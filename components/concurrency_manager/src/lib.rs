@@ -28,8 +28,6 @@ use std::{
 };
 use txn_types::{Key, Lock, TimeStamp};
 
-// TODO: Currently we are using a Mutex<BTreeMap> to implement the handle table.
-// In the future we should replace it with a concurrent ordered map.
 // Pay attention that the async functions of ConcurrencyManager should not hold
 // the mutex.
 #[derive(Clone)]

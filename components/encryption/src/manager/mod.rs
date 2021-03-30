@@ -1,6 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fs::File;
 use std::io::{Error as IoError, ErrorKind, Result as IoResult};
 use std::path::{Path, PathBuf};
 use std::sync::{atomic::AtomicU64, atomic::Ordering, Arc, Mutex};
@@ -9,15 +8,19 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crossbeam::channel::{self, select, tick};
 use engine_traits::{EncryptionKeyManager, FileEncryptionInfo};
+use fail::fail_point;
+use file_system::File;
 use kvproto::encryptionpb::{DataKey, EncryptionMethod, FileDictionary, FileInfo, KeyDictionary};
 use protobuf::Message;
+use tikv_util::{box_err, debug, error, info, thd_name, warn};
 
-use crate::config::{EncryptionConfig, MasterKeyConfig};
+use crate::config::EncryptionConfig;
+
 use crate::crypter::{self, compat, Iv};
 use crate::encrypted_file::EncryptedFile;
 use crate::file_dict_file::FileDictionaryFile;
 use crate::io::EncrypterWriter;
-use crate::master_key::{create_backend, Backend};
+use crate::master_key::Backend;
 use crate::metrics::*;
 use crate::{Error, Result};
 
@@ -115,6 +118,13 @@ impl Dicts {
                 info!("encryption: none of key dictionary and file dictionary are found.");
                 Ok(None)
             }
+            (Ok((file_dict_file, file_dict)), Err(Error::Io(key_err)))
+                if key_err.kind() == ErrorKind::NotFound && file_dict.files.is_empty() =>
+            {
+                std::fs::remove_file(file_dict_file.file_path())?;
+                info!("encryption: file dict is empty and none of key dictionary are found.");
+                Ok(None)
+            }
             // ...else, return either error.
             (file_dict_file, key_bytes) => {
                 if let Err(key_err) = key_bytes {
@@ -169,27 +179,20 @@ impl Dicts {
         )
     }
 
-    fn get_file(&self, fname: &str) -> FileInfo {
+    fn get_file(&self, fname: &str) -> Option<FileInfo> {
         let dict = self.file_dict.lock().unwrap();
-        let file_info = dict.files.get(fname);
-        match file_info {
-            None => {
-                // Return Plaintext if file not found
-                let mut file = FileInfo::default();
-                file.method = compat(EncryptionMethod::Plaintext);
-                file
-            }
-            Some(info) => info.clone(),
-        }
+        dict.files.get(fname).cloned()
     }
 
     fn new_file(&self, fname: &str, method: EncryptionMethod) -> Result<FileInfo> {
         let mut file_dict_file = self.file_dict_file.lock().unwrap();
         let iv = Iv::new_ctr();
-        let mut file = FileInfo::default();
-        file.iv = iv.as_slice().to_vec();
-        file.key_id = self.current_key_id.load(Ordering::SeqCst);
-        file.method = compat(method);
+        let file = FileInfo {
+            iv: iv.as_slice().to_vec(),
+            key_id: self.current_key_id.load(Ordering::SeqCst),
+            method: compat(method),
+            ..Default::default()
+        };
         let file_num = {
             let mut file_dict = self.file_dict.lock().unwrap();
             file_dict.files.insert(fname.to_owned(), file.clone());
@@ -200,9 +203,9 @@ impl Dicts {
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
 
         if method != EncryptionMethod::Plaintext {
-            info!("new encrypted file"; 
-                  "fname" => fname, 
-                  "method" => format!("{:?}", method), 
+            info!("new encrypted file";
+                  "fname" => fname,
+                  "method" => format!("{:?}", method),
                   "iv" => hex::encode(iv.as_slice()));
         } else {
             info!("new plaintext file"; "fname" => fname);
@@ -210,6 +213,8 @@ impl Dicts {
         Ok(file)
     }
 
+    // If the file does not exist, return Ok(())
+    // In either case the intent that the file not exist is achieved.
     fn delete_file(&self, fname: &str) -> Result<()> {
         let mut file_dict_file = self.file_dict_file.lock().unwrap();
         let (file, file_num) = {
@@ -238,7 +243,7 @@ impl Dicts {
         Ok(())
     }
 
-    fn link_file(&self, src_fname: &str, dst_fname: &str) -> Result<()> {
+    fn link_file(&self, src_fname: &str, dst_fname: &str) -> Result<Option<()>> {
         let mut file_dict_file = self.file_dict_file.lock().unwrap();
         let (method, file, file_num) = {
             let mut file_dict = self.file_dict.lock().unwrap();
@@ -247,7 +252,7 @@ impl Dicts {
                 None => {
                     // Could be a plaintext file not tracked by file dictionary.
                     info!("link untracked plaintext file"; "src" => src_fname, "dst" => dst_fname);
-                    return Ok(());
+                    return Ok(None);
                 }
             };
             // When an encrypted file exists in the file system, the file_dict must have info about
@@ -267,7 +272,7 @@ impl Dicts {
         } else {
             info!("link plaintext file"; "src" => src_fname, "dst" => dst_fname);
         }
-        Ok(())
+        Ok(Some(()))
     }
 
     fn rotate_key(&self, key_id: u64, key: DataKey, master_key: &dyn Backend) -> Result<()> {
@@ -321,11 +326,13 @@ impl Dicts {
         let creation_time = duration.as_secs();
 
         let (key_id, key) = generate_data_key(method);
-        let mut data_key = DataKey::default();
-        data_key.key = key;
-        data_key.method = compat(method);
-        data_key.creation_time = creation_time;
-        data_key.was_exposed = false;
+        let data_key = DataKey {
+            key,
+            method: compat(method),
+            creation_time,
+            was_exposed: false,
+            ..Default::default()
+        };
         self.rotate_key(key_id, data_key, master_key)
     }
 }
@@ -355,7 +362,7 @@ fn check_stale_file_exist(
 fn run_background_rotate_work(
     dict: Arc<Dicts>,
     method: EncryptionMethod,
-    master_key: Arc<dyn Backend>,
+    master_key: &dyn Backend,
     terminal_recv: channel::Receiver<()>,
 ) {
     let check_period = std::cmp::min(
@@ -367,7 +374,7 @@ fn run_background_rotate_work(
         select! {
             recv(tick(check_period)) -> _ => {
                 info!("Try to rotate data key, current method:{:?}", method);
-                dict.maybe_rotate_data_key(method, master_key.as_ref())
+                dict.maybe_rotate_data_key(method, master_key)
                     .expect("Rotating key operation encountered error in the background worker");
             },
             recv(terminal_recv) -> _ => {
@@ -395,128 +402,167 @@ pub struct DataKeyManager {
     background_worker: Option<JoinHandle<()>>,
 }
 
-impl DataKeyManager {
-    pub fn from_config(
-        config: &EncryptionConfig,
+#[derive(Debug)]
+pub struct DataKeyManagerArgs {
+    pub method: EncryptionMethod,
+    pub rotation_period: Duration,
+    pub enable_file_dictionary_log: bool,
+    pub file_dictionary_rewrite_threshold: u64,
+    pub dict_path: String,
+}
+
+impl DataKeyManagerArgs {
+    pub fn from_encryption_config(
         dict_path: &str,
+        config: &EncryptionConfig,
+    ) -> DataKeyManagerArgs {
+        DataKeyManagerArgs {
+            dict_path: dict_path.to_string(),
+            method: config.data_encryption_method,
+            rotation_period: config.data_key_rotation_period.into(),
+            enable_file_dictionary_log: config.enable_file_dictionary_log,
+            file_dictionary_rewrite_threshold: config.file_dictionary_rewrite_threshold,
+        }
+    }
+}
+
+#[allow(clippy::large_enum_variant)]
+enum LoadDicts {
+    EncryptionDisabled,
+    WrongMasterKey(Box<dyn std::error::Error + Send + Sync + 'static>),
+    Loaded(Dicts),
+}
+
+impl DataKeyManager {
+    #[cfg(test)]
+    fn new_previous_loaded(
+        master_key: Box<dyn Backend>,
+        previous_master_key: Box<dyn Backend>,
+        args: DataKeyManagerArgs,
     ) -> Result<Option<DataKeyManager>> {
-        Self::new(
-            &config.master_key,
-            &config.previous_master_key,
-            config.data_encryption_method,
-            config.data_key_rotation_period.into(),
-            config.enable_file_dictionary_log,
-            config.file_dictionary_rewrite_threshold,
-            dict_path,
-        )
+        Self::new(master_key, Box::new(move || Ok(previous_master_key)), args)
     }
 
     pub fn new(
-        master_key_config: &MasterKeyConfig,
-        previous_master_key_config: &MasterKeyConfig,
-        method: EncryptionMethod,
-        rotation_period: Duration,
-        enable_file_dictionary_log: bool,
-        file_dictionary_rewrite_threshold: u64,
-        dict_path: &str,
+        master_key: Box<dyn Backend>,
+        previous_master_key: Box<dyn FnOnce() -> Result<Box<dyn Backend>>>,
+        args: DataKeyManagerArgs,
     ) -> Result<Option<DataKeyManager>> {
-        let master_key = create_backend(master_key_config).map_err(|e| {
-            error!("failed to access master key, {}", e);
-            e
-        })?;
-        if method != EncryptionMethod::Plaintext && !master_key.is_secure() {
+        let dicts = match Self::load_dicts(&*master_key, &args)? {
+            LoadDicts::Loaded(dicts) => dicts,
+            LoadDicts::EncryptionDisabled => return Ok(None),
+            LoadDicts::WrongMasterKey(err) => {
+                Self::load_previous_dicts(&*master_key, &*(previous_master_key()?), &args, err)?
+            }
+        };
+        Ok(Some(Self::from_dicts(dicts, args.method, master_key)?))
+    }
+
+    fn load_dicts(master_key: &dyn Backend, args: &DataKeyManagerArgs) -> Result<LoadDicts> {
+        if args.method != EncryptionMethod::Plaintext && !master_key.is_secure() {
             return Err(box_err!(
                 "encryption is to enable but master key is either absent or insecure."
             ));
         }
-        let dicts = match (
+        match (
             Dicts::open(
-                dict_path,
-                rotation_period,
-                master_key.as_ref(),
-                enable_file_dictionary_log,
-                file_dictionary_rewrite_threshold,
+                &args.dict_path,
+                args.rotation_period,
+                &*master_key,
+                args.enable_file_dictionary_log,
+                args.file_dictionary_rewrite_threshold,
             ),
-            method,
+            args.method,
         ) {
             // Encryption is disabled.
             (Ok(None), EncryptionMethod::Plaintext) => {
                 info!("encryption is disabled.");
-                return Ok(None);
+                Ok(LoadDicts::EncryptionDisabled)
             }
             // Encryption is being enabled.
             (Ok(None), _) => {
-                info!("encryption is being enabled. method = {:?}", method);
-                Dicts::new(
-                    dict_path,
-                    rotation_period,
-                    enable_file_dictionary_log,
-                    file_dictionary_rewrite_threshold,
-                )?
+                info!("encryption is being enabled. method = {:?}", args.method);
+                Ok(LoadDicts::Loaded(Dicts::new(
+                    &args.dict_path,
+                    args.rotation_period,
+                    args.enable_file_dictionary_log,
+                    args.file_dictionary_rewrite_threshold,
+                )?))
             }
             // Encryption was enabled and master key didn't change.
             (Ok(Some(dicts)), _) => {
-                info!("encryption is enabled. method = {:?}", method);
-                dicts
+                info!("encryption is enabled. method = {:?}", args.method);
+                Ok(LoadDicts::Loaded(dicts))
             }
             // Failed to decrypt the dictionaries using master key. Could be master key being
             // rotated. Try the previous master key.
-            (Err(Error::WrongMasterKey(e_current)), _) => {
-                warn!(
-                    "failed to open encryption metadata using master key. \
-                      could be master key being rotated. \
-                      current master key: {:?}, previous master key: {:?}",
-                    master_key_config, previous_master_key_config
-                );
-                let previous_master_key = create_backend(previous_master_key_config)?;
-                let dicts = Dicts::open(
-                    dict_path,
-                    rotation_period,
-                    previous_master_key.as_ref(),
-                    enable_file_dictionary_log,
-                    file_dictionary_rewrite_threshold,
-                )
-                .map_err(|e| {
-                    if let Error::WrongMasterKey(e_previous) = e {
-                        Error::BothMasterKeyFail(e_current, e_previous)
-                    } else {
-                        e
-                    }
-                })?
-                .ok_or_else(|| {
-                    Error::Other(box_err!(
-                        "Fallback to previous master key but find dictionaries to be empty."
-                    ))
-                })?;
-                // Rewrite key_dict after replace master key.
-                dicts.save_key_dict(master_key.as_ref())?;
-
-                info!("encryption: persisted result after replace master key.");
-
-                dicts
-            }
+            (Err(Error::WrongMasterKey(e_current)), _) => Ok(LoadDicts::WrongMasterKey(e_current)),
             // Error.
-            (Err(e), _) => return Err(e),
-        };
-        dicts.maybe_rotate_data_key(method, master_key.as_ref())?;
+            (Err(e), _) => Err(e),
+        }
+    }
 
+    fn load_previous_dicts(
+        master_key: &dyn Backend,
+        previous_master_key: &dyn Backend,
+        args: &DataKeyManagerArgs,
+        e_current: Box<dyn std::error::Error + Send + Sync + 'static>,
+    ) -> Result<Dicts> {
+        warn!(
+            "failed to open encryption metadata using master key. \
+                could be master key being rotated. \
+                current master key: {:?}, previous master key: {:?}",
+            master_key, previous_master_key
+        );
+        let dicts = Dicts::open(
+            &args.dict_path,
+            args.rotation_period,
+            previous_master_key,
+            args.enable_file_dictionary_log,
+            args.file_dictionary_rewrite_threshold,
+        )
+        .map_err(|e| {
+            if let Error::WrongMasterKey(e_previous) = e {
+                Error::BothMasterKeyFail(e_current, e_previous)
+            } else {
+                e
+            }
+        })?
+        .ok_or_else(|| {
+            Error::Other(box_err!(
+                "Fallback to previous master key but find dictionaries to be empty."
+            ))
+        })?;
+        // Rewrite key_dict after replace master key.
+        dicts.save_key_dict(&*master_key)?;
+
+        info!("encryption: persisted result after replace master key.");
+        Ok(dicts)
+    }
+
+    fn from_dicts(
+        dicts: Dicts,
+        method: EncryptionMethod,
+        master_key: Box<dyn Backend>,
+    ) -> Result<DataKeyManager> {
+        dicts.maybe_rotate_data_key(method, &*master_key)?;
         let dicts = Arc::new(dicts);
         let dict_clone = dicts.clone();
         let (rotate_terminal, rx) = channel::bounded(1);
         let background_worker = std::thread::Builder::new()
             .name(thd_name!("enc:key"))
             .spawn(move || {
-                run_background_rotate_work(dict_clone, method, master_key, rx);
+                run_background_rotate_work(dict_clone, method, &*master_key, rx);
             })?;
 
         ENCRYPTION_INITIALIZED_GAUGE.set(1);
 
-        Ok(Some(DataKeyManager {
+        Ok(DataKeyManager {
             dicts,
             method,
             rotate_terminal,
             background_worker: Some(background_worker),
-        }))
+        })
     }
 
     pub fn create_file<P: AsRef<Path>>(&self, path: P) -> Result<EncrypterWriter<File>> {
@@ -537,14 +583,11 @@ impl DataKeyManager {
     }
 
     pub fn dump_key_dict(
-        config: &EncryptionConfig,
+        backend: Box<dyn Backend>,
         dict_path: &str,
         key_ids: Option<Vec<u64>>,
     ) -> Result<()> {
         let dict_file = EncryptedFile::new(Path::new(dict_path), KEY_DICT_NAME);
-        // Here we don't trigger master key rotation and don't care about
-        // config.previous_master_key.
-        let backend = create_backend(&config.master_key)?;
         let dict_bytes = dict_file.read(backend.as_ref())?;
         let mut dict = KeyDictionary::default();
         dict.merge_from_bytes(&dict_bytes)?;
@@ -582,21 +625,13 @@ impl DataKeyManager {
         }
         Ok(())
     }
-}
 
-impl Drop for DataKeyManager {
-    fn drop(&mut self) {
-        self.rotate_terminal.send(()).unwrap();
-        self.background_worker.take().unwrap().join().unwrap();
-    }
-}
-
-impl EncryptionKeyManager for DataKeyManager {
-    // Get key to open existing file.
-    fn get_file(&self, fname: &str) -> IoResult<FileEncryptionInfo> {
+    fn get_file_exists(&self, fname: &str) -> IoResult<Option<FileEncryptionInfo>> {
         let (method, key_id, iv) = {
-            let file = self.dicts.get_file(fname);
-            (file.method, file.key_id, file.iv)
+            match self.dicts.get_file(fname) {
+                Some(file) => (file.method, file.key_id, file.iv),
+                None => return Ok(None),
+            }
         };
         // Fail if key is specified but not found.
         let key = if method as i32 == EncryptionMethod::Plaintext as i32 {
@@ -606,7 +641,7 @@ impl EncryptionKeyManager for DataKeyManager {
                 Some(k) => k.key.clone(),
                 None => {
                     return Err(IoError::new(
-                        ErrorKind::Other,
+                        ErrorKind::NotFound,
                         format!("key not found for id {}", key_id),
                     ));
                 }
@@ -617,7 +652,41 @@ impl EncryptionKeyManager for DataKeyManager {
             method: crypter::encryption_method_to_db_encryption_method(method),
             iv,
         };
-        Ok(encrypted_file)
+        Ok(Some(encrypted_file))
+    }
+}
+
+impl Drop for DataKeyManager {
+    fn drop(&mut self) {
+        self.rotate_terminal
+            .send(())
+            .expect("DataKeyManager drop send");
+        self.background_worker
+            .take()
+            .expect("DataKeyManager worker take")
+            .join()
+            .expect("DataKeyManager worker join");
+    }
+}
+
+impl EncryptionKeyManager for DataKeyManager {
+    // Get key to open existing file.
+    fn get_file(&self, fname: &str) -> IoResult<FileEncryptionInfo> {
+        match self.get_file_exists(fname) {
+            Ok(Some(result)) => Ok(result),
+            Ok(None) => {
+                // Return Plaintext if file is not found
+                // RocksDB requires this
+                let file = FileInfo::default();
+                let method = compat(EncryptionMethod::Plaintext);
+                Ok(FileEncryptionInfo {
+                    key: vec![],
+                    method: crypter::encryption_method_to_db_encryption_method(method),
+                    iv: file.iv,
+                })
+            }
+            Err(err) => Err(err),
+        }
     }
 
     fn new_file(&self, fname: &str) -> IoResult<FileEncryptionInfo> {
@@ -641,7 +710,9 @@ impl EncryptionKeyManager for DataKeyManager {
     }
 
     fn link_file(&self, src_fname: &str, dst_fname: &str) -> IoResult<()> {
-        self.dicts.link_file(src_fname, dst_fname)?;
+        let _ = self.dicts.link_file(src_fname, dst_fname)?;
+        // For now we ignore file not found.
+        // TODO: propagate it back up as an Option.
         Ok(())
     }
 }
@@ -649,40 +720,86 @@ impl EncryptionKeyManager for DataKeyManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{FileConfig, Mock};
-    use crate::master_key::tests::MockBackend;
-    use crate::master_key::PlaintextBackend;
+    use crate::master_key::tests::{decrypt_called, encrypt_called, MockBackend};
+    use crate::master_key::{FileBackend, PlaintextBackend};
 
     use engine_traits::EncryptionMethod as DBEncryptionMethod;
+    use file_system::{remove_file, File};
     use matches::assert_matches;
-    use std::{
-        fs::{remove_file, File},
-        io::Write,
-        sync::{Arc, Mutex},
-    };
+    use std::io::Write;
     use tempfile::TempDir;
 
-    // TODO(yiwu): use the similar method in test_util crate instead.
-    fn new_tmp_key_manager(
-        temp: Option<tempfile::TempDir>,
+    lazy_static::lazy_static! {
+        static ref LOCK_FOR_GAUGE: Mutex<i32> = Mutex::new(1);
+    }
+
+    fn new_mock_backend() -> Box<MockBackend> {
+        Box::new(MockBackend::default())
+    }
+
+    fn new_key_manager_def(
+        tmp_dir: &tempfile::TempDir,
         method: Option<EncryptionMethod>,
-        master_key: Option<MasterKeyConfig>,
-        previous_master_key: Option<MasterKeyConfig>,
-    ) -> (tempfile::TempDir, Result<Option<DataKeyManager>>) {
-        let tmp = temp.unwrap_or_else(|| tempfile::TempDir::new().unwrap());
-        let mock_config = MasterKeyConfig::Mock(Mock(Arc::new(Mutex::new(MockBackend::default()))));
-        let master_key = master_key.unwrap_or_else(|| mock_config.clone());
-        let previous_master_key = previous_master_key.unwrap_or(mock_config);
-        let manager = DataKeyManager::new(
-            &master_key,
-            &previous_master_key,
-            method.unwrap_or(EncryptionMethod::Aes256Ctr),
-            Duration::from_secs(60),
-            true, /*enable_file_dictionary_log*/
-            2,
-            tmp.path().as_os_str().to_str().unwrap(),
-        );
-        (tmp, manager)
+    ) -> Result<DataKeyManager> {
+        let master_backend = new_mock_backend() as Box<dyn Backend>;
+        let mut args = def_data_key_args(tmp_dir);
+        if let Some(method) = method {
+            args.method = method;
+        }
+        match DataKeyManager::new_previous_loaded(
+            master_backend,
+            Box::new(MockBackend::default()),
+            args,
+        ) {
+            Ok(None) => panic!("expected encryption"),
+            Ok(Some(dkm)) => Ok(dkm),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn def_data_key_args(tmp_dir: &tempfile::TempDir) -> DataKeyManagerArgs {
+        DataKeyManagerArgs {
+            method: EncryptionMethod::Aes256Ctr,
+            rotation_period: Duration::from_secs(60),
+            enable_file_dictionary_log: true,
+            file_dictionary_rewrite_threshold: 2,
+            dict_path: tmp_dir.path().as_os_str().to_str().unwrap().to_string(),
+        }
+    }
+
+    // TODO(yiwu): use the similar method in test_util crate instead.
+    fn new_mock_key_manager(
+        tmp_dir: &tempfile::TempDir,
+        method: Option<EncryptionMethod>,
+        master_backend: Box<MockBackend>,
+        previous_key: Box<MockBackend>,
+    ) -> Result<DataKeyManager> {
+        let mut args = def_data_key_args(tmp_dir);
+        if let Some(method) = method {
+            args.method = method;
+        }
+        match DataKeyManager::new_previous_loaded(master_backend, previous_key, args) {
+            Ok(None) => panic!("expected encryption"),
+            Ok(Some(dkm)) => Ok(dkm),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn new_key_manager(
+        tmp_dir: &tempfile::TempDir,
+        method: Option<EncryptionMethod>,
+        master_backend: Box<dyn Backend>,
+        previous_key: Box<dyn Backend>,
+    ) -> Result<DataKeyManager> {
+        let mut args = def_data_key_args(tmp_dir);
+        if let Some(method) = method {
+            args.method = method;
+        }
+        match DataKeyManager::new_previous_loaded(master_backend, previous_key, args) {
+            Ok(None) => panic!("expected encryption"),
+            Ok(Some(dkm)) => Ok(dkm),
+            Err(e) => Err(e),
+        }
     }
 
     // TODO(yiwu): use the similar method in test_util crate instead.
@@ -697,30 +814,32 @@ mod tests {
 
     #[test]
     fn test_key_manager_encryption_enable_disable() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         // encryption not enabled.
-        let (tmp, manager) =
-            new_tmp_key_manager(None, Some(EncryptionMethod::Plaintext), None, None);
-        assert!(manager.unwrap().is_none());
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let mut args = def_data_key_args(&tmp_dir);
+        args.method = EncryptionMethod::Plaintext;
+        let dkm = DataKeyManager::new(
+            new_mock_backend(),
+            Box::new(|| Ok(new_mock_backend())),
+            args,
+        )
+        .unwrap();
+        assert!(dkm.is_none());
 
         // encryption being enabled.
-        let (tmp, manager) =
-            new_tmp_key_manager(Some(tmp), Some(EncryptionMethod::Aes256Ctr), None, None);
-        let manager = manager.unwrap().unwrap();
+        let manager = new_key_manager_def(&tmp_dir, Some(EncryptionMethod::Aes256Ctr)).unwrap();
         let foo1 = manager.new_file("foo").unwrap();
         drop(manager);
 
         // encryption was enabled. reopen.
-        let (tmp, manager) =
-            new_tmp_key_manager(Some(tmp), Some(EncryptionMethod::Aes256Ctr), None, None);
-        let manager = manager.unwrap().unwrap();
+        let manager = new_key_manager_def(&tmp_dir, Some(EncryptionMethod::Aes256Ctr)).unwrap();
         let foo2 = manager.get_file("foo").unwrap();
         assert_eq!(foo1, foo2);
         drop(manager);
 
         // disable encryption.
-        let (_tmp, manager) =
-            new_tmp_key_manager(Some(tmp), Some(EncryptionMethod::Plaintext), None, None);
-        let manager = manager.unwrap().unwrap();
+        let manager = new_key_manager_def(&tmp_dir, Some(EncryptionMethod::Plaintext)).unwrap();
         let foo3 = manager.get_file("foo").unwrap();
         assert_eq!(foo1, foo3);
         let bar = manager.new_file("bar").unwrap();
@@ -730,11 +849,13 @@ mod tests {
     // When enabling encryption, using insecure master key is not allowed.
     #[test]
     fn test_key_manager_disallow_plaintext_metadata() {
-        let (_tmp, manager) = new_tmp_key_manager(
-            None,
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let manager = new_key_manager(
+            &tmp_dir,
             Some(EncryptionMethod::Aes256Ctr),
-            Some(MasterKeyConfig::Plaintext),
-            None,
+            Box::new(PlaintextBackend::default()),
+            new_mock_backend() as Box<dyn Backend>,
         );
         manager.err().unwrap();
     }
@@ -742,108 +863,117 @@ mod tests {
     // If master_key is the wrong key, fallback to previous_master_key.
     #[test]
     fn test_key_manager_rotate_master_key() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
+
         // create initial dictionaries.
-        let (tmp, manager) = new_tmp_key_manager(None, None, None, None);
-        let manager = manager.unwrap().unwrap();
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let manager = new_key_manager_def(&tmp_dir, None).unwrap();
         let info1 = manager.new_file("foo").unwrap();
         drop(manager);
 
-        let current_key = Arc::new(Mutex::new(MockBackend {
+        let mut current_key = Box::new(MockBackend {
             is_wrong_master_key: true,
             ..Default::default()
-        }));
-        let previous_key = Arc::new(Mutex::new(MockBackend::default()));
-        let (_tmp, manager) = new_tmp_key_manager(
-            Some(tmp),
-            None,
-            Some(MasterKeyConfig::Mock(Mock(current_key.clone()))),
-            Some(MasterKeyConfig::Mock(Mock(previous_key.clone()))),
-        );
-        let manager = manager.unwrap().unwrap();
-        let info2 = manager.get_file("foo").unwrap();
+        });
+        current_key.track("current".to_string());
+        let mut previous_key = new_mock_backend();
+        previous_key.track("previous".to_string());
+        assert_eq!(encrypt_called("current"), 0);
+        assert_eq!(encrypt_called("previous"), 0);
+        assert_eq!(decrypt_called("current"), 0);
+        assert_eq!(decrypt_called("previous"), 0);
+        let manager = new_mock_key_manager(&tmp_dir, None, current_key, previous_key).unwrap();
+        let info2 = manager.get_file("foo").expect("get file foo");
         assert_eq!(info1, info2);
-        assert_eq!(1, current_key.lock().unwrap().encrypt_called);
-        assert_eq!(1, current_key.lock().unwrap().decrypt_called);
-        assert_eq!(1, previous_key.lock().unwrap().decrypt_called);
+        assert_eq!(encrypt_called("current"), 1);
+        assert_eq!(encrypt_called("previous"), 0);
+        assert_eq!(decrypt_called("current"), 1);
+        assert_eq!(decrypt_called("previous"), 1);
+        assert_eq!(ENCRYPTION_INITIALIZED_GAUGE.get(), 1);
+        assert_eq!(ENCRYPTION_FILE_NUM_GAUGE.get(), 1);
     }
 
     #[test]
     fn test_key_manager_rotate_master_key_rewrite_failure() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         // create initial dictionaries.
-        let (tmp, manager) = new_tmp_key_manager(None, None, None, None);
-        let manager = manager.unwrap().unwrap();
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let manager = new_key_manager_def(&tmp_dir, None).unwrap();
         manager.new_file("foo").unwrap();
         drop(manager);
 
-        let current_key = Arc::new(Mutex::new(MockBackend {
+        let mut current_key = Box::new(MockBackend {
             is_wrong_master_key: true,
             encrypt_fail: true,
-            ..Default::default()
-        }));
-        let previous_key = Arc::new(Mutex::new(MockBackend::default()));
-        let (_tmp, manager) = new_tmp_key_manager(
-            Some(tmp),
-            None,
-            Some(MasterKeyConfig::Mock(Mock(current_key.clone()))),
-            Some(MasterKeyConfig::Mock(Mock(previous_key.clone()))),
-        );
+            ..MockBackend::default()
+        });
+        current_key.track("current".to_string());
+        let mut previous_key = new_mock_backend();
+        previous_key.track("previous".to_string());
+        let manager = new_mock_key_manager(&tmp_dir, None, current_key, previous_key);
         assert!(manager.is_err());
-        assert_eq!(1, current_key.lock().unwrap().encrypt_called);
-        assert_eq!(1, current_key.lock().unwrap().decrypt_called);
-        assert_eq!(1, previous_key.lock().unwrap().decrypt_called);
+        assert_eq!(encrypt_called("current"), 1);
+        assert_eq!(encrypt_called("previous"), 0);
+        assert_eq!(decrypt_called("current"), 1);
+        assert_eq!(decrypt_called("previous"), 1);
+        assert_eq!(ENCRYPTION_INITIALIZED_GAUGE.get(), 1);
+        assert_eq!(ENCRYPTION_FILE_NUM_GAUGE.get(), 1);
     }
 
     #[test]
     fn test_key_manager_both_master_key_fail() {
         // create initial dictionaries.
-        let (tmp, manager) = new_tmp_key_manager(None, None, None, None);
-        let manager = manager.unwrap().unwrap();
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let manager = new_key_manager_def(&tmp_dir, None).unwrap();
         manager.new_file("foo").unwrap();
         drop(manager);
 
-        let master_key = Arc::new(Mutex::new(MockBackend {
+        let master_key = Box::new(MockBackend {
             is_wrong_master_key: true,
             ..Default::default()
-        }));
-        let (_tmp, manager) = new_tmp_key_manager(
-            Some(tmp),
-            None,
-            Some(MasterKeyConfig::Mock(Mock(master_key.clone()))),
-            Some(MasterKeyConfig::Mock(Mock(master_key))),
-        );
+        });
+        let previous_master_key = Box::new(MockBackend {
+            is_wrong_master_key: true,
+            ..Default::default()
+        });
+        let manager = new_mock_key_manager(&tmp_dir, None, master_key, previous_master_key);
         assert_matches!(manager.err(), Some(Error::BothMasterKeyFail(_, _)));
     }
 
     #[test]
     fn test_key_manager_key_dict_missing() {
         // create initial dictionaries.
-        let (tmp, manager) = new_tmp_key_manager(None, None, None, None);
-        let manager = manager.unwrap().unwrap();
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let manager = new_key_manager_def(&tmp_dir, None).unwrap();
         manager.new_file("foo").unwrap();
         drop(manager);
 
-        remove_file(tmp.path().join(KEY_DICT_NAME)).unwrap();
-        let (_tmp, manager) = new_tmp_key_manager(Some(tmp), None, None, None);
+        remove_file(tmp_dir.path().join(KEY_DICT_NAME)).unwrap();
+        let manager = new_key_manager_def(&tmp_dir, None);
         assert!(manager.is_err());
     }
 
     #[test]
     fn test_key_manager_file_dict_missing() {
         // create initial dictionaries.
-        let (tmp, manager) = new_tmp_key_manager(None, None, None, None);
-        let manager = manager.unwrap().unwrap();
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let manager = new_key_manager_def(&tmp_dir, None).unwrap();
         manager.new_file("foo").unwrap();
         drop(manager);
 
-        remove_file(tmp.path().join(FILE_DICT_NAME)).unwrap();
-        let (_tmp, manager) = new_tmp_key_manager(Some(tmp), None, None, None);
+        remove_file(tmp_dir.path().join(FILE_DICT_NAME)).unwrap();
+        let manager = new_key_manager_def(&tmp_dir, None);
         assert!(manager.is_err());
     }
 
     #[test]
     fn test_key_manager_create_get_delete() {
-        let (_tmp, manager) = new_tmp_key_manager(None, None, None, None);
-        let mut manager = manager.unwrap().unwrap();
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let manager = new_key_manager_def(&tmp_dir, None).unwrap();
 
         let new_file = manager.new_file("foo").unwrap();
         let get_file = manager.get_file("foo").unwrap();
@@ -853,17 +983,17 @@ mod tests {
         manager.delete_file("foo1").unwrap();
 
         // Must be plaintext if file not found.
-        let file = manager.get_file("foo").unwrap();
-        assert_eq!(file.method, DBEncryptionMethod::Plaintext);
+        assert_eq!(manager.get_file_exists("foo").unwrap(), None,);
 
-        manager.method = EncryptionMethod::Aes192Ctr;
-        let file1 = manager.new_file("foo").unwrap();
-        assert_ne!(file, file1);
+        let manager = new_key_manager_def(&tmp_dir, Some(EncryptionMethod::Aes192Ctr)).unwrap();
+        assert_eq!(manager.get_file_exists("foo").unwrap(), None,);
 
         // Must fail if key is specified but not found.
-        let mut file = FileInfo::default();
-        file.method = EncryptionMethod::Aes192Ctr as _;
-        file.key_id = 7; // Not exists.
+        let file = FileInfo {
+            method: EncryptionMethod::Aes192Ctr as _,
+            key_id: 7, // Not exists
+            ..Default::default()
+        };
         manager
             .dicts
             .file_dict
@@ -871,18 +1001,21 @@ mod tests {
             .unwrap()
             .files
             .insert("foo".to_owned(), file);
-        manager.get_file("foo").unwrap_err();
+        assert_eq!(
+            manager.get_file_exists("foo").unwrap_err().kind(),
+            ErrorKind::NotFound,
+        );
     }
 
     #[test]
     fn test_key_manager_link() {
-        let tmp_path = TempDir::new().unwrap();
-        let file_foo1 = tmp_path.path().join("foo1");
-        let _ = std::fs::File::create(&file_foo1).unwrap();
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let file_foo1 = tmp_dir.path().join("foo1");
+        let _ = File::create(&file_foo1).unwrap();
         let foo1_path = file_foo1.as_path().to_str().unwrap();
 
-        let (_tmp, manager) = new_tmp_key_manager(None, None, None, None);
-        let manager = manager.unwrap().unwrap();
+        let manager = new_key_manager_def(&tmp_dir, None).unwrap();
 
         let file = manager.new_file("foo").unwrap();
         manager.link_file("foo", foo1_path).unwrap();
@@ -891,20 +1024,21 @@ mod tests {
         let file1 = manager.get_file(foo1_path).unwrap();
         assert_eq!(file1, file);
 
-        // Source file not exists.
         manager.link_file("not exists", "not exists1").unwrap();
         // Target file already exists.
         manager.new_file("foo2").unwrap();
         // Here we create a temp file "foo1" to make the `link_file` return an error.
-        manager.link_file("foo2", foo1_path).unwrap_err();
+        assert_eq!(
+            manager.link_file("foo2", foo1_path).unwrap_err().kind(),
+            ErrorKind::AlreadyExists,
+        )
     }
 
     #[test]
     fn test_key_manager_rename() {
-        let (_tmp, manager) = new_tmp_key_manager(None, None, None, None);
-        let mut manager = manager.unwrap().unwrap();
-
-        manager.method = EncryptionMethod::Aes192Ctr;
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let manager = new_key_manager_def(&tmp_dir, Some(EncryptionMethod::Aes192Ctr)).unwrap();
         let file = manager.new_file("foo").unwrap();
 
         manager.link_file("foo", "foo1").unwrap();
@@ -914,33 +1048,28 @@ mod tests {
         let file1 = manager.get_file("foo1").unwrap();
         assert_eq!(file1, file);
 
-        // foo must not exist (should be plaintext)
         manager.link_file("foo", "foo2").unwrap();
         manager.delete_file("foo").unwrap();
 
-        let file_foo = manager.get_file("foo").unwrap();
-        assert_ne!(file_foo, file);
-        assert_eq!(file_foo.method, DBEncryptionMethod::Plaintext);
-        let file_foo2 = manager.get_file("foo2").unwrap();
-        assert_ne!(file_foo2, file);
-        assert_eq!(file_foo2.method, DBEncryptionMethod::Plaintext);
+        assert_eq!(manager.get_file_exists("foo").unwrap(), None);
+        assert_eq!(manager.get_file_exists("foo2").unwrap(), None);
     }
 
     #[test]
     fn test_key_manager_rotate() {
-        let (_tmp, manager) = new_tmp_key_manager(None, None, None, None);
-        let manager = manager.unwrap().unwrap();
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let manager = new_key_manager_def(&tmp_dir, None).unwrap();
         let (key_id, key) = {
             let (id, k) = manager.dicts.current_data_key();
             (id, k)
         };
 
         // Do not rotate.
-        let mock_config = MasterKeyConfig::Mock(Mock(Arc::new(Mutex::new(MockBackend::default()))));
-        let master_key = create_backend(&mock_config).unwrap();
+        let master_key = MockBackend::default();
         manager
             .dicts
-            .maybe_rotate_data_key(manager.method, master_key.as_ref())
+            .maybe_rotate_data_key(manager.method, &master_key)
             .unwrap();
         let (current_key_id1, current_key1) = {
             let (id, k) = manager.dicts.current_data_key();
@@ -949,7 +1078,7 @@ mod tests {
         assert_eq!(current_key_id1, key_id);
         assert_eq!(current_key1, key);
 
-        // Change rotateion period to a smaller value, must rotate.
+        // Change rotation period to a smaller value, must rotate.
         unsafe {
             let ptr: *mut Dicts = manager.dicts.as_ref() as *const Dicts as *mut Dicts;
             let mut dict = Box::from_raw(ptr);
@@ -959,7 +1088,7 @@ mod tests {
         std::thread::sleep(Duration::from_secs(1));
         manager
             .dicts
-            .maybe_rotate_data_key(manager.method, master_key.as_ref())
+            .maybe_rotate_data_key(manager.method, &master_key)
             .unwrap();
         let (current_key_id2, current_key2) = {
             let (id, k) = manager.dicts.current_data_key();
@@ -971,8 +1100,9 @@ mod tests {
 
     #[test]
     fn test_key_manager_persistence() {
-        let (tmp, manager) = new_tmp_key_manager(None, None, None, None);
-        let manager = manager.unwrap().unwrap();
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let manager = new_key_manager_def(&tmp_dir, None).unwrap();
 
         // Create a file and a datakey.
         manager.new_file("foo").unwrap();
@@ -982,8 +1112,7 @@ mod tests {
 
         // Close and re-open.
         drop(manager);
-        let (_tmp, manager1) = new_tmp_key_manager(Some(tmp), None, None, None);
-        let manager1 = manager1.unwrap().unwrap();
+        let manager1 = new_key_manager_def(&tmp_dir, None).unwrap();
 
         let files1 = manager1.dicts.file_dict.lock().unwrap().clone();
         let keys1 = manager1.dicts.key_dict.lock().unwrap().clone();
@@ -993,24 +1122,24 @@ mod tests {
 
     #[test]
     fn test_key_manager_rotate_on_key_expose() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         let (key_path, _tmp_key_dir) = create_key_file("key");
-        let master_key = MasterKeyConfig::File {
-            config: FileConfig {
-                path: key_path.to_str().unwrap().to_owned(),
-            },
-        };
-        let master_key_backend = create_backend(&master_key).unwrap();
-        let (_tmp_data_dir, manager) = new_tmp_key_manager(None, None, Some(master_key), None);
-        let manager = manager.unwrap().unwrap();
+        let master_key_backend =
+            Box::new(FileBackend::new(key_path.as_path()).unwrap()) as Box<dyn Backend>;
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let previous = new_mock_backend() as Box<dyn Backend>;
+        let manager = new_key_manager(&tmp_dir, None, master_key_backend, previous).unwrap();
         let (key_id, key) = {
             let (id, k) = manager.dicts.current_data_key();
             (id, k)
         };
 
+        let master_key_backend =
+            Box::new(FileBackend::new(key_path.as_path()).unwrap()) as Box<dyn Backend>;
         // Do not rotate.
         manager
             .dicts
-            .maybe_rotate_data_key(manager.method, master_key_backend.as_ref())
+            .maybe_rotate_data_key(manager.method, &*master_key_backend)
             .unwrap();
         let (current_key_id1, current_key1) = {
             let (id, k) = manager.dicts.current_data_key();
@@ -1031,7 +1160,7 @@ mod tests {
             .was_exposed = true;
         manager
             .dicts
-            .maybe_rotate_data_key(manager.method, master_key_backend.as_ref())
+            .maybe_rotate_data_key(manager.method, &*master_key_backend)
             .unwrap();
         let (current_key_id2, current_key2) = {
             let (id, k) = manager.dicts.current_data_key();
@@ -1043,21 +1172,20 @@ mod tests {
 
     #[test]
     fn test_expose_keys_on_insecure_backend() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         let (key_path, _tmp_key_dir) = create_key_file("key");
-        let master_key = MasterKeyConfig::File {
-            config: FileConfig {
-                path: key_path.to_str().unwrap().to_owned(),
-            },
-        };
+        let file_backend = FileBackend::new(key_path.as_path()).unwrap();
+        let master_key_backend = Box::new(file_backend);
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let previous = new_mock_backend() as Box<dyn Backend>;
+        let manager = new_key_manager(&tmp_dir, None, master_key_backend, previous).unwrap();
 
-        let master_key_backend = create_backend(&master_key).unwrap();
-        let (_tmp_data_dir, manager) = new_tmp_key_manager(None, None, Some(master_key), None);
-        let manager = manager.unwrap().unwrap();
-
+        let file_backend = FileBackend::new(key_path.as_path()).unwrap();
+        let master_key_backend = Box::new(file_backend);
         for i in 0..100 {
             manager
                 .dicts
-                .rotate_key(i, DataKey::default(), master_key_backend.as_ref())
+                .rotate_key(i, DataKey::default(), &*master_key_backend)
                 .unwrap();
         }
         for value in manager.dicts.key_dict.lock().unwrap().keys.values() {
@@ -1066,10 +1194,10 @@ mod tests {
 
         // Change it insecure backend and save dicts,
         // must set expose for all keys.
-        let insecure = Arc::new(PlaintextBackend::default());
+        let insecure = PlaintextBackend::default();
         manager
             .dicts
-            .rotate_key(100, DataKey::default(), insecure.as_ref())
+            .rotate_key(100, DataKey::default(), &insecure)
             .unwrap();
 
         let mut count = 0;
@@ -1078,5 +1206,30 @@ mod tests {
             assert!(value.was_exposed);
         }
         assert!(count >= 101);
+    }
+
+    #[test]
+    fn test_master_key_failure_and_succeed() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+
+        let wrong_key = Box::new(MockBackend {
+            is_wrong_master_key: true,
+            encrypt_fail: true,
+            ..MockBackend::default()
+        });
+        let right_key = Box::new(MockBackend {
+            is_wrong_master_key: true,
+            encrypt_fail: false,
+            ..MockBackend::default()
+        });
+        let previous = Box::new(PlaintextBackend::default()) as Box<dyn Backend>;
+
+        let result = new_key_manager(&tmp_dir, None, wrong_key, previous);
+        // When the master key is invalid, the key manager left a empty file dict and return errors.
+        assert!(result.is_err());
+        let previous = Box::new(PlaintextBackend::default()) as Box<dyn Backend>;
+        let result = new_key_manager(&tmp_dir, None, right_key, previous);
+        assert!(result.is_ok());
     }
 }

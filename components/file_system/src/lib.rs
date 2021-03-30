@@ -1,21 +1,26 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(test)]
-#![feature(core_intrinsics)]
-extern crate test;
 
 #[macro_use]
 extern crate lazy_static;
+extern crate test;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
 mod file;
 mod iosnoop;
+mod metrics;
+mod metrics_manager;
 mod rate_limiter;
 
 pub use file::{File, OpenOptions};
-pub use iosnoop::{flush_io_metrics, get_io_type, init_io_snooper, set_io_type, IOContext};
-pub use rate_limiter::{get_io_rate_limiter, set_io_rate_limiter, BytesRecorder, IORateLimiter};
+pub use iosnoop::{get_io_type, init_io_snooper, set_io_type};
+pub use metrics_manager::{BytesFetcher, MetricsManager};
+pub use rate_limiter::{
+    get_io_rate_limiter, set_io_rate_limiter, IORateLimiter, IORateLimiterStatistics,
+    WithIORateLimit,
+};
 
 pub use std::fs::{
     canonicalize, create_dir, create_dir_all, hard_link, metadata, read_dir, read_link, remove_dir,
@@ -29,7 +34,7 @@ use std::sync::{Arc, Mutex};
 
 use openssl::error::ErrorStack;
 use openssl::hash::{self, Hasher, MessageDigest};
-use variant_count::VariantCount;
+use strum::EnumCount;
 
 #[derive(Debug)]
 pub enum IOOp {
@@ -38,7 +43,7 @@ pub enum IOOp {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, VariantCount)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumCount)]
 pub enum IOType {
     Other,
     // Including coprocessor and storage read.
@@ -51,6 +56,7 @@ pub enum IOType {
     Compaction,
     Replication,
     LoadBalance,
+    Gc,
     Import,
     Export,
 }
@@ -70,6 +76,30 @@ impl WithIOType {
 impl Drop for WithIOType {
     fn drop(&mut self) {
         set_io_type(self.previous_io_type);
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct IOBytes {
+    read: u64,
+    write: u64,
+}
+
+impl Default for IOBytes {
+    fn default() -> Self {
+        IOBytes { read: 0, write: 0 }
+    }
+}
+
+impl std::ops::Sub for IOBytes {
+    type Output = Self;
+
+    fn sub(self, other: Self) -> Self::Output {
+        Self {
+            read: self.read.saturating_sub(other.read),
+            write: self.write.saturating_sub(other.write),
+        }
     }
 }
 
@@ -264,17 +294,17 @@ impl<R: Read> Read for Sha256Reader<R> {
 
 const SPACE_PLACEHOLDER_FILE: &str = "space_placeholder_file";
 
-// create a file with hole, to reserve space for TiKV.
+/// Create a file with hole, to reserve space for TiKV.
 pub fn reserve_space_for_recover<P: AsRef<Path>>(data_dir: P, file_size: u64) -> io::Result<()> {
     let path = data_dir.as_ref().join(SPACE_PLACEHOLDER_FILE);
-    if file_exists(path.clone()) {
-        if get_file_size(path.clone())? == file_size {
+    if file_exists(&path) {
+        if get_file_size(&path)? == file_size {
             return Ok(());
         }
-        delete_file_if_exist(path.clone())?;
+        delete_file_if_exist(&path)?;
     }
     if file_size > 0 {
-        let f = File::create(path)?;
+        let f = File::create(&path)?;
         f.allocate(file_size)?;
         f.sync_all()?;
         sync_dir(data_dir)?;

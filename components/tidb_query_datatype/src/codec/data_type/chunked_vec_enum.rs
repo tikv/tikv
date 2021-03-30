@@ -18,7 +18,7 @@ use tikv_util::buffer_vec::BufferVec;
 ///
 /// Make sure operating `bitmap` and `value` together to prevent different
 /// stored representation issue discussed at
-/// https://github.com/tikv/tikv/pull/8948#discussion_r516463693
+/// <https://github.com/tikv/tikv/pull/8948#discussion_r516463693>
 ///
 /// TODO: add way to set enum column data
 #[derive(Debug, Clone)]
@@ -136,9 +136,9 @@ impl<'a> ChunkRef<'a, EnumRef<'a>> for &'a ChunkedVecEnum {
     }
 }
 
-impl Into<ChunkedVecEnum> for Vec<Option<Enum>> {
-    fn into(self) -> ChunkedVecEnum {
-        ChunkedVecEnum::from_vec(self)
+impl From<Vec<Option<Enum>>> for ChunkedVecEnum {
+    fn from(v: Vec<Option<Enum>>) -> ChunkedVecEnum {
+        ChunkedVecEnum::from_vec(v)
     }
 }
 

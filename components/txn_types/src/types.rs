@@ -114,7 +114,7 @@ impl Key {
     /// key.
     #[inline]
     pub fn decode_ts(&self) -> Result<TimeStamp, codec::Error> {
-        Ok(Self::decode_ts_from(&self.0)?)
+        Self::decode_ts_from(&self.0)
     }
 
     /// Creates a new key by truncating the timestamp from this key.
@@ -247,7 +247,12 @@ pub enum MutationType {
 
 impl MutationType {
     pub fn may_have_old_value(&self) -> bool {
-        matches!(self, MutationType::Put | MutationType::Delete)
+        matches!(
+            self,
+            // Insert operations don't have old value but need to update a flag
+            // for indicating that not seeking for old value for it.
+            MutationType::Put | MutationType::Delete | MutationType::Insert
+        )
     }
 }
 
@@ -361,10 +366,7 @@ impl OldValue {
     }
 
     pub fn exists(&self) -> bool {
-        matches!(
-            self,
-            OldValue::Value {..}
-        )
+        matches!(self, OldValue::Value { .. })
     }
 
     pub fn size(&self) -> usize {

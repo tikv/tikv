@@ -127,7 +127,7 @@ where
         match value {
             None => Ok(()),
             Some(value) => {
-                self.sum.add_assign(ctx, &value.to_owned_value())?;
+                self.sum.add_assign(ctx, &value.into_owned_value())?;
                 self.count += 1;
                 Ok(())
             }
@@ -371,7 +371,7 @@ mod tests {
         let function = AggrFnAvgForEnum::new();
         let mut state = function.create_state();
 
-        // AVG will returns <Int, Decimal>
+        // AVG will return <Int, Decimal>
         let mut result = [
             VectorValue::with_capacity(0, EvalType::Int),
             VectorValue::with_capacity(0, EvalType::Decimal),

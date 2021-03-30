@@ -1,11 +1,10 @@
-use crate::storage::mvcc::txn::MissingLockAction;
 use crate::storage::mvcc::{
     metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
-    ErrorInner, Key, MvccTxn, ReleasedLock, Result as MvccResult, TimeStamp,
+    ErrorInner, Key, MvccTxn, ReleasedLock, Result as MvccResult, SnapshotReader, TimeStamp,
 };
 use crate::storage::{Snapshot, TxnStatus};
 
-use super::check_txn_status::check_txn_status_missing_lock;
+use super::check_txn_status::{check_txn_status_missing_lock, rollback_lock, MissingLockAction};
 
 /// Cleanup the lock if it's TTL has expired, comparing with `current_ts`. If `current_ts` is 0,
 /// cleanup the lock without checking TTL. If the lock is the primary lock of a pessimistic
@@ -14,17 +13,18 @@ use super::check_txn_status::check_txn_status_missing_lock;
 /// Returns the released lock. Returns error if the key is locked or has already been
 /// committed.
 pub fn cleanup<S: Snapshot>(
-    txn: &mut MvccTxn<S>,
+    txn: &mut MvccTxn,
+    reader: &mut SnapshotReader<S>,
     key: Key,
     current_ts: TimeStamp,
     protect_rollback: bool,
 ) -> MvccResult<Option<ReleasedLock>> {
     fail_point!("cleanup", |err| Err(
-        crate::storage::mvcc::txn::make_txn_error(err, &key, txn.start_ts,).into()
+        crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts).into()
     ));
 
-    match txn.reader.load_lock(&key)? {
-        Some(ref lock) if lock.ts == txn.start_ts => {
+    match reader.load_lock(&key)? {
+        Some(ref lock) if lock.ts == reader.start_ts => {
             // If current_ts is not 0, check the Lock's TTL.
             // If the lock is not expired, do not rollback it but report key is locked.
             if !current_ts.is_zero() && lock.ts.physical() + lock.ttl >= current_ts.physical() {
@@ -34,18 +34,31 @@ pub fn cleanup<S: Snapshot>(
             }
 
             let is_pessimistic_txn = !lock.for_update_ts.is_zero();
-            txn.check_write_and_rollback_lock(key, lock, is_pessimistic_txn)
+            rollback_lock(
+                txn,
+                reader,
+                key,
+                lock,
+                is_pessimistic_txn,
+                !protect_rollback,
+            )
         }
         l => match check_txn_status_missing_lock(
             txn,
-            key,
+            reader,
+            key.clone(),
             l,
             MissingLockAction::rollback_protect(protect_rollback),
             false,
         )? {
             TxnStatus::Committed { commit_ts } => {
                 MVCC_CONFLICT_COUNTER.rollback_committed.inc();
-                Err(ErrorInner::Committed { commit_ts }.into())
+                Err(ErrorInner::Committed {
+                    start_ts: reader.start_ts,
+                    commit_ts,
+                    key: key.into_raw()?,
+                }
+                .into())
             }
             TxnStatus::RolledBack => {
                 // Return Ok on Rollback already exist.
@@ -61,7 +74,7 @@ pub fn cleanup<S: Snapshot>(
 pub mod tests {
     use super::*;
     use crate::storage::mvcc::tests::{must_have_write, must_not_have_write, write};
-    use crate::storage::mvcc::{Error as MvccError, MvccTxn, WriteType};
+    use crate::storage::mvcc::{Error as MvccError, WriteType};
     use crate::storage::txn::tests::{must_commit, must_prewrite_put};
     use crate::storage::Engine;
     use concurrency_manager::ConcurrencyManager;
@@ -90,8 +103,10 @@ pub mod tests {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let current_ts = current_ts.into();
         let cm = ConcurrencyManager::new(current_ts);
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true, cm);
-        cleanup(&mut txn, Key::from_raw(key), current_ts, true).unwrap();
+        let start_ts = start_ts.into();
+        let mut txn = MvccTxn::new(start_ts, cm);
+        let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+        cleanup(&mut txn, &mut reader, Key::from_raw(key), current_ts, true).unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
 
@@ -104,8 +119,10 @@ pub mod tests {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let current_ts = current_ts.into();
         let cm = ConcurrencyManager::new(current_ts);
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true, cm);
-        cleanup(&mut txn, Key::from_raw(key), current_ts, true).unwrap_err()
+        let start_ts = start_ts.into();
+        let mut txn = MvccTxn::new(start_ts, cm);
+        let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+        cleanup(&mut txn, &mut reader, Key::from_raw(key), current_ts, true).unwrap_err()
     }
 
     pub fn must_cleanup_with_gc_fence<E: Engine>(
@@ -130,8 +147,9 @@ pub mod tests {
 
         let cm = ConcurrencyManager::new(current_ts);
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
-        cleanup(&mut txn, Key::from_raw(key), current_ts, true).unwrap();
+        let mut txn = MvccTxn::new(start_ts, cm);
+        let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+        cleanup(&mut txn, &mut reader, Key::from_raw(key), current_ts, true).unwrap();
 
         write(engine, &ctx, txn.into_modifies());
 

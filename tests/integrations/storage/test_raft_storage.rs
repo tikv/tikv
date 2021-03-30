@@ -53,7 +53,7 @@ fn test_raft_storage() {
     assert!(storage.get(ctx.clone(), &key, 20).is_err());
     assert!(storage.batch_get(ctx.clone(), &[key.clone()], 20).is_err());
     assert!(storage.scan(ctx.clone(), key, None, 1, false, 20).is_err());
-    assert!(storage.scan_locks(ctx, 20, None, 100).is_err());
+    assert!(storage.scan_locks(ctx, 20, None, None, 100).is_err());
 }
 
 #[test]
@@ -152,7 +152,7 @@ fn test_raft_storage_store_not_match() {
     }
     assert!(storage.batch_get(ctx.clone(), &[key.clone()], 20).is_err());
     assert!(storage.scan(ctx.clone(), key, None, 1, false, 20).is_err());
-    assert!(storage.scan_locks(ctx, 20, None, 100).is_err());
+    assert!(storage.scan_locks(ctx, 20, None, None, 100).is_err());
 }
 
 #[test]
@@ -364,4 +364,52 @@ fn test_auto_gc() {
     finish_signal_rx
         .recv_timeout(Duration::from_millis(300))
         .unwrap_err();
+}
+
+#[test]
+fn test_atomic_basic() {
+    let (_cluster, storage, ctx) = new_raft_storage();
+    storage
+        .raw_batch_put_atomic(
+            ctx.clone(),
+            "default".to_string(),
+            vec![(b"k1".to_vec(), b"v1".to_vec())],
+            0,
+        )
+        .unwrap();
+    let (prev_val, succeed) = storage
+        .raw_compare_and_swap_atomic(
+            ctx.clone(),
+            "default".to_string(),
+            b"k1".to_vec(),
+            Some(b"v2".to_vec()),
+            b"v3".to_vec(),
+            0,
+        )
+        .unwrap();
+    assert!(!succeed);
+    assert_eq!(prev_val, Some(b"v1".to_vec()));
+    let (prev_val, succeed) = storage
+        .raw_compare_and_swap_atomic(
+            ctx.clone(),
+            "default".to_string(),
+            b"k1".to_vec(),
+            Some(b"v1".to_vec()),
+            b"v2".to_vec(),
+            0,
+        )
+        .unwrap();
+    assert!(succeed);
+    assert_eq!(prev_val, Some(b"v1".to_vec()));
+    let value = storage
+        .raw_get(ctx.clone(), "default".to_string(), b"k1".to_vec())
+        .unwrap();
+    assert_eq!(b"v2".to_vec(), value.unwrap());
+    storage
+        .raw_batch_delete_atomic(ctx.clone(), "default".to_string(), vec![b"k1".to_vec()])
+        .unwrap();
+    let value = storage
+        .raw_get(ctx.clone(), "default".to_string(), b"k1".to_vec())
+        .unwrap();
+    assert!(value.is_none());
 }

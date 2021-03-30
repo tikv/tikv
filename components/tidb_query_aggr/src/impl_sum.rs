@@ -38,7 +38,7 @@ impl super::parser::AggrDefinitionParser for AggrFnDefinitionParserSum {
         let out_ft = root_expr.take_field_type();
         let out_et = box_try!(EvalType::try_from(out_ft.as_accessor().tp()));
 
-        // The rewrite should always success.
+        // The rewrite should always succeed.
         super::util::rewrite_exp_for_sum_avg(src_schema, &mut exp).unwrap();
 
         let rewritten_eval_type =
@@ -122,7 +122,7 @@ where
         match value {
             None => Ok(()),
             Some(value) => {
-                self.sum.add_assign(ctx, &value.to_owned_value())?;
+                self.sum.add_assign(ctx, &value.into_owned_value())?;
                 self.has_value = true;
                 Ok(())
             }

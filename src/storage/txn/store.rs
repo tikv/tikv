@@ -596,10 +596,10 @@ impl Scanner for FixtureStoreScanner {
 mod tests {
     use super::*;
     use crate::storage::kv::{
-        Cursor, Engine, Iterator, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode,
-        SnapContext, TestEngineBuilder, WriteData,
+        Engine, Iterator, Result as EngineResult, RocksEngine, RocksSnapshot, SnapContext,
+        TestEngineBuilder, WriteData,
     };
-    use crate::storage::mvcc::{Mutation, MvccTxn};
+    use crate::storage::mvcc::{Mutation, MvccTxn, SnapshotReader};
     use crate::storage::txn::{
         commit, prewrite, CommitKind, TransactionKind, TransactionProperties,
     };
@@ -647,11 +647,13 @@ mod tests {
             // do prewrite.
             {
                 let cm = ConcurrencyManager::new(START_TS);
-                let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true, cm);
+                let mut txn = MvccTxn::new(START_TS, cm);
+                let mut reader = SnapshotReader::new(START_TS, self.snapshot.clone(), true);
                 for key in &self.keys {
                     let key = key.as_bytes();
                     prewrite(
                         &mut txn,
+                        &mut reader,
                         &TransactionProperties {
                             start_ts: START_TS,
                             kind: TransactionKind::Optimistic(false),
@@ -675,10 +677,11 @@ mod tests {
             // do commit
             {
                 let cm = ConcurrencyManager::new(START_TS);
-                let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true, cm);
+                let mut txn = MvccTxn::new(START_TS, cm);
+                let mut reader = SnapshotReader::new(START_TS, self.snapshot.clone(), true);
                 for key in &self.keys {
                     let key = key.as_bytes();
-                    commit(&mut txn, Key::from_raw(key), COMMIT_TS).unwrap();
+                    commit(&mut txn, &mut reader, Key::from_raw(key), COMMIT_TS).unwrap();
                 }
                 let write_data = WriteData::from_modifies(txn.into_modifies());
                 self.engine.write(&self.ctx, write_data).unwrap();
@@ -768,24 +771,11 @@ mod tests {
         fn get_cf_opt(&self, _: ReadOptions, _: CfName, _: &Key) -> EngineResult<Option<Value>> {
             Ok(None)
         }
-        fn iter(&self, _: IterOptions, _: ScanMode) -> EngineResult<Cursor<Self::Iter>> {
-            Ok(Cursor::new(
-                MockRangeSnapshotIter::default(),
-                ScanMode::Forward,
-                false,
-            ))
+        fn iter(&self, _: IterOptions) -> EngineResult<Self::Iter> {
+            Ok(MockRangeSnapshotIter::default())
         }
-        fn iter_cf(
-            &self,
-            _: CfName,
-            _: IterOptions,
-            _: ScanMode,
-        ) -> EngineResult<Cursor<Self::Iter>> {
-            Ok(Cursor::new(
-                MockRangeSnapshotIter::default(),
-                ScanMode::Forward,
-                false,
-            ))
+        fn iter_cf(&self, _: CfName, _: IterOptions) -> EngineResult<Self::Iter> {
+            Ok(MockRangeSnapshotIter::default())
         }
         fn lower_bound(&self) -> Option<&[u8]> {
             Some(self.start.as_slice())

@@ -11,7 +11,6 @@ use raft::eraftpb::MessageType;
 use engine_traits::{CfName, IterOptions, CF_DEFAULT};
 use test_raftstore::*;
 use tikv::storage::kv::*;
-use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use tikv::storage::CfStatistics;
 use tikv_util::codec::bytes;
 use tikv_util::HandyRwLock;
@@ -269,7 +268,7 @@ fn test_read_on_replica_check_memory_locks() {
     };
     let follower_storage = cluster.sim.rl().storages[&follower_id].clone();
     match follower_storage.snapshot(follower_snap_ctx) {
-        Err(Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(lock_info))))) => {
+        Err(Error(box ErrorInner::KeyIsLocked(lock_info))) => {
             assert_eq!(lock_info, lock.into_lock_info(raw_key.to_vec()))
         }
         other => panic!("unexpected result: {:?}", other),
@@ -391,9 +390,11 @@ fn assert_none_cf<E: Engine>(ctx: SnapContext<'_>, engine: &E, cf: CfName, key: 
 
 fn assert_seek<E: Engine>(ctx: SnapContext<'_>, engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
     let snapshot = engine.snapshot(ctx).unwrap();
-    let mut cursor = snapshot
-        .iter(IterOptions::default(), ScanMode::Mixed)
-        .unwrap();
+    let mut cursor = Cursor::new(
+        snapshot.iter(IterOptions::default()).unwrap(),
+        ScanMode::Mixed,
+        false,
+    );
     let mut statistics = CfStatistics::default();
     cursor.seek(&Key::from_raw(key), &mut statistics).unwrap();
     assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
@@ -408,9 +409,11 @@ fn assert_seek_cf<E: Engine>(
     pair: (&[u8], &[u8]),
 ) {
     let snapshot = engine.snapshot(ctx).unwrap();
-    let mut cursor = snapshot
-        .iter_cf(cf, IterOptions::default(), ScanMode::Mixed)
-        .unwrap();
+    let mut cursor = Cursor::new(
+        snapshot.iter_cf(cf, IterOptions::default()).unwrap(),
+        ScanMode::Mixed,
+        false,
+    );
     let mut statistics = CfStatistics::default();
     cursor.seek(&Key::from_raw(key), &mut statistics).unwrap();
     assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
@@ -483,9 +486,11 @@ fn seek<E: Engine>(ctx: SnapContext<'_>, engine: &E) {
     assert_seek(ctx.clone(), engine, b"y", (b"z", b"2"));
     assert_seek(ctx.clone(), engine, b"x\x00", (b"z", b"2"));
     let snapshot = engine.snapshot(ctx.clone()).unwrap();
-    let mut iter = snapshot
-        .iter(IterOptions::default(), ScanMode::Mixed)
-        .unwrap();
+    let mut iter = Cursor::new(
+        snapshot.iter(IterOptions::default()).unwrap(),
+        ScanMode::Mixed,
+        false,
+    );
     let mut statistics = CfStatistics::default();
     assert!(!iter
         .seek(&Key::from_raw(b"z\x00"), &mut statistics)
@@ -498,9 +503,11 @@ fn near_seek<E: Engine>(ctx: SnapContext<'_>, engine: &E) {
     must_put(ctx.pb_ctx, engine, b"x", b"1");
     must_put(ctx.pb_ctx, engine, b"z", b"2");
     let snapshot = engine.snapshot(ctx.clone()).unwrap();
-    let mut cursor = snapshot
-        .iter(IterOptions::default(), ScanMode::Mixed)
-        .unwrap();
+    let mut cursor = Cursor::new(
+        snapshot.iter(IterOptions::default()).unwrap(),
+        ScanMode::Mixed,
+        false,
+    );
     assert_near_seek(&mut cursor, b"x", (b"x", b"1"));
     assert_near_seek(&mut cursor, b"a", (b"x", b"1"));
     assert_near_reverse_seek(&mut cursor, b"z1", (b"z", b"2"));

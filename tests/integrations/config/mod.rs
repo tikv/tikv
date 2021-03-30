@@ -9,10 +9,11 @@ use slog::Level;
 use batch_system::Config as BatchSystemConfig;
 use collections::HashSet;
 use encryption::{EncryptionConfig, FileConfig, MasterKeyConfig};
-use engine_rocks::config::{BlobRunMode, CompressionType, LogLevel, PerfLevel};
+use engine_rocks::config::{BlobRunMode, CompressionType, LogLevel};
 use engine_rocks::raw::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
+use engine_traits::config::PerfLevel;
 use kvproto::encryptionpb::EncryptionMethod;
 use pd_client::Config as PdConfig;
 use raftstore::coprocessor::{Config as CopConfig, ConsistencyCheckMethod};
@@ -96,6 +97,7 @@ fn test_serde_custom_tikv_config() {
         background_thread_count: 999,
         raft_client_backoff_step: ReadableDuration::secs(1),
         end_point_slow_log_threshold: ReadableDuration::secs(1),
+        forward_max_connections_per_address: 5,
     };
     value.readpool = ReadPoolConfig {
         unified: UnifiedReadPoolConfig {
@@ -159,7 +161,7 @@ fn test_serde_custom_tikv_config() {
         raft_entry_cache_life_time: ReadableDuration::secs(12),
         raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
         split_region_check_tick_interval: ReadableDuration::secs(12),
-        region_split_check_diff: ReadableSize::mb(6),
+        region_split_check_diff: ReadableSize::mb(20),
         region_compact_check_interval: ReadableDuration::secs(12),
         clean_stale_peer_delay: ReadableDuration::secs(0),
         region_compact_check_step: 1_234,
@@ -636,8 +638,10 @@ fn test_serde_custom_tikv_config() {
         scheduler_concurrency: 123,
         scheduler_worker_pool_size: 1,
         scheduler_pending_write_threshold: ReadableSize::kb(123),
-        reserve_space: ReadableSize::gb(2),
+        reserve_space: ReadableSize::gb(10),
         enable_async_apply_prewrite: true,
+        enable_ttl: true,
+        ttl_check_poll_interval: ReadableDuration::hours(0),
         block_cache: BlockCacheConfig {
             shared: true,
             capacity: OptionReadableSize(Some(ReadableSize::gb(40))),
@@ -695,7 +699,7 @@ fn test_serde_custom_tikv_config() {
         ratio_threshold: 1.2,
         batch_keys: 256,
         max_write_bytes_per_sec: ReadableSize::mb(10),
-        enable_compaction_filter: true,
+        enable_compaction_filter: false,
         compaction_filter_skip_version_check: true,
     };
     value.pessimistic_txn = PessimisticTxnConfig {
@@ -737,7 +741,7 @@ fn diff_config(lhs: &TiKvConfig, rhs: &TiKvConfig) {
             last = Some(a);
         }
         second.map_or(0, |(i, _)| i)
-    };
+    }
     let cpl = find_index(lhs_str.bytes().zip(rhs_str.bytes()));
     let csl = find_index(lhs_str.bytes().rev().zip(rhs_str.bytes().rev()));
     if cpl + csl > lhs_str.len() || cpl + csl > rhs_str.len() {

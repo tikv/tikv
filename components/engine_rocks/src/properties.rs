@@ -1,15 +1,15 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{DecodeProperties, IndexHandles};
 use std::cmp;
 use std::collections::HashMap;
 use std::io::Read;
 use std::ops::{Deref, DerefMut};
 use std::u64;
 
-use engine_traits::KvEngine;
-use engine_traits::Range;
-use engine_traits::{IndexHandle, MvccProperties, TableProperties, TablePropertiesCollection};
+use engine_traits::{
+    DecodeProperties, IndexHandle, IndexHandles, KvEngine, MvccProperties, Range, TableProperties,
+    TablePropertiesCollection,
+};
 use rocksdb::{
     DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,
     UserCollectedProperties,
@@ -53,10 +53,10 @@ impl SizeProperties {
     }
 
     pub fn decode<T: DecodeProperties>(props: &T) -> Result<SizeProperties> {
-        let mut res = SizeProperties::default();
-        res.total_size = props.decode_u64(PROP_TOTAL_SIZE)?;
-        res.index_handles = props.decode_handles(PROP_SIZE_INDEX)?;
-        Ok(res)
+        Ok(SizeProperties {
+            total_size: props.decode_u64(PROP_TOTAL_SIZE)?,
+            index_handles: props.decode_handles(PROP_SIZE_INDEX)?,
+        })
     }
 }
 
@@ -180,9 +180,10 @@ impl RangeProperties {
             let klen = number::decode_u64(&mut buf)?;
             let mut k = vec![0; klen as usize];
             buf.read_exact(&mut k)?;
-            let mut offsets = RangeOffsets::default();
-            offsets.size = number::decode_u64(&mut buf)?;
-            offsets.keys = number::decode_u64(&mut buf)?;
+            let offsets = RangeOffsets {
+                size: number::decode_u64(&mut buf)?,
+                keys: number::decode_u64(&mut buf)?,
+            };
             res.offsets.push((k, offsets));
         }
         Ok(res)
@@ -294,8 +295,10 @@ impl From<SizeProperties> for RangeProperties {
     fn from(p: SizeProperties) -> RangeProperties {
         let mut res = RangeProperties::default();
         for (key, size_handle) in p.index_handles.into_map() {
-            let mut range = RangeOffsets::default();
-            range.size = size_handle.offset;
+            let range = RangeOffsets {
+                size: size_handle.offset,
+                ..Default::default()
+            };
             res.offsets.push((key, range));
         }
         res
@@ -620,7 +623,7 @@ mod tests {
             props.get_approximate_size_in_range(b"", b"k"),
             DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8 * 25 + 11
         );
-        assert_eq!(props.get_approximate_keys_in_range(b"", b"k"), 11 as u64);
+        assert_eq!(props.get_approximate_keys_in_range(b"", b"k"), 11_u64);
 
         assert_eq!(props.offsets.len(), 7);
         let a = props.get(b"a".as_ref());

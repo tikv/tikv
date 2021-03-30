@@ -1,20 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
-#![feature(min_specialization)]
-
-#[macro_use]
-extern crate lazy_static;
-#[macro_use]
-extern crate quick_error;
-#[macro_use]
-extern crate serde_derive;
-extern crate kvproto;
-#[macro_use(fail_point)]
-extern crate fail;
-
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
-#[macro_use]
-extern crate tikv_util;
 
 mod client;
 mod feature_gate;
@@ -27,8 +13,8 @@ pub use self::client::{DummyPdClient, RpcClient};
 pub use self::config::Config;
 pub use self::errors::{Error, Result};
 pub use self::feature_gate::{Feature, FeatureGate};
-pub use self::util::validate_endpoints;
-pub use self::util::RECONNECT_INTERVAL_SEC;
+pub use self::util::PdConnector;
+pub use self::util::REQUEST_RECONNECT_INTERVAL;
 
 use std::ops::Deref;
 

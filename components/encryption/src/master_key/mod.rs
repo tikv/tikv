@@ -2,19 +2,16 @@
 
 use kvproto::encryptionpb::EncryptedContent;
 
-#[cfg(test)]
-use crate::config::Mock;
-use crate::{Error, MasterKeyConfig, Result};
+use crate::{Error, Result};
 
-use std::path::Path;
-use std::sync::Arc;
+use tikv_util::box_err;
 
 /// Provide API to encrypt/decrypt key dictionary content.
 ///
 /// Can be back by KMS, or a key read from a file. If file is used, it will
 /// prefix the result with the IV (nonce + initial counter) on encrypt,
 /// and decode the IV on decrypt.
-pub trait Backend: Sync + Send + 'static {
+pub trait Backend: Sync + Send + std::fmt::Debug + 'static {
     fn encrypt(&self, plaintext: &[u8]) -> Result<EncryptedContent>;
     fn decrypt(&self, ciphertext: &EncryptedContent) -> Result<Vec<u8>>;
 
@@ -28,14 +25,14 @@ use self::mem::MemAesGcmBackend;
 mod file;
 pub use self::file::FileBackend;
 
-mod kms;
-pub use self::kms::KmsBackend;
-
 mod metadata;
 use self::metadata::*;
 
-#[derive(Default)]
-pub(crate) struct PlaintextBackend {}
+mod kms;
+pub use self::kms::{DataKeyPair, EncryptedKey, KmsBackend, KmsProvider};
+
+#[derive(Default, Debug, Clone)]
+pub struct PlaintextBackend {}
 
 impl Backend for PlaintextBackend {
     fn encrypt(&self, plaintext: &[u8]) -> Result<EncryptedContent> {
@@ -72,70 +69,86 @@ impl Backend for PlaintextBackend {
     }
 }
 
-pub(crate) fn create_backend(config: &MasterKeyConfig) -> Result<Arc<dyn Backend>> {
-    Ok(match config {
-        MasterKeyConfig::Plaintext => Arc::new(PlaintextBackend {}) as _,
-        MasterKeyConfig::File { config } => {
-            Arc::new(FileBackend::new(Path::new(&config.path))?) as _
-        }
-        MasterKeyConfig::Kms { config } => Arc::new(KmsBackend::new(config.clone())?) as _,
-        #[cfg(test)]
-        MasterKeyConfig::Mock(Mock(mock)) => mock.clone() as _,
-    })
-}
-
-// To make MasterKeyConfig able to compile.
-#[cfg(test)]
-impl std::fmt::Debug for dyn Backend {
-    fn fmt(&self, _f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 pub mod tests {
     use super::*;
     use crate::*;
-
+    use lazy_static::lazy_static;
+    use std::collections::HashMap;
     use std::sync::Mutex;
 
-    pub(crate) struct MockBackend {
-        pub inner: Box<dyn Backend>,
+    #[derive(Debug)]
+    pub struct MockBackend {
         pub is_wrong_master_key: bool,
         pub encrypt_fail: bool,
-        pub encrypt_called: usize,
-        pub decrypt_called: usize,
+        pub track: String,
+    }
+
+    // Use a technique to use mutable state for a testing mock
+    // without having it infect the rest of the program.
+    lazy_static! {
+        pub static ref ENCRYPT_CALLED: Mutex<HashMap<String, usize>> = Mutex::new(HashMap::new());
+        pub static ref DECRYPT_CALLED: Mutex<HashMap<String, usize>> = Mutex::new(HashMap::new());
+    }
+
+    pub fn decrypt_called(name: &str) -> usize {
+        let track = make_track(name);
+        *DECRYPT_CALLED.lock().unwrap().get(&track).unwrap()
+    }
+
+    pub fn encrypt_called(name: &str) -> usize {
+        let track = make_track(name);
+        *ENCRYPT_CALLED.lock().unwrap().get(&track).unwrap()
+    }
+
+    fn make_track(name: &str) -> String {
+        format!("{} {:?}", name, std::thread::current().id())
+    }
+
+    impl MockBackend {
+        // Callers are responsible for enabling tracking on the MockBackend by calling this function
+        // This names the backend instance, allowiing later fine-grained recall
+        pub fn track(&mut self, name: String) {
+            let track = make_track(&name);
+            self.track = track.clone();
+            ENCRYPT_CALLED.lock().unwrap().insert(track.clone(), 0);
+            DECRYPT_CALLED.lock().unwrap().insert(track, 0);
+        }
     }
 
     impl Default for MockBackend {
         fn default() -> MockBackend {
             MockBackend {
-                inner: Box::new(PlaintextBackend {}),
                 is_wrong_master_key: false,
                 encrypt_fail: false,
-                encrypt_called: 0,
-                decrypt_called: 0,
+                track: "Not tracked".to_string(),
             }
         }
     }
 
-    impl Backend for Mutex<MockBackend> {
+    impl Backend for MockBackend {
         fn encrypt(&self, plaintext: &[u8]) -> Result<EncryptedContent> {
-            let mut mock = self.lock().unwrap();
-            mock.encrypt_called += 1;
-            if mock.encrypt_fail {
+            let mut map = ENCRYPT_CALLED.lock().unwrap();
+            if let Some(count) = map.get_mut(&self.track) {
+                *count += 1
+            }
+            if self.encrypt_fail {
                 return Err(box_err!("mock error"));
             }
-            mock.inner.encrypt(plaintext)
+            (PlaintextBackend {}).encrypt(plaintext)
         }
+
         fn decrypt(&self, ciphertext: &EncryptedContent) -> Result<Vec<u8>> {
-            let mut mock = self.lock().unwrap();
-            mock.decrypt_called += 1;
-            if mock.is_wrong_master_key {
+            let mut map = DECRYPT_CALLED.lock().unwrap();
+            if let Some(count) = map.get_mut(&self.track) {
+                *count += 1
+            }
+            if self.is_wrong_master_key {
                 return Err(Error::WrongMasterKey("".to_owned().into()));
             }
-            mock.inner.decrypt(ciphertext)
+            (PlaintextBackend {}).decrypt(ciphertext)
         }
+
         fn is_secure(&self) -> bool {
             true
         }

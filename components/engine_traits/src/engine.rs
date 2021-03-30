@@ -24,6 +24,8 @@ pub trait KvEngine:
     + CompactExt
     + RangePropertiesExt
     + MvccPropertiesExt
+    + TtlPropertiesExt
+    + PerfContextExt
     + MiscExt
     + Send
     + Sync

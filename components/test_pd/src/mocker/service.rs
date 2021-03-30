@@ -4,6 +4,7 @@ use collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
+use fail::fail_point;
 use kvproto::metapb::{Peer, Region, Store, StoreState};
 use kvproto::pdpb::*;
 
@@ -113,6 +114,7 @@ impl PdMocker for Service {
     }
 
     fn alloc_id(&self, _: &AllocIdRequest) -> Option<Result<AllocIdResponse>> {
+        fail_point!("connect_leader", |_| None);
         let mut resp = AllocIdResponse::default();
         resp.set_header(Service::header());
 
@@ -279,6 +281,33 @@ impl PdMocker for Service {
 
     fn get_operator(&self, _: &GetOperatorRequest) -> Option<Result<GetOperatorResponse>> {
         let mut resp = GetOperatorResponse::default();
+        let header = Service::header();
+        resp.set_header(header);
+        Some(Ok(resp))
+    }
+
+    fn put_store(&self, _: &PutStoreRequest) -> Option<Result<PutStoreResponse>> {
+        let mut resp = PutStoreResponse::default();
+        let header = Service::header();
+        resp.set_header(header);
+        Some(Ok(resp))
+    }
+
+    fn get_cluster_config(
+        &self,
+        _: &GetClusterConfigRequest,
+    ) -> Option<Result<GetClusterConfigResponse>> {
+        let mut resp = GetClusterConfigResponse::default();
+        let header = Service::header();
+        resp.set_header(header);
+        Some(Ok(resp))
+    }
+
+    fn get_gc_safe_point(
+        &self,
+        _: &GetGcSafePointRequest,
+    ) -> Option<Result<GetGcSafePointResponse>> {
+        let mut resp = GetGcSafePointResponse::default();
         let header = Service::header();
         resp.set_header(header);
         Some(Ok(resp))

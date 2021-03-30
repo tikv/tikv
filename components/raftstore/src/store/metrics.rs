@@ -133,10 +133,15 @@ make_auto_flush_static_metric! {
     }
 
     pub label_enum CompactionGuardAction {
-        create,
-        create_failure,
+        init,
+        init_failure,
         partition,
         skip_partition,
+    }
+
+    pub label_enum SendStatus {
+        accept,
+        drop,
     }
 
     pub struct RaftEventDuration : LocalHistogram {
@@ -173,6 +178,7 @@ make_auto_flush_static_metric! {
 
     pub struct MessageCounterVec : LocalIntCounter {
         "type" => MessageCounterType,
+        "status" => SendStatus,
     }
 
     pub struct RaftDropedVec : LocalIntCounter {
@@ -252,7 +258,7 @@ lazy_static! {
         register_int_counter_vec!(
             "tikv_raftstore_raft_sent_message_total",
             "Total number of raft ready sent messages.",
-            &["type"]
+            &["type", "status"]
         ).unwrap();
     pub static ref STORE_RAFT_SENT_MESSAGE_COUNTER: MessageCounterVec =
         auto_flush_from!(STORE_RAFT_SENT_MESSAGE_COUNTER_VEC, MessageCounterVec);
@@ -473,6 +479,13 @@ lazy_static! {
         &["order"]
         ).unwrap();
 
+    pub static ref LOAD_BASE_SPLIT_EVENT: IntCounterVec =
+        register_int_counter_vec!(
+            "tikv_load_base_split_event",
+            "Load base split event.",
+            &["type"]
+        ).unwrap();
+
     pub static ref RAFT_ENTRIES_CACHES_GAUGE: IntGauge = register_int_gauge!(
         "tikv_raft_entries_caches",
         "Total memory size of raft entries caches."
@@ -498,4 +511,11 @@ lazy_static! {
         ).unwrap();
     pub static ref COMPACTION_GUARD_ACTION_COUNTER: CompactionGuardActionVec =
         auto_flush_from!(COMPACTION_GUARD_ACTION_COUNTER_VEC, CompactionGuardActionVec);
+
+    pub static ref RAFT_PEER_PENDING_DURATION: Histogram =
+    register_histogram!(
+        "tikv_raftstore_peer_pending_duration_seconds",
+        "Bucketed histogram of region peer pending duration.",
+        exponential_buckets(0.1, 1.5, 30).unwrap()  // 0.1s ~ 5.3 hours
+    ).unwrap();
 }

@@ -14,14 +14,13 @@ use futures::future::TryFutureExt;
 use tokio::task::spawn_local;
 
 use engine_traits::{KvEngine, RaftEngine};
-use kvproto::metapb;
-use kvproto::pdpb;
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest,
     SplitRequest,
 };
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::RegionReplicationStatus;
+use kvproto::{metapb, pdpb};
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 
@@ -30,9 +29,9 @@ use crate::store::metrics::*;
 use crate::store::util::{is_epoch_stale, ConfChangeKind, KeysInfoFormatter};
 use crate::store::worker::split_controller::{SplitInfo, TOP_N};
 use crate::store::worker::{AutoSplitController, ReadStats};
-use crate::store::Callback;
-use crate::store::StoreInfo;
-use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, StoreMsg};
+use crate::store::{
+    Callback, CasualMessage, PeerMsg, RaftCommand, RaftRouter, SnapManager, StoreInfo, StoreMsg,
+};
 
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
@@ -450,6 +449,7 @@ where
     stats_monitor: StatsMonitor<EK>,
 
     concurrency_manager: ConcurrencyManager,
+    snap_mgr: SnapManager,
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
@@ -468,6 +468,7 @@ where
         store_heartbeat_interval: Duration,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
+        snap_mgr: SnapManager,
     ) -> Runner<EK, ER, T> {
         let interval = store_heartbeat_interval / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
@@ -486,6 +487,7 @@ where
             scheduler,
             stats_monitor,
             concurrency_manager,
+            snap_mgr,
         }
     }
 
@@ -671,21 +673,15 @@ where
         };
         stats.set_capacity(capacity);
 
-        // already include size of snapshot files
-        let used_size =
-            stats.get_used_size() + store_info.engine.get_engine_used_size().expect("cf");
+        let used_size = self.snap_mgr.get_total_snap_size().unwrap()
+            + store_info.engine.get_engine_used_size().expect("cf");
         stats.set_used_size(used_size);
 
-        let mut available = if capacity > used_size {
-            capacity - used_size
-        } else {
-            warn!("no available space");
-            0
-        };
-
+        let mut available = capacity.checked_sub(used_size).unwrap_or_default();
         // We only care about rocksdb SST file size, so we should check disk available here.
-        if available > disk_stats.free_space() {
-            available = disk_stats.free_space();
+        available = cmp::min(available, disk_stats.available_space());
+        if available == 0 {
+            warn!("no available space");
         }
 
         stats.set_available(available);
@@ -927,9 +923,6 @@ where
             peer_stat.read_keys += region_info.flow.read_keys as u64;
             self.store_stat.engine_total_bytes_read += region_info.flow.read_bytes as u64;
             self.store_stat.engine_total_keys_read += region_info.flow.read_keys as u64;
-
-            region_info.approximate_key = peer_stat.approximate_keys;
-            region_info.approximate_size = peer_stat.approximate_size;
         }
         if !read_stats.region_infos.is_empty() {
             if let Some(sender) = self.stats_monitor.get_sender() {
@@ -973,12 +966,14 @@ where
                     Ok(ts) => {
                         concurrency_manager.update_max_ts(ts);
                         // Set the least significant bit to 1 to mark it as synced.
-                        let old_value = max_ts_sync_status.compare_and_swap(
-                            initial_status,
-                            initial_status | 1,
-                            Ordering::SeqCst,
-                        );
-                        success = old_value == initial_status;
+                        success = max_ts_sync_status
+                            .compare_exchange(
+                                initial_status,
+                                initial_status | 1,
+                                Ordering::SeqCst,
+                                Ordering::SeqCst,
+                            )
+                            .is_ok();
                         break;
                     }
                     Err(e) => {

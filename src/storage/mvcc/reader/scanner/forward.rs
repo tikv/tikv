@@ -992,15 +992,18 @@ mod latest_kv_tests {
     use super::super::ScannerBuilder;
     use super::test_util::prepare_test_data_for_check_gc_fence;
     use super::*;
-    use crate::storage::kv::{Engine, TestEngineBuilder};
-    use crate::storage::Scanner;
-
+    use crate::storage::kv::{Engine, Modify, TestEngineBuilder};
+    use crate::storage::mvcc::tests::write;
     use crate::storage::txn::tests::*;
+    use crate::storage::Scanner;
+    use engine_traits::{CF_LOCK, CF_WRITE};
+    use kvproto::kvrpcpb::Context;
 
     /// Check whether everything works as usual when `ForwardKvScanner::get()` goes out of bound.
     #[test]
     fn test_get_out_of_bound() {
         let engine = TestEngineBuilder::new().build().unwrap();
+        let ctx = Context::default();
 
         // Generate 1 put for [a].
         must_prewrite_put(&engine, b"a", b"value", b"a", 7);
@@ -1008,7 +1011,16 @@ mod latest_kv_tests {
 
         // Generate 5 rollback for [b].
         for ts in 0..5 {
-            must_rollback(&engine, b"b", ts);
+            let modifies = vec![
+                // ts is rather small, so it is ok to `as u8`
+                Modify::Put(
+                    CF_WRITE,
+                    Key::from_raw(b"b").append_ts(TimeStamp::new(ts)),
+                    vec![b'R', ts as u8],
+                ),
+                Modify::Delete(CF_LOCK, Key::from_raw(b"b")),
+            ];
+            write(&engine, &ctx, modifies);
         }
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -1053,14 +1065,23 @@ mod latest_kv_tests {
     #[test]
     fn test_move_next_user_key_out_of_bound_1() {
         let engine = TestEngineBuilder::new().build().unwrap();
-
+        let ctx = Context::default();
         // Generate 1 put for [a].
         must_prewrite_put(&engine, b"a", b"a_value", b"a", SEEK_BOUND * 2);
         must_commit(&engine, b"a", SEEK_BOUND * 2, SEEK_BOUND * 2);
 
         // Generate SEEK_BOUND / 2 rollback and 1 put for [b] .
         for ts in 0..SEEK_BOUND / 2 {
-            must_rollback(&engine, b"b", ts as u64);
+            let modifies = vec![
+                // ts is rather small, so it is ok to `as u8`
+                Modify::Put(
+                    CF_WRITE,
+                    Key::from_raw(b"b").append_ts(TimeStamp::new(ts)),
+                    vec![b'R', ts as u8],
+                ),
+                Modify::Delete(CF_LOCK, Key::from_raw(b"b")),
+            ];
+            write(&engine, &ctx, modifies);
         }
         must_prewrite_put(&engine, b"b", b"b_value", b"a", SEEK_BOUND / 2);
         must_commit(&engine, b"b", SEEK_BOUND / 2, SEEK_BOUND / 2);
@@ -1116,6 +1137,7 @@ mod latest_kv_tests {
     #[test]
     fn test_move_next_user_key_out_of_bound_2() {
         let engine = TestEngineBuilder::new().build().unwrap();
+        let ctx = Context::default();
 
         // Generate 1 put for [a].
         must_prewrite_put(&engine, b"a", b"a_value", b"a", SEEK_BOUND * 2);
@@ -1123,7 +1145,16 @@ mod latest_kv_tests {
 
         // Generate SEEK_BOUND-1 rollback and 1 put for [b] .
         for ts in 1..SEEK_BOUND {
-            must_rollback(&engine, b"b", ts as u64);
+            let modifies = vec![
+                // ts is rather small, so it is ok to `as u8`
+                Modify::Put(
+                    CF_WRITE,
+                    Key::from_raw(b"b").append_ts(TimeStamp::new(ts)),
+                    vec![b'R', ts as u8],
+                ),
+                Modify::Delete(CF_LOCK, Key::from_raw(b"b")),
+            ];
+            write(&engine, &ctx, modifies);
         }
         must_prewrite_put(&engine, b"b", b"b_value", b"a", SEEK_BOUND);
         must_commit(&engine, b"b", SEEK_BOUND, SEEK_BOUND);
@@ -1303,18 +1334,20 @@ mod latest_kv_tests {
 mod latest_entry_tests {
     use super::super::ScannerBuilder;
     use super::*;
-    use crate::storage::txn::tests::{
-        must_commit, must_prewrite_delete, must_prewrite_put, must_rollback,
-    };
-    use crate::storage::{Engine, TestEngineBuilder};
+    use crate::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
+    use crate::storage::{Engine, Modify, TestEngineBuilder};
 
     use super::test_util::*;
+    use crate::storage::mvcc::tests::write;
     use crate::storage::txn::EntryBatch;
+    use engine_traits::{CF_LOCK, CF_WRITE};
+    use kvproto::kvrpcpb::Context;
 
     /// Check whether everything works as usual when `EntryScanner::get()` goes out of bound.
     #[test]
     fn test_get_out_of_bound() {
         let engine = TestEngineBuilder::new().build().unwrap();
+        let ctx = Context::default();
 
         // Generate 1 put for [a].
         must_prewrite_put(&engine, b"a", b"value", b"a", 7);
@@ -1322,7 +1355,16 @@ mod latest_entry_tests {
 
         // Generate 5 rollback for [b].
         for ts in 0..5 {
-            must_rollback(&engine, b"b", ts);
+            let modifies = vec![
+                // ts is rather small, so it is ok to `as u8`
+                Modify::Put(
+                    CF_WRITE,
+                    Key::from_raw(b"b").append_ts(TimeStamp::new(ts)),
+                    vec![b'R', ts as u8],
+                ),
+                Modify::Delete(CF_LOCK, Key::from_raw(b"b")),
+            ];
+            write(&engine, &ctx, modifies);
         }
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -1372,6 +1414,7 @@ mod latest_entry_tests {
     #[test]
     fn test_move_next_user_key_out_of_bound_1() {
         let engine = TestEngineBuilder::new().build().unwrap();
+        let ctx = Context::default();
 
         // Generate 1 put for [a].
         must_prewrite_put(&engine, b"a", b"a_value", b"a", SEEK_BOUND * 2);
@@ -1379,7 +1422,16 @@ mod latest_entry_tests {
 
         // Generate SEEK_BOUND / 2 rollback and 1 put for [b] .
         for ts in 0..SEEK_BOUND / 2 {
-            must_rollback(&engine, b"b", ts as u64);
+            let modifies = vec![
+                // ts is rather small, so it is ok to `as u8`
+                Modify::Put(
+                    CF_WRITE,
+                    Key::from_raw(b"b").append_ts(TimeStamp::new(ts)),
+                    vec![b'R', ts as u8],
+                ),
+                Modify::Delete(CF_LOCK, Key::from_raw(b"b")),
+            ];
+            write(&engine, &ctx, modifies);
         }
         must_prewrite_put(&engine, b"b", b"b_value", b"a", SEEK_BOUND / 2);
         must_commit(&engine, b"b", SEEK_BOUND / 2, SEEK_BOUND / 2);
@@ -1441,6 +1493,7 @@ mod latest_entry_tests {
     #[test]
     fn test_move_next_user_key_out_of_bound_2() {
         let engine = TestEngineBuilder::new().build().unwrap();
+        let ctx = Context::default();
 
         // Generate 1 put for [a].
         must_prewrite_put(&engine, b"a", b"a_value", b"a", SEEK_BOUND * 2);
@@ -1448,7 +1501,16 @@ mod latest_entry_tests {
 
         // Generate SEEK_BOUND-1 rollback and 1 put for [b] .
         for ts in 1..SEEK_BOUND {
-            must_rollback(&engine, b"b", ts as u64);
+            let modifies = vec![
+                // ts is rather small, so it is ok to `as u8`
+                Modify::Put(
+                    CF_WRITE,
+                    Key::from_raw(b"b").append_ts(TimeStamp::new(ts)),
+                    vec![b'R', ts as u8],
+                ),
+                Modify::Delete(CF_LOCK, Key::from_raw(b"b")),
+            ];
+            write(&engine, &ctx, modifies);
         }
         must_prewrite_put(&engine, b"b", b"b_value", b"a", SEEK_BOUND);
         must_commit(&engine, b"b", SEEK_BOUND, SEEK_BOUND);
@@ -1582,6 +1644,7 @@ mod latest_entry_tests {
     #[test]
     fn test_output_delete_and_after_ts() {
         let engine = TestEngineBuilder::new().build().unwrap();
+        let ctx = Context::default();
 
         // Generate put for [a] at 3.
         must_prewrite_put(&engine, b"a", b"a_3", b"a", 3);
@@ -1597,7 +1660,16 @@ mod latest_entry_tests {
 
         // Generate rollbacks for [b] at 2, 3, 4.
         for ts in 2..5 {
-            must_rollback(&engine, b"b", ts);
+            let modifies = vec![
+                // ts is rather small, so it is ok to `as u8`
+                Modify::Put(
+                    CF_WRITE,
+                    Key::from_raw(b"b").append_ts(TimeStamp::new(ts)),
+                    vec![b'R', ts as u8],
+                ),
+                Modify::Delete(CF_LOCK, Key::from_raw(b"b")),
+            ];
+            write(&engine, &ctx, modifies);
         }
 
         // Generate delete for [b] at 10.
@@ -1685,16 +1757,19 @@ mod delta_entry_tests {
     use super::super::ScannerBuilder;
     use super::*;
     use crate::storage::txn::tests::*;
-    use crate::storage::{Engine, TestEngineBuilder};
+    use crate::storage::{Engine, Modify, TestEngineBuilder};
 
     use txn_types::{is_short_value, SHORT_VALUE_MAX_LEN};
 
     use super::test_util::*;
-
+    use crate::storage::mvcc::tests::write;
+    use engine_traits::{CF_LOCK, CF_WRITE};
+    use kvproto::kvrpcpb::Context;
     /// Check whether everything works as usual when `Delta::get()` goes out of bound.
     #[test]
     fn test_get_out_of_bound() {
         let engine = TestEngineBuilder::new().build().unwrap();
+        let ctx = Context::default();
 
         // Generate 1 put for [a].
         must_prewrite_put(&engine, b"a", b"value", b"a", 7);
@@ -1702,7 +1777,16 @@ mod delta_entry_tests {
 
         // Generate 5 rollback for [b].
         for ts in 0..5 {
-            must_rollback(&engine, b"b", ts);
+            let modifies = vec![
+                // ts is rather small, so it is ok to `as u8`
+                Modify::Put(
+                    CF_WRITE,
+                    Key::from_raw(b"b").append_ts(TimeStamp::new(ts)),
+                    vec![b'R', ts as u8],
+                ),
+                Modify::Delete(CF_LOCK, Key::from_raw(b"b")),
+            ];
+            write(&engine, &ctx, modifies);
         }
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -1752,14 +1836,23 @@ mod delta_entry_tests {
     #[test]
     fn test_move_next_user_key_out_of_bound_1() {
         let engine = TestEngineBuilder::new().build().unwrap();
-
+        let ctx = Context::default();
         // Generate 1 put for [a].
         must_prewrite_put(&engine, b"a", b"a_value", b"a", SEEK_BOUND * 2);
         must_commit(&engine, b"a", SEEK_BOUND * 2, SEEK_BOUND * 2);
 
         // Generate SEEK_BOUND / 2 rollback and 1 put for [b] .
         for ts in 0..SEEK_BOUND / 2 {
-            must_rollback(&engine, b"b", ts as u64);
+            let modifies = vec![
+                // ts is rather small, so it is ok to `as u8`
+                Modify::Put(
+                    CF_WRITE,
+                    Key::from_raw(b"b").append_ts(TimeStamp::new(ts)),
+                    vec![b'R', ts as u8],
+                ),
+                Modify::Delete(CF_LOCK, Key::from_raw(b"b")),
+            ];
+            write(&engine, &ctx, modifies);
         }
         must_prewrite_put(&engine, b"b", b"b_value", b"a", SEEK_BOUND / 2);
         must_commit(&engine, b"b", SEEK_BOUND / 2, SEEK_BOUND / 2);
@@ -1821,6 +1914,7 @@ mod delta_entry_tests {
     #[test]
     fn test_move_next_user_key_out_of_bound_2() {
         let engine = TestEngineBuilder::new().build().unwrap();
+        let ctx = Context::default();
 
         // Generate 1 put for [a].
         must_prewrite_put(&engine, b"a", b"a_value", b"a", SEEK_BOUND * 2);
@@ -1830,7 +1924,16 @@ mod delta_entry_tests {
         // It differs from EntryScanner that this will try to fetch multiple versions of each key.
         // So in this test it needs one more next than EntryScanner.
         for ts in 1..=SEEK_BOUND {
-            must_rollback(&engine, b"b", ts as u64);
+            let modifies = vec![
+                // ts is rather small, so it is ok to `as u8`
+                Modify::Put(
+                    CF_WRITE,
+                    Key::from_raw(b"b").append_ts(TimeStamp::new(ts)),
+                    vec![b'R', ts as u8],
+                ),
+                Modify::Delete(CF_LOCK, Key::from_raw(b"b")),
+            ];
+            write(&engine, &ctx, modifies);
         }
         must_prewrite_put(&engine, b"b", b"b_value", b"a", SEEK_BOUND + 1);
         must_commit(&engine, b"b", SEEK_BOUND + 1, SEEK_BOUND + 1);
@@ -2118,7 +2221,7 @@ mod delta_entry_tests {
                         commit_ts - 1,
                         true,
                     ),
-                    WriteType::Rollback => must_rollback(&engine, key, start_ts),
+                    WriteType::Rollback => must_rollback(&engine, key, start_ts, false),
                 }
                 if *write_type != WriteType::Rollback {
                     must_commit(&engine, key, start_ts, commit_ts);
@@ -2210,6 +2313,7 @@ mod delta_entry_tests {
     #[test]
     fn test_output_old_value() {
         let engine = TestEngineBuilder::new().build().unwrap();
+        let ctx = Context::default();
 
         // Generate put for [a] at 1.
         must_prewrite_put(&engine, b"a", b"a_1", b"a", 1);
@@ -2228,7 +2332,16 @@ mod delta_entry_tests {
 
         // Generate rollbacks for [b] at 6, 7, 8.
         for ts in 6..9 {
-            must_rollback(&engine, b"b", ts);
+            let modifies = vec![
+                // ts is rather small, so it is ok to `as u8`
+                Modify::Put(
+                    CF_WRITE,
+                    Key::from_raw(b"b").append_ts(TimeStamp::new(ts)),
+                    vec![b'R', ts as u8],
+                ),
+                Modify::Delete(CF_LOCK, Key::from_raw(b"b")),
+            ];
+            write(&engine, &ctx, modifies);
         }
 
         // Generate delete for [b] at 10.
@@ -2238,6 +2351,12 @@ mod delta_entry_tests {
         // Generate put for [b] at 15.
         must_acquire_pessimistic_lock(&engine, b"b", b"b", 9, 15);
         must_pessimistic_prewrite_put(&engine, b"b", b"b_15", b"b", 9, 15, true);
+
+        must_prewrite_put(&engine, b"c", b"c_4", b"c", 4);
+        must_commit(&engine, b"c", 4, 6);
+        must_acquire_pessimistic_lock(&engine, b"c", b"c", 5, 15);
+        must_pessimistic_prewrite_put(&engine, b"c", b"c_5", b"c", 5, 15, true);
+        must_cleanup(&engine, b"c", 20, 0);
 
         let entry_a_1 = EntryBuilder::default()
             .key(b"a")
@@ -2277,6 +2396,20 @@ mod delta_entry_tests {
             .start_ts(9.into())
             .for_update_ts(15.into())
             .build_prewrite(LockType::Put, true);
+        let entry_c_4 = EntryBuilder::default()
+            .key(b"c")
+            .value(b"c_4")
+            .start_ts(4.into())
+            .commit_ts(6.into())
+            .build_commit(WriteType::Put, true);
+        let entry_c_5 = EntryBuilder::default()
+            .key(b"c")
+            .value(b"c_5")
+            .primary(b"c")
+            .start_ts(5.into())
+            .for_update_ts(15.into())
+            .old_value(b"c_4")
+            .build_prewrite(LockType::Put, true);
 
         let check = |after_ts: u64, expected: Vec<&TxnEntry>| {
             let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -2292,9 +2425,9 @@ mod delta_entry_tests {
         };
 
         // Scanning entries in (10, max] should get all prewrites
-        check(10, vec![&entry_a_5, &entry_b_15]);
-        // Scanning entries include delete in (7, max] should get a_5, b_10 and b_15
-        check(7, vec![&entry_a_5, &entry_b_15, &entry_b_10]);
+        check(10, vec![&entry_a_5, &entry_b_15, &entry_c_5]);
+        // Scanning entries include delete in (7, max] should get a_5, b_10, b_15 and c_5
+        check(7, vec![&entry_a_5, &entry_b_15, &entry_b_10, &entry_c_5]);
         // Scanning entries in (0, max] should get a_1, a_3, a_5, b_2, b_10, and b_15
         check(
             0,
@@ -2305,6 +2438,8 @@ mod delta_entry_tests {
                 &entry_b_15,
                 &entry_b_10,
                 &entry_b_2,
+                &entry_c_5,
+                &entry_c_4,
             ],
         );
     }

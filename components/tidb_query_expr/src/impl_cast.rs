@@ -354,7 +354,7 @@ fn cast_string_as_int(
                         Ok(Some(x as i64))
                     }
                     Err(err) => match *err.kind() {
-                        IntErrorKind::Overflow | IntErrorKind::Underflow => {
+                        IntErrorKind::PosOverflow | IntErrorKind::NegOverflow => {
                             let err = if is_str_neg {
                                 Error::overflow("BIGINT UNSIGNED", valid_int_prefix)
                             } else {
@@ -518,7 +518,12 @@ fn cast_string_as_signed_real(
     match val {
         None => Ok(None),
         Some(val) => {
-            let r: f64 = val.convert(ctx)?;
+            let r: f64;
+            if val.is_empty() {
+                r = 0.0;
+            } else {
+                r = val.convert(ctx)?;
+            }
             let r = produce_float_with_specified_tp(ctx, extra.ret_field_type, r)?;
             Ok(Real::new(r).ok())
         }
@@ -1968,8 +1973,8 @@ mod tests {
 
         // binary literal
         let cases = vec![
-            (vec![0x01, 0x02, 0x03], Some(0x010203 as i64)),
-            (vec![0x01, 0x02, 0x03, 0x4], Some(0x01020304 as i64)),
+            (vec![0x01, 0x02, 0x03], Some(0x010203_i64)),
+            (vec![0x01, 0x02, 0x03, 0x4], Some(0x01020304_i64)),
             (
                 vec![0x01, 0x02, 0x03, 0x4, 0x05, 0x06, 0x06, 0x06, 0x06],
                 None,
@@ -2826,6 +2831,7 @@ mod tests {
             (String::from("99999999"), 999999.99, 8, 2, false, true),
             (String::from("1234abc"), 0.9f64, 1, 1, true, true),
             (String::from("-1234abc"), -0.9f64, 1, 1, true, true),
+            (String::from(""), 0f64, 1, 0, false, false),
         ];
 
         for (input, expected, flen, decimal, truncated, overflow) in cs {

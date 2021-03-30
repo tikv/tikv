@@ -11,7 +11,8 @@ use std::{mem, u64};
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
-use engine_rocks::{PerfContext, PerfLevel};
+use engine_traits::PerfContext;
+use engine_traits::PerfContextKind;
 use engine_traits::{Engines, KvEngine, Mutable, WriteBatch, WriteBatchExt, WriteOptions};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::compat::Future01CompatExt;
@@ -42,8 +43,6 @@ use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
 
 use crate::coprocessor::split_observer::SplitObserver;
 use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
-use crate::observe_perf_context_type;
-use crate::report_perf_context;
 use crate::store::config::Config;
 use crate::store::fsm::metrics::*;
 use crate::store::fsm::peer::{
@@ -59,7 +58,7 @@ use crate::store::local_metrics::RaftMetrics;
 use crate::store::metrics::*;
 use crate::store::peer_storage::{self, HandleRaftReadyContext};
 use crate::store::transport::Transport;
-use crate::store::util::{is_initial_msg, PerfContextStatistics};
+use crate::store::util::is_initial_msg;
 use crate::store::worker::{
     AutoSplitController, CleanupRunner, CleanupSSTRunner, CleanupSSTTask, CleanupTask,
     CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner,
@@ -338,7 +337,7 @@ where
     pub has_ready: bool,
     pub ready_res: Vec<CollectedReady>,
     pub current_time: Option<Timespec>,
-    pub perf_context_statistics: PerfContextStatistics,
+    pub perf_context: EK::PerfContext,
     pub tick_batch: Vec<PeerTickBatch>,
     pub node_start_time: Option<TiInstant>,
 }
@@ -664,10 +663,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
                 });
         }
 
-        report_perf_context!(
-            self.poll_ctx.perf_context_statistics,
-            STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
-        );
+        self.poll_ctx.perf_context.report_metrics();
         fail_point!("raft_after_save");
         if ready_cnt != 0 {
             let mut ready_res = mem::take(&mut self.poll_ctx.ready_res);
@@ -738,7 +734,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         self.poll_ctx.has_ready = false;
         self.timer = TiInstant::now_coarse();
         // update config
-        self.poll_ctx.perf_context_statistics.start();
+        self.poll_ctx.perf_context.start_observe();
         if let Some(incoming) = self.cfg_tracker.any_new() {
             match Ord::cmp(
                 &incoming.messages_per_tick,
@@ -807,9 +803,12 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                     fail_point!(
                         "pause_on_peer_destroy_res",
                         peer.peer_id() == 1
-                            && matches!(msg, PeerMsg::ApplyRes {
-                                res: ApplyTaskRes::Destroy { .. },
-                            }),
+                            && matches!(
+                                msg,
+                                PeerMsg::ApplyRes {
+                                    res: ApplyTaskRes::Destroy { .. },
+                                }
+                            ),
                         |_| unreachable!()
                     );
                     self.peer_msg_buf.push(msg);
@@ -1082,7 +1081,10 @@ where
             has_ready: false,
             ready_res: Vec::new(),
             current_time: None,
-            perf_context_statistics: PerfContextStatistics::new(self.cfg.value().perf_level),
+            perf_context: self
+                .engines
+                .kv
+                .get_perf_context(self.cfg.value().perf_level, PerfContextKind::RaftstoreStore),
             tick_batch: vec![PeerTickBatch::default(); 256],
             node_start_time: Some(TiInstant::now_coarse()),
             feature_gate: self.feature_gate.clone(),
@@ -1106,12 +1108,11 @@ struct Workers<EK: KvEngine> {
     pd_worker: FutureWorker<PdTask<EK>>,
     background_worker: Worker,
 
-    // Cleanup tasks gets their own workers, instead of reusing background_workers.
-    // This is because the underlying compact_range call is a blocking operation, which
-    // can take an extensive amount of time. Also putting the cleanup tasks on
-    // background_workers pool can create a deadlock when compaction guard is enabled:
-    // https://github.com/tikv/tikv/issues/9044.
+    // Both of cleanup tasks and region tasks get their own workers, instead of reusing
+    // background_workers. This is because the underlying compact_range call is a
+    // blocking operation, which can take an extensive amount of time.
     cleanup_worker: Worker,
+    region_worker: Worker,
 
     coprocessor_host: CoprocessorHost<EK>,
 }
@@ -1164,6 +1165,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             pd_worker,
             background_worker,
             cleanup_worker: Worker::new("cleanup-worker"),
+            region_worker: Worker::new("region-worker"),
             coprocessor_host: coprocessor_host.clone(),
         };
         mgr.init()?;
@@ -1176,7 +1178,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             self.router(),
         );
         let region_scheduler = workers
-            .background_worker
+            .region_worker
             .start_with_timer("snapshot-worker", region_runner);
 
         let raftlog_gc_runner = RaftlogGcRunner::new(self.router(), engines.clone());
@@ -1215,7 +1217,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             trans,
             coprocessor_host,
             importer,
-            snap_mgr: mgr,
+            snap_mgr: mgr.clone(),
             global_replication_state,
             global_stat: GlobalStoreStat::default(),
             store_meta,
@@ -1232,6 +1234,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 builder,
                 auto_split_controller,
                 concurrency_manager,
+                mgr,
                 pd_client,
             )?;
         } else {
@@ -1241,6 +1244,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 builder,
                 auto_split_controller,
                 concurrency_manager,
+                mgr,
                 pd_client,
             )?;
         }
@@ -1254,6 +1258,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         builder: RaftPollerBuilder<EK, ER, T>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
+        snap_mgr: SnapManager,
         pd_client: Arc<C>,
     ) -> Result<()> {
         let cfg = builder.cfg.value().clone();
@@ -1315,6 +1320,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             cfg.pd_store_heartbeat_tick_interval.0,
             auto_split_controller,
             concurrency_manager,
+            snap_mgr,
         );
         box_try!(workers.pd_worker.start(pd_runner));
 
@@ -1339,6 +1345,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         }
         workers.coprocessor_host.shutdown();
         workers.cleanup_worker.stop();
+        workers.region_worker.stop();
         workers.background_worker.stop();
     }
 }
@@ -1898,8 +1905,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     fn store_heartbeat_pd(&mut self) {
         let mut stats = StoreStats::default();
 
-        let used_size = self.ctx.snap_mgr.get_total_snap_size();
-        stats.set_used_size(used_size);
         stats.set_store_id(self.ctx.store_id());
         {
             let meta = self.ctx.store_meta.lock().unwrap();
@@ -1998,11 +2003,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                         "snaps" => ?snaps,
                     );
                     for (key, is_sending) in snaps {
-                        let snap = if is_sending {
-                            self.ctx.snap_mgr.get_snapshot_for_sending(&key)?
-                        } else {
-                            self.ctx.snap_mgr.get_snapshot_for_applying(&key)?
-                        };
+                        let snap = self.ctx.snap_mgr.get_snapshot_for_gc(&key, is_sending)?;
                         self.ctx
                             .snap_mgr
                             .delete_snapshot(&key, snap.as_ref(), false);

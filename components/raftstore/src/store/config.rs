@@ -8,8 +8,8 @@ use time::Duration as TimeDuration;
 use crate::{coprocessor, Result};
 use batch_system::Config as BatchSystemConfig;
 use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration};
-use engine_rocks::config as rocks_config;
-use engine_rocks::PerfLevel;
+use engine_traits::config as engine_config;
+use engine_traits::PerfLevel;
 use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
 
 lazy_static! {
@@ -182,7 +182,7 @@ pub struct Config {
     #[serde(skip_serializing)]
     #[config(skip)]
     pub clean_stale_peer_delay: ReadableDuration,
-    #[serde(with = "rocks_config::perf_level_serde")]
+    #[serde(with = "engine_config::perf_level_serde")]
     #[config(skip)]
     pub perf_level: PerfLevel,
 }
@@ -227,7 +227,7 @@ impl Default for Config {
             max_leader_missing_duration: ReadableDuration::hours(2),
             abnormal_leader_missing_duration: ReadableDuration::minutes(10),
             peer_stale_state_check_interval: ReadableDuration::minutes(5),
-            leader_transfer_max_log_lag: 10,
+            leader_transfer_max_log_lag: 128,
             snap_apply_batch_size: ReadableSize::mb(10),
             lock_cf_compact_interval: ReadableDuration::minutes(10),
             lock_cf_compact_bytes_threshold: ReadableSize::mb(256),
@@ -239,14 +239,14 @@ impl Default for Config {
             right_derive_when_split: true,
             allow_remove_leader: false,
             merge_max_log_gap: 10,
-            merge_check_tick_interval: ReadableDuration::secs(10),
+            merge_check_tick_interval: ReadableDuration::secs(2),
             use_delete_range: false,
             cleanup_import_sst_interval: ReadableDuration::minutes(10),
             local_read_batch_size: 1024,
             apply_batch_system: BatchSystemConfig::default(),
             store_batch_system: BatchSystemConfig::default(),
             future_poll_size: 1,
-            hibernate_regions: true,
+            hibernate_regions: tikv_util::build_on_master_branch(),
             dev_assert: false,
             apply_yield_duration: ReadableDuration::millis(500),
 
@@ -328,6 +328,16 @@ impl Config {
                 "election timeout {} ms is less than lease {} ms",
                 election_timeout,
                 lease
+            ));
+        }
+
+        let tick = self.raft_base_tick_interval.as_millis() as u64;
+        if lease > election_timeout - tick {
+            return Err(box_err!(
+                "lease {} ms should not be greater than election timeout {} ms - 1 tick({} ms)",
+                lease,
+                election_timeout,
+                tick
             ));
         }
 
@@ -717,6 +727,12 @@ mod tests {
 
         cfg = Config::new();
         cfg.future_poll_size = 0;
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.raft_base_tick_interval = ReadableDuration::secs(1);
+        cfg.raft_election_timeout_ticks = 11;
+        cfg.raft_store_max_leader_lease = ReadableDuration::secs(11);
         assert!(cfg.validate().is_err());
     }
 }

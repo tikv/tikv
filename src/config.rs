@@ -30,8 +30,8 @@ use engine_rocks::util::{
 };
 use engine_rocks::{
     RaftDBLogger, RangePropertiesCollectorFactory, RocksEngine, RocksEventListener,
-    RocksSstPartitionerFactory, RocksdbLogger, DEFAULT_PROP_KEYS_INDEX_DISTANCE,
-    DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+    RocksSstPartitionerFactory, RocksdbLogger, TtlPropertiesCollectorFactory,
+    DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_VER_DEFAULT, CF_WRITE};
@@ -54,6 +54,7 @@ use crate::import::Config as ImportConfig;
 use crate::server::gc_worker::GcConfig;
 use crate::server::gc_worker::WriteCompactionFilterFactory;
 use crate::server::lock_manager::Config as PessimisticTxnConfig;
+use crate::server::ttl::TTLCompactionFilterFactory;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR};
@@ -544,6 +545,7 @@ impl DefaultCfConfig {
         &self,
         cache: &Option<Cache>,
         region_info_accessor: Option<&RegionInfoAccessor>,
+        enable_ttl: bool,
     ) -> ColumnFamilyOptions {
         let mut cf_opts = build_cf_opt!(self, CF_DEFAULT, cache, region_info_accessor);
         let f = Box::new(RangePropertiesCollectorFactory {
@@ -551,6 +553,18 @@ impl DefaultCfConfig {
             prop_keys_index_distance: self.prop_keys_index_distance,
         });
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
+        if enable_ttl {
+            cf_opts.add_table_properties_collector_factory(
+                "tikv.ttl-properties-collector",
+                Box::new(TtlPropertiesCollectorFactory {}),
+            );
+            cf_opts
+                .set_compaction_filter_factory(
+                    "ttl_compaction_filter_factory",
+                    Box::new(TTLCompactionFilterFactory {}) as Box<dyn CompactionFilterFactory>,
+                )
+                .unwrap();
+        }
         cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
     }
@@ -561,8 +575,10 @@ cf_config!(WriteCfConfig);
 impl Default for WriteCfConfig {
     fn default() -> WriteCfConfig {
         // Setting blob_run_mode=read_only effectively disable Titan.
-        let mut titan = TitanCfConfig::default();
-        titan.blob_run_mode = BlobRunMode::ReadOnly;
+        let titan = TitanCfConfig {
+            blob_run_mode: BlobRunMode::ReadOnly,
+            ..Default::default()
+        };
         WriteCfConfig {
             block_size: ReadableSize::kb(64),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_WRITE) as u64),
@@ -654,8 +670,10 @@ cf_config!(LockCfConfig);
 impl Default for LockCfConfig {
     fn default() -> LockCfConfig {
         // Setting blob_run_mode=read_only effectively disable Titan.
-        let mut titan = TitanCfConfig::default();
-        titan.blob_run_mode = BlobRunMode::ReadOnly;
+        let titan = TitanCfConfig {
+            blob_run_mode: BlobRunMode::ReadOnly,
+            ..Default::default()
+        };
         LockCfConfig {
             block_size: ReadableSize::kb(16),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_LOCK) as u64),
@@ -725,8 +743,10 @@ cf_config!(RaftCfConfig);
 impl Default for RaftCfConfig {
     fn default() -> RaftCfConfig {
         // Setting blob_run_mode=read_only effectively disable Titan.
-        let mut titan = TitanCfConfig::default();
-        titan.blob_run_mode = BlobRunMode::ReadOnly;
+        let titan = TitanCfConfig {
+            blob_run_mode: BlobRunMode::ReadOnly,
+            ..Default::default()
+        };
         RaftCfConfig {
             block_size: ReadableSize::kb(16),
             block_cache_size: ReadableSize::mb(128),
@@ -980,8 +1000,10 @@ impl Default for DbConfig {
     fn default() -> DbConfig {
         let (max_background_jobs, max_background_flushes, max_sub_compactions, max_background_gc) =
             get_background_job_limit(8, 2, 3, 4);
-        let mut titan_config = TitanDBConfig::default();
-        titan_config.max_background_gc = max_background_gc;
+        let titan_config = TitanDBConfig {
+            max_background_gc,
+            ..Default::default()
+        };
         DbConfig {
             wal_recovery_mode: DBRecoveryMode::PointInTime,
             wal_dir: "".to_owned(),
@@ -1091,11 +1113,13 @@ impl DbConfig {
         &self,
         cache: &Option<Cache>,
         region_info_accessor: Option<&RegionInfoAccessor>,
+        enable_ttl: bool,
     ) -> Vec<CFOptions<'_>> {
         vec![
             CFOptions::new(
                 CF_DEFAULT,
-                self.defaultcf.build_opt(cache, region_info_accessor),
+                self.defaultcf
+                    .build_opt(cache, region_info_accessor, enable_ttl),
             ),
             CFOptions::new(CF_LOCK, self.lockcf.build_opt(cache)),
             CFOptions::new(
@@ -1271,8 +1295,10 @@ impl Default for RaftDbConfig {
     fn default() -> RaftDbConfig {
         let (max_background_jobs, max_background_flushes, max_sub_compactions, max_background_gc) =
             get_background_job_limit(4, 1, 2, 4);
-        let mut titan_config = TitanDBConfig::default();
-        titan_config.max_background_gc = max_background_gc;
+        let titan_config = TitanDBConfig {
+            max_background_gc,
+            ..Default::default()
+        };
         RaftDbConfig {
             wal_recovery_mode: DBRecoveryMode::PointInTime,
             wal_dir: "".to_owned(),
@@ -2372,8 +2398,6 @@ impl TiKvConfig {
         self.readpool.validate()?;
         self.storage.validate()?;
 
-        self.raft_store.region_split_check_diff = self.coprocessor.region_split_size / 16;
-
         if self.cfg_path.is_empty() {
             self.cfg_path = Path::new(&self.storage.data_dir)
                 .join(LAST_CONFIG_FILE)
@@ -2648,6 +2672,11 @@ impl TiKvConfig {
         if last_cfg.raft_engine.enable && !self.raft_engine.enable {
             return Err("raft engine can't be disabled after switched on.".to_owned());
         }
+        if last_cfg.storage.enable_ttl && !self.storage.enable_ttl {
+            return Err("can't disable ttl on a ttl instance".to_owned());
+        } else if !last_cfg.storage.enable_ttl && self.storage.enable_ttl {
+            return Err("can't enable ttl on a non-ttl instance".to_owned());
+        }
 
         Ok(())
     }
@@ -2894,7 +2923,7 @@ fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, 
         } else {
             Err("failed to get field".to_owned().into())
         }
-    };
+    }
     let mut dst = HashMap::new();
     for (name, value) in change {
         let fields: Vec<_> = name.as_str().split('.').collect();
@@ -3046,6 +3075,7 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
+    use crate::server::ttl::TTLCheckerTask;
     use crate::storage::config::StorageConfigManger;
     use engine_rocks::raw_util::new_engine_opt;
     use engine_traits::DBOptions as DBOptionsTrait;
@@ -3053,6 +3083,8 @@ mod tests {
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
     use slog::Level;
     use std::sync::Arc;
+    use std::time::Duration;
+    use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
 
     #[test]
     fn test_check_critical_cfg_with() {
@@ -3313,13 +3345,22 @@ mod tests {
         );
     }
 
-    fn new_engines(cfg: TiKvConfig) -> (RocksEngine, ConfigController) {
+    fn new_engines(
+        cfg: TiKvConfig,
+    ) -> (
+        RocksEngine,
+        ConfigController,
+        ReceiverWrapper<TTLCheckerTask>,
+    ) {
         let engine = RocksEngine::from_db(Arc::new(
             new_engine_opt(
                 &cfg.storage.data_dir,
                 cfg.rocksdb.build_opt(),
-                cfg.rocksdb
-                    .build_cf_opts(&cfg.storage.block_cache.build_shared_cache(), None),
+                cfg.rocksdb.build_cf_opts(
+                    &cfg.storage.block_cache.build_shared_cache(),
+                    None,
+                    cfg.storage.enable_ttl,
+                ),
             )
             .unwrap(),
         ));
@@ -3329,11 +3370,12 @@ mod tests {
             Module::Rocksdb,
             Box::new(DBConfigManger::new(engine.clone(), DBType::Kv, shared)),
         );
+        let (scheduler, receiver) = dummy_scheduler();
         cfg_controller.register(
             Module::Storage,
-            Box::new(StorageConfigManger::new(engine.clone(), shared)),
+            Box::new(StorageConfigManger::new(engine.clone(), shared, scheduler)),
         );
-        (engine, cfg_controller)
+        (engine, cfg_controller, receiver)
     }
 
     #[test]
@@ -3348,7 +3390,7 @@ mod tests {
         cfg.rocksdb.rate_limiter_auto_tuned = false;
         cfg.storage.block_cache.shared = false;
         cfg.validate().unwrap();
-        let (db, cfg_controller) = new_engines(cfg);
+        let (db, cfg_controller, _) = new_engines(cfg);
 
         // update max_background_jobs
         assert_eq!(db.get_db_options().get_max_background_jobs(), 4);
@@ -3419,7 +3461,7 @@ mod tests {
         // vanilla limiter does not support dynamically changing auto-tuned mode.
         cfg.rocksdb.rate_limiter_auto_tuned = true;
         cfg.validate().unwrap();
-        let (db, cfg_controller) = new_engines(cfg);
+        let (db, cfg_controller, _) = new_engines(cfg);
 
         // update rate_limiter_auto_tuned
         assert_eq!(
@@ -3441,7 +3483,7 @@ mod tests {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
         cfg.storage.block_cache.shared = true;
         cfg.validate().unwrap();
-        let (db, cfg_controller) = new_engines(cfg);
+        let (db, cfg_controller, _) = new_engines(cfg);
 
         // Can not update shared block cache through rocksdb module
         assert!(cfg_controller
@@ -3477,6 +3519,23 @@ mod tests {
         assert_eq!(diff.len(), 1);
         assert_eq!(diff[0].0.as_str(), "blob_run_mode");
         assert_eq!(diff[0].1.as_str(), "kFallback");
+    }
+
+    #[test]
+    fn test_change_ttl_check_poll_interval() {
+        let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        cfg.storage.block_cache.shared = true;
+        cfg.validate().unwrap();
+        let (_, cfg_controller, mut rx) = new_engines(cfg);
+
+        // Can not update shared block cache through rocksdb module
+        cfg_controller
+            .update_config("storage.ttl_check_poll_interval", "10s")
+            .unwrap();
+        match rx.recv() {
+            None => unreachable!(),
+            Some(TTLCheckerTask::UpdatePollInterval(d)) => assert_eq!(d, Duration::from_secs(10)),
+        }
     }
 
     #[test]
@@ -3594,9 +3653,11 @@ mod tests {
     fn test_compaction_guard() {
         // Test comopaction guard disabled.
         {
-            let mut config = DefaultCfConfig::default();
-            config.target_file_size_base = ReadableSize::mb(16);
-            config.enable_compaction_guard = false;
+            let config = DefaultCfConfig {
+                target_file_size_base: ReadableSize::mb(16),
+                enable_compaction_guard: false,
+                ..Default::default()
+            };
             let provider = Some(MockRegionInfoProvider::new(vec![]));
             let cf_opts = build_cf_opt!(config, CF_DEFAULT, None /*cache*/, provider);
             assert_eq!(
@@ -3606,9 +3667,11 @@ mod tests {
         }
         // Test compaction guard enabled but region info provider is missing.
         {
-            let mut config = DefaultCfConfig::default();
-            config.target_file_size_base = ReadableSize::mb(16);
-            config.enable_compaction_guard = true;
+            let config = DefaultCfConfig {
+                target_file_size_base: ReadableSize::mb(16),
+                enable_compaction_guard: true,
+                ..Default::default()
+            };
             let provider: Option<MockRegionInfoProvider> = None;
             let cf_opts = build_cf_opt!(config, CF_DEFAULT, None /*cache*/, provider);
             assert_eq!(
@@ -3618,11 +3681,13 @@ mod tests {
         }
         // Test compaction guard enabled.
         {
-            let mut config = DefaultCfConfig::default();
-            config.target_file_size_base = ReadableSize::mb(16);
-            config.enable_compaction_guard = true;
-            config.compaction_guard_min_output_file_size = ReadableSize::mb(4);
-            config.compaction_guard_max_output_file_size = ReadableSize::mb(64);
+            let config = DefaultCfConfig {
+                target_file_size_base: ReadableSize::mb(16),
+                enable_compaction_guard: true,
+                compaction_guard_min_output_file_size: ReadableSize::mb(4),
+                compaction_guard_max_output_file_size: ReadableSize::mb(64),
+                ..Default::default()
+            };
             let provider = Some(MockRegionInfoProvider::new(vec![]));
             let cf_opts = build_cf_opt!(config, CF_DEFAULT, None /*cache*/, provider);
             assert_eq!(
@@ -3630,5 +3695,17 @@ mod tests {
                 cf_opts.get_target_file_size_base()
             );
         }
+    }
+
+    #[test]
+    fn test_validate_tikv_config() {
+        let mut cfg = TiKvConfig::default();
+        let default_region_split_check_diff = cfg.raft_store.region_split_check_diff.0;
+        cfg.raft_store.region_split_check_diff.0 += 1;
+        assert!(cfg.validate().is_ok());
+        assert_eq!(
+            cfg.raft_store.region_split_check_diff.0,
+            default_region_split_check_diff + 1
+        );
     }
 }

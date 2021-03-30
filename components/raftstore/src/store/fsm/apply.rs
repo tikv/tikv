@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
@@ -18,7 +18,8 @@ use std::{cmp, usize};
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
-use engine_rocks::{PerfContext, PerfLevel};
+use engine_traits::PerfContext;
+use engine_traits::PerfContextKind;
 use engine_traits::{
     DeleteStrategy, KvEngine, RaftEngine, Range as EngineRange, Snapshot, WriteBatch,
 };
@@ -56,10 +57,10 @@ use crate::store::peer_storage::{
 };
 use crate::store::util::{
     check_region_epoch, compare_region_epoch, is_learner, ChangePeerI, ConfChangeKind,
-    KeysInfoFormatter, PerfContextStatistics, ADMIN_CMD_EPOCH_MAP,
+    KeysInfoFormatter, ADMIN_CMD_EPOCH_MAP,
 };
 use crate::store::{cmd_resp, util, Config, RegionSnapshot, RegionTask};
-use crate::{observe_perf_context_type, report_perf_context, Error, Result};
+use crate::{Error, Result};
 
 use super::metrics::*;
 
@@ -349,7 +350,7 @@ where
     // Whether to use the delete range API instead of deleting one by one.
     use_delete_range: bool,
 
-    perf_context_statistics: PerfContextStatistics,
+    perf_context: EK::PerfContext,
 
     yield_duration: Duration,
 
@@ -358,6 +359,13 @@ where
     /// Used for handling race between splitting and creating new peer.
     /// An uninitialized peer can be replaced to the one from splitting iff they are exactly the same peer.
     pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
+
+    /// We must delete the ingested file before calling `callback` so that any ingest-request reaching this
+    /// peer could see this update if leader had changed. We must also delete them after the applied-index
+    /// has been persisted to kvdb because this entry may replay because of panic or power-off, which
+    /// happened before `WriteBatch::write` and after `SSTImporter::delete`. We shall make sure that
+    /// this entry will never apply again at first, then we can delete the ssts files.
+    delete_ssts: Vec<SstMeta>,
 }
 
 impl<EK, W> ApplyContext<EK, W>
@@ -387,7 +395,7 @@ where
             host,
             importer,
             region_scheduler,
-            engine,
+            engine: engine.clone(),
             router,
             notifier,
             kv_wb,
@@ -400,8 +408,9 @@ where
             sync_log_hint: false,
             exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
-            perf_context_statistics: PerfContextStatistics::new(cfg.perf_level),
+            perf_context: engine.get_perf_context(cfg.perf_level, PerfContextKind::RaftstoreApply),
             yield_duration: cfg.apply_yield_duration.0,
+            delete_ssts: vec![],
             store_id,
             pending_create_peers,
         }
@@ -418,13 +427,8 @@ where
 
         if let Some(observe_cmd) = &delegate.observe_cmd {
             let region_id = delegate.region_id();
-            if observe_cmd.enabled.load(Ordering::Acquire) {
-                self.host.prepare_for_apply(observe_cmd.id, region_id);
-            } else {
-                info!("region is no longer observerd";
-                    "region_id" => region_id);
-                delegate.observe_cmd.take();
-            }
+            // TODO: skip this step when we do not need to observe cmds.
+            self.host.prepare_for_apply(observe_cmd.id, region_id);
         }
     }
 
@@ -461,10 +465,7 @@ where
             self.kv_wb().write_opt(&write_opts).unwrap_or_else(|e| {
                 panic!("failed to write to engine: {:?}", e);
             });
-            report_perf_context!(
-                self.perf_context_statistics,
-                APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
-            );
+            self.perf_context.report_metrics();
             self.sync_log_hint = false;
             let data_size = self.kv_wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {
@@ -477,6 +478,14 @@ where
             }
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
+        }
+        if !self.delete_ssts.is_empty() {
+            let tag = self.tag.clone();
+            for sst in self.delete_ssts.drain(..) {
+                self.importer.delete(&sst).unwrap_or_else(|e| {
+                    panic!("{} cleanup ingested file {:?}: {:?}", tag, sst, e);
+                });
+            }
         }
         // Call it before invoking callback for preventing Commit is executed before Prewrite is observed.
         self.host.on_flush_apply(self.engine.clone());
@@ -1296,9 +1305,11 @@ where
                 CmdType::Put => self.handle_put(ctx.kv_wb_mut(), req),
                 CmdType::Delete => self.handle_delete(ctx.kv_wb_mut(), req),
                 CmdType::DeleteRange => {
+                    assert!(ctx.kv_wb.is_empty());
                     self.handle_delete_range(&ctx.engine, req, &mut ranges, ctx.use_delete_range)
                 }
                 CmdType::IngestSst => {
+                    assert!(ctx.kv_wb.is_empty());
                     self.handle_ingest_sst(&ctx.importer, &ctx.engine, req, &mut ssts)
                 }
                 // Readonly commands are handled in raftstore directly.
@@ -1335,6 +1346,16 @@ where
         let exec_res = if !ranges.is_empty() {
             ApplyResult::Res(ExecResult::DeleteRange { ranges })
         } else if !ssts.is_empty() {
+            #[cfg(feature = "failpoints")]
+            {
+                let mut dont_delete_ingested_sst_fp = || {
+                    fail_point!("dont_delete_ingested_sst", |_| {
+                        ssts.clear();
+                    });
+                };
+                dont_delete_ingested_sst_fp();
+            }
+            ctx.delete_ssts.append(&mut ssts.clone());
             ApplyResult::Res(ExecResult::IngestSst { ssts })
         } else {
             ApplyResult::None
@@ -2819,8 +2840,8 @@ impl ObserveID {
 }
 
 struct ObserveCmd {
+    // TODO: Add flags to disable observing.
     id: ObserveID,
-    enabled: Arc<AtomicBool>,
 }
 
 impl Debug for ObserveCmd {
@@ -2830,16 +2851,9 @@ impl Debug for ObserveCmd {
 }
 
 #[derive(Debug)]
-pub enum ChangeCmd {
-    RegisterObserver {
-        observe_id: ObserveID,
-        region_id: u64,
-        enabled: Arc<AtomicBool>,
-    },
-    Snapshot {
-        observe_id: ObserveID,
-        region_id: u64,
-    },
+pub struct ChangeObserver {
+    pub observe_id: ObserveID,
+    pub region_id: u64,
 }
 
 pub enum Msg<EK>
@@ -2856,7 +2870,7 @@ where
     Destroy(Destroy),
     Snapshot(GenSnapTask),
     Change {
-        cmd: ChangeCmd,
+        cmd: ChangeObserver,
         region_epoch: RegionEpoch,
         cb: Callback<EK::Snapshot>,
     },
@@ -2905,13 +2919,9 @@ where
                 write!(f, "[region {}] requests a snapshot", region_id)
             }
             Msg::Change {
-                cmd: ChangeCmd::RegisterObserver { region_id, .. },
+                cmd: ChangeObserver { region_id, .. },
                 ..
-            } => write!(f, "[region {}] registers cmd observer", region_id),
-            Msg::Change {
-                cmd: ChangeCmd::Snapshot { region_id, .. },
-                ..
-            } => write!(f, "[region {}] cmd snapshot", region_id),
+            } => write!(f, "[region {}] change cmd", region_id),
             #[cfg(any(test, feature = "testexport"))]
             Msg::Validate(region_id, _) => write!(f, "[region {}] validate", region_id),
         }
@@ -3045,9 +3055,6 @@ where
         self.delegate
             .handle_raft_committed_entries(apply_ctx, apply.entries.drain(..));
         fail_point!("post_handle_apply_1003", self.delegate.id() == 1003, |_| {});
-        if self.delegate.yield_state.is_some() {
-            return;
-        }
     }
 
     /// Handles proposals, and appends the commands to the apply delegate.
@@ -3203,6 +3210,7 @@ where
             .iter()
             .any(|res| res.region_id == self.delegate.region_id())
             && self.delegate.last_sync_apply_index != applied_index;
+        #[cfg(feature = "failpoint")]
         (|| fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true }))();
         if need_sync {
             if apply_ctx.timer.is_none() {
@@ -3247,21 +3255,14 @@ where
     fn handle_change<W: WriteBatch<EK>>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
-        cmd: ChangeCmd,
+        cmd: ChangeObserver,
         region_epoch: RegionEpoch,
         cb: Callback<EK::Snapshot>,
     ) {
-        let (observe_id, region_id, enabled) = match cmd {
-            ChangeCmd::RegisterObserver {
-                observe_id,
-                region_id,
-                enabled,
-            } => (observe_id, region_id, Some(enabled)),
-            ChangeCmd::Snapshot {
-                observe_id,
-                region_id,
-            } => (observe_id, region_id, None),
-        };
+        let ChangeObserver {
+            observe_id,
+            region_id,
+        } = cmd;
         if let Some(observe_cmd) = self.delegate.observe_cmd.as_mut() {
             if observe_cmd.id > observe_id {
                 notify_stale_req(self.delegate.term, cb);
@@ -3301,24 +3302,8 @@ where
                 return;
             }
         };
-        if let Some(enabled) = enabled {
-            assert!(
-                !self
-                    .delegate
-                    .observe_cmd
-                    .as_ref()
-                    .map_or(false, |o| o.enabled.load(Ordering::SeqCst)),
-                "{} observer already exists {:?} {:?}",
-                self.delegate.tag,
-                self.delegate.observe_cmd,
-                observe_id
-            );
-            // TODO(cdc): take observe_cmd when enabled is false.
-            self.delegate.observe_cmd = Some(ObserveCmd {
-                id: observe_id,
-                enabled,
-            });
-        }
+
+        self.delegate.observe_cmd = Some(ObserveCmd { id: observe_id });
 
         cb.invoke_read(resp);
     }
@@ -3447,7 +3432,7 @@ where
                 _ => {}
             }
         }
-        self.apply_ctx.perf_context_statistics.start();
+        self.apply_ctx.perf_context.start_observe();
     }
 
     /// There is no control fsm in apply poller.
@@ -3661,12 +3646,7 @@ where
                     return;
                 }
                 Msg::Change {
-                    cmd: ChangeCmd::RegisterObserver { region_id, .. },
-                    cb,
-                    ..
-                }
-                | Msg::Change {
-                    cmd: ChangeCmd::Snapshot { region_id, .. },
+                    cmd: ChangeObserver { region_id, .. },
                     cb,
                     ..
                 } => {
@@ -3908,10 +3888,10 @@ mod tests {
         E: KvEngine,
     {
         match receiver.recv_timeout(Duration::from_secs(3)) {
-            Ok(PeerMsg::ApplyRes { res, .. }) => match res {
-                TaskRes::Apply(res) => res,
-                e => panic!("unexpected res {:?}", e),
-            },
+            Ok(PeerMsg::ApplyRes {
+                res: TaskRes::Apply(res),
+                ..
+            }) => res,
             e => panic!("unexpected res {:?}", e),
         }
     }
@@ -3967,12 +3947,14 @@ mod tests {
         };
         system.spawn("test-basic".to_owned(), builder);
 
-        let mut reg = Registration::default();
-        reg.id = 1;
+        let mut reg = Registration {
+            id: 1,
+            term: 4,
+            applied_index_term: 5,
+            ..Default::default()
+        };
         reg.region.set_id(2);
         reg.apply_state.set_applied_index(3);
-        reg.term = 4;
-        reg.applied_index_term = 5;
         router.schedule_task(2, Msg::Registration(reg.clone()));
         validate(&router, 2, move |delegate| {
             assert_eq!(delegate.id, 1);
@@ -4037,10 +4019,10 @@ mod tests {
             ],
         );
         let apply_res = match rx.recv_timeout(Duration::from_secs(3)) {
-            Ok(PeerMsg::ApplyRes { res, .. }) => match res {
-                TaskRes::Apply(res) => res,
-                e => panic!("unexpected apply result: {:?}", e),
-            },
+            Ok(PeerMsg::ApplyRes {
+                res: TaskRes::Apply(res),
+                ..
+            }) => res,
             e => panic!("unexpected apply result: {:?}", e),
         };
         let apply_state_key = keys::apply_state_key(2);
@@ -4070,12 +4052,12 @@ mod tests {
 
         router.schedule_task(2, Msg::destroy(2, false));
         let (region_id, peer_id) = match rx.recv_timeout(Duration::from_secs(3)) {
-            Ok(PeerMsg::ApplyRes { res, .. }) => match res {
-                TaskRes::Destroy {
+            Ok(PeerMsg::ApplyRes {
+                res: TaskRes::Destroy {
                     region_id, peer_id, ..
-                } => (region_id, peer_id),
-                e => panic!("expected destroy result, but got {:?}", e),
-            },
+                },
+                ..
+            }) => (region_id, peer_id),
             e => panic!("expected destroy result, but got {:?}", e),
         };
         assert_eq!(peer_id, 1);
@@ -4309,8 +4291,10 @@ mod tests {
         system.spawn("test-handle-raft".to_owned(), builder);
 
         let peer_id = 3;
-        let mut reg = Registration::default();
-        reg.id = peer_id;
+        let mut reg = Registration {
+            id: peer_id,
+            ..Default::default()
+        };
         reg.region.set_id(1);
         reg.region.mut_peers().push(new_peer(2, 3));
         reg.region.set_end_key(b"k5".to_vec());
@@ -4628,8 +4612,10 @@ mod tests {
         system.spawn("test-handle-raft".to_owned(), builder);
 
         let peer_id = 3;
-        let mut reg = Registration::default();
-        reg.id = peer_id;
+        let mut reg = Registration {
+            id: peer_id,
+            ..Default::default()
+        };
         reg.region.set_id(1);
         reg.region.mut_peers().push(new_peer(2, 3));
         reg.region.set_end_key(b"k5".to_vec());
@@ -4673,10 +4659,9 @@ mod tests {
             1,
             Msg::Change {
                 region_epoch: region_epoch.clone(),
-                cmd: ChangeCmd::RegisterObserver {
+                cmd: ChangeObserver {
                     observe_id,
                     region_id: 1,
-                    enabled: enabled.clone(),
                 },
                 cb: Callback::Read(Box::new(|resp: ReadResponse<KvTestSnapshot>| {
                     assert!(!resp.response.get_header().has_error());
@@ -4733,20 +4718,15 @@ mod tests {
             .epoch(1, 3)
             .build();
         router.schedule_task(1, Msg::apply(apply(peer_id, 1, 2, vec![put_entry], vec![])));
-        // Must not receive new cmd.
-        cmdbatch_rx
-            .recv_timeout(Duration::from_millis(100))
-            .unwrap_err();
 
         // Must response a RegionNotFound error.
         router.schedule_task(
             2,
             Msg::Change {
                 region_epoch,
-                cmd: ChangeCmd::RegisterObserver {
+                cmd: ChangeObserver {
                     observe_id,
                     region_id: 2,
-                    enabled,
                 },
                 cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
                     assert!(resp
@@ -4875,9 +4855,11 @@ mod tests {
         let (_path, engine) = create_tmp_engine("test-delegate");
         let (_import_dir, importer) = create_tmp_importer("test-delegate");
         let peer_id = 3;
-        let mut reg = Registration::default();
-        reg.id = peer_id;
-        reg.term = 1;
+        let mut reg = Registration {
+            id: peer_id,
+            term: 1,
+            ..Default::default()
+        };
         reg.region.set_id(1);
         reg.region.set_end_key(b"k5".to_vec());
         reg.region.mut_region_epoch().set_version(3);
@@ -4918,10 +4900,9 @@ mod tests {
             1,
             Msg::Change {
                 region_epoch: region_epoch.clone(),
-                cmd: ChangeCmd::RegisterObserver {
+                cmd: ChangeObserver {
                     observe_id,
                     region_id: 1,
-                    enabled: enabled.clone(),
                 },
                 cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
                     assert!(!resp.response.get_header().has_error(), "{:?}", resp);
@@ -5077,10 +5058,9 @@ mod tests {
             1,
             Msg::Change {
                 region_epoch,
-                cmd: ChangeCmd::RegisterObserver {
+                cmd: ChangeObserver {
                     observe_id,
                     region_id: 1,
-                    enabled: Arc::new(AtomicBool::new(true)),
                 },
                 cb: Callback::Read(Box::new(move |resp: ReadResponse<_>| {
                     assert!(
