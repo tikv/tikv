@@ -2091,7 +2091,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_cloud_sys"
 version = "0.1.0"
-source = "git+https://github.com/CheneyDing/rust-rocksdb.git?branch=size-ratio-compaction#ae51d630eafcad353c68fcb1965fe8b9a2c31294"
+source = "git+https://github.com/CheneyDing/rust-rocksdb.git?branch=size-ratio-compaction#1c1c55735cef269237483b73385b54e9a48a6cdb"
 dependencies = [
  "cc",
  "cmake",
@@ -2100,7 +2100,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/CheneyDing/rust-rocksdb.git?branch=size-ratio-compaction#ae51d630eafcad353c68fcb1965fe8b9a2c31294"
+source = "git+https://github.com/CheneyDing/rust-rocksdb.git?branch=size-ratio-compaction#1c1c55735cef269237483b73385b54e9a48a6cdb"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2120,7 +2120,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/CheneyDing/rust-rocksdb.git?branch=size-ratio-compaction#ae51d630eafcad353c68fcb1965fe8b9a2c31294"
+source = "git+https://github.com/CheneyDing/rust-rocksdb.git?branch=size-ratio-compaction#1c1c55735cef269237483b73385b54e9a48a6cdb"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3577,7 +3577,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/CheneyDing/rust-rocksdb.git?branch=size-ratio-compaction#ae51d630eafcad353c68fcb1965fe8b9a2c31294"
+source = "git+https://github.com/CheneyDing/rust-rocksdb.git?branch=size-ratio-compaction#1c1c55735cef269237483b73385b54e9a48a6cdb"
 dependencies = [
  "libc",
  "librocksdb_sys",
