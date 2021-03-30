@@ -25,8 +25,8 @@ use engine_rocks::{
     RocksSstReader,
 };
 use engine_traits::{
-    EncryptionKeyManager, IngestExternalFileOptions, Iterator, KvEngine, SeekKey, SstReader,
-    SstWriter, SstWriterBuilder, SSTMetaInfo, CF_DEFAULT, CF_WRITE,
+    EncryptionKeyManager, IngestExternalFileOptions, Iterator, KvEngine, SSTMetaInfo, SeekKey,
+    SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 };
 use external_storage::{create_storage, url_of_backend};
 use file_system::{sync_dir, File, OpenOptions};
@@ -1005,7 +1005,7 @@ mod tests {
             f.append(&data).unwrap();
             f.finish().unwrap();
 
-            dir.ingest(&meta, &db, key_manager.as_deref()).unwrap();
+            dir.ingest(&meta, &db, key_manager.clone()).unwrap();
             check_db_range(&db, range);
 
             ingested.push(meta);
@@ -1566,7 +1566,16 @@ mod tests {
 
             meta.set_length(0); // disable validation.
             meta.set_crc32(0);
-            importer.ingest(&meta, &db).unwrap();
+            let resp = importer.ingest(&meta, &db).unwrap();
+            // key1 = "zt9102_r01", value1 = "abc", len = 13
+            // key2 = "zt9102_r04", value2 = "xyz", len = 13
+            // key3 = "zt9102_r07", value3 = "pqrst", len = 15
+            // key4 = "zt9102_r13", value4 = "www", len = 13
+            // total_bytes = (13 + 13 + 15 + 13) + 4 * 8 = 86
+            // don't no why each key has extra 8 byte length in raw_key_size(), but it seems tolerable.
+            // https://docs.rs/rocks/0.1.0/rocks/table_properties/struct.TableProperties.html#method.raw_key_size
+            assert_eq!(resp.total_bytes, 86);
+            assert_eq!(resp.total_kvs, 4);
 
             // verifies the DB content is correct.
             let mut iter = db.iterator_cf(cf).unwrap();

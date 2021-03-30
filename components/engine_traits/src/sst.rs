@@ -2,8 +2,8 @@
 
 use crate::errors::Result;
 use crate::iterable::Iterable;
-use std::path::PathBuf;
 use kvproto::import_sstpb::SstMeta;
+use std::path::PathBuf;
 
 #[derive(Clone, Debug)]
 pub struct SSTMetaInfo {
