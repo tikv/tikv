@@ -5,7 +5,7 @@ use crate::options::RocksReadOptions;
 use engine_traits::Error;
 use engine_traits::IterOptions;
 use engine_traits::CF_DEFAULT;
-use engine_traits::{ExternalSstFileInfo, SstCompressionType, SstWriter, SstWriterBuilder};
+use engine_traits::{ExternalSstFileInfo, SstCompressionType, SstWriter, SstWriterBuilder, SSTMetaInfo};
 use engine_traits::{Iterable, Result, SstExt, SstReader};
 use engine_traits::{Iterator, SeekKey};
 use rocksdb::rocksdb::supported_compression;
@@ -21,6 +21,8 @@ use std::sync::Arc;
 // it's shared between multiple iterators
 use crate::engine_iterator::RocksSeekKey;
 use std::path::PathBuf;
+use kvproto::import_sstpb::SstMeta;
+
 
 impl SstExt for RocksEngine {
     type SstReader = RocksSstReader;
@@ -36,6 +38,19 @@ pub struct RocksSstReader {
 }
 
 impl RocksSstReader {
+    pub fn sst_meta_info(&self, sst: SstMeta) -> SSTMetaInfo {
+        let mut meta = SSTMetaInfo{
+            total_kvs: 0,
+            total_bytes: 0,
+            meta: sst,
+        };
+        self.inner.read_table_properties(|p| {
+            meta.total_kvs = p.num_entries();
+            meta.total_bytes = p.data_size();
+        });
+        meta
+    }
+
     pub fn open_with_env(path: &str, env: Option<Arc<Env>>) -> Result<Self> {
         let mut cf_options = ColumnFamilyOptions::new();
         if let Some(env) = env {

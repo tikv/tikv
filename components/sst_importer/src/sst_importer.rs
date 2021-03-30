@@ -26,7 +26,7 @@ use engine_rocks::{
 };
 use engine_traits::{
     EncryptionKeyManager, IngestExternalFileOptions, Iterator, KvEngine, SeekKey, SstReader,
-    SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
+    SstWriter, SstWriterBuilder, SSTMetaInfo, CF_DEFAULT, CF_WRITE,
 };
 use external_storage::{create_storage, url_of_backend};
 use file_system::{sync_dir, File, OpenOptions};
@@ -85,11 +85,11 @@ impl SSTImporter {
         }
     }
 
-    pub fn ingest<E: KvEngine>(&self, meta: &SstMeta, engine: &E) -> Result<()> {
-        match self.dir.ingest(meta, engine, self.key_manager.as_deref()) {
-            Ok(_) => {
-                info!("ingest"; "meta" => ?meta);
-                Ok(())
+    pub fn ingest<E: KvEngine>(&self, meta: &SstMeta, engine: &E) -> Result<SSTMetaInfo> {
+        match self.dir.ingest(meta, engine, self.key_manager.clone()) {
+            Ok(meta_info) => {
+                info!("ingest"; "meta" => ?meta_info);
+                Ok(meta_info)
             }
             Err(e) => {
                 error!(%e; "ingest failed"; "meta" => ?meta, );
@@ -661,13 +661,24 @@ impl ImportDir {
         &self,
         meta: &SstMeta,
         engine: &E,
-        key_manager: Option<&DataKeyManager>,
-    ) -> Result<()> {
+        key_manager: Option<Arc<DataKeyManager>>,
+    ) -> Result<SSTMetaInfo> {
         let start = Instant::now();
         let path = self.join(meta)?;
         let cf = meta.get_cf_name();
-        super::prepare_sst_for_ingestion(&path.save, &path.clone, key_manager)?;
+
+        // now validate the SST file.
+        let path_str = path.save.to_str().unwrap();
+        let env = get_encrypted_env(key_manager.clone(), None /*base_env*/)?;
+        let env = get_inspected_env(Some(env))?;
+
+        let sst_reader = RocksSstReader::open_with_env(&path_str, Some(env))?;
+        sst_reader.verify_checksum()?;
+        let meta_info = sst_reader.sst_meta_info(meta.to_owned());
+
+        super::prepare_sst_for_ingestion(&path.save, &path.clone, key_manager.as_deref())?;
         let length = meta.get_length();
+
         // TODO check the length and crc32 of ingested file.
         engine.reset_global_seq(cf, &path.clone)?;
         IMPORTER_INGEST_BYTES.observe(length as _);
@@ -679,7 +690,7 @@ impl ImportDir {
         IMPORTER_INGEST_DURATION
             .with_label_values(&["ingest"])
             .observe(start.elapsed().as_secs_f64());
-        Ok(())
+        Ok(meta_info)
     }
 
     fn list_ssts(&self) -> Result<Vec<SstMeta>> {

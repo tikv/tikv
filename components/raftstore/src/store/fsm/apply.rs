@@ -23,7 +23,7 @@ use engine_traits::PerfContextKind;
 use engine_traits::{
     DeleteStrategy, KvEngine, RaftEngine, Range as EngineRange, Snapshot, WriteBatch,
 };
-use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, SSTMetaInfo};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{PeerRole, Region, RegionEpoch};
@@ -252,7 +252,7 @@ pub enum ExecResult<S> {
         ranges: Vec<Range>,
     },
     IngestSst {
-        ssts: Vec<SstMeta>,
+        ssts: Vec<SSTMetaInfo>,
     },
 }
 
@@ -365,7 +365,7 @@ where
     /// has been persisted to kvdb because this entry may replay because of panic or power-off, which
     /// happened before `WriteBatch::write` and after `SSTImporter::delete`. We shall make sure that
     /// this entry will never apply again at first, then we can delete the ssts files.
-    delete_ssts: Vec<SstMeta>,
+    delete_ssts: Vec<SSTMetaInfo>,
 }
 
 impl<EK, W> ApplyContext<EK, W>
@@ -482,7 +482,7 @@ where
         if !self.delete_ssts.is_empty() {
             let tag = self.tag.clone();
             for sst in self.delete_ssts.drain(..) {
-                self.importer.delete(&sst).unwrap_or_else(|e| {
+                self.importer.delete(&sst.meta).unwrap_or_else(|e| {
                     panic!("{} cleanup ingested file {:?}: {:?}", tag, sst, e);
                 });
             }
@@ -1531,7 +1531,7 @@ where
         importer: &Arc<SSTImporter>,
         engine: &EK,
         req: &Request,
-        ssts: &mut Vec<SstMeta>,
+        ssts: &mut Vec<SSTMetaInfo>,
     ) -> Result<Response> {
         let sst = req.get_ingest_sst().get_sst();
 
@@ -1548,13 +1548,14 @@ where
             return Err(e);
         }
 
-        importer.ingest(sst, engine).unwrap_or_else(|e| {
-            // If this failed, it means that the file is corrupted or something
-            // is wrong with the engine, but we can do nothing about that.
-            panic!("{} ingest {:?}: {:?}", self.tag, sst, e);
-        });
-
-        ssts.push(sst.clone());
+        match importer.ingest(sst, engine) {
+            Ok(meta_info) => ssts.push(meta_info),
+            Err(e) => {
+                // If this failed, it means that the file is corrupted or something
+                // is wrong with the engine, but we can do nothing about that.
+                panic!("{} ingest {:?}: {:?}", self.tag, sst, e);
+            }
+        };
         Ok(Response::default())
     }
 }

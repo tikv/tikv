@@ -3,6 +3,14 @@
 use crate::errors::Result;
 use crate::iterable::Iterable;
 use std::path::PathBuf;
+use kvproto::import_sstpb::SstMeta;
+
+#[derive(Clone, Debug)]
+pub struct SSTMetaInfo {
+    pub total_bytes: u64,
+    pub total_kvs: u64,
+    pub meta: SstMeta,
+}
 
 pub trait SstExt: Sized {
     type SstReader: SstReader;
