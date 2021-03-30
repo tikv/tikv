@@ -12,10 +12,9 @@ use std::sync::{
 use std::time::Duration;
 
 use crossbeam_utils::CachePadded;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, MutexGuard};
 use strum::EnumCount;
 use tikv_util::time::Instant;
-use tikv_util::worker::Worker;
 
 /// Record accumulated bytes through of different types.
 /// Used for testing and metrics.
@@ -134,45 +133,37 @@ impl IOThroughputEstimator {
 /// An attempt will be recorded first. If the attempted amount exceeds the available quotas of
 /// current epoch, the requester will register itself and sleep until next epoch.
 macro_rules! request_imp {
-    ($self:ident, $priority:ident, $amount:ident, $mode:tt) => {{
+    ($limiter:ident, $priority:ident, $amount:ident, $mode:tt) => {{
         let priority_idx = $priority as usize;
-        loop {
-            let cached_bytes_per_refill =
-                $self.bytes_per_epoch[priority_idx].load(Ordering::Relaxed);
-            if cached_bytes_per_refill == 0 {
-                return $amount;
-            }
-            let amount = std::cmp::min($amount, cached_bytes_per_refill);
-            let bytes_through =
-                $self.bytes_through[priority_idx].fetch_add(amount, Ordering::AcqRel) + amount;
-            if bytes_through <= cached_bytes_per_refill {
-                return amount;
-            }
-            let now = Instant::now_coarse();
-            let (next_refill_time, pending) = {
-                let mut locked = $self.protected.lock();
-                // a small delay in case a refill slips in after `bytes_per_epoch` was fetched.
-                if locked.next_refill_time + Duration::from_millis(1) >= now + DEFAULT_REFILL_PERIOD
-                {
-                    continue;
-                }
-                locked.pending_bytes[priority_idx] += amount;
-                (locked.next_refill_time, locked.pending_bytes[priority_idx])
-            };
-            let mut wait = DEFAULT_REFILL_PERIOD * (pending / cached_bytes_per_refill) as u32;
-            if next_refill_time > now {
-                // limit update is infrequent, let's assume it won't happen during the sleep
-                wait += next_refill_time - now;
-            } else if next_refill_time + DEFAULT_REFILL_PERIOD / 2 < now {
-                // expected refill delayed too long
-                $self.refill();
-            }
-            RATE_LIMITER_REQUEST_WAIT_DURATION
-                .with_label_values(&[$priority.as_str()])
-                .observe(wait.as_secs_f64());
-            do_sleep!(wait, $mode);
+        let cached_bytes_per_refill =
+            $limiter.bytes_per_epoch[priority_idx].load(Ordering::Relaxed);
+        if cached_bytes_per_refill == 0 {
+            return $amount;
+        }
+        let amount = std::cmp::min($amount, cached_bytes_per_refill);
+        let bytes_through =
+            $limiter.bytes_through[priority_idx].fetch_add(amount, Ordering::AcqRel) + amount;
+        if bytes_through <= cached_bytes_per_refill {
             return amount;
         }
+        let now = Instant::now_coarse();
+        let mut wait = Duration::from_millis(0);
+        let pending = {
+            let mut locked = $limiter.protected.lock();
+            locked.pending_bytes[priority_idx] += amount;
+            if locked.next_refill_time <= now {
+                $limiter.refill_with_lock(&mut locked);
+            } else {
+                wait += locked.next_refill_time - now;
+            }
+            locked.pending_bytes[priority_idx]
+        };
+        wait += DEFAULT_REFILL_PERIOD * (pending / cached_bytes_per_refill) as u32;
+        RATE_LIMITER_REQUEST_WAIT_DURATION
+            .with_label_values(&[$priority.as_str()])
+            .observe(wait.as_secs_f64());
+        do_sleep!(wait, $mode);
+        amount
     }};
 }
 
@@ -210,12 +201,7 @@ impl PriorityBasedIORateLimiter {
         request_imp!(self, priority, amount, async)
     }
 
-    /// Called by a daemon thread every `DEFAULT_REFILL_PERIOD`.
-    /// It is done so because the algorithm correctness relies on refill epoch being
-    /// faithful to physical time.
-    fn refill(&self) {
-        let mut locked = self.protected.lock();
-
+    fn refill_with_lock(&self, locked: &mut MutexGuard<PriorityBasedIORateLimiterProtected>) {
         let mut limit = self.bytes_per_epoch[IOPriority::High as usize].load(Ordering::Relaxed);
         if limit == 0 {
             return;
@@ -295,10 +281,6 @@ impl IORateLimiter {
         self.throughput_limiter.set_bytes_per_sec(rate);
     }
 
-    pub fn refill(&self) {
-        self.throughput_limiter.refill();
-    }
-
     /// Requests for token for bytes and potentially update statistics. If this
     /// request can not be satisfied, the call is blocked. Granted token can be
     /// less than the requested bytes, but must be greater than zero.
@@ -343,42 +325,6 @@ pub fn get_io_rate_limiter() -> Option<Arc<IORateLimiter>> {
         Some(limiter.clone())
     } else {
         None
-    }
-}
-
-pub fn start_global_io_rate_limiter_daemon(worker: &Worker) {
-    worker.spawn_interval_task(DEFAULT_REFILL_PERIOD, move || {
-        if let Some(limiter) = get_io_rate_limiter() {
-            limiter.refill();
-        }
-    });
-}
-
-#[cfg(test)]
-pub struct LocalIORateLimiterDaemon {
-    _thread: std::thread::JoinHandle<()>,
-    stop: Arc<AtomicBool>,
-}
-
-#[cfg(test)]
-impl Drop for LocalIORateLimiterDaemon {
-    fn drop(&mut self) {
-        self.stop.store(false, Ordering::Relaxed);
-    }
-}
-
-#[cfg(test)]
-pub fn start_local_io_rate_limiter_daemon(limiter: Arc<IORateLimiter>) -> LocalIORateLimiterDaemon {
-    let stop = Arc::new(AtomicBool::new(false));
-    let stop1 = stop.clone();
-    LocalIORateLimiterDaemon {
-        _thread: std::thread::spawn(move || {
-            while !stop1.load(Ordering::Relaxed) {
-                limiter.refill();
-                std::thread::sleep(DEFAULT_REFILL_PERIOD);
-            }
-        }),
-        stop,
     }
 }
 
@@ -467,7 +413,6 @@ mod tests {
         let low_bytes_per_sec = 2000;
         let high_bytes_per_sec = 10000;
         let limiter = Arc::new(IORateLimiter::new(true /*enable_statistics*/));
-        let _deamon = start_local_io_rate_limiter_daemon(limiter.clone());
         verify_rate_limit(&limiter, low_bytes_per_sec);
         verify_rate_limit(&limiter, high_bytes_per_sec);
         verify_rate_limit(&limiter, low_bytes_per_sec);
@@ -480,7 +425,6 @@ mod tests {
         let limiter = Arc::new(IORateLimiter::new(true /*enable_statistics*/));
         limiter.set_io_rate_limit(kbytes_per_sec * 1000);
         let stats = limiter.statistics().unwrap();
-        let _deamon = start_local_io_rate_limiter_daemon(limiter.clone());
         let duration = {
             let begin = Instant::now();
             {
@@ -514,7 +458,6 @@ mod tests {
         limiter.set_io_priority(IOType::Import, IOPriority::Low);
         let stats = limiter.statistics().unwrap();
         let limiter = Arc::new(limiter);
-        let _deamon = start_local_io_rate_limiter_daemon(limiter.clone());
         let duration = {
             let begin = Instant::now();
             {

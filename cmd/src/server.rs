@@ -27,10 +27,7 @@ use engine_rocks::{
 };
 use engine_traits::{compaction_job::CompactionJobInfo, Engines, RaftEngine, CF_DEFAULT, CF_WRITE};
 use error_code::ErrorCodeExt;
-use file_system::{
-    set_io_rate_limiter, start_global_io_rate_limiter_daemon, BytesFetcher,
-    MetricsManager as IOMetricsManager,
-};
+use file_system::{set_io_rate_limiter, BytesFetcher, MetricsManager as IOMetricsManager};
 use fs2::FileExt;
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
@@ -873,7 +870,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         // Set up IO limiter even when rate limit is disabled, so that rate limits can be
         // dynamically applied later on.
         set_io_rate_limiter(Some(Arc::new(limiter)));
-        start_global_io_rate_limiter_daemon(&self.background_worker);
         fetcher
     }
 
