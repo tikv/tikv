@@ -6445,7 +6445,7 @@
               "expr": "tikv_pd_request_forwarded{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}",
               "format": "time_series",
               "intervalFactor": 2,
-              "legendFormat": "{{host}}",
+              "legendFormat": "{{instance}}-{{host}}",
               "refId": "A",
               "step": 4
             }
