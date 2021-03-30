@@ -13,7 +13,12 @@ pub struct Config {
 
 impl Config {
     pub fn max_batch_size(&self) -> usize {
-        self.max_batch_size.unwrap()
+        if let Some(size) = self.max_batch_size {
+            size
+        } else {
+            // `Config::validate` is not called for test so the `max_batch_size` is None.
+            256
+        }
     }
 }
 

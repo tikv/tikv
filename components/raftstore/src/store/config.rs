@@ -416,12 +416,10 @@ impl Config {
             if size == 0 {
                 return Err(box_err!("store-max-batch-size should be greater than 0"));
             }
+        } else if self.hibernate_regions {
+            self.store_batch_system.max_batch_size = Some(256);
         } else {
-            if self.hibernate_regions {
-                self.store_batch_system.max_batch_size = Some(256);
-            } else {
-                self.store_batch_system.max_batch_size = Some(1024);
-            }
+            self.store_batch_system.max_batch_size = Some(1024);
         }
         if self.future_poll_size == 0 {
             return Err(box_err!("future-poll-size should be greater than 0."));

@@ -133,7 +133,6 @@ lazy_static! {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let common_test_cfg = manifest_dir.join("src/common-test.toml");
         let mut cfg = TiKvConfig::from_file(&common_test_cfg, None);
-        cfg.validate().unwrap();
         cfg
     };
 }
