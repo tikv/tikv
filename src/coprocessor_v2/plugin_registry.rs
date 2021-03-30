@@ -98,28 +98,28 @@ impl CoprocessorPlugin for LoadedPlugin {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use coprocessor_plugin_api::pkgname_to_libname;
-
-    #[test]
-    fn load_plugin() {
-        let lib = unsafe { Library::new(pkgname_to_libname("example-plugin")).unwrap() };
-        let loaded_plugin = unsafe { LoadedPlugin::new(lib).unwrap() };
-        let plugin_name = loaded_plugin.name();
-
-        assert_eq!(plugin_name, "example-plugin");
-    }
-
-    #[test]
-    fn plugin_registry_load_and_get_plugin() {
-        let mut plugin_registry = PluginRegistry::default();
-        let plugin_name = plugin_registry
-            .load_plugin(pkgname_to_libname("example-plugin"))
-            .unwrap();
-        let plugin = plugin_registry.get_plugin(plugin_name).unwrap();
-
-        assert_eq!(plugin.name(), "example-plugin");
-    }
-}
+//#[cfg(test)]
+//mod tests {
+//    use super::*;
+//    use coprocessor_plugin_api::pkgname_to_libname;
+//
+//    #[test]
+//    fn load_plugin() {
+//        let lib = unsafe { Library::new(pkgname_to_libname("example-plugin")).unwrap() };
+//        let loaded_plugin = unsafe { LoadedPlugin::new(lib).unwrap() };
+//        let plugin_name = loaded_plugin.name();
+//
+//        assert_eq!(plugin_name, "example-plugin");
+//    }
+//
+//    #[test]
+//    fn plugin_registry_load_and_get_plugin() {
+//        let mut plugin_registry = PluginRegistry::default();
+//        let plugin_name = plugin_registry
+//            .load_plugin(pkgname_to_libname("example-plugin"))
+//            .unwrap();
+//        let plugin = plugin_registry.get_plugin(plugin_name).unwrap();
+//
+//        assert_eq!(plugin.name(), "example-plugin");
+//    }
+//}
