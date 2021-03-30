@@ -394,7 +394,7 @@ impl Simulator for ServerCluster {
         // Register the role change observer of the lock manager.
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
 
-        let pessimistic_txn_cfg = cfg.pessimistic_txn.clone();
+        let pessimistic_txn_cfg = cfg.pessimistic_txn;
 
         let split_check_runner =
             SplitCheckRunner::new(engines.kv.clone(), router.clone(), coprocessor_host.clone());
