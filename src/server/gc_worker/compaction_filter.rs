@@ -68,6 +68,12 @@ lazy_static! {
         "Skip to create compaction filter for GC because of table properties"
     )
     .unwrap();
+    static ref GC_COMPACTION_FILTER_PERFORM: IntCounter = register_int_counter!(
+        "tikv_gc_compaction_filter_perform",
+        "perfrom GC in compaction filter"
+    )
+    .unwrap();
+
 
     // `WriteType::Rollback` and `WriteType::Lock` are handled in different ways.
     static ref GC_COMPACTION_MVCC_ROLLBACK: IntCounter = register_int_counter!(
@@ -180,6 +186,8 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             GC_COMPACTION_FILTER_SKIP.inc();
             return std::ptr::null_mut();
         }
+
+        GC_COMPACTION_FILTER_PERFORM.inc();
 
         debug!(
             "gc in compaction filter"; "safe_point" => safe_point,
