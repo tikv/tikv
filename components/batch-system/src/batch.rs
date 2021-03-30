@@ -449,7 +449,7 @@ pub fn create_system<N: Fsm, C: Fsm>(
         router: router.clone(),
         receiver: rx,
         pool_size: cfg.pool_size,
-        max_batch_size: cfg.max_batch_size,
+        max_batch_size: cfg.max_batch_size(),
         reschedule_duration: cfg.reschedule_duration.0,
         workers: vec![],
     };
