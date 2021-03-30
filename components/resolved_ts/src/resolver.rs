@@ -110,8 +110,8 @@ impl Resolver {
         self.resolved_ts
     }
 
-    pub fn min_lock_ts(&self) -> Option<TimeStamp> {
-        self.lock_ts_heap.keys().next().cloned()
+    pub fn is_initialized(&self) -> bool {
+        self.resolved_ts.is_some()
     }
 }
 
