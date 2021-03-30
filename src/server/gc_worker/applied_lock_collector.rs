@@ -132,6 +132,7 @@ impl LockObserver {
     }
 
     fn send(&self, locks: Vec<(Key, Lock)>) {
+        #[cfg(feature = "failpoints")]
         let injected_full = (|| {
             fail_point!("lock_observer_send_full", |_| {
                 info!("[failpoint] injected lock observer channel full"; "locks" => ?locks);
@@ -139,6 +140,8 @@ impl LockObserver {
             });
             false
         })();
+        #[cfg(not(feature = "failpoints"))]
+        let injected_full = false;
 
         let res = if injected_full {
             Err(ScheduleError::Full(LockCollectorTask::ObservedLocks(locks)))

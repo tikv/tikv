@@ -414,7 +414,7 @@ fn async_commit_timestamps(
         let min_commit_ts = cmp::max(cmp::max(max_ts, start_ts), for_update_ts).next();
         let min_commit_ts = cmp::max(lock.min_commit_ts, min_commit_ts);
 
-        let max_commit_ts = max_commit_ts;
+        #[cfg(feature = "failpoints")]
         let injected_fallback = (|| {
             fail_point!("async_commit_1pc_force_fallback", |_| {
                 info!("[failpoint] injected fallback for async commit/1pc transaction"; "start_ts" => start_ts);
@@ -422,6 +422,10 @@ fn async_commit_timestamps(
             });
             false
         })();
+        #[cfg(not(feature = "failpoints"))]
+        let injected_fallback = false;
+
+        let max_commit_ts = max_commit_ts;
         if (!max_commit_ts.is_zero() && min_commit_ts > max_commit_ts) || injected_fallback {
             warn!("commit_ts is too large, fallback to normal 2PC";
                 "start_ts" => start_ts,
