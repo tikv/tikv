@@ -1643,7 +1643,11 @@ mod tests {
             (Some("2021-03-26"), Some("24:00:01"), Some("2021-03-27")),
             (Some("2021-03-26"), Some("48:00:01"), Some("2021-03-28")),
             (Some("2021-03-26"), Some("-00:01:00"), Some("2021-03-25")),
-            (Some("2021-03-26 00:00:30"), Some("-00:01:00"), Some("2021-03-25")),
+            (
+                Some("2021-03-26 00:00:30"),
+                Some("-00:01:00"),
+                Some("2021-03-25"),
+            ),
             (
                 Some("2018-12-31 23:00:00"),
                 Some("1 01:30:30"),
@@ -1661,7 +1665,8 @@ mod tests {
         ];
         for (arg0, arg1, exp) in cases {
             let exp = exp.map(|exp| Time::parse_datetime(&mut ctx, exp, MAX_FSP, true).unwrap());
-            let arg0 = arg0.map(|arg0| Time::parse_datetime(&mut ctx, arg0, MAX_FSP,true).unwrap());
+            let arg0 =
+                arg0.map(|arg0| Time::parse_datetime(&mut ctx, arg0, MAX_FSP, true).unwrap());
             let arg1 = arg1.map(|arg1| arg1.as_bytes().to_vec());
 
             let output = RpnFnScalarEvaluator::new()
