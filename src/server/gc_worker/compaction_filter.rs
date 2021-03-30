@@ -181,13 +181,12 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
         }
         drop(gc_context_option);
 
+        GC_COMPACTION_FILTER_PERFORM.inc();
         if !check_need_gc(safe_point.into(), ratio_threshold, context) {
             debug!("skip gc in compaction filter because it's not necessary");
             GC_COMPACTION_FILTER_SKIP.inc();
             return std::ptr::null_mut();
         }
-
-        GC_COMPACTION_FILTER_PERFORM.inc();
 
         debug!(
             "gc in compaction filter"; "safe_point" => safe_point,
