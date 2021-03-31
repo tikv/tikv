@@ -132,7 +132,7 @@ impl EventBatcher {
                     self.buffer.push(ChangeDataEvent::default());
                 }
                 self.last_size += size;
- 
+
                 let event = e.event.as_ref().unwrap();
                 if let Event_oneof_event::Error(err) = event {
                     info!("cdc sending error"; "region_id" => e.region_id, "error" => ?err);
