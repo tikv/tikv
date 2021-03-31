@@ -5,6 +5,11 @@ use std::{error, result};
 
 use engine_traits::Error as EngineTraitsError;
 use kvproto::errorpb::Error as ErrorHeader;
+<<<<<<< HEAD
+=======
+use std::time::Duration;
+use thiserror::Error;
+>>>>>>> 286b519ea... cdc: flow control (#9885)
 use tikv::storage::kv::{Error as EngineError, ErrorInner as EngineErrorInner};
 use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
@@ -27,8 +32,17 @@ pub enum Error {
     Mvcc(MvccError),
     #[fail(display = "Request error {:?}", _0)]
     Request(ErrorHeader),
+<<<<<<< HEAD
     #[fail(display = "Engine traits error {}", _0)]
     EngineTraits(EngineTraitsError),
+=======
+    #[error("Engine traits error {0}")]
+    EngineTraits(#[from] EngineTraitsError),
+    #[error("Incremental scan timed out {0:?}")]
+    ScanTimedOut(Duration),
+    #[error("Fail to get real time stream start")]
+    GetRealTimeStartFailed,
+>>>>>>> 286b519ea... cdc: flow control (#9885)
 }
 
 macro_rules! impl_from {
