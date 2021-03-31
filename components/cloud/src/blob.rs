@@ -131,8 +131,8 @@ impl BucketConf {
             Some(sne) => (*sne).to_string(),
         };
         if let Some(ep) = &self.endpoint {
-            let mut u = url::Url::parse(&ep)
-                .map_err(|e| format!("invalid endpoint {}: {}", &ep, e))?;
+            let mut u =
+                url::Url::parse(&ep).map_err(|e| format!("invalid endpoint {}: {}", &ep, e))?;
             u.set_path(&format!(
                 "{}/{}",
                 &self.bucket.trim_end_matches('/'),

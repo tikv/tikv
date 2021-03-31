@@ -20,7 +20,6 @@ prost-codec = [
   "txn_types/prost-codec",
   "external_storage_export/prost-codec",
 ]
-]
 cloud-aws = ["external_storage_export/cloud-aws"]
 cloud-gcp = ["external_storage_export/cloud-gcp"]
 
@@ -30,13 +29,8 @@ collections = { path = "../collections" }
 concurrency_manager = { path = "../concurrency_manager" }
 crc64fast = "0.1"
 engine_traits = { path = "../engine_traits" }
-<<<<<<< HEAD
-external_storage = { path = "../external_storage" }
-file_system = { path = "../file_system", default-features = false }
-=======
 external_storage_export = { path = "../external_storage/export", default-features = false }
-file_system = { path = "../file_system" }
->>>>>>> 39c6900... external_storage: move cloud code to separate crate
+file_system = { path = "../file_system", default-features = false }
 futures = "0.3"
 futures-executor = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }

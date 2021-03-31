@@ -3,8 +3,9 @@
 //! To use External storage with protobufs as an application, import this module.
 //! external_storage contains the actual library code
 //! Cloud provider backends are under components/cloud
-use std::io;
+use std::io::{self, Write};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Instant;
 
 #[cfg(feature = "cloud-aws")]
@@ -14,24 +15,50 @@ pub use gcp::GCSStorage;
 
 #[cfg(feature = "prost-codec")]
 pub use kvproto::backup::storage_backend::Backend;
+use kvproto::backup::CloudDynamic;
 #[cfg(feature = "protobuf-codec")]
 pub use kvproto::backup::StorageBackend_oneof_backend as Backend;
-use kvproto::backup::{CloudDynamic, Gcs, S3};
+#[cfg(any(feature = "cloud-gcp", feature = "cloud-aws"))]
+use kvproto::backup::{Gcs, S3};
 
+#[cfg(feature = "cloud-storage-grpc")]
+use super::service;
 use cloud::blob::BlobStorage;
-pub use external_storage::{record_storage_create, ExternalStorage, LocalStorage, NoopStorage};
+use encryption::DataKeyManager;
+use external_storage::record_storage_create;
+pub use external_storage::{
+    read_external_storage_into_file, ExternalStorage, LocalStorage, NoopStorage,
+};
 use futures_io::AsyncRead;
 use kvproto::backup::{Noop, StorageBackend};
+use tikv_util::stream::block_on_external_io;
+use tikv_util::time::Limiter;
 
 pub fn create_storage(storage_backend: &StorageBackend) -> io::Result<Box<dyn ExternalStorage>> {
     if let Some(backend) = &storage_backend.backend {
         create_backend(backend)
     } else {
-        Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("no storage backend {:?}", storage_backend),
-        ))
+        Err(no_storage_backend(storage_backend))
     }
+}
+
+// when the flag cloud-storage-grpc is set create_storage is automatically wrapped with a client
+// This function can be used by the server to avoid any wrapping
+pub fn create_storage_no_client(
+    storage_backend: &StorageBackend,
+) -> io::Result<Box<dyn ExternalStorage>> {
+    if let Some(backend) = &storage_backend.backend {
+        create_backend_inner(backend)
+    } else {
+        Err(no_storage_backend(storage_backend))
+    }
+}
+
+fn no_storage_backend(storage_backend: &StorageBackend) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::NotFound,
+        format!("no storage backend {:?}", storage_backend),
+    )
 }
 
 #[cfg(any(feature = "cloud-gcp", feature = "cloud-aws"))]
@@ -39,8 +66,19 @@ fn blob_store(store: Box<dyn BlobStorage>) -> Box<dyn ExternalStorage> {
     Box::new(BlobStore::new(store)) as Box<dyn ExternalStorage>
 }
 
+#[cfg(feature = "cloud-storage-grpc")]
+pub fn create_backend(backend: &Backend) -> io::Result<Box<dyn ExternalStorage>> {
+    let client = service::new_client(backend.clone(), create_backend_inner(backend)?)?;
+    return Ok(Box::new(client) as Box<dyn ExternalStorage>);
+}
+
+#[cfg(not(feature = "cloud-storage-grpc"))]
+pub fn create_backend(backend: &Backend) -> io::Result<Box<dyn ExternalStorage>> {
+    create_backend_inner(backend)
+}
+
 /// Create a new storage from the given storage backend description.
-fn create_backend(backend: &Backend) -> io::Result<Box<dyn ExternalStorage>> {
+fn create_backend_inner(backend: &Backend) -> io::Result<Box<dyn ExternalStorage>> {
     let start = Instant::now();
     let storage: Box<dyn ExternalStorage> = match backend {
         Backend::Local(local) => {
@@ -206,15 +244,56 @@ impl std::ops::Deref for BlobStore {
     }
 }
 
+pub struct EncryptedExternalStorage {
+    pub key_manager: Arc<DataKeyManager>,
+    pub storage: Box<dyn ExternalStorage>,
+}
+
+impl ExternalStorage for EncryptedExternalStorage {
+    fn name(&self) -> &'static str {
+        self.storage.name()
+    }
+    fn url(&self) -> io::Result<url::Url> {
+        self.storage.url()
+    }
+    fn write(
+        &self,
+        name: &str,
+        reader: Box<dyn AsyncRead + Send + Unpin>,
+        content_length: u64,
+    ) -> io::Result<()> {
+        self.storage.write(name, reader, content_length)
+    }
+    fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
+        self.storage.read(name)
+    }
+    fn restore(
+        &self,
+        storage_name: &str,
+        restore_name: std::path::PathBuf,
+        expected_length: u64,
+        speed_limiter: &Limiter,
+    ) -> io::Result<()> {
+        let mut input = self.read(storage_name);
+        let file_writer: &mut dyn Write = &mut self.key_manager.create_file(&restore_name)?;
+        let min_read_speed: usize = 8192;
+        block_on_external_io(read_external_storage_into_file(
+            &mut input,
+            file_writer,
+            &speed_limiter,
+            expected_length,
+            min_read_speed,
+        ))
+    }
+}
+
 impl ExternalStorage for BlobStore {
     fn name(&self) -> &'static str {
         (**self).name()
     }
-
     fn url(&self) -> io::Result<url::Url> {
         (**self).url()
     }
-
     fn write(
         &self,
         name: &str,

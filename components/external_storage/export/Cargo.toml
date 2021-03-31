@@ -1,3 +1,7 @@
+[[bin]]
+name = "tikv-cloud-storage"
+required-features = ["cloud-storage-grpc"]
+
 [package]
 name = "external_storage_export"
 version = "0.0.1"
@@ -13,6 +17,7 @@ protobuf-codec = [
   "cloud/protobuf-codec",
   "gcp/protobuf-codec",
   "grpcio/protobuf-codec",
+  "encryption/protobuf-codec",
 ]
 prost-codec = [
   "kvproto/prost-codec",
@@ -21,29 +26,58 @@ prost-codec = [
   "cloud/prost-codec",
   "gcp/prost-codec",
   "grpcio/prost-codec",
+  "encryption/prost-codec",
 ]
 cloud-aws = ["aws"]
 cloud-gcp = ["gcp"]
-grpc-external-storage = ["grpcio"]
+cloud-storage-grpc = [
+  "grpcio",
+  "file_system",
+  "futures-executor",
+  "futures-util",
+  "libc",
+  "signal",
+  "slog",
+  "slog-global",
+  "slog-term",
+  "tokio",
+  "tokio-util",
+  "nix",
+]
 
 [dependencies]
+anyhow = "1.0"
 aws = { optional = true, path = "../../cloud/aws", default-features = false }
 cloud = { path = "../../cloud", default_features = false }
 gcp = { optional = true, path = "../../cloud/gcp", default-features = false }
 grpcio = { optional = true, version = "0.8",  default-features = false, features = ["openssl-vendored"] }
+encryption = { path = "../../encryption", default-features = false }
 external_storage = { path = "../", default-features = false }
-futures = "0.3"
-futures-io = "0.3"
-futures-util = { version = "0.3", default-features = false, features = ["io"] }
+file_system = { optional = true, path = "../../file_system" }
+futures-executor = { optional = true, version = "0.3" }
+futures-io = { version = "0.3" }
+futures-util = { optional = true, version = "0.3", default-features = false, features = ["io"] }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+tikv_util = { path = "../../tikv_util" }
+tokio = { optional = true, version = "0.2", features = ["time", "rt-core", "uds"] }
+tokio-util = { optional = true, version = "0.3.1", features = ["compat"] }
 url = "2.0"
 
 [dev-dependencies]
+matches = "0.1.8"
+futures-util = { version = "0.3", default-features = false, features = ["io"] }
+rust-ini = "0.14.0"
 structopt = "0.3"
 tempfile = "3.1"
-rust-ini = "0.14.0"
-matches = "0.1.8"
-tokio = { version = "0.2.13", features = ["time"] }
+tokio = { version = "0.2.24", features = ["time"] }
 
 [[example]]
 name = "scli"
+
+[target.'cfg(unix)'.dependencies]
+nix = { optional = true, version = "0.11" }
+signal = { optional = true, version = "0.6" }
+libc = { optional = true, version = "0.2" }
+slog = { optional = true, version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog-global = { optional = true, version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+slog-term = { optional = true, version = "2.4" }

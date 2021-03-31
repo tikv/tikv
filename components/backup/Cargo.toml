@@ -8,6 +8,7 @@ publish = false
 default = ["protobuf-codec", "test-engines-rocksdb", "cloud-aws", "cloud-gcp"]
 cloud-aws = ["external_storage_export/cloud-aws"]
 cloud-gcp = ["external_storage_export/cloud-gcp"]
+cloud-storage-grpc = ["external_storage_export/cloud-storage-grpc"]
 protobuf-codec = [
   "concurrency_manager/protobuf-codec",
   "engine_rocks/protobuf-codec",

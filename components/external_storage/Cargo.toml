@@ -17,6 +17,7 @@ prost-codec = [
 
 [dependencies]
 bytes = "0.5.3"
+file_system = { path = "../file_system" }
 futures = "0.3"
 futures-executor = "0.3"
 futures-io = "0.3"

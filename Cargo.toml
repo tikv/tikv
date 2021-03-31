@@ -108,6 +108,7 @@ test-engines-panic = [
 bcc-iosnoop = [
   "file_system/bcc-iosnoop",
 ]
+cloud-storage-grpc = ["sst_importer/cloud-storage-grpc"]
 
 # for testing configure propegate to other crates
 # https://stackoverflow.com/questions/41700543/can-we-share-test-utilites-between-crates
@@ -227,7 +228,7 @@ tokio = { version = "0.2", features = ["macros", "rt-threaded", "time"] }
 zipf = "6.1.0"
 
 [patch.'https://github.com/pingcap/kvproto']
-kvproto = { rev = "d045aaf92f5caa90fdcc2745055869d0177f470c", git = "https://github.com/gregwebs/kvproto.git", default-features = false }
+kvproto = { rev = "6212d77cfd9f1ea1ddc2139be0cda23895d84956", git = "https://github.com/gregwebs/kvproto.git", default-features = false }
 
 [patch.crates-io]
 # TODO: remove this when new raft-rs is published.

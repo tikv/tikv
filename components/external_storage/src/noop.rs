@@ -41,7 +41,7 @@ impl ExternalStorage for NoopStorage {
         block_on(copy(reader, &mut AllowStdIo::new(io::sink()))).map(drop)
     }
 
-    fn read(&self, _name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
+    fn read(&self, _name: &str) -> Box<dyn AsyncRead + Unpin> {
         Box::new(AllowStdIo::new(io::empty()))
     }
 }

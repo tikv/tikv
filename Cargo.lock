@@ -1362,21 +1362,16 @@ dependencies = [
 name = "external_storage"
 version = "0.0.1"
 dependencies = [
- "anyhow",
  "bytes 0.5.3",
- "ffi-support",
  "file_system",
  "futures 0.3.7",
  "futures-executor",
  "futures-io",
  "futures-util",
- "grpcio",
  "kvproto",
  "lazy_static",
- "libloading",
  "matches",
  "prometheus",
- "protobuf",
  "rand 0.7.3",
  "rusoto_core",
  "rust-ini",
@@ -1388,7 +1383,6 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "tokio",
- "tokio-util 0.3.1",
  "url",
 ]
 
@@ -1401,22 +1395,16 @@ dependencies = [
  "cloud",
  "encryption",
  "external_storage",
- "ffi-support",
  "file_system",
- "futures 0.3.7",
  "futures-executor",
  "futures-io",
  "futures-util",
  "gcp",
  "grpcio",
  "kvproto",
- "lazy_static",
  "libc 0.2.86",
- "libloading",
  "matches",
  "nix 0.11.1",
- "once_cell",
- "protobuf",
  "rust-ini",
  "signal",
  "slog",
@@ -1470,16 +1458,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f35ce9c8fb9891c75ceadbc330752951a4e369b50af10775955aeb9af3eee34b"
 
 [[package]]
-name = "ffi-support"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f85d4d1be103c0b2d86968f0b0690dc09ac0ba205b90adb0389b552869e5000e"
-dependencies = [
- "lazy_static",
- "log",
-]
-
-[[package]]
 name = "file_system"
 version = "0.1.0"
 dependencies = [
@@ -1500,6 +1478,18 @@ dependencies = [
  "tempfile",
  "tikv_alloc",
  "tikv_util",
+]
+
+[[package]]
+name = "filetime"
+version = "0.2.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d34cfa13a63ae058bfa601fe9e313bbdb3746427c1459185464ce0fcf62e1e8"
+dependencies = [
+ "cfg-if 1.0.0",
+ "libc 0.2.86",
+ "redox_syscall 0.2.6",
+ "winapi 0.3.8",
 ]
 
 [[package]]
@@ -1556,6 +1546,25 @@ name = "fs_extra"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5f2a4a2034423744d2cc7ca2068453168dcdb82c438419e639a26bd87839c674"
+
+[[package]]
+name = "fsevent"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5ab7d1bd1bd33cc98b0889831b72da23c0aa4df9cec7e0702f46ecea04b35db6"
+dependencies = [
+ "bitflags",
+ "fsevent-sys",
+]
+
+[[package]]
+name = "fsevent-sys"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f41b048a94555da0f42f1d632e2e19510084fb8e303b0daa2816e733fb3644a0"
+dependencies = [
+ "libc 0.2.86",
+]
 
 [[package]]
 name = "fuchsia-cprng"
@@ -2076,6 +2085,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "inotify"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4816c66d2c8ae673df83366c18341538f234a26d65a9ecea5c348b453ac1d02f"
+dependencies = [
+ "bitflags",
+ "inotify-sys",
+ "libc 0.2.86",
+]
+
+[[package]]
+name = "inotify-sys"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e05c02b5e89bff3b946cedeca278abc628fe811e604f027c45a8aa3cf793d0eb"
+dependencies = [
+ "libc 0.2.86",
+]
+
+[[package]]
 name = "instant"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2513,6 +2542,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "mio-extras"
+version = "2.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52403fe290012ce777c4626790c8951324a2b9e3316b3143779c72b029742f19"
+dependencies = [
+ "lazycell",
+ "log",
+ "mio",
+ "slab",
+]
+
+[[package]]
 name = "mio-named-pipes"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2697,6 +2738,24 @@ checksum = "c433f4d505fe6ce7ff78523d2fa13a0b9f2690e181fc26168bcbe5ccc5d14e07"
 dependencies = [
  "memchr",
  "version_check 0.1.5",
+]
+
+[[package]]
+name = "notify"
+version = "4.0.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2599080e87c9bd051ddb11b10074f4da7b1223298df65d4c2ec5bcf309af1533"
+dependencies = [
+ "bitflags",
+ "filetime",
+ "fsevent",
+ "fsevent-sys",
+ "inotify",
+ "libc 0.2.86",
+ "mio",
+ "mio-extras",
+ "walkdir",
+ "winapi 0.3.8",
 ]
 
 [[package]]
@@ -2905,7 +2964,7 @@ dependencies = [
  "cfg-if 0.1.10",
  "cloudabi 0.0.3",
  "libc 0.2.86",
- "redox_syscall",
+ "redox_syscall 0.1.56",
  "smallvec",
  "winapi 0.3.8",
 ]
@@ -2920,7 +2979,7 @@ dependencies = [
  "cloudabi 0.1.0",
  "instant",
  "libc 0.2.86",
- "redox_syscall",
+ "redox_syscall 0.1.56",
  "smallvec",
  "winapi 0.3.8",
 ]
@@ -3717,13 +3776,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2439c63f3f6139d1b57529d16bc3b8bb855230c8efcc5d3a896c8bea7c3b1e84"
 
 [[package]]
+name = "redox_syscall"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8270314b5ccceb518e7e578952f0b72b88222d02e8f77f5ecf7abbb673539041"
+dependencies = [
+ "bitflags",
+]
+
+[[package]]
 name = "redox_users"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09b23093265f8d200fa7b4c2c76297f47e681c655f6f1285a8780d6a022f7431"
 dependencies = [
  "getrandom",
- "redox_syscall",
+ "redox_syscall 0.1.56",
  "rust-argon2",
 ]
 
@@ -4438,7 +4506,7 @@ checksum = "2c29947abdee2a218277abeca306f25789c938e500ea5a9d4b12a5a504466902"
 dependencies = [
  "cfg-if 1.0.0",
  "libc 0.2.86",
- "redox_syscall",
+ "redox_syscall 0.1.56",
  "winapi 0.3.8",
 ]
 
@@ -4768,7 +4836,7 @@ dependencies = [
  "cfg-if 0.1.10",
  "libc 0.2.86",
  "rand 0.7.3",
- "redox_syscall",
+ "redox_syscall 0.1.56",
  "remove_dir_all",
  "winapi 0.3.8",
 ]
@@ -5209,7 +5277,6 @@ dependencies = [
  "engine_traits",
  "engine_traits_tests",
  "error_code",
- "example_plugin",
  "fail",
  "file_system",
  "fs2",
@@ -5237,6 +5304,7 @@ dependencies = [
  "more-asserts",
  "murmur3",
  "nom 5.1.0",
+ "notify",
  "num_cpus",
  "openssl",
  "panic_hook",
@@ -5498,7 +5566,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db8dcfca086c1143c9270ac42a2bbd8a7ee477b78ac8e45b19abfb0cbede4b6f"
 dependencies = [
  "libc 0.2.86",
- "redox_syscall",
+ "redox_syscall 0.1.56",
  "winapi 0.3.8",
 ]
 

@@ -1,7 +1,7 @@
 mod export;
 pub use export::*;
 
-#[cfg(feature = "grpc-external-storage")]
+#[cfg(feature = "cloud-storage-grpc")]
 mod service;
-#[cfg(feature = "grpc-external-storage")]
-pub use service::Service;
+#[cfg(feature = "cloud-storage-grpc")]
+pub use service::new_service;

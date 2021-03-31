@@ -97,7 +97,7 @@ impl ExternalStorage for LocalStorage {
         self.base_dir.sync_all()
     }
 
-    fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
+    fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin> {
         debug!("read file from local storage";
             "name" => %name, "base" => %self.base.display());
         match File::open(self.base.join(name)) {
