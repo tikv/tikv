@@ -1702,7 +1702,8 @@ fn test_cdc_write_rollback_when_no_lock() {
 
 #[test]
 fn test_resolved_ts_cluster_upgrading() {
-    let cluster = new_server_cluster(0, 3);
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.cdc.hibernate_regions_compatible = true;
     cluster.pd_client.disable_default_operator();
     unsafe {
         cluster
