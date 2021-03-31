@@ -23,7 +23,7 @@ use test_raftstore::*;
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Lock, LockType};
 
-use cdc::Task;
+use cdc::{metrics::CDC_RESOLVED_TS_ADVANCE_METHOD, Task};
 
 #[test]
 fn test_cdc_basic() {
@@ -817,7 +817,16 @@ fn test_old_value_basic() {
     let ts12 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.must_acquire_pessimistic_lock(1, vec![m7.clone()], k1.clone(), ts9, ts12);
     m7.set_op(Op::Del);
-    suite.must_kv_pessimistic_prewrite(1, vec![m7], k1, ts9, ts12);
+    suite.must_kv_pessimistic_prewrite(1, vec![m7], k1.clone(), ts9, ts12);
+    let ts13 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_commit(1, vec![k1.clone()], ts9, ts13);
+    // Insert value again
+    let mut m8 = Mutation::default();
+    m8.set_op(Op::Insert);
+    m8.key = k1.clone();
+    m8.value = b"v1".to_vec();
+    let ts14 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_prewrite(1, vec![m8], k1, ts14);
 
     let mut event_count = 0;
     loop {
@@ -871,9 +880,9 @@ fn test_old_value_basic() {
                             assert_eq!(row.get_old_value(), b"v1");
                             event_count += 1;
                         } else if row.get_type() == EventLogType::Prewrite
-                            && row.get_start_ts() == ts9.into_inner()
+                            && row.get_start_ts() == ts14.into_inner()
                         {
-                            assert_eq!(row.get_old_value(), b"v6");
+                            assert_eq!(row.get_old_value(), b"");
                             event_count += 1;
                         }
                     }
@@ -1688,5 +1697,49 @@ fn test_cdc_write_rollback_when_no_lock() {
         }
     }
 
+    suite.stop();
+}
+
+#[test]
+fn test_resolved_ts_cluster_upgrading() {
+    let cluster = new_server_cluster(0, 3);
+    cluster.pd_client.disable_default_operator();
+    unsafe {
+        cluster
+            .pd_client
+            .feature_gate()
+            .reset_version("4.0.0")
+            .unwrap();
+    }
+    let mut suite = TestSuite::with_cluster(3, cluster);
+
+    let region = suite.cluster.get_region(&[]);
+    let req = suite.new_changedata_request(region.id);
+    let (mut req_tx, event_feed_wrap, receive_event) =
+        new_event_feed(suite.get_region_cdc_client(region.id));
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    let event = receive_event(true);
+    if let Some(resolved_ts) = event.resolved_ts.as_ref() {
+        assert!(resolved_ts.regions == vec![region.id]);
+        assert_eq!(CDC_RESOLVED_TS_ADVANCE_METHOD.get(), 0);
+    }
+    suite
+        .cluster
+        .pd_client
+        .feature_gate()
+        .set_version("5.0.0")
+        .unwrap();
+
+    loop {
+        let event = receive_event(true);
+        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
+            assert!(resolved_ts.regions == vec![region.id]);
+            if CDC_RESOLVED_TS_ADVANCE_METHOD.get() == 1 {
+                break;
+            }
+        }
+    }
+
+    event_feed_wrap.replace(None);
     suite.stop();
 }
