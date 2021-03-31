@@ -580,10 +580,9 @@ pub mod testing_util {
             let (rate_limiter, drainer) = new_pair::<CdcEvent>(1024, 1024);
             let batched_sink = EventBatcherSink::new(tx);
             runtime.spawn(async move {
-                drainer
+                let _ = drainer
                     .drain(batched_sink, grpcio::WriteFlags::default())
-                    .await
-                    .unwrap();
+                    .await;
             });
 
             let rate_limiter_clone = rate_limiter.clone();
@@ -1185,7 +1184,7 @@ mod tests {
                 if rx.next().await.is_some() {
                     count += 1;
                 }
-                if count == 100 * 100000 {
+                if count == 10 * 10000 {
                     return;
                 }
             }
@@ -1194,10 +1193,10 @@ mod tests {
         tokio::task::yield_now().await;
 
         let mut handles = vec![];
-        for _i in 0..100 {
+        for _i in 0..10 {
             let rate_limiter = rate_limiter.clone();
             let handle = tokio::spawn(async move {
-                for j in 0..100000u64 {
+                for j in 0..10000u64 {
                     rate_limiter.send_scan_event(j).await.unwrap();
                 }
             });
