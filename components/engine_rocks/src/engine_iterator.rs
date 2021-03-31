@@ -31,12 +31,18 @@ impl engine_traits::Iterator for RocksEngineIterator {
     }
 
     fn prev(&mut self) -> Result<bool> {
-        assert!(cfg!(feature = "nortcheck") || self.valid()?);
+        #[cfg(not(feature = "nortcheck"))]
+        if !self.valid()? {
+            return Err(Error::Engine("Iterator invalid".to_string()));
+        }
         self.0.prev().map_err(Error::Engine)
     }
 
     fn next(&mut self) -> Result<bool> {
-        assert!(cfg!(feature = "nortcheck") || self.valid()?);
+        #[cfg(not(feature = "nortcheck"))]
+        if !self.valid()? {
+            return Err(Error::Engine("Iterator invalid".to_string()));
+        }
         self.0.next().map_err(Error::Engine)
     }
 
