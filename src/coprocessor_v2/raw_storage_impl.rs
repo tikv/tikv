@@ -205,11 +205,10 @@ impl From<Canceled> for StorageErrorShim {
 mod test {
     use super::*;
     use crate::storage::{lock_manager::DummyLockManager, TestStorageBuilder};
-    use futures::executor::block_on;
     use kvproto::kvrpcpb::Context;
 
-    #[test]
-    fn test_storage_api() {
+    #[tokio::test]
+    async fn test_storage_api() {
         let storage = TestStorageBuilder::new(DummyLockManager, false)
             .build()
             .unwrap();
@@ -222,27 +221,27 @@ mod test {
         let val2 = vec![43];
 
         // Put
-        block_on(raw_storage.put(key.clone(), val1.clone())).unwrap();
+        raw_storage.put(key.clone(), val1.clone()).await.unwrap();
 
         // Get
-        let r = block_on(raw_storage.get(key.clone())).unwrap();
+        let r = raw_storage.get(key.clone()).await.unwrap();
         assert_eq!(r, Some(val1.clone()));
 
         // Put overwrite
-        block_on(raw_storage.put(key.clone(), val2.clone())).unwrap();
-        let r = block_on(raw_storage.get(key.clone())).unwrap();
+        raw_storage.put(key.clone(), val2.clone()).await.unwrap();
+        let r = raw_storage.get(key.clone()).await.unwrap();
         assert_eq!(r, Some(val2.clone()));
 
         // Delete
-        block_on(raw_storage.delete(key.clone())).unwrap();
+        raw_storage.delete(key.clone()).await.unwrap();
 
         // Get non-existent
-        let r = block_on(raw_storage.get(key.clone())).unwrap();
+        let r = raw_storage.get(key.clone()).await.unwrap();
         assert_eq!(r, None);
     }
 
-    #[test]
-    fn test_storage_api_batch() {
+    #[tokio::test]
+    async fn test_storage_api_batch() {
         let storage = TestStorageBuilder::new(DummyLockManager, false)
             .build()
             .unwrap();
@@ -260,10 +259,16 @@ mod test {
         };
 
         // Batch put
-        block_on(raw_storage.batch_put(keys.clone().zip(values.clone()).collect())).unwrap();
+        raw_storage
+            .batch_put(keys.clone().zip(values.clone()).collect())
+            .await
+            .unwrap();
 
         // Batch get
-        let r = block_on(raw_storage.batch_get(keys.clone().take(2).collect())).unwrap();
+        let r = raw_storage
+            .batch_get(keys.clone().take(2).collect())
+            .await
+            .unwrap();
         assert_eq!(
             r,
             keys.clone()
@@ -273,15 +278,15 @@ mod test {
         );
 
         // Batch get (one non-existent)
-        let r = block_on(
-            raw_storage.batch_get(
+        let r = raw_storage
+            .batch_get(
                 keys.clone()
                     .take(1)
                     .chain(non_existing_key.clone())
                     .collect(),
-            ),
-        )
-        .unwrap();
+            )
+            .await
+            .unwrap();
         assert_eq!(
             r,
             keys.clone()
@@ -291,30 +296,33 @@ mod test {
         );
 
         // Full scan
-        let r = block_on(raw_storage.scan(full_scan.clone())).unwrap();
+        let r = raw_storage.scan(full_scan.clone()).await.unwrap();
         assert_eq!(r.len(), 3);
 
         // Batch delete (one non-existent)
-        block_on(
-            raw_storage.batch_delete(
+        raw_storage
+            .batch_delete(
                 keys.clone()
                     .take(2)
                     .chain(non_existing_key.clone())
                     .collect(),
-            ),
-        )
-        .unwrap();
-        let r = block_on(raw_storage.scan(full_scan.clone())).unwrap();
+            )
+            .await
+            .unwrap();
+        let r = raw_storage.scan(full_scan.clone()).await.unwrap();
         assert_eq!(r.len(), 1);
 
         // Batch put (one overwrite)
-        block_on(raw_storage.batch_put(keys.clone().zip(values.clone()).collect())).unwrap();
-        let r = block_on(raw_storage.scan(full_scan.clone())).unwrap();
+        raw_storage
+            .batch_put(keys.clone().zip(values.clone()).collect())
+            .await
+            .unwrap();
+        let r = raw_storage.scan(full_scan.clone()).await.unwrap();
         assert_eq!(r.len(), 3);
 
         // Delete range (all)
-        block_on(raw_storage.delete_range(full_scan.clone())).unwrap();
-        let r = block_on(raw_storage.scan(full_scan.clone())).unwrap();
+        raw_storage.delete_range(full_scan.clone()).await.unwrap();
+        let r = raw_storage.scan(full_scan.clone()).await.unwrap();
         assert_eq!(r.len(), 0);
     }
 }
