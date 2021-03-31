@@ -10,12 +10,11 @@ use std::time::Instant;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{RocksEngine, RocksWriteBatch};
 use engine_traits::{
-    DeleteStrategy, MiscExt, Mutable, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK,
-    CF_WRITE,
+    DeleteStrategy, MiscExt, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use file_system::{IOType, WithIOType};
 use futures::executor::block_on;
-use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
+use kvproto::kvrpcpb::{Context, LockInfo};
 use pd_client::{FeatureGate, PdClient};
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoProvider};
 use raftstore::router::RaftStoreRouter;
@@ -29,13 +28,13 @@ use txn_types::{Key, TimeStamp};
 
 use crate::server::metrics::*;
 use crate::storage::kv::{Engine, ScanMode, Statistics};
-use crate::storage::mvcc::{check_need_gc, Error as MvccError, GcInfo, MvccReader, MvccTxn};
+use crate::storage::mvcc::{Error as MvccError, GcInfo, MvccReader, MvccTxn};
 
 use super::applied_lock_collector::{AppliedLockCollector, Callback as LockCollectorCallback};
 use super::config::{GcConfig, GcWorkerConfigManager};
 use super::gc_manager::{AutoGcConfig, GcManager, GcManagerHandle};
 use super::{
-    Callback, CompactionFilterInitializer, Error, ErrorInner, Result,
+    check_need_gc, Callback, CompactionFilterInitializer, Error, ErrorInner, Result,
     GC_COMPACTION_FILTER_ORPHAN_VERSIONS,
 };
 use crate::storage::txn::gc;
@@ -220,29 +219,24 @@ where
         safe_point: TimeStamp,
         key: &Key,
         gc_info: &mut GcInfo,
-        txn: &mut MvccTxn<E::Snap>,
+        txn: &mut MvccTxn,
+        reader: &mut MvccReader<E::Snap>,
     ) -> Result<()> {
-        let next_gc_info = gc(txn, key.clone(), safe_point)?;
+        let next_gc_info = gc(txn, reader, key.clone(), safe_point)?;
         gc_info.found_versions += next_gc_info.found_versions;
         gc_info.deleted_versions += next_gc_info.deleted_versions;
         gc_info.is_completed = next_gc_info.is_completed;
-        self.stats.add(&txn.take_statistics());
+        self.stats.add(&reader.statistics);
         Ok(())
     }
 
-    fn new_txn(snap: E::Snap) -> MvccTxn<E::Snap> {
+    fn new_txn() -> MvccTxn {
         // TODO txn only used for GC, but this is hacky, maybe need an Option?
         let concurrency_manager = ConcurrencyManager::new(1.into());
-        MvccTxn::for_scan(
-            snap,
-            Some(ScanMode::Forward),
-            TimeStamp::zero(),
-            false,
-            concurrency_manager,
-        )
+        MvccTxn::new(TimeStamp::zero(), concurrency_manager)
     }
 
-    fn flush_txn(txn: MvccTxn<E::Snap>, limiter: &Limiter, engine: &E) -> Result<()> {
+    fn flush_txn(txn: MvccTxn, limiter: &Limiter, engine: &E) -> Result<()> {
         let write_size = txn.write_size();
         let modifies = txn.into_modifies();
         if !modifies.is_empty() {
@@ -262,7 +256,6 @@ where
             self.engine.snapshot_on_kv_engine(start_key, end_key)?,
             Some(ScanMode::Forward),
             false,
-            IsolationLevel::Si,
         );
 
         let mut next_key = Some(Key::from_encoded_slice(start_key));
@@ -278,7 +271,7 @@ where
             self.gc_keys(keys, safe_point)?;
         }
 
-        self.stats.add(reader.get_statistics());
+        self.stats.add(&reader.statistics);
         debug!(
             "gc has finished";
             "start_key" => log_wrappers::Value::key(start_key),
@@ -289,12 +282,14 @@ where
     }
 
     fn gc_keys(&mut self, keys: Vec<Key>, safe_point: TimeStamp) -> Result<()> {
-        let mut txn = Self::new_txn(self.engine.snapshot_on_kv_engine(b"", b"")?);
+        let snapshot = self.engine.snapshot_on_kv_engine(b"", b"")?;
+        let mut txn = Self::new_txn();
+        let mut reader = MvccReader::new(snapshot, Some(ScanMode::Forward), false);
         let mut gc_info = GcInfo::default();
         let mut keys = keys.into_iter();
         let mut next_gc_key = keys.next();
         while let Some(ref key) = next_gc_key {
-            if let Err(e) = self.gc_key(safe_point, &key, &mut gc_info, &mut txn) {
+            if let Err(e) = self.gc_key(safe_point, &key, &mut gc_info, &mut txn, &mut reader) {
                 error!(?e; "GC meets failure"; "key" => %key,);
                 // Switch to the next key if meets failure.
                 gc_info.is_completed = true;
@@ -319,7 +314,9 @@ where
                 gc_info = GcInfo::default();
             } else {
                 Self::flush_txn(txn, &self.limiter, &self.engine)?;
-                txn = Self::new_txn(self.engine.snapshot_on_kv_engine(b"", b"")?);
+                let snapshot = self.engine.snapshot_on_kv_engine(b"", b"")?;
+                txn = Self::new_txn();
+                reader = MvccReader::new(snapshot, Some(ScanMode::Forward), false);
             }
         }
         Self::flush_txn(txn, &self.limiter, &self.engine)?;
@@ -421,7 +418,7 @@ where
             .engine
             .snapshot_on_kv_engine(start_key.as_encoded(), &[])
             .unwrap();
-        let mut reader = MvccReader::new(snap, Some(ScanMode::Forward), false, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snap, Some(ScanMode::Forward), false);
         let (locks, _) = reader.scan_locks(Some(start_key), None, |l| l.ts <= max_ts, limit)?;
 
         let mut lock_infos = Vec::with_capacity(locks.len());

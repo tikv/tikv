@@ -25,7 +25,7 @@ use yatp::task::future::TaskCell;
 use yatp::ThreadPool;
 
 use super::metrics::*;
-use super::util::{build_forward_metadata, check_resp_header, sync_request, Client, PdConnector};
+use super::util::{check_resp_header, sync_request, Client, PdConnector};
 use super::{Config, FeatureGate, PdFuture, UnixSecs};
 use super::{Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
 
@@ -74,7 +74,7 @@ impl RpcClient {
         let pd_connector = PdConnector::new(env.clone(), security_mgr.clone());
         for i in 0..retries {
             match pd_connector.validate_endpoints(cfg).await {
-                Ok((client, forwarded_host, members)) => {
+                Ok((client, target, members)) => {
                     let rpc_client = RpcClient {
                         cluster_id: members.get_header().get_cluster_id(),
                         pd_client: Arc::new(Client::new(
@@ -82,7 +82,7 @@ impl RpcClient {
                             security_mgr,
                             client,
                             members,
-                            forwarded_host,
+                            target,
                             cfg.enable_forwarding,
                         )),
                         monitor: monitor.clone(),
@@ -159,14 +159,12 @@ impl RpcClient {
     /// Creates a new call option with default request timeout.
     #[inline]
     fn call_option(client: &Client) -> CallOption {
-        let forwarded_host = &client.inner.rl().forwarded_host;
-        if !forwarded_host.is_empty() {
-            let metadata = build_forward_metadata(forwarded_host);
-            return CallOption::default()
-                .headers(metadata)
-                .timeout(Duration::from_secs(REQUEST_TIMEOUT));
-        }
-        CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT))
+        client
+            .inner
+            .rl()
+            .target_info()
+            .call_option()
+            .timeout(Duration::from_secs(REQUEST_TIMEOUT))
     }
 
     /// Gets given key's Region and Region's leader from PD.

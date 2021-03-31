@@ -953,7 +953,7 @@ mod tests {
             let value: std::result::Result<
                 _,
                 Box<dyn Send + Sync + Fn() -> tidb_query_common::error::StorageError>,
-            > = Err(Box::new(|| failure::format_err!("locked").into()));
+            > = Err(Box::new(|| anyhow::Error::msg("locked").into()));
             kv.push((key, value));
         }
         {

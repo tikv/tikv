@@ -160,6 +160,9 @@ pub fn build_executors<S: Storage + 'static>(
 
     let mut executor: Box<dyn BatchExecutor<StorageStats = S::Statistics>>;
     let mut summary_slot_index = 0;
+    // Limit executor use this flag to check if its src is table/index scan.
+    // Performance enhancement for plan like: limit 1 -> table/index scan.
+    let mut is_src_scan_executor = true;
 
     match first_ed.get_tp() {
         ExecType::TypeTableScan => {
@@ -287,8 +290,12 @@ pub fn build_executors<S: Storage + 'static>(
                 EXECUTOR_COUNT_METRICS.batch_limit.inc();
 
                 Box::new(
-                    BatchLimitExecutor::new(executor, ed.get_limit().get_limit() as usize)?
-                        .collect_summary(summary_slot_index),
+                    BatchLimitExecutor::new(
+                        executor,
+                        ed.get_limit().get_limit() as usize,
+                        is_src_scan_executor,
+                    )?
+                    .collect_summary(summary_slot_index),
                 )
             }
             ExecType::TypeTopN => {
@@ -322,6 +329,7 @@ pub fn build_executors<S: Storage + 'static>(
             }
         };
         executor = new_executor;
+        is_src_scan_executor = false;
     }
 
     Ok(executor)

@@ -214,11 +214,11 @@ fn check_ttl_and_compact_files<E: KvEngine>(
 
 #[cfg(test)]
 mod tests {
-    use super::super::ttl_compaction_filter::TEST_CURRENT_TS;
     use super::*;
 
     use crate::config::DbConfig;
     use crate::storage::kv::TestEngineBuilder;
+    use crate::storage::raw::ttl::TEST_CURRENT_TS;
     use engine_traits::util::append_expire_ts;
     use engine_traits::{MiscExt, Peekable, SyncMutable, CF_DEFAULT};
 

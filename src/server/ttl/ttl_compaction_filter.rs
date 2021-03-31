@@ -3,40 +3,22 @@
 use std::ffi::CString;
 
 use crate::server::metrics::TTL_CHECKER_ACTIONS_COUNTER_VEC;
+use crate::storage::raw::ttl::current_ts;
 use engine_rocks::raw::{
     new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
     CompactionFilterFactory, CompactionFilterValueType, DBCompactionFilter,
 };
 use engine_rocks::{RocksTtlProperties, RocksUserCollectedPropertiesNoRc};
 use engine_traits::util::get_expire_ts;
-#[cfg(not(test))]
-use tikv_util::time::UnixSecs;
-
-#[cfg(test)]
-pub(crate) const TEST_CURRENT_TS: u64 = 100;
 
 pub struct TTLCompactionFilterFactory;
-
-impl TTLCompactionFilterFactory {
-    #[cfg(not(test))]
-    #[inline]
-    fn current_ts(&self) -> u64 {
-        UnixSecs::now().into_inner()
-    }
-
-    #[cfg(test)]
-    #[inline]
-    fn current_ts(&self) -> u64 {
-        TEST_CURRENT_TS
-    }
-}
 
 impl CompactionFilterFactory for TTLCompactionFilterFactory {
     fn create_compaction_filter(
         &self,
         context: &CompactionFilterContext,
     ) -> *mut DBCompactionFilter {
-        let current = self.current_ts();
+        let current = current_ts();
 
         let mut min_expire_ts = u64::MAX;
         for i in 0..context.file_numbers().len() {
@@ -102,11 +84,11 @@ impl CompactionFilter for TTLCompactionFilter {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use engine_traits::util::append_expire_ts;
 
     use crate::config::DbConfig;
     use crate::storage::kv::TestEngineBuilder;
+    use crate::storage::raw::ttl::TEST_CURRENT_TS;
     use engine_rocks::raw::CompactOptions;
     use engine_rocks::util::get_cf_handle;
     use engine_traits::{MiscExt, Peekable, SyncMutable, CF_DEFAULT};
