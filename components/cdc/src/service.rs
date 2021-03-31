@@ -568,7 +568,7 @@ mod tests {
         let mut batch_sink = EventBatcherSink::new(sink);
         let send_task = tokio::spawn(async move {
             let flag = grpcio::WriteFlags::default().buffer_hint(false);
-            for i in 0..10000000u64 {
+            for i in 0..100000u64 {
                 let mut resolved_ts = ResolvedTs::default();
                 resolved_ts.set_ts(i);
                 batch_sink
@@ -584,7 +584,7 @@ mod tests {
             assert_eq!(e.get_resolved_ts().get_ts(), expected);
             expected += 1;
         }
-        assert_eq!(expected, 10000000);
+        assert_eq!(expected, 100000);
         send_task.await.unwrap();
     }
 
