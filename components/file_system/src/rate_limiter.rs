@@ -508,7 +508,7 @@ mod tests {
     #[bench]
     fn bench_critical_section(b: &mut test::Bencher) {
         let inner_limiter = PriorityBasedIORateLimiter::new();
-        inner_limiter.set_bytes_per_sec(1 * 1024);
+        inner_limiter.set_bytes_per_sec(1024);
         let now = Instant::now();
         b.iter(|| {
             inner_limiter.critical_section(now);
