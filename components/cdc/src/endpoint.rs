@@ -559,6 +559,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             false
         };
 
+        let observe_id = delegate.id;
         let mut init = Initializer {
             sched,
             region_id,
@@ -568,7 +569,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             batch_size,
             downstream_state: downstream_state.clone(),
             txn_extra_op: delegate.txn_extra_op,
-            observe_id: delegate.id,
+            observe_id,
             checkpoint_ts: checkpoint_ts.into(),
             build_resolver: is_new_delegate,
             real_time_start_ts: None,
@@ -578,12 +579,19 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         let (cb, fut) = tikv_util::future::paired_future_callback();
         let scheduler = self.scheduler.clone();
         let deregister_downstream = move |err| {
-            warn!("cdc send capture change cmd failed"; "region_id" => region_id, "error" => ?err);
-            let deregister = Deregister::Downstream {
-                region_id,
-                downstream_id,
-                conn_id,
-                err: Some(err),
+            let deregister = if is_new_delegate {
+                Deregister::Region {
+                    region_id,
+                    observe_id,
+                    err,
+                }
+            } else {
+                Deregister::Downstream {
+                    region_id,
+                    downstream_id,
+                    conn_id,
+                    err: Some(err),
+                }
             };
             if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
                 error!("schedule cdc task failed"; "error" => ?e);
@@ -625,6 +633,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                     })),
                 },
             ) {
+                warn!("cdc send capture change cmd failed"; "region_id" => region_id, "error" => ?e);
                 deregister_downstream(Error::Request(e.into()));
                 return;
             }
@@ -1134,7 +1143,6 @@ impl Initializer {
 
     fn async_incremental_scan<S: Snapshot + 'static>(&self, snap: S, region: Region) {
         let downstream_id = self.downstream_id;
-        let conn_id = self.conn_id;
         let region_id = region.get_id();
         debug!("async incremental scan";
             "region_id" => region_id,
@@ -1169,16 +1177,7 @@ impl Initializer {
                 Ok(res) => res,
                 Err(e) => {
                     error!("cdc scan entries failed"; "error" => ?e, "region_id" => region_id);
-                    // TODO: record in metrics.
-                    let deregister = Deregister::Downstream {
-                        region_id,
-                        downstream_id,
-                        conn_id,
-                        err: Some(e),
-                    };
-                    if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
-                        error!("schedule cdc task failed"; "error" => ?e, "region_id" => region_id);
-                    }
+                    self.deregister_downstream(Some(e));
                     return;
                 }
             };
@@ -1222,7 +1221,6 @@ impl Initializer {
 
     async fn async_incremental_scan_v2<S: Snapshot + 'static>(&self, snap: S, region: Region) {
         let downstream_id = self.downstream_id;
-        let conn_id = self.conn_id;
         let region_id = region.get_id();
         debug!("async incremental scan v2";
             "region_id" => region_id,
@@ -1294,16 +1292,7 @@ impl Initializer {
                 }
                 Err(e) => {
                     error!("cdc async incremental scan batch failed"; "error" => ?e, "region_id" => region_id);
-                    // TODO: record in metrics.
-                    let deregister = Deregister::Downstream {
-                        region_id,
-                        downstream_id,
-                        conn_id,
-                        err: Some(e),
-                    };
-                    if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
-                        error!("schedule cdc task failed"; "error" => ?e, "region_id" => region_id);
-                    }
+                    self.deregister_downstream(Some(e));
                     return;
                 }
             };
@@ -1327,16 +1316,8 @@ impl Initializer {
                         }
                         Err(e) => {
                             error!("cdc scan entries failed"; "error" => ?e, "region_id" => region_id);
-                            // TODO: record in metrics.
-                            let deregister = Deregister::Downstream {
-                                region_id,
-                                downstream_id,
-                                conn_id,
-                                err: None, // TODO: convert rate_limiter error
-                            };
-                            if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
-                                error!("schedule cdc task failed"; "error" => ?e, "region_id" => region_id);
-                            }
+                            // TODO: convert rate_limiter error
+                            self.deregister_downstream(None);
                             return;
                         }
                     }
@@ -1372,16 +1353,8 @@ impl Initializer {
             Ok(_) => {}
             Err(e) => {
                 error!("cdc incremental scan sending finish resolved ts failed"; "error" => ?e, "region_id" => region_id);
-                // TODO: record in metrics.
-                let deregister = Deregister::Downstream {
-                    region_id,
-                    downstream_id,
-                    conn_id,
-                    err: None, // TODO: convert rate_limiter error
-                };
-                if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
-                    error!("schedule cdc task failed"; "error" => ?e, "region_id" => region_id);
-                }
+                // TODO: convert rate_limiter error
+                self.deregister_downstream(None);
                 return;
             }
         }
@@ -1468,6 +1441,43 @@ impl Initializer {
             region,
         }) {
             error!("schedule task failed"; "error" => ?e);
+        }
+    }
+
+    fn deregister_downstream(&self, err: Option<Error>) {
+        // TODO: record in metrics.
+        let deregister = if self.build_resolver {
+            if self.advanced_flow_control_enabled {
+                let incremental_scan_state = self
+                    .downstream
+                    .as_ref()
+                    .unwrap()
+                    .get_incremental_scan_state();
+                let mut st = incremental_scan_state.lock().unwrap();
+                match *st {
+                    IncrementalScanState::Ongoing | IncrementalScanState::ErrorPending(_) => {
+                        *st = IncrementalScanState::Done;
+                    }
+                    ref other => {
+                        panic!("unexpected incremental scan state {:?}", other);
+                    }
+                }
+            }
+            Deregister::Region {
+                region_id: self.region_id,
+                observe_id: self.observe_id,
+                err: err.unwrap_or_else(|| Error::Other(box_err!("scan error"))), // TODO: convert rate_limiter error
+            }
+        } else {
+            Deregister::Downstream {
+                region_id: self.region_id,
+                downstream_id: self.downstream_id,
+                conn_id: self.conn_id,
+                err, // TODO: convert rate_limiter error
+            }
+        };
+        if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
+            error!("schedule cdc task failed"; "error" => ?e, "region_id" => self.region_id);
         }
     }
 }
