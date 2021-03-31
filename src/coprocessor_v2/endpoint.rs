@@ -96,9 +96,6 @@ fn extract_region_error(error: &PluginError) -> Option<kvproto::errorpb::Error> 
                 coprocessor_plugin_api::StorageError::Other(other_err) => other_err
                     .downcast_ref::<storage::Result<()>>()
                     .map_or(None, |e| storage::errors::extract_region_error::<()>(e)),
-                // TODO: KeyNotInRegion is not set in https://tikv.github.io/doc/src/tikv/storage/errors.rs.html#193-233
-                // so I assume we should also not set it?
-                coprocessor_plugin_api::StorageError::KeyNotInRegion { .. } => None,
                 _ => None,
             }
         }
