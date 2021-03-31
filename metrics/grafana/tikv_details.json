@@ -6741,7 +6741,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "histogram_quantile(0.99, sum(rate(tikv_rate_limiter_request_wait_duration_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[30s])) by (le, type))",
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_rate_limiter_request_wait_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[30s])) by (le, type))",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": " {{type}}-99%",
@@ -6749,7 +6749,7 @@
               "step": 4
             },
             {
-              "expr": "rate(tikv_rate_limiter_request_wait_duration_sum{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[30s]) / rate(tikv_rate_limiter_request_wait_duration_count{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[30s])",
+              "expr": "rate(tikv_rate_limiter_request_wait_duration_seconds_sum{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[30s]) / rate(tikv_rate_limiter_request_wait_duration_seconds_count{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[30s])",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": " {{type}}-avg",

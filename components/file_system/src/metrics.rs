@@ -1,5 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cell::RefCell;
+
+use prometheus::local::*;
 use prometheus::*;
 use prometheus_static_metric::*;
 
@@ -51,10 +54,39 @@ lazy_static! {
         ).unwrap();
 
     pub static ref RATE_LIMITER_REQUEST_WAIT_DURATION: HistogramVec = register_histogram_vec!(
-            "tikv_rate_limiter_request_wait_duration",
+            "tikv_rate_limiter_request_wait_duration_seconds",
             "Bucketed histogram of IO rate limiter request wait duration",
             &["type"],
             exponential_buckets(0.001, 1.8, 20).unwrap()
         )
         .unwrap();
+}
+
+pub struct FileSystemLocalMetrics {
+    rate_limiter_request_wait_duration: LocalHistogramVec,
+}
+
+thread_local! {
+    static TLS_FILE_SYSTEM_METRICS: RefCell<FileSystemLocalMetrics> = RefCell::new(
+        FileSystemLocalMetrics {
+            rate_limiter_request_wait_duration: RATE_LIMITER_REQUEST_WAIT_DURATION.local(),
+       }
+   );
+}
+
+pub fn tls_flush() {
+    TLS_FILE_SYSTEM_METRICS.with(|m| {
+        let m = m.borrow();
+        m.rate_limiter_request_wait_duration.flush();
+    });
+}
+
+#[inline]
+pub fn tls_collect_rate_limiter_request_wait(priority: &str, duration: std::time::Duration) {
+    TLS_FILE_SYSTEM_METRICS.with(|m| {
+        m.borrow_mut()
+            .rate_limiter_request_wait_duration
+            .with_label_values(&[priority])
+            .observe(tikv_util::time::duration_to_sec(duration))
+    });
 }

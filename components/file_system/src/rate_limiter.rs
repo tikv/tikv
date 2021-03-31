@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::metrics::RATE_LIMITER_REQUEST_WAIT_DURATION;
+use super::metrics::tls_collect_rate_limiter_request_wait;
 use super::{IOOp, IOPriority, IOType};
 
 #[cfg(test)]
@@ -135,9 +135,7 @@ macro_rules! request_imp {
         };
         // wait until our ticket can actually be served
         wait += DEFAULT_REFILL_PERIOD * (pending / cached_bytes_per_refill) as u32;
-        RATE_LIMITER_REQUEST_WAIT_DURATION
-            .with_label_values(&[$priority.as_str()])
-            .observe(wait.as_secs_f64());
+        tls_collect_rate_limiter_request_wait($priority.as_str(), wait);
         do_sleep!(wait, $mode);
         amount
     }};
