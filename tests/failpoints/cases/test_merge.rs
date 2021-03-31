@@ -728,7 +728,7 @@ fn test_node_failed_merge_before_succeed_merge() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.merge_max_log_gap = 30;
-    cluster.cfg.raft_store.store_batch_system.max_batch_size = 1;
+    cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
     cluster.cfg.raft_store.store_batch_system.pool_size = 2;
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -813,7 +813,7 @@ fn test_node_failed_merge_before_succeed_merge() {
 fn test_node_merge_transfer_leader() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
-    cluster.cfg.raft_store.store_batch_system.max_batch_size = 1;
+    cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
     cluster.cfg.raft_store.store_batch_system.pool_size = 2;
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -1002,7 +1002,7 @@ fn test_node_merge_write_data_to_source_region_after_merging() {
     // For snapshot after merging
     cluster.cfg.raft_store.merge_max_log_gap = 10;
     cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
-    cluster.cfg.raft_store.apply_batch_system.max_batch_size = 1;
+    cluster.cfg.raft_store.apply_batch_system.max_batch_size = Some(1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
