@@ -180,6 +180,35 @@ impl TxnEntry {
             _ => unreachable!(),
         }
     }
+
+    pub fn size(&self) -> usize {
+        let mut size = 0;
+        match self {
+            TxnEntry::Commit {
+                default,
+                write,
+                old_value,
+            } => {
+                size += default.0.len();
+                size += default.1.len();
+                size += write.0.len();
+                size += write.1.len();
+                size += old_value.as_ref().map_or(0, |v| v.len())
+            }
+            TxnEntry::Prewrite {
+                default,
+                lock,
+                old_value,
+            } => {
+                size += default.0.len();
+                size += default.1.len();
+                size += lock.0.len();
+                size += lock.1.len();
+                size += old_value.as_ref().map_or(0, |v| v.len())
+            }
+        }
+        size
+    }
 }
 
 /// A batch of transaction entries.
@@ -1269,6 +1298,49 @@ mod tests {
             Some((Key::from_raw(b"abcd"), vec![]))
         );
         assert_eq!(scanner.next().unwrap(), None);
+    }
+
+    #[test]
+    fn test_txn_entry_size() {
+        assert_eq!(
+            TxnEntry::Prewrite {
+                default: (vec![0; 10], vec![0, 10]),
+                lock: (vec![0; 10], vec![0, 10]),
+                old_value: None,
+            }
+            .size(),
+            40
+        );
+
+        assert_eq!(
+            TxnEntry::Prewrite {
+                default: (vec![0; 10], vec![0, 10]),
+                lock: (vec![0; 10], vec![0, 10]),
+                old_value: Some(vec![0; 10]),
+            }
+            .size(),
+            50
+        );
+
+        assert_eq!(
+            TxnEntry::Commit {
+                default: (vec![0; 10], vec![0, 10]),
+                write: (vec![0; 10], vec![0, 10]),
+                old_value: None,
+            }
+            .size(),
+            40
+        );
+
+        assert_eq!(
+            TxnEntry::Commit {
+                default: (vec![0; 10], vec![0, 10]),
+                write: (vec![0; 10], vec![0, 10]),
+                old_value: Some(vec![0; 10]),
+            }
+            .size(),
+            50
+        );
     }
 }
 
