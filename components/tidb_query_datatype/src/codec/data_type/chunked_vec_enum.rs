@@ -33,10 +33,12 @@ impl ChunkedVecEnum {
     #[inline]
     pub fn get(&self, idx: usize) -> Option<EnumRef> {
         assert!(idx < self.len());
-        self.values.get_option_ref(idx).map(|value| {
+        if let Some(value) = self.values.get_option_ref(idx) {
             let name = self.names.get(idx).unwrap();
-            EnumRef::new(name, *value as u64)
-        })
+            Some(EnumRef::new(name, *value as u64))
+        } else {
+            None
+        }
     }
 
     #[inline]
@@ -63,7 +65,7 @@ impl ChunkedVec<Enum> for ChunkedVecEnum {
     #[inline]
     fn push_data(&mut self, value: Enum) {
         self.values.push_data(value.value() as i64);
-        self.names.push_data(value.name().to_vec());
+        self.names.push_data_ref(value.name());
     }
 
     #[inline]
@@ -95,10 +97,12 @@ impl ChunkedVec<Enum> for ChunkedVecEnum {
     fn to_vec(&self) -> Vec<Option<Enum>> {
         let mut x = Vec::with_capacity(self.len());
         for i in 0..self.len() {
-            x.push(self.values.get_option_ref(i).map(|value| {
+            if let Some(value) = self.values.get_option_ref(i) {
                 let name = self.names.get(i).unwrap().to_vec();
-                Enum::new(name, *value as u64)
-            }))
+                x.push(Some(Enum::new(name, *value as u64)));
+            } else {
+                x.push(None);
+            }
         }
         x
     }

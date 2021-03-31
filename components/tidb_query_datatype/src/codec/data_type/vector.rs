@@ -261,7 +261,7 @@ impl VectorValue {
                 size
             }
             VectorValue::Enum(vec) => {
-                let mut size = logical_rows.len() + 10;
+                let mut size = logical_rows.len() * 9 + 10;
                 for idx in logical_rows {
                     let el = vec.get_option_ref(*idx);
                     match el {
@@ -370,7 +370,6 @@ impl VectorValue {
                 }
                 Ok(())
             }
-            // TODO: implement enum/set encoding
             VectorValue::Enum(ref vec) => {
                 match &vec.get_option_ref(row_index) {
                     None => {
@@ -382,6 +381,7 @@ impl VectorValue {
                 }
                 Ok(())
             }
+            // TODO: implement set encoding
             VectorValue::Set(_) => unimplemented!(),
         }
     }
