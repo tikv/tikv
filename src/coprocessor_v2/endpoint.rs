@@ -69,8 +69,6 @@ impl Endpoint {
         let raw_storage_api = RawStorageImpl::new(req.get_context(), storage);
         let region = Region {
             id: req.get_context().get_region_id(),
-            start_key: vec![], // TODO how to get start_key and end_key?
-            end_key: vec![],   // TODO
             region_epoch: RegionEpoch {
                 conf_ver: req.get_context().get_region_epoch().get_conf_ver(),
                 version: req.get_context().get_region_epoch().get_version(),
@@ -91,13 +89,11 @@ impl Endpoint {
 
 fn extract_region_error(error: &PluginError) -> Option<kvproto::errorpb::Error> {
     match error {
-        PluginError::StorageError(storage_err) => {
-            match storage_err {
-                coprocessor_plugin_api::StorageError::Other(other_err) => other_err
-                    .downcast_ref::<storage::Result<()>>()
-                    .map_or(None, |e| storage::errors::extract_region_error::<()>(e)),
-                _ => None,
-            }
-        }
+        PluginError::StorageError(storage_err) => match storage_err {
+            coprocessor_plugin_api::StorageError::Other(other_err) => other_err
+                .downcast_ref::<storage::Result<()>>()
+                .map_or(None, |e| storage::errors::extract_region_error::<()>(e)),
+            _ => None,
+        },
     }
 }

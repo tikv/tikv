@@ -179,7 +179,7 @@ impl From<storage::errors::Error> for StorageErrorShim {
                 let key_err = req_err.get_key_not_in_region();
                 StorageError::KeyNotInRegion {
                     key: key_err.get_key().to_owned(),
-                    region: todo!(), // TODO: how to construct region here? We only have region_id
+                    region_id: key_err.get_region_id(),
                     start_key: key_err.get_start_key().to_owned(),
                     end_key: key_err.get_end_key().to_owned(),
                 }

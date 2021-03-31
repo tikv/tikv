@@ -20,8 +20,6 @@ pub type StorageResult<T> = std::result::Result<T, StorageError>;
 #[derive(Debug, Clone)]
 pub struct Region {
     pub id: u64,
-    pub start_key: Key,
-    pub end_key: Key,
     pub region_epoch: RegionEpoch,
 }
 
@@ -36,7 +34,7 @@ pub struct RegionEpoch {
 pub enum StorageError {
     KeyNotInRegion {
         key: Key,
-        region: Region,
+        region_id: u64,
         start_key: Key,
         end_key: Key,
     },
@@ -54,8 +52,8 @@ pub enum StorageError {
 impl fmt::Display for StorageError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            StorageError::KeyNotInRegion { key, region, .. } => {
-                write!(f, "key {:?} not found in region {:?}", key, region.id)
+            StorageError::KeyNotInRegion { key, region_id, .. } => {
+                write!(f, "Key {:?} not found in region {:?}", key, region_id)
             }
             StorageError::Timeout(d) => write!(f, "timeout after {:?}", d),
             StorageError::Canceled => write!(f, "request canceled"),
