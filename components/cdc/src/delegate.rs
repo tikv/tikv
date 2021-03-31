@@ -455,6 +455,10 @@ impl Delegate {
         };
         debug!("resolved ts updated";
             "region_id" => self.region_id, "resolved_ts" => resolved_ts);
+        if (min_ts.physical() - resolved_ts.physical()) / 1000 > 20 {
+            warn!("try to advance ts, lag too large";
+                "region_id" => self.region_id, "min_ts" => min_ts, "resolved_ts" => resolved_ts);
+        }
         CDC_RESOLVED_TS_GAP_HISTOGRAM
             .observe((min_ts.physical() - resolved_ts.physical()) as f64 / 1000f64);
         Some(resolved_ts)

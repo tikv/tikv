@@ -160,7 +160,6 @@ pub enum Task {
     },
     TxnExtra(TxnExtra),
     Validate(u64, Box<dyn FnOnce(Option<&Delegate>) + Send>),
-    Barrier(Box<dyn FnOnce() + Send>),
 }
 
 impl_display_as_debug!(Task);
@@ -226,7 +225,6 @@ impl fmt::Debug for Task {
                 .finish(),
             Task::TxnExtra(_) => de.field("type", &"txn_extra").finish(),
             Task::Validate(region_id, _) => de.field("region_id", &region_id).finish(),
-            Task::Barrier(_) => de.field("type", &"barrier").finish(),
         }
     }
 }
@@ -436,7 +434,8 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         async move {
             let mut min_ts = pd_client.get_tso().await.unwrap_or_default();
 
-            cm.update_max_ts(min_ts); // TODO do we need this here?
+            // needed here to support async commits
+            cm.update_max_ts(min_ts);
             if let Some(min_mem_lock_ts) = cm.global_min_lock_ts() {
                 if min_mem_lock_ts < min_ts {
                     min_ts = min_mem_lock_ts;
@@ -446,24 +445,6 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             let valid_regions =
                 Self::region_resolved_ts_raft(regions, &scheduler, raft_router, min_ts).await;
             if valid_regions.is_empty() {
-                return None;
-            }
-
-            // send a barrier to the scheduler
-            // The whole incremental scan process now by-passes the scheduler,
-            // so we have to make sure all real-time events that have been produced by this point
-            // have been processed before proceeding, or otherwise the resolved ts might not be correct.
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            if let Err(e) = scheduler.schedule(Task::Barrier(Box::new(move || {
-                // TODO any risk with unwrap?
-                tx.send(()).unwrap();
-            }))) {
-                warn!("cdc send barrier failed"; "err" => ?e, "min_ts" => min_ts);
-                return None;
-            }
-
-            if let Err(e) = rx.await {
-                warn!("cdc barrier error"; "err" => ?e, "min_ts" => min_ts);
                 return None;
             }
 
@@ -1327,18 +1308,17 @@ impl Initializer {
             }
         }
 
-        /* Now the resolver contains locks that remain unresolved after the scan. */
-        let resolver = scan_context.lock().unwrap().resolver.replace(None);
-        let min_lock_ts = resolver
-            .as_ref()
+        // Now the resolver contains locks that remain unresolved after the scan.
+        let mut resolver = scan_context.lock().unwrap().resolver.replace(None);
+        resolver.as_mut().unwrap().init();
+        let resolved_ts = resolver
+            .as_mut()
             .unwrap()
-            .min_lock_ts()
-            .unwrap_or_else(|| self.real_time_start_ts.unwrap());
-        let resolved_ts = std::cmp::min(self.real_time_start_ts.unwrap(), min_lock_ts);
+            .resolve(self.real_time_start_ts.unwrap());
 
         let resolved_ts = ResolvedTs {
             regions: vec![self.region_id],
-            ts: resolved_ts.into_inner(),
+            ts: resolved_ts.unwrap().into_inner(),
             ..Default::default()
         };
 
@@ -1423,7 +1403,9 @@ impl Initializer {
 
     fn finish_building_resolver(&self, mut resolver: Resolver, region: Region, takes: Duration) {
         let observe_id = self.observe_id;
-        resolver.init();
+        if !resolver.is_initialized() {
+            resolver.init();
+        }
         let rts = resolver.resolve(TimeStamp::zero());
         info!(
             "resolver initialized and schedule resolver ready";
@@ -1531,9 +1513,6 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable for Endpoint<T> {
             }
             Task::Validate(region_id, validate) => {
                 validate(self.capture_regions.get(&region_id));
-            }
-            Task::Barrier(cb) => {
-                cb();
             }
         }
         self.flush_all();

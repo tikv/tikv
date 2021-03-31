@@ -415,15 +415,7 @@ impl Service {
     ///
     /// It requires a scheduler of an `Endpoint` in order to schedule tasks.
     pub fn new(scheduler: Scheduler<Task>) -> Service {
-        /*let tokio_runtime = tokio::runtime::Builder::new()
-        .threaded_scheduler()
-        .enable_time()
-        .build()
-        .unwrap();*/
-        Service {
-            scheduler,
-            // runtime: Arc::new(tokio_runtime),
-        }
+        Service { scheduler }
     }
 }
 
