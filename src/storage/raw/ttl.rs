@@ -3,33 +3,10 @@
 use crate::storage::kv::{Iterator, Result, Snapshot, TTL_TOMBSTONE};
 use crate::storage::Statistics;
 
-use engine_traits::util::{get_expire_ts, strip_expire_ts, truncate_expire_ts};
+use engine_traits::util::{current_ts, get_expire_ts, strip_expire_ts, truncate_expire_ts};
 use engine_traits::CfName;
 use engine_traits::{IterOptions, ReadOptions};
 use txn_types::{Key, Value};
-
-#[cfg(test)]
-pub const TEST_CURRENT_TS: u64 = 100;
-
-pub fn convert_to_expire_ts(ttl: u64) -> u64 {
-    if ttl == 0 {
-        return 0;
-    }
-    ttl.saturating_add(current_ts())
-}
-
-#[cfg(not(test))]
-use tikv_util::time::UnixSecs;
-
-#[cfg(not(test))]
-pub fn current_ts() -> u64 {
-    UnixSecs::now().into_inner()
-}
-
-#[cfg(test)]
-pub fn current_ts() -> u64 {
-    TEST_CURRENT_TS
-}
 
 #[derive(Clone)]
 pub struct TTLSnapshot<S: Snapshot> {

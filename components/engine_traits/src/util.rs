@@ -24,6 +24,22 @@ pub fn check_key_in_range(
     }
 }
 
+pub const TEST_CURRENT_TS: u64 = 100;
+
+use tikv_util::time::UnixSecs;
+
+pub fn current_ts() -> u64 {
+    fail_point!("current_ts", |r| r.map_or(2, |e| e.parse().unwrap()));
+    UnixSecs::now().into_inner()
+}
+
+pub fn convert_to_expire_ts(ttl: u64) -> u64 {
+    if ttl == 0 {
+        return 0;
+    }
+    ttl.saturating_add(current_ts())
+}
+
 pub fn append_expire_ts(value: &mut Vec<u8>, expire_ts: u64) {
     value.encode_u64(expire_ts).unwrap();
 }

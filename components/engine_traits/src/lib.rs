@@ -260,6 +260,9 @@ extern crate tikv_alloc;
 extern crate serde_derive;
 extern crate slog_global;
 
+#[macro_use(fail_point)]
+extern crate fail;
+
 // These modules contain traits that need to be implemented by engines, either
 // they are required by KvEngine or are an associated type of KvEngine. It is
 // recommended that engines follow the same module layout.

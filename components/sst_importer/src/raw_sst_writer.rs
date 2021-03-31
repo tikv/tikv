@@ -1,4 +1,4 @@
-use engine_traits::util::append_expire_ts;
+use engine_traits::util::{append_expire_ts, convert_to_expire_ts};
 use kvproto::import_sstpb::*;
 use std::sync::Arc;
 
@@ -46,9 +46,10 @@ impl<E: KvEngine> RawSSTWriter<E> {
 
     pub fn write(&mut self, mut batch: RawWriteBatch) -> Result<()> {
         let ttl = batch.get_ttl();
+        let expire_ts = convert_to_expire_ts(ttl);
         for mut m in batch.take_pairs().into_iter() {
             let mut value = m.take_value();
-            append_expire_ts(&mut value, ttl);
+            append_expire_ts(&mut value, expire_ts);
             self.put(m.get_key(), &value, m.get_op())?;
         }
         Ok(())
