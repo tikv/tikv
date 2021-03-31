@@ -22,7 +22,7 @@ use collections::HashSet;
 use fail::fail_point;
 use grpcio::{
     CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
-    Error::RpcFailure, Metadata, MetadataBuilder, Result as GrpcResult, RpcStatus, RpcStatusCode,
+    Error::RpcFailure, MetadataBuilder, Result as GrpcResult, RpcStatus, RpcStatusCode,
 };
 use kvproto::pdpb::{
     ErrorType, GetMembersRequest, GetMembersResponse, Member, PdClient as PdClientStub,
@@ -43,6 +43,38 @@ const MAX_RETRY_DURATION: Duration = Duration::from_secs(10);
 const GLOBAL_RECONNECT_INTERVAL: Duration = Duration::from_millis(100); // 0.1s
 pub const REQUEST_RECONNECT_INTERVAL: Duration = Duration::from_secs(1); // 1s
 
+pub struct TargetInfo {
+    target_url: String,
+    via: String,
+}
+
+impl TargetInfo {
+    fn new(target_url: String, via: &str) -> TargetInfo {
+        TargetInfo {
+            target_url,
+            via: trim_http_prefix(via).to_string(),
+        }
+    }
+
+    pub fn direct_connected(&self) -> bool {
+        self.via.is_empty()
+    }
+
+    pub fn call_option(&self) -> CallOption {
+        let opt = CallOption::default();
+        if self.via.is_empty() {
+            return opt;
+        }
+
+        let mut builder = MetadataBuilder::with_capacity(1);
+        builder
+            .add_str("pd-forwarded-host", &self.target_url)
+            .unwrap();
+        let metadata = builder.build();
+        opt.headers(metadata)
+    }
+}
+
 pub struct Inner {
     env: Arc<Environment>,
     pub hb_sender: Either<
@@ -51,12 +83,18 @@ pub struct Inner {
     >,
     pub hb_receiver: Either<Option<ClientDuplexReceiver<RegionHeartbeatResponse>>, Waker>,
     pub client_stub: PdClientStub,
-    pub forwarded_host: String,
+    target: TargetInfo,
     members: GetMembersResponse,
     security_mgr: Arc<SecurityManager>,
     on_reconnect: Option<Box<dyn Fn() + Sync + Send + 'static>>,
 
     last_try_reconnect: Instant,
+}
+
+impl Inner {
+    pub fn target_info(&self) -> &TargetInfo {
+        &self.target
+    }
 }
 
 pub struct HeartbeatReceiver {
@@ -106,16 +144,21 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new(
+    pub(crate) fn new(
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
         client_stub: PdClientStub,
         members: GetMembersResponse,
-        forwarded_host: String,
+        target: TargetInfo,
         enable_forwarding: bool,
     ) -> Client {
+        if !target.direct_connected() {
+            REQUEST_FORWARDED_GAUGE_VEC
+                .with_label_values(&[&target.via])
+                .set(1);
+        }
         let (tx, rx) = client_stub
-            .region_heartbeat_opt(call_option(&forwarded_host))
+            .region_heartbeat_opt(target.call_option())
             .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "region_heartbeat", e));
         Client {
             timer: GLOBAL_TIMER_HANDLE.clone(),
@@ -125,7 +168,7 @@ impl Client {
                 hb_receiver: Either::Left(Some(rx)),
                 client_stub,
                 members,
-                forwarded_host,
+                target,
                 security_mgr,
                 on_reconnect: None,
                 last_try_reconnect: Instant::now(),
@@ -138,14 +181,14 @@ impl Client {
     pub fn update_client(
         &self,
         client_stub: PdClientStub,
-        forwarded_host: String,
+        target: TargetInfo,
         members: GetMembersResponse,
     ) {
         let start_refresh = Instant::now();
         let mut inner = self.inner.wl();
 
         let (tx, rx) = client_stub
-            .region_heartbeat_opt(call_option(&forwarded_host))
+            .region_heartbeat_opt(target.call_option())
             .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "region_heartbeat", e));
         info!("heartbeat sender and receiver are stale, refreshing ...");
 
@@ -157,28 +200,31 @@ impl Client {
         let prev_receiver = std::mem::replace(&mut inner.hb_receiver, Either::Left(Some(rx)));
         let _ = prev_receiver.right().map(|t| t.wake());
         inner.client_stub = client_stub;
-        let prev_forwarded_host =
-            std::mem::replace(&mut inner.forwarded_host, forwarded_host.clone());
         inner.members = members;
         if let Some(ref on_reconnect) = inner.on_reconnect {
             on_reconnect();
         }
 
-        if !prev_forwarded_host.is_empty() {
-            let host = trim_http_prefix(&prev_forwarded_host);
+        if !inner.target.via.is_empty() {
             REQUEST_FORWARDED_GAUGE_VEC
-                .with_label_values(&[host])
+                .with_label_values(&[&inner.target.via])
                 .set(0);
         }
 
-        if !forwarded_host.is_empty() {
-            let host = trim_http_prefix(&forwarded_host);
+        if !target.via.is_empty() {
             REQUEST_FORWARDED_GAUGE_VEC
-                .with_label_values(&[host])
+                .with_label_values(&[&target.via])
                 .set(1);
         }
 
-        info!("update pd client"; "prev_forwarded_host"=>prev_forwarded_host,"forworded_host"=>forwarded_host);
+        info!(
+            "update pd client";
+            "prev_leader" => &inner.target.target_url,
+            "prev_via" => &inner.target.via,
+            "leader" => &target.target_url,
+            "via" => &target.via,
+        );
+        inner.target = target;
         slow_log!(
             start_refresh.elapsed(),
             "PD client refresh region heartbeat",
@@ -230,10 +276,6 @@ impl Client {
         self.inner.rl().members.get_leader().clone()
     }
 
-    pub fn get_forwarded_host(&self) -> String {
-        self.inner.rl().forwarded_host.clone()
-    }
-
     /// Re-establishes connection with PD leader in asynchronized fashion.
     ///
     /// If `force` is false, it will reconnect only when members change.
@@ -258,13 +300,9 @@ impl Client {
             let connector = PdConnector::new(inner.env.clone(), inner.security_mgr.clone());
             let members = inner.members.clone();
             async move {
+                let direct_connected = self.inner.rl().target_info().direct_connected();
                 connector
-                    .reconnect_pd(
-                        members,
-                        self.get_forwarded_host(),
-                        force,
-                        self.enable_forwarding,
-                    )
+                    .reconnect_pd(members, direct_connected, force, self.enable_forwarding)
                     .await
             }
         };
@@ -286,7 +324,7 @@ impl Client {
         }
 
         slow_log!(start.elapsed(), "try reconnect pd");
-        let (client, forwarded_host, members) = match future.await {
+        let (client, target_info, members) = match future.await {
             Err(e) => {
                 PD_RECONNECT_COUNTER_VEC
                     .with_label_values(&["failure"])
@@ -309,27 +347,10 @@ impl Client {
 
         fail_point!("pd_client_reconnect", |_| Ok(()));
 
-        self.update_client(client, forwarded_host, members);
-        info!("tring to update PD client done"; "spend" => ?start.elapsed());
+        self.update_client(client, target_info, members);
+        info!("trying to update PD client done"; "spend" => ?start.elapsed());
         Ok(())
     }
-}
-
-// The call option here doesn't need the timeout setting which is used by stream.
-fn call_option(forwarded_host: &str) -> CallOption {
-    if !forwarded_host.is_empty() {
-        let metadata = build_forward_metadata(forwarded_host);
-        return CallOption::default().headers(metadata);
-    }
-    CallOption::default()
-}
-
-pub fn build_forward_metadata(forwarded_host: &str) -> Metadata {
-    let mut builder = MetadataBuilder::with_capacity(1);
-    builder
-        .add_str("pd-forwarded-host", forwarded_host)
-        .unwrap();
-    builder.build()
 }
 
 /// The context of sending requets.
@@ -445,7 +466,7 @@ where
     }
 }
 
-pub type StubTuple = (PdClientStub, String, GetMembersResponse);
+pub type StubTuple = (PdClientStub, TargetInfo, GetMembersResponse);
 
 pub struct PdConnector {
     env: Arc<Environment>,
@@ -497,12 +518,12 @@ impl PdConnector {
 
         match members {
             Some(members) => {
-                let (client, forwarded_host, resp) = self
-                    .reconnect_pd(members, "".to_string(), true, cfg.enable_forwarding)
+                let res = self
+                    .reconnect_pd(members, true, true, cfg.enable_forwarding)
                     .await?
                     .unwrap();
                 info!("all PD endpoints are consistent"; "endpoints" => ?cfg.endpoints);
-                Ok((client, forwarded_host, resp))
+                Ok(res)
             }
             _ => Err(box_err!("PD cluster failed to respond")),
         }
@@ -571,12 +592,12 @@ impl PdConnector {
 
     // There are 3 kinds of situations we will return the new client:
     // 1. the force is true which represents the client is newly created or the original connection has some problem
-    // 2. the previous forwared host is not empty and it can connect the leader now which represents the network partition problem to leader may be recovered
+    // 2. the previous forwarded host is not empty and it can connect the leader now which represents the network partition problem to leader may be recovered
     // 3. the member information of PD has been changed
     async fn reconnect_pd(
         &self,
         members_resp: GetMembersResponse,
-        pre_forwarded_host: String,
+        direct_connected: bool,
         force: bool,
         enable_forwarding: bool,
     ) -> Result<Option<StubTuple>> {
@@ -585,13 +606,14 @@ impl PdConnector {
         let members = resp.get_members();
         // Currently we connect to leader directly and there is no member change.
         // We don't need to connect to PD again.
-        if !force && pre_forwarded_host.is_empty() && resp == members_resp {
+        if !force && direct_connected && resp == members_resp {
             return Ok(None);
         }
         let (res, has_network_error) = self.reconnect_leader(leader).await?;
         match res {
-            Some(client) => {
-                return Ok(Some((client, "".to_string(), resp)));
+            Some((client, target_url)) => {
+                let info = TargetInfo::new(target_url, "");
+                return Ok(Some((client, info, resp)));
             }
             None => {
                 // If the force is false, we could have already forwarded the requests.
@@ -600,10 +622,8 @@ impl PdConnector {
                     return Err(box_err!("failed to connect to {:?}", leader));
                 }
                 if enable_forwarding && has_network_error {
-                    if let Ok(Some((client, forwarded_host))) =
-                        self.try_forward(members, leader).await
-                    {
-                        return Ok(Some((client, forwarded_host, resp)));
+                    if let Ok(Some((client, info))) = self.try_forward(members, leader).await {
+                        return Ok(Some((client, info, resp)));
                     }
                 }
             }
@@ -617,7 +637,7 @@ impl PdConnector {
     pub async fn connect_member(
         &self,
         peer: &Member,
-    ) -> Result<(Option<(PdClientStub, GetMembersResponse)>, bool)> {
+    ) -> Result<(Option<(PdClientStub, String, GetMembersResponse)>, bool)> {
         let mut network_fail_num = 0;
         let mut has_network_error = false;
         let client_urls = peer.get_client_urls();
@@ -625,7 +645,7 @@ impl PdConnector {
             match self.connect(ep.as_str()).await {
                 Ok((client, resp)) => {
                     info!("connected to PD member"; "endpoints" => ep);
-                    return Ok((Some((client, resp)), false));
+                    return Ok((Some((client, ep.clone(), resp)), false));
                 }
                 Err(Error::Grpc(e)) => {
                     if let RpcFailure(RpcStatus { status, details: _ }) = e {
@@ -647,7 +667,10 @@ impl PdConnector {
         Ok((None, has_network_error))
     }
 
-    pub async fn reconnect_leader(&self, leader: &Member) -> Result<(Option<PdClientStub>, bool)> {
+    pub async fn reconnect_leader(
+        &self,
+        leader: &Member,
+    ) -> Result<(Option<(PdClientStub, String)>, bool)> {
         fail_point!("connect_leader", |_| Ok((None, true)));
         let mut retry_times = MAX_RETRY_TIMES;
         let timer = Instant::now();
@@ -656,7 +679,7 @@ impl PdConnector {
         loop {
             let (res, has_network_err) = self.connect_member(leader).await?;
             match res {
-                Some((client, _)) => return Ok((Some(client), has_network_err)),
+                Some((client, ep, _)) => return Ok((Some((client, ep)), has_network_err)),
                 None => {
                     if has_network_err && retry_times > 0 && timer.elapsed() <= MAX_RETRY_DURATION {
                         let _ = GLOBAL_TIMER_HANDLE
@@ -676,19 +699,21 @@ impl PdConnector {
         &self,
         members: &[Member],
         leader: &Member,
-    ) -> Result<Option<(PdClientStub, String)>> {
+    ) -> Result<Option<(PdClientStub, TargetInfo)>> {
         // Try to connect the PD cluster follower.
         for m in members.iter().filter(|m| *m != leader) {
             let (res, _) = self.connect_member(m).await?;
             match res {
-                Some((client, resp)) => {
+                Some((client, ep, resp)) => {
                     let leader = resp.get_leader();
                     let client_urls = leader.get_client_urls();
                     for leader_url in client_urls {
+                        let target = TargetInfo::new(leader_url.clone(), &ep);
                         let response = client
                             .get_members_async_opt(
                                 &GetMembersRequest::default(),
-                                call_option(&leader_url)
+                                target
+                                    .call_option()
                                     .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
                             )
                             .unwrap_or_else(|e| {
@@ -696,7 +721,7 @@ impl PdConnector {
                             })
                             .await;
                         match response {
-                            Ok(_) => return Ok(Some((client, leader_url.to_string()))),
+                            Ok(_) => return Ok(Some((client, target))),
                             Err(_) => continue,
                         }
                     }
