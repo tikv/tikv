@@ -88,8 +88,8 @@ struct PriorityBasedIORateLimiterProtected {
     // IOs that are can't be fulfilled in current epoch
     pending_bytes: [usize; IOPriority::COUNT],
     // Used to smoothly update IO budgets
-    count_of_history_bytes: usize,
-    sum_of_history_bytes: [usize; IOPriority::COUNT],
+    history_epoch_count: usize,
+    history_bytes: [usize; IOPriority::COUNT],
 }
 
 impl PriorityBasedIORateLimiterProtected {
@@ -97,8 +97,8 @@ impl PriorityBasedIORateLimiterProtected {
         PriorityBasedIORateLimiterProtected {
             next_refill_time: Instant::now_coarse() + DEFAULT_REFILL_PERIOD,
             pending_bytes: [0; IOPriority::COUNT],
-            count_of_history_bytes: 0,
-            sum_of_history_bytes: [0; IOPriority::COUNT],
+            history_epoch_count: 0,
+            history_bytes: [0; IOPriority::COUNT],
         }
     }
 }
@@ -122,6 +122,7 @@ macro_rules! request_imp {
         }
         let now = Instant::now_coarse();
         let mut wait = Duration::from_millis(0);
+        // hold a snapshot ticket of pending bytes
         let pending = {
             let mut locked = $limiter.protected.lock();
             locked.pending_bytes[priority_idx] += amount;
@@ -132,6 +133,7 @@ macro_rules! request_imp {
             }
             locked.pending_bytes[priority_idx]
         };
+        // wait until our ticket can actually be served
         wait += DEFAULT_REFILL_PERIOD * (pending / cached_bytes_per_refill) as u32;
         RATE_LIMITER_REQUEST_WAIT_DURATION
             .with_label_values(&[$priority.as_str()])
@@ -174,25 +176,19 @@ impl PriorityBasedIORateLimiter {
         request_imp!(self, priority, amount, async)
     }
 
-    #[cfg(test)]
-    fn critical_section(&self, now: Instant) {
-        let mut locked = self.protected.lock();
-        self.refill(&mut locked, now);
-    }
-
+    /// Update and refill IO budgets for next epoch.
     fn refill(&self, locked: &mut MutexGuard<PriorityBasedIORateLimiterProtected>, now: Instant) {
         const UPDATE_BUDGETS_EVERY_N_EPOCHS: usize = 5;
-
         // keep in sync with a potentially skewed clock
         locked.next_refill_time = now + DEFAULT_REFILL_PERIOD;
         let mut limit = self.bytes_per_epoch[IOPriority::High as usize].load(Ordering::Relaxed);
         debug_assert!(limit > 0);
         let should_update_budgets =
-            if locked.count_of_history_bytes == UPDATE_BUDGETS_EVERY_N_EPOCHS - 1 {
-                locked.count_of_history_bytes = 0;
+            if locked.history_epoch_count == UPDATE_BUDGETS_EVERY_N_EPOCHS - 1 {
+                locked.history_epoch_count = 0;
                 true
             } else {
-                locked.count_of_history_bytes += 1;
+                locked.history_epoch_count += 1;
                 false
             };
 
@@ -210,14 +206,13 @@ impl PriorityBasedIORateLimiter {
             } else {
                 std::mem::replace(&mut locked.pending_bytes[p], 0)
             };
-            locked.sum_of_history_bytes[p] += std::cmp::min(
+            locked.history_bytes[p] += std::cmp::min(
                 self.bytes_through[p].swap(satisfied, Ordering::Release),
                 limit,
             );
             if should_update_budgets {
-                let estimated_bytes_through =
-                    std::mem::replace(&mut locked.sum_of_history_bytes[p], 0)
-                        / UPDATE_BUDGETS_EVERY_N_EPOCHS;
+                let estimated_bytes_through = std::mem::replace(&mut locked.history_bytes[p], 0)
+                    / UPDATE_BUDGETS_EVERY_N_EPOCHS;
                 limit = if limit > estimated_bytes_through {
                     limit - estimated_bytes_through
                 } else {
@@ -236,6 +231,12 @@ impl PriorityBasedIORateLimiter {
             std::mem::replace(&mut locked.pending_bytes[p], 0)
         };
         self.bytes_through[p].store(satisfied, Ordering::Release);
+    }
+
+    #[cfg(test)]
+    fn critical_section(&self, now: Instant) {
+        let mut locked = self.protected.lock();
+        self.refill(&mut locked, now);
     }
 }
 
