@@ -47,12 +47,14 @@ impl engine_traits::Iterator for RocksEngineIterator {
     }
 
     fn key(&self) -> &[u8] {
-        assert!(cfg!(feature = "nortcheck") || self.valid().unwrap());
+        #[cfg(not(feature = "nortcheck"))]
+        assert!(self.valid().unwrap());
         self.0.key()
     }
 
     fn value(&self) -> &[u8] {
-        assert!(cfg!(feature = "nortcheck") || self.valid().unwrap());
+        #[cfg(not(feature = "nortcheck"))]
+        assert!(self.valid().unwrap());
         self.0.value()
     }
 
