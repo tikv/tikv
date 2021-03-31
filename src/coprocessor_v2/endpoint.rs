@@ -58,13 +58,15 @@ impl Endpoint {
         storage: &Storage<E, L>,
         req: coprv2pb::RawCoprocessorRequest,
     ) -> Result<RawResponse, CoprocessorError> {
-        let plugin =
-            self.plugin_registry
-                .get_plugin(&req.copr_name)
-                .ok_or(CoprocessorError::Other(format!(
+        let plugin = self
+            .plugin_registry
+            .get_plugin(&req.copr_name)
+            .ok_or_else(|| {
+                CoprocessorError::Other(format!(
                     "No registered coprocessor with name '{}'",
                     req.copr_name
-                )))?;
+                ))
+            })?;
 
         let raw_storage_api = RawStorageImpl::new(req.get_context(), storage);
         let region = Region {
@@ -92,7 +94,7 @@ fn extract_region_error(error: &PluginError) -> Option<kvproto::errorpb::Error> 
         PluginError::StorageError(storage_err) => match storage_err {
             coprocessor_plugin_api::StorageError::Other(other_err) => other_err
                 .downcast_ref::<storage::Result<()>>()
-                .map_or(None, |e| storage::errors::extract_region_error::<()>(e)),
+                .and_then(|e| storage::errors::extract_region_error::<()>(e)),
             _ => None,
         },
     }
