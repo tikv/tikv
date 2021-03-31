@@ -15,7 +15,6 @@ use kvproto::kvrpcpb::*;
 use kvproto::tikvpb::TikvClient;
 use raftstore::coprocessor::CoprocessorHost;
 use test_raftstore::*;
-use tikv::config::CdcConfig;
 use tikv_util::worker::LazyWorker;
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
@@ -149,7 +148,7 @@ impl TestSuite {
             let cm = sim.get_concurrency_manager(*id);
             let env = Arc::new(Environment::new(1));
             let mut cdc_endpoint = cdc::Endpoint::new(
-                &CdcConfig::default(),
+                &cluster.cfg.cdc,
                 pd_cli.clone(),
                 worker.scheduler(),
                 raft_router,
