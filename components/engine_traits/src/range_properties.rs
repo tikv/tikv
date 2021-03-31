@@ -10,8 +10,6 @@ use crate::Range;
 
 pub trait RangePropertiesExt {
     /// Gets the number of keys in a range.
-    ///
-    /// The region_id is used only for logging and means nothing internally.
     fn get_range_approximate_keys(&self, range: Range, large_threshold: u64) -> Result<u64>;
 
     fn get_range_approximate_keys_cf(
@@ -22,8 +20,6 @@ pub trait RangePropertiesExt {
     ) -> Result<u64>;
 
     /// Get the approximate size of the range
-    ///
-    /// The region_id is used only for logging and means nothing internally.
     fn get_range_approximate_size(&self, range: Range, large_threshold: u64) -> Result<u64>;
 
     fn get_range_approximate_size_cf(
@@ -33,15 +29,17 @@ pub trait RangePropertiesExt {
         large_threshold: u64,
     ) -> Result<u64>;
 
-    /// Get range approximate split keys based on default, write and lock cf.
-    ///
-    /// The region_id is used only for logging and means nothing internally.
-    fn get_range_approximate_split_keys(&self, range: Range, parts: usize) -> Result<Vec<Vec<u8>>>;
+    /// Get range approximate split keys to split range evenly into key_count + 1 parts .
+    fn get_range_approximate_split_keys(
+        &self,
+        range: Range,
+        key_count: usize,
+    ) -> Result<Vec<Vec<u8>>>;
 
     fn get_range_approximate_split_keys_cf(
         &self,
         cfname: &str,
         range: Range,
-        parts: usize,
+        key_count: usize,
     ) -> Result<Vec<Vec<u8>>>;
 }

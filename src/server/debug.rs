@@ -1211,7 +1211,7 @@ fn divide_db(db: &Arc<DB>, parts: usize) -> raftstore::Result<Vec<Vec<u8>>> {
     let end = keys::data_end_key(b"");
     let range = Range::new(&start, &end);
     Ok(box_try!(
-        RocksEngine::from_db(db.clone()).get_range_approximate_split_keys(range, parts)
+        RocksEngine::from_db(db.clone()).get_range_approximate_split_keys(range, parts - 1)
     ))
 }
 

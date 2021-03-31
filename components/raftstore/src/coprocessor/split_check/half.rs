@@ -112,13 +112,9 @@ pub fn get_region_approximate_middle(
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
     let range = Range::new(&start_key, &end_key);
-    Ok(box_try!(db.get_range_approximate_split_keys(range, 2).map(
-        |mut v| if v.is_empty() {
-            None
-        } else {
-            Some(v.remove(0))
-        }
-    )))
+    Ok(box_try!(db
+        .get_range_approximate_split_keys(range, 1)
+        .map(|mut v| v.pop())))
 }
 
 #[cfg(test)]
@@ -231,6 +227,6 @@ mod tests {
         let middle_key = Key::from_encoded_slice(keys::origin_key(&middle_key))
             .into_raw()
             .unwrap();
-        assert_eq!(escape(&middle_key), "key_049");
+        assert_eq!(escape(&middle_key), "key_050");
     }
 }

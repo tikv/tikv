@@ -136,7 +136,11 @@ impl RangePropertiesExt for RocksEngine {
         Ok(total_size)
     }
 
-    fn get_range_approximate_split_keys(&self, range: Range, parts: usize) -> Result<Vec<Vec<u8>>> {
+    fn get_range_approximate_split_keys(
+        &self,
+        range: Range,
+        key_count: usize,
+    ) -> Result<Vec<Vec<u8>>> {
         let get_cf_size = |cf: &str| self.get_range_approximate_size_cf(cf, range, 0);
         let cfs = [
             (CF_DEFAULT, box_try!(get_cf_size(CF_DEFAULT))),
@@ -153,14 +157,14 @@ impl RangePropertiesExt for RocksEngine {
 
         let (cf, _) = cfs.iter().max_by_key(|(_, s)| s).unwrap();
 
-        self.get_range_approximate_split_keys_cf(cf, range, parts)
+        self.get_range_approximate_split_keys_cf(cf, range, key_count)
     }
 
     fn get_range_approximate_split_keys_cf(
         &self,
         cfname: &str,
         range: Range,
-        parts: usize,
+        key_count: usize,
     ) -> Result<Vec<Vec<u8>>> {
         let start_key = &range.start_key;
         let end_key = &range.end_key;
@@ -192,14 +196,14 @@ impl RangePropertiesExt for RocksEngine {
         keys.sort();
 
         // If the keys are too few, return them directly.
-        if keys.len() < parts {
+        if keys.len() <= key_count {
             return Ok(keys);
         }
 
-        // Find `parts - 1` keys which divides the whole range into `parts` parts evenly.
-        let mut res = Vec::with_capacity(parts - 1);
-        let section_len = (keys.len() as f64) / (parts as f64);
-        for i in 1..parts {
+        // Find `key_count` keys which divides the whole range into `parts` parts evenly.
+        let mut res = Vec::with_capacity(key_count);
+        let section_len = (keys.len() as f64) / ((key_count + 1) as f64);
+        for i in 1..=key_count {
             res.push(keys[(section_len * (i as f64)) as usize].clone())
         }
         res.dedup();

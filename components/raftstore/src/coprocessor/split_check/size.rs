@@ -219,7 +219,7 @@ fn get_approximate_split_keys(
     let range = Range::new(&start_key, &end_key);
     Ok(box_try!(db.get_range_approximate_split_keys(
         range,
-        batch_split_limit as usize + 1
+        batch_split_limit as usize
     )))
 }
 
@@ -375,7 +375,7 @@ pub mod tests {
 
         // for test batch_split_limit
         // so split kets will be [z0006, z0012, z0018, z0024, z0030]
-        for i in 19..51 {
+        for i in 19..41 {
             let s = keys::data_key(format!("{:04}", i).as_bytes());
             engine.put_cf(data_cf, &s, &s).unwrap();
         }
