@@ -1336,6 +1336,7 @@ dependencies = [
  "engine_traits",
  "tempfile",
  "tikv_alloc",
+ "tikv_util",
 ]
 
 [[package]]

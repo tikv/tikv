@@ -5,7 +5,8 @@ use engine_test::kv::KvTestEngine;
 use engine_traits::{Mutable, WriteBatch, WriteBatchExt};
 use engine_traits::{Peekable, Result, SyncMutable};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE};
-use std::panic::{self, AssertUnwindSafe};
+use std::panic::AssertUnwindSafe;
+use tikv_util::catch_unwind_silent;
 
 #[allow(clippy::enum_variant_names)]
 #[derive(Eq, PartialEq)]
@@ -278,7 +279,7 @@ scenario_test! { delete_range_reverse_range {
     db.put(b"c", b"").unwrap();
     db.put(b"d", b"").unwrap();
 
-    assert!(panic::catch_unwind(AssertUnwindSafe(|| {
+    assert!(catch_unwind_silent(AssertUnwindSafe(|| {
         db.delete_range(b"d", b"b").unwrap();
     })).is_err());
 
