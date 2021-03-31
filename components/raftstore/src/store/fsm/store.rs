@@ -1136,7 +1136,7 @@ impl RaftBatchSystem {
             pd_client,
             coprocessor_host: workers.coprocessor_host.clone(),
             importer,
-            snap_mgr: mgr.clone(),
+            snap_mgr: mgr,
             global_stat: GlobalStoreStat::default(),
             store_meta,
             applying_snap_count: Arc::new(AtomicUsize::new(0)),
