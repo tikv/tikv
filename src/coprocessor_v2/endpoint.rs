@@ -102,6 +102,5 @@ fn extract_region_error(error: &PluginError) -> Option<kvproto::errorpb::Error> 
                 _ => None,
             }
         }
-        PluginError::Other(_) => None,
     }
 }
