@@ -20,6 +20,7 @@ openssl = "0.10"
 parking_lot = "0.11"
 prometheus = { version = "0.10", features = ["nightly"] }
 prometheus-static-metric = "0.4"
+rand = "0.7.3"
 serde = "1.0"
 strum = { version = "0.20", features = ["derive"] }
 tikv_alloc = { path = "../tikv_alloc" }

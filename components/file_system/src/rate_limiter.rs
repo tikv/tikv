@@ -62,10 +62,21 @@ impl IORateLimiterStatistics {
 
 macro_rules! do_sleep {
     ($duration:expr, sync) => {
-        std::thread::sleep($duration)
+        std::thread::sleep($duration);
     };
     ($duration:expr, async) => {
-        tokio::time::delay_for($duration).await
+        tokio::time::delay_for($duration).await;
+    };
+    ($duration:expr, skewed_sync) => {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        let subtraction: bool = rng.gen();
+        let offset = std::cmp::min(Duration::from_millis(1), $duration / 100);
+        std::thread::sleep(if subtraction {
+            $duration - offset
+        } else {
+            $duration + offset
+        });
     };
 }
 
@@ -75,9 +86,9 @@ const DEFAULT_REFILL_PERIOD: Duration = Duration::from_millis(50);
 /// Rate limit is disabled when total IO threshold is set to zero.
 #[derive(Debug)]
 struct PriorityBasedIORateLimiter {
-    // IO amount passed through within current epoch
+    // Total bytes passed through during current epoch
     bytes_through: [CachePadded<AtomicUsize>; IOPriority::COUNT],
-    // Maximum IOs permitted within current epoch
+    // Maximum bytes permitted during current epoch
     bytes_per_epoch: [CachePadded<AtomicUsize>; IOPriority::COUNT],
     protected: Mutex<PriorityBasedIORateLimiterProtected>,
 }
@@ -85,7 +96,7 @@ struct PriorityBasedIORateLimiter {
 #[derive(Debug)]
 struct PriorityBasedIORateLimiterProtected {
     next_refill_time: Instant,
-    // IOs that are can't be fulfilled in current epoch
+    // Bytes that are can't be fulfilled in current epoch
     pending_bytes: [usize; IOPriority::COUNT],
     // Used to smoothly update IO budgets
     history_epoch_count: usize,
@@ -111,32 +122,37 @@ macro_rules! request_imp {
         let priority_idx = $priority as usize;
         let cached_bytes_per_refill =
             $limiter.bytes_per_epoch[priority_idx].load(Ordering::Relaxed);
+        // rate limits are disabled
         if cached_bytes_per_refill == 0 {
             return $amount;
         }
         let amount = std::cmp::min($amount, cached_bytes_per_refill);
         let bytes_through =
             $limiter.bytes_through[priority_idx].fetch_add(amount, Ordering::AcqRel) + amount;
+        // we prefer not to partially return only a portion of requested bytes
         if bytes_through <= cached_bytes_per_refill {
             return amount;
         }
         let now = Instant::now_coarse();
         let mut wait = Duration::from_millis(0);
-        // hold a snapshot ticket of pending bytes
-        let pending = {
+        // take a snapshot of pending bytes, which will be used to deduce when this request can
+        // be fully served.
+        let pending_snapshot = {
             let mut locked = $limiter.protected.lock();
-            locked.pending_bytes[priority_idx] += amount;
+            locked.pending_bytes[priority_idx] +=
+                std::cmp::min(bytes_through - cached_bytes_per_refill, amount);
+            let pending_snapshot = locked.pending_bytes[priority_idx];
             if locked.next_refill_time <= now {
                 $limiter.refill(&mut locked, now);
             } else {
                 wait += locked.next_refill_time - now;
             }
-            locked.pending_bytes[priority_idx]
+            pending_snapshot
         };
         // wait until our ticket can actually be served
-        wait += DEFAULT_REFILL_PERIOD * (pending / cached_bytes_per_refill) as u32;
-        tls_collect_rate_limiter_request_wait($priority.as_str(), wait);
+        wait += DEFAULT_REFILL_PERIOD * ((pending_snapshot - 1) / cached_bytes_per_refill) as u32;
         do_sleep!(wait, $mode);
+        tls_collect_rate_limiter_request_wait($priority.as_str(), wait);
         amount
     }};
 }
@@ -174,9 +190,19 @@ impl PriorityBasedIORateLimiter {
         request_imp!(self, priority, amount, async)
     }
 
+    #[cfg(test)]
+    fn request_with_skewed_clock(&self, priority: IOPriority, amount: usize) -> usize {
+        request_imp!(self, priority, amount, skewed_sync)
+    }
+
     /// Update and refill IO budgets for next epoch.
     fn refill(&self, locked: &mut MutexGuard<PriorityBasedIORateLimiterProtected>, now: Instant) {
         const UPDATE_BUDGETS_EVERY_N_EPOCHS: usize = 5;
+        // Epochs can be skipped for refill, which happens fairly rare under production workload.
+        // We will ignore these epochs in this algorithm.
+        let overflow_epochs = ((now + DEFAULT_REFILL_PERIOD / 2 - locked.next_refill_time)
+            .as_secs_f64()
+            / DEFAULT_REFILL_PERIOD.as_secs_f64()) as usize;
         // keep in sync with a potentially skewed clock
         locked.next_refill_time = now + DEFAULT_REFILL_PERIOD;
         let mut limit = self.bytes_per_epoch[IOPriority::High as usize].load(Ordering::Relaxed);
@@ -196,6 +222,8 @@ impl PriorityBasedIORateLimiter {
         );
         for p in &[IOPriority::High, IOPriority::Medium] {
             let p = *p as usize;
+            locked.pending_bytes[p] =
+                locked.pending_bytes[p].saturating_sub(limit * overflow_epochs);
             // calculate budgets from next epoch used to satisfy pending IOs
             let satisfied = if locked.pending_bytes[p] > limit {
                 // preserve pending IOs that still can't be satisfied
@@ -299,6 +327,20 @@ impl IORateLimiter {
         }
         bytes
     }
+
+    #[cfg(test)]
+    fn request_with_skewed_clock(&self, io_type: IOType, io_op: IOOp, mut bytes: usize) -> usize {
+        if io_op == IOOp::Write {
+            let priority = self.priority_map[io_type as usize];
+            bytes = self
+                .throughput_limiter
+                .request_with_skewed_clock(priority, bytes);
+        }
+        if let Some(stats) = &self.stats {
+            stats.record(io_type, io_op, bytes);
+        }
+        bytes
+    }
 }
 
 lazy_static! {
@@ -360,7 +402,7 @@ mod tests {
             let t = std::thread::spawn(move || {
                 let Request(io_type, op, len) = request;
                 while !stop.load(Ordering::Relaxed) {
-                    limiter.request(io_type, op, len);
+                    limiter.request_with_skewed_clock(io_type, op, len);
                     if let Some(interval) = interval {
                         std::thread::sleep(interval);
                     }
@@ -383,7 +425,7 @@ mod tests {
             {
                 let _context = start_background_jobs(
                     limiter,
-                    10, /*job_count*/
+                    3, /*job_count*/
                     Request(IOType::ForegroundWrite, IOOp::Write, 10),
                     None, /*interval*/
                 );
@@ -508,7 +550,7 @@ mod tests {
     fn bench_critical_section(b: &mut test::Bencher) {
         let inner_limiter = PriorityBasedIORateLimiter::new();
         inner_limiter.set_bytes_per_sec(1024);
-        let now = Instant::now();
+        let now = Instant::now_coarse();
         b.iter(|| {
             inner_limiter.critical_section(now);
         });
