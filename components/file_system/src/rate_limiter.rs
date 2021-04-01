@@ -115,14 +115,14 @@ impl PriorityBasedIORateLimiterProtected {
 }
 
 /// Actual implementation for requesting IOs from PriorityBasedIORateLimiter.
-/// An attempt will be recorded first. If the attempted amount exceeds the available quotas of
-/// current epoch, the requester will register itself and sleep until next epoch.
+/// An attempt will first be recorded. If the attempted amount exceeds the available quotas of
+/// current epoch, the requester will be queued and sleep until served.
 macro_rules! request_imp {
     ($limiter:ident, $priority:ident, $amount:ident, $mode:tt) => {{
         let priority_idx = $priority as usize;
         let cached_bytes_per_refill =
             $limiter.bytes_per_epoch[priority_idx].load(Ordering::Relaxed);
-        // rate limits are disabled
+        // flow control is disabled
         if cached_bytes_per_refill == 0 {
             return $amount;
         }
@@ -135,8 +135,8 @@ macro_rules! request_imp {
         }
         let now = Instant::now_coarse();
         let mut wait = Duration::from_millis(0);
-        // take a snapshot of pending bytes, which will be used to deduce when this request can
-        // be fully served.
+        // acquire a snapshot of pending bytes, which denotes a position of logical queue
+        // we are waiting in.
         let pending_snapshot = {
             let mut locked = $limiter.protected.lock();
             locked.pending_bytes[priority_idx] +=
@@ -149,7 +149,7 @@ macro_rules! request_imp {
             }
             pending_snapshot
         };
-        // wait until our ticket can actually be served
+        // calculate wait duration with `pending_bytes` / `service_rate`.
         wait += DEFAULT_REFILL_PERIOD * ((pending_snapshot - 1) / cached_bytes_per_refill) as u32;
         do_sleep!(wait, $mode);
         tls_collect_rate_limiter_request_wait($priority.as_str(), wait);
@@ -195,14 +195,21 @@ impl PriorityBasedIORateLimiter {
         request_imp!(self, priority, amount, skewed_sync)
     }
 
-    /// Update and refill IO budgets for next epoch.
+    /// Update and refill IO budgets for next epoch based on IO priority.
+    /// Here we provide best-effort priority control:
+    /// 1) IO budget is assigned to lower priority to make sure higher priority can always consume
+    ///    the same IO amount as the last few epochs within global threshold.
+    /// 2) Higher priority can temporarily use lower priority's IO budgets. When this happens,
+    ///    total IO flow will exceed global threshold.
+    /// 3) Highest priority IO alone must not exceed global threshold.
     fn refill(&self, locked: &mut MutexGuard<PriorityBasedIORateLimiterProtected>, now: Instant) {
         const UPDATE_BUDGETS_EVERY_N_EPOCHS: usize = 5;
         // Epochs can be skipped for refill, which happens fairly rare under production workload.
-        // We will ignore these epochs in this algorithm.
-        let overflow_epochs = ((now + DEFAULT_REFILL_PERIOD / 2 - locked.next_refill_time)
-            .as_secs_f64()
-            / DEFAULT_REFILL_PERIOD.as_secs_f64()) as usize;
+        // We will ignore these epochs when making decision.
+        // assuming clock can be skewed for no more than half an epoch
+        let skipped_epochs = ((now - locked.next_refill_time).as_secs_f64()
+            / DEFAULT_REFILL_PERIOD.as_secs_f64()
+            + 0.5) as usize;
         // keep in sync with a potentially skewed clock
         locked.next_refill_time = now + DEFAULT_REFILL_PERIOD;
         let mut limit = self.bytes_per_epoch[IOPriority::High as usize].load(Ordering::Relaxed);
@@ -222,27 +229,30 @@ impl PriorityBasedIORateLimiter {
         );
         for p in &[IOPriority::High, IOPriority::Medium] {
             let p = *p as usize;
+            // skipped epochs can only serve pending_bytes rather that immediate requests
             locked.pending_bytes[p] =
-                locked.pending_bytes[p].saturating_sub(limit * overflow_epochs);
-            // calculate budgets from next epoch used to satisfy pending IOs
+                locked.pending_bytes[p].saturating_sub(limit * skipped_epochs);
+            // calculate next epoch's budgets used to serve pending bytes
             let satisfied = if locked.pending_bytes[p] > limit {
-                // preserve pending IOs that still can't be satisfied
+                // pass on pending bytes that still can't be served
                 locked.pending_bytes[p] -= limit;
                 limit
             } else {
                 std::mem::replace(&mut locked.pending_bytes[p], 0)
             };
             locked.history_bytes[p] += std::cmp::min(
+                // add these bytes to next epoch's consumption
                 self.bytes_through[p].swap(satisfied, Ordering::Release),
                 limit,
             );
             if should_update_budgets {
+                // use average over `UPDATE_BUDGETS_EVERY_N_EPOCHS` to re-allocate budgets
                 let estimated_bytes_through = std::mem::replace(&mut locked.history_bytes[p], 0)
                     / UPDATE_BUDGETS_EVERY_N_EPOCHS;
                 limit = if limit > estimated_bytes_through {
                     limit - estimated_bytes_through
                 } else {
-                    1 // a small positive value
+                    1 // a small positive value so flow control isn't disabled
                 };
                 self.bytes_per_epoch[p - 1].store(limit, Ordering::Relaxed);
             } else {
@@ -266,7 +276,8 @@ impl PriorityBasedIORateLimiter {
     }
 }
 
-/// An instance of `IORateLimiter` should be safely shared between threads.
+/// A high-performance IO rate limiter used for prioritized flow control.
+/// An instance of `IORateLimiter` can be safely shared between threads.
 #[derive(Debug)]
 pub struct IORateLimiter {
     priority_map: [IOPriority; IOType::COUNT],
