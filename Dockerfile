@@ -38,10 +38,10 @@ RUN yum install -y epel-release && \
     yum clean all && \
     yum makecache
 
-RUN yum install -y \
-        perl \
-        make cmake3 dwz \
-        gcc gcc-c++ libstdc++-static && \
+RUN yum install -y centos-release-scl && \
+    yum install -y \
+      devtoolset-8 \
+      perl cmake3 && \
     yum clean all
 
 # CentOS gives cmake 3 a weird binary name, so we link it to something more normal
@@ -77,7 +77,7 @@ RUN mkdir -p ./cmd/src/bin && \
     done
 
 COPY Makefile ./
-RUN make build_dist_release
+RUN source /opt/rh/devtoolset-8/enable && make build_dist_release
 
 # Remove fingerprints for when we build the real binaries.
 RUN rm -rf ./target/release/.fingerprint/tikv-* && \
@@ -98,7 +98,7 @@ ARG GIT_BRANCH=${GIT_FALLBACK}
 ENV TIKV_BUILD_GIT_HASH=${GIT_HASH}
 ENV TIKV_BUILD_GIT_TAG=${GIT_TAG}
 ENV TIKV_BUILD_GIT_BRANCH=${GIT_BRANCH}
-RUN make build_dist_release
+RUN source /opt/rh/devtoolset-8/enable && make build_dist_release
 
 # Export to a clean image
 FROM pingcap/alpine-glibc
