@@ -1,8 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::io::Error as IoError;
-use std::{error, result};
 use std::time::Duration;
+use std::{error, result};
 
 use engine_traits::Error as EngineTraitsError;
 use kvproto::errorpb::Error as ErrorHeader;
