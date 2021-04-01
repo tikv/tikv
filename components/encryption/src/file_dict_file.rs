@@ -5,11 +5,12 @@ use file_system::{rename, File, OpenOptions};
 use kvproto::encryptionpb::{EncryptedContent, FileDictionary, FileInfo};
 use protobuf::Message;
 use rand::{thread_rng, RngCore};
-use tikv_util::box_err;
+use tikv_util::{box_err, warn};
 
 use crate::encrypted_file::{EncryptedFile, Header, Version, TMP_FILE_SUFFIX};
 use crate::master_key::{Backend, PlaintextBackend};
 use crate::metrics::*;
+use crate::Error;
 use crate::Result;
 
 use std::io::BufRead;
@@ -172,21 +173,28 @@ impl FileDictionaryFile {
                 // parse the remained records
                 while !remained.is_empty() {
                     // If the parsing get errors, manual intervention is required to recover.
-                    let (used_size, file_name, mode) = Self::parse_next_record(remained)?;
-                    remained.consume(used_size);
-                    match mode {
-                        LogRecord::INSERT(info) => {
-                            file_dict.files.insert(file_name, info);
-                        }
-                        LogRecord::REMOVE => {
-                            let original = file_dict.files.remove(&file_name);
-                            if original.is_none() {
-                                return Err(box_err!(
-                                    "Try to recovery from log file but remove a null entry, file name: {}",
-                                    file_name
-                                ));
+                    match Self::parse_next_record(remained) {
+                        Ok((used_size, file_name, mode)) => {
+                            remained.consume(used_size);
+                            match mode {
+                                LogRecord::INSERT(info) => {
+                                    file_dict.files.insert(file_name, info);
+                                }
+                                LogRecord::REMOVE => {
+                                    let original = file_dict.files.remove(&file_name);
+                                    if original.is_none() {
+                                        return Err(box_err!(
+                                            "Try to recovery from log file but remove a null entry, file name: {}",
+                                            file_name
+                                        ));
+                                    }
+                                }
                             }
                         }
+                        Err(Error::TailRecordParseIncomplete) => {
+                            break;
+                        }
+                        Err(e) => return Err(e),
                     }
                 }
             }
@@ -204,6 +212,15 @@ impl FileDictionaryFile {
         if self.enable_log {
             let file = self.append_file.as_mut().unwrap();
             let bytes = Self::convert_record_to_bytes(name, LogRecord::INSERT(info.clone()))?;
+
+            fail::fail_point!("file_dict_log_insert_error", |_| {
+                let mut bytes = bytes.clone();
+                let _ = bytes.pop().unwrap();
+                file.write_all(&bytes)?;
+                file.sync_all()?;
+                Ok(())
+            });
+
             file.write_all(&bytes)?;
             file.sync_all()?;
 
@@ -280,10 +297,11 @@ impl FileDictionaryFile {
 
     fn parse_next_record(mut remained: &[u8]) -> Result<(usize, String, LogRecord)> {
         if remained.len() < Self::RECORD_HEADER_SIZE {
-            return Err(box_err!(
-                "file corrupted! record header size is too small: {}",
-                remained.len()
-            ));
+            warn!(
+                "file corrupted! record header size is too small, discarded the tail record";
+                "size" => remained.len(),
+            );
+            return Err(Error::TailRecordParseIncomplete);
         }
 
         // parse header
@@ -293,11 +311,13 @@ impl FileDictionaryFile {
         let mode = remained[Self::RECORD_HEADER_SIZE - 1];
         remained.consume(Self::RECORD_HEADER_SIZE);
         if remained.len() < name_len + info_len {
-            return Err(box_err!(
-                "file corrupted! record content size is too small: {}, expect: {}",
-                remained.len(),
-                name_len + info_len
-            ));
+            warn!(
+                "file corrupted! record content size is too small, discarded the tail record";
+                "content size" => remained.len(),
+                "expect name length" => name_len,
+                "expect content length" =>info_len,
+            );
+            return Err(Error::TailRecordParseIncomplete);
         }
 
         // checksum crc32
@@ -305,11 +325,22 @@ impl FileDictionaryFile {
         digest.update(&remained[0..name_len + info_len]);
         let crc32_checksum = digest.finalize();
         if crc32_checksum != crc32 {
-            return Err(box_err!(
-                "file corrupted! crc32 mismatch {} != {}",
-                crc32,
-                crc32_checksum
-            ));
+            remained.consume(name_len + info_len);
+            if remained.is_empty() {
+                // Only when this record is the last one can the panic be skipped.
+                warn!(
+                    "file corrupted! crc32 mismatch";
+                    "expected crc32" => crc32,
+                    "checksum crc32" => crc32_checksum,
+                );
+                return Err(Error::TailRecordParseIncomplete);
+            } else {
+                return Err(box_err!(
+                    "file corrupted! crc32 mismatch {} != {}",
+                    crc32,
+                    crc32_checksum
+                ));
+            }
         }
 
         // read file name
