@@ -210,6 +210,7 @@ impl Tracker {
         let mut detail_v2 = ScanDetailV2::default();
         detail_v2.set_processed_versions(self.total_storage_stats.write.processed_keys as u64);
         detail_v2.set_total_versions(self.total_storage_stats.write.total_op_count() as u64);
+        detail_v2.set_read_bytes(self.total_storage_stats.data.flow_stats.read_bytes as u64);
         detail_v2.set_rocksdb_delete_skipped_count(
             self.total_perf_stats.0.internal_delete_skipped_count as u64,
         );
