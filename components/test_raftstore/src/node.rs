@@ -208,7 +208,7 @@ impl Simulator for NodeCluster {
         };
 
         // Create coprocessor.
-        let mut coprocessor_host = CoprocessorHost::new(router.clone());
+        let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
 
         if let Some(f) = self.post_create_coprocessor_host.as_ref() {
             f(node_id, &mut coprocessor_host);
@@ -223,6 +223,7 @@ impl Simulator for NodeCluster {
             LocalReader::new(engines.kv.c().clone(), store_meta.clone(), router.clone());
         let cfg_controller = ConfigController::new(cfg.clone());
 
+<<<<<<< HEAD
         let mut split_check_worker = Worker::new("split-check");
         let split_check_runner = SplitCheckRunner::new(
             Arc::clone(&engines.kv),
@@ -231,6 +232,11 @@ impl Simulator for NodeCluster {
             cfg.coprocessor.clone(),
         );
         split_check_worker.start(split_check_runner).unwrap();
+=======
+        let split_check_runner =
+            SplitCheckRunner::new(engines.kv.clone(), router.clone(), coprocessor_host.clone());
+        let split_scheduler = bg_worker.start("test-split-check", split_check_runner);
+>>>>>>> 18ebcad6b... raftstore: approximate split range evenly instead of against split size (#9897)
         cfg_controller.register(
             Module::Coprocessor,
             Box::new(SplitCheckConfigManager(split_check_worker.scheduler())),

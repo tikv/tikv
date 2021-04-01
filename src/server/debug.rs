@@ -1385,6 +1385,7 @@ fn divide_db(db: &Arc<DB>, parts: usize) -> raftstore::Result<Vec<Vec<u8>>> {
 fn divide_db_cf(db: &Arc<DB>, parts: usize, cf: &str) -> raftstore::Result<Vec<Vec<u8>>> {
     let start = keys::data_key(b"");
     let end = keys::data_end_key(b"");
+<<<<<<< HEAD
     let collection = db.c().get_range_properties_cf(cf, &start, &end)?;
 
     let mut keys = Vec::new();
@@ -1435,6 +1436,12 @@ fn divide_db_cf(db: &Arc<DB>, parts: usize, cf: &str) -> raftstore::Result<Vec<V
         res.push(keys[(section_len * (i as f64)) as usize].clone())
     }
     Ok(res)
+=======
+    let range = Range::new(&start, &end);
+    Ok(box_try!(
+        RocksEngine::from_db(db.clone()).get_range_approximate_split_keys(range, parts - 1)
+    ))
+>>>>>>> 18ebcad6b... raftstore: approximate split range evenly instead of against split size (#9897)
 }
 
 #[cfg(test)]

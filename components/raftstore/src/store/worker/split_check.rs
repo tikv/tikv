@@ -14,6 +14,7 @@ use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
 
+#[cfg(any(test, feature = "testexport"))]
 use crate::coprocessor::Config;
 use crate::coprocessor::CoprocessorHost;
 use crate::coprocessor::SplitCheckerHost;
@@ -176,17 +177,28 @@ impl Display for Task {
 pub struct Runner<S> {
     engine: Arc<DB>,
     router: S,
+<<<<<<< HEAD
     coprocessor: CoprocessorHost,
     cfg: Config,
 }
 
 impl<S: CasualRouter<RocksEngine>> Runner<S> {
     pub fn new(engine: Arc<DB>, router: S, coprocessor: CoprocessorHost, cfg: Config) -> Runner<S> {
+=======
+    coprocessor: CoprocessorHost<E>,
+}
+
+impl<E, S> Runner<E, S>
+where
+    E: KvEngine,
+    S: CasualRouter<E>,
+{
+    pub fn new(engine: E, router: S, coprocessor: CoprocessorHost<E>) -> Runner<E, S> {
+>>>>>>> 18ebcad6b... raftstore: approximate split range evenly instead of against split size (#9897)
         Runner {
             engine,
             router,
             coprocessor,
-            cfg,
         }
     }
 
@@ -203,6 +215,7 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
         );
         CHECK_SPILT_COUNTER_VEC.with_label_values(&["all"]).inc();
 
+<<<<<<< HEAD
         let mut host = self.coprocessor.new_split_checker_host(
             &self.cfg,
             region,
@@ -210,6 +223,11 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
             auto_split,
             policy,
         );
+=======
+        let mut host =
+            self.coprocessor
+                .new_split_checker_host(region, &self.engine, auto_split, policy);
+>>>>>>> 18ebcad6b... raftstore: approximate split range evenly instead of against split size (#9897)
         if host.skip() {
             debug!("skip split check"; "region_id" => region.get_id());
             return;
@@ -317,7 +335,7 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
             "split check config updated";
             "change" => ?change
         );
-        self.cfg.update(change);
+        self.coprocessor.cfg.update(change);
     }
 }
 
@@ -331,7 +349,7 @@ impl<S: CasualRouter<RocksEngine>> Runnable<Task> for Runner<S> {
             } => self.check_split(&region, auto_split, policy),
             Task::ChangeConfig(c) => self.change_cfg(c),
             #[cfg(any(test, feature = "testexport"))]
-            Task::Validate(f) => f(&self.cfg),
+            Task::Validate(f) => f(&self.coprocessor.cfg),
             Task::GetRegionApproximateSizeAndKeys {
                 region,
                 pending_tasks,

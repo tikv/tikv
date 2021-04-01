@@ -112,6 +112,7 @@ pub fn get_region_approximate_middle(
     db: &impl KvEngine,
     region: &Region,
 ) -> Result<Option<Vec<u8>>> {
+<<<<<<< HEAD
     let get_cf_size = |cf: &str| get_region_approximate_size_cf(db, cf, &region, 0);
 
     let default_cf_size = box_try!(get_cf_size(CF_DEFAULT));
@@ -159,6 +160,14 @@ fn get_region_approximate_middle_cf(
     // of two middle positions if the number of keys is even.
     let middle = (keys.len() - 1) / 2;
     Ok(Some(keys.swap_remove(middle)))
+=======
+    let start_key = keys::enc_start_key(region);
+    let end_key = keys::enc_end_key(region);
+    let range = Range::new(&start_key, &end_key);
+    Ok(box_try!(db
+        .get_range_approximate_split_keys(range, 1)
+        .map(|mut v| v.pop())))
+>>>>>>> 18ebcad6b... raftstore: approximate split range evenly instead of against split size (#9897)
 }
 
 #[cfg(test)]
@@ -212,6 +221,7 @@ mod tests {
         region.mut_region_epoch().set_conf_ver(5);
 
         let (tx, rx) = mpsc::sync_channel(100);
+<<<<<<< HEAD
         let mut cfg = Config::default();
         cfg.region_max_size = ReadableSize(BUCKET_NUMBER_LIMIT as u64);
         let mut runnable = SplitCheckRunner::new(
@@ -220,6 +230,14 @@ mod tests {
             CoprocessorHost::new(tx),
             cfg,
         );
+=======
+        let cfg = Config {
+            region_max_size: ReadableSize(BUCKET_NUMBER_LIMIT as u64),
+            ..Default::default()
+        };
+        let mut runnable =
+            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
+>>>>>>> 18ebcad6b... raftstore: approximate split range evenly instead of against split size (#9897)
 
         // so split key will be z0005
         let cf_handle = engine.cf_handle(CF_DEFAULT).unwrap();
@@ -277,13 +295,17 @@ mod tests {
 
         let mut region = Region::default();
         region.mut_peers().push(Peer::default());
+<<<<<<< HEAD
         let middle_key = get_region_approximate_middle_cf(engine.c(), CF_DEFAULT, &region)
+=======
+        let middle_key = get_region_approximate_middle(&engine, &region)
+>>>>>>> 18ebcad6b... raftstore: approximate split range evenly instead of against split size (#9897)
             .unwrap()
             .unwrap();
 
         let middle_key = Key::from_encoded_slice(keys::origin_key(&middle_key))
             .into_raw()
             .unwrap();
-        assert_eq!(escape(&middle_key), "key_049");
+        assert_eq!(escape(&middle_key), "key_050");
     }
 }

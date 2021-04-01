@@ -198,6 +198,7 @@ pub fn get_region_approximate_keys(
 
     let start = keys::enc_start_key(region);
     let end = keys::enc_end_key(region);
+<<<<<<< HEAD
     let cf = box_try!(db.cf_handle(CF_WRITE));
     let (_, keys) = get_range_entries_and_versions(db, cf, &start, &end).unwrap_or_default();
     Ok(keys)
@@ -249,6 +250,12 @@ pub fn get_region_approximate_keys_cf(
         )
     }
     Ok(total_keys)
+=======
+    let range = Range::new(&start, &end);
+    Ok(box_try!(
+        db.get_range_approximate_keys(range, large_threshold)
+    ))
+>>>>>>> 18ebcad6b... raftstore: approximate split range evenly instead of against split size (#9897)
 }
 
 #[cfg(test)]
@@ -333,6 +340,7 @@ mod tests {
         region.mut_region_epoch().set_conf_ver(5);
 
         let (tx, rx) = mpsc::sync_channel(100);
+<<<<<<< HEAD
         let mut cfg = Config::default();
         cfg.region_max_keys = 100;
         cfg.region_split_keys = 80;
@@ -344,6 +352,17 @@ mod tests {
             CoprocessorHost::new(tx),
             cfg,
         );
+=======
+        let cfg = Config {
+            region_max_keys: 100,
+            region_split_keys: 80,
+            batch_split_limit: 5,
+            ..Default::default()
+        };
+
+        let mut runnable =
+            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
+>>>>>>> 18ebcad6b... raftstore: approximate split range evenly instead of against split size (#9897)
 
         // so split key will be z0080
         put_data(&engine, 0, 90, false);

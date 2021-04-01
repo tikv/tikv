@@ -94,8 +94,6 @@ where
         Ok(box_try!(get_approximate_split_keys(
             engine,
             region,
-            self.split_size,
-            self.max_size,
             self.batch_split_limit,
         )))
     }
@@ -178,7 +176,7 @@ where
                 "threshold" => host.cfg.region_max_size.0,
             );
             // when meet large region use approximate way to produce split keys
-            if region_size >= host.cfg.region_max_size.0 * host.cfg.batch_split_limit * 2 {
+            if region_size >= host.cfg.region_max_size.0 * host.cfg.batch_split_limit {
                 policy = CheckPolicy::Approximate
             }
             // Need to check size.
@@ -206,6 +204,7 @@ pub fn get_region_approximate_size(
     region: &Region,
     large_threshold: u64,
 ) -> Result<u64> {
+<<<<<<< HEAD
     let mut size = 0;
     for cfname in LARGE_CFS {
         size += get_region_approximate_size_cf(db, cfname, &region, large_threshold)
@@ -262,14 +261,20 @@ pub fn get_region_approximate_size_cf(
         )
     }
     Ok(total_size)
+=======
+    let start_key = keys::enc_start_key(region);
+    let end_key = keys::enc_end_key(region);
+    let range = Range::new(&start_key, &end_key);
+    Ok(box_try!(
+        db.get_range_approximate_size(range, large_threshold)
+    ))
+>>>>>>> 18ebcad6b... raftstore: approximate split range evenly instead of against split size (#9897)
 }
 
 /// Get region approximate split keys based on default, write and lock cf.
 fn get_approximate_split_keys(
     db: &impl KvEngine,
     region: &Region,
-    split_size: u64,
-    max_size: u64,
     batch_split_limit: u64,
 ) -> Result<Vec<Vec<u8>>> {
     let get_cf_size = |cf: &str| get_region_approximate_size_cf(db, cf, &region, 0);
@@ -303,6 +308,7 @@ fn get_approximate_split_keys_cf(
 ) -> Result<Vec<Vec<u8>>> {
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
+<<<<<<< HEAD
     let collection = box_try!(db.get_range_properties_cf(cfname, &start_key, &end_key));
 
     let mut keys = vec![];
@@ -381,6 +387,13 @@ fn get_approximate_split_keys_cf(
         }
     }
     Ok(split_keys)
+=======
+    let range = Range::new(&start_key, &end_key);
+    Ok(box_try!(db.get_range_approximate_split_keys(
+        range,
+        batch_split_limit as usize
+    )))
+>>>>>>> 18ebcad6b... raftstore: approximate split range evenly instead of against split size (#9897)
 }
 
 #[cfg(test)]
@@ -486,12 +499,17 @@ pub mod tests {
         cfg.region_split_size = ReadableSize(60);
         cfg.batch_split_limit = 5;
 
+<<<<<<< HEAD
         let mut runnable = SplitCheckRunner::new(
             Arc::clone(&engine),
             tx.clone(),
             CoprocessorHost::new(tx),
             cfg,
         );
+=======
+        let mut runnable =
+            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
+>>>>>>> 18ebcad6b... raftstore: approximate split range evenly instead of against split size (#9897)
 
         let cf_handle = engine.cf_handle(data_cf).unwrap();
         // so split key will be [z0006]
@@ -544,7 +562,7 @@ pub mod tests {
 
         // for test batch_split_limit
         // so split kets will be [z0006, z0012, z0018, z0024, z0030]
-        for i in 19..51 {
+        for i in 19..41 {
             let s = keys::data_key(format!("{:04}", i).as_bytes());
             engine.put_cf(&cf_handle, &s, &s).unwrap();
         }
@@ -619,8 +637,7 @@ pub mod tests {
         let mut runnable = SplitCheckRunner::new(
             Arc::clone(&engine),
             tx.clone(),
-            CoprocessorHost::new(tx.clone()),
-            cfg.clone(),
+            CoprocessorHost::new(tx.clone(), cfg.clone()),
         );
 
         for cf in LARGE_CFS {
@@ -648,12 +665,17 @@ pub mod tests {
             .collect();
         let engine = Arc::new(new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap());
 
+<<<<<<< HEAD
         let mut runnable = SplitCheckRunner::new(
             Arc::clone(&engine),
             tx.clone(),
             CoprocessorHost::new(tx),
             cfg,
         );
+=======
+        let mut runnable =
+            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
+>>>>>>> 18ebcad6b... raftstore: approximate split range evenly instead of against split size (#9897)
 
         // Flush a sst of CF_LOCK with range properties.
         let cf_handle = engine.cf_handle(CF_LOCK).unwrap();
@@ -731,7 +753,11 @@ pub mod tests {
 
         let region = make_region(1, vec![], vec![]);
         assert_eq!(
+<<<<<<< HEAD
             get_approximate_split_keys(engine.c(), &region, 3, 5, 1).is_err(),
+=======
+            get_approximate_split_keys(&engine, &region, 1).is_err(),
+>>>>>>> 18ebcad6b... raftstore: approximate split range evenly instead of against split size (#9897)
             true
         );
 
@@ -745,7 +771,11 @@ pub mod tests {
             engine.flush_cf(cf_handle, true).unwrap();
         }
         assert_eq!(
+<<<<<<< HEAD
             get_approximate_split_keys(engine.c(), &region, 3, 5, 1).is_err(),
+=======
+            get_approximate_split_keys(&engine, &region, 1).is_err(),
+>>>>>>> 18ebcad6b... raftstore: approximate split range evenly instead of against split size (#9897)
             true
         );
     }
@@ -772,9 +802,6 @@ pub mod tests {
         let mut big_value = Vec::with_capacity(256);
         big_value.extend(iter::repeat(b'v').take(256));
 
-        // total size for one key and value
-        const ENTRY_SIZE: u64 = 256 + 9;
-
         for i in 0..4 {
             let k = format!("key_{:03}", i).into_bytes();
             let k = keys::data_key(Key::from_raw(&k).as_encoded());
@@ -783,6 +810,7 @@ pub mod tests {
             engine.flush_cf(cf_handle, true).unwrap();
         }
         let region = make_region(1, vec![], vec![]);
+<<<<<<< HEAD
         let split_keys =
             get_approximate_split_keys(engine.c(), &region, 3 * ENTRY_SIZE, 5 * ENTRY_SIZE, 1)
                 .unwrap()
@@ -793,9 +821,19 @@ pub mod tests {
                         .unwrap()
                 })
                 .collect::<Vec<Vec<u8>>>();
+=======
+        let split_keys = get_approximate_split_keys(&engine, &region, 0)
+            .unwrap()
+            .into_iter()
+            .map(|k| {
+                Key::from_encoded_slice(keys::origin_key(&k))
+                    .into_raw()
+                    .unwrap()
+            })
+            .collect::<Vec<Vec<u8>>>();
+>>>>>>> 18ebcad6b... raftstore: approximate split range evenly instead of against split size (#9897)
 
         assert_eq!(split_keys.is_empty(), true);
-
         for i in 4..5 {
             let k = format!("key_{:03}", i).into_bytes();
             let k = keys::data_key(Key::from_raw(&k).as_encoded());
@@ -803,6 +841,7 @@ pub mod tests {
             // Flush for every key so that we can know the exact middle key.
             engine.flush_cf(cf_handle, true).unwrap();
         }
+<<<<<<< HEAD
         let split_keys =
             get_approximate_split_keys(engine.c(), &region, 3 * ENTRY_SIZE, 5 * ENTRY_SIZE, 5)
                 .unwrap()
@@ -813,6 +852,17 @@ pub mod tests {
                         .unwrap()
                 })
                 .collect::<Vec<Vec<u8>>>();
+=======
+        let split_keys = get_approximate_split_keys(&engine, &region, 1)
+            .unwrap()
+            .into_iter()
+            .map(|k| {
+                Key::from_encoded_slice(keys::origin_key(&k))
+                    .into_raw()
+                    .unwrap()
+            })
+            .collect::<Vec<Vec<u8>>>();
+>>>>>>> 18ebcad6b... raftstore: approximate split range evenly instead of against split size (#9897)
 
         assert_eq!(split_keys, vec![b"key_002".to_vec()]);
 
@@ -823,6 +873,7 @@ pub mod tests {
             // Flush for every key so that we can know the exact middle key.
             engine.flush_cf(cf_handle, true).unwrap();
         }
+<<<<<<< HEAD
         let split_keys =
             get_approximate_split_keys(engine.c(), &region, 3 * ENTRY_SIZE, 5 * ENTRY_SIZE, 5)
                 .unwrap()
@@ -835,6 +886,19 @@ pub mod tests {
                 .collect::<Vec<Vec<u8>>>();
 
         assert_eq!(split_keys, vec![b"key_002".to_vec(), b"key_005".to_vec()]);
+=======
+        let split_keys = get_approximate_split_keys(&engine, &region, 2)
+            .unwrap()
+            .into_iter()
+            .map(|k| {
+                Key::from_encoded_slice(keys::origin_key(&k))
+                    .into_raw()
+                    .unwrap()
+            })
+            .collect::<Vec<Vec<u8>>>();
+
+        assert_eq!(split_keys, vec![b"key_003".to_vec(), b"key_006".to_vec()]);
+>>>>>>> 18ebcad6b... raftstore: approximate split range evenly instead of against split size (#9897)
 
         for i in 10..20 {
             let k = format!("key_{:03}", i).into_bytes();
@@ -843,6 +907,7 @@ pub mod tests {
             // Flush for every key so that we can know the exact middle key.
             engine.flush_cf(cf_handle, true).unwrap();
         }
+<<<<<<< HEAD
         let split_keys =
             get_approximate_split_keys(engine.c(), &region, 3 * ENTRY_SIZE, 5 * ENTRY_SIZE, 5)
                 .unwrap()
@@ -853,15 +918,26 @@ pub mod tests {
                         .unwrap()
                 })
                 .collect::<Vec<Vec<u8>>>();
+=======
+        let split_keys = get_approximate_split_keys(&engine, &region, 5)
+            .unwrap()
+            .into_iter()
+            .map(|k| {
+                Key::from_encoded_slice(keys::origin_key(&k))
+                    .into_raw()
+                    .unwrap()
+            })
+            .collect::<Vec<Vec<u8>>>();
+>>>>>>> 18ebcad6b... raftstore: approximate split range evenly instead of against split size (#9897)
 
         assert_eq!(
             split_keys,
             vec![
-                b"key_002".to_vec(),
-                b"key_005".to_vec(),
-                b"key_008".to_vec(),
-                b"key_011".to_vec(),
-                b"key_014".to_vec(),
+                b"key_003".to_vec(),
+                b"key_006".to_vec(),
+                b"key_010".to_vec(),
+                b"key_013".to_vec(),
+                b"key_016".to_vec(),
             ]
         );
     }
@@ -907,10 +983,13 @@ pub mod tests {
         let region = make_region(1, vec![], vec![]);
         let size = get_region_approximate_size(db.c(), &region, 0).unwrap();
         assert_eq!(size, cf_size * LARGE_CFS.len() as u64);
+<<<<<<< HEAD
         for cfname in LARGE_CFS {
             let size = get_region_approximate_size_cf(db.c(), cfname, &region, 0).unwrap();
             assert_eq!(size, cf_size);
         }
+=======
+>>>>>>> 18ebcad6b... raftstore: approximate split range evenly instead of against split size (#9897)
     }
 
     #[test]
