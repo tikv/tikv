@@ -661,7 +661,7 @@ fn test_cdc_batch_size_limit() {
     let k1 = b"k1".to_vec();
     m1.set_op(Op::Put);
     m1.key = k1.clone();
-    m1.value = vec![0; 6 * 1024 * 1024];
+    m1.value = vec![0; 6];
     let mut m2 = Mutation::default();
     let k2 = b"k2".to_vec();
     m2.set_op(Op::Put);
