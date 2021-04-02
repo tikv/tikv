@@ -20,7 +20,6 @@ use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use test_raftstore::sleep_ms;
 use test_raftstore::*;
-use tikv_util::config::ReadableSize;
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Lock, LockType};
 
@@ -654,12 +653,7 @@ fn test_duplicate_subscribe() {
 
 #[test]
 fn test_cdc_batch_size_limit() {
-    let mut cluster = new_server_cluster(1, 1);
-    // Do not set limiter in the test.
-    cluster.cfg.cdc.incremental_scan_speed_limit = ReadableSize(0);
-    // Increase the Raft tick interval to make this test case running reliably.
-    configure_for_lease_read(&mut cluster, Some(100), None);
-    let mut suite = TestSuite::with_cluster(1, cluster);
+    let mut suite = TestSuite::new(1);
 
     // Prewrite
     let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
