@@ -1046,10 +1046,10 @@ impl Initializer {
     async fn on_change_cmd(&self, mut resp: ReadResponse<RocksSnapshot>) {
         CDC_SCAN_TASKS.with_label_values(&["total"]).inc();
         if let Some(region_snapshot) = resp.snapshot {
-            CDC_SCAN_TASKS.with_label_values(&["finish"]).inc();
             assert_eq!(self.region_id, region_snapshot.get_region().get_id());
             let region = region_snapshot.get_region().clone();
             self.async_incremental_scan(region_snapshot, region).await;
+            CDC_SCAN_TASKS.with_label_values(&["finish"]).inc();
         } else {
             CDC_SCAN_TASKS.with_label_values(&["abort"]).inc();
             assert!(
