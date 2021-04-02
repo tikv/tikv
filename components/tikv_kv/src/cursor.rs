@@ -4,7 +4,6 @@ use std::cell::Cell;
 use std::cmp::Ordering;
 use std::ops::Bound;
 
-use engine_rocks::PerfContext;
 use engine_traits::CfName;
 use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
 use tikv_util::keybuilder::KeyBuilder;
@@ -12,7 +11,8 @@ use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 use txn_types::{Key, TimeStamp};
 
-use crate::storage::kv::{CfStatistics, Error, Iterator, Result, ScanMode, Snapshot, SEEK_BOUND};
+use crate::stats::{StatsCollector, StatsKind};
+use crate::{CfStatistics, Error, Iterator, Result, ScanMode, Snapshot, SEEK_BOUND};
 
 pub struct Cursor<I: Iterator> {
     iter: I,
@@ -329,36 +329,24 @@ impl<I: Iterator> Cursor<I> {
     #[inline]
     pub fn seek_to_first(&mut self, statistics: &mut CfStatistics) -> bool {
         assert!(!self.prefix_seek);
-        statistics.seek += 1;
         self.mark_unread();
-        let before = PerfContext::get().internal_delete_skipped_count() as usize;
-        let res = self.iter.seek_to_first().expect("Invalid Iterator");
-        statistics.seek_tombstone +=
-            PerfContext::get().internal_delete_skipped_count() as usize - before;
-        res
+        let _guard = StatsCollector::new(StatsKind::Seek, statistics);
+        self.iter.seek_to_first().expect("Invalid Iterator")
     }
 
     #[inline]
     pub fn seek_to_last(&mut self, statistics: &mut CfStatistics) -> bool {
         assert!(!self.prefix_seek);
-        statistics.seek += 1;
         self.mark_unread();
-        let before = PerfContext::get().internal_delete_skipped_count() as usize;
-        let res = self.iter.seek_to_last().expect("Invalid Iterator");
-        statistics.seek_tombstone +=
-            PerfContext::get().internal_delete_skipped_count() as usize - before;
-        res
+        let _guard = StatsCollector::new(StatsKind::Seek, statistics);
+        self.iter.seek_to_last().expect("Invalid Iterator")
     }
 
     #[inline]
     pub fn internal_seek(&mut self, key: &Key, statistics: &mut CfStatistics) -> Result<bool> {
-        statistics.seek += 1;
         self.mark_unread();
-        let before = PerfContext::get().internal_delete_skipped_count() as usize;
-        let res = self.iter.seek(key);
-        statistics.seek_tombstone +=
-            PerfContext::get().internal_delete_skipped_count() as usize - before;
-        res
+        let _guard = StatsCollector::new(StatsKind::Seek, statistics);
+        self.iter.seek(key)
     }
 
     #[inline]
@@ -367,35 +355,23 @@ impl<I: Iterator> Cursor<I> {
         key: &Key,
         statistics: &mut CfStatistics,
     ) -> Result<bool> {
-        statistics.seek_for_prev += 1;
         self.mark_unread();
-        let before = PerfContext::get().internal_delete_skipped_count() as usize;
-        let res = self.iter.seek_for_prev(key);
-        statistics.seek_for_prev_tombstone +=
-            PerfContext::get().internal_delete_skipped_count() as usize - before;
-        res
+        let _guard = StatsCollector::new(StatsKind::SeekForPrev, statistics);
+        self.iter.seek_for_prev(key)
     }
 
     #[inline]
     pub fn next(&mut self, statistics: &mut CfStatistics) -> bool {
-        statistics.next += 1;
         self.mark_unread();
-        let before = PerfContext::get().internal_delete_skipped_count() as usize;
-        let res = self.iter.next().expect("Invalid Iterator");
-        statistics.next_tombstone +=
-            PerfContext::get().internal_delete_skipped_count() as usize - before as usize;
-        res
+        let _guard = StatsCollector::new(StatsKind::Next, statistics);
+        self.iter.next().expect("Invalid Iterator")
     }
 
     #[inline]
     pub fn prev(&mut self, statistics: &mut CfStatistics) -> bool {
-        statistics.prev += 1;
         self.mark_unread();
-        let before = PerfContext::get().internal_delete_skipped_count() as usize;
-        let res = self.iter.prev().expect("Invalid Iterator");
-        statistics.prev_tombstone +=
-            PerfContext::get().internal_delete_skipped_count() as usize - before as usize;
-        res
+        let _guard = StatsCollector::new(StatsKind::Prev, statistics);
+        self.iter.prev().expect("Invalid Iterator")
     }
 
     #[inline]
@@ -456,6 +432,8 @@ pub struct CursorBuilder<'a, S: Snapshot> {
     hint_min_ts: Option<TimeStamp>,
     // hint for we will only scan data with commit ts <= hint_max_ts
     hint_max_ts: Option<TimeStamp>,
+    key_only: bool,
+    max_skippable_internal_keys: u64,
 }
 
 impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
@@ -472,6 +450,8 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
             lower_bound: None,
             hint_min_ts: None,
             hint_max_ts: None,
+            key_only: false,
+            max_skippable_internal_keys: 0,
         }
     }
 
@@ -531,6 +511,18 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
         self
     }
 
+    #[inline]
+    pub fn key_only(mut self, key_only: bool) -> Self {
+        self.key_only = key_only;
+        self
+    }
+
+    #[inline]
+    pub fn max_skippable_internal_keys(mut self, count: u64) -> Self {
+        self.max_skippable_internal_keys = count;
+        self
+    }
+
     /// Build `Cursor` from the current configuration.
     pub fn build(self) -> Result<Cursor<S::Iter>> {
         let l_bound = if let Some(b) = self.lower_bound {
@@ -552,11 +544,19 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
         if let Some(ts) = self.hint_max_ts {
             iter_opt.set_hint_max_ts(Bound::Included(ts.into_inner()));
         }
+        iter_opt.set_key_only(self.key_only);
+        iter_opt.set_max_skippable_internal_keys(self.max_skippable_internal_keys);
+
         // prefix_seek is only used for single key, so set prefix_same_as_start for safety.
         if self.prefix_seek {
-            iter_opt = iter_opt.use_prefix_seek().set_prefix_same_as_start(true);
+            iter_opt.use_prefix_seek();
+            iter_opt.set_prefix_same_as_start(true);
         }
-        self.snapshot.iter_cf(self.cf, iter_opt, self.scan_mode)
+        Ok(Cursor::new(
+            self.snapshot.iter_cf(self.cf, iter_opt)?,
+            self.scan_mode,
+            self.prefix_seek,
+        ))
     }
 }
 
@@ -573,7 +573,7 @@ mod tests {
     use tempfile::Builder;
     use txn_types::Key;
 
-    use crate::storage::{CfStatistics, Cursor, ScanMode};
+    use crate::{CfStatistics, Cursor, ScanMode};
     use engine_rocks::util::new_temp_engine;
     use raftstore::store::RegionSnapshot;
 
@@ -622,11 +622,10 @@ mod tests {
 
         let snap = RegionSnapshot::<RocksSnapshot>::from_raw(engine, region);
         let mut statistics = CfStatistics::default();
-        let it = snap.iter(
-            IterOptions::default()
-                .use_prefix_seek()
-                .set_prefix_same_as_start(true),
-        );
+        let mut iter_opt = IterOptions::default();
+        iter_opt.use_prefix_seek();
+        iter_opt.set_prefix_same_as_start(true);
+        let it = snap.iter(iter_opt);
         let mut iter = Cursor::new(it, ScanMode::Mixed, true);
 
         assert!(!iter

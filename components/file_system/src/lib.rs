@@ -19,7 +19,7 @@ pub use iosnoop::{get_io_type, init_io_snooper, set_io_type};
 pub use metrics_manager::{BytesFetcher, MetricsManager};
 pub use rate_limiter::{
     get_io_rate_limiter, set_io_rate_limiter, IORateLimiter, IORateLimiterStatistics,
-    WithIORateLimiter,
+    WithIORateLimit,
 };
 
 pub use std::fs::{
@@ -34,7 +34,7 @@ use std::sync::{Arc, Mutex};
 
 use openssl::error::ErrorStack;
 use openssl::hash::{self, Hasher, MessageDigest};
-use variant_count::VariantCount;
+use strum::EnumCount;
 
 #[derive(Debug)]
 pub enum IOOp {
@@ -43,7 +43,7 @@ pub enum IOOp {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, VariantCount)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumCount)]
 pub enum IOType {
     Other,
     // Including coprocessor and storage read.
@@ -56,6 +56,7 @@ pub enum IOType {
     Compaction,
     Replication,
     LoadBalance,
+    Gc,
     Import,
     Export,
 }

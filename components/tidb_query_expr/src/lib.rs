@@ -106,6 +106,30 @@ fn map_locate_3_args_utf8_sig(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
     })
 }
 
+fn map_strcmp_sig(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
+    Ok(match_template_collator! {
+        TT, match ret_field_type.as_accessor().collation().map_err(tidb_query_datatype::codec::Error::from)? {
+            Collation::TT => strcmp_fn_meta::<TT>()
+        }
+    })
+}
+
+fn map_find_in_set_sig(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
+    Ok(match_template_collator! {
+        TT, match ret_field_type.as_accessor().collation().map_err(tidb_query_datatype::codec::Error::from)? {
+            Collation::TT => find_in_set_fn_meta::<TT>()
+        }
+    })
+}
+
+fn map_ord_sig(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
+    Ok(match_template_collator! {
+        TT, match ret_field_type.as_accessor().collation().map_err(tidb_query_datatype::codec::Error::from)? {
+            Collation::TT => ord_fn_meta::<TT>()
+        }
+    })
+}
+
 fn map_int_sig<F>(value: ScalarFuncSig, children: &[Expr], mapper: F) -> Result<RpnFnMeta>
 where
     F: Fn(bool, bool) -> RpnFnMeta,
@@ -213,11 +237,27 @@ fn truncate_int_mapper(rhs_is_unsigned: bool) -> RpnFnMeta {
     }
 }
 
+fn truncate_uint_mapper(rhs_is_unsigned: bool) -> RpnFnMeta {
+    if rhs_is_unsigned {
+        truncate_uint_with_uint_fn_meta()
+    } else {
+        truncate_uint_with_int_fn_meta()
+    }
+}
+
 fn truncate_real_mapper(rhs_is_unsigned: bool) -> RpnFnMeta {
     if rhs_is_unsigned {
         truncate_real_with_uint_fn_meta()
     } else {
         truncate_real_with_int_fn_meta()
+    }
+}
+
+fn truncate_decimal_mapper(rhs_is_unsigned: bool) -> RpnFnMeta {
+    if rhs_is_unsigned {
+        truncate_decimal_with_uint_fn_meta()
+    } else {
+        truncate_decimal_with_int_fn_meta()
     }
 }
 
@@ -238,6 +278,21 @@ pub fn map_unary_minus_int_func(value: ScalarFuncSig, children: &[Expr]) -> Resu
         Ok(unary_minus_uint_fn_meta())
     } else {
         Ok(unary_minus_int_fn_meta())
+    }
+}
+
+fn map_lower_sig(value: ScalarFuncSig, children: &[Expr]) -> Result<RpnFnMeta> {
+    if children.len() != 1 {
+        return Err(other_err!(
+            "ScalarFunction {:?} (params = {}) is not supported in batch mode",
+            value,
+            children.len()
+        ));
+    }
+    if children[0].get_field_type().is_binary_string_like() {
+        Ok(lower_fn_meta())
+    } else {
+        Ok(lower_utf8_fn_meta())
     }
 }
 
@@ -389,7 +444,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::CoalesceDuration => coalesce_fn_meta::<Duration>(),
         ScalarFuncSig::CoalesceJson => coalesce_json_fn_meta(),
         // impl_compare_in
-        ScalarFuncSig::InInt => compare_in_by_hash_fn_meta::<NormalInByHash::<Int>>(),
+        ScalarFuncSig::InInt => compare_in_int_type_by_hash_fn_meta(),
         ScalarFuncSig::InReal => compare_in_by_hash_fn_meta::<NormalInByHash::<Real>>(),
         ScalarFuncSig::InString => map_compare_in_string_sig(ft)?,
         ScalarFuncSig::InDecimal => compare_in_by_hash_fn_meta::<NormalInByHash::<Decimal>>(),
@@ -442,8 +497,11 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::JsonRemoveSig => json_remove_fn_meta(),
         ScalarFuncSig::JsonKeysSig => json_keys_fn_meta(),
         ScalarFuncSig::JsonKeys2ArgsSig => json_keys_fn_meta(),
+        ScalarFuncSig::JsonQuoteSig => json_quote_fn_meta(),
         // impl_like
         ScalarFuncSig::LikeSig => map_like_sig(ft)?,
+        ScalarFuncSig::RegexpSig => regexp_fn_meta(),
+        ScalarFuncSig::RegexpUtf8Sig => regexp_utf8_fn_meta(),
         // impl_math
         ScalarFuncSig::AbsInt => abs_int_fn_meta(),
         ScalarFuncSig::AbsUInt => abs_uint_fn_meta(),
@@ -486,7 +544,9 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::RoundInt => round_int_fn_meta(),
         ScalarFuncSig::RoundDec => round_dec_fn_meta(),
         ScalarFuncSig::TruncateInt => map_rhs_int_sig(value, children, truncate_int_mapper)?,
+        ScalarFuncSig::TruncateUint => map_rhs_int_sig(value, children, truncate_uint_mapper)?,
         ScalarFuncSig::TruncateReal => map_rhs_int_sig(value, children, truncate_real_mapper)?,
+        ScalarFuncSig::TruncateDecimal => map_rhs_int_sig(value, children, truncate_decimal_mapper)?,
         ScalarFuncSig::RoundWithFracInt => round_with_frac_int_fn_meta(),
         ScalarFuncSig::RoundWithFracDec => round_with_frac_dec_fn_meta(),
         ScalarFuncSig::RoundWithFracReal => round_with_frac_real_fn_meta(),
@@ -551,7 +611,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Locate2ArgsUtf8 => map_locate_2_args_utf8_sig(ft)?,
         ScalarFuncSig::Locate3ArgsUtf8 => map_locate_3_args_utf8_sig(ft)?,
         ScalarFuncSig::BitLength => bit_length_fn_meta(),
-        ScalarFuncSig::Ord => ord_fn_meta(),
+        ScalarFuncSig::Ord => map_ord_sig(ft)?,
         ScalarFuncSig::Concat => concat_fn_meta(),
         ScalarFuncSig::ConcatWs => concat_ws_fn_meta(),
         ScalarFuncSig::Ascii => ascii_fn_meta(),
@@ -564,9 +624,11 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Lpad => lpad_fn_meta(),
         ScalarFuncSig::LpadUtf8 => lpad_utf8_fn_meta(),
         ScalarFuncSig::Rpad => rpad_fn_meta(),
+        ScalarFuncSig::RpadUtf8 => rpad_utf8_fn_meta(),
         ScalarFuncSig::AddStringAndDuration => add_string_and_duration_fn_meta(),
         ScalarFuncSig::SubStringAndDuration => sub_string_and_duration_fn_meta(),
         ScalarFuncSig::Trim1Arg => trim_1_arg_fn_meta(),
+        ScalarFuncSig::Trim2Args => trim_2_args_fn_meta(),
         ScalarFuncSig::Trim3Args => trim_3_args_fn_meta(),
         ScalarFuncSig::FromBase64 => from_base64_fn_meta(),
         ScalarFuncSig::Replace => replace_fn_meta(),
@@ -577,6 +639,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::RightUtf8 => right_utf8_fn_meta(),
         ScalarFuncSig::UpperUtf8 => upper_utf8_fn_meta(),
         ScalarFuncSig::Upper => upper_fn_meta(),
+        ScalarFuncSig::Lower => map_lower_sig(value, children)?,
         ScalarFuncSig::Locate2Args => locate_2_args_fn_meta(),
         ScalarFuncSig::Locate3Args => locate_3_args_fn_meta(),
         ScalarFuncSig::FieldInt => field_fn_meta::<Int>(),
@@ -586,11 +649,13 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::MakeSet => make_set_fn_meta(),
         ScalarFuncSig::Space => space_fn_meta(),
         ScalarFuncSig::SubstringIndex => substring_index_fn_meta(),
-        ScalarFuncSig::Strcmp => strcmp_fn_meta(),
+        ScalarFuncSig::Strcmp => map_strcmp_sig(ft)?,
+        ScalarFuncSig::Instr => instr_fn_meta(),
         ScalarFuncSig::InstrUtf8 => instr_utf8_fn_meta(),
+        ScalarFuncSig::Quote => quote_fn_meta(),
         ScalarFuncSig::OctInt => oct_int_fn_meta(),
         ScalarFuncSig::OctString => oct_string_fn_meta(),
-        ScalarFuncSig::FindInSet => find_in_set_fn_meta(),
+        ScalarFuncSig::FindInSet => map_find_in_set_sig(ft)?,
         ScalarFuncSig::CharLength => char_length_fn_meta(),
         ScalarFuncSig::CharLengthUtf8 => char_length_utf8_fn_meta(),
         ScalarFuncSig::ToBase64 => to_base64_fn_meta(),
@@ -599,6 +664,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Substring3Args => substring_3_args_fn_meta(),
         // impl_time
         ScalarFuncSig::DateFormatSig => date_format_fn_meta(),
+        ScalarFuncSig::Date => date_fn_meta(),
         ScalarFuncSig::WeekOfYear => week_of_year_fn_meta(),
         ScalarFuncSig::DayOfYear => day_of_year_fn_meta(),
         ScalarFuncSig::DayOfWeek => day_of_week_fn_meta(),
@@ -611,8 +677,12 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::ToDays => to_days_fn_meta(),
         ScalarFuncSig::ToSeconds => to_seconds_fn_meta(),
         ScalarFuncSig::DateDiff => date_diff_fn_meta(),
+        ScalarFuncSig::NullTimeDiff => null_time_diff_fn_meta(),
         ScalarFuncSig::AddDatetimeAndDuration => add_datetime_and_duration_fn_meta(),
+        ScalarFuncSig::AddDatetimeAndString => add_datetime_and_string_fn_meta(),
+        ScalarFuncSig::AddDateAndString => add_date_and_string_fn_meta(),
         ScalarFuncSig::SubDatetimeAndDuration => sub_datetime_and_duration_fn_meta(),
+        ScalarFuncSig::SubDatetimeAndString => sub_datetime_and_string_fn_meta(),
         ScalarFuncSig::FromDays => from_days_fn_meta(),
         ScalarFuncSig::Year => year_fn_meta(),
         ScalarFuncSig::Month => month_fn_meta(),
@@ -631,6 +701,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::AddDurationAndString => add_duration_and_string_fn_meta(),
         ScalarFuncSig::SubDurationAndDuration => sub_duration_and_duration_fn_meta(),
         ScalarFuncSig::MakeTime => make_time_fn_meta(),
+        ScalarFuncSig::DurationDurationTimeDiff => duration_duration_time_diff_fn_meta(),
         _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value

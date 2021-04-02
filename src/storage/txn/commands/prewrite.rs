@@ -8,7 +8,10 @@
 use crate::storage::{
     kv::WriteData,
     lock_manager::LockManager,
-    mvcc::{has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn},
+    mvcc::{
+        has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn,
+        SnapshotReader,
+    },
     txn::{
         actions::prewrite::{prewrite, CommitKind, TransactionKind, TransactionProperties},
         commands::{
@@ -358,18 +361,16 @@ impl<K: PrewriteKind> Prewriter<K> {
             .can_skip_constraint_check(&mut self.mutations, &snapshot, &mut context)?;
         self.check_max_ts_synced(&snapshot)?;
 
-        let mut txn = MvccTxn::new(
-            snapshot,
-            self.start_ts,
-            !self.ctx.get_not_fill_cache(),
-            context.concurrency_manager,
-        );
+        let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
+        let mut reader =
+            SnapshotReader::new(self.start_ts, snapshot, !self.ctx.get_not_fill_cache());
         // Set extra op here for getting the write record when check write conflict in prewrite.
 
         let rows = self.mutations.len();
-        let (locks, final_min_commit_ts) = self.prewrite(&mut txn, context.extra_op)?;
+        let (locks, final_min_commit_ts) =
+            self.prewrite(&mut txn, &mut reader, context.extra_op)?;
 
-        context.statistics.add(&txn.take_statistics());
+        context.statistics.add(&reader.take_statistics());
 
         Ok(self.write_result(
             locks,
@@ -401,7 +402,8 @@ impl<K: PrewriteKind> Prewriter<K> {
     /// an async commit transaction) the min_commit_ts, these are returned by the method.
     fn prewrite(
         &mut self,
-        txn: &mut MvccTxn<impl Snapshot>,
+        txn: &mut MvccTxn,
+        reader: &mut SnapshotReader<impl Snapshot>,
         extra_op: ExtraOp,
     ) -> Result<(Vec<std::result::Result<(), StorageError>>, TimeStamp)> {
         let commit_kind = match (&self.secondary_keys, self.try_one_pc) {
@@ -441,17 +443,20 @@ impl<K: PrewriteKind> Prewriter<K> {
                 secondaries = &self.secondary_keys;
             }
 
-            let prewrite_result = prewrite(txn, &props, m, secondaries, is_pessimistic_lock);
+            let need_min_commit_ts = secondaries.is_some() || self.try_one_pc;
+            let prewrite_result =
+                prewrite(txn, reader, &props, m, secondaries, is_pessimistic_lock);
             match prewrite_result {
-                Ok((ts, old_value)) => {
-                    if (secondaries.is_some() || self.try_one_pc) && final_min_commit_ts < ts {
+                Ok((ts, old_value)) if !(need_min_commit_ts && ts.is_zero()) => {
+                    if need_min_commit_ts && final_min_commit_ts < ts {
                         final_min_commit_ts = ts;
                     }
                     if old_value.specified() {
+                        let key = key.append_ts(txn.start_ts);
                         self.old_values.insert(key, (old_value, mutation_type));
                     }
                 }
-                Err(MvccError(box MvccErrorInner::CommitTsTooLarge { .. })) => {
+                Err(MvccError(box MvccErrorInner::CommitTsTooLarge { .. })) | Ok((_, _)) => {
                     // fallback to not using async commit or 1pc
                     props.commit_kind = CommitKind::TwoPc;
                     async_commit_pk = None;
@@ -480,7 +485,7 @@ impl<K: PrewriteKind> Prewriter<K> {
     fn write_result(
         self,
         locks: Vec<std::result::Result<(), StorageError>>,
-        mut txn: MvccTxn<impl Snapshot>,
+        mut txn: MvccTxn,
         final_min_commit_ts: TimeStamp,
         rows: usize,
         async_apply_prewrite: bool,
@@ -656,9 +661,9 @@ impl MutationLock for (Mutation, bool) {
 }
 
 /// Compute the commit ts of a 1pc transaction.
-fn one_pc_commit_ts(
+pub fn one_pc_commit_ts(
     try_one_pc: bool,
-    txn: &mut MvccTxn<impl Snapshot>,
+    txn: &mut MvccTxn,
     final_min_commit_ts: TimeStamp,
     lock_manager: &impl LockManager,
 ) -> TimeStamp {
@@ -678,7 +683,7 @@ fn one_pc_commit_ts(
 }
 
 /// Commit and delete all 1pc locks in txn.
-fn handle_1pc_locks<S: Snapshot>(txn: &mut MvccTxn<S>, commit_ts: TimeStamp) -> ReleasedLocks {
+fn handle_1pc_locks(txn: &mut MvccTxn, commit_ts: TimeStamp) -> ReleasedLocks {
     let mut released_locks = ReleasedLocks::new(txn.start_ts, commit_ts);
 
     for (key, lock, delete_pessimistic_lock) in std::mem::take(&mut txn.locks_for_1pc) {
@@ -698,7 +703,7 @@ fn handle_1pc_locks<S: Snapshot>(txn: &mut MvccTxn<S>, commit_ts: TimeStamp) -> 
 }
 
 /// Change all 1pc locks in txn to 2pc locks.
-pub(in crate::storage::txn) fn fallback_1pc_locks<S: Snapshot>(txn: &mut MvccTxn<S>) {
+pub(in crate::storage::txn) fn fallback_1pc_locks(txn: &mut MvccTxn) {
     for (key, lock, _) in std::mem::take(&mut txn.locks_for_1pc) {
         txn.put_lock(key, &lock);
     }
@@ -924,21 +929,24 @@ mod tests {
         let mutations = vec![Mutation::Put((Key::from_raw(key), value.to_vec()))];
 
         let mut statistics = Statistics::default();
-        let res = prewrite_with_cm(
-            &engine,
-            cm.clone(),
-            &mut statistics,
-            mutations,
-            key.to_vec(),
-            20,
-            Some(30),
-        )
-        .unwrap();
-        assert!(res.min_commit_ts.is_zero());
-        assert!(res.one_pc_commit_ts.is_zero());
-        must_locked(&engine, key, 20);
+        // Test the idempotency of prewrite when falling back to 2PC.
+        for _ in 0..2 {
+            let res = prewrite_with_cm(
+                &engine,
+                cm.clone(),
+                &mut statistics,
+                mutations.clone(),
+                key.to_vec(),
+                20,
+                Some(30),
+            )
+            .unwrap();
+            assert!(res.min_commit_ts.is_zero());
+            assert!(res.one_pc_commit_ts.is_zero());
+            must_locked(&engine, key, 20);
+        }
 
-        must_rollback(&engine, key, 20);
+        must_rollback(&engine, key, 20, false);
         let mutations = vec![
             Mutation::Put((Key::from_raw(key), value.to_vec())),
             Mutation::CheckNotExists(Key::from_raw(b"non_exist")),
@@ -1073,25 +1081,28 @@ mod tests {
         ];
         let mut statistics = Statistics::default();
         // calculated_ts > max_commit_ts
-        let cmd = super::Prewrite::new(
-            mutations,
-            k1.to_vec(),
-            20.into(),
-            0,
-            false,
-            2,
-            TimeStamp::default(),
-            40.into(),
-            Some(vec![k2.to_vec()]),
-            false,
-            Context::default(),
-        );
+        // Test the idempotency of prewrite when falling back to 2PC.
+        for _ in 0..2 {
+            let cmd = super::Prewrite::new(
+                mutations.clone(),
+                k1.to_vec(),
+                20.into(),
+                0,
+                false,
+                2,
+                21.into(),
+                40.into(),
+                Some(vec![k2.to_vec()]),
+                false,
+                Context::default(),
+            );
 
-        let res = prewrite_command(&engine, cm, &mut statistics, cmd).unwrap();
-        assert!(res.min_commit_ts.is_zero());
-        assert!(res.one_pc_commit_ts.is_zero());
-        assert!(!must_locked(&engine, k1, 20).use_async_commit);
-        assert!(!must_locked(&engine, k2, 20).use_async_commit);
+            let res = prewrite_command(&engine, cm.clone(), &mut statistics, cmd).unwrap();
+            assert!(res.min_commit_ts.is_zero());
+            assert!(res.one_pc_commit_ts.is_zero());
+            assert!(!must_locked(&engine, k1, 20).use_async_commit);
+            assert!(!must_locked(&engine, k2, 20).use_async_commit);
+        }
     }
 
     #[test]
@@ -1162,12 +1173,9 @@ mod tests {
 
     #[test]
     fn test_out_of_sync_max_ts() {
-        use crate::storage::{
-            kv::Result, CfName, ConcurrencyManager, Cursor, DummyLockManager, IterOptions,
-            ScanMode, Value,
-        };
+        use crate::storage::{kv::Result, CfName, ConcurrencyManager, DummyLockManager, Value};
         use engine_rocks::RocksEngineIterator;
-        use engine_traits::ReadOptions;
+        use engine_traits::{IterOptions, ReadOptions};
         use kvproto::kvrpcpb::ExtraOp;
         #[derive(Clone)]
         struct MockSnapshot;
@@ -1184,15 +1192,10 @@ mod tests {
             fn get_cf_opt(&self, _: ReadOptions, _: CfName, _: &Key) -> Result<Option<Value>> {
                 unimplemented!()
             }
-            fn iter(&self, _: IterOptions, _: ScanMode) -> Result<Cursor<Self::Iter>> {
+            fn iter(&self, _: IterOptions) -> Result<Self::Iter> {
                 unimplemented!()
             }
-            fn iter_cf(
-                &self,
-                _: CfName,
-                _: IterOptions,
-                _: ScanMode,
-            ) -> Result<Cursor<Self::Iter>> {
+            fn iter_cf(&self, _: CfName, _: IterOptions) -> Result<Self::Iter> {
                 unimplemented!()
             }
             fn is_max_ts_synced(&self) -> bool {

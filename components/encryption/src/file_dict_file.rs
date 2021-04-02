@@ -1,16 +1,17 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use byteorder::{BigEndian, ByteOrder};
+use file_system::{rename, File, OpenOptions};
 use kvproto::encryptionpb::{EncryptedContent, FileDictionary, FileInfo};
 use protobuf::Message;
 use rand::{thread_rng, RngCore};
+use tikv_util::box_err;
 
 use crate::encrypted_file::{EncryptedFile, Header, Version, TMP_FILE_SUFFIX};
 use crate::master_key::{Backend, PlaintextBackend};
 use crate::metrics::*;
 use crate::Result;
 
-use std::fs::{rename, File, OpenOptions};
 use std::io::BufRead;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -111,11 +112,16 @@ impl FileDictionaryFile {
         Ok((file_dict_file, file_dict))
     }
 
+    /// Get the file path.
+    pub fn file_path(&self) -> PathBuf {
+        self.base.join(&self.name)
+    }
+
     /// Rewrite the log file to reduce file size and reduce the time of next recovery.
     fn rewrite(&mut self) -> Result<()> {
         let file_dict_bytes = self.file_dict.write_to_bytes()?;
         if self.enable_log {
-            let origin_path = self.base.join(&self.name);
+            let origin_path = self.file_path();
             let mut tmp_path = origin_path.clone();
             tmp_path.set_extension(format!("{}.{}", thread_rng().next_u64(), TMP_FILE_SUFFIX));
             let mut tmp_file = OpenOptions::new()
@@ -133,7 +139,7 @@ impl FileDictionaryFile {
             rename(&tmp_path, &origin_path)?;
             let base_dir = File::open(&self.base)?;
             base_dir.sync_all()?;
-            let file = std::fs::OpenOptions::new().append(true).open(origin_path)?;
+            let file = OpenOptions::new().append(true).open(origin_path)?;
             self.append_file.replace(file);
         } else {
             let file = EncryptedFile::new(&self.base, &self.name);
@@ -146,9 +152,7 @@ impl FileDictionaryFile {
 
     /// Recovery from the log file and return `FileDictionary`.
     pub fn recovery(&mut self) -> Result<FileDictionary> {
-        let mut f = OpenOptions::new()
-            .read(true)
-            .open(self.base.join(&self.name))?;
+        let mut f = OpenOptions::new().read(true).open(self.file_path())?;
         let mut buf = Vec::new();
         f.read_to_end(&mut buf)?;
         let remained = buf.as_slice();
@@ -187,6 +191,7 @@ impl FileDictionaryFile {
                 }
             }
         }
+
         self.file_dict = file_dict.clone();
         Ok(file_dict)
     }

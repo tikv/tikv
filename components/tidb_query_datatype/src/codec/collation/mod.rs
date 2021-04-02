@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod charset;
-mod collator;
+pub mod collator;
 
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
@@ -44,7 +44,7 @@ pub trait Collator: 'static + std::marker::Send + std::marker::Sync + std::fmt::
 
     /// Returns the weight of a given char. The chars that have equal
     /// weight are considered as the same char with this collation.
-    /// See more on http://www.unicode.org/reports/tr10/#Weight_Level_Defn.
+    /// See more on <http://www.unicode.org/reports/tr10/#Weight_Level_Defn>.
     fn char_weight(char: <Self::Charset as Charset>::Char) -> Self::Weight;
 
     /// Writes the SortKey of `bstr` into `writer`.

@@ -227,7 +227,7 @@ impl Default for Config {
             max_leader_missing_duration: ReadableDuration::hours(2),
             abnormal_leader_missing_duration: ReadableDuration::minutes(10),
             peer_stale_state_check_interval: ReadableDuration::minutes(5),
-            leader_transfer_max_log_lag: 10,
+            leader_transfer_max_log_lag: 128,
             snap_apply_batch_size: ReadableSize::mb(10),
             lock_cf_compact_interval: ReadableDuration::minutes(10),
             lock_cf_compact_bytes_threshold: ReadableSize::mb(256),
@@ -239,14 +239,14 @@ impl Default for Config {
             right_derive_when_split: true,
             allow_remove_leader: false,
             merge_max_log_gap: 10,
-            merge_check_tick_interval: ReadableDuration::secs(10),
+            merge_check_tick_interval: ReadableDuration::secs(2),
             use_delete_range: false,
             cleanup_import_sst_interval: ReadableDuration::minutes(10),
             local_read_batch_size: 1024,
             apply_batch_system: BatchSystemConfig::default(),
             store_batch_system: BatchSystemConfig::default(),
             future_poll_size: 1,
-            hibernate_regions: true,
+            hibernate_regions: tikv_util::build_on_master_branch(),
             dev_assert: false,
             apply_yield_duration: ReadableDuration::millis(500),
 
@@ -331,6 +331,16 @@ impl Config {
             ));
         }
 
+        let tick = self.raft_base_tick_interval.as_millis() as u64;
+        if lease > election_timeout - tick {
+            return Err(box_err!(
+                "lease {} ms should not be greater than election timeout {} ms - 1 tick({} ms)",
+                lease,
+                election_timeout,
+                tick
+            ));
+        }
+
         if self.merge_max_log_gap >= self.raft_log_gc_count_limit {
             return Err(box_err!(
                 "merge log gap {} should be less than log gc limit {}.",
@@ -392,14 +402,24 @@ impl Config {
         if self.apply_batch_system.pool_size == 0 {
             return Err(box_err!("apply-pool-size should be greater than 0"));
         }
-        if self.apply_batch_system.max_batch_size == 0 {
-            return Err(box_err!("apply-max-batch-size should be greater than 0"));
+        if let Some(size) = self.apply_batch_system.max_batch_size {
+            if size == 0 {
+                return Err(box_err!("apply-max-batch-size should be greater than 0"));
+            }
+        } else {
+            self.apply_batch_system.max_batch_size = Some(256);
         }
         if self.store_batch_system.pool_size == 0 {
             return Err(box_err!("store-pool-size should be greater than 0"));
         }
-        if self.store_batch_system.max_batch_size == 0 {
-            return Err(box_err!("store-max-batch-size should be greater than 0"));
+        if let Some(size) = self.store_batch_system.max_batch_size {
+            if size == 0 {
+                return Err(box_err!("store-max-batch-size should be greater than 0"));
+            }
+        } else if self.hibernate_regions {
+            self.store_batch_system.max_batch_size = Some(256);
+        } else {
+            self.store_batch_system.max_batch_size = Some(1024);
         }
         if self.future_poll_size == 0 {
             return Err(box_err!("future-poll-size should be greater than 0."));
@@ -563,13 +583,13 @@ impl Config {
             .set(self.local_read_batch_size as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["apply_max_batch_size"])
-            .set(self.apply_batch_system.max_batch_size as f64);
+            .set(self.apply_batch_system.max_batch_size() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["apply_pool_size"])
             .set(self.apply_batch_system.pool_size as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_max_batch_size"])
-            .set(self.store_batch_system.max_batch_size as f64);
+            .set(self.store_batch_system.max_batch_size() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_pool_size"])
             .set(self.store_batch_system.pool_size as f64);
@@ -708,7 +728,7 @@ mod tests {
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();
-        cfg.apply_batch_system.max_batch_size = 0;
+        cfg.apply_batch_system.max_batch_size = Some(0);
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();
@@ -716,7 +736,41 @@ mod tests {
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();
+        cfg.store_batch_system.max_batch_size = Some(0);
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.store_batch_system.pool_size = 0;
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.hibernate_regions = true;
+        assert!(cfg.validate().is_ok());
+        assert_eq!(cfg.store_batch_system.max_batch_size, Some(256));
+        assert_eq!(cfg.apply_batch_system.max_batch_size, Some(256));
+
+        cfg = Config::new();
+        cfg.hibernate_regions = false;
+        assert!(cfg.validate().is_ok());
+        assert_eq!(cfg.store_batch_system.max_batch_size, Some(1024));
+        assert_eq!(cfg.apply_batch_system.max_batch_size, Some(256));
+
+        cfg = Config::new();
+        cfg.hibernate_regions = true;
+        cfg.store_batch_system.max_batch_size = Some(123);
+        cfg.apply_batch_system.max_batch_size = Some(234);
+        assert!(cfg.validate().is_ok());
+        assert_eq!(cfg.store_batch_system.max_batch_size, Some(123));
+        assert_eq!(cfg.apply_batch_system.max_batch_size, Some(234));
+
+        cfg = Config::new();
         cfg.future_poll_size = 0;
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.raft_base_tick_interval = ReadableDuration::secs(1);
+        cfg.raft_election_timeout_ticks = 11;
+        cfg.raft_store_max_leader_lease = ReadableDuration::secs(11);
         assert!(cfg.validate().is_err());
     }
 }

@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use collections::HashSet;
 
 use engine_traits::{name_to_cf, KvEngine, CF_DEFAULT};
+use file_system::{set_io_type, IOType};
 use futures::executor::{ThreadPool, ThreadPoolBuilder};
 use futures::{TryFutureExt, TryStreamExt};
 use grpcio::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
@@ -67,7 +68,10 @@ where
         let threads = ThreadPoolBuilder::new()
             .pool_size(cfg.num_threads)
             .name_prefix("sst-importer")
-            .after_start(move |_| tikv_alloc::add_thread_memory_accessor())
+            .after_start(move |_| {
+                tikv_alloc::add_thread_memory_accessor();
+                set_io_type(IOType::Import);
+            })
             .before_stop(move |_| tikv_alloc::remove_thread_memory_accessor())
             .create()
             .unwrap();
@@ -122,7 +126,7 @@ where
         };
         match res {
             Ok(_) => info!("switch mode"; "mode" => ?req.get_mode()),
-            Err(ref e) => error!(%e; "switch mode failed"; "mode" => ?req.get_mode(),),
+            Err(ref e) => error!(%*e; "switch mode failed"; "mode" => ?req.get_mode(),),
         }
 
         let task = async move {
@@ -385,26 +389,11 @@ where
                     "end" => end.map(log_wrappers::Value::key),
                     "output_level" => ?output_level, "takes" => ?timer.elapsed()
                 ),
-                Err(ref e) => error!(%e;
+                Err(ref e) => error!(%*e;
                     "compact files in range failed";
                     "start" => start.map(log_wrappers::Value::key),
                     "end" => end.map(log_wrappers::Value::key),
                     "output_level" => ?output_level,
-                ),
-            }
-            let res = engine.compact_files_in_range(start, end, output_level);
-            match res {
-                Ok(_) => info!(
-                    "compact files in range";
-                    "start" => start.map(log_wrappers::Value::key),
-                    "end" => end.map(log_wrappers::Value::key),
-                    "output_level" => ?output_level, "takes" => ?timer.elapsed()
-                ),
-                Err(ref e) => error!(
-                    "compact files in range failed";
-                    "start" => start.map(log_wrappers::Value::key),
-                    "end" => end.map(log_wrappers::Value::key),
-                    "output_level" => ?output_level, "err" => %e
                 ),
             }
             let res = res

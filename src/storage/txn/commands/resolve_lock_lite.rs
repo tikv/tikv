@@ -2,7 +2,7 @@
 
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::MvccTxn;
+use crate::storage::mvcc::{MvccTxn, SnapshotReader};
 use crate::storage::txn::commands::{
     Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
     WriteResult,
@@ -37,12 +37,9 @@ impl CommandExt for ResolveLockLite {
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLockLite {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
-        let mut txn = MvccTxn::new(
-            snapshot,
-            self.start_ts,
-            !self.ctx.get_not_fill_cache(),
-            context.concurrency_manager,
-        );
+        let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
+        let mut reader =
+            SnapshotReader::new(self.start_ts, snapshot, !self.ctx.get_not_fill_cache());
 
         let rows = self.resolve_keys.len();
         // ti-client guarantees the size of resolve_keys will not too large, so no necessary
@@ -50,14 +47,14 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLockLite {
         let mut released_locks = ReleasedLocks::new(self.start_ts, self.commit_ts);
         for key in self.resolve_keys {
             released_locks.push(if !self.commit_ts.is_zero() {
-                commit(&mut txn, key, self.commit_ts)?
+                commit(&mut txn, &mut reader, key, self.commit_ts)?
             } else {
-                cleanup(&mut txn, key, TimeStamp::zero(), false)?
+                cleanup(&mut txn, &mut reader, key, TimeStamp::zero(), false)?
             });
         }
         released_locks.wake_up(context.lock_mgr);
 
-        context.statistics.add(&txn.take_statistics());
+        context.statistics.add(&reader.take_statistics());
         let write_data = WriteData::from_modifies(txn.into_modifies());
         Ok(WriteResult {
             ctx: self.ctx,

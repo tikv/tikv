@@ -284,7 +284,11 @@ impl WriteRef<'_> {
                     has_overlapped_rollback = true;
                 }
                 GC_FENCE_PREFIX => gc_fence = Some(number::decode_u64(&mut b)?.into()),
-                flag => panic!("invalid flag [{}] in write", flag),
+                _ => {
+                    // To support forward compatibility, all fields should be serialized in order
+                    // and stop parsing if meets an unknown byte.
+                    break;
+                }
             }
         }
 
@@ -444,9 +448,13 @@ mod tests {
         assert!(WriteRef::parse(b"").is_err());
 
         let lock = Write::new(WriteType::Lock, 1.into(), Some(b"short_value".to_vec()));
-        let v = lock.as_ref().to_bytes();
+        let mut v = lock.as_ref().to_bytes();
         assert!(WriteRef::parse(&v[..1]).is_err());
         assert_eq!(Write::parse_type(&v).unwrap(), lock.write_type);
+        // Test `Write::parse()` ignores unknown bytes.
+        v.extend(b"unknown");
+        let w = WriteRef::parse(&v).unwrap().to_owned();
+        assert_eq!(w, lock);
     }
 
     #[test]

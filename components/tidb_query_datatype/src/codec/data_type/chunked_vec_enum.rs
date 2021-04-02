@@ -18,7 +18,7 @@ use tikv_util::buffer_vec::BufferVec;
 ///
 /// Make sure operating `bitmap` and `value` together to prevent different
 /// stored representation issue discussed at
-/// https://github.com/tikv/tikv/pull/8948#discussion_r516463693
+/// <https://github.com/tikv/tikv/pull/8948#discussion_r516463693>
 ///
 /// TODO: add way to set enum column data
 #[derive(Debug, Clone)]

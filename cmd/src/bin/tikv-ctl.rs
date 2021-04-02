@@ -22,13 +22,14 @@ use futures::{executor::block_on, future, stream, Stream, StreamExt, TryStreamEx
 use grpcio::{CallOption, ChannelBuilder, Environment};
 use protobuf::Message;
 
-use encryption::{
-    encryption_method_from_db_encryption_method, DataKeyManager, DecrypterReader, Iv,
+use encryption_export::{
+    create_backend, data_key_manager_from_config, encryption_method_from_db_encryption_method,
+    DataKeyManager, DecrypterReader, Iv,
 };
 use engine_rocks::encryption::get_env;
 use engine_rocks::RocksEngine;
-use engine_traits::{EncryptionKeyManager, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use engine_traits::{Engines, RaftEngine};
+use engine_traits::{EncryptionKeyManager, Engines, RaftEngine};
+use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use file_system::calc_crc32;
 use kvproto::debugpb::{Db as DBType, *};
 use kvproto::encryptionpb::EncryptionMethod;
@@ -71,7 +72,7 @@ fn new_debug_executor(
     match (host, db) {
         (None, Some(kv_path)) => {
             let key_manager =
-                DataKeyManager::from_config(&cfg.security.encryption, &cfg.storage.data_dir)
+                data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
                     .unwrap()
                     .map(Arc::new);
             let cache = cfg.storage.block_cache.build_shared_cache();
@@ -81,7 +82,9 @@ fn new_debug_executor(
             let mut kv_db_opts = cfg.rocksdb.build_opt();
             kv_db_opts.set_env(env.clone());
             kv_db_opts.set_paranoid_checks(!skip_paranoid_checks);
-            let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache, None);
+            let kv_cfs_opts = cfg
+                .rocksdb
+                .build_cf_opts(&cache, None, cfg.storage.enable_ttl);
             let kv_path = PathBuf::from(kv_path).canonicalize().unwrap();
             let kv_path = kv_path.to_str().unwrap();
             let kv_db =
@@ -1882,8 +1885,8 @@ fn main() {
         v1!("infile: {}, outfile: {}", infile, outfile);
 
         let key_manager =
-            match DataKeyManager::from_config(&cfg.security.encryption, &cfg.storage.data_dir)
-                .expect("DataKeyManager::from_config should success")
+            match data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
+                .expect("data_key_manager_from_config should success")
             {
                 Some(mgr) => mgr,
                 None => {
@@ -1933,7 +1936,8 @@ fn main() {
                     return;
                 }
                 DataKeyManager::dump_key_dict(
-                    &cfg.security.encryption,
+                    create_backend(&cfg.security.encryption.master_key)
+                        .expect("encryption-meta master key creation"),
                     &cfg.storage.data_dir,
                     matches
                         .values_of("ids")
@@ -2428,7 +2432,7 @@ fn run_ldb_command(cmd: &ArgMatches<'_>, cfg: &TiKvConfig) {
         None => Vec::new(),
     };
     args.insert(0, "ldb".to_owned());
-    let key_manager = DataKeyManager::from_config(&cfg.security.encryption, &cfg.storage.data_dir)
+    let key_manager = data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
         .unwrap()
         .map(Arc::new);
     let env = get_env(key_manager, None).unwrap();

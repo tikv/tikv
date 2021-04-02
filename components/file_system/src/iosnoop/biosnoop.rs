@@ -253,6 +253,7 @@ pub(crate) fn flush_io_latency_metrics() {
             flush_io_latency!(ctx.bpf, compaction);
             flush_io_latency!(ctx.bpf, replication);
             flush_io_latency!(ctx.bpf, load_balance);
+            flush_io_latency!(ctx.bpf, gc);
             flush_io_latency!(ctx.bpf, import);
             flush_io_latency!(ctx.bpf, export);
         }
