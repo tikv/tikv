@@ -10,6 +10,7 @@ use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant};
 use std::{cmp, io};
 
+use fail::fail_point;
 use futures::future::TryFutureExt;
 use tokio::task::spawn_local;
 
