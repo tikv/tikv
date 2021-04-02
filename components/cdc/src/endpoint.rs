@@ -257,6 +257,10 @@ pub struct Endpoint<T> {
     old_value_cache: OldValueCache,
     hibernate_regions_compatible: bool,
 
+    // stats
+    resolved_region_count: usize,
+    unresolved_region_count: usize,
+
     // store_id -> client
     tikv_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
     env: Arc<Environment>,
@@ -316,6 +320,8 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             min_ts_interval: cfg.min_ts_interval.0,
             min_resolved_ts: TimeStamp::max(),
             min_ts_region_id: 0,
+            resolved_region_count: 0,
+            unresolved_region_count: 0,
             old_value_cache: OldValueCache::new(cfg.old_value_cache_size),
             hibernate_regions_compatible: cfg.hibernate_regions_compatible,
             tikv_clients: Arc::new(Mutex::new(HashMap::default())),
@@ -636,6 +642,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
     }
 
     fn on_min_ts(&mut self, regions: Vec<u64>, min_ts: TimeStamp) {
+        let total_region_count = regions.len();
         let mut resolved_regions = Vec::with_capacity(regions.len());
         self.min_resolved_ts = TimeStamp::max();
         for region_id in regions {
@@ -649,6 +656,8 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 }
             }
         }
+        self.resolved_region_count = resolved_regions.len();
+        self.unresolved_region_count = total_region_count - self.resolved_region_count;
         self.broadcast_resolved_ts(resolved_regions);
     }
 
@@ -1035,11 +1044,14 @@ struct Initializer {
 
 impl Initializer {
     async fn on_change_cmd(&self, mut resp: ReadResponse<RocksSnapshot>) {
+        CDC_SCAN_TASKS.with_label_values(&["total"]).inc();
         if let Some(region_snapshot) = resp.snapshot {
+            CDC_SCAN_TASKS.with_label_values(&["finish"]).inc();
             assert_eq!(self.region_id, region_snapshot.get_region().get_id());
             let region = region_snapshot.get_region().clone();
             self.async_incremental_scan(region_snapshot, region).await;
         } else {
+            CDC_SCAN_TASKS.with_label_values(&["abort"]).inc();
             assert!(
                 resp.response.get_header().has_error(),
                 "no snapshot and no error? {:?}",
@@ -1259,6 +1271,12 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable for Endpoint<T> {
 impl<T: 'static + RaftStoreRouter<RocksEngine>> RunnableWithTimer for Endpoint<T> {
     fn on_timeout(&mut self) {
         CDC_CAPTURED_REGION_COUNT.set(self.capture_regions.len() as i64);
+        CDC_REGION_RESOLVE_STATUS_GAUGE_VEC
+            .with_label_values(&["unresolved"])
+            .set(self.unresolved_region_count as _);
+        CDC_REGION_RESOLVE_STATUS_GAUGE_VEC
+            .with_label_values(&["resolved"])
+            .set(self.resolved_region_count as _);
         if self.min_resolved_ts != TimeStamp::max() {
             CDC_MIN_RESOLVED_TS_REGION.set(self.min_ts_region_id as i64);
             CDC_MIN_RESOLVED_TS.set(self.min_resolved_ts.physical() as i64);
