@@ -139,6 +139,12 @@ macro_rules! request_imp {
         // we are waiting in.
         let pending_snapshot = {
             let mut locked = $limiter.protected.lock();
+            // double check
+            if $limiter.bytes_through[priority_idx].fetch_add(amount, Ordering::AcqRel) + amount
+                <= cached_bytes_per_refill
+            {
+                return amount;
+            }
             locked.pending_bytes[priority_idx] +=
                 std::cmp::min(bytes_through - cached_bytes_per_refill, amount);
             let pending_snapshot = locked.pending_bytes[priority_idx];
@@ -502,6 +508,7 @@ mod tests {
         let stats = limiter.statistics().unwrap();
         let limiter = Arc::new(limiter);
         let duration = {
+            let begin = Instant::now();
             let _write = start_background_jobs(
                 &limiter,
                 2, /*job_count*/
@@ -532,7 +539,6 @@ mod tests {
                 ),
                 Some(Duration::from_millis(1)),
             );
-            let begin = Instant::now();
             std::thread::sleep(Duration::from_secs(2));
             let end = Instant::now();
             end.duration_since(begin)
