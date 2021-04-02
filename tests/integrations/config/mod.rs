@@ -14,7 +14,7 @@ use engine_rocks::raw::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
 use engine_traits::config::PerfLevel;
-use file_system::IOPriority;
+use file_system::{IOPriority, IORateLimitMode};
 use kvproto::encryptionpb::EncryptionMethod;
 use pd_client::Config as PdConfig;
 use raftstore::coprocessor::{Config as CopConfig, ConsistencyCheckMethod};
@@ -652,7 +652,8 @@ fn test_serde_custom_tikv_config() {
             memory_allocator: Some(String::from("nodump")),
         },
         io_rate_limit: IORateLimitConfig {
-            total: OptionReadableSize(Some(ReadableSize::mb(1000))),
+            max_bytes_per_sec: OptionReadableSize(Some(ReadableSize::mb(1000))),
+            mode: IORateLimitMode::AllIo,
             foreground_read_priority: IOPriority::Low,
             foreground_write_priority: IOPriority::Low,
             flush_priority: IOPriority::High,

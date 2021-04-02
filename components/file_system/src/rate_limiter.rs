@@ -228,18 +228,18 @@ macro_rules! request_imp {
         // for this request to wait in.
         let pending_snapshot = {
             let mut locked = $limiter.protected.lock();
+            // already served partially by current epoch when consumption overflow bytes is
+            // smaller than requested amount
+            let remains = std::cmp::min(bytes_through - cached_bytes_per_refill, amount);
             // when there is a recent refill, double check if bytes consumption has been reset
             if now + DEFAULT_REFILL_PERIOD < locked.next_refill_time + Duration::from_millis(1)
-                && $limiter.bytes_through[priority_idx].fetch_add(amount, Ordering::Relaxed)
-                    + amount
+                && $limiter.bytes_through[priority_idx].fetch_add(remains, Ordering::Relaxed)
+                    + remains
                     <= cached_bytes_per_refill
             {
                 return amount;
             }
-            // partially served by current epoch if consumption overflow bytes is smaller than
-            // requested amount
-            locked.pending_bytes[priority_idx] +=
-                std::cmp::min(bytes_through - cached_bytes_per_refill, amount);
+            locked.pending_bytes[priority_idx] += remains;
             let pending_snapshot = locked.pending_bytes[priority_idx];
             if locked.next_refill_time <= now {
                 $limiter.refill(&mut locked, now);
@@ -483,9 +483,11 @@ mod tests {
     use super::*;
     use std::sync::atomic::AtomicBool;
 
-    fn approximate_eq(left: f64, right: f64) {
-        assert!(left >= right * 0.9);
-        assert!(left <= right * 1.1);
+    macro_rules! approximate_eq {
+        ($left:expr, $right:expr) => {
+            assert!($left >= $right * 0.9);
+            assert!($right >= $left * 0.9);
+        };
     }
 
     struct BackgroundContext {
@@ -558,9 +560,9 @@ mod tests {
         );
         std::thread::sleep(Duration::from_secs(1));
         let t1 = Instant::now();
-        approximate_eq(
+        approximate_eq!(
             stats.fetch(IOType::ForegroundWrite, IOOp::Write) as f64,
-            bytes_per_sec as f64 * (t1 - t0).as_secs_f64(),
+            bytes_per_sec as f64 * (t1 - t0).as_secs_f64()
         );
         limiter.set_io_rate_limit(0);
         stats.reset();
@@ -578,16 +580,16 @@ mod tests {
         stats.reset();
         std::thread::sleep(Duration::from_secs(1));
         let t3 = Instant::now();
-        approximate_eq(
+        approximate_eq!(
             stats.fetch(IOType::ForegroundWrite, IOOp::Write) as f64,
-            bytes_per_sec as f64 * (t3 - t2).as_secs_f64(),
+            bytes_per_sec as f64 * (t3 - t2).as_secs_f64()
         );
     }
 
     fn verify_rate_limit(limiter: &Arc<IORateLimiter>, bytes_per_sec: usize, duration: Duration) {
         let stats = limiter.statistics().unwrap();
-        stats.reset();
         limiter.set_io_rate_limit(bytes_per_sec);
+        stats.reset();
         let actual_duration = {
             let begin = Instant::now();
             {
@@ -602,9 +604,9 @@ mod tests {
             let end = Instant::now();
             end.duration_since(begin)
         };
-        approximate_eq(
+        approximate_eq!(
             stats.fetch(IOType::ForegroundWrite, IOOp::Write) as f64,
-            bytes_per_sec as f64 * actual_duration.as_secs_f64(),
+            bytes_per_sec as f64 * actual_duration.as_secs_f64()
         );
     }
 
@@ -640,9 +642,9 @@ mod tests {
             let end = Instant::now();
             end.duration_since(begin)
         };
-        approximate_eq(
+        approximate_eq!(
             stats.fetch(IOType::Compaction, IOOp::Write) as f64,
-            actual_kbytes_per_sec as f64 * duration.as_secs_f64() * 1000.0,
+            actual_kbytes_per_sec as f64 * duration.as_secs_f64() * 1000.0
         );
     }
 
@@ -695,17 +697,17 @@ mod tests {
         let end = Instant::now();
         let duration = end.duration_since(begin);
         let write_bytes = stats.fetch(IOType::ForegroundWrite, IOOp::Write);
-        approximate_eq(
+        approximate_eq!(
             write_bytes as f64,
-            (write_work * bytes_per_sec / 100) as f64 * duration.as_secs_f64(),
+            (write_work * bytes_per_sec / 100) as f64 * duration.as_secs_f64()
         );
         let compaction_bytes = stats.fetch(IOType::Compaction, IOOp::Write);
         let import_bytes = stats.fetch(IOType::Import, IOOp::Write);
         let total_bytes = write_bytes + import_bytes + compaction_bytes;
-        approximate_eq((compaction_bytes + write_bytes) as f64, total_bytes as f64);
-        approximate_eq(
+        approximate_eq!((compaction_bytes + write_bytes) as f64, total_bytes as f64);
+        approximate_eq!(
             total_bytes as f64,
-            bytes_per_sec as f64 * duration.as_secs_f64(),
+            bytes_per_sec as f64 * duration.as_secs_f64()
         );
     }
 

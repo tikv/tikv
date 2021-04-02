@@ -149,7 +149,7 @@ impl ConfigManager for StorageConfigManger {
                 return Err("IO rate limiter is not present".into());
             }
             let limiter = limiter.unwrap();
-            if let Some(limit) = io_rate_limit.remove("total") {
+            if let Some(limit) = io_rate_limit.remove("max_bytes_per_sec") {
                 if let OptionReadableSize(Some(limit)) = limit.into() {
                     limiter.set_io_rate_limit(limit.0 as usize);
                 } else {
