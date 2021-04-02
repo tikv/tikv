@@ -13,6 +13,7 @@ use rocksdb::{
 };
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
+use tikv_util::warn;
 
 pub struct RocksCompactionJobInfo<'a>(&'a RawCompactionJobInfo);
 

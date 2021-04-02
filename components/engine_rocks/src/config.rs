@@ -3,6 +3,7 @@
 use configuration::ConfigValue;
 pub use rocksdb::PerfLevel;
 use rocksdb::{DBCompressionType, DBInfoLogLevel, DBTitanDBBlobRunMode};
+use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -306,6 +307,7 @@ macro_rules! numeric_enum_mod {
             mod tests {
                 use toml;
                 use rocksdb::$enum;
+                use serde::{Deserialize, Serialize};
 
                 #[test]
                 fn test_serde() {
