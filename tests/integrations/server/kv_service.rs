@@ -50,9 +50,9 @@ fn test_rawkv() {
     cas_req.key = k.clone();
     cas_req.value = v0.clone();
     cas_req.previous_not_exist = true;
-    let resp = client.raw_compare_and_set(&cas_req).unwrap();
+    let resp = client.raw_compare_and_swap(&cas_req).unwrap();
     assert!(!resp.has_region_error());
-    assert!(!resp.get_not_equal());
+    assert!(resp.get_succeed());
 
     // Raw get
     let mut get_req = RawGetRequest::default();
@@ -64,8 +64,8 @@ fn test_rawkv() {
     cas_req.value = v1.clone();
     cas_req.previous_not_exist = false;
     cas_req.previous_value = v0;
-    let resp = client.raw_compare_and_set(&cas_req).unwrap();
-    assert!(!resp.get_not_equal());
+    let resp = client.raw_compare_and_swap(&cas_req).unwrap();
+    assert!(resp.get_succeed());
     let get_resp = client.raw_get(&get_req).unwrap();
     assert_eq!(get_resp.value, v1);
 
@@ -127,9 +127,9 @@ fn test_rawkv_ttl() {
     cas_req.value = v0.clone();
     cas_req.previous_not_exist = false;
     cas_req.previous_value = v1.clone();
-    let resp = client.raw_compare_and_set(&cas_req).unwrap();
+    let resp = client.raw_compare_and_swap(&cas_req).unwrap();
     assert!(!resp.has_region_error());
-    assert!(resp.get_not_equal());
+    assert!(!resp.get_succeed());
 
     let mut cas_req = RawCasRequest::default();
     cas_req.set_context(ctx.clone());
@@ -138,9 +138,9 @@ fn test_rawkv_ttl() {
     cas_req.previous_not_exist = true;
     cas_req.previous_value = vec![];
     cas_req.ttl = 100;
-    let resp = client.raw_compare_and_set(&cas_req).unwrap();
+    let resp = client.raw_compare_and_swap(&cas_req).unwrap();
     assert!(!resp.has_region_error());
-    assert!(!resp.get_not_equal());
+    assert!(resp.get_succeed());
     // Raw get
     let mut get_req = RawGetRequest::default();
     get_req.set_context(ctx.clone());
@@ -154,8 +154,8 @@ fn test_rawkv_ttl() {
     cas_req.previous_not_exist = false;
     cas_req.previous_value = v0;
     cas_req.ttl = 140;
-    let resp = client.raw_compare_and_set(&cas_req).unwrap();
-    assert!(!resp.get_not_equal());
+    let resp = client.raw_compare_and_swap(&cas_req).unwrap();
+    assert!(resp.get_succeed());
     let get_resp = client.raw_get(&get_req).unwrap();
     assert_eq!(get_resp.value, v1);
 
@@ -930,7 +930,7 @@ fn test_double_run_node() {
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
     let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap());
-    let coprocessor_host = CoprocessorHost::new(router);
+    let coprocessor_host = CoprocessorHost::new(router, raftstore::coprocessor::Config::default());
     let importer = {
         let dir = Path::new(engines.kv.path()).join("import-sst");
         Arc::new(SSTImporter::new(dir, None).unwrap())

@@ -12,6 +12,7 @@ use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
 
+#[cfg(any(test, feature = "testexport"))]
 use crate::coprocessor::Config;
 use crate::coprocessor::CoprocessorHost;
 use crate::coprocessor::SplitCheckerHost;
@@ -183,7 +184,6 @@ where
     engine: E,
     router: S,
     coprocessor: CoprocessorHost<E>,
-    cfg: Config,
 }
 
 impl<E, S> Runner<E, S>
@@ -191,12 +191,11 @@ where
     E: KvEngine,
     S: CasualRouter<E>,
 {
-    pub fn new(engine: E, router: S, coprocessor: CoprocessorHost<E>, cfg: Config) -> Runner<E, S> {
+    pub fn new(engine: E, router: S, coprocessor: CoprocessorHost<E>) -> Runner<E, S> {
         Runner {
             engine,
             router,
             coprocessor,
-            cfg,
         }
     }
 
@@ -213,13 +212,9 @@ where
         );
         CHECK_SPILT_COUNTER.all.inc();
 
-        let mut host = self.coprocessor.new_split_checker_host(
-            &self.cfg,
-            region,
-            &self.engine,
-            auto_split,
-            policy,
-        );
+        let mut host =
+            self.coprocessor
+                .new_split_checker_host(region, &self.engine, auto_split, policy);
         if host.skip() {
             debug!("skip split check"; "region_id" => region.get_id());
             return;
@@ -329,7 +324,7 @@ where
             "split check config updated";
             "change" => ?change
         );
-        self.cfg.update(change);
+        self.coprocessor.cfg.update(change);
     }
 }
 
@@ -349,7 +344,7 @@ where
             } => self.check_split(&region, auto_split, policy),
             Task::ChangeConfig(c) => self.change_cfg(c),
             #[cfg(any(test, feature = "testexport"))]
-            Task::Validate(f) => f(&self.cfg),
+            Task::Validate(f) => f(&self.coprocessor.cfg),
             Task::GetRegionApproximateSizeAndKeys {
                 region,
                 pending_tasks,
