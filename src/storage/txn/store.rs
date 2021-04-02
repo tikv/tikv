@@ -1304,8 +1304,8 @@ mod tests {
     fn test_txn_entry_size() {
         assert_eq!(
             TxnEntry::Prewrite {
-                default: (vec![0; 10], vec![0, 10]),
-                lock: (vec![0; 10], vec![0, 10]),
+                default: (vec![0; 10], vec![0; 10]),
+                lock: (vec![0; 10], vec![0; 10]),
                 old_value: None,
             }
             .size(),
@@ -1314,8 +1314,8 @@ mod tests {
 
         assert_eq!(
             TxnEntry::Prewrite {
-                default: (vec![0; 10], vec![0, 10]),
-                lock: (vec![0; 10], vec![0, 10]),
+                default: (vec![0; 10], vec![0; 10]),
+                lock: (vec![0; 10], vec![0; 10]),
                 old_value: Some(vec![0; 10]),
             }
             .size(),
@@ -1324,8 +1324,8 @@ mod tests {
 
         assert_eq!(
             TxnEntry::Commit {
-                default: (vec![0; 10], vec![0, 10]),
-                write: (vec![0; 10], vec![0, 10]),
+                default: (vec![0; 10], vec![0; 10]),
+                write: (vec![0; 10], vec![0; 10]),
                 old_value: None,
             }
             .size(),
@@ -1334,8 +1334,8 @@ mod tests {
 
         assert_eq!(
             TxnEntry::Commit {
-                default: (vec![0; 10], vec![0, 10]),
-                write: (vec![0; 10], vec![0, 10]),
+                default: (vec![0; 10], vec![0; 10]),
+                write: (vec![0; 10], vec![0; 10]),
                 old_value: Some(vec![0; 10]),
             }
             .size(),

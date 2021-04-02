@@ -1154,9 +1154,9 @@ impl Initializer {
         let mut total_bytes = 0;
         let mut total_size = 0;
         while total_bytes <= self.max_scan_batch_bytes && total_size < self.max_scan_batch_size {
+            total_size += 1;
             match scanner.next_entry()? {
                 Some(entry) => {
-                    total_size += 1;
                     total_bytes += entry.size();
                     entries.push(Some(entry));
                 }
@@ -1166,8 +1166,10 @@ impl Initializer {
                 }
             }
         }
-        self.speed_limter.consume(total_bytes).await;
-        CDC_SCAN_BYTES.inc_by(total_bytes as _);
+        if total_bytes > 0 {
+            self.speed_limter.consume(total_bytes).await;
+            CDC_SCAN_BYTES.inc_by(total_bytes as _);
+        }
 
         if let Some(resolver) = resolver {
             // Track the locks.

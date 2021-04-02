@@ -20,6 +20,7 @@ use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use test_raftstore::sleep_ms;
 use test_raftstore::*;
+use tikv_util::config::ReadableSize;
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Lock, LockType};
 
@@ -653,7 +654,12 @@ fn test_duplicate_subscribe() {
 
 #[test]
 fn test_cdc_batch_size_limit() {
-    let mut suite = TestSuite::new(1);
+    let mut cluster = new_server_cluster(1, 1);
+    // Do not set limiter in the test.
+    cluster.cfg.cdc.incremental_scan_speed_limit = ReadableSize(0);
+    // Increase the Raft tick interval to make this test case running reliably.
+    configure_for_lease_read(&mut cluster, Some(100), None);
+    let mut suite = TestSuite::with_cluster(1, cluster);
 
     // Prewrite
     let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
@@ -661,7 +667,7 @@ fn test_cdc_batch_size_limit() {
     let k1 = b"k1".to_vec();
     m1.set_op(Op::Put);
     m1.key = k1.clone();
-    m1.value = vec![0; 6];
+    m1.value = vec![0; 6 * 1024 * 1024];
     let mut m2 = Mutation::default();
     let k2 = b"k2".to_vec();
     m2.set_op(Op::Put);
@@ -678,10 +684,6 @@ fn test_cdc_batch_size_limit() {
     block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1, "{:?}", events.len());
-    while events.len() < 3 {
-        events.extend(receive_event(false).events.into_iter());
-    }
-    assert_eq!(events.len(), 3, "{:?}", events.len());
     match events.remove(0).event.unwrap() {
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 1);
@@ -691,29 +693,27 @@ fn test_cdc_batch_size_limit() {
         }
         other => panic!("unknown event {:?}", other),
     }
-    match events.remove(0).event.unwrap() {
-        Event_oneof_event::Entries(es) => {
-            assert!(es.entries.len() == 1);
-            let e = &es.entries[0];
-            assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", e.get_type());
-            assert_eq!(e.key, b"k2", "{:?}", e.key);
+    // For the rest 2 events, Committed and Initialized.
+    let mut entries = vec![];
+    while entries.len() < 2 {
+        match receive_event(false).events.remove(0).event.unwrap() {
+            Event_oneof_event::Entries(es) => {
+                entries.extend(es.entries.into_iter());
+            }
+            other => panic!("unknown event {:?}", other),
         }
-        other => panic!("unknown event {:?}", other),
     }
-    match events.pop().unwrap().event.unwrap() {
-        // Then it outputs Initialized event.
-        Event_oneof_event::Entries(es) => {
-            assert!(es.entries.len() == 1);
-            let e = &es.entries[0];
-            assert_eq!(
-                e.get_type(),
-                EventLogType::Initialized,
-                "{:?}",
-                e.get_type()
-            );
-        }
-        other => panic!("unknown event {:?}", other),
-    }
+    assert_eq!(entries.len(), 2, "{:?}", entries);
+    let e = &entries[0];
+    assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", e.get_type());
+    assert_eq!(e.key, b"k2", "{:?}", e.key);
+    let e = &entries[1];
+    assert_eq!(
+        e.get_type(),
+        EventLogType::Initialized,
+        "{:?}",
+        e.get_type()
+    );
 
     // Prewrite
     let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
