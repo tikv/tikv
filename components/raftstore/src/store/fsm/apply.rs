@@ -1395,7 +1395,6 @@ where
                     ctx.ssts.insert(cf, vec![s.clone()]);
                 }
             }
-            ctx.delete_ssts.append(&mut ssts.clone());
         }
 
         let mut resp = RaftCmdResponse::default();
