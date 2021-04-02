@@ -16,9 +16,9 @@ fn test_file_dict_file_record_corrupted() {
     .unwrap();
     let info1 = create_file_info(1, EncryptionMethod::Aes256Ctr);
     let info2 = create_file_info(2, EncryptionMethod::Unknown);
-    fail::cfg("file_dict_log_insert_error", "return").unwrap();
+    fail::cfg("file_dict_log_append_incomplete", "return(8)").unwrap();
     file_dict_file.insert("info1", &info1).unwrap();
-    fail::remove("file_dict_log_insert_error");
+    fail::remove("file_dict_log_append_incomplete");
     file_dict_file.insert("info2", &info2).unwrap();
     // Intermediate record damage is not allowed.
     assert!(file_dict_file.recovery().is_err());
@@ -33,9 +33,9 @@ fn test_file_dict_file_record_corrupted() {
     let info1 = create_file_info(1, EncryptionMethod::Aes256Ctr);
     let info2 = create_file_info(2, EncryptionMethod::Unknown);
     file_dict_file.insert("info1", &info1).unwrap();
-    fail::cfg("file_dict_log_insert_error", "return").unwrap();
+    fail::cfg("file_dict_log_append_incomplete", "return(8)").unwrap();
     file_dict_file.insert("info2", &info2).unwrap();
-    fail::remove("file_dict_log_insert_error");
+    fail::remove("file_dict_log_append_incomplete");
     // The ending record can be discarded.
     let file_dict = file_dict_file.recovery().unwrap();
     assert_eq!(*file_dict.files.get("info1").unwrap(), info1);

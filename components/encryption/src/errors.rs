@@ -19,7 +19,7 @@ pub enum Error {
     Other(#[from] Box<dyn error::Error + Sync + Send>),
     // Only when the parsing record is the last one, and the
     // length is insufficient or the crc checksum fails.
-    #[error("Recoverable types of parsing file dict error")]
+    #[error("Recoverable tail record corruption while parsing file dictionary")]
     TailRecordParseIncomplete,
     // Currently only in use by cloud KMS
     #[error("Cloud KMS error {0}")]

@@ -5,7 +5,7 @@ use file_system::{rename, File, OpenOptions};
 use kvproto::encryptionpb::{EncryptedContent, FileDictionary, FileInfo};
 use protobuf::Message;
 use rand::{thread_rng, RngCore};
-use tikv_util::{box_err, warn};
+use tikv_util::{box_err, info, set_panic_mark, warn};
 
 use crate::encrypted_file::{EncryptedFile, Header, Version, TMP_FILE_SUFFIX};
 use crate::master_key::{Backend, PlaintextBackend};
@@ -170,12 +170,14 @@ impl FileDictionaryFile {
             }
             Version::V2 => {
                 file_dict.merge_from_bytes(content)?;
+                let mut last_record_name = String::new();
                 // parse the remained records
                 while !remained.is_empty() {
                     // If the parsing get errors, manual intervention is required to recover.
                     match Self::parse_next_record(remained) {
                         Ok((used_size, file_name, mode)) => {
                             remained.consume(used_size);
+                            last_record_name = file_name.clone();
                             match mode {
                                 LogRecord::INSERT(info) => {
                                     file_dict.files.insert(file_name, info);
@@ -191,10 +193,18 @@ impl FileDictionaryFile {
                                 }
                             }
                         }
-                        Err(Error::TailRecordParseIncomplete) => {
+                        Err(e @ Error::TailRecordParseIncomplete) => {
+                            info!(
+                                "{:?} occurred and the last complete filename is {}",
+                                e, last_record_name
+                            );
                             break;
                         }
-                        Err(e) => return Err(e),
+                        Err(e) => {
+                            // This error is unrecoverable and manual intervention is required.
+                            set_panic_mark();
+                            return Err(e);
+                        }
                     }
                 }
             }
@@ -213,9 +223,10 @@ impl FileDictionaryFile {
             let file = self.append_file.as_mut().unwrap();
             let bytes = Self::convert_record_to_bytes(name, LogRecord::INSERT(info.clone()))?;
 
-            fail::fail_point!("file_dict_log_insert_error", |_| {
+            fail::fail_point!("file_dict_log_append_incomplete", |truncate_num| {
                 let mut bytes = bytes.clone();
-                let _ = bytes.pop().unwrap();
+                let truncate_num: usize = truncate_num.map_or(0, |c| c.parse().unwrap());
+                bytes.truncate(truncate_num);
                 file.write_all(&bytes)?;
                 file.sync_all()?;
                 Ok(())
@@ -314,8 +325,8 @@ impl FileDictionaryFile {
             warn!(
                 "file corrupted! record content size is too small, discarded the tail record";
                 "content size" => remained.len(),
-                "expect name length" => name_len,
-                "expect content length" =>info_len,
+                "expected name length" => name_len,
+                "expected content length" =>info_len,
             );
             return Err(Error::TailRecordParseIncomplete);
         }
@@ -329,7 +340,7 @@ impl FileDictionaryFile {
             if remained.is_empty() {
                 // Only when this record is the last one can the panic be skipped.
                 warn!(
-                    "file corrupted! crc32 mismatch";
+                    "file corrupted! crc32 mismatch, discarded the tail record";
                     "expected crc32" => crc32,
                     "checksum crc32" => crc32_checksum,
                 );
