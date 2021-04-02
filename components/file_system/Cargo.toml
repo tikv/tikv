@@ -26,8 +26,7 @@ strum = { version = "0.20", features = ["derive"] }
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
 time = "0.1"
-tokio = { version = "0.2", features = ["time", "sync"] }
-variant_count = "1.0.0"
+tokio = { version = "0.2", features = ["time"] }
 
 [dev-dependencies]
 rand = "0.7"
