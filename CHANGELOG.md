@@ -3,6 +3,17 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [4.0.12] - 2021-04-02
+
++ Improvements
+ + Prevent a large number of reconnections in a short period of time [#9879](https://github.com/tikv/tikv/pull/9879)
+ + Optimize the write operations in the scenarios of many tombstones [#9729](https://github.com/tikv/tikv/pull/9729)
+ + Change the default value of `leader-transfer-max-log-lag` to `128` to increase the success rate of leader transfer [#9605](https://github.com/tikv/tikv/pull/9605)
++ Bug Fixes
+ + Fix the issue that the `IN` expression does not properly handle unsigned/signed integers [#9850](https://github.com/tikv/tikv/pull/9850)
+ + Fix the issue that the ingest operation is not re-entrant [#9779](https://github.com/tikv/tikv/pull/9779)
+ + Fix the issue that the space is missed when converting JSON to string in TiKV coprocessor [#9666](https://github.com/tikv/tikv/pull/9666)
+
 ## [4.0.11] - 2021-02-26
 
 + New Features
