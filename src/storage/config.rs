@@ -8,7 +8,7 @@ use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration, Res
 use engine_rocks::raw::{Cache, LRUCacheOptions, MemoryAllocator};
 use engine_rocks::RocksEngine;
 use engine_traits::{CFOptionsExt, ColumnFamilyOptions, CF_DEFAULT};
-use file_system::{get_io_rate_limiter, IOPriority, IORateLimiter, IOType};
+use file_system::{get_io_rate_limiter, IOPriority, IORateLimitMode, IORateLimiter, IOType};
 use libc::c_int;
 use std::error::Error;
 use tikv_util::config::{self, OptionReadableSize, ReadableDuration, ReadableSize};
@@ -243,7 +243,10 @@ impl BlockCacheConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct IORateLimitConfig {
-    pub total: OptionReadableSize,
+    pub max_bytes_per_sec: OptionReadableSize,
+    #[serde(with = "file_system::io_rate_limit_mode_serde")]
+    #[config(skip)]
+    pub mode: IORateLimitMode,
     #[serde(with = "file_system::io_priority_serde")]
     #[config(skip)]
     pub foreground_read_priority: IOPriority,
@@ -279,7 +282,8 @@ pub struct IORateLimitConfig {
 impl Default for IORateLimitConfig {
     fn default() -> IORateLimitConfig {
         IORateLimitConfig {
-            total: OptionReadableSize(None),
+            max_bytes_per_sec: OptionReadableSize(None),
+            mode: IORateLimitMode::WriteOnly,
             foreground_read_priority: IOPriority::High,
             foreground_write_priority: IOPriority::High,
             flush_priority: IOPriority::Medium,
@@ -296,8 +300,8 @@ impl Default for IORateLimitConfig {
 
 impl IORateLimitConfig {
     pub fn build(&self, enable_statistics: bool) -> IORateLimiter {
-        let mut limiter = IORateLimiter::new(enable_statistics);
-        if let Some(limit) = self.total.0 {
+        let mut limiter = IORateLimiter::new(self.mode, enable_statistics);
+        if let Some(limit) = self.max_bytes_per_sec.0 {
             limiter.set_io_rate_limit(limit.0 as usize);
         }
         limiter.set_io_priority(IOType::ForegroundRead, self.foreground_read_priority);
@@ -324,6 +328,15 @@ impl IORateLimitConfig {
                 IOPriority::High
             );
             self.other_priority = IOPriority::High;
+        }
+        if self.mode != IORateLimitMode::WriteOnly {
+            warn!(
+                "Only IORateLimitMode::WriteOnly is supported for now. Change mode from \
+                  {:?} to {:?}",
+                self.mode,
+                IORateLimitMode::WriteOnly,
+            );
+            self.mode = IORateLimitMode::WriteOnly;
         }
         Ok(())
     }

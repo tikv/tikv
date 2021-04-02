@@ -59,7 +59,7 @@ mod tests {
     use tempfile::Builder;
 
     fn new_test_db(dir: &str) -> (Arc<DB>, Arc<IORateLimiterStatistics>) {
-        let limiter = Arc::new(IORateLimiter::new(true /*enable_statistics*/));
+        let limiter = Arc::new(IORateLimiter::new_for_test());
         let mut db_opts = DBOptions::new();
         db_opts.add_event_listener(RocksEventListener::new("test_db"));
         let env = get_env_with_limiter(None, Some(limiter.clone())).unwrap();

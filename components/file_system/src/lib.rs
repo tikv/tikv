@@ -19,7 +19,8 @@ pub use file::{File, OpenOptions};
 pub use iosnoop::{get_io_type, init_io_snooper, set_io_type};
 pub use metrics_manager::{BytesFetcher, MetricsManager};
 pub use rate_limiter::{
-    get_io_rate_limiter, set_io_rate_limiter, IORateLimiter, IORateLimiterStatistics,
+    get_io_rate_limiter, io_rate_limit_mode_serde, set_io_rate_limiter, IORateLimitMode,
+    IORateLimiter, IORateLimiterStatistics,
 };
 
 pub use std::fs::{
@@ -30,7 +31,6 @@ pub use std::fs::{
 
 use std::io::{self, ErrorKind, Read, Write};
 use std::path::Path;
-use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use openssl::error::ErrorStack;
@@ -121,7 +121,7 @@ impl IOPriority {
     }
 }
 
-impl FromStr for IOPriority {
+impl std::str::FromStr for IOPriority {
     type Err = String;
     fn from_str(s: &str) -> Result<IOPriority, String> {
         match s {
@@ -169,7 +169,7 @@ pub mod io_priority_serde {
                     Ok(p) => p,
                     _ => {
                         return Err(E::invalid_value(
-                            Unexpected::Other(&"invalid compression type".to_string()),
+                            Unexpected::Other(&"invalid IO priority".to_string()),
                             &self,
                         ));
                     }

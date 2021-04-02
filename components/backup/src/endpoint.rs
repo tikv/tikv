@@ -1266,7 +1266,7 @@ pub mod tests {
 
     #[test]
     fn test_handle_backup_task() {
-        let limiter = Arc::new(IORateLimiter::new(true /*enable_statistics*/));
+        let limiter = Arc::new(IORateLimiter::new_for_test());
         let stats = limiter.statistics().unwrap();
         let (tmp, endpoint) = new_endpoint_with_limiter(limiter);
         let engine = endpoint.engine.clone();

@@ -228,17 +228,17 @@ mod tests {
 
     #[test]
     fn test_instrumented_file() {
-        let limiter = Arc::new(IORateLimiter::new(true /*enable_statistics*/));
+        let limiter = Arc::new(IORateLimiter::new_for_test());
         // make sure read at most one bytes at a time
-        limiter.set_io_rate_limit(25 /* 1s / refill_period */);
+        limiter.set_io_rate_limit(20 /* 1s / refill_period */);
         let stats = limiter.statistics().unwrap();
 
         let tmp_dir = TempDir::new().unwrap();
         let tmp_file = tmp_dir.path().join("instrumented.txt");
-        let content = String::from("magic words");
+        let content = String::from("drink full and descend");
         {
             let _guard = WithIOType::new(IOType::ForegroundWrite);
-            let mut f = File::create_with_limiter(&tmp_file, Some(limiter)).unwrap();
+            let mut f = File::create_with_limiter(&tmp_file, Some(limiter.clone())).unwrap();
             f.write_all(content.as_bytes()).unwrap();
             f.sync_all().unwrap();
             assert_eq!(
@@ -246,8 +246,6 @@ mod tests {
                 content.len()
             );
         }
-        // read IOs bypass limiter
-        /*
         {
             let _guard = WithIOType::new(IOType::Export);
             let mut buffer = String::new();
@@ -258,6 +256,5 @@ mod tests {
             // it requires two EOF reads to finish the call.
             assert_eq!(stats.fetch(IOType::Export, IOOp::Read), content.len() + 2);
         }
-        */
     }
 }

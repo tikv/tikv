@@ -14,6 +14,96 @@ use parking_lot::{Mutex, MutexGuard};
 use strum::EnumCount;
 use tikv_util::time::Instant;
 
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+pub enum IORateLimitMode {
+    WriteOnly,
+    ReadOnly,
+    AllIo,
+}
+
+impl IORateLimitMode {
+    pub fn as_str(&self) -> &str {
+        match *self {
+            IORateLimitMode::WriteOnly => "write-only",
+            IORateLimitMode::ReadOnly => "read-only",
+            IORateLimitMode::AllIo => "all-io",
+        }
+    }
+
+    #[inline]
+    pub fn includes(&self, op: IOOp) -> bool {
+        match *self {
+            IORateLimitMode::WriteOnly => op == IOOp::Write,
+            IORateLimitMode::ReadOnly => op == IOOp::Read,
+            _ => true,
+        }
+    }
+}
+
+impl std::str::FromStr for IORateLimitMode {
+    type Err = String;
+    fn from_str(s: &str) -> Result<IORateLimitMode, String> {
+        match s {
+            "write-only" => Ok(IORateLimitMode::WriteOnly),
+            "read-only" => Ok(IORateLimitMode::ReadOnly),
+            "all-io" => Ok(IORateLimitMode::AllIo),
+            s => Err(format!(
+                "expect: write-only, read-only or all-io, got: {:?}",
+                s
+            )),
+        }
+    }
+}
+
+pub mod io_rate_limit_mode_serde {
+    use std::fmt;
+    use std::str::FromStr;
+
+    use serde::de::{Error, Unexpected, Visitor};
+    use serde::{Deserializer, Serializer};
+
+    use super::IORateLimitMode;
+
+    pub fn serialize<S>(t: &IORateLimitMode, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(t.as_str())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<IORateLimitMode, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct StrVistor;
+        impl<'de> Visitor<'de> for StrVistor {
+            type Value = IORateLimitMode;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(formatter, "a IO rate limit mode")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<IORateLimitMode, E>
+            where
+                E: Error,
+            {
+                let p = match IORateLimitMode::from_str(&*value.trim().to_lowercase()) {
+                    Ok(p) => p,
+                    _ => {
+                        return Err(E::invalid_value(
+                            Unexpected::Other(&"invalid IO rate limit mode".to_string()),
+                            &self,
+                        ));
+                    }
+                };
+                Ok(p)
+            }
+        }
+
+        deserializer.deserialize_str(StrVistor)
+    }
+}
+
 /// Record accumulated bytes through of different types.
 /// Used for testing and metrics.
 #[derive(Debug)]
@@ -291,14 +381,16 @@ impl PriorityBasedIORateLimiter {
 /// An instance of `IORateLimiter` can be safely shared between threads.
 #[derive(Debug)]
 pub struct IORateLimiter {
+    mode: IORateLimitMode,
     priority_map: [IOPriority; IOType::COUNT],
     throughput_limiter: Arc<PriorityBasedIORateLimiter>,
     stats: Option<Arc<IORateLimiterStatistics>>,
 }
 
 impl IORateLimiter {
-    pub fn new(enable_statistics: bool) -> IORateLimiter {
+    pub fn new(mode: IORateLimitMode, enable_statistics: bool) -> Self {
         IORateLimiter {
+            mode,
             priority_map: [IOPriority::High; IOType::COUNT],
             throughput_limiter: Arc::new(PriorityBasedIORateLimiter::new()),
             stats: if enable_statistics {
@@ -307,6 +399,10 @@ impl IORateLimiter {
                 None
             },
         }
+    }
+
+    pub fn new_for_test() -> Self {
+        IORateLimiter::new(IORateLimitMode::AllIo, true /*enable_statistics*/)
     }
 
     pub fn set_io_priority(&mut self, io_type: IOType, io_priority: IOPriority) {
@@ -325,7 +421,7 @@ impl IORateLimiter {
     /// request can not be satisfied, the call is blocked. Granted token can be
     /// less than the requested bytes, but must be greater than zero.
     pub fn request(&self, io_type: IOType, io_op: IOOp, mut bytes: usize) -> usize {
-        if io_op == IOOp::Write {
+        if self.mode.includes(io_op) {
             let priority = self.priority_map[io_type as usize];
             bytes = self.throughput_limiter.request(priority, bytes);
         }
@@ -340,7 +436,7 @@ impl IORateLimiter {
     /// Granted token can be less than the requested bytes, but must be greater
     /// than zero.
     pub async fn async_request(&self, io_type: IOType, io_op: IOOp, mut bytes: usize) -> usize {
-        if io_op == IOOp::Write {
+        if self.mode.includes(io_op) {
             let priority = self.priority_map[io_type as usize];
             bytes = self.throughput_limiter.async_request(priority, bytes).await;
         }
@@ -352,7 +448,7 @@ impl IORateLimiter {
 
     #[cfg(test)]
     fn request_with_skewed_clock(&self, io_type: IOType, io_op: IOOp, mut bytes: usize) -> usize {
-        if io_op == IOOp::Write {
+        if self.mode.includes(io_op) {
             let priority = self.priority_map[io_type as usize];
             bytes = self
                 .throughput_limiter
@@ -442,7 +538,7 @@ mod tests {
     #[test]
     fn test_rate_limit_switch() {
         let bytes_per_sec = 2000;
-        let mut limiter = IORateLimiter::new(true /*enable_statistics*/);
+        let mut limiter = IORateLimiter::new_for_test();
         limiter.set_io_priority(IOType::Compaction, IOPriority::Low);
         let limiter = Arc::new(limiter);
         let stats = limiter.statistics().unwrap();
@@ -516,7 +612,7 @@ mod tests {
     fn test_rate_limited_heavy_flow() {
         let low_bytes_per_sec = 2000;
         let high_bytes_per_sec = 10000;
-        let limiter = Arc::new(IORateLimiter::new(true /*enable_statistics*/));
+        let limiter = Arc::new(IORateLimiter::new_for_test());
         verify_rate_limit(&limiter, low_bytes_per_sec, Duration::from_secs(2));
         verify_rate_limit(&limiter, high_bytes_per_sec, Duration::from_secs(2));
         verify_rate_limit(&limiter, low_bytes_per_sec, Duration::from_secs(2));
@@ -526,7 +622,7 @@ mod tests {
     fn test_rate_limited_light_flow() {
         let kbytes_per_sec = 3;
         let actual_kbytes_per_sec = 2;
-        let limiter = Arc::new(IORateLimiter::new(true /*enable_statistics*/));
+        let limiter = Arc::new(IORateLimiter::new_for_test());
         limiter.set_io_rate_limit(kbytes_per_sec * 1000);
         let stats = limiter.statistics().unwrap();
         let duration = {
@@ -556,7 +652,7 @@ mod tests {
         let write_work = 50;
         let compaction_work = 60;
         let import_work = 10;
-        let mut limiter = IORateLimiter::new(true /*enable_statistics*/);
+        let mut limiter = IORateLimiter::new_for_test();
         limiter.set_io_rate_limit(bytes_per_sec);
         limiter.set_io_priority(IOType::Compaction, IOPriority::Medium);
         limiter.set_io_priority(IOType::Import, IOPriority::Low);

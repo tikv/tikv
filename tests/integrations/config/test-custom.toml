@@ -91,7 +91,8 @@ high-pri-pool-ratio = 0.8
 memory-allocator = "nodump"
 
 [storage.io-rate-limit]
-total = "1000MB"
+max-bytes-per-sec = "1000MB"
+mode = "all-io"
 foreground-read-priority = "low"
 foreground-write-priority = "low"
 flush-priority = "high"
