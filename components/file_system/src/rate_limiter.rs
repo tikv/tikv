@@ -502,40 +502,38 @@ mod tests {
         let stats = limiter.statistics().unwrap();
         let limiter = Arc::new(limiter);
         let duration = {
+            let _write = start_background_jobs(
+                &limiter,
+                2, /*job_count*/
+                Request(
+                    IOType::ForegroundWrite,
+                    IOOp::Write,
+                    write_work * bytes_per_sec / 100 / 1000 / 2,
+                ),
+                Some(Duration::from_millis(1)),
+            );
+            let _compaction = start_background_jobs(
+                &limiter,
+                2, /*job_count*/
+                Request(
+                    IOType::Compaction,
+                    IOOp::Write,
+                    compaction_work * bytes_per_sec / 100 / 1000 / 2,
+                ),
+                Some(Duration::from_millis(1)),
+            );
+            let _import = start_background_jobs(
+                &limiter,
+                2, /*job_count*/
+                Request(
+                    IOType::Import,
+                    IOOp::Write,
+                    import_work * bytes_per_sec / 100 / 1000 / 2,
+                ),
+                Some(Duration::from_millis(1)),
+            );
             let begin = Instant::now();
-            {
-                let _write = start_background_jobs(
-                    &limiter,
-                    2, /*job_count*/
-                    Request(
-                        IOType::ForegroundWrite,
-                        IOOp::Write,
-                        write_work * bytes_per_sec / 100 / 1000 / 2,
-                    ),
-                    Some(Duration::from_millis(1)),
-                );
-                let _compaction = start_background_jobs(
-                    &limiter,
-                    2, /*job_count*/
-                    Request(
-                        IOType::Compaction,
-                        IOOp::Write,
-                        compaction_work * bytes_per_sec / 100 / 1000 / 2,
-                    ),
-                    Some(Duration::from_millis(1)),
-                );
-                let _import = start_background_jobs(
-                    &limiter,
-                    2, /*job_count*/
-                    Request(
-                        IOType::Import,
-                        IOOp::Write,
-                        import_work * bytes_per_sec / 100 / 1000 / 2,
-                    ),
-                    Some(Duration::from_millis(1)),
-                );
-                std::thread::sleep(Duration::from_secs(2));
-            }
+            std::thread::sleep(Duration::from_secs(2));
             let end = Instant::now();
             end.duration_since(begin)
         };
@@ -545,12 +543,9 @@ mod tests {
             (write_work * bytes_per_sec / 100) as f64 * duration.as_secs_f64(),
         );
         let compaction_bytes = stats.fetch(IOType::Compaction, IOOp::Write);
-        approximate_eq(
-            compaction_bytes as f64,
-            ((100 - write_work) * bytes_per_sec / 100) as f64 * duration.as_secs_f64(),
-        );
         let import_bytes = stats.fetch(IOType::Import, IOOp::Write);
         let total_bytes = write_bytes + import_bytes + compaction_bytes;
+        approximate_eq((compaction_bytes + write_bytes) as f64, total_bytes as f64);
         approximate_eq(
             total_bytes as f64,
             bytes_per_sec as f64 * duration.as_secs_f64(),
