@@ -185,28 +185,9 @@ pub fn get_region_approximate_keys(
     let start = keys::enc_start_key(region);
     let end = keys::enc_end_key(region);
     let range = Range::new(&start, &end);
-    Ok(box_try!(db.get_range_approximate_keys(
-        range,
-        region.get_id(),
-        large_threshold
-    )))
-}
-
-pub fn get_region_approximate_keys_cf(
-    db: &impl KvEngine,
-    cfname: &str,
-    region: &Region,
-    large_threshold: u64,
-) -> Result<u64> {
-    let start = keys::enc_start_key(region);
-    let end = keys::enc_end_key(region);
-    let range = Range::new(&start, &end);
-    Ok(box_try!(db.get_range_approximate_keys_cf(
-        cfname,
-        range,
-        region.get_id(),
-        large_threshold
-    )))
+    Ok(box_try!(
+        db.get_range_approximate_keys(range, large_threshold)
+    ))
 }
 
 #[cfg(test)]
@@ -288,7 +269,7 @@ mod tests {
         };
 
         let mut runnable =
-            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx), cfg);
+            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
 
         // so split key will be z0080
         put_data(&engine, 0, 90, false);
