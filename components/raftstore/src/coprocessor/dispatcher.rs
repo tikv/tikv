@@ -9,6 +9,7 @@ use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{ComputeHashRequest, RaftCmdRequest};
 use raft::eraftpb;
+use tikv_util::box_try;
 
 use super::*;
 use crate::store::CasualRouter;
@@ -581,6 +582,7 @@ mod tests {
     use kvproto::raft_cmdpb::{
         AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request,
     };
+    use tikv_util::box_err;
 
     #[derive(Clone, Default)]
     struct TestCoprocessor {

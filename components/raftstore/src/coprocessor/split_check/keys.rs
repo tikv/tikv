@@ -7,6 +7,7 @@ use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use std::marker::PhantomData;
 use std::mem;
 use std::sync::{Arc, Mutex};
+use tikv_util::{box_try, debug, info, warn};
 
 use super::super::error::Result;
 use super::super::metrics::*;
