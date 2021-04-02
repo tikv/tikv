@@ -15,14 +15,8 @@ where
 
     assert_eq!(iter.valid().unwrap(), false);
 
-    assert!(panic::catch_unwind(AssertUnwindSafe(|| {
-        let _ = iter.prev();
-    }))
-    .is_err());
-    assert!(panic::catch_unwind(AssertUnwindSafe(|| {
-        let _ = iter.next();
-    }))
-    .is_err());
+    assert!(iter.prev().is_err());
+    assert!(iter.next().is_err());
     assert!(panic::catch_unwind(AssertUnwindSafe(|| {
         iter.key();
     }))
