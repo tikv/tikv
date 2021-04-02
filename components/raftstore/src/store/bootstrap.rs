@@ -10,6 +10,7 @@ use engine_traits::{CF_DEFAULT, CF_RAFT};
 
 use kvproto::metapb;
 use kvproto::raft_serverpb::{RaftLocalState, RegionLocalState, StoreIdent};
+use tikv_util::{box_err, box_try};
 
 pub fn initial_region(store_id: u64, region_id: u64, peer_id: u64) -> metapb::Region {
     let mut region = metapb::Region::default();

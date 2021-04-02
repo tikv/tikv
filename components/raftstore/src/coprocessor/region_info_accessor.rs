@@ -17,6 +17,7 @@ use keys::{data_end_key, data_key};
 use kvproto::metapb::Region;
 use raft::StateRole;
 use tikv_util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer, Scheduler, Worker};
+use tikv_util::{box_err, debug, info, warn};
 
 /// `RegionInfoAccessor` is used to collect all regions' information on this TiKV into a collection
 /// so that other parts of TiKV can get region information from it. It registers a observer to
