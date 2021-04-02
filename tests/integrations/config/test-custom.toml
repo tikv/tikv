@@ -521,3 +521,18 @@ pipelined = true
 
 [cdc]
 min-ts-interval = "4s"
+<<<<<<< HEAD
+=======
+old-value-cache-size = 512
+hibernate-regions-compatible = false
+incremental-scan-speed-limit = 7
+
+[split]
+detect-times = 10
+qps-threshold = 3000
+sample-num = 20
+sample-threshold = 100
+byte-threshold = 31457280
+split.split-balance-score = 0.25
+split.split-contained-score = 0.5
+>>>>>>> 4807a3d61... cdc: limit scan speed (#9948)

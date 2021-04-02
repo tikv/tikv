@@ -185,7 +185,7 @@ impl Conn {
                 if version == &ver {
                     None
                 } else {
-                    error!("different version on the same connection";
+                    error!("cdc different version on the same connection";
                         "previous version" => ?version, "version" => ?ver,
                         "downstream" => ?self.peer, "conn_id" => ?self.id);
                     let mut compat = Compatibility::default();
@@ -198,7 +198,8 @@ impl Conn {
                 if v408_bacth_resoled_ts <= ver {
                     features.toggle(FeatureGate::BATCH_RESOLVED_TS);
                 }
-                info!("cdc connection version"; "version" => ver.to_string(), "features" => ?features);
+                info!("cdc connection version";
+                    "version" => ver.to_string(), "features" => ?features, "downstream" => ?self.peer);
                 self.version = Some((ver, features));
                 None
             }
@@ -368,11 +369,16 @@ impl ChangeData for Service {
                 error!("cdc deregister failed"; "error" => ?e, "conn_id" => ?conn_id);
             }
             match res {
+<<<<<<< HEAD
                 Ok(_s) => {
                     info!("cdc send closed"; "downstream" => peer, "conn_id" => ?conn_id);
+=======
+                Ok(()) => {
+                    info!("cdc receive closed"; "downstream" => peer, "conn_id" => ?conn_id);
+>>>>>>> 4807a3d61... cdc: limit scan speed (#9948)
                 }
                 Err(e) => {
-                    warn!("cdc send failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
+                    warn!("cdc receive failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
                 }
             }
             Ok(())
@@ -388,7 +394,12 @@ impl ChangeData for Service {
             }
             match res {
                 Ok(_s) => {
+<<<<<<< HEAD
                     info!("cdc send half closed"; "downstream" => peer, "conn_id" => ?conn_id);
+=======
+                    info!("cdc send closed"; "downstream" => peer, "conn_id" => ?conn_id);
+                    let _ = sink.close().await;
+>>>>>>> 4807a3d61... cdc: limit scan speed (#9948)
                 }
                 Err(e) => {
                     warn!("cdc send failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);

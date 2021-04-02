@@ -45,7 +45,7 @@ pub fn new_event_feed(
         if !keep_resolved_ts && change_data_event.has_resolved_ts() {
             continue;
         }
-        tikv_util::info!("receive event {:?}", change_data_event);
+        tikv_util::info!("cdc receive event {:?}", change_data_event);
         break change_data_event;
     };
     (req_tx, event_feed_wrap, receive_event)
@@ -113,8 +113,14 @@ impl TestSuite {
                 cluster.store_metas[id].clone(),
             );
             cdc_endpoint.set_min_ts_interval(Duration::from_millis(100));
+<<<<<<< HEAD
             cdc_endpoint.set_scan_batch_size(2);
             worker.start(cdc_endpoint).unwrap();
+=======
+            cdc_endpoint.set_max_scan_batch_size(2);
+            concurrency_managers.insert(*id, cm);
+            worker.start(cdc_endpoint);
+>>>>>>> 4807a3d61... cdc: limit scan speed (#9948)
         }
 
         TestSuite {
