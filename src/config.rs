@@ -2195,6 +2195,7 @@ pub struct CdcConfig {
     pub old_value_cache_size: usize,
     pub hibernate_regions_compatible: bool,
     pub scan_lock_pool_size: usize,
+    pub incremental_scan_speed_limit: ReadableSize,
 }
 
 impl Default for CdcConfig {
@@ -2204,6 +2205,9 @@ impl Default for CdcConfig {
             old_value_cache_size: 1024,
             hibernate_regions_compatible: true,
             scan_lock_pool_size: 2,
+            // TiCDC requires a SSD, the typical write speed of SSD
+            // is more than 500MB/s, so 128MB/s is enough.
+            incremental_scan_speed_limit: ReadableSize::mb(128),
         }
     }
 }
