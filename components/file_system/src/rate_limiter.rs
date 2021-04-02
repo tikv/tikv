@@ -3,8 +3,6 @@
 use super::metrics::tls_collect_rate_limiter_request_wait;
 use super::{IOOp, IOPriority, IOType};
 
-#[cfg(test)]
-use std::sync::atomic::AtomicBool;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
@@ -140,9 +138,11 @@ macro_rules! request_imp {
         // for this request to wait in.
         let pending_snapshot = {
             let mut locked = $limiter.protected.lock();
-            // double check if epoch has jumped and bytes consumption is reset
-            if $limiter.bytes_through[priority_idx].fetch_add(amount, Ordering::Relaxed) + amount
-                <= cached_bytes_per_refill
+            // when there is a recent refill, double check if bytes consumption has been reset
+            if now + DEFAULT_REFILL_PERIOD < locked.next_refill_time + Duration::from_millis(1)
+                && $limiter.bytes_through[priority_idx].fetch_add(amount, Ordering::Relaxed)
+                    + amount
+                    <= cached_bytes_per_refill
             {
                 return amount;
             }
@@ -385,6 +385,7 @@ pub fn get_io_rate_limiter() -> Option<Arc<IORateLimiter>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicBool;
 
     fn approximate_eq(left: f64, right: f64) {
         assert!(left >= right * 0.9);
