@@ -322,4 +322,192 @@ mod tests {
 
         assert!(s.as_ref().is_empty());
     }
+
+    fn get_enum_field_type() -> FieldType {
+        let mut field_type = FieldType::new();
+        field_type.set_tp(FieldTypeTp::Enum.to_u8().unwrap() as i32);
+
+        let elems = protobuf::RepeatedField::from_slice(&[
+            String::from("c"),
+            String::from("b"),
+            String::from("a"),
+        ]);
+        field_type.set_elems(elems);
+
+        field_type
+    }
+
+    #[test]
+    fn test_read_enum_uint() {
+        let field_type = get_enum_field_type();
+
+        let mut data: &[u8] = &[
+            0, 0, 0, 0, 0, 0, 0, 3, // 1st
+            0, 0, 0, 0, 0, 0, 0, 2, // 2nd
+            0, 0, 0, 0, 0, 0, 0, 1, // 3rd
+        ];
+        let result = [
+            Enum::new("a".as_bytes().to_owned(), 3),
+            Enum::new("b".as_bytes().to_owned(), 2),
+            Enum::new("c".as_bytes().to_owned(), 1),
+        ];
+        for res in result.iter() {
+            let got = data.read_enum_uint(&field_type).expect("read_enum_uint");
+            assert_eq!(&got, res);
+        }
+    }
+
+    #[test]
+    fn test_read_enum_var_uint() {
+        let field_type = get_enum_field_type();
+
+        let mut data: &[u8] = &[
+            3, // 1st
+            2, // 2nd
+            1, // 3rd
+        ];
+        let result = [
+            Enum::new("a".as_bytes().to_owned(), 3),
+            Enum::new("b".as_bytes().to_owned(), 2),
+            Enum::new("c".as_bytes().to_owned(), 1),
+        ];
+        for res in result.iter() {
+            let got = data
+                .read_enum_var_uint(&field_type)
+                .expect("read_enum_var_uint");
+            assert_eq!(&got, res);
+        }
+    }
+
+    #[test]
+    fn test_read_enum_compact_bytes() {
+        let field_type = get_enum_field_type();
+
+        let mut data: &[u8] = &[
+            2, 3, // 1st
+            2, 2, // 2nd
+            2, 1, // 3rd
+        ];
+        let result = [
+            Enum::new("a".as_bytes().to_owned(), 3),
+            Enum::new("b".as_bytes().to_owned(), 2),
+            Enum::new("c".as_bytes().to_owned(), 1),
+        ];
+        for res in result.iter() {
+            let got = data
+                .read_enum_compact_bytes(&field_type)
+                .expect("read_enum_compact_bytes");
+            assert_eq!(&got, res);
+        }
+    }
+
+    #[test]
+    fn test_write_enum() {
+        let data = [
+            EnumRef::new("a".as_bytes(), 3),
+            EnumRef::new("b".as_bytes(), 2),
+            EnumRef::new("c".as_bytes(), 1),
+        ];
+        let res: &[u8] = &[
+            3, 0, 0, 0, 0, 0, 0, 0, 97, // 1st
+            2, 0, 0, 0, 0, 0, 0, 0, 98, // 2nd
+            1, 0, 0, 0, 0, 0, 0, 0, 99, // 3rd
+        ];
+
+        let mut buf = Vec::new();
+        for datum in &data {
+            buf.write_enum(*datum).expect("write_enum");
+        }
+        assert_eq!(buf.as_slice(), res);
+    }
+
+    #[test]
+    fn test_write_enum_to_chunk() {
+        let data = [
+            ("a".as_bytes(), 3),
+            ("b".as_bytes(), 2),
+            ("c".as_bytes(), 1),
+        ];
+        let res: &[u8] = &[
+            3, 0, 0, 0, 0, 0, 0, 0, 97, // 1st
+            2, 0, 0, 0, 0, 0, 0, 0, 98, // 2nd
+            1, 0, 0, 0, 0, 0, 0, 0, 99, // 3rd
+        ];
+
+        let mut buf = Vec::new();
+        for datum in &data {
+            buf.write_enum_to_chunk(datum.1, datum.0)
+                .expect("write_enum_to_chunk");
+        }
+        assert_eq!(buf.as_slice(), res);
+    }
+
+    #[test]
+    fn test_write_enum_to_chunk_by_payload_compact_bytes() {
+        let field_type = get_enum_field_type();
+
+        let src: [&[u8]; 3] = [
+            &[2, 3], // 1st
+            &[2, 2], // 2nd
+            &[2, 1], // 3rd
+        ];
+        let mut dest = Vec::new();
+
+        let res: &[u8] = &[
+            3, 0, 0, 0, 0, 0, 0, 0, 97, // 1st
+            2, 0, 0, 0, 0, 0, 0, 0, 98, // 2nd
+            1, 0, 0, 0, 0, 0, 0, 0, 99, // 3rd
+        ];
+        for data in &src {
+            dest.write_enum_to_chunk_by_datum_payload_compact_bytes(*data, &field_type)
+                .expect("write_enum_to_chunk_by_payload_compact_bytes");
+        }
+        assert_eq!(&dest, res);
+    }
+
+    #[test]
+    fn test_write_enum_to_chunk_by_payload_uint() {
+        let field_type = get_enum_field_type();
+
+        let src: [&[u8]; 3] = [
+            &[0, 0, 0, 0, 0, 0, 0, 3], // 1st
+            &[0, 0, 0, 0, 0, 0, 0, 2], // 2nd
+            &[0, 0, 0, 0, 0, 0, 0, 1], // 3rd
+        ];
+        let mut dest = Vec::new();
+
+        let res: &[u8] = &[
+            3, 0, 0, 0, 0, 0, 0, 0, 97, // 1st
+            2, 0, 0, 0, 0, 0, 0, 0, 98, // 2nd
+            1, 0, 0, 0, 0, 0, 0, 0, 99, // 3rd
+        ];
+        for data in &src {
+            dest.write_enum_to_chunk_by_datum_payload_uint(*data, &field_type)
+                .expect("write_enum_to_chunk_by_payload_uint");
+        }
+        assert_eq!(&dest, res);
+    }
+
+    #[test]
+    fn test_write_enum_to_chunk_by_payload_var_uint() {
+        let field_type = get_enum_field_type();
+
+        let src: [&[u8]; 3] = [
+            &[3], // 1st
+            &[2], // 2nd
+            &[1], // 3rd
+        ];
+        let mut dest = Vec::new();
+
+        let res: &[u8] = &[
+            3, 0, 0, 0, 0, 0, 0, 0, 97, // 1st
+            2, 0, 0, 0, 0, 0, 0, 0, 98, // 2nd
+            1, 0, 0, 0, 0, 0, 0, 0, 99, // 3rd
+        ];
+        for data in &src {
+            dest.write_enum_to_chunk_by_datum_payload_var_uint(*data, &field_type)
+                .expect("write_enum_to_chunk_by_payload_var_uint");
+        }
+        assert_eq!(&dest, res);
+    }
 }
