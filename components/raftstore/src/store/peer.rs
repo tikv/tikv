@@ -7,10 +7,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
+use bitflags::bitflags;
 use crossbeam::atomic::AtomicCell;
 use crossbeam::channel::TrySendError;
 use engine_traits::{Engines, KvEngine, RaftEngine, Snapshot, WriteBatch, WriteOptions};
 use error_code::ErrorCodeExt;
+use fail::fail_point;
 use kvproto::errorpb;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{self, PeerRole};
@@ -55,6 +57,7 @@ use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::time::{Instant as UtilInstant, ThreadReadId};
 use tikv_util::worker::{FutureScheduler, Scheduler};
 use tikv_util::Either;
+use tikv_util::{box_err, debug, error, info, warn};
 
 use super::cmd_resp;
 use super::local_metrics::{RaftReadyMetrics, RaftSendMessageMetrics};
@@ -1210,6 +1213,12 @@ where
             return pending_peers;
         }
 
+        for i in 0..self.peers_start_pending_time.len() {
+            let (_, pending_after) = self.peers_start_pending_time[i];
+            let elapsed = duration_to_sec(pending_after.elapsed());
+            RAFT_PEER_PENDING_DURATION.observe(elapsed);
+        }
+
         let progresses = status.progress.unwrap().iter();
         for (&id, progress) in progresses {
             if id == self.peer.get_id() {
@@ -1279,6 +1288,7 @@ where
                 if progress.matched >= truncated_idx {
                     let (_, pending_after) = self.peers_start_pending_time.swap_remove(i);
                     let elapsed = duration_to_sec(pending_after.elapsed());
+                    RAFT_PEER_PENDING_DURATION.observe(elapsed);
                     debug!(
                         "peer has caught up logs";
                         "region_id" => self.region_id,
@@ -1653,6 +1663,7 @@ where
         }
 
         if !self.raft_group.has_ready() {
+            fail_point!("before_no_ready_gen_snap_task", |_| None);
             // Generating snapshot task won't set ready for raft group.
             if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
                 self.pending_request_snapshot_count
@@ -1721,6 +1732,16 @@ where
 
         if !ready.committed_entries().is_empty() {
             self.handle_raft_committed_entries(ctx, ready.take_committed_entries());
+        }
+        // Check whether there is a pending generate snapshot task, the task
+        // needs to be sent to the apply system.
+        // Always sending snapshot task behind apply task, so it gets latest
+        // snapshot.
+        if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
+            self.pending_request_snapshot_count
+                .fetch_add(1, Ordering::SeqCst);
+            ctx.apply_router
+                .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
         }
 
         let invoke_ctx = match self
@@ -1866,17 +1887,6 @@ where
                 .schedule_task(self.region_id, ApplyTask::apply(apply));
         }
         fail_point!("after_send_to_apply_1003", self.peer_id() == 1003, |_| {});
-        // Check whether there is a pending generate snapshot task, the task
-        // needs to be sent to the apply system.
-        // Always sending snapshot task behind apply task, so it gets latest
-        // snapshot.
-        // TODO: maybe we should move this code to other place to make the logic more clear.
-        if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
-            self.pending_request_snapshot_count
-                .fetch_add(1, Ordering::SeqCst);
-            ctx.apply_router
-                .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
-        }
     }
 
     pub fn handle_raft_ready_advance<T: Transport>(

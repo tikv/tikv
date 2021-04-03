@@ -798,7 +798,8 @@ impl ConvertTo<f64> for &[u8] {
     ///
     /// Port from TiDB's types.StrToFloat
     fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
-        let s = str::from_utf8(self)?.trim();
+        let s = get_valid_utf8_prefix(ctx, self)?;
+        let s = s.trim();
         let vs = get_valid_float_prefix(ctx, s)?;
         let val = vs
             .parse::<f64>()
@@ -1947,6 +1948,38 @@ mod tests {
         assert!(val.is_ok());
         assert_eq!(val.unwrap(), 1.2);
         assert_eq!(ctx.warnings.warnings.len(), 0);
+    }
+
+    #[test]
+    fn test_bytes_to_f64_invalid_utf8() {
+        let tests: Vec<(&'static [u8], Option<f64>)> = vec![
+            // 'a' + invalid_char
+            (&[0x61, 0xf7], Some(0.0)),
+            (&[0xf7, 0x61], Some(0.0)),
+            // '0' '1'
+            (&[0x30, 0x31], Some(1.0)),
+            // '0' '1' 'a'
+            (&[0x30, 0x31, 0x61], Some(1.0)),
+        ];
+
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING)));
+        for (i, (v, expect)) in tests.iter().enumerate() {
+            let ff: Result<f64> = v.convert(&mut ctx);
+            match expect {
+                Some(val) => {
+                    assert_eq!(ff.unwrap(), *val);
+                }
+                None => {
+                    assert!(
+                        ff.is_err(),
+                        "index: {}, {:?} should not be converted, but got: {:?}",
+                        i,
+                        v,
+                        ff
+                    );
+                }
+            }
+        }
     }
 
     #[test]

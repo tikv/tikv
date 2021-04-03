@@ -12,7 +12,7 @@ use std::sync::Mutex;
 use std::thread;
 
 use log::{self, SetLoggerError};
-use slog::{self, Drain, FnValue, Key, OwnedKVList, PushFnValue, Record, KV};
+use slog::{self, slog_o, Drain, FnValue, Key, OwnedKVList, PushFnValue, Record, KV};
 use slog_async::{Async, OverflowStrategy};
 use slog_term::{Decorator, PlainDecorator, RecordDecorator};
 
@@ -534,7 +534,7 @@ fn write_log_fields(
 
     values.serialize(record, &mut serializer)?;
 
-    serializer.finish()?;
+    serializer.finish();
 
     Ok(())
 }
@@ -554,9 +554,7 @@ impl<'a> Serializer<'a> {
         Ok(())
     }
 
-    fn finish(self) -> io::Result<()> {
-        Ok(())
-    }
+    fn finish(self) {}
 }
 
 impl<'a> Drop for Serializer<'a> {
