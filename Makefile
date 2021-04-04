@@ -133,7 +133,7 @@ export CARGO_BUILD_PIPELINING=true
 .PHONY: fail_release prof_release release unportable_release
 
 
-default: release
+default: debug
 
 clean:
 	cargo clean
@@ -150,6 +150,9 @@ dev: format clippy
 
 build:
 	PROXY_ENABLE_FEATURES="${ENABLE_FEATURES}" ./build.sh
+
+debug:
+	./debug.sh
 
 ## Release builds (optimized dev builds)
 ## ----------------------------
