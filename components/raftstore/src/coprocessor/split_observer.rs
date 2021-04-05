@@ -2,6 +2,7 @@
 
 use super::{AdminObserver, Coprocessor, ObserverContext, Result as CopResult};
 use tikv_util::codec::bytes::{self, encode_bytes};
+use tikv_util::{box_err, box_try, error, warn};
 
 use crate::store::util;
 use kvproto::metapb::Region;

@@ -7,9 +7,10 @@ use std::sync::{
     Arc,
 };
 use std::thread::{Builder, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{cmp, io};
 
+use fail::fail_point;
 use futures::future::TryFutureExt;
 use tokio::task::spawn_local;
 
@@ -35,11 +36,15 @@ use crate::store::{
 
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
+use futures::compat::Future01CompatExt;
+use futures::FutureExt;
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::UnixSecs;
+use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
+use tikv_util::{box_err, debug, error, info, thd_name, warn};
 
 type RecordPairVec = Vec<pdpb::RecordPair>;
 
@@ -992,7 +997,22 @@ where
                 );
             }
         };
-        spawn_local(f);
+
+        #[cfg(feature = "failpoints")]
+        let delay = (|| {
+            fail_point!("delay_update_max_ts", |_| true);
+            false
+        })();
+        #[cfg(not(feature = "failpoints"))]
+        let delay = false;
+
+        if delay {
+            info!("[failpoint] delay update max ts for 1s"; "region_id" => region_id);
+            let deadline = Instant::now() + Duration::from_secs(1);
+            spawn_local(GLOBAL_TIMER_HANDLE.delay(deadline).compat().then(|_| f));
+        } else {
+            spawn_local(f);
+        }
     }
 
     fn handle_query_region_leader(&self, region_id: u64) {

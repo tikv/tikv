@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use fail::fail_point;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -26,6 +27,7 @@ use crate::{Error, Result};
 use engine_traits::{RaftEngine, RaftLogBatch};
 use into_other::into_other;
 use tikv_util::worker::Scheduler;
+use tikv_util::{box_err, box_try, debug, defer, error, info, warn};
 
 use super::metrics::*;
 use super::worker::RegionTask;

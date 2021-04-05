@@ -13,6 +13,7 @@ use rand::Rng;
 
 use collections::HashMap;
 use tikv_util::config::Tracker;
+use tikv_util::{debug, info};
 
 use crate::store::metrics::*;
 use crate::store::worker::split_config::DEFAULT_SAMPLE_NUM;

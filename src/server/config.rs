@@ -180,7 +180,8 @@ impl Default for Config {
             raft_client_backoff_step: ReadableDuration::secs(1),
             background_thread_count,
             end_point_slow_log_threshold: ReadableDuration::secs(1),
-            forward_max_connections_per_address: 2,
+            // Go tikv client uses 4 as well.
+            forward_max_connections_per_address: 4,
         }
     }
 }
