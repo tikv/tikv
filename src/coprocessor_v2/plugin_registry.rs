@@ -34,8 +34,10 @@ impl PluginRegistry {
                 match rx.recv() {
                     Ok(DebouncedEvent::Create(file)) => {
                         if is_library_file(&file) {
-                            // intentionally ignore error
-                            let _ = hot_reload_registry.write().unwrap().load_plugin(&file);
+                            let r = hot_reload_registry.write().unwrap().load_plugin(&file);
+                            if let Err(err) = r {
+                                warn!("failed to load coprocessor plugin. Maybe not compiled correctly as a TiKV plugin?"; "plugin_path" => file.display(), "error" => ?err);
+                            }
                         }
                     }
                     Ok(DebouncedEvent::Remove(file)) => {
@@ -82,8 +84,10 @@ impl PluginRegistry {
         for entry in std::fs::read_dir(&plugin_directory)? {
             if let Ok(file) = entry.map(|f| f.path()) {
                 if is_library_file(&file) {
-                    // intentionally ignore error
-                    let _ = self.load_plugin(&file);
+                    let r = self.load_plugin(&file);
+                    if let Err(err) = r {
+                        warn!("failed to load coprocessor plugin. Maybe not compiled correctly as a TiKV plugin?"; "plugin_path" => file.display(), "error" => ?err);
+                    }
                 }
             }
         }
