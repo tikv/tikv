@@ -167,7 +167,7 @@ impl PendingDeleteRanges {
     ) -> Vec<(u64, Vec<u8>, Vec<u8>, u64)> {
         let ranges = self.find_overlap_ranges(start_key, end_key);
 
-        for &(_, ref s_key, _, _) in &ranges {
+        for &(_, ref s_key, ..) in &ranges {
             self.ranges.remove(s_key).unwrap();
         }
         ranges

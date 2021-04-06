@@ -186,10 +186,11 @@ mod tests {
         let mut statistics = CfStatistics::default();
         let res = iter.seek(&Key::from_raw(b"foo"), &mut statistics);
         assert!(res.is_err());
-        assert!(res
-            .unwrap_err()
-            .to_string()
-            .contains("Result incomplete: Too many internal keys skipped"));
+        assert!(
+            res.unwrap_err()
+                .to_string()
+                .contains("Result incomplete: Too many internal keys skipped")
+        );
     }
 
     fn test_perf_statistics<E: Engine>(engine: &E) {

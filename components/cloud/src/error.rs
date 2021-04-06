@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::fmt::{Debug, Display};
 use std::io::{Error as IoError, ErrorKind};
 use std::{error, result};

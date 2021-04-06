@@ -87,9 +87,11 @@ impl Config {
             self.data_dir = config::canonicalize_path(&self.data_dir)?
         }
         if self.scheduler_concurrency > MAX_SCHED_CONCURRENCY {
-            warn!("TiKV has optimized latch since v4.0, so it is not necessary to set large schedule \
+            warn!(
+                "TiKV has optimized latch since v4.0, so it is not necessary to set large schedule \
                 concurrency. To save memory, change it from {:?} to {:?}",
-                  self.scheduler_concurrency, MAX_SCHED_CONCURRENCY);
+                self.scheduler_concurrency, MAX_SCHED_CONCURRENCY
+            );
             self.scheduler_concurrency = MAX_SCHED_CONCURRENCY;
         }
         self.io_rate_limit.validate()
@@ -222,7 +224,10 @@ impl BlockCacheConfig {
                         return Some(allocator);
                     }
                     Err(e) => {
-                        warn!("Create jemalloc nodump allocator for block cache failed: {}, continue with default allocator", e);
+                        warn!(
+                            "Create jemalloc nodump allocator for block cache failed: {}, continue with default allocator",
+                            e
+                        );
                     }
                 },
                 "" => {}

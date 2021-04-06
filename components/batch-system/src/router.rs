@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tikv_util::lru::LruCache;
 use tikv_util::Either;
+use tikv_util::{debug, info};
 
 enum CheckDoResult<T> {
     NotExist,

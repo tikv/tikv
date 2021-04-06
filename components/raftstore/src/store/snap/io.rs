@@ -44,10 +44,9 @@ pub fn build_plain_cf_file<E>(
 where
     E: KvEngine,
 {
-    let mut file = Some(box_try!(OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)));
+    let mut file = Some(box_try!(
+        OpenOptions::new().write(true).create_new(true).open(path)
+    ));
     let mut encrypted_file: Option<EncrypterWriter<File>> = None;
     let mut should_encrypt = false;
 

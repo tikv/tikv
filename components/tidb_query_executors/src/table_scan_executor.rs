@@ -540,7 +540,7 @@ mod tests {
         fn point_ranges(&self) -> Vec<KeyRange> {
             self.data
                 .iter()
-                .map(|(row_id, _, _)| {
+                .map(|(row_id, ..)| {
                     let mut r = KeyRange::default();
                     r.set_start(table::encode_row_key(self.table_id, *row_id));
                     r.set_end(r.get_start().to_vec());

@@ -767,7 +767,7 @@ impl<T: Simulator> Cluster<T> {
 
             let resp = match result {
                 e @ Err(Error::Timeout(_))
-                | e @ Err(Error::NotLeader(_, _))
+                | e @ Err(Error::NotLeader(..))
                 | e @ Err(Error::StaleCommand) => {
                     warn!("call command failed, retry it"; "err" => ?e);
                     sleep_ms(100);
