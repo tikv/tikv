@@ -24,7 +24,8 @@ mod metrics;
 
 pub use self::config::*;
 pub use self::crypter::{
-    encryption_method_from_db_encryption_method, verify_encryption_config, AesGcmCrypter, Iv,
+    compat, encryption_method_from_db_encryption_method, verify_encryption_config, AesGcmCrypter,
+    Iv,
 };
 pub use self::encrypted_file::EncryptedFile;
 pub use self::errors::{Error, Result};
