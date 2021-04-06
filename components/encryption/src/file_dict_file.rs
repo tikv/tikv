@@ -5,7 +5,7 @@ use file_system::{rename, File, OpenOptions};
 use kvproto::encryptionpb::{EncryptedContent, FileDictionary, FileInfo};
 use protobuf::Message;
 use rand::{thread_rng, RngCore};
-use tikv_util::{box_err, info, set_panic_mark, warn};
+use tikv_util::{box_err, set_panic_mark, warn};
 
 use crate::encrypted_file::{EncryptedFile, Header, Version, TMP_FILE_SUFFIX};
 use crate::master_key::{Backend, PlaintextBackend};
@@ -194,7 +194,7 @@ impl FileDictionaryFile {
                             }
                         }
                         Err(e @ Error::TailRecordParseIncomplete) => {
-                            info!(
+                            warn!(
                                 "{:?} occurred and the last complete filename is {}",
                                 e, last_record_name
                             );
