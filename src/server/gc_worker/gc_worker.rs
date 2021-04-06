@@ -284,7 +284,7 @@ where
     fn gc_keys(&mut self, keys: Vec<Key>, safe_point: TimeStamp) -> Result<()> {
         let snapshot = self.engine.snapshot_on_kv_engine(b"", b"")?;
         let mut txn = Self::new_txn();
-        let mut reader = MvccReader::new(snapshot, Some(ScanMode::Forward), false);
+        let mut reader = MvccReader::new(snapshot, None /*scan_mode*/, false);
         let mut gc_info = GcInfo::default();
         let mut keys = keys.into_iter();
         let mut next_gc_key = keys.next();
