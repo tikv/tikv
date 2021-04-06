@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use crate::storage::mvcc::{
     GcInfo, MvccReader, MvccTxn, Result as MvccResult, GC_DELETE_VERSIONS_HISTOGRAM,
     MAX_TXN_WRITE_SIZE, MVCC_VERSIONS_HISTOGRAM,

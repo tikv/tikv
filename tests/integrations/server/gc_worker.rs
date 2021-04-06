@@ -231,9 +231,11 @@ fn test_applied_lock_collector() {
         must_register_lock_observer(c, safe_point);
         assert!(must_check_lock_observer(c, safe_point, true).is_empty());
         // Can't register observer with smaller max_ts.
-        assert!(!register_lock_observer(&c, safe_point - 1)
-            .get_error()
-            .is_empty());
+        assert!(
+            !register_lock_observer(&c, safe_point - 1)
+                .get_error()
+                .is_empty()
+        );
         assert!(must_check_lock_observer(c, safe_point, true).is_empty());
     });
     let leader_client = clients.get(&leader_store_id).unwrap();
@@ -250,9 +252,11 @@ fn test_applied_lock_collector() {
         let locks = must_check_lock_observer(c, safe_point, true);
         assert_eq!(locks.len(), 1, "{:?}", locks);
         // Shouldn't remove it with a wrong max ts.
-        assert!(!remove_lock_observer(c, safe_point - 1)
-            .get_error()
-            .is_empty());
+        assert!(
+            !remove_lock_observer(c, safe_point - 1)
+                .get_error()
+                .is_empty()
+        );
         let locks = must_check_lock_observer(c, safe_point, true);
         assert_eq!(locks.len(), 1, "{:?}", locks);
         // Remove lock observers.

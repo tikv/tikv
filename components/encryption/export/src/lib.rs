@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use async_trait::async_trait;
 use derive_more::Deref;
 use error_code::{self, ErrorCode, ErrorCodeExt};
