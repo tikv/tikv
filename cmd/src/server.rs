@@ -936,6 +936,8 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         servers.lock_mgr.stop();
 
+        file_system::stop_io_snooper();
+
         self.to_stop.into_iter().for_each(|s| s.stop());
     }
 }

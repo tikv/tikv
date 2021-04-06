@@ -4,9 +4,9 @@ use crate::metrics::*;
 use crate::IOBytes;
 use crate::IOType;
 
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::ptr;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use bcc::{table::Table, Kprobe, BPF};
@@ -56,23 +56,13 @@ struct BPFContext {
 static mut IO_TYPE_ARRAY: [CachePadded<IOType>; MAX_THREAD_IDX + 1] =
     [CachePadded::new(IOType::Other); MAX_THREAD_IDX + 1];
 
+thread_local! {
+    static TYPE_TABLE_INITIALIZED: RefCell<bool> = RefCell::new(false);
+}
+
 // The index of the element of IO_TYPE_ARRAY for this thread to access.
 thread_local! {
-    static IDX: IdxWrapper = unsafe {
-        let idx = IDX_ALLOCATOR.allocate();
-        if let Some(ctx) = BPF_CONTEXT.as_mut() {
-            let tid = nix::unistd::gettid().as_raw() as u32;
-            let ptr : *const *const _ = &IO_TYPE_ARRAY.as_ptr().add(idx.0);
-            ctx.type_table.set(
-                &mut tid.to_ne_bytes(),
-                std::slice::from_raw_parts_mut(
-                    ptr as *mut u8,
-                    std::mem::size_of::<*const IOType>(),
-                ),
-            ).unwrap();
-        }
-        idx
-    }
+    static IDX: IdxWrapper = IDX_ALLOCATOR.allocate();
 }
 
 struct IdxWrapper(usize);
@@ -81,12 +71,6 @@ impl Drop for IdxWrapper {
     fn drop(&mut self) {
         unsafe { *IO_TYPE_ARRAY[self.0] = IOType::Other };
         IDX_ALLOCATOR.free(self.0);
-
-        // drop() of static variables won't be called when program exits.
-        // We need to call drop() of BPF to detach kprobe.
-        if IDX_ALLOCATOR.is_all_free() {
-            unsafe { BPF_CONTEXT.take() };
-        }
     }
 }
 
@@ -96,19 +80,16 @@ lazy_static! {
 
 struct IdxAllocator {
     free_list: Mutex<VecDeque<usize>>,
-    count: AtomicUsize,
 }
 
 impl IdxAllocator {
     fn new() -> Self {
         IdxAllocator {
             free_list: Mutex::new((0..MAX_THREAD_IDX).into_iter().collect()),
-            count: AtomicUsize::new(0),
         }
     }
 
     fn allocate(&self) -> IdxWrapper {
-        self.count.fetch_add(1, Ordering::SeqCst);
         IdxWrapper(
             if let Some(idx) = self.free_list.lock().unwrap().pop_front() {
                 idx
@@ -119,25 +100,41 @@ impl IdxAllocator {
     }
 
     fn free(&self, idx: usize) {
-        self.count.fetch_sub(1, Ordering::SeqCst);
         if idx != MAX_THREAD_IDX {
             self.free_list.lock().unwrap().push_back(idx);
         }
-    }
-
-    fn is_all_free(&self) -> bool {
-        self.count.load(Ordering::SeqCst) == 0
     }
 }
 
 pub fn set_io_type(new_io_type: IOType) {
     unsafe {
-        IDX.with(|idx| {
-            // if MAX_THREAD_IDX, keep IOType::Other always
-            if idx.0 != MAX_THREAD_IDX {
-                *IO_TYPE_ARRAY[idx.0] = new_io_type;
-            }
-        })
+        // if MAX_THREAD_IDX, keep IOType::Other always
+        let idx = IDX.with(|idx| idx.0);
+        if idx >= MAX_THREAD_IDX {
+            return;
+        }
+        *IO_TYPE_ARRAY[idx] = new_io_type;
+        let initialized = TYPE_TABLE_INITIALIZED.with(|initialized| *initialized.borrow());
+        if initialized {
+            return;
+        }
+        // Set IO type buffer type_by_pid table if needed.
+        if let Some(ctx) = BPF_CONTEXT.as_mut() {
+            let tid = nix::unistd::gettid().as_raw() as u32;
+            let ptr: *const *const _ = &IO_TYPE_ARRAY.as_ptr().add(idx);
+            ctx.type_table
+                .set(
+                    &mut tid.to_ne_bytes(),
+                    std::slice::from_raw_parts_mut(
+                        ptr as *mut u8,
+                        std::mem::size_of::<*const IOType>(),
+                    ),
+                )
+                .unwrap();
+            TYPE_TABLE_INITIALIZED.with(|initialized| {
+                initialized.replace(true);
+            });
+        }
     };
 }
 
@@ -160,6 +157,8 @@ pub(crate) fn fetch_io_bytes(mut io_type: IOType) -> IOBytes {
     IOBytes::default()
 }
 
+// For each process, it is supposed to call init_io_snooper() and stop_io_snooper_if_needed() once,
+// otherwise type_by_pid table won't be correctly set for the second time IO snooper is setup.
 pub fn init_io_snooper() -> Result<(), String> {
     unsafe {
         if BPF_CONTEXT.is_some() {
@@ -209,6 +208,11 @@ pub fn init_io_snooper() -> Result<(), String> {
         });
     }
     Ok(())
+}
+
+pub fn stop_io_snooper() {
+    // Implicitly call bcc::BPF::drop() to detach kprobe.
+    unsafe { BPF_CONTEXT.take() };
 }
 
 macro_rules! flush_io_latency {
@@ -265,7 +269,7 @@ mod tests {
     use super::{fetch_io_bytes, flush_io_latency_metrics};
     use crate::iosnoop::imp::{BPF_CONTEXT, MAX_THREAD_IDX};
     use crate::metrics::*;
-    use crate::{get_io_type, init_io_snooper, set_io_type, IOType};
+    use crate::{get_io_type, init_io_snooper, set_io_type, stop_io_snooper, IOType};
     use rand::Rng;
     use std::sync::{Arc, Condvar, Mutex};
     use std::{
@@ -285,9 +289,8 @@ mod tests {
         // To make them not affect each other, run them in sequence.
         test_thread_idx_allocation();
         test_io_context();
-        unsafe {
-            BPF_CONTEXT.take();
-        }
+        stop_io_snooper();
+        assert!(unsafe { BPF_CONTEXT.is_none() });
     }
 
     fn test_io_context() {
@@ -402,6 +405,7 @@ mod tests {
     fn bench_write_enable_io_snoop(b: &mut Bencher) {
         init_io_snooper().unwrap();
         bench_write(b);
+        stop_io_snooper();
     }
 
     #[bench]
@@ -416,6 +420,7 @@ mod tests {
     fn bench_read_enable_io_snoop(b: &mut Bencher) {
         init_io_snooper().unwrap();
         bench_read(b);
+        stop_io_snooper();
     }
 
     #[bench]
@@ -450,6 +455,7 @@ mod tests {
         b.iter(|| {
             flush_io_latency_metrics();
         });
+        stop_io_snooper();
     }
 
     fn bench_write(b: &mut Bencher) {
