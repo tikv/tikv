@@ -239,17 +239,16 @@ macro_rules! request_imp {
                 return amount;
             }
             locked.pending_bytes[priority_idx] += remains;
-            let pending_snapshot = locked.pending_bytes[priority_idx];
             if locked.next_refill_time <= now {
                 $limiter.refill(&mut locked, now);
             } else {
                 wait += locked.next_refill_time - now;
             }
-            pending_snapshot
+            // already subtracted bytes served by next epoch during refill
+            locked.pending_bytes[priority_idx]
         };
-        // calculate wait duration by queue_len / service_rate, formula below equivalent to
-        // ceiling(pending_snapshot as f32 / cached_bytes_per_epoch as f32 - 1.0)
-        wait += DEFAULT_REFILL_PERIOD * ((pending_snapshot - 1) / cached_bytes_per_epoch) as u32;
+        // calculate wait duration by queue_len / service_rate
+        wait += DEFAULT_REFILL_PERIOD * (pending_snapshot / cached_bytes_per_epoch) as u32;
         do_sleep!(wait, $mode);
         tls_collect_rate_limiter_request_wait($priority.as_str(), wait);
         amount
@@ -293,7 +292,7 @@ impl PriorityBasedIORateLimiter {
         request_imp!(self, priority, amount, skewed_sync)
     }
 
-    /// Update and refill IO budgets for next epoch based on IO priority.
+    /// Updates and refills IO budgets for next epoch based on IO priority.
     /// Here we provide best-effort priority control:
     /// 1) Limited IO budget is assigned to lower priority to make sure higher priority can always
     ///    consume the same IO amount as the last few epochs within global threshold.
