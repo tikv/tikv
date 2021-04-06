@@ -10,6 +10,7 @@ use rocksdb::{
     DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType, HistogramData, DB,
 };
 use std::i64;
+use tikv_util::warn;
 
 make_auto_flush_static_metric! {
     pub label_enum TickerName {

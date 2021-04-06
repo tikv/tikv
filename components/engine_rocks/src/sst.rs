@@ -8,6 +8,7 @@ use engine_traits::CF_DEFAULT;
 use engine_traits::{ExternalSstFileInfo, SstCompressionType, SstWriter, SstWriterBuilder};
 use engine_traits::{Iterable, Result, SstExt, SstReader};
 use engine_traits::{Iterator, SeekKey};
+use fail::fail_point;
 use rocksdb::rocksdb::supported_compression;
 use rocksdb::DBCompressionType;
 use rocksdb::DBIterator;
