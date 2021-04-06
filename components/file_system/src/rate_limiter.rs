@@ -222,10 +222,9 @@ macro_rules! request_imp {
             return amount;
         }
         let now = Instant::now_coarse();
-        let mut wait = Duration::from_millis(0);
         // acquire current value of pending bytes, which denotes a position of logical queue
         // for this request to wait in.
-        {
+        let wait = {
             let mut locked = $limiter.protected.lock();
             // already served partially by current epoch when consumption overflow bytes is
             // smaller than requested amount
@@ -244,17 +243,16 @@ macro_rules! request_imp {
                 $limiter.refill(&mut locked, now);
                 // bytes served by next epoch (and skipped epochs) during refill are subtracted
                 // from pending_bytes, round up the rest
-                wait += DEFAULT_REFILL_PERIOD
+                DEFAULT_REFILL_PERIOD
                     * ((locked.pending_bytes[priority_idx] + cached_bytes_per_epoch - 1)
-                        / cached_bytes_per_epoch) as u32;
+                        / cached_bytes_per_epoch) as u32
             } else {
                 // `(a-1)/b` is equivalent to `roundup(a.saturating_sub(b)/b)`
-                wait += locked.next_refill_time - now
+                locked.next_refill_time - now
                     + DEFAULT_REFILL_PERIOD
-                        * ((locked.pending_bytes[priority_idx] - 1) / cached_bytes_per_epoch)
-                            as u32;
+                        * ((locked.pending_bytes[priority_idx] - 1) / cached_bytes_per_epoch) as u32
             }
-        }
+        };
         do_sleep!(wait, $mode);
         tls_collect_rate_limiter_request_wait($priority.as_str(), wait);
         amount
@@ -314,7 +312,6 @@ impl PriorityBasedIORateLimiter {
         let skipped_epochs = ((now - locked.next_refill_time).as_secs_f64()
             / DEFAULT_REFILL_PERIOD.as_secs_f64()
             + 0.5) as usize;
-        // keep in sync with a potentially skewed clock
         locked.next_refill_time = now + DEFAULT_REFILL_PERIOD;
         let mut limit = self.bytes_per_epoch[IOPriority::High as usize].load(Ordering::Relaxed);
         if limit == 0 {
@@ -340,7 +337,7 @@ impl PriorityBasedIORateLimiter {
             locked.pending_bytes[p] =
                 locked.pending_bytes[p].saturating_sub(limit * skipped_epochs);
             // calculate next epoch's budgets used to serve pending bytes
-            let satisfied = if locked.pending_bytes[p] > limit {
+            let served_pending_bytes = if locked.pending_bytes[p] > limit {
                 // pass on pending bytes that still can't be served
                 locked.pending_bytes[p] -= limit;
                 limit
@@ -349,7 +346,7 @@ impl PriorityBasedIORateLimiter {
             };
             locked.history_bytes[p] += std::cmp::min(
                 // add these bytes to next epoch's consumption
-                self.bytes_through[p].swap(satisfied, Ordering::Relaxed),
+                self.bytes_through[p].swap(served_pending_bytes, Ordering::Relaxed),
                 limit,
             );
             if should_update_budgets {
@@ -367,13 +364,13 @@ impl PriorityBasedIORateLimiter {
             }
         }
         let p = IOPriority::Low as usize;
-        let satisfied = if locked.pending_bytes[p] > limit {
+        let served_pending_bytes = if locked.pending_bytes[p] > limit {
             locked.pending_bytes[p] -= limit;
             limit
         } else {
             std::mem::replace(&mut locked.pending_bytes[p], 0)
         };
-        self.bytes_through[p].store(satisfied, Ordering::Relaxed);
+        self.bytes_through[p].store(served_pending_bytes, Ordering::Relaxed);
     }
 
     #[cfg(test)]
@@ -381,6 +378,15 @@ impl PriorityBasedIORateLimiter {
         let mut locked = self.protected.lock();
         locked.next_refill_time = now;
         self.refill(&mut locked, now);
+    }
+
+    #[cfg(test)]
+    fn reset(&self) {
+        let mut locked = self.protected.lock();
+        for p in &[IOPriority::High, IOPriority::Medium] {
+            let p = *p as usize;
+            locked.pending_bytes[p] = 0;
+        }
     }
 }
 
@@ -597,6 +603,7 @@ mod tests {
         let stats = limiter.statistics().unwrap();
         limiter.set_io_rate_limit(bytes_per_sec);
         stats.reset();
+        limiter.throughput_limiter.reset();
         let actual_duration = {
             let begin = Instant::now();
             {
