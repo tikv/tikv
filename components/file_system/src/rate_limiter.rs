@@ -14,6 +14,8 @@ use parking_lot::{Mutex, MutexGuard};
 use strum::EnumCount;
 use tikv_util::time::Instant;
 
+const DEFAULT_REFILL_PERIOD: Duration = Duration::from_millis(50);
+
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub enum IORateLimitMode {
     WriteOnly,
@@ -148,8 +150,6 @@ impl IORateLimiterStatistics {
     }
 }
 
-const DEFAULT_REFILL_PERIOD: Duration = Duration::from_millis(50);
-
 /// Limit total IO flow below provided threshold by throttling lower-priority IOs.
 /// Rate limit is disabled when total IO threshold is set to zero.
 #[derive(Debug)]
@@ -193,7 +193,7 @@ macro_rules! do_sleep {
         use rand::Rng;
         let mut rng = rand::thread_rng();
         let subtraction: bool = rng.gen();
-        let offset = std::cmp::min(Duration::from_millis(1), $duration / 100);
+        let offset = std::cmp::min(Duration::from_millis(1), ($duration) / 100);
         std::thread::sleep(if subtraction {
             $duration - offset
         } else {
@@ -204,22 +204,21 @@ macro_rules! do_sleep {
 
 /// Actual implementation for requesting IOs from PriorityBasedIORateLimiter.
 /// An attempt will first be recorded. If the attempted amount exceeds the available quotas of
-/// current epoch, the requester will be queued and sleep until served.
+/// current epoch, the requester will be queued (logically) and sleep until served.
 /// Macro is necessary to de-dup codes used both in async/sync functions.
 macro_rules! request_imp {
     ($limiter:ident, $priority:ident, $amount:ident, $mode:tt) => {{
         let priority_idx = $priority as usize;
-        let cached_bytes_per_refill =
-            $limiter.bytes_per_epoch[priority_idx].load(Ordering::Relaxed);
+        let cached_bytes_per_epoch = $limiter.bytes_per_epoch[priority_idx].load(Ordering::Relaxed);
         // flow control is disabled when limit is zero
-        if cached_bytes_per_refill == 0 {
+        if cached_bytes_per_epoch == 0 {
             return $amount;
         }
-        let amount = std::cmp::min($amount, cached_bytes_per_refill);
+        let amount = std::cmp::min($amount, cached_bytes_per_epoch);
         let bytes_through =
-            $limiter.bytes_through[priority_idx].fetch_add(amount, Ordering::AcqRel) + amount;
+            $limiter.bytes_through[priority_idx].fetch_add(amount, Ordering::Relaxed) + amount;
         // we prefer not to partially return only a portion of requested bytes
-        if bytes_through <= cached_bytes_per_refill {
+        if bytes_through <= cached_bytes_per_epoch {
             return amount;
         }
         let now = Instant::now_coarse();
@@ -230,12 +229,12 @@ macro_rules! request_imp {
             let mut locked = $limiter.protected.lock();
             // already served partially by current epoch when consumption overflow bytes is
             // smaller than requested amount
-            let remains = std::cmp::min(bytes_through - cached_bytes_per_refill, amount);
+            let remains = std::cmp::min(bytes_through - cached_bytes_per_epoch, amount);
             // when there is a recent refill, double check if bytes consumption has been reset
             if now + DEFAULT_REFILL_PERIOD < locked.next_refill_time + Duration::from_millis(1)
                 && $limiter.bytes_through[priority_idx].fetch_add(remains, Ordering::Relaxed)
                     + remains
-                    <= cached_bytes_per_refill
+                    <= cached_bytes_per_epoch
             {
                 return amount;
             }
@@ -248,8 +247,9 @@ macro_rules! request_imp {
             }
             pending_snapshot
         };
-        // calculate wait duration with queue_length / service_rate.
-        wait += DEFAULT_REFILL_PERIOD * ((pending_snapshot - 1) / cached_bytes_per_refill) as u32;
+        // calculate wait duration by queue_len / service_rate, formula below equivalent to
+        // ceiling(pending_snapshot as f32 / cached_bytes_per_epoch as f32 - 1.0)
+        wait += DEFAULT_REFILL_PERIOD * ((pending_snapshot - 1) / cached_bytes_per_epoch) as u32;
         do_sleep!(wait, $mode);
         tls_collect_rate_limiter_request_wait($priority.as_str(), wait);
         amount
@@ -302,6 +302,7 @@ impl PriorityBasedIORateLimiter {
     /// 3) Highest priority IO alone must not exceed global threshold.
     fn refill(&self, locked: &mut MutexGuard<PriorityBasedIORateLimiterProtected>, now: Instant) {
         const UPDATE_BUDGETS_EVERY_N_EPOCHS: usize = 5;
+        debug_assert!(now >= locked.next_refill_time);
         // Epochs can be skipped for refill, which happens fairly rare under production workload.
         // We will ignore these epochs when making decision.
         // assuming clock can be skewed for no more than half an epoch
@@ -343,7 +344,7 @@ impl PriorityBasedIORateLimiter {
             };
             locked.history_bytes[p] += std::cmp::min(
                 // add these bytes to next epoch's consumption
-                self.bytes_through[p].swap(satisfied, Ordering::Release),
+                self.bytes_through[p].swap(satisfied, Ordering::Relaxed),
                 limit,
             );
             if should_update_budgets {
@@ -367,12 +368,13 @@ impl PriorityBasedIORateLimiter {
         } else {
             std::mem::replace(&mut locked.pending_bytes[p], 0)
         };
-        self.bytes_through[p].store(satisfied, Ordering::Release);
+        self.bytes_through[p].store(satisfied, Ordering::Relaxed);
     }
 
     #[cfg(test)]
     fn critical_section(&self, now: Instant) {
         let mut locked = self.protected.lock();
+        locked.next_refill_time = now;
         self.refill(&mut locked, now);
     }
 }
@@ -485,8 +487,8 @@ mod tests {
 
     macro_rules! approximate_eq {
         ($left:expr, $right:expr) => {
-            assert!($left >= $right * 0.9);
-            assert!($right >= $left * 0.9);
+            assert!(($left) >= ($right) * 0.9);
+            assert!(($right) >= ($left) * 0.9);
         };
     }
 
@@ -538,7 +540,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rate_limit_switch() {
+    fn test_rate_limit_toggle() {
         let bytes_per_sec = 2000;
         let mut limiter = IORateLimiter::new_for_test();
         limiter.set_io_priority(IOType::Compaction, IOPriority::Low);

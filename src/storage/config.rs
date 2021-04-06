@@ -144,11 +144,10 @@ impl ConfigManager for StorageConfigManger {
                 .unwrap();
         }
         if let Some(ConfigValue::Module(mut io_rate_limit)) = change.remove("io_rate_limit") {
-            let limiter = get_io_rate_limiter();
-            if limiter.is_none() {
-                return Err("IO rate limiter is not present".into());
-            }
-            let limiter = limiter.unwrap();
+            let limiter = match get_io_rate_limiter() {
+                None => return Err("IO rate limiter is not present".into()),
+                Some(limiter) => limiter,
+            };
             if let Some(limit) = io_rate_limit.remove("max_bytes_per_sec") {
                 if let OptionReadableSize(Some(limit)) = limit.into() {
                     limiter.set_io_rate_limit(limit.0 as usize);
@@ -330,13 +329,7 @@ impl IORateLimitConfig {
             self.other_priority = IOPriority::High;
         }
         if self.mode != IORateLimitMode::WriteOnly {
-            warn!(
-                "Only IORateLimitMode::WriteOnly is supported for now. Change mode from \
-                  {:?} to {:?}",
-                self.mode,
-                IORateLimitMode::WriteOnly,
-            );
-            self.mode = IORateLimitMode::WriteOnly;
+            return Err("storage.io-rate-limit.mode other than WriteOnly is not supported.".into());
         }
         Ok(())
     }
