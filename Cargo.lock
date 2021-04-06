@@ -66,12 +66,6 @@ checksum = "16971f2f0ce65c5cf2a1546cc6a0af102ecb11e265ddaa9433fb3e5bfdf676a4"
 
 [[package]]
 name = "arc-swap"
-version = "0.3.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc4662175ead9cd84451d5c35070517777949a2ed84551764129cedb88384841"
-
-[[package]]
-name = "arc-swap"
 version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dabe5a181f83789739c194cbe5a897dde195078fac08568d09221fd6137a7ba8"
@@ -196,7 +190,7 @@ dependencies = [
  "rusoto_s3",
  "rusoto_sts",
  "slog",
- "slog-global 0.1.0 (git+https://github.com/breeswish/slog-global.git?rev=d592f88e4dbba5eb439998463054f1a44fbf17b9)",
+ "slog-global",
  "tikv_util",
  "tokio",
  "url",
@@ -254,7 +248,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "slog",
- "slog-global 0.1.0 (git+https://github.com/breeswish/slog-global.git?rev=d592f88e4dbba5eb439998463054f1a44fbf17b9)",
+ "slog-global",
  "tempfile",
  "thiserror",
  "tidb_query_common",
@@ -295,7 +289,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "slog",
- "slog-global 0.1.0 (git+https://github.com/breeswish/slog-global.git?rev=d592f88e4dbba5eb439998463054f1a44fbf17b9)",
+ "slog-global",
  "tikv_util",
 ]
 
@@ -524,7 +518,7 @@ dependencies = [
  "security",
  "semver 0.10.0",
  "slog",
- "slog-global 0.1.0 (git+https://github.com/breeswish/slog-global.git?rev=d592f88e4dbba5eb439998463054f1a44fbf17b9)",
+ "slog-global",
  "tempfile",
  "test_raftstore",
  "test_util",
@@ -617,7 +611,7 @@ dependencies = [
  "protobuf",
  "rusoto_core",
  "slog",
- "slog-global 0.1.0 (git+https://github.com/breeswish/slog-global.git?rev=d592f88e4dbba5eb439998463054f1a44fbf17b9)",
+ "slog-global",
  "thiserror",
  "tikv_util",
  "url",
@@ -1175,7 +1169,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "slog",
- "slog-global 0.1.0 (git+https://github.com/breeswish/slog-global.git?rev=d592f88e4dbba5eb439998463054f1a44fbf17b9)",
+ "slog-global",
  "tempfile",
  "thiserror",
  "tikv_alloc",
@@ -1200,7 +1194,7 @@ dependencies = [
  "protobuf",
  "rust-ini",
  "slog",
- "slog-global 0.1.0 (git+https://github.com/breeswish/slog-global.git?rev=d592f88e4dbba5eb439998463054f1a44fbf17b9)",
+ "slog-global",
  "structopt",
  "tikv_util",
 ]
@@ -1241,7 +1235,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "slog",
- "slog-global 0.1.0 (git+https://github.com/breeswish/slog-global.git?rev=d592f88e4dbba5eb439998463054f1a44fbf17b9)",
+ "slog-global",
  "tempfile",
  "tikv_alloc",
  "tikv_util",
@@ -1275,7 +1269,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "slog",
- "slog-global 0.1.0 (git+https://github.com/breeswish/slog-global.git?rev=d592f88e4dbba5eb439998463054f1a44fbf17b9)",
+ "slog-global",
  "thiserror",
  "tikv_alloc",
  "tikv_util",
@@ -1348,7 +1342,7 @@ dependencies = [
  "rusoto_util",
  "rust-ini",
  "slog",
- "slog-global 0.1.0 (git+https://github.com/breeswish/slog-global.git?rev=d592f88e4dbba5eb439998463054f1a44fbf17b9)",
+ "slog-global",
  "structopt",
  "tame-gcs",
  "tame-oauth",
@@ -2902,7 +2896,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "slog",
- "slog-global 0.1.0 (git+https://github.com/breeswish/slog-global.git?rev=d592f88e4dbba5eb439998463054f1a44fbf17b9)",
+ "slog-global",
  "thiserror",
  "tikv_alloc",
  "tikv_util",
@@ -3448,7 +3442,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "slog",
- "slog-global 0.1.0 (git+https://github.com/breeswish/slog-global.git?rev=d592f88e4dbba5eb439998463054f1a44fbf17b9)",
+ "slog-global",
  "tikv_util",
  "time 0.1.42",
 ]
@@ -3497,7 +3491,7 @@ dependencies = [
  "serde_derive",
  "serde_with",
  "slog",
- "slog-global 0.1.0 (git+https://github.com/breeswish/slog-global.git?rev=d592f88e4dbba5eb439998463054f1a44fbf17b9)",
+ "slog-global",
  "smallvec",
  "sst_importer",
  "tempfile",
@@ -3844,7 +3838,7 @@ dependencies = [
  "raftstore",
  "security",
  "slog",
- "slog-global 0.1.0 (git+https://github.com/breeswish/slog-global.git?rev=d592f88e4dbba5eb439998463054f1a44fbf17b9)",
+ "slog-global",
  "thiserror",
  "tikv",
  "tikv_util",
@@ -4329,7 +4323,7 @@ dependencies = [
  "serde_json",
  "signal",
  "slog",
- "slog-global 0.1.0 (git+https://github.com/breeswish/slog-global.git?rev=0e23a5baff302a9d7bccd85f8f31e43339c2f2c1)",
+ "slog-global",
  "tempfile",
  "tikv",
  "tikv_alloc",
@@ -4423,20 +4417,9 @@ dependencies = [
 [[package]]
 name = "slog-global"
 version = "0.1.0"
-source = "git+https://github.com/breeswish/slog-global.git?rev=0e23a5baff302a9d7bccd85f8f31e43339c2f2c1#0e23a5baff302a9d7bccd85f8f31e43339c2f2c1"
-dependencies = [
- "arc-swap 0.3.11",
- "lazy_static",
- "log",
- "slog",
-]
-
-[[package]]
-name = "slog-global"
-version = "0.1.0"
 source = "git+https://github.com/breeswish/slog-global.git?rev=d592f88e4dbba5eb439998463054f1a44fbf17b9#d592f88e4dbba5eb439998463054f1a44fbf17b9"
 dependencies = [
- "arc-swap 0.4.8",
+ "arc-swap",
  "lazy_static",
  "log",
  "slog",
@@ -4535,7 +4518,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "slog",
- "slog-global 0.1.0 (git+https://github.com/breeswish/slog-global.git?rev=d592f88e4dbba5eb439998463054f1a44fbf17b9)",
+ "slog-global",
  "tempfile",
  "test_sst_importer",
  "test_util",
@@ -4891,7 +4874,7 @@ dependencies = [
  "pd_client",
  "security",
  "slog",
- "slog-global 0.1.0 (git+https://github.com/breeswish/slog-global.git?rev=d592f88e4dbba5eb439998463054f1a44fbf17b9)",
+ "slog-global",
  "tikv_util",
 ]
 
@@ -4918,7 +4901,7 @@ dependencies = [
  "rand 0.7.3",
  "security",
  "slog",
- "slog-global 0.1.0 (git+https://github.com/breeswish/slog-global.git?rev=d592f88e4dbba5eb439998463054f1a44fbf17b9)",
+ "slog-global",
  "tempfile",
  "test_util",
  "tikv",
@@ -4968,7 +4951,7 @@ dependencies = [
  "rand_isaac 0.2.0",
  "security",
  "slog",
- "slog-global 0.1.0 (git+https://github.com/breeswish/slog-global.git?rev=d592f88e4dbba5eb439998463054f1a44fbf17b9)",
+ "slog-global",
  "tempfile",
  "tikv_util",
  "time 0.1.42",
@@ -5018,7 +5001,7 @@ dependencies = [
  "security",
  "serde_json",
  "slog",
- "slog-global 0.1.0 (git+https://github.com/breeswish/slog-global.git?rev=d592f88e4dbba5eb439998463054f1a44fbf17b9)",
+ "slog-global",
  "sst_importer",
  "tempfile",
  "test_backup",
@@ -5163,7 +5146,7 @@ dependencies = [
  "serde",
  "serde_json",
  "slog",
- "slog-global 0.1.0 (git+https://github.com/breeswish/slog-global.git?rev=d592f88e4dbba5eb439998463054f1a44fbf17b9)",
+ "slog-global",
  "static_assertions",
  "thiserror",
  "tidb_query_common",
@@ -5186,7 +5169,7 @@ dependencies = [
  "match_template",
  "protobuf",
  "slog",
- "slog-global 0.1.0 (git+https://github.com/breeswish/slog-global.git?rev=d592f88e4dbba5eb439998463054f1a44fbf17b9)",
+ "slog-global",
  "smallvec",
  "tidb_query_aggr",
  "tidb_query_codegen",
@@ -5317,7 +5300,7 @@ dependencies = [
  "serde_ignored",
  "serde_json",
  "slog",
- "slog-global 0.1.0 (git+https://github.com/breeswish/slog-global.git?rev=d592f88e4dbba5eb439998463054f1a44fbf17b9)",
+ "slog-global",
  "sst_importer",
  "sysinfo",
  "tempfile",
@@ -5385,7 +5368,7 @@ dependencies = [
  "serde_json",
  "signal",
  "slog",
- "slog-global 0.1.0 (git+https://github.com/breeswish/slog-global.git?rev=d592f88e4dbba5eb439998463054f1a44fbf17b9)",
+ "slog-global",
  "tempfile",
  "tikv",
  "tikv_alloc",
@@ -5478,7 +5461,7 @@ dependencies = [
  "quick-error",
  "raftstore",
  "slog",
- "slog-global 0.1.0 (git+https://github.com/breeswish/slog-global.git?rev=d592f88e4dbba5eb439998463054f1a44fbf17b9)",
+ "slog-global",
  "slog_derive",
  "tempfile",
  "tikv_util",
@@ -5528,7 +5511,7 @@ dependencies = [
  "serde_json",
  "slog",
  "slog-async",
- "slog-global 0.1.0 (git+https://github.com/breeswish/slog-global.git?rev=d592f88e4dbba5eb439998463054f1a44fbf17b9)",
+ "slog-global",
  "slog-json",
  "slog-term",
  "sysinfo",
