@@ -2500,7 +2500,7 @@ pub mod tests {
                 .unwrap();
 
             // TODO: this size may change in different RocksDB version.
-            let snap_size = 1658;
+            let snap_size = 1660;
             let max_snap_count = (max_total_size + snap_size - 1) / snap_size;
             // The first snap_size is for region 100.
             // That snapshot won't be deleted because it's not for generating.
