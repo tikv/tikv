@@ -463,14 +463,16 @@ impl Cluster {
 
     fn add_region(&mut self, region: &metapb::Region) {
         let end_key = enc_end_key(region);
-        assert!(self
-            .regions
-            .insert(end_key.clone(), region.clone())
-            .is_none());
-        assert!(self
-            .region_id_keys
-            .insert(region.get_id(), end_key)
-            .is_none());
+        assert!(
+            self.regions
+                .insert(end_key.clone(), region.clone())
+                .is_none()
+        );
+        assert!(
+            self.region_id_keys
+                .insert(region.get_id(), end_key)
+                .is_none()
+        );
     }
 
     fn remove_region(&mut self, region: &metapb::Region) {

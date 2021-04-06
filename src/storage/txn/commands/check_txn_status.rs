@@ -220,18 +220,20 @@ pub mod tests {
             force_sync_commit,
             resolving_pessimistic_lock,
         };
-        assert!(command
-            .process_write(
-                snapshot,
-                WriteContext {
-                    lock_mgr: &DummyLockManager,
-                    concurrency_manager: cm,
-                    extra_op: Default::default(),
-                    statistics: &mut Default::default(),
-                    async_apply_prewrite: false,
-                },
-            )
-            .is_err());
+        assert!(
+            command
+                .process_write(
+                    snapshot,
+                    WriteContext {
+                        lock_mgr: &DummyLockManager,
+                        concurrency_manager: cm,
+                        extra_op: Default::default(),
+                        statistics: &mut Default::default(),
+                        async_apply_prewrite: false,
+                    },
+                )
+                .is_err()
+        );
     }
 
     fn committed(commit_ts: impl Into<TimeStamp>) -> impl FnOnce(TxnStatus) -> bool {

@@ -10,7 +10,7 @@ use encryption::{
 };
 use engine_traits::{
     CfName, EncryptionKeyManager, Error as EngineError, ImportExt, IngestExternalFileOptions,
-    Iterable, KvEngine, Mutable, SstWriter, SstWriterBuilder, WriteBatch,
+    Iterable, KvEngine, Mutable, SstCompressionType, SstWriter, SstWriterBuilder, WriteBatch,
 };
 use kvproto::encryptionpb::EncryptionMethod;
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
@@ -44,10 +44,9 @@ pub fn build_plain_cf_file<E>(
 where
     E: KvEngine,
 {
-    let mut file = Some(box_try!(OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)));
+    let mut file = Some(box_try!(
+        OpenOptions::new().write(true).create_new(true).open(path)
+    ));
     let mut encrypted_file: Option<EncrypterWriter<File>> = None;
     let mut should_encrypt = false;
 
@@ -206,7 +205,10 @@ fn create_sst_file_writer<E>(engine: &E, cf: CfName, path: &str) -> Result<E::Ss
 where
     E: KvEngine,
 {
-    let builder = E::SstWriterBuilder::new().set_db(&engine).set_cf(cf);
+    let builder = E::SstWriterBuilder::new()
+        .set_db(&engine)
+        .set_cf(cf)
+        .set_compression_type(Some(SstCompressionType::Zstd));
     let writer = box_try!(builder.build(path));
     Ok(writer)
 }
