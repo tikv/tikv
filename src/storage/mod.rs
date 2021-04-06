@@ -2841,7 +2841,7 @@ mod tests {
         .unwrap()
         .into_iter()
         .map(|x| x.unwrap())
-        .map(|(x, _, _)| x)
+        .map(|(x, ..)| x)
         .collect();
         assert_eq!(
             x,

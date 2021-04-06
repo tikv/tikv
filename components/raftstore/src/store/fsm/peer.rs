@@ -2022,7 +2022,7 @@ where
             match self.fsm.peer.raft_group.apply_conf_change(&cp.conf_change) {
                 Ok(_) => {}
                 // PD could dispatch redundant conf changes.
-                Err(raft::Error::NotExists(_, _)) | Err(raft::Error::Exists(_, _)) => {}
+                Err(raft::Error::NotExists(..)) | Err(raft::Error::Exists(..)) => {}
                 _ => unreachable!(),
             }
         } else {
@@ -2548,7 +2548,9 @@ where
                         "something is wrong, maybe PD do not ensure all target peers exist before merging"
                     );
                 }
-                error!("something is wrong, maybe PD do not ensure all target peers exist before merging");
+                error!(
+                    "something is wrong, maybe PD do not ensure all target peers exist before merging"
+                );
                 Ok(false)
             }
         }
@@ -3080,8 +3082,12 @@ where
                     result: MergeResultKind::FromTargetSnapshotStep2,
                 }),
             ) {
-                panic!("{} failed to send merge result(FromTargetSnapshotStep2) to source region {}, err {}",
-                       self.fsm.peer.tag, r.get_id(), e);
+                panic!(
+                    "{} failed to send merge result(FromTargetSnapshotStep2) to source region {}, err {}",
+                    self.fsm.peer.tag,
+                    r.get_id(),
+                    e
+                );
             }
         }
     }

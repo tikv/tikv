@@ -62,10 +62,11 @@ fn test_deadline_3() {
     resp.merge_from_bytes(cop_resp.get_data()).unwrap();
 
     // Errors during evaluation becomes an eval error.
-    assert!(resp
-        .get_error()
-        .get_msg()
-        .contains("exceeding the deadline"));
+    assert!(
+        resp.get_error()
+            .get_msg()
+            .contains("exceeding the deadline")
+    );
 }
 
 #[test]
@@ -164,8 +165,9 @@ fn test_region_error_in_scan() {
     let req = DAGSelect::from(&product).build_with(ctx, &[0]);
     let resp = handle_request(&endpoint, req);
 
-    assert!(resp
-        .get_region_error()
-        .get_message()
-        .contains("region seek error"));
+    assert!(
+        resp.get_region_error()
+            .get_message()
+            .contains("region seek error")
+    );
 }

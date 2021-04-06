@@ -683,9 +683,11 @@ mod tests {
 
         let bs = encode_row(&mut ctx, vec![], &[]).unwrap();
         assert!(!bs.is_empty());
-        assert!(decode_row(&mut bs.as_slice(), &mut ctx, &cols)
-            .unwrap()
-            .is_empty());
+        assert!(
+            decode_row(&mut bs.as_slice(), &mut ctx, &cols)
+                .unwrap()
+                .is_empty()
+        );
         datums = cut_row_as_owned(&bs, &col_id_set);
         assert!(datums.is_empty());
     }

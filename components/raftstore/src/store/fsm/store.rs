@@ -1711,7 +1711,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                         "source_region" => ?exist_region,
                     );
                     if self.ctx.cfg.dev_assert {
-                        panic!("something is wrong, maybe PD do not ensure all target peers exist before merging");
+                        panic!(
+                            "something is wrong, maybe PD do not ensure all target peers exist before merging"
+                        );
                     }
                 }
                 continue;

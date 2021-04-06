@@ -461,13 +461,15 @@ mod tests {
     fn test_is_protected() {
         assert!(Write::new_rollback(1.into(), true).as_ref().is_protected());
         assert!(!Write::new_rollback(2.into(), false).as_ref().is_protected());
-        assert!(!Write::new(
-            WriteType::Put,
-            3.into(),
-            Some(PROTECTED_ROLLBACK_SHORT_VALUE.to_vec()),
-        )
-        .as_ref()
-        .is_protected());
+        assert!(
+            !Write::new(
+                WriteType::Put,
+                3.into(),
+                Some(PROTECTED_ROLLBACK_SHORT_VALUE.to_vec()),
+            )
+            .as_ref()
+            .is_protected()
+        );
     }
 
     #[test]
