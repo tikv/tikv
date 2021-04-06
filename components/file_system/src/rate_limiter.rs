@@ -10,7 +10,7 @@ use std::sync::{
 use std::time::Duration;
 
 use crossbeam_utils::CachePadded;
-use parking_lot::{Mutex, MutexGuard};
+use parking_lot::Mutex;
 use strum::EnumCount;
 use tikv_util::time::Instant;
 
@@ -300,7 +300,7 @@ impl PriorityBasedIORateLimiter {
     /// 2) Higher priority may temporarily use lower priority's IO budgets. When this happens,
     ///    total IO flow could exceed global threshold.
     /// 3) Highest priority IO alone must not exceed global threshold.
-    fn refill(&self, locked: &mut MutexGuard<PriorityBasedIORateLimiterProtected>, now: Instant) {
+    fn refill(&self, locked: &mut PriorityBasedIORateLimiterProtected, now: Instant) {
         const UPDATE_BUDGETS_EVERY_N_EPOCHS: usize = 5;
         debug_assert!(now >= locked.next_refill_time);
         // Epochs can be skipped for refill, which happens fairly rare under production workload.
