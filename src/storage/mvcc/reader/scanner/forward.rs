@@ -2136,7 +2136,7 @@ mod delta_entry_tests {
         let expected_entries = |from_key: &[u8], to_key: &[u8], from_ts: u64, to_ts: u64| {
             test_data
                 .iter()
-                .filter(|(key, _, _)| *key >= from_key && (to_key.is_empty() || *key < to_key))
+                .filter(|(key, ..)| *key >= from_key && (to_key.is_empty() || *key < to_key))
                 .map(|(key, lock, writes)| {
                     let mut entries_of_key = vec![];
 
@@ -2144,7 +2144,7 @@ mod delta_entry_tests {
                         let max_commit_ts = writes
                             .last()
                             .cloned()
-                            .map(|(_, commit_ts, _, _)| commit_ts)
+                            .map(|(_, commit_ts, ..)| commit_ts)
                             .unwrap_or(0);
                         let for_update_ts = std::cmp::max(*ts, max_commit_ts + 1);
 
@@ -2233,7 +2233,7 @@ mod delta_entry_tests {
                 let max_commit_ts = writes
                     .last()
                     .cloned()
-                    .map(|(_, commit_ts, _, _)| commit_ts)
+                    .map(|(_, commit_ts, ..)| commit_ts)
                     .unwrap_or(0);
                 let for_update_ts = std::cmp::max(*ts, max_commit_ts + 1);
                 must_acquire_pessimistic_lock(&engine, key, key, *ts, for_update_ts);

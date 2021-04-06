@@ -169,7 +169,10 @@ impl RangeProperties {
     pub fn decode<T: DecodeProperties>(props: &T) -> Result<RangeProperties> {
         match RangeProperties::decode_from_range_properties(props) {
             Ok(res) => return Ok(res),
-            Err(e) => info!("decode to RangeProperties failed with err: {:?}, try to decode to SizeProperties, maybe upgrade from v2.0 or older version?", e),
+            Err(e) => info!(
+                "decode to RangeProperties failed with err: {:?}, try to decode to SizeProperties, maybe upgrade from v2.0 or older version?",
+                e
+            ),
         }
         SizeProperties::decode(props).map(|res| res.into())
     }

@@ -283,7 +283,7 @@ fn get_config_attrs(attrs: &[Attribute]) -> Result<(bool, bool, bool)> {
                 return Err(Error::new(
                     name.span(),
                     "expect #[config(skip)], #[config(hidden)] or #[config(submodule)]",
-                ))
+                ));
             }
         }
     }
