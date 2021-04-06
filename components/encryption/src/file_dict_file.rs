@@ -4,10 +4,7 @@ use byteorder::{BigEndian, ByteOrder};
 use kvproto::encryptionpb::{EncryptedContent, FileDictionary, FileInfo};
 use protobuf::Message;
 use rand::{thread_rng, RngCore};
-<<<<<<< HEAD
-=======
 use tikv_util::{box_err, set_panic_mark, warn};
->>>>>>> 4b328ed55... encryption: Ignore log record parse error caused by write failure before (#9938)
 
 use crate::encrypted_file::{EncryptedFile, Header, Version, TMP_FILE_SUFFIX};
 use crate::master_key::{Backend, PlaintextBackend};

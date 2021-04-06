@@ -9,23 +9,14 @@ use std::{error, result};
 /// The error type for encryption.
 #[derive(Debug, Fail)]
 pub enum Error {
-<<<<<<< HEAD
     #[fail(display = "Other error {}", _0)]
     Other(Box<dyn error::Error + Sync + Send>),
     #[fail(display = "RocksDB error {}", _0)]
-=======
-    #[error("Other error {0}")]
-    Other(#[from] Box<dyn error::Error + Sync + Send>),
+    Rocks(String),
     // Only when the parsing record is the last one, and the
     // length is insufficient or the crc checksum fails.
-    #[error("Recoverable tail record corruption while parsing file dictionary")]
+    #[fail(display = "Recoverable tail record corruption while parsing file dictionary")]
     TailRecordParseIncomplete,
-    // Currently only in use by cloud KMS
-    #[error("Cloud KMS error {0}")]
-    RetryCodedError(Box<dyn RetryCodedError>),
-    #[error("RocksDB error {0}")]
->>>>>>> 4b328ed55... encryption: Ignore log record parse error caused by write failure before (#9938)
-    Rocks(String),
     #[fail(display = "IO error {}", _0)]
     Io(IoError),
     #[fail(display = "OpenSSL error {}", _0)]
@@ -80,11 +71,7 @@ pub type Result<T> = result::Result<T, Error>;
 impl ErrorCodeExt for Error {
     fn error_code(&self) -> ErrorCode {
         match self {
-<<<<<<< HEAD
-=======
-            Error::RetryCodedError(err) => (*err).error_code(),
             Error::TailRecordParseIncomplete => error_code::encryption::PARSE_INCOMPLETE,
->>>>>>> 4b328ed55... encryption: Ignore log record parse error caused by write failure before (#9938)
             Error::Rocks(_) => error_code::encryption::ROCKS,
             Error::Io(_) => error_code::encryption::IO,
             Error::Crypter(_) => error_code::encryption::CRYPTER,
@@ -96,25 +83,3 @@ impl ErrorCodeExt for Error {
         }
     }
 }
-<<<<<<< HEAD
-=======
-
-impl RetryError for Error {
-    fn is_retryable(&self) -> bool {
-        // This should be refined.
-        // However, only Error::Tls should be encountered
-        match self {
-            Error::RetryCodedError(err) => err.is_retryable(),
-            Error::TailRecordParseIncomplete => true,
-            Error::Rocks(_) => true,
-            Error::Io(_) => true,
-            Error::Crypter(_) => true,
-            Error::Proto(_) => true,
-            Error::UnknownEncryption => true,
-            Error::WrongMasterKey(_) => false,
-            Error::BothMasterKeyFail(_, _) => false,
-            Error::Other(_) => true,
-        }
-    }
-}
->>>>>>> 4b328ed55... encryption: Ignore log record parse error caused by write failure before (#9938)
