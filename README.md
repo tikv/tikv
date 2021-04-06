@@ -77,7 +77,7 @@ When a node starts, the metadata of the Node, Store and Region are recorded into
 
 ### Deploy a playground with TiUP
 
-The most quick way for trying out TiKV with TiDB is using TiUP, a component manager for TiDB.
+The most quickest to try out TiKV with TiDB is using TiUP, a component manager for TiDB.
 
 You can see [this page](https://docs.pingcap.com/tidb/stable/quick-start-with-tidb#deploy-a-local-test-environment-using-tiup-playground) for a step by step tutorial.
 
