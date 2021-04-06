@@ -109,7 +109,7 @@ impl RaftLogBatch for PanicWriteBatch {
         panic!()
     }
 
-    fn count(&self) -> usize {
+    fn size(&self) -> usize {
         panic!()
     }
 }

@@ -40,14 +40,16 @@ impl RaftLogEngine {
 #[derive(Default)]
 pub struct RaftLogBatch {
     inner: LogBatch<Entry, EntryExtTyped>,
-    count: usize,
+    size: usize,
 }
 
 const RAFT_LOG_STATE_KEY: &[u8] = b"R";
 
 impl RaftLogBatchTrait for RaftLogBatch {
     fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()> {
-        self.count += entries.len();
+        for e in entries.iter() {
+            self.size += e.data.len();
+        }
         self.inner.add_entries(raft_group_id, entries);
         Ok(())
     }
@@ -67,8 +69,8 @@ impl RaftLogBatchTrait for RaftLogBatch {
         self.inner.items.is_empty()
     }
 
-    fn count(&self) -> usize {
-        self.count
+    fn size(&self) -> usize {
+        self.size
     }
 }
 

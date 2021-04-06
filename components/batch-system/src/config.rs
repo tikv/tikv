@@ -14,7 +14,7 @@ pub struct Config {
 impl Config {
     pub fn max_batch_size(&self) -> usize {
         // `Config::validate` is not called for test so the `max_batch_size` is None.
-        self.max_batch_size.unwrap_or(256)
+        self.max_batch_size.unwrap_or(512)
     }
 }
 

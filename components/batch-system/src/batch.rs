@@ -280,10 +280,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         let mut run = true;
         const MAX_FSM_ONCE_POLL: usize = 2048;
         while run && self.fetch_fsm(&mut batch) {
-            // If there is some region wait to be deal, we must deal with it even if it has overhead
-            // max size of batch. It's helpful to protect regions from becoming hungry
-            // if some regions are hot points.
-            self.handler.begin(self.max_batch_size);
+            self.handler.begin(MAX_FSM_ONCE_POLL);
 
             if batch.control.is_some() {
                 let len = self.handler.handle_control(batch.control.as_mut().unwrap());

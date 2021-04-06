@@ -848,7 +848,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
     }
 
     fn processed_messages(&self) -> usize {
-        self.poll_ctx.raft_wb.count()
+        // Transfer unit from B to KB
+        self.poll_ctx.raft_wb.size() / 1024
     }
 
     fn pause(&mut self) {

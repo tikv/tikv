@@ -89,7 +89,7 @@ pub trait RaftLogBatch: Send {
 
     fn is_empty(&self) -> bool;
 
-    fn count(&self) -> usize;
+    fn size(&self) -> usize;
 }
 
 #[derive(Clone, Copy, Default)]

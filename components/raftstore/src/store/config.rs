@@ -250,7 +250,7 @@ impl Default for Config {
             local_read_batch_size: 1024,
             apply_batch_system: BatchSystemConfig::default(),
             store_batch_system: BatchSystemConfig {
-                max_batch_size: 256,
+                max_batch_size: Some(128),
                 ..Default::default()
             },
             future_poll_size: 1,
