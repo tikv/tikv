@@ -172,7 +172,7 @@ where
     pub fn create(
         store_id: u64,
         cfg: &Config,
-        sched: Scheduler<RegionTask<EK::Snapshot>>,
+        sched: Scheduler<RegionTask>,
         engines: Engines<EK, ER>,
         region: &metapb::Region,
     ) -> Result<SenderFsmPair<EK, ER>> {
@@ -219,7 +219,7 @@ where
     pub fn replicate(
         store_id: u64,
         cfg: &Config,
-        sched: Scheduler<RegionTask<EK::Snapshot>>,
+        sched: Scheduler<RegionTask>,
         engines: Engines<EK, ER>,
         region_id: u64,
         peer: metapb::Peer,

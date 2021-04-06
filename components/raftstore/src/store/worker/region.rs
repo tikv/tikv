@@ -51,12 +51,11 @@ const CLEANUP_MAX_REGION_COUNT: usize = 128;
 
 /// Region related task
 #[derive(Debug)]
-pub enum Task<S> {
+pub enum Task {
     Gen {
         region_id: u64,
         last_applied_index_term: u64,
         last_applied_state: RaftApplyState,
-        kv_snap: S,
         notifier: SyncSender<RaftSnapshot>,
         for_balance: bool,
     },
@@ -74,8 +73,8 @@ pub enum Task<S> {
     },
 }
 
-impl<S> Task<S> {
-    pub fn destroy(region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Task<S> {
+impl Task {
+    pub fn destroy(region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Task {
         Task::Destroy {
             region_id,
             start_key,
@@ -84,7 +83,7 @@ impl<S> Task<S> {
     }
 }
 
-impl<S> Display for Task<S> {
+impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Task::Gen { region_id, .. } => write!(f, "Snap gen for {}", region_id),
@@ -244,7 +243,6 @@ where
         region_id: u64,
         last_applied_index_term: u64,
         last_applied_state: RaftApplyState,
-        kv_snap: EK::Snapshot,
         notifier: SyncSender<RaftSnapshot>,
         for_balance: bool,
     ) -> Result<()> {
@@ -252,7 +250,7 @@ where
         let snap = box_try!(store::do_snapshot::<EK>(
             self.mgr.clone(),
             &self.engine,
-            kv_snap,
+            self.engine.snapshot(),
             region_id,
             last_applied_index_term,
             last_applied_state,
@@ -281,7 +279,6 @@ where
         region_id: u64,
         last_applied_index_term: u64,
         last_applied_state: RaftApplyState,
-        kv_snap: EK::Snapshot,
         notifier: SyncSender<RaftSnapshot>,
         for_balance: bool,
     ) {
@@ -297,7 +294,6 @@ where
             region_id,
             last_applied_index_term,
             last_applied_state,
-            kv_snap,
             notifier,
             for_balance,
         ) {
@@ -576,7 +572,7 @@ where
     ctx: SnapContext<EK, R>,
     // we may delay some apply tasks if level 0 files to write stall threshold,
     // pending_applies records all delayed apply task, and will check again later
-    pending_applies: VecDeque<Task<EK::Snapshot>>,
+    pending_applies: VecDeque<Task>,
     clean_stale_tick: usize,
     clean_stale_check_interval: Duration,
 }
@@ -634,29 +630,26 @@ where
     EK: KvEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
 {
-    type Task = Task<EK::Snapshot>;
+    type Task = Task;
 
-    fn run(&mut self, task: Task<EK::Snapshot>) {
+    fn run(&mut self, task: Task) {
         match task {
             Task::Gen {
                 region_id,
                 last_applied_index_term,
                 last_applied_state,
-                kv_snap,
                 notifier,
                 for_balance,
             } => {
                 // It is safe for now to handle generating and applying snapshot concurrently,
                 // but it may not when merge is implemented.
                 let ctx = self.ctx.clone();
-
                 self.pool.spawn(async move {
                     tikv_alloc::add_thread_memory_accessor();
                     ctx.handle_gen(
                         region_id,
                         last_applied_index_term,
                         last_applied_state,
-                        kv_snap,
                         notifier,
                         for_balance,
                     );
@@ -731,7 +724,7 @@ mod tests {
     use crate::store::{CasualMessage, SnapKey, SnapManager};
     use engine_test::ctor::CFOptions;
     use engine_test::ctor::ColumnFamilyOptions;
-    use engine_test::kv::{KvTestEngine, KvTestSnapshot};
+    use engine_test::kv::KvTestEngine;
     use engine_traits::KvEngine;
     use engine_traits::{
         CFNamesExt, CompactExt, MiscExt, Mutable, Peekable, SyncMutable, WriteBatch, WriteBatchExt,
@@ -833,7 +826,7 @@ mod tests {
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
         let bg_worker = Worker::new("region-worker");
-        let mut worker: LazyWorker<Task<KvTestSnapshot>> = bg_worker.lazy_build("region-worker");
+        let mut worker: LazyWorker<Task> = bg_worker.lazy_build("region-worker");
         let sched = worker.scheduler();
         let (router, _) = mpsc::sync_channel(11);
         let mut runner = RegionRunner::new(
@@ -961,7 +954,6 @@ mod tests {
             sched
                 .schedule(Task::Gen {
                     region_id: id,
-                    kv_snap: engine.kv.snapshot(),
                     last_applied_index_term: entry.get_term(),
                     last_applied_state: apply_state,
                     notifier: tx,

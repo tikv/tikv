@@ -612,7 +612,7 @@ where
 
     snap_state: RefCell<SnapState>,
     gen_snap_task: RefCell<Option<GenSnapTask>>,
-    region_sched: Scheduler<RegionTask<EK::Snapshot>>,
+    region_sched: Scheduler<RegionTask>,
     snap_tried_cnt: RefCell<usize>,
 
     // Entry cache if `ER doesn't have an internal entry cache.
@@ -664,7 +664,7 @@ where
     pub fn new(
         engines: Engines<EK, ER>,
         region: &metapb::Region,
-        region_sched: Scheduler<RegionTask<EK::Snapshot>>,
+        region_sched: Scheduler<RegionTask>,
         peer_id: u64,
         tag: String,
     ) -> Result<PeerStorage<EK, ER>> {
@@ -1672,7 +1672,7 @@ mod tests {
     use crate::store::worker::RegionRunner;
     use crate::store::worker::RegionTask;
     use crate::store::{bootstrap_store, initial_region, prepare_bootstrap_cluster};
-    use engine_test::kv::{KvTestEngine, KvTestSnapshot, KvTestWriteBatch};
+    use engine_test::kv::{KvTestEngine, KvTestWriteBatch};
     use engine_test::raft::{RaftTestEngine, RaftTestWriteBatch};
     use engine_traits::Engines;
     use engine_traits::{Iterable, SyncMutable, WriteBatch, WriteBatchExt};
@@ -1693,7 +1693,7 @@ mod tests {
     use super::*;
 
     fn new_storage(
-        sched: Scheduler<RegionTask<KvTestSnapshot>>,
+        sched: Scheduler<RegionTask>,
         path: &TempDir,
     ) -> PeerStorage<KvTestEngine, RaftTestEngine> {
         let kv_db = engine_test::kv::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
@@ -1745,7 +1745,7 @@ mod tests {
     }
 
     fn new_storage_from_ents(
-        sched: Scheduler<RegionTask<KvTestSnapshot>>,
+        sched: Scheduler<RegionTask>,
         path: &TempDir,
         ents: &[Entry],
     ) -> PeerStorage<KvTestEngine, RaftTestEngine> {
@@ -1996,7 +1996,7 @@ mod tests {
     fn generate_and_schedule_snapshot(
         gen_task: GenSnapTask,
         engines: &Engines<KvTestEngine, RaftTestEngine>,
-        sched: &Scheduler<RegionTask<KvTestSnapshot>>,
+        sched: &Scheduler<RegionTask>,
     ) -> Result<()> {
         let apply_state: RaftApplyState = engines
             .kv
@@ -2009,12 +2009,7 @@ mod tests {
             .get_msg::<Entry>(&keys::raft_log_key(gen_task.region_id, idx))
             .unwrap()
             .unwrap();
-        gen_task.generate_and_schedule_snapshot::<KvTestEngine>(
-            engines.kv.clone().snapshot(),
-            entry.get_term(),
-            apply_state,
-            sched,
-        )
+        gen_task.generate_and_schedule_snapshot(entry.get_term(), apply_state, sched)
     }
 
     #[test]

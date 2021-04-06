@@ -332,7 +332,7 @@ where
     timer: Option<Instant>,
     host: CoprocessorHost<EK>,
     importer: Arc<SSTImporter>,
-    region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+    region_scheduler: Scheduler<RegionTask>,
     router: ApplyRouter<EK>,
     notifier: Box<dyn Notifier<EK>>,
     engine: EK,
@@ -379,7 +379,7 @@ where
         tag: String,
         host: CoprocessorHost<EK>,
         importer: Arc<SSTImporter>,
-        region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+        region_scheduler: Scheduler<RegionTask>,
         engine: EK,
         router: ApplyRouter<EK>,
         notifier: Box<dyn Notifier<EK>>,
@@ -2804,25 +2804,18 @@ impl GenSnapTask {
         self.for_balance = true;
     }
 
-    pub fn generate_and_schedule_snapshot<EK>(
+    pub fn generate_and_schedule_snapshot(
         self,
-        kv_snap: EK::Snapshot,
         last_applied_index_term: u64,
         last_applied_state: RaftApplyState,
-        region_sched: &Scheduler<RegionTask<EK::Snapshot>>,
-    ) -> Result<()>
-    where
-        EK: KvEngine,
-    {
+        region_sched: &Scheduler<RegionTask>,
+    ) -> Result<()> {
         let snapshot = RegionTask::Gen {
             region_id: self.region_id,
             notifier: self.snap_notifier,
             for_balance: self.for_balance,
             last_applied_index_term,
             last_applied_state,
-            // This snapshot may be held for a long time, which may cause too many
-            // open files in rocksdb.
-            kv_snap,
         };
         box_try!(region_sched.schedule(snapshot));
         Ok(())
@@ -3239,8 +3232,7 @@ where
             self.delegate.last_sync_apply_index = applied_index;
         }
 
-        if let Err(e) = snap_task.generate_and_schedule_snapshot::<EK>(
-            apply_ctx.engine.snapshot(),
+        if let Err(e) = snap_task.generate_and_schedule_snapshot(
             self.delegate.applied_index_term,
             self.delegate.apply_state.clone(),
             &apply_ctx.region_scheduler,
@@ -3522,7 +3514,7 @@ pub struct Builder<EK: KvEngine, W: WriteBatch<EK>> {
     cfg: Arc<VersionTrack<Config>>,
     coprocessor_host: CoprocessorHost<EK>,
     importer: Arc<SSTImporter>,
-    region_scheduler: Scheduler<RegionTask<<EK as KvEngine>::Snapshot>>,
+    region_scheduler: Scheduler<RegionTask>,
     engine: EK,
     sender: Box<dyn Notifier<EK>>,
     router: ApplyRouter<EK>,
@@ -3949,7 +3941,7 @@ mod tests {
             importer,
             region_scheduler,
             sender,
-            engine,
+            engine: engine.clone(),
             router: router.clone(),
             _phantom: Default::default(),
             store_id: 1,
@@ -4037,7 +4029,7 @@ mod tests {
         };
         let apply_state_key = keys::apply_state_key(2);
         let apply_state = match snapshot_rx.recv_timeout(Duration::from_secs(3)) {
-            Ok(Some(RegionTask::Gen { kv_snap, .. })) => kv_snap
+            Ok(Some(RegionTask::Gen { .. })) => engine
                 .get_msg_cf(CF_RAFT, &apply_state_key)
                 .unwrap()
                 .unwrap(),
