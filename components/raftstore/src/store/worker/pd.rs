@@ -216,13 +216,9 @@ where
                 region.get_id(),
                 log_wrappers::Value::key(&split_key),
             ),
-            Task::AutoSplit {
-                ref split_infos,
-            } => write!(
-                f,
-                "auto split split regions, num is {}",
-                split_infos.len(),
-            ),
+            Task::AutoSplit { ref split_infos } => {
+                write!(f, "auto split split regions, num is {}", split_infos.len(),)
+            }
             Task::AskBatchSplit {
                 ref region,
                 ref split_keys,
@@ -247,11 +243,7 @@ where
             Task::ValidatePeer {
                 ref region,
                 ref peer,
-            } => write!(
-                f,
-                "validate peer {:?} with region {:?}",
-                peer, region
-            ),
+            } => write!(f, "validate peer {:?} with region {:?}", peer, region),
             Task::ReadStats { ref read_stats } => {
                 write!(f, "get the read statistics {:?}", read_stats)
             }
@@ -272,11 +264,9 @@ where
                 "update the max timestamp for region {} in the concurrency manager",
                 region_id
             ),
-            Task::QueryRegionLeader { region_id } => write!(
-                f,
-                "query the leader of region {}",
-                region_id
-            ),
+            Task::QueryRegionLeader { region_id } => {
+                write!(f, "query the leader of region {}", region_id)
+            }
         }
     }
 }

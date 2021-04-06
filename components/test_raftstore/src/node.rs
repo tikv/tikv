@@ -278,11 +278,13 @@ impl Simulator for NodeCluster {
             AutoSplitController::default(),
             cm,
         )?;
-        assert!(engines
-            .kv
-            .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
-            .unwrap()
-            .is_none());
+        assert!(
+            engines
+                .kv
+                .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
+                .unwrap()
+                .is_none()
+        );
         assert!(node_id == 0 || node_id == node.id());
 
         let node_id = node.id();

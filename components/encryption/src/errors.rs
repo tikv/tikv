@@ -81,7 +81,7 @@ impl ErrorCodeExt for Error {
             Error::Proto(_) => error_code::encryption::PROTO,
             Error::UnknownEncryption => error_code::encryption::UNKNOWN_ENCRYPTION,
             Error::WrongMasterKey(_) => error_code::encryption::WRONG_MASTER_KEY,
-            Error::BothMasterKeyFail(_, _) => error_code::encryption::BOTH_MASTER_KEY_FAIL,
+            Error::BothMasterKeyFail(..) => error_code::encryption::BOTH_MASTER_KEY_FAIL,
             Error::Other(_) => error_code::UNKNOWN,
         }
     }
@@ -100,7 +100,7 @@ impl RetryError for Error {
             Error::Proto(_) => true,
             Error::UnknownEncryption => true,
             Error::WrongMasterKey(_) => false,
-            Error::BothMasterKeyFail(_, _) => false,
+            Error::BothMasterKeyFail(..) => false,
             Error::Other(_) => true,
         }
     }

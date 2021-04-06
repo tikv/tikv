@@ -37,7 +37,7 @@ impl<P: RegionInfoProvider> CompactionGuardGeneratorFactory<P> {
                 return Err(Error::Other(From::from(format!(
                     "fail to enable compaction guard, unrecognized cf name: {}",
                     cf
-                ))))
+                ))));
             }
         };
         Ok(CompactionGuardGeneratorFactory {

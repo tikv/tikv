@@ -2609,9 +2609,9 @@ mod tests {
             // check origin_flen and origin_decimal
             let (f, d) = input.prec_and_frac();
             let log = format!(
-                    "input: {}, origin_flen: {}, origin_decimal: {}, actual flen: {}, actual decimal: {}",
-                    input, origin_flen, origin_decimal, f, d
-                );
+                "input: {}, origin_flen: {}, origin_decimal: {}, actual flen: {}, actual decimal: {}",
+                input, origin_flen, origin_decimal, f, d
+            );
             assert_eq!(f, origin_flen, "{}", log);
             assert_eq!(d, origin_decimal, "{}", log);
 
@@ -2670,7 +2670,7 @@ mod tests {
                         assert!(r.is_ok(), "{}", log);
                         assert_eq!(&r.unwrap(), d, "{}", log);
                     }
-                    Err(Error::Eval(_, _)) => {
+                    Err(Error::Eval(..)) => {
                         if let Error::Eval(_, d) = r.err().unwrap() {
                             assert_eq!(d, ERR_M_BIGGER_THAN_D, "{}", log);
                         } else {

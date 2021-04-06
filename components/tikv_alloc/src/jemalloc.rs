@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 // The implementation of this crate when jemalloc is turned on
 
 use super::error::{ProfError, ProfResult};

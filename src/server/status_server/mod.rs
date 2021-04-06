@@ -374,7 +374,7 @@ where
                 return Ok(StatusServer::err_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     err.to_string(),
-                ))
+                ));
             }
         };
 
@@ -658,7 +658,7 @@ where
                 return Ok(StatusServer::err_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "query cancelled",
-                ))
+                ));
             }
         };
 
@@ -668,7 +668,7 @@ where
                 return Ok(StatusServer::err_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     format!("fails to json: {}", err),
-                ))
+                ));
             }
         };
         match Response::builder()
