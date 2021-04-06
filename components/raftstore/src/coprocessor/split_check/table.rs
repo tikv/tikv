@@ -8,6 +8,7 @@ use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use tidb_query_datatype::codec::table as table_codec;
 use tikv_util::keybuilder::KeyBuilder;
+use tikv_util::{box_err, box_try, warn};
 use txn_types::Key;
 
 use super::super::{

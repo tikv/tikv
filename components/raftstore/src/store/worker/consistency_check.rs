@@ -6,6 +6,7 @@ use byteorder::{BigEndian, WriteBytesExt};
 use engine_traits::{KvEngine, Snapshot};
 use kvproto::metapb::Region;
 use tikv_util::worker::Runnable;
+use tikv_util::{error, info, warn};
 
 use crate::coprocessor::CoprocessorHost;
 use crate::store::metrics::*;

@@ -8,6 +8,7 @@ use engine_traits::{KvEngine, Range};
 use error_code::ErrorCodeExt;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
+use tikv_util::{box_try, debug, info, warn};
 
 use crate::store::{CasualMessage, CasualRouter};
 

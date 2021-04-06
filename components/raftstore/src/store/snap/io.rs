@@ -10,11 +10,12 @@ use encryption::{
 };
 use engine_traits::{
     CfName, EncryptionKeyManager, Error as EngineError, ImportExt, IngestExternalFileOptions,
-    Iterable, KvEngine, Mutable, SstWriter, SstWriterBuilder, WriteBatch,
+    Iterable, KvEngine, Mutable, SstCompressionType, SstWriter, SstWriterBuilder, WriteBatch,
 };
 use kvproto::encryptionpb::EncryptionMethod;
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 use tikv_util::time::Limiter;
+use tikv_util::{box_try, debug};
 
 use super::Error;
 
@@ -205,7 +206,10 @@ fn create_sst_file_writer<E>(engine: &E, cf: CfName, path: &str) -> Result<E::Ss
 where
     E: KvEngine,
 {
-    let builder = E::SstWriterBuilder::new().set_db(&engine).set_cf(cf);
+    let builder = E::SstWriterBuilder::new()
+        .set_db(&engine)
+        .set_cf(cf)
+        .set_compression_type(Some(SstCompressionType::Zstd));
     let writer = box_try!(builder.build(path));
     Ok(writer)
 }

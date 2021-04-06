@@ -8,6 +8,8 @@ use engine_traits::{
     SstPartitionerResult, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_VER_DEFAULT, CF_WRITE,
 };
 use keys::data_end_key;
+use lazy_static::lazy_static;
+use tikv_util::warn;
 
 use super::metrics::*;
 
