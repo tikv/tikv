@@ -223,9 +223,9 @@ macro_rules! request_imp {
         }
         let now = Instant::now_coarse();
         let mut wait = Duration::from_millis(0);
-        // acquire a snapshot of pending bytes, which denotes a position of logical queue
+        // acquire current value of pending bytes, which denotes a position of logical queue
         // for this request to wait in.
-        let pending_snapshot = {
+        {
             let mut locked = $limiter.protected.lock();
             // already served partially by current epoch when consumption overflow bytes is
             // smaller than requested amount
@@ -239,16 +239,22 @@ macro_rules! request_imp {
                 return amount;
             }
             locked.pending_bytes[priority_idx] += remains;
+            // calculate wait duration by queue_len / serves_per_epoch
             if locked.next_refill_time <= now {
                 $limiter.refill(&mut locked, now);
+                // bytes served by next epoch (and skipped epochs) during refill are subtracted
+                // from pending_bytes, round up the rest
+                wait += DEFAULT_REFILL_PERIOD
+                    * ((locked.pending_bytes[priority_idx] + cached_bytes_per_epoch - 1)
+                        / cached_bytes_per_epoch) as u32;
             } else {
-                wait += locked.next_refill_time - now;
+                // `(a-1)/b` is equivalent to `roundup(a.saturating_sub(b)/b)`
+                wait += locked.next_refill_time - now
+                    + DEFAULT_REFILL_PERIOD
+                        * ((locked.pending_bytes[priority_idx] - 1) / cached_bytes_per_epoch)
+                            as u32;
             }
-            // already subtracted bytes served by next epoch during refill
-            locked.pending_bytes[priority_idx]
-        };
-        // calculate wait duration by queue_len / service_rate
-        wait += DEFAULT_REFILL_PERIOD * (pending_snapshot / cached_bytes_per_epoch) as u32;
+        }
         do_sleep!(wait, $mode);
         tls_collect_rate_limiter_request_wait($priority.as_str(), wait);
         amount
