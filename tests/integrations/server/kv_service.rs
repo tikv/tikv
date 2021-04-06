@@ -857,9 +857,11 @@ fn test_debug_fail_point() {
         .list_fail_points(&debugpb::ListFailPointsRequest::default())
         .unwrap();
     let entries = resp.get_entries();
-    assert!(entries
-        .iter()
-        .any(|e| e.get_name() == fp && e.get_actions() == act));
+    assert!(
+        entries
+            .iter()
+            .any(|e| e.get_name() == fp && e.get_actions() == act)
+    );
 
     let mut recover_req = debugpb::RecoverFailPointRequest::default();
     recover_req.set_name(fp.to_owned());
@@ -869,9 +871,11 @@ fn test_debug_fail_point() {
         .list_fail_points(&debugpb::ListFailPointsRequest::default())
         .unwrap();
     let entries = resp.get_entries();
-    assert!(entries
-        .iter()
-        .all(|e| !(e.get_name() == fp && e.get_actions() == act)));
+    assert!(
+        entries
+            .iter()
+            .all(|e| !(e.get_name() == fp && e.get_actions() == act))
+    );
 }
 
 #[test]
@@ -930,7 +934,7 @@ fn test_double_run_node() {
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
     let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap());
-    let coprocessor_host = CoprocessorHost::new(router);
+    let coprocessor_host = CoprocessorHost::new(router, raftstore::coprocessor::Config::default());
     let importer = {
         let dir = Path::new(engines.kv.path()).join("import-sst");
         Arc::new(SSTImporter::new(dir, None).unwrap())
@@ -1415,9 +1419,7 @@ macro_rules! test_func {
 }
 
 macro_rules! test_func_init {
-    ($client:ident, $ctx:ident, $call_opt:ident, $func:ident, $req:ident) => {{
-        test_func!($client, $ctx, $call_opt, $func, $req::default())
-    }};
+    ($client:ident, $ctx:ident, $call_opt:ident, $func:ident, $req:ident) => {{ test_func!($client, $ctx, $call_opt, $func, $req::default()) }};
     ($client:ident, $ctx:ident, $call_opt:ident, $func:ident, $req:ident, batch) => {{
         test_func!($client, $ctx, $call_opt, $func, {
             let mut req = $req::default();

@@ -252,7 +252,7 @@ fn test_split_not_to_split_existing_region() {
     let mut cluster = new_node_cluster(0, 4);
     configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.right_derive_when_split = true;
-    cluster.cfg.raft_store.apply_batch_system.max_batch_size = 1;
+    cluster.cfg.raft_store.apply_batch_system.max_batch_size = Some(1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -325,9 +325,9 @@ fn test_split_not_to_split_existing_tombstone_region() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.right_derive_when_split = true;
-    cluster.cfg.raft_store.store_batch_system.max_batch_size = 1;
+    cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
     cluster.cfg.raft_store.store_batch_system.pool_size = 2;
-    cluster.cfg.raft_store.apply_batch_system.max_batch_size = 1;
+    cluster.cfg.raft_store.apply_batch_system.max_batch_size = Some(1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -392,9 +392,9 @@ fn test_split_should_split_existing_same_uninitialied_peer() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.right_derive_when_split = true;
-    cluster.cfg.raft_store.store_batch_system.max_batch_size = 1;
+    cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
     cluster.cfg.raft_store.store_batch_system.pool_size = 2;
-    cluster.cfg.raft_store.apply_batch_system.max_batch_size = 1;
+    cluster.cfg.raft_store.apply_batch_system.max_batch_size = Some(1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -445,9 +445,9 @@ fn test_split_not_to_split_existing_different_uninitialied_peer() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.right_derive_when_split = true;
-    cluster.cfg.raft_store.store_batch_system.max_batch_size = 1;
+    cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
     cluster.cfg.raft_store.store_batch_system.pool_size = 2;
-    cluster.cfg.raft_store.apply_batch_system.max_batch_size = 1;
+    cluster.cfg.raft_store.apply_batch_system.max_batch_size = Some(1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();

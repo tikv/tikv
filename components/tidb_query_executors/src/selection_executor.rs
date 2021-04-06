@@ -260,9 +260,11 @@ mod tests {
 
         let mut exec = BatchSelectionExecutor::new_for_test(
             src_exec,
-            vec![RpnExpressionBuilder::new_for_test()
-                .push_fn_call_for_test(foo_fn_meta(), 0, FieldTypeTp::LongLong)
-                .build_for_test()],
+            vec![
+                RpnExpressionBuilder::new_for_test()
+                    .push_fn_call_for_test(foo_fn_meta(), 0, FieldTypeTp::LongLong)
+                    .build_for_test(),
+            ],
         );
 
         // When source executor returns empty rows, selection executor should process correctly.

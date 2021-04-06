@@ -139,7 +139,7 @@ impl KmsBackend {
                     "KMS vendor mismatch expect {:?} got {:?}",
                     vendor_name,
                     other
-                ))
+                ));
             }
         }
 

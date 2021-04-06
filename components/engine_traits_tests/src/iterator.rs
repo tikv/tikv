@@ -15,22 +15,20 @@ where
 
     assert_eq!(iter.valid().unwrap(), false);
 
-    assert!(panic::catch_unwind(AssertUnwindSafe(|| {
-        let _ = iter.prev();
-    }))
-    .is_err());
-    assert!(panic::catch_unwind(AssertUnwindSafe(|| {
-        let _ = iter.next();
-    }))
-    .is_err());
-    assert!(panic::catch_unwind(AssertUnwindSafe(|| {
-        iter.key();
-    }))
-    .is_err());
-    assert!(panic::catch_unwind(AssertUnwindSafe(|| {
-        iter.value();
-    }))
-    .is_err());
+    assert!(iter.prev().is_err());
+    assert!(iter.next().is_err());
+    assert!(
+        panic::catch_unwind(AssertUnwindSafe(|| {
+            iter.key();
+        }))
+        .is_err()
+    );
+    assert!(
+        panic::catch_unwind(AssertUnwindSafe(|| {
+            iter.value();
+        }))
+        .is_err()
+    );
 
     assert_eq!(iter.seek(SeekKey::Start).unwrap(), false);
     assert_eq!(iter.seek(SeekKey::End).unwrap(), false);
@@ -88,14 +86,18 @@ where
 
     assert!(!iter.valid().unwrap());
 
-    assert!(panic::catch_unwind(AssertUnwindSafe(|| {
-        iter.key();
-    }))
-    .is_err());
-    assert!(panic::catch_unwind(AssertUnwindSafe(|| {
-        iter.value();
-    }))
-    .is_err());
+    assert!(
+        panic::catch_unwind(AssertUnwindSafe(|| {
+            iter.key();
+        }))
+        .is_err()
+    );
+    assert!(
+        panic::catch_unwind(AssertUnwindSafe(|| {
+            iter.value();
+        }))
+        .is_err()
+    );
 }
 
 #[test]
@@ -146,14 +148,18 @@ where
 
     assert!(!iter.valid().unwrap());
 
-    assert!(panic::catch_unwind(AssertUnwindSafe(|| {
-        iter.key();
-    }))
-    .is_err());
-    assert!(panic::catch_unwind(AssertUnwindSafe(|| {
-        iter.value();
-    }))
-    .is_err());
+    assert!(
+        panic::catch_unwind(AssertUnwindSafe(|| {
+            iter.key();
+        }))
+        .is_err()
+    );
+    assert!(
+        panic::catch_unwind(AssertUnwindSafe(|| {
+            iter.value();
+        }))
+        .is_err()
+    );
 }
 
 #[test]

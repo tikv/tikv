@@ -628,25 +628,33 @@ mod tests {
         let it = snap.iter(iter_opt);
         let mut iter = Cursor::new(it, ScanMode::Mixed, true);
 
-        assert!(!iter
-            .seek(&Key::from_encoded_slice(b"a2"), &mut statistics)
-            .unwrap());
-        assert!(iter
-            .seek(&Key::from_encoded_slice(b"a3"), &mut statistics)
-            .unwrap());
-        assert!(iter
-            .seek(&Key::from_encoded_slice(b"a9"), &mut statistics)
-            .is_err());
+        assert!(
+            !iter
+                .seek(&Key::from_encoded_slice(b"a2"), &mut statistics)
+                .unwrap()
+        );
+        assert!(
+            iter.seek(&Key::from_encoded_slice(b"a3"), &mut statistics)
+                .unwrap()
+        );
+        assert!(
+            iter.seek(&Key::from_encoded_slice(b"a9"), &mut statistics)
+                .is_err()
+        );
 
-        assert!(!iter
-            .seek_for_prev(&Key::from_encoded_slice(b"a6"), &mut statistics)
-            .unwrap());
-        assert!(iter
-            .seek_for_prev(&Key::from_encoded_slice(b"a3"), &mut statistics)
-            .unwrap());
-        assert!(iter
-            .seek_for_prev(&Key::from_encoded_slice(b"a1"), &mut statistics)
-            .is_err());
+        assert!(
+            !iter
+                .seek_for_prev(&Key::from_encoded_slice(b"a6"), &mut statistics)
+                .unwrap()
+        );
+        assert!(
+            iter.seek_for_prev(&Key::from_encoded_slice(b"a3"), &mut statistics)
+                .unwrap()
+        );
+        assert!(
+            iter.seek_for_prev(&Key::from_encoded_slice(b"a1"), &mut statistics)
+                .is_err()
+        );
     }
 
     #[test]
@@ -659,34 +667,42 @@ mod tests {
         let mut statistics = CfStatistics::default();
         let it = snap.iter(IterOptions::default());
         let mut iter = Cursor::new(it, ScanMode::Mixed, false);
-        assert!(!iter
-            .reverse_seek(&Key::from_encoded_slice(b"a2"), &mut statistics)
-            .unwrap());
-        assert!(iter
-            .reverse_seek(&Key::from_encoded_slice(b"a7"), &mut statistics)
-            .unwrap());
+        assert!(
+            !iter
+                .reverse_seek(&Key::from_encoded_slice(b"a2"), &mut statistics)
+                .unwrap()
+        );
+        assert!(
+            iter.reverse_seek(&Key::from_encoded_slice(b"a7"), &mut statistics)
+                .unwrap()
+        );
         let mut pair = (
             iter.key(&mut statistics).to_vec(),
             iter.value(&mut statistics).to_vec(),
         );
         assert_eq!(pair, (b"a5".to_vec(), b"v5".to_vec()));
-        assert!(iter
-            .reverse_seek(&Key::from_encoded_slice(b"a5"), &mut statistics)
-            .unwrap());
+        assert!(
+            iter.reverse_seek(&Key::from_encoded_slice(b"a5"), &mut statistics)
+                .unwrap()
+        );
         pair = (
             iter.key(&mut statistics).to_vec(),
             iter.value(&mut statistics).to_vec(),
         );
         assert_eq!(pair, (b"a3".to_vec(), b"v3".to_vec()));
-        assert!(!iter
-            .reverse_seek(&Key::from_encoded_slice(b"a3"), &mut statistics)
-            .unwrap());
-        assert!(iter
-            .reverse_seek(&Key::from_encoded_slice(b"a1"), &mut statistics)
-            .is_err());
-        assert!(iter
-            .reverse_seek(&Key::from_encoded_slice(b"a8"), &mut statistics)
-            .is_err());
+        assert!(
+            !iter
+                .reverse_seek(&Key::from_encoded_slice(b"a3"), &mut statistics)
+                .unwrap()
+        );
+        assert!(
+            iter.reverse_seek(&Key::from_encoded_slice(b"a1"), &mut statistics)
+                .is_err()
+        );
+        assert!(
+            iter.reverse_seek(&Key::from_encoded_slice(b"a8"), &mut statistics)
+                .is_err()
+        );
 
         assert!(iter.seek_to_last(&mut statistics));
         let mut res = vec![];
@@ -709,12 +725,15 @@ mod tests {
         let snap = RegionSnapshot::<RocksSnapshot>::from_raw(engines.kv, region);
         let it = snap.iter(IterOptions::default());
         let mut iter = Cursor::new(it, ScanMode::Mixed, false);
-        assert!(!iter
-            .reverse_seek(&Key::from_encoded_slice(b"a1"), &mut statistics)
-            .unwrap());
-        assert!(iter
-            .reverse_seek(&Key::from_encoded_slice(b"a2"), &mut statistics)
-            .unwrap());
+        assert!(
+            !iter
+                .reverse_seek(&Key::from_encoded_slice(b"a1"), &mut statistics)
+                .unwrap()
+        );
+        assert!(
+            iter.reverse_seek(&Key::from_encoded_slice(b"a2"), &mut statistics)
+                .unwrap()
+        );
         let pair = (
             iter.key(&mut statistics).to_vec(),
             iter.value(&mut statistics).to_vec(),

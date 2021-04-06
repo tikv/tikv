@@ -828,7 +828,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         snapshot,
                         Some(ScanMode::Forward),
                         !ctx.get_not_fill_cache(),
-                        ctx.get_isolation_level(),
                     );
                     let result = reader
                         .scan_locks(
@@ -838,7 +837,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             limit,
                         )
                         .map_err(txn::Error::from);
-                    statistics.add(reader.get_statistics());
+                    statistics.add(&reader.statistics);
                     let (kv_pairs, _) = result?;
                     let mut locks = Vec::with_capacity(kv_pairs.len());
                     for (key, lock) in kv_pairs {
@@ -2842,7 +2841,7 @@ mod tests {
         .unwrap()
         .into_iter()
         .map(|x| x.unwrap())
-        .map(|(x, _, _)| x)
+        .map(|(x, ..)| x)
         .collect();
         assert_eq!(
             x,

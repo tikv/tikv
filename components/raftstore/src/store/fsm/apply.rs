@@ -24,6 +24,7 @@ use engine_traits::{
     DeleteStrategy, KvEngine, RaftEngine, Range as EngineRange, Snapshot, WriteBatch,
 };
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use fail::fail_point;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{PeerRole, Region, RegionEpoch};
@@ -43,6 +44,7 @@ use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant};
 use tikv_util::worker::Scheduler;
+use tikv_util::{box_err, box_try, debug, error, info, safe_panic, slow_log, warn};
 use tikv_util::{Either, MustConsumeVec};
 use time::Timespec;
 use uuid::Builder as UuidBuilder;
@@ -1182,8 +1184,14 @@ where
                 || (epoch_state.change_conf_ver
                     && epoch.get_conf_ver() == self.region.get_region_epoch().get_conf_ver())
             {
-                panic!("{} apply admin cmd {:?} but epoch change is not expected, epoch state {:?}, before {:?}, after {:?}",
-                        self.tag, req, epoch_state, epoch, self.region.get_region_epoch());
+                panic!(
+                    "{} apply admin cmd {:?} but epoch change is not expected, epoch state {:?}, before {:?}, after {:?}",
+                    self.tag,
+                    req,
+                    epoch_state,
+                    epoch,
+                    self.region.get_region_epoch()
+                );
             }
         }
 
@@ -1902,11 +1910,11 @@ where
                             "region" => ?&self.region
                         );
                         return Err(box_err!(
-                                "can't add duplicated peer {:?} to region {:?}, duplicated with exist peer {:?}",
-                                peer,
-                                self.region,
-                                exist_peer
-                            ));
+                            "can't add duplicated peer {:?} to region {:?}, duplicated with exist peer {:?}",
+                            peer,
+                            self.region,
+                            exist_peer
+                        ));
                     }
                     match (role, change_type) {
                         (PeerRole::Voter, ConfChangeType::AddLearnerNode) => match kind {
@@ -2168,8 +2176,10 @@ where
                     if replace_regions.get(region_id).is_some() {
                         // This peer must be the first one on local store. So if this peer is created on the other side,
                         // it means no `RegionLocalState` in kv engine.
-                        panic!("{} failed to replace region {} peer {} because state {:?} alread exist in kv engine",
-                            self.tag, region_id, new_split_peer.peer_id, state);
+                        panic!(
+                            "{} failed to replace region {} peer {} because state {:?} alread exist in kv engine",
+                            self.tag, region_id, new_split_peer.peer_id, state
+                        );
                     }
                     already_exist_regions.push((*region_id, new_split_peer.peer_id));
                     new_split_peer.result = Some(format!("state {:?} exist in kv engine", state));
@@ -3661,7 +3671,7 @@ where
                     return;
                 }
                 #[cfg(any(test, feature = "testexport"))]
-                Msg::Validate(_, _) => return,
+                Msg::Validate(..) => return,
             },
             Either::Left(Err(TrySendError::Full(_))) => unreachable!(),
         };
@@ -4729,11 +4739,12 @@ mod tests {
                     region_id: 2,
                 },
                 cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
-                    assert!(resp
-                        .response
-                        .get_header()
-                        .get_error()
-                        .has_region_not_found());
+                    assert!(
+                        resp.response
+                            .get_header()
+                            .get_error()
+                            .has_region_not_found()
+                    );
                     assert!(resp.snapshot.is_none());
                 })),
             },

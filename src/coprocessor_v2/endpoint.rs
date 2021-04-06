@@ -2,13 +2,16 @@
 
 use std::future::Future;
 use std::marker::PhantomData;
+use std::sync::Arc;
 
+use super::plugin_registry::PluginRegistry;
 use crate::storage::Engine;
 use kvproto::coprocessor_v2 as coprv2pb;
 
 /// A pool to build and run Coprocessor request handlers.
 #[derive(Clone)]
 pub struct Endpoint<E: Engine> {
+    plugin_registry: Arc<PluginRegistry>,
     _phantom: PhantomData<E>,
 }
 
@@ -17,6 +20,7 @@ impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
 impl<E: Engine> Endpoint<E> {
     pub fn new() -> Self {
         Self {
+            plugin_registry: Arc::new(PluginRegistry::new()),
             _phantom: Default::default(),
         }
     }
@@ -30,10 +34,10 @@ impl<E: Engine> Endpoint<E> {
         &self,
         _req: coprv2pb::RawCoprocessorRequest,
     ) -> impl Future<Output = coprv2pb::RawCoprocessorResponse> {
-        todo!("Coprocessor V2 is currently not implemented.");
+        unimplemented!("Coprocessor V2 is currently not implemented.");
 
         // Make sure we produce a valid return type
-        // (because `todo!()` doesn't work with `impl Trait`).
+        // (because `!` type doesn't implement `Future`).
         #[allow(unreachable_code)]
         std::future::ready(coprv2pb::RawCoprocessorResponse::default())
     }

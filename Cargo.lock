@@ -786,6 +786,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "995a44c877f9212528ccc74b21a232f66ad69001e40ede5bcee2ac9ef2657120"
 
 [[package]]
+name = "coprocessor_plugin_api"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1396,6 +1403,13 @@ dependencies = [
  "serde",
  "tikv_alloc",
  "toml",
+]
+
+[[package]]
+name = "example_plugin"
+version = "0.1.0"
+dependencies = [
+ "coprocessor_plugin_api",
 ]
 
 [[package]]
@@ -5227,6 +5241,7 @@ dependencies = [
  "collections",
  "concurrency_manager",
  "configuration",
+ "coprocessor_plugin_api",
  "crc32fast",
  "crc64fast",
  "crossbeam 0.8.0",
@@ -5237,6 +5252,7 @@ dependencies = [
  "engine_traits",
  "engine_traits_tests",
  "error_code",
+ "example_plugin",
  "fail",
  "file_system",
  "fs2",
@@ -5256,6 +5272,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "libc 0.2.86",
+ "libloading",
  "log",
  "log_wrappers",
  "match_template",
