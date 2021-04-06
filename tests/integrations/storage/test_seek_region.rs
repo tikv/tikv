@@ -4,9 +4,9 @@ use std::sync::mpsc::channel;
 use std::thread;
 use std::time::Duration;
 
+use collections::HashMap;
 use raftstore::coprocessor::{RegionInfoAccessor, RegionInfoProvider};
 use test_raftstore::*;
-use tikv_util::collections::HashMap;
 use tikv_util::HandyRwLock;
 
 fn test_seek_region_impl<T: Simulator, R: RegionInfoProvider>(
@@ -122,7 +122,6 @@ fn test_region_collection_seek_region() {
         .wl()
         .post_create_coprocessor_host(Box::new(move |id, host| {
             let p = RegionInfoAccessor::new(host);
-            p.start();
             tx.send((id, p)).unwrap()
         }));
 

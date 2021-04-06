@@ -41,8 +41,11 @@ fn bench_engine_snapshot<E: Engine, F: EngineFactory<E>>(
     config: &BenchConfig<F>,
 ) {
     let engine = config.engine_factory.build();
-    let ctx = Context::default();
-    bencher.iter(|| black_box(&engine).snapshot(black_box(&ctx)).unwrap());
+    bencher.iter(|| {
+        black_box(&engine)
+            .snapshot(black_box(Default::default()))
+            .unwrap()
+    });
 }
 
 //exclude snapshot
@@ -51,7 +54,6 @@ fn bench_engine_get<E: Engine, F: EngineFactory<E>>(
     config: &BenchConfig<F>,
 ) {
     let engine = config.engine_factory.build();
-    let ctx = Context::default();
     let test_kvs: Vec<Key> = KvGenerator::with_seed(
         config.key_length,
         config.value_length,
@@ -64,7 +66,7 @@ fn bench_engine_get<E: Engine, F: EngineFactory<E>>(
 
     bencher.iter_batched(
         || {
-            let snap = engine.snapshot(&ctx).unwrap();
+            let snap = engine.snapshot(Default::default()).unwrap();
             (snap, &test_kvs)
         },
         |(snap, test_kvs)| {
@@ -77,11 +79,19 @@ fn bench_engine_get<E: Engine, F: EngineFactory<E>>(
 }
 
 pub fn bench_engine<E: Engine, F: EngineFactory<E>>(c: &mut Criterion, configs: &[BenchConfig<F>]) {
-    c.bench_function_over_inputs(
-        "engine_get(exclude snapshot)",
-        bench_engine_get,
-        configs.to_vec(),
-    );
-    c.bench_function_over_inputs("engine_put", bench_engine_put, configs.to_owned());
-    c.bench_function_over_inputs("engine_snapshot", bench_engine_snapshot, configs.to_owned());
+    let mut group = c.benchmark_group("engine");
+    for config in configs {
+        group.bench_with_input(
+            format!("get(exclude snapshot)/{:?}", config),
+            config,
+            bench_engine_get,
+        );
+        group.bench_with_input(format!("put/{:?}", config), config, bench_engine_put);
+        group.bench_with_input(
+            format!("snapshot/{:?}", config),
+            config,
+            bench_engine_snapshot,
+        );
+    }
+    group.finish();
 }

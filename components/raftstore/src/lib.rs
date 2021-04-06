@@ -5,23 +5,8 @@
 #![feature(shrink_to)]
 #![feature(div_duration)]
 #![feature(min_specialization)]
-
-#[macro_use]
-extern crate bitflags;
-#[macro_use(fail_point)]
-extern crate fail;
-#[macro_use]
-extern crate lazy_static;
-#[macro_use]
-extern crate prometheus;
-#[macro_use]
-extern crate quick_error;
-#[macro_use]
-extern crate serde_derive;
-#[macro_use]
-extern crate serde_with;
-#[macro_use]
-extern crate tikv_util;
+#![feature(box_patterns)]
+#![feature(vecdeque_binary_search)]
 
 #[cfg(test)]
 extern crate test;

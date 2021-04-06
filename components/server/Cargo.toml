@@ -48,16 +48,19 @@ cdc = { path = "../cdc" }
 chrono = "0.4"
 tempfile = "3.0"
 clap = "2.32"
+collections = { path = "../collections" }
 concurrency_manager = { path = "../concurrency_manager" }
 crossbeam = "0.7"
 encryption = { path = "../encryption" }
+encryption_export = { path = "../encryption/export", default-features = false }
 engine_rocks = { path = "../engine_rocks" }
 engine_traits = { path = "../engine_traits" }
 error_code = { path = "../error_code" }
+file_system = { path = "../file_system" }
 fs2 = "0.4"
 futures = "0.3"
 tokio = { version = "0.2", features = ["rt-threaded"] }
-grpcio = { version = "0.6", default-features = false, features = ["openssl-vendored"] }
+grpcio = { version = "0.8", default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"
 keys = { path = "../keys" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
@@ -66,7 +69,7 @@ log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug
 log_wrappers = { path = "../log_wrappers" }
 nix = "0.11"
 pd_client = { path = "../pd_client" }
-prometheus = { version = "0.8", features = ["nightly"] }
+prometheus = { version = "0.10", features = ["nightly"] }
 promptly = "0.3.0"
 protobuf = "2.8"
 raft = { version = "0.6.0-alpha", default-features = false }
@@ -80,12 +83,10 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 tikv = { path = "../..", default-features = false }
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
-toml = "0.4"
+toml = "0.5"
 txn_types = { path = "../txn_types" }
 vlog = "0.1.4"
-
-[dependencies.yatp]
-git = "https://github.com/tikv/yatp.git"
+yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.6"

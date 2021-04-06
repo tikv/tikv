@@ -4,9 +4,11 @@ use txn_types::{Key, TimeStamp};
 
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::{Lock, LockManager, WaitTimeout};
-use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn};
+use crate::storage::mvcc::{
+    Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader,
+};
 use crate::storage::txn::commands::{
-    Command, CommandExt, TypedCommand, WriteCommand, WriteContext, WriteResult,
+    Command, CommandExt, ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
 use crate::storage::txn::{acquire_pessimistic_lock, Error, ErrorInner, Result};
 use crate::storage::{
@@ -71,12 +73,9 @@ fn extract_lock_from_result<T>(res: &StorageResult<T>) -> Lock {
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let (start_ts, ctx, keys) = (self.start_ts, self.ctx, self.keys);
-        let mut txn = MvccTxn::new(
-            snapshot,
-            start_ts,
-            !ctx.get_not_fill_cache(),
-            context.concurrency_manager,
-        );
+        let mut txn = MvccTxn::new(start_ts, context.concurrency_manager);
+        let mut reader = SnapshotReader::new(start_ts, snapshot, !ctx.get_not_fill_cache());
+
         let rows = keys.len();
         let mut res = if self.return_values {
             Ok(PessimisticLockRes::Values(vec![]))
@@ -86,6 +85,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
         for (k, should_not_exist) in keys {
             match acquire_pessimistic_lock(
                 &mut txn,
+                &mut reader,
                 k,
                 &self.primary,
                 should_not_exist,
@@ -114,7 +114,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
             }
         }
 
-        context.statistics.add(&txn.take_statistics());
+        context.statistics.add(&reader.take_statistics());
         // no conflict
         let (pr, to_be_write, rows, ctx, lock_info) = if res.is_ok() {
             let pr = ProcessResult::PessimisticLockRes { res };
@@ -134,6 +134,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
             pr,
             lock_info,
             lock_guards: vec![],
+            response_policy: ResponsePolicy::OnProposed,
         })
     }
 }

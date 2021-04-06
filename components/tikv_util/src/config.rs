@@ -5,7 +5,7 @@ use std::fmt::{self, Write};
 use std::fs;
 use std::net::{SocketAddrV4, SocketAddrV6};
 use std::ops::{Div, Mul};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::{self, FromStr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock, RwLockReadGuard};
@@ -13,35 +13,24 @@ use std::time::Duration;
 
 use serde::de::{self, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use thiserror::Error;
 
 use super::time::Instant;
 use crate::slow_log;
 use configuration::ConfigValue;
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum ConfigError {
-        Limit(msg: String) {
-            description(msg)
-            display("{}", msg)
-        }
-        Address(msg: String) {
-            description(msg)
-            display("config address error: {}", msg)
-        }
-        StoreLabels(msg: String) {
-            description(msg)
-            display("store label error: {}", msg)
-        }
-        Value(msg: String) {
-            description(msg)
-            display("config value error: {}", msg)
-        }
-        FileSystem(msg: String) {
-            description(msg)
-            display("config fs: {}", msg)
-        }
-    }
+#[derive(Debug, Error)]
+pub enum ConfigError {
+    #[error("{0}")]
+    Limit(String),
+    #[error("config address error: {0}")]
+    Address(String),
+    #[error("store label error: {0}")]
+    StoreLabels(String),
+    #[error("config value error: {0}")]
+    Value(String),
+    #[error("config fs: {0}")]
+    FileSystem(String),
 }
 
 const UNIT: u64 = 1;
@@ -79,12 +68,12 @@ impl From<ReadableSize> for ConfigValue {
     }
 }
 
-impl Into<ReadableSize> for ConfigValue {
-    fn into(self) -> ReadableSize {
-        if let ConfigValue::Size(s) = self {
+impl From<ConfigValue> for ReadableSize {
+    fn from(c: ConfigValue) -> ReadableSize {
+        if let ConfigValue::Size(s) = c {
             ReadableSize(s)
         } else {
-            panic!("expect: ConfigValue::Size, got: {:?}", self);
+            panic!("expect: ConfigValue::Size, got: {:?}", c);
         }
     }
 }
@@ -103,9 +92,9 @@ impl From<Option<ReadableSize>> for OptionReadableSize {
     }
 }
 
-impl Into<Option<ReadableSize>> for OptionReadableSize {
-    fn into(self) -> Option<ReadableSize> {
-        self.0
+impl From<OptionReadableSize> for Option<ReadableSize> {
+    fn from(s: OptionReadableSize) -> Option<ReadableSize> {
+        s.0
     }
 }
 
@@ -115,12 +104,12 @@ impl From<OptionReadableSize> for ConfigValue {
     }
 }
 
-impl Into<OptionReadableSize> for ConfigValue {
-    fn into(self) -> OptionReadableSize {
-        if let ConfigValue::OptionSize(s) = self {
-            OptionReadableSize(s.map(|v| ReadableSize(v)))
+impl From<ConfigValue> for OptionReadableSize {
+    fn from(s: ConfigValue) -> OptionReadableSize {
+        if let ConfigValue::OptionSize(s) = s {
+            OptionReadableSize(s.map(ReadableSize))
         } else {
-            panic!("expect: ConfigValue::OptionSize, got: {:?}", self);
+            panic!("expect: ConfigValue::OptionSize, got: {:?}", s);
         }
     }
 }
@@ -297,12 +286,12 @@ impl From<ReadableDuration> for ConfigValue {
     }
 }
 
-impl Into<ReadableDuration> for ConfigValue {
-    fn into(self) -> ReadableDuration {
-        if let ConfigValue::Duration(d) = self {
+impl From<ConfigValue> for ReadableDuration {
+    fn from(d: ConfigValue) -> ReadableDuration {
+        if let ConfigValue::Duration(d) = d {
             ReadableDuration(Duration::from_millis(d))
         } else {
-            panic!("expect: ConfigValue::Duration, got: {:?}", self);
+            panic!("expect: ConfigValue::Duration, got: {:?}", d);
         }
     }
 }
@@ -473,7 +462,12 @@ pub fn canonicalize_path(path: &str) -> Result<String, Box<dyn Error>> {
 }
 
 pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<dyn Error>> {
-    let mut path = Path::new(path).canonicalize()?;
+    let path = Path::new(path);
+    let mut path = match path.canonicalize() {
+        Ok(path) => path,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => PathBuf::from(path),
+        Err(e) => return Err(Box::new(e) as Box<dyn Error>),
+    };
     if !sub_path.is_empty() {
         path = path.join(Path::new(sub_path));
     }
@@ -639,6 +633,8 @@ mod check_data_dir {
     use std::fs;
     use std::path::Path;
     use std::sync::Mutex;
+
+    use lazy_static::lazy_static;
 
     use super::{canonicalize_path, ConfigError};
 
@@ -922,13 +918,15 @@ pub fn check_data_dir_empty(data_path: &str, extension: &str) -> Result<(), Conf
 
 /// `check_addr` validates an address. Addresses are formed like "Host:Port".
 /// More details about **Host** and **Port** can be found in WHATWG URL Standard.
-pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
+///
+/// Return whether the address is unspecified, i.e. `0.0.0.0` or `::0`
+pub fn check_addr(addr: &str) -> Result<bool, ConfigError> {
     // Try to validate "IPv4:Port" and "[IPv6]:Port".
-    if SocketAddrV4::from_str(addr).is_ok() {
-        return Ok(());
+    if let Ok(a) = SocketAddrV4::from_str(addr) {
+        return Ok(a.ip().is_unspecified());
     }
-    if SocketAddrV6::from_str(addr).is_ok() {
-        return Ok(());
+    if let Ok(a) = SocketAddrV6::from_str(addr) {
+        return Ok(a.ip().is_unspecified());
     }
 
     let parts: Vec<&str> = addr
@@ -958,7 +956,7 @@ pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
         return Err(ConfigError::Address(format!("invalid addr: {:?}", e)));
     }
 
-    Ok(())
+    Ok(false)
 }
 
 #[derive(Default)]
@@ -1101,7 +1099,7 @@ impl TomlLine {
 
 /// TomlWriter use to update the config file and only cover the most commom toml
 /// format that used by tikv config file, toml format like: quoted keys, multi-line
-/// value, inline table, etc, are not supported, see https://github.com/toml-lang/toml
+/// value, inline table, etc, are not supported, see <https://github.com/toml-lang/toml>
 /// for more detail.
 pub struct TomlWriter {
     dst: Vec<u8>,
@@ -1356,7 +1354,7 @@ mod tests {
         );
 
         let path2 = format!("{}", tmp_dir.to_path_buf().join("test2").display());
-        assert!(canonicalize_path(&path2).is_err());
+        assert!(canonicalize_path(&path2).is_ok());
         ensure_dir_exist(&path2).unwrap();
         let res_path2 = canonicalize_path(&path2).unwrap();
         assert_eq!(
@@ -1434,6 +1432,20 @@ mod tests {
 
         for (addr, is_ok) in table {
             assert_eq!(check_addr(addr).is_ok(), is_ok);
+        }
+
+        let table = vec![
+            ("0.0.0.0:8080", true),
+            ("[::0]:8080", true),
+            ("127.0.0.1:8080", false),
+            ("[::1]:8080", false),
+            ("localhost:8080", false),
+            ("pingcap.com:8080", false),
+            ("funnydomain:8080", false),
+        ];
+
+        for (addr, is_unspecified) in table {
+            assert_eq!(check_addr(addr).unwrap(), is_unspecified);
         }
     }
 

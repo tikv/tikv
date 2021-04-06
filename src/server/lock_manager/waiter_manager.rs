@@ -9,7 +9,7 @@ use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 use crate::storage::{
     Error as StorageError, ErrorInner as StorageErrorInner, ProcessResult, StorageCallback,
 };
-use tikv_util::collections::HashMap;
+use collections::HashMap;
 use tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 
 use std::cell::RefCell;
@@ -1021,9 +1021,11 @@ pub mod tests {
         let detect_worker = FutureWorker::new("dummy-deadlock");
         let detector_scheduler = DetectorScheduler::new(detect_worker.scheduler());
 
-        let mut cfg = Config::default();
-        cfg.wait_for_lock_timeout = ReadableDuration::millis(wait_for_lock_timeout);
-        cfg.wake_up_delay_duration = ReadableDuration::millis(wake_up_delay_duration);
+        let cfg = Config {
+            wait_for_lock_timeout: ReadableDuration::millis(wait_for_lock_timeout),
+            wake_up_delay_duration: ReadableDuration::millis(wake_up_delay_duration),
+            ..Default::default()
+        };
         let mut waiter_mgr_worker = FutureWorker::new("test-waiter-manager");
         let waiter_mgr_runner =
             WaiterManager::new(Arc::new(AtomicUsize::new(0)), detector_scheduler, &cfg);

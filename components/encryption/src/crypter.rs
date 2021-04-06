@@ -1,9 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use derive_more::Deref;
 use engine_traits::EncryptionMethod as DBEncryptionMethod;
 use kvproto::encryptionpb::EncryptionMethod;
 use openssl::symm::{self, Cipher as OCipher};
 use rand::{rngs::OsRng, RngCore};
+use tikv_util::{box_err, impl_display_as_debug};
 
 use crate::{Error, Result};
 
@@ -141,14 +143,14 @@ impl AesGcmTag {
 /// An Aes256-GCM crypter.
 pub struct AesGcmCrypter<'k> {
     iv: Iv,
-    key: &'k [u8],
+    key: &'k PlainKey,
 }
 
 impl<'k> AesGcmCrypter<'k> {
     /// The key length of `AesGcmCrypter` is 32 bytes.
     pub const KEY_LEN: usize = 32;
 
-    pub fn new(key: &'k [u8], iv: Iv) -> AesGcmCrypter<'k> {
+    pub fn new(key: &'k PlainKey, iv: Iv) -> AesGcmCrypter<'k> {
         AesGcmCrypter { iv, key }
     }
 
@@ -157,7 +159,7 @@ impl<'k> AesGcmCrypter<'k> {
         let mut tag = AesGcmTag([0u8; GCM_TAG_LEN]);
         let ciphertext = symm::encrypt_aead(
             cipher,
-            self.key,
+            &self.key.0,
             Some(self.iv.as_slice()),
             &[], /* AAD */
             &pt,
@@ -170,7 +172,7 @@ impl<'k> AesGcmCrypter<'k> {
         let cipher = OCipher::aes_256_gcm();
         let plaintext = symm::decrypt_aead(
             cipher,
-            self.key,
+            &self.key.0,
             Some(self.iv.as_slice()),
             &[], /* AAD */
             &ct,
@@ -196,6 +198,36 @@ pub fn verify_encryption_config(method: EncryptionMethod, key: &[u8]) -> Result<
     }
     Ok(())
 }
+
+// PlainKey is a newtype used to mark a vector a plaintext key.
+// It requires the vec to be a valid AesGcmCrypter key.
+#[derive(Deref)]
+pub struct PlainKey(Vec<u8>);
+
+impl PlainKey {
+    pub fn new(key: Vec<u8>) -> Result<Self> {
+        if key.len() != AesGcmCrypter::KEY_LEN {
+            return Err(box_err!(
+                "encryption method and key length mismatch, expect {} get {}",
+                AesGcmCrypter::KEY_LEN,
+                key.len()
+            ));
+        }
+        Ok(Self(key))
+    }
+}
+
+// Don't expose the key in a debug print
+impl std::fmt::Debug for PlainKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("PlainKey")
+            .field(&"REDACTED".to_string())
+            .finish()
+    }
+}
+
+// Don't expose the key in a display print
+impl_display_as_debug!(PlainKey);
 
 #[cfg(test)]
 mod tests {
@@ -248,7 +280,7 @@ mod tests {
 
         let pt = Vec::from_hex(pt).unwrap();
         let ct = Vec::from_hex(ct).unwrap();
-        let key = Vec::from_hex(key).unwrap();
+        let key = PlainKey::new(Vec::from_hex(key).unwrap()).unwrap();
         let iv = Iv::from_slice(Vec::from_hex(iv).unwrap().as_slice()).unwrap();
         let tag = Vec::from_hex(tag).unwrap();
 

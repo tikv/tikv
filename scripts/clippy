@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# This script runs clippy with the most common configurations.
+# Arguments given will be passed through to "cargo clippy"
+# This runs in the Makefile environment via "make run"
+
+set -euo pipefail
+
+# Run from the Makefile environment
+MAKEFILE_RUN=${MAKEFILE_RUN:-""}
+if [[ -z $MAKEFILE_RUN ]] ; then
+	COMMAND="$0 $*" exec make run
+fi
+SHELL_DEBUG=${SHELL_DEBUG:-""}
+if [[ -n "$SHELL_DEBUG" ]] ; then
+  set -x
+fi
+
+ALLOWED_CLIPPY_LINTS=(-A clippy::module_inception  \
+	-A clippy::should_implement_trait \
+	-A clippy::new_without_default \
+	-A clippy::too_many_arguments \
+	-A clippy::blacklisted_name \
+	-A clippy::needless_range_loop \
+	-A clippy::new_ret_no_self \
+	-A clippy::unnecessary_sort_by \
+	-A clippy::unnecessary_wraps)
+
+cargo clippy --workspace --no-default-features \
+	--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
+	--features "${TIKV_ENABLE_FEATURES}" "$@" -- "${ALLOWED_CLIPPY_LINTS[@]}"

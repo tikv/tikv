@@ -7,14 +7,14 @@ use std::time::Duration;
 
 use futures::executor::block_on;
 use grpcio::EnvBuilder;
+use grpcio::{Error as GrpcError, RpcStatus, RpcStatusCode};
 use kvproto::metapb;
 use kvproto::pdpb;
 use tokio::runtime::Builder;
 
-use pd_client::{validate_endpoints, Error as PdError, PdClient, RegionStat, RpcClient};
+use pd_client::{Error as PdError, Feature, PdClient, PdConnector, RegionStat, RpcClient};
 use raftstore::store;
 use security::{SecurityConfig, SecurityManager};
-use semver::Version;
 use tikv_util::config::ReadableDuration;
 use txn_types::TimeStamp;
 
@@ -31,7 +31,7 @@ fn test_retry_rpc_client() {
     server.stop();
     let child = thread::spawn(move || {
         let cfg = new_config(m_eps);
-        assert_eq!(RpcClient::new(&cfg, m_mgr).is_ok(), true);
+        assert_eq!(RpcClient::new(&cfg, None, m_mgr).is_ok(), true);
     });
     thread::sleep(Duration::from_millis(500));
     server.start(&mgr, eps);
@@ -133,6 +133,49 @@ fn test_rpc_client() {
 }
 
 #[test]
+fn test_connect_follower() {
+    let connect_leader_fp = "connect_leader";
+    let server = MockServer::new(2);
+    let eps = server.bind_addrs();
+    let mut cfg = new_config(eps.clone());
+
+    // test switch
+    cfg.enable_forwarding = false;
+    let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
+    let client1 = RpcClient::new(&cfg, None, mgr).unwrap();
+    fail::cfg(connect_leader_fp, "return").unwrap();
+    // RECONNECT_INTERVAL_SEC is 1s.
+    thread::sleep(Duration::from_secs(1));
+    let res = format!("{}", client1.alloc_id().unwrap_err());
+    let err = format!(
+        "{}",
+        PdError::Grpc(GrpcError::RpcFailure(RpcStatus::new(
+            RpcStatusCode::UNAVAILABLE,
+            Some("".to_string()),
+        )))
+    );
+    assert_eq!(res, err);
+
+    cfg.enable_forwarding = true;
+    let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
+    let client = RpcClient::new(&cfg, None, mgr).unwrap();
+    // RECONNECT_INTERVAL_SEC is 1s.
+    thread::sleep(Duration::from_secs(1));
+    let leader_addr = client1.get_leader().get_client_urls()[0].clone();
+    let res = format!("{}", client.alloc_id().unwrap_err());
+    let err = format!(
+        "{}",
+        PdError::Grpc(GrpcError::RpcFailure(RpcStatus::new(
+            RpcStatusCode::UNAVAILABLE,
+            Some(leader_addr),
+        )))
+    );
+    assert_eq!(res, err);
+
+    fail::remove(connect_leader_fp);
+}
+
+#[test]
 fn test_get_tombstone_stores() {
     let eps_count = 1;
     let server = MockServer::new(eps_count);
@@ -216,7 +259,27 @@ fn test_validate_endpoints() {
     let eps = server.bind_addrs();
 
     let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
-    assert!(validate_endpoints(env, &new_config(eps), mgr.clone()).is_err());
+    let connector = PdConnector::new(env, mgr);
+    assert!(block_on(connector.validate_endpoints(&new_config(eps))).is_err());
+}
+
+#[test]
+fn test_validate_endpoints_retry() {
+    let eps_count = 3;
+    let server = MockServer::with_case(eps_count, Arc::new(Split::new()));
+    let env = Arc::new(
+        EnvBuilder::new()
+            .cq_count(1)
+            .name_prefix(thd_name!("test-pd"))
+            .build(),
+    );
+    let mut eps = server.bind_addrs();
+    let mock_port = 65535;
+    eps.insert(0, ("127.0.0.1".to_string(), mock_port));
+    eps.pop();
+    let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
+    let connector = PdConnector::new(env, mgr);
+    assert!(block_on(connector.validate_endpoints(&new_config(eps))).is_err());
 }
 
 fn test_retry<F: Fn(&RpcClient)>(func: F) {
@@ -324,8 +387,8 @@ fn restart_leader(mgr: SecurityManager) {
     server.stop();
     server.start(&mgr, eps);
 
-    // RECONNECT_INTERVAL_SEC is 1s.
-    thread::sleep(Duration::from_secs(1));
+    // The GLOBAL_RECONNECT_INTERVAL is 0.1s so sleeps 0.2s here.
+    thread::sleep(Duration::from_millis(200));
 
     let region = block_on(client.get_region_by_id(region.get_id())).unwrap();
     assert_eq!(region.unwrap().get_id(), region_id);
@@ -467,9 +530,13 @@ fn test_cluster_version() {
     let server = MockServer::<Service>::new(3);
     let eps = server.bind_addrs();
 
+    let feature_a = Feature::require(0, 0, 1);
+    let feature_b = Feature::require(5, 0, 0);
+    let feature_c = Feature::require(5, 0, 1);
+
     let client = new_client(eps, None);
-    let cluster_version = client.cluster_version();
-    assert!(cluster_version.get().is_none());
+    let feature_gate = client.feature_gate();
+    assert!(!feature_gate.can_enable(feature_a));
 
     let emit_heartbeat = || {
         let req = pdpb::StoreStats::default();
@@ -483,32 +550,35 @@ fn test_cluster_version() {
 
     // Empty version string will be treated as invalid.
     emit_heartbeat();
-    assert!(cluster_version.get().is_none());
+    assert!(!feature_gate.can_enable(feature_a));
 
     // Explicitly invalid version string.
     set_cluster_version("invalid-version");
     emit_heartbeat();
-    assert!(cluster_version.get().is_none());
-
-    let v_500 = Version::parse("5.0.0").unwrap();
-    let v_501 = Version::parse("5.0.1").unwrap();
+    assert!(!feature_gate.can_enable(feature_a));
 
     // Correct version string.
     set_cluster_version("5.0.0");
     emit_heartbeat();
-    assert_eq!(cluster_version.get().unwrap(), v_500,);
+    assert!(feature_gate.can_enable(feature_a));
+    assert!(feature_gate.can_enable(feature_b));
+    assert!(!feature_gate.can_enable(feature_c));
 
     // Version can't go backwards.
     set_cluster_version("4.99");
     emit_heartbeat();
-    assert_eq!(cluster_version.get().unwrap(), v_500,);
+    assert!(feature_gate.can_enable(feature_b));
+    assert!(!feature_gate.can_enable(feature_c));
 
     // After reconnect the version should be still accessable.
+    // The GLOBAL_RECONNECT_INTERVAL is 0.1s so sleeps 0.2s here.
+    thread::sleep(Duration::from_millis(200));
     client.reconnect().unwrap();
-    assert_eq!(cluster_version.get().unwrap(), v_500,);
+    assert!(feature_gate.can_enable(feature_b));
+    assert!(!feature_gate.can_enable(feature_c));
 
     // Version can go forwards.
     set_cluster_version("5.0.1");
     emit_heartbeat();
-    assert_eq!(cluster_version.get().unwrap(), v_501);
+    assert!(feature_gate.can_enable(feature_c));
 }

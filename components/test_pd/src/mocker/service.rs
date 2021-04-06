@@ -1,9 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
-use tikv_util::collections::HashMap;
 
+use fail::fail_point;
 use kvproto::metapb::{Peer, Region, Store, StoreState};
 use kvproto::pdpb::*;
 
@@ -17,7 +18,7 @@ pub struct Service {
     stores: Mutex<HashMap<u64, Store>>,
     regions: Mutex<HashMap<u64, Region>>,
     leaders: Mutex<HashMap<u64, Peer>>,
-    cluster_version: Mutex<String>,
+    feature_gate: Mutex<String>,
 }
 
 impl Service {
@@ -29,7 +30,7 @@ impl Service {
             stores: Mutex::new(HashMap::default()),
             regions: Mutex::new(HashMap::default()),
             leaders: Mutex::new(HashMap::default()),
-            cluster_version: Mutex::new(String::default()),
+            feature_gate: Mutex::new(String::default()),
         }
     }
 
@@ -46,7 +47,7 @@ impl Service {
     }
 
     pub fn set_cluster_version(&self, version: String) {
-        *self.cluster_version.lock().unwrap() = version;
+        *self.feature_gate.lock().unwrap() = version;
     }
 }
 
@@ -113,6 +114,7 @@ impl PdMocker for Service {
     }
 
     fn alloc_id(&self, _: &AllocIdRequest) -> Option<Result<AllocIdResponse>> {
+        fail_point!("connect_leader", |_| None);
         let mut resp = AllocIdResponse::default();
         resp.set_header(Service::header());
 
@@ -235,7 +237,7 @@ impl PdMocker for Service {
         let mut resp = StoreHeartbeatResponse::default();
         let header = Service::header();
         resp.set_header(header);
-        resp.set_cluster_version(self.cluster_version.lock().unwrap().to_owned());
+        resp.set_cluster_version(self.feature_gate.lock().unwrap().to_owned());
         Some(Ok(resp))
     }
 
@@ -279,6 +281,33 @@ impl PdMocker for Service {
 
     fn get_operator(&self, _: &GetOperatorRequest) -> Option<Result<GetOperatorResponse>> {
         let mut resp = GetOperatorResponse::default();
+        let header = Service::header();
+        resp.set_header(header);
+        Some(Ok(resp))
+    }
+
+    fn put_store(&self, _: &PutStoreRequest) -> Option<Result<PutStoreResponse>> {
+        let mut resp = PutStoreResponse::default();
+        let header = Service::header();
+        resp.set_header(header);
+        Some(Ok(resp))
+    }
+
+    fn get_cluster_config(
+        &self,
+        _: &GetClusterConfigRequest,
+    ) -> Option<Result<GetClusterConfigResponse>> {
+        let mut resp = GetClusterConfigResponse::default();
+        let header = Service::header();
+        resp.set_header(header);
+        Some(Ok(resp))
+    }
+
+    fn get_gc_safe_point(
+        &self,
+        _: &GetGcSafePointRequest,
+    ) -> Option<Result<GetGcSafePointResponse>> {
+        let mut resp = GetGcSafePointResponse::default();
         let header = Service::header();
         resp.set_header(header);
         Some(Ok(resp))

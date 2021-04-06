@@ -1,5 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! Prometheus metrics for storage functionality.
+
 use prometheus::*;
 use prometheus_static_metric::*;
 
@@ -8,11 +10,11 @@ use std::mem;
 
 use crate::server::metrics::{GcKeysCF as ServerGcKeysCF, GcKeysDetail as ServerGcKeysDetail};
 use crate::storage::kv::{FlowStatsReporter, Statistics};
+use collections::HashMap;
 use kvproto::kvrpcpb::KeyRange;
 use kvproto::metapb;
 use raftstore::store::util::build_key_range;
 use raftstore::store::ReadStats;
-use tikv_util::collections::HashMap;
 
 struct StorageLocalMetrics {
     local_scan_details: HashMap<CommandKind, Statistics>,
@@ -128,6 +130,9 @@ make_auto_flush_static_metric! {
         raw_delete,
         raw_delete_range,
         raw_batch_delete,
+        raw_get_key_ttl,
+        raw_compare_and_swap,
+        raw_atomic_store,
     }
 
     pub label_enum CommandStageKind {
@@ -147,6 +152,8 @@ make_auto_flush_static_metric! {
         error,
         pipelined_write,
         pipelined_write_finish,
+        async_apply_prewrite,
+        async_apply_prewrite_finish,
     }
 
     pub label_enum CommandPriority {
@@ -173,6 +180,12 @@ make_auto_flush_static_metric! {
         prev_tombstone,
         seek_tombstone,
         seek_for_prev_tombstone,
+        ttl_tombstone,
+    }
+
+    pub label_enum CheckMemLockResult {
+        locked,
+        unlocked,
     }
 
     pub struct CommandScanDetails: LocalIntCounter {
@@ -217,11 +230,16 @@ make_auto_flush_static_metric! {
     pub struct SchedCommandPriCounterVec: LocalIntCounter {
         "priority" => CommandPriority,
     }
+
+    pub struct CheckMemLockHistogramVec: LocalHistogram {
+        "type" => CommandKind,
+        "result" => CheckMemLockResult,
+    }
 }
 
-impl Into<GcKeysCF> for ServerGcKeysCF {
-    fn into(self) -> GcKeysCF {
-        match self {
+impl From<ServerGcKeysCF> for GcKeysCF {
+    fn from(cf: ServerGcKeysCF) -> GcKeysCF {
+        match cf {
             ServerGcKeysCF::default => GcKeysCF::default,
             ServerGcKeysCF::lock => GcKeysCF::lock,
             ServerGcKeysCF::write => GcKeysCF::write,
@@ -229,9 +247,9 @@ impl Into<GcKeysCF> for ServerGcKeysCF {
     }
 }
 
-impl Into<GcKeysDetail> for ServerGcKeysDetail {
-    fn into(self) -> GcKeysDetail {
-        match self {
+impl From<ServerGcKeysDetail> for GcKeysDetail {
+    fn from(detail: ServerGcKeysDetail) -> GcKeysDetail {
+        match detail {
             ServerGcKeysDetail::processed_keys => GcKeysDetail::processed_keys,
             ServerGcKeysDetail::get => GcKeysDetail::get,
             ServerGcKeysDetail::next => GcKeysDetail::next,
@@ -243,6 +261,7 @@ impl Into<GcKeysDetail> for ServerGcKeysDetail {
             ServerGcKeysDetail::prev_tombstone => GcKeysDetail::prev_tombstone,
             ServerGcKeysDetail::seek_tombstone => GcKeysDetail::seek_tombstone,
             ServerGcKeysDetail::seek_for_prev_tombstone => GcKeysDetail::seek_for_prev_tombstone,
+            ServerGcKeysDetail::ttl_tombstone => GcKeysDetail::ttl_tombstone,
         }
     }
 }
@@ -357,4 +376,13 @@ lazy_static! {
         "Counter of request exceed bound"
     )
     .unwrap();
+    pub static ref CHECK_MEM_LOCK_DURATION_HISTOGRAM: HistogramVec = register_histogram_vec!(
+        "tikv_storage_check_mem_lock_duration_seconds",
+        "Histogram of the duration of checking memory locks",
+        &["type", "result"],
+        exponential_buckets(1e-6f64, 4f64, 10).unwrap() // 1us ~ 262ms
+    )
+    .unwrap();
+    pub static ref CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC: CheckMemLockHistogramVec =
+        auto_flush_from!(CHECK_MEM_LOCK_DURATION_HISTOGRAM, CheckMemLockHistogramVec);
 }

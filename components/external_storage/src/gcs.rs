@@ -1,12 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::{
-    util::{block_on_external_io, error_stream, retry, AsyncReadAsSyncStreamOfBytes, RetryError},
-    ExternalStorage,
-};
-
 use std::{convert::TryInto, fmt::Display, io, sync::Arc};
 
+use super::ExternalStorage;
 use futures_util::{
     future::TryFutureExt,
     io::{AsyncRead, AsyncReadExt, Cursor},
@@ -21,6 +17,9 @@ use tame_gcs::{
     types::{BucketName, ObjectId},
 };
 use tame_oauth::gcp::{ServiceAccountAccess, ServiceAccountInfo, TokenOrRequest};
+use tikv_util::stream::{
+    block_on_external_io, error_stream, retry, AsyncReadAsSyncStreamOfBytes, RetryError,
+};
 
 const HARDCODED_ENDPOINTS: &[&str] = &[
     "https://www.googleapis.com/upload/storage/v1",
@@ -119,10 +118,6 @@ impl From<RequestError> for io::Error {
 }
 
 impl RetryError for RequestError {
-    fn placeholder() -> Self {
-        Self::OAuth(tame_oauth::Error::InvalidKeyFormat)
-    }
-
     fn is_retryable(&self) -> bool {
         match self {
             // FIXME: Inspect the error source?
@@ -238,19 +233,6 @@ impl GCSStorage {
     }
 }
 
-// FIXME: `impl Copy for PredefinedAcl` and get rid of this silly function (EmbarkStudios/tame-gcs#30).
-fn copy_predefined_acl(acl: &Option<PredefinedAcl>) -> Option<PredefinedAcl> {
-    match acl {
-        None => None,
-        Some(PredefinedAcl::AuthenticatedRead) => Some(PredefinedAcl::AuthenticatedRead),
-        Some(PredefinedAcl::BucketOwnerFullControl) => Some(PredefinedAcl::BucketOwnerFullControl),
-        Some(PredefinedAcl::BucketOwnerRead) => Some(PredefinedAcl::BucketOwnerRead),
-        Some(PredefinedAcl::Private) => Some(PredefinedAcl::Private),
-        Some(PredefinedAcl::ProjectPrivate) => Some(PredefinedAcl::ProjectPrivate),
-        Some(PredefinedAcl::PublicRead) => Some(PredefinedAcl::PublicRead),
-    }
-}
-
 // Convert manually since they don't implement FromStr.
 fn parse_storage_class(sc: &str) -> Result<Option<StorageClass>, &str> {
     Ok(Some(match sc {
@@ -316,7 +298,7 @@ impl ExternalStorage for GCSStorage {
                     content_length,
                     &metadata,
                     Some(InsertObjectOptional {
-                        predefined_acl: copy_predefined_acl(&predefined_acl),
+                        predefined_acl,
                         ..Default::default()
                     }),
                 )?

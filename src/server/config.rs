@@ -4,8 +4,9 @@ use std::{cmp, i32, isize};
 
 use super::Result;
 use grpcio::CompressionAlgorithms;
+use regex::Regex;
 
-use tikv_util::collections::HashMap;
+use collections::HashMap;
 use tikv_util::config::{self, ReadableDuration, ReadableSize};
 use tikv_util::sys::sys_quota::SysQuota;
 
@@ -16,7 +17,7 @@ pub const DEFAULT_CLUSTER_ID: u64 = 0;
 pub const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20160";
 const DEFAULT_ADVERTISE_LISTENING_ADDR: &str = "";
 const DEFAULT_STATUS_ADDR: &str = "127.0.0.1:20180";
-const DEFAULT_GRPC_CONCURRENCY: usize = 4;
+const DEFAULT_GRPC_CONCURRENCY: usize = 5;
 const DEFAULT_GRPC_CONCURRENT_STREAM: i32 = 1024;
 const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 1;
 const DEFAULT_GRPC_MEMORY_POOL_QUOTA: u64 = isize::MAX as u64;
@@ -100,6 +101,11 @@ pub struct Config {
     pub heavy_load_threshold: usize,
     pub heavy_load_wait_duration: ReadableDuration,
     pub enable_request_batch: bool,
+    pub background_thread_count: usize,
+    // If handle time is larger than the threshold, it will print slow log in end point.
+    pub end_point_slow_log_threshold: ReadableDuration,
+    /// Max connections per address for forwarding request.
+    pub forward_max_connections_per_address: usize,
 
     // Test only.
     #[doc(hidden)]
@@ -128,6 +134,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         let cpu_num = SysQuota::new().cpu_cores_quota();
+        let background_thread_count = if cpu_num > 16.0 { 3 } else { 2 };
         Config {
             cluster_id: DEFAULT_CLUSTER_ID,
             addr: DEFAULT_LISTENING_ADDR.to_owned(),
@@ -171,6 +178,10 @@ impl Default for Config {
             heavy_load_wait_duration: ReadableDuration::millis(1),
             enable_request_batch: true,
             raft_client_backoff_step: ReadableDuration::secs(1),
+            background_thread_count,
+            end_point_slow_log_threshold: ReadableDuration::secs(1),
+            // Go tikv client uses 4 as well.
+            forward_max_connections_per_address: 4,
         }
     }
 }
@@ -188,7 +199,7 @@ impl Config {
             );
             self.advertise_addr = self.addr.clone();
         }
-        if self.advertise_addr.starts_with("0.0.0.0") {
+        if box_try!(config::check_addr(&self.advertise_addr)) {
             return Err(box_err!(
                 "invalid advertise-addr: {:?}",
                 self.advertise_addr
@@ -198,21 +209,26 @@ impl Config {
             return Err(box_err!("status-addr can not be empty"));
         }
         if !self.status_addr.is_empty() {
-            box_try!(config::check_addr(&self.status_addr));
+            let status_addr_unspecified = box_try!(config::check_addr(&self.status_addr));
             if !self.advertise_status_addr.is_empty() {
-                box_try!(config::check_addr(&self.advertise_status_addr));
-                if self.advertise_status_addr.starts_with("0.0.0.0") {
+                if box_try!(config::check_addr(&self.advertise_status_addr)) {
                     return Err(box_err!(
                         "invalid advertise-status-addr: {:?}",
                         self.advertise_status_addr
                     ));
                 }
-            } else {
+            } else if !status_addr_unspecified {
                 info!(
                     "no advertise-status-addr is specified, falling back to status-addr";
                     "status-addr" => %self.status_addr
                 );
                 self.advertise_status_addr = self.status_addr.clone();
+            } else {
+                info!(
+                    "no advertise-status-addr is specified, and we can't falling back to \
+                    status-addr because it is invalid as advertise-status-addr";
+                    "status-addr" => %self.status_addr
+                );
             }
         }
         if self.advertise_status_addr == self.advertise_addr {
@@ -251,13 +267,19 @@ impl Config {
 
         if self.grpc_stream_initial_window_size.0 > i32::MAX as u64 {
             return Err(box_err!(
-                "server.grpc_stream_initial_window_size is too large."
+                "server.grpc-stream-initial-window-size is too large."
             ));
         }
 
         for (k, v) in &self.labels {
-            validate_label(k, "key")?;
-            validate_label(v, "value")?;
+            validate_label_key(k)?;
+            validate_label_value(v)?;
+        }
+
+        if self.forward_max_connections_per_address == 0 {
+            return Err(box_err!(
+                "server.forward-max-connections-per-address can't be 0."
+            ));
         }
 
         Ok(())
@@ -273,35 +295,34 @@ impl Config {
     }
 }
 
-fn validate_label(s: &str, tp: &str) -> Result<()> {
-    let report_err = || {
-        box_err!(
-            "store label {}: {:?} not match ^[a-zA-Z0-9]([a-zA-Z0-9-._]*[a-zA-Z0-9])?",
-            tp,
-            s
-        )
-    };
-    if s.is_empty() {
-        return Err(report_err());
+lazy_static! {
+    static ref LABEL_KEY_FORMAT: Regex =
+        Regex::new("^[$]?[A-Za-z0-9]([-A-Za-z0-9_./]*[A-Za-z0-9])?$").unwrap();
+    static ref LABEL_VALUE_FORMAT: Regex = Regex::new("^[-A-Za-z0-9_./]*$").unwrap();
+}
+
+fn validate_label_key(s: &str) -> Result<()> {
+    if LABEL_KEY_FORMAT.is_match(s) {
+        Ok(())
+    } else {
+        Err(box_err!(
+            "store label key: {:?} not match {}",
+            s,
+            *LABEL_KEY_FORMAT
+        ))
     }
-    let mut chrs = s.chars();
-    let first_char = chrs.next().unwrap();
-    if !first_char.is_ascii_alphanumeric() {
-        return Err(report_err());
+}
+
+fn validate_label_value(s: &str) -> Result<()> {
+    if LABEL_VALUE_FORMAT.is_match(s) {
+        Ok(())
+    } else {
+        Err(box_err!(
+            "store label value: {:?} not match {}",
+            s,
+            *LABEL_VALUE_FORMAT
+        ))
     }
-    let last_char = match chrs.next_back() {
-        None => return Ok(()),
-        Some(c) => c,
-    };
-    if !last_char.is_ascii_alphanumeric() {
-        return Err(report_err());
-    }
-    for c in chrs {
-        if !c.is_ascii_alphanumeric() && !"-._".contains(c) {
-            return Err(report_err());
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -342,16 +363,19 @@ mod tests {
 
         invalid_cfg = Config::default();
         invalid_cfg.status_addr = "0.0.0.0:1000".to_owned();
-        invalid_cfg.validate().unwrap();
+        for _ in 0..10 {
+            invalid_cfg.validate().unwrap();
+        }
+        assert!(invalid_cfg.advertise_status_addr.is_empty());
         invalid_cfg.advertise_status_addr = "0.0.0.0:1000".to_owned();
         assert!(invalid_cfg.validate().is_err());
 
-        let mut invalid_cfg = cfg.clone();
+        invalid_cfg = Config::default();
         invalid_cfg.advertise_addr = "127.0.0.1:1000".to_owned();
         invalid_cfg.advertise_status_addr = "127.0.0.1:1000".to_owned();
         assert!(invalid_cfg.validate().is_err());
 
-        let mut invalid_cfg = cfg.clone();
+        invalid_cfg = Config::default();
         invalid_cfg.grpc_stream_initial_window_size = ReadableSize(i32::MAX as u64 + 1);
         assert!(invalid_cfg.validate().is_err());
 
@@ -363,18 +387,33 @@ mod tests {
 
     #[test]
     fn test_store_labels() {
-        let invalid_cases = vec!["", "123*", ".123", "💖"];
-
-        for case in invalid_cases {
-            assert!(validate_label(case, "dummy").is_err());
-        }
-
-        let valid_cases = vec![
-            "a", "0", "a.1-2", "Cab", "abC", "b_1.2", "cab-012", "3ac.8b2",
+        let cases = vec![
+            ("", false, true),
+            ("123*", false, false),
+            (".123", false, true),
+            ("💖", false, false),
+            ("a", true, true),
+            ("0", true, true),
+            ("a.1-2", true, true),
+            ("Cab", true, true),
+            ("abC", true, true),
+            ("b_1.2", true, true),
+            ("cab-012", true, true),
+            ("3ac.8b2", true, true),
+            ("/abc", false, true),
+            ("abc/", false, true),
+            ("abc/def", true, true),
+            ("-abc", false, true),
+            ("abc-", false, true),
+            ("abc$def", false, false),
+            ("$abc", true, false),
+            ("$a.b-c/d_e", true, false),
+            (".-_/", false, true),
         ];
 
-        for case in valid_cases {
-            validate_label(case, "dummy").unwrap();
+        for (text, can_be_key, can_be_value) in cases {
+            assert_eq!(validate_label_key(text).is_ok(), can_be_key);
+            assert_eq!(validate_label_value(text).is_ok(), can_be_value);
         }
     }
 }

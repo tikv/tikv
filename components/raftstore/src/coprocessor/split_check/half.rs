@@ -4,6 +4,7 @@ use engine_traits::{KvEngine, Range};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 
+use tikv_util::box_try;
 use tikv_util::config::ReadableSize;
 
 use super::super::error::Result;
@@ -112,34 +113,9 @@ pub fn get_region_approximate_middle(
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
     let range = Range::new(&start_key, &end_key);
-    Ok(box_try!(
-        db.get_range_approximate_middle(range, region.get_id())
-    ))
-}
-
-/// Get the approximate middle key of the region. If we suppose the region
-/// is stored on disk as a plain file, "middle key" means the key whose
-/// position is in the middle of the file.
-///
-/// The returned key maybe is timestamped if transaction KV is used,
-/// and must start with "z".
-///
-/// FIXME the cfg(test) here probably indicates that the test doesn't belong
-/// here. It should be a test of the engine_traits or engine_rocks crates.
-#[cfg(test)]
-fn get_region_approximate_middle_cf(
-    db: &impl KvEngine,
-    cfname: &str,
-    region: &Region,
-) -> Result<Option<Vec<u8>>> {
-    let start_key = keys::enc_start_key(region);
-    let end_key = keys::enc_end_key(region);
-    let range = Range::new(&start_key, &end_key);
-    Ok(box_try!(db.get_range_approximate_middle_cf(
-        cfname,
-        range,
-        region.get_id()
-    )))
+    Ok(box_try!(db
+        .get_range_approximate_split_keys(range, 1)
+        .map(|mut v| v.pop())))
 }
 
 #[cfg(test)]
@@ -186,10 +162,12 @@ mod tests {
         region.mut_region_epoch().set_conf_ver(5);
 
         let (tx, rx) = mpsc::sync_channel(100);
-        let mut cfg = Config::default();
-        cfg.region_max_size = ReadableSize(BUCKET_NUMBER_LIMIT as u64);
+        let cfg = Config {
+            region_max_size: ReadableSize(BUCKET_NUMBER_LIMIT as u64),
+            ..Default::default()
+        };
         let mut runnable =
-            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx), cfg);
+            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
 
         // so split key will be z0005
         for i in 0..11 {
@@ -243,13 +221,13 @@ mod tests {
 
         let mut region = Region::default();
         region.mut_peers().push(Peer::default());
-        let middle_key = get_region_approximate_middle_cf(&engine, CF_DEFAULT, &region)
+        let middle_key = get_region_approximate_middle(&engine, &region)
             .unwrap()
             .unwrap();
 
         let middle_key = Key::from_encoded_slice(keys::origin_key(&middle_key))
             .into_raw()
             .unwrap();
-        assert_eq!(escape(&middle_key), "key_049");
+        assert_eq!(escape(&middle_key), "key_050");
     }
 }

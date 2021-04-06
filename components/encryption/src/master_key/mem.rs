@@ -6,21 +6,19 @@ use super::metadata::*;
 use crate::crypter::*;
 use crate::{AesGcmCrypter, Error, Iv, Result};
 
+use tikv_util::box_err;
+
 /// An in-memory backend, it saves master key in memory.
+#[derive(Debug)]
 pub(crate) struct MemAesGcmBackend {
-    pub key: Vec<u8>,
+    pub key: PlainKey,
 }
 
 impl MemAesGcmBackend {
     pub fn new(key: Vec<u8>) -> Result<MemAesGcmBackend> {
-        if key.len() != AesGcmCrypter::KEY_LEN {
-            return Err(box_err!(
-                "encryption method and key length mismatch, expect {} get {}",
-                AesGcmCrypter::KEY_LEN,
-                key.len()
-            ));
-        }
-        Ok(MemAesGcmBackend { key })
+        Ok(MemAesGcmBackend {
+            key: PlainKey::new(key)?,
+        })
     }
 
     pub fn encrypt_content(&self, plaintext: &[u8], iv: Iv) -> Result<EncryptedContent> {

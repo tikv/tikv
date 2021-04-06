@@ -37,6 +37,7 @@ pub use checksum::checksum_crc64_xor;
 use crate::storage::mvcc::TimeStamp;
 use crate::storage::Statistics;
 use async_trait::async_trait;
+use engine_rocks::PerfLevel;
 use kvproto::{coprocessor as coppb, kvrpcpb};
 use metrics::ReqTag;
 use rand::prelude::*;
@@ -77,7 +78,7 @@ pub trait RequestHandler: Send {
 }
 
 type RequestHandlerBuilder<Snap> =
-    Box<dyn for<'a> FnOnce(Snap, &'a ReqContext) -> Result<Box<dyn RequestHandler>> + Send>;
+    Box<dyn for<'a> FnOnce(Snap, &ReqContext) -> Result<Box<dyn RequestHandler>> + Send>;
 
 /// Encapsulate the `kvrpcpb::Context` to provide some extra properties.
 #[derive(Debug, Clone)]
@@ -88,11 +89,8 @@ pub struct ReqContext {
     /// The rpc context carried in the request
     pub context: kvrpcpb::Context,
 
-    /// The first range of the request
-    pub first_range: Option<coppb::KeyRange>,
-
-    /// The length of the range
-    pub ranges_len: usize,
+    /// Scan ranges of this request
+    pub ranges: Vec<coppb::KeyRange>,
 
     /// The deadline of the request
     pub deadline: Deadline,
@@ -120,18 +118,22 @@ pub struct ReqContext {
 
     /// The upper bound key in ranges of the request
     pub upper_bound: Vec<u8>,
+
+    /// Perf level
+    pub perf_level: PerfLevel,
 }
 
 impl ReqContext {
     pub fn new(
         tag: ReqTag,
         mut context: kvrpcpb::Context,
-        ranges: &[coppb::KeyRange],
+        ranges: Vec<coppb::KeyRange>,
         max_handle_duration: Duration,
         peer: Option<String>,
         is_desc_scan: Option<bool>,
         txn_start_ts: TimeStamp,
         cache_match_version: Option<u64>,
+        perf_level: PerfLevel,
     ) -> Self {
         let deadline = Deadline::from_now(max_handle_duration);
         let bypass_locks = TsSet::from_u64s(context.take_resolved_locks());
@@ -150,12 +152,12 @@ impl ReqContext {
             peer,
             is_desc_scan,
             txn_start_ts,
-            first_range: ranges.first().cloned(),
-            ranges_len: ranges.len(),
+            ranges,
             bypass_locks,
             cache_match_version,
             lower_bound,
             upper_bound,
+            perf_level,
         }
     }
 
@@ -163,13 +165,14 @@ impl ReqContext {
     pub fn default_for_test() -> Self {
         Self::new(
             ReqTag::test,
-            kvrpcpb::Context::default(),
-            &[],
+            Default::default(),
+            Vec::new(),
             Duration::from_secs(100),
             None,
             None,
             TimeStamp::max(),
             None,
+            PerfLevel::EnableCount,
         )
     }
 

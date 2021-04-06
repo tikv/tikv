@@ -212,7 +212,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                 self.write_cursor.prev(&mut self.statistics.write);
                 if !self.write_cursor.valid()? {
                     // Key space ended. We use `last_version` as the return.
-                    return Ok(self.handle_last_version(last_version, user_key)?);
+                    return self.handle_last_version(last_version, user_key);
                 }
             }
 
@@ -234,7 +234,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                 }
             }
             if is_done {
-                return Ok(self.handle_last_version(last_version, user_key)?);
+                return self.handle_last_version(last_version, user_key);
             }
 
             let write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))
@@ -261,7 +261,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                     }
                 }
             }
-            return Ok(self.handle_last_version(last_version, user_key)?);
+            return self.handle_last_version(last_version, user_key);
         }
         assert!(ts > last_checked_commit_ts);
 
@@ -318,10 +318,14 @@ impl<S: Snapshot> BackwardKvScanner<S> {
             };
             if current_ts <= last_checked_commit_ts {
                 // We reach the last handled key
-                return Ok(self.handle_last_version(last_version, user_key)?);
+                return self.handle_last_version(last_version, user_key);
             }
 
             let write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
+
+            if !write.check_gc_fence_as_latest_version(self.cfg.ts) {
+                return Ok(None);
+            }
 
             match write.write_type {
                 WriteType::Put => {
@@ -348,11 +352,16 @@ impl<S: Snapshot> BackwardKvScanner<S> {
     ) -> Result<Option<Value>> {
         match some_write {
             None => Ok(None),
-            Some(write) => match write.write_type {
-                WriteType::Put => Ok(Some(self.reverse_load_data_by_write(write, user_key)?)),
-                WriteType::Delete => Ok(None),
-                _ => unreachable!(),
-            },
+            Some(write) => {
+                if !write.as_ref().check_gc_fence_as_latest_version(self.cfg.ts) {
+                    return Ok(None);
+                }
+                match write.write_type {
+                    WriteType::Put => Ok(Some(self.reverse_load_data_by_write(write, user_key)?)),
+                    WriteType::Delete => Ok(None),
+                    _ => unreachable!(),
+                }
+            }
         }
     }
 
@@ -430,46 +439,60 @@ impl<S: Snapshot> BackwardKvScanner<S> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_util::prepare_test_data_for_check_gc_fence;
     use super::super::ScannerBuilder;
     use super::*;
-    use crate::storage::kv::{Engine, TestEngineBuilder};
-    use crate::storage::mvcc::tests::*;
-    use crate::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
+    use crate::storage::kv::{Engine, Modify, TestEngineBuilder};
+    use crate::storage::mvcc::tests::write;
+    use crate::storage::txn::tests::{
+        must_commit, must_gc, must_prewrite_delete, must_prewrite_put, must_rollback,
+    };
     use crate::storage::Scanner;
+    use engine_traits::{CF_LOCK, CF_WRITE};
     use kvproto::kvrpcpb::Context;
 
     #[test]
     fn test_basic() {
         let engine = TestEngineBuilder::new().build().unwrap();
 
+        let ctx = Context::default();
         // Generate REVERSE_SEEK_BOUND / 2 Put for key [10].
-        let k = &[10 as u8];
+        let k = &[10_u8];
         for ts in 0..REVERSE_SEEK_BOUND / 2 {
             must_prewrite_put(&engine, k, &[ts as u8], k, ts);
             must_commit(&engine, k, ts, ts);
         }
 
         // Generate REVERSE_SEEK_BOUND + 1 Put for key [9].
-        let k = &[9 as u8];
+        let k = &[9_u8];
         for ts in 0..=REVERSE_SEEK_BOUND {
             must_prewrite_put(&engine, k, &[ts as u8], k, ts);
             must_commit(&engine, k, ts, ts);
         }
 
         // Generate REVERSE_SEEK_BOUND / 2 Put and REVERSE_SEEK_BOUND / 2 + 1 Rollback for key [8].
-        let k = &[8 as u8];
+        let k = &[8_u8];
         for ts in 0..=REVERSE_SEEK_BOUND {
             must_prewrite_put(&engine, k, &[ts as u8], k, ts);
             if ts < REVERSE_SEEK_BOUND / 2 {
                 must_commit(&engine, k, ts, ts);
             } else {
-                must_rollback(&engine, k, ts);
+                let modifies = vec![
+                    // ts is rather small, so it is ok to `as u8`
+                    Modify::Put(
+                        CF_WRITE,
+                        Key::from_raw(k).append_ts(TimeStamp::new(ts)),
+                        vec![b'R', ts as u8],
+                    ),
+                    Modify::Delete(CF_LOCK, Key::from_raw(k)),
+                ];
+                write(&engine, &ctx, modifies);
             }
         }
 
         // Generate REVERSE_SEEK_BOUND / 2 Put, 1 Delete and REVERSE_SEEK_BOUND / 2 Rollback
         // for key [7].
-        let k = &[7 as u8];
+        let k = &[7_u8];
         for ts in 0..REVERSE_SEEK_BOUND / 2 {
             must_prewrite_put(&engine, k, &[ts as u8], k, ts);
             must_commit(&engine, k, ts, ts);
@@ -481,26 +504,44 @@ mod tests {
         }
         for ts in REVERSE_SEEK_BOUND / 2 + 1..=REVERSE_SEEK_BOUND {
             must_prewrite_put(&engine, k, &[ts as u8], k, ts);
-            must_rollback(&engine, k, ts);
+            let modifies = vec![
+                // ts is rather small, so it is ok to `as u8`
+                Modify::Put(
+                    CF_WRITE,
+                    Key::from_raw(k).append_ts(TimeStamp::new(ts)),
+                    vec![b'R', ts as u8],
+                ),
+                Modify::Delete(CF_LOCK, Key::from_raw(k)),
+            ];
+            write(&engine, &ctx, modifies);
         }
 
         // Generate 1 PUT for key [6].
-        let k = &[6 as u8];
+        let k = &[6_u8];
         for ts in 0..1 {
             must_prewrite_put(&engine, k, &[ts as u8], k, ts);
             must_commit(&engine, k, ts, ts);
         }
 
         // Generate REVERSE_SEEK_BOUND + 1 Rollback for key [5].
-        let k = &[5 as u8];
+        let k = &[5_u8];
         for ts in 0..=REVERSE_SEEK_BOUND {
             must_prewrite_put(&engine, k, &[ts as u8], k, ts);
-            must_rollback(&engine, k, ts);
+            let modifies = vec![
+                // ts is rather small, so it is ok to `as u8`
+                Modify::Put(
+                    CF_WRITE,
+                    Key::from_raw(k).append_ts(TimeStamp::new(ts)),
+                    vec![b'R', ts as u8],
+                ),
+                Modify::Delete(CF_LOCK, Key::from_raw(k)),
+            ];
+            write(&engine, &ctx, modifies);
         }
 
         // Generate 1 PUT with ts = REVERSE_SEEK_BOUND and 1 PUT
         // with ts = REVERSE_SEEK_BOUND + 1 for key [4].
-        let k = &[4 as u8];
+        let k = &[4_u8];
         for ts in REVERSE_SEEK_BOUND..REVERSE_SEEK_BOUND + 2 {
             must_prewrite_put(&engine, k, &[ts as u8], k, ts);
             must_commit(&engine, k, ts, ts);
@@ -509,9 +550,9 @@ mod tests {
         // Assume REVERSE_SEEK_BOUND == 4, we have keys:
         // 4 4 5 5 5 5 5 6 7 7 7 7 7 8 8 8 8 8 9 9 9 9 9 10 10
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, REVERSE_SEEK_BOUND.into(), true)
-            .range(None, Some(Key::from_raw(&[11 as u8])))
+            .range(None, Some(Key::from_raw(&[11_u8])))
             .build()
             .unwrap();
 
@@ -528,7 +569,7 @@ mod tests {
         assert_eq!(
             scanner.next().unwrap(),
             Some((
-                Key::from_raw(&[10 as u8]),
+                Key::from_raw(&[10_u8]),
                 vec![(REVERSE_SEEK_BOUND / 2 - 1) as u8]
             ))
         );
@@ -558,7 +599,7 @@ mod tests {
         //                                   ^cursor
         assert_eq!(
             scanner.next().unwrap(),
-            Some((Key::from_raw(&[9 as u8]), vec![REVERSE_SEEK_BOUND as u8]))
+            Some((Key::from_raw(&[9_u8]), vec![REVERSE_SEEK_BOUND as u8]))
         );
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.prev, REVERSE_SEEK_BOUND as usize);
@@ -593,7 +634,7 @@ mod tests {
         assert_eq!(
             scanner.next().unwrap(),
             Some((
-                Key::from_raw(&[8 as u8]),
+                Key::from_raw(&[8_u8]),
                 vec![(REVERSE_SEEK_BOUND / 2 - 1) as u8]
             ))
         );
@@ -630,7 +671,7 @@ mod tests {
         //             ^cursor
         assert_eq!(
             scanner.next().unwrap(),
-            Some((Key::from_raw(&[6 as u8]), vec![0 as u8]))
+            Some((Key::from_raw(&[6_u8]), vec![0_u8]))
         );
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.prev, REVERSE_SEEK_BOUND as usize + 2);
@@ -665,7 +706,7 @@ mod tests {
         // ^cursor
         assert_eq!(
             scanner.next().unwrap(),
-            Some((Key::from_raw(&[4 as u8]), vec![REVERSE_SEEK_BOUND as u8]))
+            Some((Key::from_raw(&[4_u8]), vec![REVERSE_SEEK_BOUND as u8]))
         );
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.prev, REVERSE_SEEK_BOUND as usize + 3);
@@ -689,10 +730,19 @@ mod tests {
     #[test]
     fn test_reverse_get_out_of_bound_1() {
         let engine = TestEngineBuilder::new().build().unwrap();
-
+        let ctx = Context::default();
         // Generate N/2 rollback for [b].
         for ts in 0..REVERSE_SEEK_BOUND / 2 {
-            must_rollback(&engine, b"b", ts);
+            let modifies = vec![
+                // ts is rather small, so it is ok to `as u8`
+                Modify::Put(
+                    CF_WRITE,
+                    Key::from_raw(b"b").append_ts(TimeStamp::new(ts)),
+                    vec![b'R', ts as u8],
+                ),
+                Modify::Delete(CF_LOCK, Key::from_raw(b"b")),
+            ];
+            write(&engine, &ctx, modifies);
         }
 
         // Generate 1 put for [c].
@@ -704,7 +754,7 @@ mod tests {
             REVERSE_SEEK_BOUND * 2,
         );
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, (REVERSE_SEEK_BOUND * 2).into(), true)
             .range(None, None)
             .build()
@@ -757,12 +807,21 @@ mod tests {
     #[test]
     fn test_reverse_get_out_of_bound_2() {
         let engine = TestEngineBuilder::new().build().unwrap();
-
+        let ctx = Context::default();
         // Generate 1 put and N/2 rollback for [b].
         must_prewrite_put(&engine, b"b", b"value_b", b"b", 0);
         must_commit(&engine, b"b", 0, 0);
         for ts in 1..=REVERSE_SEEK_BOUND / 2 {
-            must_rollback(&engine, b"b", ts);
+            let modifies = vec![
+                // ts is rather small, so it is ok to `as u8`
+                Modify::Put(
+                    CF_WRITE,
+                    Key::from_raw(b"b").append_ts(TimeStamp::new(ts)),
+                    vec![b'R', ts as u8],
+                ),
+                Modify::Delete(CF_LOCK, Key::from_raw(b"b")),
+            ];
+            write(&engine, &ctx, modifies);
         }
 
         // Generate 1 put for [c].
@@ -774,7 +833,7 @@ mod tests {
             REVERSE_SEEK_BOUND * 2,
         );
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, (REVERSE_SEEK_BOUND * 2).into(), true)
             .range(None, None)
             .build()
@@ -841,7 +900,7 @@ mod tests {
             must_commit(&engine, b"b", ts, ts);
         }
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, 1.into(), true)
             .range(None, None)
             .build()
@@ -912,7 +971,7 @@ mod tests {
             must_commit(&engine, b"b", ts, ts);
         }
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, 1.into(), true)
             .range(None, None)
             .build()
@@ -991,7 +1050,7 @@ mod tests {
             must_commit(&engine, b"b", ts, ts);
         }
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, (REVERSE_SEEK_BOUND + 1).into(), true)
             .range(None, None)
             .build()
@@ -1076,7 +1135,7 @@ mod tests {
             must_commit(&engine, &[i], 14, 14);
         }
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
 
         // Test both bound specified.
         let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), true)
@@ -1166,7 +1225,7 @@ mod tests {
             for y in 0..16 {
                 let pk = &[i as u8, y as u8];
                 must_prewrite_put(&engine, pk, b"", pk, start_ts);
-                must_rollback(&engine, pk, start_ts);
+                must_rollback(&engine, pk, start_ts, false);
                 // Generate 254 RocksDB tombstones between [0,0] and [15,15].
                 if !((i == 0 && y == 0) || (i == 15 && y == 15)) {
                     must_gc(&engine, pk, safe_point);
@@ -1181,8 +1240,8 @@ mod tests {
             must_prewrite_put(&engine, pk, b"", pk, start_ts);
         }
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let row = &[15 as u8];
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let row = &[15_u8];
         let k = Key::from_raw(row);
 
         // Call reverse scan
@@ -1195,5 +1254,30 @@ mod tests {
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.lock.prev, 15);
         assert_eq!(statistics.write.prev, 1);
+    }
+
+    #[test]
+    fn test_backward_scanner_check_gc_fence() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let (read_ts, expected_result) = prepare_test_data_for_check_gc_fence(&engine);
+        let expected_result: Vec<_> = expected_result
+            .into_iter()
+            .filter_map(|(key, value)| value.map(|v| (key, v)))
+            .rev()
+            .collect();
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, read_ts, true)
+            .range(None, None)
+            .build()
+            .unwrap();
+        let result: Vec<_> = scanner
+            .scan(100, 0)
+            .unwrap()
+            .into_iter()
+            .map(|result| result.unwrap())
+            .collect();
+        assert_eq!(result, expected_result);
     }
 }

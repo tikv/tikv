@@ -7,7 +7,10 @@ use std::time::Instant;
 
 use engine_traits::KvEngine;
 use engine_traits::CF_WRITE;
+use fail::fail_point;
+use quick_error::quick_error;
 use tikv_util::worker::Runnable;
+use tikv_util::{box_try, error, info, warn};
 
 use super::metrics::COMPACT_RANGE_CF;
 
@@ -252,7 +255,7 @@ mod tests {
     use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions};
     use engine_test::kv::KvTestEngine;
     use engine_test::kv::{new_engine, new_engine_opt};
-    use engine_traits::{MiscExt, Mutable, SyncMutable, WriteBatchExt};
+    use engine_traits::{MiscExt, Mutable, SyncMutable, WriteBatch, WriteBatchExt};
     use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use tempfile::Builder;
 
@@ -278,7 +281,7 @@ mod tests {
             wb.put_cf(CF_DEFAULT, k.as_bytes(), b"whatever content")
                 .unwrap();
         }
-        db.write(&wb).unwrap();
+        wb.write().unwrap();
         db.flush_cf(CF_DEFAULT, true).unwrap();
 
         // Generate another SST file has the same content with first SST file.
@@ -288,7 +291,7 @@ mod tests {
             wb.put_cf(CF_DEFAULT, k.as_bytes(), b"whatever content")
                 .unwrap();
         }
-        db.write(&wb).unwrap();
+        wb.write().unwrap();
         db.flush_cf(CF_DEFAULT, true).unwrap();
 
         // Get the total SST files size.

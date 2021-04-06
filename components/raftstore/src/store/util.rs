@@ -1,20 +1,23 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::fmt::Display;
 use std::option::Option;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::{fmt, u64};
 
-use engine_rocks::{set_perf_level, PerfContext, PerfLevel};
+use collections::HashMap;
 use kvproto::kvrpcpb::KeyRange;
 use kvproto::metapb::{self, PeerRole};
 use kvproto::raft_cmdpb::{AdminCmdType, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest};
+use kvproto::raft_serverpb::RaftMessage;
+use lazy_static::lazy_static;
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
 use raft::INVALID_INDEX;
 use raft_proto::ConfChangeI;
-use tikv_util::collections::HashMap;
 use tikv_util::time::monotonic_raw_now;
+use tikv_util::{box_err, debug};
 use time::{Duration, Timespec};
 
 use super::peer_storage;
@@ -635,7 +638,7 @@ fn timespec_to_u64(ts: Timespec) -> u64 {
 ///
 /// If nsec is negative or GE than 1_000_000_000(nano seconds pre second).
 #[inline]
-fn u64_to_timespec(u: u64) -> Timespec {
+pub(crate) fn u64_to_timespec(u: u64) -> Timespec {
     let sec = u >> TIMESPEC_SEC_SHIFT;
     let nsec = (u & TIMESPEC_NSEC_MASK) << TIMESPEC_NSEC_SHIFT;
     Timespec::new(sec as i64, nsec as i32)
@@ -739,88 +742,6 @@ pub fn integration_on_half_fail_quorum_fn(voters: usize) -> usize {
     (voters + 1) / 2 + 1
 }
 
-#[macro_export]
-macro_rules! report_perf_context {
-    ($ctx: expr, $metric: ident) => {
-        if $ctx.perf_level != PerfLevel::Disable {
-            let perf_context = PerfContext::get();
-            let pre_and_post_process = perf_context.write_pre_and_post_process_time();
-            let write_thread_wait = perf_context.write_thread_wait_nanos();
-            observe_perf_context_type!($ctx, perf_context, $metric, write_wal_time);
-            observe_perf_context_type!($ctx, perf_context, $metric, write_memtable_time);
-            observe_perf_context_type!($ctx, perf_context, $metric, db_mutex_lock_nanos);
-            observe_perf_context_type!($ctx, $metric, pre_and_post_process);
-            observe_perf_context_type!($ctx, $metric, write_thread_wait);
-            observe_perf_context_type!(
-                $ctx,
-                perf_context,
-                $metric,
-                write_scheduling_flushes_compactions_time
-            );
-            observe_perf_context_type!($ctx, perf_context, $metric, db_condition_wait_nanos);
-            observe_perf_context_type!($ctx, perf_context, $metric, write_delay_time);
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! observe_perf_context_type {
-    ($s:expr, $metric: expr, $v:ident) => {
-        $metric.$v.observe((($v) - $s.$v) as f64 / 1_000_000_000.0);
-        $s.$v = $v;
-    };
-    ($s:expr, $context: expr, $metric: expr, $v:ident) => {
-        let $v = $context.$v();
-        $metric.$v.observe((($v) - $s.$v) as f64 / 1_000_000_000.0);
-        $s.$v = $v;
-    };
-}
-
-pub struct PerfContextStatistics {
-    pub perf_level: PerfLevel,
-    pub write_wal_time: u64,
-    pub pre_and_post_process: u64,
-    pub write_memtable_time: u64,
-    pub write_thread_wait: u64,
-    pub db_mutex_lock_nanos: u64,
-    pub write_scheduling_flushes_compactions_time: u64,
-    pub db_condition_wait_nanos: u64,
-    pub write_delay_time: u64,
-}
-
-impl PerfContextStatistics {
-    /// Create an instance which stores instant statistics values, retrieved at creation.
-    pub fn new(perf_level: PerfLevel) -> Self {
-        PerfContextStatistics {
-            perf_level,
-            write_wal_time: 0,
-            pre_and_post_process: 0,
-            write_thread_wait: 0,
-            write_memtable_time: 0,
-            db_mutex_lock_nanos: 0,
-            write_scheduling_flushes_compactions_time: 0,
-            db_condition_wait_nanos: 0,
-            write_delay_time: 0,
-        }
-    }
-
-    pub fn start(&mut self) {
-        if self.perf_level == PerfLevel::Disable {
-            return;
-        }
-        PerfContext::get().reset();
-        set_perf_level(self.perf_level);
-        self.write_wal_time = 0;
-        self.pre_and_post_process = 0;
-        self.db_mutex_lock_nanos = 0;
-        self.write_thread_wait = 0;
-        self.write_memtable_time = 0;
-        self.write_scheduling_flushes_compactions_time = 0;
-        self.db_condition_wait_nanos = 0;
-        self.write_delay_time = 0;
-    }
-}
-
 #[derive(PartialEq, Eq, Debug)]
 pub enum ConfChangeKind {
     // Only contains one configuration change
@@ -903,6 +824,18 @@ impl<'a> ChangePeerI for &'a ChangePeerV2Request {
     }
 }
 
+pub struct MsgType<'a>(pub &'a RaftMessage);
+
+impl Display for MsgType<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if !self.0.has_extra_msg() {
+            write!(f, "{:?}", self.0.get_message().get_msg_type())
+        } else {
+            write!(f, "{:?}", self.0.get_extra_msg().get_type())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::thread;
@@ -913,7 +846,7 @@ mod tests {
     use time::Duration as TimeDuration;
 
     use crate::store::peer_storage;
-    use tikv_util::time::{monotonic_now, monotonic_raw_now};
+    use tikv_util::time::monotonic_raw_now;
 
     use super::*;
 
@@ -921,20 +854,16 @@ mod tests {
     fn test_lease() {
         #[inline]
         fn sleep_test(duration: TimeDuration, lease: &Lease, state: LeaseState) {
-            // In linux, sleep uses CLOCK_MONOTONIC.
-            let monotonic_start = monotonic_now();
-            // In linux, lease uses CLOCK_MONOTONIC_RAW.
+            // In linux, lease uses CLOCK_MONOTONIC_RAW, while sleep uses CLOCK_MONOTONIC
             let monotonic_raw_start = monotonic_raw_now();
             thread::sleep(duration.to_std().unwrap());
-            let monotonic_end = monotonic_now();
-            let monotonic_raw_end = monotonic_raw_now();
-            assert_eq!(
-                lease.inspect(Some(monotonic_raw_end)),
-                state,
-                "elapsed monotonic_raw: {:?}, monotonic: {:?}",
-                monotonic_raw_end - monotonic_raw_start,
-                monotonic_end - monotonic_start
-            );
+            let mut monotonic_raw_end = monotonic_raw_now();
+            // spin wait to make sure pace is aligned with MONOTONIC_RAW clock
+            while monotonic_raw_end - monotonic_raw_start < duration {
+                thread::yield_now();
+                monotonic_raw_end = monotonic_raw_now();
+            }
+            assert_eq!(lease.inspect(Some(monotonic_raw_end)), state);
             assert_eq!(lease.inspect(None), state);
         }
 

@@ -4,9 +4,10 @@ use txn_types::Key;
 
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::MvccTxn;
+use crate::storage::mvcc::{MvccTxn, SnapshotReader};
 use crate::storage::txn::commands::{
-    Command, CommandExt, ReleasedLocks, TypedCommand, WriteCommand, WriteContext, WriteResult,
+    Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
+    WriteResult,
 };
 use crate::storage::txn::{commit, Error, ErrorInner, Result};
 use crate::storage::{ProcessResult, Snapshot, TxnStatus};
@@ -44,22 +45,19 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Commit {
                 commit_ts: self.commit_ts,
             }));
         }
-        let mut txn = MvccTxn::new(
-            snapshot,
-            self.lock_ts,
-            !self.ctx.get_not_fill_cache(),
-            context.concurrency_manager,
-        );
+        let mut txn = MvccTxn::new(self.lock_ts, context.concurrency_manager);
+        let mut reader =
+            SnapshotReader::new(self.lock_ts, snapshot, !self.ctx.get_not_fill_cache());
 
         let rows = self.keys.len();
         // Pessimistic txn needs key_hashes to wake up waiters
         let mut released_locks = ReleasedLocks::new(self.lock_ts, self.commit_ts);
         for k in self.keys {
-            released_locks.push(commit(&mut txn, k, self.commit_ts)?);
+            released_locks.push(commit(&mut txn, &mut reader, k, self.commit_ts)?);
         }
         released_locks.wake_up(context.lock_mgr);
 
-        context.statistics.add(&txn.take_statistics());
+        context.statistics.add(&reader.take_statistics());
         let pr = ProcessResult::TxnStatus {
             txn_status: TxnStatus::committed(self.commit_ts),
         };
@@ -71,6 +69,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Commit {
             pr,
             lock_info: None,
             lock_guards: vec![],
+            response_policy: ResponsePolicy::OnApplied,
         })
     }
 }

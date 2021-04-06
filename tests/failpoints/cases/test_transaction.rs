@@ -3,12 +3,14 @@
 use futures::executor::block_on;
 use kvproto::kvrpcpb::Context;
 use std::{sync::mpsc::channel, thread, time::Duration};
-use storage::mvcc::{self, Error as MvccError, ErrorInner as MvccErrorInner};
-use tikv::storage::txn::tests::{must_prewrite_put, must_prewrite_put_err};
-use tikv::storage::txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner};
-use tikv::storage::TestEngineBuilder;
-use tikv::storage::{self, txn::tests::must_commit};
-use tikv::storage::{lock_manager::DummyLockManager, TestStorageBuilder};
+use storage::mvcc::{self, tests::must_locked};
+use tikv::storage::mvcc::tests::must_get;
+use tikv::storage::txn::commands;
+use tikv::storage::txn::tests::{
+    must_acquire_pessimistic_lock, must_commit, must_pessimistic_prewrite_put,
+    must_pessimistic_prewrite_put_err, must_prewrite_put, must_prewrite_put_err,
+};
+use tikv::storage::{self, lock_manager::DummyLockManager, TestEngineBuilder, TestStorageBuilder};
 use txn_types::{Key, Mutation, TimeStamp};
 
 #[test]
@@ -22,6 +24,19 @@ fn test_txn_failpoints() {
     fail::cfg("commit", "delay(100)").unwrap();
     must_commit(&engine, k, 10, 20);
     fail::remove("commit");
+
+    let v1 = b"v1";
+    let (k2, v2) = (b"k2", b"v2");
+    must_acquire_pessimistic_lock(&engine, k, k, 30, 30);
+    fail::cfg("pessimistic_prewrite", "return()").unwrap();
+    must_pessimistic_prewrite_put_err(&engine, k, v1, k, 30, 30, true);
+    must_prewrite_put(&engine, k2, v2, k2, 31);
+    fail::remove("pessimistic_prewrite");
+    must_pessimistic_prewrite_put(&engine, k, v1, k, 30, 30, true);
+    must_commit(&engine, k, 30, 40);
+    must_commit(&engine, k2, 31, 41);
+    must_get(&engine, k, 50, v1);
+    must_get(&engine, k2, 50, v2);
 }
 
 #[test]
@@ -49,6 +64,7 @@ fn test_atomic_getting_max_ts_and_storing_memory_lock() {
                 TimeStamp::default(),
                 TimeStamp::default(),
                 Some(vec![]),
+                false,
                 Context::default(),
             ),
             Box::new(move |res| {
@@ -101,6 +117,7 @@ fn test_snapshot_must_be_later_than_updating_max_ts() {
                 TimeStamp::default(),
                 TimeStamp::default(),
                 Some(vec![]),
+                false,
                 Context::default(),
             ),
             Box::new(move |res| {
@@ -142,6 +159,7 @@ fn test_update_max_ts_before_scan_memory_locks() {
                 TimeStamp::default(),
                 TimeStamp::default(),
                 Some(vec![]),
+                false,
                 Context::default(),
             ),
             Box::new(move |res| {
@@ -151,7 +169,7 @@ fn test_update_max_ts_before_scan_memory_locks() {
         .unwrap();
 
     // The prewritten lock is not seen by the reader
-    assert_eq!(block_on(get_fut).unwrap(), None);
+    assert_eq!(block_on(get_fut).unwrap().0, None);
     // But we make sure in this case min_commit_ts is greater than start_ts.
     let res = prewrite_rx.recv().unwrap().unwrap();
     assert_eq!(res.min_commit_ts, 101.into());
@@ -190,6 +208,7 @@ macro_rules! lock_release_test {
                         TimeStamp::default(),
                         TimeStamp::default(),
                         Some(vec![]),
+                        false,
                         Context::default(),
                     ),
                     Box::new(move |res| {
@@ -239,7 +258,7 @@ lock_release_test!(
 );
 
 #[test]
-fn test_no_memory_locks_after_max_commit_ts_error() {
+fn test_max_commit_ts_error() {
     let engine = TestEngineBuilder::new().build().unwrap();
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
@@ -266,6 +285,7 @@ fn test_no_memory_locks_after_max_commit_ts_error() {
                 TimeStamp::default(),
                 100.into(),
                 Some(vec![b"k2".to_vec()]),
+                false,
                 Context::default(),
             ),
             Box::new(move |res| {
@@ -279,13 +299,107 @@ fn test_no_memory_locks_after_max_commit_ts_error() {
         .is_err());
     cm.update_max_ts(200.into());
 
-    let res = prewrite_rx.recv().unwrap();
-    assert!(matches!(
-        res.unwrap_err(),
-        storage::Error(box storage::ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::CommitTsTooLarge { .. },
-        )))))
-    ));
+    let res = prewrite_rx.recv().unwrap().unwrap();
+    assert!(res.min_commit_ts.is_zero());
+    assert!(res.one_pc_commit_ts.is_zero());
 
+    // There should not be any memory lock left.
     assert!(cm.read_range_check(None, None, |_, _| Err(())).is_ok());
+
+    // Two locks should be written, the second one does not async commit.
+    let l1 = must_locked(&storage.get_engine(), b"k1", 10);
+    let l2 = must_locked(&storage.get_engine(), b"k2", 10);
+    assert!(l1.use_async_commit);
+    assert!(!l2.use_async_commit);
+}
+
+#[test]
+fn test_exceed_max_commit_ts_in_the_middle_of_prewrite() {
+    let engine = TestEngineBuilder::new().build().unwrap();
+    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+        engine,
+        DummyLockManager {},
+    )
+    .build()
+    .unwrap();
+    let cm = storage.get_concurrency_manager();
+
+    let (prewrite_tx, prewrite_rx) = channel();
+    // Pause between getting max ts and store the lock in memory
+    fail::cfg("before-set-lock-in-memory", "pause").unwrap();
+
+    cm.update_max_ts(40.into());
+    let mutations = vec![
+        Mutation::Put((Key::from_raw(b"k1"), b"v".to_vec())),
+        Mutation::Put((Key::from_raw(b"k2"), b"v".to_vec())),
+    ];
+    storage
+        .sched_txn_command(
+            commands::Prewrite::new(
+                mutations.clone(),
+                b"k1".to_vec(),
+                10.into(),
+                20000,
+                false,
+                2,
+                11.into(),
+                50.into(),
+                Some(vec![]),
+                false,
+                Context::default(),
+            ),
+            Box::new(move |res| {
+                prewrite_tx.send(res).unwrap();
+            }),
+        )
+        .unwrap();
+    // sleep a while so the first key gets max ts.
+    thread::sleep(Duration::from_millis(200));
+
+    cm.update_max_ts(51.into());
+    fail::remove("before-set-lock-in-memory");
+    let res = prewrite_rx.recv().unwrap().unwrap();
+    assert!(res.min_commit_ts.is_zero());
+    assert!(res.one_pc_commit_ts.is_zero());
+
+    let locks = block_on(storage.scan_lock(
+        Context::default(),
+        20.into(),
+        Some(Key::from_raw(b"k1")),
+        None,
+        2,
+    ))
+    .unwrap();
+    assert_eq!(locks.len(), 2);
+    assert_eq!(locks[0].get_key(), b"k1");
+    assert!(locks[0].get_use_async_commit());
+    assert_eq!(locks[0].get_min_commit_ts(), 41);
+    assert_eq!(locks[1].get_key(), b"k2");
+    assert!(!locks[1].get_use_async_commit());
+
+    // Send a duplicated request to test the idempotency of prewrite when falling back to 2PC.
+    let (prewrite_tx, prewrite_rx) = channel();
+    storage
+        .sched_txn_command(
+            commands::Prewrite::new(
+                mutations,
+                b"k1".to_vec(),
+                10.into(),
+                20000,
+                false,
+                2,
+                11.into(),
+                50.into(),
+                Some(vec![]),
+                false,
+                Context::default(),
+            ),
+            Box::new(move |res| {
+                prewrite_tx.send(res).unwrap();
+            }),
+        )
+        .unwrap();
+    let res = prewrite_rx.recv().unwrap().unwrap();
+    assert!(res.min_commit_ts.is_zero());
+    assert!(res.one_pc_commit_ts.is_zero());
 }

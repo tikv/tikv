@@ -8,12 +8,14 @@ use std::marker::PhantomData;
 
 pub enum RowSlice<'a> {
     Small {
+        origin: &'a [u8],
         non_null_ids: LEBytes<'a, u8>,
         null_ids: LEBytes<'a, u8>,
         offsets: LEBytes<'a, u16>,
         values: LEBytes<'a, u8>,
     },
     Big {
+        origin: &'a [u8],
         non_null_ids: LEBytes<'a, u32>,
         null_ids: LEBytes<'a, u32>,
         offsets: LEBytes<'a, u32>,
@@ -26,6 +28,7 @@ impl RowSlice<'_> {
     ///
     /// Panics if the value of first byte is not 128(v2 version code)
     pub fn from_bytes(mut data: &[u8]) -> Result<RowSlice> {
+        let origin = data;
         assert_eq!(data.read_u8()?, super::CODEC_VERSION);
         let is_big = super::Flags::from_bits_truncate(data.read_u8()?) == super::Flags::BIG;
 
@@ -34,6 +37,7 @@ impl RowSlice<'_> {
         let null_cnt = data.read_u16_le()? as usize;
         let row = if is_big {
             RowSlice::Big {
+                origin,
                 non_null_ids: read_le_bytes(&mut data, non_null_cnt)?,
                 null_ids: read_le_bytes(&mut data, null_cnt)?,
                 offsets: read_le_bytes(&mut data, non_null_cnt)?,
@@ -41,6 +45,7 @@ impl RowSlice<'_> {
             }
         } else {
             RowSlice::Small {
+                origin,
                 non_null_ids: read_le_bytes(&mut data, non_null_cnt)?,
                 null_ids: read_le_bytes(&mut data, null_cnt)?,
                 offsets: read_le_bytes(&mut data, non_null_cnt)?,
@@ -103,6 +108,9 @@ impl RowSlice<'_> {
     ///
     /// Returns true if found
     pub fn search_in_null_ids(&self, id: i64) -> bool {
+        if !self.id_valid(id) {
+            return false;
+        }
         match self {
             RowSlice::Big { null_ids, .. } => null_ids.binary_search(&(id as u32)).is_ok(),
             RowSlice::Small { null_ids, .. } => null_ids.binary_search(&(id as u8)).is_ok(),
@@ -132,6 +140,25 @@ impl RowSlice<'_> {
         match self {
             RowSlice::Big { values, .. } => values.slice,
             RowSlice::Small { values, .. } => values.slice,
+        }
+    }
+
+    #[inline]
+    pub fn origin(&self) -> &[u8] {
+        match self {
+            RowSlice::Big { origin, .. } => *origin,
+            RowSlice::Small { origin, .. } => *origin,
+        }
+    }
+
+    #[inline]
+    pub fn get(&self, column_id: i64) -> Result<Option<&[u8]>> {
+        if let Some((start, end)) = self.search_in_non_null_ids(column_id)? {
+            Ok(Some(self.values().get(start..end).ok_or_else(|| {
+                Error::CorruptedData(log_wrappers::Value(self.origin()).to_string())
+            })?))
+        } else {
+            Ok(None)
         }
     }
 }
@@ -246,8 +273,9 @@ mod tests {
         let cols = vec![
             Column::new(1, 1000),
             Column::new(356, 2),
-            Column::new(33, ScalarValue::Int(None)),
+            Column::new(33, ScalarValue::Int(None)), //0x21
             Column::new(3, 3),
+            Column::new(64123, 5),
         ];
         let mut buf = vec![];
         buf.write_row(&mut EvalContext::default(), cols).unwrap();
@@ -280,6 +308,8 @@ mod tests {
         );
         assert_eq!(Some((0, 2)), big_row.search_in_non_null_ids(1).unwrap());
         assert_eq!(Some((3, 4)), big_row.search_in_non_null_ids(356).unwrap());
+        assert_eq!(Some((4, 5)), big_row.search_in_non_null_ids(64123).unwrap());
+        assert_eq!(None, big_row.search_in_non_null_ids(64124).unwrap());
 
         let data = encoded_data();
         let row = RowSlice::from_bytes(&data).unwrap();
@@ -299,9 +329,21 @@ mod tests {
     fn test_search_in_null_ids() {
         let data = encoded_data_big();
         let row = RowSlice::from_bytes(&data).unwrap();
-        assert!(row.search_in_null_ids(33));
+        assert!(row.search_in_null_ids(0x21));
         assert!(!row.search_in_null_ids(3));
         assert!(!row.search_in_null_ids(333));
+        assert!(!row.search_in_null_ids(0xCC21));
+        assert!(!row.search_in_null_ids(0xFF0021));
+        assert!(!row.search_in_null_ids(0xFF00000021));
+
+        let data = encoded_data();
+        let row = RowSlice::from_bytes(&data).unwrap();
+        assert!(row.search_in_null_ids(0x21));
+        assert!(!row.search_in_null_ids(3));
+        assert!(!row.search_in_null_ids(333));
+        assert!(!row.search_in_null_ids(0xCC21));
+        assert!(!row.search_in_null_ids(0xFF0021));
+        assert!(!row.search_in_null_ids(0xFF00000021));
     }
 }
 

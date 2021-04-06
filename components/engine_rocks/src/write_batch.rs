@@ -17,31 +17,6 @@ impl WriteBatchExt for RocksEngine {
 
     const WRITE_BATCH_MAX_KEYS: usize = 256;
 
-    fn write_opt(&self, wb: &Self::WriteBatch, opts: &WriteOptions) -> Result<()> {
-        debug_assert_eq!(
-            wb.get_db().path(),
-            self.as_inner().path(),
-            "mismatched db path"
-        );
-        let opt: RocksWriteOptions = opts.into();
-        self.as_inner()
-            .write_opt(wb.as_inner(), &opt.into_raw())
-            .map_err(Error::Engine)
-    }
-
-    fn write_vec_opt(&self, wb: &RocksWriteBatchVec, opts: &WriteOptions) -> Result<()> {
-        let opt: RocksWriteOptions = opts.into();
-        if wb.index > 0 {
-            self.as_inner()
-                .multi_batch_write(wb.as_inner(), &opt.into_raw())
-                .map_err(Error::Engine)
-        } else {
-            self.as_inner()
-                .write_opt(&wb.wbs[0], &opt.into_raw())
-                .map_err(Error::Engine)
-        }
-    }
-
     fn support_write_batch_vec(&self) -> bool {
         let options = self.as_inner().get_db_options();
         options.is_enable_multi_batch_write()
@@ -96,12 +71,13 @@ impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatch {
         e.write_batch_with_cap(cap)
     }
 
-    fn write_to_engine(&self, e: &RocksEngine, opts: &WriteOptions) -> Result<()> {
-        e.write_opt(self, opts)
+    fn write_opt(&self, opts: &WriteOptions) -> Result<()> {
+        let opt: RocksWriteOptions = opts.into();
+        self.get_db()
+            .write_opt(self.as_inner(), &opt.into_raw())
+            .map_err(Error::Engine)
     }
-}
 
-impl Mutable for RocksWriteBatch {
     fn data_size(&self) -> usize {
         self.wb.data_size()
     }
@@ -133,7 +109,9 @@ impl Mutable for RocksWriteBatch {
     fn rollback_to_save_point(&mut self) -> Result<()> {
         self.wb.rollback_to_save_point().map_err(Error::Engine)
     }
+}
 
+impl Mutable for RocksWriteBatch {
     fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
         self.wb.put(key, value).map_err(Error::Engine)
     }
@@ -150,6 +128,12 @@ impl Mutable for RocksWriteBatch {
     fn delete_cf(&mut self, cf: &str, key: &[u8]) -> Result<()> {
         let handle = get_cf_handle(self.db.as_ref(), cf)?;
         self.wb.delete_cf(handle, key).map_err(Error::Engine)
+    }
+
+    fn delete_range(&mut self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
+        self.wb
+            .delete_range(begin_key, end_key)
+            .map_err(Error::Engine)
     }
 
     fn delete_range_cf(&mut self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
@@ -219,12 +203,19 @@ impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatchVec {
         RocksWriteBatchVec::new(e.as_inner().clone(), WRITE_BATCH_LIMIT, cap)
     }
 
-    fn write_to_engine(&self, e: &RocksEngine, opts: &WriteOptions) -> Result<()> {
-        e.write_vec_opt(self, opts)
+    fn write_opt(&self, opts: &WriteOptions) -> Result<()> {
+        let opt: RocksWriteOptions = opts.into();
+        if self.index > 0 {
+            self.get_db()
+                .multi_batch_write(self.as_inner(), &opt.into_raw())
+                .map_err(Error::Engine)
+        } else {
+            self.get_db()
+                .write_opt(&self.wbs[0], &opt.into_raw())
+                .map_err(Error::Engine)
+        }
     }
-}
 
-impl Mutable for RocksWriteBatchVec {
     fn data_size(&self) -> usize {
         self.wbs.iter().fold(0, |a, b| a + b.data_size())
     }
@@ -272,7 +263,9 @@ impl Mutable for RocksWriteBatchVec {
         }
         Err(Error::Engine("no save point".into()))
     }
+}
 
+impl Mutable for RocksWriteBatchVec {
     fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
         self.check_switch_batch();
         self.wbs[self.index].put(key, value).map_err(Error::Engine)
@@ -296,6 +289,13 @@ impl Mutable for RocksWriteBatchVec {
         let handle = get_cf_handle(self.db.as_ref(), cf)?;
         self.wbs[self.index]
             .delete_cf(handle, key)
+            .map_err(Error::Engine)
+    }
+
+    fn delete_range(&mut self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
+        self.check_switch_batch();
+        self.wbs[self.index]
+            .delete_range(begin_key, end_key)
             .map_err(Error::Engine)
     }
 

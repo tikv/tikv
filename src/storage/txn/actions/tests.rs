@@ -5,12 +5,11 @@
 use super::*;
 use crate::storage::kv::WriteData;
 use crate::storage::mvcc::tests::write;
-use crate::storage::mvcc::{Error, Key, Mutation, MvccTxn, TimeStamp};
-use crate::storage::Engine;
+use crate::storage::mvcc::{Error, Key, Mutation, MvccTxn, SnapshotReader, TimeStamp};
+use crate::storage::{txn, Engine};
 use concurrency_manager::ConcurrencyManager;
 use kvproto::kvrpcpb::Context;
-use pessimistic_prewrite::pessimistic_prewrite;
-use prewrite::prewrite;
+use prewrite::{prewrite, CommitKind, TransactionKind, TransactionProperties};
 
 pub fn must_prewrite_put_impl<E: Engine>(
     engine: &E,
@@ -25,43 +24,42 @@ pub fn must_prewrite_put_impl<E: Engine>(
     txn_size: u64,
     min_commit_ts: TimeStamp,
     max_commit_ts: TimeStamp,
-    pipelined_pessimistic_lock: bool,
 ) {
     let ctx = Context::default();
-    let snapshot = engine.snapshot(&ctx).unwrap();
+    let snapshot = engine.snapshot(Default::default()).unwrap();
     let cm = ConcurrencyManager::new(ts);
-    let mut txn = MvccTxn::new(snapshot, ts, true, cm);
+    let mut txn = MvccTxn::new(ts, cm);
+    let mut reader = SnapshotReader::new(ts, snapshot, true);
 
     let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
-    if for_update_ts.is_zero() {
-        prewrite(
-            &mut txn,
-            mutation,
-            pk,
-            &secondary_keys,
-            false,
-            lock_ttl,
-            txn_size,
-            min_commit_ts,
-            max_commit_ts,
-        )
-        .unwrap();
+    let txn_kind = if for_update_ts.is_zero() {
+        TransactionKind::Optimistic(false)
     } else {
-        pessimistic_prewrite(
-            &mut txn,
-            mutation,
-            pk,
-            &secondary_keys,
-            is_pessimistic_lock,
-            lock_ttl,
-            for_update_ts,
+        TransactionKind::Pessimistic(for_update_ts)
+    };
+    let commit_kind = if secondary_keys.is_some() {
+        CommitKind::Async(max_commit_ts)
+    } else {
+        CommitKind::TwoPc
+    };
+    prewrite(
+        &mut txn,
+        &mut reader,
+        &TransactionProperties {
+            start_ts: ts,
+            kind: txn_kind,
+            commit_kind,
+            primary: pk,
             txn_size,
+            lock_ttl,
             min_commit_ts,
-            max_commit_ts,
-            pipelined_pessimistic_lock,
-        )
-        .unwrap();
-    }
+            need_old_value: false,
+        },
+        mutation,
+        &secondary_keys,
+        is_pessimistic_lock,
+    )
+    .unwrap();
     write(engine, &ctx, txn.into_modifies());
 }
 
@@ -85,7 +83,6 @@ pub fn must_prewrite_put<E: Engine>(
         0,
         TimeStamp::default(),
         TimeStamp::default(),
-        false,
     );
 }
 
@@ -111,33 +108,6 @@ pub fn must_pessimistic_prewrite_put<E: Engine>(
         0,
         TimeStamp::default(),
         TimeStamp::default(),
-        false,
-    );
-}
-
-pub fn must_pipelined_pessimistic_prewrite_put<E: Engine>(
-    engine: &E,
-    key: &[u8],
-    value: &[u8],
-    pk: &[u8],
-    ts: impl Into<TimeStamp>,
-    for_update_ts: impl Into<TimeStamp>,
-    is_pessimistic_lock: bool,
-) {
-    must_prewrite_put_impl(
-        engine,
-        key,
-        value,
-        pk,
-        &None,
-        ts.into(),
-        is_pessimistic_lock,
-        0,
-        for_update_ts.into(),
-        0,
-        TimeStamp::default(),
-        TimeStamp::default(),
-        true,
     );
 }
 
@@ -164,7 +134,6 @@ pub fn must_pessimistic_prewrite_put_with_ttl<E: Engine>(
         0,
         TimeStamp::default(),
         TimeStamp::default(),
-        false,
     );
 }
 
@@ -194,7 +163,6 @@ pub fn must_prewrite_put_for_large_txn<E: Engine>(
         0,
         min_commit_ts,
         TimeStamp::default(),
-        false,
     );
 }
 
@@ -221,7 +189,6 @@ pub fn must_prewrite_put_async_commit<E: Engine>(
         0,
         min_commit_ts.into(),
         TimeStamp::default(),
-        false,
     );
 }
 
@@ -250,10 +217,31 @@ pub fn must_pessimistic_prewrite_put_async_commit<E: Engine>(
         0,
         min_commit_ts.into(),
         TimeStamp::default(),
-        false,
     );
 }
 
+fn default_txn_props(
+    start_ts: TimeStamp,
+    primary: &[u8],
+    for_update_ts: TimeStamp,
+) -> TransactionProperties {
+    let kind = if for_update_ts.is_zero() {
+        TransactionKind::Optimistic(false)
+    } else {
+        TransactionKind::Pessimistic(for_update_ts)
+    };
+
+    TransactionProperties {
+        start_ts,
+        kind,
+        commit_kind: CommitKind::TwoPc,
+        primary,
+        txn_size: 0,
+        lock_ttl: 0,
+        min_commit_ts: TimeStamp::default(),
+        need_old_value: false,
+    }
+}
 fn must_prewrite_put_err_impl<E: Engine>(
     engine: &E,
     key: &[u8],
@@ -262,44 +250,24 @@ fn must_prewrite_put_err_impl<E: Engine>(
     ts: impl Into<TimeStamp>,
     for_update_ts: impl Into<TimeStamp>,
     is_pessimistic_lock: bool,
-    pipelined_pessimistic_lock: bool,
 ) -> Error {
-    let ctx = Context::default();
-    let snapshot = engine.snapshot(&ctx).unwrap();
+    let snapshot = engine.snapshot(Default::default()).unwrap();
     let for_update_ts = for_update_ts.into();
     let cm = ConcurrencyManager::new(for_update_ts);
-    let mut txn = MvccTxn::new(snapshot, ts.into(), true, cm);
+    let ts = ts.into();
+    let mut txn = MvccTxn::new(ts, cm);
+    let mut reader = SnapshotReader::new(ts, snapshot, true);
     let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
 
-    if for_update_ts.is_zero() {
-        prewrite(
-            &mut txn,
-            mutation,
-            pk,
-            &None,
-            false,
-            0,
-            0,
-            TimeStamp::default(),
-            TimeStamp::default(),
-        )
-        .unwrap_err()
-    } else {
-        pessimistic_prewrite(
-            &mut txn,
-            mutation,
-            pk,
-            &None,
-            is_pessimistic_lock,
-            0,
-            for_update_ts,
-            0,
-            TimeStamp::default(),
-            TimeStamp::default(),
-            pipelined_pessimistic_lock,
-        )
-        .unwrap_err()
-    }
+    prewrite(
+        &mut txn,
+        &mut reader,
+        &default_txn_props(ts, pk, for_update_ts),
+        mutation,
+        &None,
+        is_pessimistic_lock,
+    )
+    .unwrap_err()
 }
 
 pub fn must_prewrite_put_err<E: Engine>(
@@ -309,7 +277,7 @@ pub fn must_prewrite_put_err<E: Engine>(
     pk: &[u8],
     ts: impl Into<TimeStamp>,
 ) -> Error {
-    must_prewrite_put_err_impl(engine, key, value, pk, ts, TimeStamp::zero(), false, false)
+    must_prewrite_put_err_impl(engine, key, value, pk, ts, TimeStamp::zero(), false)
 }
 
 pub fn must_pessimistic_prewrite_put_err<E: Engine>(
@@ -329,28 +297,6 @@ pub fn must_pessimistic_prewrite_put_err<E: Engine>(
         ts,
         for_update_ts,
         is_pessimistic_lock,
-        false,
-    )
-}
-
-pub fn must_pipelined_pessimistic_prewrite_put_err<E: Engine>(
-    engine: &E,
-    key: &[u8],
-    value: &[u8],
-    pk: &[u8],
-    ts: impl Into<TimeStamp>,
-    for_update_ts: impl Into<TimeStamp>,
-    is_pessimistic_lock: bool,
-) -> Error {
-    must_prewrite_put_err_impl(
-        engine,
-        key,
-        value,
-        pk,
-        ts,
-        for_update_ts,
-        is_pessimistic_lock,
-        true,
     )
 }
 
@@ -363,41 +309,24 @@ fn must_prewrite_delete_impl<E: Engine>(
     is_pessimistic_lock: bool,
 ) {
     let ctx = Context::default();
-    let snapshot = engine.snapshot(&ctx).unwrap();
+    let snapshot = engine.snapshot(Default::default()).unwrap();
     let for_update_ts = for_update_ts.into();
     let cm = ConcurrencyManager::new(for_update_ts);
-    let mut txn = MvccTxn::new(snapshot, ts.into(), true, cm);
+    let ts = ts.into();
+    let mut txn = MvccTxn::new(ts, cm);
+    let mut reader = SnapshotReader::new(ts, snapshot, true);
     let mutation = Mutation::Delete(Key::from_raw(key));
 
-    if for_update_ts.is_zero() {
-        prewrite(
-            &mut txn,
-            mutation,
-            pk,
-            &None,
-            false,
-            0,
-            0,
-            TimeStamp::default(),
-            TimeStamp::default(),
-        )
-        .unwrap();
-    } else {
-        pessimistic_prewrite(
-            &mut txn,
-            mutation,
-            pk,
-            &None,
-            is_pessimistic_lock,
-            0,
-            for_update_ts,
-            0,
-            TimeStamp::default(),
-            TimeStamp::default(),
-            false,
-        )
-        .unwrap();
-    }
+    prewrite(
+        &mut txn,
+        &mut reader,
+        &default_txn_props(ts, pk, for_update_ts),
+        mutation,
+        &None,
+        is_pessimistic_lock,
+    )
+    .unwrap();
+
     engine
         .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
         .unwrap();
@@ -432,41 +361,24 @@ fn must_prewrite_lock_impl<E: Engine>(
     is_pessimistic_lock: bool,
 ) {
     let ctx = Context::default();
-    let snapshot = engine.snapshot(&ctx).unwrap();
+    let snapshot = engine.snapshot(Default::default()).unwrap();
     let for_update_ts = for_update_ts.into();
     let cm = ConcurrencyManager::new(for_update_ts);
-    let mut txn = MvccTxn::new(snapshot, ts.into(), true, cm);
+    let ts = ts.into();
+    let mut txn = MvccTxn::new(ts, cm);
+    let mut reader = SnapshotReader::new(ts, snapshot, true);
 
     let mutation = Mutation::Lock(Key::from_raw(key));
-    if for_update_ts.is_zero() {
-        prewrite(
-            &mut txn,
-            mutation,
-            pk,
-            &None,
-            false,
-            0,
-            0,
-            TimeStamp::default(),
-            TimeStamp::default(),
-        )
-        .unwrap();
-    } else {
-        pessimistic_prewrite(
-            &mut txn,
-            mutation,
-            pk,
-            &None,
-            is_pessimistic_lock,
-            0,
-            for_update_ts,
-            0,
-            TimeStamp::default(),
-            TimeStamp::default(),
-            false,
-        )
-        .unwrap();
-    }
+    prewrite(
+        &mut txn,
+        &mut reader,
+        &default_txn_props(ts, pk, for_update_ts),
+        mutation,
+        &None,
+        is_pessimistic_lock,
+    )
+    .unwrap();
+
     engine
         .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
         .unwrap();
@@ -482,22 +394,19 @@ pub fn must_prewrite_lock_err<E: Engine>(
     pk: &[u8],
     ts: impl Into<TimeStamp>,
 ) {
-    let ctx = Context::default();
-    let snapshot = engine.snapshot(&ctx).unwrap();
+    let snapshot = engine.snapshot(Default::default()).unwrap();
     let ts = ts.into();
     let cm = ConcurrencyManager::new(ts);
-    let mut txn = MvccTxn::new(snapshot, ts, true, cm);
+    let mut txn = MvccTxn::new(ts, cm);
+    let mut reader = SnapshotReader::new(ts, snapshot, true);
 
     assert!(prewrite(
         &mut txn,
+        &mut reader,
+        &default_txn_props(ts, pk, TimeStamp::zero()),
         Mutation::Lock(Key::from_raw(key)),
-        pk,
         &None,
         false,
-        0,
-        0,
-        TimeStamp::default(),
-        TimeStamp::default(),
     )
     .is_err());
 }
@@ -511,4 +420,43 @@ pub fn must_pessimistic_prewrite_lock<E: Engine>(
     is_pessimistic_lock: bool,
 ) {
     must_prewrite_lock_impl(engine, key, pk, ts, for_update_ts, is_pessimistic_lock);
+}
+
+pub fn must_rollback<E: Engine>(
+    engine: &E,
+    key: &[u8],
+    start_ts: impl Into<TimeStamp>,
+    protect_rollback: bool,
+) {
+    let ctx = Context::default();
+    let snapshot = engine.snapshot(Default::default()).unwrap();
+    let start_ts = start_ts.into();
+    let cm = ConcurrencyManager::new(start_ts);
+    let mut txn = MvccTxn::new(start_ts, cm);
+    let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+    txn::cleanup(
+        &mut txn,
+        &mut reader,
+        Key::from_raw(key),
+        TimeStamp::zero(),
+        protect_rollback,
+    )
+    .unwrap();
+    write(engine, &ctx, txn.into_modifies());
+}
+
+pub fn must_rollback_err<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) {
+    let snapshot = engine.snapshot(Default::default()).unwrap();
+    let start_ts = start_ts.into();
+    let cm = ConcurrencyManager::new(start_ts);
+    let mut txn = MvccTxn::new(start_ts, cm);
+    let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+    assert!(txn::cleanup(
+        &mut txn,
+        &mut reader,
+        Key::from_raw(key),
+        TimeStamp::zero(),
+        false,
+    )
+    .is_err());
 }

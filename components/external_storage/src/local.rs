@@ -14,46 +14,34 @@ use futures_util::{
 };
 use rand::Rng;
 
-use super::{util::error_stream, ExternalStorage};
+use super::ExternalStorage;
+use tikv_util::stream::error_stream;
 
-const LOCAL_STORAGE_TMP_DIR: &str = "localtmp";
 const LOCAL_STORAGE_TMP_FILE_SUFFIX: &str = "tmp";
-
-fn maybe_create_dir(path: &Path) -> io::Result<()> {
-    if let Err(e) = fs::create_dir_all(path) {
-        if e.kind() != io::ErrorKind::AlreadyExists {
-            return Err(e);
-        }
-    }
-    Ok(())
-}
 
 /// A storage saves files in local file system.
 #[derive(Clone)]
 pub struct LocalStorage {
     base: PathBuf,
     base_dir: Arc<File>,
-    tmp: PathBuf,
 }
 
 impl LocalStorage {
     /// Create a new local storage in the given path.
     pub fn new(base: &Path) -> io::Result<LocalStorage> {
         info!("create local storage"; "base" => base.display());
-        let tmp_dir = base.join(LOCAL_STORAGE_TMP_DIR);
-        maybe_create_dir(&tmp_dir)?;
         let base_dir = Arc::new(File::open(base)?);
         Ok(LocalStorage {
             base: base.to_owned(),
             base_dir,
-            tmp: tmp_dir,
         })
     }
 
     fn tmp_path(&self, path: &Path) -> PathBuf {
         let uid: u64 = rand::thread_rng().gen();
         let tmp_suffix = format!("{}{:016x}", LOCAL_STORAGE_TMP_FILE_SUFFIX, uid);
-        self.tmp.join(path).with_extension(tmp_suffix)
+        // Save tmp files in base directory.
+        self.base.join(path).with_extension(tmp_suffix)
     }
 }
 
@@ -116,7 +104,7 @@ mod tests {
 
         // Test tmp_path
         let tp = ls.tmp_path(Path::new("t.sst"));
-        assert_eq!(tp.parent().unwrap(), path.join(LOCAL_STORAGE_TMP_DIR));
+        assert_eq!(tp.parent().unwrap(), path);
         assert!(tp.file_name().unwrap().to_str().unwrap().starts_with('t'));
         assert!(tp
             .as_path()

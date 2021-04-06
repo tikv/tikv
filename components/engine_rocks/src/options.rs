@@ -59,6 +59,7 @@ impl From<engine_traits::IterOptions> for RocksReadOptions {
 fn build_read_opts(iter_opts: engine_traits::IterOptions) -> RawReadOptions {
     let mut opts = RawReadOptions::new();
     opts.fill_cache(iter_opts.fill_cache());
+    opts.set_max_skippable_internal_keys(iter_opts.max_skippable_internal_keys());
     if iter_opts.key_only() {
         opts.set_titan_key_only(true);
     }

@@ -763,7 +763,7 @@ Some invalid logs 2: Welcome to TiKV - test-filter"#
         let mut req = SearchLogRequest::default();
         req.set_start_time(timestamp("2019/08/23 18:09:54.387 +08:00"));
         req.set_end_time(std::i64::MAX);
-        req.set_levels(vec![LogLevel::Warn.into()].into());
+        req.set_levels(vec![LogLevel::Warn as _]);
         req.set_patterns(vec![".*test-filter.*".to_string()].into());
         let expected = vec![
             "2019/08/23 18:09:58.387 +08:00",

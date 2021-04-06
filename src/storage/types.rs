@@ -93,6 +93,10 @@ pub enum TxnStatus {
     },
     /// The txn was committed.
     Committed { commit_ts: TimeStamp },
+    /// The primary key is pessimistically rolled back.
+    PessimisticRollBack,
+    /// The txn primary key is not found and nothing is done.
+    LockNotExistDoNothing,
 }
 
 impl TxnStatus {
@@ -112,6 +116,7 @@ impl TxnStatus {
 pub struct PrewriteResult {
     pub locks: Vec<Result<()>>,
     pub min_commit_ts: TimeStamp,
+    pub one_pc_commit_ts: TimeStamp,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -128,10 +133,16 @@ impl PessimisticLockRes {
         }
     }
 
-    pub fn into_vec(self) -> Vec<Value> {
+    pub fn into_values_and_not_founds(self) -> (Vec<Value>, Vec<bool>) {
         match self {
-            PessimisticLockRes::Values(v) => v.into_iter().map(Option::unwrap_or_default).collect(),
-            PessimisticLockRes::Empty => vec![],
+            PessimisticLockRes::Values(vals) => vals
+                .into_iter()
+                .map(|v| {
+                    let is_not_found = v.is_none();
+                    (v.unwrap_or_default(), is_not_found)
+                })
+                .unzip(),
+            PessimisticLockRes::Empty => (vec![], vec![]),
         }
     }
 }
@@ -189,6 +200,7 @@ storage_callback! {
     Prewrite(PrewriteResult) ProcessResult::PrewriteResult { result } => result,
     PessimisticLock(Result<PessimisticLockRes>) ProcessResult::PessimisticLockRes { res } => res,
     SecondaryLocksStatus(SecondaryLocksStatus) ProcessResult::SecondaryLocksStatus { status } => status,
+    RawCompareAndSwap((Option<Value>, bool)) ProcessResult::RawCompareAndSwapRes { previous_value, succeed } => (previous_value, succeed),
 }
 
 pub trait StorageCallbackType: Sized {

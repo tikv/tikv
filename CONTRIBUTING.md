@@ -2,13 +2,13 @@
 
 Thanks for your interest in contributing to TiKV! This document outlines some of the conventions on building, running, and testing TiKV, the development workflow, commit message formatting, contact points and other resources.
 
-TiKV has many dependent repositories. If you need any help or mentoring getting started, understanding the codebase, or making a PR (or anything else really), please ask on [Slack](https:/tikv.org/chat), or [WeChat](./README.md#WeChat). If you don't know where to start, please click on the contributor icon below to get you on the right contributing path.
+TiKV has many dependent repositories. If you need any help or mentoring getting started, understanding the codebase, or making a PR (or anything else really), please ask on [Slack](https://tikv.org/chat), or [WeChat](./README.md#WeChat). If you don't know where to start, please click on the contributor icon below to get you on the right contributing path.
 
 [<img src="images/contribution-map.png" alt="contribution-map" width="180">](https://github.com/pingcap/tidb-map/blob/master/maps/contribution-map.md#tikv-distributed-transactional-key-value-database)
 
 ## Building and setting up a development workspace
 
-TiKV is mostly written in Rust, but has components written in C++ (RocksDB) and Go (gRPC). We are currently using the Rust nightly toolchain. To provide consistency, we use linters and automated formatting tools.
+TiKV is mostly written in Rust, but has components written in C++ (RocksDB, gRPC). We are currently using the Rust nightly toolchain. To provide consistency, we use linters and automated formatting tools.
 
 ### Prerequisites
 
@@ -19,6 +19,7 @@ To build TiKV you'll need to at least have the following installed:
 * `make` - Build tool (run common workflows)
 * `cmake` - Build tool (required for gRPC)
 * `awk` - Pattern scanning/processing language
+* C++ compiler - gcc 4.9+ (required for gRPC)
 
 If you are targeting platforms other than x86_64 linux, you'll also need:
 
@@ -131,6 +132,8 @@ This is a rough outline of what a contributor's workflow looks like:
 - Our CI system automatically tests all pull requests.
 - Our bot will merge your PR. It can be summoned by commenting `/merge` or adding the `S: CanMerge` label (requires tests to pass and two approvals. You might have to ask your reviewer to do this).
 
+See [Rustdoc of TiKV](https://tikv.github.io) for TiKV code documentation.
+
 Thanks for your contributions!
 
 ### Finding something to work on
@@ -146,6 +149,8 @@ The TiKV team actively develops and maintains a bunch of dependencies used in Ti
 - [raft-rs](https://github.com/tikv/raft-rs): The Raft distributed consensus algorithm implemented in Rust
 - [grpc-rs](https://github.com/tikv/grpc-rs): The gRPC library for Rust built on the gRPC C Core library and Rust Futures
 - [fail-rs](https://github.com/tikv/fail-rs): Fail points for Rust
+
+See more in [TiKV Community](https://github.com/tikv/community).
 
 ### Format of the commit message
 
@@ -182,3 +187,38 @@ The body of the commit message should describe why the change was made and at a 
 The project uses [DCO check](https://github.com/probot/dco#how-it-works) and the commit message must contain a `Signed-off-by` line for [Developer Certificate of Origin](https://developercertificate.org/).
 
 Use option `git commit -s` to sign off your commits.
+
+
+### Testing AWS
+
+Testing AWS can be done without an AWS account by using [localstack](https://github.com/localstack/localstack).
+
+```
+git clone https://github.com/localstack/localstack.git
+cd localstack
+docker-compose up
+```
+
+For example, to test KMS, create a key:
+
+```
+pip install awscli-local
+awslocal kms create-key`
+```
+
+Then add then use the returned ID in key-id:
+
+```
+[security.encryption.master-key]
+type = "kms"
+region = "us-west-2"
+endpoint = "http://localhost:4566"
+key-id = "KMS key id"
+```
+
+When you run TiKV, make sure to set the localstck credentials
+
+```
+export AWS_ACCESS_KEY_ID=test
+export AWS_SECRET_ACCESS_KEY=test
+```

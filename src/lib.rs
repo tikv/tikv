@@ -26,7 +26,7 @@
 #![feature(box_patterns)]
 #![feature(shrink_to)]
 #![feature(drain_filter)]
-#![feature(clamp)]
+#![feature(negative_impls)]
 
 #[macro_use(fail_point)]
 extern crate fail;
@@ -37,25 +37,18 @@ extern crate quick_error;
 #[macro_use]
 extern crate serde_derive;
 #[macro_use]
-extern crate slog_derive;
-#[macro_use]
-extern crate derive_more;
-#[macro_use]
 extern crate more_asserts;
 #[macro_use]
 extern crate vlog;
 #[macro_use]
 extern crate tikv_util;
-#[macro_use]
-extern crate failure;
 
 #[cfg(test)]
 extern crate test;
 
-extern crate encryption;
-
 pub mod config;
 pub mod coprocessor;
+pub mod coprocessor_v2;
 pub mod import;
 pub mod read_pool;
 pub mod server;

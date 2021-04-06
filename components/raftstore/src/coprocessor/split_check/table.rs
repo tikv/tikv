@@ -8,6 +8,7 @@ use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use tidb_query_datatype::codec::table as table_codec;
 use tikv_util::keybuilder::KeyBuilder;
+use tikv_util::{box_err, box_try, warn};
 use txn_types::Key;
 
 use super::super::{
@@ -324,19 +325,21 @@ mod tests {
         let (tx, rx) = mpsc::sync_channel(100);
         let (stx, _rx) = mpsc::sync_channel(100);
 
-        let mut cfg = Config::default();
-        // Enable table split.
-        cfg.split_region_on_table = true;
+        let cfg = Config {
+            // Enable table split.
+            split_region_on_table: true,
+            // Try to "disable" size split.
+            region_max_size: ReadableSize::gb(2),
+            region_split_size: ReadableSize::gb(1),
+            // Try to "disable" keys split
+            region_max_keys: 2000000000,
+            region_split_keys: 1000000000,
+            ..Default::default()
+        };
 
-        // Try to "disable" size split.
-        cfg.region_max_size = ReadableSize::gb(2);
-        cfg.region_split_size = ReadableSize::gb(1);
-        // Try to "disable" keys split
-        cfg.region_max_keys = 2000000000;
-        cfg.region_split_keys = 1000000000;
         // Try to ignore the ApproximateRegionSize
-        let coprocessor = CoprocessorHost::new(stx);
-        let mut runnable = SplitCheckRunner::new(engine.clone(), tx, coprocessor, cfg);
+        let coprocessor = CoprocessorHost::new(stx, cfg);
+        let mut runnable = SplitCheckRunner::new(engine.clone(), tx, coprocessor);
 
         type Case = (Option<Vec<u8>>, Option<Vec<u8>>, Option<i64>);
         let mut check_cases = |cases: Vec<Case>| {

@@ -8,6 +8,8 @@ mod cgroup;
 // re-export some traits for ease of use
 pub use sysinfo::{DiskExt, NetworkExt, ProcessExt, ProcessorExt, SystemExt};
 
+use crate::config::ReadableSize;
+use lazy_static::lazy_static;
 use std::sync::Mutex;
 
 lazy_static! {
@@ -31,11 +33,19 @@ pub mod sys_quota {
         }
 
         pub fn cpu_cores_quota(&self) -> f64 {
-            let cpu_num = num_cpus::get() as f64;
-            match self.cgroup.cpu_cores_quota() {
-                Some(cgroup_quota) if cgroup_quota > 0.0 && cgroup_quota < cpu_num => cgroup_quota,
-                _ => cpu_num,
+            let mut cpu_num = num_cpus::get() as f64;
+            let cpuset_cores = self.cgroup.cpuset_cores().len() as f64;
+            let cpu_quota = self.cgroup.cpu_cores_quota().unwrap_or(0.);
+
+            if cpuset_cores != 0. {
+                cpu_num = cpu_num.min(cpuset_cores);
             }
+
+            if cpu_quota != 0. {
+                cpu_num = cpu_num.min(cpu_quota);
+            }
+
+            super::limit_cpu_cores_quota_by_env_var(cpu_num)
         }
 
         pub fn memory_limit_in_bytes(&self) -> u64 {
@@ -75,7 +85,8 @@ pub mod sys_quota {
         }
 
         pub fn cpu_cores_quota(&self) -> f64 {
-            num_cpus::get() as f64
+            let cpu_num = num_cpus::get() as f64;
+            super::limit_cpu_cores_quota_by_env_var(cpu_num)
         }
 
         pub fn memory_limit_in_bytes(&self) -> u64 {
@@ -95,6 +106,18 @@ pub mod sys_quota {
 }
 
 pub const HIGH_PRI: i32 = -1;
+
+const CPU_CORES_QUOTA_ENV_VAR_KEY: &str = "TIKV_CPU_CORES_QUOTA";
+
+fn limit_cpu_cores_quota_by_env_var(quota: f64) -> f64 {
+    match std::env::var(CPU_CORES_QUOTA_ENV_VAR_KEY)
+        .ok()
+        .and_then(|value| value.parse().ok())
+    {
+        Some(env_var_quota) if quota.is_sign_positive() => f64::min(quota, env_var_quota),
+        _ => quota,
+    }
+}
 
 #[cfg(target_os = "linux")]
 pub mod thread {
@@ -181,4 +204,28 @@ pub mod thread {
     pub fn get_priority() -> Result<i32, Error> {
         Ok(0)
     }
+}
+
+fn read_size_in_cache(level: usize, field: &str) -> Option<u64> {
+    std::fs::read_to_string(format!(
+        "/sys/devices/system/cpu/cpu0/cache/index{}/{}",
+        level, field
+    ))
+    .ok()
+    .and_then(|s| s.parse::<ReadableSize>().ok())
+    .map(|s| s.0)
+}
+
+/// Gets the size of given level cache.
+///
+/// It will only return `Some` on Linux.
+pub fn cache_size(level: usize) -> Option<u64> {
+    read_size_in_cache(level, "size")
+}
+
+/// Gets the size of given level cache line.
+///
+/// It will only return `Some` on Linux.
+pub fn cache_line_size(level: usize) -> Option<u64> {
+    read_size_in_cache(level, "coherency_line_size")
 }

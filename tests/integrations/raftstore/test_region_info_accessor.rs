@@ -178,7 +178,6 @@ fn test_node_cluster_region_info_accessor() {
         }));
     cluster.run_conf_change();
     let c = rx.recv().unwrap();
-    c.start();
     // We only created it on the node whose id == 1 so we shouldn't receive more than one item.
     assert!(rx.try_recv().is_err());
 

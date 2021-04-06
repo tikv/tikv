@@ -5,7 +5,8 @@ use std::io::{Error, ErrorKind, Result};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use crate::collections::HashMap;
+use collections::HashMap;
+use lazy_static::lazy_static;
 use libc::{self, pid_t};
 use prometheus::core::{Collector, Desc};
 use prometheus::{self, proto, CounterVec, IntCounterVec, IntGaugeVec, Opts};
@@ -298,7 +299,7 @@ lazy_static! {
 
 #[inline]
 fn get_name(command: &str) -> String {
-    if command != "" {
+    if !command.is_empty() {
         return command.to_owned();
     }
     String::from("anony")

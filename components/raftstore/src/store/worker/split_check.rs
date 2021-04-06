@@ -4,20 +4,26 @@ use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::sync::Arc;
 
 use engine_traits::{CfName, IterOptions, Iterable, Iterator, KvEngine, CF_WRITE, LARGE_CFS};
 use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
 
+#[cfg(any(test, feature = "testexport"))]
 use crate::coprocessor::Config;
 use crate::coprocessor::CoprocessorHost;
 use crate::coprocessor::SplitCheckerHost;
+use crate::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
 use crate::store::{Callback, CasualMessage, CasualRouter};
 use crate::Result;
 use configuration::{ConfigChange, Configuration};
+use file_system::{IOType, WithIOType};
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Runnable;
+use tikv_util::{box_err, debug, error, info, warn};
 
 use super::metrics::*;
 
@@ -131,6 +137,11 @@ pub enum Task {
     ChangeConfig(ConfigChange),
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&Config) + Send>),
+    GetRegionApproximateSizeAndKeys {
+        region: Region,
+        pending_tasks: Arc<AtomicU64>,
+        cb: Box<dyn FnOnce(u64, u64) + Send>,
+    },
 }
 
 impl Task {
@@ -157,6 +168,11 @@ impl Display for Task {
             Task::ChangeConfig(_) => write!(f, "[split check worker] Change Config Task"),
             #[cfg(any(test, feature = "testexport"))]
             Task::Validate(_) => write!(f, "[split check worker] Validate config"),
+            Task::GetRegionApproximateSizeAndKeys { region, .. } => write!(
+                f,
+                "[split check worker] Get region approximate size and keys for region {}",
+                region.get_id()
+            ),
         }
     }
 }
@@ -168,7 +184,6 @@ where
     engine: E,
     router: S,
     coprocessor: CoprocessorHost<E>,
-    cfg: Config,
 }
 
 impl<E, S> Runner<E, S>
@@ -176,12 +191,11 @@ where
     E: KvEngine,
     S: CasualRouter<E>,
 {
-    pub fn new(engine: E, router: S, coprocessor: CoprocessorHost<E>, cfg: Config) -> Runner<E, S> {
+    pub fn new(engine: E, router: S, coprocessor: CoprocessorHost<E>) -> Runner<E, S> {
         Runner {
             engine,
             router,
             coprocessor,
-            cfg,
         }
     }
 
@@ -198,13 +212,9 @@ where
         );
         CHECK_SPILT_COUNTER.all.inc();
 
-        let mut host = self.coprocessor.new_split_checker_host(
-            &self.cfg,
-            region,
-            &self.engine,
-            auto_split,
-            policy,
-        );
+        let mut host =
+            self.coprocessor
+                .new_split_checker_host(region, &self.engine, auto_split, policy);
         if host.skip() {
             debug!("skip split check"; "region_id" => region.get_id());
             return;
@@ -244,7 +254,7 @@ where
 
         if !split_keys.is_empty() {
             let region_epoch = region.get_region_epoch().clone();
-            let msg = new_split_region(region_epoch, split_keys);
+            let msg = new_split_region(region_epoch, split_keys, "split checker");
             let res = self.router.send(region_id, msg);
             if let Err(e) = res {
                 warn!("failed to send check result"; "region_id" => region_id, "err" => %e);
@@ -314,7 +324,7 @@ where
             "split check config updated";
             "change" => ?change
         );
-        self.cfg.update(change);
+        self.coprocessor.cfg.update(change);
     }
 }
 
@@ -324,8 +334,8 @@ where
     S: CasualRouter<E>,
 {
     type Task = Task;
-
     fn run(&mut self, task: Task) {
+        let _io_type_guard = WithIOType::new(IOType::LoadBalance);
         match task {
             Task::SplitCheckTask {
                 region,
@@ -334,12 +344,38 @@ where
             } => self.check_split(&region, auto_split, policy),
             Task::ChangeConfig(c) => self.change_cfg(c),
             #[cfg(any(test, feature = "testexport"))]
-            Task::Validate(f) => f(&self.cfg),
+            Task::Validate(f) => f(&self.coprocessor.cfg),
+            Task::GetRegionApproximateSizeAndKeys {
+                region,
+                pending_tasks,
+                cb,
+            } => {
+                if pending_tasks.fetch_sub(1, AtomicOrdering::SeqCst) > 1 {
+                    return;
+                }
+                let size =
+                    get_region_approximate_size(&self.engine, &region, 0).unwrap_or_default();
+                let keys =
+                    get_region_approximate_keys(&self.engine, &region, 0).unwrap_or_default();
+                let _ = self.router.send(
+                    region.get_id(),
+                    CasualMessage::RegionApproximateSize { size },
+                );
+                let _ = self.router.send(
+                    region.get_id(),
+                    CasualMessage::RegionApproximateKeys { keys },
+                );
+                cb(size, keys);
+            }
         }
     }
 }
 
-fn new_split_region<E>(region_epoch: RegionEpoch, split_keys: Vec<Vec<u8>>) -> CasualMessage<E>
+fn new_split_region<E>(
+    region_epoch: RegionEpoch,
+    split_keys: Vec<Vec<u8>>,
+    source: &'static str,
+) -> CasualMessage<E>
 where
     E: KvEngine,
 {
@@ -347,5 +383,6 @@ where
         region_epoch,
         split_keys,
         callback: Callback::None,
+        source: source.into(),
     }
 }

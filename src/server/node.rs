@@ -26,8 +26,7 @@ use raftstore::store::AutoSplitController;
 use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager, Transport};
 use raftstore::store::{GlobalReplicationState, PdTask, SplitCheckTask};
 use tikv_util::config::VersionTrack;
-use tikv_util::worker::FutureWorker;
-use tikv_util::worker::Worker;
+use tikv_util::worker::{FutureWorker, Scheduler, Worker};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
@@ -67,6 +66,7 @@ pub struct Node<C: PdClient + 'static, ER: RaftEngine> {
 
     pd_client: Arc<C>,
     state: Arc<Mutex<GlobalReplicationState>>,
+    bg_worker: Worker,
 }
 
 impl<C, ER> Node<C, ER>
@@ -81,6 +81,7 @@ where
         store_cfg: Arc<VersionTrack<StoreConfig>>,
         pd_client: Arc<C>,
         state: Arc<Mutex<GlobalReplicationState>>,
+        bg_worker: Worker,
     ) -> Node<C, ER> {
         let mut store = metapb::Store::default();
         store.set_id(INVALID_ID);
@@ -126,6 +127,7 @@ where
             system,
             has_started: false,
             state,
+            bg_worker,
         }
     }
 
@@ -142,7 +144,7 @@ where
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,
-        split_check_worker: Worker<SplitCheckTask>,
+        split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
     ) -> Result<()>
@@ -184,7 +186,7 @@ where
             store_meta,
             coprocessor_host,
             importer,
-            split_check_worker,
+            split_check_scheduler,
             auto_split_controller,
             concurrency_manager,
         )?;
@@ -296,12 +298,10 @@ where
     ) -> Result<Option<metapb::Region>> {
         if let Some(first_region) = engines.kv.get_msg(keys::PREPARE_BOOTSTRAP_KEY)? {
             Ok(Some(first_region))
+        } else if self.check_cluster_bootstrapped()? {
+            Ok(None)
         } else {
-            if self.check_cluster_bootstrapped()? {
-                Ok(None)
-            } else {
-                self.prepare_bootstrap_cluster(engines, store_id).map(Some)
-            }
+            self.prepare_bootstrap_cluster(engines, store_id).map(Some)
         }
     }
 
@@ -377,7 +377,7 @@ where
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,
-        split_check_worker: Worker<SplitCheckTask>,
+        split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
     ) -> Result<()>
@@ -393,6 +393,7 @@ where
         let cfg = self.store_cfg.clone();
         let pd_client = Arc::clone(&self.pd_client);
         let store = self.store.clone();
+
         self.system.spawn(
             store,
             cfg,
@@ -404,7 +405,8 @@ where
             store_meta,
             coprocessor_host,
             importer,
-            split_check_worker,
+            split_check_scheduler,
+            self.bg_worker.clone(),
             auto_split_controller,
             self.state.clone(),
             concurrency_manager,
@@ -420,6 +422,7 @@ where
     /// Stops the Node.
     pub fn stop(&mut self) {
         let store_id = self.store.get_id();
-        self.stop_store(store_id)
+        self.stop_store(store_id);
+        self.bg_worker.stop();
     }
 }

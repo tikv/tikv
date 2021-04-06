@@ -8,6 +8,8 @@ use engine_traits::{CfName, KvEngine};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{ComputeHashRequest, RaftCmdRequest};
+use raft::eraftpb;
+use tikv_util::box_try;
 
 use super::*;
 use crate::store::CasualRouter;
@@ -145,6 +147,11 @@ impl_box_observer!(
     RegionChangeObserver,
     WrappedRegionChangeObserver
 );
+impl_box_observer!(
+    BoxReadIndexObserver,
+    ReadIndexObserver,
+    WrappedReadIndexObserver
+);
 impl_box_observer_g!(BoxCmdObserver, CmdObserver, WrappedCmdObserver);
 impl_box_observer_g!(
     BoxConsistencyCheckObserver,
@@ -166,6 +173,7 @@ where
     role_observers: Vec<Entry<BoxRoleObserver>>,
     region_change_observers: Vec<Entry<BoxRegionChangeObserver>>,
     cmd_observers: Vec<Entry<BoxCmdObserver<E>>>,
+    read_index_observers: Vec<Entry<BoxReadIndexObserver>>,
     // TODO: add endpoint
 }
 
@@ -180,6 +188,7 @@ impl<E: KvEngine> Default for Registry<E> {
             role_observers: Default::default(),
             region_change_observers: Default::default(),
             cmd_observers: Default::default(),
+            read_index_observers: Default::default(),
         }
     }
 }
@@ -237,6 +246,10 @@ impl<E: KvEngine> Registry<E> {
     pub fn register_cmd_observer(&mut self, priority: u32, rlo: BoxCmdObserver<E>) {
         push!(priority, rlo, self.cmd_observers);
     }
+
+    pub fn register_read_index_observer(&mut self, priority: u32, rio: BoxReadIndexObserver) {
+        push!(priority, rio, self.read_index_observers);
+    }
 }
 
 /// A macro that loops over all observers and returns early when error is found or
@@ -290,6 +303,7 @@ where
     E: KvEngine + 'static,
 {
     pub registry: Registry<E>,
+    pub cfg: Config,
 }
 
 impl<E: KvEngine> Default for CoprocessorHost<E>
@@ -299,12 +313,16 @@ where
     fn default() -> Self {
         CoprocessorHost {
             registry: Default::default(),
+            cfg: Default::default(),
         }
     }
 }
 
 impl<E: KvEngine> CoprocessorHost<E> {
-    pub fn new<C: CasualRouter<E> + Clone + Send + 'static>(ch: C) -> CoprocessorHost<E> {
+    pub fn new<C: CasualRouter<E> + Clone + Send + 'static>(
+        ch: C,
+        cfg: Config,
+    ) -> CoprocessorHost<E> {
         let mut registry = Registry::default();
         registry.register_split_check_observer(
             200,
@@ -320,7 +338,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
             400,
             BoxSplitCheckObserver::new(TableCheckObserver::default()),
         );
-        CoprocessorHost { registry }
+        CoprocessorHost { registry, cfg }
     }
 
     /// Call all propose hooks until bypass is set to true.
@@ -413,14 +431,13 @@ impl<E: KvEngine> CoprocessorHost<E> {
     }
 
     pub fn new_split_checker_host<'a>(
-        &self,
-        cfg: &'a Config,
+        &'a self,
         region: &Region,
         engine: &E,
         auto_split: bool,
         policy: CheckPolicy,
     ) -> SplitCheckerHost<'a, E> {
-        let mut host = SplitCheckerHost::new(auto_split, cfg);
+        let mut host = SplitCheckerHost::new(auto_split, &self.cfg);
         loop_ob!(
             region,
             &self.registry.split_check_observers,
@@ -532,6 +549,12 @@ impl<E: KvEngine> CoprocessorHost<E> {
             .on_flush_apply(engine)
     }
 
+    pub fn on_step_read_index(&self, msg: &mut eraftpb::Message) {
+        for step_ob in &self.registry.read_index_observers {
+            step_ob.observer.inner().on_step(msg);
+        }
+    }
+
     pub fn shutdown(&self) {
         for entry in &self.registry.admin_observers {
             entry.observer.inner().stop();
@@ -559,6 +582,7 @@ mod tests {
     use kvproto::raft_cmdpb::{
         AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request,
     };
+    use tikv_util::box_err;
 
     #[derive(Clone, Default)]
     struct TestCoprocessor {

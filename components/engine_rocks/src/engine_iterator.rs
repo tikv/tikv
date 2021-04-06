@@ -13,6 +13,10 @@ impl RocksEngineIterator {
     pub fn from_raw(iter: DBIterator<Arc<DB>>) -> RocksEngineIterator {
         RocksEngineIterator(iter)
     }
+
+    pub fn sequence(&self) -> Option<u64> {
+        self.0.sequence()
+    }
 }
 
 impl engine_traits::Iterator for RocksEngineIterator {
@@ -27,18 +31,30 @@ impl engine_traits::Iterator for RocksEngineIterator {
     }
 
     fn prev(&mut self) -> Result<bool> {
+        #[cfg(not(feature = "nortcheck"))]
+        if !self.valid()? {
+            return Err(Error::Engine("Iterator invalid".to_string()));
+        }
         self.0.prev().map_err(Error::Engine)
     }
 
     fn next(&mut self) -> Result<bool> {
+        #[cfg(not(feature = "nortcheck"))]
+        if !self.valid()? {
+            return Err(Error::Engine("Iterator invalid".to_string()));
+        }
         self.0.next().map_err(Error::Engine)
     }
 
     fn key(&self) -> &[u8] {
+        #[cfg(not(feature = "nortcheck"))]
+        assert!(self.valid().unwrap());
         self.0.key()
     }
 
     fn value(&self) -> &[u8] {
+        #[cfg(not(feature = "nortcheck"))]
+        assert!(self.valid().unwrap());
         self.0.value()
     }
 

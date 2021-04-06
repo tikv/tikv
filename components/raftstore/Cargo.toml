@@ -7,21 +7,14 @@ edition = "2018"
 publish = false
 
 [features]
+default = ["protobuf-codec", "test-engines-rocksdb"]
 failpoints = ["fail/failpoints"]
-prost-codec = [
-  "prost",
-  "engine_rocks/prost-codec",
-  "into_other/prost-codec",
-  "keys/prost-codec",
-  "kvproto/prost-codec",
-  "raft/prost-codec",
-  "pd_client/prost-codec",
-  "sst_importer/prost-codec",
-  "tidb_query_datatype/prost-codec",
-  "txn_types/prost-codec",
-]
 protobuf-codec = [
-  "engine_rocks/protobuf-codec",
+  "batch-system/protobuf-codec",
+  "concurrency_manager/protobuf-codec",
+  "engine_test/protobuf-codec",
+  "engine_traits/protobuf-codec",
+  "error_code/protobuf-codec",
   "into_other/protobuf-codec",
   "keys/protobuf-codec",
   "kvproto/protobuf-codec",
@@ -29,67 +22,90 @@ protobuf-codec = [
   "pd_client/protobuf-codec",
   "sst_importer/protobuf-codec",
   "tidb_query_datatype/protobuf-codec",
+  "tikv_util/protobuf-codec",
   "txn_types/protobuf-codec",
 ]
+prost-codec = [
+  "prost",
+  "batch-system/prost-codec",
+  "concurrency_manager/prost-codec",
+  "engine_test/prost-codec",
+  "engine_traits/prost-codec",
+  "error_code/prost-codec",
+  "into_other/prost-codec",
+  "keys/prost-codec",
+  "kvproto/prost-codec",
+  "raft/prost-codec",
+  "pd_client/prost-codec",
+  "sst_importer/prost-codec",
+  "tidb_query_datatype/prost-codec",
+  "tikv_util/prost-codec",
+  "txn_types/prost-codec",
+]
 testexport = []
+test-engines-rocksdb = [
+  "engine_test/test-engines-rocksdb",
+]
+test-engines-panic = [
+  "engine_test/test-engines-panic",
+]
 
 [dependencies]
-batch-system = { path = "../batch-system" }
+batch-system = { path = "../batch-system", default-features = false }
 bitflags = "1.0.1"
 byteorder = "1.2"
-concurrency_manager = { path = "../concurrency_manager" }
+concurrency_manager = { path = "../concurrency_manager", default-features = false }
 configuration = { path = "../configuration" }
 crc32fast = "1.2"
 crossbeam = "0.7.2"
-engine_rocks = { path = "../engine_rocks" }
-encryption = { path = "../encryption" }
-engine_traits = { path = "../engine_traits" }
-error_code = { path = "../error_code" }
+encryption = { path = "../encryption", default-features = false }
+engine_traits = { path = "../engine_traits", default-features = false }
+error_code = { path = "../error_code", default-features = false }
 fail = "0.4"
 openssl = "0.10"
+file_system = { path = "../file_system" }
 fs2 = "0.4"
 futures = "0.3"
 futures-util = { version = "0.3.1", default-features = false, features = ["io"] }
-hex = "0.4"
-into_other = { path = "../into_other" }
-keys = { path = "../keys" }
+into_other = { path = "../into_other",  default-features = false }
+keys = { path = "../keys", default-features = false }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 lazy_static = "1.3"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { path = "../log_wrappers" }
-pd_client = { path = "../pd_client" }
-prometheus = { version = "0.8", features = ["nightly"] }
-prost = { version = "0.6", optional = true }
+pd_client = { path = "../pd_client", default-features = false }
+prometheus = { version = "0.10", features = ["nightly"] }
+prometheus-static-metric = "0.4"
+prost = { version = "0.7", optional = true }
 protobuf = "2.8"
 quick-error = "1.2.3"
 raft = { version = "0.6.0-alpha", default-features = false }
-raft-proto = { git = "https://github.com/pingcap/raft-rs", branch = "master", default-features = false }
+raft-proto = { version = "0.6.0-alpha", default-features = false }
 rand = "0.7.3"
 serde = "1.0"
 serde_derive = "1.0"
 serde_with = "1.4"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
-slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 smallvec = "1.4"
-sst_importer = { path = "../sst_importer" }
+sst_importer = { path = "../sst_importer", default-features = false }
 tempfile = "3.0"
-tidb_query_datatype = { path = "../tidb_query_datatype" }
+tidb_query_datatype = { path = "../tidb_query_datatype", default-features = false }
 tikv_alloc = { path = "../tikv_alloc" }
-tikv_util = { path = "../tikv_util" }
+tikv_util = { path = "../tikv_util", default-features = false }
+collections = { path = "../collections" }
 time = "0.1"
 tokio = { version = "0.2", features = ["sync", "rt-threaded"] }
-txn_types = { path = "../txn_types" }
+txn_types = { path = "../txn_types", default-features = false }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
+yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
-[dependencies.prometheus-static-metric]
-git = "https://github.com/tikv/rust-prometheus.git"
-rev = "fd122caa03de8e7e5e4fae9372583aebf19e39f6"
-
-[dependencies.yatp]
-git = "https://github.com/tikv/yatp.git"
+# Should be [dev-dependencies] but we need to control the features
+# https://github.com/rust-lang/cargo/issues/6915
+engine_test = { path = "../engine_test", default-features = false }
 
 [dev-dependencies]
-engine_test = { path = "../engine_test" }
+engine_rocks = { path = "../engine_rocks", default-features = false }
 panic_hook = { path = "../panic_hook" }
-test_sst_importer = { path = "../test_sst_importer" }
-engine_panic = { path = "../engine_panic" }
+test_sst_importer = { path = "../test_sst_importer", default-features = false }
+engine_panic = { path = "../engine_panic", default-features = false }

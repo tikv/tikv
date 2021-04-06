@@ -4,11 +4,12 @@ use txn_types::{Key, TimeStamp};
 
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::MvccTxn;
+use crate::storage::mvcc::{MvccTxn, SnapshotReader};
 use crate::storage::txn::commands::{
-    Command, CommandExt, ReleasedLocks, TypedCommand, WriteCommand, WriteContext, WriteResult,
+    Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
+    WriteResult,
 };
-use crate::storage::txn::Result;
+use crate::storage::txn::{cleanup, Result};
 use crate::storage::{ProcessResult, Snapshot};
 
 command! {
@@ -42,20 +43,23 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Cleanup {
         // to prevent this case from happening.
         context.concurrency_manager.update_max_ts(self.start_ts);
 
-        let mut txn = MvccTxn::new(
-            snapshot,
-            self.start_ts,
-            !self.ctx.get_not_fill_cache(),
-            context.concurrency_manager,
-        );
+        let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
+        let mut reader =
+            SnapshotReader::new(self.start_ts, snapshot, !self.ctx.get_not_fill_cache());
 
         let mut released_locks = ReleasedLocks::new(self.start_ts, TimeStamp::zero());
         // The rollback must be protected, see more on
         // [issue #7364](https://github.com/tikv/tikv/issues/7364)
-        released_locks.push(txn.cleanup(self.key, self.current_ts, true)?);
+        released_locks.push(cleanup(
+            &mut txn,
+            &mut reader,
+            self.key,
+            self.current_ts,
+            true,
+        )?);
         released_locks.wake_up(context.lock_mgr);
 
-        context.statistics.add(&txn.take_statistics());
+        context.statistics.add(&reader.take_statistics());
         let write_data = WriteData::from_modifies(txn.into_modifies());
         Ok(WriteResult {
             ctx: self.ctx,
@@ -64,6 +68,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Cleanup {
             pr: ProcessResult::Res,
             lock_info: None,
             lock_guards: vec![],
+            response_policy: ResponsePolicy::OnApplied,
         })
     }
 }

@@ -130,7 +130,7 @@ pub trait TxnEntryScanner: Send {
 }
 
 /// A transaction entry in underlying storage.
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum TxnEntry {
     Prewrite {
         default: KvPair,
@@ -166,6 +166,16 @@ impl TxnEntry {
                     Ok((k, v))
                 }
             }
+            // Prewrite are not support
+            _ => unreachable!(),
+        }
+    }
+    /// This method will generate this kv pair's key
+    pub fn to_key(&self) -> Result<Key> {
+        match self {
+            TxnEntry::Commit { write, .. } => Ok(Key::from_encoded_slice(
+                Key::truncate_ts_for(&write.0).unwrap(),
+            )),
             // Prewrite are not support
             _ => unreachable!(),
         }
@@ -586,11 +596,13 @@ impl Scanner for FixtureStoreScanner {
 mod tests {
     use super::*;
     use crate::storage::kv::{
-        Cursor, Engine, Iterator, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode,
+        Engine, Iterator, Result as EngineResult, RocksEngine, RocksSnapshot, SnapContext,
         TestEngineBuilder, WriteData,
     };
-    use crate::storage::mvcc::{Mutation, MvccTxn};
-    use crate::storage::txn::{commit, prewrite};
+    use crate::storage::mvcc::{Mutation, MvccTxn, SnapshotReader};
+    use crate::storage::txn::{
+        commit, prewrite, CommitKind, TransactionKind, TransactionProperties,
+    };
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CfName;
     use engine_traits::{IterOptions, ReadOptions};
@@ -616,7 +628,7 @@ mod tests {
                 .map(|i| format!("{}{}", KEY_PREFIX, i))
                 .collect();
             let ctx = Context::default();
-            let snapshot = engine.snapshot(&ctx).unwrap();
+            let snapshot = engine.snapshot(Default::default()).unwrap();
             let mut store = TestStore {
                 keys,
                 snapshot,
@@ -635,19 +647,26 @@ mod tests {
             // do prewrite.
             {
                 let cm = ConcurrencyManager::new(START_TS);
-                let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true, cm);
+                let mut txn = MvccTxn::new(START_TS, cm);
+                let mut reader = SnapshotReader::new(START_TS, self.snapshot.clone(), true);
                 for key in &self.keys {
                     let key = key.as_bytes();
                     prewrite(
                         &mut txn,
+                        &mut reader,
+                        &TransactionProperties {
+                            start_ts: START_TS,
+                            kind: TransactionKind::Optimistic(false),
+                            commit_kind: CommitKind::TwoPc,
+                            primary: pk,
+                            txn_size: 0,
+                            lock_ttl: 0,
+                            min_commit_ts: TimeStamp::default(),
+                            need_old_value: false,
+                        },
                         Mutation::Put((Key::from_raw(key), key.to_vec())),
-                        pk,
                         &None,
                         false,
-                        0,
-                        0,
-                        TimeStamp::default(),
-                        TimeStamp::default(),
                     )
                     .unwrap();
                 }
@@ -658,10 +677,11 @@ mod tests {
             // do commit
             {
                 let cm = ConcurrencyManager::new(START_TS);
-                let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true, cm);
+                let mut txn = MvccTxn::new(START_TS, cm);
+                let mut reader = SnapshotReader::new(START_TS, self.snapshot.clone(), true);
                 for key in &self.keys {
                     let key = key.as_bytes();
-                    commit(&mut txn, Key::from_raw(key), COMMIT_TS).unwrap();
+                    commit(&mut txn, &mut reader, Key::from_raw(key), COMMIT_TS).unwrap();
                 }
                 let write_data = WriteData::from_modifies(txn.into_modifies());
                 self.engine.write(&self.ctx, write_data).unwrap();
@@ -671,7 +691,11 @@ mod tests {
 
         #[inline]
         fn refresh_snapshot(&mut self) {
-            self.snapshot = self.engine.snapshot(&self.ctx).unwrap()
+            let snap_ctx = SnapContext {
+                pb_ctx: &self.ctx,
+                ..Default::default()
+            };
+            self.snapshot = self.engine.snapshot(snap_ctx).unwrap()
         }
 
         fn store(&self) -> SnapshotStore<Arc<RocksSnapshot>> {
@@ -747,22 +771,11 @@ mod tests {
         fn get_cf_opt(&self, _: ReadOptions, _: CfName, _: &Key) -> EngineResult<Option<Value>> {
             Ok(None)
         }
-        fn iter(&self, _: IterOptions, _: ScanMode) -> EngineResult<Cursor<Self::Iter>> {
-            Ok(Cursor::new(
-                MockRangeSnapshotIter::default(),
-                ScanMode::Forward,
-            ))
+        fn iter(&self, _: IterOptions) -> EngineResult<Self::Iter> {
+            Ok(MockRangeSnapshotIter::default())
         }
-        fn iter_cf(
-            &self,
-            _: CfName,
-            _: IterOptions,
-            _: ScanMode,
-        ) -> EngineResult<Cursor<Self::Iter>> {
-            Ok(Cursor::new(
-                MockRangeSnapshotIter::default(),
-                ScanMode::Forward,
-            ))
+        fn iter_cf(&self, _: CfName, _: IterOptions) -> EngineResult<Self::Iter> {
+            Ok(MockRangeSnapshotIter::default())
         }
         fn lower_bound(&self) -> Option<&[u8]> {
             Some(self.start.as_slice())

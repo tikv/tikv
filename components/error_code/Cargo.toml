@@ -5,13 +5,14 @@ edition = "2018"
 publish = false
 
 [features]
+default = ["protobuf-codec"]
 prost-codec = [
-  "kvproto/prost-codec",
   "grpcio/prost-codec",
+  "kvproto/prost-codec",
 ]
 protobuf-codec = [
-  "kvproto/protobuf-codec",
   "grpcio/protobuf-codec",
+  "kvproto/protobuf-codec",
 ]
 
 [lib]
@@ -27,6 +28,6 @@ lazy_static = "1.3"
 raft = { version = "0.6.0-alpha", default-features = false }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 tikv_alloc = { path = "../tikv_alloc" }
-grpcio = { version = "0.6", default-features = false, features = ["openssl-vendored"] }
-toml = "0.4"
+grpcio = { version = "0.8",  default-features = false, features = ["openssl-vendored"] }
+toml = "0.5"
 serde = { version = "1.0", features = ["derive"] }

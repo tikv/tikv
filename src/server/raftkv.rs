@@ -1,38 +1,45 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt::{self, Debug, Display, Formatter};
-use std::io::Error as IoError;
 use std::result;
-use std::{sync::atomic::Ordering, sync::Arc, time::Duration};
-
-use engine_rocks::{RocksEngine, RocksSnapshot, RocksTablePropertiesCollection};
-use engine_traits::CfName;
-use engine_traits::CF_DEFAULT;
-use engine_traits::{
-    IterOptions, MvccProperties, MvccPropertiesExt, Peekable, ReadOptions, Snapshot,
-    TablePropertiesExt,
+use std::{borrow::Cow, io::Error as IoError};
+use std::{
+    fmt::{self, Debug, Display, Formatter},
+    mem,
 };
+use std::{sync::Arc, time::Duration};
+
+use bitflags::bitflags;
+use concurrency_manager::ConcurrencyManager;
+use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_traits::CF_DEFAULT;
+use engine_traits::{CfName, KvEngine};
+use engine_traits::{MvccProperties, MvccPropertiesExt};
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::{
     CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
     RaftRequestHeader, Request, Response,
 };
 use kvproto::{errorpb, metapb};
-use txn_types::{Key, TimeStamp, TxnExtraScheduler, Value};
+use raft::eraftpb::{self, MessageType};
+use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler};
 
 use super::metrics::*;
 use crate::storage::kv::{
-    write_modifies, Callback, CbContext, Cursor, Engine, Error as KvError,
-    ErrorInner as KvErrorInner, ExtCallback, Iterator as EngineIterator, Modify, ScanMode,
-    Snapshot as EngineSnapshot, WriteData,
+    write_modifies, Callback, CbContext, Engine, Error as KvError, ErrorInner as KvErrorInner,
+    ExtCallback, Modify, SnapContext, WriteData,
 };
 use crate::storage::{self, kv};
-use raftstore::errors::Error as RaftServerError;
-use raftstore::router::{LocalReadRouter, RaftStoreRouter};
-use raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
-use raftstore::store::{RegionIterator, RegionSnapshot};
+use raftstore::{coprocessor::dispatcher::BoxReadIndexObserver, store::RegionSnapshot};
+use raftstore::{
+    coprocessor::Coprocessor,
+    router::{LocalReadRouter, RaftStoreRouter},
+};
+use raftstore::{
+    coprocessor::CoprocessorHost,
+    store::{Callback as StoreCallback, ReadIndexContext, ReadResponse, WriteResponse},
+};
+use raftstore::{coprocessor::ReadIndexObserver, errors::Error as RaftServerError};
 use tikv_util::time::Instant;
-use tikv_util::time::ThreadReadId;
 
 quick_error! {
     #[derive(Debug)]
@@ -82,7 +89,9 @@ fn get_status_kind_from_engine_error(e: &kv::Error) -> RequestStatusKind {
         KvError(box KvErrorInner::Request(ref header)) => {
             RequestStatusKind::from(storage::get_error_kind_from_header(header))
         }
-
+        KvError(box KvErrorInner::KeyIsLocked(_)) => {
+            RequestStatusKind::err_leader_memory_lock_check
+        }
         KvError(box KvErrorInner::Timeout(_)) => RequestStatusKind::err_timeout,
         KvError(box KvErrorInner::EmptyRequest) => RequestStatusKind::err_empty_request,
         KvError(box KvErrorInner::Other(_)) => RequestStatusKind::err_other,
@@ -98,12 +107,6 @@ impl From<Error> for kv::Error {
             Error::Server(e) => e.into(),
             e => box_err!(e),
         }
-    }
-}
-
-impl From<RaftServerError> for KvError {
-    fn from(e: RaftServerError) -> KvError {
-        KvError(Box::new(KvErrorInner::Request(e.into())))
     }
 }
 
@@ -163,8 +166,8 @@ fn on_read_result(
         return (cb_ctx, Err(e));
     }
     let resps = read_resp.response.take_responses();
-    if !resps.is_empty() || resps[0].get_cmd_type() == CmdType::Snap {
-        (cb_ctx, Ok(CmdRes::Snap(read_resp.snapshot.unwrap())))
+    if let Some(snapshot) = read_resp.snapshot {
+        (cb_ctx, Ok(CmdRes::Snap(snapshot)))
     } else {
         (cb_ctx, Ok(CmdRes::Resp(resps.into())))
     }
@@ -202,18 +205,17 @@ where
 
     fn exec_snapshot(
         &self,
-        read_id: Option<ThreadReadId>,
-        ctx: &Context,
+        ctx: SnapContext<'_>,
         req: Request,
         cb: Callback<CmdRes>,
     ) -> Result<()> {
-        let header = self.new_request_header(ctx);
+        let header = self.new_request_header(&*ctx.pb_ctx);
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
         cmd.set_requests(vec![req].into());
         self.router
             .read(
-                read_id,
+                ctx.read_id,
                 cmd,
                 StoreCallback::Read(Box::new(move |resp| {
                     let (cb_ctx, res) = on_read_result(resp, 1);
@@ -227,8 +229,10 @@ where
         &self,
         ctx: &Context,
         reqs: Vec<Request>,
+        txn_extra: TxnExtra,
         write_cb: Callback<CmdRes>,
         proposed_cb: Option<ExtCallback>,
+        committed_cb: Option<ExtCallback>,
     ) -> Result<()> {
         #[cfg(feature = "failpoints")]
         {
@@ -253,10 +257,20 @@ where
         }
 
         let len = reqs.len();
-        let header = self.new_request_header(ctx);
+        let mut header = self.new_request_header(ctx);
+        if txn_extra.one_pc {
+            header.set_flags(WriteBatchFlags::ONE_PC.bits());
+        }
+
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
         cmd.set_requests(reqs.into());
+
+        if let Some(tx) = self.txn_extra_scheduler.as_ref() {
+            if !txn_extra.is_empty() {
+                tx.schedule(txn_extra);
+            }
+        }
 
         self.router
             .send_command(
@@ -267,6 +281,7 @@ where
                         write_cb((cb_ctx, res.map_err(Error::into)));
                     }),
                     proposed_cb,
+                    committed_cb,
                 ),
             )
             .map_err(From::from)
@@ -349,7 +364,7 @@ where
         batch: WriteData,
         write_cb: Callback<()>,
     ) -> kv::Result<()> {
-        self.async_write_ext(ctx, batch, write_cb, None)
+        self.async_write_ext(ctx, batch, write_cb, None, None)
     }
 
     fn async_write_ext(
@@ -358,60 +373,21 @@ where
         batch: WriteData,
         write_cb: Callback<()>,
         proposed_cb: Option<ExtCallback>,
+        committed_cb: Option<ExtCallback>,
     ) -> kv::Result<()> {
         fail_point!("raftkv_async_write");
         if batch.modifies.is_empty() {
             return Err(KvError::from(KvErrorInner::EmptyRequest));
         }
 
-        let mut reqs = Vec::with_capacity(batch.modifies.len());
-        for m in batch.modifies {
-            let mut req = Request::default();
-            match m {
-                Modify::Delete(cf, k) => {
-                    let mut delete = DeleteRequest::default();
-                    delete.set_key(k.into_encoded());
-                    if cf != CF_DEFAULT {
-                        delete.set_cf(cf.to_string());
-                    }
-                    req.set_cmd_type(CmdType::Delete);
-                    req.set_delete(delete);
-                }
-                Modify::Put(cf, k, v) => {
-                    let mut put = PutRequest::default();
-                    put.set_key(k.into_encoded());
-                    put.set_value(v);
-                    if cf != CF_DEFAULT {
-                        put.set_cf(cf.to_string());
-                    }
-                    req.set_cmd_type(CmdType::Put);
-                    req.set_put(put);
-                }
-                Modify::DeleteRange(cf, start_key, end_key, notify_only) => {
-                    let mut delete_range = DeleteRangeRequest::default();
-                    delete_range.set_cf(cf.to_string());
-                    delete_range.set_start_key(start_key.into_encoded());
-                    delete_range.set_end_key(end_key.into_encoded());
-                    delete_range.set_notify_only(notify_only);
-                    req.set_cmd_type(CmdType::DeleteRange);
-                    req.set_delete_range(delete_range);
-                }
-            }
-            reqs.push(req);
-        }
-
+        let reqs = modifies_to_requests(batch.modifies);
         ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
         let begin_instant = Instant::now_coarse();
-
-        if let Some(tx) = self.txn_extra_scheduler.as_ref() {
-            if !batch.extra.is_empty() {
-                tx.schedule(batch.extra);
-            }
-        }
 
         self.exec_write_requests(
             ctx,
             reqs,
+            batch.extra,
             Box::new(move |(cb_ctx, res)| match res {
                 Ok(CmdRes::Resp(_)) => {
                     ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
@@ -432,6 +408,7 @@ where
                 }
             }),
             proposed_cb,
+            committed_cb,
         )
         .map_err(|e| {
             let status_kind = get_status_kind_from_error(&e);
@@ -440,25 +417,37 @@ where
         })
     }
 
-    fn async_snapshot(
-        &self,
-        ctx: &Context,
-        read_id: Option<ThreadReadId>,
-        cb: Callback<Self::Snap>,
-    ) -> kv::Result<()> {
+    fn async_snapshot(&self, mut ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> kv::Result<()> {
+        fail_point!("raftkv_async_snapshot_err", |_| Err(box_err!(
+            "injected error for async_snapshot"
+        )));
+
         let mut req = Request::default();
         req.set_cmd_type(CmdType::Snap);
+        if !ctx.start_ts.is_zero() {
+            req.mut_read_index().set_start_ts(ctx.start_ts.into_inner());
+            req.mut_read_index()
+                .set_key_ranges(mem::take(&mut ctx.key_ranges).into());
+        }
         ASYNC_REQUESTS_COUNTER_VEC.snapshot.all.inc();
         let begin_instant = Instant::now_coarse();
         self.exec_snapshot(
-            read_id,
             ctx,
             req,
             Box::new(move |(cb_ctx, res)| match res {
-                Ok(CmdRes::Resp(r)) => cb((
-                    cb_ctx,
-                    Err(invalid_resp_type(CmdType::Snap, r[0].get_cmd_type()).into()),
-                )),
+                Ok(CmdRes::Resp(mut r)) => {
+                    let e = if r
+                        .get(0)
+                        .map(|resp| resp.get_read_index().has_locked())
+                        .unwrap_or(false)
+                    {
+                        let locked = r[0].take_read_index().take_locked();
+                        KvError::from(KvErrorInner::KeyIsLocked(locked))
+                    } else {
+                        invalid_resp_type(CmdType::Snap, r[0].get_cmd_type()).into()
+                    };
+                    cb((cb_ctx, Err(e)))
+                }
                 Ok(CmdRes::Snap(s)) => {
                     ASYNC_REQUESTS_DURATIONS_VEC
                         .snapshot
@@ -484,19 +473,6 @@ where
         self.router.release_snapshot_cache();
     }
 
-    fn get_properties_cf(
-        &self,
-        cf: CfName,
-        start: &[u8],
-        end: &[u8],
-    ) -> kv::Result<RocksTablePropertiesCollection> {
-        let start = keys::data_key(start);
-        let end = keys::data_end_key(end);
-        self.engine
-            .get_range_properties_cf(cf, &start, &end)
-            .map_err(|e| e.into())
-    }
-
     fn get_mvcc_properties_cf(
         &self,
         cf: CfName,
@@ -511,122 +487,143 @@ where
     }
 }
 
-impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {
-    type Iter = RegionIterator<S>;
+#[derive(Clone)]
+pub struct ReplicaReadLockChecker {
+    concurrency_manager: ConcurrencyManager,
+}
 
-    fn get(&self, key: &Key) -> kv::Result<Option<Value>> {
-        fail_point!("raftkv_snapshot_get", |_| Err(box_err!(
-            "injected error for get"
-        )));
-        let v = box_try!(self.get_value(key.as_encoded()));
-        Ok(v.map(|v| v.to_vec()))
+impl ReplicaReadLockChecker {
+    pub fn new(concurrency_manager: ConcurrencyManager) -> Self {
+        ReplicaReadLockChecker {
+            concurrency_manager,
+        }
     }
 
-    fn get_cf(&self, cf: CfName, key: &Key) -> kv::Result<Option<Value>> {
-        fail_point!("raftkv_snapshot_get_cf", |_| Err(box_err!(
-            "injected error for get_cf"
-        )));
-        let v = box_try!(self.get_value_cf(cf, key.as_encoded()));
-        Ok(v.map(|v| v.to_vec()))
-    }
-
-    fn get_cf_opt(&self, opts: ReadOptions, cf: CfName, key: &Key) -> kv::Result<Option<Value>> {
-        fail_point!("raftkv_snapshot_get_cf", |_| Err(box_err!(
-            "injected error for get_cf"
-        )));
-        let v = box_try!(self.get_value_cf_opt(&opts, cf, key.as_encoded()));
-        Ok(v.map(|v| v.to_vec()))
-    }
-
-    fn iter(&self, iter_opt: IterOptions, mode: ScanMode) -> kv::Result<Cursor<Self::Iter>> {
-        fail_point!("raftkv_snapshot_iter", |_| Err(box_err!(
-            "injected error for iter"
-        )));
-        Ok(Cursor::new(RegionSnapshot::iter(self, iter_opt), mode))
-    }
-
-    fn iter_cf(
-        &self,
-        cf: CfName,
-        iter_opt: IterOptions,
-        mode: ScanMode,
-    ) -> kv::Result<Cursor<Self::Iter>> {
-        fail_point!("raftkv_snapshot_iter_cf", |_| Err(box_err!(
-            "injected error for iter_cf"
-        )));
-        Ok(Cursor::new(
-            RegionSnapshot::iter_cf(self, cf, iter_opt)?,
-            mode,
-        ))
-    }
-
-    #[inline]
-    fn lower_bound(&self) -> Option<&[u8]> {
-        Some(self.get_start_key())
-    }
-
-    #[inline]
-    fn upper_bound(&self) -> Option<&[u8]> {
-        Some(self.get_end_key())
-    }
-
-    #[inline]
-    fn get_data_version(&self) -> Option<u64> {
-        self.get_apply_index().ok()
-    }
-
-    fn is_max_ts_synced(&self) -> bool {
-        self.max_ts_sync_status
-            .as_ref()
-            .map(|v| v.load(Ordering::SeqCst) & 1 == 1)
-            .unwrap_or(false)
+    pub fn register<E: KvEngine + 'static>(self, host: &mut CoprocessorHost<E>) {
+        host.registry
+            .register_read_index_observer(1, BoxReadIndexObserver::new(self));
     }
 }
 
-impl<S: Snapshot> EngineIterator for RegionIterator<S> {
-    fn next(&mut self) -> kv::Result<bool> {
-        RegionIterator::next(self).map_err(KvError::from)
-    }
+impl Coprocessor for ReplicaReadLockChecker {}
 
-    fn prev(&mut self) -> kv::Result<bool> {
-        RegionIterator::prev(self).map_err(KvError::from)
-    }
+impl ReadIndexObserver for ReplicaReadLockChecker {
+    fn on_step(&self, msg: &mut eraftpb::Message) {
+        if msg.get_msg_type() != MessageType::MsgReadIndex {
+            return;
+        }
+        assert_eq!(msg.get_entries().len(), 1);
+        let mut rctx = ReadIndexContext::parse(msg.get_entries()[0].get_data()).unwrap();
+        if let Some(mut request) = rctx.request.take() {
+            let begin_instant = Instant::now();
 
-    fn seek(&mut self, key: &Key) -> kv::Result<bool> {
-        fail_point!("raftkv_iter_seek", |_| Err(box_err!(
-            "injected error for iter_seek"
-        )));
-        RegionIterator::seek(self, key.as_encoded()).map_err(From::from)
+            let start_ts = request.get_start_ts().into();
+            self.concurrency_manager.update_max_ts(start_ts);
+            for range in request.mut_key_ranges().iter_mut() {
+                let key_bound = |key: Vec<u8>| {
+                    if key.is_empty() {
+                        None
+                    } else {
+                        Some(txn_types::Key::from_encoded(key))
+                    }
+                };
+                let start_key = key_bound(range.take_start_key());
+                let end_key = key_bound(range.take_end_key());
+                let res = self.concurrency_manager.read_range_check(
+                    start_key.as_ref(),
+                    end_key.as_ref(),
+                    |key, lock| {
+                        txn_types::Lock::check_ts_conflict(
+                            Cow::Borrowed(lock),
+                            key,
+                            start_ts,
+                            &Default::default(),
+                        )
+                    },
+                );
+                if let Err(txn_types::Error(box txn_types::ErrorInner::KeyIsLocked(lock))) = res {
+                    rctx.locked = Some(lock);
+                    REPLICA_READ_LOCK_CHECK_HISTOGRAM_VEC_STATIC
+                        .locked
+                        .observe(begin_instant.elapsed().as_secs_f64());
+                } else {
+                    REPLICA_READ_LOCK_CHECK_HISTOGRAM_VEC_STATIC
+                        .unlocked
+                        .observe(begin_instant.elapsed().as_secs_f64());
+                }
+            }
+            msg.mut_entries()[0].set_data(rctx.to_bytes());
+        }
     }
+}
 
-    fn seek_for_prev(&mut self, key: &Key) -> kv::Result<bool> {
-        fail_point!("raftkv_iter_seek_for_prev", |_| Err(box_err!(
-            "injected error for iter_seek_for_prev"
-        )));
-        RegionIterator::seek_for_prev(self, key.as_encoded()).map_err(From::from)
+bitflags! {
+    /// Additional flags for a write batch.
+    /// They should be set in the `flags` field in `RaftRequestHeader`.
+    pub struct WriteBatchFlags: u64 {
+        /// Indicates this request is from a 1PC transaction.
+        /// It helps CDC recognize 1PC transactions and handle them correctly.
+        const ONE_PC = 0b00000001;
     }
+}
 
-    fn seek_to_first(&mut self) -> kv::Result<bool> {
-        RegionIterator::seek_to_first(self).map_err(KvError::from)
+pub fn modifies_to_requests(modifies: Vec<Modify>) -> Vec<Request> {
+    let mut reqs = Vec::with_capacity(modifies.len());
+    for m in modifies {
+        let mut req = Request::default();
+        match m {
+            Modify::Delete(cf, k) => {
+                let mut delete = DeleteRequest::default();
+                delete.set_key(k.into_encoded());
+                if cf != CF_DEFAULT {
+                    delete.set_cf(cf.to_string());
+                }
+                req.set_cmd_type(CmdType::Delete);
+                req.set_delete(delete);
+            }
+            Modify::Put(cf, k, v) => {
+                let mut put = PutRequest::default();
+                put.set_key(k.into_encoded());
+                put.set_value(v);
+                if cf != CF_DEFAULT {
+                    put.set_cf(cf.to_string());
+                }
+                req.set_cmd_type(CmdType::Put);
+                req.set_put(put);
+            }
+            Modify::DeleteRange(cf, start_key, end_key, notify_only) => {
+                let mut delete_range = DeleteRangeRequest::default();
+                delete_range.set_cf(cf.to_string());
+                delete_range.set_start_key(start_key.into_encoded());
+                delete_range.set_end_key(end_key.into_encoded());
+                delete_range.set_notify_only(notify_only);
+                req.set_cmd_type(CmdType::DeleteRange);
+                req.set_delete_range(delete_range);
+            }
+        }
+        reqs.push(req);
     }
+    reqs
+}
 
-    fn seek_to_last(&mut self) -> kv::Result<bool> {
-        RegionIterator::seek_to_last(self).map_err(KvError::from)
-    }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
 
-    fn valid(&self) -> kv::Result<bool> {
-        RegionIterator::valid(self).map_err(KvError::from)
-    }
+    // This test ensures `ReplicaReadLockChecker` won't change UUID context of read index.
+    #[test]
+    fn test_replica_read_lock_checker_for_single_uuid() {
+        let cm = ConcurrencyManager::new(1.into());
+        let checker = ReplicaReadLockChecker::new(cm);
+        let mut m = eraftpb::Message::default();
+        m.set_msg_type(MessageType::MsgReadIndex);
+        let uuid = Uuid::new_v4();
+        let mut e = eraftpb::Entry::default();
+        e.set_data(uuid.as_bytes().to_vec());
+        m.mut_entries().push(e);
 
-    fn validate_key(&self, key: &Key) -> kv::Result<()> {
-        self.should_seekable(key.as_encoded()).map_err(From::from)
-    }
-
-    fn key(&self) -> &[u8] {
-        RegionIterator::key(self)
-    }
-
-    fn value(&self) -> &[u8] {
-        RegionIterator::value(self)
+        checker.on_step(&mut m);
+        assert_eq!(m.get_entries()[0].get_data(), uuid.as_bytes());
     }
 }

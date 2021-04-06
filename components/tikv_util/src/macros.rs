@@ -48,13 +48,13 @@ macro_rules! count_args {
 macro_rules! map {
     () => {
         {
-            $crate::collections::HashMap::default()
+            collections::HashMap::default()
         }
     };
     ( $( $k:expr => $v:expr ),+ ) => {
         {
             let mut temp_map =
-                $crate::collections::HashMap::with_capacity_and_hasher(
+                collections::HashMap::with_capacity_and_hasher(
                     $crate::count_args!($(($k, $v)),+),
                     Default::default()
                 );
@@ -200,6 +200,28 @@ macro_rules! safe_panic {
             panic!($fmt, $($args)+)
         }
     });
+}
+
+#[macro_export]
+macro_rules! impl_format_delegate_newtype {
+    ($t:ty) => {
+        impl std::fmt::Display for $t {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                std::fmt::Display::fmt(&self.0, f)
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! impl_display_as_debug {
+    ($t:ty) => {
+        impl std::fmt::Display for $t {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{:?}", self)
+            }
+        }
+    };
 }
 
 #[cfg(test)]

@@ -73,6 +73,11 @@ pub struct IterOptions {
     // only supported when Titan enabled, otherwise it doesn't take effect.
     key_only: bool,
     seek_mode: SeekMode,
+    // A threshold for the number of keys that can be skipped before failing an
+    // iterator seek as incomplete. The default value of 0 should be used to
+    // never fail a request as incomplete, even on skipping too many keys.
+    // It's used to avoid encountering too many tombstones when seeking.
+    max_skippable_internal_keys: u64,
 }
 
 impl IterOptions {
@@ -90,13 +95,18 @@ impl IterOptions {
             hint_max_ts: None,
             key_only: false,
             seek_mode: SeekMode::TotalOrder,
+            max_skippable_internal_keys: 0,
         }
     }
 
     #[inline]
-    pub fn use_prefix_seek(mut self) -> IterOptions {
+    pub fn prefix_seek_used(&self) -> bool {
+        self.seek_mode == SeekMode::Prefix
+    }
+
+    #[inline]
+    pub fn use_prefix_seek(&mut self) {
         self.seek_mode = SeekMode::Prefix;
-        self
     }
 
     #[inline]
@@ -207,9 +217,18 @@ impl IterOptions {
     }
 
     #[inline]
-    pub fn set_prefix_same_as_start(mut self, enable: bool) -> IterOptions {
+    pub fn set_prefix_same_as_start(&mut self, enable: bool) {
         self.prefix_same_as_start = enable;
-        self
+    }
+
+    #[inline]
+    pub fn max_skippable_internal_keys(&self) -> u64 {
+        self.max_skippable_internal_keys
+    }
+
+    #[inline]
+    pub fn set_max_skippable_internal_keys(&mut self, threshold: u64) {
+        self.max_skippable_internal_keys = threshold;
     }
 }
 
@@ -224,6 +243,7 @@ impl Default for IterOptions {
             hint_max_ts: None,
             key_only: false,
             seek_mode: SeekMode::TotalOrder,
+            max_skippable_internal_keys: 0,
         }
     }
 }

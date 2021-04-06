@@ -4,48 +4,45 @@
 #[macro_use]
 mod macros;
 pub(crate) mod acquire_pessimistic_lock;
+pub(crate) mod atomic_store;
 pub(crate) mod check_secondary_locks;
 pub(crate) mod check_txn_status;
 pub(crate) mod cleanup;
 pub(crate) mod commit;
+pub(crate) mod compare_and_swap;
 pub(crate) mod mvcc_by_key;
 pub(crate) mod mvcc_by_start_ts;
 pub(crate) mod pause;
 pub(crate) mod pessimistic_rollback;
 pub(crate) mod prewrite;
-pub(crate) mod prewrite_pessimistic;
 pub(crate) mod resolve_lock;
 pub(crate) mod resolve_lock_lite;
 pub(crate) mod resolve_lock_readphase;
 pub(crate) mod rollback;
-pub(crate) mod scan_lock;
 pub(crate) mod txn_heart_beat;
 
 pub use acquire_pessimistic_lock::AcquirePessimisticLock;
+pub use atomic_store::RawAtomicStore;
 pub use check_secondary_locks::CheckSecondaryLocks;
 pub use check_txn_status::CheckTxnStatus;
 pub use cleanup::Cleanup;
 pub use commit::Commit;
+pub use compare_and_swap::RawCompareAndSwap;
 pub use mvcc_by_key::MvccByKey;
 pub use mvcc_by_start_ts::MvccByStartTs;
 pub use pause::Pause;
 pub use pessimistic_rollback::PessimisticRollback;
-pub use prewrite::Prewrite;
-pub use prewrite_pessimistic::PrewritePessimistic;
+pub use prewrite::{one_pc_commit_ts, Prewrite, PrewritePessimistic};
 pub use resolve_lock::ResolveLock;
 pub use resolve_lock_lite::ResolveLockLite;
 pub use resolve_lock_readphase::ResolveLockReadPhase;
 pub use rollback::Rollback;
-pub use scan_lock::ScanLock;
 pub use txn_heart_beat::TxnHeartBeat;
-
-#[cfg(test)]
-pub(crate) use prewrite::FORWARD_MIN_MUTATIONS_NUM;
 
 pub use resolve_lock::RESOLVE_LOCK_BATCH_SIZE;
 
 use std::fmt::{self, Debug, Display, Formatter};
-use std::iter::{self, FromIterator};
+use std::iter;
 use std::marker::PhantomData;
 
 use kvproto::kvrpcpb::*;
@@ -62,7 +59,6 @@ use crate::storage::types::{
 };
 use crate::storage::{metrics, Result as StorageResult, Snapshot, Statistics};
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
-use tikv_util::collections::HashMap;
 
 /// Store Transaction scheduler commands.
 ///
@@ -71,7 +67,6 @@ use tikv_util::collections::HashMap;
 ///
 /// These are typically scheduled and used through the [`Storage`](crate::storage::Storage) with functions like
 /// [`prewrite`](prewrite::Prewrite) trait and are executed asynchronously.
-// Logic related to these can be found in the `src/storage/txn/proccess.rs::process_write_impl` function.
 pub enum Command {
     Prewrite(Prewrite),
     PrewritePessimistic(PrewritePessimistic),
@@ -83,17 +78,41 @@ pub enum Command {
     TxnHeartBeat(TxnHeartBeat),
     CheckTxnStatus(CheckTxnStatus),
     CheckSecondaryLocks(CheckSecondaryLocks),
-    ScanLock(ScanLock),
     ResolveLockReadPhase(ResolveLockReadPhase),
     ResolveLock(ResolveLock),
     ResolveLockLite(ResolveLockLite),
     Pause(Pause),
     MvccByKey(MvccByKey),
     MvccByStartTs(MvccByStartTs),
+    RawCompareAndSwap(RawCompareAndSwap),
+    RawAtomicStore(RawAtomicStore),
 }
 
+/// A `Command` with its return type, reified as the generic parameter `T`.
+///
+/// Incoming grpc requests (like `CommitRequest`, `PrewriteRequest`) are converted to
+/// this type via a series of transformations. That process is described below using
+/// `CommitRequest` as an example:
+/// 1. A `CommitRequest` is handled by the `future_commit` method in kv.rs, where it
+/// needs to be transformed to a `TypedCommand` before being passed to the
+/// `storage.sched_txn_command` method.
+/// 2. The `From<CommitRequest>` impl for `TypedCommand` gets chosen, and its generic
+/// parameter indicates that the result type for this instance of `TypedCommand` is
+/// going to be `TxnStatus` - one of the variants of the `StorageCallback` enum.
+/// 3. In the above `from` method, the details of the commit request are captured by
+/// creating an instance of the struct `storage::txn::commands::commit::Command`
+/// via its `new` method.
+/// 4. This struct is wrapped in a variant of the enum `storage::txn::commands::Command`.
+/// This enum exists to facilitate generic operations over different commands.
+/// 5. Finally, the `Command` enum variant for `Commit` is converted to the `TypedCommand`
+/// using the `From<Command>` impl for `TypedCommand`.
+///
+/// For other requests, see the corresponding `future_` method, the `From` trait
+/// implementation and so on.
 pub struct TypedCommand<T> {
     pub cmd: Command,
+
+    /// Track the type of the command's return value.
     _pd: PhantomData<T>,
 }
 
@@ -131,6 +150,7 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
                 req.get_min_commit_ts().into(),
                 req.get_max_commit_ts().into(),
                 secondary_keys,
+                req.get_try_one_pc(),
                 req.take_context(),
             )
         } else {
@@ -151,6 +171,7 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
                 req.get_min_commit_ts().into(),
                 req.get_max_commit_ts().into(),
                 secondary_keys,
+                req.get_try_one_pc(),
                 req.take_context(),
             )
         }
@@ -249,6 +270,8 @@ impl From<CheckTxnStatusRequest> for TypedCommand<TxnStatus> {
             req.get_caller_start_ts().into(),
             req.get_current_ts().into(),
             req.get_rollback_if_not_exist(),
+            req.get_force_sync_commit(),
+            req.get_resolving_pessimistic_lock(),
             req.take_context(),
         )
     }
@@ -267,23 +290,6 @@ impl From<CheckSecondaryLocksRequest> for TypedCommand<SecondaryLocksStatus> {
     }
 }
 
-impl From<ScanLockRequest> for TypedCommand<Vec<LockInfo>> {
-    fn from(mut req: ScanLockRequest) -> Self {
-        let start_key = if req.get_start_key().is_empty() {
-            None
-        } else {
-            Some(Key::from_raw(req.get_start_key()))
-        };
-
-        ScanLock::new(
-            req.get_max_version().into(),
-            start_key,
-            req.get_limit() as usize,
-            req.take_context(),
-        )
-    }
-}
-
 impl From<ResolveLockRequest> for TypedCommand<()> {
     fn from(mut req: ResolveLockRequest) -> Self {
         let resolve_keys: Vec<Key> = req
@@ -292,16 +298,16 @@ impl From<ResolveLockRequest> for TypedCommand<()> {
             .map(|key| Key::from_raw(key))
             .collect();
         let txn_status = if req.get_start_version() > 0 {
-            HashMap::from_iter(iter::once((
+            iter::once((
                 req.get_start_version().into(),
                 req.get_commit_version().into(),
-            )))
+            ))
+            .collect()
         } else {
-            HashMap::from_iter(
-                req.take_txn_infos()
-                    .into_iter()
-                    .map(|info| (info.txn.into(), info.status.into())),
-            )
+            req.take_txn_infos()
+                .into_iter()
+                .map(|info| (info.txn.into(), info.status.into()))
+                .collect()
         };
 
         if resolve_keys.is_empty() {
@@ -328,11 +334,28 @@ impl From<MvccGetByStartTsRequest> for TypedCommand<Option<(Key, MvccInfo)>> {
 }
 
 #[derive(Default)]
-struct ReleasedLocks {
+pub(super) struct ReleasedLocks {
     start_ts: TimeStamp,
     commit_ts: TimeStamp,
     hashes: Vec<u64>,
     pessimistic: bool,
+}
+
+/// Represents for a scheduler command, when should the response sent to the client.
+/// For most cases, the response should be sent after the result being successfully applied to
+/// the storage (if needed). But in some special cases, some optimizations allows the response to be
+/// returned at an earlier phase.
+///
+/// Note that this doesn't affect latch releasing. The latch and the memory lock (if any) are always
+/// released after applying, regardless of when the response is sent.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ResponsePolicy {
+    /// Return the response to the client when the command has finished applying.
+    OnApplied,
+    /// Return the response after finishing Raft committing.
+    OnCommitted,
+    /// Return the response after finishing raft proposing.
+    OnProposed,
 }
 
 pub struct WriteResult {
@@ -343,6 +366,7 @@ pub struct WriteResult {
     // (lock, is_first_lock, wait_timeout)
     pub lock_info: Option<(lock_manager::Lock, bool, Option<WaitTimeout>)>,
     pub lock_guards: Vec<KeyHandleGuard>,
+    pub response_policy: ResponsePolicy,
 }
 
 impl ReleasedLocks {
@@ -361,6 +385,10 @@ impl ReleasedLocks {
                 self.pessimistic = lock.pessimistic;
             }
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.hashes.is_empty()
     }
 
     // Wake up pessimistic transactions that waiting for these locks.
@@ -387,8 +415,11 @@ fn find_mvcc_infos_by_key<S: Snapshot>(
         let opt = reader.seek_write(key, ts)?;
         match opt {
             Some((commit_ts, write)) => {
-                ts = commit_ts.prev();
                 writes.push((commit_ts, write));
+                if commit_ts.is_zero() {
+                    break;
+                }
+                ts = commit_ts.prev();
             }
             None => break,
         };
@@ -434,7 +465,7 @@ pub struct WriteContext<'a, L: LockManager> {
     pub concurrency_manager: ConcurrencyManager,
     pub extra_op: ExtraOp,
     pub statistics: &'a mut Statistics,
-    pub pipelined_pessimistic_lock: bool,
+    pub async_apply_prewrite: bool,
 }
 
 impl Command {
@@ -452,13 +483,14 @@ impl Command {
             Command::TxnHeartBeat(t) => t,
             Command::CheckTxnStatus(t) => t,
             Command::CheckSecondaryLocks(t) => t,
-            Command::ScanLock(t) => t,
             Command::ResolveLockReadPhase(t) => t,
             Command::ResolveLock(t) => t,
             Command::ResolveLockLite(t) => t,
             Command::Pause(t) => t,
             Command::MvccByKey(t) => t,
             Command::MvccByStartTs(t) => t,
+            Command::RawCompareAndSwap(t) => t,
+            Command::RawAtomicStore(t) => t,
         }
     }
 
@@ -474,13 +506,14 @@ impl Command {
             Command::TxnHeartBeat(t) => t,
             Command::CheckTxnStatus(t) => t,
             Command::CheckSecondaryLocks(t) => t,
-            Command::ScanLock(t) => t,
             Command::ResolveLockReadPhase(t) => t,
             Command::ResolveLock(t) => t,
             Command::ResolveLockLite(t) => t,
             Command::Pause(t) => t,
             Command::MvccByKey(t) => t,
             Command::MvccByStartTs(t) => t,
+            Command::RawCompareAndSwap(t) => t,
+            Command::RawAtomicStore(t) => t,
         }
     }
 
@@ -490,7 +523,6 @@ impl Command {
         statistics: &mut Statistics,
     ) -> Result<ProcessResult> {
         match self {
-            Command::ScanLock(t) => t.process_read(snapshot, statistics),
             Command::ResolveLockReadPhase(t) => t.process_read(snapshot, statistics),
             Command::MvccByKey(t) => t.process_read(snapshot, statistics),
             Command::MvccByStartTs(t) => t.process_read(snapshot, statistics),
@@ -498,7 +530,7 @@ impl Command {
         }
     }
 
-    pub(super) fn process_write<S: Snapshot, L: LockManager>(
+    pub(crate) fn process_write<S: Snapshot, L: LockManager>(
         self,
         snapshot: S,
         context: WriteContext<'_, L>,
@@ -517,6 +549,8 @@ impl Command {
             Command::CheckTxnStatus(t) => t.process_write(snapshot, context),
             Command::CheckSecondaryLocks(t) => t.process_write(snapshot, context),
             Command::Pause(t) => t.process_write(snapshot, context),
+            Command::RawCompareAndSwap(t) => t.process_write(snapshot, context),
+            Command::RawAtomicStore(t) => t.process_write(snapshot, context),
             _ => panic!("unsupported write command"),
         }
     }
@@ -581,10 +615,207 @@ impl Debug for Command {
     }
 }
 
+/// Commands that do not need to modify the database during execution will implement this trait.
 pub trait ReadCommand<S: Snapshot>: CommandExt {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult>;
 }
 
+/// Commands that need to modify the database during execution will implement this trait.
 pub trait WriteCommand<S: Snapshot, L: LockManager>: CommandExt {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult>;
+}
+
+#[cfg(test)]
+pub mod test_util {
+    use super::*;
+
+    use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
+    use crate::storage::txn::{Error, ErrorInner, Result};
+    use crate::storage::DummyLockManager;
+    use crate::storage::Engine;
+    use txn_types::Mutation;
+
+    // Some utils for tests that may be used in multiple source code files.
+
+    pub fn prewrite_command<E: Engine>(
+        engine: &E,
+        cm: ConcurrencyManager,
+        statistics: &mut Statistics,
+        cmd: TypedCommand<PrewriteResult>,
+    ) -> Result<PrewriteResult> {
+        let snap = engine.snapshot(Default::default())?;
+        let context = WriteContext {
+            lock_mgr: &DummyLockManager {},
+            concurrency_manager: cm,
+            extra_op: ExtraOp::Noop,
+            statistics,
+            async_apply_prewrite: false,
+        };
+        let ret = cmd.cmd.process_write(snap, context)?;
+        let res = match ret.pr {
+            ProcessResult::PrewriteResult {
+                result: PrewriteResult { locks, .. },
+            } if !locks.is_empty() => {
+                let info = LockInfo::default();
+                return Err(Error::from(ErrorInner::Mvcc(MvccError::from(
+                    MvccErrorInner::KeyIsLocked(info),
+                ))));
+            }
+            ProcessResult::PrewriteResult { result } => result,
+            _ => unreachable!(),
+        };
+        let ctx = Context::default();
+        if !ret.to_be_write.modifies.is_empty() {
+            engine.write(&ctx, ret.to_be_write).unwrap();
+        }
+        Ok(res)
+    }
+
+    pub fn prewrite<E: Engine>(
+        engine: &E,
+        statistics: &mut Statistics,
+        mutations: Vec<Mutation>,
+        primary: Vec<u8>,
+        start_ts: u64,
+        one_pc_max_commit_ts: Option<u64>,
+    ) -> Result<PrewriteResult> {
+        let cm = ConcurrencyManager::new(start_ts.into());
+        prewrite_with_cm(
+            engine,
+            cm,
+            statistics,
+            mutations,
+            primary,
+            start_ts,
+            one_pc_max_commit_ts,
+        )
+    }
+
+    pub fn prewrite_with_cm<E: Engine>(
+        engine: &E,
+        cm: ConcurrencyManager,
+        statistics: &mut Statistics,
+        mutations: Vec<Mutation>,
+        primary: Vec<u8>,
+        start_ts: u64,
+        one_pc_max_commit_ts: Option<u64>,
+    ) -> Result<PrewriteResult> {
+        let cmd = if let Some(max_commit_ts) = one_pc_max_commit_ts {
+            Prewrite::with_1pc(
+                mutations,
+                primary,
+                TimeStamp::from(start_ts),
+                max_commit_ts.into(),
+            )
+        } else {
+            Prewrite::with_defaults(mutations, primary, TimeStamp::from(start_ts))
+        };
+        prewrite_command(engine, cm, statistics, cmd)
+    }
+
+    pub fn pessimsitic_prewrite<E: Engine>(
+        engine: &E,
+        statistics: &mut Statistics,
+        mutations: Vec<(Mutation, bool)>,
+        primary: Vec<u8>,
+        start_ts: u64,
+        for_update_ts: u64,
+        one_pc_max_commit_ts: Option<u64>,
+    ) -> Result<PrewriteResult> {
+        let cm = ConcurrencyManager::new(start_ts.into());
+        pessimsitic_prewrite_with_cm(
+            engine,
+            cm,
+            statistics,
+            mutations,
+            primary,
+            start_ts,
+            for_update_ts,
+            one_pc_max_commit_ts,
+        )
+    }
+
+    pub fn pessimsitic_prewrite_with_cm<E: Engine>(
+        engine: &E,
+        cm: ConcurrencyManager,
+        statistics: &mut Statistics,
+        mutations: Vec<(Mutation, bool)>,
+        primary: Vec<u8>,
+        start_ts: u64,
+        for_update_ts: u64,
+        one_pc_max_commit_ts: Option<u64>,
+    ) -> Result<PrewriteResult> {
+        let cmd = if let Some(max_commit_ts) = one_pc_max_commit_ts {
+            PrewritePessimistic::with_1pc(
+                mutations,
+                primary,
+                start_ts.into(),
+                for_update_ts.into(),
+                max_commit_ts.into(),
+            )
+        } else {
+            PrewritePessimistic::with_defaults(
+                mutations,
+                primary,
+                start_ts.into(),
+                for_update_ts.into(),
+            )
+        };
+        prewrite_command(engine, cm, statistics, cmd)
+    }
+
+    pub fn commit<E: Engine>(
+        engine: &E,
+        statistics: &mut Statistics,
+        keys: Vec<Key>,
+        lock_ts: u64,
+        commit_ts: u64,
+    ) -> Result<()> {
+        let ctx = Context::default();
+        let snap = engine.snapshot(Default::default())?;
+        let concurrency_manager = ConcurrencyManager::new(lock_ts.into());
+        let cmd = Commit::new(
+            keys,
+            TimeStamp::from(lock_ts),
+            TimeStamp::from(commit_ts),
+            ctx,
+        );
+
+        let context = WriteContext {
+            lock_mgr: &DummyLockManager {},
+            concurrency_manager,
+            extra_op: ExtraOp::Noop,
+            statistics,
+            async_apply_prewrite: false,
+        };
+
+        let ret = cmd.cmd.process_write(snap, context)?;
+        let ctx = Context::default();
+        engine.write(&ctx, ret.to_be_write).unwrap();
+        Ok(())
+    }
+
+    pub fn rollback<E: Engine>(
+        engine: &E,
+        statistics: &mut Statistics,
+        keys: Vec<Key>,
+        start_ts: u64,
+    ) -> Result<()> {
+        let ctx = Context::default();
+        let snap = engine.snapshot(Default::default())?;
+        let concurrency_manager = ConcurrencyManager::new(start_ts.into());
+        let cmd = Rollback::new(keys, TimeStamp::from(start_ts), ctx);
+        let context = WriteContext {
+            lock_mgr: &DummyLockManager {},
+            concurrency_manager,
+            extra_op: ExtraOp::Noop,
+            statistics,
+            async_apply_prewrite: false,
+        };
+
+        let ret = cmd.cmd.process_write(snap, context)?;
+        let ctx = Context::default();
+        engine.write(&ctx, ret.to_be_write).unwrap();
+        Ok(())
+    }
 }

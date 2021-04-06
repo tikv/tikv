@@ -7,7 +7,8 @@ lazy_static! {
         "tikv_import_rpc_duration",
         "Bucketed histogram of import rpc duration",
         &["request", "result"],
-        exponential_buckets(0.001, 2.0, 30).unwrap()
+        // Start from 10ms.
+        exponential_buckets(0.01, 2.0, 20).unwrap()
     )
     .unwrap();
     pub static ref IMPORT_UPLOAD_CHUNK_BYTES: Histogram = register_histogram!(
@@ -19,20 +20,23 @@ lazy_static! {
     pub static ref IMPORT_UPLOAD_CHUNK_DURATION: Histogram = register_histogram!(
         "tikv_import_upload_chunk_duration",
         "Bucketed histogram of import upload chunk duration",
-        exponential_buckets(0.001, 2.0, 20).unwrap()
+        // Start from 10ms.
+        exponential_buckets(0.01, 2.0, 20).unwrap()
     )
     .unwrap();
     pub static ref IMPORT_WRITE_CHUNK_DURATION: Histogram = register_histogram!(
         "tikv_import_write_chunk_duration",
         "Bucketed histogram of import write chunk duration",
-        exponential_buckets(0.001, 2.0, 20).unwrap()
+        // Start from 10ms.
+        exponential_buckets(0.01, 2.0, 20).unwrap()
     )
     .unwrap();
     pub static ref IMPORTER_DOWNLOAD_DURATION: HistogramVec = register_histogram_vec!(
         "tikv_import_download_duration",
         "Bucketed histogram of importer download duration",
         &["type"],
-        exponential_buckets(0.001, 2.0, 20).unwrap()
+        // Start from 10ms.
+        exponential_buckets(0.01, 2.0, 20).unwrap()
     )
     .unwrap();
     pub static ref IMPORTER_DOWNLOAD_BYTES: Histogram = register_histogram!(
@@ -45,7 +49,8 @@ lazy_static! {
         "tikv_import_ingest_duration",
         "Bucketed histogram of importer ingest duration",
         &["type"],
-        exponential_buckets(0.001, 2.0, 20).unwrap()
+        // Start from 10ms.
+        exponential_buckets(0.01, 2.0, 20).unwrap()
     )
     .unwrap();
     pub static ref IMPORTER_INGEST_BYTES: Histogram = register_histogram!(
@@ -57,7 +62,7 @@ lazy_static! {
     pub static ref IMPORTER_ERROR_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_import_error_counter",
         "Total number of importer errors",
-        &["error"]
+        &["type", "error"]
     )
     .unwrap();
 }

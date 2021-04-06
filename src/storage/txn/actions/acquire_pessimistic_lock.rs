@@ -1,12 +1,14 @@
 use crate::storage::mvcc::{
     metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
-    ErrorInner, MvccTxn, Result as MvccResult,
+    ErrorInner, MvccTxn, Result as MvccResult, SnapshotReader,
 };
+use crate::storage::txn::actions::check_data_constraint::check_data_constraint;
 use crate::storage::Snapshot;
 use txn_types::{Key, Lock, LockType, TimeStamp, Value, WriteType};
 
 pub fn acquire_pessimistic_lock<S: Snapshot>(
-    txn: &mut MvccTxn<S>,
+    txn: &mut MvccTxn,
+    reader: &mut SnapshotReader<S>,
     key: Key,
     primary: &[u8],
     should_not_exist: bool,
@@ -16,7 +18,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     min_commit_ts: TimeStamp,
 ) -> MvccResult<Option<Value>> {
     fail_point!("acquire_pessimistic_lock", |err| Err(
-        crate::storage::mvcc::txn::make_txn_error(err, &key, txn.start_ts,).into()
+        crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts).into()
     ));
 
     fn pessimistic_lock(
@@ -39,26 +41,26 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     }
 
     let mut val = None;
-    if let Some(lock) = txn.reader.load_lock(&key)? {
-        if lock.ts != txn.start_ts {
+    if let Some(lock) = reader.load_lock(&key)? {
+        if lock.ts != reader.start_ts {
             return Err(ErrorInner::KeyIsLocked(lock.into_lock_info(key.into_raw()?)).into());
         }
         if lock.lock_type != LockType::Pessimistic {
             return Err(ErrorInner::LockTypeNotMatch {
-                start_ts: txn.start_ts,
+                start_ts: reader.start_ts,
                 key: key.into_raw()?,
                 pessimistic: false,
             }
             .into());
         }
         if need_value {
-            val = txn.reader.get(&key, for_update_ts, true)?;
+            val = reader.get(&key, for_update_ts)?;
         }
         // Overwrite the lock with small for_update_ts
         if for_update_ts > lock.for_update_ts {
             let lock = pessimistic_lock(
                 primary,
-                txn.start_ts,
+                reader.start_ts,
                 lock_ttl,
                 for_update_ts,
                 min_commit_ts,
@@ -72,7 +74,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         return Ok(val);
     }
 
-    if let Some((commit_ts, write)) = txn.reader.seek_write(&key, TimeStamp::max())? {
+    if let Some((commit_ts, write)) = reader.seek_write(&key, TimeStamp::max())? {
         // The isolation level of pessimistic transactions is RC. `for_update_ts` is
         // the commit_ts of the data this transaction read. If exists a commit version
         // whose commit timestamp is larger than current `for_update_ts`, the
@@ -82,7 +84,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                 .acquire_pessimistic_lock_conflict
                 .inc();
             return Err(ErrorInner::WriteConflict {
-                start_ts: txn.start_ts,
+                start_ts: reader.start_ts,
                 conflict_start_ts: write.start_ts,
                 conflict_commit_ts: commit_ts,
                 key: key.into_raw()?,
@@ -92,25 +94,29 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         }
 
         // Handle rollback.
-        // The rollack informathin may come from either a Rollback record or a record with
+        // The rollback information may come from either a Rollback record or a record with
         // `has_overlapped_rollback` flag.
-        if commit_ts == txn.start_ts
+        if commit_ts == reader.start_ts
             && (write.write_type == WriteType::Rollback || write.has_overlapped_rollback)
         {
             assert!(write.has_overlapped_rollback || write.start_ts == commit_ts);
             return Err(ErrorInner::PessimisticLockRolledBack {
-                start_ts: txn.start_ts,
+                start_ts: reader.start_ts,
                 key: key.into_raw()?,
             }
             .into());
         }
         // If `commit_ts` we seek is already before `start_ts`, the rollback must not exist.
-        if commit_ts > txn.start_ts {
-            if let Some((commit_ts, write)) = txn.reader.seek_write(&key, txn.start_ts)? {
-                if write.start_ts == txn.start_ts {
-                    assert!(commit_ts == txn.start_ts && write.write_type == WriteType::Rollback);
+        if commit_ts > reader.start_ts {
+            if let Some((older_commit_ts, older_write)) =
+                reader.seek_write(&key, reader.start_ts)?
+            {
+                if older_commit_ts == reader.start_ts
+                    && (older_write.write_type == WriteType::Rollback
+                        || older_write.has_overlapped_rollback)
+                {
                     return Err(ErrorInner::PessimisticLockRolledBack {
-                        start_ts: txn.start_ts,
+                        start_ts: reader.start_ts,
                         key: key.into_raw()?,
                     }
                     .into());
@@ -119,28 +125,33 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         }
 
         // Check data constraint when acquiring pessimistic lock.
-        txn.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
+        check_data_constraint(reader, should_not_exist, &write, commit_ts, &key)?;
 
         if need_value {
             val = match write.write_type {
                 // If it's a valid Write, no need to read again.
-                WriteType::Put => Some(txn.reader.load_data(&key, write)?),
-                WriteType::Delete => None,
-                WriteType::Lock | WriteType::Rollback => {
-                    txn.reader.get(&key, commit_ts.prev(), true)?
+                WriteType::Put
+                    if write
+                        .as_ref()
+                        .check_gc_fence_as_latest_version(reader.start_ts) =>
+                {
+                    Some(reader.load_data(&key, write)?)
                 }
+                WriteType::Delete | WriteType::Put => None,
+                WriteType::Lock | WriteType::Rollback => reader.get(&key, commit_ts.prev())?,
             };
         }
     }
 
     let lock = pessimistic_lock(
         primary,
-        txn.start_ts,
+        reader.start_ts,
         lock_ttl,
         for_update_ts,
         min_commit_ts,
     );
     txn.put_lock(key, &lock);
+    // TODO don't we need to commit the modifies in txn?
 
     Ok(val)
 }
@@ -148,11 +159,10 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
 pub mod tests {
     use super::*;
     use crate::storage::kv::WriteData;
-    use crate::storage::mvcc::{Error as MvccError, MvccReader, MvccTxn};
+    use crate::storage::mvcc::{Error as MvccError, MvccReader};
     use crate::storage::Engine;
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
-    use kvproto::kvrpcpb::IsolationLevel;
     use txn_types::TimeStamp;
 
     #[cfg(test)]
@@ -165,21 +175,25 @@ pub mod tests {
         key: &[u8],
         pk: &[u8],
         start_ts: impl Into<TimeStamp>,
+        should_not_exist: bool,
         lock_ttl: u64,
         for_update_ts: impl Into<TimeStamp>,
         need_value: bool,
         min_commit_ts: impl Into<TimeStamp>,
     ) -> Option<Value> {
         let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let min_commit_ts = min_commit_ts.into();
         let cm = ConcurrencyManager::new(min_commit_ts);
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true, cm);
+        let start_ts = start_ts.into();
+        let mut txn = MvccTxn::new(start_ts, cm);
+        let mut reader = SnapshotReader::new(start_ts, snapshot, true);
         let res = acquire_pessimistic_lock(
             &mut txn,
+            &mut reader,
             Key::from_raw(key),
             pk,
-            false,
+            should_not_exist,
             lock_ttl,
             for_update_ts.into(),
             need_value,
@@ -217,6 +231,7 @@ pub mod tests {
             key,
             pk,
             start_ts,
+            false,
             0,
             for_update_ts.into(),
             true,
@@ -237,6 +252,7 @@ pub mod tests {
             key,
             pk,
             start_ts,
+            false,
             ttl,
             for_update_ts.into(),
             false,
@@ -260,6 +276,7 @@ pub mod tests {
             key,
             pk,
             start_ts,
+            false,
             lock_ttl,
             for_update_ts,
             false,
@@ -279,6 +296,7 @@ pub mod tests {
             key,
             pk,
             start_ts,
+            false,
             for_update_ts,
             false,
             TimeStamp::zero(),
@@ -297,6 +315,7 @@ pub mod tests {
             key,
             pk,
             start_ts,
+            false,
             for_update_ts,
             true,
             TimeStamp::zero(),
@@ -308,20 +327,23 @@ pub mod tests {
         key: &[u8],
         pk: &[u8],
         start_ts: impl Into<TimeStamp>,
+        should_not_exist: bool,
         for_update_ts: impl Into<TimeStamp>,
         need_value: bool,
         min_commit_ts: impl Into<TimeStamp>,
     ) -> MvccError {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let min_commit_ts = min_commit_ts.into();
         let cm = ConcurrencyManager::new(min_commit_ts);
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true, cm);
+        let start_ts = start_ts.into();
+        let mut txn = MvccTxn::new(start_ts, cm);
+        let mut reader = SnapshotReader::new(start_ts, snapshot, true);
         acquire_pessimistic_lock(
             &mut txn,
+            &mut reader,
             Key::from_raw(key),
             pk,
-            false,
+            should_not_exist,
             0,
             for_update_ts.into(),
             need_value,
@@ -336,8 +358,8 @@ pub mod tests {
         start_ts: impl Into<TimeStamp>,
         for_update_ts: impl Into<TimeStamp>,
     ) {
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut reader = MvccReader::new(snapshot, None, true);
         let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
         assert_eq!(lock.ts, start_ts.into());
         assert_eq!(lock.for_update_ts, for_update_ts.into());
@@ -426,15 +448,12 @@ pub mod tests {
 
         // Rollback
         must_succeed(&engine, k, k, 18, 18);
-        must_rollback(&engine, k, 18);
+        must_rollback(&engine, k, 18, false);
         must_unlocked(&engine, k);
         must_prewrite_put(&engine, k, v, k, 19);
         must_commit(&engine, k, 19, 20);
         must_err(&engine, k, k, 18, 21);
         must_unlocked(&engine, k);
-
-        // Prewrite non-exist pessimistic lock
-        must_pessimistic_prewrite_put_err(&engine, k, v, k, 22, 22, true);
 
         // LockTypeNotMatch
         must_prewrite_put(&engine, k, v, k, 23);
@@ -444,7 +463,7 @@ pub mod tests {
         must_succeed(&engine, k, k, 24, 24);
         must_pessimistic_locked(&engine, k, 24, 24);
         must_prewrite_put_err(&engine, k, v, k, 24);
-        must_rollback(&engine, k, 24);
+        must_rollback(&engine, k, 24, false);
 
         // Acquire lock on a prewritten key should fail.
         must_succeed(&engine, k, k, 26, 26);
@@ -478,8 +497,8 @@ pub mod tests {
         must_get_commit_ts(&engine, k, 30, 31);
 
         // Rollback collapsed.
-        must_rollback_collapsed(&engine, k, 32);
-        must_rollback_collapsed(&engine, k, 33);
+        must_rollback(&engine, k, 32, false);
+        must_rollback(&engine, k, 33, false);
         must_err(&engine, k, k, 32, 32);
         // Currently we cannot avoid this.
         must_succeed(&engine, k, k, 32, 34);
@@ -552,7 +571,7 @@ pub mod tests {
         must_cleanup(&engine, k, 49, 0);
         must_get_rollback_protected(&engine, k, 49, true);
         must_prewrite_put(&engine, k, v, k, 51);
-        must_rollback_collapsed(&engine, k, 51);
+        must_rollback(&engine, k, 51, false);
         must_err(&engine, k, k, 49, 60);
 
         // Overlapped rollback record will be written when the current start_ts equals to another write
@@ -561,7 +580,7 @@ pub mod tests {
         must_pessimistic_prewrite_put(&engine, k, v, k, 50, 61, true);
         must_locked(&engine, k, 50);
         must_cleanup(&engine, k, 50, 0);
-        must_get_overlapped_rollback(&engine, k, 50, 46, WriteType::Put);
+        must_get_overlapped_rollback(&engine, k, 50, 46, WriteType::Put, Some(0));
 
         // start_ts and commit_ts interlacing
         for start_ts in &[140, 150, 160] {
@@ -573,7 +592,7 @@ pub mod tests {
             must_get(&engine, k, commit_ts + 1, v);
         }
 
-        must_rollback(&engine, k, 170);
+        must_rollback(&engine, k, 170, false);
 
         // Now the data should be like: (start_ts -> commit_ts)
         // 140 -> 190
@@ -626,7 +645,7 @@ pub mod tests {
         pessimistic_rollback::tests::must_success(&engine, k, 45, 45);
 
         // Skip Write::Rollback
-        must_rollback(&engine, k, 50);
+        must_rollback(&engine, k, 50, false);
         assert_eq!(
             must_succeed_return_value(&engine, k, k, 55, 55),
             Some(v.to_vec())
@@ -660,5 +679,106 @@ pub mod tests {
         must_pessimistic_locked(&engine, k, 1, 2);
         must_succeed(&engine, k, k, 1, 3);
         must_pessimistic_locked(&engine, k, 1, 3);
+    }
+
+    #[test]
+    fn test_pessimistic_lock_check_gc_fence() {
+        use pessimistic_rollback::tests::must_success as must_pessimistic_rollback;
+
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        // PUT,           Read
+        //  `------^
+        must_prewrite_put(&engine, b"k1", b"v1", b"k1", 10);
+        must_commit(&engine, b"k1", 10, 30);
+        must_cleanup_with_gc_fence(&engine, b"k1", 30, 0, 40, true);
+
+        // PUT,           Read
+        //  * (GC fence ts = 0)
+        must_prewrite_put(&engine, b"k2", b"v2", b"k2", 11);
+        must_commit(&engine, b"k2", 11, 30);
+        must_cleanup_with_gc_fence(&engine, b"k2", 30, 0, 0, true);
+
+        // PUT, LOCK,   LOCK, Read
+        //  `---------^
+        must_prewrite_put(&engine, b"k3", b"v3", b"k3", 12);
+        must_commit(&engine, b"k3", 12, 30);
+        must_prewrite_lock(&engine, b"k3", b"k3", 37);
+        must_commit(&engine, b"k3", 37, 38);
+        must_cleanup_with_gc_fence(&engine, b"k3", 30, 0, 40, true);
+        must_prewrite_lock(&engine, b"k3", b"k3", 42);
+        must_commit(&engine, b"k3", 42, 43);
+
+        // PUT, LOCK,   LOCK, Read
+        //  *
+        must_prewrite_put(&engine, b"k4", b"v4", b"k4", 13);
+        must_commit(&engine, b"k4", 13, 30);
+        must_prewrite_lock(&engine, b"k4", b"k4", 37);
+        must_commit(&engine, b"k4", 37, 38);
+        must_prewrite_lock(&engine, b"k4", b"k4", 42);
+        must_commit(&engine, b"k4", 42, 43);
+        must_cleanup_with_gc_fence(&engine, b"k4", 30, 0, 0, true);
+
+        // PUT,   PUT,    READ
+        //  `-----^ `------^
+        must_prewrite_put(&engine, b"k5", b"v5", b"k5", 14);
+        must_commit(&engine, b"k5", 14, 20);
+        must_prewrite_put(&engine, b"k5", b"v5x", b"k5", 21);
+        must_commit(&engine, b"k5", 21, 30);
+        must_cleanup_with_gc_fence(&engine, b"k5", 20, 0, 30, false);
+        must_cleanup_with_gc_fence(&engine, b"k5", 30, 0, 40, true);
+
+        // PUT,   PUT,    READ
+        //  `-----^ *
+        must_prewrite_put(&engine, b"k6", b"v6", b"k6", 15);
+        must_commit(&engine, b"k6", 15, 20);
+        must_prewrite_put(&engine, b"k6", b"v6x", b"k6", 22);
+        must_commit(&engine, b"k6", 22, 30);
+        must_cleanup_with_gc_fence(&engine, b"k6", 20, 0, 30, false);
+        must_cleanup_with_gc_fence(&engine, b"k6", 30, 0, 0, true);
+
+        // PUT,  LOCK,    READ
+        //  `----------^
+        // Note that this case is special because usually the `LOCK` is the first write already got
+        // during prewrite/acquire_pessimistic_lock and will continue searching an older version
+        // from the `LOCK` record.
+        must_prewrite_put(&engine, b"k7", b"v7", b"k7", 16);
+        must_commit(&engine, b"k7", 16, 30);
+        must_prewrite_lock(&engine, b"k7", b"k7", 37);
+        must_commit(&engine, b"k7", 37, 38);
+        must_cleanup_with_gc_fence(&engine, b"k7", 30, 0, 40, true);
+
+        let cases = vec![
+            (b"k1" as &[u8], None),
+            (b"k2", Some(b"v2" as &[u8])),
+            (b"k3", None),
+            (b"k4", Some(b"v4")),
+            (b"k5", None),
+            (b"k6", Some(b"v6x")),
+            (b"k7", None),
+        ];
+
+        for (key, expected_value) in cases {
+            // Test constraint check with `should_not_exist`.
+            if expected_value.is_none() {
+                assert!(must_succeed_impl(&engine, key, key, 50, true, 0, 50, false, 51).is_none());
+                must_pessimistic_rollback(&engine, key, 50, 51);
+                must_unlocked(&engine, key);
+            } else {
+                must_err_impl(&engine, key, key, 50, true, 50, false, 51);
+                must_unlocked(&engine, key);
+            }
+
+            // Test getting value.
+            let res = must_succeed_impl(&engine, key, key, 50, false, 0, 50, true, 51);
+            assert_eq!(res, expected_value.map(|v| v.to_vec()));
+            must_pessimistic_rollback(&engine, key, 50, 51);
+
+            // Test getting value when already locked.
+            must_succeed(&engine, key, key, 50, 51);
+            let res2 = must_succeed_impl(&engine, key, key, 50, false, 0, 50, true, 51);
+            assert_eq!(res2, expected_value.map(|v| v.to_vec()));
+            must_pessimistic_rollback(&engine, key, 50, 51);
+        }
     }
 }

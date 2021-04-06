@@ -22,7 +22,7 @@ impl std::fmt::Debug for BufferVec {
             if item.is_empty() {
                 write!(f, "null")?;
             } else {
-                write!(f, "{}", hex::encode_upper(item))?;
+                write!(f, "{}", log_wrappers::Value::value(item))?;
             }
         }
         write!(f, "]")
@@ -112,9 +112,23 @@ impl BufferVec {
 
     /// Removes the last buffer if there is any.
     #[inline]
-    pub fn pop(&mut self) {
+    pub fn pop(&mut self) -> Option<Vec<u8>> {
         if let Some(offset) = self.offsets.pop() {
+            let res = self.data.get(offset..).map(Vec::from);
             self.data.truncate(offset);
+            res
+        } else {
+            None
+        }
+    }
+
+    /// Get the last buffer if there is any.
+    #[inline]
+    pub fn last(&self) -> Option<&[u8]> {
+        if let Some(offset) = self.offsets.last() {
+            self.data.get(*offset..)
+        } else {
+            None
         }
     }
 
@@ -216,8 +230,8 @@ impl BufferVec {
             if len > 0 {
                 let mut data_write_offset = 0;
                 let mut offsets_write_offset = 0;
-                for i in 0..len - 1 {
-                    if retain_arr[i] {
+                for (i, retain) in retain_arr.iter().enumerate().take(len - 1) {
+                    if *retain {
                         let write_len = self.offsets[i + 1] - self.offsets[i];
                         std::ptr::copy(
                             self.data.as_ptr().add(self.offsets[i]),

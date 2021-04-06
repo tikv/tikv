@@ -41,7 +41,6 @@ capacity = "64MB"
 [metric]
 
 [raftstore]
-sync-log = false
 raft-base-tick-interval = "10ms"
 raft-heartbeat-ticks = 2
 raft-election-timeout-ticks = 25
@@ -62,13 +61,13 @@ max-leader-missing-duration = "2s"
 abnormal-leader-missing-duration = "1500ms"
 peer-stale-state-check-interval = "1s"
 report-region-flow-interval = "100ms"
-raft-store-max-leader-lease = "250ms"
+raft-store-max-leader-lease = "240ms"
 allow-remove-leader = true
 merge-check-tick-interval = "100ms"
 pd-heartbeat-tick-interval = "20ms"
 raft-reject-transfer-leader-duration = "0s"
-hibernate-timeout = "0s"
 dev-assert = true
+hibernate-regions = true
 
 [coprocessor]
 

@@ -199,7 +199,7 @@ impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
         if self.compression_level != 0 {
             // other three fields are default value.
             // see: https://github.com/facebook/rocksdb/blob/8cb278d11a43773a3ac22e523f4d183b06d37d88/include/rocksdb/advanced_options.h#L146-L153
-            io_options.set_compression_options(-14, self.compression_level, 0, 0);
+            io_options.set_compression_options(-14, self.compression_level, 0, 0, 0);
         }
         io_options.compression(compress_type);
         // in rocksdb 5.5.1, SstFileWriter will try to use bottommost_compression and
@@ -208,6 +208,7 @@ impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
         io_options.compression_per_level(&[]);
         io_options.bottommost_compression(DBCompressionType::Disable);
         let mut writer = SstFileWriter::new(EnvOptions::new(), io_options);
+        fail_point!("on_open_sst_writer");
         writer.open(path)?;
         Ok(RocksSstWriter { writer, env })
     }
