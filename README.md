@@ -79,26 +79,7 @@ When a node starts, the metadata of the Node, Store and Region are recorded into
 
 The most quick way for trying out TiKV with TiDB is using TiUP, a component manager for TiDB.
 
-1. Download and install TiUP:
-
-```bash
-$ curl --proto '=https' --tlsv1.2 -sSf https://tiup-mirrors.pingcap.com/install.sh | sh
-```
-
-2. Source your shell profile or open a new shell.
-3. Start the cluster in the current session:
-
-```bash
-$ tiup playground
-...
-CLUSTER START SUCCESSFULLY, Enjoy it ^-^
-To connect TiDB: mysql --host 127.0.0.1 --port 4000 -u root
-To connect TiDB: mysql --host 127.0.0.1 --port 4001 -u root
-To view the dashboard: http://127.0.0.1:2379/dashboard
-To view the monitor: http://127.0.0.1:9090
-```
-
-Now follow the prompt to try out your playground!
+You can see [this page](https://docs.pingcap.com/tidb/stable/quick-start-with-tidb#deploy-a-local-test-environment-using-tiup-playground) for a step by step tutorial.
 
 ### Deploy a playground with binary
 
