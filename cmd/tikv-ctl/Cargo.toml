@@ -64,7 +64,7 @@ test-engines-panic = [
   "tikv/test-engines-panic",
 ]
 
-nortcheck = []
+nortcheck = ["engine_rocks/nortcheck"]
 
 [dependencies]
 backup = { path = "../../components/backup", default-features = false }
