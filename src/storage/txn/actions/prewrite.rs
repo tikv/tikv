@@ -428,9 +428,11 @@ fn async_commit_timestamps(
         let max_commit_ts = max_commit_ts;
         if (!max_commit_ts.is_zero() && min_commit_ts > max_commit_ts) || injected_fallback {
             warn!("commit_ts is too large, fallback to normal 2PC";
+                "key" => log_wrappers::Value::key(key.as_encoded()),
                 "start_ts" => start_ts,
                 "min_commit_ts" => min_commit_ts,
-                "max_commit_ts" => max_commit_ts);
+                "max_commit_ts" => max_commit_ts,
+                "lock" => ?lock);
             return Err(ErrorInner::CommitTsTooLarge {
                 start_ts,
                 min_commit_ts,
