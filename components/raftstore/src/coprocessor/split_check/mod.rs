@@ -7,6 +7,7 @@ mod table;
 
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
+use tikv_util::box_try;
 
 use super::config::Config;
 use super::error::Result;

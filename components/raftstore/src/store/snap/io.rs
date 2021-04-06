@@ -15,6 +15,7 @@ use engine_traits::{
 use kvproto::encryptionpb::EncryptionMethod;
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 use tikv_util::time::Limiter;
+use tikv_util::{box_try, debug};
 
 use super::Error;
 

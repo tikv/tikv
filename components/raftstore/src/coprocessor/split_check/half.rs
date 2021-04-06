@@ -4,6 +4,7 @@ use engine_traits::{KvEngine, Range};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 
+use tikv_util::box_try;
 use tikv_util::config::ReadableSize;
 
 use super::super::error::Result;
