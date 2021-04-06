@@ -7,9 +7,11 @@ publish = false
 [features]
 protobuf-codec = [
   "backup/protobuf-codec",
+  "file_system/protobuf-codec",
 ]
 prost-codec = [
   "backup/prost-codec",
+  "file_system/prost-codec",
 ]
 
 [dependencies]
@@ -19,7 +21,7 @@ concurrency_manager = { path = "../concurrency_manager" }
 crc64fast = "0.1"
 engine_traits = { path = "../engine_traits" }
 external_storage = { path = "../external_storage" }
-file_system = { path = "../file_system" }
+file_system = { path = "../file_system", default-features = false }
 futures = "0.3"
 futures-executor = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
