@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
+use tikv_util::{debug, info, warn};
 use tokio::sync::mpsc::{
     channel as async_channel, Receiver as AsyncReceiver, Sender as AsyncSender,
 };

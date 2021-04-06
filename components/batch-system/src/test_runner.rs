@@ -3,6 +3,7 @@
 //! A sample Handler for test and micro-benchmark purpose.
 
 use crate::*;
+use derive_more::{Add, AddAssign};
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
 use tikv_util::mpsc;
