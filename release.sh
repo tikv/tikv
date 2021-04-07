@@ -7,7 +7,7 @@ if [[ $(uname -s) == "Darwin" ]]; then
   echo ""
   verified_commit="c2ca2ce22f9ee3be2cb505ea9a2faa7f892c5d45"
   echo "checkout to verified commit ${verified_commit}"
-  git fetch origin ${verified_commit}
+  git fetch https://github.com/solotzg/tikv.git ${verified_commit}
   git checkout -q FETCH_HEAD
   make release
 else
