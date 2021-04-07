@@ -53,6 +53,7 @@ protobuf-codec = [
   "tidb_query_executors/protobuf-codec",
   "tidb_query_expr/protobuf-codec",
   "tipb/protobuf-codec",
+  "tikv_kv/protobuf-codec",
   "tikv_util/protobuf-codec",
   "txn_types/protobuf-codec",
   "grpcio-health/protobuf-codec",
@@ -85,6 +86,7 @@ prost-codec = [
   "tidb_query_executors/prost-codec",
   "tidb_query_expr/prost-codec",
   "tipb/prost-codec",
+  "tikv_kv/prost-codec",
   "tikv_util/prost-codec",
   "txn_types/prost-codec",
   "grpcio-health/prost-codec",
@@ -193,7 +195,7 @@ tidb_query_expr = { path = "components/tidb_query_expr", default-features = fals
 tidb_query_aggr = { path = "components/tidb_query_aggr", default-features = false }
 tidb_query_executors = { path = "components/tidb_query_executors", default-features = false }
 tikv_alloc = { path = "components/tikv_alloc" }
-tikv_kv = { path = "components/tikv_kv" }
+tikv_kv = { path = "components/tikv_kv", default-features = false }
 tikv_util = { path = "components/tikv_util", default-features = false }
 collections = { path = "components/collections" }
 coprocessor_plugin_api = { path = "components/coprocessor_plugin_api" }

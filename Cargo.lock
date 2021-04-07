@@ -1328,6 +1328,7 @@ version = "0.0.1"
 dependencies = [
  "engine_test",
  "engine_traits",
+ "panic_hook",
  "tempfile",
  "tikv_alloc",
 ]
