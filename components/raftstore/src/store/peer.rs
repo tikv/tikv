@@ -2814,7 +2814,15 @@ where
                 last_index
             ));
         }
-        assert!(min_matched >= min_committed);
+        if min_matched < min_committed {
+            warn!(
+                "min_matched < min_committed, raft progress is inaccurate";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+                "min_matched" => min_matched,
+                "min_committed" => min_committed,
+            );
+        }
         let mut entry_size = 0;
         for entry in self
             .raft_group
