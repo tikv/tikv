@@ -50,7 +50,7 @@ impl<P: RegionInfoProvider> CompactionGuardGeneratorFactory<P> {
 
 // Update to implement engine_traits::SstPartitionerFactory instead once we move to use abstracted
 // ColumnFamilyOptions in src/config.rs.
-impl<P: RegionInfoProvider + Clone + Sync> SstPartitionerFactory
+impl<P: RegionInfoProvider + Clone + 'static> SstPartitionerFactory
     for CompactionGuardGeneratorFactory<P>
 {
     type Partitioner = CompactionGuardGenerator<P>;

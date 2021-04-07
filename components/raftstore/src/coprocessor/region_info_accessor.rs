@@ -529,7 +529,7 @@ impl RegionInfoAccessor {
     }
 }
 
-pub trait RegionInfoProvider: Send + Clone + 'static {
+pub trait RegionInfoProvider: Send + Sync {
     /// Get a iterator of regions that contains `from` or have keys larger than `from`, and invoke
     /// the callback to process the result.
     fn seek_region(&self, _from: &[u8], _callback: SeekRegionCallback) -> Result<()> {
