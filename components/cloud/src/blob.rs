@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use futures_io::AsyncRead;
 pub use kvproto::backup::CloudDynamic;
 use std::io;
@@ -49,11 +51,7 @@ impl BlobStorage for Box<dyn BlobStorage> {
 pub struct StringNonEmpty(String);
 impl StringNonEmpty {
     pub fn opt(s: String) -> Option<Self> {
-        if s.is_empty() {
-            None
-        } else {
-            Some(Self(s))
-        }
+        if s.is_empty() { None } else { Some(Self(s)) }
     }
 
     pub fn opt2(s1: String, s2: String) -> Option<Self> {

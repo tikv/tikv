@@ -8,6 +8,7 @@ publish = false
 default = ["protobuf-codec", "cloud-aws", "cloud-gcp"]
 protobuf-codec = [
   "backup/protobuf-codec",
+  "external_storage_export/protobuf-codec",
   "file_system/protobuf-codec",
   "tikv_util/protobuf-codec",
   "txn_types/protobuf-codec",
@@ -15,10 +16,10 @@ protobuf-codec = [
 ]
 prost-codec = [
   "backup/prost-codec",
+  "external_storage_export/prost-codec",
   "file_system/prost-codec",
   "tikv_util/prost-codec",
   "txn_types/prost-codec",
-  "external_storage_export/prost-codec",
 ]
 cloud-aws = ["external_storage_export/cloud-aws"]
 cloud-gcp = ["external_storage_export/cloud-gcp"]

@@ -1,3 +1,4 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 use crate::{create_storage, create_storage_no_client};
 use external_storage::{read_external_storage_into_file, ExternalStorage};
 
@@ -37,7 +38,7 @@ pub fn new_client(
         .enable_all()
         .build()?;
     Ok(ExternalStorageClient {
-        backend: backend,
+        backend,
         runtime: Arc::new(Mutex::new(runtime)),
         blob_storage: Arc::new(blob_storage),
         rpc: new_rpc_client()?,
@@ -149,7 +150,7 @@ pub fn new_service() -> io::Result<SocketService> {
             .build()
             .context("GRPC build server")?;
         server.start();
-        let (_, _) = server.bind_addrs().next().context("GRPC bind server")?;
+        let (..) = server.bind_addrs().next().context("GRPC bind server")?;
         Ok(SocketService { server, listener })
     })()
     .context("new service")
@@ -190,12 +191,20 @@ fn socket_name(storage: &dyn ExternalStorage, object_name: &str) -> std::path::P
     std::env::temp_dir().join(full_name)
 }
 
-
-fn write_inner(runtime: &mut Runtime, storage_backend: &proto::StorageBackend, object_name: &str, content_length: u64) -> anyhow::Result<()> {
+fn write_inner(
+    runtime: &mut Runtime,
+    storage_backend: &proto::StorageBackend,
+    object_name: &str,
+    content_length: u64,
+) -> anyhow::Result<()> {
     let storage = create_storage_no_client(storage_backend).context("create storage")?;
     let file_path = socket_name(&storage, object_name);
-    let reader = runtime.block_on(open_file_as_async_read(file_path)).context("open file")?;
-    storage.write(object_name, reader, content_length).context("storage write")
+    let reader = runtime
+        .block_on(open_file_as_async_read(file_path))
+        .context("open file")?;
+    storage
+        .write(object_name, reader, content_length)
+        .context("storage write")
 }
 
 impl proto::ExternalStorage for Service {
@@ -206,7 +215,8 @@ impl proto::ExternalStorage for Service {
         sink: grpcio::UnarySink<proto::ExternalStorageWriteResponse>,
     ) {
         info!("write request {:?}", req.get_object_name());
-        let result = write_inner(&mut self.runtime.lock().unwrap(),
+        let result = write_inner(
+            &mut self.runtime.lock().unwrap(),
             req.get_storage_backend(),
             req.get_object_name(),
             req.get_content_length(),

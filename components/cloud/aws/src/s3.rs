@@ -16,6 +16,7 @@ use futures_util::{
     stream::TryStreamExt,
 };
 pub use kvproto::backup::{Bucket as InputBucket, CloudDynamic, S3 as InputConfig};
+use tikv_util::debug;
 use tikv_util::stream::{block_on_external_io, error_stream, retry};
 
 pub const STORAGE_VENDOR_NAME_AWS: &str = "aws";

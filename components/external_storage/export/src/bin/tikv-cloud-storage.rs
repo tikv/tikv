@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use external_storage_export::new_service;
 use grpcio::{self};
 use slog::{self};
