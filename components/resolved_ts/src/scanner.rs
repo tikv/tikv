@@ -22,7 +22,7 @@ const DEFAULT_SCAN_BATCH_SIZE: usize = 1024;
 
 pub type BeforeStartCallback = Box<dyn Fn() + Send>;
 pub type OnErrorCallback = Box<dyn Fn(ObserveID, Region, Error) + Send>;
-pub type OnEntriesCallback = Box<dyn Fn(Vec<ScanEntry>) + Send>;
+pub type OnEntriesCallback = Box<dyn Fn(Vec<ScanEntry>, u64) + Send>;
 pub type IsCancelledCallback = Box<dyn Fn() -> bool + Send>;
 
 pub enum ScanMode {
@@ -93,6 +93,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                     return;
                 }
             };
+            let apply_index = snap.get_apply_index().unwrap();
             let mut entries = vec![];
             match task.mode {
                 ScanMode::All | ScanMode::AllWithOldValue => {
@@ -164,7 +165,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                 }
             }
             entries.push(ScanEntry::None);
-            (task.send_entries)(entries);
+            (task.send_entries)(entries, apply_index);
         };
         self.workers.spawn(fut);
     }

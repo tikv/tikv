@@ -33,6 +33,7 @@ use crate::scanner::{ScanEntry, ScanMode, ScanTask, ScannerPool};
 
 enum ResolverStatus {
     Pending {
+        tracked_index: u64,
         locks: Vec<PendingLock>,
         cancelled: Arc<AtomicBool>,
     },
@@ -61,13 +62,14 @@ struct ObserveRegion {
 }
 
 impl ObserveRegion {
-    fn new(meta: Region, resolved_ts: Arc<AtomicU64>) -> Self {
+    fn new(meta: Region, rrp: RegionReadProgress) -> Self {
         ObserveRegion {
-            resolver: Resolver::from_resolved_ts(meta.id, resolved_ts),
+            resolver: Resolver::from_resolved_ts(meta.id, rrp),
             meta,
             observe_id: ObserveID::new(),
             lease: None,
             resolver_status: ResolverStatus::Pending {
+                tracked_index: 0,
                 locks: vec![],
                 cancelled: Arc::new(AtomicBool::new(false)),
             },
@@ -76,9 +78,13 @@ impl ObserveRegion {
 
     fn track_change_log(&mut self, change_logs: &[ChangeLog]) {
         match self.resolver_status {
-            ResolverStatus::Pending { ref mut locks, .. } => {
-                for log in change_logs {
-                    log.rows.iter().for_each(|row| match row {
+            ResolverStatus::Pending {
+                ref mut locks,
+                ref mut tracked_index,
+                ..
+            } => {
+                for ChangeLog { index, rows } in change_logs {
+                    rows.iter().for_each(|row| match row {
                         ChangeRow::Prewrite { key, lock, .. } => locks.push(PendingLock::Track {
                             key: key.clone(),
                             start_ts: lock.ts,
@@ -93,12 +99,14 @@ impl ObserveRegion {
                             start_ts: write.start_ts,
                             commit_ts: *commit_ts,
                         }),
-                    })
+                    });
+                    assert!(*tracked_index < *index);
+                    *tracked_index = *index;
                 }
             }
             ResolverStatus::Ready => {
-                for log in change_logs {
-                    log.rows.iter().for_each(|row| match row {
+                for ChangeLog { index, rows } in change_logs {
+                    rows.iter().for_each(|row| match row {
                         ChangeRow::Prewrite { key, lock, .. } => {
                             self.resolver.track_lock(lock.ts, key.0.clone())
                         }
@@ -108,13 +116,14 @@ impl ObserveRegion {
                             write,
                             ..
                         } => self.resolver.untrack_lock(*commit_ts, &key.0),
-                    })
+                    });
+                    self.resolver.update_tracked_index(*index);
                 }
             }
         }
     }
 
-    fn track_scan_locks(&mut self, entries: Vec<ScanEntry>) {
+    fn track_scan_locks(&mut self, entries: Vec<ScanEntry>, apply_index: u64) {
         for es in entries {
             match es {
                 ScanEntry::Lock(locks) => {
@@ -126,10 +135,16 @@ impl ObserveRegion {
                     }
                 }
                 ScanEntry::None => {
+                    // Update tracked index to the scaned data
+                    self.resolver.update_tracked_index(apply_index);
                     let status =
                         std::mem::replace(&mut self.resolver_status, ResolverStatus::Ready);
                     match status {
-                        ResolverStatus::Pending { locks, .. } => {
+                        ResolverStatus::Pending {
+                            locks,
+                            tracked_index,
+                            ..
+                        } => {
                             locks.into_iter().for_each(|lock| match lock {
                                 PendingLock::Track { key, start_ts } => {
                                     self.resolver.track_lock(start_ts, key.0.clone())
@@ -139,7 +154,11 @@ impl ObserveRegion {
                                     start_ts,
                                     commit_ts,
                                 } => self.resolver.untrack_lock(commit_ts, &key.0),
-                            })
+                            });
+                            // Update tracked index to the pending data
+                            if tracked_index != 0 {
+                                self.resolver.update_tracked_index(tracked_index);
+                            }
                         }
                         ResolverStatus::Ready => {
                             panic!("region {:?} resolver has ready", self.meta.id)
@@ -240,7 +259,7 @@ where
                     "store id" => ?store_meta.store_id.clone(),
                     "region" => ?region
                 );
-                ObserveRegion::new(region.clone(), rrp.get_safe_ts())
+                ObserveRegion::new(region.clone(), rrp.clone())
             } else {
                 warn!(
                     "try register unexit region";
@@ -266,12 +285,13 @@ where
             region,
             checkpoint_ts: TimeStamp::zero(),
             is_cancelled: Box::new(move || cancelled.load(Ordering::Acquire)),
-            send_entries: Box::new(move |entries| {
+            send_entries: Box::new(move |entries, apply_index| {
                 scheduler
                     .schedule(Task::ScanLocks {
                         region_id,
                         observe_id,
                         entries,
+                        apply_index,
                     })
                     .unwrap_or_else(|e| debug!("schedule resolved ts task failed"; "err" => ?e));
             }),
@@ -445,11 +465,12 @@ where
         region_id: u64,
         observe_id: ObserveID,
         entries: Vec<ScanEntry>,
+        apply_index: u64,
     ) {
         match self.regions.get_mut(&region_id) {
             Some(observe_region) => {
                 if observe_region.observe_id == observe_id {
-                    observe_region.track_scan_locks(entries);
+                    observe_region.track_scan_locks(entries, apply_index);
                 }
             }
             None => {
@@ -489,6 +510,7 @@ pub enum Task<S: Snapshot> {
         region_id: u64,
         observe_id: ObserveID,
         entries: Vec<ScanEntry>,
+        apply_index: u64,
     },
 }
 
@@ -534,11 +556,13 @@ impl<S: Snapshot> fmt::Debug for Task<S> {
             Task::ScanLocks {
                 ref region_id,
                 ref observe_id,
+                ref apply_index,
                 ..
             } => de
                 .field("name", &"scan_locks")
                 .field("region_id", &region_id)
                 .field("observe_id", &observe_id)
+                .field("apply_index", &apply_index)
                 .finish(),
             Task::RegisterAdvanceEvent => de.field("name", &"register_advance_event").finish(),
         }
@@ -579,7 +603,8 @@ where
                 region_id,
                 observe_id,
                 entries,
-            } => self.handle_scan_locks(region_id, observe_id, entries),
+                apply_index,
+            } => self.handle_scan_locks(region_id, observe_id, entries, apply_index),
             Task::RegisterAdvanceEvent => self.register_advance_event(),
         }
     }

@@ -2,6 +2,7 @@
 
 use collections::HashSet;
 use crossbeam::atomic::AtomicCell;
+use raftstore::store::fsm::store::RegionReadProgress;
 use std::cmp;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -18,18 +19,21 @@ pub struct Resolver {
     lock_ts_heap: BTreeMap<TimeStamp, HashSet<Arc<[u8]>>>,
     // The timestamps that guarantees no more commit will happen before.
     resolved_ts: TimeStamp,
-    // The global `resolved_ts` that may updated by multi threads
-    global_resolved_ts: Arc<AtomicU64>,
+    // The region read progress
+    rrp: RegionReadProgress,
+    // The highest index `Resolver` had been tracked
+    tracked_index: u64,
     // The timestamps that advance the resolved_ts when there is no more write.
     min_ts: TimeStamp,
 }
 
 impl Resolver {
-    pub fn from_resolved_ts(region_id: u64, global_resolved_ts: Arc<AtomicU64>) -> Resolver {
+    pub fn from_resolved_ts(region_id: u64, rrp: RegionReadProgress) -> Resolver {
         Resolver {
             region_id,
             resolved_ts: TimeStamp::zero(),
-            global_resolved_ts,
+            rrp,
+            tracked_index: 0,
             locks_by_key: HashMap::default(),
             lock_ts_heap: BTreeMap::new(),
             min_ts: TimeStamp::zero(),
@@ -37,7 +41,7 @@ impl Resolver {
     }
 
     pub fn new(region_id: u64) -> Resolver {
-        Self::from_resolved_ts(region_id, Arc::new(AtomicU64::new(0)))
+        Self::from_resolved_ts(region_id, RegionReadProgress::default())
     }
 
     pub fn resolved_ts(&self) -> TimeStamp {
@@ -46,6 +50,13 @@ impl Resolver {
 
     pub fn locks(&self) -> &BTreeMap<TimeStamp, HashSet<Arc<[u8]>>> {
         &self.lock_ts_heap
+    }
+
+    // Call with `track_lock` and `untrack_lock`
+    pub fn update_tracked_index(&mut self, index: u64) {
+        // TODO: check it again
+        assert!(self.tracked_index < index);
+        self.tracked_index = index;
     }
 
     pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>) {
@@ -115,29 +126,29 @@ impl Resolver {
         // No more commit happens before the ts.
         let new_resolved_ts = cmp::min(min_start_ts, min_ts);
 
-        // Resolved ts never decrease.
-        self.resolved_ts = cmp::max(self.resolved_ts, new_resolved_ts);
-
-        // Update the global resolved ts
-        let prev_ts = self
-            .global_resolved_ts
-            .fetch_max(self.resolved_ts.into_inner(), Ordering::Relaxed);
-        if prev_ts < self.resolved_ts.into_inner() {
+        if new_resolved_ts > self.resolved_ts {
             debug!(
                 "forward resolved ts by resolver";
                 "region id" => self.region_id,
-                "new resolved ts" => ?self.resolved_ts,
+                "new resolved ts" => ?new_resolved_ts,
             );
         } else {
             info!(
                 "faied to forward resolved ts by resolver";
                 "region id" => self.region_id,
-                "prev ts" => ?prev_ts,
-                "new resolved ts" => ?self.resolved_ts,
+                "prev ts" => ?self.resolved_ts,
+                "new resolved ts" => ?new_resolved_ts,
                 "min lock" => ?min_lock,
                 "pd ts" => ?min_ts,
             );
         }
+
+        // Resolved ts never decrease.
+        self.resolved_ts = cmp::max(self.resolved_ts, new_resolved_ts);
+
+        // Publish an `(apply index, safe ts)` item into the region read progress
+        self.rrp
+            .forward_safe_ts(self.tracked_index, self.resolved_ts.into_inner());
 
         let new_min_ts = if has_lock {
             // If there are some lock, the min_ts must be smaller than

@@ -2460,14 +2460,33 @@ fn get_range_safe_ts(meta: &StoreMeta, key_range: KeyRange) -> u64 {
     // }
 }
 
-#[derive(Clone)]
+/// `RegionReadProgress` is used to keep track of the replica's `safe_ts`, the replica can handle a read
+/// request directly without requiring leader lease or read index iff `safe_ts` >= `read_ts` (the `read_ts`
+/// is usually stale i.e seconds ago).
+///
+/// `safe_ts` is forward by the `(apply index, safe ts)` item:
+/// ```
+/// if self.applied_index >= item.apply_index {
+///     self.safe_ts = max(self.safe_ts, item.safe_ts)
+/// }
+/// ```
+///
+/// For the leader, the `(apply index, safe ts)` item is publish by the `resolved-ts` worker periodically.
+/// For the followers, the item is sync periodically from the leader through the `CheckLeader` rpc and the
+/// raft heartbeat message
+///
+/// The intend is to make the item's `safe ts` larger (more up to date) and `apply index` smaller (require less data)
+///
+// TODO: reduce `Arc` use
+#[derive(Clone, Default)]
 pub struct RegionReadProgress {
     tag: String,
     applied_index: Arc<AtomicU64>,
     last_merge_index: Arc<AtomicU64>,
     safe_ts: Arc<AtomicU64>,
-    // `pending_ts` should not be accessed outside to avoid dead lock
-    pending_ts: Arc<Mutex<VecDeque<(u64, u64)>>>,
+    // `pending_items` is a *sorted* list of `(apply index, safe ts)` item, it should
+    // not be accessed outside to avoid dead lock
+    pending_items: Arc<Mutex<VecDeque<(u64, u64)>>>,
     cap: usize,
 }
 
@@ -2476,10 +2495,10 @@ impl RegionReadProgress {
         RegionReadProgress {
             tag,
             applied_index: Arc::new(AtomicU64::from(applied_index)),
-            // It is okey to inti `last_merge_index` with `applied_index`
+            // It is okey to init `last_merge_index` with `applied_index`
             last_merge_index: Arc::new(AtomicU64::from(applied_index)),
             safe_ts: Arc::new(AtomicU64::from(0)),
-            pending_ts: Arc::new(Mutex::new(VecDeque::with_capacity(cap))),
+            pending_items: Arc::new(Mutex::new(VecDeque::with_capacity(cap))),
             cap,
         }
     }
@@ -2492,19 +2511,15 @@ impl RegionReadProgress {
         self.safe_ts.load(Ordering::Relaxed)
     }
 
-    pub fn get_safe_ts(&self) -> Arc<AtomicU64> {
-        self.safe_ts.clone()
-    }
-
     pub fn update_applied(&self, applied: u64) {
-        self.update_applied_internal(applied, &mut self.pending_ts.lock().unwrap());
+        self.update_applied_internal(applied, &mut self.pending_items.lock().unwrap());
     }
 
-    fn update_applied_internal(&self, applied: u64, pending_ts: &mut VecDeque<(u64, u64)>) {
+    fn update_applied_internal(&self, applied: u64, pending_items: &mut VecDeque<(u64, u64)>) {
         let mut ts_to_update = self.safe_ts.load(Ordering::Relaxed);
-        while let Some((idx, ts)) = pending_ts.pop_front() {
+        while let Some((idx, ts)) = pending_items.pop_front() {
             if applied < idx {
-                pending_ts.push_front((idx, ts));
+                pending_items.push_front((idx, ts));
                 break;
             }
             if ts_to_update < ts {
@@ -2518,7 +2533,7 @@ impl RegionReadProgress {
     }
 
     pub fn forward_safe_ts(&self, apply_index: u64, ts: u64) {
-        let mut pending_ts = self.pending_ts.lock().unwrap();
+        let mut pending_items = self.pending_items.lock().unwrap();
 
         let last_merge_index = self.last_merge_index.load(Ordering::Relaxed);
         if last_merge_index > apply_index {
@@ -2532,16 +2547,21 @@ impl RegionReadProgress {
         }
 
         if self.applied_index.load(Ordering::Relaxed) < apply_index {
-            if let Some(item) = pending_ts.back_mut() {
-                if item.0 >= apply_index && item.1 < ts {
+            // Instead of adding a new item, try update the last one
+            if let Some(item) = pending_items.back_mut() {
+                // Discord the item if it has a smaller `safe_ts`
+                if item.1 >= ts {
+                    return;
+                }
+                // Discord the item if it has a smaller `apply_index`
+                if item.0 >= apply_index {
+                    // Update the last item's `safe_ts` if the incoming item require a less or equal
+                    // `apply_index` with a larger `safe_ts`
                     item.1 = ts;
                     return;
                 }
-                if *item >= (apply_index, ts) {
-                    return;
-                }
             }
-            self.push_back(&mut pending_ts, (apply_index, ts));
+            self.push_back(&mut pending_items, (apply_index, ts));
         } else {
             if ts > self.safe_ts.fetch_max(ts, Ordering::Relaxed) {
                 debug!("safe ts updated"; "tag" => &self.tag, "safe ts" => ts);
@@ -2551,9 +2571,9 @@ impl RegionReadProgress {
 
     // Reset `safe_ts` to min(`source_safe_ts`, `safe_ts`)
     pub fn merge_safe_ts(&self, source_safe_ts: u64, merge_index: u64) {
-        let mut pending_ts = self.pending_ts.lock().unwrap();
+        let mut pending_items = self.pending_items.lock().unwrap();
         // Clear all pending ts before `merge_index`
-        self.update_applied_internal(merge_index - 1, &mut pending_ts);
+        self.update_applied_internal(merge_index - 1, &mut pending_items);
         // Update `last_merge_index` to `merge_index`
         self.last_merge_index.store(merge_index, Ordering::Relaxed);
         // Reset target region's `safe_ts`
@@ -2637,6 +2657,8 @@ impl PeerPropertyAction for RegionSafeTSTracker {
 
     fn property_to_bytes(&self, any: &Box<dyn Any + Send + Sync>) -> Result<Vec<u8>> {
         let rrp = any.downcast_ref::<RegionReadProgress>().unwrap();
+        // TODO: instead of getting the current `apply_index`, get the `apply_index` that published
+        // with the `safe_ts` in the same item which should be less or equal to the current `apply_index`
         let (applied_index, safe_ts) = (rrp.applied_index(), rrp.safe_ts());
         let mut read_state = ReadState::default();
         read_state.set_applied_index(applied_index);
