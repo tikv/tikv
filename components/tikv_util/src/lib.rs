@@ -12,7 +12,6 @@ use std::collections::hash_map::Entry;
 use std::collections::vec_deque::{Iter, VecDeque};
 use std::fs::File;
 use std::ops::{Deref, DerefMut};
-use std::panic;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -417,6 +416,7 @@ impl<T> Drop for MustConsumeVec<T> {
 
 /// Exit the whole process when panic.
 pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
+    use std::panic;
     use std::process;
 
     // HACK! New a backtrace ahead for caching necessary elf sections of this
@@ -493,16 +493,6 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
             }
         }
     }))
-}
-
-pub fn catch_unwind_silent<F: FnOnce() -> R + panic::UnwindSafe, R>(
-    f: F,
-) -> std::thread::Result<R> {
-    let prev_hook = panic::take_hook();
-    panic::set_hook(Box::new(|_| {}));
-    let result = panic::catch_unwind(f);
-    panic::set_hook(prev_hook);
-    result
 }
 
 /// Checks environment variables that affect TiKV.

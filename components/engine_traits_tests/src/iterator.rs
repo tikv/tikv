@@ -3,8 +3,7 @@
 use super::default_engine;
 use engine_traits::SeekKey;
 use engine_traits::{Iterable, Iterator, KvEngine};
-use std::panic::AssertUnwindSafe;
-use tikv_util::catch_unwind_silent;
+use panic_hook::recover_safe;
 
 fn iter_empty<E, I, IF>(e: &E, i: IF)
 where
@@ -16,21 +15,21 @@ where
 
     assert_eq!(iter.valid().unwrap(), false);
 
-    assert!(catch_unwind_silent(AssertUnwindSafe(|| {
+    assert!(recover_safe(|| {
         let _ = iter.prev();
-    }))
+    })
     .is_err());
-    assert!(catch_unwind_silent(AssertUnwindSafe(|| {
+    assert!(recover_safe(|| {
         let _ = iter.next();
-    }))
+    })
     .is_err());
-    assert!(catch_unwind_silent(AssertUnwindSafe(|| {
+    assert!(recover_safe(|| {
         iter.key();
-    }))
+    })
     .is_err());
-    assert!(catch_unwind_silent(AssertUnwindSafe(|| {
+    assert!(recover_safe(|| {
         iter.value();
-    }))
+    })
     .is_err());
 
     assert_eq!(iter.seek(SeekKey::Start).unwrap(), false);
@@ -89,13 +88,13 @@ where
 
     assert!(!iter.valid().unwrap());
 
-    assert!(catch_unwind_silent(AssertUnwindSafe(|| {
+    assert!(recover_safe(|| {
         iter.key();
-    }))
+    })
     .is_err());
-    assert!(catch_unwind_silent(AssertUnwindSafe(|| {
+    assert!(recover_safe(|| {
         iter.value();
-    }))
+    })
     .is_err());
 }
 
@@ -147,13 +146,13 @@ where
 
     assert!(!iter.valid().unwrap());
 
-    assert!(catch_unwind_silent(AssertUnwindSafe(|| {
+    assert!(recover_safe(|| {
         iter.key();
-    }))
+    })
     .is_err());
-    assert!(catch_unwind_silent(AssertUnwindSafe(|| {
+    assert!(recover_safe(|| {
         iter.value();
-    }))
+    })
     .is_err());
 }
 
