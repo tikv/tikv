@@ -36,6 +36,7 @@ protobuf-codec = [
   "tikv/protobuf-codec",
   "tikv_util/protobuf-codec",
   "txn_types/protobuf-codec",
+  "file_system/protobuf-codec",
 ]
 prost-codec = [
   "backup/prost-codec",
@@ -56,6 +57,7 @@ prost-codec = [
   "tikv/prost-codec",
   "tikv_util/prost-codec",
   "txn_types/prost-codec",
+  "file_system/prost-codec",
 ]
 test-engines-rocksdb = [
   "tikv/test-engines-rocksdb",
@@ -78,7 +80,7 @@ encryption_export = { path = "../../components/encryption/export", default-featu
 engine_rocks = { path = "../../components/engine_rocks", default-features = false }
 engine_traits = { path = "../../components/engine_traits", default-features = false }
 error_code = { path = "../../components/error_code", default-features = false }
-file_system = { path = "../../components/file_system" }
+file_system = { path = "../../components/file_system", default-features = false }
 fs2 = "0.4"
 futures = "0.3"
 tokio = { version = "0.2", features = ["rt-threaded", "time"] }

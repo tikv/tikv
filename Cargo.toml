@@ -56,6 +56,7 @@ protobuf-codec = [
   "tikv_util/protobuf-codec",
   "txn_types/protobuf-codec",
   "grpcio-health/protobuf-codec",
+  "file_system/protobuf-codec",
 ]
 prost-codec = [
   "batch-system/prost-codec",
@@ -87,6 +88,7 @@ prost-codec = [
   "tikv_util/prost-codec",
   "txn_types/prost-codec",
   "grpcio-health/prost-codec",
+  "file_system/prost-codec",
 ]
 testexport = ["raftstore/testexport"]
 test-engines-rocksdb = [
@@ -129,7 +131,7 @@ engine_traits = { path = "components/engine_traits", default-features = false }
 engine_traits_tests = { path = "components/engine_traits_tests", default-features = false }
 error_code = { path = "components/error_code", default-features = false }
 fail = "0.4"
-file_system = { path = "components/file_system" }
+file_system = { path = "components/file_system", default-features = false }
 fs2 = "0.4"
 futures = { version = "0.3", features = ["thread-pool", "compat"] }
 futures-executor = "0.3.1"
