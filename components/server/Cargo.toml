@@ -1,13 +1,11 @@
 [package]
-name = "cmd"
+name = "server"
 version = "0.0.1"
 license = "Apache-2.0"
 edition = "2018"
 publish = false
-default-run = "tikv-server"
 
 [features]
-default = ["protobuf-codec", "test-engines-rocksdb", "cloud-aws", "cloud-gcp"]
 tcmalloc = ["tikv/tcmalloc"]
 jemalloc = ["tikv/jemalloc"]
 mimalloc = ["tikv/mimalloc"]
@@ -37,7 +35,6 @@ protobuf-codec = [
   "tikv/protobuf-codec",
   "tikv_util/protobuf-codec",
   "txn_types/protobuf-codec",
-  "file_system/protobuf-codec",
 ]
 prost-codec = [
   "backup/prost-codec",
@@ -58,7 +55,6 @@ prost-codec = [
   "tikv/prost-codec",
   "tikv_util/prost-codec",
   "txn_types/prost-codec",
-  "file_system/prost-codec",
 ]
 test-engines-rocksdb = [
   "tikv/test-engines-rocksdb",
@@ -67,64 +63,53 @@ test-engines-panic = [
   "tikv/test-engines-panic",
 ]
 
-nortcheck = []
-
-[lib]
-name = "cmd"
-
-[[bin]]
-name = "tikv-server"
-
-[[bin]]
-name = "tikv-ctl"
+nortcheck = ["engine_rocks/nortcheck"]
 
 [dependencies]
-backup = { path = "../components/backup", default-features = false }
-cdc = { path = "../components/cdc", default-features = false }
+backup = { path = "../backup", default-features = false }
+cdc = { path = "../cdc" }
 chrono = "0.4"
-crossbeam = "0.7"
 tempfile = "3.0"
 clap = "2.32"
-concurrency_manager = { path = "../components/concurrency_manager", default-features = false }
-encryption_export = { path = "../components/encryption/export", default-features = false }
-engine_rocks = { path = "../components/engine_rocks", default-features = false }
-engine_traits = { path = "../components/engine_traits", default-features = false }
-error_code = { path = "../components/error_code", default-features = false }
-file_system = { path = "../components/file_system", default-features = false }
+collections = { path = "../collections" }
+concurrency_manager = { path = "../concurrency_manager" }
+crossbeam = "0.7"
+encryption = { path = "../encryption" }
+encryption_export = { path = "../encryption/export", default-features = false }
+engine_rocks = { path = "../engine_rocks" }
+engine_traits = { path = "../engine_traits" }
+error_code = { path = "../error_code" }
+file_system = { path = "../file_system" }
 fs2 = "0.4"
 futures = "0.3"
-tokio = { version = "0.2", features = ["rt-threaded", "time"] }
-grpcio = { version = "0.8",  default-features = false, features = ["openssl-vendored"] }
+tokio = { version = "0.2", features = ["rt-threaded"] }
+grpcio = { version = "0.8", default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"
-keys = { path = "../components/keys", default-features = false }
+keys = { path = "../keys" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
-log_wrappers = { path = "../components/log_wrappers" }
+log_wrappers = { path = "../log_wrappers" }
 nix = "0.11"
-pd_client = { path = "../components/pd_client", default-features = false }
+pd_client = { path = "../pd_client" }
 prometheus = { version = "0.10", features = ["nightly"] }
 promptly = "0.3.0"
 protobuf = "2.8"
 raft = { version = "0.6.0-alpha", default-features = false }
-raft_log_engine = { path = "../components/raft_log_engine", default-features = false }
-raftstore = { path = "../components/raftstore", default-features = false }
+raft_log_engine = { path = "../raft_log_engine" }
+raftstore = { path = "../raftstore" }
 rand = "0.7"
-security = { path = "../components/security", default-features = false }
+security = { path = "../security" }
 serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
-tikv = { path = "../", default-features = false }
-tikv_alloc = { path = "../components/tikv_alloc" }
-tikv_util = { path = "../components/tikv_util", default-features = false }
-collections = { path = "../components/collections" }
+tikv = { path = "../..", default-features = false }
+tikv_alloc = { path = "../tikv_alloc" }
+tikv_util = { path = "../tikv_util" }
 toml = "0.5"
-txn_types = { path = "../components/txn_types", default-features = false }
+txn_types = { path = "../txn_types" }
 vlog = "0.1.4"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
-
-[build-dependencies]
-time = "0.1"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.6"

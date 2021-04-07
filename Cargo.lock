@@ -645,57 +645,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cmd"
-version = "0.0.1"
-dependencies = [
- "backup",
- "cdc",
- "chrono",
- "clap",
- "collections",
- "concurrency_manager",
- "crossbeam",
- "encryption_export",
- "engine_rocks",
- "engine_traits",
- "error_code",
- "file_system",
- "fs2",
- "futures 0.3.7",
- "grpcio",
- "hex 0.4.2",
- "keys",
- "kvproto",
- "libc 0.2.86",
- "log",
- "log_wrappers",
- "nix 0.11.1",
- "pd_client",
- "prometheus",
- "promptly",
- "protobuf",
- "raft",
- "raft_log_engine",
- "raftstore",
- "rand 0.7.3",
- "security",
- "serde_json",
- "signal",
- "slog",
- "slog-global",
- "tempfile",
- "tikv",
- "tikv_alloc",
- "tikv_util",
- "time 0.1.42",
- "tokio",
- "toml",
- "txn_types",
- "vlog",
- "yatp",
-]
-
-[[package]]
 name = "codec"
 version = "0.0.1"
 dependencies = [
@@ -4336,6 +4285,57 @@ dependencies = [
 ]
 
 [[package]]
+name = "server"
+version = "0.0.1"
+dependencies = [
+ "backup",
+ "cdc",
+ "chrono",
+ "clap",
+ "collections",
+ "concurrency_manager",
+ "crossbeam",
+ "encryption",
+ "encryption_export",
+ "engine_rocks",
+ "engine_traits",
+ "error_code",
+ "file_system",
+ "fs2",
+ "futures 0.3.7",
+ "grpcio",
+ "hex 0.4.2",
+ "keys",
+ "kvproto",
+ "libc 0.2.86",
+ "log",
+ "log_wrappers",
+ "nix 0.11.1",
+ "pd_client",
+ "prometheus",
+ "promptly",
+ "protobuf",
+ "raft",
+ "raft_log_engine",
+ "raftstore",
+ "rand 0.7.3",
+ "security",
+ "serde_json",
+ "signal",
+ "slog",
+ "slog-global",
+ "tempfile",
+ "tikv",
+ "tikv_alloc",
+ "tikv_util",
+ "tokio",
+ "toml",
+ "txn_types",
+ "vlog",
+ "yatp",
+]
+
+[[package]]
 name = "sha1"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5331,6 +5331,57 @@ dependencies = [
 ]
 
 [[package]]
+name = "tikv-ctl"
+version = "0.0.1"
+dependencies = [
+ "backup",
+ "cdc",
+ "chrono",
+ "clap",
+ "collections",
+ "concurrency_manager",
+ "crossbeam",
+ "encryption_export",
+ "engine_rocks",
+ "engine_traits",
+ "error_code",
+ "file_system",
+ "fs2",
+ "futures 0.3.7",
+ "grpcio",
+ "hex 0.4.2",
+ "keys",
+ "kvproto",
+ "libc 0.2.86",
+ "log",
+ "log_wrappers",
+ "nix 0.19.0",
+ "pd_client",
+ "prometheus",
+ "promptly",
+ "protobuf",
+ "raft",
+ "raft_log_engine",
+ "raftstore",
+ "rand 0.7.3",
+ "security",
+ "serde_json",
+ "signal",
+ "slog",
+ "slog-global",
+ "tempfile",
+ "tikv",
+ "tikv_alloc",
+ "tikv_util",
+ "time 0.1.42",
+ "tokio",
+ "toml",
+ "txn_types",
+ "vlog",
+ "yatp",
+]
+
+[[package]]
 name = "tikv-jemalloc-ctl"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5360,6 +5411,17 @@ checksum = "3c14a5a604eb8715bc5785018a37d00739b180bcf609916ddf4393d33d49ccdf"
 dependencies = [
  "libc 0.2.86",
  "tikv-jemalloc-sys",
+]
+
+[[package]]
+name = "tikv-server"
+version = "0.0.1"
+dependencies = [
+ "clap",
+ "server",
+ "tikv",
+ "time 0.1.42",
+ "toml",
 ]
 
 [[package]]
