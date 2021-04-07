@@ -3,6 +3,7 @@
 use configuration::ConfigValue;
 pub use rocksdb::PerfLevel;
 use rocksdb::{DBCompressionType, DBInfoLogLevel, DBTitanDBBlobRunMode};
+use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -306,6 +307,7 @@ macro_rules! numeric_enum_mod {
             mod tests {
                 use toml;
                 use rocksdb::$enum;
+                use serde::{Deserialize, Serialize};
 
                 #[test]
                 fn test_serde() {
@@ -408,18 +410,22 @@ mod tests {
 
         // length is wrong.
         assert!(toml::from_str::<CompressionTypeHolder>("tp = [\"no\"]").is_err());
-        assert!(toml::from_str::<CompressionTypeHolder>(
-            r#"tp = [
+        assert!(
+            toml::from_str::<CompressionTypeHolder>(
+                r#"tp = [
             "no", "no", "no", "no", "no", "no", "no", "no"
         ]"#
-        )
-        .is_err());
+            )
+            .is_err()
+        );
         // value is wrong.
-        assert!(toml::from_str::<CompressionTypeHolder>(
-            r#"tp = [
+        assert!(
+            toml::from_str::<CompressionTypeHolder>(
+                r#"tp = [
             "no", "no", "no", "no", "no", "no", "yes"
         ]"#
-        )
-        .is_err());
+            )
+            .is_err()
+        );
     }
 }

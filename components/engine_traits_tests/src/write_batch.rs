@@ -4,7 +4,7 @@ use super::{assert_engine_error, default_engine};
 use engine_test::kv::KvTestEngine;
 use engine_traits::CF_DEFAULT;
 use engine_traits::{Mutable, Peekable, SyncMutable, WriteBatch, WriteBatchExt};
-use std::panic::{self, AssertUnwindSafe};
+use panic_hook::recover_safe;
 
 #[test]
 fn write_batch_none_no_commit() {
@@ -282,10 +282,12 @@ fn write_batch_delete_range_cf_backward_range() {
     let mut wb = db.engine.write_batch();
 
     wb.delete_range_cf(CF_DEFAULT, b"c", b"a").unwrap();
-    assert!(panic::catch_unwind(AssertUnwindSafe(|| {
-        wb.write().unwrap();
-    }))
-    .is_err());
+    assert!(
+        recover_safe(|| {
+            wb.write().unwrap();
+        })
+        .is_err()
+    );
 
     assert!(db.engine.get_value(b"a").unwrap().is_some());
     assert!(db.engine.get_value(b"b").unwrap().is_some());
@@ -311,10 +313,12 @@ fn write_batch_delete_range_cf_backward_range_partial_commit() {
     wb.put(b"f", b"").unwrap();
     wb.delete(b"a").unwrap();
 
-    assert!(panic::catch_unwind(AssertUnwindSafe(|| {
-        wb.write().unwrap();
-    }))
-    .is_err());
+    assert!(
+        recover_safe(|| {
+            wb.write().unwrap();
+        })
+        .is_err()
+    );
 
     assert!(db.engine.get_value(b"a").unwrap().is_some());
     assert!(db.engine.get_value(b"b").unwrap().is_some());

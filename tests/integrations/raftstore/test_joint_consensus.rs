@@ -532,8 +532,10 @@ fn put_request(region: &Region, id: u64, key: &[u8], val: &[u8]) -> RaftCmdReque
 }
 
 fn must_has_peer(region: &Region, peer_id: u64, role: PeerRole) {
-    assert!(region
-        .get_peers()
-        .iter()
-        .any(|p| p.get_id() == peer_id && p.get_role() == role));
+    assert!(
+        region
+            .get_peers()
+            .iter()
+            .any(|p| p.get_id() == peer_id && p.get_role() == role)
+    );
 }

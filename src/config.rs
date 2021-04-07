@@ -2262,7 +2262,7 @@ impl Default for CdcConfig {
     fn default() -> Self {
         Self {
             min_ts_interval: ReadableDuration::secs(1),
-            old_value_cache_size: 1024,
+            old_value_cache_size: 1024 * 1024,
             hibernate_regions_compatible: true,
         }
     }
@@ -2487,8 +2487,10 @@ impl TiKvConfig {
         }
 
         if self.raft_store.hibernate_regions && !self.cdc.hibernate_regions_compatible {
-            warn!("raftstore.hibernate-regions was enabled but cdc.hibernate-regions-compatible \
-                was disabled, hibernate regions may be broken up if you want to deploy a cdc cluster");
+            warn!(
+                "raftstore.hibernate-regions was enabled but cdc.hibernate-regions-compatible \
+                was disabled, hibernate regions may be broken up if you want to deploy a cdc cluster"
+            );
         }
 
         self.rocksdb.validate()?;
@@ -2803,7 +2805,7 @@ pub fn write_config<P: AsRef<Path>>(path: P, content: &[u8]) -> CfgResult<()> {
                 "failed to get parent path of config file: {}",
                 path.as_ref().display()
             )
-            .into())
+            .into());
         }
     };
     {
@@ -3450,9 +3452,11 @@ mod tests {
 
         // Can not update block cache through storage module
         // when shared block cache is disabled
-        assert!(cfg_controller
-            .update_config("storage.block-cache.capacity", "512MB")
-            .is_err());
+        assert!(
+            cfg_controller
+                .update_config("storage.block-cache.capacity", "512MB")
+                .is_err()
+        );
     }
 
     #[test]
@@ -3486,9 +3490,11 @@ mod tests {
         let (db, cfg_controller, _) = new_engines(cfg);
 
         // Can not update shared block cache through rocksdb module
-        assert!(cfg_controller
-            .update_config("rocksdb.defaultcf.block-cache-size", "256MB")
-            .is_err());
+        assert!(
+            cfg_controller
+                .update_config("rocksdb.defaultcf.block-cache-size", "256MB")
+                .is_err()
+        );
 
         cfg_controller
             .update_config("storage.block-cache.capacity", "256MB")

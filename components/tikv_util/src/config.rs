@@ -21,7 +21,7 @@ use configuration::ConfigValue;
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
-    #[error("0")]
+    #[error("{0}")]
     Limit(String),
     #[error("config address error: {0}")]
     Address(String),

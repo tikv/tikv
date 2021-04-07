@@ -17,6 +17,7 @@ use keys::{data_end_key, data_key};
 use kvproto::metapb::Region;
 use raft::StateRole;
 use tikv_util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer, Scheduler, Worker};
+use tikv_util::{box_err, debug, info, warn};
 
 /// `RegionInfoAccessor` is used to collect all regions' information on this TiKV into a collection
 /// so that other parts of TiKV can get region information from it. It registers a observer to
@@ -218,10 +219,11 @@ impl RegionCollector {
 
             // Insert new entry to `region_ranges`.
             let end_key = data_end_key(region.get_end_key());
-            assert!(self
-                .region_ranges
-                .insert(end_key, region.get_id())
-                .is_none());
+            assert!(
+                self.region_ranges
+                    .insert(end_key, region.get_id())
+                    .is_none()
+            );
         }
 
         // If the region already exists, update it and keep the original role.
@@ -745,10 +747,11 @@ mod tests {
         // to `region_id`, it shouldn't be removed since it was used by another region.
         if let Some(old_end_key) = old_end_key {
             if old_end_key.as_slice() != region.get_end_key() {
-                assert!(c
-                    .region_ranges
-                    .get(&data_end_key(&old_end_key))
-                    .map_or(true, |id| *id != region.get_id()));
+                assert!(
+                    c.region_ranges
+                        .get(&data_end_key(&old_end_key))
+                        .map_or(true, |id| *id != region.get_id())
+                );
             }
         }
     }
@@ -763,10 +766,11 @@ mod tests {
         // If the region_id corresponding to the end_key doesn't equals to `id`, it shouldn't be
         // removed since it was used by another region.
         if let Some(end_key) = end_key {
-            assert!(c
-                .region_ranges
-                .get(&data_end_key(&end_key))
-                .map_or(true, |r| *r != id));
+            assert!(
+                c.region_ranges
+                    .get(&data_end_key(&end_key))
+                    .map_or(true, |r| *r != id)
+            );
         }
     }
 

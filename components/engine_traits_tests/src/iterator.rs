@@ -3,7 +3,7 @@
 use super::default_engine;
 use engine_traits::SeekKey;
 use engine_traits::{Iterable, Iterator, KvEngine};
-use std::panic::{self, AssertUnwindSafe};
+use panic_hook::recover_safe;
 
 fn iter_empty<E, I, IF>(e: &E, i: IF)
 where
@@ -15,22 +15,20 @@ where
 
     assert_eq!(iter.valid().unwrap(), false);
 
-    assert!(panic::catch_unwind(AssertUnwindSafe(|| {
-        let _ = iter.prev();
-    }))
-    .is_err());
-    assert!(panic::catch_unwind(AssertUnwindSafe(|| {
-        let _ = iter.next();
-    }))
-    .is_err());
-    assert!(panic::catch_unwind(AssertUnwindSafe(|| {
-        iter.key();
-    }))
-    .is_err());
-    assert!(panic::catch_unwind(AssertUnwindSafe(|| {
-        iter.value();
-    }))
-    .is_err());
+    assert!(iter.prev().is_err());
+    assert!(iter.next().is_err());
+    assert!(
+        recover_safe(|| {
+            iter.key();
+        })
+        .is_err()
+    );
+    assert!(
+        recover_safe(|| {
+            iter.value();
+        })
+        .is_err()
+    );
 
     assert_eq!(iter.seek(SeekKey::Start).unwrap(), false);
     assert_eq!(iter.seek(SeekKey::End).unwrap(), false);
@@ -88,14 +86,18 @@ where
 
     assert!(!iter.valid().unwrap());
 
-    assert!(panic::catch_unwind(AssertUnwindSafe(|| {
-        iter.key();
-    }))
-    .is_err());
-    assert!(panic::catch_unwind(AssertUnwindSafe(|| {
-        iter.value();
-    }))
-    .is_err());
+    assert!(
+        recover_safe(|| {
+            iter.key();
+        })
+        .is_err()
+    );
+    assert!(
+        recover_safe(|| {
+            iter.value();
+        })
+        .is_err()
+    );
 }
 
 #[test]
@@ -146,14 +148,18 @@ where
 
     assert!(!iter.valid().unwrap());
 
-    assert!(panic::catch_unwind(AssertUnwindSafe(|| {
-        iter.key();
-    }))
-    .is_err());
-    assert!(panic::catch_unwind(AssertUnwindSafe(|| {
-        iter.value();
-    }))
-    .is_err());
+    assert!(
+        recover_safe(|| {
+            iter.key();
+        })
+        .is_err()
+    );
+    assert!(
+        recover_safe(|| {
+            iter.value();
+        })
+        .is_err()
+    );
 }
 
 #[test]

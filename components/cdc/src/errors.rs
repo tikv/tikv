@@ -5,6 +5,7 @@ use std::{error, result};
 
 use engine_traits::Error as EngineTraitsError;
 use kvproto::errorpb::Error as ErrorHeader;
+use std::time::Duration;
 use thiserror::Error;
 use tikv::storage::kv::{Error as EngineError, ErrorInner as EngineErrorInner};
 use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
@@ -30,6 +31,10 @@ pub enum Error {
     Request(ErrorHeader),
     #[error("Engine traits error {0}")]
     EngineTraits(#[from] EngineTraitsError),
+    #[error("Incremental scan timed out {0:?}")]
+    ScanTimedOut(Duration),
+    #[error("Fail to get real time stream start")]
+    GetRealTimeStartFailed,
 }
 
 macro_rules! impl_from {

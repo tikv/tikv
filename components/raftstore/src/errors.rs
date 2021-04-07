@@ -5,13 +5,13 @@ use std::io;
 use std::net;
 use std::result;
 
-use crossbeam::TrySendError;
+use crossbeam::channel::TrySendError;
+use error_code::{self, ErrorCode, ErrorCodeExt};
+use kvproto::{errorpb, metapb};
 #[cfg(feature = "prost-codec")]
 use prost::{DecodeError, EncodeError};
 use protobuf::ProtobufError;
-
-use error_code::{self, ErrorCode, ErrorCodeExt};
-use kvproto::{errorpb, metapb};
+use quick_error::quick_error;
 use tikv_util::codec;
 
 use super::coprocessor::Error as CopError;
@@ -261,14 +261,14 @@ impl ErrorCodeExt for Error {
     fn error_code(&self) -> ErrorCode {
         match self {
             Error::ProposalInMergingMode(_) => error_code::raftstore::PROPOSAL_IN_MERGING_MODE,
-            Error::ReadIndexNotReady(_, _) => error_code::raftstore::READ_INDEX_NOT_READY,
-            Error::RaftEntryTooLarge(_, _) => error_code::raftstore::ENTRY_TOO_LARGE,
-            Error::StoreNotMatch(_, _) => error_code::raftstore::STORE_NOT_MATCH,
+            Error::ReadIndexNotReady(..) => error_code::raftstore::READ_INDEX_NOT_READY,
+            Error::RaftEntryTooLarge(..) => error_code::raftstore::ENTRY_TOO_LARGE,
+            Error::StoreNotMatch(..) => error_code::raftstore::STORE_NOT_MATCH,
             Error::RegionNotFound(_) => error_code::raftstore::REGION_NOT_FOUND,
-            Error::NotLeader(_, _) => error_code::raftstore::NOT_LEADER,
+            Error::NotLeader(..) => error_code::raftstore::NOT_LEADER,
             Error::StaleCommand => error_code::raftstore::STALE_COMMAND,
             Error::RegionNotInitialized(_) => error_code::raftstore::REGION_NOT_INITIALIZED,
-            Error::KeyNotInRegion(_, _) => error_code::raftstore::KEY_NOT_IN_REGION,
+            Error::KeyNotInRegion(..) => error_code::raftstore::KEY_NOT_IN_REGION,
             Error::Io(_) => error_code::raftstore::IO,
             Error::Engine(e) => e.error_code(),
             Error::Protobuf(_) => error_code::raftstore::PROTOBUF,
@@ -277,7 +277,7 @@ impl ErrorCodeExt for Error {
             Error::Pd(e) => e.error_code(),
             Error::Raft(e) => e.error_code(),
             Error::Timeout(_) => error_code::raftstore::TIMEOUT,
-            Error::EpochNotMatch(_, _) => error_code::raftstore::EPOCH_NOT_MATCH,
+            Error::EpochNotMatch(..) => error_code::raftstore::EPOCH_NOT_MATCH,
             Error::Coprocessor(e) => e.error_code(),
             Error::Transport(_) => error_code::raftstore::TRANSPORT,
             Error::Snapshot(e) => e.error_code(),

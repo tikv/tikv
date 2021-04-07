@@ -14,6 +14,7 @@ protobuf-codec = [
   "raft/protobuf-codec",
   "tikv_util/protobuf-codec",
   "txn_types/protobuf-codec",
+  "file_system/protobuf-codec",
 ]
 prost-codec = [
   "encryption/prost-codec",
@@ -23,6 +24,7 @@ prost-codec = [
   "raft/prost-codec",
   "tikv_util/prost-codec",
   "txn_types/prost-codec",
+  "file_system/prost-codec",
 ]
 jemalloc = ["rocksdb/jemalloc"]
 portable = ["rocksdb/portable"]
@@ -44,7 +46,7 @@ nortcheck = []
 [dependencies]
 encryption = { path = "../encryption", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
-file_system = { path = "../file_system" }
+file_system = { path = "../file_system", default-features = false }
 keys = { path = "../keys", default-features = false }
 num_cpus = "1"
 prometheus = { version = "0.10", features = ["nightly"] }
