@@ -2330,17 +2330,17 @@ mod tests {
         }
 
         // If the input is invalid UTF-8 bytes, it should return error.
-        assert!(
-            RpnFnScalarEvaluator::new()
-                .push_param(vec![0, 159, 146, 150])
-                .return_field_type(
-                    FieldTypeBuilder::new()
-                        .tp(FieldTypeTp::DateTime)
-                        .decimal(1)
-                        .build(),
-                )
-                .evaluate::<Time>(ScalarFuncSig::CastStringAsTime)
-                .is_err()
+        let (res, ctx) = RpnFnScalarEvaluator::new()
+            .push_param(vec![0, 159, 146, 150])
+            .evaluate_raw(
+                FieldTypeBuilder::new().tp(FieldTypeTp::DateTime).build(),
+                ScalarFuncSig::CastStringAsTime,
+            );
+        assert!(matches!(res.unwrap(), ScalarValue::DateTime(None)));
+        check_warning(
+            &ctx,
+            Some(ERR_TRUNCATE_WRONG_VALUE),
+            "should have warning when casting invalid utf-8 to time",
         );
     }
 
