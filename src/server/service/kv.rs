@@ -1089,15 +1089,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
 
         ctx.spawn(task);
     }
-
-    fn raw_get_key_ttl(
-        &mut self,
-        _: RpcContext<'_>,
-        _: RawGetKeyTtlRequest,
-        _: UnarySink<RawGetKeyTtlResponse>,
-    ) {
-        todo!()
-    }
 }
 
 fn response_batch_commands_request<F>(
