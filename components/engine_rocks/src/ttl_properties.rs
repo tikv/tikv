@@ -9,6 +9,7 @@ use engine_traits::{
     TablePropertiesExt, TtlProperties, TtlPropertiesExt,
 };
 use rocksdb::{DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory};
+use tikv_util::error;
 
 const PROP_MAX_EXPIRE_TS: &str = "tikv.max_expire_ts";
 const PROP_MIN_EXPIRE_TS: &str = "tikv.min_expire_ts";

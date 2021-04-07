@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use crossbeam::channel::{unbounded, Receiver};
 use engine_rocks::{
     self,

@@ -91,7 +91,7 @@ fn test_prevote<T: Simulator>(
 
     // Let the cluster recover.
     match failure_type {
-        FailureType::Partition(_, _) => {
+        FailureType::Partition(..) => {
             cluster.clear_send_filters();
         }
         FailureType::Reboot(peers) => {

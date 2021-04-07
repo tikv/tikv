@@ -113,7 +113,7 @@ impl ErrorCodeExt for Error {
             ErrorInner::Io(_) => error_code::storage::IO,
             ErrorInner::SchedTooBusy => error_code::storage::SCHED_TOO_BUSY,
             ErrorInner::GcWorkerTooBusy => error_code::storage::GC_WORKER_TOO_BUSY,
-            ErrorInner::KeyTooLarge(_, _) => error_code::storage::KEY_TOO_LARGE,
+            ErrorInner::KeyTooLarge(..) => error_code::storage::KEY_TOO_LARGE,
             ErrorInner::InvalidCf(_) => error_code::storage::INVALID_CF,
             ErrorInner::TTLNotEnabled => error_code::storage::TTL_NOT_ENABLED,
         }
