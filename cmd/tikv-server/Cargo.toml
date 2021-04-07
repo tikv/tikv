@@ -1,0 +1,34 @@
+[package]
+name = "tikv-server"
+version = "0.0.1"
+license = "Apache-2.0"
+edition = "2018"
+publish = false
+
+[features]
+default = ["protobuf-codec", "test-engines-rocksdb", "cloud-aws", "cloud-gcp"]
+tcmalloc = ["server/tcmalloc"]
+jemalloc = ["server/jemalloc"]
+mimalloc = ["server/mimalloc"]
+portable = ["server/portable"]
+sse = ["server/sse"]
+mem-profiling = ["server/mem-profiling"]
+failpoints = ["server/failpoints"]
+bcc-iosnoop = ["server/bcc-iosnoop"]
+cloud-aws = ["server/cloud-aws"]
+cloud-gcp = ["server/cloud-gcp"]
+protobuf-codec = ["server/protobuf-codec"]
+prost-codec = ["server/prost-codec"]
+test-engines-rocksdb = ["server/test-engines-rocksdb"]
+test-engines-panic = ["server/test-engines-panic"]
+
+nortcheck = ["server/nortcheck"]
+
+[dependencies]
+clap = "2.32"
+server = { path = "../../components/server", default-features = false }
+tikv = { path = "../../", default-features = false }
+toml = "0.5"
+
+[build-dependencies]
+time = "0.1"
