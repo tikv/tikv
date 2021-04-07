@@ -85,7 +85,7 @@ pub fn url_of_backend(backend: &StorageBackend) -> url::Url {
             }
             u.set_path(gcs.get_prefix());
         }
-        Some(Backend::CloudDynamic(_)) => todo!(),
+        Some(Backend::CloudDynamic(_)) => unimplemented!(),
         None => {}
     }
     u
