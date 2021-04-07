@@ -11,11 +11,13 @@ use kvproto::kvrpcpb::KeyRange;
 use kvproto::metapb::{self, PeerRole};
 use kvproto::raft_cmdpb::{AdminCmdType, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest};
 use kvproto::raft_serverpb::RaftMessage;
+use lazy_static::lazy_static;
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
 use raft::INVALID_INDEX;
 use raft_proto::ConfChangeI;
 use tikv_util::time::monotonic_raw_now;
+use tikv_util::{box_err, debug};
 use time::{Duration, Timespec};
 
 use super::peer_storage;
@@ -636,7 +638,7 @@ fn timespec_to_u64(ts: Timespec) -> u64 {
 ///
 /// If nsec is negative or GE than 1_000_000_000(nano seconds pre second).
 #[inline]
-fn u64_to_timespec(u: u64) -> Timespec {
+pub(crate) fn u64_to_timespec(u: u64) -> Timespec {
     let sec = u >> TIMESPEC_SEC_SHIFT;
     let nsec = (u & TIMESPEC_NSEC_MASK) << TIMESPEC_NSEC_SHIFT;
     Timespec::new(sec as i64, nsec as i32)
@@ -714,11 +716,11 @@ pub struct KeysInfoFormatter<
 >(pub I);
 
 impl<
-        'a,
-        I: std::iter::DoubleEndedIterator<Item = &'a Vec<u8>>
-            + std::iter::ExactSizeIterator<Item = &'a Vec<u8>>
-            + Clone,
-    > fmt::Display for KeysInfoFormatter<'a, I>
+    'a,
+    I: std::iter::DoubleEndedIterator<Item = &'a Vec<u8>>
+        + std::iter::ExactSizeIterator<Item = &'a Vec<u8>>
+        + Clone,
+> fmt::Display for KeysInfoFormatter<'a, I>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut it = self.0.clone();
@@ -1059,10 +1061,12 @@ mod tests {
                 ));
                 assert!(learner.iter().all(|id| cs.get_learners().contains(id)));
                 assert!(incomming.iter().all(|id| cs.get_voters().contains(id)));
-                assert!(demoting
-                    .iter()
-                    .all(|id| cs.get_voters_outgoing().contains(id)
-                        && cs.get_learners_next().contains(id)));
+                assert!(
+                    demoting
+                        .iter()
+                        .all(|id| cs.get_voters_outgoing().contains(id)
+                            && cs.get_learners_next().contains(id))
+                );
             }
         }
     }

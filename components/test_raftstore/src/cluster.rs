@@ -18,7 +18,7 @@ use raft::eraftpb::ConfChangeType;
 use tempfile::TempDir;
 
 use collections::{HashMap, HashSet};
-use encryption::DataKeyManager;
+use encryption_export::DataKeyManager;
 use engine_rocks::raw::DB;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::{
@@ -749,7 +749,7 @@ impl<T: Simulator> Cluster<T> {
 
             let resp = match result {
                 e @ Err(Error::Timeout(_))
-                | e @ Err(Error::NotLeader(_, _))
+                | e @ Err(Error::NotLeader(..))
                 | e @ Err(Error::StaleCommand) => {
                     warn!("call command failed, retry it"; "err" => ?e);
                     sleep_ms(100);

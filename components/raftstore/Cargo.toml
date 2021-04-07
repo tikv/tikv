@@ -12,7 +12,6 @@ failpoints = ["fail/failpoints"]
 protobuf-codec = [
   "batch-system/protobuf-codec",
   "concurrency_manager/protobuf-codec",
-  "engine_rocks/protobuf-codec",
   "engine_test/protobuf-codec",
   "engine_traits/protobuf-codec",
   "error_code/protobuf-codec",
@@ -25,12 +24,12 @@ protobuf-codec = [
   "tidb_query_datatype/protobuf-codec",
   "tikv_util/protobuf-codec",
   "txn_types/protobuf-codec",
+  "file_system/protobuf-codec",
 ]
 prost-codec = [
   "prost",
   "batch-system/prost-codec",
   "concurrency_manager/prost-codec",
-  "engine_rocks/prost-codec",
   "engine_test/prost-codec",
   "engine_traits/prost-codec",
   "error_code/prost-codec",
@@ -43,6 +42,7 @@ prost-codec = [
   "tidb_query_datatype/prost-codec",
   "tikv_util/prost-codec",
   "txn_types/prost-codec",
+  "file_system/prost-codec",
 ]
 testexport = []
 test-engines-rocksdb = [
@@ -61,12 +61,11 @@ configuration = { path = "../configuration" }
 crc32fast = "1.2"
 crossbeam = "0.7.2"
 encryption = { path = "../encryption", default-features = false }
-engine_rocks = { path = "../engine_rocks", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 error_code = { path = "../error_code", default-features = false }
 fail = "0.4"
 openssl = "0.10"
-file_system = { path = "../file_system" }
+file_system = { path = "../file_system", default-features = false }
 fs2 = "0.4"
 futures = "0.3"
 futures-util = { version = "0.3.1", default-features = false, features = ["io"] }
@@ -79,7 +78,7 @@ log_wrappers = { path = "../log_wrappers" }
 pd_client = { path = "../pd_client", default-features = false }
 prometheus = { version = "0.10", features = ["nightly"] }
 prometheus-static-metric = "0.4"
-prost = { version = "0.6", optional = true }
+prost = { version = "0.7", optional = true }
 protobuf = "2.8"
 quick-error = "1.2.3"
 raft = { version = "0.6.0-alpha", default-features = false }
@@ -108,6 +107,7 @@ yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 engine_test = { path = "../engine_test", default-features = false }
 
 [dev-dependencies]
+engine_rocks = { path = "../engine_rocks", default-features = false }
 panic_hook = { path = "../panic_hook" }
 test_sst_importer = { path = "../test_sst_importer", default-features = false }
 engine_panic = { path = "../engine_panic", default-features = false }

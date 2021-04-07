@@ -76,11 +76,7 @@ impl LockTable {
                     .and_then(|lock| check_fn(&handle.key, lock).err())
             })
         });
-        if let Some(e) = e {
-            Err(e)
-        } else {
-            Ok(())
-        }
+        if let Some(e) = e { Err(e) } else { Ok(()) }
     }
 
     /// Gets the handle of the key.
@@ -231,18 +227,22 @@ mod test {
         });
 
         // no lock found
-        assert!(lock_table
-            .check_range(
-                Some(&Key::from_raw(b"m")),
-                Some(&Key::from_raw(b"n")),
-                |_, _| Err(())
-            )
-            .is_ok());
+        assert!(
+            lock_table
+                .check_range(
+                    Some(&Key::from_raw(b"m")),
+                    Some(&Key::from_raw(b"n")),
+                    |_, _| Err(())
+                )
+                .is_ok()
+        );
 
         // lock passes check_fn
-        assert!(lock_table
-            .check_range(None, Some(&Key::from_raw(b"z")), |_, l| ts_check(l, 5))
-            .is_ok());
+        assert!(
+            lock_table
+                .check_range(None, Some(&Key::from_raw(b"z")), |_, l| ts_check(l, 5))
+                .is_ok()
+        );
 
         // first lock does not pass check_fn
         assert_eq!(

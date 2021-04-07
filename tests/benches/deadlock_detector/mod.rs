@@ -69,39 +69,41 @@ fn bench_detect(b: &mut Bencher, cfg: &Config) {
 }
 
 fn bench_dense_detect_without_cleanup(c: &mut Criterion) {
+    let mut group = c.benchmark_group("bench_dense_detect_without_cleanup");
+
     let ranges = vec![
         10,
         100,
         1_000,
-        10_000,
         10_000,
         100_000,
         1_000_000,
         10_000_000,
         100_000_000,
     ];
-    let mut cfgs = vec![];
     for range in ranges {
-        cfgs.push(Config {
+        let config = Config {
             n: 10,
             range,
             ttl: Duration::from_secs(100000000),
-        });
+        };
+        group.bench_with_input(format!("{:?}", &config), &config, bench_detect);
     }
-    c.bench_function_over_inputs("bench_dense_detect_without_cleanup", bench_detect, cfgs);
 }
 
 fn bench_dense_detect_with_cleanup(c: &mut Criterion) {
+    let mut group = c.benchmark_group("bench_dense_detect_with_cleanup");
+
     let ttls = vec![1, 3, 5, 10, 100, 500, 1_000, 3_000];
-    let mut cfgs = vec![];
     for ttl in &ttls {
-        cfgs.push(Config {
+        let config = Config {
             n: 10,
             range: 1000,
             ttl: Duration::from_millis(*ttl),
-        })
+        };
+        group.bench_with_input(format!("{:?}", &config), &config, bench_detect);
     }
-    c.bench_function_over_inputs("bench_dense_detect_with_cleanup", bench_detect, cfgs);
+    group.finish();
 }
 
 fn main() {
