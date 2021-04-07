@@ -716,11 +716,11 @@ pub struct KeysInfoFormatter<
 >(pub I);
 
 impl<
-        'a,
-        I: std::iter::DoubleEndedIterator<Item = &'a Vec<u8>>
-            + std::iter::ExactSizeIterator<Item = &'a Vec<u8>>
-            + Clone,
-    > fmt::Display for KeysInfoFormatter<'a, I>
+    'a,
+    I: std::iter::DoubleEndedIterator<Item = &'a Vec<u8>>
+        + std::iter::ExactSizeIterator<Item = &'a Vec<u8>>
+        + Clone,
+> fmt::Display for KeysInfoFormatter<'a, I>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut it = self.0.clone();
@@ -1061,10 +1061,12 @@ mod tests {
                 ));
                 assert!(learner.iter().all(|id| cs.get_learners().contains(id)));
                 assert!(incomming.iter().all(|id| cs.get_voters().contains(id)));
-                assert!(demoting
-                    .iter()
-                    .all(|id| cs.get_voters_outgoing().contains(id)
-                        && cs.get_learners_next().contains(id)));
+                assert!(
+                    demoting
+                        .iter()
+                        .all(|id| cs.get_voters_outgoing().contains(id)
+                            && cs.get_learners_next().contains(id))
+                );
             }
         }
     }

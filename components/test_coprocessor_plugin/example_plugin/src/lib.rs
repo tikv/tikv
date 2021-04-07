@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use coprocessor_plugin_api::*;
 
 #[derive(Default)]
@@ -14,7 +16,7 @@ impl CoprocessorPlugin for ExamplePlugin {
         _request: &RawRequest,
         _storage: &dyn RawStorage,
     ) -> Result<RawResponse, PluginError> {
-        todo!()
+        unimplemented!()
     }
 }
 

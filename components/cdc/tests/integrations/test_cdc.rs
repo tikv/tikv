@@ -228,12 +228,14 @@ fn test_cdc_not_leader() {
         ))
         .unwrap();
     rx.recv_timeout(Duration::from_secs(1)).unwrap();
-    assert!(suite
-        .obs
-        .get(&leader.get_store_id())
-        .unwrap()
-        .is_subscribed(1)
-        .is_some());
+    assert!(
+        suite
+            .obs
+            .get(&leader.get_store_id())
+            .unwrap()
+            .is_subscribed(1)
+            .is_some()
+    );
 
     // Transfer leader.
     let peer = suite
@@ -252,12 +254,14 @@ fn test_cdc_not_leader() {
         }
         other => panic!("unknown event {:?}", other),
     }
-    assert!(!suite
-        .obs
-        .get(&leader.get_store_id())
-        .unwrap()
-        .is_subscribed(1)
-        .is_some());
+    assert!(
+        !suite
+            .obs
+            .get(&leader.get_store_id())
+            .unwrap()
+            .is_subscribed(1)
+            .is_some()
+    );
 
     // Sleep a while to make sure the stream is deregistered.
     sleep_ms(200);
@@ -283,12 +287,14 @@ fn test_cdc_not_leader() {
         }
         other => panic!("unknown event {:?}", other),
     }
-    assert!(!suite
-        .obs
-        .get(&leader.get_store_id())
-        .unwrap()
-        .is_subscribed(1)
-        .is_some());
+    assert!(
+        !suite
+            .obs
+            .get(&leader.get_store_id())
+            .unwrap()
+            .is_subscribed(1)
+            .is_some()
+    );
 
     event_feed_wrap.replace(None);
     suite.stop();

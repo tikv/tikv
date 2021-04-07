@@ -113,11 +113,13 @@ fn test_reject_proposal_during_region_split() {
 
     fail::remove(fp);
     // Split is finished.
-    assert!(!split_rx
-        .recv_timeout(Duration::from_secs(1))
-        .unwrap()
-        .get_header()
-        .has_error());
+    assert!(
+        !split_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .get_header()
+            .has_error()
+    );
 
     // The write request fails due to epoch not match.
     cb_receivers.assert_err();
@@ -182,11 +184,13 @@ fn test_reject_proposal_during_region_merge() {
 
     // prepare-merge is finished.
     fail::remove(prepare_merge_fp);
-    assert!(!merge_rx
-        .recv_timeout(Duration::from_secs(1))
-        .unwrap()
-        .get_header()
-        .has_error());
+    assert!(
+        !merge_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .get_header()
+            .has_error()
+    );
     // The write request fails due to epoch not match.
     cb_receivers.assert_err();
 
@@ -348,17 +352,21 @@ fn test_accept_proposal_during_conf_change() {
     cb_receivers.proposed.try_recv().unwrap();
 
     fail::remove(conf_change_fp);
-    assert!(!add_peer_rx
-        .recv_timeout(Duration::from_secs(1))
-        .unwrap()
-        .get_header()
-        .has_error());
-    assert!(!cb_receivers
-        .applied
-        .recv_timeout(Duration::from_secs(1))
-        .unwrap()
-        .get_header()
-        .has_error());
+    assert!(
+        !add_peer_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .get_header()
+            .has_error()
+    );
+    assert!(
+        !cb_receivers
+            .applied
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .get_header()
+            .has_error()
+    );
     must_get_equal(&cluster.get_engine(2), b"k", b"v");
 }
 
