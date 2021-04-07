@@ -611,7 +611,7 @@ impl AnalyzeIndexResult {
         if let Some(f) = self.fms {
             let mut s = tipb::SampleCollector::default();
             s.set_fm_sketch(f.into_proto());
-            res.set_collector(s); 
+            res.set_collector(s);
         }
         res
     }
