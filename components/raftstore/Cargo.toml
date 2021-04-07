@@ -59,7 +59,7 @@ byteorder = "1.2"
 concurrency_manager = { path = "../concurrency_manager", default-features = false }
 configuration = { path = "../configuration" }
 crc32fast = "1.2"
-crossbeam = "0.7.2"
+crossbeam = "0.8"
 encryption = { path = "../encryption", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 error_code = { path = "../error_code", default-features = false }
