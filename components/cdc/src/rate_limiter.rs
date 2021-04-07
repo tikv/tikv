@@ -100,7 +100,7 @@ impl State {
     fn wake_up_one_sender(&self) {
         // Acquires the write lock on wait_queue.
         let queue = self.wait_queue.write().unwrap();
-        while let Ok(waker) = queue.pop() {
+        while let Some(waker) = queue.pop() {
             let mut waker = waker.lock().unwrap();
             // waker may have already been taken away, because the runtime has
             // decided to poll the sender for some reason (spurious wake-up) and the sender has unblocked itself.
@@ -116,7 +116,7 @@ impl State {
     fn wake_up_all_senders(&self) {
         // Acquires the write lock on wait_queue.
         let queue = self.wait_queue.write().unwrap();
-        while let Ok(waker) = queue.pop() {
+        while let Some(waker) = queue.pop() {
             let mut waker = waker.lock().unwrap();
             // see more comments on implementation details in wake_up_one_sender.
             if let Some(waker) = waker.take() {

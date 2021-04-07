@@ -5,7 +5,7 @@ use std::io;
 use std::net;
 use std::result;
 
-use crossbeam::TrySendError;
+use crossbeam::channel::TrySendError;
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::{errorpb, metapb};
 #[cfg(feature = "prost-codec")]

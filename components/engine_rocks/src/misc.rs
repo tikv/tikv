@@ -10,6 +10,7 @@ use engine_traits::{
     WriteBatchExt, ALL_CFS,
 };
 use rocksdb::Range as RocksRange;
+use tikv_util::box_try;
 use tikv_util::keybuilder::KeyBuilder;
 
 pub const MAX_DELETE_COUNT_BY_KEY: usize = 2048;

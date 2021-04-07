@@ -10,10 +10,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use engine_traits::Result;
+use engine_traits::CF_DEFAULT;
 use rocksdb::load_latest_options;
 use rocksdb::{CColumnFamilyDescriptor, ColumnFamilyOptions, DBOptions, Env, DB};
-
-use engine_traits::CF_DEFAULT;
+use tikv_util::warn;
 
 pub struct CFOptions<'a> {
     cf: &'a str,

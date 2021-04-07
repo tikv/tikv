@@ -23,6 +23,7 @@ protobuf-codec = [
   "tikv/protobuf-codec",
   "tikv_util/protobuf-codec",
   "txn_types/protobuf-codec",
+  "file_system/protobuf-codec",
 ]
 prost-codec = [
   "concurrency_manager/prost-codec",
@@ -41,6 +42,7 @@ prost-codec = [
   "tikv/prost-codec",
   "tikv_util/prost-codec",
   "txn_types/prost-codec",
+  "file_system/prost-codec",
 ]
 test-engines-rocksdb = [
   "tikv/test-engines-rocksdb",
@@ -64,7 +66,7 @@ engine_rocks = { path = "../engine_rocks", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 error_code = { path = "../error_code", default-features = false }
 external_storage = { path = "../external_storage", default-features = false }
-file_system = { path = "../file_system" }
+file_system = { path = "../file_system", default-features = false }
 futures = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
 grpcio = { version = "0.8",  default-features = false, features = ["openssl-vendored"] }
