@@ -723,10 +723,6 @@ mod tests {
         let import_bytes = stats.fetch(IOType::Import, IOOp::Write);
         let total_bytes = write_bytes + import_bytes + compaction_bytes;
         approximate_eq!((compaction_bytes + write_bytes) as f64, total_bytes as f64);
-        approximate_eq!(
-            total_bytes as f64,
-            bytes_per_sec as f64 * duration.as_secs_f64()
-        );
     }
 
     #[bench]
