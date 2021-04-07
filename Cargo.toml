@@ -239,7 +239,8 @@ members = [
   "fuzz/fuzzer-libfuzzer",
   "fuzz/fuzzer-honggfuzz",
   "tests",
-  "cmd",
+  "cmd/tikv-server",
+  "cmd/tikv-ctl",
   "components/test_backup",
   "components/test_raftstore",
   "components/test_storage",
@@ -277,12 +278,13 @@ members = [
   "components/encryption",
   "components/error_code",
   "components/concurrency_manager",
+  "components/server",
   "components/file_system",
   "components/collections",
   "components/coprocessor_plugin_api",
   "components/test_coprocessor_plugin/example_plugin"
 ]
-default-members = ["cmd"]
+default-members = ["cmd/tikv-server", "cmd/tikv-ctl"]
 
 [profile.dev]
 opt-level = 0
@@ -305,6 +307,10 @@ panic = 'unwind'
 debug-assertions = false
 overflow-checks = false
 rpath = false
+
+[profile.release.package.server]
+opt-level = 1
+codegen-units = 4
 
 [profile.test]
 opt-level = 0
