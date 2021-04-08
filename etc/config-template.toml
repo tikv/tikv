@@ -209,13 +209,10 @@
 ## latency jittering when apply duration is not stable.
 # enable-async-apply-prewrite = false
 
-## Reserve some space to ensure recovering the store from `no space left` must success. The
-## configured value only indicates the lower limit, and 20GB is the upper limit. In this range,
+## Reserve some space to ensure recovering the store from `no space left` must succeed.
 ## `max(reserve-space, capacity * 5%)` will be reserved exactly.
 ##
-## Set it to 0 will cause no space is reserved at all.
-##
-## Generally it's not necessary to change it. This configuration could be deprecated in future.
+## Set it to 0 will cause no space is reserved at all. It's generally used for tests.
 # reserve-space = "5GB"
 
 [storage.block-cache]
@@ -971,7 +968,7 @@
 # max-write-bytes-per-sec = "0"
 
 ## Enable GC by compaction filter or not.
-# enable-compaction-filter = false
+# enable-compaction-filter = true
 
 ## Garbage ratio threshold to trigger a GC.
 # ratio-threshold = 1.1

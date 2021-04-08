@@ -1,23 +1,23 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::RefCell;
-use std::ops::{Bound, Deref};
+use std::ops::Deref;
 use std::sync::{Arc, RwLock};
 
 use collections::HashMap;
 use engine_rocks::RocksEngine;
-use engine_traits::{
-    IterOptions, KvEngine, ReadOptions, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN,
-};
+use engine_traits::{KvEngine, ReadOptions, CF_DEFAULT, CF_WRITE};
+use fail::fail_point;
 use kvproto::metapb::{Peer, Region};
 use raft::StateRole;
 use raftstore::coprocessor::*;
 use raftstore::store::fsm::ObserveID;
 use raftstore::store::RegionSnapshot;
 use raftstore::Error as RaftStoreError;
-use tikv::storage::{Cursor, ScanMode, Snapshot as EngineSnapshot, Statistics};
+use tikv::storage::{Cursor, CursorBuilder, ScanMode, Snapshot as EngineSnapshot, Statistics};
 use tikv_util::time::Instant;
 use tikv_util::worker::Scheduler;
+use tikv_util::{error, warn};
 use txn_types::{Key, MutationType, OldValue, TimeStamp, Value, WriteRef, WriteType};
 
 use crate::endpoint::{Deregister, OldValueCache, Task};
@@ -134,7 +134,6 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
                 if let Some((old_value, mutation_type)) = old_value_cache.cache.remove(&key) {
                     match mutation_type {
                         MutationType::Insert => {
-                            assert!(!old_value.exists());
                             return None;
                         }
                         MutationType::Put | MutationType::Delete => {
@@ -236,16 +235,15 @@ impl<S: EngineSnapshot> OldValueReader<S> {
     }
 
     fn new_write_cursor(&self, key: &Key) -> Cursor<S::Iter> {
-        let mut iter_opts = IterOptions::default();
         let ts = Key::decode_ts_from(key.as_encoded()).unwrap();
         let upper = Key::from_encoded_slice(Key::truncate_ts_for(key.as_encoded()).unwrap())
             .append_ts(TimeStamp::zero());
-        iter_opts.set_fill_cache(false);
-        iter_opts.set_hint_max_ts(Bound::Included(ts.into_inner()));
-        iter_opts.set_lower_bound(key.as_encoded(), DATA_KEY_PREFIX_LEN);
-        iter_opts.set_upper_bound(upper.as_encoded(), DATA_KEY_PREFIX_LEN);
-        self.snapshot
-            .iter_cf(CF_WRITE, iter_opts, ScanMode::Mixed)
+        CursorBuilder::new(&self.snapshot, CF_WRITE)
+            .fill_cache(false)
+            .scan_mode(ScanMode::Mixed)
+            .range(Some(key.clone()), Some(upper))
+            .hint_max_ts(Some(ts))
+            .build()
             .unwrap()
     }
 
@@ -409,7 +407,7 @@ mod tests {
 
         must_prewrite_put(&engine, k, b"v2", k, 2);
         must_get_eq(2, Some(b"v1".to_vec()));
-        must_rollback(&engine, k, 2);
+        must_rollback(&engine, k, 2, false);
 
         must_prewrite_put(&engine, k, b"v3", k, 3);
         must_get_eq(3, Some(b"v1".to_vec()));
@@ -425,7 +423,7 @@ mod tests {
 
         must_prewrite_delete(&engine, k, k, 6);
         must_get_eq(6, Some(vec![b'v'; 5120]));
-        must_rollback(&engine, k, 6);
+        must_rollback(&engine, k, 6, false);
 
         must_prewrite_put(&engine, k, b"v4", k, 7);
         must_commit(&engine, k, 7, 9);

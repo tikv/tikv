@@ -3,22 +3,23 @@
 use std::convert::Infallible;
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
-use failure::Fail;
+use thiserror::Error;
+use tikv_util::impl_format_delegate_newtype;
 
-#[derive(Fail, Debug)]
+#[derive(Debug, Error)]
 pub enum EvaluateError {
-    #[fail(display = "Execution terminated due to exceeding the deadline")]
+    #[error("Execution terminated due to exceeding the deadline")]
     DeadlineExceeded,
 
-    #[fail(display = "Invalid {} character string", charset)]
+    #[error("Invalid {charset} character string")]
     InvalidCharacterString { charset: String },
 
     /// This variant is only a compatible layer for existing CodecError.
     /// Ideally each error kind should occupy an enum variant.
-    #[fail(display = "{}", msg)]
+    #[error("{msg}")]
     Custom { code: i32, msg: String },
 
-    #[fail(display = "{}", _0)]
+    #[error("{0}")]
     Other(String),
 }
 
@@ -80,41 +81,25 @@ impl ErrorCodeExt for EvaluateError {
     }
 }
 
-#[derive(Fail, Debug)]
-#[fail(display = "{}", _0)]
-pub struct StorageError(pub failure::Error);
-
-impl From<failure::Error> for StorageError {
-    #[inline]
-    fn from(err: failure::Error) -> Self {
-        StorageError(err)
-    }
-}
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct StorageError(#[from] pub anyhow::Error);
 
 /// We want to restrict the type of errors to be either a `StorageError` or `EvaluateError`, thus
 /// `failure::Error` is not used. Instead, we introduce our own error enum.
-#[derive(Fail, Debug)]
+#[derive(Debug, Error)]
 pub enum ErrorInner {
-    #[fail(display = "Storage error: {}", _0)]
-    Storage(#[fail(cause)] StorageError),
+    #[error("Storage error: {0}")]
+    Storage(#[source] StorageError),
 
-    #[fail(display = "Evaluate error: {}", _0)]
-    Evaluate(#[fail(cause)] EvaluateError),
+    #[error("Evaluate error: {0}")]
+    Evaluate(#[source] EvaluateError),
 }
 
+#[derive(Debug)]
 pub struct Error(pub Box<ErrorInner>);
 
-impl std::fmt::Debug for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&self.0, f)
-    }
-}
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.0, f)
-    }
-}
+impl_format_delegate_newtype!(Error);
 
 impl From<StorageError> for Error {
     #[inline]

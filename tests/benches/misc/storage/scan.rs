@@ -59,16 +59,18 @@ fn bench_tombstone_scan(b: &mut Bencher) {
     kvs = KvGenerator::new(100, 1000);
     b.iter(|| {
         let (k, _) = kvs.next().unwrap();
-        assert!(store
-            .scan(
-                Context::default(),
-                Key::from_raw(&k),
-                None,
-                1,
-                false,
-                ts_generator.next().unwrap(),
-            )
-            .unwrap()
-            .is_empty())
+        assert!(
+            store
+                .scan(
+                    Context::default(),
+                    Key::from_raw(&k),
+                    None,
+                    1,
+                    false,
+                    ts_generator.next().unwrap(),
+                )
+                .unwrap()
+                .is_empty()
+        )
     })
 }

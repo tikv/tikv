@@ -433,6 +433,7 @@ impl Worker {
                     }
                     Msg::Timeout => {
                         handle.inner.on_timeout();
+                        let timeout = handle.inner.get_interval();
                         Self::delay_notify(tx.clone(), timeout);
                     }
                 }

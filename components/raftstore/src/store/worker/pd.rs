@@ -7,21 +7,22 @@ use std::sync::{
     Arc,
 };
 use std::thread::{Builder, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{cmp, io};
 
+#[cfg(feature = "failpoints")]
+use fail::fail_point;
 use futures::future::TryFutureExt;
 use tokio::task::spawn_local;
 
 use engine_traits::{KvEngine, RaftEngine};
-use kvproto::metapb;
-use kvproto::pdpb;
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest,
     SplitRequest,
 };
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::RegionReplicationStatus;
+use kvproto::{metapb, pdpb};
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 
@@ -30,17 +31,21 @@ use crate::store::metrics::*;
 use crate::store::util::{is_epoch_stale, ConfChangeKind, KeysInfoFormatter};
 use crate::store::worker::split_controller::{SplitInfo, TOP_N};
 use crate::store::worker::{AutoSplitController, ReadStats};
-use crate::store::Callback;
-use crate::store::StoreInfo;
-use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, StoreMsg};
+use crate::store::{
+    Callback, CasualMessage, PeerMsg, RaftCommand, RaftRouter, SnapManager, StoreInfo, StoreMsg,
+};
 
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
+use futures::compat::Future01CompatExt;
+use futures::FutureExt;
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::UnixSecs;
+use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
+use tikv_util::{box_err, debug, error, info, thd_name, warn};
 
 type RecordPairVec = Vec<pdpb::RecordPair>;
 
@@ -211,13 +216,9 @@ where
                 region.get_id(),
                 log_wrappers::Value::key(&split_key),
             ),
-            Task::AutoSplit {
-                ref split_infos,
-            } => write!(
-                f,
-                "auto split split regions, num is {}",
-                split_infos.len(),
-            ),
+            Task::AutoSplit { ref split_infos } => {
+                write!(f, "auto split split regions, num is {}", split_infos.len(),)
+            }
             Task::AskBatchSplit {
                 ref region,
                 ref split_keys,
@@ -242,11 +243,7 @@ where
             Task::ValidatePeer {
                 ref region,
                 ref peer,
-            } => write!(
-                f,
-                "validate peer {:?} with region {:?}",
-                peer, region
-            ),
+            } => write!(f, "validate peer {:?} with region {:?}", peer, region),
             Task::ReadStats { ref read_stats } => {
                 write!(f, "get the read statistics {:?}", read_stats)
             }
@@ -267,11 +264,9 @@ where
                 "update the max timestamp for region {} in the concurrency manager",
                 region_id
             ),
-            Task::QueryRegionLeader { region_id } => write!(
-                f,
-                "query the leader of region {}",
-                region_id
-            ),
+            Task::QueryRegionLeader { region_id } => {
+                write!(f, "query the leader of region {}", region_id)
+            }
         }
     }
 }
@@ -448,6 +443,7 @@ where
     stats_monitor: StatsMonitor<EK>,
 
     concurrency_manager: ConcurrencyManager,
+    snap_mgr: SnapManager,
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
@@ -466,6 +462,7 @@ where
         store_heartbeat_interval: Duration,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
+        snap_mgr: SnapManager,
     ) -> Runner<EK, ER, T> {
         let interval = store_heartbeat_interval / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
@@ -484,6 +481,7 @@ where
             scheduler,
             stats_monitor,
             concurrency_manager,
+            snap_mgr,
         }
     }
 
@@ -669,9 +667,8 @@ where
         };
         stats.set_capacity(capacity);
 
-        // already include size of snapshot files
-        let used_size =
-            stats.get_used_size() + store_info.engine.get_engine_used_size().expect("cf");
+        let used_size = self.snap_mgr.get_total_snap_size().unwrap()
+            + store_info.engine.get_engine_used_size().expect("cf");
         stats.set_used_size(used_size);
 
         let mut available = capacity.checked_sub(used_size).unwrap_or_default();
@@ -920,9 +917,6 @@ where
             peer_stat.read_keys += region_info.flow.read_keys as u64;
             self.store_stat.engine_total_bytes_read += region_info.flow.read_bytes as u64;
             self.store_stat.engine_total_keys_read += region_info.flow.read_keys as u64;
-
-            region_info.approximate_key = peer_stat.approximate_keys;
-            region_info.approximate_size = peer_stat.approximate_size;
         }
         if !read_stats.region_infos.is_empty() {
             if let Some(sender) = self.stats_monitor.get_sender() {
@@ -994,7 +988,22 @@ where
                 );
             }
         };
-        spawn_local(f);
+
+        #[cfg(feature = "failpoints")]
+        let delay = (|| {
+            fail_point!("delay_update_max_ts", |_| true);
+            false
+        })();
+        #[cfg(not(feature = "failpoints"))]
+        let delay = false;
+
+        if delay {
+            info!("[failpoint] delay update max ts for 1s"; "region_id" => region_id);
+            let deadline = Instant::now() + Duration::from_secs(1);
+            spawn_local(GLOBAL_TIMER_HANDLE.delay(deadline).compat().then(|_| f));
+        } else {
+            spawn_local(f);
+        }
     }
 
     fn handle_query_region_leader(&self, region_id: u64) {

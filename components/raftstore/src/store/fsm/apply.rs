@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
@@ -24,6 +24,7 @@ use engine_traits::{
     DeleteStrategy, KvEngine, RaftEngine, Range as EngineRange, Snapshot, WriteBatch,
 };
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use fail::fail_point;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{PeerRole, Region, RegionEpoch};
@@ -43,6 +44,7 @@ use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant};
 use tikv_util::worker::Scheduler;
+use tikv_util::{box_err, box_try, debug, error, info, safe_panic, slow_log, warn};
 use tikv_util::{Either, MustConsumeVec};
 use time::Timespec;
 use uuid::Builder as UuidBuilder;
@@ -427,13 +429,8 @@ where
 
         if let Some(observe_cmd) = &delegate.observe_cmd {
             let region_id = delegate.region_id();
-            if observe_cmd.enabled.load(Ordering::Acquire) {
-                self.host.prepare_for_apply(observe_cmd.id, region_id);
-            } else {
-                info!("region is no longer observerd";
-                    "region_id" => region_id);
-                delegate.observe_cmd.take();
-            }
+            // TODO: skip this step when we do not need to observe cmds.
+            self.host.prepare_for_apply(observe_cmd.id, region_id);
         }
     }
 
@@ -1187,8 +1184,14 @@ where
                 || (epoch_state.change_conf_ver
                     && epoch.get_conf_ver() == self.region.get_region_epoch().get_conf_ver())
             {
-                panic!("{} apply admin cmd {:?} but epoch change is not expected, epoch state {:?}, before {:?}, after {:?}",
-                        self.tag, req, epoch_state, epoch, self.region.get_region_epoch());
+                panic!(
+                    "{} apply admin cmd {:?} but epoch change is not expected, epoch state {:?}, before {:?}, after {:?}",
+                    self.tag,
+                    req,
+                    epoch_state,
+                    epoch,
+                    self.region.get_region_epoch()
+                );
             }
         }
 
@@ -1351,6 +1354,15 @@ where
         let exec_res = if !ranges.is_empty() {
             ApplyResult::Res(ExecResult::DeleteRange { ranges })
         } else if !ssts.is_empty() {
+            #[cfg(feature = "failpoints")]
+            {
+                let mut dont_delete_ingested_sst_fp = || {
+                    fail_point!("dont_delete_ingested_sst", |_| {
+                        ssts.clear();
+                    });
+                };
+                dont_delete_ingested_sst_fp();
+            }
             ctx.delete_ssts.append(&mut ssts.clone());
             ApplyResult::Res(ExecResult::IngestSst { ssts })
         } else {
@@ -1898,11 +1910,11 @@ where
                             "region" => ?&self.region
                         );
                         return Err(box_err!(
-                                "can't add duplicated peer {:?} to region {:?}, duplicated with exist peer {:?}",
-                                peer,
-                                self.region,
-                                exist_peer
-                            ));
+                            "can't add duplicated peer {:?} to region {:?}, duplicated with exist peer {:?}",
+                            peer,
+                            self.region,
+                            exist_peer
+                        ));
                     }
                     match (role, change_type) {
                         (PeerRole::Voter, ConfChangeType::AddLearnerNode) => match kind {
@@ -2164,8 +2176,10 @@ where
                     if replace_regions.get(region_id).is_some() {
                         // This peer must be the first one on local store. So if this peer is created on the other side,
                         // it means no `RegionLocalState` in kv engine.
-                        panic!("{} failed to replace region {} peer {} because state {:?} alread exist in kv engine",
-                            self.tag, region_id, new_split_peer.peer_id, state);
+                        panic!(
+                            "{} failed to replace region {} peer {} because state {:?} alread exist in kv engine",
+                            self.tag, region_id, new_split_peer.peer_id, state
+                        );
                     }
                     already_exist_regions.push((*region_id, new_split_peer.peer_id));
                     new_split_peer.result = Some(format!("state {:?} exist in kv engine", state));
@@ -2836,8 +2850,8 @@ impl ObserveID {
 }
 
 struct ObserveCmd {
+    // TODO: Add flags to disable observing.
     id: ObserveID,
-    enabled: Arc<AtomicBool>,
 }
 
 impl Debug for ObserveCmd {
@@ -2847,16 +2861,9 @@ impl Debug for ObserveCmd {
 }
 
 #[derive(Debug)]
-pub enum ChangeCmd {
-    RegisterObserver {
-        observe_id: ObserveID,
-        region_id: u64,
-        enabled: Arc<AtomicBool>,
-    },
-    Snapshot {
-        observe_id: ObserveID,
-        region_id: u64,
-    },
+pub struct ChangeObserver {
+    pub observe_id: ObserveID,
+    pub region_id: u64,
 }
 
 pub enum Msg<EK>
@@ -2873,7 +2880,7 @@ where
     Destroy(Destroy),
     Snapshot(GenSnapTask),
     Change {
-        cmd: ChangeCmd,
+        cmd: ChangeObserver,
         region_epoch: RegionEpoch,
         cb: Callback<EK::Snapshot>,
     },
@@ -2922,13 +2929,9 @@ where
                 write!(f, "[region {}] requests a snapshot", region_id)
             }
             Msg::Change {
-                cmd: ChangeCmd::RegisterObserver { region_id, .. },
+                cmd: ChangeObserver { region_id, .. },
                 ..
-            } => write!(f, "[region {}] registers cmd observer", region_id),
-            Msg::Change {
-                cmd: ChangeCmd::Snapshot { region_id, .. },
-                ..
-            } => write!(f, "[region {}] cmd snapshot", region_id),
+            } => write!(f, "[region {}] change cmd", region_id),
             #[cfg(any(test, feature = "testexport"))]
             Msg::Validate(region_id, _) => write!(f, "[region {}] validate", region_id),
         }
@@ -3262,21 +3265,14 @@ where
     fn handle_change<W: WriteBatch<EK>>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
-        cmd: ChangeCmd,
+        cmd: ChangeObserver,
         region_epoch: RegionEpoch,
         cb: Callback<EK::Snapshot>,
     ) {
-        let (observe_id, region_id, enabled) = match cmd {
-            ChangeCmd::RegisterObserver {
-                observe_id,
-                region_id,
-                enabled,
-            } => (observe_id, region_id, Some(enabled)),
-            ChangeCmd::Snapshot {
-                observe_id,
-                region_id,
-            } => (observe_id, region_id, None),
-        };
+        let ChangeObserver {
+            observe_id,
+            region_id,
+        } = cmd;
         if let Some(observe_cmd) = self.delegate.observe_cmd.as_mut() {
             if observe_cmd.id > observe_id {
                 notify_stale_req(self.delegate.term, cb);
@@ -3316,24 +3312,8 @@ where
                 return;
             }
         };
-        if let Some(enabled) = enabled {
-            assert!(
-                !self
-                    .delegate
-                    .observe_cmd
-                    .as_ref()
-                    .map_or(false, |o| o.enabled.load(Ordering::SeqCst)),
-                "{} observer already exists {:?} {:?}",
-                self.delegate.tag,
-                self.delegate.observe_cmd,
-                observe_id
-            );
-            // TODO(cdc): take observe_cmd when enabled is false.
-            self.delegate.observe_cmd = Some(ObserveCmd {
-                id: observe_id,
-                enabled,
-            });
-        }
+
+        self.delegate.observe_cmd = Some(ObserveCmd { id: observe_id });
 
         cb.invoke_read(resp);
     }
@@ -3343,14 +3323,11 @@ where
         apply_ctx: &mut ApplyContext<EK, W>,
         msgs: &mut Vec<Msg<EK>>,
     ) {
-        let mut channel_timer = None;
         let mut drainer = msgs.drain(..);
         loop {
             match drainer.next() {
                 Some(Msg::Apply { start, apply }) => {
-                    if channel_timer.is_none() {
-                        channel_timer = Some(start);
-                    }
+                    APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(start.elapsed_secs());
                     self.handle_apply(apply_ctx, apply);
                     if let Some(ref mut state) = self.delegate.yield_state {
                         state.pending_msgs = drainer.collect();
@@ -3374,10 +3351,6 @@ where
                 }
                 None => break,
             }
-        }
-        if let Some(timer) = channel_timer {
-            let elapsed = duration_to_sec(timer.elapsed());
-            APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(elapsed);
         }
     }
 }
@@ -3676,12 +3649,7 @@ where
                     return;
                 }
                 Msg::Change {
-                    cmd: ChangeCmd::RegisterObserver { region_id, .. },
-                    cb,
-                    ..
-                }
-                | Msg::Change {
-                    cmd: ChangeCmd::Snapshot { region_id, .. },
+                    cmd: ChangeObserver { region_id, .. },
                     cb,
                     ..
                 } => {
@@ -3696,7 +3664,7 @@ where
                     return;
                 }
                 #[cfg(any(test, feature = "testexport"))]
-                Msg::Validate(_, _) => return,
+                Msg::Validate(..) => return,
             },
             Either::Left(Err(TrySendError::Full(_))) => unreachable!(),
         };
@@ -4694,10 +4662,9 @@ mod tests {
             1,
             Msg::Change {
                 region_epoch: region_epoch.clone(),
-                cmd: ChangeCmd::RegisterObserver {
+                cmd: ChangeObserver {
                     observe_id,
                     region_id: 1,
-                    enabled: enabled.clone(),
                 },
                 cb: Callback::Read(Box::new(|resp: ReadResponse<KvTestSnapshot>| {
                     assert!(!resp.response.get_header().has_error());
@@ -4754,27 +4721,23 @@ mod tests {
             .epoch(1, 3)
             .build();
         router.schedule_task(1, Msg::apply(apply(peer_id, 1, 2, vec![put_entry], vec![])));
-        // Must not receive new cmd.
-        cmdbatch_rx
-            .recv_timeout(Duration::from_millis(100))
-            .unwrap_err();
 
         // Must response a RegionNotFound error.
         router.schedule_task(
             2,
             Msg::Change {
                 region_epoch,
-                cmd: ChangeCmd::RegisterObserver {
+                cmd: ChangeObserver {
                     observe_id,
                     region_id: 2,
-                    enabled,
                 },
                 cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
-                    assert!(resp
-                        .response
-                        .get_header()
-                        .get_error()
-                        .has_region_not_found());
+                    assert!(
+                        resp.response
+                            .get_header()
+                            .get_error()
+                            .has_region_not_found()
+                    );
                     assert!(resp.snapshot.is_none());
                 })),
             },
@@ -4941,10 +4904,9 @@ mod tests {
             1,
             Msg::Change {
                 region_epoch: region_epoch.clone(),
-                cmd: ChangeCmd::RegisterObserver {
+                cmd: ChangeObserver {
                     observe_id,
                     region_id: 1,
-                    enabled: enabled.clone(),
                 },
                 cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
                     assert!(!resp.response.get_header().has_error(), "{:?}", resp);
@@ -5100,10 +5062,9 @@ mod tests {
             1,
             Msg::Change {
                 region_epoch,
-                cmd: ChangeCmd::RegisterObserver {
+                cmd: ChangeObserver {
                     observe_id,
                     region_id: 1,
-                    enabled: Arc::new(AtomicBool::new(true)),
                 },
                 cb: Callback::Read(Box::new(move |resp: ReadResponse<_>| {
                     assert!(

@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use super::timestamp::TimeStamp;
 use crate::Write;
 use byteorder::{ByteOrder, NativeEndian};
@@ -247,7 +249,12 @@ pub enum MutationType {
 
 impl MutationType {
     pub fn may_have_old_value(&self) -> bool {
-        matches!(self, MutationType::Put | MutationType::Delete)
+        matches!(
+            self,
+            // Insert operations don't have old value but need to update a flag
+            // for indicating that not seeking for old value for it.
+            MutationType::Put | MutationType::Delete | MutationType::Insert
+        )
     }
 }
 

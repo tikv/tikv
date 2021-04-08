@@ -6,6 +6,7 @@ use crate::{db_options::RocksTitanDBOptions, sst_partitioner::RocksSstPartitione
 use engine_traits::{CFOptionsExt, Result};
 use engine_traits::{ColumnFamilyOptions, SstPartitionerFactory};
 use rocksdb::ColumnFamilyOptions as RawCFOptions;
+use tikv_util::box_err;
 
 impl CFOptionsExt for RocksEngine {
     type ColumnFamilyOptions = RocksColumnFamilyOptions;

@@ -1,12 +1,15 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use collections::HashMap;
+use engine_traits::{Peekable, CF_WRITE};
 use grpcio::{ChannelBuilder, Environment};
+use keys::data_key;
 use kvproto::{kvrpcpb::*, metapb, tikvpb::TikvClient};
-use test_raftstore::*;
-use tikv_util::HandyRwLock;
-
 use std::sync::Arc;
+use test_raftstore::*;
+use tikv::server::gc_worker::sync_gc;
+use tikv_util::HandyRwLock;
+use txn_types::Key;
 
 #[test]
 fn test_physical_scan_lock() {
@@ -228,9 +231,11 @@ fn test_applied_lock_collector() {
         must_register_lock_observer(c, safe_point);
         assert!(must_check_lock_observer(c, safe_point, true).is_empty());
         // Can't register observer with smaller max_ts.
-        assert!(!register_lock_observer(&c, safe_point - 1)
-            .get_error()
-            .is_empty());
+        assert!(
+            !register_lock_observer(&c, safe_point - 1)
+                .get_error()
+                .is_empty()
+        );
         assert!(must_check_lock_observer(c, safe_point, true).is_empty());
     });
     let leader_client = clients.get(&leader_store_id).unwrap();
@@ -247,13 +252,63 @@ fn test_applied_lock_collector() {
         let locks = must_check_lock_observer(c, safe_point, true);
         assert_eq!(locks.len(), 1, "{:?}", locks);
         // Shouldn't remove it with a wrong max ts.
-        assert!(!remove_lock_observer(c, safe_point - 1)
-            .get_error()
-            .is_empty());
+        assert!(
+            !remove_lock_observer(c, safe_point - 1)
+                .get_error()
+                .is_empty()
+        );
         let locks = must_check_lock_observer(c, safe_point, true);
         assert_eq!(locks.len(), 1, "{:?}", locks);
         // Remove lock observers.
         must_remove_lock_observer(c, safe_point);
         assert!(!check_lock_observer(c, safe_point).get_error().is_empty());
     });
+}
+
+// Since v5.0 GC bypasses Raft, which means GC scans/deletes records with `keys::DATA_PREFIX`.
+// This case ensures it's performed correctly.
+#[test]
+fn test_gc_bypass_raft() {
+    let (cluster, leader, ctx) = must_new_cluster();
+    cluster.pd_client.disable_default_operator();
+
+    let env = Arc::new(Environment::new(1));
+    let leader_store = leader.get_store_id();
+    let channel = ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader_store));
+    let client = TikvClient::new(channel);
+
+    let pk = b"k1".to_vec();
+    let value = vec![b'x'; 300];
+    let engine = cluster.engines.get(&leader_store).unwrap();
+
+    for &start_ts in &[10, 20, 30, 40] {
+        let commit_ts = start_ts + 5;
+        let muts = vec![new_mutation(Op::Put, b"k1", &value)];
+
+        must_kv_prewrite(&client, ctx.clone(), muts, pk.clone(), start_ts);
+        let keys = vec![pk.clone()];
+        must_kv_commit(&client, ctx.clone(), keys, start_ts, commit_ts, commit_ts);
+
+        let key = Key::from_raw(b"k1").append_ts(start_ts.into());
+        let key = data_key(key.as_encoded());
+        assert!(engine.kv.get_value(&key).unwrap().is_some());
+
+        let key = Key::from_raw(b"k1").append_ts(commit_ts.into());
+        let key = data_key(key.as_encoded());
+        assert!(engine.kv.get_value_cf(CF_WRITE, &key).unwrap().is_some());
+    }
+
+    let gc_sched = cluster.sim.rl().get_gc_worker(1).scheduler();
+    assert!(sync_gc(&gc_sched, 0, b"k1".to_vec(), b"k2".to_vec(), 200.into()).is_ok());
+
+    for &start_ts in &[10, 20, 30] {
+        let commit_ts = start_ts + 5;
+        let key = Key::from_raw(b"k1").append_ts(start_ts.into());
+        let key = data_key(key.as_encoded());
+        assert!(engine.kv.get_value(&key).unwrap().is_none());
+
+        let key = Key::from_raw(b"k1").append_ts(commit_ts.into());
+        let key = data_key(key.as_encoded());
+        assert!(engine.kv.get_value_cf(CF_WRITE, &key).unwrap().is_none());
+    }
 }

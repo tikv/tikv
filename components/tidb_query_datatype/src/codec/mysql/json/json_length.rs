@@ -13,7 +13,7 @@ impl<'a> JsonRef<'a> {
     }
 
     /// `json_length` is the implementation for JSON_LENGTH in mysql
-    /// https://dev.mysql.com/doc/refman/5.7/en/json-attribute-functions.html#function_json-length
+    /// <https://dev.mysql.com/doc/refman/5.7/en/json-attribute-functions.html#function_json-length>
     pub fn json_length(&self, path_expr_list: &[PathExpression]) -> Result<Option<i64>> {
         if path_expr_list.is_empty() {
             return Ok(Some(self.len()));

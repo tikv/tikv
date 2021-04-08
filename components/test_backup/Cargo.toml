@@ -7,9 +7,15 @@ publish = false
 [features]
 protobuf-codec = [
   "backup/protobuf-codec",
+  "file_system/protobuf-codec",
+  "tikv_util/protobuf-codec",
+  "txn_types/protobuf-codec",
 ]
 prost-codec = [
   "backup/prost-codec",
+  "file_system/prost-codec",
+  "tikv_util/prost-codec",
+  "txn_types/prost-codec",
 ]
 
 [dependencies]
@@ -19,16 +25,16 @@ concurrency_manager = { path = "../concurrency_manager" }
 crc64fast = "0.1"
 engine_traits = { path = "../engine_traits" }
 external_storage = { path = "../external_storage" }
-file_system = { path = "../file_system" }
+file_system = { path = "../file_system", default-features = false }
 futures = "0.3"
 futures-executor = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
-grpcio = { version = "0.7", default-features = false, features = ["openssl-vendored"] }
+grpcio = { version = "0.8",  default-features = false, features = ["openssl-vendored"] }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 rand = "0.7"
 tempfile = "3.0"
 test_raftstore = { path = "../test_raftstore" }
 tidb_query_common = { path = "../tidb_query_common" }
 tikv = { path = "../../", default-features = false }
-tikv_util = { path = "../tikv_util" }
-txn_types = { path = "../txn_types" }
+tikv_util = { path = "../tikv_util", default-features = false }
+txn_types = { path = "../txn_types", default-features = false }
