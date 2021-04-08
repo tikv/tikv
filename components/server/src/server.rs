@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 //! This module startups all the components of a TiKV server.
 //!
 //! It is responsible for reading from configs, starting up the various server components,
@@ -73,16 +75,11 @@ use tikv::{
         ttl::TTLChecker,
         Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID, GRPC_THREAD_PREFIX,
     },
-    storage::{
-        self,
-        config::{StorageConfigManger, MAX_RESERVED_SPACE_GB},
-        mvcc::MvccConsistencyCheckObserver,
-        Engine,
-    },
+    storage::{self, config::StorageConfigManger, mvcc::MvccConsistencyCheckObserver, Engine},
 };
 use tikv_util::{
     check_environment_variables,
-    config::{ensure_dir_exist, ReadableSize, VersionTrack},
+    config::{ensure_dir_exist, VersionTrack},
     sys::sys_quota::SysQuota,
     time::Monitor,
     timer::GLOBAL_TIMER_HANDLE,
@@ -216,7 +213,10 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let (resolver, state) =
             resolve::new_resolver(Arc::clone(&pd_client), &background_worker, router.clone());
 
-        let mut coprocessor_host = Some(CoprocessorHost::new(router.clone()));
+        let mut coprocessor_host = Some(CoprocessorHost::new(
+            router.clone(),
+            config.coprocessor.clone(),
+        ));
         let region_info_accessor = RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap());
 
         // Initialize concurrency manager
@@ -377,18 +377,15 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
         file_system::reserve_space_for_recover(
             &self.config.storage.data_dir,
-            cmp::min(
-                ReadableSize::gb(MAX_RESERVED_SPACE_GB).0,
-                if self.config.storage.reserve_space.0 == 0 {
-                    0
-                } else {
-                    // Max one of configured `reserve_space` and `storage.capacity * 5%`.
-                    cmp::max(
-                        (capacity as f64 * 0.05) as u64,
-                        self.config.storage.reserve_space.0,
-                    )
-                },
-            ),
+            if self.config.storage.reserve_space.0 == 0 {
+                0
+            } else {
+                // Max one of configured `reserve_space` and `storage.capacity * 5%`.
+                cmp::max(
+                    (capacity as f64 * 0.05) as u64,
+                    self.config.storage.reserve_space.0,
+                )
+            },
         )
         .unwrap();
     }
@@ -638,7 +635,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             engines.engines.kv.clone(),
             self.router.clone(),
             self.coprocessor_host.clone().unwrap(),
-            self.config.coprocessor.clone(),
         );
         let split_check_scheduler = self
             .background_worker

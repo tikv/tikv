@@ -1,4 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
+#[allow(unused_extern_crates)]
+extern crate tikv_alloc;
 
 mod client;
 mod feature_gate;
@@ -254,7 +256,7 @@ pub trait PdClient: Send + Sync {
 
     /// Gets the internal `FeatureGate`.
     fn feature_gate(&self) -> &FeatureGate {
-        todo!()
+        unimplemented!()
     }
 }
 

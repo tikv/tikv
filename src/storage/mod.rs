@@ -63,7 +63,7 @@ pub use self::{
 use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::metrics::CommandKind;
 use crate::storage::mvcc::MvccReader;
-use crate::storage::txn::commands::{RawAtomicStore, RawCompareAndSet};
+use crate::storage::txn::commands::{RawAtomicStore, RawCompareAndSwap};
 
 use crate::storage::{
     config::Config,
@@ -828,7 +828,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         snapshot,
                         Some(ScanMode::Forward),
                         !ctx.get_not_fill_cache(),
-                        ctx.get_isolation_level(),
                     );
                     let result = reader
                         .scan_locks(
@@ -838,7 +837,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             limit,
                         )
                         .map_err(txn::Error::from);
-                    statistics.add(reader.get_statistics());
+                    statistics.add(&reader.statistics);
                     let (kv_pairs, _) = result?;
                     let mut locks = Vec::with_capacity(kv_pairs.len());
                     for (key, lock) in kv_pairs {
@@ -1571,7 +1570,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         }
     }
 
-    pub fn raw_compare_and_set_atomic(
+    pub fn raw_compare_and_swap_atomic(
         &self,
         ctx: Context,
         cf: String,
@@ -1591,7 +1590,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             None
         };
         let cmd =
-            RawCompareAndSet::new(cf, Key::from_encoded(key), previous_value, value, ttl, ctx);
+            RawCompareAndSwap::new(cf, Key::from_encoded(key), previous_value, value, ttl, ctx);
         self.sched_txn_command(cmd, cb)
     }
 
@@ -2842,7 +2841,7 @@ mod tests {
         .unwrap()
         .into_iter()
         .map(|x| x.unwrap())
-        .map(|(x, _, _)| x)
+        .map(|(x, ..)| x)
         .collect();
         assert_eq!(
             x,

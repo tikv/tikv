@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use crate::{RocksEngine, RocksWriteBatch};
 
 use engine_traits::{Error, RaftEngine, RaftLogBatch, Result};
@@ -8,6 +10,7 @@ use engine_traits::{
 use kvproto::raft_serverpb::RaftLocalState;
 use protobuf::Message;
 use raft::eraftpb::Entry;
+use tikv_util::{box_err, box_try};
 
 const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
 

@@ -114,7 +114,7 @@ portable = ["tikv/portable"]
 fail = "0.4"
 batch-system = { path = "../components/batch-system", default-features = false }
 crc64fast = "0.1"
-crossbeam = "0.7.2"
+crossbeam = "0.8"
 configuration = { path = "../components/configuration", default-features = false }
 encryption = { path = "../components/encryption", default-features = false }
 cdc = { path = "../components/cdc", default-features = false }
@@ -180,6 +180,6 @@ tokio = { version = "0.2", features = ["rt-threaded"] }
 concurrency_manager = { path = "../components/concurrency_manager", default-features = false }
 file_system = { path = "../components/file_system" }
 
-[target.'cfg(target_os = "linux")'.dev-dependencies]
+[target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dev-dependencies]
 criterion-perf-events = "0.1"
 perfcnt = "0.6"

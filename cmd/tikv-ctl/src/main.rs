@@ -1929,8 +1929,7 @@ fn main() {
     if let Some(matches) = matches.subcommand_matches("encryption-meta") {
         match matches.subcommand() {
             ("dump-key", Some(matches)) => {
-                let message =
-                    "This action will expose encryption key(s) as plaintext. Do not output the \
+                let message = "This action will expose encryption key(s) as plaintext. Do not output the \
                     result in file on disk.";
                 if !warning_prompt(message) {
                     return;

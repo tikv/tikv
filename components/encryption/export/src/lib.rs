@@ -1,12 +1,11 @@
-#![feature(min_specialization)]
-#[macro_use]
-extern crate slog_global;
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use async_trait::async_trait;
 use derive_more::Deref;
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use std::fmt::Debug;
 use std::path::Path;
+use tikv_util::error;
 use tikv_util::impl_format_delegate_newtype;
 use tikv_util::stream::RetryError;
 

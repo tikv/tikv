@@ -7,10 +7,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
+use bitflags::bitflags;
 use crossbeam::atomic::AtomicCell;
 use crossbeam::channel::TrySendError;
 use engine_traits::{Engines, KvEngine, RaftEngine, Snapshot, WriteBatch, WriteOptions};
 use error_code::ErrorCodeExt;
+use fail::fail_point;
 use kvproto::errorpb;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{self, PeerRole};
@@ -55,6 +57,7 @@ use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::time::{Instant as UtilInstant, ThreadReadId};
 use tikv_util::worker::{FutureScheduler, Scheduler};
 use tikv_util::Either;
+use tikv_util::{box_err, debug, error, info, warn};
 
 use super::cmd_resp;
 use super::local_metrics::{RaftReadyMetrics, RaftSendMessageMetrics};
@@ -287,9 +290,10 @@ impl<S: Snapshot> CmdEpochChecker<S> {
         self.maybe_update_term(term);
         // Due to `test_admin_cmd_epoch_map_include_all_cmd_type`, using unwrap is ok.
         let epoch_state = *ADMIN_CMD_EPOCH_MAP.get(&cmd_type).unwrap();
-        assert!(self
-            .last_conflict_index(epoch_state.check_ver, epoch_state.check_conf_ver)
-            .is_none());
+        assert!(
+            self.last_conflict_index(epoch_state.check_ver, epoch_state.check_conf_ver)
+                .is_none()
+        );
 
         if epoch_state.change_conf_ver || epoch_state.change_ver {
             if let Some(cmd) = self.proposed_admin_cmd.back() {

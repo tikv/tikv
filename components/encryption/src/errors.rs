@@ -17,6 +17,10 @@ pub trait RetryCodedError: Debug + Display + ErrorCodeExt + RetryError + Send + 
 pub enum Error {
     #[error("Other error {0}")]
     Other(#[from] Box<dyn error::Error + Sync + Send>),
+    // Only when the parsing record is the last one, and the
+    // length is insufficient or the crc checksum fails.
+    #[error("Recoverable tail record corruption while parsing file dictionary")]
+    TailRecordParseIncomplete,
     // Currently only in use by cloud KMS
     #[error("Cloud KMS error {0}")]
     RetryCodedError(Box<dyn RetryCodedError>),
@@ -70,13 +74,14 @@ impl ErrorCodeExt for Error {
     fn error_code(&self) -> ErrorCode {
         match self {
             Error::RetryCodedError(err) => (*err).error_code(),
+            Error::TailRecordParseIncomplete => error_code::encryption::PARSE_INCOMPLETE,
             Error::Rocks(_) => error_code::encryption::ROCKS,
             Error::Io(_) => error_code::encryption::IO,
             Error::Crypter(_) => error_code::encryption::CRYPTER,
             Error::Proto(_) => error_code::encryption::PROTO,
             Error::UnknownEncryption => error_code::encryption::UNKNOWN_ENCRYPTION,
             Error::WrongMasterKey(_) => error_code::encryption::WRONG_MASTER_KEY,
-            Error::BothMasterKeyFail(_, _) => error_code::encryption::BOTH_MASTER_KEY_FAIL,
+            Error::BothMasterKeyFail(..) => error_code::encryption::BOTH_MASTER_KEY_FAIL,
             Error::Other(_) => error_code::UNKNOWN,
         }
     }
@@ -88,13 +93,14 @@ impl RetryError for Error {
         // However, only Error::Tls should be encountered
         match self {
             Error::RetryCodedError(err) => err.is_retryable(),
+            Error::TailRecordParseIncomplete => true,
             Error::Rocks(_) => true,
             Error::Io(_) => true,
             Error::Crypter(_) => true,
             Error::Proto(_) => true,
             Error::UnknownEncryption => true,
             Error::WrongMasterKey(_) => false,
-            Error::BothMasterKeyFail(_, _) => false,
+            Error::BothMasterKeyFail(..) => false,
             Error::Other(_) => true,
         }
     }

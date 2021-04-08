@@ -14,9 +14,11 @@ use engine_traits::util::check_key_in_range;
 use engine_traits::RaftEngine;
 use engine_traits::CF_RAFT;
 use engine_traits::{Error as EngineError, Iterable, Iterator};
+use fail::fail_point;
 use keys::DATA_PREFIX_KEY;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
+use tikv_util::{box_err, error};
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 
 /// Snapshot of a region.

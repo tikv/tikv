@@ -9,7 +9,7 @@ pub(crate) mod check_secondary_locks;
 pub(crate) mod check_txn_status;
 pub(crate) mod cleanup;
 pub(crate) mod commit;
-pub(crate) mod compare_and_set;
+pub(crate) mod compare_and_swap;
 pub(crate) mod mvcc_by_key;
 pub(crate) mod mvcc_by_start_ts;
 pub(crate) mod pause;
@@ -27,7 +27,7 @@ pub use check_secondary_locks::CheckSecondaryLocks;
 pub use check_txn_status::CheckTxnStatus;
 pub use cleanup::Cleanup;
 pub use commit::Commit;
-pub use compare_and_set::RawCompareAndSet;
+pub use compare_and_swap::RawCompareAndSwap;
 pub use mvcc_by_key::MvccByKey;
 pub use mvcc_by_start_ts::MvccByStartTs;
 pub use pause::Pause;
@@ -84,7 +84,7 @@ pub enum Command {
     Pause(Pause),
     MvccByKey(MvccByKey),
     MvccByStartTs(MvccByStartTs),
-    RawCompareAndSet(RawCompareAndSet),
+    RawCompareAndSwap(RawCompareAndSwap),
     RawAtomicStore(RawAtomicStore),
 }
 
@@ -489,7 +489,7 @@ impl Command {
             Command::Pause(t) => t,
             Command::MvccByKey(t) => t,
             Command::MvccByStartTs(t) => t,
-            Command::RawCompareAndSet(t) => t,
+            Command::RawCompareAndSwap(t) => t,
             Command::RawAtomicStore(t) => t,
         }
     }
@@ -512,7 +512,7 @@ impl Command {
             Command::Pause(t) => t,
             Command::MvccByKey(t) => t,
             Command::MvccByStartTs(t) => t,
-            Command::RawCompareAndSet(t) => t,
+            Command::RawCompareAndSwap(t) => t,
             Command::RawAtomicStore(t) => t,
         }
     }
@@ -549,7 +549,7 @@ impl Command {
             Command::CheckTxnStatus(t) => t.process_write(snapshot, context),
             Command::CheckSecondaryLocks(t) => t.process_write(snapshot, context),
             Command::Pause(t) => t.process_write(snapshot, context),
-            Command::RawCompareAndSet(t) => t.process_write(snapshot, context),
+            Command::RawCompareAndSwap(t) => t.process_write(snapshot, context),
             Command::RawAtomicStore(t) => t.process_write(snapshot, context),
             _ => panic!("unsupported write command"),
         }
@@ -713,7 +713,7 @@ pub mod test_util {
         prewrite_command(engine, cm, statistics, cmd)
     }
 
-    pub fn pessimsitic_prewrite<E: Engine>(
+    pub fn pessimistic_prewrite<E: Engine>(
         engine: &E,
         statistics: &mut Statistics,
         mutations: Vec<(Mutation, bool)>,
@@ -723,7 +723,7 @@ pub mod test_util {
         one_pc_max_commit_ts: Option<u64>,
     ) -> Result<PrewriteResult> {
         let cm = ConcurrencyManager::new(start_ts.into());
-        pessimsitic_prewrite_with_cm(
+        pessimistic_prewrite_with_cm(
             engine,
             cm,
             statistics,
@@ -735,7 +735,7 @@ pub mod test_util {
         )
     }
 
-    pub fn pessimsitic_prewrite_with_cm<E: Engine>(
+    pub fn pessimistic_prewrite_with_cm<E: Engine>(
         engine: &E,
         cm: ConcurrencyManager,
         statistics: &mut Statistics,
