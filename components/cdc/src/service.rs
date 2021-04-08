@@ -185,7 +185,7 @@ impl Conn {
                 if version == &ver {
                     None
                 } else {
-                    error!("different version on the same connection";
+                    error!("cdc different version on the same connection";
                         "previous version" => ?version, "version" => ?ver,
                         "downstream" => ?self.peer, "conn_id" => ?self.id);
                     let mut compat = Compatibility::default();
@@ -198,7 +198,8 @@ impl Conn {
                 if v408_bacth_resoled_ts <= ver {
                     features.toggle(FeatureGate::BATCH_RESOLVED_TS);
                 }
-                info!("cdc connection version"; "version" => ver.to_string(), "features" => ?features);
+                info!("cdc connection version";
+                    "version" => ver.to_string(), "features" => ?features, "downstream" => ?self.peer);
                 self.version = Some((ver, features));
                 None
             }
@@ -369,10 +370,10 @@ impl ChangeData for Service {
             }
             match res {
                 Ok(_s) => {
-                    info!("cdc send closed"; "downstream" => peer, "conn_id" => ?conn_id);
+                    info!("cdc receive closed"; "downstream" => peer, "conn_id" => ?conn_id);
                 }
                 Err(e) => {
-                    warn!("cdc send failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
+                    warn!("cdc receive failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
                 }
             }
             Ok(())
@@ -388,7 +389,7 @@ impl ChangeData for Service {
             }
             match res {
                 Ok(_s) => {
-                    info!("cdc send half closed"; "downstream" => peer, "conn_id" => ?conn_id);
+                    info!("cdc send closed"; "downstream" => peer, "conn_id" => ?conn_id);
                 }
                 Err(e) => {
                     warn!("cdc send failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);

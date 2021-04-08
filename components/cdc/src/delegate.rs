@@ -112,20 +112,20 @@ impl Downstream {
     pub fn sink_event(&self, mut event: Event) {
         event.set_request_id(self.req_id);
         if self.sink.is_none() {
-            info!("drop event, no sink";
-                "conn_id" => ?self.conn_id, "downstream_id" => ?self.id);
+            info!("cdc drop event, no sink";
+                "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => self.req_id);
             return;
         }
         let sink = self.sink.as_ref().unwrap();
         if let Err(e) = sink.try_send(CdcEvent::Event(event)) {
             match e {
                 crossbeam::channel::TrySendError::Disconnected(_) => {
-                    debug!("send event failed, disconnected";
-                        "conn_id" => ?self.conn_id, "downstream_id" => ?self.id);
+                    debug!("cdc send event failed, disconnected";
+                        "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => self.req_id);
                 }
                 crossbeam::channel::TrySendError::Full(_) => {
-                    info!("send event failed, full";
-                        "conn_id" => ?self.conn_id, "downstream_id" => ?self.id);
+                    info!("cdc send event failed, full";
+                        "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => self.req_id);
                 }
             }
         }
@@ -253,7 +253,7 @@ impl Delegate {
                 true,  /* check_ver */
                 true,  /* include_region */
             ) {
-                info!("fail to subscribe downstream";
+                info!("cdc fail to subscribe downstream";
                     "region_id" => region.get_id(),
                     "downstream_id" => ?downstream.get_id(),
                     "conn_id" => ?downstream.get_conn_id(),
@@ -348,7 +348,7 @@ impl Delegate {
         // Stop observe further events.
         self.enabled.store(false, Ordering::SeqCst);
 
-        info!("region met error";
+        info!("cdc met region error";
             "region_id" => self.region_id, "error" => ?err);
         let change_data_err = self.error_event(err);
         for d in &self.downstreams {
@@ -402,24 +402,24 @@ impl Delegate {
             }
         }
         self.resolver = Some(resolver);
-        info!("region is ready"; "region_id" => self.region_id);
+        info!("cdc region is ready"; "region_id" => self.region_id);
         pending.take_downstreams()
     }
 
     /// Try advance and broadcast resolved ts.
     pub fn on_min_ts(&mut self, min_ts: TimeStamp) -> Option<TimeStamp> {
         if self.resolver.is_none() {
-            debug!("region resolver not ready";
+            debug!("cdc region resolver not ready";
                 "region_id" => self.region_id, "min_ts" => min_ts);
             return None;
         }
-        debug!("try to advance ts"; "region_id" => self.region_id, "min_ts" => min_ts);
+        debug!("cdc try to advance ts"; "region_id" => self.region_id, "min_ts" => min_ts);
         let resolver = self.resolver.as_mut().unwrap();
         let resolved_ts = match resolver.resolve(min_ts) {
             Some(rts) => rts,
             None => return None,
         };
-        debug!("resolved ts updated";
+        debug!("cdc resolved ts updated";
             "region_id" => self.region_id, "resolved_ts" => resolved_ts);
         CDC_RESOLVED_TS_GAP_HISTOGRAM
             .observe((min_ts.physical() - resolved_ts.physical()) as f64 / 1000f64);
@@ -465,7 +465,8 @@ impl Delegate {
         let downstream = if let Some(d) = downstreams.iter().find(|d| d.id == downstream_id) {
             d
         } else {
-            warn!("downstream not found"; "downstream_id" => ?downstream_id, "region_id" => self.region_id);
+            warn!("cdc downstream not found";
+                "downstream_id" => ?downstream_id, "region_id" => self.region_id);
             return;
         };
 
@@ -735,7 +736,7 @@ fn decode_write(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
         WriteType::Delete => (EventRowOpType::Delete, EventLogType::Commit),
         WriteType::Rollback => (EventRowOpType::Unknown, EventLogType::Rollback),
         other => {
-            debug!("skip write record"; "write" => ?other, "key" => &log_wrappers::Value::key(&key));
+            debug!("cdc skip write record"; "write" => ?other, "key" => &log_wrappers::Value::key(&key));
             return true;
         }
     };
@@ -762,7 +763,7 @@ fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow) -> bool {
         LockType::Put => EventRowOpType::Put,
         LockType::Delete => EventRowOpType::Delete,
         other => {
-            debug!("skip lock record";
+            debug!("cdc skip lock record";
                 "type" => ?other,
                 "start_ts" => ?lock.ts,
                 "key" => &log_wrappers::Value::key(&key),

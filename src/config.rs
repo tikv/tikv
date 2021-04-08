@@ -2015,12 +2015,16 @@ impl Default for BackupConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct CdcConfig {
     pub min_ts_interval: ReadableDuration,
+    pub incremental_scan_speed_limit: ReadableSize,
 }
 
 impl Default for CdcConfig {
     fn default() -> Self {
         Self {
             min_ts_interval: ReadableDuration::secs(1),
+            // TiCDC requires a SSD, the typical write speed of SSD
+            // is more than 500MB/s, so 128MB/s is enough.
+            incremental_scan_speed_limit: ReadableSize::mb(128),
         }
     }
 }
