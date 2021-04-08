@@ -350,7 +350,8 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                     if let Some(reader) = self.store_meta.lock().unwrap().readers.get(&region_id) {
                         reader
                             .txn_extra_op
-                            .compare_and_swap(TxnExtraOp::ReadOldValue, TxnExtraOp::Noop);
+                            .compare_exchange(TxnExtraOp::ReadOldValue, TxnExtraOp::Noop)
+                            .unwrap();
                     }
                     // Do not continue to observe the events of the region.
                     let oid = self.observer.unsubscribe_region(region_id, delegate.id);
@@ -1503,8 +1504,8 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable for Endpoint<T> {
                 cb,
             } => {
                 info!("downstream was initialized"; "downstream_id" => ?downstream_id);
-                downstream_state
-                    .compare_and_swap(DownstreamState::Uninitialized, DownstreamState::Normal);
+                let _ = downstream_state
+                    .compare_exchange(DownstreamState::Uninitialized, DownstreamState::Normal);
                 cb();
             }
             Task::TxnExtra(txn_extra) => {
