@@ -617,7 +617,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 },
             ) {
                 warn!("cdc send capture change cmd failed"; "region_id" => region_id, "error" => ?e);
-                deregister_downstream(Error::Request(e.into()));
+                deregister_downstream(Error::Request(Box::new(e.into())));
                 return;
             }
 

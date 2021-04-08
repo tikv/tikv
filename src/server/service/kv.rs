@@ -1071,7 +1071,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         _: StoreSafeTsRequest,
         _: UnarySink<StoreSafeTsResponse>,
     ) {
-        todo!()
+        unimplemented!()
     }
 }
 
