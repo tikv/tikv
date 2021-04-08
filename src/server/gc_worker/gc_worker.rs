@@ -1434,7 +1434,7 @@ mod tests {
             let suffix = Key::from_raw(&k).append_ts(152.into());
             raw_k.extend_from_slice(suffix.as_encoded());
 
-            if i < 20 || i >= 30 {
+            if !(20..30).contains(&i) {
                 // MVCC-DELETIONs can't be cleaned because region info checks can't pass.
                 assert!(db.get_cf(cf, &raw_k).unwrap().is_some());
             } else {

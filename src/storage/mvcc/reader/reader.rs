@@ -1752,6 +1752,7 @@ pub mod tests {
         }
         engine.flush();
 
+        #[allow(clippy::useless_vec)]
         for (k, scan_mode, tombstones) in vec![
             (b"k0", Some(ScanMode::Forward), 99),
             (b"k0", None, 0),
