@@ -3472,7 +3472,7 @@ where
             rs.set_applied_index(self.read_progress.applied_index());
             rs.set_safe_ts(self.read_progress.safe_ts());
             let data = rs.write_to_bytes().unwrap();
-            send_msg.set_extra_ctx(data.into());
+            send_msg.set_extra_ctx(data);
         }
 
         send_msg.set_message(msg);
