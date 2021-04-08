@@ -23,6 +23,17 @@ const BASE64_INPUT_CHUNK_LENGTH: usize = 3;
 const BASE64_ENCODED_CHUNK_LENGTH: usize = 4;
 const BASE64_LINE_WRAP: u8 = b'\n';
 
+/// Returns the byte index of the char at `char_idx` in `s`.
+/// If `char_idx` is larger then the number of UTF-8 chars in `s`,
+/// the length of `s` in bytes is returned.
+#[inline]
+fn get_utf8_byte_index(s: &str, char_idx: usize) -> usize {
+    s.char_indices()
+        .map(|(i, _)| i)
+        .nth(char_idx)
+        .unwrap_or_else(|| s.len())
+}
+
 #[rpn_fn(writer)]
 #[inline]
 pub fn bin(num: &Int, writer: BytesWriter) -> Result<BytesGuard> {
@@ -241,18 +252,23 @@ pub fn lpad(arg: BytesRef, len: &Int, pad: BytesRef, writer: BytesWriter) -> Res
     match validate_target_len_for_pad(*len < 0, *len, arg.len(), 1, pad.is_empty()) {
         None => Ok(writer.write(None)),
         Some(0) => Ok(writer.write_ref(Some(b""))),
+        Some(target_len) if target_len < arg.len() => {
+            Ok(writer.write_ref(Some(&arg[..target_len])))
+        }
         Some(target_len) => {
-            let r = if let Some(remain) = target_len.checked_sub(arg.len()) {
-                pad.iter()
-                    .cycle()
-                    .take(remain)
-                    .chain(arg.iter())
-                    .copied()
-                    .collect::<Bytes>()
-            } else {
-                arg[..target_len].to_vec()
-            };
-            Ok(writer.write(Some(r)))
+            let mut writer = writer.begin();
+            // Write full pads
+            let num_pads = (target_len - arg.len()) / pad.len();
+            for _ in 0..num_pads {
+                writer.partial_write(&pad);
+            }
+
+            // Write last incomplete pad (might be none)
+            let last_pad_len = (target_len - arg.len()) % pad.len();
+            writer.partial_write(&pad[..last_pad_len]);
+
+            writer.partial_write(&arg);
+            Ok(writer.finish())
         }
     }
 }
@@ -268,20 +284,30 @@ pub fn lpad_utf8(
     let input = str::from_utf8(&*arg)?;
     let pad = str::from_utf8(&*pad)?;
     let input_len = input.chars().count();
+    let pad_len = pad.chars().count();
+
     match validate_target_len_for_pad(*len < 0, *len, input_len, 4, pad.is_empty()) {
         None => Ok(writer.write(None)),
         Some(0) => Ok(writer.write_ref(Some(b""))),
+        Some(target_len) if target_len < input_len => {
+            let utf8_byte_end = get_utf8_byte_index(input, target_len);
+            Ok(writer.write_ref(Some(input[..utf8_byte_end].as_bytes())))
+        }
         Some(target_len) => {
-            let r = if let Some(remain) = target_len.checked_sub(input_len) {
-                pad.chars()
-                    .cycle()
-                    .take(remain)
-                    .chain(input.chars())
-                    .collect::<String>()
-            } else {
-                input.chars().take(target_len).collect::<String>()
-            };
-            Ok(writer.write(Some(r.into_bytes())))
+            let mut writer = writer.begin();
+            // Write full pads
+            let num_pads = (target_len - input_len) / pad_len;
+            for _ in 0..num_pads {
+                writer.partial_write(pad.as_bytes());
+            }
+
+            // Write last incomplete pad (might be none)
+            let last_pad_len = (target_len - input_len) % pad_len;
+            let utf8_byte_end = get_utf8_byte_index(pad, last_pad_len);
+            writer.partial_write(pad[..utf8_byte_end].as_bytes());
+
+            writer.partial_write(input.as_bytes());
+            Ok(writer.finish())
         }
     }
 }
@@ -292,14 +318,62 @@ pub fn rpad(arg: BytesRef, len: &Int, pad: BytesRef, writer: BytesWriter) -> Res
     match validate_target_len_for_pad(*len < 0, *len, arg.len(), 1, pad.is_empty()) {
         None => Ok(writer.write(None)),
         Some(0) => Ok(writer.write_ref(Some(b""))),
+        Some(target_len) if target_len < arg.len() => {
+            Ok(writer.write_ref(Some(&arg[..target_len])))
+        }
         Some(target_len) => {
-            let r = arg
-                .iter()
-                .chain(pad.iter().cycle())
-                .copied()
-                .take(target_len)
-                .collect::<Bytes>();
-            Ok(writer.write(Some(r)))
+            let mut writer = writer.begin();
+            writer.partial_write(&arg);
+
+            // Write full pads
+            let num_pads = (target_len - arg.len()) / pad.len();
+            for _ in 0..num_pads {
+                writer.partial_write(&pad);
+            }
+
+            // Write last incomplete pad (might be none)
+            let last_pad_len = (target_len - arg.len()) % pad.len();
+            writer.partial_write(&pad[..last_pad_len]);
+            Ok(writer.finish())
+        }
+    }
+}
+
+#[rpn_fn(writer)]
+#[inline]
+pub fn rpad_utf8(
+    arg: BytesRef,
+    len: &Int,
+    pad: BytesRef,
+    writer: BytesWriter,
+) -> Result<BytesGuard> {
+    let input = str::from_utf8(&*arg)?;
+    let pad = str::from_utf8(&*pad)?;
+    let input_len = input.chars().count();
+    let pad_len = pad.chars().count();
+
+    match validate_target_len_for_pad(*len < 0, *len, input_len, 4, pad.is_empty()) {
+        None => Ok(writer.write(None)),
+        Some(0) => Ok(writer.write_ref(Some(b""))),
+        Some(target_len) if target_len < input_len => {
+            let utf8_byte_end = get_utf8_byte_index(input, target_len);
+            Ok(writer.write_ref(Some(input[..utf8_byte_end].as_bytes())))
+        }
+        Some(target_len) => {
+            let mut writer = writer.begin();
+            writer.partial_write(input.as_bytes());
+
+            // Write full pads
+            let num_pads = (target_len - input_len) / pad_len;
+            for _ in 0..num_pads {
+                writer.partial_write(pad.as_bytes());
+            }
+
+            // Write last incomplete pad (might be none)
+            let last_pad_len = (target_len - input_len) % pad_len;
+            let utf8_byte_end = get_utf8_byte_index(pad, last_pad_len);
+            writer.partial_write(pad[..utf8_byte_end].as_bytes());
+            Ok(writer.finish())
         }
     }
 }
@@ -377,11 +451,7 @@ pub fn left_utf8(lhs: BytesRef, rhs: &Int, writer: BytesWriter) -> Result<BytesG
     let rhs = *rhs as usize;
     let len = s.chars().count();
     let result = if len > rhs {
-        let idx = s
-            .char_indices()
-            .nth(rhs)
-            .map(|(idx, _)| idx)
-            .unwrap_or_else(|| s.len());
+        let idx = get_utf8_byte_index(s, rhs);
         s[..idx].as_bytes()
     } else {
         s.as_bytes()
@@ -444,11 +514,7 @@ pub fn right_utf8(lhs: BytesRef, rhs: &Int, writer: BytesWriter) -> Result<Bytes
     let rhs = *rhs as usize;
     let len = s.chars().count();
     let result = if len > rhs {
-        let idx = s
-            .char_indices()
-            .nth(len - rhs)
-            .map(|(idx, _)| idx)
-            .unwrap_or_else(|| s.len());
+        let idx = get_utf8_byte_index(s, len - rhs);
         s[idx..].as_bytes()
     } else {
         s.as_bytes()
@@ -989,6 +1055,16 @@ mod tests {
 
     use super::*;
     use crate::types::test_util::RpnFnScalarEvaluator;
+
+    #[test]
+    fn test_get_utf8_byte_index() {
+        let s = "你好世界";
+
+        assert_eq!(&s[..get_utf8_byte_index(s, 0)], "");
+        assert_eq!(&s[..get_utf8_byte_index(s, 2)], "你好");
+        assert_eq!(&s[..get_utf8_byte_index(s, 4)], "你好世界");
+        assert_eq!(&s[..get_utf8_byte_index(s, 9)], "你好世界");
+    }
 
     #[test]
     fn test_bin() {
@@ -2023,6 +2099,59 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_lpad_utf8() {
+        let mut cases = vec![
+            (
+                Some("a多字节".as_bytes().to_vec()),
+                Some(3),
+                Some("测试".as_bytes().to_vec()),
+                Some("a多字".as_bytes().to_vec()),
+            ),
+            (
+                Some("a多字节".as_bytes().to_vec()),
+                Some(4),
+                Some("测试".as_bytes().to_vec()),
+                Some("a多字节".as_bytes().to_vec()),
+            ),
+            (
+                Some("a多字节".as_bytes().to_vec()),
+                Some(5),
+                Some("测试".as_bytes().to_vec()),
+                Some("测a多字节".as_bytes().to_vec()),
+            ),
+            (
+                Some("a多字节".as_bytes().to_vec()),
+                Some(6),
+                Some("测试".as_bytes().to_vec()),
+                Some("测试a多字节".as_bytes().to_vec()),
+            ),
+            (
+                Some("a多字节".as_bytes().to_vec()),
+                Some(7),
+                Some("测试".as_bytes().to_vec()),
+                Some("测试测a多字节".as_bytes().to_vec()),
+            ),
+            (
+                Some("a多字节".as_bytes().to_vec()),
+                Some(i64::from(MAX_BLOB_WIDTH) / 4 + 1),
+                Some("测试".as_bytes().to_vec()),
+                None,
+            ),
+        ];
+        cases.append(&mut common_lpad_cases());
+
+        for (arg, len, pad, expect_output) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .push_param(len)
+                .push_param(pad)
+                .evaluate(ScalarFuncSig::LpadUtf8)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
     #[allow(clippy::type_complexity)]
     fn common_rpad_cases() -> Vec<(Option<Bytes>, Option<Int>, Option<Bytes>, Option<Bytes>)> {
         vec![
@@ -2115,37 +2244,37 @@ mod tests {
     }
 
     #[test]
-    fn test_lpad_utf8() {
+    fn test_rpad_utf8() {
         let mut cases = vec![
             (
-                Some("a多字节".as_bytes().to_vec()),
+                Some("多字节a".as_bytes().to_vec()),
                 Some(3),
                 Some("测试".as_bytes().to_vec()),
-                Some("a多字".as_bytes().to_vec()),
+                Some("多字节".as_bytes().to_vec()),
             ),
             (
-                Some("a多字节".as_bytes().to_vec()),
+                Some("多字节a".as_bytes().to_vec()),
                 Some(4),
                 Some("测试".as_bytes().to_vec()),
-                Some("a多字节".as_bytes().to_vec()),
+                Some("多字节a".as_bytes().to_vec()),
             ),
             (
-                Some("a多字节".as_bytes().to_vec()),
+                Some("多字节a".as_bytes().to_vec()),
                 Some(5),
                 Some("测试".as_bytes().to_vec()),
-                Some("测a多字节".as_bytes().to_vec()),
+                Some("多字节a测".as_bytes().to_vec()),
             ),
             (
-                Some("a多字节".as_bytes().to_vec()),
+                Some("多字节a".as_bytes().to_vec()),
                 Some(6),
                 Some("测试".as_bytes().to_vec()),
-                Some("测试a多字节".as_bytes().to_vec()),
+                Some("多字节a测试".as_bytes().to_vec()),
             ),
             (
-                Some("a多字节".as_bytes().to_vec()),
+                Some("多字节a".as_bytes().to_vec()),
                 Some(7),
                 Some("测试".as_bytes().to_vec()),
-                Some("测试测a多字节".as_bytes().to_vec()),
+                Some("多字节a测试测".as_bytes().to_vec()),
             ),
             (
                 Some("a多字节".as_bytes().to_vec()),
@@ -2154,14 +2283,14 @@ mod tests {
                 None,
             ),
         ];
-        cases.append(&mut common_lpad_cases());
+        cases.append(&mut common_rpad_cases());
 
         for (arg, len, pad, expect_output) in cases {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg)
                 .push_param(len)
                 .push_param(pad)
-                .evaluate(ScalarFuncSig::LpadUtf8)
+                .evaluate(ScalarFuncSig::RpadUtf8)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
@@ -3752,7 +3881,7 @@ mod tests {
             (
                 "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
                 "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw\nMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw",
-            )
+            ),
         ];
 
         for (arg, expected) in cases {

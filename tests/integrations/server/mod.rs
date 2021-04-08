@@ -14,6 +14,7 @@ use futures::future::FutureExt;
 use grpcio::RpcStatusCode;
 use grpcio::*;
 use kvproto::coprocessor::*;
+use kvproto::coprocessor_v2::*;
 use kvproto::kvrpcpb::*;
 use kvproto::mpp::*;
 use kvproto::raft_serverpb::{Done, RaftMessage, SnapshotChunk};
@@ -177,6 +178,8 @@ trait MockKvService {
         RawDeleteRangeRequest,
         RawDeleteRangeResponse
     );
+    unary_call!(raw_get_key_ttl, RawGetKeyTtlRequest, RawGetKeyTtlResponse);
+    unary_call!(raw_compare_and_swap, RawCasRequest, RawCasResponse);
     unary_call!(ver_get, VerGetRequest, VerGetResponse);
     unary_call!(ver_batch_get, VerBatchGetRequest, VerBatchGetResponse);
     unary_call!(ver_mut, VerMutRequest, VerMutResponse);
@@ -217,6 +220,11 @@ trait MockKvService {
     unary_call!(coprocessor, Request, Response);
     sstream_call!(batch_coprocessor, BatchRequest, BatchResponse);
     sstream_call!(coprocessor_stream, Request, Response);
+    unary_call!(
+        coprocessor_v2,
+        RawCoprocessorRequest,
+        RawCoprocessorResponse
+    );
     sstream_call!(
         establish_mpp_connection,
         EstablishMppConnectionRequest,
@@ -235,7 +243,6 @@ trait MockKvService {
     unary_call!(read_index, ReadIndexRequest, ReadIndexResponse);
     bstream_call!(batch_commands, BatchCommandsRequest, BatchCommandsResponse);
     unary_call!(check_leader, CheckLeaderRequest, CheckLeaderResponse);
-    unary_call!(raw_get_key_ttl, RawGetKeyTtlRequest, RawGetKeyTtlResponse);
     unary_call!(get_store_safe_ts, StoreSafeTsRequest, StoreSafeTsResponse);
 }
 
@@ -294,6 +301,8 @@ impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
         RawDeleteRangeRequest,
         RawDeleteRangeResponse
     );
+    unary_call_dispatch!(raw_get_key_ttl, RawGetKeyTtlRequest, RawGetKeyTtlResponse);
+    unary_call_dispatch!(raw_compare_and_swap, RawCasRequest, RawCasResponse);
     unary_call_dispatch!(ver_get, VerGetRequest, VerGetResponse);
     unary_call_dispatch!(ver_batch_get, VerBatchGetRequest, VerBatchGetResponse);
     unary_call_dispatch!(ver_mut, VerMutRequest, VerMutResponse);
@@ -334,6 +343,11 @@ impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
     unary_call_dispatch!(coprocessor, Request, Response);
     sstream_call_dispatch!(batch_coprocessor, BatchRequest, BatchResponse);
     sstream_call_dispatch!(coprocessor_stream, Request, Response);
+    unary_call_dispatch!(
+        coprocessor_v2,
+        RawCoprocessorRequest,
+        RawCoprocessorResponse
+    );
     sstream_call_dispatch!(
         establish_mpp_connection,
         EstablishMppConnectionRequest,
@@ -352,7 +366,6 @@ impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
     unary_call_dispatch!(read_index, ReadIndexRequest, ReadIndexResponse);
     bstream_call_dispatch!(batch_commands, BatchCommandsRequest, BatchCommandsResponse);
     unary_call_dispatch!(check_leader, CheckLeaderRequest, CheckLeaderResponse);
-    unary_call_dispatch!(raw_get_key_ttl, RawGetKeyTtlRequest, RawGetKeyTtlResponse);
     unary_call_dispatch!(get_store_safe_ts, StoreSafeTsRequest, StoreSafeTsResponse);
 }
 

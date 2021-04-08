@@ -35,6 +35,7 @@ protobuf-codec = [
   "engine_rocks/protobuf-codec",
   "engine_test/protobuf-codec",
   "engine_traits/protobuf-codec",
+  "engine_traits_tests/protobuf-codec",
   "error_code/protobuf-codec",
   "grpcio/protobuf-codec",
   "into_other/protobuf-codec",
@@ -52,8 +53,11 @@ protobuf-codec = [
   "tidb_query_executors/protobuf-codec",
   "tidb_query_expr/protobuf-codec",
   "tipb/protobuf-codec",
+  "tikv_kv/protobuf-codec",
   "tikv_util/protobuf-codec",
   "txn_types/protobuf-codec",
+  "grpcio-health/protobuf-codec",
+  "file_system/protobuf-codec",
 ]
 prost-codec = [
   "batch-system/prost-codec",
@@ -64,6 +68,7 @@ prost-codec = [
   "engine_rocks/prost-codec",
   "engine_test/prost-codec",
   "engine_traits/prost-codec",
+  "engine_traits_tests/prost-codec",
   "error_code/prost-codec",
   "grpcio/prost-codec",
   "into_other/prost-codec",
@@ -81,8 +86,11 @@ prost-codec = [
   "tidb_query_executors/prost-codec",
   "tidb_query_expr/prost-codec",
   "tipb/prost-codec",
+  "tikv_kv/prost-codec",
   "tikv_util/prost-codec",
   "txn_types/prost-codec",
+  "grpcio-health/prost-codec",
+  "file_system/prost-codec",
 ]
 testexport = ["raftstore/testexport"]
 test-engines-rocksdb = [
@@ -103,6 +111,7 @@ testing = []
 name = "tikv"
 
 [dependencies]
+anyhow = "1.0"
 async-stream = "0.2"
 async-trait = "0.1"
 backtrace = "0.3"
@@ -114,22 +123,22 @@ concurrency_manager = { path = "components/concurrency_manager", default-feature
 configuration = { path = "components/configuration" }
 crc32fast = "1.2"
 crc64fast = "0.1"
-crossbeam = "0.7.2"
-derive_more = "0.99.3"
+crossbeam = "0.8"
 encryption_export = { path = "components/encryption/export", default-features = false }
 engine_panic = { path = "components/engine_panic", default-features = false }
 engine_rocks = { path = "components/engine_rocks", default-features = false }
 engine_test = { path = "components/engine_test", default-features = false }
 engine_traits = { path = "components/engine_traits", default-features = false }
+engine_traits_tests = { path = "components/engine_traits_tests", default-features = false }
 error_code = { path = "components/error_code", default-features = false }
 fail = "0.4"
-failure = "0.1"
-file_system = { path = "components/file_system" }
+file_system = { path = "components/file_system", default-features = false }
 fs2 = "0.4"
 futures = { version = "0.3", features = ["thread-pool", "compat"] }
 futures-executor = "0.3.1"
 futures-util = { version = "0.3.1", default-features = false, features = ["io", "async-await"] }
 grpcio = { version = "0.8",  default-features = false, features = ["openssl-vendored"] }
+grpcio-health = { version = "0.8", default-features = false }
 hex = "0.4"
 hyper-tls = "0.4"
 itertools = "0.8"
@@ -142,6 +151,7 @@ keys = { path = "components/keys", default-features = false }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 lazy_static = "1.3"
 libc = "0.2"
+libloading = "0.7"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { path = "components/log_wrappers" }
 mime = "0.3.13"
@@ -169,7 +179,6 @@ serde_ignored = "0.1"
 serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
-slog_derive = "0.2"
 parking_lot = "0.11"
 prometheus = { version = "0.10", features = ["nightly"] }
 prometheus-static-metric = "0.4"
@@ -177,14 +186,18 @@ sst_importer = { path = "components/sst_importer", default-features = false }
 sysinfo = "0.16"
 tempfile = "3.0"
 match_template = { path = "components/match_template" }
+paste = "1.0"
+thiserror = "1.0"
 tidb_query_datatype = { path = "components/tidb_query_datatype", default-features = false }
 tidb_query_common = { path = "components/tidb_query_common", default-features = false }
 tidb_query_expr = { path = "components/tidb_query_expr", default-features = false }
 tidb_query_aggr = { path = "components/tidb_query_aggr", default-features = false }
 tidb_query_executors = { path = "components/tidb_query_executors", default-features = false }
 tikv_alloc = { path = "components/tikv_alloc" }
+tikv_kv = { path = "components/tikv_kv", default-features = false }
 tikv_util = { path = "components/tikv_util", default-features = false }
 collections = { path = "components/collections" }
+coprocessor_plugin_api = { path = "components/coprocessor_plugin_api" }
 time = "0.1"
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 tokio = { version = "0.2", features = ["full"] }
@@ -205,6 +218,7 @@ test_sst_importer = { path = "components/test_sst_importer", default-features = 
 test_util = { path = "components/test_util", default-features = false }
 tokio = { version = "0.2", features = ["macros", "rt-threaded", "time"] }
 zipf = "6.1.0"
+example_plugin = { path = "components/test_coprocessor_plugin/example_plugin" }
 
 [patch.crates-io]
 # TODO: remove this when new raft-rs is published.
@@ -213,6 +227,7 @@ raft-proto = { git = "https://github.com/tikv/raft-rs", branch = "master", defau
 protobuf = { git = "https://github.com/pingcap/rust-protobuf", rev = "65e9df20fbcbcf2409d5ee86a2332ecd04c534f8" }
 protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "65e9df20fbcbcf2409d5ee86a2332ecd04c534f8" }
 openssl-src = { git = "https://github.com/busyjay/openssl-src-rs", branch = "patch-for-m1" }
+crossbeam-channel = { git = "https://github.com/tikv/crossbeam", branch = "tikv-5.0" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
@@ -231,7 +246,8 @@ members = [
   "fuzz/fuzzer-libfuzzer",
   "fuzz/fuzzer-honggfuzz",
   "tests",
-  "cmd",
+  "cmd/tikv-server",
+  "cmd/tikv-ctl",
   "components/test_backup",
   "components/test_raftstore",
   "components/test_storage",
@@ -269,10 +285,13 @@ members = [
   "components/encryption",
   "components/error_code",
   "components/concurrency_manager",
+  "components/server",
   "components/file_system",
   "components/collections",
+  "components/coprocessor_plugin_api",
+  "components/test_coprocessor_plugin/example_plugin"
 ]
-default-members = ["cmd"]
+default-members = ["cmd/tikv-server", "cmd/tikv-ctl"]
 
 [profile.dev]
 opt-level = 0
@@ -295,6 +314,10 @@ panic = 'unwind'
 debug-assertions = false
 overflow-checks = false
 rpath = false
+
+[profile.release.package.server]
+opt-level = 1
+codegen-units = 4
 
 [profile.test]
 opt-level = 0

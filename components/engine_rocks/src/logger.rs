@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 use rocksdb::{DBInfoLogLevel as InfoLogLevel, Logger};
+use tikv_util::{crit, debug, error, info, warn};
 
 // TODO(yiwu): abstract the Logger interface.
 #[derive(Default)]

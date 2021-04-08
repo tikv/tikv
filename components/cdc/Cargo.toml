@@ -52,10 +52,9 @@ failpoints = ["tikv/failpoints"]
 
 [dependencies]
 bitflags = "1.0"
-crossbeam = "0.7"
+crossbeam = "0.8"
 engine_rocks = { path = "../engine_rocks", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
-failure = "0.1"
 futures = "0.3"
 grpcio = { version = "0.8",  default-features = false, features = ["openssl-vendored"] }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
@@ -67,6 +66,7 @@ security = { path = "../security", default-features = false }
 semver = "0.10"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+thiserror = "1.0"
 tikv = { path = "../../", default-features = false }
 tikv_util = { path = "../tikv_util", default-features = false }
 collections = { path = "../collections" }

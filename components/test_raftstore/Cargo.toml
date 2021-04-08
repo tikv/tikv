@@ -50,7 +50,7 @@ test-engines-panic = [
 ]
 
 [dependencies]
-crossbeam = "0.7.2"
+crossbeam = "0.8"
 engine_traits = { path = "../engine_traits", default-features = false }
 engine_rocks = { path = "../engine_rocks", default-features = false }
 futures = "0.3"

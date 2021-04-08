@@ -15,6 +15,7 @@ use rocksdb::Range as RocksRange;
 use rocksdb::{CFHandle, SliceTransform, DB};
 use std::str::FromStr;
 use std::sync::Arc;
+use tikv_util::box_err;
 
 pub fn new_temp_engine(path: &tempfile::TempDir) -> Engines<RocksEngine, RocksEngine> {
     let raft_path = path.path().join(std::path::Path::new("raft"));

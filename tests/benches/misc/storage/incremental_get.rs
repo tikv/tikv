@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use test::{black_box, Bencher};
 
 use engine_rocks::RocksSnapshot;

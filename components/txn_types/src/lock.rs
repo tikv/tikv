@@ -58,7 +58,7 @@ impl LockType {
     }
 }
 
-#[derive(PartialEq, Clone, Debug)]
+#[derive(PartialEq, Clone)]
 pub struct Lock {
     pub lock_type: LockType,
     pub primary: Vec<u8>,
@@ -79,6 +79,31 @@ pub struct Lock {
     // while committing is relatively expensive. So the solution is putting the ts of the rollback
     // to the lock.
     pub rollback_ts: Vec<TimeStamp>,
+}
+
+impl std::fmt::Debug for Lock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut secondary_keys = std::vec::Vec::with_capacity(self.secondaries.len());
+        for key in self.secondaries.iter() {
+            secondary_keys.push(log_wrappers::Value::key(key))
+        }
+        f.debug_struct("Lock")
+            .field("lock_type", &self.lock_type)
+            .field("primary_key", &log_wrappers::Value::key(&self.primary))
+            .field("start_ts", &self.ts)
+            .field("ttl", &self.ttl)
+            .field(
+                "short_value",
+                &log_wrappers::Value::value(self.short_value.as_ref().unwrap_or(&b"".to_vec())),
+            )
+            .field("for_update_ts", &self.for_update_ts)
+            .field("txn_size", &self.txn_size)
+            .field("min_commit_ts", &self.min_commit_ts)
+            .field("use_async_commit", &self.use_async_commit)
+            .field("secondaries", &secondary_keys)
+            .field("rollback_ts", &self.rollback_ts)
+            .finish()
+    }
 }
 
 impl Lock {
@@ -253,7 +278,11 @@ impl Lock {
                         rollback_ts.push(number::decode_u64(&mut b)?.into());
                     }
                 }
-                flag => panic!("invalid flag [{}] in lock", flag),
+                _ => {
+                    // To support forward compatibility, all fields should be serialized in order
+                    // and stop parsing if meets an unknown byte.
+                    break;
+                }
             }
         }
         let mut lock = Lock::new(
@@ -564,8 +593,12 @@ mod tests {
             0,
             TimeStamp::zero(),
         );
-        let v = lock.to_bytes();
+        let mut v = lock.to_bytes();
         assert!(Lock::parse(&v[..4]).is_err());
+        // Test `Lock::parse()` ignores unknown bytes.
+        v.extend(b"unknown");
+        let l = Lock::parse(&v).unwrap();
+        assert_eq!(l, lock);
     }
 
     #[test]
@@ -650,5 +683,61 @@ mod tests {
         Lock::check_ts_conflict(Cow::Borrowed(&lock), &key, 140.into(), &empty).unwrap();
         Lock::check_ts_conflict(Cow::Borrowed(&lock), &key, 150.into(), &empty).unwrap_err();
         Lock::check_ts_conflict(Cow::Borrowed(&lock), &key, 160.into(), &empty).unwrap_err();
+    }
+
+    #[test]
+    fn test_customize_debug() {
+        let mut lock = Lock::new(
+            LockType::Put,
+            b"pk".to_vec(),
+            100.into(),
+            3,
+            Option::from(b"short_value".to_vec()),
+            101.into(),
+            10,
+            127.into(),
+        )
+        .use_async_commit(vec![
+            b"secondary_k1".to_vec(),
+            b"secondary_kkkkk2".to_vec(),
+            b"secondary_k3k3k3k3k3k3".to_vec(),
+            b"secondary_k4".to_vec(),
+        ]);
+
+        assert_eq!(
+            format!("{:?}", lock),
+            "Lock { lock_type: Put, primary_key: 706B, start_ts: TimeStamp(100), ttl: 3, \
+            short_value: 73686F72745F76616C7565, for_update_ts: TimeStamp(101), txn_size: 10, \
+            min_commit_ts: TimeStamp(127), use_async_commit: true, \
+            secondaries: [7365636F6E646172795F6B31, 7365636F6E646172795F6B6B6B6B6B32, \
+            7365636F6E646172795F6B336B336B336B336B336B33, 7365636F6E646172795F6B34], rollback_ts: [] }"
+        );
+        log_wrappers::set_redact_info_log(true);
+        let redact_result = format!("{:?}", lock);
+        log_wrappers::set_redact_info_log(false);
+        assert_eq!(
+            redact_result,
+            "Lock { lock_type: Put, primary_key: ?, start_ts: TimeStamp(100), ttl: 3, \
+            short_value: ?, for_update_ts: TimeStamp(101), txn_size: 10, min_commit_ts: TimeStamp(127), \
+            use_async_commit: true, secondaries: [?, ?, ?, ?], rollback_ts: [] }"
+        );
+
+        lock.short_value = None;
+        lock.secondaries = Vec::default();
+        assert_eq!(
+            format!("{:?}", lock),
+            "Lock { lock_type: Put, primary_key: 706B, start_ts: TimeStamp(100), ttl: 3, short_value: , \
+            for_update_ts: TimeStamp(101), txn_size: 10, min_commit_ts: TimeStamp(127), \
+            use_async_commit: true, secondaries: [], rollback_ts: [] }"
+        );
+        log_wrappers::set_redact_info_log(true);
+        let redact_result = format!("{:?}", lock);
+        log_wrappers::set_redact_info_log(false);
+        assert_eq!(
+            redact_result,
+            "Lock { lock_type: Put, primary_key: ?, start_ts: TimeStamp(100), ttl: 3, short_value: ?, \
+            for_update_ts: TimeStamp(101), txn_size: 10, min_commit_ts: TimeStamp(127), \
+            use_async_commit: true, secondaries: [], rollback_ts: [] }"
+        );
     }
 }

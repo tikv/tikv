@@ -805,11 +805,7 @@ impl Datum {
 
 impl From<bool> for Datum {
     fn from(b: bool) -> Datum {
-        if b {
-            Datum::I64(1)
-        } else {
-            Datum::I64(0)
-        }
+        if b { Datum::I64(1) } else { Datum::I64(0) }
     }
 }
 

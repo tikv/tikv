@@ -27,7 +27,7 @@ codec = { path = "../codec", default-features = false }
 configuration = { path = "../configuration" }
 chrono = "0.4"
 crc32fast = "1.2"
-crossbeam = "0.7.2"
+crossbeam = "0.8"
 error_code = { path = "../error_code", default-features = false }
 derive_more = "0.99.3"
 fail = "0.4"
@@ -43,7 +43,6 @@ log_wrappers = { path = "../log_wrappers" }
 num_cpus = "1"
 openssl = "0.10"
 prometheus = { version = "0.10", features = ["nightly"] }
-quick-error = "1.2.3"
 rand = "0.7"
 rusoto_core = "0.45.0"
 serde = { version = "1.0", features = ["derive"] }
@@ -54,6 +53,7 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 slog-json = "2.3"
 slog-term = "2.4"
 sysinfo = "0.16"
+thiserror = "1.0"
 tikv_alloc = { path = "../tikv_alloc" }
 collections = { path = "../collections" }
 time = "0.1"
