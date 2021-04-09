@@ -534,16 +534,24 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
 
         let (cb, fut) = tikv_util::future::paired_future_callback();
         let scheduler = self.scheduler.clone();
+        let observe_id = delegate.id;
         let deregister_downstream = move |err| {
-            warn!("cdc send capture change cmd failed"; "region_id" => region_id, "error" => ?err);
-            let deregister = Deregister::Downstream {
-                region_id,
-                downstream_id,
-                conn_id,
-                err: Some(err),
+            let deregister = if is_new_delegate {
+                Deregister::Region {
+                    region_id,
+                    observe_id,
+                    err,
+                }
+            } else {
+                Deregister::Downstream {
+                    region_id,
+                    downstream_id,
+                    conn_id,
+                    err: Some(err),
+                }
             };
             if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
-                error!("cdc schedule cdc task failed"; "error" => ?e);
+                error!("schedule cdc task failed"; "error" => ?e);
             }
         };
         let scheduler = self.scheduler.clone();
@@ -1071,7 +1079,6 @@ impl Initializer {
 
     async fn async_incremental_scan<S: Snapshot + 'static>(&self, snap: S, region: Region) {
         let downstream_id = self.downstream_id;
-        let conn_id = self.conn_id;
         let region_id = region.get_id();
         debug!("cdc async incremental scan";
             "region_id" => region_id,
@@ -1085,6 +1092,21 @@ impl Initializer {
         };
 
         fail_point!("cdc_incremental_scan_start");
+
+        let deregister_region = || {
+            if !self.build_resolver {
+                return;
+            }
+
+            let deregister = Deregister::Region {
+                region_id,
+                observe_id: self.observe_id,
+                err: Error::ResolverBuilderConnExited,
+            };
+            if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
+                error!("cdc schedule cdc task failed"; "error" => ?e, "region_id" => region_id);
+            }
+        };
 
         let start = Instant::now_coarse();
         // Time range: (checkpoint_ts, current]
@@ -1101,22 +1123,14 @@ impl Initializer {
                     "downstream_id" => ?downstream_id,
                     "observe_id" => ?self.observe_id,
                     "conn_id" => ?self.conn_id);
+                deregister_region();
                 return;
             }
             let entries = match self.scan_batch(&mut scanner, resolver.as_mut()).await {
                 Ok(res) => res,
                 Err(e) => {
                     error!("cdc scan entries failed"; "error" => ?e, "region_id" => region_id);
-                    // TODO: record in metrics.
-                    let deregister = Deregister::Downstream {
-                        region_id,
-                        downstream_id,
-                        conn_id,
-                        err: Some(e),
-                    };
-                    if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
-                        error!("cdc schedule cdc task failed"; "error" => ?e, "region_id" => region_id);
-                    }
+                    deregister_region();
                     return;
                 }
             };
@@ -1150,6 +1164,10 @@ impl Initializer {
         scanner: &mut DeltaScanner<S>,
         resolver: Option<&mut Resolver>,
     ) -> Result<Vec<Option<TxnEntry>>> {
+        fail_point!("cdc_scan_batch_fail", |_| {
+            Err(Error::Rocks("injected error".to_string()))
+        });
+
         let mut entries = Vec::with_capacity(self.max_scan_batch_size);
         let mut total_bytes = 0;
         let mut total_size = 0;

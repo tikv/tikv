@@ -29,6 +29,8 @@ pub enum Error {
     Request(ErrorHeader),
     #[fail(display = "Engine traits error {}", _0)]
     EngineTraits(EngineTraitsError),
+    #[fail(display = "Resolver Builder has disconnected")]
+    ResolverBuilderConnExited,
 }
 
 macro_rules! impl_from {
