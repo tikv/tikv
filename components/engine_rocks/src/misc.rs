@@ -328,6 +328,20 @@ impl MiscExt for RocksEngine {
             level,
         ))
     }
+
+    fn is_stalled_or_stopped(&self) -> bool {
+        const ROCKSDB_IS_WRITE_STALLED: &str = "rocksdb.is-write-stalled";
+        const ROCKSDB_IS_WRITE_STOPPED: &str = "rocksdb.is-write-stopped";
+        self.as_inner()
+            .get_property_int(ROCKSDB_IS_WRITE_STALLED)
+            .unwrap_or_default()
+            != 0
+            || self
+                .as_inner()
+                .get_property_int(ROCKSDB_IS_WRITE_STOPPED)
+                .unwrap_or_default()
+                != 0
+    }
 }
 
 #[cfg(test)]
