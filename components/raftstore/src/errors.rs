@@ -297,7 +297,7 @@ impl ErrorCodeExt for Error {
             Error::ProstDecode(_) => error_code::raftstore::PROTOBUF,
             #[cfg(feature = "prost-codec")]
             Error::ProstEncode(_) => error_code::raftstore::PROTOBUF,
-            Error::DataIsNotReady(_, _, _) => error_code::raftstore::DATA_IS_NOT_READY,
+            Error::DataIsNotReady(..) => error_code::raftstore::DATA_IS_NOT_READY,
 
             Error::Other(_) => error_code::raftstore::UNKNOWN,
         }
