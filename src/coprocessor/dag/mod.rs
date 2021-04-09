@@ -5,7 +5,7 @@ mod storage_impl;
 pub use self::storage_impl::TiKVStorage;
 
 use async_trait::async_trait;
-use kvproto::{coprocessor::{KeyRange, Response}};
+use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
 use tidb_query_common::{execute_stats::ExecSummary, storage::IntervalRange};
 use tipb::{DagRequest, SelectResponse, StreamResponse};
