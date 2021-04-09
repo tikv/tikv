@@ -342,5 +342,33 @@ fn is_library_file<P: AsRef<Path>>(path: P) -> bool {
 //        assert_eq!(registry.loaded_plugin_names().len(), 0);
 //    }
 //
-//    // TODO: test hot-reloading. But first we need to figure out how to deal with dylib files for tests.
+//    #[test]
+//    fn plugin_registry_hot_reloading() {
+//        let build_dir = std::env::current_exe()
+//            .map(|p| p.as_path().parent().unwrap().to_owned())
+//            .unwrap();
+//        let coprocessor_dir = build_dir.join("coprocessors");
+//
+//        std::fs::create_dir_all(&coprocessor_dir).unwrap();
+//        let library_path = pkgname_to_libname("example-plugin");
+//
+//        let mut registry = PluginRegistry::default();
+//        registry.start_hot_reloading(&coprocessor_dir).unwrap();
+//
+//        // trigger loading
+//        std::fs::copy(
+//            build_dir.join(&library_path),
+//            coprocessor_dir.join(&library_path),
+//        )
+//        .unwrap();
+//        std::thread::sleep(Duration::from_secs(4));
+//
+//        assert!(registry.get_plugin("example-plugin").is_some());
+//
+//        // trigger unloading
+//        std::fs::remove_file(coprocessor_dir.join(&library_path)).unwrap();
+//        std::thread::sleep(Duration::from_secs(4));
+//
+//        assert!(registry.get_plugin("example-plugin").is_none());
+//    }
 //}
