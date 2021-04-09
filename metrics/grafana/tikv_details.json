@@ -13366,7 +13366,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_storage_mvcc_gc_delete_versions_sum{tidb_cluster=\"$tidb_cluster\"}[1m]))",
+              "expr": "sum(rate(tikv_storage_mvcc_gc_delete_versions_sum{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
               "format": "time_series",
               "intervalFactor": 2,
               "legendFormat": "keys/s",
