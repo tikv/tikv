@@ -1254,6 +1254,7 @@ impl Initializer {
                     "region_id" => region_id,
                     "downstream_id" => ?downstream_id,
                     "observe_id" => ?self.observe_id);
+                self.deregister_downstream(None);
                 return;
             }
             let scan_context = scan_context.clone();
@@ -1352,6 +1353,7 @@ impl Initializer {
                     info!("cdc incremental scan finished after region error, sending error"; "err_event" => ?err_event);
                     self.downstream_state.store(DownstreamState::Stopped);
                     self.downstream.as_ref().unwrap().sink_error(err_event);
+                    self.deregister_downstream(None);
                 }
                 other => {
                     panic!("unexpected incremental scan state {:?}", other);
