@@ -50,6 +50,7 @@ use tikv_util::sys::sys_quota::SysQuota;
 use tikv_util::time::duration_to_sec;
 use tikv_util::yatp_pool;
 
+use crate::coprocessor_v2::Config as CoprocessorV2Config;
 use crate::import::Config as ImportConfig;
 use crate::server::gc_worker::GcConfig;
 use crate::server::gc_worker::WriteCompactionFilterFactory;
@@ -2267,6 +2268,9 @@ pub struct TiKvConfig {
     #[config(submodule)]
     pub coprocessor: CopConfig,
 
+    #[config(skip)]
+    pub coprocessor_v2: CoprocessorV2Config,
+
     #[config(submodule)]
     pub rocksdb: DbConfig,
 
@@ -2316,6 +2320,7 @@ impl Default for TiKvConfig {
             metric: MetricConfig::default(),
             raft_store: RaftstoreConfig::default(),
             coprocessor: CopConfig::default(),
+            coprocessor_v2: CoprocessorV2Config::default(),
             pd: PdConfig::default(),
             rocksdb: DbConfig::default(),
             raftdb: RaftDbConfig::default(),
