@@ -266,6 +266,7 @@ impl Simulator for NodeCluster {
             Box::new(RaftstoreConfigManager(raft_store)),
         );
 
+        let _ = node.bootstrap_store_id(engines.clone())?;
         node.start(
             engines.clone(),
             simulate_trans.clone(),

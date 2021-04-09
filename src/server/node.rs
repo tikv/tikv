@@ -131,6 +131,18 @@ where
         }
     }
 
+    pub fn bootstrap_store_id(&mut self, engines: Engines<RocksEngine, ER>) -> Result<()> {
+        let mut store_id = self.check_store(&engines).unwrap();
+        if store_id == INVALID_ID {
+            store_id = self.bootstrap_store(&engines).unwrap();
+            fail_point!("node_after_bootstrap_store", |_| Err(box_err!(
+                "injected error: node_after_bootstrap_store"
+            )));
+        }
+        self.store.set_id(store_id);
+        Ok(())
+    }
+
     /// Starts the Node. It tries to bootstrap cluster if the cluster is not
     /// bootstrapped yet. Then it spawns a thread to run the raftstore in
     /// background.
@@ -151,14 +163,7 @@ where
     where
         T: Transport + 'static,
     {
-        let mut store_id = self.check_store(&engines)?;
-        if store_id == INVALID_ID {
-            store_id = self.bootstrap_store(&engines)?;
-            fail_point!("node_after_bootstrap_store", |_| Err(box_err!(
-                "injected error: node_after_bootstrap_store"
-            )));
-        }
-        self.store.set_id(store_id);
+        let store_id = self.id();
         {
             let mut meta = store_meta.lock().unwrap();
             meta.store_id = Some(store_id);

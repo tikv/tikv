@@ -605,8 +605,21 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         let server_config = Arc::new(self.config.server.clone());
 
+        let raft_store = Arc::new(VersionTrack::new(self.config.raft_store.clone()));
+        let mut node = Node::new(
+            self.system.take().unwrap(),
+            &server_config,
+            raft_store.clone(),
+            self.pd_client.clone(),
+            self.state.clone(),
+            self.background_worker.clone(),
+        );
+        node.bootstrap_store_id(engines.engines.clone())
+            .unwrap_or_else(|e| fatal!("failed to bootstrap node id: {}", e));
+
         // Create server
         let server = Server::new(
+            node.id(),
             &server_config,
             &self.security_mgr,
             storage,
@@ -648,10 +661,9 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             .raft_store
             .validate()
             .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
-        let raft_store = Arc::new(VersionTrack::new(self.config.raft_store.clone()));
         cfg_controller.register(
             tikv::config::Module::Raftstore,
-            Box::new(RaftstoreConfigManager(raft_store.clone())),
+            Box::new(RaftstoreConfigManager(raft_store)),
         );
 
         let split_config_manager =
@@ -678,15 +690,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             .unwrap()
             .registry
             .register_consistency_check_observer(100, observer);
-
-        let mut node = Node::new(
-            self.system.take().unwrap(),
-            &server_config,
-            raft_store,
-            self.pd_client.clone(),
-            self.state.clone(),
-            self.background_worker.clone(),
-        );
 
         node.start(
             engines.engines.clone(),

@@ -101,6 +101,7 @@ fn test_node_bootstrap_with_prepared_data() {
     };
     let (split_check_scheduler, _) = dummy_scheduler();
 
+    node.bootstrap_store_id(engines.clone()).unwrap();
     // try to restart this node, will clear the prepare data
     node.start(
         engines,

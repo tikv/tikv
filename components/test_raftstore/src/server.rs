@@ -335,6 +335,7 @@ impl Simulator for ServerCluster {
 
         for _ in 0..100 {
             let mut svr = Server::new(
+                node_id,
                 &server_cfg,
                 &security_mgr,
                 store.clone(),
@@ -400,6 +401,7 @@ impl Simulator for ServerCluster {
             SplitCheckRunner::new(engines.kv.clone(), router.clone(), coprocessor_host.clone());
         let split_check_scheduler = bg_worker.start("split-check", split_check_runner);
 
+        node.bootstrap_store_id(engines.clone())?;
         node.start(
             engines,
             simulate_trans.clone(),
