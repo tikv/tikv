@@ -98,9 +98,6 @@ impl PluginRegistry {
     /// Finds a plugin by its name. The plugin must have been loaded before with [`load_plugin()`].
     ///
     /// Plugins are indexed by the name that is returned by [`CoprocessorPlugin::name()`].
-    // TODO: takes &self and returns Arc<_> --> allows parallel execution of plugins. Is this okay?
-    // TODO: I guess it should be okay, because `CoprocessorPlugin::on_raw_coprocessor_request()`
-    // TODO: also takes &self and thus should be concurrently usable.
     pub fn get_plugin(&self, plugin_name: &str) -> Option<Arc<impl CoprocessorPlugin>> {
         self.inner.read().unwrap().get_plugin(plugin_name)
     }
@@ -161,8 +158,6 @@ impl Default for PluginRegistry {
 struct PluginRegistryInner {
     /// Plugins that are currently loaded.
     /// Provides a mapping from the plugin's name to the actual instance.
-    // TODO: is `Arc` here okay? Intention is that we can concurrently manipulate (load/unload)
-    // TODO: plugins from the map while a plugin is running, so that long-running plugins don't block us.
     loaded_plugins: HashMap<String, Arc<LoadedPlugin>>,
 }
 
