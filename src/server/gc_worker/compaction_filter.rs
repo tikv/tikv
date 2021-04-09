@@ -397,7 +397,9 @@ impl WriteCompactionFilter {
             wopts: &WriteOptions,
         ) -> Result<(), engine_traits::Error> {
             fail_point!("write_compaction_filter_flush_write_batch", true, |_| {
-                Err("Ingested fail point".to_owned())
+                Err(engine_traits::Error::Engine(
+                    "Ingested fail point".to_string(),
+                ))
             });
             wb.write_opt(wopts)
         }
