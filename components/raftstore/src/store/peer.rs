@@ -2792,7 +2792,20 @@ where
                 }
             }
         }
-        Ok((min_m.unwrap_or(0), min_c.unwrap_or(0)))
+        let (mut min_m, min_c) = (min_m.unwrap_or(0), min_c.unwrap_or(0));
+        if min_m < min_c {
+            warn!(
+                "min_matched < min_committed, raft progress is inaccurate";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+                "min_matched" => min_m,
+                "min_committed" => min_c,
+            );
+            // Reset `min_matched` to `min_committed`, since a raft log is committed,
+            // the peer should also has replicated it
+            min_m = min_c;
+        }
+        Ok((min_m, min_c))
     }
 
     fn pre_propose_prepare_merge<T>(
@@ -2813,15 +2826,6 @@ where
                 min_committed,
                 last_index
             ));
-        }
-        if min_matched < min_committed {
-            warn!(
-                "min_matched < min_committed, raft progress is inaccurate";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-                "min_matched" => min_matched,
-                "min_committed" => min_committed,
-            );
         }
         let mut entry_size = 0;
         for entry in self
