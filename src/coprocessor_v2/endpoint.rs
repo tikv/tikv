@@ -29,11 +29,11 @@ impl Endpoint {
     pub fn new(copr_cfg: &Config) -> Self {
         let mut plugin_registry = PluginRegistry::new();
 
-        // Should we make sure that the directory exists (e.g. create?)
-        // or what should we do on error?
+        std::fs::create_dir_all(&copr_cfg.coprocessor_plugin_directory)
+            .expect("Unable to create directory for coprocessor plugins.");
         plugin_registry
             .start_hot_reloading(&copr_cfg.coprocessor_plugin_directory)
-            .unwrap();
+            .expect("Unable to load coprocessor plugins from directory.");
 
         Self {
             plugin_registry: Arc::new(plugin_registry),
