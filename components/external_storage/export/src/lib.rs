@@ -7,3 +7,9 @@ pub use export::*;
 mod service;
 #[cfg(feature = "cloud-storage-grpc")]
 pub use service::new_service;
+
+#[cfg(feature = "cloud-storage-dylib")]
+mod dylib;
+
+#[cfg(any(feature = "cloud-storage-grpc", feature = "cloud-storage-dylib"))]
+mod request;

@@ -9,6 +9,7 @@ default = ["protobuf-codec", "cloud-aws", "cloud-gcp"]
 cloud-aws = ["external_storage_export/cloud-aws"]
 cloud-gcp = ["external_storage_export/cloud-gcp"]
 cloud-storage-grpc = ["external_storage_export/cloud-storage-grpc"]
+cloud-storage-dylib = ["external_storage_export/cloud-storage-dylib"]
 protobuf-codec = [
   "encryption/protobuf-codec",
   "engine_rocks/protobuf-codec",

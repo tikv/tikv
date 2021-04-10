@@ -23,9 +23,8 @@ cloud-gcp = [
   "encryption_export/cloud-gcp",
   "backup/cloud-gcp",
 ]
-cloud-storage-grpc = [
-  "backup/cloud-storage-grpc",
-]
+cloud-storage-grpc = [ "backup/cloud-storage-grpc" ]
+cloud-storage-dylib = [ "backup/cloud-storage-dylib" ]
 protobuf-codec = [
   "backup/protobuf-codec",
   "cdc/protobuf-codec",

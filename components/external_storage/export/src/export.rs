@@ -21,6 +21,8 @@ pub use kvproto::backup::StorageBackend_oneof_backend as Backend;
 #[cfg(any(feature = "cloud-gcp", feature = "cloud-aws"))]
 use kvproto::backup::{Gcs, S3};
 
+#[cfg(feature = "cloud-storage-dylib")]
+use super::dylib;
 #[cfg(feature = "cloud-storage-grpc")]
 use super::service;
 use cloud::blob::BlobStorage;
@@ -66,13 +68,24 @@ fn blob_store(store: Box<dyn BlobStorage>) -> Box<dyn ExternalStorage> {
     Box::new(BlobStore::new(store)) as Box<dyn ExternalStorage>
 }
 
-#[cfg(feature = "cloud-storage-grpc")]
+#[cfg(all(feature = "cloud-storage-grpc", not(feature = "cloud-storage-dylib")))]
 pub fn create_backend(backend: &Backend) -> io::Result<Box<dyn ExternalStorage>> {
     let client = service::new_client(backend.clone(), create_backend_inner(backend)?)?;
     return Ok(Box::new(client) as Box<dyn ExternalStorage>);
 }
 
-#[cfg(not(feature = "cloud-storage-grpc"))]
+#[cfg(all(feature = "cloud-storage-dylib", not(feature = "cloud-storage-grpc")))]
+pub fn create_backend(backend: &Backend) -> io::Result<Box<dyn ExternalStorage>> {
+    dylib::new_client(backend.clone(), create_backend_inner(backend)?)
+}
+
+#[cfg(all(feature = "cloud-storage-dylib", feature = "cloud-storage-grpc"))]
+panic!("cannot set both cloud-storage-dylib and cloud-storage-grpc");
+
+#[cfg(all(
+    not(feature = "cloud-storage-grpc"),
+    not(feature = "cloud-storage-dylib")
+))]
 pub fn create_backend(backend: &Backend) -> io::Result<Box<dyn ExternalStorage>> {
     create_backend_inner(backend)
 }

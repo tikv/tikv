@@ -1,14 +1,15 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
-use crate::{create_storage, create_storage_no_client};
-use external_storage::{read_external_storage_into_file, ExternalStorage};
+use external_storage::ExternalStorage;
 
-use std::f64::INFINITY;
 use std::io::{self, ErrorKind};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
+use crate::request::{
+    anyhow_to_io_log_error, file_name_for_write, restore_receiver, restore_sender, write_receiver,
+    write_sender, DropPath,
+};
 use anyhow::Context;
-use file_system::File;
-use futures_io::{AsyncRead, AsyncWrite};
+use futures_io::AsyncRead;
 use grpcio::{self};
 use kvproto::backup as proto;
 #[cfg(feature = "prost-codec")]
@@ -18,11 +19,10 @@ pub use kvproto::backup::StorageBackend_oneof_backend as Backend;
 use slog_global::{error, info};
 use tikv_util::time::Limiter;
 use tokio::runtime::{Builder, Runtime};
-use tokio_util::compat::Tokio02AsyncReadCompatExt;
 
 pub struct ExternalStorageClient {
     backend: Backend,
-    runtime: Arc<Mutex<Runtime>>,
+    runtime: Arc<Runtime>,
     rpc: proto::ExternalStorageClient,
     blob_storage: Arc<Box<dyn ExternalStorage>>,
 }
@@ -39,7 +39,7 @@ pub fn new_client(
         .build()?;
     Ok(ExternalStorageClient {
         backend,
-        runtime: Arc::new(Mutex::new(runtime)),
+        runtime: Arc::new(runtime),
         blob_storage: Arc::new(blob_storage),
         rpc: new_rpc_client()?,
     })
@@ -62,31 +62,15 @@ impl ExternalStorage for ExternalStorageClient {
     ) -> io::Result<()> {
         info!("external storage writing");
         (|| -> anyhow::Result<()> {
-            let object_name = name.to_string();
-            // TODO: the reader should write direct to this file
-            // currently it is copying into an intermediate buffer
-            // Writing to a file here uses up disk space
-            // But as a positive it gets the backup data out of the DB the fastest
-            // Currently this waits for the file to be completely written before sending to storage
-            let file_path = socket_name(&*self.blob_storage, &object_name);
-            self.runtime.lock().unwrap().block_on(async {
-                let msg = |action: &str| format!("{} file {:?}", action, &file_path);
-                info!("{}", msg("create"));
-                let f = tokio::fs::File::create(file_path.clone())
-                    .await
-                    .context(msg("create"))?;
-                let mut writer: Box<dyn AsyncWrite + Unpin + Send> = Box::new(Box::pin(f.compat()));
-                info!("{}", msg("copy"));
-                futures_util::io::copy(reader, &mut writer)
-                    .await
-                    .context(msg("copy"))
-            })?;
-            let mut req = proto::ExternalStorageWriteRequest::default();
-            req.set_object_name(name.to_string());
-            req.set_content_length(content_length);
-            let mut sb = proto::StorageBackend::default();
-            sb.backend = Some(self.backend.clone());
-            req.set_storage_backend(sb);
+            let file_path = file_name_for_write(&*self.blob_storage, &name);
+            let req = write_sender(
+                &self.runtime,
+                self.backend.clone(),
+                file_path.clone(),
+                name,
+                reader,
+                content_length,
+            )?;
             info!("grpc write request");
             self.rpc
                 .write(&req)
@@ -109,21 +93,16 @@ impl ExternalStorage for ExternalStorageClient {
         storage_name: &str,
         restore_name: std::path::PathBuf,
         expected_length: u64,
-        _speed_limiter: &Limiter,
+        speed_limiter: &Limiter,
     ) -> io::Result<()> {
         info!("external storage restore");
-        // TODO: send speed_limiter
-        let mut req = proto::ExternalStorageRestoreRequest::default();
-        req.set_object_name(storage_name.to_string().clone());
-        let restore_str = restore_name.to_str().ok_or(io::Error::new(
-            ErrorKind::InvalidData,
-            format!("could not convert to str {:?}", &restore_name),
-        ))?;
-        req.set_restore_name(restore_str.to_string());
-        req.set_content_length(expected_length);
-        let mut sb = proto::StorageBackend::default();
-        sb.backend = Some(self.backend.clone());
-        req.set_storage_backend(sb);
+        let req = restore_sender(
+            self.backend.clone(),
+            storage_name,
+            restore_name,
+            expected_length,
+            speed_limiter,
+        )?;
         self.rpc.restore(&req).map_err(rpc_error_to_io).map(|_| ())
     }
 }
@@ -168,43 +147,22 @@ fn new_rpc_client() -> io::Result<proto::ExternalStorageClient> {
 /// Service handles the RPC messages for the `ExternalStorage` service.
 #[derive(Clone)]
 pub struct Service {
-    runtime: Arc<Mutex<Runtime>>,
+    runtime: Arc<Runtime>,
 }
 
 impl Service {
     /// Create a new backup service.
     pub fn new() -> io::Result<Service> {
-        let runtime = Arc::new(Mutex::new(
+        let runtime = Arc::new(
             Builder::new()
                 .basic_scheduler()
                 .thread_name("external-storage-grpc-service")
                 .core_threads(1)
                 .enable_all()
                 .build()?,
-        ));
+        );
         Ok(Service { runtime })
     }
-}
-
-fn socket_name(storage: &dyn ExternalStorage, object_name: &str) -> std::path::PathBuf {
-    let full_name = format!("{}-{}", storage.name(), object_name);
-    std::env::temp_dir().join(full_name)
-}
-
-fn write_inner(
-    runtime: &mut Runtime,
-    storage_backend: &proto::StorageBackend,
-    object_name: &str,
-    content_length: u64,
-) -> anyhow::Result<()> {
-    let storage = create_storage_no_client(storage_backend).context("create storage")?;
-    let file_path = socket_name(&storage, object_name);
-    let reader = runtime
-        .block_on(open_file_as_async_read(file_path))
-        .context("open file")?;
-    storage
-        .write(object_name, reader, content_length)
-        .context("storage write")
 }
 
 impl proto::ExternalStorage for Service {
@@ -215,12 +173,7 @@ impl proto::ExternalStorage for Service {
         sink: grpcio::UnarySink<proto::ExternalStorageWriteResponse>,
     ) {
         info!("write request {:?}", req.get_object_name());
-        let result = write_inner(
-            &mut self.runtime.lock().unwrap(),
-            req.get_storage_backend(),
-            req.get_object_name(),
-            req.get_content_length(),
-        );
+        let result = write_receiver(&self.runtime, req);
         match result {
             Ok(_) => {
                 let rsp = proto::ExternalStorageWriteResponse::default();
@@ -245,16 +198,7 @@ impl proto::ExternalStorage for Service {
             req.get_object_name(),
             req.get_restore_name()
         );
-        let object_name = req.get_object_name();
-        let storage_backend = req.get_storage_backend();
-        let file_name = std::path::PathBuf::from(req.get_restore_name());
-        let expected_length = req.get_content_length();
-        let result = self.runtime.lock().unwrap().block_on(restore_inner(
-            storage_backend,
-            object_name,
-            file_name,
-            expected_length,
-        ));
+        let result = restore_receiver(&self.runtime, req);
         match result {
             Ok(_) => {
                 let rsp = proto::ExternalStorageRestoreResponse::default();
@@ -267,32 +211,6 @@ impl proto::ExternalStorage for Service {
             }
         }
     }
-}
-
-async fn restore_inner(
-    storage_backend: &proto::StorageBackend,
-    object_name: &str,
-    file_name: std::path::PathBuf,
-    expected_length: u64,
-) -> io::Result<()> {
-    let storage = create_storage(&storage_backend)?;
-    // TODO: support encryption. The service must be launched with or sent a DataKeyManager
-    let output: &mut dyn io::Write = &mut File::create(file_name)?;
-    // the minimum speed of reading data, in bytes/second.
-    // if reading speed is slower than this rate, we will stop with
-    // a "TimedOut" error.
-    // (at 8 KB/s for a 2 MB buffer, this means we timeout after 4m16s.)
-    const MINIMUM_READ_SPEED: usize = 8192;
-    let limiter = Limiter::new(INFINITY);
-    let x = read_external_storage_into_file(
-        &mut storage.read(object_name),
-        output,
-        &limiter,
-        expected_length,
-        MINIMUM_READ_SPEED,
-    )
-    .await;
-    x
 }
 
 pub fn make_rpc_error(err: io::Error) -> grpcio::RpcStatus {
@@ -322,42 +240,10 @@ pub fn rpc_error_to_io(err: grpcio::Error) -> io::Error {
     }
 }
 
-fn anyhow_to_io_log_error(err: anyhow::Error) -> io::Error {
-    let string = format!("{:#}", &err);
-    match err.downcast::<io::Error>() {
-        Ok(e) => {
-            // It will be difficult to propagate the context
-            // without changing the error type to anyhow or a custom TiKV error
-            error!("{}", string);
-            e
-        }
-        Err(_) => io::Error::new(ErrorKind::Other, string),
-    }
-}
-
-async fn open_file_as_async_read(
-    file_path: std::path::PathBuf,
-) -> anyhow::Result<Box<dyn AsyncRead + Unpin + Send>> {
-    info!("open file {:?}", &file_path);
-    let f = tokio::fs::File::open(file_path)
-        .await
-        .context("open file")?;
-    let reader: Box<dyn AsyncRead + Unpin + Send> = Box::new(Box::pin(f.compat()));
-    Ok(reader)
-}
-
 fn bind_socket(
     socket_path: &std::path::PathBuf,
 ) -> anyhow::Result<std::os::unix::net::UnixListener> {
     let msg = format!("bind socket {:?}", &socket_path);
     info!("{}", msg);
     std::os::unix::net::UnixListener::bind(&socket_path).context(msg)
-}
-
-struct DropPath(std::path::PathBuf);
-
-impl Drop for DropPath {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-    }
 }

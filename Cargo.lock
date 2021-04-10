@@ -1395,16 +1395,22 @@ dependencies = [
  "cloud",
  "encryption",
  "external_storage",
+ "ffi-support",
  "file_system",
+ "futures 0.3.7",
  "futures-executor",
  "futures-io",
  "futures-util",
  "gcp",
  "grpcio",
  "kvproto",
+ "lazy_static",
  "libc 0.2.86",
+ "libloading",
  "matches",
  "nix 0.11.1",
+ "once_cell",
+ "protobuf",
  "rust-ini",
  "signal",
  "slog",
@@ -1456,6 +1462,16 @@ name = "farmhash"
 version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f35ce9c8fb9891c75ceadbc330752951a4e369b50af10775955aeb9af3eee34b"
+
+[[package]]
+name = "ffi-support"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f85d4d1be103c0b2d86968f0b0690dc09ac0ba205b90adb0389b552869e5000e"
+dependencies = [
+ "lazy_static",
+ "log",
+]
 
 [[package]]
 name = "file_system"
