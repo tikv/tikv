@@ -2801,8 +2801,8 @@ where
                 "min_matched" => min_m,
                 "min_committed" => min_c,
             );
-            // Reset `min_matched` to `min_committed`, since a raft log is committed,
-            // the peer should also has replicated it
+            // Reset `min_matched` to `min_committed`, since the raft log at `min_committed` is
+            // known to be committed in all peers, all of the peers should also have replicated it
             min_m = min_c;
         }
         Ok((min_m, min_c))
