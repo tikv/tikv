@@ -3095,6 +3095,7 @@ impl ConfigController {
 
 #[cfg(test)]
 mod tests {
+    use itertools::Itertools;
     use tempfile::Builder;
 
     use super::*;
@@ -3786,5 +3787,27 @@ mod tests {
                 max_titan_background_gc: 4,
             }
         );
+    }
+
+    #[test]
+    fn test_config_template_valid() {
+        let template_config = std::include_str!("../etc/config-template.toml")
+            .lines()
+            .map(|l| l.strip_prefix('#').unwrap_or(l))
+            .join("\n");
+
+        let mut cfg: TiKvConfig = toml::from_str(&template_config).unwrap();
+        cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn test_config_template_matches_default() {
+        let template_config = std::include_str!("../etc/config-template.toml")
+            .lines()
+            .map(|l| l.strip_prefix('#').unwrap_or(l))
+            .join("\n");
+
+        let cfg: TiKvConfig = toml::from_str(&template_config).unwrap();
+        assert_eq!(cfg, TiKvConfig::default());
     }
 }
