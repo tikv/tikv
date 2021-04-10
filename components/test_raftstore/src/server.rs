@@ -362,7 +362,7 @@ impl Simulator for ServerCluster {
             concurrency_manager.clone(),
             PerfLevel::EnableCount,
         );
-        let coprv2 = coprocessor_v2::Endpoint::new(&server_cfg);
+        let coprv2 = coprocessor_v2::Endpoint::new(&cfg.coprocessor_v2);
         let mut server = None;
         // Create Debug service.
         let debug_thread_pool = Arc::new(
