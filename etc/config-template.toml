@@ -39,7 +39,7 @@
 ## It won't take effect when compiling without BCC_IOSNOOP=1. 
 # enable-io-snoop = true
 
-# Configurations for the single thread pool serving read requests.
+## Configurations for the single thread pool serving read requests.
 [readpool.unified]
 ## The minimal working thread count of the thread pool.
 # min-thread-count = 1
@@ -232,7 +232,7 @@
 
 [pd]
 ## PD endpoints.
-# endpoints = []
+# endpoints = ["127.0.0.1:2379"]
 
 ## The interval at which to retry a PD connection initialization.
 ## Default is 300ms.
@@ -331,8 +331,8 @@
 # lock-cf-compact-interval = "10m"
 # lock-cf-compact-bytes-threshold = "256MB"
 
-## Interval (s) to check Region whether the data are consistent.
-# consistency-check-interval = 0
+## Interval to check region whether the data is consistent.
+# consistency-check-interval = "0s"
 
 ## Interval to clean up import SST files.
 # cleanup-import-sst-interval = "10m"
@@ -505,7 +505,7 @@
 ## absolute path will be used as the log file name's prefix.
 # info-log-dir = ""
 
-# RocksDB log levels
+## RocksDB log levels
 # info-log-level = "info"
 
 ## Options for `Titan`.
@@ -516,7 +516,7 @@
 # enabled = false
 
 ## Maximum number of threads of `Titan` background gc jobs.
-# default: 4
+## default: 4
 # max-background-gc = 4
 
 ## Options for "Default" Column Family, which stores actual user data.
@@ -690,16 +690,16 @@
 ##   lz4:    kLZ4Compression
 ##   lz4hc:  kLZ4HCCompression
 ##   zstd:   kZSTD
-# default: lz4
+## default: lz4
 # blob-file-compression = "lz4"
 
 ## Specifics cache size for blob records
-# default: 0
+## default: 0
 # blob-cache-size = "0GB"
 
 ## If the ratio of discardable size of a blob file is larger than
 ## this threshold, the blob file will be GCed out.
-# default: 0.5
+## default: 0.5
 # discardable-ratio = 0.5
 
 ## The mode used to process blob files. In read-only mode Titan
@@ -709,7 +709,7 @@
 ##   default:   kNormal
 ##   read-only: kReadOnly
 ##   fallback:  kFallback
-# default: normal
+## default: normal
 # blob-run-mode = "normal"
 
 ## If set true, values in blob file will be merged to a new blob file while
@@ -848,7 +848,7 @@
 ## Default is false.
 # redact-info-log = false
 
-# Configurations for encryption at rest. Experimental.
+## Configurations for encryption at rest. Experimental.
 [security.encryption]
 ## Encryption method to use for data files.
 ## Possible values are "plaintext", "aes128-ctr", "aes192-ctr" and "aes256-ctr". Value other than
