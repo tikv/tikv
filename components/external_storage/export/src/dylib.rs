@@ -25,13 +25,15 @@ pub use kvproto::backup::StorageBackend_oneof_backend as Backend;
 struct ExternalStorageClient {
     backend: Backend,
     runtime: Arc<Runtime>,
-    blob_storage: Arc<Box<dyn ExternalStorage>>,
     library: Option<libloading::Library>,
+    name: &'static str,
+    url: url::Url,
 }
 
 pub fn new_client(
     backend: Backend,
-    blob_storage: Box<dyn ExternalStorage>,
+    name: &'static str,
+    url: url::Url,
 ) -> io::Result<Box<dyn ExternalStorage>> {
     let runtime = Builder::new()
         .basic_scheduler()
@@ -59,8 +61,9 @@ pub fn new_client(
     Ok(Box::new(ExternalStorageClient {
         runtime: Arc::new(runtime),
         backend,
-        blob_storage: Arc::new(blob_storage),
         library,
+        name,
+        url,
     }) as _)
 }
 
@@ -111,11 +114,11 @@ impl ExternalStorageClient {
 
 impl ExternalStorage for ExternalStorageClient {
     fn name(&self) -> &'static str {
-        self.blob_storage.name()
+        self.name
     }
 
     fn url(&self) -> io::Result<url::Url> {
-        self.blob_storage.url()
+        Ok(self.url.clone())
     }
 
     fn write(
@@ -126,7 +129,7 @@ impl ExternalStorage for ExternalStorageClient {
     ) -> io::Result<()> {
         info!("external storage writing");
         (|| -> anyhow::Result<()> {
-            let file_path = file_name_for_write(&*self.blob_storage, &name);
+            let file_path = file_name_for_write(&self.name, &name);
             let req = write_sender(
                 &self.runtime,
                 self.backend.clone(),

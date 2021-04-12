@@ -20,38 +20,41 @@ use slog_global::{error, info};
 use tikv_util::time::Limiter;
 use tokio::runtime::{Builder, Runtime};
 
-pub struct ExternalStorageClient {
+struct ExternalStorageClient {
     backend: Backend,
     runtime: Arc<Runtime>,
     rpc: proto::ExternalStorageClient,
-    blob_storage: Arc<Box<dyn ExternalStorage>>,
+    name: &'static str,
+    url: url::Url,
 }
 
 pub fn new_client(
     backend: Backend,
-    blob_storage: Box<dyn ExternalStorage>,
-) -> io::Result<ExternalStorageClient> {
+    name: &'static str,
+    url: url::Url,
+) -> io::Result<Box<dyn ExternalStorage>> {
     let runtime = Builder::new()
         .basic_scheduler()
         .thread_name("external-storage-grpc-client")
         .core_threads(1)
         .enable_all()
         .build()?;
-    Ok(ExternalStorageClient {
+    Ok(Box::new(ExternalStorageClient {
         backend,
         runtime: Arc::new(runtime),
-        blob_storage: Arc::new(blob_storage),
         rpc: new_rpc_client()?,
-    })
+        name,
+        url,
+    }))
 }
 
 impl ExternalStorage for ExternalStorageClient {
     fn name(&self) -> &'static str {
-        self.blob_storage.name()
+        self.name
     }
 
     fn url(&self) -> io::Result<url::Url> {
-        self.blob_storage.url()
+        Ok(self.url.clone())
     }
 
     fn write(
@@ -62,7 +65,7 @@ impl ExternalStorage for ExternalStorageClient {
     ) -> io::Result<()> {
         info!("external storage writing");
         (|| -> anyhow::Result<()> {
-            let file_path = file_name_for_write(&*self.blob_storage, &name);
+            let file_path = file_name_for_write(&self.name, &name);
             let req = write_sender(
                 &self.runtime,
                 self.backend.clone(),

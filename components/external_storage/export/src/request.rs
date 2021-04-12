@@ -85,7 +85,7 @@ pub fn write_receiver(
     let object_name = req.get_object_name();
     let content_length = req.get_content_length();
     let storage = create_storage_no_client(storage_backend).context("create storage")?;
-    let file_path = file_name_for_write(&storage, object_name);
+    let file_path = file_name_for_write(storage.name(), object_name);
     let reader = runtime
         .enter(|| block_on(open_file_as_async_read(file_path)))
         .context("open file")?;
@@ -170,7 +170,7 @@ impl Drop for DropPath {
     }
 }
 
-pub fn file_name_for_write(storage: &dyn ExternalStorage, object_name: &str) -> std::path::PathBuf {
-    let full_name = format!("{}-{}", storage.name(), object_name);
+pub fn file_name_for_write(storage_name: &str, object_name: &str) -> std::path::PathBuf {
+    let full_name = format!("{}-{}", storage_name, object_name);
     std::env::temp_dir().join(full_name)
 }

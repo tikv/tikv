@@ -70,13 +70,14 @@ fn blob_store(store: Box<dyn BlobStorage>) -> Box<dyn ExternalStorage> {
 
 #[cfg(all(feature = "cloud-storage-grpc", not(feature = "cloud-storage-dylib")))]
 pub fn create_backend(backend: &Backend) -> io::Result<Box<dyn ExternalStorage>> {
-    let client = service::new_client(backend.clone(), create_backend_inner(backend)?)?;
-    return Ok(Box::new(client) as Box<dyn ExternalStorage>);
+    let storage = create_backend_inner(backend)?;
+    service::new_client(backend.clone(), storage.name(), storage.url()?.clone())
 }
 
 #[cfg(all(feature = "cloud-storage-dylib", not(feature = "cloud-storage-grpc")))]
 pub fn create_backend(backend: &Backend) -> io::Result<Box<dyn ExternalStorage>> {
-    dylib::new_client(backend.clone(), create_backend_inner(backend)?)
+    let storage = create_backend_inner(backend)?;
+    dylib::new_client(backend.clone(), storage.name(), storage.url()?.clone())
 }
 
 #[cfg(all(feature = "cloud-storage-dylib", feature = "cloud-storage-grpc"))]
