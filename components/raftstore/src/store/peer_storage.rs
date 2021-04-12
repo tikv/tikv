@@ -27,7 +27,7 @@ use crate::{Error, Result};
 use engine_traits::{RaftEngine, RaftLogBatch};
 use into_other::into_other;
 use tikv_util::worker::Scheduler;
-use tikv_util::{box_err, box_try, debug, defer, error, info, warn};
+use tikv_util::{box_err, box_try, debug, defer, error, info};
 
 use super::metrics::*;
 use super::worker::RegionTask;
@@ -37,7 +37,6 @@ use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
 // so that we can force the follower peer to sync the snapshot first.
 pub const RAFT_INIT_LOG_TERM: u64 = 5;
 pub const RAFT_INIT_LOG_INDEX: u64 = 5;
-const MAX_SNAP_TRY_CNT: usize = 5;
 
 /// The initial region epoch version.
 pub const INIT_EPOCH_VER: u64 = 1;
@@ -983,7 +982,7 @@ where
                     }
                 }
                 None => {
-                    warn!(
+                    info!(
                         "failed to try generating snapshot";
                         "region_id" => self.region.get_id(),
                         "peer_id" => self.peer_id,
@@ -995,15 +994,6 @@ where
 
         if SnapState::Relax != *snap_state {
             panic!("{} unexpected state: {:?}", self.tag, *snap_state);
-        }
-
-        if *tried_cnt >= MAX_SNAP_TRY_CNT {
-            let cnt = *tried_cnt;
-            *tried_cnt = 0;
-            return Err(raft::Error::Store(box_err!(
-                "failed to get snapshot after {} times",
-                cnt
-            )));
         }
 
         info!(
@@ -2072,7 +2062,9 @@ mod tests {
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
         generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap();
         let snap = match *s.snap_state.borrow() {
-            SnapState::Generating(ref rx) => rx.recv_timeout(Duration::from_secs(3)).unwrap(),
+            SnapState::Generating { ref receiver, .. } => {
+                receiver.recv_timeout(Duration::from_secs(3)).unwrap()
+            }
             ref s => panic!("unexpected state: {:?}", s),
         };
         assert_eq!(snap.get_metadata().get_index(), 5);
@@ -2085,7 +2077,7 @@ mod tests {
         assert_eq!(data.get_region().get_peers().len(), 1);
 
         let (tx, rx) = channel();
-        s.set_snap_state(SnapState::Generating(rx));
+        s.set_snap_state(gen_snap_for_test(rx));
         // Empty channel should cause snapshot call to wait.
         assert_eq!(s.snapshot(0).unwrap_err(), unavailable);
         assert_eq!(*s.snap_tried_cnt.borrow(), 1);
@@ -2096,7 +2088,7 @@ mod tests {
 
         let (tx, rx) = channel();
         tx.send(snap.clone()).unwrap();
-        s.set_snap_state(SnapState::Generating(rx));
+        s.set_snap_state(gen_snap_for_test(rx));
         // stale snapshot should be abandoned, snapshot index < request index.
         assert_eq!(
             s.snapshot(snap.get_metadata().get_index() + 1).unwrap_err(),
@@ -2137,7 +2129,7 @@ mod tests {
 
         let (tx, rx) = channel();
         tx.send(snap).unwrap();
-        s.set_snap_state(SnapState::Generating(rx));
+        s.set_snap_state(gen_snap_for_test(rx));
         *s.snap_tried_cnt.borrow_mut() = 1;
         // stale snapshot should be abandoned, snapshot index < truncated index.
         assert_eq!(s.snapshot(0).unwrap_err(), unavailable);
@@ -2146,10 +2138,10 @@ mod tests {
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
         generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap();
         match *s.snap_state.borrow() {
-            SnapState::Generating(ref rx) => {
-                rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            SnapState::Generating { ref receiver, .. } => {
+                receiver.recv_timeout(Duration::from_secs(3)).unwrap();
                 worker.stop();
-                match rx.recv_timeout(Duration::from_secs(3)) {
+                match receiver.recv_timeout(Duration::from_secs(3)) {
                     Err(RecvTimeoutError::Disconnected) => {}
                     res => panic!("unexpected result: {:?}", res),
                 }
@@ -2162,18 +2154,12 @@ mod tests {
         generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap_err();
         assert_eq!(*s.snap_tried_cnt.borrow(), 2);
 
-        for cnt in 2..super::MAX_SNAP_TRY_CNT {
+        for cnt in 2..100 {
             // Scheduled job failed should trigger .
             assert_eq!(s.snapshot(0).unwrap_err(), unavailable);
             let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
             generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap_err();
             assert_eq!(*s.snap_tried_cnt.borrow(), cnt + 1);
-        }
-
-        // When retry too many times, it should report a different error.
-        match s.snapshot(0) {
-            Err(RaftError::Store(StorageError::Other(_))) => {}
-            res => panic!("unexpected res: {:?}", res),
         }
     }
 
@@ -2386,7 +2372,9 @@ mod tests {
         generate_and_schedule_snapshot(gen_task, &s1.engines, &sched).unwrap();
 
         let snap1 = match *s1.snap_state.borrow() {
-            SnapState::Generating(ref rx) => rx.recv_timeout(Duration::from_secs(3)).unwrap(),
+            SnapState::Generating { ref receiver, .. } => {
+                receiver.recv_timeout(Duration::from_secs(3)).unwrap()
+            }
             ref s => panic!("unexpected state: {:?}", s),
         };
         assert_eq!(s1.truncated_index(), 3);
@@ -2665,5 +2653,13 @@ mod tests {
             .unwrap();
         engines.raft.put_msg(&raft_state_key, &raft_state).unwrap();
         assert!(build_storage().is_err());
+    }
+
+    fn gen_snap_for_test(rx: Receiver<Snapshot>) -> SnapState {
+        SnapState::Generating {
+            canceled: Arc::new(AtomicBool::new(false)),
+            index: Arc::new(AtomicU64::new(0)),
+            receiver: rx,
+        }
     }
 }

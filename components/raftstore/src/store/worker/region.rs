@@ -287,6 +287,7 @@ where
         notifier: SyncSender<RaftSnapshot>,
         for_balance: bool,
     ) {
+        fail_point!("before_region_gen_snap", |_| ());
         SNAP_COUNTER.generate.all.inc();
         if canceled.load(Ordering::Relaxed) {
             info!("generate snap is canceled"; "region_id" => region_id);
@@ -751,8 +752,7 @@ mod tests {
     use tempfile::Builder;
     use tikv_util::worker::{LazyWorker, Worker};
 
-    use super::PendingDeleteRanges;
-    use super::Task;
+    use super::*;
 
     fn insert_range(
         pending_delete_ranges: &mut PendingDeleteRanges,
@@ -973,6 +973,7 @@ mod tests {
                     kv_snap: engine.kv.snapshot(),
                     last_applied_index_term: entry.get_term(),
                     last_applied_state: apply_state,
+                    canceled: Arc::new(AtomicBool::new(false)),
                     notifier: tx,
                     for_balance: false,
                 })

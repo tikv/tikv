@@ -20,7 +20,7 @@ use kvproto::raft_cmdpb::{
     AdminRequest, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest, RaftCmdResponse, Request,
     StatusRequest,
 };
-use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
+use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState};
 use kvproto::tikvpb::TikvClient;
 use raft::eraftpb::ConfChangeType;
 
@@ -966,4 +966,30 @@ pub fn remove_lock_observer(client: &TikvClient, max_ts: u64) -> RemoveLockObser
 pub fn must_remove_lock_observer(client: &TikvClient, max_ts: u64) {
     let resp = remove_lock_observer(client, max_ts);
     assert!(resp.get_error().is_empty(), "{:?}", resp.get_error());
+}
+
+pub fn get_raft_msg_or_default<M: protobuf::Message + Default>(
+    engines: &Engines<RocksEngine, RocksEngine>,
+    key: &[u8],
+) -> M {
+    engines
+        .kv
+        .get_msg_cf(CF_RAFT, key)
+        .unwrap()
+        .unwrap_or_default()
+}
+
+pub fn must_compact_raft_log_to<T>(cluster: &Cluster<T>, store_id: u64, region_id: u64, index: u64)
+where
+    T: Simulator,
+{
+    for _ in 0..100 {
+        let key = keys::apply_state_key(region_id);
+        let state: RaftApplyState = get_raft_msg_or_default(&cluster.engines[&store_id], &key);
+        if state.get_truncated_state().index >= index {
+            return;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    panic!("raft log must be compacted to {}", index);
 }
