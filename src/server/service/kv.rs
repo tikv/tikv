@@ -60,7 +60,7 @@ pub struct Service<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: Lock
     // For handling coprocessor requests.
     cop: Endpoint<E>,
     // For handling corprocessor v2 requests.
-    coprv2: coprocessor_v2::Endpoint<E>,
+    coprv2: coprocessor_v2::Endpoint,
     // For handling raft messages.
     ch: T,
     // For handling snapshot.
@@ -100,7 +100,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
         storage: Storage<E, L>,
         gc_worker: GcWorker<E, T>,
         cop: Endpoint<E>,
-        coprv2: coprocessor_v2::Endpoint<E>,
+        coprv2: coprocessor_v2::Endpoint,
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
         grpc_thread_load: Arc<ThreadLoad>,
@@ -333,7 +333,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         sink: UnarySink<RawCoprocessorResponse>,
     ) {
         let begin_instant = Instant::now_coarse();
-        let future = future_coprv2(&self.coprv2, req);
+        let future = future_coprv2(&self.coprv2, &self.storage, req);
         let task = async move {
             let resp = future.await?;
             sink.success(resp).await?;
@@ -1093,7 +1093,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
     batcher: &mut Option<ReqBatcher>,
     storage: &Storage<E, L>,
     cop: &Endpoint<E>,
-    coprv2: &coprocessor_v2::Endpoint<E>,
+    coprv2: &coprocessor_v2::Endpoint,
     peer: &str,
     id: u64,
     req: batch_commands_request::Request,
@@ -1187,7 +1187,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
         VerScan, future_ver_scan(storage), ver_scan;
         VerDeleteRange, future_ver_delete_range(storage), ver_delete_range;
         Coprocessor, future_cop(cop, Some(peer.to_string())), coprocessor;
-        CoprocessorV2, future_coprv2(coprv2), coprocessor;
+        CoprocessorV2, future_coprv2(coprv2, storage), coprocessor;
         PessimisticLock, future_acquire_pessimistic_lock(storage), kv_pessimistic_lock;
         PessimisticRollback, future_pessimistic_rollback(storage), kv_pessimistic_rollback;
         Empty, future_handle_empty(), invalid;
@@ -1771,11 +1771,12 @@ fn future_cop<E: Engine>(
     async move { Ok(ret.await) }
 }
 
-fn future_coprv2<E: Engine>(
-    coprv2: &coprocessor_v2::Endpoint<E>,
+fn future_coprv2<E: Engine, L: LockManager>(
+    coprv2: &coprocessor_v2::Endpoint,
+    storage: &Storage<E, L>,
     req: RawCoprocessorRequest,
 ) -> impl Future<Output = ServerResult<RawCoprocessorResponse>> {
-    let ret = coprv2.handle_request(req);
+    let ret = coprv2.handle_request(storage, req);
     async move { Ok(ret.await) }
 }
 

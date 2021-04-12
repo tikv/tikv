@@ -4,7 +4,7 @@ use super::{assert_engine_error, default_engine};
 use engine_test::kv::KvTestEngine;
 use engine_traits::CF_DEFAULT;
 use engine_traits::{Mutable, Peekable, SyncMutable, WriteBatch, WriteBatchExt};
-use std::panic::{self, AssertUnwindSafe};
+use panic_hook::recover_safe;
 
 #[test]
 fn write_batch_none_no_commit() {
@@ -283,9 +283,9 @@ fn write_batch_delete_range_cf_backward_range() {
 
     wb.delete_range_cf(CF_DEFAULT, b"c", b"a").unwrap();
     assert!(
-        panic::catch_unwind(AssertUnwindSafe(|| {
+        recover_safe(|| {
             wb.write().unwrap();
-        }))
+        })
         .is_err()
     );
 
@@ -314,9 +314,9 @@ fn write_batch_delete_range_cf_backward_range_partial_commit() {
     wb.delete(b"a").unwrap();
 
     assert!(
-        panic::catch_unwind(AssertUnwindSafe(|| {
+        recover_safe(|| {
             wb.write().unwrap();
-        }))
+        })
         .is_err()
     );
 
