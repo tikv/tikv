@@ -39,7 +39,6 @@ pub mod stream;
 pub mod sys;
 pub mod time;
 pub mod timer;
-pub mod trace;
 pub mod worker;
 pub mod yatp_pool;
 
