@@ -165,15 +165,6 @@
 ## Whether to enable request batch.
 # enable-request-batch = true
 
-## Whether to collect batch across commands.
-## When disabled, wait duration is ignored. When enabled, collect batch for specified duration
-## when load is high.
-# request-batch-enable-cross-command = true
-
-## Wait duration before each request batch is processed. Wait is triggered when cross-command
-## option is enabled and system load is high.
-# request-batch-wait-duration = "1ms"
-
 ## Attributes about this server, e.g. `{ zone = "us-west-1", disk = "ssd" }`.
 # labels = {}
 
@@ -942,9 +933,6 @@
 # sst-max-size = "144MB"
 
 [pessimistic-txn]
-## Enable pessimistic transaction
-# enabled = true
-
 ## The default and maximum delay before responding to TiDB when pessimistic
 ## transactions encounter locks
 # wait-for-lock-timeout = "1s"
