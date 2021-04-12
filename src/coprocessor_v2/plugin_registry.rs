@@ -30,43 +30,35 @@ impl PluginRegistry {
 
         let hot_reload_registry = registry.clone();
         thread::spawn(move || {
+            // Simple helper functions for loading/unloading plugins.
+            let maybe_load = |file: &PathBuf| {
+                if is_library_file(&file) {
+                    // Discard error.
+                    let _ = hot_reload_registry.write().unwrap().load_plugin(file);
+                }
+            };
+            let unload = |file: &PathBuf| {
+                hot_reload_registry
+                    .write()
+                    .unwrap()
+                    .unload_plugin_by_path(file)
+            };
+
             loop {
                 match rx.recv() {
                     Ok(DebouncedEvent::Create(file)) => {
-                        if is_library_file(&file) {
-                            let r = hot_reload_registry.write().unwrap().load_plugin(&file);
-                            if let Err(err) = r {
-                                warn!("failed to load coprocessor plugin. Maybe not compiled correctly as a TiKV plugin?"; "plugin_path" => file.display(), "error" => ?err);
-                            }
-                        }
+                        maybe_load(&file);
                     }
                     Ok(DebouncedEvent::Remove(file)) => {
-                        hot_reload_registry
-                            .write()
-                            .unwrap()
-                            .unload_plugin_by_path(&file);
+                        unload(&file);
                     }
                     Ok(DebouncedEvent::Write(file)) => {
-                        hot_reload_registry
-                            .write()
-                            .unwrap()
-                            .unload_plugin_by_path(&file);
-                        let r = hot_reload_registry.write().unwrap().load_plugin(&file);
-                        if let Err(err) = r {
-                            warn!("failed to load coprocessor plugin. Maybe not compiled correctly as a TiKV plugin?"; "plugin_path" => file.display(), "error" => ?err);
-                        }
+                        unload(&file);
+                        maybe_load(&file);
                     }
                     Ok(DebouncedEvent::Rename(old_file, new_file)) => {
-                        hot_reload_registry
-                            .write()
-                            .unwrap()
-                            .unload_plugin_by_path(&old_file);
-                        if is_library_file(&new_file) {
-                            let r = hot_reload_registry.write().unwrap().load_plugin(&new_file);
-                            if let Err(err) = r {
-                                warn!("failed to load coprocessor plugin. Maybe not compiled correctly as a TiKV plugin?"; "plugin_path" => new_file.display(), "error" => ?err);
-                            }
-                        }
+                        unload(&old_file);
+                        maybe_load(&new_file);
                     }
                     Ok(_) => (),
                     Err(_) => break, // Stop when watcher is dropped.
@@ -104,10 +96,8 @@ impl PluginRegistry {
         for entry in std::fs::read_dir(&plugin_directory)? {
             if let Ok(file) = entry.map(|f| f.path()) {
                 if is_library_file(&file) {
-                    let r = self.load_plugin(&file);
-                    if let Err(err) = r {
-                        warn!("failed to load coprocessor plugin. Maybe not compiled correctly as a TiKV plugin?"; "plugin_path" => file.display(), "error" => ?err);
-                    }
+                    // Discard error.
+                    let _ = self.load_plugin(&file);
                 }
             }
         }
@@ -197,7 +187,13 @@ impl PluginRegistryInner {
         &mut self,
         filename: P,
     ) -> Result<&'static str, DylibError> {
-        let plugin = unsafe { LoadedPlugin::new(&filename)? };
+        let plugin = unsafe { LoadedPlugin::new(&filename) };
+        if let Err(err) = &plugin {
+            let filename = filename.as_ref().to_string_lossy();
+            warn!("failed to load coprocessor plugin. Maybe not compiled correctly as a TiKV plugin?"; "plugin_path" => ?filename, "error" => ?err);
+        }
+        let plugin = plugin?;
+
         let plugin_name = plugin.name();
 
         self.loaded_plugins
