@@ -170,14 +170,14 @@ fn get_unified_read_pool_name() -> String {
 
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     format!(
-        "unified-read-pool-test-{}",
+        "read-pool-test-{}",
         COUNTER.fetch_add(1, Ordering::Relaxed)
     )
 }
 
 #[cfg(not(test))]
 fn get_unified_read_pool_name() -> String {
-    "unified-read-pool".to_string()
+    "read-pool".to_string()
 }
 
 pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
