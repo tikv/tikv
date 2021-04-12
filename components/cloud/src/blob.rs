@@ -5,12 +5,15 @@ pub use kvproto::backup::CloudDynamic;
 use std::io;
 use std::marker::Unpin;
 
+pub trait BlobConfig: 'static + Send + Sync {
+    fn name(&self) -> &'static str;
+    fn url(&self) -> io::Result<url::Url>;
+}
+
 /// An abstraction for blob storage.
 /// Currently the same as ExternalStorage
 pub trait BlobStorage: 'static + Send + Sync {
-    fn name(&self) -> &'static str;
-
-    fn url(&self) -> io::Result<url::Url>;
+    fn config(&self) -> Box<dyn BlobConfig>;
 
     /// Write all contents of the read to the given path.
     fn put(
@@ -24,13 +27,19 @@ pub trait BlobStorage: 'static + Send + Sync {
     fn get(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_>;
 }
 
-impl BlobStorage for Box<dyn BlobStorage> {
+impl BlobConfig for dyn BlobStorage {
     fn name(&self) -> &'static str {
-        (**self).name()
+        self.config().name()
     }
 
     fn url(&self) -> io::Result<url::Url> {
-        (**self).url()
+        self.config().url()
+    }
+}
+
+impl BlobStorage for Box<dyn BlobStorage> {
+    fn config(&self) -> Box<dyn BlobConfig> {
+        (**self).config()
     }
 
     fn put(

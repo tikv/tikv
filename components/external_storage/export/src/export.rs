@@ -9,9 +9,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 #[cfg(feature = "cloud-aws")]
-pub use aws::S3Storage;
+pub use aws::{Config as S3Config, S3Storage};
 #[cfg(feature = "cloud-gcp")]
-pub use gcp::GCSStorage;
+pub use gcp::{Config as GCSConfig, GCSStorage};
 
 #[cfg(feature = "prost-codec")]
 pub use kvproto::backup::storage_backend::Backend;
@@ -25,6 +25,8 @@ use kvproto::backup::{Gcs, S3};
 use super::dylib;
 #[cfg(feature = "cloud-storage-grpc")]
 use super::service;
+#[cfg(any(feature = "cloud-storage-dylib", feature = "cloud-storage-grpc"))]
+use cloud::blob::BlobConfig;
 use cloud::blob::BlobStorage;
 use encryption::DataKeyManager;
 use external_storage::record_storage_create;
@@ -40,27 +42,33 @@ pub fn create_storage(storage_backend: &StorageBackend) -> io::Result<Box<dyn Ex
     if let Some(backend) = &storage_backend.backend {
         create_backend(backend)
     } else {
-        Err(no_storage_backend(storage_backend))
+        Err(bad_storage_backend(storage_backend))
     }
 }
 
-// when the flag cloud-storage-grpc is set create_storage is automatically wrapped with a client
-// This function can be used by the server to avoid any wrapping
+// when the flag cloud-storage-dylib or cloud-storage-grpc is set create_storage is automatically wrapped with a client
+// This function is used by the library/server to avoid any wrapping
 pub fn create_storage_no_client(
     storage_backend: &StorageBackend,
 ) -> io::Result<Box<dyn ExternalStorage>> {
     if let Some(backend) = &storage_backend.backend {
         create_backend_inner(backend)
     } else {
-        Err(no_storage_backend(storage_backend))
+        Err(bad_storage_backend(storage_backend))
     }
 }
 
-fn no_storage_backend(storage_backend: &StorageBackend) -> io::Error {
+fn bad_storage_backend(storage_backend: &StorageBackend) -> io::Error {
     io::Error::new(
         io::ErrorKind::NotFound,
-        format!("no storage backend {:?}", storage_backend),
+        format!("bad storage backend {:?}", storage_backend),
     )
+}
+
+fn bad_backend(backend: Backend) -> io::Error {
+    let mut storage_backend = StorageBackend::default();
+    storage_backend.backend = Some(backend);
+    return bad_storage_backend(&storage_backend)
 }
 
 #[cfg(any(feature = "cloud-gcp", feature = "cloud-aws"))]
@@ -70,14 +78,28 @@ fn blob_store(store: Box<dyn BlobStorage>) -> Box<dyn ExternalStorage> {
 
 #[cfg(all(feature = "cloud-storage-grpc", not(feature = "cloud-storage-dylib")))]
 pub fn create_backend(backend: &Backend) -> io::Result<Box<dyn ExternalStorage>> {
-    let storage = create_backend_inner(backend)?;
-    service::new_client(backend.clone(), storage.name(), storage.url()?.clone())
+    match create_config(backend) {
+        Some(config) => {
+            let conf = config?;
+            service::new_client(backend.clone(), conf.name(), conf.url()?.clone())
+        }
+        None => {
+            Err(bad_backend(backend.clone()))
+        }
+    }
 }
 
 #[cfg(all(feature = "cloud-storage-dylib", not(feature = "cloud-storage-grpc")))]
 pub fn create_backend(backend: &Backend) -> io::Result<Box<dyn ExternalStorage>> {
-    let storage = create_backend_inner(backend)?;
-    dylib::new_client(backend.clone(), storage.name(), storage.url()?.clone())
+    match create_config(backend) {
+        Some(config) => {
+            let conf = config?;
+            dylib::new_client(backend.clone(), conf.name(), conf.url()?.clone())
+        }
+        None => {
+            Err(bad_backend(backend.clone()))
+        }
+    }
 }
 
 #[cfg(all(feature = "cloud-storage-dylib", feature = "cloud-storage-grpc"))]
@@ -89,6 +111,36 @@ panic!("cannot set both cloud-storage-dylib and cloud-storage-grpc");
 ))]
 pub fn create_backend(backend: &Backend) -> io::Result<Box<dyn ExternalStorage>> {
     create_backend_inner(backend)
+}
+
+#[cfg(any(feature = "cloud-storage-dylib", feature = "cloud-storage-grpc"))]
+fn create_config(backend: &Backend) -> Option<io::Result<Box<dyn BlobConfig>>> {
+    match backend {
+        #[cfg(feature = "cloud-aws")]
+        Backend::S3(config) => {
+            let conf = S3Config::from_input(config.clone());
+            Some(conf.map(|c| Box::new(c) as Box<dyn BlobConfig>))
+        }
+        #[cfg(feature = "cloud-gcp")]
+        Backend::Gcs(config) => {
+            let conf = GCSConfig::from_input(config.clone());
+            Some(conf.map(|c| Box::new(c) as Box<dyn BlobConfig>))
+        }
+        Backend::CloudDynamic(dyn_backend) => match dyn_backend.provider_name.as_str() {
+            #[cfg(feature = "cloud-aws")]
+            "aws" | "s3" => {
+                let conf = S3Config::from_cloud_dynamic(&dyn_backend);
+                Some(conf.map(|c| Box::new(c) as Box<dyn BlobConfig>))
+            }
+            #[cfg(feature = "cloud-gcp")]
+            "gcp" | "gcs" => {
+                let conf = GCSConfig::from_cloud_dynamic(&dyn_backend);
+                Some(conf.map(|c| Box::new(c) as Box<dyn BlobConfig>))
+            }
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// Create a new storage from the given storage backend description.
@@ -111,23 +163,12 @@ fn create_backend_inner(backend: &Backend) -> io::Result<Box<dyn ExternalStorage
             "gcp" | "gcs" => blob_store(Box::new(GCSStorage::from_cloud_dynamic(&dyn_backend)?)),
             _ => {
                 let storage_backend = make_cloud_backend(dyn_backend.clone());
-                return Err(io::Error::new(
-                    io::ErrorKind::NotFound,
-                    format!("cloud dynamic backend not found for {:?}", storage_backend),
-                ));
+                return Err(bad_storage_backend(&storage_backend))
             }
         },
         #[cfg(not(any(feature = "cloud-gcp", feature = "cloud-aws")))]
         _ => {
-            let mut storage_backend = StorageBackend::default();
-            storage_backend.backend = Some(backend.clone());
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!(
-                    "external storage backend not enabled for {:?}",
-                    storage_backend
-                ),
-            ));
+            Err(bad_backend(backend.clone()))
         }
     };
     record_storage_create(start, &*storage);
@@ -303,10 +344,10 @@ impl ExternalStorage for EncryptedExternalStorage {
 
 impl ExternalStorage for BlobStore {
     fn name(&self) -> &'static str {
-        (**self).name()
+        (**self).config().name()
     }
     fn url(&self) -> io::Result<url::Url> {
-        (**self).url()
+        (**self).config().url()
     }
     fn write(
         &self,

@@ -9,7 +9,7 @@ use rusoto_credential::{ProvideAwsCredentials, StaticProvider};
 use rusoto_s3::*;
 
 use crate::util;
-use cloud::blob::{none_to_empty, BlobStorage, BucketConf, StringNonEmpty};
+use cloud::blob::{none_to_empty, BlobConfig, BlobStorage, BucketConf, StringNonEmpty};
 use futures_util::{
     future::FutureExt,
     io::{AsyncRead, AsyncReadExt},
@@ -120,6 +120,21 @@ impl Config {
             access_key_pair,
             force_path_style: input.force_path_style,
             sse_kms_key_id: StringNonEmpty::opt(input.sse_kms_key_id),
+        })
+    }
+}
+
+impl BlobConfig for Config {
+    fn name(&self) -> &'static str {
+        &STORAGE_NAME
+    }
+
+    fn url(&self) -> io::Result<url::Url> {
+        self.bucket.url("s3").map_err(|s| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                format!("error creating bucket url: {}", s),
+            )
         })
     }
 }
@@ -359,24 +374,11 @@ impl<'client> S3Uploader<'client> {
     }
 }
 
-fn url_for(config: &Config) -> Result<url::Url, String> {
-    config.bucket.url("s3")
-}
-
 const STORAGE_NAME: &str = "s3";
 
 impl BlobStorage for S3Storage {
-    fn name(&self) -> &'static str {
-        &STORAGE_NAME
-    }
-
-    fn url(&self) -> io::Result<url::Url> {
-        url_for(&self.config).map_err(|s| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("error creating bucket url: {}", s),
-            )
-        })
+    fn config(&self) -> Box<dyn BlobConfig> {
+        Box::new(self.config.clone()) as Box<dyn BlobConfig>
     }
 
     fn put(
@@ -529,13 +531,13 @@ mod tests {
         bucket.prefix = Some(StringNonEmpty::stat("/backup 01/prefix/"));
         let s3 = Config::default(bucket.clone());
         assert_eq!(
-            url_for(&s3).unwrap().to_string(),
+            s3.url().unwrap().to_string(),
             "s3://bucket/backup%2001/prefix/"
         );
         bucket.endpoint = Some(StringNonEmpty::stat("http://endpoint.com"));
         let s3 = Config::default(bucket);
         assert_eq!(
-            url_for(&s3).unwrap().to_string(),
+            s3.url().unwrap().to_string(),
             "http://endpoint.com/bucket/backup%2001/prefix/"
         );
     }

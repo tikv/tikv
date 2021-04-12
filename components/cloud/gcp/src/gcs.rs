@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{convert::TryInto, fmt::Display, io, sync::Arc};
 
-use cloud::blob::{none_to_empty, BlobStorage, BucketConf, StringNonEmpty};
+use cloud::blob::{none_to_empty, BlobConfig, BlobStorage, BucketConf, StringNonEmpty};
 use futures_util::{
     future::TryFutureExt,
     io::{AsyncRead, AsyncReadExt, Cursor},
@@ -97,6 +97,21 @@ impl Config {
             predefined_acl,
             svc_info,
             storage_class,
+        })
+    }
+}
+
+impl BlobConfig for Config {
+    fn name(&self) -> &'static str {
+        &STORAGE_NAME
+    }
+
+    fn url(&self) -> io::Result<url::Url> {
+        self.bucket.url("gcs").map_err(|s| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                format!("error creating bucket url: {}", s),
+            )
         })
     }
 }
@@ -357,24 +372,11 @@ fn parse_predefined_acl(acl: &str) -> Result<Option<PredefinedAcl>, &str> {
     }))
 }
 
-fn url_for(config: &Config) -> Result<url::Url, String> {
-    config.bucket.url("gcs")
-}
-
 const STORAGE_NAME: &str = "gcs";
 
 impl BlobStorage for GCSStorage {
-    fn name(&self) -> &'static str {
-        &STORAGE_NAME
-    }
-
-    fn url(&self) -> io::Result<url::Url> {
-        url_for(&self.config).map_err(|s| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("error creating bucket url: {}", s),
-            )
-        })
+    fn config(&self) -> Box<dyn BlobConfig> {
+        Box::new(self.config.clone()) as Box<dyn BlobConfig>
     }
 
     fn put(
@@ -536,12 +538,12 @@ mod tests {
         let gcs = Config::default(bucket.clone());
         // only 'bucket' and 'prefix' should be visible in url_of_backend()
         assert_eq!(
-            url_for(&gcs).unwrap().to_string(),
+            gcs.url().unwrap().to_string(),
             "gcs://bucket/backup%2002/prefix/"
         );
         bucket.endpoint = Some(StringNonEmpty::stat("http://endpoint.com"));
         assert_eq!(
-            url_for(&Config::default(bucket)).unwrap().to_string(),
+            &Config::default(bucket).url().unwrap().to_string(),
             "http://endpoint.com/bucket/backup%2002/prefix/"
         );
     }
