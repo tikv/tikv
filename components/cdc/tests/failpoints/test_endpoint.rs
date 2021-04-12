@@ -77,11 +77,11 @@ fn test_cdc_double_scan_io_error() {
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Put);
     mutation.key = k.clone();
-    mutation.value = v.clone();
+    mutation.value = v;
     suite.must_kv_prewrite(1, vec![mutation], k.clone(), start_ts1);
     // Commit
     let commit_ts1 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
-    suite.must_kv_commit(1, vec![k.clone()], start_ts1, commit_ts1);
+    suite.must_kv_commit(1, vec![k], start_ts1, commit_ts1);
 
     fail::cfg("cdc_incremental_scan_start", "pause").unwrap();
     fail::cfg("cdc_scan_batch_fail", "1*return").unwrap();
