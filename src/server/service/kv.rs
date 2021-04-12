@@ -624,10 +624,11 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             let res = stream.map_err(Error::from).try_for_each(move |msg| {
                 RAFT_MESSAGE_RECV_COUNTER.inc();
                 if msg.get_from_peer().get_store_id() != store_id {
-                    // TODO: drop connections
+                    future::err(Error::from(futures::channel::oneshot::Canceled))
+                } else {
+                    let ret = ch.send_raft_msg(msg).map_err(Error::from);
+                    future::ready(ret)
                 }
-                let ret = ch.send_raft_msg(msg).map_err(Error::from);
-                future::ready(ret)
             });
             let status = match res.await {
                 Err(e) => {
@@ -660,7 +661,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 RAFT_MESSAGE_BATCH_SIZE.observe(len as f64);
                 for msg in msgs.take_msgs().into_iter() {
                     if msg.get_from_peer().get_store_id() != store_id {
-                        // TODO: drop connections
+                        return future::err(Error::from(futures::channel::oneshot::Canceled));
                     }
                     if let Err(e) = ch.send_raft_msg(msg) {
                         return future::err(Error::from(e));
