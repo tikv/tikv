@@ -31,7 +31,7 @@ fn test_cdc_double_scan_deregister() {
     fail::cfg(fp, "pause").unwrap();
 
     let req = suite.new_changedata_request(1);
-    let (mut req_tx, event_feed_wrap, receive_event) =
+    let (mut req_tx, event_feed_wrap, _receive_event) =
         new_event_feed(suite.get_region_cdc_client(1));
     block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
 
@@ -55,7 +55,6 @@ fn test_cdc_double_scan_deregister() {
     'outer: loop {
         let event = receive_event_1(false);
         let mut event_vec = event.events.to_vec();
-        println!("cdc receive_event {:?}", event_vec);
         while event_vec.len() > 0 {
             match event_vec.pop().unwrap().event.unwrap() {
                 Event_oneof_event::Error(err) => {
@@ -68,7 +67,6 @@ fn test_cdc_double_scan_deregister() {
     }
 
     event_feed_wrap_1.replace(None);
-    receive_event.replace(None);
     suite.stop();
 }
 
@@ -125,9 +123,7 @@ fn test_cdc_double_scan_io_error() {
                     assert!(err.has_region_not_found(), "{:?}", err);
                     break 'outer;
                 }
-                e => {
-                    println!("cdc receive_event {:?}", e);
-                }
+                _ => {}
             }
         }
     }
@@ -141,7 +137,6 @@ fn test_cdc_double_scan_io_error() {
             }
         }
         let mut event_vec = event.events.to_vec();
-        println!("cdc receive_event {:?}", event_vec);
         while event_vec.len() > 0 {
             match event_vec.pop().unwrap().event.unwrap() {
                 Event_oneof_event::Error(err) => {

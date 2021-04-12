@@ -535,7 +535,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         let (cb, fut) = tikv_util::future::paired_future_callback();
         let scheduler = self.scheduler.clone();
         let observe_id = delegate.id;
-        let deregister_downstream = move |err| {
+        let deregister = move |err| {
             let deregister = if is_new_delegate {
                 Deregister::Region {
                     region_id,
@@ -551,7 +551,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 }
             };
             if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
-                error!("schedule cdc task failed"; "error" => ?e);
+                error!("cdc schedule task failed"; "error" => ?e);
             }
         };
         let scheduler = self.scheduler.clone();
@@ -573,13 +573,13 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 })),
             },
         ) {
-            deregister_downstream(Error::Request(e.into()));
+            deregister(Error::Request(e.into()));
             return;
         }
         self.workers.spawn(async move {
             match fut.await {
                 Ok(resp) => init.on_change_cmd(resp).await,
-                Err(e) => deregister_downstream(Error::Other(box_err!(e))),
+                Err(e) => deregister(Error::Other(box_err!(e))),
             }
         });
     }
