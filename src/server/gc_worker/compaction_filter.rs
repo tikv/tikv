@@ -20,10 +20,11 @@ use engine_traits::{
 };
 use pd_client::{Feature, FeatureGate};
 use prometheus::{local::*, *};
+use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::worker::FutureScheduler;
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 
-use super::{GcConfig, GcTask, GcWorkerConfigManager};
+use crate::server::gc_worker::{GcConfig, GcTask, GcWorkerConfigManager};
 use crate::storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
 
 const DEFAULT_DELETE_BATCH_SIZE: usize = 256 * 1024;
@@ -38,10 +39,12 @@ const COMPACTION_FILTER_GC_FEATURE: Feature = Feature::require(5, 0, 0);
 // not available when construcing `WriteCompactionFilterFactory`.
 struct GcContext {
     db: RocksEngine,
+    store_id: u64,
     safe_point: Arc<AtomicU64>,
     cfg_tracker: GcWorkerConfigManager,
     feature_gate: FeatureGate,
     gc_scheduler: FutureScheduler<GcTask>,
+    region_info_provider: Arc<dyn RegionInfoProvider + 'static>,
     #[cfg(any(test, feature = "failpoints"))]
     callbacks_on_drop: Vec<Arc<dyn Fn(&WriteCompactionFilter) + Send + Sync>>,
 }
@@ -94,10 +97,12 @@ lazy_static! {
 pub trait CompactionFilterInitializer {
     fn init_compaction_filter(
         &self,
+        store_id: u64,
         safe_point: Arc<AtomicU64>,
         cfg_tracker: GcWorkerConfigManager,
         feature_gate: FeatureGate,
         gc_scheduler: FutureScheduler<GcTask>,
+        region_info_provider: Arc<dyn RegionInfoProvider>,
     );
 }
 
@@ -107,10 +112,12 @@ where
 {
     default fn init_compaction_filter(
         &self,
+        _store_id: u64,
         _safe_point: Arc<AtomicU64>,
         _cfg_tracker: GcWorkerConfigManager,
         _feature_gate: FeatureGate,
         _gc_scheduler: FutureScheduler<GcTask>,
+        _region_info_provider: Arc<dyn RegionInfoProvider>,
     ) {
         info!("Compaction filter is not supported for this engine.");
     }
@@ -119,19 +126,23 @@ where
 impl CompactionFilterInitializer for RocksEngine {
     fn init_compaction_filter(
         &self,
+        store_id: u64,
         safe_point: Arc<AtomicU64>,
         cfg_tracker: GcWorkerConfigManager,
         feature_gate: FeatureGate,
         gc_scheduler: FutureScheduler<GcTask>,
+        region_info_provider: Arc<dyn RegionInfoProvider>,
     ) {
         info!("initialize GC context for compaction filter");
         let mut gc_context = GC_CONTEXT.lock().unwrap();
         *gc_context = Some(GcContext {
             db: self.clone(),
+            store_id,
             safe_point,
             cfg_tracker,
             feature_gate,
             gc_scheduler,
+            region_info_provider,
             #[cfg(any(test, feature = "failpoints"))]
             callbacks_on_drop: vec![],
         });
@@ -169,6 +180,8 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
 
         let db = gc_context.db.clone();
         let gc_scheduler = gc_context.gc_scheduler.clone();
+        let store_id = gc_context.store_id;
+        let region_info_provider = gc_context.region_info_provider.clone();
 
         debug!(
             "creating compaction filter"; "feature_enable" => enable,
@@ -206,6 +219,7 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             safe_point,
             context,
             gc_scheduler,
+            (store_id, region_info_provider),
         ));
         let name = CString::new("write_compaction_filter").unwrap();
         unsafe { new_compaction_filter_raw(name, filter) }
@@ -226,6 +240,7 @@ struct WriteCompactionFilter {
     // mark will be sent to the GC worker only if `mvcc_deletion_overlaps` is 0. It's
     // a little optimization to reduce modifications on write CF.
     mvcc_deletion_overlaps: Option<usize>,
+    regions_provider: (u64, Arc<dyn RegionInfoProvider>),
 
     mvcc_key_prefix: Vec<u8>,
     remove_older: bool,
@@ -250,6 +265,7 @@ impl WriteCompactionFilter {
         safe_point: u64,
         context: &CompactionFilterContext,
         gc_scheduler: FutureScheduler<GcTask>,
+        regions_provider: (u64, Arc<dyn RegionInfoProvider>),
     ) -> Self {
         // Safe point must have been initialized.
         assert!(safe_point > 0);
@@ -266,6 +282,7 @@ impl WriteCompactionFilter {
             gc_scheduler,
             mvcc_deletions: Vec::with_capacity(DEFAULT_DELETE_BATCH_COUNT),
             mvcc_deletion_overlaps: None,
+            regions_provider,
 
             mvcc_key_prefix: vec![],
             remove_older: false,
@@ -306,9 +323,13 @@ impl WriteCompactionFilter {
     fn gc_mvcc_deletions(&mut self) {
         if !self.mvcc_deletions.is_empty() {
             let empty = Vec::with_capacity(DEFAULT_DELETE_BATCH_COUNT);
-            let keys = mem::replace(&mut self.mvcc_deletions, empty);
-            let safe_point = self.safe_point.into();
-            self.schedule_gc_task(GcTask::GcKeys { keys, safe_point }, false);
+            let task = GcTask::GcKeys {
+                keys: mem::replace(&mut self.mvcc_deletions, empty),
+                safe_point: self.safe_point.into(),
+                store_id: self.regions_provider.0,
+                region_info_provider: self.regions_provider.1.clone(),
+            };
+            self.schedule_gc_task(task, false);
         }
     }
 
@@ -639,6 +660,7 @@ pub mod test_utils {
     use engine_rocks::RocksEngine;
     use engine_traits::{SyncMutable, CF_WRITE};
     use futures::channel::mpsc::{unbounded, UnboundedReceiver};
+    use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
     use tikv_util::config::VersionTrack;
 
     /// Do a global GC with the given safe point.
@@ -714,10 +736,12 @@ pub mod test_utils {
             let mut gc_context_opt = GC_CONTEXT.lock().unwrap();
             *gc_context_opt = Some(GcContext {
                 db: engine.clone(),
+                store_id: 1,
                 safe_point,
                 cfg_tracker,
                 feature_gate,
                 gc_scheduler: self.gc_scheduler.clone(),
+                region_info_provider: Arc::new(MockRegionInfoProvider::new(vec![])),
                 callbacks_on_drop: self.callbacks_on_drop.clone(),
             });
         }
