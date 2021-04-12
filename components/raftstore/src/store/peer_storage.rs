@@ -3,7 +3,7 @@
 use fail::fail_point;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::Arc;
 use std::time::Instant;
@@ -62,14 +62,18 @@ pub enum CheckApplyingSnapStatus {
     Success,
     /// A snapshot is being applied.
     Applying,
-    /// No snapshot is being applied at all or the snapshot is cancelled
+    /// No snapshot is being applied at all or the snapshot is canceled
     Idle,
 }
 
 #[derive(Debug)]
 pub enum SnapState {
     Relax,
-    Generating(Receiver<Snapshot>),
+    Generating {
+        canceled: Arc<AtomicBool>,
+        index: Arc<AtomicU64>,
+        receiver: Receiver<Snapshot>,
+    },
     Applying(Arc<AtomicUsize>),
     ApplyAborted,
 }
@@ -79,7 +83,7 @@ impl PartialEq for SnapState {
         match (self, other) {
             (&SnapState::Relax, &SnapState::Relax)
             | (&SnapState::ApplyAborted, &SnapState::ApplyAborted)
-            | (&SnapState::Generating(_), &SnapState::Generating(_)) => true,
+            | (&SnapState::Generating { .. }, &SnapState::Generating { .. }) => true,
             (&SnapState::Applying(ref b1), &SnapState::Applying(ref b2)) => {
                 b1.load(Ordering::Relaxed) == b2.load(Ordering::Relaxed)
             }
@@ -833,6 +837,17 @@ where
     #[inline]
     pub fn set_applied_state(&mut self, apply_state: RaftApplyState) {
         self.apply_state = apply_state;
+        if let SnapState::Generating {
+            ref canceled,
+            ref index,
+            ..
+        } = *self.snap_state.borrow()
+        {
+            let snap_index = index.load(Ordering::Relaxed);
+            if snap_index > 0 && self.apply_state.get_truncated_state().index > snap_index {
+                canceled.store(true, Ordering::Relaxed);
+            }
+        }
     }
 
     #[inline]
@@ -939,16 +954,22 @@ where
         let mut tried_cnt = self.snap_tried_cnt.borrow_mut();
 
         let (mut tried, mut snap) = (false, None);
-        if let SnapState::Generating(ref recv) = *snap_state {
+        if let SnapState::Generating {
+            ref canceled,
+            ref receiver,
+            ..
+        } = *snap_state
+        {
             tried = true;
-            match recv.try_recv() {
-                Err(TryRecvError::Disconnected) => {}
-                Err(TryRecvError::Empty) => {
-                    return Err(raft::Error::Store(
-                        raft::StorageError::SnapshotTemporarilyUnavailable,
-                    ));
+            if !canceled.load(Ordering::Relaxed) {
+                match receiver.try_recv() {
+                    Err(TryRecvError::Disconnected) => {}
+                    Err(TryRecvError::Empty) => {
+                        let e = raft::StorageError::SnapshotTemporarilyUnavailable;
+                        return Err(raft::Error::Store(e));
+                    }
+                    Ok(s) => snap = Some(s),
                 }
-                Ok(s) => snap = Some(s),
             }
         }
 
@@ -992,10 +1013,16 @@ where
             "request_index" => request_index,
         );
         *tried_cnt += 1;
-        let (tx, rx) = mpsc::sync_channel(1);
-        *snap_state = SnapState::Generating(rx);
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let canceled = Arc::new(AtomicBool::new(false));
+        let index = Arc::new(AtomicU64::new(0));
+        *snap_state = SnapState::Generating {
+            canceled: canceled.clone(),
+            index: index.clone(),
+            receiver,
+        };
 
-        let task = GenSnapTask::new(self.region.get_id(), tx);
+        let task = GenSnapTask::new(self.region.get_id(), index, canceled, sender);
         let mut gen_snap_task = self.gen_snap_task.borrow_mut();
         assert!(gen_snap_task.is_none());
         *gen_snap_task = Some(task);
@@ -1258,7 +1285,7 @@ where
     #[inline]
     pub fn is_generating_snapshot(&self) -> bool {
         fail_point!("is_generating_snapshot", |_| { true });
-        matches!(*self.snap_state.borrow(), SnapState::Generating(_))
+        matches!(*self.snap_state.borrow(), SnapState::Generating { .. })
     }
 
     /// Check if the storage is applying a snapshot.
@@ -1286,19 +1313,9 @@ where
         res
     }
 
-    #[inline]
-    pub fn is_canceling_snap(&self) -> bool {
-        match *self.snap_state.borrow() {
-            SnapState::Applying(ref status) => {
-                status.load(Ordering::Relaxed) == JOB_STATUS_CANCELLING
-            }
-            _ => false,
-        }
-    }
-
     /// Cancel applying snapshot, return true if the job can be considered not be run again.
     pub fn cancel_applying_snap(&mut self) -> bool {
-        let is_cancelled = match *self.snap_state.borrow() {
+        let is_canceled = match *self.snap_state.borrow() {
             SnapState::Applying(ref status) => {
                 if status
                     .compare_exchange(
@@ -1326,13 +1343,22 @@ where
             }
             _ => return false,
         };
-        if is_cancelled {
+        if is_canceled {
             *self.snap_state.borrow_mut() = SnapState::ApplyAborted;
             return true;
         }
         // now status can only be JOB_STATUS_CANCELLING, JOB_STATUS_CANCELLED,
         // JOB_STATUS_FAILED and JOB_STATUS_FINISHED.
         self.check_applying_snap() != CheckApplyingSnapStatus::Applying
+    }
+
+    /// Cancel generating snapshot, return true if there is such a job.
+    pub fn cancel_generating_snap(&mut self) -> bool {
+        if let SnapState::Generating { ref canceled, .. } = *self.snap_state.borrow() {
+            canceled.store(true, Ordering::Relaxed);
+            return true;
+        }
+        false
     }
 
     #[inline]
