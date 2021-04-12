@@ -41,11 +41,31 @@ impl PluginRegistry {
                         }
                     }
                     Ok(DebouncedEvent::Remove(file)) => {
-                        if is_library_file(&file) {
-                            hot_reload_registry
-                                .write()
-                                .unwrap()
-                                .unload_plugin_by_path(&file);
+                        hot_reload_registry
+                            .write()
+                            .unwrap()
+                            .unload_plugin_by_path(&file);
+                    }
+                    Ok(DebouncedEvent::Write(file)) => {
+                        hot_reload_registry
+                            .write()
+                            .unwrap()
+                            .unload_plugin_by_path(&file);
+                        let r = hot_reload_registry.write().unwrap().load_plugin(&file);
+                        if let Err(err) = r {
+                            warn!("failed to load coprocessor plugin. Maybe not compiled correctly as a TiKV plugin?"; "plugin_path" => file.display(), "error" => ?err);
+                        }
+                    }
+                    Ok(DebouncedEvent::Rename(old_file, new_file)) => {
+                        hot_reload_registry
+                            .write()
+                            .unwrap()
+                            .unload_plugin_by_path(&old_file);
+                        if is_library_file(&new_file) {
+                            let r = hot_reload_registry.write().unwrap().load_plugin(&new_file);
+                            if let Err(err) = r {
+                                warn!("failed to load coprocessor plugin. Maybe not compiled correctly as a TiKV plugin?"; "plugin_path" => new_file.display(), "error" => ?err);
+                            }
                         }
                     }
                     Ok(_) => (),
