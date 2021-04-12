@@ -492,10 +492,12 @@ pub mod tests {
     pub fn must_seek_write_none<E: Engine>(engine: &E, key: &[u8], ts: impl Into<TimeStamp>) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true);
-        assert!(reader
-            .seek_write(&Key::from_raw(key), ts.into())
-            .unwrap()
-            .is_none());
+        assert!(
+            reader
+                .seek_write(&Key::from_raw(key), ts.into())
+                .unwrap()
+                .is_none()
+        );
     }
 
     pub fn must_seek_write<E: Engine>(

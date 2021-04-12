@@ -856,9 +856,11 @@ mod tests {
         let exec_slow_col = |src_exec| {
             Box::new(BatchSlowHashAggregationExecutor::new_for_test(
                 src_exec,
-                vec![RpnExpressionBuilder::new_for_test()
-                    .push_column_ref_for_test(0)
-                    .build_for_test()],
+                vec![
+                    RpnExpressionBuilder::new_for_test()
+                        .push_column_ref_for_test(0)
+                        .build_for_test(),
+                ],
                 vec![Expr::default()],
                 MyParser,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
@@ -867,9 +869,11 @@ mod tests {
         let exec_slow_const = |src_exec| {
             Box::new(BatchSlowHashAggregationExecutor::new_for_test(
                 src_exec,
-                vec![RpnExpressionBuilder::new_for_test()
-                    .push_constant_for_test(0)
-                    .build_for_test()],
+                vec![
+                    RpnExpressionBuilder::new_for_test()
+                        .push_constant_for_test(0)
+                        .build_for_test(),
+                ],
                 vec![Expr::default()],
                 MyParser,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
@@ -950,9 +954,11 @@ mod tests {
         let exec_slow_col = |src_exec| {
             Box::new(BatchSlowHashAggregationExecutor::new_for_test(
                 src_exec,
-                vec![RpnExpressionBuilder::new_for_test()
-                    .push_column_ref_for_test(0)
-                    .build_for_test()],
+                vec![
+                    RpnExpressionBuilder::new_for_test()
+                        .push_column_ref_for_test(0)
+                        .build_for_test(),
+                ],
                 vec![],
                 AllAggrDefinitionParser,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
@@ -1019,9 +1025,11 @@ mod tests {
         let exec_slow_const = |src_exec| {
             Box::new(BatchSlowHashAggregationExecutor::new_for_test(
                 src_exec,
-                vec![RpnExpressionBuilder::new_for_test()
-                    .push_constant_for_test(1)
-                    .build_for_test()],
+                vec![
+                    RpnExpressionBuilder::new_for_test()
+                        .push_constant_for_test(1)
+                        .build_for_test(),
+                ],
                 vec![],
                 AllAggrDefinitionParser,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>

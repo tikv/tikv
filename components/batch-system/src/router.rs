@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tikv_util::lru::LruCache;
 use tikv_util::Either;
+use tikv_util::{debug, info};
 
 enum CheckDoResult<T> {
     NotExist,
@@ -274,6 +275,10 @@ where
         if let Some(mb) = mailboxes.remove(&addr) {
             mb.close();
         }
+    }
+
+    pub fn clear_cache(&self) {
+        unsafe { &mut *self.caches.as_ptr() }.clear();
     }
 }
 

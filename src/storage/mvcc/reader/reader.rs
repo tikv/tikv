@@ -503,6 +503,11 @@ pub mod tests {
             }
         }
 
+        pub fn snapshot(&self) -> RegionSnapshot<RocksSnapshot> {
+            let db = self.db.c().clone();
+            RegionSnapshot::<RocksSnapshot>::from_raw(db, self.region.clone())
+        }
+
         pub fn put(
             &mut self,
             pk: &[u8],
@@ -563,8 +568,7 @@ pub mod tests {
         }
 
         pub fn prewrite(&mut self, m: Mutation, pk: &[u8], start_ts: impl Into<TimeStamp>) {
-            let snap =
-                RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
+            let snap = self.snapshot();
             let start_ts = start_ts.into();
             let cm = ConcurrencyManager::new(start_ts);
             let mut txn = MvccTxn::new(start_ts, cm);
@@ -588,8 +592,7 @@ pub mod tests {
             pk: &[u8],
             start_ts: impl Into<TimeStamp>,
         ) {
-            let snap =
-                RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
+            let snap = self.snapshot();
             let start_ts = start_ts.into();
             let cm = ConcurrencyManager::new(start_ts);
             let mut txn = MvccTxn::new(start_ts, cm);
@@ -614,8 +617,7 @@ pub mod tests {
             start_ts: impl Into<TimeStamp>,
             for_update_ts: impl Into<TimeStamp>,
         ) {
-            let snap =
-                RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
+            let snap = self.snapshot();
             let for_update_ts = for_update_ts.into();
             let cm = ConcurrencyManager::new(for_update_ts);
             let start_ts = start_ts.into();
@@ -642,8 +644,7 @@ pub mod tests {
             start_ts: impl Into<TimeStamp>,
             commit_ts: impl Into<TimeStamp>,
         ) {
-            let snap =
-                RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
+            let snap = self.snapshot();
             let start_ts = start_ts.into();
             let cm = ConcurrencyManager::new(start_ts);
             let mut txn = MvccTxn::new(start_ts, cm);
@@ -653,8 +654,7 @@ pub mod tests {
         }
 
         pub fn rollback(&mut self, pk: &[u8], start_ts: impl Into<TimeStamp>) {
-            let snap =
-                RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
+            let snap = self.snapshot();
             let start_ts = start_ts.into();
             let cm = ConcurrencyManager::new(start_ts);
             let mut txn = MvccTxn::new(start_ts, cm);
@@ -673,10 +673,7 @@ pub mod tests {
         pub fn gc(&mut self, pk: &[u8], safe_point: impl Into<TimeStamp> + Copy) {
             let cm = ConcurrencyManager::new(safe_point.into());
             loop {
-                let snap = RegionSnapshot::<RocksSnapshot>::from_raw(
-                    self.db.c().clone(),
-                    self.region.clone(),
-                );
+                let snap = self.snapshot();
                 let mut txn = MvccTxn::new(safe_point.into(), cm.clone());
                 let mut reader = MvccReader::new(snap, None, true);
                 gc(&mut txn, &mut reader, Key::from_raw(pk), safe_point.into()).unwrap();
@@ -976,10 +973,12 @@ pub mod tests {
 
         let seek_old = reader.statistics.write.seek;
         let next_old = reader.statistics.write.next;
-        assert!(!reader
-            .get_txn_commit_record(&key, 30.into())
-            .unwrap()
-            .exist());
+        assert!(
+            !reader
+                .get_txn_commit_record(&key, 30.into())
+                .unwrap()
+                .exist()
+        );
         let seek_new = reader.statistics.write.seek;
         let next_new = reader.statistics.write.next;
 
@@ -1257,10 +1256,12 @@ pub mod tests {
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 18.into());
 
-        assert!(reader
-            .get_write(&Key::from_raw(b"j"), 100.into(), None)
-            .unwrap()
-            .is_none());
+        assert!(
+            reader
+                .get_write(&Key::from_raw(b"j"), 100.into(), None)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -1728,6 +1729,42 @@ pub mod tests {
                     .unwrap();
                 assert_eq!(result, case.expected);
             }
+        }
+    }
+
+    #[test]
+    fn test_reader_prefix_seek() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let builder = TestEngineBuilder::new().path(dir.path());
+        let db = builder.build().unwrap().kv_engine().get_sync_db();
+        let cf = engine_rocks::util::get_cf_handle(&db, CF_WRITE).unwrap();
+
+        let region = make_region(1, vec![], vec![]);
+        let mut engine = RegionEngine::new(&db, &region);
+
+        // Put some tombstones into the DB.
+        for i in 1..100 {
+            let commit_ts = (i * 2 + 1).into();
+            let mut k = vec![b'z'];
+            k.extend_from_slice(Key::from_raw(b"k1").append_ts(commit_ts).as_encoded());
+            use engine_rocks::raw::Writable;
+            engine.db.delete_cf(cf, &k).unwrap();
+        }
+        engine.flush();
+
+        #[allow(clippy::useless_vec)]
+        for (k, scan_mode, tombstones) in vec![
+            (b"k0", Some(ScanMode::Forward), 99),
+            (b"k0", None, 0),
+            (b"k1", Some(ScanMode::Forward), 99),
+            (b"k1", None, 99),
+            (b"k2", Some(ScanMode::Forward), 0),
+            (b"k2", None, 0),
+        ] {
+            let mut reader = MvccReader::new(engine.snapshot(), scan_mode, false);
+            let (k, ts) = (Key::from_raw(k), 199.into());
+            reader.seek_write(&k, ts).unwrap();
+            assert_eq!(reader.statistics.write.seek_tombstone, tombstones);
         }
     }
 }
