@@ -750,6 +750,12 @@ where
                             (Method::GET, "/debug/pprof/profile") => {
                                 Self::dump_rsperf_to_resp(req).await
                             }
+                            (Method::GET, "/debug/fail_point") => {
+                                info!("debug fail point API start");
+                                fail_point!("debug_fail_point");
+                                info!("debug fail point API finish");
+                                Ok(Response::default())
+                            }
                             (Method::GET, path) if path.starts_with("/region") => {
                                 Self::dump_region_meta(req, router).await
                             }

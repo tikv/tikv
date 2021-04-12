@@ -276,6 +276,10 @@ where
             mb.close();
         }
     }
+
+    pub fn clear_cache(&self) {
+        unsafe { &mut *self.caches.as_ptr() }.clear();
+    }
 }
 
 impl<N: Fsm, C: Fsm, Ns: Clone, Cs: Clone> Clone for Router<N, C, Ns, Cs> {
