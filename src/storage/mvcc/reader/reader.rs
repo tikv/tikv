@@ -526,6 +526,7 @@ mod tests {
         acquire_pessimistic_lock, cleanup, commit, gc, prewrite, CommitKind, TransactionKind,
         TransactionProperties,
     };
+    use crate::storage::{Engine, TestEngineBuilder};
     use concurrency_manager::ConcurrencyManager;
     use engine_rocks::properties::MvccPropertiesCollectorFactory;
     use engine_rocks::raw::DB;
@@ -555,16 +556,12 @@ mod tests {
             }
         }
 
-<<<<<<< HEAD
-        fn put(
-=======
         pub fn snapshot(&self) -> RegionSnapshot<RocksSnapshot> {
             let db = self.db.c().clone();
             RegionSnapshot::<RocksSnapshot>::from_raw(db, self.region.clone())
         }
 
         pub fn put(
->>>>>>> 690e307d8... handle gc keys task more effectively (#9959)
             &mut self,
             pk: &[u8],
             start_ts: impl Into<TimeStamp>,
@@ -623,14 +620,8 @@ mod tests {
             }
         }
 
-<<<<<<< HEAD
-        fn prewrite(&mut self, m: Mutation, pk: &[u8], start_ts: impl Into<TimeStamp>) {
-            let snap =
-                RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
-=======
         pub fn prewrite(&mut self, m: Mutation, pk: &[u8], start_ts: impl Into<TimeStamp>) {
             let snap = self.snapshot();
->>>>>>> 690e307d8... handle gc keys task more effectively (#9959)
             let start_ts = start_ts.into();
             let cm = ConcurrencyManager::new(start_ts);
             let mut txn = MvccTxn::new(snap, start_ts, true, cm);
@@ -707,14 +698,8 @@ mod tests {
             self.write(txn.into_modifies());
         }
 
-<<<<<<< HEAD
-        fn rollback(&mut self, pk: &[u8], start_ts: impl Into<TimeStamp>) {
-            let snap =
-                RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
-=======
         pub fn rollback(&mut self, pk: &[u8], start_ts: impl Into<TimeStamp>) {
             let snap = self.snapshot();
->>>>>>> 690e307d8... handle gc keys task more effectively (#9959)
             let start_ts = start_ts.into();
             let cm = ConcurrencyManager::new(start_ts);
             let mut txn = MvccTxn::new(snap, start_ts, true, cm);
@@ -737,19 +722,9 @@ mod tests {
         fn gc(&mut self, pk: &[u8], safe_point: impl Into<TimeStamp> + Copy) {
             let cm = ConcurrencyManager::new(safe_point.into());
             loop {
-<<<<<<< HEAD
-                let snap = RegionSnapshot::<RocksSnapshot>::from_raw(
-                    self.db.c().clone(),
-                    self.region.clone(),
-                );
+                let snap = self.snapshot();
                 let mut txn = MvccTxn::new(snap, safe_point.into(), true, cm.clone());
                 gc(&mut txn, Key::from_raw(pk), safe_point.into()).unwrap();
-=======
-                let snap = self.snapshot();
-                let mut txn = MvccTxn::new(safe_point.into(), cm.clone());
-                let mut reader = MvccReader::new(snap, None, true);
-                gc(&mut txn, &mut reader, Key::from_raw(pk), safe_point.into()).unwrap();
->>>>>>> 690e307d8... handle gc keys task more effectively (#9959)
                 let modifies = txn.into_modifies();
                 if modifies.is_empty() {
                     return;
@@ -1766,7 +1741,8 @@ mod tests {
             (b"k2", Some(ScanMode::Forward), 0),
             (b"k2", None, 0),
         ] {
-            let mut reader = MvccReader::new(engine.snapshot(), scan_mode, false);
+            let mut reader =
+                MvccReader::new(engine.snapshot(), scan_mode, false, IsolationLevel::Si);
             let (k, ts) = (Key::from_raw(k), 199.into());
             reader.seek_write(&k, ts).unwrap();
             assert_eq!(reader.statistics.write.seek_tombstone, tombstones);

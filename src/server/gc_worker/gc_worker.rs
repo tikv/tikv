@@ -17,12 +17,8 @@ use engine_traits::{
 };
 use file_system::{IOType, WithIOType};
 use futures::executor::block_on;
-<<<<<<< HEAD
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
-=======
-use kvproto::kvrpcpb::{Context, LockInfo};
 use kvproto::metapb::Region;
->>>>>>> 690e307d8... handle gc keys task more effectively (#9959)
 use pd_client::{FeatureGate, PdClient};
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoProvider};
 use raftstore::router::RaftStoreRouter;
@@ -298,10 +294,6 @@ where
         Ok(())
     }
 
-<<<<<<< HEAD
-    fn gc_keys(&mut self, keys: Vec<Key>, safe_point: TimeStamp) -> Result<()> {
-        let mut txn = Self::new_txn(self.engine.snapshot_on_kv_engine(b"", b"")?);
-=======
     fn gc_keys(
         &mut self,
         keys: Vec<Key>,
@@ -352,9 +344,7 @@ where
         let mut keys = get_keys_in_regions(keys, regions_provider)?;
 
         let snapshot = self.engine.snapshot_on_kv_engine(b"", b"")?;
-        let mut txn = Self::new_txn();
-        let mut reader = MvccReader::new(snapshot, None /*scan_mode*/, false);
->>>>>>> 690e307d8... handle gc keys task more effectively (#9959)
+        let mut txn = Self::new_txn(snapshot);
         let mut gc_info = GcInfo::default();
         let mut next_gc_key = keys.next();
         while let Some(ref key) = next_gc_key {
