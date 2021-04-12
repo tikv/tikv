@@ -2834,7 +2834,7 @@ impl GenSnapTask {
             for_balance: self.for_balance,
             last_applied_index_term,
             last_applied_state,
-            canceled: self.canceled.clone(),
+            canceled: self.canceled,
             // This snapshot may be held for a long time, which may cause too many
             // open files in rocksdb.
             kv_snap,
