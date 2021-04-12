@@ -41,7 +41,7 @@ use crate::read_pool::ReadPool;
 const LOAD_STATISTICS_SLOTS: usize = 4;
 const LOAD_STATISTICS_INTERVAL: Duration = Duration::from_millis(100);
 pub const GRPC_THREAD_PREFIX: &str = "grpc-server";
-pub const READPOOL_NORMAL_THREAD_PREFIX: &str = "store-read-norm";
+pub const READPOOL_NORMAL_THREAD_PREFIX: &str = "store-read-nl";
 pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 
 /// The TiKV server
