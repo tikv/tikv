@@ -158,12 +158,6 @@ impl PluginRegistry {
     }
 }
 
-impl Default for PluginRegistry {
-    fn default() -> Self {
-        PluginRegistry::new()
-    }
-}
-
 #[derive(Default)]
 struct PluginRegistryInner {
     /// Plugins that are currently loaded.
@@ -320,7 +314,7 @@ fn is_library_file<P: AsRef<Path>>(path: P) -> bool {
 //
 //    #[test]
 //    fn registry_load_and_get_plugin() {
-//        let registry = PluginRegistry::default();
+//        let registry = PluginRegistry::new();
 //        let library_path = pkgname_to_libname("example-plugin");
 //        let plugin_name = registry.load_plugin(&library_path).unwrap();
 //
@@ -332,7 +326,7 @@ fn is_library_file<P: AsRef<Path>>(path: P) -> bool {
 //
 //    #[test]
 //    fn registry_unload_plugin_by_name() {
-//        let registry = PluginRegistry::default();
+//        let registry = PluginRegistry::new();
 //        let library_path = pkgname_to_libname("example-plugin");
 //        let plugin_name = registry.load_plugin(&library_path).unwrap();
 //
@@ -346,7 +340,7 @@ fn is_library_file<P: AsRef<Path>>(path: P) -> bool {
 //
 //    #[test]
 //    fn plugin_registry_unload_plugin_by_path() {
-//        let registry = PluginRegistry::default();
+//        let registry = PluginRegistry::new();
 //        let library_path = pkgname_to_libname("example-plugin");
 //        let plugin_name = registry.load_plugin(&library_path).unwrap();
 //
@@ -368,7 +362,7 @@ fn is_library_file<P: AsRef<Path>>(path: P) -> bool {
 //        std::fs::create_dir_all(&coprocessor_dir).unwrap();
 //        let library_path = pkgname_to_libname("example-plugin");
 //
-//        let mut registry = PluginRegistry::default();
+//        let mut registry = PluginRegistry::new();
 //        registry.start_hot_reloading(&coprocessor_dir).unwrap();
 //
 //        // trigger loading
@@ -388,3 +382,4 @@ fn is_library_file<P: AsRef<Path>>(path: P) -> bool {
 //        assert!(registry.get_plugin("example-plugin").is_none());
 //    }
 //}
+//
