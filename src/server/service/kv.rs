@@ -623,8 +623,12 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         ctx.spawn(async move {
             let res = stream.map_err(Error::from).try_for_each(move |msg| {
                 RAFT_MESSAGE_RECV_COUNTER.inc();
-                if msg.get_from_peer().get_store_id() != store_id {
-                    future::err(Error::from(futures::channel::oneshot::Canceled))
+                let to_store_id = msg.get_to_peer().get_store_id();
+                if to_store_id != store_id {
+                    future::err(Error::from(RaftStoreError::StoreNotMatch(
+                        to_store_id,
+                        store_id,
+                    )))
                 } else {
                     let ret = ch.send_raft_msg(msg).map_err(Error::from);
                     future::ready(ret)
@@ -660,8 +664,12 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 RAFT_MESSAGE_RECV_COUNTER.inc_by(len as i64);
                 RAFT_MESSAGE_BATCH_SIZE.observe(len as f64);
                 for msg in msgs.take_msgs().into_iter() {
-                    if msg.get_from_peer().get_store_id() != store_id {
-                        return future::err(Error::from(futures::channel::oneshot::Canceled));
+                    let to_store_id = msg.get_to_peer().get_store_id();
+                    if to_store_id != store_id {
+                        return future::err(Error::from(RaftStoreError::StoreNotMatch(
+                            to_store_id,
+                            store_id,
+                        )));
                     }
                     if let Err(e) = ch.send_raft_msg(msg) {
                         return future::err(Error::from(e));

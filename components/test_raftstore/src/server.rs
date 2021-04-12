@@ -333,6 +333,21 @@ impl Simulator for ServerCluster {
             ConfigController::default(),
         );
 
+        let apply_router = system.apply_router();
+        // Create node.
+        let mut raft_store = cfg.raft_store.clone();
+        raft_store.validate().unwrap();
+        let mut node = Node::new(
+            system,
+            &cfg.server,
+            Arc::new(VersionTrack::new(raft_store)),
+            Arc::clone(&self.pd_client),
+            state,
+            bg_worker.clone(),
+        );
+        node.try_bootstrap_store(engines.clone())?;
+        let node_id = node.id();
+
         for _ in 0..100 {
             let mut svr = Server::new(
                 node_id,
@@ -378,19 +393,6 @@ impl Simulator for ServerCluster {
         let trans = server.transport();
         let simulate_trans = SimulateTransport::new(trans);
         let server_cfg = Arc::new(cfg.server.clone());
-        let apply_router = system.apply_router();
-
-        // Create node.
-        let mut raft_store = cfg.raft_store.clone();
-        raft_store.validate().unwrap();
-        let mut node = Node::new(
-            system,
-            &cfg.server,
-            Arc::new(VersionTrack::new(raft_store)),
-            Arc::clone(&self.pd_client),
-            state,
-            bg_worker.clone(),
-        );
 
         // Register the role change observer of the lock manager.
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
@@ -401,7 +403,6 @@ impl Simulator for ServerCluster {
             SplitCheckRunner::new(engines.kv.clone(), router.clone(), coprocessor_host.clone());
         let split_check_scheduler = bg_worker.start("split-check", split_check_runner);
 
-        node.bootstrap_store_id(engines.clone())?;
         node.start(
             engines,
             simulate_trans.clone(),

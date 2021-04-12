@@ -131,10 +131,12 @@ where
         }
     }
 
-    pub fn bootstrap_store_id(&mut self, engines: Engines<RocksEngine, ER>) -> Result<()> {
+    pub fn try_bootstrap_store(&mut self, engines: Engines<RocksEngine, ER>) -> Result<()> {
         let mut store_id = self.check_store(&engines).unwrap();
         if store_id == INVALID_ID {
-            store_id = self.bootstrap_store(&engines).unwrap();
+            store_id = self.alloc_id()?;
+            debug!("alloc store id"; "store_id" => store_id);
+            store::bootstrap_store(&engines, self.cluster_id, store_id)?;
             fail_point!("node_after_bootstrap_store", |_| Err(box_err!(
                 "injected error: node_after_bootstrap_store"
             )));
@@ -259,15 +261,6 @@ where
                 .group
                 .register_store(store.id, store.take_labels().into());
         }
-    }
-
-    fn bootstrap_store(&self, engines: &Engines<RocksEngine, ER>) -> Result<u64> {
-        let store_id = self.alloc_id()?;
-        debug!("alloc store id"; "store_id" => store_id);
-
-        store::bootstrap_store(&engines, self.cluster_id, store_id)?;
-
-        Ok(store_id)
     }
 
     // Exported for tests.

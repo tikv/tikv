@@ -614,7 +614,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.state.clone(),
             self.background_worker.clone(),
         );
-        node.bootstrap_store_id(engines.engines.clone())
+        node.try_bootstrap_store(engines.engines.clone())
             .unwrap_or_else(|e| fatal!("failed to bootstrap node id: {}", e));
 
         // Create server
