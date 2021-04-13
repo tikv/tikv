@@ -1212,11 +1212,7 @@ mod tests {
     {
         move |a: &T, b: &T| {
             let ord = a.partial_cmp(b).unwrap();
-            if !asc {
-                ord.reverse()
-            } else {
-                ord
-            }
+            if !asc { ord.reverse() } else { ord }
         }
     }
 

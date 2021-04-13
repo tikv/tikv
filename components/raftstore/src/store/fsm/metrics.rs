@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use prometheus::{exponential_buckets, Histogram};
+use lazy_static::lazy_static;
+use prometheus::{exponential_buckets, register_histogram, Histogram};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 

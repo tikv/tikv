@@ -243,11 +243,7 @@ where
                     let region_id = ctx.get_region_id();
                     rid.and_then(|rid| {
                         let rid: u64 = rid.parse().unwrap();
-                        if rid == region_id {
-                            None
-                        } else {
-                            Some(())
-                        }
+                        if rid == region_id { None } else { Some(()) }
                     })
                     .ok_or_else(|| RaftServerError::RegionNotFound(region_id).into())
                 });

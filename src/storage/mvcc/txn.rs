@@ -765,15 +765,17 @@ pub(crate) mod tests {
         let cm = ConcurrencyManager::new(10.into());
         let mut txn = MvccTxn::new(5.into(), cm.clone());
         let mut reader = SnapshotReader::new(5.into(), snapshot, true);
-        assert!(prewrite(
-            &mut txn,
-            &mut reader,
-            &txn_props(5.into(), key, CommitKind::TwoPc, None, 0, false),
-            Mutation::Put((Key::from_raw(key), value.to_vec())),
-            &None,
-            false,
-        )
-        .is_err());
+        assert!(
+            prewrite(
+                &mut txn,
+                &mut reader,
+                &txn_props(5.into(), key, CommitKind::TwoPc, None, 0, false),
+                Mutation::Put((Key::from_raw(key), value.to_vec())),
+                &None,
+                false,
+            )
+            .is_err()
+        );
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut txn = MvccTxn::new(5.into(), cm);

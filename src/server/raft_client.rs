@@ -4,7 +4,7 @@ use crate::server::metrics::*;
 use crate::server::snap::Task as SnapTask;
 use crate::server::{self, Config, StoreAddrResolver};
 use collections::{HashMap, HashSet};
-use crossbeam::queue::{ArrayQueue, PushError};
+use crossbeam::queue::ArrayQueue;
 use engine_rocks::RocksEngine;
 use futures::channel::oneshot;
 use futures::compat::Future01CompatExt;
@@ -74,7 +74,7 @@ impl Queue {
         if self.connected.load(Ordering::Relaxed) {
             match self.buf.push(msg) {
                 Ok(()) => (),
-                Err(PushError(_)) => return Err(DiscardReason::Full),
+                Err(_) => return Err(DiscardReason::Full),
             }
         } else {
             return Err(DiscardReason::Disconnected);
@@ -108,7 +108,7 @@ impl Queue {
 
     /// Gets message from the head of the queue.
     fn try_pop(&self) -> Option<RaftMessage> {
-        self.buf.pop().ok()
+        self.buf.pop()
     }
 
     /// Same as `try_pop` but register interest on readiness when `None` is returned.
@@ -118,15 +118,15 @@ impl Queue {
     #[inline]
     fn pop(&self, ctx: &Context) -> Option<RaftMessage> {
         match self.buf.pop() {
-            Ok(msg) => Some(msg),
-            Err(_) => {
+            Some(msg) => Some(msg),
+            None => {
                 {
                     let mut waker = self.waker.lock().unwrap();
                     *waker = Some(ctx.waker().clone());
                 }
                 match self.buf.pop() {
-                    Ok(msg) => Some(msg),
-                    Err(_) => None,
+                    Some(msg) => Some(msg),
+                    None => None,
                 }
             }
         }
@@ -553,14 +553,14 @@ where
         }
     }
 
-    fn clear_pending_message(&self) {
+    fn clear_pending_message(&self, reason: &str) {
         let len = self.queue.len();
         for _ in 0..len {
             let msg = self.queue.try_pop().unwrap();
             report_unreachable(&self.builder.router, &msg)
         }
         REPORT_FAILURE_MSG_COUNTER
-            .with_label_values(&["unreachable", &self.store_id.to_string()])
+            .with_label_values(&[reason, &self.store_id.to_string()])
             .inc_by(len as i64);
     }
 
@@ -670,7 +670,7 @@ async fn start<S, R>(
             }
             Err(e) => {
                 RESOLVE_STORE_COUNTER.with_label_values(&["failed"]).inc();
-                back_end.clear_pending_message();
+                back_end.clear_pending_message("resolve");
                 error_unknown!(?e; "resolve store address failed"; "store_id" => back_end.store_id,);
                 // TOMBSTONE
                 if format!("{}", e).contains("has been removed") {
@@ -702,7 +702,12 @@ async fn start<S, R>(
                 error!("connection abort"; "store_id" => back_end.store_id, "addr" => addr);
                 if retry_times > 1 {
                     // Clears pending messages to avoid consuming high memory when one node is shutdown.
-                    back_end.clear_pending_message();
+                    back_end.clear_pending_message("unreachable");
+                } else {
+                    // At least report failure in metrics.
+                    REPORT_FAILURE_MSG_COUNTER
+                        .with_label_values(&["unreachable", &back_end.store_id.to_string()])
+                        .inc_by(1);
                 }
                 back_end
                     .builder

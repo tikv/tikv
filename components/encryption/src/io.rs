@@ -81,7 +81,7 @@ pub fn create_aes_ctr_crypter(
     }
     let cipher = match method {
         EncryptionMethod::Unknown | EncryptionMethod::Plaintext => {
-            return Err(box_err!("init crypter while encryption is not enabled"))
+            return Err(box_err!("init crypter while encryption is not enabled"));
         }
         EncryptionMethod::Aes128Ctr => OCipher::aes_128_ctr(),
         EncryptionMethod::Aes192Ctr => OCipher::aes_192_ctr(),

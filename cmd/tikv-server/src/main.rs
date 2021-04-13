@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process;
 
 use clap::{crate_authors, App, Arg};
-use cmd::setup::{ensure_no_unrecognized_config, validate_and_persist_config};
+use server::setup::{ensure_no_unrecognized_config, validate_and_persist_config};
 use tikv::config::TiKvConfig;
 
 fn main() {
@@ -169,7 +169,7 @@ fn main() {
             )
         });
 
-    cmd::setup::overwrite_config_with_cmd_args(&mut config, &matches);
+    server::setup::overwrite_config_with_cmd_args(&mut config, &matches);
 
     if is_config_check {
         validate_and_persist_config(&mut config, false);
@@ -178,5 +178,5 @@ fn main() {
         process::exit(0)
     }
 
-    cmd::server::run_tikv(config);
+    server::server::run_tikv(config);
 }

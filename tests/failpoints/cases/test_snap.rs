@@ -305,7 +305,7 @@ fn test_destroy_peer_on_pending_snapshot() {
 fn test_shutdown_when_snap_gc() {
     let mut cluster = new_node_cluster(0, 2);
     // So that batch system can handle a snap_gc event before shutting down.
-    cluster.cfg.raft_store.store_batch_system.max_batch_size = 1;
+    cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(20);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
