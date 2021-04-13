@@ -12,7 +12,7 @@ use engine_rocks::{RocksEngine as BaseRocksEngine, RocksEngineIterator};
 use engine_traits::{CfName, CF_DEFAULT};
 use engine_traits::{
     Engines, IterOptions, Iterable, Iterator, KvEngine, Mutable, Peekable, ReadOptions, SeekKey,
-    WriteBatch, WriteBatchExt,
+    WriteBatch,
 };
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
@@ -166,7 +166,7 @@ impl Debug for RocksEngine {
 }
 
 /// Write modifications into a `BaseRocksEngine` instance.
-pub fn write_modifies(kv_engine: &BaseRocksEngine, modifies: Vec<Modify>) -> Result<()> {
+pub fn write_modifies(kv_engine: &impl KvEngine, modifies: Vec<Modify>) -> Result<()> {
     fail_point!("rockskv_write_modifies", |_| Err(box_err!("write failed")));
 
     let mut wb = kv_engine.write_batch();
