@@ -754,6 +754,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.concurrency_manager.clone(),
             server.env(),
             self.security_mgr.clone(),
+            // TODO: replace to the cdc sinker
             resolved_ts::DummySinker::new(),
         );
         rts_worker.start(rts_endpoint);

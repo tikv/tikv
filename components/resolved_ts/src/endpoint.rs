@@ -199,7 +199,7 @@ where
             cfg.min_ts_interval.0,
             cfg.hibernate_regions_compatible,
         );
-        let scanner_pool = ScannerPool::new(2, raft_router);
+        let scanner_pool = ScannerPool::new(cfg.scan_lock_pool_size, raft_router);
         let ep = Self {
             scheduler,
             // raft_router,
