@@ -15,7 +15,7 @@ pub struct PluginRegistry {
     inner: Arc<RwLock<PluginRegistryInner>>,
     /// Active file system watcher for hot-reloading.
     /// If dropped, the corresponding hot-reloading thread will stop.
-    fs_watcher: notify::RecommendedWatcher,
+    fs_watcher: Option<notify::RecommendedWatcher>,
 }
 
 #[allow(dead_code)]
@@ -24,51 +24,9 @@ impl PluginRegistry {
     pub fn new() -> Self {
         let registry = Arc::new(RwLock::new(PluginRegistryInner::default()));
 
-        // Create a file system watcher and background thread for hot-reloading.
-        let (tx, rx) = mpsc::channel();
-        let fs_watcher = notify::watcher(tx, Duration::from_secs(3)).unwrap();
-
-        let hot_reload_registry = registry.clone();
-        thread::spawn(move || {
-            // Simple helper functions for loading/unloading plugins.
-            let maybe_load = |file: &PathBuf| {
-                if is_library_file(&file) {
-                    // Discard error.
-                    let _ = hot_reload_registry.write().unwrap().load_plugin(file);
-                }
-            };
-            let unload = |file: &PathBuf| {
-                hot_reload_registry
-                    .write()
-                    .unwrap()
-                    .unload_plugin_by_path(file)
-            };
-
-            loop {
-                match rx.recv() {
-                    Ok(DebouncedEvent::Create(file)) => {
-                        maybe_load(&file);
-                    }
-                    Ok(DebouncedEvent::Remove(file)) => {
-                        unload(&file);
-                    }
-                    Ok(DebouncedEvent::Write(file)) => {
-                        unload(&file);
-                        maybe_load(&file);
-                    }
-                    Ok(DebouncedEvent::Rename(old_file, new_file)) => {
-                        unload(&old_file);
-                        maybe_load(&new_file);
-                    }
-                    Ok(_) => (),
-                    Err(_) => break, // Stop when watcher is dropped.
-                }
-            }
-        });
-
         PluginRegistry {
             inner: registry,
-            fs_watcher,
+            fs_watcher: None,
         }
     }
 
@@ -88,20 +46,64 @@ impl PluginRegistry {
     ) -> notify::Result<()> {
         let plugin_directory = plugin_directory.into();
 
-        // Register a new directory for hot-reloading.
-        self.fs_watcher
-            .watch(&plugin_directory, RecursiveMode::NonRecursive)?;
+        // If this is the first call to `start_hot_reloading()`, create a new file system watcher
+        // and background thread for loading plugins. For later invocations, the same watcher and
+        // thread will be used.
+        if self.fs_watcher.is_none() {
+            let (tx, rx) = mpsc::channel();
+            let fs_watcher = notify::watcher(tx, Duration::from_secs(3)).unwrap();
 
-        // Load plugins that are already in the directory.
-        for entry in std::fs::read_dir(&plugin_directory)? {
-            if let Ok(file) = entry.map(|f| f.path()) {
-                if is_library_file(&file) {
-                    // Discard error.
-                    let _ = self.load_plugin(&file);
+            let hot_reload_registry = self.inner.clone();
+            thread::spawn(move || {
+                // Simple helper functions for loading/unloading plugins.
+                let maybe_load = |file: &PathBuf| {
+                    if is_library_file(&file) {
+                        // Discard error.
+                        let _ = hot_reload_registry.write().unwrap().load_plugin(file);
+                    }
+                };
+                let unload = |file: &PathBuf| {
+                    hot_reload_registry
+                        .write()
+                        .unwrap()
+                        .unload_plugin_by_path(file)
+                };
+
+                loop {
+                    match rx.recv() {
+                        Ok(DebouncedEvent::Create(file)) => {
+                            maybe_load(&file);
+                        }
+                        Ok(DebouncedEvent::Remove(file)) => {
+                            unload(&file);
+                        }
+                        Ok(DebouncedEvent::Write(file)) => {
+                            unload(&file);
+                            maybe_load(&file);
+                        }
+                        Ok(DebouncedEvent::Rename(old_file, new_file)) => {
+                            unload(&old_file);
+                            maybe_load(&new_file);
+                        }
+                        Ok(_) => (),
+                        Err(_) => break, // Stop when watcher is dropped.
+                    }
                 }
-            }
+            });
+
+            self.fs_watcher = Some(fs_watcher);
         }
 
+        // Register a new directory for hot-reloading.
+        if let Some(watcher) = &mut self.fs_watcher {
+            watcher.watch(&plugin_directory, RecursiveMode::NonRecursive)?;
+        } else {
+            // `self.fs_watcher` will never be `None` at this point.
+            unreachable!();
+        }
+
+        // Load plugins that are already in the directory.
+        self.load_plugins_from_dir(&plugin_directory)?;
         Ok(())
     }
 
@@ -131,8 +133,36 @@ impl PluginRegistry {
     /// name.
     ///
     /// Returns the name of the loaded plugin.
-    pub fn load_plugin<P: AsRef<OsStr>>(&self, filename: P) -> Result<&'static str, DylibError> {
-        self.inner.write().unwrap().load_plugin(filename)
+    pub fn load_plugin<P: AsRef<OsStr>>(&self, file_name: P) -> Result<&'static str, DylibError> {
+        self.inner.write().unwrap().load_plugin(file_name)
+    }
+
+    /// Attempts to load all plugins from a given directory.
+    ///
+    /// Returns a list of the names of all successfully loaded plugins.
+    /// If a file could not be successfully loaded as a plugin, it will be discarded.
+    ///
+    /// The plugins have to follow the system's naming convention in order to be loaded, e.g. `.so`
+    /// for Linux, `.dylib` for MacOS and `.dll` for Windows.
+    pub fn load_plugins_from_dir(
+        &self,
+        dir_name: impl Into<PathBuf>,
+    ) -> std::io::Result<Vec<&'static str>> {
+        let dir_name = dir_name.into();
+        let mut loaded_plugins = Vec::new();
+
+        for entry in std::fs::read_dir(&dir_name)? {
+            if let Ok(file) = entry.map(|f| f.path()) {
+                if is_library_file(&file) {
+                    // Ignore errors.
+                    let r = self.load_plugin(&file);
+                    if let Ok(plugin_name) = r {
+                        loaded_plugins.push(plugin_name);
+                    }
+                }
+            }
+        }
+        Ok(loaded_plugins)
     }
 
     /// Unloads a plugin with the given `plugin_name`.
@@ -382,4 +412,3 @@ fn is_library_file<P: AsRef<Path>>(path: P) -> bool {
 //        assert!(registry.get_plugin("example-plugin").is_none());
 //    }
 //}
-//
