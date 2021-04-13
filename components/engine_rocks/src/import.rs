@@ -31,14 +31,7 @@ impl ImportExt for RocksEngine {
         Ok(())
     }
 
-    // TODO: rename it to `reset_global_seq`.
-    fn validate_sst_for_ingestion<P: AsRef<Path>>(
-        &self,
-        cf: &str,
-        path: P,
-        _expected_size: u64,
-        _expected_checksum: u32,
-    ) -> Result<()> {
+    fn reset_global_seq<P: AsRef<Path>>(&self, cf: &str, path: P) -> Result<()> {
         let path = path.as_ref().to_str().unwrap();
         let f = File::open(path)?;
 

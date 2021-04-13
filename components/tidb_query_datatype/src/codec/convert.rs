@@ -791,7 +791,8 @@ impl ConvertTo<f64> for &[u8] {
     ///
     /// Port from TiDB's types.StrToFloat
     fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
-        let s = str::from_utf8(self)?.trim();
+        let s = get_valid_utf8_prefix(ctx, self)?;
+        let s = s.trim();
         let vs = get_valid_float_prefix(ctx, s)?;
         let val = vs
             .parse::<f64>()
@@ -1943,6 +1944,38 @@ mod tests {
     }
 
     #[test]
+    fn test_bytes_to_f64_invalid_utf8() {
+        let tests: Vec<(&'static [u8], Option<f64>)> = vec![
+            // 'a' + invalid_char
+            (&[0x61, 0xf7], Some(0.0)),
+            (&[0xf7, 0x61], Some(0.0)),
+            // '0' '1'
+            (&[0x30, 0x31], Some(1.0)),
+            // '0' '1' 'a'
+            (&[0x30, 0x31, 0x61], Some(1.0)),
+        ];
+
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING)));
+        for (i, (v, expect)) in tests.iter().enumerate() {
+            let ff: Result<f64> = v.convert(&mut ctx);
+            match expect {
+                Some(val) => {
+                    assert_eq!(ff.unwrap(), *val);
+                }
+                None => {
+                    assert!(
+                        ff.is_err(),
+                        "index: {}, {:?} should not be converted, but got: {:?}",
+                        i,
+                        v,
+                        ff
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_get_valid_float_prefix() {
         let cases = vec![
             ("-100", "-100"),
@@ -2576,9 +2609,9 @@ mod tests {
             // check origin_flen and origin_decimal
             let (f, d) = input.prec_and_frac();
             let log = format!(
-                    "input: {}, origin_flen: {}, origin_decimal: {}, actual flen: {}, actual decimal: {}",
-                    input, origin_flen, origin_decimal, f, d
-                );
+                "input: {}, origin_flen: {}, origin_decimal: {}, actual flen: {}, actual decimal: {}",
+                input, origin_flen, origin_decimal, f, d
+            );
             assert_eq!(f, origin_flen, "{}", log);
             assert_eq!(d, origin_decimal, "{}", log);
 
@@ -2637,7 +2670,7 @@ mod tests {
                         assert!(r.is_ok(), "{}", log);
                         assert_eq!(&r.unwrap(), d, "{}", log);
                     }
-                    Err(Error::Eval(_, _)) => {
+                    Err(Error::Eval(..)) => {
                         if let Error::Eval(_, d) = r.err().unwrap() {
                             assert_eq!(d, ERR_M_BIGGER_THAN_D, "{}", log);
                         } else {

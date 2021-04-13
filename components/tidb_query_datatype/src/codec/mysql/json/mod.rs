@@ -97,7 +97,7 @@ use constants::{JSON_LITERAL_FALSE, JSON_LITERAL_NIL, JSON_LITERAL_TRUE};
 
 const ERR_CONVERT_FAILED: &str = "Can not covert from ";
 
-/// The types of `Json` which follows https://tools.ietf.org/html/rfc7159#section-3
+/// The types of `Json` which follows <https://tools.ietf.org/html/rfc7159#section-3>
 #[derive(Eq, PartialEq, FromPrimitive, Clone, Debug, Copy)]
 pub enum JsonType {
     Object = 0x01,
@@ -221,7 +221,7 @@ impl<'a> JsonRef<'a> {
 
 /// Json implements type json used in tikv by Binary Json.
 /// The Binary Json format from `MySQL` 5.7 is in the following link:
-/// (https://github.com/mysql/mysql-server/blob/5.7/sql/json_binary.h#L52)
+/// (<https://github.com/mysql/mysql-server/blob/5.7/sql/json_binary.h#L52>)
 /// The only difference is that we use large `object` or large `array` for
 /// the small corresponding ones. That means in our implementation there
 /// is no difference between small `object` and big `object`, so does `array`.
@@ -347,7 +347,7 @@ impl Json {
 }
 
 /// Create JSON array by given elements
-/// https://dev.mysql.com/doc/refman/5.7/en/json-creation-functions.html#function_json-array
+/// <https://dev.mysql.com/doc/refman/5.7/en/json-creation-functions.html#function_json-array>
 pub fn json_array(elems: Vec<Datum>) -> Result<Json> {
     let mut a = Vec::with_capacity(elems.len());
     for elem in elems {
@@ -357,7 +357,7 @@ pub fn json_array(elems: Vec<Datum>) -> Result<Json> {
 }
 
 /// Create JSON object by given key-value pairs
-/// https://dev.mysql.com/doc/refman/5.7/en/json-creation-functions.html#function_json-object
+/// <https://dev.mysql.com/doc/refman/5.7/en/json-creation-functions.html#function_json-object>
 pub fn json_object(kvs: Vec<Datum>) -> Result<Json> {
     let len = kvs.len();
     if !is_even(len) {

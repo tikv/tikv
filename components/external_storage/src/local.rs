@@ -106,13 +106,14 @@ mod tests {
         let tp = ls.tmp_path(Path::new("t.sst"));
         assert_eq!(tp.parent().unwrap(), path);
         assert!(tp.file_name().unwrap().to_str().unwrap().starts_with('t'));
-        assert!(tp
-            .as_path()
-            .extension()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .starts_with(LOCAL_STORAGE_TMP_FILE_SUFFIX));
+        assert!(
+            tp.as_path()
+                .extension()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with(LOCAL_STORAGE_TMP_FILE_SUFFIX)
+        );
 
         // Test save_file
         let magic_contents: &[u8] = b"5678";

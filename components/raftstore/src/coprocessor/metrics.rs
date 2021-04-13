@@ -1,6 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use prometheus::{exponential_buckets, Histogram, IntGaugeVec};
+use lazy_static::lazy_static;
+use prometheus::{
+    exponential_buckets, register_histogram, register_int_gauge_vec, Histogram, IntGaugeVec,
+};
 
 lazy_static! {
     pub static ref REGION_SIZE_HISTOGRAM: Histogram = register_histogram!(

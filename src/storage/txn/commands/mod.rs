@@ -4,10 +4,12 @@
 #[macro_use]
 mod macros;
 pub(crate) mod acquire_pessimistic_lock;
+pub(crate) mod atomic_store;
 pub(crate) mod check_secondary_locks;
 pub(crate) mod check_txn_status;
 pub(crate) mod cleanup;
 pub(crate) mod commit;
+pub(crate) mod compare_and_swap;
 pub(crate) mod mvcc_by_key;
 pub(crate) mod mvcc_by_start_ts;
 pub(crate) mod pause;
@@ -20,10 +22,12 @@ pub(crate) mod rollback;
 pub(crate) mod txn_heart_beat;
 
 pub use acquire_pessimistic_lock::AcquirePessimisticLock;
+pub use atomic_store::RawAtomicStore;
 pub use check_secondary_locks::CheckSecondaryLocks;
 pub use check_txn_status::CheckTxnStatus;
 pub use cleanup::Cleanup;
 pub use commit::Commit;
+pub use compare_and_swap::RawCompareAndSwap;
 pub use mvcc_by_key::MvccByKey;
 pub use mvcc_by_start_ts::MvccByStartTs;
 pub use pause::Pause;
@@ -80,6 +84,8 @@ pub enum Command {
     Pause(Pause),
     MvccByKey(MvccByKey),
     MvccByStartTs(MvccByStartTs),
+    RawCompareAndSwap(RawCompareAndSwap),
+    RawAtomicStore(RawAtomicStore),
 }
 
 /// A `Command` with its return type, reified as the generic parameter `T`.
@@ -409,8 +415,11 @@ fn find_mvcc_infos_by_key<S: Snapshot>(
         let opt = reader.seek_write(key, ts)?;
         match opt {
             Some((commit_ts, write)) => {
-                ts = commit_ts.prev();
                 writes.push((commit_ts, write));
+                if commit_ts.is_zero() {
+                    break;
+                }
+                ts = commit_ts.prev();
             }
             None => break,
         };
@@ -480,6 +489,8 @@ impl Command {
             Command::Pause(t) => t,
             Command::MvccByKey(t) => t,
             Command::MvccByStartTs(t) => t,
+            Command::RawCompareAndSwap(t) => t,
+            Command::RawAtomicStore(t) => t,
         }
     }
 
@@ -501,6 +512,8 @@ impl Command {
             Command::Pause(t) => t,
             Command::MvccByKey(t) => t,
             Command::MvccByStartTs(t) => t,
+            Command::RawCompareAndSwap(t) => t,
+            Command::RawAtomicStore(t) => t,
         }
     }
 
@@ -536,6 +549,8 @@ impl Command {
             Command::CheckTxnStatus(t) => t.process_write(snapshot, context),
             Command::CheckSecondaryLocks(t) => t.process_write(snapshot, context),
             Command::Pause(t) => t.process_write(snapshot, context),
+            Command::RawCompareAndSwap(t) => t.process_write(snapshot, context),
+            Command::RawAtomicStore(t) => t.process_write(snapshot, context),
             _ => panic!("unsupported write command"),
         }
     }
@@ -650,7 +665,9 @@ pub mod test_util {
             _ => unreachable!(),
         };
         let ctx = Context::default();
-        engine.write(&ctx, ret.to_be_write).unwrap();
+        if !ret.to_be_write.modifies.is_empty() {
+            engine.write(&ctx, ret.to_be_write).unwrap();
+        }
         Ok(res)
     }
 
@@ -696,7 +713,7 @@ pub mod test_util {
         prewrite_command(engine, cm, statistics, cmd)
     }
 
-    pub fn pessimsitic_prewrite<E: Engine>(
+    pub fn pessimistic_prewrite<E: Engine>(
         engine: &E,
         statistics: &mut Statistics,
         mutations: Vec<(Mutation, bool)>,
@@ -706,7 +723,7 @@ pub mod test_util {
         one_pc_max_commit_ts: Option<u64>,
     ) -> Result<PrewriteResult> {
         let cm = ConcurrencyManager::new(start_ts.into());
-        pessimsitic_prewrite_with_cm(
+        pessimistic_prewrite_with_cm(
             engine,
             cm,
             statistics,
@@ -718,7 +735,7 @@ pub mod test_util {
         )
     }
 
-    pub fn pessimsitic_prewrite_with_cm<E: Engine>(
+    pub fn pessimistic_prewrite_with_cm<E: Engine>(
         engine: &E,
         cm: ConcurrencyManager,
         statistics: &mut Statistics,

@@ -39,6 +39,8 @@ pub mod range_properties;
 pub use crate::range_properties::*;
 pub mod mvcc_properties;
 pub use crate::mvcc_properties::*;
+pub mod ttl_properties;
+pub use crate::ttl_properties::*;
 pub mod perf_context;
 pub use crate::perf_context::*;
 

@@ -7,10 +7,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
+use bitflags::bitflags;
 use crossbeam::atomic::AtomicCell;
 use crossbeam::channel::TrySendError;
 use engine_traits::{Engines, KvEngine, RaftEngine, Snapshot, WriteBatch, WriteOptions};
 use error_code::ErrorCodeExt;
+use fail::fail_point;
 use kvproto::errorpb;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{self, PeerRole};
@@ -55,9 +57,10 @@ use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::time::{Instant as UtilInstant, ThreadReadId};
 use tikv_util::worker::{FutureScheduler, Scheduler};
 use tikv_util::Either;
+use tikv_util::{box_err, debug, error, info, warn};
 
 use super::cmd_resp;
-use super::local_metrics::{RaftMessageMetrics, RaftReadyMetrics};
+use super::local_metrics::{RaftReadyMetrics, RaftSendMessageMetrics};
 use super::metrics::*;
 use super::peer_storage::{
     write_peer_state, ApplySnapResult, CheckApplyingSnapStatus, InvokeContext, PeerStorage,
@@ -287,9 +290,10 @@ impl<S: Snapshot> CmdEpochChecker<S> {
         self.maybe_update_term(term);
         // Due to `test_admin_cmd_epoch_map_include_all_cmd_type`, using unwrap is ok.
         let epoch_state = *ADMIN_CMD_EPOCH_MAP.get(&cmd_type).unwrap();
-        assert!(self
-            .last_conflict_index(epoch_state.check_ver, epoch_state.check_conf_ver)
-            .is_none());
+        assert!(
+            self.last_conflict_index(epoch_state.check_ver, epoch_state.check_conf_ver)
+                .is_none()
+        );
 
         if epoch_state.change_conf_ver || epoch_state.change_ver {
             if let Some(cmd) = self.proposed_admin_cmd.back() {
@@ -1030,31 +1034,33 @@ where
     }
 
     #[inline]
-    fn send<T, I>(&mut self, trans: &mut T, msgs: I, metrics: &mut RaftMessageMetrics)
+    fn send<T, I>(&mut self, trans: &mut T, msgs: I, metrics: &mut RaftSendMessageMetrics)
     where
         T: Transport,
         I: IntoIterator<Item = eraftpb::Message>,
     {
         for msg in msgs {
             let msg_type = msg.get_msg_type();
+            let snapshot_index = msg.get_request_snapshot();
+            let i = self.send_raft_message(msg, trans) as usize;
             match msg_type {
-                MessageType::MsgAppend => metrics.append += 1,
+                MessageType::MsgAppend => metrics.append[i] += 1,
                 MessageType::MsgAppendResponse => {
-                    if msg.get_request_snapshot() != raft::INVALID_INDEX {
-                        metrics.request_snapshot += 1;
+                    if snapshot_index != raft::INVALID_INDEX {
+                        metrics.request_snapshot[i] += 1;
                     }
-                    metrics.append_resp += 1;
+                    metrics.append_resp[i] += 1;
                 }
-                MessageType::MsgRequestPreVote => metrics.prevote += 1,
-                MessageType::MsgRequestPreVoteResponse => metrics.prevote_resp += 1,
-                MessageType::MsgRequestVote => metrics.vote += 1,
-                MessageType::MsgRequestVoteResponse => metrics.vote_resp += 1,
-                MessageType::MsgSnapshot => metrics.snapshot += 1,
-                MessageType::MsgHeartbeat => metrics.heartbeat += 1,
-                MessageType::MsgHeartbeatResponse => metrics.heartbeat_resp += 1,
-                MessageType::MsgTransferLeader => metrics.transfer_leader += 1,
-                MessageType::MsgReadIndex => metrics.read_index += 1,
-                MessageType::MsgReadIndexResp => metrics.read_index_resp += 1,
+                MessageType::MsgRequestPreVote => metrics.prevote[i] += 1,
+                MessageType::MsgRequestPreVoteResponse => metrics.prevote_resp[i] += 1,
+                MessageType::MsgRequestVote => metrics.vote[i] += 1,
+                MessageType::MsgRequestVoteResponse => metrics.vote_resp[i] += 1,
+                MessageType::MsgSnapshot => metrics.snapshot[i] += 1,
+                MessageType::MsgHeartbeat => metrics.heartbeat[i] += 1,
+                MessageType::MsgHeartbeatResponse => metrics.heartbeat_resp[i] += 1,
+                MessageType::MsgTransferLeader => metrics.transfer_leader[i] += 1,
+                MessageType::MsgReadIndex => metrics.read_index[i] += 1,
+                MessageType::MsgReadIndexResp => metrics.read_index_resp[i] += 1,
                 MessageType::MsgTimeoutNow => {
                     // After a leader transfer procedure is triggered, the lease for
                     // the old leader may be expired earlier than usual, since a new leader
@@ -1064,7 +1070,7 @@ where
                     // to suspect.
                     self.leader_lease.suspect(monotonic_raw_now());
 
-                    metrics.timeout_now += 1;
+                    metrics.timeout_now[i] += 1;
                 }
                 // We do not care about these message types for metrics.
                 // Explicitly declare them so when we add new message types we are forced to
@@ -1076,7 +1082,6 @@ where
                 | MessageType::MsgSnapStatus
                 | MessageType::MsgCheckQuorum => {}
             }
-            self.send_raft_message(msg, trans);
         }
     }
 
@@ -1209,6 +1214,12 @@ where
             return pending_peers;
         }
 
+        for i in 0..self.peers_start_pending_time.len() {
+            let (_, pending_after) = self.peers_start_pending_time[i];
+            let elapsed = duration_to_sec(pending_after.elapsed());
+            RAFT_PEER_PENDING_DURATION.observe(elapsed);
+        }
+
         let progresses = status.progress.unwrap().iter();
         for (&id, progress) in progresses {
             if id == self.peer.get_id() {
@@ -1278,6 +1289,7 @@ where
                 if progress.matched >= truncated_idx {
                     let (_, pending_after) = self.peers_start_pending_time.swap_remove(i);
                     let elapsed = duration_to_sec(pending_after.elapsed());
+                    RAFT_PEER_PENDING_DURATION.observe(elapsed);
                     debug!(
                         "peer has caught up logs";
                         "region_id" => self.region_id,
@@ -1652,6 +1664,7 @@ where
         }
 
         if !self.raft_group.has_ready() {
+            fail_point!("before_no_ready_gen_snap_task", |_| None);
             // Generating snapshot task won't set ready for raft group.
             if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
                 self.pending_request_snapshot_count
@@ -1712,7 +1725,7 @@ where
                 fail_point!("raft_before_follower_send");
             }
             for vec_msg in ready.take_messages() {
-                self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.message);
+                self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.send_message);
             }
         }
 
@@ -1720,6 +1733,16 @@ where
 
         if !ready.committed_entries().is_empty() {
             self.handle_raft_committed_entries(ctx, ready.take_committed_entries());
+        }
+        // Check whether there is a pending generate snapshot task, the task
+        // needs to be sent to the apply system.
+        // Always sending snapshot task behind apply task, so it gets latest
+        // snapshot.
+        if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
+            self.pending_request_snapshot_count
+                .fetch_add(1, Ordering::SeqCst);
+            ctx.apply_router
+                .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
         }
 
         let invoke_ctx = match self
@@ -1866,17 +1889,6 @@ where
                 .schedule_task(self.region_id, ApplyTask::apply(apply));
         }
         fail_point!("after_send_to_apply_1003", self.peer_id() == 1003, |_| {});
-        // Check whether there is a pending generate snapshot task, the task
-        // needs to be sent to the apply system.
-        // Always sending snapshot task behind apply task, so it gets latest
-        // snapshot.
-        // TODO: maybe we should move this code to other place to make the logic more clear.
-        if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
-            self.pending_request_snapshot_count
-                .fetch_add(1, Ordering::SeqCst);
-            ctx.apply_router
-                .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
-        }
     }
 
     pub fn handle_raft_ready_advance<T: Transport>(
@@ -1919,7 +1931,7 @@ where
                 fail_point!("raft_before_follower_send");
             }
             for vec_msg in light_rd.take_messages() {
-                self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.message);
+                self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.send_message);
             }
         }
 
@@ -2781,7 +2793,20 @@ where
                 }
             }
         }
-        Ok((min_m.unwrap_or(0), min_c.unwrap_or(0)))
+        let (mut min_m, min_c) = (min_m.unwrap_or(0), min_c.unwrap_or(0));
+        if min_m < min_c {
+            warn!(
+                "min_matched < min_committed, raft progress is inaccurate";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+                "min_matched" => min_m,
+                "min_committed" => min_c,
+            );
+            // Reset `min_matched` to `min_committed`, since the raft log at `min_committed` is
+            // known to be committed in all peers, all of the peers should also have replicated it
+            min_m = min_c;
+        }
+        Ok((min_m, min_c))
     }
 
     fn pre_propose_prepare_merge<T>(
@@ -2803,7 +2828,6 @@ where
                 last_index
             ));
         }
-        assert!(min_matched >= min_committed);
         let mut entry_size = 0;
         for entry in self
             .raft_group
@@ -3400,7 +3424,7 @@ where
         }
     }
 
-    fn send_raft_message<T: Transport>(&mut self, msg: eraftpb::Message, trans: &mut T) {
+    fn send_raft_message<T: Transport>(&mut self, msg: eraftpb::Message, trans: &mut T) -> bool {
         let mut send_msg = self.prepare_raft_message();
 
         let to_peer = match self.get_peer_from_cache(msg.get_to()) {
@@ -3412,7 +3436,7 @@ where
                     "peer_id" => self.peer.get_id(),
                     "to_peer" => msg.get_to(),
                 );
-                return;
+                return false;
             }
         };
 
@@ -3446,7 +3470,8 @@ where
         send_msg.set_message(msg);
 
         if let Err(e) = trans.send(send_msg) {
-            warn!(
+            // We use metrics to observe failure on production.
+            debug!(
                 "failed to send msg to other peer";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
@@ -3464,7 +3489,9 @@ where
                 self.raft_group
                     .report_snapshot(to_peer_id, SnapshotStatus::Failure);
             }
+            return false;
         }
+        true
     }
 
     pub fn bcast_wake_up_message<T: Transport>(&self, ctx: &mut PollContext<EK, ER, T>) {

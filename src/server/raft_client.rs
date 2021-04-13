@@ -4,7 +4,7 @@ use crate::server::metrics::*;
 use crate::server::snap::Task as SnapTask;
 use crate::server::{self, Config, StoreAddrResolver};
 use collections::{HashMap, HashSet};
-use crossbeam::queue::{ArrayQueue, PushError};
+use crossbeam::queue::ArrayQueue;
 use engine_rocks::RocksEngine;
 use futures::channel::oneshot;
 use futures::compat::Future01CompatExt;
@@ -74,7 +74,7 @@ impl Queue {
         if self.connected.load(Ordering::Relaxed) {
             match self.buf.push(msg) {
                 Ok(()) => (),
-                Err(PushError(_)) => return Err(DiscardReason::Full),
+                Err(_) => return Err(DiscardReason::Full),
             }
         } else {
             return Err(DiscardReason::Disconnected);
@@ -108,7 +108,7 @@ impl Queue {
 
     /// Gets message from the head of the queue.
     fn try_pop(&self) -> Option<RaftMessage> {
-        self.buf.pop().ok()
+        self.buf.pop()
     }
 
     /// Same as `try_pop` but register interest on readiness when `None` is returned.
@@ -118,15 +118,15 @@ impl Queue {
     #[inline]
     fn pop(&self, ctx: &Context) -> Option<RaftMessage> {
         match self.buf.pop() {
-            Ok(msg) => Some(msg),
-            Err(_) => {
+            Some(msg) => Some(msg),
+            None => {
                 {
                     let mut waker = self.waker.lock().unwrap();
                     *waker = Some(ctx.waker().clone());
                 }
                 match self.buf.pop() {
-                    Ok(msg) => Some(msg),
-                    Err(_) => None,
+                    Some(msg) => Some(msg),
+                    None => None,
                 }
             }
         }
@@ -151,8 +151,6 @@ trait Buffer {
         &mut self,
         sender: &mut ClientCStreamSender<Self::OutputMessage>,
     ) -> grpcio::Result<()>;
-    /// Clears all messages and invoke hook before dropping.
-    fn clear(&mut self, hook: impl FnMut(&RaftMessage));
 }
 
 /// A buffer for BatchRaftMessage.
@@ -220,19 +218,6 @@ impl Buffer for BatchMessageBuffer {
         }
         res
     }
-
-    #[inline]
-    fn clear(&mut self, mut hook: impl FnMut(&RaftMessage)) {
-        for msg in self.batch.get_msgs() {
-            hook(msg);
-        }
-        self.batch.mut_msgs().clear();
-
-        if let Some(ref msg) = self.overflowing {
-            hook(msg);
-        }
-        self.overflowing.take();
-    }
 }
 
 /// A buffer for non-batch RaftMessage.
@@ -276,14 +261,6 @@ impl Buffer for MessageBuffer {
         } else {
             Ok(())
         }
-    }
-
-    #[inline]
-    fn clear(&mut self, mut hook: impl FnMut(&RaftMessage)) {
-        for msg in &self.batch {
-            hook(msg);
-        }
-        self.batch.clear();
     }
 }
 
@@ -576,12 +553,15 @@ where
         }
     }
 
-    fn clear_pending_message(&self) {
+    fn clear_pending_message(&self, reason: &str) {
         let len = self.queue.len();
         for _ in 0..len {
             let msg = self.queue.try_pop().unwrap();
             report_unreachable(&self.builder.router, &msg)
         }
+        REPORT_FAILURE_MSG_COUNTER
+            .with_label_values(&[reason, &self.store_id.to_string()])
+            .inc_by(len as i64);
     }
 
     fn connect(&self, addr: &str) -> TikvClient {
@@ -690,7 +670,7 @@ async fn start<S, R>(
             }
             Err(e) => {
                 RESOLVE_STORE_COUNTER.with_label_values(&["failed"]).inc();
-                back_end.clear_pending_message();
+                back_end.clear_pending_message("resolve");
                 error_unknown!(?e; "resolve store address failed"; "store_id" => back_end.store_id,);
                 // TOMBSTONE
                 if format!("{}", e).contains("has been removed") {
@@ -722,7 +702,12 @@ async fn start<S, R>(
                 error!("connection abort"; "store_id" => back_end.store_id, "addr" => addr);
                 if retry_times > 1 {
                     // Clears pending messages to avoid consuming high memory when one node is shutdown.
-                    back_end.clear_pending_message();
+                    back_end.clear_pending_message("unreachable");
+                } else {
+                    // At least report failure in metrics.
+                    REPORT_FAILURE_MSG_COUNTER
+                        .with_label_values(&["unreachable", &back_end.store_id.to_string()])
+                        .inc_by(1);
                 }
                 back_end
                     .builder
@@ -750,6 +735,8 @@ struct CachedQueue {
     /// it will be marked to true. And all dirty queues are expected to be
     /// notified during flushing.
     dirty: bool,
+    /// Mark if the connection is full.
+    full: bool,
 }
 
 /// A raft client that can manages connections correctly.
@@ -768,6 +755,7 @@ pub struct RaftClient<S, R> {
     pool: Arc<Mutex<ConnectionPool>>,
     cache: LruCache<(u64, usize), CachedQueue>,
     need_flush: Vec<(u64, usize)>,
+    full_stores: Vec<(u64, usize)>,
     future_pool: Arc<ThreadPool<TaskCell>>,
     builder: ConnectionBuilder<S, R>,
 }
@@ -787,6 +775,7 @@ where
             pool: Arc::default(),
             cache: LruCache::with_capacity_and_sample(0, 7),
             need_flush: vec![],
+            full_stores: vec![],
             future_pool,
             builder,
         }
@@ -828,6 +817,7 @@ where
             CachedQueue {
                 queue: s,
                 dirty: false,
+                full: false,
             },
         );
         true
@@ -875,6 +865,10 @@ where
                     Err(DiscardReason::Full) => {
                         s.queue.notify();
                         s.dirty = false;
+                        if !s.full {
+                            s.full = true;
+                            self.full_stores.push((store_id, conn_id));
+                        }
                         return Err(DiscardReason::Full);
                     }
                     Err(DiscardReason::Disconnected) => break,
@@ -890,11 +884,31 @@ where
     }
 
     pub fn need_flush(&self) -> bool {
-        !self.need_flush.is_empty()
+        !self.need_flush.is_empty() || !self.full_stores.is_empty()
+    }
+
+    fn flush_full_metrics(&mut self) {
+        if self.full_stores.is_empty() {
+            return;
+        }
+
+        for id in &self.full_stores {
+            if let Some(s) = self.cache.get_mut(id) {
+                s.full = false;
+            }
+            REPORT_FAILURE_MSG_COUNTER
+                .with_label_values(&["full", &id.0.to_string()])
+                .inc();
+        }
+        self.full_stores.clear();
+        if self.full_stores.capacity() > 2048 {
+            self.full_stores.shrink_to(512);
+        }
     }
 
     /// Flushes all buffered messages.
     pub fn flush(&mut self) {
+        self.flush_full_metrics();
         if self.need_flush.is_empty() {
             return;
         }
@@ -928,6 +942,7 @@ where
             pool: self.pool.clone(),
             cache: LruCache::with_capacity_and_sample(0, 7),
             need_flush: vec![],
+            full_stores: vec![],
             future_pool: self.future_pool.clone(),
             builder: self.builder.clone(),
         }

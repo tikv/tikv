@@ -1,21 +1,22 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{DecodeProperties, IndexHandles};
 use std::cmp;
 use std::collections::HashMap;
 use std::io::Read;
 use std::ops::{Deref, DerefMut};
 use std::u64;
 
-use engine_traits::KvEngine;
-use engine_traits::Range;
-use engine_traits::{IndexHandle, MvccProperties, TableProperties, TablePropertiesCollection};
+use engine_traits::{
+    DecodeProperties, IndexHandle, IndexHandles, KvEngine, MvccProperties, Range, TableProperties,
+    TablePropertiesCollection,
+};
 use rocksdb::{
     DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,
     UserCollectedProperties,
 };
 use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::{Error, Result};
+use tikv_util::info;
 use txn_types::{Key, Write, WriteType};
 
 use crate::mvcc_properties::*;
@@ -168,7 +169,10 @@ impl RangeProperties {
     pub fn decode<T: DecodeProperties>(props: &T) -> Result<RangeProperties> {
         match RangeProperties::decode_from_range_properties(props) {
             Ok(res) => return Ok(res),
-            Err(e) => info!("decode to RangeProperties failed with err: {:?}, try to decode to SizeProperties, maybe upgrade from v2.0 or older version?", e),
+            Err(e) => info!(
+                "decode to RangeProperties failed with err: {:?}, try to decode to SizeProperties, maybe upgrade from v2.0 or older version?",
+                e
+            ),
         }
         SizeProperties::decode(props).map(|res| res.into())
     }

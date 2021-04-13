@@ -11,7 +11,6 @@ use raft::eraftpb::MessageType;
 use engine_traits::{CfName, IterOptions, CF_DEFAULT};
 use test_raftstore::*;
 use tikv::storage::kv::*;
-use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use tikv::storage::CfStatistics;
 use tikv_util::codec::bytes;
 use tikv_util::HandyRwLock;
@@ -269,7 +268,7 @@ fn test_read_on_replica_check_memory_locks() {
     };
     let follower_storage = cluster.sim.rl().storages[&follower_id].clone();
     match follower_storage.snapshot(follower_snap_ctx) {
-        Err(Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(lock_info))))) => {
+        Err(Error(box ErrorInner::KeyIsLocked(lock_info))) => {
             assert_eq!(lock_info, lock.into_lock_info(raw_key.to_vec()))
         }
         other => panic!("unexpected result: {:?}", other),
@@ -493,9 +492,11 @@ fn seek<E: Engine>(ctx: SnapContext<'_>, engine: &E) {
         false,
     );
     let mut statistics = CfStatistics::default();
-    assert!(!iter
-        .seek(&Key::from_raw(b"z\x00"), &mut statistics)
-        .unwrap());
+    assert!(
+        !iter
+            .seek(&Key::from_raw(b"z\x00"), &mut statistics)
+            .unwrap()
+    );
     must_delete(ctx.pb_ctx, engine, b"x");
     must_delete(ctx.pb_ctx, engine, b"z");
 }
@@ -516,9 +517,11 @@ fn near_seek<E: Engine>(ctx: SnapContext<'_>, engine: &E) {
     assert_near_seek(&mut cursor, b"y", (b"z", b"2"));
     assert_near_seek(&mut cursor, b"x\x00", (b"z", b"2"));
     let mut statistics = CfStatistics::default();
-    assert!(!cursor
-        .near_seek(&Key::from_raw(b"z\x00"), &mut statistics)
-        .unwrap());
+    assert!(
+        !cursor
+            .near_seek(&Key::from_raw(b"z\x00"), &mut statistics)
+            .unwrap()
+    );
     must_delete(ctx.pb_ctx, engine, b"x");
     must_delete(ctx.pb_ctx, engine, b"z");
 }

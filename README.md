@@ -73,30 +73,67 @@ You can see the [TiKV Roadmap](docs/ROADMAP.md).
 
 When a node starts, the metadata of the Node, Store and Region are recorded into PD. The status of each Region and Store is reported to PD regularly.
 
-## Try TiKV
+## Quick start
 
-TiKV was originally a component of [TiDB](https://github.com/pingcap/tidb). To run TiKV you must build and run it with PD, which is used to manage a TiKV cluster. You can use TiKV together with TiDB or separately on its own.
+### Deploy a playground with TiUP
 
-We provide multiple deployment methods, but it is recommended to use our Ansible deployment for production environment. The TiKV documentation is available on [TiKV's website](https://tikv.org/docs/4.0/concepts/overview/).
+The most quickest to try out TiKV with TiDB is using TiUP, a component manager for TiDB.
 
-### Testing deployment
+You can see [this page](https://docs.pingcap.com/tidb/stable/quick-start-with-tidb#deploy-a-local-test-environment-using-tiup-playground) for a step by step tutorial.
 
-- [Try TiKV and TiDB](https://tikv.org/docs/4.0/tasks/try/introduction/)
+### Deploy a playground with binary
 
-    You can use [`tidb-docker-compose`](https://github.com/pingcap/tidb-docker-compose/) to quickly test TiKV and TiDB on a single machine. This is the easiest way. For other ways, see [TiDB documentation](https://docs.pingcap.com/).
+TiKV is able to run separatedly with PD, which is the minimal deployment required.
 
-- Try TiKV separately
+1. Download and extract binaries.
 
-    - [Deploy TiKV Using Docker Stack](https://tikv.org/docs/4.0/tasks/try/docker-stack/): To quickly test TiKV separately without TiDB on a single machine
-    - [Deploy TiKV Using Docker](https://tikv.org/docs/4.0/tasks/deploy/docker/): To deploy a multi-node TiKV testing cluster using Docker
-    - [Deploy TiKV Using Binary Files](https://tikv.org/docs/4.0/tasks/deploy/binary/): To deploy a TiKV cluster using binary files on a single node or on multiple nodes
+```bash
+$ export TIKV_VERSION=v4.0.12
+$ export GOOS=darwin  # only {darwin, linux} are supported
+$ export GOARCH=amd64 # only {amd64, arm64} are supported
+$ curl -O  https://tiup-mirrors.pingcap.com/tikv-$TIKV_VERSION-$GOOS-$GOARCH.tar.gz
+$ curl -O  https://tiup-mirrors.pingcap.com/pd-$TIKV_VERSION-$GOOS-$GOARCH.tar.gz
+$ tar -xzf tikv-$TIKV_VERSION-$GOOS-$GOARCH.tar.gz
+$ tar -xzf pd-$TIKV_VERSION-$GOOS-$GOARCH.tar.gz
+```
 
-### Production deployment
+2. Start PD instance.
 
-For the production environment, use [TiDB Ansible](https://github.com/pingcap/tidb-ansible) to deploy the cluster.
+```bash
+$ ./pd-server --name=pd --data-dir=/tmp/pd/data --client-urls="http://127.0.0.1:2379" --peer-urls="http://127.0.0.1:2380" --initial-cluster="pd=http://127.0.0.1:2380" --log-file=/tmp/pd/log/pd.log
+```
 
-- [Deploy TiDB Using Ansible](https://docs.pingcap.com/tidb/stable/online-deployment-using-ansible)
-- [Deploy TiKV separately Using Ansible](https://tikv.org/docs/4.0/tasks/deploy/ansible/)
+3. Start TiKV instance.
+
+```bash
+$ ./tikv-server --pd-endpoints="127.0.0.1:2379" --addr="127.0.0.1:20160" --data-dir=/tmp/tikv/data --log-file=/tmp/tikv/log/tikv.log
+```
+
+4. Install TiKV Client(Python) and verify the deployment, required Python 3.5+.
+
+```bash
+$ pip3 install -i https://test.pypi.org/simple/ tikv-client
+```
+
+```python
+from tikv_client import RawClient
+
+client = RawClient.connect("127.0.0.1:2379")
+
+client.put(b'foo', b'bar')
+print(client.get(b'foo')) # b'bar'
+
+client.put(b'foo', b'baz')
+print(client.get(b'foo')) # b'baz'
+```
+
+### Deploy a cluster with TiUP
+
+You can see [this manual](./doc/deploy.md) of production-like cluster deployment presented by @c4pt0r.
+
+### Build from source
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## Client drivers
 

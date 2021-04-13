@@ -39,21 +39,25 @@ fn test_turnoff_titan() {
 
     let size = 5;
     for i in 0..size {
-        assert!(cluster
-            .put(
-                format!("k{:02}0", i).as_bytes(),
-                format!("v{}", i).as_bytes(),
-            )
-            .is_ok());
+        assert!(
+            cluster
+                .put(
+                    format!("k{:02}0", i).as_bytes(),
+                    format!("v{}", i).as_bytes(),
+                )
+                .is_ok()
+        );
     }
     cluster.must_flush_cf(CF_DEFAULT, true);
     for i in 0..size {
-        assert!(cluster
-            .put(
-                format!("k{:02}1", i).as_bytes(),
-                format!("v{}", i).as_bytes(),
-            )
-            .is_ok());
+        assert!(
+            cluster
+                .put(
+                    format!("k{:02}1", i).as_bytes(),
+                    format!("v{}", i).as_bytes(),
+                )
+                .is_ok()
+        );
     }
     cluster.must_flush_cf(CF_DEFAULT, true);
     for i in cluster.get_node_ids().into_iter() {
@@ -160,7 +164,9 @@ fn test_delete_files_in_range_for_titan() {
     cfg.rocksdb.defaultcf.titan.sample_ratio = 1.0;
     cfg.rocksdb.defaultcf.titan.min_blob_size = ReadableSize(0);
     let kv_db_opts = cfg.rocksdb.build_opt();
-    let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache, None);
+    let kv_cfs_opts = cfg
+        .rocksdb
+        .build_cf_opts(&cache, None, cfg.storage.enable_ttl);
 
     let raft_path = path.path().join(Path::new("titan"));
     let engines = Engines::new(

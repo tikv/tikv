@@ -14,6 +14,7 @@ protobuf-codec = [
   "raft/protobuf-codec",
   "tikv_util/protobuf-codec",
   "txn_types/protobuf-codec",
+  "file_system/protobuf-codec",
 ]
 prost-codec = [
   "encryption/prost-codec",
@@ -23,16 +24,29 @@ prost-codec = [
   "raft/prost-codec",
   "tikv_util/prost-codec",
   "txn_types/prost-codec",
+  "file_system/prost-codec",
 ]
 jemalloc = ["rocksdb/jemalloc"]
 portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
 failpoints = ["fail/failpoints"]
 
+# Disables runtime checks of invariants required by RocksDB that are redundant
+# with assertions inside RocksDB itself. This makes it possible to test those
+# invariants in Rust tests, resulting an a panic instead of an abort, at the
+# expense of an extra branch. This feature exists to mark those extra branches.
+# The checks _can_ be disabled by enabling this feature, though it may not
+# result in any real performance improvement to do so, and it will break
+# the test suite.
+#
+# Probably these checks should be in the rust-rocksdb crate itself, in order
+# to ensure the bindings are safe, but until that is done, they are here.
+nortcheck = []
+
 [dependencies]
 encryption = { path = "../encryption", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
-file_system = { path = "../file_system" }
+file_system = { path = "../file_system", default-features = false }
 keys = { path = "../keys", default-features = false }
 num_cpus = "1"
 prometheus = { version = "0.10", features = ["nightly"] }

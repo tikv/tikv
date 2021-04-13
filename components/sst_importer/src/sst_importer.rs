@@ -668,21 +668,14 @@ impl ImportDir {
         let cf = meta.get_cf_name();
         super::prepare_sst_for_ingestion(&path.save, &path.clone, key_manager)?;
         let length = meta.get_length();
-        let crc32 = meta.get_crc32();
-        // FIXME perform validate_sst_for_ingestion after we can handle sst file size correctly.
-        // currently we can not handle sst file size after rewrite,
-        // we need re-compute length & crc32 and fill back to sstMeta.
-        if length != 0 {
-            if crc32 != 0 {
-                // we only validate if the length and CRC32 are explicitly provided.
-                engine.validate_sst_for_ingestion(cf, &path.clone, length, crc32)?;
-            }
-            IMPORTER_INGEST_BYTES.observe(length as _)
-        }
+        // TODO check the length and crc32 of ingested file.
+        engine.reset_global_seq(cf, &path.clone)?;
+        IMPORTER_INGEST_BYTES.observe(length as _);
 
         let mut opts = E::IngestExternalFileOptions::new();
         opts.move_files(true);
         engine.ingest_external_file_cf(cf, &opts, &[path.clone.to_str().unwrap()])?;
+
         IMPORTER_INGEST_DURATION
             .with_label_values(&["ingest"])
             .observe(start.elapsed().as_secs_f64());
@@ -1198,8 +1191,8 @@ mod tests {
             .to_bytes()
     }
 
-    fn create_sample_external_sst_file_txn_default(
-    ) -> Result<(tempfile::TempDir, StorageBackend, SstMeta)> {
+    fn create_sample_external_sst_file_txn_default()
+    -> Result<(tempfile::TempDir, StorageBackend, SstMeta)> {
         let ext_sst_dir = tempfile::tempdir()?;
         let mut sst_writer = new_sst_writer(
             ext_sst_dir
@@ -1228,8 +1221,8 @@ mod tests {
         Ok((ext_sst_dir, backend, meta))
     }
 
-    fn create_sample_external_sst_file_txn_write(
-    ) -> Result<(tempfile::TempDir, StorageBackend, SstMeta)> {
+    fn create_sample_external_sst_file_txn_write()
+    -> Result<(tempfile::TempDir, StorageBackend, SstMeta)> {
         let ext_sst_dir = tempfile::tempdir()?;
         let mut sst_writer = new_sst_writer(
             ext_sst_dir

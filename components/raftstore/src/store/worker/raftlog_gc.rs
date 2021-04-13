@@ -8,8 +8,10 @@ use crate::store::{CasualMessage, CasualRouter};
 
 use engine_traits::{Engines, KvEngine, RaftEngine};
 use file_system::{IOType, WithIOType};
+use quick_error::quick_error;
 use tikv_util::time::Duration;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
+use tikv_util::{box_try, debug, error, warn};
 
 const MAX_GC_REGION_BATCH: usize = 128;
 const COMPACT_LOG_INTERVAL: Duration = Duration::from_secs(60);

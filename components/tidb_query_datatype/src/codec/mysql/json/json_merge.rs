@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 impl Json {
     /// `merge` is the implementation for JSON_MERGE in mysql
-    /// https://dev.mysql.com/doc/refman/5.7/en/json-modification-functions.html#function_json-merge
+    /// <https://dev.mysql.com/doc/refman/5.7/en/json-modification-functions.html#function_json-merge>
     ///
     /// The merge rules are listed as following:
     /// 1. adjacent arrays are merged to a single array;

@@ -28,9 +28,12 @@ use tikv::storage::txn::{
     EntryBatch, Error as TxnError, SnapshotStore, TxnEntryScanner, TxnEntryStore,
 };
 use tikv::storage::Statistics;
-use tikv_util::impl_display_as_debug;
 use tikv_util::time::Limiter;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
+use tikv_util::{
+    box_err, debug, defer, error, error_unknown, impl_display_as_debug, info, slow_log, thd_name,
+    warn,
+};
 use txn_types::{Key, Lock, TimeStamp};
 use yatp::task::callback::{Handle, TaskCell};
 use yatp::ThreadPool;
@@ -432,7 +435,7 @@ impl ConfigManager {
 /// The endpoint of backup.
 ///
 /// It coordinates backup tasks and dispatches them to different workers.
-pub struct Endpoint<E: Engine, R: RegionInfoProvider> {
+pub struct Endpoint<E: Engine, R: RegionInfoProvider + Clone + 'static> {
     store_id: u64,
     pool: RefCell<ControlThreadPool>,
     pool_idle_threshold: u64,
@@ -616,7 +619,7 @@ impl ControlThreadPool {
     }
 }
 
-impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
+impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
     pub fn new(
         store_id: u64,
         engine: E,
@@ -834,7 +837,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
     }
 }
 
-impl<E: Engine, R: RegionInfoProvider> Runnable for Endpoint<E, R> {
+impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Runnable for Endpoint<E, R> {
     type Task = Task;
 
     fn run(&mut self, task: Task) {
@@ -848,7 +851,7 @@ impl<E: Engine, R: RegionInfoProvider> Runnable for Endpoint<E, R> {
     }
 }
 
-impl<E: Engine, R: RegionInfoProvider> RunnableWithTimer for Endpoint<E, R> {
+impl<E: Engine, R: RegionInfoProvider + Clone + 'static> RunnableWithTimer for Endpoint<E, R> {
     fn on_timeout(&mut self) {
         let pool_idle_duration = Duration::from_millis(self.pool_idle_threshold);
         self.pool.borrow_mut().check_active(pool_idle_duration);
@@ -1497,10 +1500,10 @@ pub mod tests {
         assert!(endpoint.pool.borrow().size == 3);
     }
 
-    pub struct EndpointWrapper<E: Engine, R: RegionInfoProvider> {
+    pub struct EndpointWrapper<E: Engine, R: RegionInfoProvider + Clone + 'static> {
         inner: Arc<Mutex<Endpoint<E, R>>>,
     }
-    impl<E: Engine, R: RegionInfoProvider> Runnable for EndpointWrapper<E, R> {
+    impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Runnable for EndpointWrapper<E, R> {
         type Task = Task;
 
         fn run(&mut self, task: Task) {
@@ -1508,7 +1511,9 @@ pub mod tests {
         }
     }
 
-    impl<E: Engine, R: RegionInfoProvider> RunnableWithTimer for EndpointWrapper<E, R> {
+    impl<E: Engine, R: RegionInfoProvider + Clone + 'static> RunnableWithTimer
+        for EndpointWrapper<E, R>
+    {
         fn on_timeout(&mut self) {
             self.inner.lock().unwrap().on_timeout();
         }

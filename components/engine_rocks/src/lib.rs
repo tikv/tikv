@@ -18,12 +18,6 @@
 
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
-#[macro_use]
-extern crate tikv_util;
-#[macro_use]
-extern crate serde_derive;
-#[macro_use(fail_point)]
-extern crate fail;
 
 #[cfg(test)]
 extern crate test;
@@ -92,6 +86,9 @@ pub use event_listener::*;
 
 pub mod config;
 pub use config::*;
+
+pub mod ttl_properties;
+pub use ttl_properties::*;
 
 pub mod encryption;
 

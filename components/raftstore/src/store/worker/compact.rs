@@ -7,7 +7,10 @@ use std::time::Instant;
 
 use engine_traits::KvEngine;
 use engine_traits::CF_WRITE;
+use fail::fail_point;
+use quick_error::quick_error;
 use tikv_util::worker::Runnable;
+use tikv_util::{box_try, error, info, warn};
 
 use super::metrics::COMPACT_RANGE_CF;
 
@@ -106,9 +109,10 @@ where
         let compact_range_timer = COMPACT_RANGE_CF
             .with_label_values(&[cf_name])
             .start_coarse_timer();
-        box_try!(self
-            .engine
-            .compact_range(cf_name, start_key, end_key, false, 1 /* threads */,));
+        box_try!(
+            self.engine
+                .compact_range(cf_name, start_key, end_key, false, 1 /* threads */,)
+        );
         compact_range_timer.observe_duration();
         info!(
             "compact range finished";

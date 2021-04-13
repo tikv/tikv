@@ -1,13 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-#[macro_use]
-extern crate tikv_util;
-#[cfg(feature = "test-runner")]
-#[macro_use]
-extern crate derive_more;
-#[macro_use]
-extern crate serde_derive;
-
 mod batch;
 mod config;
 mod fsm;

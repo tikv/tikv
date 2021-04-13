@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::sync::atomic::*;
 
 use futures::channel::mpsc;
@@ -5,6 +7,7 @@ use futures::{FutureExt, SinkExt, StreamExt, TryFutureExt};
 use grpcio::{self, *};
 use kvproto::backup::*;
 use tikv_util::worker::*;
+use tikv_util::{error, info};
 
 use super::Task;
 

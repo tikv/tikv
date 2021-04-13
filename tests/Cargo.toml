@@ -72,6 +72,7 @@ protobuf-codec = [
   "tikv_util/protobuf-codec",
   "tipb/protobuf-codec",
   "txn_types/protobuf-codec",
+  "grpcio-health/protobuf-codec",
 ]
 prost-codec = [
   "batch-system/prost-codec",
@@ -96,6 +97,7 @@ prost-codec = [
   "tikv_util/prost-codec",
   "tipb/prost-codec",
   "txn_types/prost-codec",
+  "grpcio-health/prost-codec",
 ]
 test-engines-rocksdb = [
   "raftstore/test-engines-rocksdb",
@@ -112,14 +114,16 @@ portable = ["tikv/portable"]
 fail = "0.4"
 batch-system = { path = "../components/batch-system", default-features = false }
 crc64fast = "0.1"
-crossbeam = "0.7.2"
+crossbeam = "0.8"
 configuration = { path = "../components/configuration", default-features = false }
 encryption = { path = "../components/encryption", default-features = false }
 cdc = { path = "../components/cdc", default-features = false }
 futures = "0.3"
 grpcio = { version = "0.8",  default-features = false, features = ["openssl-vendored"] }
+grpcio-health = { version = "0.8", default-features = false }
 log_wrappers = { path = "../components/log_wrappers" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+paste = "1.0"
 pd_client = { path = "../components/pd_client", default-features = false }
 protobuf = "2.8"
 more-asserts = "0.2"
@@ -176,6 +180,6 @@ tokio = { version = "0.2", features = ["rt-threaded"] }
 concurrency_manager = { path = "../components/concurrency_manager", default-features = false }
 file_system = { path = "../components/file_system" }
 
-[target.'cfg(target_os = "linux")'.dev-dependencies]
+[target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dev-dependencies]
 criterion-perf-events = "0.1"
 perfcnt = "0.6"

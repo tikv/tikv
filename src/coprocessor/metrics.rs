@@ -47,6 +47,7 @@ make_auto_flush_static_metric! {
         prev_tombstone,
         seek_tombstone,
         seek_for_prev_tombstone,
+        ttl_tombstone,
     }
 
     pub label_enum WaitType {
@@ -106,6 +107,11 @@ make_auto_flush_static_metric! {
         decrypt_data_nanos,
     }
 
+    pub label_enum MemLockCheckResult {
+        unlocked,
+        locked,
+    }
+
     pub struct CoprReqHistogram: LocalHistogram {
         "req" => ReqTag,
     }
@@ -129,6 +135,10 @@ make_auto_flush_static_metric! {
         "req" => ReqTag,
         "cf" => CF,
         "tag" => ScanKind,
+    }
+
+    pub struct MemLockCheckHistogramVec: LocalHistogram {
+        "result" => MemLockCheckResult,
     }
 }
 
@@ -224,6 +234,16 @@ lazy_static! {
         "The number of tasks waiting for the semaphore"
     )
     .unwrap();
+    pub static ref MEM_LOCK_CHECK_HISTOGRAM_VEC: HistogramVec =
+        register_histogram_vec!(
+            "tikv_coprocessor_mem_lock_check_duration_seconds",
+            "Duration of memory lock checking for coprocessor",
+            &["result"],
+            exponential_buckets(1e-6f64, 4f64, 10).unwrap() // 1us ~ 262ms
+        )
+        .unwrap();
+    pub static ref MEM_LOCK_CHECK_HISTOGRAM_VEC_STATIC: MemLockCheckHistogramVec =
+        auto_flush_from!(MEM_LOCK_CHECK_HISTOGRAM_VEC, MemLockCheckHistogramVec);
 }
 
 make_static_metric! {
@@ -286,6 +306,7 @@ impl From<GcKeysDetail> for ScanKind {
             GcKeysDetail::prev_tombstone => ScanKind::prev_tombstone,
             GcKeysDetail::seek_tombstone => ScanKind::seek_tombstone,
             GcKeysDetail::seek_for_prev_tombstone => ScanKind::seek_for_prev_tombstone,
+            GcKeysDetail::ttl_tombstone => ScanKind::ttl_tombstone,
         }
     }
 }

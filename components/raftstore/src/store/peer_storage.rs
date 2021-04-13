@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use fail::fail_point;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -26,6 +27,7 @@ use crate::{Error, Result};
 use engine_traits::{RaftEngine, RaftLogBatch};
 use into_other::into_other;
 use tikv_util::worker::Scheduler;
+use tikv_util::{box_err, box_try, debug, defer, error, info, warn};
 
 use super::metrics::*;
 use super::worker::RegionTask;
@@ -1201,9 +1203,10 @@ where
     pub fn clear_data(&self) -> Result<()> {
         let (start_key, end_key) = (enc_start_key(self.region()), enc_end_key(self.region()));
         let region_id = self.get_region_id();
-        box_try!(self
-            .region_sched
-            .schedule(RegionTask::destroy(region_id, start_key, end_key)));
+        box_try!(
+            self.region_sched
+                .schedule(RegionTask::destroy(region_id, start_key, end_key))
+        );
         Ok(())
     }
 
