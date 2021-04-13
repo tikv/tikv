@@ -104,6 +104,7 @@ impl<E: KvEngine> RegionChangeObserver for Observer<E> {
         event: RegionChangeEvent,
         _: StateRole,
     ) {
+        // TODO: handle region update event
         if let RegionChangeEvent::Destroy = event {
             if let Err(e) = self
                 .scheduler

@@ -163,7 +163,6 @@ impl ObserveRegion {
 pub struct Endpoint<T, E: KvEngine, C> {
     store_meta: Arc<Mutex<StoreMeta>>,
     regions: HashMap<u64, ObserveRegion>,
-    // raft_router: T,
     scanner_pool: ScannerPool<T, E>,
     scheduler: Scheduler<Task<E::Snapshot>>,
     sinker: C,
@@ -202,7 +201,6 @@ where
         let scanner_pool = ScannerPool::new(cfg.scan_lock_pool_size, raft_router);
         let ep = Self {
             scheduler,
-            // raft_router,
             store_meta,
             advance_worker,
             scanner_pool,
@@ -366,7 +364,7 @@ where
         }
 
         let mut min_ts = TimeStamp::max();
-        for region_id in regions.iter().copied() {
+        for region_id in regions.iter() {
             if let Some(observe_region) = self.regions.get_mut(&region_id) {
                 if let ResolverStatus::Ready = observe_region.resolver_status {
                     let resolved_ts = observe_region.resolver.resolve(ts);
@@ -388,7 +386,7 @@ where
     ) {
         let logs = cmd_batch
             .into_iter()
-            .map(|batch| {
+            .filter_map(|batch| {
                 if !batch.is_empty() {
                     if let Some(observe_region) = self.regions.get_mut(&batch.region_id) {
                         let observe_id = batch.cdc_id;
@@ -415,7 +413,6 @@ where
                 }
                 None
             })
-            .filter_map(|v| v)
             .collect();
         self.sinker.sink_cmd(logs, snapshot);
     }

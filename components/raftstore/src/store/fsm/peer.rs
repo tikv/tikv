@@ -1992,6 +1992,7 @@ where
             }
         }
         meta.leaders.remove(&region_id);
+        meta.peer_properties.remove(&region_id);
     }
 
     // Update some region infos

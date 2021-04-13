@@ -7,7 +7,7 @@
 //! To maintain a correct Resolved TS, these premises must be satisfied:
 //!   1. Tracing all locks in the region, use the minimal Start TS as Resolved TS.
 //!   2. If there is not any lock, use the latest timestamp as Resolved TS.
-//!   3. Resolved TS must be advanced by the region leader.
+//!   3. Resolved TS must be advanced by the region leader after it has applied on its term.
 
 #![feature(box_patterns)]
 
