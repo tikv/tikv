@@ -22,15 +22,15 @@ pub use kvproto::backup::StorageBackend_oneof_backend as Backend;
 use kvproto::backup::{Gcs, S3};
 
 #[cfg(feature = "cloud-storage-dylib")]
-use external_storage::dylib_client;
-#[cfg(feature = "cloud-storage-dylib")]
 use crate::dylib;
-#[cfg(feature = "cloud-storage-grpc")]
-use external_storage::grpc_client;
 #[cfg(any(feature = "cloud-storage-dylib", feature = "cloud-storage-grpc"))]
 use cloud::blob::BlobConfig;
 use cloud::blob::BlobStorage;
 use encryption::DataKeyManager;
+#[cfg(feature = "cloud-storage-dylib")]
+use external_storage::dylib_client;
+#[cfg(feature = "cloud-storage-grpc")]
+use external_storage::grpc_client;
 use external_storage::record_storage_create;
 pub use external_storage::{
     read_external_storage_into_file, ExternalStorage, LocalStorage, NoopStorage,
@@ -39,6 +39,7 @@ use futures_io::AsyncRead;
 use kvproto::backup::{Noop, StorageBackend};
 use tikv_util::stream::block_on_external_io;
 use tikv_util::time::Limiter;
+#[cfg(feature = "cloud-storage-dylib")]
 use tikv_util::warn;
 
 pub fn create_storage(storage_backend: &StorageBackend) -> io::Result<Box<dyn ExternalStorage>> {
@@ -69,12 +70,15 @@ fn bad_storage_backend(storage_backend: &StorageBackend) -> io::Error {
 }
 
 fn bad_backend(backend: Backend) -> io::Error {
-    let storage_backend = StorageBackend { backend: Some(backend), ..Default::default() };
+    let storage_backend = StorageBackend {
+        backend: Some(backend),
+        ..Default::default()
+    };
     bad_storage_backend(&storage_backend)
 }
 
 #[cfg(any(feature = "cloud-gcp", feature = "cloud-aws"))]
-fn blob_store(store: Box<dyn BlobStorage>) -> Box<dyn ExternalStorage> {
+fn blob_store<Blob: BlobStorage>(store: Blob) -> Box<dyn ExternalStorage> {
     Box::new(BlobStore::new(store)) as Box<dyn ExternalStorage>
 }
 
@@ -100,7 +104,7 @@ pub fn create_backend(backend: &Backend) -> io::Result<Box<dyn ExternalStorage>>
                     warn!("could not open dll for external_storage_export");
                     dylib::staticlib::new_client(backend.clone(), conf.name(), conf.url()?.clone())
                 }
-                _ => r
+                _ => r,
             }
         }
         None => Err(bad_backend(backend.clone())),
@@ -155,14 +159,14 @@ fn create_backend_inner(backend: &Backend) -> io::Result<Box<dyn ExternalStorage
         }
         Backend::Noop(_) => Box::new(NoopStorage::default()) as Box<dyn ExternalStorage>,
         #[cfg(feature = "cloud-aws")]
-        Backend::S3(config) => blob_store(Box::new(S3Storage::from_input(config.clone())?)),
+        Backend::S3(config) => blob_store(S3Storage::from_input(config.clone())?),
         #[cfg(feature = "cloud-gcp")]
-        Backend::Gcs(config) => blob_store(Box::new(GCSStorage::from_input(config.clone())?)),
+        Backend::Gcs(config) => blob_store(GCSStorage::from_input(config.clone())?),
         Backend::CloudDynamic(dyn_backend) => match dyn_backend.provider_name.as_str() {
             #[cfg(feature = "cloud-aws")]
-            "aws" | "s3" => blob_store(Box::new(S3Storage::from_cloud_dynamic(&dyn_backend)?)),
+            "aws" | "s3" => blob_store(S3Storage::from_cloud_dynamic(&dyn_backend)?),
             #[cfg(feature = "cloud-gcp")]
-            "gcp" | "gcs" => blob_store(Box::new(GCSStorage::from_cloud_dynamic(&dyn_backend)?)),
+            "gcp" | "gcs" => blob_store(GCSStorage::from_cloud_dynamic(&dyn_backend)?),
             _ => {
                 return Err(bad_backend(Backend::CloudDynamic(dyn_backend.clone())));
             }
@@ -283,16 +287,16 @@ mod tests {
     }
 }
 
-pub struct BlobStore(Box<dyn BlobStorage>);
+pub struct BlobStore<Blob: BlobStorage>(Blob);
 
-impl BlobStore {
-    pub fn new(inner: Box<dyn BlobStorage>) -> Self {
+impl<Blob: BlobStorage> BlobStore<Blob> {
+    pub fn new(inner: Blob) -> Self {
         BlobStore(inner)
     }
 }
 
-impl std::ops::Deref for BlobStore {
-    type Target = Box<dyn BlobStorage>;
+impl<Blob: BlobStorage> std::ops::Deref for BlobStore<Blob> {
+    type Target = Blob;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
@@ -341,7 +345,7 @@ impl ExternalStorage for EncryptedExternalStorage {
     }
 }
 
-impl ExternalStorage for BlobStore {
+impl<Blob: BlobStorage> ExternalStorage for BlobStore<Blob> {
     fn name(&self) -> &'static str {
         (**self).config().name()
     }

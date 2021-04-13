@@ -481,7 +481,7 @@ mod tests {
 
     #[test]
     fn test_change_host() {
-        let host = StringNonEmpty::stat("http://localhost:4443");
+        let host = StringNonEmpty::static_str("http://localhost:4443");
         assert_eq!(
             &change_host(&host, &format!("{}/storage/v1/foo", GOOGLEAPI_HOST)).unwrap(),
             "http://localhost:4443/storage/v1/foo"
@@ -490,7 +490,7 @@ mod tests {
         let h1 = url::Url::parse(HARDCODED_ENDPOINTS[0]).unwrap();
         let h2 = url::Url::parse(HARDCODED_ENDPOINTS[1]).unwrap();
 
-        let endpoint = StringNonEmpty::stat("http://example.com");
+        let endpoint = StringNonEmpty::static_str("http://example.com");
         assert_eq!(
             &change_host(&endpoint, h1.as_str()).unwrap(),
             "http://example.com/upload/storage/v1"
@@ -532,16 +532,16 @@ mod tests {
 
     #[test]
     fn test_url_of_backend() {
-        let bucket_name = StringNonEmpty::stat("bucket");
+        let bucket_name = StringNonEmpty::static_str("bucket");
         let mut bucket = BucketConf::default(bucket_name);
-        bucket.prefix = Some(StringNonEmpty::stat("/backup 02/prefix/"));
+        bucket.prefix = Some(StringNonEmpty::static_str("/backup 02/prefix/"));
         let gcs = Config::default(bucket.clone());
         // only 'bucket' and 'prefix' should be visible in url_of_backend()
         assert_eq!(
             gcs.url().unwrap().to_string(),
             "gcs://bucket/backup%2002/prefix/"
         );
-        bucket.endpoint = Some(StringNonEmpty::stat("http://endpoint.com"));
+        bucket.endpoint = Some(StringNonEmpty::static_str("http://endpoint.com"));
         assert_eq!(
             &Config::default(bucket).url().unwrap().to_string(),
             "http://endpoint.com/bucket/backup%2002/prefix/"

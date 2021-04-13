@@ -31,7 +31,7 @@ impl std::fmt::Debug for AccessKeyPair {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AccessKeyPair")
             .field("access_key", &self.access_key)
-            .field("secret_access_key", &"REDACTED".to_string())
+            .field("secret_access_key", &"?")
             .finish()
     }
 }
@@ -528,13 +528,13 @@ mod tests {
     fn test_url_of_backend() {
         let bucket_name = StringNonEmpty::required("bucket".to_owned()).unwrap();
         let mut bucket = BucketConf::default(bucket_name);
-        bucket.prefix = Some(StringNonEmpty::stat("/backup 01/prefix/"));
+        bucket.prefix = Some(StringNonEmpty::static_str("/backup 01/prefix/"));
         let s3 = Config::default(bucket.clone());
         assert_eq!(
             s3.url().unwrap().to_string(),
             "s3://bucket/backup%2001/prefix/"
         );
-        bucket.endpoint = Some(StringNonEmpty::stat("http://endpoint.com"));
+        bucket.endpoint = Some(StringNonEmpty::static_str("http://endpoint.com"));
         let s3 = Config::default(bucket);
         assert_eq!(
             s3.url().unwrap().to_string(),

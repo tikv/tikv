@@ -86,7 +86,7 @@ impl StringNonEmpty {
         }
     }
 
-    pub fn error_required(msg: &str) -> io::Error {
+    fn error_required(msg: &str) -> io::Error {
         io::Error::new(io::ErrorKind::InvalidInput, msg)
     }
 
@@ -94,7 +94,7 @@ impl StringNonEmpty {
         Self::required_msg(s, "string")
     }
 
-    pub fn stat(s: &'static str) -> Self {
+    pub fn static_str(s: &'static str) -> Self {
         Self::required_msg(s.to_owned(), "static str").unwrap()
     }
 }
@@ -133,10 +133,7 @@ impl BucketConf {
     }
 
     pub fn url(&self, scheme: &str) -> Result<url::Url, String> {
-        let path = match &self.prefix {
-            None => String::new(),
-            Some(sne) => (*sne).to_string(),
-        };
+        let path = none_to_empty(self.prefix.clone());
         if let Some(ep) = &self.endpoint {
             let mut u =
                 url::Url::parse(&ep).map_err(|e| format!("invalid endpoint {}: {}", &ep, e))?;
@@ -171,7 +168,7 @@ impl BucketConf {
 
 pub fn none_to_empty(opt: Option<StringNonEmpty>) -> String {
     if let Some(s) = opt {
-        (*s).clone()
+        s.0
     } else {
         "".to_owned()
     }
@@ -190,7 +187,7 @@ mod tests {
             bucket.url("s3").unwrap().to_string(),
             "s3://bucket/backup%2001/prefix/"
         );
-        bucket.endpoint = Some(StringNonEmpty::stat("http://endpoint.com"));
+        bucket.endpoint = Some(StringNonEmpty::static_str("http://endpoint.com"));
         assert_eq!(
             bucket.url("s3").unwrap().to_string(),
             "http://endpoint.com/bucket/backup%2001/prefix/"
