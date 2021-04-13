@@ -149,7 +149,9 @@ fn check_raft_cmd_response(resp: &mut RaftCmdResponse, req_cnt: usize) -> Result
     Ok(())
 }
 
-fn on_write_result(mut write_resp: WriteResponse, req_cnt: usize) -> (CbContext, Result<CmdRes<RocksSnapshot>>) {
+fn on_write_result<S>(mut write_resp: WriteResponse, req_cnt: usize) -> (CbContext, Result<CmdRes<S>>)
+where S: Snapshot,
+{
     let cb_ctx = new_ctx(&write_resp.response);
     if let Err(e) = check_raft_cmd_response(&mut write_resp.response, req_cnt) {
         return (cb_ctx, Err(e));
