@@ -132,7 +132,7 @@ where
     }
 
     pub fn try_bootstrap_store(&mut self, engines: Engines<RocksEngine, ER>) -> Result<()> {
-        let mut store_id = self.check_store(&engines).unwrap();
+        let mut store_id = self.check_store(&engines)?;
         if store_id == INVALID_ID {
             store_id = self.alloc_id()?;
             debug!("alloc store id"; "store_id" => store_id);
