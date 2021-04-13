@@ -158,10 +158,12 @@ fn on_write_result(mut write_resp: WriteResponse, req_cnt: usize) -> (CbContext,
     (cb_ctx, Ok(CmdRes::Resp(resps.into())))
 }
 
-fn on_read_result(
-    mut read_resp: ReadResponse<RocksSnapshot>,
+fn on_read_result<S>(
+    mut read_resp: ReadResponse<S>,
     req_cnt: usize,
-) -> (CbContext, Result<CmdRes<RocksSnapshot>>) {
+) -> (CbContext, Result<CmdRes<S>>)
+where S: Snapshot,
+{
     let mut cb_ctx = new_ctx(&read_resp.response);
     cb_ctx.txn_extra_op = read_resp.txn_extra_op;
     if let Err(e) = check_raft_cmd_response(&mut read_resp.response, req_cnt) {
