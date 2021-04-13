@@ -14,7 +14,7 @@ groups:
       summary: TiKV memory used too fast
 
   - alert: TiKV_GC_can_not_work
-    expr: sum(increase(tikv_gcworker_gc_tasks_vec{task="gc"}[1d])) < 1
+    expr: sum(increase(tikv_gcworker_gc_tasks_vec{task="gc"}[1d])) < 1 and sum(increase(tikv_gc_compaction_filter_perform[1d])) < 1
     for: 1m
     labels:
       env: ENV_LABELS_ENV

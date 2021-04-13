@@ -234,7 +234,7 @@ pub(super) struct GcManager<S: GcSafePointProvider, R: RegionInfoProvider> {
     feature_gate: FeatureGate,
 }
 
-impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
+impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static> GcManager<S, R> {
     pub fn new(
         cfg: AutoGcConfig<S, R>,
         safe_point: Arc<AtomicU64>,
