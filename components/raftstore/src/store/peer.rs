@@ -3199,7 +3199,7 @@ where
                 };
             }
         }
-        let flags = WriteBatchFlags::from_bits_truncate(req.get_header().get_flags());
+        let flags = WriteBatchFlags::from_bits_check(req.get_header().get_flags());
         if flags.contains(WriteBatchFlags::STALE_READ) {
             let read_ts = decode_u64(&mut req.mut_header().take_flag_data().as_slice()).unwrap();
             let safe_ts = self.safe_ts.load(Ordering::Relaxed);
@@ -3666,7 +3666,7 @@ pub trait RequestInspector {
             return Ok(RequestPolicy::ProposeNormal);
         }
 
-        let flags = WriteBatchFlags::from_bits_truncate(req.get_header().get_flags());
+        let flags = WriteBatchFlags::from_bits_check(req.get_header().get_flags());
         if flags.contains(WriteBatchFlags::STALE_READ) {
             return Ok(RequestPolicy::StaleRead);
         }

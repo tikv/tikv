@@ -5813,6 +5813,7 @@ dependencies = [
  "farmhash",
  "kvproto",
  "log_wrappers",
+ "rand 0.7.3",
  "slog",
  "thiserror",
  "tikv_alloc",

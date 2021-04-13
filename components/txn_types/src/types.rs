@@ -421,9 +421,36 @@ bitflags! {
     }
 }
 
+impl WriteBatchFlags {
+    /// Convert from underlying bit representation
+    /// panic if it contains bits that do not correspond to a flag
+    pub fn from_bits_check(bits: u64) -> WriteBatchFlags {
+        match WriteBatchFlags::from_bits(bits) {
+            None => panic!("unrecognized flags: {:b}", bits),
+            // zero or more flags
+            Some(f) => f
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_flags() {
+        assert!(WriteBatchFlags::from_bits_check(0).is_empty());
+        assert_eq!(WriteBatchFlags::from_bits_check(WriteBatchFlags::ONE_PC.bits()), WriteBatchFlags::ONE_PC);
+        assert_eq!(WriteBatchFlags::from_bits_check(WriteBatchFlags::STALE_READ.bits()), WriteBatchFlags::STALE_READ);   
+    }
+    
+    #[test]
+    #[should_panic]
+    fn test_flags_panic() {
+        // r must be an invalid flags
+        let r = (rand::random::<u64>() + 1) & !WriteBatchFlags::all().bits();
+        WriteBatchFlags::from_bits_check(r);
+    }
 
     #[test]
     fn test_is_user_key_eq() {
