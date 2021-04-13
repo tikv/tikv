@@ -15,6 +15,7 @@ use strum::EnumCount;
 use tikv_util::time::Instant;
 
 const DEFAULT_REFILL_PERIOD: Duration = Duration::from_millis(50);
+const MAX_WAIT_DURATION_PER_REQUEST: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub enum IORateLimitMode {
@@ -167,7 +168,7 @@ struct PriorityBasedIORateLimiterProtected {
     // Bytes that can't be fulfilled in current epoch
     pending_bytes: [usize; IOPriority::COUNT],
     // Used to smoothly update IO budgets
-    history_epoch_count: usize,
+    history_epoch_count_mul_16: usize,
     history_bytes: [usize; IOPriority::COUNT],
 }
 
@@ -176,7 +177,7 @@ impl PriorityBasedIORateLimiterProtected {
         PriorityBasedIORateLimiterProtected {
             next_refill_time: Instant::now_coarse() + DEFAULT_REFILL_PERIOD,
             pending_bytes: [0; IOPriority::COUNT],
-            history_epoch_count: 0,
+            history_epoch_count_mul_16: 0,
             history_bytes: [0; IOPriority::COUNT],
         }
     }
@@ -214,14 +215,14 @@ macro_rules! request_imp {
         if cached_bytes_per_epoch == 0 {
             return $amount;
         }
-        let amount = std::cmp::min($amount, cached_bytes_per_epoch);
+        let mut amount = std::cmp::min($amount, cached_bytes_per_epoch);
         let bytes_through =
             $limiter.bytes_through[priority_idx].fetch_add(amount, Ordering::Relaxed) + amount;
         // We prefer not to partially return only a portion of requested bytes.
         if bytes_through <= cached_bytes_per_epoch {
             return amount;
         }
-        let wait = {
+        let mut wait = {
             let now = Instant::now_coarse();
             let mut locked = $limiter.protected.lock();
             // The request is already partially fulfilled in current epoch when consumption
@@ -253,8 +254,16 @@ macro_rules! request_imp {
                         * ((locked.pending_bytes[priority_idx] - 1) / cached_bytes_per_epoch) as u32
             }
         };
-        do_sleep!(wait, $mode);
+        if wait > MAX_WAIT_DURATION_PER_REQUEST {
+            amount = std::cmp::max(
+                (MAX_WAIT_DURATION_PER_REQUEST.as_secs_f32() * amount as f32 / wait.as_secs_f32())
+                    as usize,
+                1,
+            );
+            wait = MAX_WAIT_DURATION_PER_REQUEST;
+        }
         tls_collect_rate_limiter_request_wait($priority.as_str(), wait);
+        do_sleep!(wait, $mode);
         amount
     }};
 }
@@ -305,27 +314,17 @@ impl PriorityBasedIORateLimiter {
     /// 3) Highest priority IO alone must not exceed global threshold.
     fn refill(&self, locked: &mut PriorityBasedIORateLimiterProtected, now: Instant) {
         const UPDATE_BUDGETS_EVERY_N_EPOCHS: usize = 5;
-        debug_assert!(now >= locked.next_refill_time);
-        // Epochs can be skipped for refill, which happens fairly rare under production workload.
-        // We will ignore these epochs in decision-making.
-        // Assuming clock can be skewed for no more than half an epoch
-        let skipped_epochs = ((now - locked.next_refill_time).as_secs_f64()
-            / DEFAULT_REFILL_PERIOD.as_secs_f64()
-            + 0.5) as usize;
-        locked.next_refill_time = now + DEFAULT_REFILL_PERIOD;
+
         let mut limit = self.bytes_per_epoch[IOPriority::High as usize].load(Ordering::Relaxed);
         if limit == 0 {
             // It's possible that rate limit is toggled off in the meantime.
             return;
         }
-        let should_update_budgets =
-            if locked.history_epoch_count == UPDATE_BUDGETS_EVERY_N_EPOCHS - 1 {
-                locked.history_epoch_count = 0;
-                true
-            } else {
-                locked.history_epoch_count += 1;
-                false
-            };
+        debug_assert!(now >= locked.next_refill_time);
+        let skipped_epochs_mul_16 = ((now - locked.next_refill_time).as_secs_f32() * 16.0
+            / DEFAULT_REFILL_PERIOD.as_secs_f32()) as usize;
+        locked.next_refill_time = now + DEFAULT_REFILL_PERIOD;
+        locked.history_epoch_count_mul_16 += skipped_epochs_mul_16 + 16;
 
         debug_assert!(
             IOPriority::High as usize == IOPriority::Medium as usize + 1
@@ -333,27 +332,28 @@ impl PriorityBasedIORateLimiter {
         );
         for p in &[IOPriority::High, IOPriority::Medium] {
             let p = *p as usize;
-            // Skipped epochs can only serve pending requests rather that immediate ones, it's safe
-            // to catch up by simple subtraction.
-            locked.pending_bytes[p] =
-                locked.pending_bytes[p].saturating_sub(limit * skipped_epochs);
-            // Reserve some of next epoch's budgets to serve pending bytes.
-            let served_pending_bytes = if locked.pending_bytes[p] > limit {
-                // Pass on pending bytes that still can't be served.
-                locked.pending_bytes[p] -= limit;
-                limit
-            } else {
-                std::mem::replace(&mut locked.pending_bytes[p], 0)
-            };
-            locked.history_bytes[p] += std::cmp::min(
-                self.bytes_through[p].swap(served_pending_bytes, Ordering::Relaxed),
-                limit,
+            // Skipped epochs can only serve pending requests rather that in-coming ones, catch up
+            // by subtracting them from pending_bytes.
+            let served_by_skipped_epochs = std::cmp::min(
+                (limit * skipped_epochs_mul_16) >> 4,
+                locked.pending_bytes[p],
             );
-            if should_update_budgets {
+            locked.pending_bytes[p] -= served_by_skipped_epochs;
+            // Reserve some of next epoch's budgets to serve pending bytes.
+            let to_serve_pending_bytes = std::cmp::min(locked.pending_bytes[p], limit);
+            locked.pending_bytes[p] -= to_serve_pending_bytes;
+            locked.history_bytes[p] += served_by_skipped_epochs
+                + std::cmp::min(
+                    self.bytes_through[p].swap(to_serve_pending_bytes, Ordering::Relaxed),
+                    limit,
+                );
+            if locked.history_epoch_count_mul_16 >= (UPDATE_BUDGETS_EVERY_N_EPOCHS << 4) {
                 // Raw IO flow could be too spiky to converge. Use average over
                 // `UPDATE_BUDGETS_EVERY_N_EPOCHS` to re-allocate budgets.
-                let estimated_bytes_through = std::mem::replace(&mut locked.history_bytes[p], 0)
-                    / UPDATE_BUDGETS_EVERY_N_EPOCHS;
+                let estimated_bytes_through = (std::mem::replace(&mut locked.history_bytes[p], 0)
+                    << 4)
+                    / locked.history_epoch_count_mul_16;
+                locked.history_epoch_count_mul_16 = 0;
                 limit = if limit > estimated_bytes_through {
                     limit - estimated_bytes_through
                 } else {
@@ -365,13 +365,9 @@ impl PriorityBasedIORateLimiter {
             }
         }
         let p = IOPriority::Low as usize;
-        let served_pending_bytes = if locked.pending_bytes[p] > limit {
-            locked.pending_bytes[p] -= limit;
-            limit
-        } else {
-            std::mem::replace(&mut locked.pending_bytes[p], 0)
-        };
-        self.bytes_through[p].store(served_pending_bytes, Ordering::Relaxed);
+        let to_serve_pending_bytes = std::cmp::min(locked.pending_bytes[p], limit);
+        locked.pending_bytes[p] -= to_serve_pending_bytes;
+        self.bytes_through[p].store(to_serve_pending_bytes, Ordering::Relaxed);
     }
 
     #[cfg(test)]

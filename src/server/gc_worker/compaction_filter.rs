@@ -16,6 +16,7 @@ use engine_rocks::{
     RocksEngine, RocksMvccProperties, RocksUserCollectedPropertiesNoRc, RocksWriteBatch,
 };
 use engine_traits::{MiscExt, Mutable, MvccProperties, WriteBatch};
+use file_system::{IOType, WithIOType};
 use pd_client::{Feature, FeatureGate};
 use prometheus::{local::*, *};
 use tikv_util::worker::FutureScheduler;
@@ -386,6 +387,7 @@ impl WriteCompactionFilter {
         }
 
         fn do_flush(db: &DB, wb: &RocksWriteBatch, wopts: &WriteOptions) -> Result<(), String> {
+            let _io_type_guard = WithIOType::new(IOType::Gc);
             fail_point!("write_compaction_filter_flush_write_batch", true, |_| {
                 Err("Ingested fail point".to_owned())
             });

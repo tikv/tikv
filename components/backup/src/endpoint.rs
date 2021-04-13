@@ -1012,37 +1012,11 @@ pub mod tests {
     }
 
     pub fn new_endpoint() -> (TempDir, Endpoint<RocksEngine, MockRegionInfoProvider>) {
-        let temp = TempDir::new().unwrap();
-        let rocks = TestEngineBuilder::new()
-            .path(temp.path())
-            .cfs(&[
-                engine_traits::CF_DEFAULT,
-                engine_traits::CF_LOCK,
-                engine_traits::CF_WRITE,
-            ])
-            .build()
-            .unwrap();
-        let concurrency_manager = ConcurrencyManager::new(1.into());
-        let db = rocks.get_rocksdb().get_sync_db();
-        (
-            temp,
-            Endpoint::new(
-                1,
-                rocks,
-                MockRegionInfoProvider::new(),
-                db,
-                BackupConfig {
-                    num_threads: 4,
-                    batch_size: 8,
-                    sst_max_size: ReadableSize::mb(144),
-                },
-                concurrency_manager,
-            ),
-        )
+        new_endpoint_with_limiter(None)
     }
 
     pub fn new_endpoint_with_limiter(
-        limiter: Arc<IORateLimiter>,
+        limiter: Option<Arc<IORateLimiter>>,
     ) -> (TempDir, Endpoint<RocksEngine, MockRegionInfoProvider>) {
         let temp = TempDir::new().unwrap();
         let rocks = TestEngineBuilder::new()
@@ -1052,7 +1026,7 @@ pub mod tests {
                 engine_traits::CF_LOCK,
                 engine_traits::CF_WRITE,
             ])
-            .io_rate_limiter(Some(limiter))
+            .io_rate_limiter(limiter)
             .build()
             .unwrap();
         let concurrency_manager = ConcurrencyManager::new(1.into());
@@ -1268,7 +1242,7 @@ pub mod tests {
     fn test_handle_backup_task() {
         let limiter = Arc::new(IORateLimiter::new_for_test());
         let stats = limiter.statistics().unwrap();
-        let (tmp, endpoint) = new_endpoint_with_limiter(limiter);
+        let (tmp, endpoint) = new_endpoint_with_limiter(Some(limiter));
         let engine = endpoint.engine.clone();
 
         endpoint

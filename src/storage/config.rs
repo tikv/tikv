@@ -294,7 +294,8 @@ impl Default for IORateLimitConfig {
             compaction_priority: IOPriority::Medium,
             replication_priority: IOPriority::High,
             load_balance_priority: IOPriority::High,
-            gc_priority: IOPriority::Medium,
+            // GC writes are merged with foreground writes, must be set to high priority.
+            gc_priority: IOPriority::High,
             import_priority: IOPriority::Low,
             export_priority: IOPriority::Low,
             other_priority: IOPriority::High,
@@ -332,6 +333,14 @@ impl IORateLimitConfig {
                 IOPriority::High
             );
             self.other_priority = IOPriority::High;
+        }
+        if self.gc_priority != self.foreground_write_priority {
+            warn!(
+                "GC writes are merged with foreground writes. To avoid priority inversion, change \
+                  priority for IOType::Gc from {:?} to {:?}",
+                self.gc_priority, self.foreground_write_priority,
+            );
+            self.gc_priority = self.foreground_write_priority;
         }
         if self.mode != IORateLimitMode::WriteOnly {
             return Err("storage.io-rate-limit.mode other than WriteOnly is not supported.".into());
