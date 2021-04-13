@@ -1309,7 +1309,6 @@ impl Initializer {
 
         // Now the resolver contains locks that remain unresolved after the scan.
         let mut resolver = scan_context.lock().unwrap().resolver.replace(None);
-        resolver.as_mut().unwrap().init();
         let resolved_ts = resolver
             .as_mut()
             .unwrap()
@@ -1317,7 +1316,7 @@ impl Initializer {
 
         let resolved_ts = ResolvedTs {
             regions: vec![self.region_id],
-            ts: resolved_ts.unwrap().into_inner(),
+            ts: resolved_ts.into_inner(),
             ..Default::default()
         };
 

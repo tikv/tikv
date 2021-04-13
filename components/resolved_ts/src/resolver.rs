@@ -109,10 +109,6 @@ impl Resolver {
 
         cmp::max(TimeStamp::new(prev_ts), new_resolved_ts)
     }
-
-    pub fn is_initialized(&self) -> bool {
-        self.resolved_ts.is_some()
-    }
 }
 
 #[cfg(test)]

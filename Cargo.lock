@@ -3846,8 +3846,8 @@ version = "0.0.1"
 dependencies = [
  "collections",
  "concurrency_manager",
- "engine_rocks",
  "crossbeam 0.8.0",
+ "engine_rocks",
  "engine_traits",
  "fail",
  "futures 0.3.7",
@@ -4347,6 +4347,7 @@ dependencies = [
  "raft_log_engine",
  "raftstore",
  "rand 0.7.3",
+ "resolved_ts",
  "security",
  "serde_json",
  "signal",
