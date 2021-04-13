@@ -13,7 +13,7 @@ use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::CF_DEFAULT;
 use engine_traits::{CfName, KvEngine};
-use engine_traits::{MvccProperties, MvccPropertiesExt};
+use engine_traits::{MvccProperties, MvccPropertiesExt, Snapshot};
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::{
     CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
@@ -121,9 +121,11 @@ where
     txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
 }
 
-pub enum CmdRes {
+pub enum CmdRes<S>
+where S: Snapshot,
+{
     Resp(Vec<Response>),
-    Snap(RegionSnapshot<RocksSnapshot>),
+    Snap(RegionSnapshot<S>),
 }
 
 fn new_ctx(resp: &RaftCmdResponse) -> CbContext {
@@ -147,7 +149,7 @@ fn check_raft_cmd_response(resp: &mut RaftCmdResponse, req_cnt: usize) -> Result
     Ok(())
 }
 
-fn on_write_result(mut write_resp: WriteResponse, req_cnt: usize) -> (CbContext, Result<CmdRes>) {
+fn on_write_result(mut write_resp: WriteResponse, req_cnt: usize) -> (CbContext, Result<CmdRes<RocksSnapshot>>) {
     let cb_ctx = new_ctx(&write_resp.response);
     if let Err(e) = check_raft_cmd_response(&mut write_resp.response, req_cnt) {
         return (cb_ctx, Err(e));
@@ -159,7 +161,7 @@ fn on_write_result(mut write_resp: WriteResponse, req_cnt: usize) -> (CbContext,
 fn on_read_result(
     mut read_resp: ReadResponse<RocksSnapshot>,
     req_cnt: usize,
-) -> (CbContext, Result<CmdRes>) {
+) -> (CbContext, Result<CmdRes<RocksSnapshot>>) {
     let mut cb_ctx = new_ctx(&read_resp.response);
     cb_ctx.txn_extra_op = read_resp.txn_extra_op;
     if let Err(e) = check_raft_cmd_response(&mut read_resp.response, req_cnt) {
@@ -207,7 +209,7 @@ where
         &self,
         ctx: SnapContext<'_>,
         req: Request,
-        cb: Callback<CmdRes>,
+        cb: Callback<CmdRes<RocksSnapshot>>,
     ) -> Result<()> {
         let header = self.new_request_header(&*ctx.pb_ctx);
         let mut cmd = RaftCmdRequest::default();
@@ -230,7 +232,7 @@ where
         ctx: &Context,
         reqs: Vec<Request>,
         txn_extra: TxnExtra,
-        write_cb: Callback<CmdRes>,
+        write_cb: Callback<CmdRes<RocksSnapshot>>,
         proposed_cb: Option<ExtCallback>,
         committed_cb: Option<ExtCallback>,
     ) -> Result<()> {

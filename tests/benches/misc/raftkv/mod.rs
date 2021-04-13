@@ -147,8 +147,8 @@ fn bench_async_snapshots_noop(b: &mut test::Bencher) {
                 assert!(res.is_ok());
             },
         );
-        let cb2: EngineCallback<CmdRes> =
-            Box::new(move |(ctx, res): (CbContext, EngineResult<CmdRes>)| {
+        let cb2: EngineCallback<CmdRes<RocksSnapshot>> =
+            Box::new(move |(ctx, res): (CbContext, EngineResult<CmdRes<RocksSnapshot>>)| {
                 if let Ok(CmdRes::Snap(snap)) = res {
                     cb1((ctx, Ok(snap)));
                 }
