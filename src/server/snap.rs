@@ -1,11 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt::{self, Display, Formatter};
+use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use std::marker::PhantomData;
 
 use futures::future::{Future, TryFutureExt};
 use futures::sink::SinkExt;
@@ -298,8 +298,9 @@ fn recv_snap<R: RaftStoreRouter<impl KvEngine> + 'static>(
 }
 
 pub struct Runner<E, R>
-where E: KvEngine,
-      R: RaftStoreRouter<E> + 'static,
+where
+    E: KvEngine,
+    R: RaftStoreRouter<E> + 'static,
 {
     env: Arc<Environment>,
     snap_mgr: SnapManager,
@@ -313,8 +314,9 @@ where E: KvEngine,
 }
 
 impl<E, R> Runner<E, R>
-where E: KvEngine,
-      R: RaftStoreRouter<E> + 'static,
+where
+    E: KvEngine,
+    R: RaftStoreRouter<E> + 'static,
 {
     pub fn new(
         env: Arc<Environment>,
@@ -345,8 +347,9 @@ where E: KvEngine,
 }
 
 impl<E, R> Runnable for Runner<E, R>
-where E: KvEngine,
-      R: RaftStoreRouter<E> + 'static,
+where
+    E: KvEngine,
+    R: RaftStoreRouter<E> + 'static,
 {
     type Task = Task;
 
