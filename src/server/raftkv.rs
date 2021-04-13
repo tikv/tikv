@@ -122,7 +122,8 @@ where
 }
 
 pub enum CmdRes<S>
-where S: Snapshot,
+where
+    S: Snapshot,
 {
     Resp(Vec<Response>),
     Snap(RegionSnapshot<S>),
@@ -149,8 +150,12 @@ fn check_raft_cmd_response(resp: &mut RaftCmdResponse, req_cnt: usize) -> Result
     Ok(())
 }
 
-fn on_write_result<S>(mut write_resp: WriteResponse, req_cnt: usize) -> (CbContext, Result<CmdRes<S>>)
-where S: Snapshot,
+fn on_write_result<S>(
+    mut write_resp: WriteResponse,
+    req_cnt: usize,
+) -> (CbContext, Result<CmdRes<S>>)
+where
+    S: Snapshot,
 {
     let cb_ctx = new_ctx(&write_resp.response);
     if let Err(e) = check_raft_cmd_response(&mut write_resp.response, req_cnt) {
@@ -164,7 +169,8 @@ fn on_read_result<S>(
     mut read_resp: ReadResponse<S>,
     req_cnt: usize,
 ) -> (CbContext, Result<CmdRes<S>>)
-where S: Snapshot,
+where
+    S: Snapshot,
 {
     let mut cb_ctx = new_ctx(&read_resp.response);
     cb_ctx.txn_extra_op = read_resp.txn_extra_op;

@@ -459,7 +459,10 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
     fn init_gc_worker(
         &mut self,
-    ) -> GcWorker<RaftKv<RocksEngine, ServerRaftStoreRouter<RocksEngine, ER>>, RaftRouter<RocksEngine, ER>> {
+    ) -> GcWorker<
+        RaftKv<RocksEngine, ServerRaftStoreRouter<RocksEngine, ER>>,
+        RaftRouter<RocksEngine, ER>,
+    > {
         let engines = self.engines.as_ref().unwrap();
         let mut gc_worker = GcWorker::new(
             engines.engine.clone(),

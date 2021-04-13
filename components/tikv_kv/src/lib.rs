@@ -34,13 +34,14 @@ use std::{error, ptr, result};
 
 use engine_traits::util::append_expire_ts;
 use engine_traits::{CfName, CF_DEFAULT};
-use engine_traits::{IterOptions, KvEngine as LocalEngine, MvccProperties, ReadOptions,
-                    Mutable, WriteBatch};
+use engine_traits::{
+    IterOptions, KvEngine as LocalEngine, Mutable, MvccProperties, ReadOptions, WriteBatch,
+};
 use futures::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ExtraOp as TxnExtraOp, KeyRange};
-use txn_types::{Key, TimeStamp, TxnExtra, Value};
 use tikv_util::escape;
+use txn_types::{Key, TimeStamp, TxnExtra, Value};
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::cursor::{Cursor, CursorBuilder};

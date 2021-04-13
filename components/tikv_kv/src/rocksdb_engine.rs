@@ -9,7 +9,7 @@ use engine_rocks::file_system::get_env as get_inspected_env;
 use engine_rocks::raw::DBOptions;
 use engine_rocks::raw_util::CFOptions;
 use engine_rocks::{RocksEngine as BaseRocksEngine, RocksEngineIterator};
-use engine_traits::{CfName};
+use engine_traits::CfName;
 use engine_traits::{
     Engines, IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions, SeekKey,
 };
@@ -20,8 +20,8 @@ use txn_types::{Key, Value};
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
 use super::{
-    Callback, CbContext, Engine, Error, ErrorInner, ExtCallback, Iterator as EngineIterator,
-    Modify, Result, SnapContext, Snapshot, WriteData, write_modifies,
+    write_modifies, Callback, CbContext, Engine, Error, ErrorInner, ExtCallback,
+    Iterator as EngineIterator, Modify, Result, SnapContext, Snapshot, WriteData,
 };
 
 pub use engine_rocks::RocksSnapshot;
