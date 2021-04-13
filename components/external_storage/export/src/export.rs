@@ -22,9 +22,11 @@ pub use kvproto::backup::StorageBackend_oneof_backend as Backend;
 use kvproto::backup::{Gcs, S3};
 
 #[cfg(feature = "cloud-storage-dylib")]
-use super::dylib;
+use external_storage::dylib_client;
+#[cfg(feature = "cloud-storage-dylib")]
+use crate::dylib;
 #[cfg(feature = "cloud-storage-grpc")]
-use super::service;
+use external_storage::grpc_client;
 #[cfg(any(feature = "cloud-storage-dylib", feature = "cloud-storage-grpc"))]
 use cloud::blob::BlobConfig;
 use cloud::blob::BlobStorage;
@@ -37,6 +39,7 @@ use futures_io::AsyncRead;
 use kvproto::backup::{Noop, StorageBackend};
 use tikv_util::stream::block_on_external_io;
 use tikv_util::time::Limiter;
+use tikv_util::warn;
 
 pub fn create_storage(storage_backend: &StorageBackend) -> io::Result<Box<dyn ExternalStorage>> {
     if let Some(backend) = &storage_backend.backend {
@@ -66,9 +69,8 @@ fn bad_storage_backend(storage_backend: &StorageBackend) -> io::Error {
 }
 
 fn bad_backend(backend: Backend) -> io::Error {
-    let mut storage_backend = StorageBackend::default();
-    storage_backend.backend = Some(backend);
-    return bad_storage_backend(&storage_backend)
+    let storage_backend = StorageBackend { backend: Some(backend), ..Default::default() };
+    bad_storage_backend(&storage_backend)
 }
 
 #[cfg(any(feature = "cloud-gcp", feature = "cloud-aws"))]
@@ -76,34 +78,34 @@ fn blob_store(store: Box<dyn BlobStorage>) -> Box<dyn ExternalStorage> {
     Box::new(BlobStore::new(store)) as Box<dyn ExternalStorage>
 }
 
-#[cfg(all(feature = "cloud-storage-grpc", not(feature = "cloud-storage-dylib")))]
+#[cfg(feature = "cloud-storage-grpc")]
 pub fn create_backend(backend: &Backend) -> io::Result<Box<dyn ExternalStorage>> {
     match create_config(backend) {
         Some(config) => {
             let conf = config?;
-            service::new_client(backend.clone(), conf.name(), conf.url()?.clone())
+            grpc_client::new_client(backend.clone(), conf.name(), conf.url()?.clone())
         }
-        None => {
-            Err(bad_backend(backend.clone()))
-        }
+        None => Err(bad_backend(backend.clone())),
     }
 }
 
-#[cfg(all(feature = "cloud-storage-dylib", not(feature = "cloud-storage-grpc")))]
+#[cfg(feature = "cloud-storage-dylib")]
 pub fn create_backend(backend: &Backend) -> io::Result<Box<dyn ExternalStorage>> {
     match create_config(backend) {
         Some(config) => {
             let conf = config?;
-            dylib::new_client(backend.clone(), conf.name(), conf.url()?.clone())
+            let r = dylib_client::new_client(backend.clone(), conf.name(), conf.url()?.clone());
+            match r {
+                Err(e) if e.kind() == io::ErrorKind::AddrNotAvailable => {
+                    warn!("could not open dll for external_storage_export");
+                    dylib::staticlib::new_client(backend.clone(), conf.name(), conf.url()?.clone())
+                }
+                _ => r
+            }
         }
-        None => {
-            Err(bad_backend(backend.clone()))
-        }
+        None => Err(bad_backend(backend.clone())),
     }
 }
-
-#[cfg(all(feature = "cloud-storage-dylib", feature = "cloud-storage-grpc"))]
-panic!("cannot set both cloud-storage-dylib and cloud-storage-grpc");
 
 #[cfg(all(
     not(feature = "cloud-storage-grpc"),
@@ -162,14 +164,11 @@ fn create_backend_inner(backend: &Backend) -> io::Result<Box<dyn ExternalStorage
             #[cfg(feature = "cloud-gcp")]
             "gcp" | "gcs" => blob_store(Box::new(GCSStorage::from_cloud_dynamic(&dyn_backend)?)),
             _ => {
-                let storage_backend = make_cloud_backend(dyn_backend.clone());
-                return Err(bad_storage_backend(&storage_backend))
+                return Err(bad_backend(Backend::CloudDynamic(dyn_backend.clone())));
             }
         },
         #[cfg(not(any(feature = "cloud-gcp", feature = "cloud-aws")))]
-        _ => {
-            Err(bad_backend(backend.clone()))
-        }
+        _ => Err(bad_backend(backend.clone())),
     };
     record_storage_create(start, &*storage);
     Ok(storage)

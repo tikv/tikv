@@ -36,6 +36,7 @@ prost-codec = [
 cloud-aws = ["aws"]
 cloud-gcp = ["gcp"]
 cloud-storage-dylib = [
+  "external_storage/cloud-storage-dylib",
   "ffi-support",
   "file_system",
   "futures",
@@ -49,6 +50,7 @@ cloud-storage-dylib = [
   "tokio-util",
 ]
 cloud-storage-grpc = [
+  "external_storage/cloud-storage-grpc",
   "grpcio",
   "file_system",
   "futures",

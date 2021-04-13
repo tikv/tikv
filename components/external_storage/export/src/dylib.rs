@@ -1,217 +1,19 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::request::{
-    anyhow_to_io_log_error, file_name_for_write, restore_receiver, restore_sender, write_receiver,
-    write_sender, DropPath,
-};
+use crate::request::{restore_receiver, write_receiver};
 use anyhow::Context;
-use external_storage::ExternalStorage;
-use futures_io::AsyncRead;
 use kvproto::backup as proto;
 use lazy_static::lazy_static;
 use once_cell::sync::OnceCell;
-use protobuf::{self, Message};
-use slog_global::{error, info, warn};
-use std::io::{self, ErrorKind};
-use std::sync::{Arc, Mutex};
-use tikv_util::time::Limiter;
+use protobuf::{self};
+use slog_global::{error, info};
+use std::sync::Mutex;
 use tokio::runtime::{Builder, Runtime};
 
 #[cfg(feature = "prost-codec")]
 pub use kvproto::backup::storage_backend::Backend;
 #[cfg(feature = "protobuf-codec")]
 pub use kvproto::backup::StorageBackend_oneof_backend as Backend;
-
-struct ExternalStorageClient {
-    backend: Backend,
-    runtime: Arc<Runtime>,
-    library: Option<libloading::Library>,
-    name: &'static str,
-    url: url::Url,
-}
-
-pub fn new_client(
-    backend: Backend,
-    name: &'static str,
-    url: url::Url,
-) -> io::Result<Box<dyn ExternalStorage>> {
-    let runtime = Builder::new()
-        .basic_scheduler()
-        .thread_name("external-storage-dylib-client")
-        .core_threads(1)
-        .enable_all()
-        .build()?;
-    let library = unsafe {
-        match libloading::Library::new(
-            std::path::Path::new("./")
-                .join(libloading::library_filename("external_storage_export")),
-        ) {
-            Ok(lib) => Some(lib),
-            Err(libloading::Error::DlOpen { .. }) | Err(libloading::Error::DlOpenUnknown) => {
-                warn!("could not open external_storage_export");
-                None
-            }
-            Err(e) => return Err(libloading_err_to_io(e)),
-        }
-    };
-    match &library {
-        None => external_storage_init_ffi()?,
-        Some(lib) => external_storage_init_ffi_dynamic(lib)?,
-    }
-    Ok(Box::new(ExternalStorageClient {
-        runtime: Arc::new(runtime),
-        backend,
-        library,
-        name,
-        url,
-    }) as _)
-}
-
-fn external_storage_init_ffi() -> io::Result<()> {
-    let mut e = ffi_support::ExternError::default();
-    external_storage_init(&mut e);
-    if e.get_code() != ffi_support::ErrorCode::SUCCESS {
-        Err(extern_to_io_err(e))?;
-    }
-    Ok(())
-}
-
-impl ExternalStorageClient {
-    fn external_storage_write(&self, bytes: Vec<u8>) -> io::Result<()> {
-        match &self.library {
-            Some(library) => call_ffi_dynamic(&library, b"external_storage_write", bytes),
-            None => {
-                let mut e = ffi_support::ExternError::default();
-                unsafe {
-                    external_storage_write(bytes.as_ptr(), bytes.len() as i32, &mut e);
-                }
-                if e.get_code() != ffi_support::ErrorCode::SUCCESS {
-                    Err(extern_to_io_err(e))
-                } else {
-                    Ok(())
-                }
-            }
-        }
-    }
-
-    fn external_storage_restore(&self, bytes: Vec<u8>) -> io::Result<()> {
-        match &self.library {
-            Some(library) => call_ffi_dynamic(&library, b"external_storage_restore", bytes),
-            None => {
-                let mut e = ffi_support::ExternError::default();
-                unsafe {
-                    external_storage_restore(bytes.as_ptr(), bytes.len() as i32, &mut e);
-                }
-                if e.get_code() != ffi_support::ErrorCode::SUCCESS {
-                    Err(extern_to_io_err(e))
-                } else {
-                    Ok(())
-                }
-            }
-        }
-    }
-}
-
-impl ExternalStorage for ExternalStorageClient {
-    fn name(&self) -> &'static str {
-        self.name
-    }
-
-    fn url(&self) -> io::Result<url::Url> {
-        Ok(self.url.clone())
-    }
-
-    fn write(
-        &self,
-        name: &str,
-        reader: Box<dyn AsyncRead + Send + Unpin>,
-        content_length: u64,
-    ) -> io::Result<()> {
-        info!("external storage writing");
-        (|| -> anyhow::Result<()> {
-            let file_path = file_name_for_write(&self.name, &name);
-            let req = write_sender(
-                &self.runtime,
-                self.backend.clone(),
-                file_path.clone(),
-                name,
-                reader,
-                content_length,
-            )?;
-            let bytes = req.write_to_bytes()?;
-            info!("write request");
-            self.external_storage_write(bytes)?;
-            DropPath(file_path);
-            Ok(())
-        })()
-        .context("external storage write")
-        .map_err(anyhow_to_io_log_error)
-    }
-
-    fn read(&self, _name: &str) -> Box<dyn AsyncRead + Unpin> {
-        unimplemented!("use restore instead of read")
-    }
-
-    fn restore(
-        &self,
-        storage_name: &str,
-        restore_name: std::path::PathBuf,
-        expected_length: u64,
-        speed_limiter: &Limiter,
-    ) -> io::Result<()> {
-        info!("external storage restore");
-        let req = restore_sender(
-            self.backend.clone(),
-            storage_name,
-            restore_name,
-            expected_length,
-            speed_limiter,
-        )?;
-        let bytes = req.write_to_bytes()?;
-        self.external_storage_restore(bytes)
-    }
-}
-
-fn extern_to_io_err(e: ffi_support::ExternError) -> io::Error {
-    io::Error::new(io::ErrorKind::Other, format!("{:?}", e))
-}
-
-type FfiInitFn<'a> =
-    libloading::Symbol<'a, unsafe extern "C" fn(error: &mut ffi_support::ExternError) -> ()>;
-type FfiFn<'a> = libloading::Symbol<
-    'a,
-    unsafe extern "C" fn(error: &mut ffi_support::ExternError, bytes: Vec<u8>) -> (),
->;
-
-fn external_storage_init_ffi_dynamic(library: &libloading::Library) -> io::Result<()> {
-    let mut e = ffi_support::ExternError::default();
-    unsafe {
-        let func: FfiInitFn = library
-            .get(b"external_storage_init")
-            .map_err(libloading_err_to_io)?;
-        func(&mut e);
-    }
-    if e.get_code() != ffi_support::ErrorCode::SUCCESS {
-        Err(extern_to_io_err(e))?;
-    }
-    Ok(())
-}
-
-fn call_ffi_dynamic(
-    library: &libloading::Library,
-    fn_name: &[u8],
-    bytes: Vec<u8>,
-) -> io::Result<()> {
-    let mut e = ffi_support::ExternError::default();
-    unsafe {
-        let func: FfiFn = library.get(fn_name).map_err(libloading_err_to_io)?;
-        func(&mut e, bytes);
-    }
-    if e.get_code() != ffi_support::ErrorCode::SUCCESS {
-        Err(extern_to_io_err(e))?;
-    }
-    Ok(())
-}
 
 static RUNTIME: OnceCell<Runtime> = OnceCell::new();
 lazy_static! {
@@ -306,6 +108,138 @@ fn anyhow_to_extern_err(e: anyhow::Error) -> ffi_support::ExternError {
     ffi_support::ExternError::new_error(ffi_support::ErrorCode::new(1), format!("{:?}", e))
 }
 
-fn libloading_err_to_io(e: libloading::Error) -> io::Error {
-    io::Error::new(ErrorKind::Other, format!("{}", e))
+pub mod staticlib {
+    use super::*;
+    use external_storage::{
+        dylib_client::extern_to_io_err,
+        request::{
+            anyhow_to_io_log_error, file_name_for_write, restore_sender, write_sender, DropPath,
+        },
+        ExternalStorage,
+    };
+    use futures_io::AsyncRead;
+    use protobuf::Message;
+    use std::io::{self};
+    use std::sync::Arc;
+    use tikv_util::time::Limiter;
+
+    struct ExternalStorageClient {
+        backend: Backend,
+        runtime: Arc<Runtime>,
+        name: &'static str,
+        url: url::Url,
+    }
+
+    pub fn new_client(
+        backend: Backend,
+        name: &'static str,
+        url: url::Url,
+    ) -> io::Result<Box<dyn ExternalStorage>> {
+        let runtime = Builder::new()
+            .basic_scheduler()
+            .thread_name("external-storage-dylib-client")
+            .core_threads(1)
+            .enable_all()
+            .build()?;
+        external_storage_init_ffi()?;
+        Ok(Box::new(ExternalStorageClient {
+            runtime: Arc::new(runtime),
+            backend,
+            name,
+            url,
+        }) as _)
+    }
+
+    impl ExternalStorage for ExternalStorageClient {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+
+        fn url(&self) -> io::Result<url::Url> {
+            Ok(self.url.clone())
+        }
+
+        fn write(
+            &self,
+            name: &str,
+            reader: Box<dyn AsyncRead + Send + Unpin>,
+            content_length: u64,
+        ) -> io::Result<()> {
+            info!("external storage writing");
+            (|| -> anyhow::Result<()> {
+                let file_path = file_name_for_write(&self.name, &name);
+                let req = write_sender(
+                    &self.runtime,
+                    self.backend.clone(),
+                    file_path.clone(),
+                    name,
+                    reader,
+                    content_length,
+                )?;
+                let bytes = req.write_to_bytes()?;
+                info!("write request");
+                external_storage_write_ffi(bytes)?;
+                DropPath(file_path);
+                Ok(())
+            })()
+            .context("external storage write")
+            .map_err(anyhow_to_io_log_error)
+        }
+
+        fn read(&self, _name: &str) -> Box<dyn AsyncRead + Unpin> {
+            unimplemented!("use restore instead of read")
+        }
+
+        fn restore(
+            &self,
+            storage_name: &str,
+            restore_name: std::path::PathBuf,
+            expected_length: u64,
+            speed_limiter: &Limiter,
+        ) -> io::Result<()> {
+            info!("external storage restore");
+            let req = restore_sender(
+                self.backend.clone(),
+                storage_name,
+                restore_name,
+                expected_length,
+                speed_limiter,
+            )?;
+            let bytes = req.write_to_bytes()?;
+            external_storage_restore_ffi(bytes)
+        }
+    }
+
+    fn external_storage_write_ffi(bytes: Vec<u8>) -> io::Result<()> {
+        let mut e = ffi_support::ExternError::default();
+        unsafe {
+            external_storage_write(bytes.as_ptr(), bytes.len() as i32, &mut e);
+        }
+        if e.get_code() != ffi_support::ErrorCode::SUCCESS {
+            Err(extern_to_io_err(e))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn external_storage_restore_ffi(bytes: Vec<u8>) -> io::Result<()> {
+        let mut e = ffi_support::ExternError::default();
+        unsafe {
+            external_storage_restore(bytes.as_ptr(), bytes.len() as i32, &mut e);
+        }
+        if e.get_code() != ffi_support::ErrorCode::SUCCESS {
+            Err(extern_to_io_err(e))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn external_storage_init_ffi() -> io::Result<()> {
+        let mut e = ffi_support::ExternError::default();
+        external_storage_init(&mut e);
+        if e.get_code() != ffi_support::ErrorCode::SUCCESS {
+            Err(extern_to_io_err(e))?;
+        }
+        Ok(())
+    }
 }

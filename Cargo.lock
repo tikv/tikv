@@ -1362,16 +1362,21 @@ dependencies = [
 name = "external_storage"
 version = "0.0.1"
 dependencies = [
+ "anyhow",
  "bytes 0.5.3",
+ "ffi-support",
  "file_system",
  "futures 0.3.7",
  "futures-executor",
  "futures-io",
  "futures-util",
+ "grpcio",
  "kvproto",
  "lazy_static",
+ "libloading",
  "matches",
  "prometheus",
+ "protobuf",
  "rand 0.7.3",
  "rusoto_core",
  "rust-ini",
@@ -1383,6 +1388,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "tokio",
+ "tokio-util 0.3.1",
  "url",
 ]
 

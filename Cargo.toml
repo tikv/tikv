@@ -109,7 +109,7 @@ bcc-iosnoop = [
   "file_system/bcc-iosnoop",
 ]
 cloud-storage-grpc = ["sst_importer/cloud-storage-grpc"]
-cloud-storage-dylib = ["sst_importer/cloud-storage-grpc"]
+cloud-storage-dylib = ["sst_importer/cloud-storage-dylib"]
 
 # for testing configure propegate to other crates
 # https://stackoverflow.com/questions/41700543/can-we-share-test-utilites-between-crates
