@@ -30,7 +30,6 @@ use tikv_util::future::create_stream_with_buffer;
 use tikv_util::future::paired_future_callback;
 use tikv_util::time::{Instant, Limiter};
 
-use sst_importer::import_mode::*;
 use sst_importer::metrics::*;
 use sst_importer::service::*;
 use sst_importer::{error_inc, sst_meta_to_path, Config, Error, Result, SSTImporter};
@@ -49,7 +48,6 @@ where
     router: Router,
     threads: ThreadPool,
     importer: Arc<SSTImporter>,
-    switcher: ImportModeSwitcher<E>,
     limiter: Limiter,
     task_slots: Arc<Mutex<HashSet<PathBuf>>>,
 }
@@ -75,14 +73,13 @@ where
             .before_stop(move |_| tikv_alloc::remove_thread_memory_accessor())
             .create()
             .unwrap();
-        let switcher = ImportModeSwitcher::new(&cfg, &threads, engine.clone());
+        importer.start_switch_mode_check(&threads, engine.clone());
         ImportSSTService {
             cfg,
             engine,
             threads,
             router,
             importer,
-            switcher,
             limiter: Limiter::new(INFINITY),
             task_slots: Arc::new(Mutex::new(HashSet::default())),
         }
@@ -120,8 +117,8 @@ where
             }
 
             match req.get_mode() {
-                SwitchMode::Normal => self.switcher.enter_normal_mode(mf),
-                SwitchMode::Import => self.switcher.enter_import_mode(mf),
+                SwitchMode::Normal => self.importer.enter_normal_mode(self.engine.clone(), mf),
+                SwitchMode::Import => self.importer.enter_import_mode(self.engine.clone(), mf),
             }
         };
         match res {
@@ -252,7 +249,7 @@ where
 
         let mut resp = IngestResponse::default();
         let mut errorpb = errorpb::Error::default();
-        if self.switcher.get_mode() == SwitchMode::Normal
+        if self.importer.get_mode() == SwitchMode::Normal
             && self
                 .engine
                 .ingest_maybe_slowdown_writes(CF_DEFAULT)

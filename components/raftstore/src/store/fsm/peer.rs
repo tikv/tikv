@@ -16,6 +16,7 @@ use engine_traits::{Engines, KvEngine, RaftEngine, SSTMetaInfo, WriteBatchExt};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use kvproto::errorpb;
+use kvproto::import_sstpb::SwitchMode;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{
@@ -3546,13 +3547,22 @@ where
             return;
         }
 
+        if self.ctx.importer.get_mode() == SwitchMode::Import {
+            return;
+        }
+
         // When restart, the approximate size will be None. The split check will first
         // check the region size, and then check whether the region should split. This
         // should work even if we change the region max size.
         // If peer says should update approximate size, update region size and check
         // whether the region should split.
-        if self.fsm.peer.approximate_size.is_some()
-            && self.fsm.peer.compaction_declined_bytes < self.ctx.cfg.region_split_check_diff.0
+        // If the current `approximate_size` is larger than `region_max_size`, this region
+        // may ingest a large file which is imported by `BR` or `lightning`, we shall check it
+        if self.fsm.peer.approximate_size.map_or(false, |size| {
+            size < self.ctx.coprocessor_host.cfg.region_max_size.0
+        }) && self.fsm.peer.approximate_keys.map_or(false, |keys| {
+            keys < self.ctx.coprocessor_host.cfg.region_max_keys
+        }) && self.fsm.peer.compaction_declined_bytes < self.ctx.cfg.region_split_check_diff.0
             && self.fsm.peer.size_diff_hint < self.ctx.cfg.region_split_check_diff.0
         {
             return;
