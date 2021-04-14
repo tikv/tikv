@@ -58,8 +58,8 @@ impl PluginRegistry {
                 // Simple helper functions for loading/unloading plugins.
                 let maybe_load = |file: &PathBuf| {
                     if is_library_file(&file) {
-                        // Discard error.
-                        let _ = hot_reload_registry.write().unwrap().load_plugin(file);
+                        // Ignore errors.
+                        hot_reload_registry.write().unwrap().load_plugin(file).ok();
                     }
                 };
                 let unload = |file: &PathBuf| {
@@ -155,8 +155,8 @@ impl PluginRegistry {
             if let Ok(file) = entry.map(|f| f.path()) {
                 if is_library_file(&file) {
                     // Ignore errors.
-                    let r = self.load_plugin(&file);
-                    if let Ok(plugin_name) = r {
+                    let r = self.load_plugin(&file).ok();
+                    if let Some(plugin_name) = r {
                         loaded_plugins.push(plugin_name);
                     }
                 }
