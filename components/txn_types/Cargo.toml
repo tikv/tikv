@@ -34,5 +34,4 @@ collections = { path = "../collections" }
 log_wrappers = { path = "../log_wrappers" }
 
 [dev-dependencies]
-bitflags = "1.0"
 rand = "0.7"
