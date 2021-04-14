@@ -37,7 +37,7 @@ impl<P: RegionInfoProvider> CompactionGuardGeneratorFactory<P> {
                 return Err(Error::Other(From::from(format!(
                     "fail to enable compaction guard, unrecognized cf name: {}",
                     cf
-                ))))
+                ))));
             }
         };
         Ok(CompactionGuardGeneratorFactory {
@@ -50,7 +50,7 @@ impl<P: RegionInfoProvider> CompactionGuardGeneratorFactory<P> {
 
 // Update to implement engine_traits::SstPartitionerFactory instead once we move to use abstracted
 // ColumnFamilyOptions in src/config.rs.
-impl<P: RegionInfoProvider + Clone + Sync> SstPartitionerFactory
+impl<P: RegionInfoProvider + Clone + 'static> SstPartitionerFactory
     for CompactionGuardGeneratorFactory<P>
 {
     type Partitioner = CompactionGuardGenerator<P>;

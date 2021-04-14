@@ -25,8 +25,8 @@ use engine_rocks::{
     RocksSstReader,
 };
 use engine_traits::{
-    EncryptionKeyManager, IngestExternalFileOptions, Iterator, KvEngine, SeekKey, SstReader,
-    SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
+    EncryptionKeyManager, IngestExternalFileOptions, Iterator, KvEngine, SSTMetaInfo, SeekKey,
+    SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 };
 use external_storage::{create_storage, url_of_backend};
 use file_system::{sync_dir, File, OpenOptions};
@@ -85,11 +85,11 @@ impl SSTImporter {
         }
     }
 
-    pub fn ingest<E: KvEngine>(&self, meta: &SstMeta, engine: &E) -> Result<()> {
-        match self.dir.ingest(meta, engine, self.key_manager.as_deref()) {
-            Ok(_) => {
-                info!("ingest"; "meta" => ?meta);
-                Ok(())
+    pub fn ingest<E: KvEngine>(&self, meta: &SstMeta, engine: &E) -> Result<SSTMetaInfo> {
+        match self.dir.ingest(meta, engine, self.key_manager.clone()) {
+            Ok(meta_info) => {
+                info!("ingest"; "meta" => ?meta_info);
+                Ok(meta_info)
             }
             Err(e) => {
                 error!(%e; "ingest failed"; "meta" => ?meta, );
@@ -661,13 +661,24 @@ impl ImportDir {
         &self,
         meta: &SstMeta,
         engine: &E,
-        key_manager: Option<&DataKeyManager>,
-    ) -> Result<()> {
+        key_manager: Option<Arc<DataKeyManager>>,
+    ) -> Result<SSTMetaInfo> {
         let start = Instant::now();
         let path = self.join(meta)?;
         let cf = meta.get_cf_name();
-        super::prepare_sst_for_ingestion(&path.save, &path.clone, key_manager)?;
+
+        // now validate the SST file.
+        let path_str = path.save.to_str().unwrap();
+        let env = get_encrypted_env(key_manager.clone(), None /*base_env*/)?;
+        let env = get_inspected_env(Some(env))?;
+
+        let sst_reader = RocksSstReader::open_with_env(&path_str, Some(env))?;
+        sst_reader.verify_checksum()?;
+        let meta_info = sst_reader.sst_meta_info(meta.to_owned());
+
+        super::prepare_sst_for_ingestion(&path.save, &path.clone, key_manager.as_deref())?;
         let length = meta.get_length();
+
         // TODO check the length and crc32 of ingested file.
         engine.reset_global_seq(cf, &path.clone)?;
         IMPORTER_INGEST_BYTES.observe(length as _);
@@ -679,7 +690,7 @@ impl ImportDir {
         IMPORTER_INGEST_DURATION
             .with_label_values(&["ingest"])
             .observe(start.elapsed().as_secs_f64());
-        Ok(())
+        Ok(meta_info)
     }
 
     fn list_ssts(&self) -> Result<Vec<SstMeta>> {
@@ -994,7 +1005,7 @@ mod tests {
             f.append(&data).unwrap();
             f.finish().unwrap();
 
-            dir.ingest(&meta, &db, key_manager.as_deref()).unwrap();
+            dir.ingest(&meta, &db, key_manager.clone()).unwrap();
             check_db_range(&db, range);
 
             ingested.push(meta);
@@ -1191,8 +1202,8 @@ mod tests {
             .to_bytes()
     }
 
-    fn create_sample_external_sst_file_txn_default(
-    ) -> Result<(tempfile::TempDir, StorageBackend, SstMeta)> {
+    fn create_sample_external_sst_file_txn_default()
+    -> Result<(tempfile::TempDir, StorageBackend, SstMeta)> {
         let ext_sst_dir = tempfile::tempdir()?;
         let mut sst_writer = new_sst_writer(
             ext_sst_dir
@@ -1221,8 +1232,8 @@ mod tests {
         Ok((ext_sst_dir, backend, meta))
     }
 
-    fn create_sample_external_sst_file_txn_write(
-    ) -> Result<(tempfile::TempDir, StorageBackend, SstMeta)> {
+    fn create_sample_external_sst_file_txn_write()
+    -> Result<(tempfile::TempDir, StorageBackend, SstMeta)> {
         let ext_sst_dir = tempfile::tempdir()?;
         let mut sst_writer = new_sst_writer(
             ext_sst_dir
@@ -1555,7 +1566,16 @@ mod tests {
 
             meta.set_length(0); // disable validation.
             meta.set_crc32(0);
-            importer.ingest(&meta, &db).unwrap();
+            let resp = importer.ingest(&meta, &db).unwrap();
+            // key1 = "zt9102_r01", value1 = "abc", len = 13
+            // key2 = "zt9102_r04", value2 = "xyz", len = 13
+            // key3 = "zt9102_r07", value3 = "pqrst", len = 15
+            // key4 = "zt9102_r13", value4 = "www", len = 13
+            // total_bytes = (13 + 13 + 15 + 13) + 4 * 8 = 86
+            // don't no why each key has extra 8 byte length in raw_key_size(), but it seems tolerable.
+            // https://docs.rs/rocks/0.1.0/rocks/table_properties/struct.TableProperties.html#method.raw_key_size
+            assert_eq!(resp.total_bytes, 86);
+            assert_eq!(resp.total_kvs, 4);
 
             // verifies the DB content is correct.
             let mut iter = db.iterator_cf(cf).unwrap();

@@ -851,7 +851,7 @@ pub mod tests {
     #[test]
     fn test_waiter_on_timeout() {
         // The timeout handler should be invoked after timeout.
-        let (waiter, _, _) = new_test_waiter(10.into(), 20.into(), 20);
+        let (waiter, ..) = new_test_waiter(10.into(), 20.into(), 20);
         waiter.reset_timeout(Instant::now() + Duration::from_millis(100));
         let (tx, rx) = mpsc::sync_channel(1);
         let f = waiter.on_timeout(move || tx.send(1).unwrap());
@@ -859,7 +859,7 @@ pub mod tests {
         rx.try_recv().unwrap();
 
         // The timeout handler shouldn't be invoked after waiter has been notified.
-        let (waiter, _, _) = new_test_waiter(10.into(), 20.into(), 20);
+        let (waiter, ..) = new_test_waiter(10.into(), 20.into(), 20);
         waiter.reset_timeout(Instant::now() + Duration::from_millis(100));
         let (tx, rx) = mpsc::sync_channel(1);
         let f = waiter.on_timeout(move || tx.send(1).unwrap());
@@ -896,15 +896,17 @@ pub mod tests {
         }
         assert_eq!(wait_table.count(), 0);
         assert!(wait_table.wait_table.is_empty());
-        assert!(wait_table
-            .remove_waiter(
-                Lock {
-                    ts: TimeStamp::zero(),
-                    hash: 0
-                },
-                TimeStamp::zero(),
-            )
-            .is_none());
+        assert!(
+            wait_table
+                .remove_waiter(
+                    Lock {
+                        ts: TimeStamp::zero(),
+                        hash: 0
+                    },
+                    TimeStamp::zero(),
+                )
+                .is_none()
+        );
     }
 
     #[test]
@@ -915,9 +917,11 @@ pub mod tests {
             ts: 20.into(),
             hash: 20,
         };
-        assert!(wait_table
-            .add_waiter(dummy_waiter(waiter_ts, lock.ts, lock.hash))
-            .is_none());
+        assert!(
+            wait_table
+                .add_waiter(dummy_waiter(waiter_ts, lock.ts, lock.hash))
+                .is_none()
+        );
         let waiter = wait_table
             .add_waiter(dummy_waiter(waiter_ts, lock.ts, lock.hash))
             .unwrap();
@@ -1138,7 +1142,7 @@ pub mod tests {
             );
             waiters_info.push((waiter_ts, lock_info, f));
         }
-        waiters_info.sort_by_key(|(ts, _, _)| *ts);
+        waiters_info.sort_by_key(|(ts, ..)| *ts);
         let mut commit_ts = 30.into();
         // Each waiter should be waked up immediately in order.
         for (waiter_ts, mut lock_info, f) in waiters_info.drain(..waiters_info.len() - 1) {

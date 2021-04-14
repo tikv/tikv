@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 //! This module startups all the components of a TiKV server.
 //!
 //! It is responsible for reading from configs, starting up the various server components,

@@ -1330,6 +1330,8 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             warn!("set thread priority for raftstore failed"; "error" => ?e);
         }
         self.workers = Some(workers);
+        // This router will not be accessed again, free all caches.
+        self.router.clear_cache();
         Ok(())
     }
 
@@ -1711,7 +1713,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                         "source_region" => ?exist_region,
                     );
                     if self.ctx.cfg.dev_assert {
-                        panic!("something is wrong, maybe PD do not ensure all target peers exist before merging");
+                        panic!(
+                            "something is wrong, maybe PD do not ensure all target peers exist before merging"
+                        );
                     }
                 }
                 continue;

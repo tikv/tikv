@@ -256,7 +256,7 @@ pub trait PdClient: Send + Sync {
 
     /// Gets the internal `FeatureGate`.
     fn feature_gate(&self) -> &FeatureGate {
-        todo!()
+        unimplemented!()
     }
 }
 

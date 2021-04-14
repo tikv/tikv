@@ -193,16 +193,18 @@ impl<ER: RaftEngine> Debugger<ER> {
         let raft_state = box_try!(self.engines.raft.get_raft_state(region_id));
 
         let apply_state_key = keys::apply_state_key(region_id);
-        let apply_state = box_try!(self
-            .engines
-            .kv
-            .get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key));
+        let apply_state = box_try!(
+            self.engines
+                .kv
+                .get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key)
+        );
 
         let region_state_key = keys::region_state_key(region_id);
-        let region_state = box_try!(self
-            .engines
-            .kv
-            .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key));
+        let region_state = box_try!(
+            self.engines
+                .kv
+                .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
+        );
 
         match (raft_state, apply_state, region_state) {
             (None, None, None) => Err(Error::NotFound(format!("info for region {}", region_id))),
@@ -729,10 +731,11 @@ impl<ER: RaftEngine> Debugger<ER> {
 
     fn get_region_state(&self, region_id: u64) -> Result<RegionLocalState> {
         let region_state_key = keys::region_state_key(region_id);
-        let region_state = box_try!(self
-            .engines
-            .kv
-            .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key));
+        let region_state = box_try!(
+            self.engines
+                .kv
+                .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
+        );
         match region_state {
             Some(v) => Ok(v),
             None => Err(Error::NotFound(format!("region {}", region_id))),

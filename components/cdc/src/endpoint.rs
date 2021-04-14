@@ -10,6 +10,7 @@ use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::{RocksEngine, RocksSnapshot};
+use fail::fail_point;
 use futures::compat::Future01CompatExt;
 use futures::future::FutureExt;
 use grpcio::{ChannelBuilder, Environment};
@@ -32,11 +33,11 @@ use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
 use tikv::storage::txn::TxnEntry;
 use tikv::storage::txn::TxnEntryScanner;
 use tikv::storage::Statistics;
-use tikv_util::impl_display_as_debug;
 use tikv_util::lru::LruCache;
 use tikv_util::time::Instant;
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
+use tikv_util::{box_err, box_try, debug, error, impl_display_as_debug, info, warn};
 use tokio::runtime::{Builder, Runtime};
 use txn_types::{
     Key, Lock, LockType, MutationType, OldValue, TimeStamp, TxnExtra, TxnExtraScheduler,
@@ -349,7 +350,8 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                     if let Some(reader) = self.store_meta.lock().unwrap().readers.get(&region_id) {
                         reader
                             .txn_extra_op
-                            .compare_and_swap(TxnExtraOp::ReadOldValue, TxnExtraOp::Noop);
+                            .compare_exchange(TxnExtraOp::ReadOldValue, TxnExtraOp::Noop)
+                            .unwrap();
                     }
                     // Do not continue to observe the events of the region.
                     let oid = self.observer.unsubscribe_region(region_id, delegate.id);
@@ -1502,8 +1504,8 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable for Endpoint<T> {
                 cb,
             } => {
                 info!("downstream was initialized"; "downstream_id" => ?downstream_id);
-                downstream_state
-                    .compare_and_swap(DownstreamState::Uninitialized, DownstreamState::Normal);
+                let _ = downstream_state
+                    .compare_exchange(DownstreamState::Uninitialized, DownstreamState::Normal);
                 cb();
             }
             Task::TxnExtra(txn_extra) => {

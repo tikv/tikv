@@ -18,6 +18,7 @@ use kvproto::cdcpb::{
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use protobuf::Message;
 use tikv_util::worker::*;
+use tikv_util::{debug, error, info, warn};
 
 use crate::delegate::{Downstream, DownstreamID};
 use crate::endpoint::{Deregister, Task};

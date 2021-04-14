@@ -926,36 +926,44 @@ mod tests {
         let bound_c = Key::from_encoded(b"c".to_vec());
         let bound_d = Key::from_encoded(b"d".to_vec());
         assert!(store.scanner(false, false, false, None, None).is_ok());
-        assert!(store
-            .scanner(
-                false,
-                false,
-                false,
-                Some(bound_b.clone()),
-                Some(bound_c.clone())
-            )
-            .is_ok());
-        assert!(store
-            .scanner(
-                false,
-                false,
-                false,
-                Some(bound_a.clone()),
-                Some(bound_c.clone())
-            )
-            .is_err());
-        assert!(store
-            .scanner(
-                false,
-                false,
-                false,
-                Some(bound_b.clone()),
-                Some(bound_d.clone())
-            )
-            .is_err());
-        assert!(store
-            .scanner(false, false, false, Some(bound_a.clone()), Some(bound_d))
-            .is_err());
+        assert!(
+            store
+                .scanner(
+                    false,
+                    false,
+                    false,
+                    Some(bound_b.clone()),
+                    Some(bound_c.clone())
+                )
+                .is_ok()
+        );
+        assert!(
+            store
+                .scanner(
+                    false,
+                    false,
+                    false,
+                    Some(bound_a.clone()),
+                    Some(bound_c.clone())
+                )
+                .is_err()
+        );
+        assert!(
+            store
+                .scanner(
+                    false,
+                    false,
+                    false,
+                    Some(bound_b.clone()),
+                    Some(bound_d.clone())
+                )
+                .is_err()
+        );
+        assert!(
+            store
+                .scanner(false, false, false, Some(bound_a.clone()), Some(bound_d))
+                .is_err()
+        );
 
         // Store with whole range
         let snap2 = MockRangeSnapshot::new(b"".to_vec(), b"".to_vec());
@@ -968,15 +976,21 @@ mod tests {
             false,
         );
         assert!(store2.scanner(false, false, false, None, None).is_ok());
-        assert!(store2
-            .scanner(false, false, false, Some(bound_a.clone()), None)
-            .is_ok());
-        assert!(store2
-            .scanner(false, false, false, Some(bound_a), Some(bound_b))
-            .is_ok());
-        assert!(store2
-            .scanner(false, false, false, None, Some(bound_c))
-            .is_ok());
+        assert!(
+            store2
+                .scanner(false, false, false, Some(bound_a.clone()), None)
+                .is_ok()
+        );
+        assert!(
+            store2
+                .scanner(false, false, false, Some(bound_a), Some(bound_b))
+                .is_ok()
+        );
+        assert!(
+            store2
+                .scanner(false, false, false, None, Some(bound_c))
+                .is_ok()
+        );
     }
 
     fn gen_fixture_store() -> FixtureStore {

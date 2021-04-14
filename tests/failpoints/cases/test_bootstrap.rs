@@ -29,11 +29,13 @@ fn test_bootstrap_half_way_failure(fp: &str) {
     fail::remove(fp);
     cluster.start().unwrap();
 
-    assert!(engines
-        .kv
-        .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
-        .unwrap()
-        .is_none());
+    assert!(
+        engines
+            .kv
+            .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
+            .unwrap()
+            .is_none()
+    );
 
     let k = b"k1";
     let v = b"v1";

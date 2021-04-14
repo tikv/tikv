@@ -141,14 +141,14 @@ impl ErrorCodeExt for Error {
             Error::EngineTraits(e) => e.error_code(),
             Error::ParseIntError(_) => error_code::sst_importer::PARSE_INT_ERROR,
             Error::FileExists(..) => error_code::sst_importer::FILE_EXISTS,
-            Error::FileCorrupted(_, _) => error_code::sst_importer::FILE_CORRUPTED,
+            Error::FileCorrupted(..) => error_code::sst_importer::FILE_CORRUPTED,
             Error::InvalidSSTPath(_) => error_code::sst_importer::INVALID_SST_PATH,
             Error::InvalidChunk => error_code::sst_importer::INVALID_CHUNK,
             Error::Engine(_) => error_code::sst_importer::ENGINE,
-            Error::CannotReadExternalStorage(_, _, _, _) => {
+            Error::CannotReadExternalStorage(..) => {
                 error_code::sst_importer::CANNOT_READ_EXTERNAL_STORAGE
             }
-            Error::WrongKeyPrefix(_, _, _) => error_code::sst_importer::WRONG_KEY_PREFIX,
+            Error::WrongKeyPrefix(..) => error_code::sst_importer::WRONG_KEY_PREFIX,
             Error::BadFormat(_) => error_code::sst_importer::BAD_FORMAT,
             Error::Encryption(e) => e.error_code(),
             Error::CodecError(e) => e.error_code(),

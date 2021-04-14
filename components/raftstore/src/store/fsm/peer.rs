@@ -12,11 +12,10 @@ use std::{cmp, u64};
 use batch_system::{BasicMailbox, Fsm};
 use collections::HashMap;
 use engine_traits::CF_RAFT;
-use engine_traits::{Engines, KvEngine, RaftEngine, WriteBatchExt};
+use engine_traits::{Engines, KvEngine, RaftEngine, SSTMetaInfo, WriteBatchExt};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use kvproto::errorpb;
-use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{
@@ -2022,7 +2021,7 @@ where
             match self.fsm.peer.raft_group.apply_conf_change(&cp.conf_change) {
                 Ok(_) => {}
                 // PD could dispatch redundant conf changes.
-                Err(raft::Error::NotExists(_, _)) | Err(raft::Error::Exists(_, _)) => {}
+                Err(raft::Error::NotExists(..)) | Err(raft::Error::Exists(..)) => {}
                 _ => unreachable!(),
             }
         } else {
@@ -2548,7 +2547,9 @@ where
                         "something is wrong, maybe PD do not ensure all target peers exist before merging"
                     );
                 }
-                error!("something is wrong, maybe PD do not ensure all target peers exist before merging");
+                error!(
+                    "something is wrong, maybe PD do not ensure all target peers exist before merging"
+                );
                 Ok(false)
             }
         }
@@ -3080,8 +3081,12 @@ where
                     result: MergeResultKind::FromTargetSnapshotStep2,
                 }),
             ) {
-                panic!("{} failed to send merge result(FromTargetSnapshotStep2) to source region {}, err {}",
-                       self.fsm.peer.tag, r.get_id(), e);
+                panic!(
+                    "{} failed to send merge result(FromTargetSnapshotStep2) to source region {}, err {}",
+                    self.fsm.peer.tag,
+                    r.get_id(),
+                    e
+                );
             }
         }
     }
@@ -3925,11 +3930,18 @@ where
         self.propose_raft_command(req, Callback::None);
     }
 
-    fn on_ingest_sst_result(&mut self, ssts: Vec<SstMeta>) {
+    fn on_ingest_sst_result(&mut self, ssts: Vec<SSTMetaInfo>) {
+        let mut size = 0;
+        let mut keys = 0;
         for sst in &ssts {
-            self.fsm.peer.size_diff_hint += sst.get_length();
+            size += sst.total_bytes;
+            keys += sst.total_kvs;
         }
-        self.register_split_region_check_tick();
+        self.fsm.peer.approximate_size = Some(self.fsm.peer.approximate_size.unwrap_or(0) + size);
+        self.fsm.peer.approximate_keys = Some(self.fsm.peer.approximate_keys.unwrap_or(0) + keys);
+        if self.fsm.peer.is_leader() {
+            self.on_pd_heartbeat_tick();
+        }
     }
 
     /// Verify and store the hash to state. return true means the hash has been stored successfully.
