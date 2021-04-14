@@ -14,7 +14,7 @@ use engine_traits::CF_RAFT;
 use engine_traits::{KvEngine, Peekable};
 use error_code::ErrorCodeExt;
 use kvproto::errorpb;
-use kvproto::import_sstpb::{SstMeta, SwitchMode};
+use kvproto::import_sstpb::SwitchMode;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{
@@ -30,6 +30,7 @@ use protobuf::Message;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 use raft::{Ready, StateRole};
+use sst_importer::SSTMetaInfo;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
@@ -3549,7 +3550,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.propose_raft_command(req, Callback::None, TxnExtra::default());
     }
 
-    fn on_ingest_sst_result(&mut self, _: Vec<SstMeta>) {
+    fn on_ingest_sst_result(&mut self, ssts: Vec<SSTMetaInfo>) {
+        for sst in &ssts {
+            self.fsm.peer.approximate_size += sst.total_bytes;
+            self.fsm.peer.approximate_keys += sst.total_kvs;
+        }
         // The ingested file may be overlapped with the data in engine, so we need to check it
         // again to get the accurate value.
         self.fsm.peer.has_calculated_region_size = false;
