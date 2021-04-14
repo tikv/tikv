@@ -375,8 +375,22 @@ impl Cluster {
         Ok(self.base_id.fetch_add(1, Ordering::Relaxed) as u64)
     }
 
+    fn force_put_store(&mut self, store: metapb::Store) {
+        let store_id = store.get_id();
+        self.stores.insert(
+            store_id,
+            Store {
+                store,
+                ..Default::default()
+            },
+        );
+    }
+
     fn put_store(&mut self, store: metapb::Store) -> Result<()> {
         let store_id = store.get_id();
+        if self.stores.contains_key(&store_id) {
+            return Ok(());
+        }
         // There is a race between put_store and handle_region_heartbeat_response. If store id is
         // 0, it means it's a placeholder created by latter, we just need to update the meta.
         // Otherwise we should overwrite it.
@@ -1224,6 +1238,11 @@ impl TestPdClient {
 
     pub fn reset_version(&self, version: &str) {
         unsafe { self.feature_gate.reset_version(version).unwrap() }
+    }
+
+    pub fn force_put_store(&self, store: metapb::Store) {
+        let mut cluster = self.cluster.wl();
+        cluster.force_put_store(store)
     }
 }
 

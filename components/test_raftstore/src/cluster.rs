@@ -119,6 +119,12 @@ pub trait Simulator {
         rx.recv_timeout(timeout)
             .map_err(|_| Error::Timeout(format!("request timeout for {:?}", timeout)))
     }
+
+    fn get_addr_by_node(&self, _node_id: u64) -> String {
+        String::default()
+    }
+
+    fn add_addr_in_cache(&mut self, _node_id: u64, _addr: String) {}
 }
 
 pub struct Cluster<T: Simulator> {
@@ -731,7 +737,7 @@ impl<T: Simulator> Cluster<T> {
         reqs: Vec<Request>,
         read_quorum: bool,
         timeout: Duration,
-    ) -> RaftCmdResponse {
+    ) -> Result<RaftCmdResponse> {
         let timer = Instant::now();
         let mut tried_times = 0;
         // At least retry once.
@@ -774,9 +780,9 @@ impl<T: Simulator> Cluster<T> {
                 sleep_ms(100);
                 continue;
             }
-            return resp;
+            return Ok(resp);
         }
-        panic!("request timeout");
+        Err(Error::Other(box_err!("request timeout")))
     }
 
     // Get region when the `filter` returns true.
@@ -823,12 +829,14 @@ impl<T: Simulator> Cluster<T> {
     }
 
     fn get_impl(&mut self, cf: &str, key: &[u8], read_quorum: bool) -> Option<Vec<u8>> {
-        let mut resp = self.request(
-            key,
-            vec![new_get_cf_cmd(cf, key)],
-            read_quorum,
-            Duration::from_secs(5),
-        );
+        let mut resp = self
+            .request(
+                key,
+                vec![new_get_cf_cmd(cf, key)],
+                read_quorum,
+                Duration::from_secs(5),
+            )
+            .unwrap();
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
@@ -909,12 +917,14 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn must_put_cf(&mut self, cf: &str, key: &[u8], value: &[u8]) {
-        let resp = self.request(
-            key,
-            vec![new_put_cf_cmd(cf, key, value)],
-            false,
-            Duration::from_secs(5),
-        );
+        let resp = self
+            .request(
+                key,
+                vec![new_put_cf_cmd(cf, key, value)],
+                false,
+                Duration::from_secs(5),
+            )
+            .unwrap();
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
@@ -928,7 +938,7 @@ impl<T: Simulator> Cluster<T> {
             vec![new_put_cf_cmd("default", key, value)],
             false,
             Duration::from_secs(5),
-        );
+        )?;
         if resp.get_header().has_error() {
             Err(resp.get_header().get_error().clone())
         } else {
@@ -941,12 +951,14 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn must_delete_cf(&mut self, cf: &str, key: &[u8]) {
-        let resp = self.request(
-            key,
-            vec![new_delete_cmd(cf, key)],
-            false,
-            Duration::from_secs(5),
-        );
+        let resp = self
+            .request(
+                key,
+                vec![new_delete_cmd(cf, key)],
+                false,
+                Duration::from_secs(5),
+            )
+            .unwrap();
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
@@ -955,12 +967,14 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn must_delete_range_cf(&mut self, cf: &str, start: &[u8], end: &[u8]) {
-        let resp = self.request(
-            start,
-            vec![new_delete_range_cmd(cf, start, end)],
-            false,
-            Duration::from_secs(5),
-        );
+        let resp = self
+            .request(
+                start,
+                vec![new_delete_range_cmd(cf, start, end)],
+                false,
+                Duration::from_secs(5),
+            )
+            .unwrap();
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
@@ -971,7 +985,9 @@ impl<T: Simulator> Cluster<T> {
     pub fn must_notify_delete_range_cf(&mut self, cf: &str, start: &[u8], end: &[u8]) {
         let mut req = new_delete_range_cmd(cf, start, end);
         req.mut_delete_range().set_notify_only(true);
-        let resp = self.request(start, vec![req], false, Duration::from_secs(5));
+        let resp = self
+            .request(start, vec![req], false, Duration::from_secs(5))
+            .unwrap();
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
@@ -1452,6 +1468,22 @@ impl<T: Simulator> Cluster<T> {
         )
         .unwrap();
         request_rx.recv_timeout(Duration::from_secs(5)).unwrap()
+    }
+
+    pub fn update_pd_store_info(&mut self, store: metapb::Store) {
+        self.pd_client.force_put_store(store)
+    }
+
+    pub fn get_store(&self, store_id: u64) -> metapb::Store {
+        self.pd_client.get_store(store_id).unwrap()
+    }
+
+    pub fn get_addr_by_node(&self, node_id: u64) -> String {
+        self.sim.rl().get_addr_by_node(node_id)
+    }
+
+    pub fn modify_server_addr(&mut self, node_id: u64, addr: String) {
+        self.sim.wl().add_addr_in_cache(node_id, addr)
     }
 }
 

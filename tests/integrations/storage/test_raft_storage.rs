@@ -168,6 +168,7 @@ fn test_engine_leader_change_twice() {
 
     let term = cluster
         .request(b"", vec![new_get_cmd(b"")], true, Duration::from_secs(5))
+        .unwrap()
         .get_header()
         .get_current_term();
 

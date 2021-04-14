@@ -606,9 +606,9 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let server_config = Arc::new(self.config.server.clone());
 
         self.config
-        .raft_store
-        .validate()
-        .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
+            .raft_store
+            .validate()
+            .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
         let raft_store = Arc::new(VersionTrack::new(self.config.raft_store.clone()));
         let mut node = Node::new(
             self.system.take().unwrap(),
