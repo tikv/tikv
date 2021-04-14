@@ -307,13 +307,13 @@ impl PriorityBasedIORateLimiter {
 
     /// Updates and refills IO budgets for next epoch based on IO priority.
     /// Here we provide best-effort priority control:
-    /// 1) Limited IO budget is assigned to lower priority to make sure higher priority can always
-    ///    consume the same IO amount as the last few epochs within global threshold.
+    /// 1) Limited IO budget is assigned to lower priority to ensure higher priority can at least
+    ///    consume the same IO amount as the last few epochs without breaching global threshold.
     /// 2) Higher priority may temporarily use lower priority's IO budgets. When this happens,
     ///    total IO flow could exceed global threshold.
     /// 3) Highest priority IO alone must not exceed global threshold.
     fn refill(&self, locked: &mut PriorityBasedIORateLimiterProtected, now: Instant) {
-        const UPDATE_BUDGETS_EVERY_N_EPOCHS: usize = 5;
+        const UPDATE_BUDGETS_EVERY_N_EPOCHS: usize = 10;
 
         let mut limit = self.bytes_per_epoch[IOPriority::High as usize].load(Ordering::Relaxed);
         if limit == 0 {
@@ -342,17 +342,18 @@ impl PriorityBasedIORateLimiter {
             // Reserve some of next epoch's budgets to serve pending bytes.
             let to_serve_pending_bytes = std::cmp::min(locked.pending_bytes[p], limit);
             locked.pending_bytes[p] -= to_serve_pending_bytes;
-            locked.history_bytes[p] += served_by_skipped_epochs
+            let bytes_through = served_by_skipped_epochs
                 + std::cmp::min(
                     self.bytes_through[p].swap(to_serve_pending_bytes, Ordering::Relaxed),
                     limit,
                 );
+            let bytes_through_per_epoch = (bytes_through * 16) / (skipped_epochs_mul_16 + 16);
+            locked.history_bytes[p] =
+                std::cmp::max(locked.history_bytes[p], bytes_through_per_epoch);
             if locked.history_epoch_count_mul_16 >= (UPDATE_BUDGETS_EVERY_N_EPOCHS << 4) {
                 // Raw IO flow could be too spiky to converge. Use average over
                 // `UPDATE_BUDGETS_EVERY_N_EPOCHS` to re-allocate budgets.
-                let estimated_bytes_through = (std::mem::replace(&mut locked.history_bytes[p], 0)
-                    << 4)
-                    / locked.history_epoch_count_mul_16;
+                let estimated_bytes_through = std::mem::replace(&mut locked.history_bytes[p], 0);
                 locked.history_epoch_count_mul_16 = 0;
                 limit = if limit > estimated_bytes_through {
                     limit - estimated_bytes_through
