@@ -166,6 +166,15 @@ impl TsSet {
             TsSet::Set(set) => set.contains(&ts),
         }
     }
+
+    // Returns if the set is empty.
+    pub fn is_empty(&self) -> bool {
+        match self {
+            TsSet::Empty => true,
+            TsSet::Vec(vec) => vec.is_empty(),
+            TsSet::Set(set) => set.is_empty(),
+        }
+    }
 }
 
 #[cfg(test)]

@@ -347,6 +347,14 @@ impl Lock {
             return Ok(());
         }
 
+        // When ts is `TimeStamp::max()` and `bypass_locks` is not empty, the lock
+        // read for the first time has been resolved (or whose min_commit_ts has been
+        // advanced). And because other new locks should not block such reading requests,
+        // we can ignore all seen locks in this case.
+        if ts == TimeStamp::max() && !bypass_locks.is_empty() {
+            return Ok(());
+        }
+
         let raw_key = key.to_raw()?;
 
         if ts == TimeStamp::max() && raw_key == lock.primary && !lock.use_async_commit {
@@ -683,6 +691,15 @@ mod tests {
         Lock::check_ts_conflict(Cow::Borrowed(&lock), &key, 140.into(), &empty).unwrap();
         Lock::check_ts_conflict(Cow::Borrowed(&lock), &key, 150.into(), &empty).unwrap_err();
         Lock::check_ts_conflict(Cow::Borrowed(&lock), &key, 160.into(), &empty).unwrap_err();
+
+        // Reading with `TimeStamp::max()` and non-empty `bypass_locks` can bypass all locks.
+        Lock::check_ts_conflict(
+            Cow::Borrowed(&lock),
+            &key,
+            160.into(),
+            &TsSet::from_u64s(vec![100]),
+        )
+        .unwrap();
     }
 
     #[test]
