@@ -2277,7 +2277,7 @@ pub struct CdcConfig {
     pub min_ts_interval: ReadableDuration,
     pub old_value_cache_size: usize,
     pub hibernate_regions_compatible: bool,
-    pub scan_lock_pool_size: u64,
+    pub scan_lock_pool_size: usize,
 }
 
 impl Default for CdcConfig {
