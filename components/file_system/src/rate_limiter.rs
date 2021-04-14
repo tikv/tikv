@@ -255,6 +255,8 @@ macro_rules! request_imp {
             }
         };
         if wait > MAX_WAIT_DURATION_PER_REQUEST {
+            // Long wait duration could freeze request thread not to react to latest budgets
+            // adjustment. Exit early by returning partial quotas.
             amount = std::cmp::max(
                 (MAX_WAIT_DURATION_PER_REQUEST.as_secs_f32() * amount as f32 / wait.as_secs_f32())
                     as usize,
@@ -342,6 +344,7 @@ impl PriorityBasedIORateLimiter {
             // Reserve some of next epoch's budgets to serve pending bytes.
             let to_serve_pending_bytes = std::cmp::min(locked.pending_bytes[p], limit);
             locked.pending_bytes[p] -= to_serve_pending_bytes;
+            // Update throughput estimation over recent epochs.
             let bytes_through = served_by_skipped_epochs
                 + std::cmp::min(
                     self.bytes_through[p].swap(to_serve_pending_bytes, Ordering::Relaxed),
@@ -351,7 +354,7 @@ impl PriorityBasedIORateLimiter {
             locked.history_bytes[p] =
                 std::cmp::max(locked.history_bytes[p], bytes_through_per_epoch);
             if locked.history_epoch_count_mul_16 >= (UPDATE_BUDGETS_EVERY_N_EPOCHS << 4) {
-                // Raw IO flow could be too spiky to converge. Use average over
+                // Raw IO flow could be too spiky to converge. Use max over
                 // `UPDATE_BUDGETS_EVERY_N_EPOCHS` to re-allocate budgets.
                 let estimated_bytes_through = std::mem::replace(&mut locked.history_bytes[p], 0);
                 locked.history_epoch_count_mul_16 = 0;

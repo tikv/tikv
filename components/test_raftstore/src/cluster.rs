@@ -22,7 +22,8 @@ use encryption_export::DataKeyManager;
 use engine_rocks::raw::DB;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::{
-    CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, WriteBatch, WriteBatchExt, CF_RAFT,
+    CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, WriteBatch, WriteBatchExt,
+    CF_DEFAULT, CF_RAFT,
 };
 use file_system::IORateLimiter;
 use pd_client::PdClient;
@@ -251,15 +252,14 @@ impl<T: Simulator> Cluster<T> {
     pub fn compact_data(&self) {
         for engine in self.engines.values() {
             let db = &engine.kv;
-            db.compact_range("default", None, None, false, 1).unwrap();
+            db.compact_range(CF_DEFAULT, None, None, false, 1).unwrap();
         }
     }
 
     pub fn flush_data(&self) {
         for engine in self.engines.values() {
             let db = &engine.kv;
-            db.flush_cf(engine_traits::CF_DEFAULT, true /*sync*/)
-                .unwrap();
+            db.flush_cf(CF_DEFAULT, true /*sync*/).unwrap();
         }
     }
 
@@ -829,7 +829,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
-        self.get_impl("default", key, false)
+        self.get_impl(CF_DEFAULT, key, false)
     }
 
     pub fn get_cf(&mut self, cf: &str, key: &[u8]) -> Option<Vec<u8>> {
@@ -837,7 +837,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn must_get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
-        self.get_impl("default", key, true)
+        self.get_impl(CF_DEFAULT, key, true)
     }
 
     fn get_impl(&mut self, cf: &str, key: &[u8], read_quorum: bool) -> Option<Vec<u8>> {
@@ -923,7 +923,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn must_put(&mut self, key: &[u8], value: &[u8]) {
-        self.must_put_cf("default", key, value);
+        self.must_put_cf(CF_DEFAULT, key, value);
     }
 
     pub fn must_put_cf(&mut self, cf: &str, key: &[u8], value: &[u8]) {
@@ -943,7 +943,7 @@ impl<T: Simulator> Cluster<T> {
     pub fn put(&mut self, key: &[u8], value: &[u8]) -> result::Result<(), PbError> {
         let resp = self.request(
             key,
-            vec![new_put_cf_cmd("default", key, value)],
+            vec![new_put_cf_cmd(CF_DEFAULT, key, value)],
             false,
             Duration::from_secs(5),
         );
@@ -955,7 +955,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn must_delete(&mut self, key: &[u8]) {
-        self.must_delete_cf("default", key)
+        self.must_delete_cf(CF_DEFAULT, key)
     }
 
     pub fn must_delete_cf(&mut self, cf: &str, key: &[u8]) {
