@@ -34,11 +34,9 @@ impl Latch {
 
     /// Find the first command ID in the queue whose hash value is equal to hash.
     pub fn get_first_req_by_hash(&self, hash: u64) -> Option<u64> {
-        for item in self.waiting.iter() {
-            if let Some((h, cid)) = item {
-                if *h == hash {
-                    return Some(*cid);
-                }
+        for (h, cid) in self.waiting.iter().flatten() {
+            if *h == hash {
+                return Some(*cid);
             }
         }
         None
@@ -57,6 +55,8 @@ impl Latch {
                 }
                 self.waiting.push_front(item);
             }
+            // FIXME: remove this clippy attribute once https://github.com/rust-lang/rust-clippy/issues/6784 is fixed.
+            #[allow(clippy::manual_flatten)]
             for it in self.waiting.iter_mut() {
                 if let Some((v, _)) = it {
                     if *v == key_hash {

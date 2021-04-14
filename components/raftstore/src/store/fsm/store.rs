@@ -2389,7 +2389,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 );
                 None
             })
-            .filter_map(|r| r)
+            .flatten()
             .collect();
         cb(regions);
     }

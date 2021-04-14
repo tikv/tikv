@@ -115,9 +115,9 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
             coprv2,
             ch,
             snap_scheduler,
+            enable_req_batch,
             grpc_thread_load,
             readpool_normal_thread_load,
-            enable_req_batch,
             proxy,
         }
     }

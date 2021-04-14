@@ -383,8 +383,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             config,
             collect_exec_summary,
             exec_stats,
-            encode_type,
             stream_row_limit,
+            encode_type,
         })
     }
 

@@ -20,7 +20,10 @@ CLIPPY_LINTS=(-A clippy::module_inception  \
 	-A clippy::new_without_default \
 	-A clippy::too_many_arguments \
 	-A clippy::blacklisted_name \
+	-A clippy::redundant_closure \
+	-A clippy::upper_case_acronyms \
 	-A clippy::needless_range_loop \
+	-A clippy::inconsistent_struct_constructor \
 	-A clippy::new_ret_no_self \
 	-A clippy::unnecessary_sort_by \
 	-A clippy::unnecessary_wraps \
