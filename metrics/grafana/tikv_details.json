@@ -14996,8 +14996,8 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "${DS_LOCAL}",
-          "description": "The time consumed when handling snapshots",
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Action stats for snapshot generating and applying",
           "editable": true,
           "error": false,
           "fill": 1,
@@ -15040,7 +15040,7 @@
               "expr": "sum(delta(tikv_raftstore_snapshot_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type, status)",
               "format": "time_series",
               "intervalFactor": 1,
-              "legendFormat": "{{type}}-{{statys}}",
+              "legendFormat": "{{type}}-{{status}}",
               "refId": "A"
             }
           ],
