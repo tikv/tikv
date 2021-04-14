@@ -63,7 +63,7 @@ pub use self::{
 use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::metrics::CommandKind;
 use crate::storage::mvcc::MvccReader;
-use crate::storage::txn::commands::{RawAtomicStore, RawCompareAndSet};
+use crate::storage::txn::commands::{RawAtomicStore, RawCompareAndSwap};
 
 use crate::storage::{
     config::Config,
@@ -1571,7 +1571,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         }
     }
 
-    pub fn raw_compare_and_set_atomic(
+    pub fn raw_compare_and_swap_atomic(
         &self,
         ctx: Context,
         cf: String,
@@ -1591,7 +1591,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             None
         };
         let cmd =
-            RawCompareAndSet::new(cf, Key::from_encoded(key), previous_value, value, ttl, ctx);
+            RawCompareAndSwap::new(cf, Key::from_encoded(key), previous_value, value, ttl, ctx);
         self.sched_txn_command(cmd, cb)
     }
 
