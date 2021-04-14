@@ -831,7 +831,7 @@ fn make_overlapped_rollback(key: Key, row: &mut EventRow) {
     row.start_ts = key.decode_ts().unwrap().into_inner();
     row.commit_ts = 0;
     row.key = key.truncate_ts().unwrap().into_raw().unwrap();
-    row.op_type = EventRowOpType::Unknown;
+    row.op_type = EventRowOpType::Unknown as _;
     set_event_row_type(row, EventLogType::Rollback);
 }
 

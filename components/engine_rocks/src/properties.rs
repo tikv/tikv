@@ -16,6 +16,7 @@ use rocksdb::{
 };
 use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::{Error, Result};
+use tikv_util::info;
 use txn_types::{Key, Write, WriteType};
 
 use crate::mvcc_properties::*;

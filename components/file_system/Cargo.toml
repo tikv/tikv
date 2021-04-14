@@ -5,7 +5,14 @@ edition = "2018"
 publish = false
 
 [features]
+default = ["protobuf-codec"]
 bcc-iosnoop = ["bcc"]
+protobuf-codec = [
+  "tikv_util/protobuf-codec",
+]
+prost-codec = [
+  "tikv_util/prost-codec",
+]
 
 [dependencies]
 collections = { path = "../collections" }
@@ -24,7 +31,7 @@ rand = "0.7.3"
 serde = "1.0"
 strum = { version = "0.20", features = ["derive"] }
 tikv_alloc = { path = "../tikv_alloc" }
-tikv_util = { path = "../tikv_util" }
+tikv_util = { path = "../tikv_util", default-features = false }
 time = "0.1"
 tokio = { version = "0.2", features = ["time"] }
 
