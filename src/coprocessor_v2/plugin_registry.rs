@@ -57,16 +57,23 @@ impl PluginRegistry {
             thread::spawn(move || {
                 // Simple helper functions for loading/unloading plugins.
                 let maybe_load = |file: &PathBuf| {
+                    let mut hot_reload_registry = hot_reload_registry.write().unwrap();
                     if is_library_file(&file) {
                         // Ignore errors.
-                        hot_reload_registry.write().unwrap().load_plugin(file).ok();
+                        hot_reload_registry.load_plugin(file).ok();
                     }
                 };
                 let unload = |file: &PathBuf| {
-                    hot_reload_registry
-                        .write()
-                        .unwrap()
-                        .unload_plugin_by_path(file)
+                    let mut hot_reload_registry = hot_reload_registry.write().unwrap();
+                    if let Some(plugin) = hot_reload_registry.get_plugin_by_path(file) {
+                        hot_reload_registry.unload_plugin(plugin.name());
+                    }
+                };
+                let rename = |old_path: &PathBuf, new_path: &PathBuf| {
+                    let mut hot_reload_registry = hot_reload_registry.write().unwrap();
+                    if let Some(plugin) = hot_reload_registry.get_plugin_by_path(old_path) {
+                        hot_reload_registry.update_plugin_path(plugin.name(), new_path);
+                    }
                 };
 
                 loop {
@@ -82,8 +89,7 @@ impl PluginRegistry {
                             maybe_load(&file);
                         }
                         Ok(DebouncedEvent::Rename(old_file, new_file)) => {
-                            unload(&old_file);
-                            maybe_load(&new_file);
+                            rename(&old_file, &new_file);
                         }
                         Ok(_) => (),
                         Err(_) => break, // Stop when watcher is dropped.
@@ -112,6 +118,19 @@ impl PluginRegistry {
     /// Plugins are indexed by the name that is returned by [`CoprocessorPlugin::name()`].
     pub fn get_plugin(&self, plugin_name: &str) -> Option<Arc<impl CoprocessorPlugin>> {
         self.inner.read().unwrap().get_plugin(plugin_name)
+    }
+
+    /// finds a plugin by its associated file path, similar to [`get_plugin()`].
+    ///
+    /// The given path has to be exactly the same as the one the plugin with loaded with, e.g.
+    /// `"./coprocessors/plugin1.so"` would be *different* from `"coprocessors/plugin1.so"`
+    /// (note the leading `./`). The same applies when the associated path was changed with
+    /// [`update_plugin_path()`].
+    pub fn get_plugin_by_path<P: AsRef<OsStr>>(
+        &self,
+        plugin_path: P,
+    ) -> Option<Arc<impl CoprocessorPlugin>> {
+        self.inner.read().unwrap().get_plugin_by_path(plugin_path)
     }
 
     /// Returns the names of the currently loaded plugins.
@@ -166,25 +185,28 @@ impl PluginRegistry {
     }
 
     /// Unloads a plugin with the given `plugin_name`.
-    pub fn unload_plugin_by_name(&self, plugin_name: &str) {
-        self.inner
-            .write()
-            .unwrap()
-            .unload_plugin_by_name(plugin_name)
+    pub fn unload_plugin(&self, plugin_name: &str) {
+        self.inner.write().unwrap().unload_plugin(plugin_name)
     }
 
-    /// Unloads a plugin based on the given file path.
+    /// Updates the associated file path for plugin.
     ///
-    /// The plugin whose library path is equal to the given `plugin_file` path is unloaded.
-    ///
-    /// Note that equality between paths here means equality of the representation, so `"lib"` is
-    /// not the same as `"./lib"`; in other words: [`unload_plugin_by_path()`] requires the _exact_
-    /// same path as was passed to [`load_plugin()`].
-    pub fn unload_plugin_by_path<P: AsRef<OsStr>>(&self, plugin_path: P) {
+    /// This function should be used to maintain consistent state when the underlying file of a
+    /// plugin was renamed or moved.
+    pub fn update_plugin_path<P: AsRef<OsStr>>(&self, plugin_name: &str, new_path: P) {
         self.inner
             .write()
             .unwrap()
-            .unload_plugin_by_path(plugin_path)
+            .update_plugin_path(plugin_name, new_path)
+    }
+
+    /// Returns the associated file path for the plugin for the given `plugin_name`.
+    pub fn get_path_for_plugin(&self, plugin_name: &str) -> Option<OsString> {
+        self.inner
+            .read()
+            .unwrap()
+            .get_path_for_plugin(plugin_name)
+            .map(|s| s.to_os_string())
     }
 }
 
@@ -192,13 +214,26 @@ impl PluginRegistry {
 struct PluginRegistryInner {
     /// Plugins that are currently loaded.
     /// Provides a mapping from the plugin's name to the actual instance.
-    loaded_plugins: HashMap<String, Arc<LoadedPlugin>>,
+    loaded_plugins: HashMap<String, (OsString, Arc<LoadedPlugin>)>,
 }
 
 impl PluginRegistryInner {
     #[inline]
     pub fn get_plugin(&self, plugin_name: &str) -> Option<Arc<impl CoprocessorPlugin>> {
-        self.loaded_plugins.get(plugin_name).cloned()
+        self.loaded_plugins
+            .get(plugin_name)
+            .map(|(_path, plugin)| plugin.clone())
+    }
+
+    #[inline]
+    pub fn get_plugin_by_path<P: AsRef<OsStr>>(
+        &self,
+        plugin_path: P,
+    ) -> Option<Arc<impl CoprocessorPlugin>> {
+        self.loaded_plugins
+            .iter()
+            .find(|(_, (path, _))| path == plugin_path.as_ref())
+            .map(|(_, (_, plugin))| plugin.clone())
     }
 
     #[inline]
@@ -220,26 +255,30 @@ impl PluginRegistryInner {
 
         let plugin_name = plugin.name();
 
-        self.loaded_plugins
-            .insert(plugin_name.to_string(), Arc::new(plugin));
+        self.loaded_plugins.insert(
+            plugin_name.to_string(),
+            (filename.as_ref().to_os_string(), Arc::new(plugin)),
+        );
         Ok(plugin_name)
     }
 
     #[inline]
-    pub fn unload_plugin_by_name(&mut self, plugin_name: &str) {
+    pub fn unload_plugin(&mut self, plugin_name: &str) {
         self.loaded_plugins.remove(plugin_name);
     }
 
     #[inline]
-    pub fn unload_plugin_by_path<P: AsRef<OsStr>>(&mut self, plugin_path: P) {
-        if let Some(plugin_name) = self
-            .loaded_plugins
-            .iter()
-            .find(|(_plugin_name, plugin)| plugin.file_name() == plugin_path.as_ref())
-            .map(|(plugin_name, _)| plugin_name.clone())
-        {
-            self.unload_plugin_by_name(&plugin_name)
+    pub fn update_plugin_path<P: AsRef<OsStr>>(&mut self, plugin_name: &str, new_path: P) {
+        if let Some((plugin_path, _)) = self.loaded_plugins.get_mut(plugin_name) {
+            *plugin_path = new_path.as_ref().to_os_string();
         }
+    }
+
+    #[inline]
+    pub fn get_path_for_plugin(&self, plugin_name: &str) -> Option<&OsStr> {
+        self.loaded_plugins
+            .get(plugin_name)
+            .map(|(path, _plugin)| path.as_os_str())
     }
 }
 
@@ -247,8 +286,6 @@ impl PluginRegistryInner {
 struct LoadedPlugin {
     /// Pointer to a [`CoprocessorPlugin`] in the loaded `lib`.
     plugin: Box<dyn CoprocessorPlugin>,
-    /// The path of the library file for this plugin.
-    file_path: OsString,
 }
 
 impl LoadedPlugin {
@@ -285,15 +322,7 @@ impl LoadedPlugin {
         // Leak library so that we will never drop it
         std::mem::forget(lib);
 
-        Ok(LoadedPlugin {
-            plugin,
-            file_path: file_path.as_ref().to_os_string(),
-        })
-    }
-
-    /// Returns the file name of the library file where this plugin was loaded from.
-    pub fn file_name(&self) -> &OsStr {
-        &self.file_path
+        Ok(LoadedPlugin { plugin })
     }
 }
 
@@ -328,87 +357,126 @@ fn is_library_file<P: AsRef<Path>>(path: P) -> bool {
     path.as_ref().extension() == Some(OsStr::new("dll"))
 }
 
-//#[cfg(test)]
-//mod tests {
-//    use super::*;
-//    use coprocessor_plugin_api::pkgname_to_libname;
-//
-//    #[test]
-//    fn load_plugin() {
-//        let library_path = pkgname_to_libname("example-plugin");
-//        let loaded_plugin = unsafe { LoadedPlugin::new(&library_path).unwrap() };
-//
-//        assert_eq!(loaded_plugin.name(), "example-plugin");
-//        assert_eq!(loaded_plugin.file_name().to_str().unwrap(), library_path);
-//    }
-//
-//    #[test]
-//    fn registry_load_and_get_plugin() {
-//        let registry = PluginRegistry::new();
-//        let library_path = pkgname_to_libname("example-plugin");
-//        let plugin_name = registry.load_plugin(&library_path).unwrap();
-//
-//        let plugin = registry.get_plugin(plugin_name).unwrap();
-//
-//        assert_eq!(plugin.name(), "example-plugin");
-//        assert_eq!(registry.loaded_plugin_names(), vec!["example-plugin"]);
-//    }
-//
-//    #[test]
-//    fn registry_unload_plugin_by_name() {
-//        let registry = PluginRegistry::new();
-//        let library_path = pkgname_to_libname("example-plugin");
-//        let plugin_name = registry.load_plugin(&library_path).unwrap();
-//
-//        assert!(registry.get_plugin(plugin_name).is_some());
-//
-//        registry.unload_plugin_by_name(plugin_name);
-//
-//        assert!(registry.get_plugin(plugin_name).is_none());
-//        assert_eq!(registry.loaded_plugin_names().len(), 0);
-//    }
-//
-//    #[test]
-//    fn plugin_registry_unload_plugin_by_path() {
-//        let registry = PluginRegistry::new();
-//        let library_path = pkgname_to_libname("example-plugin");
-//        let plugin_name = registry.load_plugin(&library_path).unwrap();
-//
-//        assert!(registry.get_plugin(plugin_name).is_some());
-//
-//        registry.unload_plugin_by_path(library_path);
-//
-//        assert!(registry.get_plugin(plugin_name).is_none());
-//        assert_eq!(registry.loaded_plugin_names().len(), 0);
-//    }
-//
-//    #[test]
-//    fn plugin_registry_hot_reloading() {
-//        let build_dir = std::env::current_exe()
-//            .map(|p| p.as_path().parent().unwrap().to_owned())
-//            .unwrap();
-//        let coprocessor_dir = build_dir.join("coprocessors");
-//
-//        std::fs::create_dir_all(&coprocessor_dir).unwrap();
-//        let library_path = pkgname_to_libname("example-plugin");
-//
-//        let mut registry = PluginRegistry::new();
-//        registry.start_hot_reloading(&coprocessor_dir).unwrap();
-//
-//        // trigger loading
-//        std::fs::copy(
-//            build_dir.join(&library_path),
-//            coprocessor_dir.join(&library_path),
-//        )
-//        .unwrap();
-//        std::thread::sleep(Duration::from_secs(4));
-//
-//        assert!(registry.get_plugin("example-plugin").is_some());
-//
-//        // trigger unloading
-//        std::fs::remove_file(coprocessor_dir.join(&library_path)).unwrap();
-//        std::thread::sleep(Duration::from_secs(4));
-//
-//        assert!(registry.get_plugin("example-plugin").is_none());
-//    }
-//}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use coprocessor_plugin_api::pkgname_to_libname;
+
+    #[test]
+    fn load_plugin() {
+        let library_path = pkgname_to_libname("example-plugin");
+        let loaded_plugin = unsafe { LoadedPlugin::new(&library_path).unwrap() };
+
+        assert_eq!(loaded_plugin.name(), "example-plugin");
+    }
+
+    #[test]
+    fn registry_load_and_get_plugin() {
+        let registry = PluginRegistry::new();
+        let library_path = pkgname_to_libname("example-plugin");
+        let plugin_name = registry.load_plugin(&library_path).unwrap();
+
+        let plugin = registry.get_plugin(plugin_name).unwrap();
+
+        assert_eq!(plugin.name(), "example-plugin");
+        assert_eq!(registry.loaded_plugin_names(), vec!["example-plugin"]);
+        assert_eq!(
+            registry
+                .get_path_for_plugin("example-plugin")
+                .unwrap()
+                .to_string_lossy(),
+            library_path
+        );
+    }
+
+    #[test]
+    fn update_plugin_path() {
+        let registry = PluginRegistry::new();
+        let library_path = pkgname_to_libname("example-plugin");
+        let library_path_2 = pkgname_to_libname("example-plugin-2");
+
+        let plugin_name = registry.load_plugin(&library_path).unwrap();
+
+        assert_eq!(
+            registry
+                .get_path_for_plugin(plugin_name)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            &library_path
+        );
+
+        registry.update_plugin_path(plugin_name, &library_path_2);
+
+        assert_eq!(
+            registry
+                .get_path_for_plugin(plugin_name)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            &library_path_2
+        );
+    }
+
+    #[test]
+    fn registry_unload_plugin() {
+        let registry = PluginRegistry::new();
+        let library_path = pkgname_to_libname("example-plugin");
+
+        let plugin_name = registry.load_plugin(&library_path).unwrap();
+
+        assert!(registry.get_plugin(plugin_name).is_some());
+
+        registry.unload_plugin(plugin_name);
+
+        assert!(registry.get_plugin(plugin_name).is_none());
+        assert_eq!(registry.loaded_plugin_names().len(), 0);
+    }
+
+    #[test]
+    fn plugin_registry_hot_reloading() {
+        let build_dir = std::env::current_exe()
+            .map(|p| p.as_path().parent().unwrap().to_owned())
+            .unwrap();
+        let coprocessor_dir = build_dir.join("coprocessors");
+        let library_path = coprocessor_dir.join(pkgname_to_libname("example-plugin"));
+        let library_path_2 = coprocessor_dir.join(pkgname_to_libname("example-plugin-2"));
+        let plugin_name = "example-plugin";
+
+        std::fs::remove_dir_all(&coprocessor_dir).unwrap();
+        std::fs::create_dir_all(&coprocessor_dir).unwrap();
+
+        let mut registry = PluginRegistry::new();
+        registry.start_hot_reloading(&coprocessor_dir).unwrap();
+
+        // trigger loading
+        std::fs::copy(
+            build_dir.join(&pkgname_to_libname("example-plugin")),
+            &library_path,
+        )
+        .unwrap();
+        std::thread::sleep(Duration::from_secs(4));
+
+        assert!(registry.get_plugin(plugin_name).is_some());
+        assert_eq!(
+            &PathBuf::from(registry.get_path_for_plugin(plugin_name).unwrap()),
+            &library_path
+        );
+
+        // trigger rename
+        std::fs::rename(&library_path, &library_path_2).unwrap();
+        std::thread::sleep(Duration::from_secs(4));
+
+        assert!(registry.get_plugin(plugin_name).is_some());
+        assert_eq!(
+            &PathBuf::from(registry.get_path_for_plugin(plugin_name).unwrap()),
+            &library_path_2
+        );
+
+        // trigger unloading
+        std::fs::remove_file(&library_path_2).unwrap();
+        std::thread::sleep(Duration::from_secs(4));
+
+        assert!(registry.get_plugin(plugin_name).is_none());
+    }
+}
