@@ -99,7 +99,8 @@ impl ObserveRegion {
                                 start_ts: *start_ts,
                                 commit_ts: *commit_ts,
                             }),
-                            _ => (),
+                            // One pc command do not contains any lock, so just skip it
+                            ChangeRow::OnePc { .. } => {}
                         }),
                     }
                 }
@@ -115,7 +116,8 @@ impl ObserveRegion {
                             ChangeRow::Commit { key, .. } => {
                                 self.resolver.untrack_lock(&key.to_raw().unwrap())
                             }
-                            _ => (),
+                            // One pc command do not contains any lock, so just skip it
+                            ChangeRow::OnePc { .. } => {}
                         }),
                     }
                 }
