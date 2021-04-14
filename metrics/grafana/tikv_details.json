@@ -6155,7 +6155,12 @@
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
-          "seriesOverrides": [],
+          "seriesOverrides": [
+            {
+              "alias": "pending",
+              "yaxis": 2
+            }
+          ],
           "spaceLength": 10,
           "stack": false,
           "steppedLine": false,
@@ -6167,6 +6172,13 @@
               "legendFormat": "{{ type }}",
               "refId": "A",
               "step": 4
+            },
+            {
+              "refId": "B",
+              "expr": "tikv_pd_pending_heartbeat_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}",
+              "intervalFactor": 1,
+              "format": "time_series",
+              "legendFormat": "pending"
             }
           ],
           "thresholds": [],
@@ -6197,11 +6209,11 @@
               "show": true
             },
             {
-              "format": "opm",
+              "format": "short",
               "label": null,
               "logBase": 1,
               "max": null,
-              "min": null,
+              "min": "0",
               "show": true
             }
           ],
