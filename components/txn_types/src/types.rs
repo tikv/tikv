@@ -428,7 +428,7 @@ impl WriteBatchFlags {
         match WriteBatchFlags::from_bits(bits) {
             None => panic!("unrecognized flags: {:b}", bits),
             // zero or more flags
-            Some(f) => f
+            Some(f) => f,
         }
     }
 }
@@ -440,10 +440,16 @@ mod tests {
     #[test]
     fn test_flags() {
         assert!(WriteBatchFlags::from_bits_check(0).is_empty());
-        assert_eq!(WriteBatchFlags::from_bits_check(WriteBatchFlags::ONE_PC.bits()), WriteBatchFlags::ONE_PC);
-        assert_eq!(WriteBatchFlags::from_bits_check(WriteBatchFlags::STALE_READ.bits()), WriteBatchFlags::STALE_READ);   
+        assert_eq!(
+            WriteBatchFlags::from_bits_check(WriteBatchFlags::ONE_PC.bits()),
+            WriteBatchFlags::ONE_PC
+        );
+        assert_eq!(
+            WriteBatchFlags::from_bits_check(WriteBatchFlags::STALE_READ.bits()),
+            WriteBatchFlags::STALE_READ
+        );
     }
-    
+
     #[test]
     #[should_panic]
     fn test_flags_panic() {
