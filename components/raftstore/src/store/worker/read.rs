@@ -542,7 +542,7 @@ where
                     RequestPolicy::StaleRead => {
                         let read_ts =
                             decode_u64(&mut req.mut_header().take_flag_data().as_ref()).unwrap();
-                        let safe_ts = delegate.safe_ts.load(Ordering::Relaxed);
+                        let safe_ts = delegate.safe_ts.load(Ordering::Acquire);
                         assert!(read_ts > 0);
                         if safe_ts < read_ts {
                             debug!(
