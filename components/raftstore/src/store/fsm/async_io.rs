@@ -124,8 +124,14 @@ impl UnsyncedReady {
     }
 }
 
-pub struct AsyncWriteTask {
+pub struct AsyncWriteTask<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
     region_id: u64,
+    pub kv_wb: Option<EK::WriteBatch>,
+    pub raft_wb: Option<ER::LogBatch>,
     pub entries: Vec<Entry>,
     pub cut_logs: Option<(u64, u64)>,
     pub unsynced_ready: Option<UnsyncedReady>,
@@ -136,10 +142,16 @@ pub struct AsyncWriteTask {
     pub size: usize,
 }
 
-impl AsyncWriteTask {
+impl<EK, ER> AsyncWriteTask<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
     pub fn new(region_id: u64) -> Self {
         Self {
             region_id,
+            kv_wb: None,
+            raft_wb: None,
             entries: vec![],
             cut_logs: None,
             unsynced_ready: None,
@@ -152,43 +164,47 @@ impl AsyncWriteTask {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.messages.is_empty() 
+            && self.entries.is_empty()
+            && self.raft_state.is_none()
             && self.cut_logs.is_none()
             && self.unsynced_ready.is_none()
-            && self.raft_state.is_none()
             && self.proposal_times.is_empty()
-            && self.messages.is_empty()
+            && self.kv_wb.as_ref().map_or_else(|| true, |wb| wb.is_empty())
+            && self.raft_wb.as_ref().map_or_else(|| true, |wb| wb.is_empty())
     }
 }
 
-pub enum AsyncWriteMsg {
-    WriteTask(AsyncWriteTask),
+pub enum AsyncWriteMsg<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    WriteTask(AsyncWriteTask<EK, ER>),
     Shutdown,
 }
 
-pub struct AsyncWriteBatch<EK, WK, WR>
+pub struct AsyncWriteBatch<EK, ER>
 where
     EK: KvEngine,
-    WK: WriteBatch<EK>,
-    WR: RaftLogBatch,
+    ER: RaftEngine,
 {
-    pub kv_wb: WK,
-    pub raft_wb: WR,
+    pub kv_wb: EK::WriteBatch,
+    pub raft_wb: ER::LogBatch,
     pub begin: Option<UtilInstant>,
     pub unsynced_readies: HashMap<u64, UnsyncedReady>,
     pub raft_states: HashMap<u64, RaftLocalState>,
     pub state_size: usize,
-    pub tasks: Vec<AsyncWriteTask>,
+    pub tasks: Vec<AsyncWriteTask<EK, ER>>,
     _phantom: PhantomData<EK>,
 }
 
-impl<EK, WK, WR> AsyncWriteBatch<EK, WK, WR>
+impl<EK, ER> AsyncWriteBatch<EK, ER>
 where
     EK: KvEngine,
-    WK: WriteBatch<EK>,
-    WR: RaftLogBatch,
+    ER: RaftEngine,
 {
-    fn new(kv_wb: WK, raft_wb: WR) -> Self {
+    fn new(kv_wb: EK::WriteBatch, raft_wb: ER::LogBatch) -> Self {
         Self {
             kv_wb,
             raft_wb,
@@ -207,7 +223,13 @@ where
         }
     }
 
-    fn add_write_task(&mut self, mut task: AsyncWriteTask) {
+    fn add_write_task(&mut self, mut task: AsyncWriteTask<EK, ER>) {
+        if let Some(mut kv_wb) = task.kv_wb.take() {
+            self.kv_wb.append(&mut kv_wb);
+        }
+        if let Some(mut raft_wb) = task.raft_wb.take() {
+            self.raft_wb.merge(&mut raft_wb);
+        }
         let entries = std::mem::take(&mut task.entries);
         self.raft_wb.append(task.region_id, entries).unwrap();
         if let Some((from, to)) = task.cut_logs {
@@ -218,7 +240,7 @@ where
         }
         if let Some(raft_state) = task.raft_state.take() {
             if !self.raft_states.contains_key(&task.region_id) {
-                self.state_size += 4 * 8;
+                self.state_size += std::mem::size_of::<RaftLocalState>();
             }
             self.raft_states.insert(task.region_id, raft_state);
         }
@@ -287,7 +309,7 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    wbs: VecDeque<AsyncWriteBatch<EK, EK::WriteBatch, ER::LogBatch>>,
+    wbs: VecDeque<AsyncWriteBatch<EK, ER>>,
     metrics: AsyncWriterStoreMetrics,
     size_limits: Vec<usize>,
     current_idx: usize,
@@ -343,7 +365,7 @@ where
 
     pub fn prepare_current_for_write(
         &mut self,
-    ) -> &mut AsyncWriteBatch<EK, EK::WriteBatch, ER::LogBatch> {
+    ) -> &mut AsyncWriteBatch<EK, ER> {
         if self.adaptive_size {
             let current_size = self.wbs[self.current_idx].get_raft_size();
             if current_size
@@ -360,7 +382,7 @@ where
         &mut self.wbs[self.current_idx]
     }
 
-    fn detach_task(&mut self) -> AsyncWriteBatch<EK, EK::WriteBatch, ER::LogBatch> {
+    fn detach_task(&mut self) -> AsyncWriteBatch<EK, ER> {
         self.metrics.queue_size.observe(self.current_idx as f64);
         self.metrics.adaptive_idx.observe(self.adaptive_idx as f64);
 
@@ -399,7 +421,7 @@ where
         task
     }
 
-    fn push_back_done_task(&mut self, mut task: AsyncWriteBatch<EK, EK::WriteBatch, ER::LogBatch>) {
+    fn push_back_done_task(&mut self, mut task: AsyncWriteBatch<EK, ER>) {
         task.clear();
         self.wbs.push_back(task);
     }
@@ -433,7 +455,7 @@ where
     kv_engine: EK,
     raft_engine: ER,
     router: RaftRouter<EK, ER>,
-    receiver: Receiver<Vec<AsyncWriteMsg>>,
+    receiver: Receiver<Vec<AsyncWriteMsg<EK, ER>>>,
     queue: AsyncWriteAdaptiveQueue<EK, ER>,
     trans: T,
     perf_context_statistics: PerfContextStatistics,
@@ -452,7 +474,7 @@ where
         kv_engine: EK,
         raft_engine: ER,
         router: RaftRouter<EK, ER>,
-        receiver: Receiver<Vec<AsyncWriteMsg>>,
+        receiver: Receiver<Vec<AsyncWriteMsg<EK, ER>>>,
         trans: T,
         config: &Config,
     ) -> Self {
@@ -535,7 +557,7 @@ where
         }
     }
 
-    fn sync_write(&mut self, batch: &mut AsyncWriteBatch<EK, EK::WriteBatch, ER::LogBatch>) {
+    fn sync_write(&mut self, batch: &mut AsyncWriteBatch<EK, ER>) {
         batch.before_write_to_db();
 
         self.perf_context_statistics.start();
@@ -608,12 +630,20 @@ where
     }
 }
 
-pub struct AsyncWriters {
-    writers: Vec<Sender<Vec<AsyncWriteMsg>>>,
+pub struct AsyncWriters<EK, ER> 
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    writers: Vec<Sender<Vec<AsyncWriteMsg<EK, ER>>>>,
     handlers: Vec<JoinHandle<()>>,
 }
 
-impl AsyncWriters {
+impl<EK, ER> AsyncWriters<EK, ER> 
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
     pub fn new() -> Self {
         Self {
             writers: vec![],
@@ -621,11 +651,11 @@ impl AsyncWriters {
         }
     }
 
-    pub fn senders(&self) -> &Vec<Sender<Vec<AsyncWriteMsg>>> {
+    pub fn senders(&self) -> &Vec<Sender<Vec<AsyncWriteMsg<EK, ER>>>> {
         &self.writers
     }
 
-    pub fn spawn<EK: KvEngine, ER: RaftEngine, T: Transport + 'static>(
+    pub fn spawn<T: Transport + 'static>(
         &mut self,
         store_id: u64,
         kv_engine: &EK,

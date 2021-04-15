@@ -1625,7 +1625,6 @@ where
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
     ) -> Option<(Ready, InvokeContext)> {
-        let now = Instant::now();
         if self.pending_remove {
             return None;
         }

@@ -100,9 +100,8 @@ impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatch {
         e.write_opt(self, opts)
     }
 
-    fn append(&mut self, _: &mut Self) {
-        // not implemented yet
-        panic!("append is not implemented for write batch");
+    fn append(&mut self, src: &mut Self) {
+        self.wb.append(src.wb.data());
     }
 }
 

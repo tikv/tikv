@@ -241,6 +241,10 @@ impl RaftLogBatch for RocksWriteBatch {
     fn is_empty(&self) -> bool {
         Mutable::is_empty(self)
     }
+
+    fn merge(&mut self, src: &mut Self) {
+        engine_traits::WriteBatch::<RocksEngine>::append(self, src);
+    }
 }
 
 impl RocksWriteBatch {

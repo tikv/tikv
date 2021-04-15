@@ -289,13 +289,21 @@ impl Clone for PeerTickBatch {
     }
 }
 
-pub struct AsyncWriteMsgBatch {
-    pub msgs: Vec<AsyncWriteMsg>,
+pub struct AsyncWriteMsgBatch<EK, ER> 
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    pub msgs: Vec<AsyncWriteMsg<EK, ER>>,
     pub begin: Option<Instant>,
     pub size: usize,
 }
 
-impl AsyncWriteMsgBatch {
+impl<EK, ER> AsyncWriteMsgBatch<EK, ER> 
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
     fn new() -> Self {
         Self {
             msgs: vec![],
@@ -351,18 +359,18 @@ where
     pub perf_context_statistics: PerfContextStatistics,
     pub tick_batch: Vec<PeerTickBatch>,
     pub node_start_time: Option<TiInstant>,
-    pub async_write_senders: Vec<Sender<Vec<AsyncWriteMsg>>>,
-    pub async_write_msg_batch: Vec<AsyncWriteMsgBatch>,
+    pub async_write_senders: Vec<Sender<Vec<AsyncWriteMsg<EK, ER>>>>,
+    pub async_write_msg_batch: Vec<AsyncWriteMsgBatch<EK, ER>>,
     pub io_lock_metrics: StoreIOLockMetrics,
 }
 
-impl<EK, ER, T> HandleRaftReadyContext for PollContext<EK, ER, T>
+impl<EK, ER, T> HandleRaftReadyContext<EK, ER> for PollContext<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
 {
     #[inline]
-    fn async_write_batch(&mut self, id: usize) -> &mut AsyncWriteMsgBatch {
+    fn async_write_batch(&mut self, id: usize) -> &mut AsyncWriteMsgBatch<EK, ER> {
         &mut self.async_write_msg_batch[id]
     }
 
@@ -886,7 +894,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     pub engines: Engines<EK, ER>,
     applying_snap_count: Arc<AtomicUsize>,
     global_replication_state: Arc<Mutex<GlobalReplicationState>>,
-    async_write_senders: Vec<Sender<Vec<AsyncWriteMsg>>>,
+    async_write_senders: Vec<Sender<Vec<AsyncWriteMsg<EK, ER>>>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
@@ -1145,7 +1153,7 @@ pub struct RaftBatchSystem<EK: KvEngine, ER: RaftEngine> {
     apply_system: ApplyBatchSystem<EK>,
     router: RaftRouter<EK, ER>,
     workers: Option<Workers<EK>>,
-    async_writers: AsyncWriters,
+    async_writers: AsyncWriters<EK, ER>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {

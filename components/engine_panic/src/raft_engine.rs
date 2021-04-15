@@ -107,4 +107,8 @@ impl RaftLogBatch for PanicWriteBatch {
     fn is_empty(&self) -> bool {
         panic!()
     }
+
+    fn merge(&mut self, _: &mut Self) {
+        panic!()
+    }
 }

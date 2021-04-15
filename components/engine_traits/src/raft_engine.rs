@@ -85,6 +85,8 @@ pub trait RaftLogBatch: Send {
     fn persist_size(&self) -> usize;
 
     fn is_empty(&self) -> bool;
+
+    fn merge(&mut self, _: &mut Self);
 }
 
 #[derive(Clone, Copy, Default)]
