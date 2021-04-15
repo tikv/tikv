@@ -848,7 +848,8 @@ fn test_mismatch_store_node() {
     store2.set_address(node1_addr.clone());
     cluster.update_pd_store_info(store1);
     cluster.update_pd_store_info(store2);
-    // sleep to wait address re-resolved
-    sleep_ms(40 * 1000);
+    fail::cfg("mock_store_refresh_interval_secs", "return(1)").unwrap();
+    // wait address refresh
+    sleep_ms(3 * 1000);
     cluster.must_put(b"k4", b"k5");
 }

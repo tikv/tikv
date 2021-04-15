@@ -19,6 +19,12 @@ const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 
 pub type Callback = Box<dyn FnOnce(Result<String>) + Send>;
 
+pub fn store_address_refresh_interval_secs() -> u64 {
+    fail_point!("mock_store_refresh_interval_secs", |arg| arg
+        .map_or(1, |e| e.parse().unwrap()));
+    STORE_ADDRESS_REFRESH_SECONDS
+}
+
 /// A trait for resolving store addresses.
 pub trait StoreAddrResolver: Send + Clone {
     /// Resolves the address for the specified store id asynchronously.
@@ -63,7 +69,7 @@ where
         if let Some(s) = self.store_addrs.get(&store_id) {
             let now = Instant::now();
             let elapsed = now.duration_since(s.last_update);
-            if elapsed.as_secs() < STORE_ADDRESS_REFRESH_SECONDS {
+            if elapsed.as_secs() < store_address_refresh_interval_secs() {
                 return Ok(s.addr.clone());
             }
         }
