@@ -1190,6 +1190,10 @@ impl<T: Simulator> Cluster<T> {
         self.sim.rl().get_snap_dir(node_id)
     }
 
+    pub fn get_snap_mgr(&self, node_id: u64) -> SnapManager {
+        self.sim.rl().get_snap_mgr(node_id).clone()
+    }
+
     pub fn clear_send_filters(&mut self) {
         let mut sim = self.sim.wl();
         for node_id in sim.get_node_ids() {

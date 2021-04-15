@@ -1,23 +1,28 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fs;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::path::Path;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
-use kvproto::raft_serverpb::*;
-use kvproto::tikvpb::TikvClient;
-use raft::eraftpb::{Message, MessageType};
 use engine_rocks::Compat;
 use engine_traits::Peekable;
 use file_system::{IOOp, IOType, WithIORateLimit};
-use grpcio::Error as GrpcError;
+use futures::executor::block_on;
+use grpcio::Environment;
+use kvproto::raft_serverpb::*;
+use protobuf::Message as _;
+use raft::eraftpb::{Message, MessageType};
+use raftstore::store::SNAPSHOT_VERSION;
 use raftstore::store::*;
-use tikv::server::snap::send_snap;
 use raftstore::Result;
+use rand::Rng;
+use security::SecurityManager;
 use test_raftstore::*;
+use tikv::server::snap::send_snap;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
 
@@ -524,7 +529,7 @@ fn test_inspected_snapshot() {
 #[test]
 fn test_gen_during_heavy_recv() {
     let mut cluster = new_server_cluster(0, 3);
-    cluster.cfg.server.snap_max_write_bytes_per_sec = ReadableSize(5);
+    cluster.cfg.server.snap_max_write_bytes_per_sec = ReadableSize(5 * 1024 * 1024);
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration(Duration::from_secs(100));
 
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -532,18 +537,20 @@ fn test_gen_during_heavy_recv() {
     let rid = cluster.run_conf_change();
 
     // Put about 1M data into the region.
-    let value = vec![b'x'; 1024];
-    for i in 0..1024 {
+    cluster.must_put(b"key-0000", b"value");
+    for i in 1..1024 {
         let key = format!("key-{:04}", i).into_bytes();
-        cluster.must_put(&key, &value);
+        cluster.must_put(&key, &random_long_vec(1024));
     }
 
-    pd_client.add_peer(rid, new_learner_peer(2, 2));
-    must_get_equal(&cluster.get_engine(2), b"key-0000", &value);
+    pd_client.must_add_peer(rid, new_learner_peer(2, 2));
+    must_get_equal(&cluster.get_engine(2), b"key-0000", b"value");
 
+    // A snapshot must have been received on store 2. Copy it to send it back to store 1 later.
     let snap_dir = cluster.get_snap_dir(2);
-    let snap_mgr = cluster.get_snap_mgr(2).clone();
+    let snap_mgr = cluster.get_snap_mgr(2);
     let (mut snap_term, mut snap_index) = (0, 0);
+    let mut meta_path = String::new();
     for entry in fs::read_dir(&snap_dir).unwrap() {
         let entry = entry.unwrap();
         let copy_to = entry.path().to_str().unwrap().replace("rev_1", "gen_2");
@@ -554,43 +561,103 @@ fn test_gen_during_heavy_recv() {
             let parts: Vec<_> = prefix.split('_').collect();
             snap_term = parts[2].parse::<u64>().unwrap();
             snap_index = parts[3].parse::<u64>().unwrap();
+            meta_path = copy_to;
         }
     }
 
+    info!("snap 1 dir: {} ---------------", cluster.get_snap_dir(1));
 
+    // Keep sending snapshots to store 1.
     let addr = cluster.sim.rl().get_addr(1);
-    let smgr = cluster.sim.rl().security_mgr.clone();
-    send_a_large_snapshot(snap_mgr, smgr, &addr, 1, 2, snap_index, snap_term);
+    let sec_mgr = cluster.sim.rl().security_mgr.clone();
+    let th = std::thread::spawn(move || {
+        loop {
+            for suffix in &[".meta", "_default.sst"] {
+                let mut src = PathBuf::from(&snap_dir);
+                src.push(&format!("gen_2_{}_{}{}", snap_term, snap_index, suffix));
+                let mut dst = PathBuf::from(&snap_dir);
+                dst.push(&format!("gen_2_{}_{}{}", snap_term, snap_index + 1, suffix));
+                fs::hard_link(&src, &dst).unwrap();
+            }
 
-    // println!("addr: {}", addr);
-    // let th = std::thread::spawn(move || {
-    //     for index in 100..200 {
-    //         if send_a_large_snapshot(&addr, 1, 100, index, 100).is_err() {
-    //             break;
-    //         }
-    //     }
-    // });
-    // th.join().unwrap();
+            let snap_mgr = snap_mgr.clone();
+            let sec_mgr = sec_mgr.clone();
+            if let Err(e) = send_a_large_snapshot(
+                snap_mgr, sec_mgr, &addr, 2, snap_index, snap_term, &meta_path,
+            ) {
+                info!("send_a_large_snapshot fail: {}", e);
+                break;
+            }
 
+            meta_path = meta_path.replace(
+                &format!("{}.meta", snap_index),
+                &format!("{}.meta", snap_index + 1),
+            );
+            snap_index += 1;
+        }
+    });
 
+    // While store 1 keeps receiving snapshots, it should still can generate a snapshot on time.
+    pd_client.must_add_peer(rid, new_learner_peer(3, 3));
+    std::thread::sleep(Duration::from_millis(500));
+    must_get_equal(&cluster.get_engine(3), b"key-0000", b"value");
+
+    drop(cluster);
+    let _ = th.join();
 }
 
 fn send_a_large_snapshot(
     mgr: SnapManager,
     security_mgr: Arc<SecurityManager>,
     addr: &str,
-    store_id: u64,
     region_id: u64,
     index: u64,
     term: u64,
-) -> std::result::Result<(), GrpcError> {
+    meta_path: &str,
+) -> std::result::Result<(), String> {
+    // Read a snapshot meta.
+    let mut meta_bytes = Vec::with_capacity(1024);
+    fs::File::open(meta_path)
+        .and_then(|mut f| f.read_to_end(&mut meta_bytes))
+        .unwrap();
+    let mut snap_meta = SnapshotMeta::default();
+    snap_meta.merge_from_bytes(&meta_bytes).unwrap();
+
+    // Construct a snapshot data.
+    let mut snap_data = RaftSnapshotData::default();
+    snap_data.mut_region().id = region_id;
+    snap_data.set_file_size(
+        mgr.get_snapshot_for_sending(&SnapKey::new(region_id, term, index))
+            .unwrap()
+            .total_size()
+            .unwrap(),
+    );
+    snap_data.set_version(SNAPSHOT_VERSION);
+    snap_data.set_meta(snap_meta);
+
+    // Construct a raft message.
+    let mut msg = RaftMessage::default();
+    msg.region_id = region_id;
+    msg.mut_message().mut_snapshot().mut_metadata().term = term;
+    msg.mut_message().mut_snapshot().mut_metadata().index = index;
+    msg.mut_message()
+        .mut_snapshot()
+        .set_data(snap_data.write_to_bytes().unwrap());
+
     let env = Arc::new(Environment::new(1));
     let cfg = tikv::server::Config::default();
-    let mut msg = RaftMessage::default();
-    msg.region_id = 2;
-    msg.mut_message().mut_snapshot().term = snap_key.term;
-    msg.mut_message().mut_snapshot().index = snap_key.idx;
+    block_on(async {
+        send_snap(env, mgr, security_mgr, &cfg, addr, msg)
+            .unwrap()
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("{:?}", e))
+    })
+}
 
-    send_snap(env, mgr, security_mgr, &cfg, addr, )
-    Ok(())
+fn random_long_vec(length: usize) -> Vec<u8> {
+    let mut rng = rand::thread_rng();
+    let mut value = Vec::with_capacity(1024);
+    (0..length).for_each(|_| value.push(rng.gen::<u8>()));
+    value
 }

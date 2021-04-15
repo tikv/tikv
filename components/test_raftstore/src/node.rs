@@ -224,6 +224,8 @@ impl Simulator for NodeCluster {
         {
             let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
             let snap_mgr = SnapManagerBuilder::default()
+                .max_write_bytes_per_sec(cfg.server.snap_max_write_bytes_per_sec.0 as i64)
+                .max_total_size(cfg.server.snap_max_total_size.0)
                 .encryption_key_manager(key_manager)
                 .build(tmp.path().to_str().unwrap());
             (snap_mgr, Some(tmp))

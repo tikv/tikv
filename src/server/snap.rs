@@ -94,7 +94,7 @@ impl Stream for SnapChunk {
     }
 }
 
-struct SendStat {
+pub struct SendStat {
     key: SnapKey,
     total_size: u64,
     elapsed: Duration,
