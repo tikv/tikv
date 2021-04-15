@@ -27,5 +27,6 @@
 
 mod endpoint;
 mod plugin_registry;
+mod raw_storage_impl;
 
 pub use self::endpoint::Endpoint;

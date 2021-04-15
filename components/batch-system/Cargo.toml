@@ -16,7 +16,7 @@ prost-codec = [
 ]
 
 [dependencies]
-crossbeam = "0.7"
+crossbeam = "0.8"
 tikv_util = { path = "../tikv_util", default-features = false }
 file_system = { path = "../file_system", default-features = false }
 collections = { path = "../collections" }
