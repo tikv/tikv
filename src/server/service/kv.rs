@@ -1208,7 +1208,7 @@ async fn future_handle_empty(
             )
             .compat()
             .await;
-        }
+    }
     Ok(res)
 }
 

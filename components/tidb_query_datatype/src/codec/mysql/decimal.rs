@@ -2930,13 +2930,9 @@ mod tests {
 
         for (dec_str, scale, half_exp, trunc_exp, ceil_exp) in cases {
             let dec = dec_str.parse::<Decimal>().unwrap();
-            let res = dec
-                .round(scale, RoundMode::HalfEven)
-                .map(|d| d.to_string());
+            let res = dec.round(scale, RoundMode::HalfEven).map(|d| d.to_string());
             assert_eq!(res, half_exp.map(|s| s.to_owned()));
-            let res = dec
-                .round(scale, RoundMode::Truncate)
-                .map(|d| d.to_string());
+            let res = dec.round(scale, RoundMode::Truncate).map(|d| d.to_string());
             assert_eq!(res, trunc_exp.map(|s| s.to_owned()));
             let res = dec.round(scale, RoundMode::Ceiling).map(|d| d.to_string());
             assert_eq!(res, ceil_exp.map(|s| s.to_owned()));

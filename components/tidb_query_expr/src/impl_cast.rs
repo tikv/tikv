@@ -4397,8 +4397,7 @@ mod tests {
                         }
                         // TODO: if add test case for Decimal::round failure,
                         //  then should check whether this setting is right.
-                        let res = base_res
-                            .round((origin_decimal - 1) as i8, RoundMode::HalfEven);
+                        let res = base_res.round((origin_decimal - 1) as i8, RoundMode::HalfEven);
                         if res.is_zero() {
                             truncate_as_warning = false;
                             overflow_as_warning = false;
