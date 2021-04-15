@@ -295,6 +295,8 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             .core_threads(1)
             .build()
             .unwrap();
+        CDC_OLD_VALUE_CACHE_CAP.set(cfg.old_value_cache_size as i64);
+        let old_value_cache = OldValueCache::new(cfg.old_value_cache_size);
         let ep = Endpoint {
             env,
             security_mgr,
@@ -314,7 +316,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             min_ts_interval: cfg.min_ts_interval.0,
             min_resolved_ts: TimeStamp::max(),
             min_ts_region_id: 0,
-            old_value_cache: OldValueCache::new(cfg.old_value_cache_size),
+            old_value_cache,
             hibernate_regions_compatible: cfg.hibernate_regions_compatible,
             tikv_clients: Arc::new(Mutex::new(HashMap::default())),
         };
@@ -1549,6 +1551,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> RunnableWithTimer for Endpoint<T
         CDC_OLD_VALUE_CACHE_BYTES.set(cache_size as i64);
         CDC_OLD_VALUE_CACHE_ACCESS.add(self.old_value_cache.access_count as i64);
         CDC_OLD_VALUE_CACHE_MISS.add(self.old_value_cache.miss_count as i64);
+        CDC_OLD_VALUE_CACHE_LEN.set(self.old_value_cache.cache.len() as i64);
         self.old_value_cache.access_count = 0;
         self.old_value_cache.miss_count = 0;
     }
