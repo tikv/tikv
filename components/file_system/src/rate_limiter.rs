@@ -112,7 +112,7 @@ pub fn set_io_rate_limiter(limiter: Option<Arc<IORateLimiter>>) {
 }
 
 pub fn get_io_rate_limiter() -> Option<Arc<IORateLimiter>> {
-    (*IO_RATE_LIMITER.lock().unwrap()).as_ref().cloned()
+    (*IO_RATE_LIMITER.lock().unwrap()).clone()
 }
 
 pub struct WithIORateLimit {
