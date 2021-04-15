@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::iter::Iterator;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, u64};
@@ -1897,6 +1897,8 @@ where
         meta.pending_snapshot_regions
             .retain(|r| self.fsm.region_id() != r.get_id());
 
+        // Set the `safe_ts` to zero to reject incoming stale read request
+        self.fsm.peer.safe_ts.store(0, Ordering::Release);
         // Destroy read delegates.
         meta.readers.remove(&region_id);
 

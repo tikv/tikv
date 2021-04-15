@@ -26,7 +26,7 @@ use crate::store::{
 use crate::Error;
 use crate::Result;
 
-use engine_traits::{KvEngine, RaftEngine};
+use engine_traits::{KvEngine, RaftEngine, Snapshot};
 use tikv_util::codec::number::decode_u64;
 use tikv_util::lru::LruCache;
 use tikv_util::time::monotonic_raw_now;
@@ -267,6 +267,35 @@ impl ReadDelegate {
         }
 
         false
+    }
+
+    fn is_safe_to_read<S: Snapshot>(
+        &self,
+        read_ts: u64,
+        metrics: &mut ReadMetrics,
+    ) -> Option<ReadResponse<S>> {
+        let safe_ts = self.safe_ts.load(Ordering::Acquire);
+        if safe_ts >= read_ts {
+            return None;
+        }
+        debug!(
+            "reject stale read by safe ts";
+            "tag" => &self.tag,
+            "safe ts" => safe_ts,
+            "read ts" => read_ts
+        );
+        metrics.rejected_by_safe_timestamp += 1;
+        let mut response = cmd_resp::new_error(Error::DataIsNotReady(
+            self.region.get_id(),
+            self.peer_id,
+            safe_ts,
+        ));
+        cmd_resp::bind_term(&mut response, self.term);
+        Some(ReadResponse {
+            response,
+            snapshot: None,
+            txn_extra_op: TxnExtraOp::Noop,
+        })
     }
 }
 
@@ -518,7 +547,7 @@ where
     ) {
         match self.pre_propose_raft_command(&req) {
             Ok(Some((delegate, policy))) => {
-                match policy {
+                let mut response = match policy {
                     // Leader can read local if and only if it is in lease.
                     RequestPolicy::ReadLocal => {
                         let snapshot_ts = match read_id.as_mut() {
@@ -537,38 +566,30 @@ where
                             self.redirect(RaftCommand::new(req, cb));
                             return;
                         }
+                        self.execute(&req, &delegate.region, None, read_id)
                     }
                     // Replica can serve stale read if and only if its `safe_ts` >= `read_ts`
                     RequestPolicy::StaleRead => {
                         let read_ts =
                             decode_u64(&mut req.mut_header().take_flag_data().as_ref()).unwrap();
-                        let safe_ts = delegate.safe_ts.load(Ordering::Acquire);
                         assert!(read_ts > 0);
-                        if safe_ts < read_ts {
-                            debug!(
-                                "reject stale read by safe ts";
-                                "tag" => &delegate.tag,
-                                "safe ts" => safe_ts,
-                                "read ts" => read_ts
-                            );
-                            self.metrics.rejected_by_safe_timestamp += 1;
-                            let mut response = cmd_resp::new_error(Error::DataIsNotReady(
-                                delegate.region.get_id(),
-                                delegate.peer_id,
-                                safe_ts,
-                            ));
-                            cmd_resp::bind_term(&mut response, delegate.term);
-                            cb.invoke_read(ReadResponse {
-                                response,
-                                snapshot: None,
-                                txn_extra_op: TxnExtraOp::Noop,
-                            });
+                        if let Some(resp) = delegate.is_safe_to_read(read_ts, &mut self.metrics) {
+                            cb.invoke_read(resp);
                             return;
                         }
+
+                        // Getting the snapshot
+                        let response = self.execute(&req, &delegate.region, None, read_id);
+
+                        // Double check in case `safe_ts` change after the first check and before getting snapshot
+                        if let Some(resp) = delegate.is_safe_to_read(read_ts, &mut self.metrics) {
+                            cb.invoke_read(resp);
+                            return;
+                        }
+                        response
                     }
                     _ => unreachable!(),
-                }
-                let mut response = self.execute(&req, &delegate.region, None, read_id);
+                };
                 cmd_resp::bind_term(&mut response.response, delegate.term);
                 if let Some(snap) = response.snapshot.as_mut() {
                     snap.max_ts_sync_status = Some(delegate.max_ts_sync_status.clone());
