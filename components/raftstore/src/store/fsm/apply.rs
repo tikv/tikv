@@ -3309,14 +3309,11 @@ where
         apply_ctx: &mut ApplyContext<EK, W>,
         msgs: &mut Vec<Msg<EK>>,
     ) {
-        let mut channel_timer = None;
         let mut drainer = msgs.drain(..);
         loop {
             match drainer.next() {
                 Some(Msg::Apply { start, apply }) => {
-                    if channel_timer.is_none() {
-                        channel_timer = Some(start);
-                    }
+                    APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(start.elapsed_secs());
                     self.handle_apply(apply_ctx, apply);
                     if let Some(ref mut state) = self.delegate.yield_state {
                         state.pending_msgs = drainer.collect();
@@ -3340,10 +3337,6 @@ where
                 }
                 None => break,
             }
-        }
-        if let Some(timer) = channel_timer {
-            let elapsed = duration_to_sec(timer.elapsed());
-            APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(elapsed);
         }
     }
 }

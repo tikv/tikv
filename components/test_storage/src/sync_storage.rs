@@ -85,7 +85,7 @@ pub struct SyncTestStorage<E: Engine> {
 }
 
 impl<E: Engine> SyncTestStorage<E> {
-    pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider>(
+    pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider + Clone + 'static>(
         &mut self,
         cfg: AutoGcConfig<S, R>,
     ) {
@@ -333,7 +333,7 @@ impl<E: Engine> SyncTestStorage<E> {
         )
     }
 
-    pub fn raw_compare_and_set_atomic(
+    pub fn raw_compare_and_swap_atomic(
         &self,
         ctx: Context,
         cf: String,
@@ -342,7 +342,7 @@ impl<E: Engine> SyncTestStorage<E> {
         value: Vec<u8>,
         ttl: u64,
     ) -> Result<(Option<Vec<u8>>, bool)> {
-        wait_op!(|cb| self.store.raw_compare_and_set_atomic(
+        wait_op!(|cb| self.store.raw_compare_and_swap_atomic(
             ctx,
             cf,
             key,
