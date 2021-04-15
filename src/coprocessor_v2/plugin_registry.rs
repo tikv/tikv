@@ -84,12 +84,15 @@ impl PluginRegistry {
                         Ok(DebouncedEvent::Remove(file)) => {
                             unload(&file);
                         }
+                        Ok(DebouncedEvent::Rename(old_file, new_file)) => {
+                            // If the file is renamed with a different parent directory, we will receive a `Remove` instead.
+                            std::debug_assert!(old_file.parent() == new_file.parent());
+                            rename(&old_file, &new_file);
+                        }
                         Ok(DebouncedEvent::Write(file)) => {
+                            warn!("another process is overwriting a coprocessor plugin while the plugin is loaded. This can lead to severe issues!"; "plugin_path" => ?file);
                             unload(&file);
                             maybe_load(&file);
-                        }
-                        Ok(DebouncedEvent::Rename(old_file, new_file)) => {
-                            rename(&old_file, &new_file);
                         }
                         Ok(_) => (),
                         Err(_) => break, // Stop when watcher is dropped.
