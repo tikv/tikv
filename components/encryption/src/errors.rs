@@ -15,6 +15,10 @@ pub trait RetryCodedError: Debug + Display + ErrorCodeExt + RetryError + Send + 
 pub enum Error {
     #[fail(display = "Other error {}", _0)]
     Other(Box<dyn error::Error + Sync + Send>),
+    // Only when the parsing record is the last one, and the
+    // length is insufficient or the crc checksum fails.
+    #[fail(display = "Recoverable tail record corruption while parsing file dictionary")]
+    TailRecordParseIncomplete,
     // Currently only in use by cloud KMS
     #[fail(display = "Cloud KMS error {}", _0)]
     RetryCodedError(Box<dyn RetryCodedError>),
@@ -75,6 +79,7 @@ impl ErrorCodeExt for Error {
     fn error_code(&self) -> ErrorCode {
         match self {
             Error::RetryCodedError(err) => (*err).error_code(),
+            Error::TailRecordParseIncomplete => error_code::encryption::PARSE_INCOMPLETE,
             Error::Rocks(_) => error_code::encryption::ROCKS,
             Error::Io(_) => error_code::encryption::IO,
             Error::Crypter(_) => error_code::encryption::CRYPTER,
@@ -93,6 +98,7 @@ impl RetryError for Error {
         // However, only Error::Tls should be encountered
         match self {
             Error::RetryCodedError(err) => err.is_retryable(),
+            Error::TailRecordParseIncomplete => true,
             Error::Rocks(_) => true,
             Error::Io(_) => true,
             Error::Crypter(_) => true,
