@@ -86,7 +86,7 @@ impl PluginRegistry {
                         }
                         Ok(DebouncedEvent::Rename(old_file, new_file)) => {
                             // If the file is renamed with a different parent directory, we will receive a `Remove` instead.
-                            std::debug_assert!(old_file.parent() == new_file.parent());
+                            debug_assert!(old_file.parent() == new_file.parent());
                             rename(&old_file, &new_file);
                         }
                         Ok(DebouncedEvent::Write(file)) => {
