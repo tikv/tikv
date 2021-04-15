@@ -56,7 +56,7 @@
 
 [readpool.storage]
 ## Whether to use the unified read pool to handle storage requests.
-# use-unified-pool = false
+# use-unified-pool = true
 
 ## The following configurations only take effect when `use-unified-pool` is false.
 
@@ -123,7 +123,7 @@
 # grpc-compression-type = "none"
 
 ## Size of the thread pool for the gRPC server.
-# grpc-concurrency = 4
+# grpc-concurrency = 5
 
 ## The number of max concurrent streams/requests on a client connection.
 # grpc-concurrent-stream = 1024
@@ -179,12 +179,12 @@
 
 [storage]
 ## The path to RocksDB directory.
-# data-dir = "/tmp/tikv/store"
+# data-dir = "./"
 
 ## The number of slots in Scheduler latches, which controls write concurrency.
 ## In most cases you can use the default value. When importing data, you can set it to a larger
 ## value.
-# scheduler-concurrency = 2048000
+# scheduler-concurrency = 524288
 
 ## Scheduler's worker pool size, i.e. the number of write threads.
 ## It should be less than total CPU cores. When there are frequent write operations, set it to a
@@ -296,7 +296,7 @@
 # raft-log-gc-threshold = 50
 
 ## When the entry count exceeds this value, GC will be forced to trigger.
-# raft-log-gc-count-limit = 72000
+# raft-log-gc-count-limit = 73728
 
 ## When the approximate size of Raft log entries exceeds this value, GC will be forced trigger.
 ## It's recommanded to set it to 3/4 of `region-split-size`.
@@ -417,7 +417,7 @@
 ## persistent storage. See https://github.com/facebook/rocksdb/wiki/How-to-persist-in-memory-RocksDB-database .
 ## If there are two disks on the machine, storing RocksDB data and WAL logs on different disks can
 ## improve performance.
-# wal-dir = "/tmp/tikv/store"
+# wal-dir = ""
 
 ## The following two fields affect how archived WAL will be deleted.
 ## 1. If both values are set to 0, logs will be deleted ASAP and will not get into the archive.
@@ -712,18 +712,6 @@
 ## default: normal
 # blob-run-mode = "normal"
 
-## If set true, values in blob file will be merged to a new blob file while
-## their corresponding keys are compacted to last two level in LSM-Tree.
-##
-## With this feature enabled, Titan could get better scan performance, and
-## better write performance during GC, but will suffer around 1.1 space
-## amplification and 3 more write amplification if no GC needed (eg. uniformly
-## distributed keys) under default rocksdb setting.
-##
-## Requirement: level_compaction_dynamic_level_base = true
-## default: false
-# level_merge = false
-
 ## Use merge operator to rewrite GC blob index.
 ## default: false
 # gc-merge-rewrite = false
@@ -789,7 +777,7 @@
 # writable-file-max-buffer-size = "1MB"
 # use-direct-io-for-flush-and-compaction = false
 # enable-pipelined-write = true
-# allow-concurrent-memtable-write = false
+# allow-concurrent-memtable-write = true
 # bytes-per-sync = "1MB"
 # wal-bytes-per-sync = "512KB"
 
@@ -798,7 +786,6 @@
 # info-log-keep-log-file-num = 10
 # info-log-dir = ""
 # info-log-level = "info"
-# optimize-filters-for-hits = true
 
 [raftdb.defaultcf]
 ## Recommend to set it the same as `rocksdb.defaultcf.compression-per-level`.
@@ -923,9 +910,6 @@
 ## Number of threads to perform backup tasks.
 ## The default value is set to min(CPU_NUM * 0.75, 32).
 # num-threads = 24
-
-## Number of ranges to backup in one batch.
-# batch = 8
 
 ## When Backup region [a,e) size exceeds `sst-max-size`, it will be backuped into several Files [a,b),
 ## [b,c), [c,d), [d,e) and the size of [a,b), [b,c), [c,d) will be `sst-max-size` (or a
