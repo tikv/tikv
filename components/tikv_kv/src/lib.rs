@@ -125,9 +125,9 @@ impl WriteData {
 pub struct SnapContext<'a> {
     pub pb_ctx: &'a Context,
     pub read_id: Option<ThreadReadId>,
-    // `start_ts` and `key_ranges` are used in replica read. They are sent to
-    // the leader via raft "read index" to check memory locks.
     pub start_ts: TimeStamp,
+    // `key_ranges` is used in replica read. It will send to
+    // the leader via raft "read index" to check memory locks.
     pub key_ranges: Vec<KeyRange>,
 }
 
