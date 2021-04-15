@@ -37,12 +37,6 @@ const GENERATE_POOL_SIZE: usize = 2;
 
 // used to periodically check whether we should delete a stale peer's range in region runner
 
-#[cfg(not(test))]
-pub const STALE_PEER_CHECK_TICK: usize = 500; // 10000 milliseconds
-
-// used to periodically check whether schedule pending applies in region runner
-pub const PENDING_APPLY_CHECK_INTERVAL: u64 = 20;
-
 const CLEANUP_MAX_REGION_COUNT: usize = 128;
 
 /// Region related task
@@ -645,6 +639,7 @@ where
     pending_applies: VecDeque<EngineStoreApplySnapTask>,
     pre_handle_snap_cfg: PreHandleSnapCfg,
     clean_stale_tick: usize,
+    clean_stale_tick_max: usize,
     clean_stale_check_interval: Duration,
 }
 
@@ -657,6 +652,7 @@ where
         engine: EK,
         mgr: SnapManager,
         snap_handle_pool_size: usize,
+        region_worker_tick_interval: tikv_util::config::ReadableDuration,
         use_delete_range: bool,
         coprocessor_host: CoprocessorHost<EK>,
         router: R,
@@ -666,7 +662,11 @@ where
         } else {
             (snap_handle_pool_size, true)
         };
-        info!("create region runner"; "pool_size" => pool_size, "pre_handle_snap" => pre_handle_snap);
+        let tick_interval_ms = region_worker_tick_interval.as_millis();
+        let clean_stale_tick_max = (10_000 / tick_interval_ms) as usize;
+
+        info!("create region runner"; "pool_size" => pool_size, "pre_handle_snap" => pre_handle_snap, "tick_interval_ms" => tick_interval_ms,
+         "clean_stale_tick_max" => clean_stale_tick_max);
 
         Runner {
             pool: Builder::new(thd_name!("region-task"))
@@ -682,7 +682,8 @@ where
             },
             pending_applies: VecDeque::new(),
             clean_stale_tick: 0,
-            clean_stale_check_interval: Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL),
+            clean_stale_tick_max,
+            clean_stale_check_interval: Duration::from_millis(tick_interval_ms),
             pre_handle_snap_cfg: PreHandleSnapCfg {
                 pool_size,
                 pre_handle_snap,
@@ -808,7 +809,7 @@ where
     fn on_timeout(&mut self) {
         self.handle_pending_applies();
         self.clean_stale_tick += 1;
-        if self.clean_stale_tick >= STALE_PEER_CHECK_TICK {
+        if self.clean_stale_tick >= self.clean_stale_tick_max {
             self.ctx.clean_stale_ranges();
             self.clean_stale_tick = 0;
         }

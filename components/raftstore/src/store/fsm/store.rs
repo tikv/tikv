@@ -1183,6 +1183,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             engines.kv.clone(),
             mgr.clone(),
             cfg.value().snap_handle_pool_size,
+            cfg.value().region_worker_tick_interval,
             cfg.value().use_delete_range,
             workers.coprocessor_host.clone(),
             self.router(),

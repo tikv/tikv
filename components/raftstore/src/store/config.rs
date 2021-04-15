@@ -123,6 +123,9 @@ pub struct Config {
     #[config(skip)]
     pub snap_handle_pool_size: usize,
 
+    #[config(skip)]
+    pub region_worker_tick_interval: ReadableDuration,
+
     // Interval (ms) to check region whether the data is consistent.
     pub consistency_check_interval: ReadableDuration,
 
@@ -236,6 +239,7 @@ impl Default for Config {
             leader_transfer_max_log_lag: 128,
             snap_apply_batch_size: ReadableSize::mb(10),
             snap_handle_pool_size: 2,
+            region_worker_tick_interval: ReadableDuration::millis(500),
             lock_cf_compact_interval: ReadableDuration::minutes(10),
             lock_cf_compact_bytes_threshold: ReadableSize::mb(256),
             // Disable consistency check by default as it will hurt performance.
