@@ -284,6 +284,7 @@ members = [
   "components/file_system",
   "components/collections",
   "components/coprocessor_plugin_api",
+  "components/test_coprocessor_plugin/example_plugin"
 ]
 default-members = ["cmd/tikv-server", "cmd/tikv-ctl"]
 

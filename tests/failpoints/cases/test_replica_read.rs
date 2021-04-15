@@ -138,7 +138,7 @@ fn test_duplicate_read_index_ctx() {
     let router = cluster.sim.wl().get_router(1).unwrap();
     fail::cfg("pause_on_peer_collect_message", "pause").unwrap();
     cluster.sim.wl().clear_recv_filters(1);
-    for raft_msg in std::mem::take(dropped_msgs.lock().unwrap().as_mut()): Vec<_> {
+    for raft_msg in std::mem::take(&mut dropped_msgs.lock().unwrap()) {
         router.send_raft_message(raft_msg).unwrap();
     }
     fail::remove("pause_on_peer_collect_message");
@@ -459,7 +459,7 @@ fn test_replica_read_after_transfer_leader() {
     cluster.sim.wl().clear_recv_filters(2);
 
     let router = cluster.sim.wl().get_router(2).unwrap();
-    for raft_msg in std::mem::take(dropped_msgs.lock().unwrap().as_mut()): Vec<_> {
+    for raft_msg in std::mem::take(&mut dropped_msgs.lock().unwrap()) {
         router.send_raft_message(raft_msg).unwrap();
     }
 
