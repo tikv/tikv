@@ -7020,11 +7020,19 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_io_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", op=\"write\"}[1m])) by (type)",
+              "expr": "max_over_time((sum(rate(tikv_io_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", op=\"write\"}[30s])) by (type))[30s:10s])",
               "format": "time_series",
-              "intervalFactor": 1,
+              "intervalFactor": 2,
               "legendFormat": " {{type}}",
               "refId": "A",
+              "step": 4
+            },
+            {
+              "expr": "max_over_time((sum(rate(tikv_io_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", op=\"write\"}[30s])))[30s:10s])",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": " {{type}}",
+              "refId": "B",
               "step": 4
             }
           ],
@@ -7115,11 +7123,19 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_io_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", op=\"read\"}[1m])) by (type)",
+              "expr": "max_over_time((sum(rate(tikv_io_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", op=\"read\"}[30s])) by (type))[30s:10s])",
               "format": "time_series",
-              "intervalFactor": 1,
-              "legendFormat": " {{type}}",
+              "intervalFactor": 2,
+              "legendFormat": "{{type}}",
               "refId": "A",
+              "step": 4
+            },
+            {
+              "expr": "max_over_time((sum(rate(tikv_io_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", op=\"read\"}[30s])))[30s:10s])",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "total",
+              "refId": "B",
               "step": 4
             }
           ],

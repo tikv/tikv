@@ -315,7 +315,7 @@ impl PriorityBasedIORateLimiter {
     ///    total IO flow could exceed global threshold.
     /// 3) Highest priority IO alone must not exceed global threshold.
     fn refill(&self, locked: &mut PriorityBasedIORateLimiterProtected, now: Instant) {
-        const UPDATE_BUDGETS_EVERY_N_EPOCHS: usize = 10;
+        const UPDATE_BUDGETS_EVERY_N_EPOCHS: usize = 15;
 
         let mut limit = self.bytes_per_epoch[IOPriority::High as usize].load(Ordering::Relaxed);
         if limit == 0 {
