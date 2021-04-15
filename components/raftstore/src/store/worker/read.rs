@@ -269,14 +269,14 @@ impl ReadDelegate {
         false
     }
 
-    fn is_safe_to_read<S: Snapshot>(
+    fn check_stale_read_safe<S: Snapshot>(
         &self,
         read_ts: u64,
         metrics: &mut ReadMetrics,
-    ) -> Option<ReadResponse<S>> {
+    ) -> std::result::Result<(), ReadResponse<S>> {
         let safe_ts = self.safe_ts.load(Ordering::Acquire);
         if safe_ts >= read_ts {
-            return None;
+            return Ok(());
         }
         debug!(
             "reject stale read by safe ts";
@@ -291,7 +291,7 @@ impl ReadDelegate {
             safe_ts,
         ));
         cmd_resp::bind_term(&mut response, self.term);
-        Some(ReadResponse {
+        Err(ReadResponse {
             response,
             snapshot: None,
             txn_extra_op: TxnExtraOp::Noop,
@@ -542,7 +542,7 @@ where
     pub fn propose_raft_command(
         &mut self,
         mut read_id: Option<ThreadReadId>,
-        mut req: RaftCmdRequest,
+        req: RaftCmdRequest,
         cb: Callback<E::Snapshot>,
     ) {
         match self.pre_propose_raft_command(&req) {
@@ -570,10 +570,11 @@ where
                     }
                     // Replica can serve stale read if and only if its `safe_ts` >= `read_ts`
                     RequestPolicy::StaleRead => {
-                        let read_ts =
-                            decode_u64(&mut req.mut_header().take_flag_data().as_ref()).unwrap();
+                        let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
                         assert!(read_ts > 0);
-                        if let Some(resp) = delegate.is_safe_to_read(read_ts, &mut self.metrics) {
+                        if let Err(resp) =
+                            delegate.check_stale_read_safe(read_ts, &mut self.metrics)
+                        {
                             cb.invoke_read(resp);
                             return;
                         }
@@ -582,7 +583,9 @@ where
                         let response = self.execute(&req, &delegate.region, None, read_id);
 
                         // Double check in case `safe_ts` change after the first check and before getting snapshot
-                        if let Some(resp) = delegate.is_safe_to_read(read_ts, &mut self.metrics) {
+                        if let Err(resp) =
+                            delegate.check_stale_read_safe(read_ts, &mut self.metrics)
+                        {
                             cb.invoke_read(resp);
                             return;
                         }

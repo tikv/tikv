@@ -5639,6 +5639,7 @@ dependencies = [
  "farmhash",
  "kvproto",
  "log_wrappers",
+ "panic_hook",
  "rand 0.7.3",
  "slog",
  "thiserror",

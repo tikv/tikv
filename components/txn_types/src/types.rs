@@ -451,13 +451,19 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
     fn test_flags_panic() {
-        // r must be an invalid flags if it is not zero
-        let r = rand::random::<u64>() & !WriteBatchFlags::all().bits();
-        WriteBatchFlags::from_bits_check(r);
-        if r == 0 {
-            panic!("panic for zero");
+        for _ in 0..100 {
+            assert!(
+                panic_hook::recover_safe(|| {
+                    // r must be an invalid flags if it is not zero
+                    let r = rand::random::<u64>() & !WriteBatchFlags::all().bits();
+                    WriteBatchFlags::from_bits_check(r);
+                    if r == 0 {
+                        panic!("panic for zero");
+                    }
+                })
+                .is_err()
+            );
         }
     }
 

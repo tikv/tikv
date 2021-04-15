@@ -35,3 +35,4 @@ log_wrappers = { path = "../log_wrappers" }
 
 [dev-dependencies]
 rand = "0.7"
+panic_hook = { path = "../panic_hook" }
