@@ -10,7 +10,7 @@ use std::sync::mpsc::channel;
 use std::sync::Arc;
 use test_raftstore::*;
 use test_storage::*;
-use tikv::server::gc_worker::AutoGcConfig;
+use tikv::server::gc_worker::{AutoGcConfig, GcConfig};
 use tikv::storage::kv::{Engine, Error as KvError, ErrorInner as KvErrorInner};
 use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
@@ -273,11 +273,9 @@ fn test_auto_gc() {
         .storages
         .iter()
         .map(|(id, engine)| {
+            let mut config = GcConfig::default();
             // Do not skip GC
-            let config = tikv::server::gc_worker::GcConfig {
-                ratio_threshold: 0.9,
-                ..Default::default()
-            };
+            config.ratio_threshold = 0.9;
             let storage = SyncTestStorageBuilder::from_engine(engine.clone())
                 .gc_config(config)
                 .build()
