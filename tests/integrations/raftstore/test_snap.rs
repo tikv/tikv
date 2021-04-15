@@ -2,17 +2,20 @@
 
 use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::path::Path;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use kvproto::raft_serverpb::*;
+use kvproto::tikvpb::TikvClient;
 use raft::eraftpb::{Message, MessageType};
-
 use engine_rocks::Compat;
 use engine_traits::Peekable;
 use file_system::{IOOp, IOType, WithIORateLimit};
+use grpcio::Error as GrpcError;
 use raftstore::store::*;
+use tikv::server::snap::send_snap;
 use raftstore::Result;
 use test_raftstore::*;
 use tikv_util::config::*;
@@ -516,4 +519,78 @@ fn test_inspected_snapshot() {
     must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
     assert_ne!(stats.fetch(IOType::LoadBalance, IOOp::Read), 0);
     assert_ne!(stats.fetch(IOType::LoadBalance, IOOp::Write), 0);
+}
+
+#[test]
+fn test_gen_during_heavy_recv() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.server.snap_max_write_bytes_per_sec = ReadableSize(5);
+    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration(Duration::from_secs(100));
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let rid = cluster.run_conf_change();
+
+    // Put about 1M data into the region.
+    let value = vec![b'x'; 1024];
+    for i in 0..1024 {
+        let key = format!("key-{:04}", i).into_bytes();
+        cluster.must_put(&key, &value);
+    }
+
+    pd_client.add_peer(rid, new_learner_peer(2, 2));
+    must_get_equal(&cluster.get_engine(2), b"key-0000", &value);
+
+    let snap_dir = cluster.get_snap_dir(2);
+    let snap_mgr = cluster.get_snap_mgr(2).clone();
+    let (mut snap_term, mut snap_index) = (0, 0);
+    for entry in fs::read_dir(&snap_dir).unwrap() {
+        let entry = entry.unwrap();
+        let copy_to = entry.path().to_str().unwrap().replace("rev_1", "gen_2");
+        fs::copy(entry.path(), Path::new(&copy_to)).unwrap();
+        if copy_to.ends_with(".meta") {
+            let fname = copy_to.split("/").last().unwrap();
+            let prefix = fname.strip_suffix(".meta").unwrap();
+            let parts: Vec<_> = prefix.split('_').collect();
+            snap_term = parts[2].parse::<u64>().unwrap();
+            snap_index = parts[3].parse::<u64>().unwrap();
+        }
+    }
+
+
+    let addr = cluster.sim.rl().get_addr(1);
+    let smgr = cluster.sim.rl().security_mgr.clone();
+    send_a_large_snapshot(snap_mgr, smgr, &addr, 1, 2, snap_index, snap_term);
+
+    // println!("addr: {}", addr);
+    // let th = std::thread::spawn(move || {
+    //     for index in 100..200 {
+    //         if send_a_large_snapshot(&addr, 1, 100, index, 100).is_err() {
+    //             break;
+    //         }
+    //     }
+    // });
+    // th.join().unwrap();
+
+
+}
+
+fn send_a_large_snapshot(
+    mgr: SnapManager,
+    security_mgr: Arc<SecurityManager>,
+    addr: &str,
+    store_id: u64,
+    region_id: u64,
+    index: u64,
+    term: u64,
+) -> std::result::Result<(), GrpcError> {
+    let env = Arc::new(Environment::new(1));
+    let cfg = tikv::server::Config::default();
+    let mut msg = RaftMessage::default();
+    msg.region_id = 2;
+    msg.mut_message().mut_snapshot().term = snap_key.term;
+    msg.mut_message().mut_snapshot().index = snap_key.idx;
+
+    send_snap(env, mgr, security_mgr, &cfg, addr, )
+    Ok(())
 }

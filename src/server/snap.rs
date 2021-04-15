@@ -103,7 +103,7 @@ struct SendStat {
 /// Send the snapshot to specified address.
 ///
 /// It will first send the normal raft snapshot message and then send the snapshot file.
-fn send_snap(
+pub fn send_snap(
     env: Arc<Environment>,
     mgr: SnapManager,
     security_mgr: Arc<SecurityManager>,

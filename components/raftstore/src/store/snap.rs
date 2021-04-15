@@ -1,6 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::{Ordering as CmpOrdering, Reverse};
+use std::borrow::Cow;
+use std::cmp::{self, Ordering as CmpOrdering, Reverse};
 use std::f64::INFINITY;
 use std::fmt::{self, Display, Formatter};
 use std::fs::{self, File, Metadata, OpenOptions};
@@ -18,8 +19,6 @@ use encryption::{
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use engine_traits::{EncryptionKeyManager, KvEngine};
 use fail::fail_point;
-use futures::executor::block_on;
-use futures_util::io::{AllowStdIo, AsyncWriteExt};
 use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
@@ -58,6 +57,7 @@ pub const SNAPSHOT_CFS_ENUM_PAIR: &[(CfNames, CfName)] = &[
     (CfNames::write, CF_WRITE),
 ];
 pub const SNAPSHOT_VERSION: u64 = 2;
+pub const IO_LIMITER_CHUNK_SIZE: usize = 4 * 1024;
 
 /// Name prefix for the self-generated snapshot file.
 const SNAP_GEN_PREFIX: &str = "gen";
@@ -1036,10 +1036,9 @@ impl Write for Snap {
             file_for_recving.written_size += write_len as u64;
             written_bytes += write_len;
 
-            let file = AllowStdIo::new(&mut file_for_recving.file);
-            let mut file = self.mgr.limiter.clone().limit(file);
-            if file_for_recving.encrypter.is_none() {
-                block_on(file.write_all(&next_buf[0..write_len]))?;
+            let file = &mut file_for_recving.file;
+            let encrypt_buffer = if file_for_recving.encrypter.is_none() {
+                Cow::Borrowed(&next_buf[0..write_len])
             } else {
                 let (cipher, crypter) = file_for_recving.encrypter.as_mut().unwrap();
                 let mut encrypt_buffer = vec![0; write_len + cipher.block_size()];
@@ -1048,7 +1047,19 @@ impl Write for Snap {
                     bytes += crypter.finalize(&mut encrypt_buffer)?;
                 }
                 encrypt_buffer.truncate(bytes);
-                block_on(file.write_all(&encrypt_buffer))?;
+                Cow::Owned(encrypt_buffer)
+            };
+            let encrypt_len = encrypt_buffer.len();
+
+            let mut start = 0;
+            loop {
+                let acquire = cmp::min(IO_LIMITER_CHUNK_SIZE, encrypt_len - start);
+                self.mgr.limiter.blocking_consume(acquire);
+                file.write_all(&encrypt_buffer[start..start + acquire])?;
+                if start + acquire == encrypt_len {
+                    break;
+                }
+                start += acquire;
             }
 
             if switch {
