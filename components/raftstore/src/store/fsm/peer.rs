@@ -3558,11 +3558,11 @@ where
         // whether the region should split.
         // If the current `approximate_size` is larger than `region_max_size`, this region
         // may ingest a large file which is imported by `BR` or `lightning`, we shall check it
-        if self.fsm.peer.approximate_size.map_or(false, |size| {
-            size < self.ctx.coprocessor_host.cfg.region_max_size.0
-        }) && self.fsm.peer.approximate_keys.map_or(false, |keys| {
-            keys < self.ctx.coprocessor_host.cfg.region_max_keys
-        }) && self.fsm.peer.compaction_declined_bytes < self.ctx.cfg.region_split_check_diff.0
+        if self.fsm.peer.approximate_size.unwrap_or(u64::max_value())
+            < self.ctx.coprocessor_host.cfg.region_max_size.0
+            && self.fsm.peer.approximate_keys.unwrap_or(u64::max_value())
+                < self.ctx.coprocessor_host.cfg.region_max_keys
+            && self.fsm.peer.compaction_declined_bytes < self.ctx.cfg.region_split_check_diff.0
             && self.fsm.peer.size_diff_hint < self.ctx.cfg.region_split_check_diff.0
         {
             return;
