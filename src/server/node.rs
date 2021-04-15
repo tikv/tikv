@@ -329,12 +329,11 @@ where
                     Ok(region) => {
                         if region == first_region {
                             store::clear_prepare_bootstrap_key(&engines)?;
-                            return Ok(());
                         } else {
                             info!("cluster is already bootstrapped"; "cluster_id" => self.cluster_id);
                             store::clear_prepare_bootstrap_cluster(&engines, region_id)?;
-                            return Ok(());
                         }
+                        return Ok(());
                     }
                     Err(e) => {
                         warn!("get the first region failed"; "err" => ?e);

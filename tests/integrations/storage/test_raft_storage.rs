@@ -273,9 +273,8 @@ fn test_auto_gc() {
         .storages
         .iter()
         .map(|(id, engine)| {
-            let mut config = GcConfig::default();
             // Do not skip GC
-            config.ratio_threshold = 0.9;
+            let config = tikv::server::gc_worker::GcConfig { ratio_threshold: 0.9, ..Default::default() };
             let storage = SyncTestStorageBuilder::from_engine(engine.clone())
                 .gc_config(config)
                 .build()

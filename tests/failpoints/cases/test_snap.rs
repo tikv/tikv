@@ -400,7 +400,7 @@ fn test_receive_old_snapshot() {
             drop(guard);
             panic!("do not receive snapshot msg in 200ms");
         }
-        mem::replace(guard.as_mut(), vec![])
+        std::mem::take(guard.as_mut())
     };
 
     cluster.sim.wl().clear_recv_filters(2);

@@ -22,6 +22,8 @@ CLIPPY_LINTS=(-A clippy::module_inception  \
 	-A clippy::blacklisted_name \
 	-A clippy::redundant_closure \
 	-A clippy::upper_case_acronyms \
+	-A clippy::field_reassign_with_default \
+	-A clippy::wrong_self_convention \
 	-A clippy::needless_range_loop \
 	-A clippy::inconsistent_struct_constructor \
 	-A clippy::new_ret_no_self \

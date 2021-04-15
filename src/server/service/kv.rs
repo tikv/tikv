@@ -1201,17 +1201,15 @@ async fn future_handle_empty(
     res.set_test_id(req.get_test_id());
     // `BatchCommandsWaker` processes futures in notify. If delay_time is too small, notify
     // can be called immediately, so the future is polled recursively and lead to deadlock.
-    if req.get_delay_time() < 10 {
-        Ok(res)
-    } else {
+    if req.get_delay_time() >= 10 {
         let _ = tikv_util::timer::GLOBAL_TIMER_HANDLE
             .delay(
                 std::time::Instant::now() + std::time::Duration::from_millis(req.get_delay_time()),
             )
             .compat()
             .await;
-        Ok(res)
-    }
+        }
+    Ok(res)
 }
 
 fn future_get<E: Engine, L: LockManager>(

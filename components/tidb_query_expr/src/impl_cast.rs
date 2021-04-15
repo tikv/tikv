@@ -4398,7 +4398,6 @@ mod tests {
                         // TODO: if add test case for Decimal::round failure,
                         //  then should check whether this setting is right.
                         let res = base_res
-                            .clone()
                             .round((origin_decimal - 1) as i8, RoundMode::HalfEven);
                         if res.is_zero() {
                             truncate_as_warning = false;
@@ -4418,7 +4417,6 @@ mod tests {
                     }
                     ResType::Round => {
                         let r = base_res
-                            .clone()
                             .round(res_decimal as i8, RoundMode::HalfEven)
                             .unwrap();
                         if r == base_res {

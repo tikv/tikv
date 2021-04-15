@@ -290,12 +290,10 @@ impl ToInt for f64 {
         let ub_f64 = upper_bound as f64;
         // according to https://github.com/pingcap/tidb/pull/5247
         if val >= ub_f64 {
-            if val == ub_f64 {
-                return Ok(upper_bound);
-            } else {
+            if val != ub_f64 {
                 ctx.handle_overflow_err(overflow(val, tp))?;
-                return Ok(upper_bound);
             }
+            return Ok(upper_bound);
         }
         Ok(val as i64)
     }
