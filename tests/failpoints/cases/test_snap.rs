@@ -3,7 +3,7 @@
 use std::sync::atomic::Ordering;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::*;
-use std::{fs, io, mem, thread};
+use std::{fs, io, thread};
 
 use raft::eraftpb::MessageType;
 
@@ -394,7 +394,7 @@ fn test_receive_old_snapshot() {
         drop(guard);
         sleep_ms(10);
     }
-    let msgs = {
+    let msgs: Vec<_> = {
         let mut guard = dropped_msgs.lock().unwrap();
         if guard.is_empty() {
             drop(guard);
