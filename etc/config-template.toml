@@ -712,6 +712,18 @@
 ## default: normal
 # blob-run-mode = "normal"
 
+## If set true, values in blob file will be merged to a new blob file while
+## their corresponding keys are compacted to last two level in LSM-Tree.
+##
+## With this feature enabled, Titan could get better scan performance, and
+## better write performance during GC, but will suffer around 1.1 space
+## amplification and 3 more write amplification if no GC needed (eg. uniformly
+## distributed keys) under default rocksdb setting.
+##
+## Requirement: level_compaction_dynamic_level_base = true
+## default: false
+# level_merge = false
+
 ## Use merge operator to rewrite GC blob index.
 ## default: false
 # gc-merge-rewrite = false
