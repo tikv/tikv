@@ -4891,7 +4891,7 @@ mod tests {
                 let val = val.map(|x| x.as_bytes());
                 cast_bytes_as_decimal(ctx, extra, val)
             },
-            |x| (*x).to_string(),
+            |x| x.to_string(),
             "cast_string_as_signed_decimal",
         )
     }
@@ -5098,7 +5098,7 @@ mod tests {
                 let val = val.map(|x| x.as_bytes());
                 cast_string_as_unsigned_decimal(ctx, extra, metadata, val)
             },
-            |x| (*x).to_string(),
+            |x| x.to_string(),
             "cast_string_as_unsigned_decimal",
         );
     }

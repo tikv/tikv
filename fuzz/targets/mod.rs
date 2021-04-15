@@ -110,17 +110,17 @@ pub fn fuzz_coprocessor_codec_decimal(data: &[u8]) -> Result<()> {
     use tidb_query_datatype::codec::data_type::Decimal;
 
     fn fuzz(lhs: &Decimal, rhs: &Decimal, cursor: &mut Cursor<&[u8]>) -> Result<()> {
-        let _ = (*lhs).abs();
+        let _ = lhs.abs();
         let _ = lhs.ceil();
         let _ = lhs.floor();
         let _ = lhs.prec_and_frac();
 
         let mode = cursor.read_as_decimal_round_mode()?;
         let frac = cursor.read_as_i8()?;
-        let _ = (*lhs).round(frac, mode);
+        let _ = lhs.round(frac, mode);
 
         let shift = cursor.read_as_u64()? as isize;
-        let _ = (*lhs).shift(shift);
+        let _ = lhs.shift(shift);
 
         let _ = lhs.as_i64();
         let _ = lhs.as_u64();

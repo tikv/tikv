@@ -820,7 +820,7 @@ fn test_debug_region_size() {
 
     let mut req = debugpb::RegionSizeRequest::default();
     req.set_region_id(region_id);
-    req.set_cfs(cfs.iter().map(|s| (*s).to_string()).collect());
+    req.set_cfs(cfs.iter().map(|s| s.to_string()).collect());
     let entries: Vec<_> = debug_client
         .region_size(&req)
         .unwrap()

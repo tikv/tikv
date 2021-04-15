@@ -930,18 +930,18 @@ impl Decimal {
     /// ceil the Decimal into a new Decimal.
     pub fn ceil(&self) -> Res<Decimal> {
         if !self.negative {
-            (*self).round(0, RoundMode::Ceiling)
+            self.round(0, RoundMode::Ceiling)
         } else {
-            (*self).round(0, RoundMode::Truncate)
+            self.round(0, RoundMode::Truncate)
         }
     }
 
     /// floor the Decimal into a new Decimal.
     pub fn floor(&self) -> Res<Decimal> {
         if !self.negative {
-            (*self).round(0, RoundMode::Truncate)
+            self.round(0, RoundMode::Truncate)
         } else {
-            (*self).round(0, RoundMode::Ceiling)
+            self.round(0, RoundMode::Ceiling)
         }
     }
 

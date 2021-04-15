@@ -150,10 +150,10 @@ mod imp {
             };
             let mut current = cpu_info as *const processor_cpu_load_info_data_t;
             for _ in 0..num_cpus_u {
-                ret.user += (*current).cpu_ticks[CPU_STATE_USER] as u64;
-                ret.system += (*current).cpu_ticks[CPU_STATE_SYSTEM] as u64;
-                ret.idle += (*current).cpu_ticks[CPU_STATE_IDLE] as u64;
-                ret.nice += (*current).cpu_ticks[CPU_STATE_NICE] as u64;
+                ret.user += current.cpu_ticks[CPU_STATE_USER] as u64;
+                ret.system += current.cpu_ticks[CPU_STATE_SYSTEM] as u64;
+                ret.idle += current.cpu_ticks[CPU_STATE_IDLE] as u64;
+                ret.nice += current.cpu_ticks[CPU_STATE_NICE] as u64;
                 current = current.offset(1);
             }
             vm_deallocate(mach_task_self_, cpu_info as vm_address_t, msg_type as usize);

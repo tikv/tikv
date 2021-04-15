@@ -393,7 +393,7 @@ fn test_read_index_when_transfer_leader_2() {
     let router = cluster.sim.wl().get_router(old_leader.get_id()).unwrap();
     let mut reserved_msgs = Vec::new();
     'LOOP: loop {
-        for raft_msg in std::mem::take(&mut dropped_msgs.lock().unwrap()) {
+        for raft_msg in std::mem::take(&mut *dropped_msgs.lock().unwrap()) {
             let msg_type = raft_msg.get_message().get_msg_type();
             if msg_type == MessageType::MsgHeartbeatResponse || msg_type == MessageType::MsgAppend {
                 reserved_msgs.push(raft_msg);
