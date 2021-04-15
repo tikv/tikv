@@ -75,7 +75,7 @@ tempfile = "3.0"
 clap = "2.32"
 collections = { path = "../collections" }
 concurrency_manager = { path = "../concurrency_manager", default-features = false }
-crossbeam = "0.7"
+crossbeam = "0.8"
 encryption = { path = "../encryption", default-features = false }
 encryption_export = { path = "../encryption/export", default-features = false }
 engine_rocks = { path = "../engine_rocks", default-features = false }

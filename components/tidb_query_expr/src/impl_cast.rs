@@ -1145,9 +1145,10 @@ fn cast_string_as_time(
 ) -> Result<Option<Time>> {
     if let Some(val) = val {
         // Convert `val` to a string first and then parse it as a float string.
+        let val = String::from_utf8_lossy(val);
         Time::parse(
             ctx,
-            unsafe { std::str::from_utf8_unchecked(val) },
+            &*val,
             extra.ret_field_type.as_accessor().tp().try_into()?,
             extra.ret_field_type.get_decimal() as i8,
             // Enable round
@@ -2327,6 +2328,20 @@ mod tests {
                 .unwrap();
             assert_eq!(actual.to_string(), expected);
         }
+
+        // If the input is invalid UTF-8 bytes, it should return error.
+        let (res, ctx) = RpnFnScalarEvaluator::new()
+            .push_param(vec![0, 159, 146, 150])
+            .evaluate_raw(
+                FieldTypeBuilder::new().tp(FieldTypeTp::DateTime).build(),
+                ScalarFuncSig::CastStringAsTime,
+            );
+        assert!(matches!(res.unwrap(), ScalarValue::DateTime(None)));
+        check_warning(
+            &ctx,
+            Some(ERR_TRUNCATE_WRONG_VALUE),
+            "should have warning when casting invalid utf-8 to time",
+        );
     }
 
     #[test]
