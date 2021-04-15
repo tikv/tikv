@@ -27,7 +27,7 @@ use crate::{Error, Result};
 use engine_traits::{RaftEngine, RaftLogBatch};
 use into_other::into_other;
 use tikv_util::worker::Scheduler;
-use tikv_util::{box_err, box_try, debug, defer, error, info};
+use tikv_util::{box_err, box_try, debug, defer, error, info, warn};
 
 use super::metrics::*;
 use super::worker::RegionTask;
@@ -37,6 +37,7 @@ use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
 // so that we can force the follower peer to sync the snapshot first.
 pub const RAFT_INIT_LOG_TERM: u64 = 5;
 pub const RAFT_INIT_LOG_INDEX: u64 = 5;
+const MAX_SNAP_TRY_CNT: usize = 5;
 
 /// The initial region epoch version.
 pub const INIT_EPOCH_VER: u64 = 1;
@@ -836,15 +837,17 @@ where
     #[inline]
     pub fn set_applied_state(&mut self, apply_state: RaftApplyState) {
         self.apply_state = apply_state;
+        let mut snap_state = self.snap_state.borrow_mut();
         if let SnapState::Generating {
             ref canceled,
             ref index,
             ..
-        } = *self.snap_state.borrow()
+        } = *snap_state
         {
-            let snap_index = index.load(Ordering::Relaxed);
+            let snap_index = index.load(Ordering::SeqCst);
             if snap_index > 0 && self.apply_state.get_truncated_state().index > snap_index {
-                canceled.store(true, Ordering::Relaxed);
+                canceled.store(true, Ordering::SeqCst);
+                *snap_state = SnapState::Relax;
             }
         }
     }
@@ -960,7 +963,7 @@ where
         } = *snap_state
         {
             tried = true;
-            if !canceled.load(Ordering::Relaxed) {
+            if !canceled.load(Ordering::SeqCst) {
                 match receiver.try_recv() {
                     Err(TryRecvError::Disconnected) => {}
                     Err(TryRecvError::Empty) => {
@@ -982,7 +985,7 @@ where
                     }
                 }
                 None => {
-                    info!(
+                    warn!(
                         "failed to try generating snapshot";
                         "region_id" => self.region.get_id(),
                         "peer_id" => self.peer_id,
@@ -994,6 +997,15 @@ where
 
         if SnapState::Relax != *snap_state {
             panic!("{} unexpected state: {:?}", self.tag, *snap_state);
+        }
+
+        if *tried_cnt >= MAX_SNAP_TRY_CNT {
+            let cnt = *tried_cnt;
+            *tried_cnt = 0;
+            return Err(raft::Error::Store(box_err!(
+                "failed to get snapshot after {} times",
+                cnt
+            )));
         }
 
         info!(
@@ -1344,8 +1356,10 @@ where
 
     /// Cancel generating snapshot, return true if there is such a job.
     pub fn cancel_generating_snap(&mut self) -> bool {
-        if let SnapState::Generating { ref canceled, .. } = *self.snap_state.borrow() {
-            canceled.store(true, Ordering::Relaxed);
+        let mut snap_state = self.snap_state.borrow_mut();
+        if let SnapState::Generating { ref canceled, .. } = *snap_state {
+            canceled.store(true, Ordering::SeqCst);
+            *snap_state = SnapState::Relax;
             return true;
         }
         false
@@ -2154,12 +2168,18 @@ mod tests {
         generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap_err();
         assert_eq!(*s.snap_tried_cnt.borrow(), 2);
 
-        for cnt in 2..100 {
+        for cnt in 2..super::MAX_SNAP_TRY_CNT {
             // Scheduled job failed should trigger .
             assert_eq!(s.snapshot(0).unwrap_err(), unavailable);
             let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
             generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap_err();
             assert_eq!(*s.snap_tried_cnt.borrow(), cnt + 1);
+        }
+
+        // When retry too many times, it should report a different error.
+        match s.snapshot(0) {
+            Err(RaftError::Store(StorageError::Other(_))) => {}
+            res => panic!("unexpected res: {:?}", res),
         }
     }
 

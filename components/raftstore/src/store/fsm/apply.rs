@@ -2828,7 +2828,7 @@ impl GenSnapTask {
         EK: KvEngine,
     {
         self.index
-            .store(last_applied_state.applied_index, Ordering::Relaxed);
+            .store(last_applied_state.applied_index, Ordering::SeqCst);
         let snapshot = RegionTask::Gen {
             region_id: self.region_id,
             notifier: self.snap_notifier,

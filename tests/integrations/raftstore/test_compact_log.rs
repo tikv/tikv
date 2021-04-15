@@ -16,7 +16,7 @@ fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
 
     for (&id, engines) in &cluster.engines {
         let mut state: RaftApplyState =
-            get_raft_msg_or_default(&engines, &keys::apply_state_key(1));
+            get_raft_msg(&engines, &keys::apply_state_key(1)).unwrap_or_default();
         before_states.insert(id, state.take_truncated_state());
     }
 
@@ -44,7 +44,7 @@ fn check_compacted(
 
     for (&id, engines) in all_engines {
         let mut state: RaftApplyState =
-            get_raft_msg_or_default(&engines, &keys::apply_state_key(1));
+            get_raft_msg(&engines, &keys::apply_state_key(1)).unwrap_or_default();
         let after_state = state.take_truncated_state();
 
         let before_state = &before_states[&id];
@@ -88,7 +88,7 @@ fn test_compact_count_limit<T: Simulator>(cluster: &mut Cluster<T>) {
     for (&id, engines) in &cluster.engines {
         must_get_equal(&engines.kv.as_inner(), b"k1", b"v1");
         let mut state: RaftApplyState =
-            get_raft_msg_or_default(&engines, &keys::apply_state_key(1));
+            get_raft_msg(&engines, &keys::apply_state_key(1)).unwrap_or_default();
         let state = state.take_truncated_state();
         // compact should not start
         assert_eq!(RAFT_INIT_LOG_INDEX, state.get_index());
@@ -108,7 +108,7 @@ fn test_compact_count_limit<T: Simulator>(cluster: &mut Cluster<T>) {
     // limit has not reached, should not gc.
     for (&id, engines) in &cluster.engines {
         let mut state: RaftApplyState =
-            get_raft_msg_or_default(&engines, &keys::apply_state_key(1));
+            get_raft_msg(&engines, &keys::apply_state_key(1)).unwrap_or_default();
         let after_state = state.take_truncated_state();
 
         let before_state = &before_states[&id];
@@ -144,7 +144,7 @@ fn test_compact_many_times<T: Simulator>(cluster: &mut Cluster<T>) {
     for (&id, engines) in &cluster.engines {
         must_get_equal(&engines.kv.as_inner(), b"k1", b"v1");
         let mut state: RaftApplyState =
-            get_raft_msg_or_default(&engines, &keys::apply_state_key(1));
+            get_raft_msg(&engines, &keys::apply_state_key(1)).unwrap_or_default();
         let state = state.take_truncated_state();
         // compact should not start
         assert_eq!(RAFT_INIT_LOG_INDEX, state.get_index());
@@ -204,7 +204,7 @@ fn test_compact_size_limit<T: Simulator>(cluster: &mut Cluster<T>) {
         }
         must_get_equal(&engines.kv.as_inner(), b"k1", b"v1");
         let mut state: RaftApplyState =
-            get_raft_msg_or_default(&engines, &keys::apply_state_key(1));
+            get_raft_msg(&engines, &keys::apply_state_key(1)).unwrap_or_default();
         let state = state.take_truncated_state();
         // compact should not start
         assert_eq!(RAFT_INIT_LOG_INDEX, state.get_index());
@@ -229,7 +229,7 @@ fn test_compact_size_limit<T: Simulator>(cluster: &mut Cluster<T>) {
             continue;
         }
         let mut state: RaftApplyState =
-            get_raft_msg_or_default(&engines, &keys::apply_state_key(1));
+            get_raft_msg(&engines, &keys::apply_state_key(1)).unwrap_or_default();
         let after_state = state.take_truncated_state();
 
         let before_state = &before_states[&id];
@@ -255,7 +255,7 @@ fn test_compact_size_limit<T: Simulator>(cluster: &mut Cluster<T>) {
             continue;
         }
         let mut state: RaftApplyState =
-            get_raft_msg_or_default(&engines, &keys::apply_state_key(1));
+            get_raft_msg(&engines, &keys::apply_state_key(1)).unwrap_or_default();
         let after_state = state.take_truncated_state();
 
         let before_state = &before_states[&id];
@@ -284,7 +284,7 @@ fn test_compact_reserve_max_ticks<T: Simulator>(cluster: &mut Cluster<T>) {
     let mut before_states = HashMap::default();
     for (&id, engines) in &cluster.engines {
         must_get_equal(&engines.kv.as_inner(), b"k1", b"v1");
-        let mut state: RaftApplyState = get_raft_msg_or_default(&engines, &apply_key);
+        let mut state: RaftApplyState = get_raft_msg(&engines, &apply_key).unwrap_or_default();
         let state = state.take_truncated_state();
         // compact should not start
         assert_eq!(RAFT_INIT_LOG_INDEX, state.get_index());
@@ -303,7 +303,7 @@ fn test_compact_reserve_max_ticks<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Should GC even if limit has not reached.
     for (&id, engines) in &cluster.engines {
-        let mut state: RaftApplyState = get_raft_msg_or_default(&engines, &apply_key);
+        let mut state: RaftApplyState = get_raft_msg(&engines, &apply_key).unwrap_or_default();
         let after_state = state.take_truncated_state();
         let before_state = &before_states[&id];
         assert_ne!(after_state.get_index(), before_state.get_index());

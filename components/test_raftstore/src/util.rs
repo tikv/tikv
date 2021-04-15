@@ -968,13 +968,9 @@ pub fn must_remove_lock_observer(client: &TikvClient, max_ts: u64) {
     assert!(resp.get_error().is_empty(), "{:?}", resp.get_error());
 }
 
-pub fn get_raft_msg_or_default<M: protobuf::Message + Default>(
+pub fn get_raft_msg<M: protobuf::Message + Default>(
     engines: &Engines<RocksEngine, RocksEngine>,
     key: &[u8],
-) -> M {
-    engines
-        .kv
-        .get_msg_cf(CF_RAFT, key)
-        .unwrap()
-        .unwrap_or_default()
+) -> Option<M> {
+    engines.kv.get_msg_cf(CF_RAFT, key).unwrap()
 }
