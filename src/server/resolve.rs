@@ -21,7 +21,7 @@ pub type Callback = Box<dyn FnOnce(Result<String>) + Send>;
 
 pub fn store_address_refresh_interval_secs() -> u64 {
     fail_point!("mock_store_refresh_interval_secs", |arg| arg
-        .map_or(1, |e| e.parse().unwrap()));
+        .map_or(0, |e| e.parse().unwrap()));
     STORE_ADDRESS_REFRESH_SECONDS
 }
 

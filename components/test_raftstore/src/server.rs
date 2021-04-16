@@ -548,14 +548,6 @@ impl Simulator for ServerCluster {
     fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RocksEngine>> {
         self.metas.get(&node_id).map(|m| m.raw_router.clone())
     }
-
-    fn get_addr_by_node(&self, node_id: u64) -> String {
-        self.addrs.get(node_id).unwrap()
-    }
-
-    fn add_addr_in_cache(&mut self, node_id: u64, addr: String) {
-        self.addrs.insert(node_id, addr)
-    }
 }
 
 pub fn new_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {

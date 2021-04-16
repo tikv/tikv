@@ -203,14 +203,12 @@ fn test_transfer_leader_delay() {
         .unwrap();
     let timer = Instant::now();
     while timer.elapsed() < Duration::from_secs(3) {
-        let resp = cluster
-            .request(
-                b"k2",
-                vec![new_put_cmd(b"k2", b"v2")],
-                false,
-                Duration::from_secs(5),
-            )
-            .unwrap();
+        let resp = cluster.request(
+            b"k2",
+            vec![new_put_cmd(b"k2", b"v2")],
+            false,
+            Duration::from_secs(5),
+        );
         let header = resp.get_header();
         if !header.has_error() {
             return;

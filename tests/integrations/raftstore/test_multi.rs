@@ -819,37 +819,3 @@ fn test_node_catch_up_logs() {
     cluster.run_node(3).unwrap();
     must_get_equal(&cluster.get_engine(3), b"0009", b"0009");
 }
-
-#[test]
-fn test_mismatch_store_node() {
-    let count = 3;
-    let mut cluster = new_server_cluster(0, count);
-    cluster.start().unwrap();
-    cluster.must_put(b"k1", b"v1");
-    let node_ids = cluster.get_node_ids();
-    let mut iter = node_ids.iter();
-    let node1_id = *iter.next().unwrap();
-    let node2_id = *iter.next().unwrap();
-    let node1_addr = cluster.get_addr_by_node(node1_id);
-    let node2_addr = cluster.get_addr_by_node(node2_id);
-    let mut store1 = cluster.get_store(node1_id).clone();
-    let mut store2 = cluster.get_store(node2_id).clone();
-    cluster.stop_node(node1_id);
-    cluster.stop_node(node2_id);
-    cluster.update_pd_store_info(store1.clone());
-    cluster.update_pd_store_info(store2.clone());
-    cluster.modify_server_addr(node1_id, node2_addr.clone());
-    cluster.modify_server_addr(node2_id, node1_addr.clone());
-    cluster.run_node(node1_id).unwrap();
-    cluster.run_node(node2_id).unwrap();
-    cluster.put(b"k1", b"k2").expect_err("should fail");
-    // update store_info in pd
-    store1.set_address(node2_addr.clone());
-    store2.set_address(node1_addr.clone());
-    cluster.update_pd_store_info(store1);
-    cluster.update_pd_store_info(store2);
-    fail::cfg("mock_store_refresh_interval_secs", "return(1)").unwrap();
-    // wait address refresh
-    sleep_ms(3 * 1000);
-    cluster.must_put(b"k4", b"k5");
-}

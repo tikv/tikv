@@ -387,6 +387,7 @@ impl Cluster {
     }
 
     fn put_store(&mut self, store: metapb::Store) -> Result<()> {
+        fail_point!("skip_put_store", |_| Ok(()));
         let store_id = store.get_id();
         if self.stores.contains_key(&store_id) {
             return Ok(());
