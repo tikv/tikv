@@ -5,7 +5,6 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{thread, usize};
 
-use fail::fail_point;
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use kvproto::deadlock::create_deadlock;
@@ -194,18 +193,6 @@ impl ServerCluster {
     pub fn get_concurrency_manager(&self, node_id: u64) -> ConcurrencyManager {
         self.concurrency_managers.get(&node_id).unwrap().clone()
     }
-
-    fn set_cfg_addr_by_cache(&self, node_id: u64, mut cfg: TiKvConfig) -> TiKvConfig {
-        fail_point!("invalidate_addr_cache", |_| cfg.clone());
-        // Now we cache the store address, so here we should re-use last
-        // listening address for the same store.
-        if let Some(addr) = self.addrs.get(node_id) {
-            cfg.server.addr = addr;
-        } else {
-            cfg.server.addr = format!("127.0.0.1:{}", test_util::alloc_port());
-        }
-        cfg
-    }
 }
 
 impl Simulator for ServerCluster {
@@ -229,7 +216,15 @@ impl Simulator for ServerCluster {
 
         let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
 
-        cfg = self.set_cfg_addr_by_cache(node_id, cfg);
+        if cfg.server.addr == "127.0.0.1:0" {
+            // Now we cache the store address, so here we should re-use last
+            // listening address for the same store.
+            if let Some(addr) = self.addrs.get(node_id) {
+                cfg.server.addr = addr;
+            } else {
+                cfg.server.addr = format!("127.0.0.1:{}", test_util::alloc_port());
+            }
+        }
 
         let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
