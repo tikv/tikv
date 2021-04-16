@@ -12,9 +12,10 @@ pub static PLUGIN_GET_BUILD_INFO_SYMBOL: &[u8] = b"_plugin_get_build_info";
 /// See also [`PLUGIN_CONSTRUCTOR_SYMBOL`].
 pub type PluginConstructorSignature =
     unsafe fn(host_allocator: HostAllocatorPtr) -> *mut dyn CoprocessorPlugin;
+
 /// Type signature of the exported function to get build information about the plugin.
 /// See also [`PLUGIN_GET_BUILD_INFO_SYMBOL`].
-pub type PluginGetBuildInfo = extern "C" fn() -> BuildInfo;
+pub type PluginGetBuildInfoSignature = extern "C" fn() -> BuildInfo;
 
 /// Automatically collected build information about the plugin that is exposed from the library.
 ///
