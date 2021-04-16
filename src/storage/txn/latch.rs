@@ -213,10 +213,10 @@ mod tests {
     fn test_wakeup() {
         let latches = Latches::new(256);
 
-        let slots_a = vec!["k1", "k3", "k5"];
-        let mut lock_a = Lock::new(slots_a.iter());
-        let slots_b = vec!["k4", "k5", "k6"];
-        let mut lock_b = Lock::new(slots_b.iter());
+        let keys_a = vec!["k1", "k3", "k5"];
+        let mut lock_a = Lock::new(keys_a.iter());
+        let keys_b = vec!["k4", "k5", "k6"];
+        let mut lock_b = Lock::new(keys_b.iter());
         let cid_a: u64 = 1;
         let cid_b: u64 = 2;
 
@@ -241,12 +241,12 @@ mod tests {
     fn test_wakeup_by_multi_cmds() {
         let latches = Latches::new(256);
 
-        let slots_a = vec!["k1", "k2", "k3"];
-        let slots_b = vec!["k4", "k5", "k6"];
-        let slots_c = vec!["k3", "k4"];
-        let mut lock_a = Lock::new(slots_a.iter());
-        let mut lock_b = Lock::new(slots_b.iter());
-        let mut lock_c = Lock::new(slots_c.iter());
+        let keys_a = vec!["k1", "k2", "k3"];
+        let keys_b = vec!["k4", "k5", "k6"];
+        let keys_c = vec!["k3", "k4"];
+        let mut lock_a = Lock::new(keys_a.iter());
+        let mut lock_b = Lock::new(keys_b.iter());
+        let mut lock_c = Lock::new(keys_c.iter());
         let cid_a: u64 = 1;
         let cid_b: u64 = 2;
         let cid_c: u64 = 3;
@@ -284,14 +284,14 @@ mod tests {
     fn test_wakeup_by_small_latch_slot() {
         let latches = Latches::new(5);
 
-        let slots_a = vec!["k1", "k2", "k3"];
-        let slots_b = vec!["k6", "k7", "k8"];
-        let slots_c = vec!["k3", "k4"];
-        let slots_d = vec!["k7", "k10"];
-        let mut lock_a = Lock::new(slots_a.iter());
-        let mut lock_b = Lock::new(slots_b.iter());
-        let mut lock_c = Lock::new(slots_c.iter());
-        let mut lock_d = Lock::new(slots_d.iter());
+        let keys_a = vec!["k1", "k2", "k3"];
+        let keys_b = vec!["k6", "k7", "k8"];
+        let keys_c = vec!["k3", "k4"];
+        let keys_d = vec!["k7", "k10"];
+        let mut lock_a = Lock::new(keys_a.iter());
+        let mut lock_b = Lock::new(keys_b.iter());
+        let mut lock_c = Lock::new(keys_c.iter());
+        let mut lock_d = Lock::new(keys_d.iter());
         let cid_a: u64 = 1;
         let cid_b: u64 = 2;
         let cid_c: u64 = 3;
