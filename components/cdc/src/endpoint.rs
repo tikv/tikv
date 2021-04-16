@@ -1548,7 +1548,12 @@ mod tests {
             let task = rx.recv_timeout(Duration::from_secs(1));
             match task {
                 Ok(Task::Deregister(Deregister::Downstream { region_id, .. })) => {
-                    assert_eq!(region_id, region.get_id(), "unexpected region id {:?}", region_id);
+                    assert_eq!(
+                        region_id,
+                        region.get_id(),
+                        "unexpected region id {:?}",
+                        region_id
+                    );
                     break;
                 }
                 Ok(t) => panic!("unepxected task {} received", t),
