@@ -382,6 +382,7 @@ pub struct BatchSystem<N: Fsm, C: Fsm> {
     max_batch_size: usize,
     workers: Vec<JoinHandle<()>>,
     reschedule_duration: Duration,
+    enable_low_priority_poller: bool,
 }
 
 impl<N, C> BatchSystem<N, C>
@@ -433,11 +434,13 @@ where
                 &mut builder,
             );
         }
-        self.start_poller(
-            thd_name!(format!("{}-low", name_prefix)),
-            Priority::Low,
-            &mut builder,
-        );
+        if self.enable_low_priority_poller {
+            self.start_poller(
+                thd_name!(format!("{}-low", name_prefix)),
+                Priority::Low,
+                &mut builder,
+            );
+        }
         self.name_prefix = Some(name_prefix);
     }
 
@@ -497,6 +500,7 @@ pub fn create_system<N: Fsm, C: Fsm>(
         max_batch_size: cfg.max_batch_size(),
         reschedule_duration: cfg.reschedule_duration.0,
         workers: vec![],
+        enable_low_priority_poller: cfg.enable_low_priority_poller.unwrap_or_default(),
     };
     (router, system)
 }

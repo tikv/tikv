@@ -370,7 +370,11 @@ where
     /// happened before `WriteBatch::write` and after `SSTImporter::delete`. We shall make sure that
     /// this entry will never apply again at first, then we can delete the ssts files.
     delete_ssts: Vec<SSTMetaInfo>,
+
+    /// The priority of this Handler.
     priority: Priority,
+    /// Whether to yield high-latency operation to low-priority handler.
+    yield_high_latency_operation: bool,
 }
 
 impl<EK, W> ApplyContext<EK, W>
@@ -420,6 +424,10 @@ where
             store_id,
             pending_create_peers,
             priority,
+            yield_high_latency_operation: cfg
+                .apply_batch_system
+                .enable_low_priority_poller
+                .unwrap_or_default(),
         }
     }
 
@@ -954,7 +962,10 @@ where
         if !data.is_empty() {
             let cmd = util::parse_data_at(data, index, &self.tag);
 
-            if has_high_latency_operation(&cmd) && apply_ctx.priority != Priority::Low {
+            if apply_ctx.yield_high_latency_operation
+                && has_high_latency_operation(&cmd)
+                && apply_ctx.priority != Priority::Low
+            {
                 apply_ctx.commit(self);
                 self.priority = Priority::Low;
                 return ApplyResult::Yield;
