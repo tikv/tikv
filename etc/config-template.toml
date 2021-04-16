@@ -165,15 +165,6 @@
 ## Whether to enable request batch.
 # enable-request-batch = true
 
-## Whether to collect batch across commands.
-## When disabled, wait duration is ignored. When enabled, collect batch for specified duration
-## when load is high.
-# request-batch-enable-cross-command = true
-
-## Wait duration before each request batch is processed. Wait is triggered when cross-command
-## option is enabled and system load is high.
-# request-batch-wait-duration = "1ms"
-
 ## Attributes about this server, e.g. `{ zone = "us-west-1", disk = "ssd" }`.
 # labels = {}
 
@@ -209,13 +200,10 @@
 ## latency jittering when apply duration is not stable.
 # enable-async-apply-prewrite = false
 
-## Reserve some space to ensure recovering the store from `no space left` must success. The
-## configured value only indicates the lower limit, and 20GB is the upper limit. In this range,
+## Reserve some space to ensure recovering the store from `no space left` must succeed.
 ## `max(reserve-space, capacity * 5%)` will be reserved exactly.
 ##
-## Set it to 0 will cause no space is reserved at all.
-##
-## Generally it's not necessary to change it. This configuration could be deprecated in future.
+## Set it to 0 will cause no space is reserved at all. It's generally used for tests.
 # reserve-space = "5GB"
 
 [storage.block-cache]
@@ -945,9 +933,6 @@
 # sst-max-size = "144MB"
 
 [pessimistic-txn]
-## Enable pessimistic transaction
-# enabled = true
-
 ## The default and maximum delay before responding to TiDB when pessimistic
 ## transactions encounter locks
 # wait-for-lock-timeout = "1s"
