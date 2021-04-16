@@ -4,10 +4,38 @@ use super::allocator::HostAllocatorPtr;
 use super::plugin_api::CoprocessorPlugin;
 
 /// Name of the exported constructor function for the plugin in the `dylib`.
-pub const PLUGIN_CONSTRUCTOR_SYMBOL: &[u8] = b"_plugin_create";
+pub static PLUGIN_CONSTRUCTOR_SYMBOL: &[u8] = b"_plugin_create";
+/// Name of the exported function to get build information about the plugin.
+pub static PLUGIN_GET_BUILD_INFO_SYMBOL: &[u8] = b"_plugin_get_build_info";
+
 /// Type signature of the exported constructor function for the plugin in the `dylib`.
+/// See also [`PLUGIN_CONSTRUCTOR_SYMBOL`].
 pub type PluginConstructorSignature =
     unsafe fn(host_allocator: HostAllocatorPtr) -> *mut dyn CoprocessorPlugin;
+/// Type signature of the exported function to get build information about the plugin.
+/// See also [`PLUGIN_GET_BUILD_INFO_SYMBOL`].
+pub type PluginGetBuildInfo = extern "C" fn() -> BuildInfo;
+
+/// Build information about the plugin.
+///
+/// Will be automatically created when using [`declare_plugin!(...)`](declare_plugin).
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuildInfo {
+    pub api_version: &'static str,
+    pub target: &'static str,
+    pub rustc: &'static str,
+}
+
+impl BuildInfo {
+    pub const fn get() -> Self {
+        Self {
+            api_version: env!("API_VERSION"),
+            target: env!("TARGET"),
+            rustc: env!("RUSTC_VERSION"),
+        }
+    }
+}
 
 /// Declare a plugin for the library so that it can be loaded by TiKV.
 ///
@@ -28,6 +56,11 @@ macro_rules! declare_plugin {
             $crate::allocator::HostAllocator::new();
 
         #[cfg(not(test))]
+        #[no_mangle]
+        pub unsafe extern "C" fn _plugin_get_build_info() -> $crate::BuildInfo {
+            $crate::BuildInfo::get()
+        }
+
         #[no_mangle]
         pub unsafe extern "C" fn _plugin_create(
             host_allocator: $crate::allocator::HostAllocatorPtr,
