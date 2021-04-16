@@ -23,8 +23,8 @@ use kvproto::raft_cmdpb::*;
 
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use engine_traits::{SstExt, SstWriterBuilder};
-use raftstore::router::handle_send_error;
-use raftstore::store::{Callback, ProposalRouter, RaftCommand};
+use raftstore::router::RaftStoreRouter;
+use raftstore::store::{Callback, PeerMsg};
 use sst_importer::send_rpc_response;
 use tikv_util::future::create_stream_with_buffer;
 use tikv_util::future::paired_future_callback;
@@ -55,7 +55,7 @@ where
 impl<E, Router> ImportSSTService<E, Router>
 where
     E: KvEngine,
-    Router: ProposalRouter<E::Snapshot> + Clone,
+    Router: 'static + RaftStoreRouter<E>,
 {
     pub fn new(
         cfg: Config,
@@ -73,7 +73,14 @@ where
             .before_stop(move |_| tikv_alloc::remove_thread_memory_accessor())
             .create()
             .unwrap();
-        importer.start_switch_mode_check(&threads, engine.clone());
+        let r = router.clone();
+        importer.start_switch_mode_check(
+            &threads,
+            engine.clone(),
+            Box::new(move || {
+                r.broadcast_normal(|| PeerMsg::SplitCheck);
+            }),
+        );
         ImportSSTService {
             cfg,
             engine,
@@ -100,7 +107,7 @@ where
 impl<E, Router> ImportSst for ImportSSTService<E, Router>
 where
     E: KvEngine,
-    Router: 'static + ProposalRouter<E::Snapshot> + Clone + Send,
+    Router: 'static + RaftStoreRouter<E>,
 {
     fn switch_mode(
         &mut self,
@@ -300,8 +307,7 @@ where
             let m = meta.clone();
             let res = async move {
                 let mut resp = IngestResponse::default();
-                if let Err(e) = router.send(RaftCommand::new(cmd, Callback::Read(cb))) {
-                    let e = handle_send_error(region_id, e);
+                if let Err(e) = router.send_command(cmd, Callback::Read(cb)) {
                     resp.set_error(e.into());
                     return Ok(resp);
                 }
@@ -332,8 +338,7 @@ where
                 }
 
                 let (cb, future) = paired_future_callback();
-                if let Err(e) = router.send(RaftCommand::new(cmd, Callback::write(cb))) {
-                    let e = handle_send_error(region_id, e);
+                if let Err(e) = router.send_command(cmd, Callback::write(cb)) {
                     resp.set_error(e.into());
                     return Ok(resp);
                 }

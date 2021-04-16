@@ -27,6 +27,10 @@ struct ImportModeSwitcherInner {
 
 impl ImportModeSwitcherInner {
     fn enter_normal_mode<E: KvEngine>(&mut self, db: &E, mf: RocksDBMetricsFn) -> Result<()> {
+        if !self.is_import.load(Ordering::Acquire) {
+            return Ok(());
+        }
+
         self.backup_db_options.set_options(db)?;
         for (cf_name, cf_opts) in &self.backup_cf_options {
             cf_opts.set_options(db, cf_name, mf)?;
@@ -38,6 +42,10 @@ impl ImportModeSwitcherInner {
     }
 
     fn enter_import_mode<E: KvEngine>(&mut self, db: &E, mf: RocksDBMetricsFn) -> Result<()> {
+        if self.is_import.load(Ordering::Acquire) {
+            return Ok(());
+        }
+
         self.backup_db_options = ImportModeDBOptions::new_options(db);
         self.backup_cf_options.clear();
 
@@ -78,7 +86,7 @@ impl ImportModeSwitcher {
         ImportModeSwitcher { inner, is_import }
     }
 
-    pub fn start<E: KvEngine>(&self, executor: &ThreadPool, db: E) {
+    pub fn start<E: KvEngine>(&self, executor: &ThreadPool, db: E, cb: Box<dyn Fn() + Send>) {
         // spawn a background future to put TiKV back into normal mode after timeout
         let inner = self.inner.clone();
         let switcher = Arc::downgrade(&inner);
@@ -94,6 +102,7 @@ impl ImportModeSwitcher {
                             if switcher.enter_normal_mode(&db, mf).is_err() {
                                 error!("failed to put TiKV back into normal mode");
                             }
+                            cb();
                         }
                         switcher.next_check = now + switcher.timeout
                     }
@@ -305,7 +314,7 @@ mod tests {
             .unwrap();
 
         let switcher = ImportModeSwitcher::new(&cfg);
-        switcher.start(&threads, db.clone());
+        switcher.start(&threads, db.clone(), Box::new(|| {}));
         check_import_options(&db, &normal_db_options, &normal_cf_options);
         switcher.enter_import_mode(&db, mf).unwrap();
         check_import_options(&db, &import_db_options, &import_cf_options);
@@ -343,7 +352,9 @@ mod tests {
             .unwrap();
 
         let switcher = ImportModeSwitcher::new(&cfg);
-        switcher.start(&threads, db.clone());
+        let finished = Arc::new(AtomicBool::new(false));
+        let notify = finished.clone();
+        switcher.start(&threads, db.clone(), Box::new(move || notify.store(true, Ordering::Release)));
         check_import_options(&db, &normal_db_options, &normal_cf_options);
         switcher.enter_import_mode(&db, mf).unwrap();
         check_import_options(&db, &import_db_options, &import_cf_options);
@@ -351,6 +362,7 @@ mod tests {
         thread::sleep(Duration::from_secs(1));
 
         check_import_options(&db, &normal_db_options, &normal_cf_options);
+        assert_eq!(true, finished.load(Ordering::Acquire));
     }
 
     #[test]

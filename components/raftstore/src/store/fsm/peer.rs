@@ -523,6 +523,19 @@ where
                 }
                 PeerMsg::Noop => {}
                 PeerMsg::UpdateReplicationMode => self.on_update_replication_mode(),
+                PeerMsg::SplitCheck => {
+                    // If the current `approximate_size` is larger than `region_max_size`, this region
+                    // may ingest a large file which is imported by `BR` or `lightning`, we shall check it
+                    if self.fsm.peer.is_leader() {
+                        if self.fsm.peer.approximate_size.map_or(true, |size| {
+                            size > self.ctx.coprocessor_host.cfg.region_max_size.0
+                        }) || self.fsm.peer.approximate_keys.map_or(true, |keys| {
+                            keys > self.ctx.coprocessor_host.cfg.region_max_keys
+                        }) {
+                            self.schedule_check_split();
+                        }
+                    }
+                }
             }
         }
         // Propose batch request which may be still waiting for more raft-command
@@ -3556,18 +3569,18 @@ where
         // should work even if we change the region max size.
         // If peer says should update approximate size, update region size and check
         // whether the region should split.
-        // If the current `approximate_size` is larger than `region_max_size`, this region
-        // may ingest a large file which is imported by `BR` or `lightning`, we shall check it
-        if self.fsm.peer.approximate_size.unwrap_or(u64::max_value())
-            < self.ctx.coprocessor_host.cfg.region_max_size.0
-            && self.fsm.peer.approximate_keys.unwrap_or(u64::max_value())
-                < self.ctx.coprocessor_host.cfg.region_max_keys
+        if self.fsm.peer.approximate_size.is_some()
             && self.fsm.peer.compaction_declined_bytes < self.ctx.cfg.region_split_check_diff.0
             && self.fsm.peer.size_diff_hint < self.ctx.cfg.region_split_check_diff.0
         {
             return;
         }
+        if self.schedule_check_split() {
+            self.register_split_region_check_tick();
+        }
+    }
 
+    fn schedule_check_split(&mut self) -> bool {
         // bulk insert too fast may cause snapshot stale very soon, worst case it stale before
         // sending. so when snapshot is generating or sending, skip split check at most 3 times.
         // There is a trade off between region size and snapshot success rate. Split check is
@@ -3578,7 +3591,7 @@ where
             && self.fsm.skip_split_count < self.region_split_skip_max_count()
         {
             self.fsm.skip_split_count += 1;
-            return;
+            return false;
         }
         self.fsm.skip_split_count = 0;
 
@@ -3594,7 +3607,7 @@ where
         }
         self.fsm.peer.size_diff_hint = 0;
         self.fsm.peer.compaction_declined_bytes = 0;
-        self.register_split_region_check_tick();
+        return true;
     }
 
     fn on_prepare_split_region(
