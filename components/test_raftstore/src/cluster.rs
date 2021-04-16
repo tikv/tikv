@@ -1453,10 +1453,6 @@ impl<T: Simulator> Cluster<T> {
         .unwrap();
         request_rx.recv_timeout(Duration::from_secs(5)).unwrap()
     }
-
-    pub fn update_pd_store_info(&mut self, store: metapb::Store) {
-        self.pd_client.force_put_store(store)
-    }
 }
 
 impl<T: Simulator> Drop for Cluster<T> {
