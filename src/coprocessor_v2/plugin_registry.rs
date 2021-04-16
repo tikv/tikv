@@ -10,6 +10,51 @@ use std::sync::{mpsc, Arc, RwLock};
 use std::thread;
 use std::time::Duration;
 
+quick_error! {
+    #[derive(Debug)]
+    pub enum PluginLoadingError {
+        Dylib(err: DylibError) {
+            from()
+            cause(err)
+            display("{}", err)
+        }
+        CompilerMismatch(plugin_rustc_version: String, tikv_rustc_version: String) {
+            display("version mismatch of rustc: plugin was compiled with {}, but TiKV with {}", plugin_rustc_version, tikv_rustc_version)
+        }
+        TargetMismatch(plugin_target: String, tikv_target: String) {
+            display("target mismatch: plugin was compiled for {}, but TiKV for {}", plugin_target, tikv_target)
+        }
+        ApiMismatch(plugin_api: String, tikv_api: String) {
+            display("coprocessor_plugin_api mismatch: plugin was compiled with {}, but TiKV with {}", plugin_api, tikv_api)
+        }
+    }
+}
+
+/// Helper function for error handling.
+fn err_on_mismatch(
+    plugin_build_info: &BuildInfo,
+    tikv_build_info: &BuildInfo,
+) -> Result<(), PluginLoadingError> {
+    if plugin_build_info.api_version != tikv_build_info.api_version {
+        Err(PluginLoadingError::ApiMismatch(
+            plugin_build_info.api_version.to_string(),
+            tikv_build_info.api_version.to_string(),
+        ))
+    } else if plugin_build_info.rustc != tikv_build_info.rustc {
+        Err(PluginLoadingError::CompilerMismatch(
+            plugin_build_info.rustc.to_string(),
+            tikv_build_info.rustc.to_string(),
+        ))
+    } else if plugin_build_info.target != tikv_build_info.target {
+        Err(PluginLoadingError::TargetMismatch(
+            plugin_build_info.target.to_string(),
+            tikv_build_info.target.to_string(),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 /// Manages loading and unloading of coprocessor plugins.
 pub struct PluginRegistry {
     inner: Arc<RwLock<PluginRegistryInner>>,
@@ -155,7 +200,10 @@ impl PluginRegistry {
     /// name.
     ///
     /// Returns the name of the loaded plugin.
-    pub fn load_plugin<P: AsRef<OsStr>>(&self, file_name: P) -> Result<&'static str, DylibError> {
+    pub fn load_plugin<P: AsRef<OsStr>>(
+        &self,
+        file_name: P,
+    ) -> Result<&'static str, PluginLoadingError> {
         self.inner.write().unwrap().load_plugin(file_name)
     }
 
@@ -248,7 +296,7 @@ impl PluginRegistryInner {
     pub fn load_plugin<P: AsRef<OsStr>>(
         &mut self,
         filename: P,
-    ) -> Result<&'static str, DylibError> {
+    ) -> Result<&'static str, PluginLoadingError> {
         let plugin = unsafe { LoadedPlugin::new(&filename) };
         if let Err(err) = &plugin {
             let filename = filename.as_ref().to_string_lossy();
@@ -310,8 +358,17 @@ impl LoadedPlugin {
     /// signature of [`PluginConstructorSignature`]. Otherwise, behavior is undefined.
     /// See also [`libloading::Library::get()`] for more information on what restrictions apply to
     /// [`PLUGIN_CONSTRUCTOR_SYMBOL`].
-    pub unsafe fn new<P: AsRef<OsStr>>(file_path: P) -> Result<Self, DylibError> {
+    pub unsafe fn new<P: AsRef<OsStr>>(file_path: P) -> Result<Self, PluginLoadingError> {
         let lib = Library::new(&file_path)?;
+
+        let get_build_info: Symbol<PluginGetBuildInfoSignature> =
+            lib.get(PLUGIN_GET_BUILD_INFO_SYMBOL)?;
+
+        // It's important to check the ABI before calling the constructor.
+        let plugin_build_info = get_build_info();
+        let tikv_build_info = BuildInfo::get();
+        err_on_mismatch(&plugin_build_info, &tikv_build_info)?;
+
         let constructor: Symbol<PluginConstructorSignature> = lib.get(PLUGIN_CONSTRUCTOR_SYMBOL)?;
 
         let host_allocator = HostAllocatorPtr {
