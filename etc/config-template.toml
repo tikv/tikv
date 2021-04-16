@@ -722,7 +722,7 @@
 ##
 ## Requirement: level_compaction_dynamic_level_base = true
 ## default: false
-# level_merge = false
+# level-merge = false
 
 ## Use merge operator to rewrite GC blob index.
 ## default: false
