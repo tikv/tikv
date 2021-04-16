@@ -16,14 +16,18 @@ pub type PluginConstructorSignature =
 /// See also [`PLUGIN_GET_BUILD_INFO_SYMBOL`].
 pub type PluginGetBuildInfo = extern "C" fn() -> BuildInfo;
 
-/// Build information about the plugin.
+/// Automatically collected build information about the plugin that is exposed from the library.
 ///
-/// Will be automatically created when using [`declare_plugin!(...)`](declare_plugin).
+/// Will be automatically created when using [`declare_plugin!(...)`](declare_plugin) and will be
+/// used by TiKV when a plugin is loaded to determine whether there are compilation mismatches.
 #[repr(C)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildInfo {
+    /// Version of the [`coprocessor_plugin_api`](crate) crate that was used to compile this plugin.
     pub api_version: &'static str,
+    /// Target triple for which platform this plugin was compiled.
     pub target: &'static str,
+    /// Version of the Rust compiler that was used for compilation.
     pub rustc: &'static str,
 }
 
@@ -87,6 +91,7 @@ macro_rules! declare_plugin {
 ///
 /// *Note: Depending on artifacts of other crates will be easier with
 /// [this RFC](https://github.com/rust-lang/cargo/issues/9096).*
+#[doc(hidden)]
 pub fn pkgname_to_libname(pkgname: &str) -> String {
     let pkgname = pkgname.to_string().replace("-", "_");
     if cfg!(target_os = "windows") {
