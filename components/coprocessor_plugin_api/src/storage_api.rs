@@ -1,8 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use async_trait::async_trait;
+use std::any::Any;
 use std::fmt;
 use std::ops::Range;
+use std::time::Duration;
 
 /// A raw key in the storage.
 pub type Key = Vec<u8>;
@@ -18,8 +20,6 @@ pub type StorageResult<T> = std::result::Result<T, StorageError>;
 #[derive(Debug, Clone)]
 pub struct Region {
     pub id: u64,
-    pub start_key: Key,
-    pub end_key: Key,
     pub region_epoch: RegionEpoch,
 }
 
@@ -34,16 +34,31 @@ pub struct RegionEpoch {
 pub enum StorageError {
     KeyNotInRegion {
         key: Key,
-        region: Region,
+        region_id: u64,
         start_key: Key,
         end_key: Key,
     },
-    OtherError(String),
+    Timeout(Duration),
+    Canceled,
+
+    /// Errors that can not be handled by a coprocessor plugin but should instead be returned to the
+    /// client.
+    ///
+    /// If such an error appears, plugins can run some cleanup code and return early from the
+    /// request. The error will be passed to the client and the client might retry the request.
+    Other(Box<dyn Any>),
 }
 
 impl fmt::Display for StorageError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Storage-related error: {:?}", self)
+        match self {
+            StorageError::KeyNotInRegion { key, region_id, .. } => {
+                write!(f, "Key {:?} not found in region {:?}", key, region_id)
+            }
+            StorageError::Timeout(d) => write!(f, "timeout after {:?}", d),
+            StorageError::Canceled => write!(f, "request canceled"),
+            StorageError::Other(e) => write!(f, "{:?}", e),
+        }
     }
 }
 
