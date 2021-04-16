@@ -1094,15 +1094,21 @@ impl Initializer {
         fail_point!("cdc_incremental_scan_start");
 
         let deregister_region = || {
-            if !self.build_resolver {
-                return;
-            }
-
-            let deregister = Deregister::Region {
-                region_id,
-                observe_id: self.observe_id,
-                err: Error::ResolverBuilderConnExited,
+            let deregister = if self.build_resolver {
+                Deregister::Region {
+                    region_id,
+                    observe_id: self.observe_id,
+                    err: Error::ResolverBuilderConnExited,
+                }
+            } else {
+                Deregister::Downstream {
+                    region_id,
+                    downstream_id: self.downstream_id,
+                    conn_id: self.conn_id,
+                    err: None,
+                }
             };
+
             if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
                 error!("cdc schedule cdc task failed"; "error" => ?e, "region_id" => region_id);
             }
