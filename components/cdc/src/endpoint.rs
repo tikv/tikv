@@ -1542,13 +1542,16 @@ mod tests {
 
         // Test cancellation.
         initializer.downstream_state.store(DownstreamState::Stopped);
-        block_on(initializer.async_incremental_scan(snap, region));
+        block_on(initializer.async_incremental_scan(snap, region.clone()));
 
         loop {
             let task = rx.recv_timeout(Duration::from_secs(1));
             match task {
+                Ok(Task::Deregister(Deregister::Downstream { region_id, .. })) => {
+                    assert_eq!(region_id, region.get_id(), "unexpected region id {:?}", region_id);
+                    break;
+                }
                 Ok(t) => panic!("unepxected task {} received", t),
-                Err(RecvTimeoutError::Timeout) => break,
                 Err(e) => panic!("unexpected err {:?}", e),
             }
         }
