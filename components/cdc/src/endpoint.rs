@@ -1147,6 +1147,7 @@ impl Initializer {
             };
             if let Err(e) = self.sched.schedule(scanned) {
                 error!("cdc schedule cdc task failed"; "error" => ?e, "region_id" => region_id);
+                deregister_region();
                 return;
             }
         }
