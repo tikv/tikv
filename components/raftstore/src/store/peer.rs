@@ -3194,7 +3194,7 @@ where
     fn handle_read<T>(
         &self,
         ctx: &mut PollContext<EK, ER, T>,
-        mut req: RaftCmdRequest,
+        req: RaftCmdRequest,
         check_epoch: bool,
         read_index: Option<u64>,
     ) -> ReadResponse<EK::Snapshot> {
@@ -3213,7 +3213,7 @@ where
         }
         let flags = WriteBatchFlags::from_bits_check(req.get_header().get_flags());
         if flags.contains(WriteBatchFlags::STALE_READ) {
-            let read_ts = decode_u64(&mut req.mut_header().take_flag_data().as_slice()).unwrap();
+            let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
             let safe_ts = self.safe_ts.load(Ordering::Acquire);
             if safe_ts < read_ts {
                 debug!(
