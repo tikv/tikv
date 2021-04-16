@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::any::Any;
-use std::cmp::{Ord, Ordering as CmpOrdering};
+use std::cmp::{self, Ord, Ordering as CmpOrdering};
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::collections::{BTreeMap, VecDeque};
 use std::ops::Deref;
@@ -2430,34 +2430,40 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
 // Get the minimal `safe_ts` from regions overlap with the key range [`start_key`, `end_key`)
 fn get_range_safe_ts(meta: &StoreMeta, key_range: KeyRange) -> u64 {
-    unimplemented!()
-    // if key_range.get_start_key().is_empty() && key_range.get_end_key().is_empty() {
-    //     // Fast path to get the min `safe_ts` of all regions in this store
-    //     meta.region_read_progress
-    //         .iter()
-    //         .map(|(_, rrp)| rrp.safe_ts.load(Ordering::Relaxed))
-    //         .min()
-    //         .unwrap_or(0)
-    // } else {
-    //     let (start_key, end_key) = (
-    //         data_key(key_range.get_start_key()),
-    //         data_end_key(key_range.get_end_key()),
-    //     );
-    //     meta.region_ranges
-    //         // get overlapped regions
-    //         .range((Excluded(start_key), Unbounded))
-    //         .take_while(|(_, id)| end_key > enc_start_key(&meta.regions[id]))
-    //         // get the min `safe_ts`
-    //         .map(|(_, id)| {
-    //             meta.region_read_progress
-    //                 .get(id)
-    //                 .unwrap()
-    //                 .safe_ts
-    //                 .load(Ordering::Relaxed)
-    //         })
-    //         .min()
-    //         .unwrap_or(0)
-    // }
+    if key_range.get_start_key().is_empty() && key_range.get_end_key().is_empty() {
+        // Fast path to get the min `safe_ts` of all regions in this store
+        meta.peer_properties
+            .iter()
+            .map(|(_, pps)| {
+                let pp = pps
+                    .get::<RegionSafeTSTracker>()
+                    .expect("no peer property found");
+                let rrp = pp.downcast_ref::<RegionReadProgress>().unwrap();
+                rrp.safe_ts.load(Ordering::Acquire)
+            })
+            .min()
+            .unwrap_or(0)
+    } else {
+        let (start_key, end_key) = (
+            data_key(key_range.get_start_key()),
+            data_end_key(key_range.get_end_key()),
+        );
+        meta.region_ranges
+            // get overlapped regions
+            .range((Excluded(start_key), Unbounded))
+            .take_while(|(_, id)| end_key > enc_start_key(&meta.regions[id]))
+            // get the min `safe_ts`
+            .map(|(_, id)| {
+                let pps = meta.peer_properties.get(id).unwrap();
+                let pp = pps
+                    .get::<RegionSafeTSTracker>()
+                    .expect("no peer property found");
+                let rrp = pp.downcast_ref::<RegionReadProgress>().unwrap();
+                rrp.safe_ts.load(Ordering::Acquire)
+            })
+            .min()
+            .unwrap_or(0)
+    }
 }
 
 /// `RegionReadProgress` is used to keep track of the replica's `safe_ts`, the replica can handle a read

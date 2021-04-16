@@ -12,7 +12,9 @@ use raft::eraftpb::{Message, MessageType};
 use engine_rocks::Compat;
 use engine_traits::PbPeekable;
 use engine_traits::Peekable;
-use file_system::{set_io_rate_limiter, WithIORateLimit, BytesRecorder, IOOp, IORateLimiter, IOType};
+use file_system::{
+    set_io_rate_limiter, BytesRecorder, IOOp, IORateLimiter, IOType, WithIORateLimit,
+};
 use raftstore::store::*;
 use raftstore::Result;
 use test_raftstore::*;

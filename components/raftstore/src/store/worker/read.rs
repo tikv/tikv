@@ -548,7 +548,6 @@ where
                             &req,
                             delegate.region.get_region_epoch(),
                         ) {
-
                             warn!("stale read met error"; "err" => ?e);
 
                             self.metrics.rejected_by_safe_timestamp += 1;
