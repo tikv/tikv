@@ -4,6 +4,7 @@ use tipb::{Expr, ExprType, FieldType};
 
 use crate::impl_bit_op::*;
 use crate::impl_max_min::*;
+use crate::impl_variance::*;
 use crate::AggrFunction;
 use tidb_query_common::Result;
 use tidb_query_datatype::expr::EvalContext;
@@ -74,6 +75,10 @@ fn map_pb_sig_to_aggr_func_parser(value: ExprType) -> Result<Box<dyn AggrDefinit
         ExprType::AggBitXor => Ok(Box::new(AggrFnDefinitionParserBitOp::<BitXor>::new())),
         ExprType::Max => Ok(Box::new(AggrFnDefinitionParserExtremum::<Max>::new())),
         ExprType::Min => Ok(Box::new(AggrFnDefinitionParserExtremum::<Min>::new())),
+        ExprType::Variance | ExprType::VarPop => {
+            Ok(Box::new(AggrFnDefinitionParserVariance::<Population>::new()))
+        }
+        ExprType::VarSamp => Ok(Box::new(AggrFnDefinitionParserVariance::<Sample>::new())),
         v => Err(other_err!(
             "Aggregation function meet blacklist aggr function {:?}",
             v

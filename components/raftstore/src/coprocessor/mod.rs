@@ -30,9 +30,9 @@ pub use self::region_info_accessor::{
     RegionInfoProvider, SeekRegionCallback,
 };
 pub use self::split_check::{
-    get_region_approximate_keys, get_region_approximate_keys_cf, get_region_approximate_middle,
-    get_region_approximate_size, get_region_approximate_size_cf, HalfCheckObserver,
-    Host as SplitCheckerHost, KeysCheckObserver, SizeCheckObserver, TableCheckObserver,
+    get_region_approximate_keys, get_region_approximate_middle, get_region_approximate_size,
+    HalfCheckObserver, Host as SplitCheckerHost, KeysCheckObserver, SizeCheckObserver,
+    TableCheckObserver,
 };
 
 use crate::store::fsm::ObserveID;

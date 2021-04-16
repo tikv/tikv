@@ -2,20 +2,9 @@
 
 #![cfg_attr(test, feature(test))]
 #![feature(thread_id_value)]
-#![feature(min_specialization)]
 #![feature(box_patterns)]
 #![feature(str_split_once)]
 
-#[macro_use(fail_point)]
-extern crate fail;
-#[macro_use]
-extern crate lazy_static;
-#[macro_use]
-extern crate quick_error;
-#[macro_use(slog_o)]
-extern crate slog;
-#[macro_use]
-extern crate derive_more;
 #[cfg(test)]
 extern crate test;
 
@@ -50,7 +39,6 @@ pub mod stream;
 pub mod sys;
 pub mod time;
 pub mod timer;
-pub mod trace;
 pub mod worker;
 pub mod yatp_pool;
 
@@ -446,31 +434,29 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
         .unwrap();
 
     let data_dir = data_dir.to_string();
-    let orig_hook = panic::take_hook();
+
     panic::set_hook(Box::new(move |info: &panic::PanicInfo<'_>| {
-        use slog::Drain;
-        if slog_global::borrow_global().is_enabled(::slog::Level::Error) {
-            let msg = match info.payload().downcast_ref::<&'static str>() {
-                Some(s) => *s,
-                None => match info.payload().downcast_ref::<String>() {
-                    Some(s) => &s[..],
-                    None => "Box<Any>",
-                },
-            };
-            let thread = thread::current();
-            let name = thread.name().unwrap_or("<unnamed>");
-            let loc = info
-                .location()
-                .map(|l| format!("{}:{}", l.file(), l.line()));
-            let bt = backtrace::Backtrace::new();
-            crit!("{}", msg;
-                "thread_name" => name,
-                "location" => loc.unwrap_or_else(|| "<unknown>".to_owned()),
-                "backtrace" => format_args!("{:?}", bt),
-            );
-        } else {
-            orig_hook(info);
-        }
+        let msg = match info.payload().downcast_ref::<&'static str>() {
+            Some(s) => *s,
+            None => match info.payload().downcast_ref::<String>() {
+                Some(s) => &s[..],
+                None => "Box<Any>",
+            },
+        };
+
+        let thread = thread::current();
+        let name = thread.name().unwrap_or("<unnamed>");
+        let loc = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()));
+        let bt = backtrace::Backtrace::new();
+        crit!("{}", msg;
+            "thread_name" => name,
+            "location" => loc.unwrap_or_else(|| "<unknown>".to_owned()),
+            "backtrace" => format_args!("{:?}", bt),
+        );
+        // This may be needed to allow the above log statements to flush
+        thread::sleep(Duration::from_millis(2));
 
         // There might be remaining logs in the async logger.
         // To collect remaining logs and also collect future logs, replace the old one with a
@@ -536,6 +522,11 @@ pub fn is_zero_duration(d: &Duration) -> bool {
 
 pub fn empty_shared_slice<T>() -> Arc<[T]> {
     Vec::new().into()
+}
+
+/// A useful hook to check if master branch is being built.
+pub fn build_on_master_branch() -> bool {
+    option_env!("TIKV_BUILD_GIT_BRANCH").map_or(false, |b| "master" == b)
 }
 
 #[cfg(test)]

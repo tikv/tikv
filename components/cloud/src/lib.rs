@@ -5,9 +5,6 @@
 
 #![feature(min_specialization)]
 
-#[macro_use]
-extern crate failure;
-
 pub mod error;
 pub use error::{Error, ErrorTrait, Result};
 

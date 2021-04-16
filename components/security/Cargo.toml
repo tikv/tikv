@@ -19,7 +19,7 @@ prost-codec = [
 
 [dependencies]
 encryption = { path = "../encryption", default-features = false }
-grpcio = { version = "0.7", default-features = false, features = ["openssl-vendored"] }
+grpcio = { version = "0.8",  default-features = false, features = ["openssl-vendored"] }
 serde = "1.0"
 serde_derive = "1.0"
 serde_json = "1.0"

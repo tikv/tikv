@@ -63,6 +63,9 @@ endif
 ifeq ($(shell uname -p),aarch64)
 ROCKSDB_SYS_SSE=0
 endif
+ifeq ($(shell uname -p),arm)
+ROCKSDB_SYS_SSE=0
+endif
 
 # Build portable binary by default unless disable explicitly
 ifneq ($(ROCKSDB_SYS_PORTABLE),0)
@@ -360,6 +363,6 @@ x-build-dist: export X_CARGO_CMD=build
 x-build-dist: export X_CARGO_FEATURES=${ENABLE_FEATURES}
 x-build-dist: export X_CARGO_RELEASE=1
 x-build-dist: export X_CARGO_CONFIG_FILE=${DIST_CONFIG}
-x-build-dist: export X_PACKAGE=cmd
+x-build-dist: export X_PACKAGE=tikv-server tikv-ctl
 x-build-dist:
 	bash scripts/run-cargo.sh

@@ -16,6 +16,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use tikv_util::mpsc;
 use tikv_util::time::Instant;
+use tikv_util::{debug, error, info, thd_name, warn};
 
 /// A unify type for FSMs so that they can be sent to channel easily.
 enum FsmTypes<N, C> {
@@ -493,7 +494,7 @@ pub fn create_system<N: Fsm, C: Fsm>(
         receiver: rx,
         low_receiver: rx2,
         pool_size: cfg.pool_size,
-        max_batch_size: cfg.max_batch_size,
+        max_batch_size: cfg.max_batch_size(),
         reschedule_duration: cfg.reschedule_duration.0,
         workers: vec![],
     };

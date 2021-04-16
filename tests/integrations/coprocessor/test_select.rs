@@ -845,7 +845,7 @@ fn test_index() {
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
     let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 1);
-    for (row, (id, _, _)) in spliter.zip(data) {
+    for (row, (id, ..)) in spliter.zip(data) {
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &[id.into()]).unwrap();
         let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
@@ -879,7 +879,7 @@ fn test_index_reverse_limit() {
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
     let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 1);
-    for (row, (id, _, _)) in spliter.zip(expect) {
+    for (row, (id, ..)) in spliter.zip(expect) {
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &[id.into()]).unwrap();
         let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
@@ -909,7 +909,7 @@ fn test_limit_oom() {
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
     let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 1);
-    for (row, (id, _, _)) in spliter.zip(data) {
+    for (row, (id, ..)) in spliter.zip(data) {
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &[id.into()]).unwrap();
         let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();

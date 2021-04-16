@@ -8,7 +8,7 @@ TiKV has many dependent repositories. If you need any help or mentoring getting 
 
 ## Building and setting up a development workspace
 
-TiKV is mostly written in Rust, but has components written in C++ (RocksDB) and Go (gRPC). We are currently using the Rust nightly toolchain. To provide consistency, we use linters and automated formatting tools.
+TiKV is mostly written in Rust, but has components written in C++ (RocksDB, gRPC). We are currently using the Rust nightly toolchain. To provide consistency, we use linters and automated formatting tools.
 
 ### Prerequisites
 
@@ -19,6 +19,7 @@ To build TiKV you'll need to at least have the following installed:
 * `make` - Build tool (run common workflows)
 * `cmake` - Build tool (required for gRPC)
 * `awk` - Pattern scanning/processing language
+* C++ compiler - gcc 4.9+ (required for gRPC)
 
 If you are targeting platforms other than x86_64 linux, you'll also need:
 

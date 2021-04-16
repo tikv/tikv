@@ -7,7 +7,7 @@ use tidb_query_common::Result;
 
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::codec::mysql::duration::{
-    MAX_HOUR_PART, MAX_MINUTE_PART, MAX_NANOS_PART, MAX_SECOND_PART, NANOS_PER_SEC,
+    MAX_HOUR_PART, MAX_MINUTE_PART, MAX_NANOS, MAX_NANOS_PART, MAX_SECOND_PART, NANOS_PER_SEC,
 };
 use tidb_query_datatype::codec::mysql::time::extension::DateTimeExtension;
 use tidb_query_datatype::codec::mysql::time::weekmode::WeekMode;
@@ -286,6 +286,12 @@ pub fn date_diff(from_time: &DateTime, to_time: &DateTime) -> Result<Option<Int>
     Ok(from_time.date_diff(*to_time))
 }
 
+#[rpn_fn]
+#[inline]
+pub fn null_time_diff() -> Result<Option<Duration>> {
+    Ok(None)
+}
+
 #[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn add_datetime_and_duration(
@@ -301,7 +307,7 @@ pub fn add_datetime_and_duration(
                     "DATETIME",
                     format!("({} + {})", datetime, duration),
                 ))
-                .map(|_| Ok(None))?
+                .map(|_| Ok(None))?;
         }
     };
     if res.set_time_type(TimeType::DateTime).is_err() {
@@ -310,7 +316,7 @@ pub fn add_datetime_and_duration(
     Ok(Some(res))
 }
 
-#[rpn_fn(capture=[ctx])]
+#[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn add_datetime_and_string(
     ctx: &mut EvalContext,
@@ -337,7 +343,35 @@ pub fn add_datetime_and_string(
     Ok(Some(res))
 }
 
-#[rpn_fn(capture=[ctx])]
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn add_date_and_string(
+    ctx: &mut EvalContext,
+    arg0: &DateTime,
+    arg1: BytesRef,
+) -> Result<Option<DateTime>> {
+    let arg1 = std::str::from_utf8(&arg1).map_err(Error::Encoding)?;
+    let arg1 = match Duration::parse(ctx, arg1, MAX_FSP) {
+        Ok(arg) => arg,
+        Err(_) => return Ok(None),
+    };
+
+    let mut res = match arg0.checked_add(ctx, arg1) {
+        Some(res) => res,
+        None => {
+            return ctx
+                .handle_invalid_time_error(Error::overflow(
+                    "DATE",
+                    format!("({} + {})", arg0, arg1),
+                ))
+                .map(|_| Ok(None))?;
+        }
+    };
+    res.set_time_type(TimeType::Date)?;
+    Ok(Some(res))
+}
+
+#[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn sub_duration_and_duration(
     ctx: &mut EvalContext,
@@ -352,7 +386,7 @@ pub fn sub_duration_and_duration(
                     "Duration",
                     format!("({} - {})", duration1, duration2),
                 ))
-                .map(|_| Ok(None))?
+                .map(|_| Ok(None))?;
         }
     };
     Ok(Some(result))
@@ -373,7 +407,7 @@ pub fn sub_datetime_and_duration(
                     "DATETIME",
                     format!("({} - {})", datetime, duration),
                 ))
-                .map(|_| Ok(None))?
+                .map(|_| Ok(None))?;
         }
     };
     if res.set_time_type(TimeType::DateTime).is_err() {
@@ -666,7 +700,7 @@ pub fn add_duration_and_duration(
                     "DURATION",
                     format!("({} + {})", duration1, duration2),
                 ))
-                .map(|_| Ok(None))?
+                .map(|_| Ok(None))?;
         }
         Some(res) => res,
     };
@@ -693,6 +727,38 @@ pub fn add_duration_and_string(
                 .handle_invalid_time_error(Error::overflow(
                     "DURATION",
                     format!("({} + {})", arg1, arg2),
+                ))
+                .map(|_| Ok(None))?;
+        }
+    };
+    Ok(Some(res))
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn duration_duration_time_diff(
+    ctx: &mut EvalContext,
+    arg1: &Duration,
+    arg2: &Duration,
+) -> Result<Option<Duration>> {
+    let res = match arg1.checked_sub(*arg2) {
+        Some(res) => res,
+        // `check_sub` returns `None` if the sub operation overflow/underflow i64 bound or mysql_time_value bound.
+        // and we need to treat these two case separately.
+        // if `arg1 - arg2` is in (`MAX_NANOS`, `i64::MAX`], return max value of mysql `TIME` type.
+        // if `arg1 - arg2` is in [`i64::MIN`, `-MAX_NANOS`), return min value of mysql `TIME` type.
+        // if `arg1 - arg2` is overflow or underflow i64, return `None`.
+        None if !arg1.is_neg() && arg1.to_nanos() - i64::MAX <= arg2.to_nanos() => {
+            Duration::from_nanos(MAX_NANOS, arg1.fsp().max(arg2.fsp()) as i8)?
+        }
+        None if arg1.is_neg() && arg1.to_nanos() - i64::MIN >= arg2.to_nanos() => {
+            Duration::from_nanos(-MAX_NANOS, arg1.fsp().max(arg2.fsp()) as i8)?
+        }
+        _ => {
+            return ctx
+                .handle_invalid_time_error(Error::overflow(
+                    "DURATION",
+                    format!("({} - {})", arg1, arg2),
                 ))
                 .map(|_| Ok(None))?;
         }
@@ -1348,6 +1414,14 @@ mod tests {
     }
 
     #[test]
+    fn test_null_time_diff() {
+        let output = RpnFnScalarEvaluator::new()
+            .evaluate::<Duration>(ScalarFuncSig::NullTimeDiff)
+            .unwrap();
+        assert_eq!(output, None);
+    }
+
+    #[test]
     fn test_add_datetime_and_duration() {
         let mut ctx = EvalContext::default();
         let cases = vec![
@@ -1556,6 +1630,50 @@ mod tests {
                 .push_param(arg1)
                 .evaluate(ScalarFuncSig::SubDatetimeAndString)
                 .unwrap();
+            assert_eq!(output, exp);
+        }
+    }
+
+    #[test]
+    fn test_add_date_and_string() {
+        let mut ctx = EvalContext::default();
+        let cases = vec![
+            (Some("2021-03-26"), Some("00:00:00"), Some("2021-03-26")),
+            (Some("2021-03-26"), Some("23:59:59"), Some("2021-03-26")),
+            (Some("2021-03-26"), Some("24:00:01"), Some("2021-03-27")),
+            (Some("2021-03-26"), Some("48:00:01"), Some("2021-03-28")),
+            (Some("2021-03-26"), Some("-00:01:00"), Some("2021-03-25")),
+            (
+                Some("2021-03-26 00:00:30"),
+                Some("-00:01:00"),
+                Some("2021-03-25"),
+            ),
+            (
+                Some("2018-12-31 23:00:00"),
+                Some("1 01:30:30"),
+                Some("2019-01-02"),
+            ),
+            (
+                Some("2021-03-26"),
+                Some("00:00:00.123456"),
+                Some("2021-03-26"),
+            ),
+            // null cases
+            (None, None, None),
+            (None, Some("11:30:45.123456"), None),
+            (Some("2019-01-01 01:00:00"), None, None),
+        ];
+        for (arg0, arg1, exp) in cases {
+            let exp = exp.map(|exp| Time::parse_datetime(&mut ctx, exp, MAX_FSP, true).unwrap());
+            let arg0 =
+                arg0.map(|arg0| Time::parse_datetime(&mut ctx, arg0, MAX_FSP, true).unwrap());
+            let arg1 = arg1.map(|arg1| arg1.as_bytes().to_vec());
+
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .push_param(arg1)
+                .evaluate(ScalarFuncSig::AddDateAndString);
+            let output = output.unwrap();
             assert_eq!(output, exp);
         }
     }
@@ -2082,6 +2200,66 @@ mod tests {
                 )
                 .evaluate::<Duration>(ScalarFuncSig::MakeTime);
             assert!(output.is_err());
+        }
+    }
+
+    #[test]
+    fn test_duration_duration_time_diff() {
+        let cases = vec![
+            (Some("00:02:02"), Some("00:01:01"), Some("00:01:01")),
+            (Some("12:00:00"), Some("00:00:01"), Some("11:59:59")),
+            (Some("24:00:00"), Some("00:00:01"), Some("23:59:59")),
+            (Some("24:00:01"), Some("00:00:02"), Some("23:59:59")),
+            (None, None, None),
+            // corner case
+            (
+                Some("00:59:59.999999"),
+                Some("01:00:00.000000"),
+                Some("-00:00:00.000001"),
+            ),
+            (
+                Some("00:59:59.999999"),
+                Some("-00:00:00.000001"),
+                Some("01:00:00.000000"),
+            ),
+            (
+                Some("-00:00:00.000001"),
+                Some("00:00:00.000001"),
+                Some("-00:00:00.000002"),
+            ),
+            (
+                Some("-00:00:00.000001"),
+                Some("-00:00:00.000001"),
+                Some("00:00:00.000000"),
+            ),
+            // overflow or underflow case
+            (
+                Some("-00:00:01"),
+                Some("838:59:59.000000"),
+                Some("-838:59:59.000000"),
+            ),
+            (
+                Some("838:59:59.000000"),
+                Some("-00:00:01"),
+                Some("838:59:59.000000"),
+            ),
+            (
+                Some("838:59:59.000000"),
+                Some("-838:59:59.000000"),
+                Some("838:59:59.000000"),
+            ),
+        ];
+        let mut ctx = EvalContext::default();
+        for (duration1, duration2, exp) in cases {
+            let expected = exp.map(|exp| Duration::parse(&mut ctx, exp, MAX_FSP).unwrap());
+            let duration1 = duration1.map(|arg1| Duration::parse(&mut ctx, arg1, MAX_FSP).unwrap());
+            let duration2 = duration2.map(|arg2| Duration::parse(&mut ctx, arg2, MAX_FSP).unwrap());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(duration1)
+                .push_param(duration2)
+                .evaluate::<Duration>(ScalarFuncSig::DurationDurationTimeDiff)
+                .unwrap();
+            assert_eq!(output, expected, "got {}", output.unwrap().to_string());
         }
     }
 }

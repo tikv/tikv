@@ -126,8 +126,8 @@
 //!   for this is that associated types cannot contain lifetimes. That requires
 //!   "generic associated types". See
 //!
-//!   - [https://github.com/rust-lang/rfcs/pull/1598](https://github.com/rust-lang/rfcs/pull/1598)
-//!   - [https://github.com/rust-lang/rust/issues/44265](https://github.com/rust-lang/rust/issues/44265)
+//!   - <https://github.com/rust-lang/rfcs/pull/1598>
+//!   - <https://github.com/rust-lang/rust/issues/44265>
 //!
 //! - Traits can't have mutually-recursive associated types. That is, if
 //!   `KvEngine` has a `Snapshot` associated type, `Snapshot` can't then have a
@@ -252,10 +252,7 @@
 //!   `engine_traits` and reexported from `engine` to ease the transition.
 //!   Likewise `engine_rocks` can temporarily call code from inside `engine`.
 #![feature(min_specialization)]
-#![recursion_limit = "200"]
 
-#[macro_use]
-extern crate quick_error;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 #[cfg(test)]
@@ -305,6 +302,8 @@ pub use crate::sst_partitioner::*;
 mod range_properties;
 pub use crate::mvcc_properties::*;
 pub use crate::range_properties::*;
+mod ttl_properties;
+pub use crate::ttl_properties::*;
 mod perf_context;
 pub use crate::perf_context::*;
 

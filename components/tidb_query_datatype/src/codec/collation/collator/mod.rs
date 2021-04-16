@@ -22,7 +22,7 @@ use super::charset::*;
 use super::Collator;
 use crate::codec::Result;
 
-const PADDING_SPACE: char = 0x20 as char;
+pub const PADDING_SPACE: char = 0x20 as char;
 
 #[cfg(test)]
 mod tests {

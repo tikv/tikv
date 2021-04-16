@@ -8,12 +8,14 @@ use std::marker::PhantomData;
 
 pub enum RowSlice<'a> {
     Small {
+        origin: &'a [u8],
         non_null_ids: LEBytes<'a, u8>,
         null_ids: LEBytes<'a, u8>,
         offsets: LEBytes<'a, u16>,
         values: LEBytes<'a, u8>,
     },
     Big {
+        origin: &'a [u8],
         non_null_ids: LEBytes<'a, u32>,
         null_ids: LEBytes<'a, u32>,
         offsets: LEBytes<'a, u32>,
@@ -26,6 +28,7 @@ impl RowSlice<'_> {
     ///
     /// Panics if the value of first byte is not 128(v2 version code)
     pub fn from_bytes(mut data: &[u8]) -> Result<RowSlice> {
+        let origin = data;
         assert_eq!(data.read_u8()?, super::CODEC_VERSION);
         let is_big = super::Flags::from_bits_truncate(data.read_u8()?) == super::Flags::BIG;
 
@@ -34,6 +37,7 @@ impl RowSlice<'_> {
         let null_cnt = data.read_u16_le()? as usize;
         let row = if is_big {
             RowSlice::Big {
+                origin,
                 non_null_ids: read_le_bytes(&mut data, non_null_cnt)?,
                 null_ids: read_le_bytes(&mut data, null_cnt)?,
                 offsets: read_le_bytes(&mut data, non_null_cnt)?,
@@ -41,6 +45,7 @@ impl RowSlice<'_> {
             }
         } else {
             RowSlice::Small {
+                origin,
                 non_null_ids: read_le_bytes(&mut data, non_null_cnt)?,
                 null_ids: read_le_bytes(&mut data, null_cnt)?,
                 offsets: read_le_bytes(&mut data, non_null_cnt)?,
@@ -135,6 +140,25 @@ impl RowSlice<'_> {
         match self {
             RowSlice::Big { values, .. } => values.slice,
             RowSlice::Small { values, .. } => values.slice,
+        }
+    }
+
+    #[inline]
+    pub fn origin(&self) -> &[u8] {
+        match self {
+            RowSlice::Big { origin, .. } => *origin,
+            RowSlice::Small { origin, .. } => *origin,
+        }
+    }
+
+    #[inline]
+    pub fn get(&self, column_id: i64) -> Result<Option<&[u8]>> {
+        if let Some((start, end)) = self.search_in_non_null_ids(column_id)? {
+            Ok(Some(self.values().get(start..end).ok_or_else(|| {
+                Error::CorruptedData(log_wrappers::Value(self.origin()).to_string())
+            })?))
+        } else {
+            Ok(None)
         }
     }
 }

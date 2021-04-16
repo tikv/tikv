@@ -29,8 +29,8 @@ impl ErrorCodeExt for Error {
             Error::ProposalDropped => PROPOSAL_DROPPED,
             Error::ConfigInvalid(_) => CONFIG_INVALID,
             Error::CodecError(_) => CODEC_ERROR,
-            Error::Exists(_, _) => EXISTS,
-            Error::NotExists(_, _) => NOT_EXISTS,
+            Error::Exists(..) => EXISTS,
+            Error::NotExists(..) => NOT_EXISTS,
             Error::RequestSnapshotDropped => REQUEST_SNAPSHOT_DROPPED,
             Error::ConfChangeError(_) => CONF_CHANGE_ERROR,
         }

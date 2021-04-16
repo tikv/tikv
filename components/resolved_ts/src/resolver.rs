@@ -109,6 +109,10 @@ impl Resolver {
 
         self.resolved_ts
     }
+
+    pub fn is_initialized(&self) -> bool {
+        self.resolved_ts.is_some()
+    }
 }
 
 #[cfg(test)]

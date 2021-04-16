@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt::{self, Display, Formatter};
+use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -19,7 +20,7 @@ use kvproto::tikvpb::TikvClient;
 use protobuf::Message;
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 
-use engine_rocks::RocksEngine;
+use engine_traits::KvEngine;
 use file_system::{IOType, WithIOType};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{GenericSnapshot, SnapEntry, SnapKey, SnapManager};
@@ -233,7 +234,7 @@ impl RecvSnapContext {
         })
     }
 
-    fn finish<R: RaftStoreRouter<RocksEngine>>(self, raft_router: R) -> Result<()> {
+    fn finish<R: RaftStoreRouter<impl KvEngine>>(self, raft_router: R) -> Result<()> {
         let key = self.key;
         if let Some(mut file) = self.file {
             info!("saving snapshot file"; "snap_key" => %key, "file" => file.path());
@@ -250,7 +251,7 @@ impl RecvSnapContext {
     }
 }
 
-fn recv_snap<R: RaftStoreRouter<RocksEngine> + 'static>(
+fn recv_snap<R: RaftStoreRouter<impl KvEngine> + 'static>(
     stream: RequestStream<SnapshotChunk>,
     sink: ClientStreamingSink<Done>,
     snap_mgr: SnapManager,
@@ -296,7 +297,11 @@ fn recv_snap<R: RaftStoreRouter<RocksEngine> + 'static>(
     }
 }
 
-pub struct Runner<R: RaftStoreRouter<RocksEngine> + 'static> {
+pub struct Runner<E, R>
+where
+    E: KvEngine,
+    R: RaftStoreRouter<E> + 'static,
+{
     env: Arc<Environment>,
     snap_mgr: SnapManager,
     pool: Runtime,
@@ -305,16 +310,21 @@ pub struct Runner<R: RaftStoreRouter<RocksEngine> + 'static> {
     cfg: Arc<Config>,
     sending_count: Arc<AtomicUsize>,
     recving_count: Arc<AtomicUsize>,
+    engine: PhantomData<E>,
 }
 
-impl<R: RaftStoreRouter<RocksEngine> + 'static> Runner<R> {
+impl<E, R> Runner<E, R>
+where
+    E: KvEngine,
+    R: RaftStoreRouter<E> + 'static,
+{
     pub fn new(
         env: Arc<Environment>,
         snap_mgr: SnapManager,
         r: R,
         security_mgr: Arc<SecurityManager>,
         cfg: Arc<Config>,
-    ) -> Runner<R> {
+    ) -> Runner<E, R> {
         Runner {
             env,
             snap_mgr,
@@ -331,11 +341,16 @@ impl<R: RaftStoreRouter<RocksEngine> + 'static> Runner<R> {
             cfg,
             sending_count: Arc::new(AtomicUsize::new(0)),
             recving_count: Arc::new(AtomicUsize::new(0)),
+            engine: PhantomData,
         }
     }
 }
 
-impl<R: RaftStoreRouter<RocksEngine> + 'static> Runnable for Runner<R> {
+impl<E, R> Runnable for Runner<E, R>
+where
+    E: KvEngine,
+    R: RaftStoreRouter<E> + 'static,
+{
     type Task = Task;
 
     fn run(&mut self, task: Task) {

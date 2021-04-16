@@ -24,6 +24,7 @@ protobuf-codec = [
   "tidb_query_datatype/protobuf-codec",
   "tikv_util/protobuf-codec",
   "txn_types/protobuf-codec",
+  "file_system/protobuf-codec",
 ]
 prost-codec = [
   "prost",
@@ -41,6 +42,7 @@ prost-codec = [
   "tidb_query_datatype/prost-codec",
   "tikv_util/prost-codec",
   "txn_types/prost-codec",
+  "file_system/prost-codec",
 ]
 testexport = []
 test-engines-rocksdb = [
@@ -57,13 +59,13 @@ byteorder = "1.2"
 concurrency_manager = { path = "../concurrency_manager", default-features = false }
 configuration = { path = "../configuration" }
 crc32fast = "1.2"
-crossbeam = "0.7.2"
+crossbeam = "0.8"
 encryption = { path = "../encryption", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 error_code = { path = "../error_code", default-features = false }
 fail = "0.4"
 openssl = "0.10"
-file_system = { path = "../file_system" }
+file_system = { path = "../file_system", default-features = false }
 fs2 = "0.4"
 futures = "0.3"
 futures-util = { version = "0.3.1", default-features = false, features = ["io"] }
@@ -76,7 +78,7 @@ log_wrappers = { path = "../log_wrappers" }
 pd_client = { path = "../pd_client", default-features = false }
 prometheus = { version = "0.10", features = ["nightly"] }
 prometheus-static-metric = "0.4"
-prost = { version = "0.6", optional = true }
+prost = { version = "0.7", optional = true }
 protobuf = "2.8"
 quick-error = "1.2.3"
 raft = { version = "0.6.0-alpha", default-features = false }

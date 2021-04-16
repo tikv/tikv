@@ -9,6 +9,7 @@ mod cgroup;
 pub use sysinfo::{DiskExt, NetworkExt, ProcessExt, ProcessorExt, SystemExt};
 
 use crate::config::ReadableSize;
+use lazy_static::lazy_static;
 use std::sync::Mutex;
 
 lazy_static! {

@@ -24,7 +24,7 @@ prost-codec = [
 [dependencies]
 fail = "0.4"
 futures = "0.3"
-grpcio = { version = "0.7", default-features = false, features = ["openssl-vendored"] }
+grpcio = { version = "0.8",  default-features = false, features = ["openssl-vendored"] }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
