@@ -4,10 +4,9 @@ use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
 
-
 /// When encountering raft/batch_raft mismatch store id error, the service is expected
 /// to drop connections in order to let raft_client re-resolve store address from PD
-/// This will make the mismatch error be automatically corrected. 
+/// This will make the mismatch error be automatically corrected.
 /// Ths test verified this case.
 #[test]
 fn test_mismatch_store_node() {
