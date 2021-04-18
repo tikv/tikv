@@ -1247,6 +1247,8 @@ impl Initializer {
             // unlock incremental_scan_state
         }
 
+        fail_point!("cdc_after_incremental_scan_blocks_regional_errors");
+
         let mut done = false;
         while !done {
             if self.downstream_state.load() != DownstreamState::Normal {
@@ -1284,8 +1286,6 @@ impl Initializer {
             if let Some(None) = entries.last() {
                 done = true;
             }
-
-            fail_point!("before_schedule_incremental_scan");
 
             let downstream = self.downstream.as_ref().unwrap();
             let events =
@@ -1354,6 +1354,7 @@ impl Initializer {
                     self.downstream_state.store(DownstreamState::Stopped);
                     self.downstream.as_ref().unwrap().sink_error(err_event);
                     self.deregister_downstream(None);
+                    return;
                 }
                 other => {
                     panic!("unexpected incremental scan state {:?}", other);
@@ -1890,8 +1891,11 @@ mod tests {
         loop {
             let task = rx.recv_timeout(Duration::from_secs(1));
             match task {
-                Ok(t) => panic!("unepxected task {} received", t),
-                Err(RecvTimeoutError::Timeout) => break,
+                Ok(Task::Deregister(Deregister::Downstream { region_id, .. })) => {
+                    assert_eq!(region_id, initializer.region_id);
+                    break;
+                }
+                Ok(other) => panic!("unexpected task {:?}", other),
                 Err(e) => panic!("unexpected err {:?}", e),
             }
         }
