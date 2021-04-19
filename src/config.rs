@@ -1831,7 +1831,7 @@ macro_rules! readpool_config {
 
         impl $struct_name {
             /// Builds configurations for low, normal and high priority pools.
-            pub fn to_yatp_pool_configs(&self) -> Vec<yatp_pool::Config> {
+            pub fn to_yatp_pool_configs(self) -> Vec<yatp_pool::Config> {
                 vec![
                     yatp_pool::Config {
                         workers: self.low_concurrency,

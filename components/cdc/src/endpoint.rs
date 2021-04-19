@@ -885,10 +885,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             })
             .collect();
         let resps = futures::future::join_all(regions).await;
-        resps
-            .into_iter()
-            .filter_map(|resp| resp)
-            .collect::<Vec<u64>>()
+        resps.into_iter().flatten().collect::<Vec<u64>>()
     }
 
     async fn region_resolved_ts_store(
@@ -1387,8 +1384,8 @@ impl Initializer {
 
         if let Some(resolver) = resolver {
             // Track the locks.
-            for entry in &entries {
-                if let Some(TxnEntry::Prewrite { lock, .. }) = entry {
+            for entry in entries.iter().flatten() {
+                if let TxnEntry::Prewrite { lock, .. } = entry {
                     let (encoded_key, value) = lock;
                     let key = Key::from_encoded_slice(encoded_key).into_raw().unwrap();
                     let lock = Lock::parse(value)?;

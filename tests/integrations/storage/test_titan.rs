@@ -94,8 +94,7 @@ fn test_turnoff_titan() {
     for i in cluster.get_node_ids().into_iter() {
         let db = cluster.get_engine(i);
         let handle = get_cf_handle(&db, CF_DEFAULT).unwrap();
-        let mut opt = Vec::new();
-        opt.push(("blob_run_mode", "kFallback"));
+        let opt = vec![("blob_run_mode", "kFallback")];
         assert!(db.set_options_cf(handle, &opt).is_ok());
     }
     cluster.compact_data();
