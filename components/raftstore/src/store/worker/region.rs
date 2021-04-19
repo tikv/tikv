@@ -989,7 +989,7 @@ mod tests {
             let key = SnapKey::from_snap(&s1).unwrap();
             let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
             let mut s2 = mgr.get_snapshot_for_sending(&key).unwrap();
-            let mut s3 = mgr.get_snapshot_for_receiving(&key, &data[..]).unwrap();
+            let mut s3 = mgr.get_snapshot_for_receiving(&key, data).unwrap();
             io::copy(&mut s2, &mut s3).unwrap();
             s3.save().unwrap();
 
