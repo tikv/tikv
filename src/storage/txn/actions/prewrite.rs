@@ -78,8 +78,19 @@ pub fn prewrite<S: Snapshot>(
         return Ok((min_commit_ts, OldValue::Unspecified));
     }
 
-    let old_value = if txn_props.need_old_value && mutation.mutation_type.may_have_old_value() {
-        get_old_value(txn, &mutation.key, prev_write)?
+    let old_value = if txn_props.need_old_value {
+        if mutation.mutation_type == MutationType::Insert {
+            // The previous write of an Insert is guaranteed to be None.
+            OldValue::None
+        } else if mutation.skip_constraint_check() {
+            // The mutation does not read previous write.
+            OldValue::Unspecified
+        } else if let Some(w) = prev_write {
+            // The mutation reads and get a previous write.
+            get_old_value(txn, &mutation.key, w)?
+        } else {
+            OldValue::None
+        }
     } else {
         OldValue::Unspecified
     };
