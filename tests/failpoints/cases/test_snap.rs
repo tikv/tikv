@@ -502,7 +502,7 @@ fn test_cancel_snapshot_generating() {
 
     // Snapshot generatings will be canceled by raft log GC.
     (0..100).for_each(|_| cluster.must_put(b"kk", b"vv"));
-    cluster.wait_log_truncated(1, 1, 112);
+    cluster.wait_log_truncated(rid, 1, 112);
 
     fail::cfg("before_region_gen_snap", "off").unwrap();
     // Wait for all snapshot generating tasks are consumed.

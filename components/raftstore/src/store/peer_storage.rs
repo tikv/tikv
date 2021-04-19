@@ -848,6 +848,7 @@ where
             if snap_index > 0 && self.apply_state.get_truncated_state().index > snap_index {
                 canceled.store(true, Ordering::SeqCst);
                 *snap_state = SnapState::Relax;
+                *self.snap_tried_cnt.borrow_mut() = 0;
             }
         }
     }
@@ -1360,6 +1361,7 @@ where
         if let SnapState::Generating { ref canceled, .. } = *snap_state {
             canceled.store(true, Ordering::SeqCst);
             *snap_state = SnapState::Relax;
+            *self.snap_tried_cnt.borrow_mut() = 0;
             return true;
         }
         false
