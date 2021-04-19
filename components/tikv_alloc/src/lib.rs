@@ -111,6 +111,8 @@ mod imp;
 #[path = "system.rs"]
 mod imp;
 
+pub mod trace;
+
 pub use crate::imp::*;
 
 #[global_allocator]

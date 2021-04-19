@@ -147,6 +147,7 @@ openssl = "0.10"
 hyper = "0.13"
 hyper-openssl = "0.8"
 http = "0"
+inferno = "0.9"
 into_other = { path = "components/into_other", default-features = false }
 keys = { path = "components/keys", default-features = false }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
@@ -155,6 +156,7 @@ libc = "0.2"
 libloading = "0.7"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { path = "components/log_wrappers" }
+memory_trace_macros = { path = "components/memory_trace_macros" }
 mime = "0.3.13"
 more-asserts = "0.2"
 murmur3 = "0.5.1"
@@ -254,6 +256,7 @@ members = [
   "components/test_pd",
   "components/tikv_alloc",
   "components/match_template",
+  "components/memory_trace_macros",
   "components/codec",
   "components/configuration",
   "components/panic_hook",
