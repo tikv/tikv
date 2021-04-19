@@ -2201,11 +2201,9 @@ where
         } else {
             self.leader_lease.renew(ts);
             let term = self.term();
-            if let Some(remote_lease) = self.leader_lease.maybe_new_remote_lease(term) {
-                Some(ReadProgress::leader_lease(remote_lease))
-            } else {
-                None
-            }
+            self.leader_lease
+                .maybe_new_remote_lease(term)
+                .map(ReadProgress::leader_lease)
         };
         if let Some(progress) = progress {
             let mut meta = ctx.store_meta.lock().unwrap();

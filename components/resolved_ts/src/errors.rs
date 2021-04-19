@@ -33,6 +33,10 @@ pub enum Error {
 }
 
 impl Error {
+    pub fn request(err: ErrorHeader) -> Error {
+        Error::Request(Box::new(err))
+    }
+
     pub fn extract_error_header(self) -> ErrorHeader {
         match self {
             Error::Engine(EngineError(box EngineErrorInner::Request(e)))
@@ -41,8 +45,8 @@ impl Error {
             ))))
             | Error::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
                 box MvccErrorInner::Engine(EngineError(box EngineErrorInner::Request(e))),
-            )))) => e,
-            Error::Request(e) => e.as_ref().clone(),
+            ))))
+            | Error::Request(box e) => e,
             other => {
                 let mut e = ErrorHeader::default();
                 e.set_message(format!("{:?}", other));
