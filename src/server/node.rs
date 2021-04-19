@@ -131,6 +131,20 @@ where
         }
     }
 
+    pub fn try_bootstrap_store(&mut self, engines: Engines<RocksEngine, ER>) -> Result<()> {
+        let mut store_id = self.check_store(&engines)?;
+        if store_id == INVALID_ID {
+            store_id = self.alloc_id()?;
+            debug!("alloc store id"; "store_id" => store_id);
+            store::bootstrap_store(&engines, self.cluster_id, store_id)?;
+            fail_point!("node_after_bootstrap_store", |_| Err(box_err!(
+                "injected error: node_after_bootstrap_store"
+            )));
+        }
+        self.store.set_id(store_id);
+        Ok(())
+    }
+
     /// Starts the Node. It tries to bootstrap cluster if the cluster is not
     /// bootstrapped yet. Then it spawns a thread to run the raftstore in
     /// background.
@@ -151,14 +165,7 @@ where
     where
         T: Transport + 'static,
     {
-        let mut store_id = self.check_store(&engines)?;
-        if store_id == INVALID_ID {
-            store_id = self.bootstrap_store(&engines)?;
-            fail_point!("node_after_bootstrap_store", |_| Err(box_err!(
-                "injected error: node_after_bootstrap_store"
-            )));
-        }
-        self.store.set_id(store_id);
+        let store_id = self.id();
         {
             let mut meta = store_meta.lock().unwrap();
             meta.store_id = Some(store_id);
@@ -254,15 +261,6 @@ where
                 .group
                 .register_store(store.id, store.take_labels().into());
         }
-    }
-
-    fn bootstrap_store(&self, engines: &Engines<RocksEngine, ER>) -> Result<u64> {
-        let store_id = self.alloc_id()?;
-        debug!("alloc store id"; "store_id" => store_id);
-
-        store::bootstrap_store(&engines, self.cluster_id, store_id)?;
-
-        Ok(store_id)
     }
 
     // Exported for tests.
