@@ -22,10 +22,12 @@ pub type PluginConstructorSignature =
 #[macro_export]
 macro_rules! declare_plugin {
     ($plugin_ctor:expr) => {
+        #[cfg(not(test))]
         #[global_allocator]
         static HOST_ALLOCATOR: $crate::allocator::HostAllocator =
             $crate::allocator::HostAllocator::new();
 
+        #[cfg(not(test))]
         #[no_mangle]
         pub unsafe extern "C" fn _plugin_create(
             host_allocator: $crate::allocator::HostAllocatorPtr,

@@ -494,11 +494,7 @@ pub fn set_io_rate_limiter(limiter: Option<Arc<IORateLimiter>>) {
 }
 
 pub fn get_io_rate_limiter() -> Option<Arc<IORateLimiter>> {
-    if let Some(ref limiter) = *IO_RATE_LIMITER.lock() {
-        Some(limiter.clone())
-    } else {
-        None
-    }
+    (*IO_RATE_LIMITER.lock().unwrap()).clone()
 }
 
 #[cfg(test)]
