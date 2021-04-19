@@ -510,7 +510,7 @@ where
     /// task run when there are more than 1 pending tasks.
     pub pending_pd_heartbeat_tasks: Arc<AtomicU64>,
 
-    pub read_progress: RegionReadProgress,
+    pub read_progress: Arc<RegionReadProgress>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -604,7 +604,10 @@ where
             cmd_epoch_checker: Default::default(),
             last_unpersisted_number: 0,
             pending_pd_heartbeat_tasks: Arc::new(AtomicU64::new(0)),
-            read_progress: RegionReadProgress::new(applied_index, REGION_READ_PROGRESS_CAP),
+            read_progress: Arc::new(RegionReadProgress::new(
+                applied_index,
+                REGION_READ_PROGRESS_CAP,
+            )),
         };
 
         // If this region has only one peer and I am the one, campaign directly.

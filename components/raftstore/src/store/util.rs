@@ -853,26 +853,42 @@ impl Display for MsgType<'_> {
 /// raft heartbeat message
 ///
 /// The intend is to make the item's `safe ts` larger (more up to date) and `apply index` smaller (require less data)
-///
-// TODO: reduce `Arc` use
-#[derive(Clone)]
+#[derive(Debug)]
 pub struct RegionReadProgress {
-    applied_index: Arc<AtomicU64>,
-    safe_ts: Arc<AtomicU64>,
-    // `pending_items` is a *sorted* list of `(apply index, safe ts)` item, it should
+    // `core` used to keep track and update `safe_ts`, it should
     // not be accessed outside to avoid dead lock
-    pending_items: Arc<Mutex<VecDeque<(u64, u64)>>>,
-    // the max size of `pending_items`
-    cap: usize,
+    core: Mutex<RegionReadProgressCore>,
+    // The fast path to read `safe_ts` and `applied_index` without
+    // acquiring the mutex on `core`
+    safe_ts: AtomicU64,
+    applied_index: AtomicU64,
 }
 
 impl RegionReadProgress {
     pub fn new(applied_index: u64, cap: usize) -> RegionReadProgress {
         RegionReadProgress {
-            applied_index: Arc::new(AtomicU64::from(applied_index)),
-            safe_ts: Arc::new(AtomicU64::from(0)),
-            pending_items: Arc::new(Mutex::new(VecDeque::with_capacity(cap))),
-            cap,
+            core: Mutex::new(RegionReadProgressCore::new(applied_index, cap)),
+            applied_index: AtomicU64::from(applied_index),
+            safe_ts: AtomicU64::from(0),
+        }
+    }
+
+    pub fn update_applied(&self, applied: u64) {
+        let mut core = self.core.lock().unwrap();
+        if let Some(ts) = core.update_applied(applied) {
+            self.safe_ts.fetch_max(ts, AtomicOrdering::SeqCst);
+        }
+        self.applied_index
+            .fetch_max(applied, AtomicOrdering::SeqCst);
+    }
+
+    pub fn forward_safe_ts(&self, apply_index: u64, ts: u64) {
+        if apply_index == 0 || ts == 0 {
+            return;
+        }
+        let mut core = self.core.lock().unwrap();
+        if let Some(ts) = core.forward_safe_ts(apply_index, ts) {
+            self.safe_ts.fetch_max(ts, AtomicOrdering::SeqCst);
         }
     }
 
@@ -883,62 +899,88 @@ impl RegionReadProgress {
     pub fn safe_ts(&self) -> u64 {
         self.safe_ts.load(AtomicOrdering::Acquire)
     }
+}
 
-    pub fn get_safe_ts(&self) -> Arc<AtomicU64> {
-        self.safe_ts.clone()
+#[derive(Debug)]
+struct RegionReadProgressCore {
+    applied_index: u64,
+    safe_ts: u64,
+    // `pending_items` is a *sorted* list of `(apply index, safe ts)` item
+    pending_items: VecDeque<(u64, u64)>,
+    // the max size of `pending_items`
+    cap: usize,
+}
+
+impl RegionReadProgressCore {
+    fn new(applied_index: u64, cap: usize) -> RegionReadProgressCore {
+        RegionReadProgressCore {
+            applied_index,
+            safe_ts: 0,
+            pending_items: VecDeque::with_capacity(cap),
+            cap,
+        }
     }
 
-    pub fn update_applied(&self, applied: u64) {
-        let mut pending_items = self.pending_items.lock().unwrap();
-        let mut ts_to_update = self.safe_ts.load(AtomicOrdering::Acquire);
-        // Consume pending items with `apply_index` less or equal to incoming apply index
-        while let Some((idx, ts)) = pending_items.pop_front() {
-            if applied < idx {
-                pending_items.push_front((idx, ts));
+    // Return the `safe_ts` if it is updated
+    fn update_applied(&mut self, applied: u64) -> Option<u64> {
+        if self.applied_index >= applied {
+            return None;
+        }
+        self.applied_index = applied;
+        // Consume pending items with `apply_index` less or equal to `self.applied_index`
+        let mut ts_to_update = self.safe_ts;
+        while let Some((idx, ts)) = self.pending_items.pop_front() {
+            if self.applied_index < idx {
+                self.pending_items.push_front((idx, ts));
                 break;
             }
             if ts_to_update < ts {
                 ts_to_update = ts;
             }
         }
-        self.applied_index
-            .fetch_max(applied, AtomicOrdering::SeqCst);
-        self.safe_ts.fetch_max(ts_to_update, AtomicOrdering::SeqCst);
-    }
-
-    pub fn forward_safe_ts(&self, apply_index: u64, ts: u64) {
-        if apply_index == 0 || ts == 0 {
-            return;
-        }
-
-        let mut pending_items = self.pending_items.lock().unwrap();
-        if self.applied_index.load(AtomicOrdering::Acquire) < apply_index {
-            // Instead of adding a new item, try update the last one
-            if let Some(item) = pending_items.back_mut() {
-                // Discord the item if it has a smaller `safe_ts`
-                if item.1 >= ts {
-                    return;
-                }
-                // Discord the item if it has a smaller `apply_index`
-                if item.0 >= apply_index {
-                    // Update the last item's `safe_ts` if the incoming item require a less or equal
-                    // `apply_index` with a larger `safe_ts`
-                    item.1 = ts;
-                    return;
-                }
-            }
-            self.push_back(&mut pending_items, (apply_index, ts));
+        if self.safe_ts < ts_to_update {
+            self.safe_ts = ts_to_update;
+            Some(ts_to_update)
         } else {
-            // try update `safe_ts` directly
-            self.safe_ts.fetch_max(ts, AtomicOrdering::SeqCst);
+            None
         }
     }
 
-    fn push_back(&self, queue: &mut VecDeque<(u64, u64)>, item: (u64, u64)) {
-        if queue.len() >= self.cap {
-            queue.pop_front();
+    // Return the `safe_ts` if it is updated
+    fn forward_safe_ts(&mut self, apply_index: u64, ts: u64) -> Option<u64> {
+        // The peer has enough data, try update `safe_ts` directly
+        if self.applied_index >= apply_index {
+            let mut updated_ts = None;
+            if self.safe_ts < ts {
+                self.safe_ts = ts;
+                updated_ts = Some(ts);
+            }
+            return updated_ts;
         }
-        queue.push_back(item);
+        // The peer doesn't has enough data, keep the item for future use
+        if let Some(item) = self.pending_items.back_mut() {
+            // Discord the item if it has a smaller `safe_ts`
+            if item.1 >= ts {
+                return None;
+            }
+            // Discord the item if it has a smaller `apply_index`
+            if item.0 >= apply_index {
+                // Instead of adding a new item, try update the last one,
+                // update the last item's `safe_ts` if the incoming item
+                // require a less or equal `apply_index` with a larger `safe_ts`
+                item.1 = ts;
+                return None;
+            }
+        }
+        self.push_back((apply_index, ts));
+        None
+    }
+
+    fn push_back(&mut self, item: (u64, u64)) {
+        if self.pending_items.len() >= self.cap {
+            self.pending_items.pop_front();
+        }
+        self.pending_items.push_back(item);
     }
 }
 
@@ -1572,7 +1614,7 @@ mod tests {
     fn test_region_read_progress() {
         // Return the number of the pending (index, ts) item
         fn pending_items_num(rrp: &RegionReadProgress) -> usize {
-            rrp.pending_items.lock().unwrap().len()
+            rrp.core.lock().unwrap().pending_items.len()
         }
 
         let cap = 10;

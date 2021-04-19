@@ -121,7 +121,7 @@ pub struct StoreMeta {
     /// Used for reminding the source peer to switch to ready in `atomic_snap_regions`.
     pub destroyed_region_for_snap: HashMap<u64, bool>,
 
-    pub region_read_progress: HashMap<u64, RegionReadProgress>,
+    pub region_read_progress: HashMap<u64, Arc<RegionReadProgress>>,
 }
 
 impl StoreMeta {
@@ -2515,10 +2515,10 @@ mod tests {
             region.set_end_key(kr.get_end_key().to_vec());
             region.set_peers(vec![kvproto::metapb::Peer::default()].into());
             let rrp = RegionReadProgress::new(0, 1);
-            rrp.get_safe_ts().store(safe_ts, Ordering::Release);
+            rrp.forward_safe_ts(0, safe_ts);
             meta.region_ranges.insert(enc_end_key(&region), id);
             meta.regions.insert(id, region);
-            meta.region_read_progress.insert(id, rrp);
+            meta.region_read_progress.insert(id, Arc::new(rrp));
         }
 
         fn key_range(start_key: &[u8], end_key: &[u8]) -> KeyRange {

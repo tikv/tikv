@@ -18,7 +18,7 @@ use kvproto::raft_cmdpb::{
 use time::Timespec;
 
 use crate::errors::RAFTSTORE_IS_BUSY;
-use crate::store::util::{self, LeaseState, RemoteLease};
+use crate::store::util::{self, LeaseState, RegionReadProgress, RemoteLease};
 use crate::store::{
     cmd_resp, Callback, Peer, ProposalRouter, RaftCommand, ReadResponse, RegionSnapshot,
     RequestInspector, RequestPolicy,
@@ -147,7 +147,7 @@ pub struct ReadDelegate {
     tag: String,
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     max_ts_sync_status: Arc<AtomicU64>,
-    pub safe_ts: Arc<AtomicU64>,
+    rrp: Arc<RegionReadProgress>,
 
     // `track_ver` used to keep the local `ReadDelegate` in `LocalReader`
     // up-to-date with the global `ReadDelegate` stored at `StoreMeta`
@@ -219,7 +219,7 @@ impl ReadDelegate {
             tag: format!("[region {}] {}", region_id, peer_id),
             txn_extra_op: peer.txn_extra_op.clone(),
             max_ts_sync_status: peer.max_ts_sync_status.clone(),
-            safe_ts: peer.read_progress.get_safe_ts(),
+            rrp: peer.read_progress.clone(),
             track_ver: TrackVer::new(),
         }
     }
@@ -880,7 +880,7 @@ mod tests {
                 last_valid_ts: Timespec::new(0, 0),
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
                 max_ts_sync_status: Arc::new(AtomicU64::new(0)),
-                safe_ts: Arc::new(AtomicU64::new(0)),
+                rrp: Arc::new(RegionReadProgress::new(0, 0)),
                 track_ver: TrackVer::new(),
             };
             meta.readers.insert(1, read_delegate);
@@ -1090,7 +1090,7 @@ mod tests {
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
                 max_ts_sync_status: Arc::new(AtomicU64::new(0)),
                 track_ver: TrackVer::new(),
-                safe_ts: Arc::new(AtomicU64::new(0)),
+                rrp: Arc::new(RegionReadProgress::new(0, 0)),
             };
             meta.readers.insert(1, read_delegate);
         }
