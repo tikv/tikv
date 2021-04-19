@@ -10,6 +10,7 @@ use std::time::Duration;
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::atomic::AtomicCell;
+use crossbeam::channel::TrySendError;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use futures::compat::Future01CompatExt;
 use grpcio::{ChannelBuilder, Environment};
@@ -365,7 +366,8 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                     if let Some(reader) = self.store_meta.lock().unwrap().readers.get(&region_id) {
                         reader
                             .txn_extra_op
-                            .compare_and_swap(TxnExtraOp::ReadOldValue, TxnExtraOp::Noop);
+                            .compare_exchange(TxnExtraOp::ReadOldValue, TxnExtraOp::Noop)
+                            .unwrap();
                     }
                     // Do not continue to observe the events of the region.
                     let oid = self.observer.unsubscribe_region(region_id, delegate.id);
@@ -679,11 +681,11 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         let send_cdc_event = |conn: &Conn, event| {
             if let Err(e) = conn.get_sink().try_send(event) {
                 match e {
-                    crossbeam::TrySendError::Disconnected(_) => {
+                    TrySendError::Disconnected(_) => {
                         debug!("cdc send event failed, disconnected";
                             "conn_id" => ?conn.get_id(), "downstream" => conn.get_peer());
                     }
-                    crossbeam::TrySendError::Full(_) => {
+                    TrySendError::Full(_) => {
                         info!("cdc send event failed, full";
                             "conn_id" => ?conn.get_id(), "downstream" => conn.get_peer());
                     }
@@ -1278,8 +1280,8 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable for Endpoint<T> {
                 cb,
             } => {
                 debug!("cdc downstream was initialized"; "downstream_id" => ?downstream_id);
-                downstream_state
-                    .compare_and_swap(DownstreamState::Uninitialized, DownstreamState::Normal);
+                let _ = downstream_state
+                    .compare_exchange(DownstreamState::Uninitialized, DownstreamState::Normal);
                 cb();
             }
             Task::TxnExtra(txn_extra) => {

@@ -119,7 +119,7 @@ concurrency_manager = { path = "components/concurrency_manager", default-feature
 configuration = { path = "components/configuration" }
 crc32fast = "1.2"
 crc64fast = "0.1"
-crossbeam = "0.7.2"
+crossbeam = "0.8"
 derive_more = "0.99.3"
 encryption_export = { path = "components/encryption/export", default-features = false }
 engine_panic = { path = "components/engine_panic", default-features = false }
