@@ -45,8 +45,8 @@ impl Error {
             ))))
             | Error::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
                 box MvccErrorInner::Engine(EngineError(box EngineErrorInner::Request(e))),
-            )))) => e,
-            Error::Request(e) => e.as_ref().clone(),
+            ))))
+            | Error::Request(box e) => e,
             other => {
                 let mut e = ErrorHeader::default();
                 e.set_message(format!("{:?}", other));
