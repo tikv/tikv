@@ -4,7 +4,7 @@ use crate::storage::kv::{Cursor, CursorBuilder, ScanMode, Snapshot as EngineSnap
 use crate::storage::mvcc::{
     default_not_found_error,
     reader::{OverlappedWrite, TxnCommitRecord},
-    seek_for_valid_write, Result,
+    Result,
 };
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use txn_types::{Key, Lock, OldValue, TimeStamp, Value, Write, WriteRef, WriteType};
@@ -454,37 +454,37 @@ impl<S: EngineSnapshot> MvccReader<S> {
         start_ts: TimeStamp,
         prev_write: Write,
     ) -> Result<OldValue> {
-        // Precondition:
-        debug_assert!({
-            let cursor = self.write_cursor.as_ref().unwrap();
-            let key_under_cursor =
-                Key::from_encoded(cursor.key(&mut self.statistics.write).to_vec())
-                    .truncate_ts()
-                    .unwrap();
-            let write_under_cursor =
-                txn_types::WriteRef::parse(cursor.value(&mut self.statistics.write))
-                    .unwrap()
-                    .to_owned();
-            key == &key_under_cursor && prev_write == write_under_cursor
-        });
-
-        if !prev_write.may_have_old_value() {
-            let write_cursor = self.write_cursor.as_mut().unwrap();
-            // Skip the current write record.
-            write_cursor.next(&mut self.statistics.write);
-            let write =
-                seek_for_valid_write(write_cursor, key, start_ts, start_ts, &mut self.statistics)?;
-            Ok(write.into())
-        } else if prev_write
+        if !prev_write
             .as_ref()
             .check_gc_fence_as_latest_version(start_ts)
         {
-            Ok(OldValue::Value {
-                short_value: prev_write.short_value,
-                start_ts: prev_write.start_ts,
-            })
-        } else {
-            Ok(OldValue::None)
+            return Ok(OldValue::None);
+        }
+        match prev_write.write_type {
+            WriteType::Put => {
+                // For Put, there must be an old value either in its
+                // short value or in the default CF.
+                Ok(OldValue::Value {
+                    short_value: prev_write.short_value,
+                    start_ts: prev_write.start_ts,
+                })
+            }
+            WriteType::Delete => {
+                // For Delete, no old value.
+                Ok(OldValue::None)
+            }
+            WriteType::Rollback | WriteType::Lock => {
+                // For Rollback and Lock, it's unknown whether there is a more
+                // previous valid write. Call `get_write` to get a valid
+                // previous write.
+                Ok(match self.get_write(key, start_ts, Some(start_ts))? {
+                    Some(write) => OldValue::Value {
+                        short_value: write.short_value,
+                        start_ts: write.start_ts,
+                    },
+                    None => OldValue::None,
+                })
+            }
         }
     }
 }
@@ -1677,10 +1677,26 @@ pub mod tests {
                     ),
                 ],
             },
+            Case {
+                expected: OldValue::Value {
+                    short_value: Some(b"v".to_vec()),
+                    start_ts: TimeStamp::new(4),
+                },
+
+                written: vec![
+                    (
+                        Write::new(WriteType::Put, TimeStamp::new(4), Some(b"v".to_vec())),
+                        TimeStamp::new(6),
+                    ),
+                    (
+                        Write::new(WriteType::Rollback, TimeStamp::new(5), None),
+                        TimeStamp::new(7),
+                    ),
+                ],
+            },
             // prev_write is Rollback, and there isn't a more previous valid write
             Case {
                 expected: OldValue::None,
-
                 written: vec![(
                     Write::new(WriteType::Rollback, TimeStamp::new(5), None),
                     TimeStamp::new(6),
@@ -1707,7 +1723,6 @@ pub mod tests {
             // prev_write is Lock, and there isn't a more previous valid write
             Case {
                 expected: OldValue::None,
-
                 written: vec![(
                     Write::new(WriteType::Lock, TimeStamp::new(5), None),
                     TimeStamp::new(6),
@@ -1734,8 +1749,37 @@ pub mod tests {
                     TimeStamp::new(5),
                 )],
             },
+            // prev_write is Delete, check_gc_fence_as_latest_version is true
+            Case {
+                expected: OldValue::None,
+                written: vec![
+                    (
+                        Write::new(WriteType::Put, TimeStamp::new(3), None),
+                        TimeStamp::new(6),
+                    ),
+                    (
+                        Write::new(WriteType::Delete, TimeStamp::new(7), None),
+                        TimeStamp::new(8),
+                    ),
+                ],
+            },
+            // prev_write is Delete, check_gc_fence_as_latest_version is false
+            Case {
+                expected: OldValue::None,
+                written: vec![
+                    (
+                        Write::new(WriteType::Put, TimeStamp::new(3), None),
+                        TimeStamp::new(6),
+                    ),
+                    (
+                        Write::new(WriteType::Delete, TimeStamp::new(7), None)
+                            .set_overlapped_rollback(true, Some(6.into())),
+                        TimeStamp::new(8),
+                    ),
+                ],
+            },
         ];
-        for case in cases {
+        for (i, case) in cases.into_iter().enumerate() {
             let engine = TestEngineBuilder::new().build().unwrap();
             let cm = ConcurrencyManager::new(42.into());
             let mut txn = MvccTxn::new(TimeStamp::new(10), cm.clone());
@@ -1758,7 +1802,7 @@ pub mod tests {
                 let result = reader
                     .get_old_value(&Key::from_raw(b"a"), TimeStamp::new(25), prev_write)
                     .unwrap();
-                assert_eq!(result, case.expected);
+                assert_eq!(result, case.expected, "case #{}", i);
             }
         }
     }
