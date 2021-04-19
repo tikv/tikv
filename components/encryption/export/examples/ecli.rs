@@ -1,8 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-#[macro_use]
-extern crate tikv_util;
-
 use std::io::{Read, Write};
 
 pub use cloud::kms::Config as CloudConfig;
@@ -15,6 +12,7 @@ use kvproto::encryptionpb::EncryptedContent;
 use protobuf::Message;
 use structopt::clap::arg_enum;
 use structopt::StructOpt;
+use tikv_util::box_err;
 
 arg_enum! {
     #[derive(Debug)]

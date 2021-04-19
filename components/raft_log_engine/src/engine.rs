@@ -53,9 +53,10 @@ impl RaftLogBatchTrait for RaftLogBatch {
     }
 
     fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
-        box_try!(self
-            .0
-            .put_msg(raft_group_id, RAFT_LOG_STATE_KEY.to_vec(), state));
+        box_try!(
+            self.0
+                .put_msg(raft_group_id, RAFT_LOG_STATE_KEY.to_vec(), state)
+        );
         Ok(())
     }
 

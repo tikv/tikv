@@ -75,11 +75,8 @@ pub struct Service<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: Lock
     proxy: Proxy,
 }
 
-impl<
-        T: RaftStoreRouter<RocksEngine> + Clone + 'static,
-        E: Engine + Clone,
-        L: LockManager + Clone,
-    > Clone for Service<T, E, L>
+impl<T: RaftStoreRouter<RocksEngine> + Clone + 'static, E: Engine + Clone, L: LockManager + Clone>
+    Clone for Service<T, E, L>
 {
     fn clone(&self) -> Self {
         Service {

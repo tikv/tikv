@@ -16,6 +16,7 @@ use protobuf::Message;
 use tikv_util::codec::number::{NumberEncoder, MAX_VAR_U64_LEN};
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::MustConsumeVec;
+use tikv_util::{box_err, debug};
 use time::Timespec;
 use uuid::Uuid;
 

@@ -594,11 +594,13 @@ pub fn sync_gc(
     end_key: Vec<u8>,
     safe_point: TimeStamp,
 ) -> Result<()> {
-    wait_op!(|callback| schedule_gc(scheduler, region_id, start_key, end_key, safe_point, callback))
-        .unwrap_or_else(|| {
-            error!("failed to receive result of gc");
-            Err(box_err!("gc_worker: failed to receive result of gc"))
-        })
+    wait_op!(|callback| schedule_gc(
+        scheduler, region_id, start_key, end_key, safe_point, callback
+    ))
+    .unwrap_or_else(|| {
+        error!("failed to receive result of gc");
+        Err(box_err!("gc_worker: failed to receive result of gc"))
+    })
 }
 
 /// Used to schedule GC operations.

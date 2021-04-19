@@ -18,6 +18,7 @@ use encryption::{
 };
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use engine_traits::{EncryptionKeyManager, KvEngine};
+use fail::fail_point;
 use futures::executor::block_on;
 use futures_util::io::{AllowStdIo, AsyncWriteExt};
 use kvproto::encryptionpb::EncryptionMethod;
@@ -25,6 +26,7 @@ use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
 use kvproto::raft_serverpb::{SnapshotCfFile, SnapshotMeta};
 use protobuf::Message;
+use quick_error::quick_error;
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
 use collections::{HashMap, HashMapEntry as Entry};
@@ -36,6 +38,7 @@ use keys::{enc_end_key, enc_start_key};
 use openssl::symm::{Cipher, Crypter, Mode};
 use tikv_util::time::{duration_to_sec, Limiter};
 use tikv_util::HandyRwLock;
+use tikv_util::{box_err, box_try, debug, error, info, map, warn};
 
 use crate::coprocessor::CoprocessorHost;
 use crate::store::metrics::{
@@ -1692,6 +1695,7 @@ pub mod tests {
 
     use protobuf::Message;
     use tempfile::{Builder, TempDir};
+    use tikv_util::map;
     use tikv_util::time::Limiter;
 
     use super::{
@@ -2597,7 +2601,7 @@ pub mod tests {
                 .unwrap();
 
             // TODO: this size may change in different RocksDB version.
-            let snap_size = 1658;
+            let snap_size = 1660;
             let max_snap_count = (max_total_size + snap_size - 1) / snap_size;
             // The first snap_size is for region 100.
             // That snapshot won't be deleted because it's not for generating.

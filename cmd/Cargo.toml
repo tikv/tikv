@@ -60,6 +60,8 @@ test-engines-panic = [
   "tikv/test-engines-panic",
 ]
 
+nortcheck = []
+
 [lib]
 name = "cmd"
 

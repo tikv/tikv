@@ -456,7 +456,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                         self.old_values.insert(key, (old_value, mutation_type));
                     }
                 }
-                Err(MvccError(box MvccErrorInner::CommitTsTooLarge { .. })) | Ok((_, _)) => {
+                Err(MvccError(box MvccErrorInner::CommitTsTooLarge { .. })) | Ok((..)) => {
                     // fallback to not using async commit or 1pc
                     props.commit_kind = CommitKind::TwoPc;
                     async_commit_pk = None;

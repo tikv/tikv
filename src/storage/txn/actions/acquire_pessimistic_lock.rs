@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use crate::storage::mvcc::{
     metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
     ErrorInner, MvccTxn, Result as MvccResult, SnapshotReader,
@@ -247,18 +249,20 @@ pub mod tests {
         for_update_ts: impl Into<TimeStamp>,
         ttl: u64,
     ) {
-        assert!(must_succeed_impl(
-            engine,
-            key,
-            pk,
-            start_ts,
-            false,
-            ttl,
-            for_update_ts.into(),
-            false,
-            TimeStamp::zero(),
-        )
-        .is_none());
+        assert!(
+            must_succeed_impl(
+                engine,
+                key,
+                pk,
+                start_ts,
+                false,
+                ttl,
+                for_update_ts.into(),
+                false,
+                TimeStamp::zero(),
+            )
+            .is_none()
+        );
     }
 
     pub fn must_succeed_for_large_txn<E: Engine>(

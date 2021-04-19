@@ -8,6 +8,8 @@ use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as
 use tikv_util::future::paired_future_callback;
 use txn_types::Key;
 
+use tikv_util::{debug, error};
+
 pub trait ReadIndex: Sync + Send {
     fn batch_read_index(&self, req: Vec<ReadIndexRequest>) -> Vec<(ReadIndexResponse, u64)>;
 }

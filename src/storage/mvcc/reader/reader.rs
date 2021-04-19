@@ -976,10 +976,12 @@ pub mod tests {
 
         let seek_old = reader.statistics.write.seek;
         let next_old = reader.statistics.write.next;
-        assert!(!reader
-            .get_txn_commit_record(&key, 30.into())
-            .unwrap()
-            .exist());
+        assert!(
+            !reader
+                .get_txn_commit_record(&key, 30.into())
+                .unwrap()
+                .exist()
+        );
         let seek_new = reader.statistics.write.seek;
         let next_new = reader.statistics.write.next;
 
@@ -1257,10 +1259,12 @@ pub mod tests {
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 18.into());
 
-        assert!(reader
-            .get_write(&Key::from_raw(b"j"), 100.into(), None)
-            .unwrap()
-            .is_none());
+        assert!(
+            reader
+                .get_write(&Key::from_raw(b"j"), 100.into(), None)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

@@ -456,7 +456,7 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
         _: kvproto::pdpb::SplitRegionsRequest,
         _: grpcio::UnarySink<kvproto::pdpb::SplitRegionsResponse>,
     ) {
-        todo!()
+        unimplemented!()
     }
 
     fn get_dc_location_info(
@@ -465,6 +465,6 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
         _: kvproto::pdpb::GetDcLocationInfoRequest,
         _: grpcio::UnarySink<kvproto::pdpb::GetDcLocationInfoResponse>,
     ) {
-        todo!()
+        unimplemented!()
     }
 }

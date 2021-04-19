@@ -2,6 +2,7 @@
 
 use kvproto::metapb::Region;
 use pd_client::{Feature, FeatureGate};
+use serde_derive::{Deserialize, Serialize};
 
 /// Because negotiation protocol can't be recognized by old version of binaries,
 /// so enabling it directly can cause a lot of connection reset.

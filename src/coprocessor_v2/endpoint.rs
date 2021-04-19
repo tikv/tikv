@@ -34,10 +34,10 @@ impl<E: Engine> Endpoint<E> {
         &self,
         _req: coprv2pb::RawCoprocessorRequest,
     ) -> impl Future<Output = coprv2pb::RawCoprocessorResponse> {
-        todo!("Coprocessor V2 is currently not implemented.");
+        unimplemented!("Coprocessor V2 is currently not implemented.");
 
         // Make sure we produce a valid return type
-        // (because `todo!()` doesn't work with `impl Trait`).
+        // (because `!` type doesn't implement `Future`).
         #[allow(unreachable_code)]
         std::future::ready(coprv2pb::RawCoprocessorResponse::default())
     }

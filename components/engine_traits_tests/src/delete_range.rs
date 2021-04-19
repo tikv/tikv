@@ -7,8 +7,10 @@ use std::panic::{self, AssertUnwindSafe};
 #[test]
 fn delete_range_cf_bad_cf() {
     let db = default_engine();
-    assert!(panic::catch_unwind(AssertUnwindSafe(|| {
-        db.engine.delete_range_cf("bogus", b"a", b"b").unwrap();
-    }))
-    .is_err());
+    assert!(
+        panic::catch_unwind(AssertUnwindSafe(|| {
+            db.engine.delete_range_cf("bogus", b"a", b"b").unwrap();
+        }))
+        .is_err()
+    );
 }

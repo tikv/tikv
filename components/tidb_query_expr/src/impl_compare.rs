@@ -460,8 +460,8 @@ mod tests {
     }
 
     #[allow(clippy::type_complexity)]
-    fn generate_numeric_compare_cases(
-    ) -> Vec<(Option<Real>, Option<Real>, TestCaseCmpOp, Option<i64>)> {
+    fn generate_numeric_compare_cases()
+    -> Vec<(Option<Real>, Option<Real>, TestCaseCmpOp, Option<i64>)> {
         vec![
             (None, None, TestCaseCmpOp::GT, None),
             (Real::new(3.5).ok(), None, TestCaseCmpOp::GT, None),

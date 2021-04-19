@@ -4,10 +4,6 @@
 #![feature(async_closure)]
 #![recursion_limit = "512"]
 
-#[macro_use(fail_point)]
-extern crate fail;
-#[macro_use]
-extern crate tikv_util;
 extern crate futures;
 extern crate tokio;
 

@@ -1,8 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use configuration::{ConfigChange, ConfigManager, Configuration};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tikv_util::config::VersionTrack;
+use tikv_util::info;
 
 const DEFAULT_DETECT_TIMES: u64 = 10;
 const DEFAULT_SAMPLE_THRESHOLD: u64 = 100;
