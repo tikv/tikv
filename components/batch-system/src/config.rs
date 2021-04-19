@@ -18,6 +18,12 @@ impl Config {
         // `Config::validate` is not called for test so the `max_batch_size` is None.
         self.max_batch_size.unwrap_or(256)
     }
+
+    pub fn with_low_priority_pool_size(size: usize) -> Self {
+        let mut cfg = Config::default();
+        cfg.low_priority_pool_size = Some(size);
+        cfg
+    }
 }
 
 impl Default for Config {

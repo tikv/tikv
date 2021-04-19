@@ -248,7 +248,7 @@ impl Default for Config {
             use_delete_range: false,
             cleanup_import_sst_interval: ReadableDuration::minutes(10),
             local_read_batch_size: 1024,
-            apply_batch_system: BatchSystemConfig::default(),
+            apply_batch_system: BatchSystemConfig::with_low_priority_pool_size(1),
             store_batch_system: BatchSystemConfig::default(),
             future_poll_size: 1,
             hibernate_regions: tikv_util::build_on_master_branch(),
