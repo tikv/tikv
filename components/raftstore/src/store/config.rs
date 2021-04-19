@@ -414,8 +414,8 @@ impl Config {
         } else {
             self.apply_batch_system.max_batch_size = Some(256);
         }
-        if self.apply_batch_system.enable_low_priority_poller.is_none() {
-            self.apply_batch_system.enable_low_priority_poller = Some(true);
+        if self.apply_batch_system.low_priority_pool_size.is_none() {
+            self.apply_batch_system.low_priority_pool_size = Some(1);
         }
         if self.store_batch_system.pool_size == 0 {
             return Err(box_err!("store-pool-size should be greater than 0"));

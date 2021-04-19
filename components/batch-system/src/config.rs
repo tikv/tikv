@@ -10,8 +10,7 @@ pub struct Config {
     pub max_batch_size: Option<usize>,
     pub pool_size: usize,
     pub reschedule_duration: ReadableDuration,
-    // Whether to enable low-priority poller.
-    pub enable_low_priority_poller: Option<bool>,
+    pub low_priority_pool_size: Option<usize>,
 }
 
 impl Config {
@@ -27,7 +26,7 @@ impl Default for Config {
             max_batch_size: None,
             pool_size: 2,
             reschedule_duration: ReadableDuration::secs(5),
-            enable_low_priority_poller: None,
+            low_priority_pool_size: None,
         }
     }
 }
