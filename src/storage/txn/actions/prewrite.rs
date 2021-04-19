@@ -1,12 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
-use crate::storage::txn::actions::get_old_value::get_old_value;
 use crate::storage::{
     mvcc::{
         metrics::{
             CONCURRENCY_MANAGER_LOCK_DURATION_HISTOGRAM, MVCC_CONFLICT_COUNTER,
             MVCC_DUPLICATE_CMD_COUNTER_VEC,
         },
-        Error, ErrorInner, Lock, LockType, MvccTxn, Result,
+        Error, ErrorInner, Lock, LockType, MvccTxn, Result, SnapshotReader,
     },
     txn::actions::check_data_constraint::check_data_constraint,
     txn::LockInfo,
@@ -20,7 +19,8 @@ use txn_types::{
 
 /// Prewrite a single mutation by creating and storing a lock and value.
 pub fn prewrite<S: Snapshot>(
-    txn: &mut MvccTxn<S>,
+    txn: &mut MvccTxn,
+    reader: &mut SnapshotReader<S>,
     txn_props: &TransactionProperties,
     mutation: Mutation,
     secondary_keys: &Option<Vec<Vec<u8>>>,
@@ -28,27 +28,24 @@ pub fn prewrite<S: Snapshot>(
 ) -> Result<(TimeStamp, OldValue)> {
     let mut mutation = PrewriteMutation::from_mutation(mutation, secondary_keys, txn_props)?;
 
-    #[cfg(feature = "failpoints")]
-    {
-        let fail_point = if txn_props.is_pessimistic() {
+    fail_point!(
+        if txn_props.is_pessimistic() {
             "pessimistic_prewrite"
         } else {
             "prewrite"
-        };
-        fail_point!(fail_point, |err| Err(
-            crate::storage::mvcc::txn::make_txn_error(
-                err,
-                &mutation.key,
-                mutation.txn_props.start_ts
-            )
-            .into()
-        ));
-    }
+        },
+        |err| Err(crate::storage::mvcc::txn::make_txn_error(
+            err,
+            &mutation.key,
+            mutation.txn_props.start_ts
+        )
+        .into())
+    );
 
-    let lock_status = match txn.reader.load_lock(&mutation.key)? {
+    let lock_status = match reader.load_lock(&mutation.key)? {
         Some(lock) => mutation.check_lock(lock, is_pessimistic_lock)?,
         None if is_pessimistic_lock => {
-            amend_pessimistic_lock(&mutation.key, txn)?;
+            amend_pessimistic_lock(&mutation.key, reader)?;
             LockStatus::None
         }
         None => LockStatus::None,
@@ -60,7 +57,7 @@ pub fn prewrite<S: Snapshot>(
 
     // Note that the `prev_write` may have invalid GC fence.
     let prev_write = if !mutation.skip_constraint_check() {
-        mutation.check_for_newer_version(txn)?
+        mutation.check_for_newer_version(reader)?
     } else {
         None
     };
@@ -79,7 +76,11 @@ pub fn prewrite<S: Snapshot>(
     }
 
     let old_value = if txn_props.need_old_value && mutation.mutation_type.may_have_old_value() {
-        get_old_value(txn, &mutation.key, prev_write)?
+        if let Some(w) = prev_write {
+            reader.get_old_value(w)?
+        } else {
+            OldValue::None
+        }
     } else {
         OldValue::Unspecified
     };
@@ -270,8 +271,11 @@ impl<'a> PrewriteMutation<'a> {
         Ok(LockStatus::Locked(min_commit_ts))
     }
 
-    fn check_for_newer_version<S: Snapshot>(&self, txn: &mut MvccTxn<S>) -> Result<Option<Write>> {
-        match txn.reader.seek_write(&self.key, TimeStamp::max())? {
+    fn check_for_newer_version<S: Snapshot>(
+        &self,
+        reader: &mut SnapshotReader<S>,
+    ) -> Result<Option<Write>> {
+        match reader.seek_write(&self.key, TimeStamp::max())? {
             Some((commit_ts, write)) => {
                 // Abort on writes after our start timestamp ...
                 // If exists a commit version whose commit timestamp is larger than current start
@@ -292,7 +296,7 @@ impl<'a> PrewriteMutation<'a> {
                 }
                 // Should check it when no lock exists, otherwise it can report error when there is
                 // a lock belonging to a committed transaction which deletes the key.
-                check_data_constraint(txn, self.should_not_exist, &write, commit_ts, &self.key)?;
+                check_data_constraint(reader, self.should_not_exist, &write, commit_ts, &self.key)?;
 
                 Ok(Some(write))
             }
@@ -300,11 +304,7 @@ impl<'a> PrewriteMutation<'a> {
         }
     }
 
-    fn write_lock<S: Snapshot>(
-        self,
-        lock_status: LockStatus,
-        txn: &mut MvccTxn<S>,
-    ) -> Result<TimeStamp> {
+    fn write_lock(self, lock_status: LockStatus, txn: &mut MvccTxn) -> Result<TimeStamp> {
         let mut try_one_pc = self.try_one_pc();
 
         let mut lock = Lock::new(
@@ -393,13 +393,13 @@ impl<'a> PrewriteMutation<'a> {
 
 // The final_min_commit_ts will be calculated if either async commit or 1PC is enabled.
 // It's allowed to enable 1PC without enabling async commit.
-fn async_commit_timestamps<S: Snapshot>(
+fn async_commit_timestamps(
     key: &Key,
     lock: &mut Lock,
     start_ts: TimeStamp,
     for_update_ts: TimeStamp,
     max_commit_ts: TimeStamp,
-    txn: &mut MvccTxn<S>,
+    txn: &mut MvccTxn,
 ) -> Result<TimeStamp> {
     // This operation should not block because the latch makes sure only one thread
     // is operating on this key.
@@ -438,8 +438,8 @@ fn async_commit_timestamps<S: Snapshot>(
 
 // TiKV may fails to write pessimistic locks due to pipelined process.
 // If the data is not changed after acquiring the lock, we can still prewrite the key.
-fn amend_pessimistic_lock<S: Snapshot>(key: &Key, txn: &mut MvccTxn<S>) -> Result<()> {
-    if let Some((commit_ts, _)) = txn.reader.seek_write(key, TimeStamp::max())? {
+fn amend_pessimistic_lock<S: Snapshot>(key: &Key, reader: &mut SnapshotReader<S>) -> Result<()> {
+    if let Some((commit_ts, _)) = reader.seek_write(key, TimeStamp::max())? {
         // The invariants of pessimistic locks are:
         //   1. lock's for_update_ts >= key's latest commit_ts
         //   2. lock's for_update_ts >= txn's start_ts
@@ -449,10 +449,10 @@ fn amend_pessimistic_lock<S: Snapshot>(key: &Key, txn: &mut MvccTxn<S>) -> Resul
         // However, we can't get lock's for_update_ts in current implementation (txn's for_update_ts is updated for each DML),
         // we can only use txn's start_ts to check -- If the key's commit_ts is less than txn's start_ts, it's less than
         // lock's for_update_ts too.
-        if commit_ts >= txn.start_ts {
+        if commit_ts >= reader.start_ts {
             warn!(
                 "prewrite failed (pessimistic lock not found)";
-                "start_ts" => txn.start_ts,
+                "start_ts" => reader.start_ts,
                 "commit_ts" => commit_ts,
                 "key" => %key
             );
@@ -460,7 +460,7 @@ fn amend_pessimistic_lock<S: Snapshot>(key: &Key, txn: &mut MvccTxn<S>) -> Resul
                 .pipelined_acquire_pessimistic_lock_amend_fail
                 .inc();
             return Err(ErrorInner::PessimisticLockNotFound {
-                start_ts: txn.start_ts,
+                start_ts: reader.start_ts,
                 key: key.clone().into_raw()?,
             }
             .into());
@@ -539,10 +539,12 @@ pub mod tests {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let ts = ts.into();
         let cm = ConcurrencyManager::new(ts);
-        let mut txn = MvccTxn::new(snapshot, ts, true, cm);
+        let mut txn = MvccTxn::new(ts, cm);
+        let mut reader = SnapshotReader::new(ts, snapshot, true);
 
         prewrite(
             &mut txn,
+            &mut reader,
             &optimistic_txn_props(pk, ts),
             Mutation::Insert((Key::from_raw(key), value.to_vec())),
             &None,
@@ -561,10 +563,12 @@ pub mod tests {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let ts = ts.into();
         let cm = ConcurrencyManager::new(ts);
-        let mut txn = MvccTxn::new(snapshot, ts, true, cm);
+        let mut txn = MvccTxn::new(ts, cm);
+        let mut reader = SnapshotReader::new(ts, snapshot, true);
 
         prewrite(
             &mut txn,
+            &mut reader,
             &optimistic_txn_props(pk, ts),
             Mutation::CheckNotExists(Key::from_raw(key)),
             &None,
@@ -579,11 +583,13 @@ pub mod tests {
         let cm = ConcurrencyManager::new(42.into());
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut txn = MvccTxn::new(10.into(), cm.clone());
+        let mut reader = SnapshotReader::new(10.into(), snapshot, true);
 
-        let mut txn = MvccTxn::new(snapshot, 10.into(), false, cm.clone());
         // calculated commit_ts = 43 ≤ 50, ok
         prewrite(
             &mut txn,
+            &mut reader,
             &optimistic_async_props(b"k1", 10.into(), 50.into(), 2, false),
             Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())),
             &Some(vec![b"k2".to_vec()]),
@@ -595,6 +601,7 @@ pub mod tests {
         // calculated commit_ts = 61 > 50, err
         let err = prewrite(
             &mut txn,
+            &mut reader,
             &optimistic_async_props(b"k1", 10.into(), 50.into(), 1, false),
             Mutation::Put((Key::from_raw(b"k2"), b"v2".to_vec())),
             &Some(vec![]),
@@ -624,9 +631,11 @@ pub mod tests {
         // the concurrency manager for max_ts. Its min_commit_ts may be less than or equal to max_ts.
         let mut props = optimistic_async_props(b"k0", 10.into(), 50.into(), 2, false);
         props.min_commit_ts = 11.into();
-        let mut txn = MvccTxn::new(snapshot.clone(), 10.into(), false, cm.clone());
+        let mut txn = MvccTxn::new(10.into(), cm.clone());
+        let mut reader = SnapshotReader::new(10.into(), snapshot.clone(), false);
         let (min_ts, _) = prewrite(
             &mut txn,
+            &mut reader,
             &props,
             Mutation::CheckNotExists(Key::from_raw(b"k0")),
             &Some(vec![]),
@@ -640,9 +649,11 @@ pub mod tests {
         // `checkNotExists` is equivalent to a get operation, so it should update the max_ts.
         let mut props = optimistic_txn_props(b"k0", 42.into());
         props.min_commit_ts = 43.into();
-        let mut txn = MvccTxn::new(snapshot.clone(), 42.into(), false, cm.clone());
+        let mut txn = MvccTxn::new(42.into(), cm.clone());
+        let mut reader = SnapshotReader::new(42.into(), snapshot.clone(), false);
         prewrite(
             &mut txn,
+            &mut reader,
             &props,
             Mutation::CheckNotExists(Key::from_raw(b"k0")),
             &Some(vec![]),
@@ -652,9 +663,11 @@ pub mod tests {
         assert_eq!(cm.max_ts(), props.start_ts);
 
         // should_write mutations' min_commit_ts must be > max_ts
-        let mut txn = MvccTxn::new(snapshot.clone(), 10.into(), false, cm.clone());
+        let mut txn = MvccTxn::new(10.into(), cm.clone());
+        let mut reader = SnapshotReader::new(10.into(), snapshot.clone(), false);
         let (min_ts, _) = prewrite(
             &mut txn,
+            &mut reader,
             &optimistic_async_props(b"k1", 10.into(), 50.into(), 2, false),
             Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())),
             &Some(vec![b"k2".to_vec()]),
@@ -672,9 +685,11 @@ pub mod tests {
             };
 
             // min_commit_ts must be > start_ts
-            let mut txn = MvccTxn::new(snapshot.clone(), 44.into(), false, cm.clone());
+            let mut txn = MvccTxn::new(44.into(), cm.clone());
+            let mut reader = SnapshotReader::new(44.into(), snapshot.clone(), false);
             let (min_ts, _) = prewrite(
                 &mut txn,
+                &mut reader,
                 &optimistic_async_props(b"k3", 44.into(), 50.into(), 2, false),
                 mutation.clone(),
                 &Some(vec![b"k4".to_vec()]),
@@ -691,6 +706,7 @@ pub mod tests {
                 props.kind = TransactionKind::Pessimistic(45.into());
                 let (min_ts, _) = prewrite(
                     &mut txn,
+                    &mut reader,
                     &props,
                     mutation.clone(),
                     &Some(vec![b"k6".to_vec()]),
@@ -707,6 +723,7 @@ pub mod tests {
             props.min_commit_ts = 46.into();
             let (min_ts, _) = prewrite(
                 &mut txn,
+                &mut reader,
                 &props,
                 mutation.clone(),
                 &Some(vec![b"k8".to_vec()]),
@@ -726,10 +743,12 @@ pub mod tests {
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
 
-        let mut txn = MvccTxn::new(snapshot, 10.into(), false, cm.clone());
+        let mut txn = MvccTxn::new(10.into(), cm.clone());
+        let mut reader = SnapshotReader::new(10.into(), snapshot, false);
         // calculated commit_ts = 43 ≤ 50, ok
         prewrite(
             &mut txn,
+            &mut reader,
             &optimistic_async_props(b"k1", 10.into(), 50.into(), 2, true),
             Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())),
             &None,
@@ -741,6 +760,7 @@ pub mod tests {
         // calculated commit_ts = 61 > 50, err
         let err = prewrite(
             &mut txn,
+            &mut reader,
             &optimistic_async_props(b"k1", 10.into(), 50.into(), 1, true),
             Mutation::Put((Key::from_raw(b"k2"), b"v2".to_vec())),
             &None,
@@ -770,10 +790,12 @@ pub mod tests {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let ts = ts.into();
         let cm = ConcurrencyManager::new(ts);
-        let mut txn = MvccTxn::new(snapshot, ts, true, cm);
+        let mut txn = MvccTxn::new(ts, cm);
+        let mut reader = SnapshotReader::new(ts, snapshot, false);
 
         prewrite(
             &mut txn,
+            &mut reader,
             &TransactionProperties {
                 start_ts: ts,
                 kind: TransactionKind::Pessimistic(TimeStamp::default()),
@@ -801,7 +823,8 @@ pub mod tests {
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
 
-        let mut txn = MvccTxn::new(snapshot, 10.into(), false, cm.clone());
+        let mut txn = MvccTxn::new(10.into(), cm.clone());
+        let mut reader = SnapshotReader::new(10.into(), snapshot, false);
         let txn_props = TransactionProperties {
             start_ts: 10.into(),
             kind: TransactionKind::Pessimistic(20.into()),
@@ -815,6 +838,7 @@ pub mod tests {
         // calculated commit_ts = 43 ≤ 50, ok
         prewrite(
             &mut txn,
+            &mut reader,
             &txn_props,
             Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())),
             &Some(vec![b"k2".to_vec()]),
@@ -826,6 +850,7 @@ pub mod tests {
         // calculated commit_ts = 61 > 50, ok
         prewrite(
             &mut txn,
+            &mut reader,
             &txn_props,
             Mutation::Put((Key::from_raw(b"k2"), b"v2".to_vec())),
             &Some(vec![]),
@@ -844,7 +869,8 @@ pub mod tests {
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
 
-        let mut txn = MvccTxn::new(snapshot, 10.into(), false, cm.clone());
+        let mut txn = MvccTxn::new(10.into(), cm.clone());
+        let mut reader = SnapshotReader::new(10.into(), snapshot, false);
         let txn_props = TransactionProperties {
             start_ts: 10.into(),
             kind: TransactionKind::Pessimistic(20.into()),
@@ -858,6 +884,7 @@ pub mod tests {
         // calculated commit_ts = 43 ≤ 50, ok
         prewrite(
             &mut txn,
+            &mut reader,
             &txn_props,
             Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())),
             &None,
@@ -869,6 +896,7 @@ pub mod tests {
         // calculated commit_ts = 61 > 50, ok
         prewrite(
             &mut txn,
+            &mut reader,
             &txn_props,
             Mutation::Put((Key::from_raw(b"k2"), b"v2".to_vec())),
             &None,
@@ -946,7 +974,8 @@ pub mod tests {
         // 1. Check GC fence when doing constraint check with the older version.
         let snapshot = engine.snapshot(Default::default()).unwrap();
 
-        let mut txn = MvccTxn::new(snapshot.clone(), 50.into(), false, cm.clone());
+        let mut txn = MvccTxn::new(50.into(), cm.clone());
+        let mut reader = SnapshotReader::new(50.into(), snapshot.clone(), false);
         let txn_props = TransactionProperties {
             start_ts: 50.into(),
             kind: TransactionKind::Optimistic(false),
@@ -971,6 +1000,7 @@ pub mod tests {
         for (key, success) in cases {
             let res = prewrite(
                 &mut txn,
+                &mut reader,
                 &txn_props,
                 Mutation::CheckNotExists(Key::from_raw(key)),
                 &None,
@@ -984,6 +1014,7 @@ pub mod tests {
 
             let res = prewrite(
                 &mut txn,
+                &mut reader,
                 &txn_props,
                 Mutation::Insert((Key::from_raw(key), b"value".to_vec())),
                 &None,
@@ -999,7 +1030,8 @@ pub mod tests {
         drop(txn);
 
         // 2. Check GC fence when reading the old value.
-        let mut txn = MvccTxn::new(snapshot, 50.into(), false, cm);
+        let mut txn = MvccTxn::new(50.into(), cm);
+        let mut reader = SnapshotReader::new(50.into(), snapshot, false);
         let txn_props = TransactionProperties {
             start_ts: 50.into(),
             kind: TransactionKind::Optimistic(false),
@@ -1015,7 +1047,8 @@ pub mod tests {
             (b"k1" as &[u8], None),
             (b"k2", Some((b"v2" as &[u8], 11))),
             (b"k3", None),
-            (b"k4", Some((b"v4", 13))),
+            // `get_old_value` won't seek before Lock record
+            (b"k4", None),
             (b"k5", None),
             (b"k6", Some((b"v6x", 22))),
             (b"k7", None),
@@ -1035,6 +1068,7 @@ pub mod tests {
         for (key, expected_value) in &cases {
             let (_, old_value) = prewrite(
                 &mut txn,
+                &mut reader,
                 &txn_props,
                 Mutation::Put((key.clone(), b"value".to_vec())),
                 &None,

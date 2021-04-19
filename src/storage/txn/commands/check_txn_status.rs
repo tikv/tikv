@@ -4,8 +4,7 @@ use txn_types::{Key, TimeStamp};
 
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::txn::MissingLockAction;
-use crate::storage::mvcc::MvccTxn;
+use crate::storage::mvcc::{MvccTxn, SnapshotReader};
 use crate::storage::txn::actions::check_txn_status::*;
 use crate::storage::txn::commands::{
     Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
@@ -74,12 +73,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
         }
         context.concurrency_manager.update_max_ts(new_max_ts);
 
-        let mut txn = MvccTxn::new(
-            snapshot,
-            self.lock_ts,
-            !self.ctx.get_not_fill_cache(),
-            context.concurrency_manager,
-        );
+        let mut txn = MvccTxn::new(self.lock_ts, context.concurrency_manager);
+        let mut reader =
+            SnapshotReader::new(self.lock_ts, snapshot, !self.ctx.get_not_fill_cache());
 
         fail_point!("check_txn_status", |err| Err(
             crate::storage::mvcc::Error::from(crate::storage::mvcc::txn::make_txn_error(
@@ -90,9 +86,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
             .into()
         ));
 
-        let (txn_status, released) = match txn.reader.load_lock(&self.primary_key)? {
+        let (txn_status, released) = match reader.load_lock(&self.primary_key)? {
             Some(lock) if lock.ts == self.lock_ts => check_txn_status_lock_exists(
                 &mut txn,
+                &mut reader,
                 self.primary_key,
                 lock,
                 self.current_ts,
@@ -105,6 +102,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
             l => (
                 check_txn_status_missing_lock(
                     &mut txn,
+                    &mut reader,
                     self.primary_key,
                     l,
                     MissingLockAction::rollback(self.rollback_if_not_exist),
@@ -121,7 +119,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
             released_locks.wake_up(context.lock_mgr);
         }
 
-        context.statistics.add(&txn.take_statistics());
+        context.statistics.add(&reader.take_statistics());
         let pr = ProcessResult::TxnStatus { txn_status };
         let write_data = WriteData::from_modifies(txn.into_modifies());
         Ok(WriteResult {
@@ -935,7 +933,7 @@ pub mod tests {
             uncommitted(100, TimeStamp::zero(), false),
         );
         must_large_txn_locked(&engine, k, ts(300, 0), 100, TimeStamp::zero(), false);
-        must_rollback(&engine, k, ts(300, 0));
+        must_rollback(&engine, k, ts(300, 0), false);
 
         must_prewrite_put_for_large_txn(&engine, k, v, k, ts(310, 0), 100, 0);
         must_large_txn_locked(&engine, k, ts(310, 0), 100, ts(310, 1), false);

@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::mem;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
@@ -34,16 +34,17 @@ use raftstore::Error as RaftStoreError;
 use resolved_ts::Resolver;
 use tikv::storage::Statistics;
 use tikv::{server::raftkv::WriteBatchFlags, storage::txn::TxnEntry};
-use tikv_util::mpsc::batch::Sender as BatchSender;
 use tikv_util::time::Instant;
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteRef, WriteType};
 
 use crate::endpoint::{OldValueCache, OldValueCallback};
 use crate::metrics::*;
+use crate::rate_limiter::RateLimiter;
 use crate::service::{CdcEvent, ConnID};
 use crate::{Error, Result};
 
-const EVENT_MAX_SIZE: usize = 6 * 1024 * 1024; // 6MB
+// 6MB
+const EVENT_MAX_SIZE: usize = 6 * 1024 * 1024;
 static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
 /// A unique identifier of a Downstream.
@@ -63,6 +64,14 @@ pub enum DownstreamState {
     Stopped,
 }
 
+#[derive(Debug)]
+pub enum IncrementalScanState {
+    NotStarted,
+    Ongoing,
+    Done,
+    ErrorPending(Event),
+}
+
 impl Default for DownstreamState {
     fn default() -> Self {
         Self::Uninitialized
@@ -80,9 +89,10 @@ pub struct Downstream {
     // The IP address of downstream.
     peer: String,
     region_epoch: RegionEpoch,
-    sink: Option<BatchSender<CdcEvent>>,
+    sink: Option<RateLimiter<CdcEvent>>,
     state: Arc<AtomicCell<DownstreamState>>,
     enable_old_value: bool,
+    incremental_scan_state: Arc<Mutex<IncrementalScanState>>,
 }
 
 impl Downstream {
@@ -106,6 +116,7 @@ impl Downstream {
             sink: None,
             state: Arc::new(AtomicCell::new(DownstreamState::default())),
             enable_old_value,
+            incremental_scan_state: Arc::new(Mutex::new(IncrementalScanState::NotStarted)),
         }
     }
 
@@ -113,28 +124,38 @@ impl Downstream {
     /// The size of `Error` and `ResolvedTS` are considered zero.
     pub fn sink_event(&self, mut event: Event) {
         event.set_request_id(self.req_id);
+
         if self.sink.is_none() {
-            info!("drop event, no sink";
+            warn!("cdc drop event, no rate_limiter";
                 "conn_id" => ?self.conn_id, "downstream_id" => ?self.id);
             return;
         }
-        let sink = self.sink.as_ref().unwrap();
-        if let Err(e) = sink.try_send(CdcEvent::Event(event)) {
-            match e {
-                crossbeam::TrySendError::Disconnected(_) => {
-                    debug!("send event failed, disconnected";
-                        "conn_id" => ?self.conn_id, "downstream_id" => ?self.id);
-                }
-                crossbeam::TrySendError::Full(_) => {
-                    info!("send event failed, full";
-                        "conn_id" => ?self.conn_id, "downstream_id" => ?self.id);
-                }
-            }
+
+        let rate_limiter = self.sink.as_ref().unwrap();
+        if let Err(e) = rate_limiter.send_realtime_event(CdcEvent::Event(event)) {
+            info!("cdc send event failed";
+                "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "err" => ?e);
         }
     }
 
-    pub fn set_sink(&mut self, sink: BatchSender<CdcEvent>) {
+    pub fn sink_error(&self, mut event: Event) {
+        event.set_request_id(self.req_id);
+
+        if let Some(rate_limiter) = self.sink.as_ref() {
+            if let Err(e) = rate_limiter.close_with_error(CdcEvent::Event(event)) {
+                info!("cdc sink error failed"; "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "err" => ?e);
+            }
+        } else {
+            warn!("cdc sink error failed, no rate_limiter found"; "conn_id" => ?self.conn_id, "downstream_id" => ?self.id)
+        }
+    }
+
+    pub fn set_sink(&mut self, sink: RateLimiter<CdcEvent>) {
         self.sink = Some(sink);
+    }
+
+    pub fn get_rate_limiter(&self) -> Option<RateLimiter<CdcEvent>> {
+        self.sink.clone()
     }
 
     pub fn get_id(&self) -> DownstreamID {
@@ -147,6 +168,10 @@ impl Downstream {
 
     pub fn get_conn_id(&self) -> ConnID {
         self.conn_id
+    }
+
+    pub fn get_req_id(&self) -> u64 {
+        self.req_id
     }
 
     pub fn sink_duplicate_error(&self, region_id: u64) {
@@ -168,6 +193,10 @@ impl Downstream {
         change_data_event.event = Some(Event_oneof_event::Error(cdc_err));
         change_data_event.region_id = region_id;
         self.sink_event(change_data_event);
+    }
+
+    pub fn get_incremental_scan_state(&self) -> Arc<Mutex<IncrementalScanState>> {
+        self.incremental_scan_state.clone()
     }
 }
 
@@ -346,10 +375,20 @@ impl Delegate {
         info!("region met error";
             "region_id" => self.region_id, "error" => ?err);
         let change_data_err = self.error_event(err);
-        for d in &self.downstreams {
-            d.state.store(DownstreamState::Stopped);
+
+        for d in self.downstreams() {
+            let mut incremental_state = d.incremental_scan_state.lock().unwrap();
+            match *incremental_state {
+                IncrementalScanState::Ongoing => {
+                    info!("cdc incremental scan not done, holding off error"; "region_id" => self.region_id);
+                    *incremental_state = IncrementalScanState::ErrorPending(change_data_err.clone())
+                }
+                _ => {
+                    d.state.store(DownstreamState::Stopped);
+                    d.sink_error(change_data_err.clone());
+                }
+            }
         }
-        self.broadcast(change_data_err, false);
     }
 
     fn broadcast(&self, change_data_event: Event, normal_only: bool) {
@@ -372,7 +411,11 @@ impl Delegate {
                     }
                 }
             }
-            downstream.sink_event(event);
+            if normal_only {
+                downstream.sink_event(event);
+            } else {
+                downstream.sink_error(event);
+            }
         }
     }
 
@@ -457,19 +500,11 @@ impl Delegate {
         Ok(())
     }
 
-    pub fn on_scan(&mut self, downstream_id: DownstreamID, entries: Vec<Option<TxnEntry>>) {
-        let downstreams = if let Some(pending) = self.pending.as_mut() {
-            &pending.downstreams
-        } else {
-            &self.downstreams
-        };
-        let downstream = if let Some(d) = downstreams.iter().find(|d| d.id == downstream_id) {
-            d
-        } else {
-            warn!("downstream not found"; "downstream_id" => ?downstream_id, "region_id" => self.region_id);
-            return;
-        };
-
+    pub(crate) fn convert_to_grpc_events(
+        region_id: u64,
+        request_id: u64,
+        entries: Vec<Option<TxnEntry>>,
+    ) -> Vec<Event> {
         let entries_len = entries.len();
         let mut rows = vec![Vec::with_capacity(entries_len)];
         let mut current_rows_size: usize = 0;
@@ -538,20 +573,39 @@ impl Delegate {
             }
         }
 
-        for rs in rows {
-            if !rs.is_empty() {
+        rows.into_iter()
+            .filter(|rs| !rs.is_empty())
+            .map(|rs| {
                 let event_entries = EventEntries {
                     entries: rs.into(),
                     ..Default::default()
                 };
-                let event = Event {
-                    region_id: self.region_id,
+                Event {
+                    region_id,
+                    request_id,
                     event: Some(Event_oneof_event::Entries(event_entries)),
                     ..Default::default()
-                };
-                downstream.sink_event(event);
-            }
-        }
+                }
+            })
+            .collect()
+    }
+
+    pub fn on_scan(&mut self, downstream_id: DownstreamID, entries: Vec<Option<TxnEntry>>) {
+        let downstreams = if let Some(pending) = self.pending.as_mut() {
+            &pending.downstreams
+        } else {
+            &self.downstreams
+        };
+        let downstream = if let Some(d) = downstreams.iter().find(|d| d.id == downstream_id) {
+            d
+        } else {
+            warn!("downstream not found"; "downstream_id" => ?downstream_id, "region_id" => self.region_id);
+            return;
+        };
+
+        Self::convert_to_grpc_events(self.region_id, downstream.req_id, entries)
+            .into_iter()
+            .for_each(|e| downstream.sink_event(e))
     }
 
     fn sink_data(
@@ -859,16 +913,24 @@ fn decode_default(value: Vec<u8>, row: &mut EventRow) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::executor::block_on;
+    use crate::rate_limiter::testing_util::TestingHarness;
+    use futures::future::FutureExt;
     use futures::stream::StreamExt;
     use kvproto::errorpb::Error as ErrorHeader;
     use kvproto::metapb::Region;
     use std::cell::Cell;
     use tikv::storage::mvcc::test_util::*;
-    use tikv_util::mpsc::batch::{self, BatchReceiver, VecCollector};
 
     #[test]
     fn test_error() {
+        let mut builder = tokio::runtime::Builder::new();
+        let mut runtime = builder
+            .threaded_scheduler()
+            .core_threads(4)
+            .enable_all()
+            .build()
+            .unwrap();
+
         let region_id = 1;
         let mut region = Region::default();
         region.set_id(region_id);
@@ -877,12 +939,14 @@ mod tests {
         region.mut_region_epoch().set_conf_ver(2);
         let region_epoch = region.get_region_epoch().clone();
 
-        let (sink, rx) = batch::unbounded(1);
-        let rx = BatchReceiver::new(rx, 1, Vec::new, VecCollector);
+        let mut harness = TestingHarness::new();
+        let mut rx = harness.get_rx();
+        let rate_limiter = harness.get_rate_limiter();
+
         let request_id = 123;
         let mut downstream =
             Downstream::new(String::new(), region_epoch, request_id, ConnID::new(), true);
-        downstream.set_sink(sink);
+        downstream.set_sink(rate_limiter.with_region_id(region_id));
         let mut delegate = Delegate::new(region_id);
         delegate.subscribe(downstream);
         let enabled = delegate.enabled();
@@ -893,27 +957,20 @@ mod tests {
             delegate.subscribe(downstream);
         }
 
-        let rx_wrap = Cell::new(Some(rx));
-        let receive_error = || {
-            let (resps, rx) = block_on(rx_wrap.replace(None).unwrap().into_future());
-            rx_wrap.set(Some(rx));
-            let mut resps = resps.unwrap();
-            assert_eq!(resps.len(), 1);
-            for r in &resps {
-                if let CdcEvent::Event(e) = r {
-                    assert_eq!(e.get_request_id(), request_id);
+        let mut receive_error = move || {
+            runtime.block_on(rx.next().map(|resps| {
+                let (resp, _) = resps.as_ref().unwrap();
+                let resps = resp.get_events();
+                assert_eq!(resps.len(), 1);
+                for r in resps {
+                    assert_eq!(r.get_request_id(), request_id);
                 }
-            }
-            let cdc_event = &mut resps[0];
-            if let CdcEvent::Event(e) = cdc_event {
-                let event = e.event.take().unwrap();
-                match event {
-                    Event_oneof_event::Error(err) => err,
+                let cdc_event = &resps[0];
+                match cdc_event.event.as_ref().unwrap() {
+                    Event_oneof_event::Error(err) => err.clone(),
                     other => panic!("unknown event {:?}", other),
                 }
-            } else {
-                panic!("unknown event")
-            }
+            }))
         };
 
         let mut err_header = ErrorHeader::default();
@@ -1006,13 +1063,15 @@ mod tests {
         region.mut_region_epoch().set_conf_ver(2);
         let region_epoch = region.get_region_epoch().clone();
 
-        let (sink, rx) = batch::unbounded(1);
-        let rx = BatchReceiver::new(rx, 1, Vec::new, VecCollector);
+        let mut harness = TestingHarness::new();
+        let rx = harness.get_rx();
+        let rate_limiter = harness.get_rate_limiter();
+
         let request_id = 123;
         let mut downstream =
             Downstream::new(String::new(), region_epoch, request_id, ConnID::new(), true);
         let downstream_id = downstream.get_id();
-        downstream.set_sink(sink);
+        downstream.set_sink(rate_limiter);
         let mut delegate = Delegate::new(region_id);
         delegate.subscribe(downstream);
         let enabled = delegate.enabled();
@@ -1020,26 +1079,24 @@ mod tests {
 
         let rx_wrap = Cell::new(Some(rx));
         let check_event = |event_rows: Vec<EventRow>| {
-            let (resps, rx) = block_on(rx_wrap.replace(None).unwrap().into_future());
+            let harness = TestingHarness::new();
+            let (resp, rx) = harness.block_on(rx_wrap.replace(None).unwrap().into_future());
             rx_wrap.set(Some(rx));
-            let mut resps = resps.unwrap();
+            let (resp, _) = resp.unwrap();
+            let mut resps = resp.events;
             assert_eq!(resps.len(), 1);
             for r in &resps {
-                if let CdcEvent::Event(e) = r {
-                    assert_eq!(e.get_request_id(), request_id);
-                }
+                assert_eq!(r.get_request_id(), request_id);
             }
-            let cdc_event = resps.remove(0);
-            if let CdcEvent::Event(mut e) = cdc_event {
-                assert_eq!(e.region_id, region_id);
-                assert_eq!(e.index, 0);
-                let event = e.event.take().unwrap();
-                match event {
-                    Event_oneof_event::Entries(entries) => {
-                        assert_eq!(entries.entries.as_slice(), event_rows.as_slice());
-                    }
-                    other => panic!("unknown event {:?}", other),
+            let mut cdc_event = resps.remove(0);
+            assert_eq!(cdc_event.region_id, region_id);
+            assert_eq!(cdc_event.index, 0);
+            let event = cdc_event.event.take().unwrap();
+            match event {
+                Event_oneof_event::Entries(entries) => {
+                    assert_eq!(entries.entries.as_slice(), event_rows.as_slice());
                 }
+                other => panic!("unknown event {:?}", other),
             }
         };
 

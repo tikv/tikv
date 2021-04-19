@@ -2,7 +2,7 @@
 
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::{MvccTxn, MAX_TXN_WRITE_SIZE};
+use crate::storage::mvcc::{MvccTxn, SnapshotReader, MAX_TXN_WRITE_SIZE};
 use crate::storage::txn::commands::{
     Command, CommandExt, ReleasedLocks, ResolveLockReadPhase, ResponsePolicy, TypedCommand,
     WriteCommand, WriteContext, WriteResult,
@@ -65,27 +65,31 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
     fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let (ctx, txn_status, key_locks) = (self.ctx, self.txn_status, self.key_locks);
 
-        let mut txn = MvccTxn::new(
-            snapshot,
-            TimeStamp::zero(),
-            !ctx.get_not_fill_cache(),
-            context.concurrency_manager,
-        );
+        let mut txn = MvccTxn::new(TimeStamp::zero(), context.concurrency_manager);
+        let mut reader =
+            SnapshotReader::new(TimeStamp::zero(), snapshot, !ctx.get_not_fill_cache());
 
         let mut scan_key = self.scan_key.take();
         let rows = key_locks.len();
         // Map txn's start_ts to ReleasedLocks
         let mut released_locks = HashMap::default();
         for (current_key, current_lock) in key_locks {
-            txn.set_start_ts(current_lock.ts);
+            txn.start_ts = current_lock.ts;
+            reader.start_ts = current_lock.ts;
             let commit_ts = *txn_status
                 .get(&current_lock.ts)
                 .expect("txn status not found");
 
             let released = if commit_ts.is_zero() {
-                cleanup(&mut txn, current_key.clone(), TimeStamp::zero(), false)?
+                cleanup(
+                    &mut txn,
+                    &mut reader,
+                    current_key.clone(),
+                    TimeStamp::zero(),
+                    false,
+                )?
             } else if commit_ts > current_lock.ts {
-                commit(&mut txn, current_key.clone(), commit_ts)?
+                commit(&mut txn, &mut reader, current_key.clone(), commit_ts)?
             } else {
                 return Err(Error::from(ErrorInner::InvalidTxnTso {
                     start_ts: current_lock.ts,
@@ -107,7 +111,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
             .into_iter()
             .for_each(|(_, released_locks)| released_locks.wake_up(lock_mgr));
 
-        context.statistics.add(&txn.take_statistics());
+        context.statistics.add(&reader.take_statistics());
         let pr = if scan_key.is_none() {
             ProcessResult::Res
         } else {

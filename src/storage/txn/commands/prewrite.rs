@@ -8,7 +8,10 @@
 use crate::storage::{
     kv::WriteData,
     lock_manager::LockManager,
-    mvcc::{has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn},
+    mvcc::{
+        has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn,
+        SnapshotReader,
+    },
     txn::{
         actions::prewrite::{prewrite, CommitKind, TransactionKind, TransactionProperties},
         commands::{
@@ -358,18 +361,16 @@ impl<K: PrewriteKind> Prewriter<K> {
             .can_skip_constraint_check(&mut self.mutations, &snapshot, &mut context)?;
         self.check_max_ts_synced(&snapshot)?;
 
-        let mut txn = MvccTxn::new(
-            snapshot,
-            self.start_ts,
-            !self.ctx.get_not_fill_cache(),
-            context.concurrency_manager,
-        );
+        let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
+        let mut reader =
+            SnapshotReader::new(self.start_ts, snapshot, !self.ctx.get_not_fill_cache());
         // Set extra op here for getting the write record when check write conflict in prewrite.
 
         let rows = self.mutations.len();
-        let (locks, final_min_commit_ts) = self.prewrite(&mut txn, context.extra_op)?;
+        let (locks, final_min_commit_ts) =
+            self.prewrite(&mut txn, &mut reader, context.extra_op)?;
 
-        context.statistics.add(&txn.take_statistics());
+        context.statistics.add(&reader.take_statistics());
 
         Ok(self.write_result(
             locks,
@@ -401,7 +402,8 @@ impl<K: PrewriteKind> Prewriter<K> {
     /// an async commit transaction) the min_commit_ts, these are returned by the method.
     fn prewrite(
         &mut self,
-        txn: &mut MvccTxn<impl Snapshot>,
+        txn: &mut MvccTxn,
+        reader: &mut SnapshotReader<impl Snapshot>,
         extra_op: ExtraOp,
     ) -> Result<(Vec<std::result::Result<(), StorageError>>, TimeStamp)> {
         let commit_kind = match (&self.secondary_keys, self.try_one_pc) {
@@ -442,7 +444,8 @@ impl<K: PrewriteKind> Prewriter<K> {
             }
 
             let need_min_commit_ts = secondaries.is_some() || self.try_one_pc;
-            let prewrite_result = prewrite(txn, &props, m, secondaries, is_pessimistic_lock);
+            let prewrite_result =
+                prewrite(txn, reader, &props, m, secondaries, is_pessimistic_lock);
             match prewrite_result {
                 Ok((ts, old_value)) if !(need_min_commit_ts && ts.is_zero()) => {
                     if need_min_commit_ts && final_min_commit_ts < ts {
@@ -482,7 +485,7 @@ impl<K: PrewriteKind> Prewriter<K> {
     fn write_result(
         self,
         locks: Vec<std::result::Result<(), StorageError>>,
-        mut txn: MvccTxn<impl Snapshot>,
+        mut txn: MvccTxn,
         final_min_commit_ts: TimeStamp,
         rows: usize,
         async_apply_prewrite: bool,
@@ -660,7 +663,7 @@ impl MutationLock for (Mutation, bool) {
 /// Compute the commit ts of a 1pc transaction.
 pub fn one_pc_commit_ts(
     try_one_pc: bool,
-    txn: &mut MvccTxn<impl Snapshot>,
+    txn: &mut MvccTxn,
     final_min_commit_ts: TimeStamp,
     lock_manager: &impl LockManager,
 ) -> TimeStamp {
@@ -680,7 +683,7 @@ pub fn one_pc_commit_ts(
 }
 
 /// Commit and delete all 1pc locks in txn.
-fn handle_1pc_locks<S: Snapshot>(txn: &mut MvccTxn<S>, commit_ts: TimeStamp) -> ReleasedLocks {
+fn handle_1pc_locks(txn: &mut MvccTxn, commit_ts: TimeStamp) -> ReleasedLocks {
     let mut released_locks = ReleasedLocks::new(txn.start_ts, commit_ts);
 
     for (key, lock, delete_pessimistic_lock) in std::mem::take(&mut txn.locks_for_1pc) {
@@ -700,7 +703,7 @@ fn handle_1pc_locks<S: Snapshot>(txn: &mut MvccTxn<S>, commit_ts: TimeStamp) -> 
 }
 
 /// Change all 1pc locks in txn to 2pc locks.
-pub(in crate::storage::txn) fn fallback_1pc_locks<S: Snapshot>(txn: &mut MvccTxn<S>) {
+pub(in crate::storage::txn) fn fallback_1pc_locks(txn: &mut MvccTxn) {
     for (key, lock, _) in std::mem::take(&mut txn.locks_for_1pc) {
         txn.put_lock(key, &lock);
     }
@@ -943,7 +946,7 @@ mod tests {
             must_locked(&engine, key, 20);
         }
 
-        must_rollback(&engine, key, 20);
+        must_rollback(&engine, key, 20, false);
         let mutations = vec![
             Mutation::Put((Key::from_raw(key), value.to_vec())),
             Mutation::CheckNotExists(Key::from_raw(b"non_exist")),

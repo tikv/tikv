@@ -316,7 +316,7 @@ pub fn add_datetime_and_duration(
     Ok(Some(res))
 }
 
-#[rpn_fn(capture=[ctx])]
+#[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn add_datetime_and_string(
     ctx: &mut EvalContext,
@@ -343,7 +343,35 @@ pub fn add_datetime_and_string(
     Ok(Some(res))
 }
 
-#[rpn_fn(capture=[ctx])]
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn add_date_and_string(
+    ctx: &mut EvalContext,
+    arg0: &DateTime,
+    arg1: BytesRef,
+) -> Result<Option<DateTime>> {
+    let arg1 = std::str::from_utf8(&arg1).map_err(Error::Encoding)?;
+    let arg1 = match Duration::parse(ctx, arg1, MAX_FSP) {
+        Ok(arg) => arg,
+        Err(_) => return Ok(None),
+    };
+
+    let mut res = match arg0.checked_add(ctx, arg1) {
+        Some(res) => res,
+        None => {
+            return ctx
+                .handle_invalid_time_error(Error::overflow(
+                    "DATE",
+                    format!("({} + {})", arg0, arg1),
+                ))
+                .map(|_| Ok(None))?;
+        }
+    };
+    res.set_time_type(TimeType::Date)?;
+    Ok(Some(res))
+}
+
+#[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn sub_duration_and_duration(
     ctx: &mut EvalContext,
@@ -1602,6 +1630,50 @@ mod tests {
                 .push_param(arg1)
                 .evaluate(ScalarFuncSig::SubDatetimeAndString)
                 .unwrap();
+            assert_eq!(output, exp);
+        }
+    }
+
+    #[test]
+    fn test_add_date_and_string() {
+        let mut ctx = EvalContext::default();
+        let cases = vec![
+            (Some("2021-03-26"), Some("00:00:00"), Some("2021-03-26")),
+            (Some("2021-03-26"), Some("23:59:59"), Some("2021-03-26")),
+            (Some("2021-03-26"), Some("24:00:01"), Some("2021-03-27")),
+            (Some("2021-03-26"), Some("48:00:01"), Some("2021-03-28")),
+            (Some("2021-03-26"), Some("-00:01:00"), Some("2021-03-25")),
+            (
+                Some("2021-03-26 00:00:30"),
+                Some("-00:01:00"),
+                Some("2021-03-25"),
+            ),
+            (
+                Some("2018-12-31 23:00:00"),
+                Some("1 01:30:30"),
+                Some("2019-01-02"),
+            ),
+            (
+                Some("2021-03-26"),
+                Some("00:00:00.123456"),
+                Some("2021-03-26"),
+            ),
+            // null cases
+            (None, None, None),
+            (None, Some("11:30:45.123456"), None),
+            (Some("2019-01-01 01:00:00"), None, None),
+        ];
+        for (arg0, arg1, exp) in cases {
+            let exp = exp.map(|exp| Time::parse_datetime(&mut ctx, exp, MAX_FSP, true).unwrap());
+            let arg0 =
+                arg0.map(|arg0| Time::parse_datetime(&mut ctx, arg0, MAX_FSP, true).unwrap());
+            let arg1 = arg1.map(|arg1| arg1.as_bytes().to_vec());
+
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .push_param(arg1)
+                .evaluate(ScalarFuncSig::AddDateAndString);
+            let output = output.unwrap();
             assert_eq!(output, exp);
         }
     }

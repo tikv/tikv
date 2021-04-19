@@ -133,11 +133,11 @@ fn test_serde_custom_tikv_config() {
         job: "tikv_1".to_owned(),
     };
     let mut apply_batch_system = BatchSystemConfig::default();
-    apply_batch_system.max_batch_size = 22;
+    apply_batch_system.max_batch_size = Some(22);
     apply_batch_system.pool_size = 4;
     apply_batch_system.reschedule_duration = ReadableDuration::secs(3);
     let mut store_batch_system = BatchSystemConfig::default();
-    store_batch_system.max_batch_size = 21;
+    store_batch_system.max_batch_size = Some(21);
     store_batch_system.pool_size = 3;
     store_batch_system.reschedule_duration = ReadableDuration::secs(2);
     value.raft_store = RaftstoreConfig {

@@ -405,7 +405,7 @@ mod tests {
 
         must_prewrite_put(&engine, k, b"v2", k, 2);
         must_get_eq(2, Some(b"v1".to_vec()));
-        must_rollback(&engine, k, 2);
+        must_rollback(&engine, k, 2, false);
 
         must_prewrite_put(&engine, k, b"v3", k, 3);
         must_get_eq(3, Some(b"v1".to_vec()));
@@ -421,7 +421,7 @@ mod tests {
 
         must_prewrite_delete(&engine, k, k, 6);
         must_get_eq(6, Some(vec![b'v'; 5120]));
-        must_rollback(&engine, k, 6);
+        must_rollback(&engine, k, 6, false);
 
         must_prewrite_put(&engine, k, b"v4", k, 7);
         must_commit(&engine, k, 7, 9);
