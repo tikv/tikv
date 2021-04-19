@@ -60,7 +60,6 @@ macro_rules! declare_plugin {
         static HOST_ALLOCATOR: $crate::allocator::HostAllocator =
             $crate::allocator::HostAllocator::new();
 
-        #[cfg(not(test))]
         #[no_mangle]
         pub unsafe extern "C" fn _plugin_get_build_info() -> $crate::BuildInfo {
             $crate::BuildInfo::get()
@@ -70,6 +69,7 @@ macro_rules! declare_plugin {
         pub unsafe extern "C" fn _plugin_create(
             host_allocator: $crate::allocator::HostAllocatorPtr,
         ) -> *mut $crate::CoprocessorPlugin {
+            #[cfg(not(test))]
             HOST_ALLOCATOR.set_allocator(host_allocator);
 
             let boxed: Box<dyn $crate::CoprocessorPlugin> = Box::new($plugin_ctor);
