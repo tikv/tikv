@@ -182,7 +182,7 @@ fn test_cdc_scan_continues_after_region_split() {
 
     let mut req = suite.new_changedata_request(1);
     req.mut_header().set_ticdc_version("5.0.0".into());
-    let (mut req_tx, _event_feed_wrap, receive_event) =
+    let (mut req_tx, event_feed_wrap, receive_event) =
         new_event_feed(suite.get_region_cdc_client(1));
     block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
 

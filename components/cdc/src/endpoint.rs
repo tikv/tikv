@@ -1353,7 +1353,6 @@ impl Initializer {
                     info!("cdc incremental scan finished after region error, sending error"; "err_event" => ?err_event);
                     self.downstream_state.store(DownstreamState::Stopped);
                     self.downstream.as_ref().unwrap().sink_error(err_event);
-                    self.deregister_downstream(None);
                     return;
                 }
                 other => {
