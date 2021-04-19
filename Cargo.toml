@@ -159,6 +159,7 @@ mime = "0.3.13"
 more-asserts = "0.2"
 murmur3 = "0.5.1"
 nom = { version = "5.1.0", default-features = false, features = ["std"] }
+notify = "4"
 num_cpus = "1"
 pd_client = { path = "components/pd_client", default-features = false }
 pin-project = "0.4.8"
