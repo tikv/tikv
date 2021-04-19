@@ -5,7 +5,6 @@ use engine_traits::{KvEngine, Range};
 use error_code::ErrorCodeExt;
 use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use std::marker::PhantomData;
-use std::mem;
 use std::sync::{Arc, Mutex};
 use tikv_util::{box_try, debug, info, warn};
 
@@ -72,7 +71,7 @@ where
             self.split_keys.pop();
         }
         if !self.split_keys.is_empty() {
-            mem::replace(&mut self.split_keys, vec![])
+            std::mem::take(&mut self.split_keys)
         } else {
             vec![]
         }
