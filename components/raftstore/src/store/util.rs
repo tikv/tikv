@@ -1,9 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::VecDeque;
 use std::fmt::Display;
 use std::option::Option;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::{fmt, u64};
 
 use collections::HashMap;
@@ -836,6 +837,111 @@ impl Display for MsgType<'_> {
     }
 }
 
+/// `RegionReadProgress` is used to keep track of the replica's `safe_ts`, the replica can handle a read
+/// request directly without requiring leader lease or read index iff `safe_ts` >= `read_ts` (the `read_ts`
+/// is usually stale i.e seconds ago).
+///
+/// `safe_ts` is forward by the `(apply index, safe ts)` item:
+/// ```
+/// if self.applied_index >= item.apply_index {
+///     self.safe_ts = max(self.safe_ts, item.safe_ts)
+/// }
+/// ```
+///
+/// For the leader, the `(apply index, safe ts)` item is publish by the `resolved-ts` worker periodically.
+/// For the followers, the item is sync periodically from the leader through the `CheckLeader` rpc and the
+/// raft heartbeat message
+///
+/// The intend is to make the item's `safe ts` larger (more up to date) and `apply index` smaller (require less data)
+///
+// TODO: reduce `Arc` use
+#[derive(Clone)]
+pub struct RegionReadProgress {
+    applied_index: Arc<AtomicU64>,
+    safe_ts: Arc<AtomicU64>,
+    // `pending_items` is a *sorted* list of `(apply index, safe ts)` item, it should
+    // not be accessed outside to avoid dead lock
+    pending_items: Arc<Mutex<VecDeque<(u64, u64)>>>,
+    // the max size of `pending_items`
+    cap: usize,
+}
+
+impl RegionReadProgress {
+    pub fn new(applied_index: u64, cap: usize) -> RegionReadProgress {
+        RegionReadProgress {
+            applied_index: Arc::new(AtomicU64::from(applied_index)),
+            safe_ts: Arc::new(AtomicU64::from(0)),
+            pending_items: Arc::new(Mutex::new(VecDeque::with_capacity(cap))),
+            cap,
+        }
+    }
+
+    pub fn applied_index(&self) -> u64 {
+        self.applied_index.load(AtomicOrdering::Acquire)
+    }
+
+    pub fn safe_ts(&self) -> u64 {
+        self.safe_ts.load(AtomicOrdering::Acquire)
+    }
+
+    pub fn get_safe_ts(&self) -> Arc<AtomicU64> {
+        self.safe_ts.clone()
+    }
+
+    pub fn update_applied(&self, applied: u64) {
+        let mut pending_items = self.pending_items.lock().unwrap();
+        let mut ts_to_update = self.safe_ts.load(AtomicOrdering::Acquire);
+        // Consume pending items with `apply_index` less or equal to incoming apply index
+        while let Some((idx, ts)) = pending_items.pop_front() {
+            if applied < idx {
+                pending_items.push_front((idx, ts));
+                break;
+            }
+            if ts_to_update < ts {
+                ts_to_update = ts;
+            }
+        }
+        self.applied_index
+            .fetch_max(applied, AtomicOrdering::SeqCst);
+        self.safe_ts.fetch_max(ts_to_update, AtomicOrdering::SeqCst);
+    }
+
+    pub fn forward_safe_ts(&self, apply_index: u64, ts: u64) {
+        if apply_index == 0 || ts == 0 {
+            return;
+        }
+
+        let mut pending_items = self.pending_items.lock().unwrap();
+        if self.applied_index.load(AtomicOrdering::Acquire) < apply_index {
+            // Instead of adding a new item, try update the last one
+            if let Some(item) = pending_items.back_mut() {
+                // Discord the item if it has a smaller `safe_ts`
+                if item.1 >= ts {
+                    return;
+                }
+                // Discord the item if it has a smaller `apply_index`
+                if item.0 >= apply_index {
+                    // Update the last item's `safe_ts` if the incoming item require a less or equal
+                    // `apply_index` with a larger `safe_ts`
+                    item.1 = ts;
+                    return;
+                }
+            }
+            self.push_back(&mut pending_items, (apply_index, ts));
+        } else {
+            // try update `safe_ts` directly
+            self.safe_ts.fetch_max(ts, AtomicOrdering::SeqCst);
+        }
+    }
+
+    fn push_back(&self, queue: &mut VecDeque<(u64, u64)>, item: (u64, u64)) {
+        if queue.len() >= self.cap {
+            queue.pop_front();
+        }
+        queue.push_back(item);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::thread;
@@ -1460,5 +1566,65 @@ mod tests {
         for cmd_type in AdminCmdType::values() {
             assert!(ADMIN_CMD_EPOCH_MAP.contains_key(cmd_type));
         }
+    }
+
+    #[test]
+    fn test_region_read_progress() {
+        // Return the number of the pending (index, ts) item
+        fn pending_items_num(rrp: &RegionReadProgress) -> usize {
+            rrp.pending_items.lock().unwrap().len()
+        }
+
+        let cap = 10;
+        let rrp = RegionReadProgress::new(10, cap);
+        for i in 1..=20 {
+            rrp.forward_safe_ts(i, i);
+        }
+        // `safe_ts` update according to its `applied_index`
+        assert_eq!(rrp.safe_ts(), 10);
+        assert_eq!(pending_items_num(&rrp), 10);
+
+        rrp.update_applied(20);
+        assert_eq!(rrp.safe_ts(), 20);
+        assert_eq!(pending_items_num(&rrp), 0);
+
+        for i in 100..200 {
+            rrp.forward_safe_ts(i, i);
+        }
+        assert_eq!(rrp.safe_ts(), 20);
+        // the number of pending item should not exceed `cap`
+        assert_eq!(pending_items_num(&rrp), cap);
+
+        // `safe_ts` will not update because previous items are dropped
+        rrp.update_applied(200 - (cap as u64) - 1);
+        assert_eq!(rrp.safe_ts(), 20);
+
+        // `applied_index` large than all pending items will clear all pending items
+        rrp.update_applied(200);
+        assert_eq!(rrp.safe_ts(), 199);
+        assert_eq!(pending_items_num(&rrp), 0);
+
+        // pending item can be updated instead of adding a new one
+        rrp.forward_safe_ts(300, 300);
+        assert_eq!(pending_items_num(&rrp), 1);
+        rrp.forward_safe_ts(200, 400);
+        assert_eq!(pending_items_num(&rrp), 1);
+        rrp.forward_safe_ts(300, 500);
+        assert_eq!(pending_items_num(&rrp), 1);
+        rrp.forward_safe_ts(301, 600);
+        assert_eq!(pending_items_num(&rrp), 2);
+        // `safe_ts` will update to 500 instead of 300
+        rrp.update_applied(300);
+        assert_eq!(rrp.safe_ts(), 500);
+        rrp.update_applied(301);
+        assert_eq!(rrp.safe_ts(), 600);
+        assert_eq!(pending_items_num(&rrp), 0);
+
+        // stale item will be ignored
+        rrp.forward_safe_ts(300, 500);
+        rrp.forward_safe_ts(301, 600);
+        rrp.forward_safe_ts(400, 0);
+        rrp.forward_safe_ts(0, 700);
+        assert_eq!(pending_items_num(&rrp), 0);
     }
 }
