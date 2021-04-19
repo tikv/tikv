@@ -5,7 +5,7 @@ use std::io;
 use std::net;
 use std::result;
 
-use crossbeam::TrySendError;
+use crossbeam::channel::TrySendError;
 use protobuf::{ProtobufError, RepeatedField};
 
 use crate::pd;
