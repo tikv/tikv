@@ -119,11 +119,18 @@ impl ImportModeSwitcher {
         executor.spawn_ok(timer_loop);
     }
 
-    pub fn enter_normal_mode<E: KvEngine>(&self, db: &E, mf: RocksDBMetricsFn) -> Result<()> {
+    pub fn enter_normal_mode<E: KvEngine>(
+        &self,
+        db: &E,
+        cb: Box<dyn Fn() + Send>,
+        mf: RocksDBMetricsFn,
+    ) -> Result<()> {
         if !self.is_import.load(Ordering::Acquire) {
             return Ok(());
         }
-        self.inner.lock().unwrap().enter_normal_mode(db, mf)
+        self.inner.lock().unwrap().enter_normal_mode(db, mf)?;
+        cb();
+        Ok(())
     }
 
     pub fn enter_import_mode<E: KvEngine>(&self, db: &E, mf: RocksDBMetricsFn) -> Result<()> {
