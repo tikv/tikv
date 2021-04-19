@@ -1,7 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::marker::PhantomData;
-use std::mem;
 use std::sync::{Arc, Mutex};
 
 use engine_traits::{KvEngine, Range};
@@ -77,7 +76,7 @@ where
             self.split_keys.pop();
         }
         if !self.split_keys.is_empty() {
-            mem::replace(&mut self.split_keys, vec![])
+            std::mem::take(&mut self.split_keys)
         } else {
             vec![]
         }

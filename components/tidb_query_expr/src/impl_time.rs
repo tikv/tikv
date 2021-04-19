@@ -1256,10 +1256,7 @@ mod tests {
 
         let mut ctx = EvalContext::default();
         for (arg, exp) in cases {
-            let time = match arg {
-                Some(arg) => Some(Time::parse_datetime(&mut ctx, arg, 6, true).unwrap()),
-                None => None,
-            };
+            let time = arg.map(|arg| Time::parse_datetime(&mut ctx, arg, 6, true).unwrap());
             let output = RpnFnScalarEvaluator::new()
                 .push_param(time)
                 .evaluate(ScalarFuncSig::ToDays)

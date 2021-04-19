@@ -221,7 +221,7 @@ impl Floor for FloorIntToInt {
 #[rpn_fn]
 #[inline]
 fn abs_int(arg: &Int) -> Result<Option<Int>> {
-    match (*arg).checked_abs() {
+    match arg.checked_abs() {
         None => Err(Error::overflow("BIGINT", &format!("abs({})", *arg)).into()),
         Some(arg_abs) => Ok(Some(arg_abs)),
     }

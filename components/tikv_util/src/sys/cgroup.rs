@@ -174,10 +174,8 @@ where
 {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
-    for line in reader.lines() {
-        if let Ok(l) = line {
-            f(&l);
-        }
+    for line in reader.lines().flatten() {
+        f(&line);
     }
     Ok(())
 }

@@ -767,11 +767,10 @@ pub mod tests {
             if expected_value.is_none() {
                 assert!(must_succeed_impl(&engine, key, key, 50, true, 0, 50, false, 51).is_none());
                 must_pessimistic_rollback(&engine, key, 50, 51);
-                must_unlocked(&engine, key);
             } else {
                 must_err_impl(&engine, key, key, 50, true, 50, false, 51);
-                must_unlocked(&engine, key);
             }
+            must_unlocked(&engine, key);
 
             // Test getting value.
             let res = must_succeed_impl(&engine, key, key, 50, false, 0, 50, true, 51);
