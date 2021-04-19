@@ -251,6 +251,8 @@ pub struct IORateLimitConfig {
     #[serde(with = "file_system::io_rate_limit_mode_serde")]
     #[config(skip)]
     pub mode: IORateLimitMode,
+    #[config(skip)]
+    pub strict: bool,
     #[serde(with = "file_system::io_priority_serde")]
     #[config(skip)]
     pub foreground_read_priority: IOPriority,
@@ -288,6 +290,7 @@ impl Default for IORateLimitConfig {
         IORateLimitConfig {
             max_bytes_per_sec: OptionReadableSize(None),
             mode: IORateLimitMode::WriteOnly,
+            strict: false,
             foreground_read_priority: IOPriority::High,
             foreground_write_priority: IOPriority::High,
             flush_priority: IOPriority::Medium,
@@ -305,7 +308,7 @@ impl Default for IORateLimitConfig {
 
 impl IORateLimitConfig {
     pub fn build(&self, enable_statistics: bool) -> IORateLimiter {
-        let mut limiter = IORateLimiter::new(self.mode, enable_statistics);
+        let mut limiter = IORateLimiter::new(self.mode, self.strict, enable_statistics);
         if let Some(limit) = self.max_bytes_per_sec.0 {
             limiter.set_io_rate_limit(limit.0 as usize);
         }

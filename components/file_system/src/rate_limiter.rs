@@ -155,6 +155,8 @@ impl IORateLimiterStatistics {
 /// Rate limit is disabled when total IO threshold is set to zero.
 #[derive(Debug)]
 struct PriorityBasedIORateLimiter {
+    // Only limit high-priority IOs when strict is true
+    strict: bool,
     // Total bytes passed through during current epoch
     bytes_through: [CachePadded<AtomicUsize>; IOPriority::COUNT],
     // Maximum bytes permitted during current epoch
@@ -219,7 +221,9 @@ macro_rules! request_imp {
         let bytes_through =
             $limiter.bytes_through[priority_idx].fetch_add(amount, Ordering::Relaxed) + amount;
         // We prefer not to partially return only a portion of requested bytes.
-        if bytes_through <= cached_bytes_per_epoch {
+        if bytes_through <= cached_bytes_per_epoch
+            || !$limiter.strict && $priority == IOPriority::High
+        {
             return amount;
         }
         let mut wait = {
@@ -271,8 +275,9 @@ macro_rules! request_imp {
 }
 
 impl PriorityBasedIORateLimiter {
-    fn new() -> Self {
+    fn new(strict: bool) -> Self {
         PriorityBasedIORateLimiter {
+            strict,
             bytes_through: Default::default(),
             bytes_per_epoch: Default::default(),
             protected: Mutex::new(PriorityBasedIORateLimiterProtected::new()),
@@ -402,11 +407,11 @@ pub struct IORateLimiter {
 }
 
 impl IORateLimiter {
-    pub fn new(mode: IORateLimitMode, enable_statistics: bool) -> Self {
+    pub fn new(mode: IORateLimitMode, strict: bool, enable_statistics: bool) -> Self {
         IORateLimiter {
             mode,
             priority_map: [IOPriority::High; IOType::COUNT],
-            throughput_limiter: Arc::new(PriorityBasedIORateLimiter::new()),
+            throughput_limiter: Arc::new(PriorityBasedIORateLimiter::new(strict)),
             stats: if enable_statistics {
                 Some(Arc::new(IORateLimiterStatistics::new()))
             } else {
@@ -416,7 +421,11 @@ impl IORateLimiter {
     }
 
     pub fn new_for_test() -> Self {
-        IORateLimiter::new(IORateLimitMode::AllIo, true /*enable_statistics*/)
+        IORateLimiter::new(
+            IORateLimitMode::AllIo,
+            true, /*strict*/
+            true, /*enable_statistics*/
+        )
     }
 
     pub fn set_io_priority(&mut self, io_type: IOType, io_priority: IOPriority) {
@@ -727,7 +736,7 @@ mod tests {
 
     #[bench]
     fn bench_critical_section(b: &mut test::Bencher) {
-        let inner_limiter = PriorityBasedIORateLimiter::new();
+        let inner_limiter = PriorityBasedIORateLimiter::new(true /*strict*/);
         inner_limiter.set_bytes_per_sec(1024);
         let now = Instant::now_coarse();
         b.iter(|| {

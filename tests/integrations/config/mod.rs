@@ -654,6 +654,7 @@ fn test_serde_custom_tikv_config() {
         io_rate_limit: IORateLimitConfig {
             max_bytes_per_sec: OptionReadableSize(Some(ReadableSize::mb(1000))),
             mode: IORateLimitMode::AllIo,
+            strict: true,
             foreground_read_priority: IOPriority::Low,
             foreground_write_priority: IOPriority::Low,
             flush_priority: IOPriority::High,

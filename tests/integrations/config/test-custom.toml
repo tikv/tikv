@@ -93,6 +93,7 @@ memory-allocator = "nodump"
 [storage.io-rate-limit]
 max-bytes-per-sec = "1000MB"
 mode = "all-io"
+strict = true
 foreground-read-priority = "low"
 foreground-write-priority = "low"
 flush-priority = "high"
