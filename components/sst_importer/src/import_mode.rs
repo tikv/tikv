@@ -26,9 +26,9 @@ struct ImportModeSwitcherInner {
 }
 
 impl ImportModeSwitcherInner {
-    fn enter_normal_mode<E: KvEngine>(&mut self, db: &E, mf: RocksDBMetricsFn) -> Result<()> {
+    fn enter_normal_mode<E: KvEngine>(&mut self, db: &E, mf: RocksDBMetricsFn) -> Result<bool> {
         if !self.is_import.load(Ordering::Acquire) {
-            return Ok(());
+            return Ok(false);
         }
 
         self.backup_db_options.set_options(db)?;
@@ -38,12 +38,12 @@ impl ImportModeSwitcherInner {
 
         info!("enter normal mode");
         self.is_import.store(false, Ordering::Release);
-        Ok(())
+        Ok(true)
     }
 
-    fn enter_import_mode<E: KvEngine>(&mut self, db: &E, mf: RocksDBMetricsFn) -> Result<()> {
+    fn enter_import_mode<E: KvEngine>(&mut self, db: &E, mf: RocksDBMetricsFn) -> Result<bool> {
         if self.is_import.load(Ordering::Acquire) {
-            return Ok(());
+            return Ok(false);
         }
 
         self.backup_db_options = ImportModeDBOptions::new_options(db);
@@ -59,7 +59,7 @@ impl ImportModeSwitcherInner {
         }
         info!("enter import mode");
         self.is_import.store(true, Ordering::Release);
-        Ok(())
+        Ok(true)
     }
 }
 
@@ -99,10 +99,16 @@ impl ImportModeSwitcher {
                     if now >= switcher.next_check {
                         if switcher.is_import.load(Ordering::Acquire) {
                             let mf = switcher.metrics_fn;
-                            if switcher.enter_normal_mode(&db, mf).is_err() {
-                                error!("failed to put TiKV back into normal mode");
+                            match switcher.enter_normal_mode(&db, mf) {
+                                Err(e) => {
+                                    error!(?e; "failed to put TiKV back into normal mode");
+                                },
+                                Ok(success) => {
+                                    if success {
+                                        cb();
+                                    }
+                                }
                             }
-                            cb();
                         }
                         switcher.next_check = now + switcher.timeout
                     }
@@ -122,26 +128,23 @@ impl ImportModeSwitcher {
     pub fn enter_normal_mode<E: KvEngine>(
         &self,
         db: &E,
-        cb: Box<dyn Fn() + Send>,
         mf: RocksDBMetricsFn,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         if !self.is_import.load(Ordering::Acquire) {
-            return Ok(());
+            return Ok(false);
         }
-        self.inner.lock().unwrap().enter_normal_mode(db, mf)?;
-        cb();
-        Ok(())
+        self.inner.lock().unwrap().enter_normal_mode(db, mf)
     }
 
-    pub fn enter_import_mode<E: KvEngine>(&self, db: &E, mf: RocksDBMetricsFn) -> Result<()> {
+    pub fn enter_import_mode<E: KvEngine>(&self, db: &E, mf: RocksDBMetricsFn) -> Result<bool> {
         if self.is_import.load(Ordering::Acquire) {
-            return Ok(());
+            return Ok(false);
         }
         let mut inner = self.inner.lock().unwrap();
-        inner.enter_import_mode(db, mf)?;
+        let ret = inner.enter_import_mode(db, mf)?;
         inner.next_check = Instant::now() + inner.timeout;
         inner.metrics_fn = mf;
-        Ok(())
+        Ok(ret)
     }
 
     pub fn get_mode(&self) -> SwitchMode {
@@ -323,13 +326,13 @@ mod tests {
         let switcher = ImportModeSwitcher::new(&cfg);
         switcher.start(&threads, db.clone(), Box::new(|| {}));
         check_import_options(&db, &normal_db_options, &normal_cf_options);
-        switcher.enter_import_mode(&db, mf).unwrap();
+        assert!(switcher.enter_import_mode(&db, mf).unwrap());
         check_import_options(&db, &import_db_options, &import_cf_options);
-        switcher.enter_import_mode(&db, mf).unwrap();
+        assert!(!switcher.enter_import_mode(&db, mf).unwrap());
         check_import_options(&db, &import_db_options, &import_cf_options);
-        switcher.enter_normal_mode(&db, mf).unwrap();
+        assert!(switcher.enter_normal_mode(&db, mf).unwrap());
         check_import_options(&db, &normal_db_options, &normal_cf_options);
-        switcher.enter_normal_mode(&db, mf).unwrap();
+        assert!(!switcher.enter_normal_mode(&db, mf).unwrap());
         check_import_options(&db, &normal_db_options, &normal_cf_options);
     }
 
