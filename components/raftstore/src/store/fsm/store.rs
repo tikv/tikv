@@ -2386,7 +2386,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                         {
                             if let Some(pr) = meta.region_read_progress.get(&leader_info.region_id)
                             {
-                                pr.forward_safe_ts(
+                                pr.update_safe_ts(
                                     leader_info.get_read_state().get_applied_index(),
                                     leader_info.get_read_state().get_safe_ts(),
                                 );
@@ -2516,8 +2516,9 @@ mod tests {
             region.set_start_key(kr.get_start_key().to_vec());
             region.set_end_key(kr.get_end_key().to_vec());
             region.set_peers(vec![kvproto::metapb::Peer::default()].into());
-            let rrp = RegionReadProgress::new(0, 1);
-            rrp.forward_safe_ts(0, safe_ts);
+            let rrp = RegionReadProgress::new(1, 1);
+            rrp.update_safe_ts(1, safe_ts);
+            assert_eq!(rrp.safe_ts(), safe_ts);
             meta.region_ranges.insert(enc_end_key(&region), id);
             meta.regions.insert(id, region);
             meta.region_read_progress.insert(id, Arc::new(rrp));

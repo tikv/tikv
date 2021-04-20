@@ -841,7 +841,7 @@ impl Display for MsgType<'_> {
 /// request directly without requiring leader lease or read index iff `safe_ts` >= `read_ts` (the `read_ts`
 /// is usually stale i.e seconds ago).
 ///
-/// `safe_ts` is forward by the `(apply index, safe ts)` item:
+/// `safe_ts` is updated by the `(apply index, safe ts)` item:
 /// ```
 /// if self.applied_index >= item.apply_index {
 ///     self.safe_ts = max(self.safe_ts, item.safe_ts)
@@ -882,12 +882,12 @@ impl RegionReadProgress {
             .fetch_max(applied, AtomicOrdering::SeqCst);
     }
 
-    pub fn forward_safe_ts(&self, apply_index: u64, ts: u64) {
+    pub fn update_safe_ts(&self, apply_index: u64, ts: u64) {
         if apply_index == 0 || ts == 0 {
             return;
         }
         let mut core = self.core.lock().unwrap();
-        if let Some(ts) = core.forward_safe_ts(apply_index, ts) {
+        if let Some(ts) = core.update_safe_ts(apply_index, ts) {
             self.safe_ts.fetch_max(ts, AtomicOrdering::SeqCst);
         }
     }
@@ -947,7 +947,7 @@ impl RegionReadProgressCore {
     }
 
     // Return the `safe_ts` if it is updated
-    fn forward_safe_ts(&mut self, apply_index: u64, ts: u64) -> Option<u64> {
+    fn update_safe_ts(&mut self, apply_index: u64, ts: u64) -> Option<u64> {
         // The peer has enough data, try update `safe_ts` directly
         if self.applied_index >= apply_index {
             let mut updated_ts = None;
@@ -1620,7 +1620,7 @@ mod tests {
         let cap = 10;
         let rrp = RegionReadProgress::new(10, cap);
         for i in 1..=20 {
-            rrp.forward_safe_ts(i, i);
+            rrp.update_safe_ts(i, i);
         }
         // `safe_ts` update according to its `applied_index`
         assert_eq!(rrp.safe_ts(), 10);
@@ -1631,7 +1631,7 @@ mod tests {
         assert_eq!(pending_items_num(&rrp), 0);
 
         for i in 100..200 {
-            rrp.forward_safe_ts(i, i);
+            rrp.update_safe_ts(i, i);
         }
         assert_eq!(rrp.safe_ts(), 20);
         // the number of pending item should not exceed `cap`
@@ -1647,13 +1647,13 @@ mod tests {
         assert_eq!(pending_items_num(&rrp), 0);
 
         // pending item can be updated instead of adding a new one
-        rrp.forward_safe_ts(300, 300);
+        rrp.update_safe_ts(300, 300);
         assert_eq!(pending_items_num(&rrp), 1);
-        rrp.forward_safe_ts(200, 400);
+        rrp.update_safe_ts(200, 400);
         assert_eq!(pending_items_num(&rrp), 1);
-        rrp.forward_safe_ts(300, 500);
+        rrp.update_safe_ts(300, 500);
         assert_eq!(pending_items_num(&rrp), 1);
-        rrp.forward_safe_ts(301, 600);
+        rrp.update_safe_ts(301, 600);
         assert_eq!(pending_items_num(&rrp), 2);
         // `safe_ts` will update to 500 instead of 300
         rrp.update_applied(300);
@@ -1663,10 +1663,10 @@ mod tests {
         assert_eq!(pending_items_num(&rrp), 0);
 
         // stale item will be ignored
-        rrp.forward_safe_ts(300, 500);
-        rrp.forward_safe_ts(301, 600);
-        rrp.forward_safe_ts(400, 0);
-        rrp.forward_safe_ts(0, 700);
+        rrp.update_safe_ts(300, 500);
+        rrp.update_safe_ts(301, 600);
+        rrp.update_safe_ts(400, 0);
+        rrp.update_safe_ts(0, 700);
         assert_eq!(pending_items_num(&rrp), 0);
     }
 }

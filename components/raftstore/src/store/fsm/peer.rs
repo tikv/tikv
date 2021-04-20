@@ -1247,7 +1247,7 @@ where
                 self.fsm
                     .peer
                     .read_progress
-                    .forward_safe_ts(rs.get_applied_index(), rs.get_safe_ts());
+                    .update_safe_ts(rs.get_applied_index(), rs.get_safe_ts());
             }
         }
 
