@@ -81,7 +81,7 @@ impl ObserveRegion {
             ResolverStatus::Pending { ref mut locks, .. } => {
                 for log in change_logs {
                     match log {
-                        ChangeLog::Error(e) => return Err(Error::Request(e.clone())),
+                        ChangeLog::Error(e) => return Err(Error::request(e.clone())),
                         ChangeLog::Rows { rows, .. } => rows.iter().for_each(|row| match row {
                             ChangeRow::Prewrite { key, start_ts, .. } => {
                                 locks.push(PendingLock::Track {
@@ -108,7 +108,7 @@ impl ObserveRegion {
             ResolverStatus::Ready => {
                 for log in change_logs {
                     match log {
-                        ChangeLog::Error(e) => return Err(Error::Request(e.clone())),
+                        ChangeLog::Error(e) => return Err(Error::request(e.clone())),
                         ChangeLog::Rows { rows, .. } => rows.iter().for_each(|row| match row {
                             ChangeRow::Prewrite { key, start_ts, .. } => {
                                 self.resolver.track_lock(*start_ts, key.to_raw().unwrap())
