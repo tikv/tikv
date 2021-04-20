@@ -2415,6 +2415,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     }
 
     fn on_get_store_safe_ts(&self, key_range: KeyRange, cb: Box<dyn FnOnce(u64) + Send>) {
+        // `store_safe_ts` won't be accessed frequently (like per-request or per-transaction),
+        // so it is okay getting `store_safe_ts` from `store_meta` (behide a mutex)
         let meta = self.ctx.store_meta.lock().unwrap();
         cb(get_range_safe_ts(&meta, key_range));
     }
