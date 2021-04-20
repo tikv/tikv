@@ -16,7 +16,6 @@ use engine_traits::{Engines, KvEngine, RaftEngine, SSTMetaInfo, WriteBatchExt};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use kvproto::errorpb;
-use kvproto::kvrpcpb::ReadState;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{
@@ -1214,12 +1213,9 @@ where
             return Ok(());
         }
 
-        let (msg_type, msg_term) = (
-            msg.get_message().get_msg_type(),
-            msg.get_message().get_term(),
-        );
-
-        if util::is_vote_msg(&msg.get_message()) || msg_type == MessageType::MsgTimeoutNow {
+        if util::is_vote_msg(&msg.get_message())
+            || msg.get_message().get_msg_type() == MessageType::MsgTimeoutNow
+        {
             if self.fsm.hibernate_state.group_state() != GroupState::Chaos {
                 self.fsm.hibernate_state.reset(GroupState::Chaos);
                 self.register_raft_base_tick();

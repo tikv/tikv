@@ -877,7 +877,8 @@ impl RegionReadProgress {
         if let Some(ts) = core.update_applied(applied) {
             self.safe_ts.fetch_max(ts, AtomicOrdering::SeqCst);
         }
-        let pre_applied = self.applied_index
+        let pre_applied = self
+            .applied_index
             .fetch_max(applied, AtomicOrdering::SeqCst);
         // The apply index should not decrease
         assert!(applied >= pre_applied);
