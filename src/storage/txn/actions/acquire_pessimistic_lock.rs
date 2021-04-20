@@ -6,7 +6,7 @@ use crate::storage::mvcc::{
 };
 use crate::storage::txn::actions::check_data_constraint::check_data_constraint;
 use crate::storage::Snapshot;
-use txn_types::{Key, Lock, LockType, TimeStamp, Value, WriteType};
+use txn_types::{Key, Lock, LockType, OldValue, TimeStamp, Value, WriteType};
 
 pub fn acquire_pessimistic_lock<S: Snapshot>(
     txn: &mut MvccTxn,
@@ -18,7 +18,8 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     for_update_ts: TimeStamp,
     need_value: bool,
     min_commit_ts: TimeStamp,
-) -> MvccResult<Option<Value>> {
+    need_old_value: bool,
+) -> MvccResult<(Option<Value>, OldValue)> {
     fail_point!("acquire_pessimistic_lock", |err| Err(
         crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts).into()
     ));
@@ -42,6 +43,8 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         )
     }
 
+    let mut old_value = OldValue::Unspecified;
+    let mut prev_write = None;
     let mut val = None;
     if let Some(lock) = reader.load_lock(&key)? {
         if lock.ts != reader.start_ts {
@@ -55,8 +58,16 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
             }
             .into());
         }
-        if need_value {
+        if need_value || need_old_value {
             val = reader.get(&key, for_update_ts)?;
+            if need_old_value {
+                old_value = match val {
+                    Some(ref value) => OldValue::Value {
+                        value: value.clone(),
+                    },
+                    None => OldValue::None,
+                };
+            }
         }
         // Overwrite the lock with small for_update_ts
         if for_update_ts > lock.for_update_ts {
@@ -73,7 +84,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                 .acquire_pessimistic_lock
                 .inc();
         }
-        return Ok(val);
+        return Ok((val, old_value));
     }
 
     if let Some((commit_ts, write)) = reader.seek_write(&key, TimeStamp::max())? {
@@ -137,11 +148,26 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                         .as_ref()
                         .check_gc_fence_as_latest_version(reader.start_ts) =>
                 {
-                    Some(reader.load_data(&key, write)?)
+                    Some(reader.load_data(&key, write.clone())?)
                 }
                 WriteType::Delete | WriteType::Put => None,
                 WriteType::Lock | WriteType::Rollback => reader.get(&key, commit_ts.prev())?,
             };
+        }
+        prev_write = Some(write);
+    }
+
+    if need_old_value {
+        old_value = if need_value {
+            match val {
+                Some(ref val) => OldValue::Value { value: val.clone() },
+                None => OldValue::None,
+            }
+        } else {
+            match prev_write {
+                Some(write) => reader.get_old_value(&key, write)?,
+                None => OldValue::None,
+            }
         }
     }
 
@@ -155,7 +181,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     txn.put_lock(key, &lock);
     // TODO don't we need to commit the modifies in txn?
 
-    Ok(val)
+    Ok((val, old_value))
 }
 
 pub mod tests {
@@ -200,6 +226,7 @@ pub mod tests {
             for_update_ts.into(),
             need_value,
             min_commit_ts,
+            false,
         )
         .unwrap();
         let modifies = txn.into_modifies();
@@ -208,7 +235,7 @@ pub mod tests {
                 .write(&ctx, WriteData::from_modifies(modifies))
                 .unwrap();
         }
-        res
+        res.0
     }
 
     pub fn must_succeed<E: Engine>(
@@ -352,6 +379,7 @@ pub mod tests {
             for_update_ts.into(),
             need_value,
             min_commit_ts,
+            false,
         )
         .unwrap_err()
     }

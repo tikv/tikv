@@ -1112,19 +1112,18 @@ pub mod tests {
 
         let cases: Vec<_> = vec![
             (b"k1" as &[u8], None),
-            (b"k2", Some((b"v2" as &[u8], 11))),
+            (b"k2", Some(b"v2" as &[u8])),
             (b"k3", None),
-            (b"k4", Some((b"v4", 13))),
+            (b"k4", Some(b"v4")),
             (b"k5", None),
-            (b"k6", Some((b"v6x", 22))),
+            (b"k6", Some(b"v6x")),
             (b"k7", None),
         ]
         .into_iter()
         .map(|(k, v)| {
             let old_value = v
-                .map(|(value, ts)| OldValue::Value {
-                    short_value: Some(value.to_vec()),
-                    start_ts: ts.into(),
+                .map(|value| OldValue::Value {
+                    value: value.to_vec(),
                 })
                 .unwrap_or(OldValue::None);
             (Key::from_raw(k), old_value)
@@ -1191,8 +1190,7 @@ pub mod tests {
             assert_eq!(
                 old_value,
                 OldValue::Value {
-                    short_value: Some(b"v1".to_vec()),
-                    start_ts: 10.into(),
+                    value: b"v1".to_vec(),
                 }
             );
         }
@@ -1309,9 +1307,11 @@ pub mod tests {
                     .unwrap()
                 {
                     assert_eq!(write.write_type, WriteType::Put);
-                    OldValue::Value {
-                        short_value: write.short_value,
-                        start_ts: write.start_ts,
+                    match write.short_value {
+                        Some(value) => OldValue::Value { value },
+                        None => OldValue::ValueTimeStamp {
+                            start_ts: write.start_ts,
+                        },
                     }
                 } else {
                     OldValue::None

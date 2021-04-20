@@ -130,32 +130,34 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
                 old_value_cache.access_count += 1;
                 if let Some((old_value, mutation_type)) = old_value_cache.cache.remove(&key) {
                     return match mutation_type {
-                        MutationType::Insert => (None, None),
-                        MutationType::Put | MutationType::Delete => match old_value {
-                            OldValue::None => (None, None),
-                            OldValue::Value {
-                                start_ts,
-                                short_value,
-                            } => {
-                                let mut statistics = None;
-                                let value = short_value.or_else(|| {
-                                    statistics = Some(Statistics::default());
+                        // Old value of an Insert is guaranteed to be None.
+                        Some(MutationType::Insert) => {
+                            assert_eq!(old_value, OldValue::None);
+                            (None, None)
+                        }
+                        // For Put, Delete or a mutation type we do not know,
+                        // we read old value from the cache.
+                        Some(MutationType::Put) | Some(MutationType::Delete) | None => {
+                            match old_value {
+                                OldValue::None => (None, None),
+                                OldValue::Value { value } => (Some(value), None),
+                                OldValue::ValueTimeStamp { start_ts } => {
+                                    let mut statistics = Statistics::default();
                                     let prev_key = key.truncate_ts().unwrap().append_ts(start_ts);
                                     let start = Instant::now();
                                     let mut opts = ReadOptions::new();
                                     opts.set_fill_cache(false);
-                                    let value = reader
-                                        .get_value_default(&prev_key, statistics.as_mut().unwrap());
+                                    let value =
+                                        reader.get_value_default(&prev_key, &mut statistics);
                                     CDC_OLD_VALUE_DURATION_HISTOGRAM
                                         .with_label_values(&["get"])
                                         .observe(start.elapsed().as_secs_f64());
-                                    value
-                                });
-                                (value, statistics)
+                                    (value, Some(statistics))
+                                }
+                                // Unspecified should not be added into cache.
+                                OldValue::Unspecified => unreachable!(),
                             }
-                            // Unspecified should not be added into cache.
-                            OldValue::Unspecified => unreachable!(),
-                        },
+                        }
                         _ => unreachable!(),
                     };
                 }
@@ -170,6 +172,9 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
                 CDC_OLD_VALUE_DURATION_HISTOGRAM
                     .with_label_values(&["seek"])
                     .observe(start.elapsed().as_secs_f64());
+                if value.is_none() {
+                    old_value_cache.miss_none_count += 1;
+                }
                 (value, Some(statistics))
             };
             if let Err(e) = self.sched.schedule(Task::MultiBatch {

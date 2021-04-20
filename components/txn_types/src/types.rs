@@ -322,10 +322,9 @@ impl From<kvrpcpb::Mutation> for Mutation {
 #[derive(Debug, Clone, PartialEq)]
 pub enum OldValue {
     /// A real `OldValue`
-    Value {
-        short_value: Option<Value>,
-        start_ts: TimeStamp,
-    },
+    Value { value: Value },
+    /// A timestamp of an old value in case a value is not inlined in Write
+    ValueTimeStamp { start_ts: TimeStamp },
     /// `None` means we don't found a previous value
     None,
     /// `Unspecified` means one of the following:
@@ -347,10 +346,7 @@ impl OldValue {
 
     pub fn size(&self) -> usize {
         let value_size = match self {
-            OldValue::Value {
-                short_value: Some(v),
-                ..
-            } => v.len(),
+            OldValue::Value { value } => value.len(),
             _ => 0,
         };
         value_size + std::mem::size_of::<OldValue>()
@@ -361,7 +357,7 @@ impl OldValue {
 // key with current ts -> (short value of the prev txn, start ts of the prev txn).
 // The value of the map will be None when the mutation is `Insert`.
 // MutationType is the type of mutation of the current write.
-pub type OldValues = HashMap<Key, (OldValue, MutationType)>;
+pub type OldValues = HashMap<Key, (OldValue, Option<MutationType>)>;
 
 // Extra data fields filled by kvrpcpb::ExtraOp.
 #[derive(Default, Debug, Clone)]
