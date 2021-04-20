@@ -1233,24 +1233,6 @@ where
 
         let result = self.fsm.peer.step(self.ctx, msg.take_message());
 
-        if msg_type == MessageType::MsgHeartbeat
-            && msg_term == self.fsm.peer.term()
-            && !util::is_epoch_stale(
-                msg.get_region_epoch(),
-                self.fsm.peer.region().get_region_epoch(),
-            )
-        {
-            let extra_ctx = msg.take_extra_ctx();
-            if !extra_ctx.is_empty() {
-                let mut rs = ReadState::default();
-                rs.merge_from_bytes(&extra_ctx)?;
-                self.fsm
-                    .peer
-                    .read_progress
-                    .update_safe_ts(rs.get_applied_index(), rs.get_safe_ts());
-            }
-        }
-
         if is_snapshot {
             if !self.fsm.peer.has_pending_snapshot() {
                 // This snapshot is rejected by raft-rs.

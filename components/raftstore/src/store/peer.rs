@@ -3476,17 +3476,6 @@ where
             send_msg.set_end_key(region.get_end_key().to_vec());
         }
 
-        if self.is_leader()
-            && msg.get_msg_type() == MessageType::MsgHeartbeat
-            && self.has_applied_to_current_term()
-        {
-            let mut rs = ReadState::default();
-            rs.set_applied_index(self.read_progress.applied_index());
-            rs.set_safe_ts(self.read_progress.safe_ts());
-            let data = rs.write_to_bytes().unwrap();
-            send_msg.set_extra_ctx(data);
-        }
-
         send_msg.set_message(msg);
 
         if let Err(e) = trans.send(send_msg) {
