@@ -13,7 +13,7 @@ use tikv_util::config::ReadableDuration;
 pub struct Config {
     /// The PD endpoints for the client.
     ///
-    /// Default is empty.
+    /// Default is `"127.0.0.1:2379"`.
     pub endpoints: Vec<String>,
     /// The interval at which to retry a PD connection initialization.
     ///
