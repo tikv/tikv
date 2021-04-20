@@ -220,7 +220,7 @@ quick_error! {
     pub enum ErrorInner {
         Request(err: ErrorHeader) {
             from()
-            description("request to underhook engine failed")
+            description(err.get_message())
             display("{:?}", err)
         }
         Timeout(d: Duration) {

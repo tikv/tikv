@@ -162,6 +162,16 @@ impl TxnEntry {
             _ => unreachable!(),
         }
     }
+    /// This method will generate this kv pair's key
+    pub fn to_key(&self) -> Result<Key> {
+        match self {
+            TxnEntry::Commit { write, .. } => Ok(Key::from_encoded_slice(
+                Key::truncate_ts_for(&write.0).unwrap(),
+            )),
+            // Prewrite are not support
+            _ => unreachable!(),
+        }
+    }
 }
 
 /// A batch of transaction entries.
@@ -735,6 +745,7 @@ mod tests {
             Ok(Cursor::new(
                 MockRangeSnapshotIter::default(),
                 ScanMode::Forward,
+                false,
             ))
         }
         fn iter_cf(
@@ -746,6 +757,7 @@ mod tests {
             Ok(Cursor::new(
                 MockRangeSnapshotIter::default(),
                 ScanMode::Forward,
+                false,
             ))
         }
         fn lower_bound(&self) -> Option<&[u8]> {
