@@ -117,19 +117,13 @@ impl Queue {
     /// it will register current polling task for notifications.
     #[inline]
     fn pop(&self, ctx: &Context) -> Option<RaftMessage> {
-        match self.buf.pop() {
-            Some(msg) => Some(msg),
-            None => {
-                {
-                    let mut waker = self.waker.lock().unwrap();
-                    *waker = Some(ctx.waker().clone());
-                }
-                match self.buf.pop() {
-                    Some(msg) => Some(msg),
-                    None => None,
-                }
+        self.buf.pop().or_else(|| {
+            {
+                let mut waker = self.waker.lock().unwrap();
+                *waker = Some(ctx.waker().clone());
             }
-        }
+            self.buf.pop()
+        })
     }
 }
 

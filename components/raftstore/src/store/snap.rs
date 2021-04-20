@@ -246,7 +246,7 @@ fn retry_delete_snapshot(mgr: &SnapManagerCore, key: &SnapKey, snap: &dyn Generi
 fn gen_snapshot_meta(cf_files: &[CfFile]) -> RaftStoreResult<SnapshotMeta> {
     let mut meta = Vec::with_capacity(cf_files.len());
     for cf_file in cf_files {
-        if SNAPSHOT_CFS.iter().find(|&cf| cf_file.cf == *cf).is_none() {
+        if !SNAPSHOT_CFS.iter().any(|cf| cf_file.cf == *cf) {
             return Err(box_err!(
                 "failed to encode invalid snapshot cf {}",
                 cf_file.cf

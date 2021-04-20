@@ -626,7 +626,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 },
             ) {
                 warn!("cdc send capture change cmd failed"; "region_id" => region_id, "error" => ?e);
-                deregister_downstream(Error::Request(e.into()));
+                deregister_downstream(Error::request(e.into()));
                 return;
             }
 
@@ -879,7 +879,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                         let deregister = Deregister::Region {
                             observe_id,
                             region_id,
-                            err: Error::Request(e.into()),
+                            err: Error::request(e.into()),
                         };
                         if let Err(e) = scheduler_clone.schedule(Task::Deregister(deregister)) {
                             error!("schedule cdc task failed"; "error" => ?e);
@@ -891,10 +891,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             })
             .collect();
         let resps = futures::future::join_all(regions).await;
-        resps
-            .into_iter()
-            .filter_map(|resp| resp)
-            .collect::<Vec<u64>>()
+        resps.into_iter().flatten().collect::<Vec<u64>>()
     }
 
     async fn region_resolved_ts_store(
@@ -1122,7 +1119,7 @@ impl Initializer {
             let deregister = Deregister::Region {
                 region_id: self.region_id,
                 observe_id: self.observe_id,
-                err: Error::Request(err),
+                err: Error::request(err),
             };
             if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
                 error!("schedule cdc task failed"; "error" => ?e);
@@ -1393,8 +1390,8 @@ impl Initializer {
 
         if let Some(resolver) = resolver {
             // Track the locks.
-            for entry in &entries {
-                if let Some(TxnEntry::Prewrite { lock, .. }) = entry {
+            for entry in entries.iter().flatten() {
+                if let TxnEntry::Prewrite { lock, .. } = entry {
                     let (encoded_key, value) = lock;
                     let key = Key::from_encoded_slice(encoded_key).into_raw().unwrap();
                     let lock = Lock::parse(value)?;
@@ -2190,7 +2187,7 @@ mod tests {
             region_id: 1,
             downstream_id,
             conn_id,
-            err: Some(Error::Request(err_header.clone())),
+            err: Some(Error::request(err_header.clone())),
         };
         ep.run(Task::Deregister(deregister));
         'outer: loop {
@@ -2223,7 +2220,7 @@ mod tests {
             region_id: 1,
             downstream_id,
             conn_id,
-            err: Some(Error::Request(err_header.clone())),
+            err: Some(Error::request(err_header.clone())),
         };
         ep.run(Task::Deregister(deregister));
         assert!(harness.recv_timeout(Duration::from_millis(200)).is_err());
@@ -2233,7 +2230,7 @@ mod tests {
             region_id: 1,
             downstream_id: new_downstream_id,
             conn_id,
-            err: Some(Error::Request(err_header.clone())),
+            err: Some(Error::request(err_header.clone())),
         };
         ep.run(Task::Deregister(deregister));
         'outer1: loop {
@@ -2265,7 +2262,7 @@ mod tests {
             region_id: 1,
             // A stale ObserveID (different from the actual one).
             observe_id: ObserveID::new(),
-            err: Error::Request(err_header),
+            err: Error::request(err_header),
         };
         ep.run(Task::Deregister(deregister));
         match harness.recv_timeout(Duration::from_millis(500)) {

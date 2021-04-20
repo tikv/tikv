@@ -2,8 +2,8 @@
 
 use std::sync::atomic::*;
 use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
 use std::time::Duration;
-use std::{mem, thread};
 
 use kvproto::metapb::{Peer, Region};
 use raft::eraftpb::MessageType;
@@ -393,7 +393,7 @@ fn test_read_index_when_transfer_leader_2() {
     let router = cluster.sim.wl().get_router(old_leader.get_id()).unwrap();
     let mut reserved_msgs = Vec::new();
     'LOOP: loop {
-        for raft_msg in mem::replace(dropped_msgs.lock().unwrap().as_mut(), vec![]) {
+        for raft_msg in std::mem::take(&mut *dropped_msgs.lock().unwrap()) {
             let msg_type = raft_msg.get_message().get_msg_type();
             if msg_type == MessageType::MsgHeartbeatResponse || msg_type == MessageType::MsgAppend {
                 reserved_msgs.push(raft_msg);
