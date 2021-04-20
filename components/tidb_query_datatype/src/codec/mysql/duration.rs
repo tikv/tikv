@@ -854,6 +854,19 @@ mod tests {
     }
 
     #[test]
+    fn test_parse2_duration_with_null() {
+        let cases: Vec<(&str, i8, Option<&'static str>, bool)> = vec![
+            ("-790822912", 0, None, true),
+            ("-790822912", 0, Some("-838:59:59"), false),
+        ];
+
+        for (input, fsp, expect, return_null) in cases {
+            let got = Duration::parse2(&mut EvalContext::default(), input, fsp, return_null);
+            assert_eq!(got.ok().map(|d| d.to_string()), expect.map(str::to_string));
+        }
+    }
+
+    #[test]
     fn test_to_numeric_string() {
         let cases: Vec<(&str, i8, &str)> = vec![
             ("11:30:45.123456", 4, "113045.1235"),
