@@ -575,15 +575,23 @@ pub mod tests {
         let mut txn = MvccTxn::new(ts, cm);
         let mut reader = SnapshotReader::new(ts, snapshot, true);
 
+        let mut props = optimistic_txn_props(pk, ts);
+        props.need_old_value = true;
         let (_, old_value) = prewrite(
             &mut txn,
             &mut reader,
-            &optimistic_txn_props(pk, ts),
+            &props,
             Mutation::Insert((Key::from_raw(key), value.to_vec())),
             &None,
             false,
         )?;
-        assert_eq!(old_value, OldValue::None);
+        // Insert must be None if the key is not lock, or be Unspecified if the
+        // key is already locked.
+        assert!(
+            matches!(old_value, OldValue::None | OldValue::Unspecified),
+            "{:?}",
+            old_value
+        );
         write(engine, &ctx, txn.into_modifies());
         Ok(())
     }
@@ -606,7 +614,7 @@ pub mod tests {
             &optimistic_txn_props(pk, ts),
             Mutation::CheckNotExists(Key::from_raw(key)),
             &None,
-            false,
+            true,
         )?;
         assert_eq!(old_value, OldValue::Unspecified);
         Ok(())
