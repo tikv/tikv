@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 
-use crossbeam::{SendError, TrySendError};
+use crossbeam::channel::{SendError, TrySendError};
 use engine_traits::{KvEngine, RaftEngine, Snapshot};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
