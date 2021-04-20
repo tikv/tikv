@@ -1,6 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cell::RefCell;
 use std::f64::INFINITY;
 use std::fmt;
 use std::sync::{Arc, Mutex};
