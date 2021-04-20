@@ -566,14 +566,22 @@ pub mod tests {
         let cm = ConcurrencyManager::new(ts);
         let mut txn = MvccTxn::new(snapshot, ts, true, cm);
 
+        let mut props = optimistic_txn_props(pk, ts);
+        props.need_old_value = true;
         let (_, old_value) = prewrite(
             &mut txn,
-            &optimistic_txn_props(pk, ts),
+            &props,
             Mutation::Insert((Key::from_raw(key), value.to_vec())),
             &None,
             false,
         )?;
-        assert_eq!(old_value, OldValue::None);
+        // Insert must be None if the key is not lock, or be Unspecified if the
+        // key is already locked.
+        assert!(
+            matches!(old_value, OldValue::None | OldValue::Unspecified),
+            "{:?}",
+            old_value
+        );
         write(engine, &ctx, txn.into_modifies());
         Ok(())
     }
@@ -594,7 +602,7 @@ pub mod tests {
             &optimistic_txn_props(pk, ts),
             Mutation::CheckNotExists(Key::from_raw(key)),
             &None,
-            false,
+            true,
         )?;
         assert_eq!(old_value, OldValue::Unspecified);
         Ok(())
@@ -1104,7 +1112,7 @@ pub mod tests {
         must_commit(&engine_rollback, b"k1", 10, 30);
 
         must_prewrite_put(&engine_rollback, b"k1", b"v2", b"k1", 40);
-        must_rollback(&engine_rollback, b"k1", 40, false);
+        must_rollback(&engine_rollback, b"k1", 40);
 
         let engine_lock = crate::storage::TestEngineBuilder::new().build().unwrap();
 
@@ -1128,11 +1136,9 @@ pub mod tests {
             };
             let snapshot = engine.snapshot(Default::default()).unwrap();
             let cm = ConcurrencyManager::new(start_ts);
-            let mut txn = MvccTxn::new(start_ts, cm);
-            let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+            let mut txn = MvccTxn::new(snapshot, start_ts, false, cm);
             let (_, old_value) = prewrite(
                 &mut txn,
-                &mut reader,
                 &txn_props,
                 Mutation::Put((Key::from_raw(b"k1"), b"value".to_vec())),
                 &None,
@@ -1175,11 +1181,9 @@ pub mod tests {
         };
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let cm = ConcurrencyManager::new(start_ts);
-        let mut txn = MvccTxn::new(start_ts, cm);
-        let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+        let mut txn = MvccTxn::new(snapshot, start_ts, false, cm);
         let (_, old_value) = prewrite(
             &mut txn,
-            &mut reader,
             &txn_props,
             Mutation::Insert((Key::from_raw(b"k1"), b"v2".to_vec())),
             &None,
@@ -1244,7 +1248,7 @@ pub mod tests {
                     }
                     3 => {
                         must_prewrite_put(&engine, b"k1", &[i as u8], b"k1", start_ts);
-                        must_rollback(&engine, b"k1", start_ts, false);
+                        must_rollback(&engine, b"k1", start_ts);
                     }
                     _ => unreachable!(),
                 }
@@ -1253,8 +1257,8 @@ pub mod tests {
             let snapshot = engine.snapshot(Default::default()).unwrap();
             let cm = ConcurrencyManager::new(start_ts);
             let expect = {
-                let mut reader = SnapshotReader::new(start_ts, snapshot.clone(), true);
-                if let Some(write) = reader
+                let mut txn = MvccTxn::new(snapshot.clone(), start_ts, false, cm.clone());
+                if let Some(write) = txn
                     .reader
                     .get_write(&Key::from_raw(b"k1"), start_ts, Some(start_ts))
                     .unwrap()
@@ -1269,8 +1273,7 @@ pub mod tests {
                 }
             };
 
-            let mut txn = MvccTxn::new(start_ts, cm.clone());
-            let mut reader = SnapshotReader::new(start_ts, snapshot.clone(), true);
+            let mut txn = MvccTxn::new(snapshot.clone(), start_ts, false, cm.clone());
             let txn_props = TransactionProperties {
                 start_ts,
                 kind: TransactionKind::Optimistic(false),
@@ -1283,7 +1286,6 @@ pub mod tests {
             };
             let (_, old_value) = prewrite(
                 &mut txn,
-                &mut reader,
                 &txn_props,
                 Mutation::Put((Key::from_raw(b"k1"), b"v2".to_vec())),
                 &None,
@@ -1293,11 +1295,9 @@ pub mod tests {
             assert_eq!(old_value, expect, "seed: {} ops: {:?}", seed, ops);
 
             if expect == OldValue::None {
-                let mut txn = MvccTxn::new(start_ts, cm);
-                let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+                let mut txn = MvccTxn::new(snapshot, start_ts, false, cm);
                 let (_, old_value) = prewrite(
                     &mut txn,
-                    &mut reader,
                     &txn_props,
                     Mutation::Insert((Key::from_raw(b"k1"), b"v2".to_vec())),
                     &None,
