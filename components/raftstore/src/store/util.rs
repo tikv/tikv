@@ -878,8 +878,10 @@ impl RegionReadProgress {
         if let Some(ts) = core.update_applied(applied) {
             self.safe_ts.fetch_max(ts, AtomicOrdering::SeqCst);
         }
-        self.applied_index
+        let pre_applied = self.applied_index
             .fetch_max(applied, AtomicOrdering::SeqCst);
+        // The apply index should not decrease
+        assert!(applied >= pre_applied);
     }
 
     pub fn update_safe_ts(&self, apply_index: u64, ts: u64) {

@@ -1630,6 +1630,7 @@ where
                     );
                 }
                 self.post_pending_read_index_on_replica(ctx);
+                self.read_progress.update_applied(self.last_applying_idx);
             }
             CheckApplyingSnapStatus::Idle => {}
         }
@@ -1805,9 +1806,6 @@ where
             let mut meta = ctx.store_meta.lock().unwrap();
             meta.readers
                 .insert(self.region_id, ReadDelegate::from_peer(self));
-            if let Some(rp) = meta.region_read_progress.get(&self.region_id) {
-                rp.update_applied(self.get_store().applied_index());
-            }
         }
 
         apply_snap_result
