@@ -13,7 +13,6 @@ use raftstore::coprocessor::*;
 use raftstore::store::fsm::ObserveID;
 use raftstore::store::RegionSnapshot;
 use raftstore::Error as RaftStoreError;
-use tikv::storage::Statistics;
 use tikv_util::worker::Scheduler;
 use tikv_util::{error, warn};
 
@@ -122,12 +121,9 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
             // Create a snapshot here for preventing the old value was GC-ed.
             let snapshot =
                 RegionSnapshot::from_snapshot(Arc::new(engine.snapshot()), Arc::new(region));
-            let mut reader = OldValueReader::new(snapshot);
-            let get_old_value = move |key,
-                                      query_ts,
-                                      old_value_cache: &mut OldValueCache,
-                                      statistics: &mut Statistics| {
-                old_value::get_old_value(key, query_ts, old_value_cache, statistics, &mut reader)
+            let reader = OldValueReader::new(snapshot);
+            let get_old_value = move |key, query_ts, old_value_cache: &mut OldValueCache| {
+                old_value::get_old_value(key, query_ts, old_value_cache, &reader)
             };
             if let Err(e) = self.sched.schedule(Task::MultiBatch {
                 multi: batches,

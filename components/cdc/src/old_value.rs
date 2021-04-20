@@ -17,52 +17,54 @@ pub fn get_old_value<S: EngineSnapshot>(
     key: Key,
     query_ts: TimeStamp,
     old_value_cache: &mut OldValueCache,
-    statistics: &mut Statistics,
-    reader: &mut OldValueReader<S>,
-) -> Option<Value> {
-    old_value_cache.access_count += 1;
+    reader: &OldValueReader<S>,
+) -> (Option<Value>, Option<Statistics>) {
     if let Some((old_value, mutation_type)) = old_value_cache.cache.remove(&key) {
-        match mutation_type {
-            MutationType::Insert => {
-                return None;
-            }
-            MutationType::Put | MutationType::Delete => {
-                if let OldValue::Value {
+        return match mutation_type {
+            MutationType::Insert => (None, None),
+            MutationType::Put | MutationType::Delete => match old_value {
+                OldValue::None => (None, None),
+                OldValue::Value {
                     start_ts,
                     short_value,
-                } = old_value
-                {
-                    return short_value.or_else(|| {
+                } => {
+                    let mut statistics = None;
+                    let value = short_value.or_else(|| {
+                        statistics = Some(Statistics::default());
                         let prev_key = key.truncate_ts().unwrap().append_ts(start_ts);
                         let start = Instant::now();
                         let mut opts = ReadOptions::new();
                         opts.set_fill_cache(false);
-                        let value = reader.get_value_default(&prev_key, statistics);
+                        let value =
+                            reader.get_value_default(&prev_key, statistics.as_mut().unwrap());
                         CDC_OLD_VALUE_DURATION_HISTOGRAM
                             .with_label_values(&["get"])
                             .observe(start.elapsed().as_secs_f64());
                         value
                     });
+                    (value, statistics)
                 }
-            }
+                // Unspecified should not be added into cache.
+                OldValue::Unspecified => unreachable!(),
+            },
             _ => unreachable!(),
-        }
+        };
     }
     // Cannot get old value from cache, seek for it in engine.
-    old_value_cache.miss_count += 1;
+    let mut statistics = Statistics::default();
     let start = Instant::now();
     let key = key.truncate_ts().unwrap().append_ts(query_ts);
     let value = reader
-        .near_seek_old_value(&key, statistics)
+        .near_seek_old_value(&key, &mut statistics)
         .unwrap_or_default();
     CDC_OLD_VALUE_DURATION_HISTOGRAM
         .with_label_values(&["seek"])
         .observe(start.elapsed().as_secs_f64());
-    value
+    (value, Some(statistics))
 }
 
-pub type OldValueCallback =
-    Box<dyn FnMut(Key, TimeStamp, &mut OldValueCache, &mut Statistics) -> Option<Vec<u8>> + Send>;
+pub(crate) type OldValueCallback =
+    Box<dyn Fn(Key, TimeStamp, &mut OldValueCache) -> (Option<Vec<u8>>, Option<Statistics>) + Send>;
 
 #[derive(Default)]
 struct OldValueCacheSizeTrace(u64);
@@ -148,7 +150,7 @@ impl<S: EngineSnapshot> OldValueReader<S> {
             .unwrap()
     }
 
-    fn get_value_default(&mut self, key: &Key, statistics: &mut Statistics) -> Option<Value> {
+    fn get_value_default(&self, key: &Key, statistics: &mut Statistics) -> Option<Value> {
         statistics.data.get += 1;
         let mut opts = ReadOptions::new();
         opts.set_fill_cache(false);
@@ -164,7 +166,7 @@ impl<S: EngineSnapshot> OldValueReader<S> {
     /// the latest value of the entry if the user key is the same to the given key and
     /// the timestamp is older than or equal to the timestamp in the given key.
     pub fn near_seek_old_value(
-        &mut self,
+        &self,
         key: &Key,
         statistics: &mut Statistics,
     ) -> Result<Option<Value>> {
@@ -221,7 +223,7 @@ mod tests {
         let key = Key::from_raw(k);
 
         let must_get_eq = |ts: u64, value| {
-            let mut old_value_reader = OldValueReader::new(Arc::new(kv_engine.snapshot()));
+            let old_value_reader = OldValueReader::new(Arc::new(kv_engine.snapshot()));
             let mut statistics = Statistics::default();
             assert_eq!(
                 old_value_reader
@@ -272,7 +274,7 @@ mod tests {
         let kv_engine = engine.get_rocksdb();
 
         let must_get_eq = |key: &[u8], ts: u64, value| {
-            let mut old_value_reader = OldValueReader::new(Arc::new(kv_engine.snapshot()));
+            let old_value_reader = OldValueReader::new(Arc::new(kv_engine.snapshot()));
             let mut statistics = Statistics::default();
             assert_eq!(
                 old_value_reader
