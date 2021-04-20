@@ -280,7 +280,7 @@ impl ArithmeticOp for RealMod {
     type T = Real;
 
     fn calc(lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
-        if (*rhs).into_inner() == 0f64 {
+        if rhs.into_inner() == 0f64 {
             return Ok(None);
         }
         Ok(Some(*lhs % *rhs))

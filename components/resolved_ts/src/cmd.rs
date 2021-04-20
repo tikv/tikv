@@ -84,7 +84,7 @@ impl ChangeLog {
                     Some(ChangeLog::Error(err_header))
                 }
             })
-            .filter_map(|v| v)
+            .flatten()
             .collect()
     }
 
@@ -145,7 +145,7 @@ impl ChangeLog {
                 }),
                 other => panic!("unexpected row pattern {:?}", other),
             })
-            .filter_map(|v| v)
+            .flatten()
             .collect()
     }
 }

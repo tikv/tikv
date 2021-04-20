@@ -35,7 +35,7 @@ impl AssertionStorage<SimulateEngine> {
         key: &str,
     ) -> (Cluster<ServerCluster>, Self) {
         let (cluster, store, ctx) = new_raft_storage_with_store_count(count, key);
-        let storage = Self { ctx, store };
+        let storage = Self { store, ctx };
         (cluster, storage)
     }
 
