@@ -553,7 +553,7 @@ where
         let is_synced = self.write_to_db();
 
         if !self.apply_res.is_empty() {
-            let apply_res = std::mem::replace(&mut self.apply_res, vec![]);
+            let apply_res = std::mem::take(&mut self.apply_res);
             self.notifier.notify(apply_res);
         }
 
@@ -1493,7 +1493,7 @@ where
         if cf.is_empty() {
             cf = CF_DEFAULT;
         }
-        if ALL_CFS.iter().find(|x| **x == cf).is_none() {
+        if !ALL_CFS.iter().any(|x| *x == cf) {
             return Err(box_err!("invalid delete range command, cf: {:?}", cf));
         }
 

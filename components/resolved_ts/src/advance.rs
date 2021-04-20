@@ -173,10 +173,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
             })
             .collect();
         let resps = futures::future::join_all(regions).await;
-        resps
-            .into_iter()
-            .filter_map(|resp| resp)
-            .collect::<Vec<u64>>()
+        resps.into_iter().flatten().collect::<Vec<u64>>()
     }
 
     // Confirms leadership of region peer before trying to advance resolved ts.

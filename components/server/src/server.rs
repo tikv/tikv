@@ -323,21 +323,19 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         std::fs::create_dir_all(&search_base)
             .unwrap_or_else(|_| panic!("create {} failed", search_base.display()));
 
-        for result in fs::read_dir(&search_base).unwrap() {
-            if let Ok(entry) = result {
-                if !entry.file_type().unwrap().is_file() {
-                    continue;
-                }
-                let file_path = entry.path();
-                let file_name = file_path.file_name().unwrap().to_str().unwrap();
-                if let Ok(addr) = file_name.replace('_', ":").parse::<SocketAddr>() {
-                    let ip = addr.ip();
-                    let port = addr.port();
-                    if cur_port == port
-                        && (cur_ip == ip || cur_ip.is_unspecified() || ip.is_unspecified())
-                    {
-                        let _ = try_lock_conflict_addr(file_path);
-                    }
+        for entry in fs::read_dir(&search_base).unwrap().flatten() {
+            if !entry.file_type().unwrap().is_file() {
+                continue;
+            }
+            let file_path = entry.path();
+            let file_name = file_path.file_name().unwrap().to_str().unwrap();
+            if let Ok(addr) = file_name.replace('_', ":").parse::<SocketAddr>() {
+                let ip = addr.ip();
+                let port = addr.port();
+                if cur_port == port
+                    && (cur_ip == ip || cur_ip.is_unspecified() || ip.is_unspecified())
+                {
+                    let _ = try_lock_conflict_addr(file_path);
                 }
             }
         }

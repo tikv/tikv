@@ -409,7 +409,7 @@ fn test_atomic_basic() {
         .raw_batch_delete_atomic(ctx.clone(), "default".to_string(), vec![b"k1".to_vec()])
         .unwrap();
     let value = storage
-        .raw_get(ctx.clone(), "default".to_string(), b"k1".to_vec())
+        .raw_get(ctx, "default".to_string(), b"k1".to_vec())
         .unwrap();
     assert!(value.is_none());
 }

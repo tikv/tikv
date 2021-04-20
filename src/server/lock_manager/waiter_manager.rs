@@ -264,10 +264,7 @@ impl Waiter {
                         ref mut primary,
                         ..
                     }),
-                )))) => (
-                    std::mem::replace(key, Vec::new()),
-                    std::mem::replace(primary, Vec::new()),
-                ),
+                )))) => (std::mem::take(key), std::mem::take(primary)),
                 _ => panic!("unexpected mvcc error"),
             },
             _ => panic!("unexpected progress result"),

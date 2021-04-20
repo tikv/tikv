@@ -102,7 +102,7 @@ impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
         self.engines.kv.sync().unwrap_or_else(|e| {
             panic!("failed to sync kv_engine in raft_log_gc: {:?}", e);
         });
-        let tasks = std::mem::replace(&mut self.tasks, vec![]);
+        let tasks = std::mem::take(&mut self.tasks);
         for t in tasks {
             match t {
                 Task::Gc {

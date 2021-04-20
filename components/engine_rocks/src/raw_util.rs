@@ -202,7 +202,7 @@ pub(crate) fn db_exist(path: &str) -> bool {
 /// Returns a Vec of cf which is in `a' but not in `b'.
 fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
     a.iter()
-        .filter(|x| b.iter().find(|y| y == x).is_none())
+        .filter(|x| !b.iter().any(|y| *x == y))
         .cloned()
         .collect()
 }

@@ -967,11 +967,10 @@ fn test_old_value_multi_changefeeds() {
                         if row.get_type() == EventLogType::Prewrite {
                             if row.get_start_ts() == ts3.into_inner() {
                                 assert_eq!(row.get_old_value(), b"v1");
-                                event_count += 1;
                             } else {
                                 assert_eq!(row.get_old_value(), b"");
-                                event_count += 1;
                             }
+                            event_count += 1;
                         }
                     }
                 }
