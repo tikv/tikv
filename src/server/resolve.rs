@@ -1,11 +1,12 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt::{self, Display, Formatter};
+use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use collections::HashMap;
-use engine_rocks::RocksEngine;
+use engine_traits::KvEngine;
 use kvproto::replication_modepb::ReplicationMode;
 use pd_client::{take_peer_address, PdClient};
 use raftstore::router::RaftStoreRouter;
@@ -49,21 +50,24 @@ struct StoreAddr {
 }
 
 /// A runner for resolving store addresses.
-struct Runner<T, RR>
+struct Runner<T, RR, E>
 where
     T: PdClient,
-    RR: RaftStoreRouter<RocksEngine>,
+    RR: RaftStoreRouter<E>,
+    E: KvEngine,
 {
     pd_client: Arc<T>,
     store_addrs: HashMap<u64, StoreAddr>,
     state: Arc<Mutex<GlobalReplicationState>>,
     router: RR,
+    engine: PhantomData<E>,
 }
 
-impl<T, RR> Runner<T, RR>
+impl<T, RR, E> Runner<T, RR, E>
 where
     T: PdClient,
-    RR: RaftStoreRouter<RocksEngine>,
+    RR: RaftStoreRouter<E>,
+    E: KvEngine,
 {
     fn resolve(&mut self, store_id: u64) -> Result<String> {
         if let Some(s) = self.store_addrs.get(&store_id) {
@@ -122,10 +126,11 @@ where
     }
 }
 
-impl<T, RR> Runnable for Runner<T, RR>
+impl<T, RR, E> Runnable for Runner<T, RR, E>
 where
     T: PdClient,
-    RR: RaftStoreRouter<RocksEngine>,
+    RR: RaftStoreRouter<E>,
+    E: KvEngine,
 {
     type Task = Task;
     fn run(&mut self, task: Task) {
@@ -148,14 +153,15 @@ impl PdStoreAddrResolver {
 }
 
 /// Creates a new `PdStoreAddrResolver`.
-pub fn new_resolver<T, RR: 'static>(
+pub fn new_resolver<T, RR: 'static, E>(
     pd_client: Arc<T>,
     worker: &Worker,
     router: RR,
 ) -> (PdStoreAddrResolver, Arc<Mutex<GlobalReplicationState>>)
 where
     T: PdClient + 'static,
-    RR: RaftStoreRouter<RocksEngine>,
+    RR: RaftStoreRouter<E>,
+    E: KvEngine,
 {
     let state = Arc::new(Mutex::new(GlobalReplicationState::default()));
     let runner = Runner {
@@ -163,6 +169,7 @@ where
         store_addrs: HashMap::default(),
         state: state.clone(),
         router,
+        engine: PhantomData,
     };
     let scheduler = worker.start("addr-resolver", runner);
     let resolver = PdStoreAddrResolver::new(scheduler);
@@ -180,6 +187,7 @@ impl StoreAddrResolver for PdStoreAddrResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::marker::PhantomData;
     use std::net::SocketAddr;
     use std::ops::Sub;
     use std::str::FromStr;
@@ -188,6 +196,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use collections::HashMap;
+    use engine_test::kv::KvTestEngine;
     use kvproto::metapb;
     use pd_client::{PdClient, Result};
     use raftstore::router::RaftStoreBlackHole;
@@ -225,7 +234,7 @@ mod tests {
         store
     }
 
-    fn new_runner(store: metapb::Store) -> Runner<MockPdClient, RaftStoreBlackHole> {
+    fn new_runner(store: metapb::Store) -> Runner<MockPdClient, RaftStoreBlackHole, KvTestEngine> {
         let client = MockPdClient {
             start: Instant::now(),
             store,
@@ -235,6 +244,7 @@ mod tests {
             store_addrs: HashMap::default(),
             state: Default::default(),
             router: RaftStoreBlackHole,
+            engine: PhantomData,
         }
     }
 
