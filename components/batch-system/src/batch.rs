@@ -500,7 +500,7 @@ pub fn create_system<N: Fsm, C: Fsm>(
         max_batch_size: cfg.max_batch_size(),
         reschedule_duration: cfg.reschedule_duration.0,
         workers: vec![],
-        low_priority_pool_size: cfg.low_priority_pool_size.unwrap_or_default(),
+        low_priority_pool_size: cfg.low_priority_pool_size,
     };
     (router, system)
 }

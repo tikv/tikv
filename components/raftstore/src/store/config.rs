@@ -248,7 +248,7 @@ impl Default for Config {
             use_delete_range: false,
             cleanup_import_sst_interval: ReadableDuration::minutes(10),
             local_read_batch_size: 1024,
-            apply_batch_system: BatchSystemConfig::with_low_priority_pool_size(1),
+            apply_batch_system: BatchSystemConfig::default(),
             store_batch_system: BatchSystemConfig::default(),
             future_poll_size: 1,
             hibernate_regions: tikv_util::build_on_master_branch(),
@@ -414,11 +414,12 @@ impl Config {
         } else {
             self.apply_batch_system.max_batch_size = Some(256);
         }
-        if self.apply_batch_system.low_priority_pool_size.is_none() {
-            self.apply_batch_system.low_priority_pool_size = Some(1);
-        }
         if self.store_batch_system.pool_size == 0 {
             return Err(box_err!("store-pool-size should be greater than 0"));
+        }
+        if self.store_batch_system.low_priority_pool_size > 0 {
+            // The store thread pool doesn't need a low-priority thread currently.
+            self.store_batch_system.low_priority_pool_size = 0;
         }
         if let Some(size) = self.store_batch_system.max_batch_size {
             if size == 0 {

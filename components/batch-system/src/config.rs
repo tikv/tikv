@@ -10,19 +10,13 @@ pub struct Config {
     pub max_batch_size: Option<usize>,
     pub pool_size: usize,
     pub reschedule_duration: ReadableDuration,
-    pub low_priority_pool_size: Option<usize>,
+    pub low_priority_pool_size: usize,
 }
 
 impl Config {
     pub fn max_batch_size(&self) -> usize {
         // `Config::validate` is not called for test so the `max_batch_size` is None.
         self.max_batch_size.unwrap_or(256)
-    }
-
-    pub fn with_low_priority_pool_size(size: usize) -> Self {
-        let mut cfg = Config::default();
-        cfg.low_priority_pool_size = Some(size);
-        cfg
     }
 }
 
@@ -32,7 +26,7 @@ impl Default for Config {
             max_batch_size: None,
             pool_size: 2,
             reschedule_duration: ReadableDuration::secs(5),
-            low_priority_pool_size: None,
+            low_priority_pool_size: 1,
         }
     }
 }

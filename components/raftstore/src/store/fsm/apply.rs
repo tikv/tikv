@@ -424,11 +424,7 @@ where
             store_id,
             pending_create_peers,
             priority,
-            yield_high_latency_operation: cfg
-                .apply_batch_system
-                .low_priority_pool_size
-                .unwrap_or_default()
-                > 0,
+            yield_high_latency_operation: cfg.apply_batch_system.low_priority_pool_size > 0,
         }
     }
 
