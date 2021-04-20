@@ -850,7 +850,7 @@ fn test_request_snapshot_after_propose_merge() {
     let leader = cluster.leader_of_region(region.get_id()).unwrap();
     let followers: Vec<_> = region
         .get_peers()
-        .into_iter()
+        .iter()
         .filter(|p| p.id != leader.id)
         .collect();
 

@@ -39,15 +39,11 @@ impl Charset for CharsetUtf8mb4 {
     fn decode_one(data: &[u8]) -> Option<(Self::Char, usize)> {
         let mut it = data.iter();
         let start = it.as_slice().as_ptr();
-        if let Some(c) = core::str::next_code_point(&mut it) {
-            unsafe {
-                Some((
-                    std::char::from_u32_unchecked(c),
-                    it.as_slice().as_ptr().offset_from(start) as usize,
-                ))
-            }
-        } else {
-            None
-        }
+        core::str::next_code_point(&mut it).map(|c| unsafe {
+            (
+                std::char::from_u32_unchecked(c),
+                it.as_slice().as_ptr().offset_from(start) as usize,
+            )
+        })
     }
 }
