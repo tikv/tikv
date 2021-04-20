@@ -1521,6 +1521,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> RunnableWithTimer for Endpoint<T
         CDC_OLD_VALUE_CACHE_BYTES.set(self.old_value_cache.size() as i64);
         CDC_OLD_VALUE_CACHE_ACCESS.add(self.old_value_cache.access_count as i64);
         CDC_OLD_VALUE_CACHE_MISS.add(self.old_value_cache.miss_count as i64);
+        CDC_OLD_VALUE_CACHE_LEN.set(self.old_value_cache.count() as i64);
         self.old_value_cache.access_count = 0;
         self.old_value_cache.miss_count = 0;
     }

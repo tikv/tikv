@@ -184,6 +184,10 @@ impl<K, V, T> RawLruCache<K, V, T> {
     pub fn capacity(&self) -> u64 {
         self.capacity
     }
+
+    pub fn count(&self) -> usize {
+        self.map.len()
+    }
 }
 
 impl<K, V, T> RawLruCache<K, V, T>

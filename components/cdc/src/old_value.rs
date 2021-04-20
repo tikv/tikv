@@ -126,6 +126,10 @@ impl OldValueCache {
     pub fn size(&self) -> u64 {
         self.cache.size()
     }
+
+    pub fn count(&self) -> usize {
+        self.cache.count()
+    }
 }
 
 pub struct OldValueReader<S: EngineSnapshot> {
