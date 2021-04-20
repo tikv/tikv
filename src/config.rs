@@ -2275,7 +2275,12 @@ impl Default for BackupConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct CdcConfig {
     pub min_ts_interval: ReadableDuration,
+    // Deprecated! These configuration has been moved to Coprocessor.
+    // They are preserved for compatibility check.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
     pub old_value_cache_size: usize,
+    pub old_value_cache_mem_capacity: OptionReadableSize,
     pub hibernate_regions_compatible: bool,
 }
 
@@ -2283,8 +2288,10 @@ impl Default for CdcConfig {
     fn default() -> Self {
         Self {
             min_ts_interval: ReadableDuration::secs(1),
-            old_value_cache_size: 1024 * 1024,
             hibernate_regions_compatible: true,
+            old_value_cache_mem_capacity: OptionReadableSize(None),
+            // Deprecated! preserve for compatibility check.
+            old_value_cache_size: 0,
         }
     }
 }

@@ -709,8 +709,9 @@ fn test_serde_custom_tikv_config() {
     };
     value.cdc = CdcConfig {
         min_ts_interval: ReadableDuration::secs(4),
-        old_value_cache_size: 512,
+        old_value_cache_mem_capacity: OptionReadableSize(Some(ReadableSize::gb(1))),
         hibernate_regions_compatible: false,
+        old_value_cache_size: 0,
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");

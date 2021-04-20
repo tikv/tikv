@@ -108,7 +108,7 @@ where
                     return CheckDoResult::NotExist;
                 }
             };
-            (cnt, b)
+            (cnt as u64, b)
         };
         if cnt > caches.capacity() || cnt < caches.capacity() / 2 {
             caches.resize(cnt);

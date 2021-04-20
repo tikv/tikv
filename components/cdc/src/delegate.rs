@@ -38,8 +38,8 @@ use tikv_util::time::Instant;
 use tikv_util::{debug, info, warn};
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteRef, WriteType};
 
-use crate::endpoint::{OldValueCache, OldValueCallback};
 use crate::metrics::*;
+use crate::old_value::{OldValueCache, OldValueCallback};
 use crate::rate_limiter::RateLimiter;
 use crate::service::{CdcEvent, ConnID};
 use crate::{Error, Result};

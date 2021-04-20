@@ -12,6 +12,7 @@ mod endpoint;
 mod errors;
 pub mod metrics;
 mod observer;
+mod old_value;
 mod rate_limiter;
 mod service;
 

@@ -613,7 +613,7 @@ pipelined = false
 
 [cdc]
 min-ts-interval = "4s"
-old-value-cache-size = 512
+old-value-cache-mem-capacity = "1GB"
 hibernate-regions-compatible = false
 
 [split]

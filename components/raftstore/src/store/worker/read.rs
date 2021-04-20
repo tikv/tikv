@@ -425,7 +425,7 @@ where
 
                 // Remove the stale delegate
                 self.delegates.remove(&region_id);
-                self.delegates.resize(meta_len);
+                self.delegates.resize(meta_len as u64);
                 match meta_reader {
                     Some(reader) => {
                         self.delegates.insert(region_id, Arc::clone(&reader));

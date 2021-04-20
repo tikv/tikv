@@ -785,7 +785,7 @@ where
             if pool.tombstone_stores.contains(&store_id) {
                 let pool_len = pool.connections.len();
                 drop(pool);
-                self.cache.resize(pool_len);
+                self.cache.resize(pool_len as u64);
                 return false;
             }
             let conn = pool
@@ -805,7 +805,7 @@ where
                 .clone();
             (conn, pool.connections.len())
         };
-        self.cache.resize(pool_len);
+        self.cache.resize(pool_len as u64);
         self.cache.insert(
             (store_id, conn_id),
             CachedQueue {

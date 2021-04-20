@@ -32,19 +32,16 @@ use tikv::storage::kv::Snapshot;
 use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
 use tikv::storage::txn::TxnEntry;
 use tikv::storage::txn::TxnEntryScanner;
-use tikv::storage::Statistics;
-use tikv_util::lru::LruCache;
 use tikv_util::time::Instant;
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
 use tikv_util::{box_err, box_try, debug, error, impl_display_as_debug, info, warn};
 use tokio::runtime::{Builder, Runtime};
-use txn_types::{
-    Key, Lock, LockType, MutationType, OldValue, TimeStamp, TxnExtra, TxnExtraScheduler,
-};
+use txn_types::{Key, Lock, LockType, TimeStamp, TxnExtra, TxnExtraScheduler};
 
 use crate::delegate::{Delegate, Downstream, DownstreamID, DownstreamState, IncrementalScanState};
 use crate::metrics::*;
+use crate::old_value::{OldValueCache, OldValueCallback};
 use crate::service::{CdcEvent, Conn, ConnID, FeatureGate};
 use crate::{CdcObserver, Error, Result};
 use futures::Future;
@@ -103,24 +100,6 @@ impl fmt::Debug for Deregister {
 }
 
 type InitCallback = Box<dyn FnOnce() + Send>;
-pub(crate) type OldValueCallback =
-    Box<dyn FnMut(Key, TimeStamp, &mut OldValueCache, &mut Statistics) -> Option<Vec<u8>> + Send>;
-
-pub struct OldValueCache {
-    pub cache: LruCache<Key, (OldValue, MutationType)>,
-    pub miss_count: usize,
-    pub access_count: usize,
-}
-
-impl OldValueCache {
-    pub fn new(size: usize) -> OldValueCache {
-        OldValueCache {
-            cache: LruCache::with_capacity(size),
-            miss_count: 0,
-            access_count: 0,
-        }
-    }
-}
 
 pub enum Task {
     Register {
@@ -307,7 +286,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             min_ts_interval: cfg.min_ts_interval.0,
             min_resolved_ts: TimeStamp::max(),
             min_ts_region_id: 0,
-            old_value_cache: OldValueCache::new(cfg.old_value_cache_size),
+            old_value_cache: OldValueCache::new(cfg.old_value_cache_mem_capacity),
             hibernate_regions_compatible: cfg.hibernate_regions_compatible,
             tikv_clients: Arc::new(Mutex::new(HashMap::default())),
         };
@@ -1507,7 +1486,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable for Endpoint<T> {
             }
             Task::TxnExtra(txn_extra) => {
                 for (k, v) in txn_extra.old_values {
-                    self.old_value_cache.cache.insert(k, v);
+                    self.old_value_cache.insert(k, v);
                 }
             }
             Task::Validate(region_id, validate) => {
@@ -1528,13 +1507,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> RunnableWithTimer for Endpoint<T
         self.min_resolved_ts = TimeStamp::max();
         self.min_ts_region_id = 0;
 
-        let cache_size: usize = self
-            .old_value_cache
-            .cache
-            .iter()
-            .map(|(k, v)| k.as_encoded().len() + v.0.size())
-            .sum();
-        CDC_OLD_VALUE_CACHE_BYTES.set(cache_size as i64);
+        CDC_OLD_VALUE_CACHE_BYTES.set(self.old_value_cache.size() as i64);
         CDC_OLD_VALUE_CACHE_ACCESS.add(self.old_value_cache.access_count as i64);
         CDC_OLD_VALUE_CACHE_MISS.add(self.old_value_cache.miss_count as i64);
         self.old_value_cache.access_count = 0;
