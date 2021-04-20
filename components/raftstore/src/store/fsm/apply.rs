@@ -3365,7 +3365,7 @@ where
                     APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(start.elapsed_secs());
                     // If there is any apply task, we change this fsm to normal-priority.
                     // When it meets a ingest-request or a delete-range request, it will change to
-                    // low-priority
+                    // low-priority.
                     self.delegate.priority = Priority::Normal;
                     self.handle_apply(apply_ctx, apply);
                     if let Some(ref mut state) = self.delegate.yield_state {
