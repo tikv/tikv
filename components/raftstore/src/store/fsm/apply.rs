@@ -916,7 +916,6 @@ where
                 }
             }
         }
-        self.priority = Priority::Normal;
         apply_ctx.finish_for(self, results);
 
         if self.pending_remove {
@@ -959,13 +958,12 @@ where
         if !data.is_empty() {
             let cmd = util::parse_data_at(data, index, &self.tag);
 
-            if apply_ctx.yield_high_latency_operation
-                && has_high_latency_operation(&cmd)
-                && apply_ctx.priority != Priority::Low
-            {
-                apply_ctx.commit(self);
+            if apply_ctx.yield_high_latency_operation && has_high_latency_operation(&cmd) {
                 self.priority = Priority::Low;
-                return ApplyResult::Yield;
+                if apply_ctx.priority != Priority::Low {
+                    apply_ctx.commit(self);
+                    return ApplyResult::Yield;
+                }
             }
             if should_write_to_engine(&cmd) || apply_ctx.kv_wb().should_write_to_engine() {
                 apply_ctx.commit(self);
@@ -3365,6 +3363,10 @@ where
             match drainer.next() {
                 Some(Msg::Apply { start, apply }) => {
                     APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(start.elapsed_secs());
+                    // If there is any apply task, we change this fsm to normal-priority.
+                    // When it meets a ingest-request or a delete-range request, it will change to
+                    // low-priority
+                    self.delegate.priority = Priority::Normal;
                     self.handle_apply(apply_ctx, apply);
                     if let Some(ref mut state) = self.delegate.yield_state {
                         state.pending_msgs = drainer.collect();
@@ -4505,10 +4507,6 @@ mod tests {
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
         assert_eq!(engine.get_value(&dk_k3).unwrap().unwrap(), b"v1");
-        // The region will be rescheduled from normal-priority handler to
-        // low-priority, so the first apple_res.exec_res should be empty.
-        let apply_res = fetch_apply_res(&rx);
-        assert!(apply_res.exec_res.is_empty());
         fetch_apply_res(&rx);
 
         let delete_range_entry = EntryBuilder::new(8, 3)
@@ -4604,10 +4602,6 @@ mod tests {
         check_db_range(&engine, sst_range);
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(resp.get_header().has_error());
-        let apply_res = fetch_apply_res(&rx);
-        assert_eq!(apply_res.applied_index_term, 3);
-        assert_eq!(apply_res.apply_state.get_applied_index(), 9);
-        // The region will be reschedule to low-priority PollHandler.
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.applied_index_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 10);
