@@ -437,7 +437,12 @@ impl Duration {
             .ok_or_else(|| Error::truncated_wrong_val("TIME", input))
     }
 
-    pub fn parse2(ctx: &mut EvalContext, input: &str, fsp: i8, overflow_return_null: bool) -> Result<Duration> {
+    pub fn parse2(
+        ctx: &mut EvalContext,
+        input: &str,
+        fsp: i8,
+        overflow_return_null: bool,
+    ) -> Result<Duration> {
         let fsp = check_fsp(fsp)?;
         parser::parse(ctx, input, fsp, true, overflow_return_null)
             .ok_or_else(|| Error::truncated_wrong_val("TIME", input))

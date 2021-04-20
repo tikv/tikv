@@ -1001,7 +1001,12 @@ fn cast_bytes_like_as_duration(
     overflow_return_null: bool,
 ) -> Result<Option<Duration>> {
     let val = std::str::from_utf8(val).map_err(Error::Encoding)?;
-    let result = Duration::parse2(ctx, val, extra.ret_field_type.get_decimal() as i8, overflow_return_null);
+    let result = Duration::parse2(
+        ctx,
+        val,
+        extra.ret_field_type.get_decimal() as i8,
+        overflow_return_null,
+    );
     match result {
         Ok(dur) => Ok(Some(dur)),
         Err(e) => match e.code() {
