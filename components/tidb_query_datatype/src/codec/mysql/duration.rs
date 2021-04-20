@@ -200,6 +200,7 @@ mod parser {
         input: &str,
         fsp: u8,
         fallback_to_daytime: bool,
+        overflow_return_null: bool,
     ) -> Option<Duration> {
         let input = input.trim();
         if input.is_empty() {
@@ -231,6 +232,9 @@ mod parser {
         match duration {
             Some(Ok(duration)) => Some(duration),
             Some(Err(err)) if err.is_overflow() => {
+                if overflow_return_null {
+                    return None;
+                }
                 ctx.handle_overflow_err(err).map_or(None, |_| {
                     let nanos = if neg { -MAX_NANOS } else { MAX_NANOS };
                     Some(Duration { nanos, fsp })
@@ -429,14 +433,20 @@ impl Duration {
     /// See: <http://dev.mysql.com/doc/refman/5.7/en/fractional-seconds.html>
     pub fn parse(ctx: &mut EvalContext, input: &str, fsp: i8) -> Result<Duration> {
         let fsp = check_fsp(fsp)?;
-        parser::parse(ctx, input, fsp, true)
+        parser::parse(ctx, input, fsp, true, false)
+            .ok_or_else(|| Error::truncated_wrong_val("TIME", input))
+    }
+
+    pub fn parse2(ctx: &mut EvalContext, input: &str, fsp: i8, overflow_return_null: bool) -> Result<Duration> {
+        let fsp = check_fsp(fsp)?;
+        parser::parse(ctx, input, fsp, true, overflow_return_null)
             .ok_or_else(|| Error::truncated_wrong_val("TIME", input))
     }
 
     /// Parses the input exactly as duration and will not fallback to datetime.
     pub fn parse_exactly(ctx: &mut EvalContext, input: &str, fsp: i8) -> Result<Duration> {
         let fsp = check_fsp(fsp)?;
-        parser::parse(ctx, input, fsp, false)
+        parser::parse(ctx, input, fsp, false, false)
             .ok_or_else(|| Error::truncated_wrong_val("TIME", input))
     }
 

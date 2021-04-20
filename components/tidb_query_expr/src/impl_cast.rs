@@ -998,9 +998,10 @@ fn cast_bytes_like_as_duration(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
     val: &[u8],
+    overflow_return_null: bool,
 ) -> Result<Option<Duration>> {
     let val = std::str::from_utf8(val).map_err(Error::Encoding)?;
-    let result = Duration::parse(ctx, val, extra.ret_field_type.get_decimal() as i8);
+    let result = Duration::parse2(ctx, val, extra.ret_field_type.get_decimal() as i8, overflow_return_null);
     match result {
         Ok(dur) => Ok(Some(dur)),
         Err(e) => match e.code() {
@@ -1025,7 +1026,7 @@ pub fn cast_real_as_duration(
     val: Option<&Real>,
 ) -> Result<Option<Duration>> {
     let v = skip_none!(val).into_inner().to_string();
-    cast_bytes_like_as_duration(ctx, extra, v.as_bytes())
+    cast_bytes_like_as_duration(ctx, extra, v.as_bytes(), true)
 }
 
 #[rpn_fn(nullable, capture = [ctx, extra])]
@@ -1036,7 +1037,7 @@ pub fn cast_bytes_as_duration(
     val: Option<BytesRef>,
 ) -> Result<Option<Duration>> {
     let v = skip_none!(val);
-    cast_bytes_like_as_duration(ctx, extra, v)
+    cast_bytes_like_as_duration(ctx, extra, v, false)
 }
 
 #[rpn_fn(nullable, capture = [ctx, extra])]
@@ -1047,7 +1048,7 @@ pub fn cast_decimal_as_duration(
     val: Option<&Decimal>,
 ) -> Result<Option<Duration>> {
     let v = skip_none!(val).to_string();
-    cast_bytes_like_as_duration(ctx, extra, v.as_bytes())
+    cast_bytes_like_as_duration(ctx, extra, v.as_bytes(), true)
 }
 
 #[rpn_fn(nullable, capture = [ctx, extra])]
@@ -1058,7 +1059,7 @@ pub fn cast_json_as_duration(
     val: Option<JsonRef>,
 ) -> Result<Option<Duration>> {
     let v = skip_none!(val).unquote()?;
-    cast_bytes_like_as_duration(ctx, extra, v.as_bytes())
+    cast_bytes_like_as_duration(ctx, extra, v.as_bytes(), false)
 }
 
 #[rpn_fn(nullable, capture = [ctx, extra])]
