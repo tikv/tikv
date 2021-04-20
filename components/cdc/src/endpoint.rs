@@ -1,9 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cell::RefCell;
 use std::f64::INFINITY;
 use std::fmt;
-use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -103,7 +101,7 @@ impl fmt::Debug for Deregister {
 
 type InitCallback = Box<dyn FnOnce() + Send>;
 pub(crate) type OldValueCallback =
-    Box<dyn FnMut(Key, TimeStamp, &mut OldValueCache, &mut Statistics) -> Option<Vec<u8>> + Send>;
+    Box<dyn Fn(Key, TimeStamp, &mut OldValueCache) -> (Option<Vec<u8>>, Option<Statistics>) + Send>;
 
 pub struct OldValueCache {
     pub cache: LruCache<Key, (OldValue, MutationType)>,
@@ -119,6 +117,11 @@ impl OldValueCache {
             access_count: 0,
         }
     }
+}
+
+pub enum Validate {
+    Region(u64, Box<dyn FnOnce(Option<&Delegate>) + Send>),
+    OldValueCache(Box<dyn FnOnce(&OldValueCache) + Send>),
 }
 
 pub enum Task {
@@ -159,7 +162,7 @@ pub enum Task {
         cb: InitCallback,
     },
     TxnExtra(TxnExtra),
-    Validate(u64, Box<dyn FnOnce(Option<&Delegate>) + Send>),
+    Validate(Validate),
 }
 
 impl_display_as_debug!(Task);
@@ -224,7 +227,10 @@ impl fmt::Debug for Task {
                 .field("downstream", &downstream_id)
                 .finish(),
             Task::TxnExtra(_) => de.field("type", &"txn_extra").finish(),
-            Task::Validate(region_id, _) => de.field("region_id", &region_id).finish(),
+            Task::Validate(validate) => match validate {
+                Validate::Region(region_id, _) => de.field("region_id", &region_id).finish(),
+                Validate::OldValueCache(_) => de.finish(),
+            },
         }
     }
 }
@@ -301,6 +307,8 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         let max_scan_batch_bytes = 1024 * 1024;
         // Assume 1KB per entry.
         let max_scan_batch_size = 1024;
+        CDC_OLD_VALUE_CACHE_CAP.set(cfg.old_value_cache_size as i64);
+        let old_value_cache = OldValueCache::new(cfg.old_value_cache_size);
         let ep = Endpoint {
             env,
             security_mgr,
@@ -323,7 +331,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             min_ts_region_id: 0,
             resolved_region_count: 0,
             unresolved_region_count: 0,
-            old_value_cache: OldValueCache::new(cfg.old_value_cache_size),
+            old_value_cache,
             hibernate_regions_compatible: cfg.hibernate_regions_compatible,
             tikv_clients: Arc::new(Mutex::new(HashMap::default())),
         };
@@ -588,7 +596,6 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
 
     pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>, old_value_cb: OldValueCallback) {
         fail_point!("cdc_before_handle_multi_batch", |_| {});
-        let old_value_cb = Rc::new(RefCell::new(old_value_cb));
         for batch in multi {
             let region_id = batch.region_id;
             let mut deregister = None;
@@ -597,9 +604,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                     // Skip the batch if the delegate has failed.
                     continue;
                 }
-                if let Err(e) =
-                    delegate.on_batch(batch, old_value_cb.clone(), &mut self.old_value_cache)
-                {
+                if let Err(e) = delegate.on_batch(batch, &old_value_cb, &mut self.old_value_cache) {
                     assert!(delegate.has_failed());
                     // Delegate has error, deregister the corresponding region.
                     deregister = Some(Deregister::Region {
@@ -1289,9 +1294,14 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable for Endpoint<T> {
                     self.old_value_cache.cache.insert(k, v);
                 }
             }
-            Task::Validate(region_id, validate) => {
-                validate(self.capture_regions.get(&region_id));
-            }
+            Task::Validate(validate) => match validate {
+                Validate::Region(region_id, validate) => {
+                    validate(self.capture_regions.get(&region_id));
+                }
+                Validate::OldValueCache(validate) => {
+                    validate(&self.old_value_cache);
+                }
+            },
         }
         self.flush_all();
     }
@@ -1322,6 +1332,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> RunnableWithTimer for Endpoint<T
         CDC_OLD_VALUE_CACHE_BYTES.set(cache_size as i64);
         CDC_OLD_VALUE_CACHE_ACCESS.add(self.old_value_cache.access_count as i64);
         CDC_OLD_VALUE_CACHE_MISS.add(self.old_value_cache.miss_count as i64);
+        CDC_OLD_VALUE_CACHE_LEN.set(self.old_value_cache.cache.len() as i64);
         self.old_value_cache.access_count = 0;
         self.old_value_cache.miss_count = 0;
     }
