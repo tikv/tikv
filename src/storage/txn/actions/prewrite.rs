@@ -78,8 +78,29 @@ pub fn prewrite<S: Snapshot>(
         return Ok((min_commit_ts, OldValue::Unspecified));
     }
 
-    let old_value = if txn_props.need_old_value && mutation.mutation_type.may_have_old_value() {
-        get_old_value(txn, prev_write)?
+    let old_value = if txn_props.need_old_value
+        && matches!(
+            mutation.mutation_type,
+            // Only Put, Delete and Insert may have old value.
+            MutationType::Put | MutationType::Delete | MutationType::Insert
+        ) {
+        if mutation.mutation_type == MutationType::Insert {
+            // The previous write of an Insert is guaranteed to be None.
+            OldValue::None
+        } else if mutation.skip_constraint_check() {
+            // The mutation does not read previous write if it skips constraint
+            // check.
+            // Pessimistic transaction always skip constraint check in
+            // "prewrite" stage, as it checks constraint in
+            // "acquire pessimistic lock" stage.
+            OldValue::Unspecified
+        } else if let Some(w) = prev_write {
+            // The mutation reads and get a previous write.
+            get_old_value(txn, &mutation.key, w)?
+        } else {
+            // There is no previous write.
+            OldValue::None
+        }
     } else {
         OldValue::Unspecified
     };
@@ -416,9 +437,11 @@ fn async_commit_timestamps<S: Snapshot>(
         let max_commit_ts = max_commit_ts;
         if !max_commit_ts.is_zero() && min_commit_ts > max_commit_ts {
             warn!("commit_ts is too large, fallback to normal 2PC";
+                "key" => log_wrappers::Value::key(key.as_encoded()),
                 "start_ts" => start_ts,
                 "min_commit_ts" => min_commit_ts,
-                "max_commit_ts" => max_commit_ts);
+                "max_commit_ts" => max_commit_ts,
+                "lock" => ?lock);
             return Err(ErrorInner::CommitTsTooLarge {
                 start_ts,
                 min_commit_ts,
@@ -481,12 +504,14 @@ pub mod tests {
         commands::prewrite::fallback_1pc_locks,
         tests::{
             must_acquire_pessimistic_lock, must_cleanup_with_gc_fence, must_commit,
-            must_prewrite_lock, must_prewrite_put,
+            must_prewrite_delete, must_prewrite_lock, must_prewrite_put, must_rollback,
         },
     };
     use crate::storage::{mvcc::tests::*, Engine};
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
+    #[cfg(test)]
+    use rand::{Rng, SeedableRng};
     #[cfg(test)]
     use txn_types::OldValue;
 
@@ -523,7 +548,7 @@ pub mod tests {
             txn_size,
             lock_ttl: 2000,
             min_commit_ts: 10.into(),
-            need_old_value: false,
+            need_old_value: true,
         }
     }
 
@@ -541,13 +566,22 @@ pub mod tests {
         let cm = ConcurrencyManager::new(ts);
         let mut txn = MvccTxn::new(snapshot, ts, true, cm);
 
-        prewrite(
+        let mut props = optimistic_txn_props(pk, ts);
+        props.need_old_value = true;
+        let (_, old_value) = prewrite(
             &mut txn,
-            &optimistic_txn_props(pk, ts),
+            &props,
             Mutation::Insert((Key::from_raw(key), value.to_vec())),
             &None,
             false,
         )?;
+        // Insert must be None if the key is not lock, or be Unspecified if the
+        // key is already locked.
+        assert!(
+            matches!(old_value, OldValue::None | OldValue::Unspecified),
+            "{:?}",
+            old_value
+        );
         write(engine, &ctx, txn.into_modifies());
         Ok(())
     }
@@ -563,13 +597,14 @@ pub mod tests {
         let cm = ConcurrencyManager::new(ts);
         let mut txn = MvccTxn::new(snapshot, ts, true, cm);
 
-        prewrite(
+        let (_, old_value) = prewrite(
             &mut txn,
             &optimistic_txn_props(pk, ts),
             Mutation::CheckNotExists(Key::from_raw(key)),
             &None,
-            false,
+            true,
         )?;
+        assert_eq!(old_value, OldValue::Unspecified);
         Ok(())
     }
 
@@ -582,7 +617,7 @@ pub mod tests {
 
         let mut txn = MvccTxn::new(snapshot, 10.into(), false, cm.clone());
         // calculated commit_ts = 43 ≤ 50, ok
-        prewrite(
+        let (_, old_value) = prewrite(
             &mut txn,
             &optimistic_async_props(b"k1", 10.into(), 50.into(), 2, false),
             Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())),
@@ -590,6 +625,7 @@ pub mod tests {
             false,
         )
         .unwrap();
+        assert_eq!(old_value, OldValue::None);
 
         cm.update_max_ts(60.into());
         // calculated commit_ts = 61 > 50, err
@@ -625,7 +661,7 @@ pub mod tests {
         let mut props = optimistic_async_props(b"k0", 10.into(), 50.into(), 2, false);
         props.min_commit_ts = 11.into();
         let mut txn = MvccTxn::new(snapshot.clone(), 10.into(), false, cm.clone());
-        let (min_ts, _) = prewrite(
+        let (min_ts, old_value) = prewrite(
             &mut txn,
             &props,
             Mutation::CheckNotExists(Key::from_raw(b"k0")),
@@ -636,12 +672,13 @@ pub mod tests {
         assert!(min_ts > props.start_ts);
         assert!(min_ts >= props.min_commit_ts);
         assert!(min_ts < 41.into());
+        assert_eq!(old_value, OldValue::Unspecified);
 
         // `checkNotExists` is equivalent to a get operation, so it should update the max_ts.
         let mut props = optimistic_txn_props(b"k0", 42.into());
         props.min_commit_ts = 43.into();
         let mut txn = MvccTxn::new(snapshot.clone(), 42.into(), false, cm.clone());
-        prewrite(
+        let (_, old_value) = prewrite(
             &mut txn,
             &props,
             Mutation::CheckNotExists(Key::from_raw(b"k0")),
@@ -650,10 +687,11 @@ pub mod tests {
         )
         .unwrap();
         assert_eq!(cm.max_ts(), props.start_ts);
+        assert_eq!(old_value, OldValue::Unspecified);
 
         // should_write mutations' min_commit_ts must be > max_ts
         let mut txn = MvccTxn::new(snapshot.clone(), 10.into(), false, cm.clone());
-        let (min_ts, _) = prewrite(
+        let (min_ts, old_value) = prewrite(
             &mut txn,
             &optimistic_async_props(b"k1", 10.into(), 50.into(), 2, false),
             Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())),
@@ -663,6 +701,7 @@ pub mod tests {
         .unwrap();
         assert!(min_ts > 42.into());
         assert!(min_ts < 50.into());
+        assert_eq!(old_value, OldValue::None);
 
         for &should_not_write in &[false, true] {
             let mutation = if should_not_write {
@@ -673,7 +712,7 @@ pub mod tests {
 
             // min_commit_ts must be > start_ts
             let mut txn = MvccTxn::new(snapshot.clone(), 44.into(), false, cm.clone());
-            let (min_ts, _) = prewrite(
+            let (min_ts, old_value) = prewrite(
                 &mut txn,
                 &optimistic_async_props(b"k3", 44.into(), 50.into(), 2, false),
                 mutation.clone(),
@@ -684,12 +723,17 @@ pub mod tests {
             assert!(min_ts > 44.into());
             assert!(min_ts < 50.into());
             txn.take_guards();
+            if should_not_write {
+                assert_eq!(old_value, OldValue::Unspecified);
+            } else {
+                assert_eq!(old_value, OldValue::None);
+            }
 
             // min_commit_ts must be > for_update_ts
             if !should_not_write {
                 let mut props = optimistic_async_props(b"k5", 44.into(), 50.into(), 2, false);
                 props.kind = TransactionKind::Pessimistic(45.into());
-                let (min_ts, _) = prewrite(
+                let (min_ts, old_value) = prewrite(
                     &mut txn,
                     &props,
                     mutation.clone(),
@@ -700,12 +744,14 @@ pub mod tests {
                 assert!(min_ts > 45.into());
                 assert!(min_ts < 50.into());
                 txn.take_guards();
+                // Pessimistic txn skips constraint check, does not read previous write.
+                assert_eq!(old_value, OldValue::Unspecified);
             }
 
             // min_commit_ts must be >= txn min_commit_ts
             let mut props = optimistic_async_props(b"k7", 44.into(), 50.into(), 2, false);
             props.min_commit_ts = 46.into();
-            let (min_ts, _) = prewrite(
+            let (min_ts, old_value) = prewrite(
                 &mut txn,
                 &props,
                 mutation.clone(),
@@ -716,6 +762,11 @@ pub mod tests {
             assert!(min_ts >= 46.into());
             assert!(min_ts < 50.into());
             txn.take_guards();
+            if should_not_write {
+                assert_eq!(old_value, OldValue::Unspecified);
+            } else {
+                assert_eq!(old_value, OldValue::None);
+            }
         }
     }
 
@@ -728,7 +779,7 @@ pub mod tests {
 
         let mut txn = MvccTxn::new(snapshot, 10.into(), false, cm.clone());
         // calculated commit_ts = 43 ≤ 50, ok
-        prewrite(
+        let (_, old_value) = prewrite(
             &mut txn,
             &optimistic_async_props(b"k1", 10.into(), 50.into(), 2, true),
             Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())),
@@ -736,6 +787,7 @@ pub mod tests {
             false,
         )
         .unwrap();
+        assert_eq!(old_value, OldValue::None);
 
         cm.update_max_ts(60.into());
         // calculated commit_ts = 61 > 50, err
@@ -772,7 +824,7 @@ pub mod tests {
         let cm = ConcurrencyManager::new(ts);
         let mut txn = MvccTxn::new(snapshot, ts, true, cm);
 
-        prewrite(
+        let (_, old_value) = prewrite(
             &mut txn,
             &TransactionProperties {
                 start_ts: ts,
@@ -782,12 +834,13 @@ pub mod tests {
                 txn_size: 0,
                 lock_ttl: 0,
                 min_commit_ts: TimeStamp::default(),
-                need_old_value: false,
+                need_old_value: true,
             },
             Mutation::CheckNotExists(Key::from_raw(key)),
             &None,
             false,
         )?;
+        assert_eq!(old_value, OldValue::Unspecified);
         Ok(())
     }
 
@@ -810,10 +863,10 @@ pub mod tests {
             txn_size: 2,
             lock_ttl: 2000,
             min_commit_ts: 10.into(),
-            need_old_value: false,
+            need_old_value: true,
         };
         // calculated commit_ts = 43 ≤ 50, ok
-        prewrite(
+        let (_, old_value) = prewrite(
             &mut txn,
             &txn_props,
             Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())),
@@ -821,6 +874,8 @@ pub mod tests {
             true,
         )
         .unwrap();
+        // Pessimistic txn skips constraint check, does not read previous write.
+        assert_eq!(old_value, OldValue::Unspecified);
 
         cm.update_max_ts(60.into());
         // calculated commit_ts = 61 > 50, ok
@@ -853,10 +908,10 @@ pub mod tests {
             txn_size: 2,
             lock_ttl: 2000,
             min_commit_ts: 10.into(),
-            need_old_value: false,
+            need_old_value: true,
         };
         // calculated commit_ts = 43 ≤ 50, ok
-        prewrite(
+        let (_, old_value) = prewrite(
             &mut txn,
             &txn_props,
             Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())),
@@ -864,6 +919,8 @@ pub mod tests {
             true,
         )
         .unwrap();
+        // Pessimistic txn skips constraint check, does not read previous write.
+        assert_eq!(old_value, OldValue::Unspecified);
 
         cm.update_max_ts(60.into());
         // calculated commit_ts = 61 > 50, ok
@@ -955,7 +1012,7 @@ pub mod tests {
             txn_size: 6,
             lock_ttl: 2000,
             min_commit_ts: 51.into(),
-            need_old_value: false,
+            need_old_value: true,
         };
 
         let cases = vec![
@@ -977,7 +1034,8 @@ pub mod tests {
                 false,
             );
             if success {
-                res.unwrap();
+                let res = res.unwrap();
+                assert_eq!(res.1, OldValue::Unspecified);
             } else {
                 res.unwrap_err();
             }
@@ -990,7 +1048,8 @@ pub mod tests {
                 false,
             );
             if success {
-                res.unwrap();
+                let res = res.unwrap();
+                assert_eq!(res.1, OldValue::None);
             } else {
                 res.unwrap_err();
             }
@@ -1015,8 +1074,7 @@ pub mod tests {
             (b"k1" as &[u8], None),
             (b"k2", Some((b"v2" as &[u8], 11))),
             (b"k3", None),
-            // `get_old_value` won't seek before Lock record
-            (b"k4", None),
+            (b"k4", Some((b"v4", 13))),
             (b"k5", None),
             (b"k6", Some((b"v6x", 22))),
             (b"k7", None),
@@ -1042,7 +1100,212 @@ pub mod tests {
                 false,
             )
             .unwrap();
-            assert_eq!(&old_value, expected_value);
+            assert_eq!(&old_value, expected_value, "key: {}", key);
+        }
+    }
+
+    #[test]
+    fn test_prewrite_old_value_rollback_and_lock() {
+        let engine_rollback = crate::storage::TestEngineBuilder::new().build().unwrap();
+
+        must_prewrite_put(&engine_rollback, b"k1", b"v1", b"k1", 10);
+        must_commit(&engine_rollback, b"k1", 10, 30);
+
+        must_prewrite_put(&engine_rollback, b"k1", b"v2", b"k1", 40);
+        must_rollback(&engine_rollback, b"k1", 40);
+
+        let engine_lock = crate::storage::TestEngineBuilder::new().build().unwrap();
+
+        must_prewrite_put(&engine_lock, b"k1", b"v1", b"k1", 10);
+        must_commit(&engine_lock, b"k1", 10, 30);
+
+        must_prewrite_lock(&engine_lock, b"k1", b"k1", 40);
+        must_commit(&engine_lock, b"k1", 40, 45);
+
+        for engine in &[engine_rollback, engine_lock] {
+            let start_ts = TimeStamp::from(50);
+            let txn_props = TransactionProperties {
+                start_ts,
+                kind: TransactionKind::Optimistic(false),
+                commit_kind: CommitKind::TwoPc,
+                primary: b"k1",
+                txn_size: 0,
+                lock_ttl: 0,
+                min_commit_ts: TimeStamp::default(),
+                need_old_value: true,
+            };
+            let snapshot = engine.snapshot(Default::default()).unwrap();
+            let cm = ConcurrencyManager::new(start_ts);
+            let mut txn = MvccTxn::new(snapshot, start_ts, false, cm);
+            let (_, old_value) = prewrite(
+                &mut txn,
+                &txn_props,
+                Mutation::Put((Key::from_raw(b"k1"), b"value".to_vec())),
+                &None,
+                false,
+            )
+            .unwrap();
+            assert_eq!(
+                old_value,
+                OldValue::Value {
+                    short_value: Some(b"v1".to_vec()),
+                    start_ts: 10.into(),
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn test_prewrite_old_value_put_delete_lock_insert() {
+        let engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+
+        must_prewrite_put(&engine, b"k1", b"v1", b"k1", 10);
+        must_commit(&engine, b"k1", 10, 20);
+
+        must_prewrite_delete(&engine, b"k1", b"k1", 30);
+        must_commit(&engine, b"k1", 30, 40);
+
+        must_prewrite_lock(&engine, b"k1", b"k1", 50);
+        must_commit(&engine, b"k1", 50, 60);
+
+        let start_ts = TimeStamp::from(70);
+        let txn_props = TransactionProperties {
+            start_ts,
+            kind: TransactionKind::Optimistic(false),
+            commit_kind: CommitKind::TwoPc,
+            primary: b"k1",
+            txn_size: 0,
+            lock_ttl: 0,
+            min_commit_ts: TimeStamp::default(),
+            need_old_value: true,
+        };
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let cm = ConcurrencyManager::new(start_ts);
+        let mut txn = MvccTxn::new(snapshot, start_ts, false, cm);
+        let (_, old_value) = prewrite(
+            &mut txn,
+            &txn_props,
+            Mutation::Insert((Key::from_raw(b"k1"), b"v2".to_vec())),
+            &None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(old_value, OldValue::None);
+    }
+
+    #[test]
+    fn test_prewrite_old_value_random() {
+        let mut ts = 1u64;
+        let mut tso = || {
+            ts += 1;
+            ts
+        };
+
+        use std::time::SystemTime;
+        // A simple valid operation sequence: p[iprld]*
+        // i: insert, p: put, r: rollback, l: lock, d: delete
+        let seed = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let mut rg = rand::rngs::StdRng::seed_from_u64(seed);
+
+        // Generate 1000 random cases;
+        let engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+        let cases = 1000;
+        for _ in 0..cases {
+            // At most 12 ops per-case.
+            let ops_count = rg.gen::<u8>() % 12;
+            let ops = (0..ops_count)
+                .into_iter()
+                .enumerate()
+                .map(|(i, _)| {
+                    if i == 0 {
+                        // The first op must be put.
+                        0
+                    } else {
+                        rg.gen::<u8>() % 4
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            for (i, op) in ops.iter().enumerate() {
+                let start_ts = tso();
+                let commit_ts = tso();
+
+                match op {
+                    0 => {
+                        must_prewrite_put(&engine, b"k1", &[i as u8], b"k1", start_ts);
+                        must_commit(&engine, b"k1", start_ts, commit_ts);
+                    }
+                    1 => {
+                        must_prewrite_delete(&engine, b"k1", b"k1", start_ts);
+                        must_commit(&engine, b"k1", start_ts, commit_ts);
+                    }
+                    2 => {
+                        must_prewrite_lock(&engine, b"k1", b"k1", start_ts);
+                        must_commit(&engine, b"k1", start_ts, commit_ts);
+                    }
+                    3 => {
+                        must_prewrite_put(&engine, b"k1", &[i as u8], b"k1", start_ts);
+                        must_rollback(&engine, b"k1", start_ts);
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            let start_ts = TimeStamp::from(tso());
+            let snapshot = engine.snapshot(Default::default()).unwrap();
+            let cm = ConcurrencyManager::new(start_ts);
+            let expect = {
+                let mut txn = MvccTxn::new(snapshot.clone(), start_ts, false, cm.clone());
+                if let Some(write) = txn
+                    .reader
+                    .get_write(&Key::from_raw(b"k1"), start_ts, Some(start_ts))
+                    .unwrap()
+                {
+                    assert_eq!(write.write_type, WriteType::Put);
+                    OldValue::Value {
+                        short_value: write.short_value,
+                        start_ts: write.start_ts,
+                    }
+                } else {
+                    OldValue::None
+                }
+            };
+
+            let mut txn = MvccTxn::new(snapshot.clone(), start_ts, false, cm.clone());
+            let txn_props = TransactionProperties {
+                start_ts,
+                kind: TransactionKind::Optimistic(false),
+                commit_kind: CommitKind::TwoPc,
+                primary: b"k1",
+                txn_size: 0,
+                lock_ttl: 0,
+                min_commit_ts: TimeStamp::default(),
+                need_old_value: true,
+            };
+            let (_, old_value) = prewrite(
+                &mut txn,
+                &txn_props,
+                Mutation::Put((Key::from_raw(b"k1"), b"v2".to_vec())),
+                &None,
+                false,
+            )
+            .unwrap();
+            assert_eq!(old_value, expect, "seed: {} ops: {:?}", seed, ops);
+
+            if expect == OldValue::None {
+                let mut txn = MvccTxn::new(snapshot, start_ts, false, cm);
+                let (_, old_value) = prewrite(
+                    &mut txn,
+                    &txn_props,
+                    Mutation::Insert((Key::from_raw(b"k1"), b"v2".to_vec())),
+                    &None,
+                    false,
+                )
+                .unwrap();
+                assert_eq!(old_value, expect, "seed: {} ops: {:?}", seed, ops);
+            }
         }
     }
 }

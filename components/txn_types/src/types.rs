@@ -1,5 +1,4 @@
 use super::timestamp::TimeStamp;
-use crate::Write;
 use byteorder::{ByteOrder, NativeEndian};
 use collections::HashMap;
 use kvproto::kvrpcpb;
@@ -245,17 +244,6 @@ pub enum MutationType {
     Other,
 }
 
-impl MutationType {
-    pub fn may_have_old_value(&self) -> bool {
-        matches!(
-            self,
-            // Insert operations don't have old value but need to update a flag
-            // for indicating that not seeking for old value for it.
-            MutationType::Put | MutationType::Delete | MutationType::Insert
-        )
-    }
-}
-
 /// A row mutation.
 #[derive(Debug, Clone)]
 pub enum Mutation {
@@ -338,7 +326,9 @@ pub enum OldValue {
     },
     /// `None` means we don't found a previous value
     None,
-    /// `Unspecified` means the user doesn't care about the previous value
+    /// `Unspecified` means one of the following:
+    ///   - The user doesn't care about the previous value
+    ///   - We don't sure if there is a previous value
     Unspecified,
 }
 
@@ -348,25 +338,9 @@ impl Default for OldValue {
     }
 }
 
-impl From<Option<Write>> for OldValue {
-    fn from(write: Option<Write>) -> Self {
-        match write {
-            Some(w) => OldValue::Value {
-                short_value: w.short_value,
-                start_ts: w.start_ts,
-            },
-            None => OldValue::None,
-        }
-    }
-}
-
 impl OldValue {
-    pub fn specified(&self) -> bool {
+    pub fn valid(&self) -> bool {
         !matches!(self, OldValue::Unspecified)
-    }
-
-    pub fn exists(&self) -> bool {
-        matches!(self, OldValue::Value { .. })
     }
 
     pub fn size(&self) -> usize {
@@ -377,7 +351,7 @@ impl OldValue {
             } => v.len(),
             _ => 0,
         };
-        value_size + std::mem::size_of::<TimeStamp>()
+        value_size + std::mem::size_of::<OldValue>()
     }
 }
 
@@ -509,6 +483,24 @@ mod tests {
             let mut longer_raw = raw.to_vec();
             longer_raw.push(0);
             assert!(!encoded.is_encoded_from(&longer_raw));
+        }
+    }
+
+    #[test]
+    fn test_old_value_valid() {
+        let cases = vec![
+            (OldValue::Unspecified, false),
+            (OldValue::None, true),
+            (
+                OldValue::Value {
+                    short_value: None,
+                    start_ts: 0.into(),
+                },
+                true,
+            ),
+        ];
+        for (old_value, v) in cases {
+            assert_eq!(old_value.valid(), v);
         }
     }
 }

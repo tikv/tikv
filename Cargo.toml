@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "5.0.0-rc.x"
+version = "5.0.0"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -121,7 +121,7 @@ concurrency_manager = { path = "components/concurrency_manager", default-feature
 configuration = { path = "components/configuration" }
 crc32fast = "1.2"
 crc64fast = "0.1"
-crossbeam = "0.7.2"
+crossbeam = "0.8"
 derive_more = "0.99.3"
 encryption_export = { path = "components/encryption/export", default-features = false }
 engine_panic = { path = "components/engine_panic", default-features = false }
