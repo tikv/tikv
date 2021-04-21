@@ -289,6 +289,9 @@ members = [
 ]
 default-members = ["cmd/tikv-server", "cmd/tikv-ctl"]
 
+[patch.'https://github.com/pingcap/tipb.git']
+tipb = { git = "https://github.com/winoros/tipb.git", branch = "sampling-test" }
+
 [profile.dev]
 opt-level = 0
 debug = 1 # required for line numbers in tests, see tikv #5049
