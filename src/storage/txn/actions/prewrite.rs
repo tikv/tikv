@@ -508,11 +508,14 @@ fn amend_pessimistic_lock<S: Snapshot>(key: &Key, reader: &mut SnapshotReader<S>
 pub mod tests {
     use super::*;
     #[cfg(test)]
-    use crate::storage::txn::{
-        commands::prewrite::fallback_1pc_locks,
-        tests::{
-            must_acquire_pessimistic_lock, must_cleanup_with_gc_fence, must_commit,
-            must_prewrite_delete, must_prewrite_lock, must_prewrite_put, must_rollback,
+    use crate::storage::{
+        kv::RocksSnapshot,
+        txn::{
+            commands::prewrite::fallback_1pc_locks,
+            tests::{
+                must_acquire_pessimistic_lock, must_cleanup_with_gc_fence, must_commit,
+                must_prewrite_delete, must_prewrite_lock, must_prewrite_put, must_rollback,
+            },
         },
     };
     use crate::storage::{mvcc::tests::*, Engine};
@@ -520,6 +523,8 @@ pub mod tests {
     use kvproto::kvrpcpb::Context;
     #[cfg(test)]
     use rand::{Rng, SeedableRng};
+    #[cfg(test)]
+    use std::sync::Arc;
     #[cfg(test)]
     use txn_types::OldValue;
 
@@ -1145,7 +1150,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_prewrite_old_value_rollback_and_lock() {
+    fn test_old_value_rollback_and_lock() {
         let engine_rollback = crate::storage::TestEngineBuilder::new().build().unwrap();
 
         must_prewrite_put(&engine_rollback, b"k1", b"v1", b"k1", 10);
@@ -1196,20 +1201,25 @@ pub mod tests {
         }
     }
 
+    // Prepares a test case that put, delete and lock a key and returns
+    // a timestamp for testing the case.
+    pub fn old_value_put_delete_lock_insert<E: Engine>(engine: &E, key: &[u8]) -> TimeStamp {
+        must_prewrite_put(engine, key, b"v1", key, 10);
+        must_commit(engine, key, 10, 20);
+
+        must_prewrite_delete(engine, key, key, 30);
+        must_commit(engine, key, 30, 40);
+
+        must_prewrite_lock(engine, key, key, 50);
+        must_commit(engine, key, 50, 60);
+
+        70.into()
+    }
+
     #[test]
-    fn test_prewrite_old_value_put_delete_lock_insert() {
+    fn test_old_value_put_delete_lock_insert() {
         let engine = crate::storage::TestEngineBuilder::new().build().unwrap();
-
-        must_prewrite_put(&engine, b"k1", b"v1", b"k1", 10);
-        must_commit(&engine, b"k1", 10, 20);
-
-        must_prewrite_delete(&engine, b"k1", b"k1", 30);
-        must_commit(&engine, b"k1", 30, 40);
-
-        must_prewrite_lock(&engine, b"k1", b"k1", 50);
-        must_commit(&engine, b"k1", 50, 60);
-
-        let start_ts = TimeStamp::from(70);
+        let start_ts = old_value_put_delete_lock_insert(&engine, b"k1");
         let txn_props = TransactionProperties {
             start_ts,
             kind: TransactionKind::Optimistic(false),
@@ -1236,8 +1246,11 @@ pub mod tests {
         assert_eq!(old_value, OldValue::None);
     }
 
-    #[test]
-    fn test_prewrite_old_value_random() {
+    pub fn old_value_random(
+        key: &[u8],
+        require_old_value_none: bool,
+        tests: Vec<Box<dyn Fn(Arc<RocksSnapshot>, TimeStamp) -> Result<OldValue>>>,
+    ) {
         let mut ts = 1u64;
         let mut tso = || {
             ts += 1;
@@ -1245,8 +1258,8 @@ pub mod tests {
         };
 
         use std::time::SystemTime;
-        // A simple valid operation sequence: p[iprld]*
-        // i: insert, p: put, r: rollback, l: lock, d: delete
+        // A simple valid operation sequence: p[prld]*
+        // p: put, r: rollback, l: lock, d: delete
         let seed = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
@@ -1278,32 +1291,31 @@ pub mod tests {
 
                 match op {
                     0 => {
-                        must_prewrite_put(&engine, b"k1", &[i as u8], b"k1", start_ts);
-                        must_commit(&engine, b"k1", start_ts, commit_ts);
+                        must_prewrite_put(&engine, key, &[i as u8], key, start_ts);
+                        must_commit(&engine, key, start_ts, commit_ts);
                     }
                     1 => {
-                        must_prewrite_delete(&engine, b"k1", b"k1", start_ts);
-                        must_commit(&engine, b"k1", start_ts, commit_ts);
+                        must_prewrite_delete(&engine, key, key, start_ts);
+                        must_commit(&engine, key, start_ts, commit_ts);
                     }
                     2 => {
-                        must_prewrite_lock(&engine, b"k1", b"k1", start_ts);
-                        must_commit(&engine, b"k1", start_ts, commit_ts);
+                        must_prewrite_lock(&engine, key, key, start_ts);
+                        must_commit(&engine, key, start_ts, commit_ts);
                     }
                     3 => {
-                        must_prewrite_put(&engine, b"k1", &[i as u8], b"k1", start_ts);
-                        must_rollback(&engine, b"k1", start_ts, false);
+                        must_prewrite_put(&engine, key, &[i as u8], key, start_ts);
+                        must_rollback(&engine, key, start_ts, false);
                     }
                     _ => unreachable!(),
                 }
             }
             let start_ts = TimeStamp::from(tso());
             let snapshot = engine.snapshot(Default::default()).unwrap();
-            let cm = ConcurrencyManager::new(start_ts);
             let expect = {
                 let mut reader = SnapshotReader::new(start_ts, snapshot.clone(), true);
                 if let Some(write) = reader
                     .reader
-                    .get_write(&Key::from_raw(b"k1"), start_ts, Some(start_ts))
+                    .get_write(&Key::from_raw(key), start_ts, Some(start_ts))
                     .unwrap()
                 {
                     assert_eq!(write.write_type, WriteType::Put);
@@ -1317,44 +1329,87 @@ pub mod tests {
                     OldValue::None
                 }
             };
+            if require_old_value_none && expect != OldValue::None {
+                continue;
+            }
+            for test in &tests {
+                match test(snapshot.clone(), start_ts) {
+                    Ok(old_value) => {
+                        assert_eq!(old_value, expect, "seed: {} ops: {:?}", seed, ops);
+                    }
+                    Err(e) => {
+                        panic!("error: {:?} seed: {} ops: {:?}", e, seed, ops);
+                    }
+                }
+            }
+        }
+    }
 
-            let mut txn = MvccTxn::new(start_ts, cm.clone());
-            let mut reader = SnapshotReader::new(start_ts, snapshot.clone(), true);
-            let txn_props = TransactionProperties {
-                start_ts,
-                kind: TransactionKind::Optimistic(false),
-                commit_kind: CommitKind::TwoPc,
-                primary: b"k1",
-                txn_size: 0,
-                lock_ttl: 0,
-                min_commit_ts: TimeStamp::default(),
-                need_old_value: true,
-            };
-            let (_, old_value) = prewrite(
-                &mut txn,
-                &mut reader,
-                &txn_props,
-                Mutation::Put((Key::from_raw(b"k1"), b"v2".to_vec())),
-                &None,
-                false,
-            )
-            .unwrap();
-            assert_eq!(old_value, expect, "seed: {} ops: {:?}", seed, ops);
-
-            if expect == OldValue::None {
-                let mut txn = MvccTxn::new(start_ts, cm);
+    #[test]
+    fn test_old_value_random() {
+        let key = b"k1";
+        let require_old_value_none = false;
+        old_value_random(
+            key,
+            require_old_value_none,
+            vec![Box::new(move |snapshot, start_ts| {
+                let cm = ConcurrencyManager::new(start_ts);
+                let mut txn = MvccTxn::new(start_ts, cm.clone());
                 let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+                let txn_props = TransactionProperties {
+                    start_ts,
+                    kind: TransactionKind::Optimistic(false),
+                    commit_kind: CommitKind::TwoPc,
+                    primary: key,
+                    txn_size: 0,
+                    lock_ttl: 0,
+                    min_commit_ts: TimeStamp::default(),
+                    need_old_value: true,
+                };
                 let (_, old_value) = prewrite(
                     &mut txn,
                     &mut reader,
                     &txn_props,
-                    Mutation::Insert((Key::from_raw(b"k1"), b"v2".to_vec())),
+                    Mutation::Put((Key::from_raw(key), b"v2".to_vec())),
                     &None,
                     false,
-                )
-                .unwrap();
-                assert_eq!(old_value, expect, "seed: {} ops: {:?}", seed, ops);
-            }
-        }
+                )?;
+                Ok(old_value)
+            })],
+        )
+    }
+
+    #[test]
+    fn test_old_value_random_none() {
+        let key = b"k1";
+        let require_old_value_none = true;
+        old_value_random(
+            key,
+            require_old_value_none,
+            vec![Box::new(move |snapshot, start_ts| {
+                let cm = ConcurrencyManager::new(start_ts);
+                let mut txn = MvccTxn::new(start_ts, cm);
+                let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+                let txn_props = TransactionProperties {
+                    start_ts,
+                    kind: TransactionKind::Optimistic(false),
+                    commit_kind: CommitKind::TwoPc,
+                    primary: key,
+                    txn_size: 0,
+                    lock_ttl: 0,
+                    min_commit_ts: TimeStamp::default(),
+                    need_old_value: true,
+                };
+                let (_, old_value) = prewrite(
+                    &mut txn,
+                    &mut reader,
+                    &txn_props,
+                    Mutation::Insert((Key::from_raw(key), b"v2".to_vec())),
+                    &None,
+                    false,
+                )?;
+                Ok(old_value)
+            })],
+        )
     }
 }

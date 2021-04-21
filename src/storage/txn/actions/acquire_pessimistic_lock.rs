@@ -6,7 +6,7 @@ use crate::storage::mvcc::{
 };
 use crate::storage::txn::actions::check_data_constraint::check_data_constraint;
 use crate::storage::Snapshot;
-use txn_types::{Key, Lock, LockType, OldValue, TimeStamp, Value, WriteType};
+use txn_types::{Key, Lock, LockType, OldValue, TimeStamp, Value, Write, WriteType};
 
 pub fn acquire_pessimistic_lock<S: Snapshot>(
     txn: &mut MvccTxn,
@@ -43,8 +43,34 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         )
     }
 
-    let mut old_value = OldValue::Unspecified;
-    let mut prev_write = None;
+    fn load_old_value<S: Snapshot>(
+        need_old_value: bool,
+        need_value: bool,
+        val: Option<&Value>,
+        reader: &mut SnapshotReader<S>,
+        key: &Key,
+        prev_write_loaded: bool,
+        prev_write: Option<Write>,
+    ) -> MvccResult<OldValue> {
+        if !need_old_value {
+            return Ok(OldValue::Unspecified);
+        }
+        if need_value {
+            // The old value must be loaded to `val` when `need_value` is set.
+            Ok(match val {
+                Some(val) => OldValue::Value { value: val.clone() },
+                None => OldValue::None,
+            })
+        } else if prev_write_loaded {
+            Ok(match prev_write {
+                Some(write) => reader.get_old_value(&key, write)?,
+                None => OldValue::None,
+            })
+        } else {
+            Ok(OldValue::Unspecified)
+        }
+    }
+
     let mut val = None;
     if let Some(lock) = reader.load_lock(&key)? {
         if lock.ts != reader.start_ts {
@@ -58,17 +84,21 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
             }
             .into());
         }
-        if need_value || need_old_value {
+        if need_value {
             val = reader.get(&key, for_update_ts)?;
-            if need_old_value {
-                old_value = match val {
-                    Some(ref value) => OldValue::Value {
-                        value: value.clone(),
-                    },
-                    None => OldValue::None,
-                };
-            }
         }
+        // Pervious write is not loaded.
+        let (prev_write_loaded, prev_write) = (false, None);
+        let old_value = load_old_value(
+            need_old_value,
+            need_value,
+            val.as_ref(),
+            reader,
+            &key,
+            prev_write_loaded,
+            prev_write,
+        )?;
+
         // Overwrite the lock with small for_update_ts
         if for_update_ts > lock.for_update_ts {
             let lock = pessimistic_lock(
@@ -87,7 +117,14 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         return Ok((val, old_value));
     }
 
+    // Following seek_write read the previous write.
+    let (prev_write_loaded, mut prev_write) = (true, None);
     if let Some((commit_ts, write)) = reader.seek_write(&key, TimeStamp::max())? {
+        // Find a previous write.
+        if need_old_value {
+            prev_write = Some(write.clone());
+        }
+
         // The isolation level of pessimistic transactions is RC. `for_update_ts` is
         // the commit_ts of the data this transaction read. If exists a commit version
         // whose commit timestamp is larger than current `for_update_ts`, the
@@ -154,23 +191,17 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                 WriteType::Lock | WriteType::Rollback => reader.get(&key, commit_ts.prev())?,
             };
         }
-        prev_write = Some(write);
     }
 
-    if need_old_value {
-        old_value = if need_value {
-            match val {
-                Some(ref val) => OldValue::Value { value: val.clone() },
-                None => OldValue::None,
-            }
-        } else {
-            match prev_write {
-                Some(write) => reader.get_old_value(&key, write)?,
-                None => OldValue::None,
-            }
-        }
-    }
-
+    let old_value = load_old_value(
+        need_old_value,
+        need_value,
+        val.as_ref(),
+        reader,
+        &key,
+        prev_write_loaded,
+        prev_write,
+    )?;
     let lock = pessimistic_lock(
         primary,
         reader.start_ts,
@@ -195,8 +226,15 @@ pub mod tests {
 
     #[cfg(test)]
     use crate::storage::{
-        mvcc::tests::*, txn::commands::pessimistic_rollback, txn::tests::*, TestEngineBuilder,
+        kv::RocksSnapshot,
+        mvcc::tests::*,
+        txn::actions::prewrite::tests::{old_value_put_delete_lock_insert, old_value_random},
+        txn::commands::pessimistic_rollback,
+        txn::tests::*,
+        TestEngineBuilder,
     };
+    #[cfg(test)]
+    use std::sync::Arc;
 
     pub fn must_succeed_impl<E: Engine>(
         engine: &E,
@@ -811,5 +849,87 @@ pub mod tests {
             assert_eq!(res2, expected_value.map(|v| v.to_vec()));
             must_pessimistic_rollback(&engine, key, 50, 51);
         }
+    }
+
+    #[test]
+    fn test_old_value_put_delete_lock_insert() {
+        let engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+        let start_ts = old_value_put_delete_lock_insert(&engine, b"k1");
+        let key = Key::from_raw(b"k1");
+        for should_not_exist in &[true, false] {
+            for need_value in &[true, false] {
+                let snapshot = engine.snapshot(Default::default()).unwrap();
+                let cm = ConcurrencyManager::new(start_ts);
+                let mut txn = MvccTxn::new(start_ts, cm);
+                let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+                let need_old_value = true;
+                let lock_ttl = 0;
+                let for_update_ts = start_ts;
+                let min_commit_ts = 0.into();
+                let (_, old_value) = acquire_pessimistic_lock(
+                    &mut txn,
+                    &mut reader,
+                    key.clone(),
+                    key.as_encoded(),
+                    *should_not_exist,
+                    lock_ttl,
+                    for_update_ts,
+                    *need_value,
+                    min_commit_ts,
+                    need_old_value,
+                )
+                .unwrap();
+                assert_eq!(old_value, OldValue::None);
+            }
+        }
+    }
+
+    #[test]
+    fn test_old_value_random() {
+        let key = b"k1";
+        let mut tests: Vec<Box<dyn Fn(Arc<RocksSnapshot>, TimeStamp) -> MvccResult<OldValue>>> =
+            vec![];
+        let mut tests_require_old_value_none: Vec<
+            Box<dyn Fn(Arc<RocksSnapshot>, TimeStamp) -> MvccResult<OldValue>>,
+        > = vec![];
+
+        for should_not_exist in &[true, false] {
+            for need_value in &[true, false] {
+                let should_not_exist = *should_not_exist;
+                let need_value = *need_value;
+                let t = Box::new(move |snapshot, start_ts| {
+                    let key = Key::from_raw(key);
+                    let cm = ConcurrencyManager::new(start_ts);
+                    let mut txn = MvccTxn::new(start_ts, cm);
+                    let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+                    let need_old_value = true;
+                    let lock_ttl = 0;
+                    let for_update_ts = start_ts;
+                    let min_commit_ts = 0.into();
+                    let (_, old_value) = acquire_pessimistic_lock(
+                        &mut txn,
+                        &mut reader,
+                        key.clone(),
+                        key.as_encoded(),
+                        should_not_exist,
+                        lock_ttl,
+                        for_update_ts,
+                        need_value,
+                        min_commit_ts,
+                        need_old_value,
+                    )?;
+                    Ok(old_value)
+                });
+                if should_not_exist {
+                    tests_require_old_value_none.push(t);
+                } else {
+                    tests.push(t);
+                }
+            }
+        }
+        let require_old_value_none = false;
+        old_value_random(key, require_old_value_none, tests);
+        let require_old_value_none = true;
+        old_value_random(key, require_old_value_none, tests_require_old_value_none);
     }
 }
