@@ -307,6 +307,13 @@ fn write_batch_delete_range_cf_backward_range_partial_commit() {
 
     // Everything in the write batch before the panic
     // due to bad range is going to end up committed.
+    //
+    // NB: This behavior seems pretty questionable and
+    // should probably be re-evaluated before other engines
+    // try to emulate it.
+    //
+    // A more reasonable solution might be to have a bogus
+    // delete_range request immediately panic.
     wb.put(b"e", b"").unwrap();
     wb.delete(b"d").unwrap();
     wb.delete_range_cf(CF_DEFAULT, b"c", b"a").unwrap();
