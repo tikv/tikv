@@ -179,8 +179,7 @@ impl S3Storage {
     where
         D: DispatchSignedRequest + Send + Sync + 'static,
     {
-        // TODO: this should not be supported.
-        // It implies static AWS credentials.
+        // static credentials are used with minio
         if let Some(access_key_pair) = &config.access_key_pair {
             let cred_provider = StaticProvider::new_minimal(
                 (*access_key_pair.access_key).to_owned(),
