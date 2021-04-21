@@ -11,7 +11,7 @@ use grpcio::{ChannelBuilder, Environment};
 use kvproto::kvrpcpb::{CheckLeaderRequest, LeaderInfo};
 use kvproto::metapb::{PeerRole, Region};
 use kvproto::tikvpb::TikvClient;
-use pd_client::PdClient;
+use pd_client::{Feature, PdClient};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::StoreMeta;
 use raftstore::store::msg::{Callback, SignificantMsg};
@@ -23,6 +23,9 @@ use txn_types::TimeStamp;
 
 use crate::endpoint::Task;
 use crate::errors::Result;
+use crate::metrics::RESOLVED_TS_ADVANCE_METHOD;
+
+const FEATURE_RESOLVED_TS_STORE: Feature = Feature::require(5, 0, 0);
 
 pub struct AdvanceTsWorker<T, E: KvEngine> {
     store_meta: Arc<Mutex<StoreMeta>>,
@@ -110,20 +113,25 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
                 info!("failed to schedule register advance event"; "err" => ?e);
             }
 
-            let regions = if hibernate_regions_compatible {
-                Self::region_resolved_ts_store(
-                    regions,
-                    store_meta,
-                    pd_client,
-                    security_mgr,
-                    env,
-                    tikv_clients,
-                    min_ts,
-                )
-                .await
-            } else {
-                Self::region_resolved_ts_raft(regions, raft_router, min_ts).await
-            };
+            let gate = pd_client.feature_gate();
+
+            let regions =
+                if hibernate_regions_compatible && gate.can_enable(FEATURE_RESOLVED_TS_STORE) {
+                    RESOLVED_TS_ADVANCE_METHOD.set(1);
+                    Self::region_resolved_ts_store(
+                        regions,
+                        store_meta,
+                        pd_client,
+                        security_mgr,
+                        env,
+                        tikv_clients,
+                        min_ts,
+                    )
+                    .await
+                } else {
+                    RESOLVED_TS_ADVANCE_METHOD.set(0);
+                    Self::region_resolved_ts_raft(regions, raft_router, min_ts).await
+                };
 
             if !regions.is_empty() {
                 if let Err(e) = scheduler.schedule(Task::AdvanceResolvedTs {
