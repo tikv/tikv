@@ -130,7 +130,7 @@ This is a rough outline of what a contributor's workflow looks like:
   * If there are conflicts, you can rebase (or merge) and resolve them locally. Then force push to your PR branch.
     You do not need to get re-review just for resolving conflicts, but you should request re-review if there are significant changes.
 - Our CI system automatically tests all pull requests.
-- Our bot will merge your PR. It can be summoned by commenting `/merge` or adding the `S: CanMerge` label (requires tests to pass and two approvals. You might have to ask your reviewer to do this).
+- Our [bot](https://github.com/ti-chi-bot) will merge your PR. It can be summoned by commenting `/merge` (requires tests to pass and two approvals. You might have to ask your reviewer to do this).
 
 See [Rustdoc of TiKV](https://tikv.github.io) for TiKV code documentation.
 
@@ -216,7 +216,7 @@ endpoint = "http://localhost:4566"
 key-id = "KMS key id"
 ```
 
-When you run TiKV, make sure to set the localstck credentials
+When you run TiKV, make sure to set the localstack credentials
 
 ```
 export AWS_ACCESS_KEY_ID=test
