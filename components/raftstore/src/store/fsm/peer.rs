@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::iter::Iterator;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, u64};
@@ -36,6 +36,7 @@ use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
 use tikv_util::{box_err, debug, error, info, trace, warn};
 use tikv_util::{escape, is_zero_duration, Either};
+use txn_types::WriteBatchFlags;
 
 use crate::coprocessor::RegionChangeEvent;
 use crate::store::cmd_resp::{bind_term, new_error};
@@ -1896,6 +1897,8 @@ where
         meta.pending_snapshot_regions
             .retain(|r| self.fsm.region_id() != r.get_id());
 
+        // Set the `safe_ts` to zero to reject incoming stale read request
+        self.fsm.peer.safe_ts.store(0, Ordering::Release);
         // Destroy read delegates.
         meta.readers.remove(&region_id);
 
@@ -3249,7 +3252,13 @@ where
             }
         }
         let allow_replica_read = read_only && msg.get_header().get_replica_read();
-        if !(self.fsm.peer.is_leader() || is_read_index_request || allow_replica_read) {
+        let flags = WriteBatchFlags::from_bits_check(msg.get_header().get_flags());
+        let allow_stale_read = read_only && flags.contains(WriteBatchFlags::STALE_READ);
+        if !self.fsm.peer.is_leader()
+            && !is_read_index_request
+            && !allow_replica_read
+            && !allow_stale_read
+        {
             self.ctx.raft_metrics.invalid_proposal.not_leader += 1;
             let leader = self.fsm.peer.get_peer_from_cache(leader_id);
             self.fsm.hibernate_state.reset(GroupState::Chaos);
