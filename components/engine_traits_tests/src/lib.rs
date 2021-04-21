@@ -95,6 +95,7 @@ fn tempdir() -> tempfile::TempDir {
 fn assert_engine_error<T>(r: engine_traits::Result<T>) {
     match r {
         Err(engine_traits::Error::Engine(_)) => {}
-        _ => panic!("expected Error::Engine"),
+        Err(e) => panic!("expected Error::Engine, got {:?}", e),
+        Ok(_) => panic!("expected Error::Engine, got Ok"),
     }
 }
