@@ -2381,7 +2381,7 @@ fn compact_whole_cluster(
         let mgr = Arc::clone(&mgr);
         let addr = s.address.clone();
         let (from, to) = (from.clone(), to.clone());
-        let cfs: Vec<String> = cfs.iter().map(|cf| (*cf).to_string()).collect();
+        let cfs: Vec<String> = cfs.iter().map(|cf| cf.to_string()).collect();
         let h = thread::Builder::new()
             .name(format!("compact-{}", addr))
             .spawn(move || {

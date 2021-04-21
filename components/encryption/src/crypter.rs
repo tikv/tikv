@@ -249,7 +249,7 @@ mod tests {
         assert_eq!(ivs.len(), 100);
 
         for iv in ivs {
-            let iv1 = Iv::from_slice(&iv.as_slice()[..]).unwrap();
+            let iv1 = Iv::from_slice(iv.as_slice()).unwrap();
             assert_eq!(iv.as_slice(), iv1.as_slice());
         }
     }

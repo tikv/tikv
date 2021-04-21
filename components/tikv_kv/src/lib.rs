@@ -611,6 +611,7 @@ pub mod tests {
             cursor
                 .near_seek(&Key::from_raw(key), &mut statistics)
                 .unwrap(),
+            "{}",
             log_wrappers::hex_encode_upper(key)
         );
         assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
@@ -627,6 +628,7 @@ pub mod tests {
             cursor
                 .near_reverse_seek(&Key::from_raw(key), &mut statistics)
                 .unwrap(),
+            "{}",
             log_wrappers::hex_encode_upper(key)
         );
         assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
