@@ -726,3 +726,94 @@ fn save_point_all_commands() {
     assert!(b.is_none());
     assert!(d.is_some());
 }
+
+// What happens to the count() and is_empty() methods
+// as we use push and pop save points?
+#[test]
+fn save_points_and_counts() {
+    let db = default_engine();
+    let mut wb = db.engine.write_batch();
+
+    assert_eq!(wb.is_empty(), true);
+    assert_eq!(wb.count(), 0);
+
+    wb.set_save_point();
+
+    assert_eq!(wb.is_empty(), true);
+    assert_eq!(wb.count(), 0);
+
+    wb.put(b"a", b"").unwrap();
+
+    assert_eq!(wb.is_empty(), false);
+    assert_eq!(wb.count(), 1);
+
+    wb.rollback_to_save_point().unwrap();
+
+    assert_eq!(wb.is_empty(), true);
+    assert_eq!(wb.count(), 0);
+
+    wb.set_save_point();
+
+    assert_eq!(wb.is_empty(), true);
+    assert_eq!(wb.count(), 0);
+
+    wb.put(b"a", b"").unwrap();
+
+    assert_eq!(wb.is_empty(), false);
+    assert_eq!(wb.count(), 1);
+
+    wb.pop_save_point().unwrap();
+
+    assert_eq!(wb.is_empty(), false);
+    assert_eq!(wb.count(), 1);
+
+    wb.clear();
+
+    assert_eq!(wb.is_empty(), true);
+    assert_eq!(wb.count(), 0);
+
+    wb.set_save_point();
+
+    assert_eq!(wb.is_empty(), true);
+    assert_eq!(wb.count(), 0);
+
+    wb.put(b"a", b"").unwrap();
+
+    assert_eq!(wb.is_empty(), false);
+    assert_eq!(wb.count(), 1);
+
+    wb.write().unwrap();
+
+    assert_eq!(wb.is_empty(), false);
+    assert_eq!(wb.count(), 1);
+
+    wb.rollback_to_save_point().unwrap();
+
+    assert_eq!(wb.is_empty(), true);
+    assert_eq!(wb.count(), 0);
+
+    wb.set_save_point();
+
+    assert_eq!(wb.is_empty(), true);
+    assert_eq!(wb.count(), 0);
+
+    wb.put(b"a", b"").unwrap();
+
+    assert_eq!(wb.is_empty(), false);
+    assert_eq!(wb.count(), 1);
+
+    wb.write().unwrap();
+
+    assert_eq!(wb.is_empty(), false);
+    assert_eq!(wb.count(), 1);
+
+    wb.pop_save_point().unwrap();
+
+    assert_eq!(wb.is_empty(), false);
+    assert_eq!(wb.count(), 1);
+
+    wb.clear();
+
+    assert_eq!(wb.is_empty(), true);
+    assert_eq!(wb.count(), 0);
+}
