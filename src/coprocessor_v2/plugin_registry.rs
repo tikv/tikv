@@ -503,6 +503,8 @@ fn is_library_file<P: AsRef<Path>>(path: P) -> bool {
 //        let library_path_2 = coprocessor_dir.join(pkgname_to_libname("example-plugin-2"));
 //        let plugin_name = "example-plugin";
 //
+//        // Make sure we have an existing, but empty coprocessor directory.
+//        std::fs::create_dir_all(&coprocessor_dir).unwrap();
 //        std::fs::remove_dir_all(&coprocessor_dir).unwrap();
 //        std::fs::create_dir_all(&coprocessor_dir).unwrap();
 //
