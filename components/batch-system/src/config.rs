@@ -9,6 +9,7 @@ pub struct Config {
     pub max_batch_size: Option<usize>,
     pub pool_size: usize,
     pub reschedule_duration: ReadableDuration,
+    pub low_priority_pool_size: usize,
 }
 
 impl Config {
@@ -24,6 +25,7 @@ impl Default for Config {
             max_batch_size: None,
             pool_size: 2,
             reschedule_duration: ReadableDuration::secs(5),
+            low_priority_pool_size: 1,
         }
     }
 }
