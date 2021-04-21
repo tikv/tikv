@@ -3214,7 +3214,7 @@ where
             let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
             let safe_ts = self.safe_ts.load(Ordering::Acquire);
             if safe_ts < read_ts {
-                debug!(
+                warn!(
                     "read rejected by safe timestamp";
                     "safe ts" => safe_ts,
                     "read ts" => read_ts,
