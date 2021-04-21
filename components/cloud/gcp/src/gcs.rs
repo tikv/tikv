@@ -61,7 +61,7 @@ impl Config {
                 .to_string(),
         );
         let svc_info = if let Some(cred) = credentials_blob_opt {
-            Some(ServiceAccountInfo::deserialize(cred.to_string()).unwrap())
+            Some(deserialize_service_account_info(cred)?)
         } else {
             None
         };
@@ -88,7 +88,7 @@ impl Config {
         let storage_class = parse_storage_class(&none_to_empty(bucket.storage_class.clone()))
             .or_invalid_input("invalid storage_class")?;
         let svc_info = if let Some(cred) = StringNonEmpty::opt(input.credentials_blob) {
-            Some(ServiceAccountInfo::deserialize(cred.to_string()).unwrap())
+            Some(deserialize_service_account_info(cred)?)
         } else {
             None
         };
@@ -99,6 +99,13 @@ impl Config {
             storage_class,
         })
     }
+}
+
+fn deserialize_service_account_info(
+    cred: StringNonEmpty,
+) -> std::result::Result<ServiceAccountInfo, RequestError> {
+    ServiceAccountInfo::deserialize(cred.to_string())
+        .map_err(|e| RequestError::OAuth(e, "deserialize ServiceAccountInfo".to_string()))
 }
 
 impl BlobConfig for Config {

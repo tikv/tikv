@@ -1085,15 +1085,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
 
         ctx.spawn(task);
     }
-
-    fn get_store_safe_ts(
-        &mut self,
-        _: RpcContext<'_>,
-        _: StoreSafeTsRequest,
-        _: UnarySink<StoreSafeTsResponse>,
-    ) {
-        unimplemented!()
-    }
 }
 
 fn response_batch_commands_request<F>(
