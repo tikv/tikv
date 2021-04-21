@@ -1,10 +1,12 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::metrics::tls_collect_rate_limiter_request_wait;
+use super::metrics::{
+    tls_collect_rate_limiter_request_wait, RATE_LIMITER_REQUEST_ESCALATION_PROBABILITY,
+};
 use super::{IOOp, IOPriority, IOType};
 
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicU32, AtomicUsize, Ordering},
     Arc,
 };
 use std::time::Duration;
@@ -402,6 +404,7 @@ impl PriorityBasedIORateLimiter {
 pub struct IORateLimiter {
     mode: IORateLimitMode,
     priority_map: [IOPriority; IOType::COUNT],
+    backlog_hint_map: [CachePadded<AtomicU32>; IOType::COUNT],
     throughput_limiter: Arc<PriorityBasedIORateLimiter>,
     stats: Option<Arc<IORateLimiterStatistics>>,
 }
@@ -411,6 +414,7 @@ impl IORateLimiter {
         IORateLimiter {
             mode,
             priority_map: [IOPriority::High; IOType::COUNT],
+            backlog_hint_map: Default::default(),
             throughput_limiter: Arc::new(PriorityBasedIORateLimiter::new(strict)),
             stats: if enable_statistics {
                 Some(Arc::new(IORateLimiterStatistics::new()))
@@ -445,7 +449,11 @@ impl IORateLimiter {
     /// less than the requested bytes, but must be greater than zero.
     pub fn request(&self, io_type: IOType, io_op: IOOp, mut bytes: usize) -> usize {
         if self.mode.contains(io_op) {
-            let priority = self.priority_map[io_type as usize];
+            let priority = if self.should_escalate(io_type) {
+                IOPriority::High
+            } else {
+                self.priority_map[io_type as usize]
+            };
             bytes = self.throughput_limiter.request(priority, bytes);
         }
         if let Some(stats) = &self.stats {
@@ -460,7 +468,11 @@ impl IORateLimiter {
     /// than zero.
     pub async fn async_request(&self, io_type: IOType, io_op: IOOp, mut bytes: usize) -> usize {
         if self.mode.contains(io_op) {
-            let priority = self.priority_map[io_type as usize];
+            let priority = if self.should_escalate(io_type) {
+                IOPriority::High
+            } else {
+                self.priority_map[io_type as usize]
+            };
             bytes = self.throughput_limiter.async_request(priority, bytes).await;
         }
         if let Some(stats) = &self.stats {
@@ -472,7 +484,11 @@ impl IORateLimiter {
     #[cfg(test)]
     fn request_with_skewed_clock(&self, io_type: IOType, io_op: IOOp, mut bytes: usize) -> usize {
         if self.mode.contains(io_op) {
-            let priority = self.priority_map[io_type as usize];
+            let priority = if self.should_escalate(io_type) {
+                IOPriority::High
+            } else {
+                self.priority_map[io_type as usize]
+            };
             bytes = self
                 .throughput_limiter
                 .request_with_skewed_clock(priority, bytes);
@@ -481,6 +497,32 @@ impl IORateLimiter {
             stats.record(io_type, io_op, bytes);
         }
         bytes
+    }
+
+    pub fn update_backlog(&self, io_type: IOType, normalized_backlog: f32) {
+        debug_assert!(normalized_backlog <= 1.0);
+        let escalation_probability = if normalized_backlog > 0.5 {
+            (normalized_backlog - 0.5).sqrt()
+        } else {
+            0.0
+        };
+        RATE_LIMITER_REQUEST_ESCALATION_PROBABILITY
+            .with_label_values(&[io_type.as_str()])
+            .set(escalation_probability as f64);
+        self.backlog_hint_map[io_type as usize]
+            .store((escalation_probability * 100.0) as u32, Ordering::Relaxed);
+    }
+
+    #[inline]
+    fn should_escalate(&self, io_type: IOType) -> bool {
+        let backlog = self.backlog_hint_map[io_type as usize].load(Ordering::Relaxed);
+        if backlog > 0 {
+            use rand::Rng;
+            let i: u32 = rand::thread_rng().gen_range(0, 100);
+            i <= backlog
+        } else {
+            false
+        }
     }
 }
 

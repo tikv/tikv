@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use engine_rocks::file_system::get_env_with_limiter as get_inspected_env;
+use engine_rocks::file_system::get_env as get_inspected_env;
 use engine_rocks::raw::DBOptions;
 use engine_rocks::raw_util::CFOptions;
 use engine_rocks::{RocksEngine as BaseRocksEngine, RocksEngineIterator};

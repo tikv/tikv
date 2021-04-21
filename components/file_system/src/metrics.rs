@@ -60,6 +60,12 @@ lazy_static! {
             exponential_buckets(0.001, 1.8, 20).unwrap()
         )
         .unwrap();
+
+    pub static ref RATE_LIMITER_REQUEST_ESCALATION_PROBABILITY: GaugeVec = register_gauge_vec!(
+        "tikv_rate_limiter_request_escalation_probability",
+        "Request escalation probability of IO rate limiter",
+        &["type"]
+    ).unwrap();
 }
 
 pub struct FileSystemLocalMetrics {

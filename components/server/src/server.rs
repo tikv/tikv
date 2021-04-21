@@ -25,11 +25,13 @@ use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{
     encryption::get_env as get_encrypted_env, file_system::get_env as get_inspected_env,
-    RocksEngine,
+    RocksEngine, RocksEngineResourceInfo,
 };
 use engine_traits::{compaction_job::CompactionJobInfo, Engines, RaftEngine, CF_DEFAULT, CF_WRITE};
 use error_code::ErrorCodeExt;
-use file_system::{set_io_rate_limiter, BytesFetcher, MetricsManager as IOMetricsManager};
+use file_system::{
+    set_io_rate_limiter, BytesFetcher, IORateLimiter, MetricsManager as IOMetricsManager,
+};
 use fs2::FileExt;
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
@@ -108,16 +110,16 @@ pub fn run_tikv(config: TiKvConfig) {
     macro_rules! run_impl {
         ($ER: ty) => {{
             let mut tikv = TiKVServer::<$ER>::init(config);
-            let fetcher = tikv.init_io_utility();
             tikv.check_conflict_addr();
             tikv.init_fs();
             tikv.init_yatp();
             tikv.init_encryption();
-            let engines = tikv.init_raw_engines();
+            let (limiter, fetcher) = tikv.init_io_utility();
+            let engines = tikv.init_raw_engines(Some(limiter.clone()));
             tikv.init_engines(engines);
             let server_config = tikv.init_servers();
             tikv.register_services();
-            tikv.init_metrics_flusher(fetcher);
+            tikv.init_metrics_flusher(limiter, fetcher);
             tikv.run_server(server_config);
             tikv.run_status_server();
 
@@ -849,16 +851,17 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
     }
 
-    fn init_io_utility(&mut self) -> BytesFetcher {
+    fn init_io_utility(&mut self) -> (Arc<IORateLimiter>, BytesFetcher) {
         let io_snooper_on = self.config.enable_io_snoop
             && file_system::init_io_snooper()
                 .map_err(|e| error_unknown!(%e; "failed to init io snooper"))
                 .is_ok();
-        let limiter = self
-            .config
-            .storage
-            .io_rate_limit
-            .build(!io_snooper_on /*enable_statistics*/);
+        let limiter = Arc::new(
+            self.config
+                .storage
+                .io_rate_limit
+                .build(!io_snooper_on /*enable_statistics*/),
+        );
         let fetcher = if io_snooper_on {
             BytesFetcher::FromIOSnooper()
         } else {
@@ -866,19 +869,25 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         };
         // Set up IO limiter even when rate limit is disabled, so that rate limits can be
         // dynamically applied later on.
-        set_io_rate_limiter(Some(Arc::new(limiter)));
-        fetcher
+        set_io_rate_limiter(Some(limiter.clone()));
+        (limiter, fetcher)
     }
 
-    fn init_metrics_flusher(&mut self, fetcher: BytesFetcher) {
+    fn init_metrics_flusher(&mut self, limiter: Arc<IORateLimiter>, fetcher: BytesFetcher) {
         let mut engine_metrics =
             EngineMetricsManager::new(self.engines.as_ref().unwrap().engines.clone());
         let mut io_metrics = IOMetricsManager::new(fetcher);
+        let rocks_info = Arc::new(RocksEngineResourceInfo::new(
+            self.engines.as_ref().unwrap().engines.kv.clone(),
+            limiter,
+            60, /*max_samples_to_preserve*/
+        ));
         self.background_worker
             .spawn_interval_task(DEFAULT_METRICS_FLUSH_INTERVAL, move || {
                 let now = Instant::now();
                 engine_metrics.flush(now);
                 io_metrics.flush(now);
+                rocks_info.update();
             });
     }
 
@@ -940,10 +949,13 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 }
 
 impl TiKVServer<RocksEngine> {
-    fn init_raw_engines(&mut self) -> Engines<RocksEngine, RocksEngine> {
+    fn init_raw_engines(
+        &mut self,
+        limiter: Option<Arc<IORateLimiter>>,
+    ) -> Engines<RocksEngine, RocksEngine> {
         let env =
             get_encrypted_env(self.encryption_key_manager.clone(), None /*base_env*/).unwrap();
-        let env = get_inspected_env(Some(env)).unwrap();
+        let env = get_inspected_env(Some(env), limiter).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         // Create raft engine.
@@ -1006,10 +1018,13 @@ impl TiKVServer<RocksEngine> {
 }
 
 impl TiKVServer<RaftLogEngine> {
-    fn init_raw_engines(&mut self) -> Engines<RocksEngine, RaftLogEngine> {
+    fn init_raw_engines(
+        &mut self,
+        limiter: Option<Arc<IORateLimiter>>,
+    ) -> Engines<RocksEngine, RaftLogEngine> {
         let env =
             get_encrypted_env(self.encryption_key_manager.clone(), None /*base_env*/).unwrap();
-        let env = get_inspected_env(Some(env)).unwrap();
+        let env = get_inspected_env(Some(env), limiter).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         // Create raft engine.

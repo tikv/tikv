@@ -6,17 +6,7 @@ use rocksdb::FileSystemInspector as DBFileSystemInspector;
 use std::sync::Arc;
 
 // Use engine::Env directly since Env is not abstracted.
-pub fn get_env(base_env: Option<Arc<Env>>) -> Result<Arc<Env>, String> {
-    let base_env = base_env.unwrap_or_else(|| Arc::new(Env::default()));
-    Ok(Arc::new(Env::new_file_system_inspected_env(
-        base_env,
-        WrappedFileSystemInspector {
-            inspector: EngineFileSystemInspector::new(),
-        },
-    )?))
-}
-
-pub fn get_env_with_limiter(
+pub fn get_env(
     base_env: Option<Arc<Env>>,
     limiter: Option<Arc<file_system::IORateLimiter>>,
 ) -> Result<Arc<Env>, String> {
@@ -62,7 +52,7 @@ mod tests {
         let limiter = Arc::new(IORateLimiter::new_for_test());
         let mut db_opts = DBOptions::new();
         db_opts.add_event_listener(RocksEventListener::new("test_db"));
-        let env = get_env_with_limiter(None, Some(limiter.clone())).unwrap();
+        let env = get_env(None, Some(limiter.clone())).unwrap();
         db_opts.set_env(env);
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_disable_auto_compactions(true);

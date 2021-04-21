@@ -30,8 +30,7 @@ use encryption_export::{
 use engine_rocks::config::BlobRunMode;
 use engine_rocks::raw::DB;
 use engine_rocks::{
-    encryption::get_env as get_encrypted_env,
-    file_system::get_env_with_limiter as get_inspected_env,
+    encryption::get_env as get_encrypted_env, file_system::get_env as get_inspected_env,
 };
 use engine_rocks::{CompactionListener, RocksCompactionJobInfo};
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
