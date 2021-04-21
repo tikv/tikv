@@ -1,8 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cell::RefCell;
 use std::mem;
-use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -33,7 +31,6 @@ use raftstore::store::util::compare_region_epoch;
 use raftstore::Error as RaftStoreError;
 use resolved_ts::Resolver;
 use tikv::storage::txn::TxnEntry;
-use tikv::storage::Statistics;
 use tikv_util::time::Instant;
 use tikv_util::{debug, info, warn};
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
@@ -464,7 +461,7 @@ impl Delegate {
     pub fn on_batch(
         &mut self,
         batch: CmdBatch,
-        old_value_cb: Rc<RefCell<OldValueCallback>>,
+        old_value_cb: &OldValueCallback,
         old_value_cache: &mut OldValueCache,
     ) -> Result<()> {
         // Stale CmdBatch, drop it sliently.
@@ -485,7 +482,7 @@ impl Delegate {
                     self.sink_data(
                         index,
                         request.requests.into(),
-                        old_value_cb.clone(),
+                        old_value_cb,
                         old_value_cache,
                         is_one_pc,
                     )?;
@@ -613,7 +610,7 @@ impl Delegate {
         &mut self,
         index: u64,
         requests: Vec<Request>,
-        old_value_cb: Rc<RefCell<OldValueCallback>>,
+        old_value_cb: &OldValueCallback,
         old_value_cache: &mut OldValueCache,
         is_one_pc: bool,
     ) -> Result<()> {
@@ -622,19 +619,18 @@ impl Delegate {
             if txn_extra_op == TxnExtraOp::ReadOldValue {
                 let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
                 let start = Instant::now();
-
-                let mut statistics = Statistics::default();
-                row.old_value =
-                    old_value_cb.borrow_mut()(key, read_old_ts, old_value_cache, &mut statistics)
-                        .unwrap_or_default();
+                let (old_value, statistics) = old_value_cb(key, read_old_ts, old_value_cache);
+                row.old_value = old_value.unwrap_or_default();
                 CDC_OLD_VALUE_DURATION_HISTOGRAM
                     .with_label_values(&["all"])
                     .observe(start.elapsed().as_secs_f64());
-                for (cf, cf_details) in statistics.details().iter() {
-                    for (tag, count) in cf_details.iter() {
-                        CDC_OLD_VALUE_SCAN_DETAILS
-                            .with_label_values(&[*cf, *tag])
-                            .inc_by(*count as i64);
+                if let Some(statistics) = statistics {
+                    for (cf, cf_details) in statistics.details().iter() {
+                        for (tag, count) in cf_details.iter() {
+                            CDC_OLD_VALUE_SCAN_DETAILS
+                                .with_label_values(&[*cf, *tag])
+                                .inc_by(*count as i64);
+                        }
                     }
                 }
             }
