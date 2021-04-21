@@ -579,6 +579,7 @@ where
                             return;
                         }
 
+                        // TODO: the follower should not handle read request while applying snapshot
                         // Getting the snapshot
                         let response = self.execute(&req, &delegate.region, None, read_id);
 
