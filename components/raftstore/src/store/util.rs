@@ -875,13 +875,9 @@ impl RegionReadProgress {
     pub fn update_applied(&self, applied: u64) {
         let mut core = self.core.lock().unwrap();
         if let Some(ts) = core.update_applied(applied) {
-            self.safe_ts.fetch_max(ts, AtomicOrdering::SeqCst);
+            self.safe_ts.store(ts, AtomicOrdering::Release);
         }
-        let pre_applied = self
-            .applied_index
-            .fetch_max(applied, AtomicOrdering::SeqCst);
-        // The apply index should not decrease
-        assert!(applied >= pre_applied);
+        self.applied_index.store(applied, AtomicOrdering::Release);
     }
 
     pub fn update_safe_ts(&self, apply_index: u64, ts: u64) {
@@ -890,7 +886,7 @@ impl RegionReadProgress {
         }
         let mut core = self.core.lock().unwrap();
         if let Some(ts) = core.update_safe_ts(apply_index, ts) {
-            self.safe_ts.fetch_max(ts, AtomicOrdering::SeqCst);
+            self.safe_ts.store(ts, AtomicOrdering::Release);
         }
     }
 
@@ -925,9 +921,8 @@ impl RegionReadProgressCore {
 
     // Return the `safe_ts` if it is updated
     fn update_applied(&mut self, applied: u64) -> Option<u64> {
-        if self.applied_index >= applied {
-            return None;
-        }
+        // The apply index should not decrease
+        assert!(applied >= self.applied_index);
         self.applied_index = applied;
         // Consume pending items with `apply_index` less or equal to `self.applied_index`
         let mut ts_to_update = self.safe_ts;
