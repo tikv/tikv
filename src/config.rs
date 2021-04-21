@@ -2270,6 +2270,8 @@ impl Default for BackupConfig {
     }
 }
 
+// TODO: `CdcConfig` is used by both `cdc` worker and `resolved ts` worker
+// should separate it into two configs
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
