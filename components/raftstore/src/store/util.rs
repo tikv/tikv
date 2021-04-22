@@ -975,7 +975,9 @@ impl RegionReadProgressCore {
 
     fn push_back(&mut self, item: (u64, u64)) {
         if self.pending_items.len() >= self.cap {
-            self.pending_items.pop_front();
+            // Randomly remove a item to make room for the incoming one
+            let idx = rand::thread_rng().gen::<usize>() % self.cap;
+            self.pending_items.remove(idx);
         }
         self.pending_items.push_back(item);
     }
