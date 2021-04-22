@@ -229,6 +229,9 @@ protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "65
 openssl-src = { git = "https://github.com/busyjay/openssl-src-rs", branch = "patch-for-m1" }
 crossbeam-channel = { git = "https://github.com/tikv/crossbeam", branch = "tikv-5.0" }
 
+[patch.'https://github.com/pingcap/kvproto']
+kvproto = {git = "https://github.com/jyz0309/kvproto", branch="add_read_byte"}
+
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
 

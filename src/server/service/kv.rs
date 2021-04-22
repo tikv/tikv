@@ -293,6 +293,8 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
     fn kv_import(&mut self, _: RpcContext<'_>, _: ImportRequest, _: UnarySink<ImportResponse>) {
         unimplemented!();
     }
+    
+    fn get_store_safe_ts(&mut self, _: RpcContext<'_>, _: StoreSafeTsRequest, _: UnarySink<StoreSafeTsResponse>) { todo!() }
 
     fn kv_gc(&mut self, ctx: RpcContext<'_>, _: GcRequest, sink: UnarySink<GcResponse>) {
         let e = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
