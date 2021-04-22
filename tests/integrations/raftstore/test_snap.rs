@@ -565,8 +565,6 @@ fn test_gen_during_heavy_recv() {
         }
     }
 
-    info!("snap 1 dir: {} ---------------", cluster.get_snap_dir(1));
-
     // Keep sending snapshots to store 1.
     let addr = cluster.sim.rl().get_addr(1);
     let sec_mgr = cluster.sim.rl().security_mgr.clone();
