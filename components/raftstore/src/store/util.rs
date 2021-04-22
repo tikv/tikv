@@ -890,6 +890,12 @@ impl RegionReadProgress {
         }
     }
 
+    pub fn clear(&self) {
+        let mut core = self.core.lock().unwrap();
+        core.clear();
+        self.safe_ts.store(0, AtomicOrdering::Release);
+    }
+
     pub fn applied_index(&self) -> u64 {
         self.applied_index.load(AtomicOrdering::Acquire)
     }
@@ -971,6 +977,11 @@ impl RegionReadProgressCore {
         }
         self.push_back((apply_index, ts));
         None
+    }
+
+    fn clear(&mut self) {
+        self.pending_items.clear();
+        self.safe_ts = 0;
     }
 
     fn push_back(&mut self, item: (u64, u64)) {
