@@ -47,7 +47,6 @@ impl BuildInfo {
     }
 }
 
-
 /// Information about the plugin, like its name and version.
 #[repr(C)]
 #[derive(Debug, Clone, PartialEq, Eq)]
