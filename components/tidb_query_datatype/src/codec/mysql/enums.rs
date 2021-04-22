@@ -192,6 +192,12 @@ pub trait EnumEncoder: NumberEncoder {
     }
 
     #[inline]
+    fn write_enum_uint(&mut self, data: EnumRef) -> Result<()> {
+        self.write_u64_le(data.value as u64)?;
+        Ok(())
+    }
+
+    #[inline]
     fn write_enum_to_chunk(&mut self, value: u64, name: &[u8]) -> Result<()> {
         self.write_u64_le(value)?;
         self.write_bytes(name)?;

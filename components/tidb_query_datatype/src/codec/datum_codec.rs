@@ -207,8 +207,8 @@ pub trait DatumPayloadEncoder:
     }
 
     #[inline]
-    fn write_datum_payload_enum(&mut self, v: EnumRef) -> Result<()> {
-        self.write_enum(v).map_err(|_| {
+    fn write_datum_payload_enum_uint(&mut self, v: EnumRef) -> Result<()> {
+        self.write_enum_uint(v).map_err(|_| {
             Error::InvalidDataType("Failed to encode datum payload from enum".to_owned())
         })
     }
@@ -285,9 +285,9 @@ pub trait DatumFlagAndPayloadEncoder: BufferWriter + DatumPayloadEncoder {
         Ok(())
     }
 
-    fn write_datum_enum(&mut self, val: EnumRef) -> Result<()> {
+    fn write_datum_enum_uint(&mut self, val: EnumRef) -> Result<()> {
         self.write_u8(datum::UINT_FLAG)?;
-        self.write_datum_payload_enum(val)?;
+        self.write_datum_payload_enum_uint(val)?;
         Ok(())
     }
 }
@@ -344,8 +344,8 @@ pub trait EvaluableDatumEncoder: DatumFlagAndPayloadEncoder {
     }
 
     #[inline]
-    fn write_evaluable_datum_enum(&mut self, val: EnumRef) -> Result<()> {
-        self.write_datum_enum(val)
+    fn write_evaluable_datum_enum_uint(&mut self, val: EnumRef) -> Result<()> {
+        self.write_datum_enum_uint(val)
     }
 }
 

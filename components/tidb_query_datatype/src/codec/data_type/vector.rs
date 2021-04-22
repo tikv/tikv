@@ -216,8 +216,8 @@ impl VectorValue {
                 }
                 size
             }
-            // TODO: implement here after we implement enum/set encoding
-            VectorValue::Enum(_) => unimplemented!(),
+            VectorValue::Enum(_) => logical_rows.len() * 9,
+            // TODO: implement here after we implement set encoding
             VectorValue::Set(_) => unimplemented!(),
         }
     }
@@ -376,7 +376,7 @@ impl VectorValue {
                         output.write_evaluable_datum_null()?;
                     }
                     Some(ref val) => {
-                        output.write_evaluable_datum_enum(*val)?;
+                        output.write_evaluable_datum_enum_uint(*val)?;
                     }
                 }
                 Ok(())
