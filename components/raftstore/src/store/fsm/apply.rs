@@ -369,7 +369,8 @@ where
     /// has been persisted to kvdb because this entry may replay because of panic or power-off, which
     /// happened before `WriteBatch::write` and after `SSTImporter::delete`. We shall make sure that
     /// this entry will never apply again at first, then we can delete the ssts files.
-    delete_ssts: Vec<SSTMetaInfo>,
+    // delete_ssts: Vec<SSTMetaInfo>,
+    pending_ssts: Vec<SstMeta>,
 
     /// The priority of this Handler.
     priority: Priority,
@@ -420,7 +421,7 @@ where
             use_delete_range: cfg.use_delete_range,
             perf_context: engine.get_perf_context(cfg.perf_level, PerfContextKind::RaftstoreApply),
             yield_duration: cfg.apply_yield_duration.0,
-            delete_ssts: vec![],
+            pending_ssts: vec![],
             store_id,
             pending_create_peers,
             priority,
@@ -491,10 +492,18 @@ where
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
         }
-        if !self.delete_ssts.is_empty() {
+        if !self.pending_ssts.is_empty() {
             let tag = self.tag.clone();
-            for sst in self.delete_ssts.drain(..) {
-                self.importer.delete(&sst.meta).unwrap_or_else(|e| {
+            self.importer
+                .ingest(&self.pending_ssts, &self.engine)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{} failed to ingest ssts {:?}: {:?}",
+                        tag, self.pending_ssts, e
+                    );
+                });
+            for sst in self.pending_ssts.drain(..) {
+                self.importer.delete(&sst).unwrap_or_else(|e| {
                     panic!("{} cleanup ingested file {:?}: {:?}", tag, sst, e);
                 });
             }
@@ -813,6 +822,12 @@ where
     /// Priority in batch system. When applying some commands which have high latency,
     /// we decrease the priority of current fsm to reduce the impact on other normal commands.
     priority: Priority,
+
+    /// The sst waiting to be ingested. We always delay ingestion to `write_to_db` so that multiple
+    /// ingest commands can be group into a batch for low apply duration. The commands after the ingest
+    /// command must not be processed before ingestion is finished. So yield a fsm when it first
+    /// processed a ingest command. After recovering from yield, the pending sst should be ingested.
+    pending_sst: Option<SSTMetaInfo>,
 }
 
 impl<EK> ApplyDelegate<EK>
@@ -841,6 +856,7 @@ where
             pending_request_snapshot_count: reg.pending_request_snapshot_count,
             observe_cmd: None,
             priority: Priority::Normal,
+            pending_sst: None,
         }
     }
 
@@ -1098,6 +1114,9 @@ where
         if let ApplyResult::WaitMergeSource(_) = exec_result {
             return exec_result;
         }
+        if let ApplyResult::Yield = exec_result {
+            return exec_result;
+        }
 
         debug!(
             "applied command";
@@ -1171,6 +1190,9 @@ where
             }
         };
         if let ApplyResult::WaitMergeSource(_) = exec_result {
+            return (resp, exec_result);
+        }
+        if let ApplyResult::Yield = exec_result {
             return (resp, exec_result);
         }
 
@@ -1352,7 +1374,12 @@ where
                 }
                 CmdType::IngestSst => {
                     assert!(ctx.kv_wb.is_empty());
-                    self.handle_ingest_sst(&ctx.importer, &ctx.engine, req, &mut ssts)
+                    if self.pending_sst.is_none() {
+                        self.handle_ingest(ctx, req)?;
+                        return Ok((RaftCmdResponse::default(), ApplyResult::Yield));
+                    }
+                    ssts.push(self.pending_sst.take().unwrap());
+                    Ok(Response::default())
                 }
                 // Readonly commands are handled in raftstore directly.
                 // Don't panic here in case there are old entries need to be applied.
@@ -1397,7 +1424,6 @@ where
                 };
                 dont_delete_ingested_sst_fp();
             }
-            ctx.delete_ssts.append(&mut ssts.clone());
             ApplyResult::Res(ExecResult::IngestSst { ssts })
         } else {
             ApplyResult::None
@@ -1568,13 +1594,11 @@ where
         Ok(resp)
     }
 
-    fn handle_ingest_sst(
+    fn handle_ingest<W: WriteBatch<EK>>(
         &mut self,
-        importer: &Arc<SSTImporter>,
-        engine: &EK,
+        ctx: &mut ApplyContext<EK, W>,
         req: &Request,
-        ssts: &mut Vec<SSTMetaInfo>,
-    ) -> Result<Response> {
+    ) -> Result<()> {
         let sst = req.get_ingest_sst().get_sst();
 
         if let Err(e) = check_sst_for_ingestion(sst, &self.region) {
@@ -1586,19 +1610,18 @@ where
                  "region" => ?&self.region,
             );
             // This file is not valid, we can delete it here.
-            let _ = importer.delete(sst);
+            let _ = ctx.importer.delete(sst);
             return Err(e);
         }
-
-        match importer.ingest(sst, engine) {
-            Ok(meta_info) => ssts.push(meta_info),
+        match ctx.importer.validate(sst) {
+            Ok(meta_info) => self.pending_sst = Some(meta_info),
             Err(e) => {
                 // If this failed, it means that the file is corrupted or something
                 // is wrong with the engine, but we can do nothing about that.
                 panic!("{} ingest {:?}: {:?}", self.tag, sst, e);
             }
-        };
-        Ok(Response::default())
+        }
+        Ok(())
     }
 }
 

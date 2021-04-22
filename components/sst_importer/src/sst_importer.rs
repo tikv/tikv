@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::fmt;
 use std::io::{self, Write};
 use std::marker::Unpin;
@@ -85,14 +86,18 @@ impl SSTImporter {
         }
     }
 
-    pub fn ingest<E: KvEngine>(&self, meta: &SstMeta, engine: &E) -> Result<SSTMetaInfo> {
-        match self.dir.ingest(meta, engine, self.key_manager.clone()) {
-            Ok(meta_info) => {
-                info!("ingest"; "meta" => ?meta_info);
-                Ok(meta_info)
+    pub fn validate(&self, meta: &SstMeta) -> Result<SSTMetaInfo> {
+        self.dir.validate(meta, self.key_manager.clone())
+    }
+
+    pub fn ingest<E: KvEngine>(&self, metas: &[SstMeta], engine: &E) -> Result<()> {
+        match self.dir.ingest(metas, engine, self.key_manager.clone()) {
+            Ok(..) => {
+                info!("ingest"; "metas" => ?metas);
+                Ok(())
             }
             Err(e) => {
-                error!(%e; "ingest failed"; "meta" => ?meta, );
+                error!(%e; "ingest failed"; "metas" => ?metas, );
                 Err(e)
             }
         }
@@ -657,40 +662,52 @@ impl ImportDir {
         Ok(path.save.exists())
     }
 
-    fn ingest<E: KvEngine>(
+    fn validate(
         &self,
         meta: &SstMeta,
-        engine: &E,
         key_manager: Option<Arc<DataKeyManager>>,
     ) -> Result<SSTMetaInfo> {
-        let start = Instant::now();
         let path = self.join(meta)?;
-        let cf = meta.get_cf_name();
-
-        // now validate the SST file.
         let path_str = path.save.to_str().unwrap();
         let env = get_encrypted_env(key_manager.clone(), None /*base_env*/)?;
         let env = get_inspected_env(Some(env))?;
-
         let sst_reader = RocksSstReader::open_with_env(&path_str, Some(env))?;
         sst_reader.verify_checksum()?;
+        // TODO: check the length and crc32 of ingested file.
         let meta_info = sst_reader.sst_meta_info(meta.to_owned());
+        Ok(meta_info)
+    }
 
-        super::prepare_sst_for_ingestion(&path.save, &path.clone, key_manager.as_deref())?;
-        let length = meta.get_length();
+    fn ingest<E: KvEngine>(
+        &self,
+        metas: &[SstMeta],
+        engine: &E,
+        key_manager: Option<Arc<DataKeyManager>>,
+    ) -> Result<()> {
+        let start = Instant::now();
 
-        // TODO check the length and crc32 of ingested file.
-        engine.reset_global_seq(cf, &path.clone)?;
-        IMPORTER_INGEST_BYTES.observe(length as _);
+        let mut paths = HashMap::new();
+        let mut ingest_bytes = 0;
+        for meta in metas {
+            let path = self.join(meta)?;
+            let cf = meta.get_cf_name();
+            super::prepare_sst_for_ingestion(&path.save, &path.clone, key_manager.as_deref())?;
+            ingest_bytes += meta.get_length();
+            engine.reset_global_seq(cf, &path.clone)?;
+            paths.entry(cf).or_insert(Vec::new()).push(path);
+        }
 
         let mut opts = E::IngestExternalFileOptions::new();
         opts.move_files(true);
-        engine.ingest_external_file_cf(cf, &opts, &[path.clone.to_str().unwrap()])?;
-
+        for (cf, cf_paths) in paths {
+            let files: Vec<&str> = cf_paths.iter().map(|p| p.clone.to_str().unwrap()).collect();
+            engine.ingest_external_file_cf(cf, &opts, &files)?;
+        }
+        IMPORTER_INGEST_BYTES.observe(ingest_bytes as _);
         IMPORTER_INGEST_DURATION
             .with_label_values(&["ingest"])
             .observe(start.elapsed().as_secs_f64());
-        Ok(meta_info)
+        Ok(())
     }
 
     fn list_ssts(&self) -> Result<Vec<SstMeta>> {
@@ -1005,7 +1022,8 @@ mod tests {
             f.append(&data).unwrap();
             f.finish().unwrap();
 
-            dir.ingest(&meta, &db, key_manager.clone()).unwrap();
+            dir.ingest(&[meta.to_owned()], &db, key_manager.clone())
+                .unwrap();
             check_db_range(&db, range);
 
             ingested.push(meta);
@@ -1566,7 +1584,8 @@ mod tests {
 
             meta.set_length(0); // disable validation.
             meta.set_crc32(0);
-            let resp = importer.ingest(&meta, &db).unwrap();
+            let meta_info = importer.validate(&meta).unwrap();
+            let _ = importer.ingest(&[meta], &db).unwrap();
             // key1 = "zt9102_r01", value1 = "abc", len = 13
             // key2 = "zt9102_r04", value2 = "xyz", len = 13
             // key3 = "zt9102_r07", value3 = "pqrst", len = 15
@@ -1574,8 +1593,8 @@ mod tests {
             // total_bytes = (13 + 13 + 15 + 13) + 4 * 8 = 86
             // don't no why each key has extra 8 byte length in raw_key_size(), but it seems tolerable.
             // https://docs.rs/rocks/0.1.0/rocks/table_properties/struct.TableProperties.html#method.raw_key_size
-            assert_eq!(resp.total_bytes, 86);
-            assert_eq!(resp.total_kvs, 4);
+            assert_eq!(meta_info.total_bytes, 86);
+            assert_eq!(meta_info.total_kvs, 4);
 
             // verifies the DB content is correct.
             let mut iter = db.iterator_cf(cf).unwrap();
