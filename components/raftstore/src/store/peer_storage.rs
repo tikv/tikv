@@ -837,20 +837,6 @@ where
     #[inline]
     pub fn set_applied_state(&mut self, apply_state: RaftApplyState) {
         self.apply_state = apply_state;
-        let mut snap_state = self.snap_state.borrow_mut();
-        if let SnapState::Generating {
-            ref canceled,
-            ref index,
-            ..
-        } = *snap_state
-        {
-            let snap_index = index.load(Ordering::SeqCst);
-            if snap_index > 0 && self.apply_state.get_truncated_state().index > snap_index {
-                canceled.store(true, Ordering::SeqCst);
-                *snap_state = SnapState::Relax;
-                *self.snap_tried_cnt.borrow_mut() = 0;
-            }
-        }
     }
 
     #[inline]
@@ -1103,6 +1089,21 @@ where
         } else {
             let rid = self.get_region_id();
             self.engines.raft.gc_entry_cache(rid, idx);
+        }
+
+        let mut snap_state = self.snap_state.borrow_mut();
+        if let SnapState::Generating {
+            ref canceled,
+            ref index,
+            ..
+        } = *snap_state
+        {
+            let snap_index = index.load(Ordering::SeqCst);
+            if snap_index > 0 && idx > snap_index + 1 {
+                canceled.store(true, Ordering::SeqCst);
+                *snap_state = SnapState::Relax;
+                *self.snap_tried_cnt.borrow_mut() = 0;
+            }
         }
     }
 
