@@ -2161,7 +2161,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#7d50a22e4b4fb0da7e003ac72d639711cf3ead5e"
+source = "git+https://github.com/hicqu/kvproto?branch=store-heartbeat-resp-store-status#206bc9bc27e4b09f87d034e7b977024161a6673b"
 dependencies = [
  "futures 0.3.7",
  "grpcio",

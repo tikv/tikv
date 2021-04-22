@@ -22,6 +22,7 @@ use futures::executor::block_on;
 use futures_util::io::{AllowStdIo, AsyncWriteExt};
 use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::metapb::Region;
+use kvproto::pdpb::StoreStatus;
 use kvproto::raft_serverpb::RaftSnapshotData;
 use kvproto::raft_serverpb::{SnapshotCfFile, SnapshotMeta};
 use protobuf::Message;
@@ -1118,6 +1119,7 @@ struct SnapManagerCore {
 /// `SnapManagerCore` trace all current processing snapshots.
 pub struct SnapManager {
     core: SnapManagerCore,
+    max_write_speed: i64,
     max_total_size: u64,
 }
 
@@ -1125,6 +1127,7 @@ impl Clone for SnapManager {
     fn clone(&self) -> Self {
         SnapManager {
             core: self.core.clone(),
+            max_write_speed: self.max_write_speed,
             max_total_size: self.max_total_size,
         }
     }
@@ -1166,6 +1169,16 @@ impl SnapManager {
             }
         }
         Ok(())
+    }
+
+    pub fn update_store_status(&self, status: StoreStatus) {
+        let new_limit = match status {
+            StoreStatus::Normal => self.max_write_speed as f64,
+            StoreStatus::OngoingOnline => f64::INFINITY,
+            // Treat an ongoing offline store as normal because leaders should be evicted.
+            StoreStatus::OngoingOffline => self.max_write_speed as f64,
+        };
+        self.core.limiter.set_speed_limit(new_limit);
     }
 
     // Return all snapshots which is idle not being used.
@@ -1563,6 +1576,7 @@ impl SnapManagerBuilder {
                 temp_sst_id: Arc::new(AtomicU64::new(0)),
                 encryption_key_manager: self.key_manager,
             },
+            max_write_speed: self.max_write_bytes_per_sec,
             max_total_size,
         }
     }

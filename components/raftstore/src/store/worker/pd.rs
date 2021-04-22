@@ -709,10 +709,12 @@ where
             .set(available as i64);
 
         let router = self.router.clone();
+        let snap_mgr = self.snap_mgr.clone();
         let resp = self.pd_client.store_heartbeat(stats);
         let f = async move {
             match resp.await {
                 Ok(mut resp) => {
+                    snap_mgr.update_store_status(resp.get_store_status());
                     if let Some(status) = resp.replication_status.take() {
                         let _ = router.send_control(StoreMsg::UpdateReplicationMode(status));
                     }
