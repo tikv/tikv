@@ -2,7 +2,7 @@
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
-use std::mem;
+
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -202,7 +202,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
         let ret = match self.req.get_tp() {
             AnalyzeType::TypeIndex | AnalyzeType::TypeCommonHandle => {
                 let req = self.req.take_idx_req();
-                let ranges = mem::replace(&mut self.ranges, vec![]);
+                let ranges = std::mem::take(&mut self.ranges);
                 table::check_table_ranges(&ranges)?;
                 let mut scanner = RangesScanner::new(RangesScannerOptions {
                     storage: self.storage.take().unwrap(),
@@ -227,7 +227,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
             AnalyzeType::TypeColumn => {
                 let col_req = self.req.take_col_req();
                 let storage = self.storage.take().unwrap();
-                let ranges = mem::replace(&mut self.ranges, Vec::new());
+                let ranges = std::mem::take(&mut self.ranges);
                 let mut builder = SampleBuilder::new(col_req, None, storage, ranges)?;
                 let res = AnalyzeContext::handle_column(&mut builder).await;
                 builder.data.collect_storage_stats(&mut self.storage_stats);
@@ -239,7 +239,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
                 let col_req = self.req.take_col_req();
                 let idx_req = self.req.take_idx_req();
                 let storage = self.storage.take().unwrap();
-                let ranges = mem::replace(&mut self.ranges, Vec::new());
+                let ranges = std::mem::take(&mut self.ranges);
                 let mut builder = SampleBuilder::new(col_req, Some(idx_req), storage, ranges)?;
                 let res = AnalyzeContext::handle_mixed(&mut builder).await;
                 builder.data.collect_storage_stats(&mut self.storage_stats);

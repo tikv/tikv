@@ -8,7 +8,6 @@ use std::{
 };
 use std::{sync::Arc, time::Duration};
 
-use bitflags::bitflags;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::CF_DEFAULT;
@@ -39,7 +38,9 @@ use raftstore::{
     store::{Callback as StoreCallback, ReadIndexContext, ReadResponse, WriteResponse},
 };
 use raftstore::{coprocessor::ReadIndexObserver, errors::Error as RaftServerError};
+use tikv_util::codec::number::NumberEncoder;
 use tikv_util::time::Instant;
+use txn_types::WriteBatchFlags;
 
 quick_error! {
     #[derive(Debug)]
@@ -209,7 +210,15 @@ where
         req: Request,
         cb: Callback<CmdRes>,
     ) -> Result<()> {
-        let header = self.new_request_header(&*ctx.pb_ctx);
+        let mut header = self.new_request_header(&*ctx.pb_ctx);
+        if ctx.pb_ctx.get_stale_read() && !ctx.start_ts.is_zero() {
+            let mut data = [0u8; 8];
+            (&mut data[..])
+                .encode_u64(ctx.start_ts.into_inner())
+                .unwrap();
+            header.set_flags(WriteBatchFlags::STALE_READ.bits());
+            header.set_flag_data(data.into());
+        }
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
         cmd.set_requests(vec![req].into());
@@ -420,7 +429,7 @@ where
 
         let mut req = Request::default();
         req.set_cmd_type(CmdType::Snap);
-        if !ctx.start_ts.is_zero() {
+        if !ctx.key_ranges.is_empty() && !ctx.start_ts.is_zero() {
             req.mut_read_index().set_start_ts(ctx.start_ts.into_inner());
             req.mut_read_index()
                 .set_key_ranges(mem::take(&mut ctx.key_ranges).into());
@@ -550,16 +559,6 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
             }
             msg.mut_entries()[0].set_data(rctx.to_bytes());
         }
-    }
-}
-
-bitflags! {
-    /// Additional flags for a write batch.
-    /// They should be set in the `flags` field in `RaftRequestHeader`.
-    pub struct WriteBatchFlags: u64 {
-        /// Indicates this request is from a 1PC transaction.
-        /// It helps CDC recognize 1PC transactions and handle them correctly.
-        const ONE_PC = 0b00000001;
     }
 }
 
