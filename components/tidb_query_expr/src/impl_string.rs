@@ -988,32 +988,7 @@ pub fn substring_2_args_utf8(
     pos: &Int,
     writer: BytesWriter,
 ) -> Result<BytesGuard> {
-    let (len, len_positive) = i64_to_usize(input.len() as Int, !input.is_empty());
-    let (pos, positive_search) = i64_to_usize(*pos, *pos > 0);
-    if pos == 0 || len == 0 || !len_positive {
-        return Ok(writer.write_ref(Some(b"")));
-    }
-
-    let start = if positive_search {
-        input
-            .char_indices()
-            .enumerate()
-            .find(|(cnt, _)| cnt + 1 == pos)
-            .map(|(_, (i, _, _))| i)
-    } else {
-        input
-            .char_indices()
-            .rev()
-            .enumerate()
-            .find(|(cnt, _)| cnt + 1 == pos)
-            .map(|(_, (i, _, _))| i)
-    };
-
-    if let Some(start) = start {
-        Ok(writer.write_ref(Some(&input[start..])))
-    } else {
-        Ok(writer.write_ref(Some(b"")))
-    }
+    substring_utf8(input, *pos, input.len() as Int, writer)
 }
 
 #[rpn_fn(writer)]
@@ -1024,8 +999,13 @@ pub fn substring_3_args_utf8(
     len: &Int,
     writer: BytesWriter,
 ) -> Result<BytesGuard> {
-    let (pos, positive_search) = i64_to_usize(*pos, *pos > 0);
-    let (len, len_positive) = i64_to_usize(*len, *len > 0);
+    substring_utf8(input, *pos, *len, writer)
+}
+
+#[inline]
+fn substring_utf8(input: BytesRef, pos: Int, len: Int, writer: BytesWriter) -> Result<BytesGuard> {
+    let (pos, positive_search) = i64_to_usize(pos, pos > 0);
+    let (len, len_positive) = i64_to_usize(len, len > 0);
 
     if pos == 0 || len == 0 || !len_positive {
         return Ok(writer.write_ref(Some(b"")));
