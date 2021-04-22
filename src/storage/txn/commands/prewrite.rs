@@ -1252,14 +1252,14 @@ mod tests {
     #[test]
     fn test_out_of_sync_max_ts() {
         use crate::storage::{kv::Result, CfName, ConcurrencyManager, DummyLockManager, Value};
-        use engine_rocks::RocksEngineIterator;
+        use engine_test::kv::KvTestEngineIterator;
         use engine_traits::{IterOptions, ReadOptions};
         use kvproto::kvrpcpb::ExtraOp;
         #[derive(Clone)]
         struct MockSnapshot;
 
         impl Snapshot for MockSnapshot {
-            type Iter = RocksEngineIterator;
+            type Iter = KvTestEngineIterator;
 
             fn get(&self, _: &Key) -> Result<Option<Value>> {
                 unimplemented!()
