@@ -446,15 +446,17 @@ impl RowSampleCollector {
         let col_len = columns_val.len();
         for i in 0..column_groups.len() {
             let offsets = column_groups[i].get_column_offsets();
-            let mut all_null = true;
+            let mut has_null = true;
             for j in 0..offsets.len() {
                 if columns_val[j][0] != NIL_FLAG {
-                    all_null = false
+                    has_null = false
                 }
                 self.total_sizes[col_len + i] += columns_val[i].len() as i64
             }
-            if all_null {
+            // We only maintain the null count for single column case.
+            if has_null && offsets.len() == 1 {
                 self.null_count[col_len + i] += 1;
+                continue
             }
             // Use a in place murmur3 to replace this memory copy.
             for j in 0..offsets.len() {
