@@ -1,9 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::bit_vec::BitVec;
 use super::{ChunkRef, ChunkedVec, UnsafeRefInto};
 use super::{Enum, EnumRef};
 use crate::impl_chunked_vec_common;
+use bit_vec::BitVec;
 use std::sync::Arc;
 use tikv_util::buffer_vec::BufferVec;
 
@@ -32,8 +32,7 @@ pub struct ChunkedVecEnum {
 impl ChunkedVecEnum {
     #[inline]
     pub fn get(&self, idx: usize) -> Option<EnumRef> {
-        assert!(idx < self.len());
-        if self.bitmap.get(idx) {
+        if self.bitmap.get(idx).unwrap() {
             Some(EnumRef::new(&self.data, self.value[idx]))
         } else {
             None
@@ -76,7 +75,7 @@ impl ChunkedVec<Enum> for ChunkedVecEnum {
     }
 
     fn capacity(&self) -> usize {
-        self.bitmap.capacity().max(self.value.capacity())
+        self.bitmap.capacity().min(self.value.capacity())
     }
 
     fn append(&mut self, other: &mut Self) {
@@ -87,7 +86,7 @@ impl ChunkedVec<Enum> for ChunkedVecEnum {
     fn to_vec(&self) -> Vec<Option<Enum>> {
         let mut x = Vec::with_capacity(self.len());
         for i in 0..self.len() {
-            x.push(if self.bitmap.get(i) {
+            x.push(if self.bitmap.get(i).unwrap() {
                 Some(Enum::new(self.data.clone(), self.value[i]))
             } else {
                 None

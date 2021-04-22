@@ -1,6 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-mod bit_vec;
 mod chunked_vec_bytes;
 mod chunked_vec_common;
 mod chunked_vec_enum;
@@ -22,7 +21,9 @@ pub type BytesRef<'a> = &'a [u8];
 pub use crate::codec::mysql::{
     json::JsonRef, Decimal, Duration, Enum, EnumRef, Json, JsonType, Set, SetRef, Time as DateTime,
 };
-pub use bit_vec::{BitAndIterator, BitVec};
+
+pub use bit_vec::BitVec;
+
 pub use chunked_vec_bytes::{BytesGuard, BytesWriter, ChunkedVecBytes, PartialBytesWriter};
 pub use chunked_vec_enum::ChunkedVecEnum;
 pub use chunked_vec_json::ChunkedVecJson;

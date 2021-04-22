@@ -27,6 +27,7 @@ prost-codec = [
 [dependencies]
 bitfield = "0.13.2"
 bitflags = "1.0.1"
+bit-vec = "0.6"
 boolinator = "2.4.0"
 chrono = "0.4"
 chrono-tz = "0.5.1"
