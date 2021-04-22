@@ -998,14 +998,14 @@ fn cast_bytes_like_as_duration(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
     val: &[u8],
-    overflow_return_null: bool,
+    overflow_as_null: bool,
 ) -> Result<Option<Duration>> {
     let val = std::str::from_utf8(val).map_err(Error::Encoding)?;
-    let result = Duration::parse2(
+    let result = Duration::parse_consider_overflow(
         ctx,
         val,
         extra.ret_field_type.get_decimal() as i8,
-        overflow_return_null,
+        overflow_as_null,
     );
     match result {
         Ok(dur) => Ok(Some(dur)),

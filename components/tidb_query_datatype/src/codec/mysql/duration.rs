@@ -200,7 +200,7 @@ mod parser {
         input: &str,
         fsp: u8,
         fallback_to_daytime: bool,
-        overflow_return_null: bool,
+        overflow_as_null: bool,
     ) -> Option<Duration> {
         let input = input.trim();
         if input.is_empty() {
@@ -232,7 +232,7 @@ mod parser {
         match duration {
             Some(Ok(duration)) => Some(duration),
             Some(Err(err)) if err.is_overflow() => {
-                if overflow_return_null {
+                if overflow_as_null {
                     return None;
                 }
                 ctx.handle_overflow_err(err).map_or(None, |_| {
@@ -437,14 +437,14 @@ impl Duration {
             .ok_or_else(|| Error::truncated_wrong_val("TIME", input))
     }
 
-    pub fn parse2(
+    pub fn parse_consider_overflow(
         ctx: &mut EvalContext,
         input: &str,
         fsp: i8,
-        overflow_return_null: bool,
+        overflow_as_null: bool,
     ) -> Result<Duration> {
         let fsp = check_fsp(fsp)?;
-        parser::parse(ctx, input, fsp, true, overflow_return_null)
+        parser::parse(ctx, input, fsp, true, overflow_as_null)
             .ok_or_else(|| Error::truncated_wrong_val("TIME", input))
     }
 
@@ -854,14 +854,19 @@ mod tests {
     }
 
     #[test]
-    fn test_parse2_duration_with_null() {
+    fn test_parse_consider_overflow() {
         let cases: Vec<(&str, i8, Option<&'static str>, bool)> = vec![
             ("-790822912", 0, None, true),
             ("-790822912", 0, Some("-838:59:59"), false),
         ];
 
         for (input, fsp, expect, return_null) in cases {
-            let got = Duration::parse2(&mut EvalContext::default(), input, fsp, return_null);
+            let got = Duration::parse_consider_overflow(
+                &mut EvalContext::default(),
+                input,
+                fsp,
+                return_null,
+            );
             assert_eq!(got.ok().map(|d| d.to_string()), expect.map(str::to_string));
         }
     }
