@@ -13,4 +13,4 @@ pub use self::batch::{create_system, BatchRouter, BatchSystem, HandlerBuilder, P
 pub use self::config::Config;
 pub use self::fsm::Fsm;
 pub use self::mailbox::{BasicMailbox, Mailbox};
-pub use self::router::Router;
+pub use self::router::{Router, RouterTrace};

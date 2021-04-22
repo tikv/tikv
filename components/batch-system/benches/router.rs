@@ -3,14 +3,17 @@
 use batch_system::test_runner::*;
 use batch_system::*;
 use criterion::*;
+use std::sync::atomic::*;
+use std::sync::Arc;
 
 fn bench_send(c: &mut Criterion) {
     let (control_tx, control_fsm) = Runner::new(100000);
     let (router, mut system) =
         batch_system::create_system(&Config::default(), control_tx, control_fsm);
     system.spawn("test".to_owned(), Builder::new());
+    let state_cnt = Arc::new(AtomicUsize::new(0));
     let (normal_tx, normal_fsm) = Runner::new(100000);
-    let normal_box = BasicMailbox::new(normal_tx, normal_fsm);
+    let normal_box = BasicMailbox::new(normal_tx, normal_fsm, state_cnt);
     router.register(1, normal_box);
 
     c.bench_function("router::send", |b| {
