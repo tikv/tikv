@@ -62,12 +62,14 @@ pub mod raft {
     pub use engine_panic::{
         PanicEngine as RaftTestEngine, PanicSnapshot as RaftTestSnapshot,
         PanicWriteBatch as RaftTestWriteBatch,
+        PanicEngineIterator as RaftTestEngineIterator,
     };
 
     #[cfg(feature = "test-engine-raft-rocksdb")]
     pub use engine_rocks::{
         RocksEngine as RaftTestEngine, RocksSnapshot as RaftTestSnapshot,
         RocksWriteBatch as RaftTestWriteBatch,
+        RocksEngineIterator as RaftTestEngineIterator,
     };
 
     pub fn new_engine(
@@ -100,12 +102,14 @@ pub mod kv {
     pub use engine_panic::{
         PanicEngine as KvTestEngine, PanicSnapshot as KvTestSnapshot,
         PanicWriteBatch as KvTestWriteBatch,
+        PanicEngineIterator as KvTestEngineIterator,
     };
 
     #[cfg(feature = "test-engine-kv-rocksdb")]
     pub use engine_rocks::{
         RocksEngine as KvTestEngine, RocksSnapshot as KvTestSnapshot,
         RocksWriteBatch as KvTestWriteBatch,
+        RocksEngineIterator as KvTestEngineIterator,
     };
 
     pub fn new_engine(
