@@ -259,7 +259,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
             AnalyzeType::TypeFullSampling => {
                 let col_req = self.req.take_col_req();
                 let storage = self.storage.take().unwrap();
-                let ranges = std::mem::replace(&mut self.ranges, Vec::new());
+                let ranges = std::mem::take(&mut self.ranges);
                 let mut builder = RowSampleBuilder::new(col_req, storage, ranges)?;
                 let res = AnalyzeContext::handle_full_sampling(&mut builder).await;
                 builder.data.collect_storage_stats(&mut self.storage_stats);
@@ -316,7 +316,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
             Arc::new(EvalConfig::default()),
             columns_info.clone(),
             ranges,
-            common_handle_ids.clone(),
+            common_handle_ids,
             false,
             false, // Streaming mode is not supported in Analyze request, always false here
             req.take_primary_prefix_column_ids(),
@@ -439,8 +439,8 @@ impl RowSampleCollector {
 
     pub fn collect_column_group(
         &mut self,
-        columns_val: &Vec<Vec<u8>>,
-        column_groups: &Vec<tipb::AnalyzeColumnGroup>,
+        columns_val: &[Vec<u8>],
+        column_groups: &[tipb::AnalyzeColumnGroup],
     ) {
         self.row_buf.clear();
         let col_len = columns_val.len();
@@ -502,7 +502,7 @@ impl RowSampleCollector {
             })
             .collect();
         s.set_samples(samples);
-        s.set_null_counts(self.null_count.into());
+        s.set_null_counts(self.null_count);
         s.set_count(self.count as i64);
         let pb_fm_sketches = self
             .fm_sketches
@@ -510,7 +510,7 @@ impl RowSampleCollector {
             .map(|fm_sketch| fm_sketch.into_proto())
             .collect();
         s.set_fm_sketch(pb_fm_sketches);
-        s.set_total_size(self.total_sizes.into());
+        s.set_total_size(self.total_sizes);
         s
     }
 }
