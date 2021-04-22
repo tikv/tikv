@@ -3,6 +3,7 @@
 use coprocessor_plugin_api::{allocator::HostAllocatorPtr, *};
 use libloading::{Error as DylibError, Library, Symbol};
 use notify::{DebouncedEvent, RecursiveMode, Watcher};
+use semver::Version;
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -175,7 +176,7 @@ impl PluginRegistry {
     /// Finds a plugin by its name. The plugin must have been loaded before with [`load_plugin()`].
     ///
     /// Plugins are indexed by the name that is returned by [`CoprocessorPlugin::name()`].
-    pub fn get_plugin(&self, plugin_name: &str) -> Option<Arc<impl CoprocessorPlugin>> {
+    pub fn get_plugin(&self, plugin_name: &str) -> Option<Arc<LoadedPlugin>> {
         self.inner.read().unwrap().get_plugin(plugin_name)
     }
 
@@ -185,10 +186,7 @@ impl PluginRegistry {
     /// `"./coprocessors/plugin1.so"` would be *different* from `"coprocessors/plugin1.so"`
     /// (note the leading `./`). The same applies when the associated path was changed with
     /// [`update_plugin_path()`].
-    pub fn get_plugin_by_path<P: AsRef<OsStr>>(
-        &self,
-        plugin_path: P,
-    ) -> Option<Arc<impl CoprocessorPlugin>> {
+    pub fn get_plugin_by_path<P: AsRef<OsStr>>(&self, plugin_path: P) -> Option<Arc<LoadedPlugin>> {
         self.inner.read().unwrap().get_plugin_by_path(plugin_path)
     }
 
@@ -339,7 +337,7 @@ impl PluginRegistryInner {
 }
 
 /// A wrapper around a loaded raw coprocessor plugin library.
-struct LoadedPlugin {
+pub struct LoadedPlugin {
     /// Pointer to a [`CoprocessorPlugin`] in the loaded `lib`.
     plugin: Box<dyn CoprocessorPlugin>,
     /// Some information about the plugin, like name and version.
@@ -402,8 +400,8 @@ impl LoadedPlugin {
     }
 
     /// Returns the version of the plugin.
-    pub fn version(&self) -> &str {
-        self.info.version
+    pub fn version(&self) -> Version {
+        Version::parse(self.info.version).unwrap()
     }
 }
 
@@ -453,7 +451,9 @@ fn is_library_file<P: AsRef<Path>>(path: P) -> bool {
 //        let library_path = pkgname_to_libname("example-plugin");
 //        let plugin_name = registry.load_plugin(&library_path).unwrap();
 //
-//        assert!(registry.get_plugin(&plugin_name).is_some());
+//        let plugin = registry.get_plugin(&plugin_name).unwrap();
+//
+//        assert_eq!(plugin.name(), "example_plugin");
 //        assert_eq!(registry.loaded_plugin_names(), vec!["example_plugin"]);
 //        assert_eq!(
 //            registry
