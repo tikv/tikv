@@ -4471,9 +4471,7 @@ mod tests {
                         }
                         // TODO: if add test case for Decimal::round failure,
                         //  then should check whether this setting is right.
-                        let res = base_res
-                            .clone()
-                            .round((origin_decimal - 1) as i8, RoundMode::HalfEven);
+                        let res = base_res.round((origin_decimal - 1) as i8, RoundMode::HalfEven);
                         if res.is_zero() {
                             truncate_as_warning = false;
                             overflow_as_warning = false;
@@ -4492,7 +4490,6 @@ mod tests {
                     }
                     ResType::Round => {
                         let r = base_res
-                            .clone()
                             .round(res_decimal as i8, RoundMode::HalfEven)
                             .unwrap();
                         if r == base_res {
@@ -4968,7 +4965,7 @@ mod tests {
                 let val = val.map(|x| x.as_bytes());
                 cast_bytes_as_decimal(ctx, extra, val)
             },
-            |x| (*x).to_string(),
+            |x| x.to_string(),
             "cast_string_as_signed_decimal",
         )
     }
@@ -5175,7 +5172,7 @@ mod tests {
                 let val = val.map(|x| x.as_bytes());
                 cast_string_as_unsigned_decimal(ctx, extra, metadata, val)
             },
-            |x| (*x).to_string(),
+            |x| x.to_string(),
             "cast_string_as_unsigned_decimal",
         );
     }

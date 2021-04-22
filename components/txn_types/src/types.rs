@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::timestamp::TimeStamp;
-use crate::Write;
+use bitflags::bitflags;
 use byteorder::{ByteOrder, NativeEndian};
 use collections::HashMap;
 use kvproto::kvrpcpb;
@@ -247,17 +247,6 @@ pub enum MutationType {
     Other,
 }
 
-impl MutationType {
-    pub fn may_have_old_value(&self) -> bool {
-        matches!(
-            self,
-            // Insert operations don't have old value but need to update a flag
-            // for indicating that not seeking for old value for it.
-            MutationType::Put | MutationType::Delete | MutationType::Insert
-        )
-    }
-}
-
 /// A row mutation.
 #[derive(Debug, Clone)]
 pub enum Mutation {
@@ -340,7 +329,9 @@ pub enum OldValue {
     },
     /// `None` means we don't found a previous value
     None,
-    /// `Unspecified` means the user doesn't care about the previous value
+    /// `Unspecified` means one of the following:
+    ///   - The user doesn't care about the previous value
+    ///   - We don't sure if there is a previous value
     Unspecified,
 }
 
@@ -350,25 +341,9 @@ impl Default for OldValue {
     }
 }
 
-impl From<Option<Write>> for OldValue {
-    fn from(write: Option<Write>) -> Self {
-        match write {
-            Some(w) => OldValue::Value {
-                short_value: w.short_value,
-                start_ts: w.start_ts,
-            },
-            None => OldValue::None,
-        }
-    }
-}
-
 impl OldValue {
-    pub fn specified(&self) -> bool {
+    pub fn valid(&self) -> bool {
         !matches!(self, OldValue::Unspecified)
-    }
-
-    pub fn exists(&self) -> bool {
-        matches!(self, OldValue::Value { .. })
     }
 
     pub fn size(&self) -> usize {
@@ -379,7 +354,7 @@ impl OldValue {
             } => v.len(),
             _ => 0,
         };
-        value_size + std::mem::size_of::<TimeStamp>()
+        value_size + std::mem::size_of::<OldValue>()
     }
 }
 
@@ -408,9 +383,63 @@ pub trait TxnExtraScheduler: Send + Sync {
     fn schedule(&self, txn_extra: TxnExtra);
 }
 
+bitflags! {
+    /// Additional flags for a write batch.
+    /// They should be set in the `flags` field in `RaftRequestHeader`.
+    pub struct WriteBatchFlags: u64 {
+        /// Indicates this request is from a 1PC transaction.
+        /// It helps CDC recognize 1PC transactions and handle them correctly.
+        const ONE_PC = 0b00000001;
+        /// Indicates this request is from a stale read-only transaction.
+        const STALE_READ = 0b00000010;
+    }
+}
+
+impl WriteBatchFlags {
+    /// Convert from underlying bit representation
+    /// panic if it contains bits that do not correspond to a flag
+    pub fn from_bits_check(bits: u64) -> WriteBatchFlags {
+        match WriteBatchFlags::from_bits(bits) {
+            None => panic!("unrecognized flags: {:b}", bits),
+            // zero or more flags
+            Some(f) => f,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_flags() {
+        assert!(WriteBatchFlags::from_bits_check(0).is_empty());
+        assert_eq!(
+            WriteBatchFlags::from_bits_check(WriteBatchFlags::ONE_PC.bits()),
+            WriteBatchFlags::ONE_PC
+        );
+        assert_eq!(
+            WriteBatchFlags::from_bits_check(WriteBatchFlags::STALE_READ.bits()),
+            WriteBatchFlags::STALE_READ
+        );
+    }
+
+    #[test]
+    fn test_flags_panic() {
+        for _ in 0..100 {
+            assert!(
+                panic_hook::recover_safe(|| {
+                    // r must be an invalid flags if it is not zero
+                    let r = rand::random::<u64>() & !WriteBatchFlags::all().bits();
+                    WriteBatchFlags::from_bits_check(r);
+                    if r == 0 {
+                        panic!("panic for zero");
+                    }
+                })
+                .is_err()
+            );
+        }
+    }
 
     #[test]
     fn test_is_user_key_eq() {
@@ -511,6 +540,24 @@ mod tests {
             let mut longer_raw = raw.to_vec();
             longer_raw.push(0);
             assert!(!encoded.is_encoded_from(&longer_raw));
+        }
+    }
+
+    #[test]
+    fn test_old_value_valid() {
+        let cases = vec![
+            (OldValue::Unspecified, false),
+            (OldValue::None, true),
+            (
+                OldValue::Value {
+                    short_value: None,
+                    start_ts: 0.into(),
+                },
+                true,
+            ),
+        ];
+        for (old_value, v) in cases {
+            assert_eq!(old_value.valid(), v);
         }
     }
 }
