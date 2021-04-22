@@ -3095,6 +3095,7 @@ impl ConfigController {
 
 #[cfg(test)]
 mod tests {
+    use itertools::Itertools;
     use tempfile::Builder;
 
     use super::*;
@@ -3786,5 +3787,83 @@ mod tests {
                 max_titan_background_gc: 4,
             }
         );
+    }
+
+    #[test]
+    fn test_config_template_is_valid() {
+        let template_config = std::include_str!("../etc/config-template.toml")
+            .lines()
+            .map(|l| l.strip_prefix('#').unwrap_or(l))
+            .join("\n");
+
+        let mut cfg: TiKvConfig = toml::from_str(&template_config).unwrap();
+        cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn test_config_template_no_superfluous_keys() {
+        let template_config = std::include_str!("../etc/config-template.toml")
+            .lines()
+            .map(|l| l.strip_prefix('#').unwrap_or(l))
+            .join("\n");
+
+        let mut deserializer = toml::Deserializer::new(&template_config);
+        let mut unrecognized_keys = Vec::new();
+        let _: TiKvConfig = serde_ignored::deserialize(&mut deserializer, |key| {
+            unrecognized_keys.push(key.to_string())
+        })
+        .unwrap();
+
+        // Don't use `is_empty()` so we see which keys are superfluous on failure.
+        assert_eq!(unrecognized_keys, Vec::<String>::new());
+    }
+
+    #[test]
+    fn test_config_template_matches_default() {
+        let template_config = std::include_str!("../etc/config-template.toml")
+            .lines()
+            .map(|l| l.strip_prefix('#').unwrap_or(l))
+            .join("\n");
+
+        let mut cfg: TiKvConfig = toml::from_str(&template_config).unwrap();
+        let mut default_cfg = TiKvConfig::default();
+
+        // Some default values are computed based on the environment.
+        // Because we can't set config values for these in `config-template.toml`, we will handle
+        // them manually.
+        cfg.readpool.unified.max_thread_count = default_cfg.readpool.unified.max_thread_count;
+        cfg.readpool.storage.high_concurrency = default_cfg.readpool.storage.high_concurrency;
+        cfg.readpool.storage.normal_concurrency = default_cfg.readpool.storage.normal_concurrency;
+        cfg.readpool.storage.low_concurrency = default_cfg.readpool.storage.low_concurrency;
+        cfg.readpool.coprocessor.high_concurrency =
+            default_cfg.readpool.coprocessor.high_concurrency;
+        cfg.readpool.coprocessor.normal_concurrency =
+            default_cfg.readpool.coprocessor.normal_concurrency;
+        cfg.readpool.coprocessor.low_concurrency = default_cfg.readpool.coprocessor.low_concurrency;
+        cfg.server.grpc_memory_pool_quota = default_cfg.server.grpc_memory_pool_quota;
+        cfg.server.background_thread_count = default_cfg.server.background_thread_count;
+        cfg.server.end_point_max_concurrency = default_cfg.server.end_point_max_concurrency;
+        cfg.storage.scheduler_worker_pool_size = default_cfg.storage.scheduler_worker_pool_size;
+        cfg.rocksdb.max_background_jobs = default_cfg.rocksdb.max_background_jobs;
+        cfg.rocksdb.max_background_flushes = default_cfg.rocksdb.max_background_flushes;
+        cfg.rocksdb.max_sub_compactions = default_cfg.rocksdb.max_sub_compactions;
+        cfg.rocksdb.titan.max_background_gc = default_cfg.rocksdb.titan.max_background_gc;
+        cfg.raftdb.max_background_jobs = default_cfg.raftdb.max_background_jobs;
+        cfg.raftdb.max_background_flushes = default_cfg.raftdb.max_background_flushes;
+        cfg.raftdb.max_sub_compactions = default_cfg.raftdb.max_sub_compactions;
+        cfg.raftdb.titan.max_background_gc = default_cfg.raftdb.titan.max_background_gc;
+        cfg.backup.num_threads = default_cfg.backup.num_threads;
+
+        // There is another set of config values that we can't directly compare:
+        // When the default values are `None`, but are then resolved to `Some(_)` later on.
+        default_cfg.readpool.storage.adjust_use_unified_pool();
+        default_cfg.readpool.coprocessor.adjust_use_unified_pool();
+        default_cfg.security.redact_info_log = Some(false);
+
+        // Other special cases.
+        cfg.pd.retry_max_count = default_cfg.pd.retry_max_count; // Both -1 and isize::MAX are the same.
+        cfg.storage.block_cache.capacity = OptionReadableSize(None); // Either `None` and a value is computed or `Some(_)` fixed value.
+
+        assert_eq!(cfg, default_cfg);
     }
 }
