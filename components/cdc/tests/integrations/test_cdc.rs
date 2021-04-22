@@ -18,7 +18,6 @@ use kvproto::cdcpb::{
 use kvproto::kvrpcpb::*;
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
-use test_raftstore::sleep_ms;
 use test_raftstore::*;
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Lock, LockType};
