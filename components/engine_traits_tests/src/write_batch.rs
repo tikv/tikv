@@ -2,7 +2,6 @@
 
 use super::{assert_engine_error, default_engine};
 use engine_test::kv::KvTestEngine;
-use engine_traits::CF_DEFAULT;
 use engine_traits::{Mutable, Peekable, SyncMutable, WriteBatch, WriteBatchExt};
 use panic_hook::recover_safe;
 
@@ -98,7 +97,7 @@ fn write_batch_write_twice_3() {
 }
 
 #[test]
-fn write_batch_delete_range_cf_basic() {
+fn write_batch_delete_range_basic() {
     let db = default_engine();
 
     db.engine.put(b"a", b"").unwrap();
@@ -109,7 +108,7 @@ fn write_batch_delete_range_cf_basic() {
 
     let mut wb = db.engine.write_batch();
 
-    wb.delete_range_cf(CF_DEFAULT, b"b", b"e").unwrap();
+    wb.delete_range(b"b", b"e").unwrap();
     wb.write().unwrap();
 
     assert!(db.engine.get_value(b"a").unwrap().is_some());
@@ -120,7 +119,7 @@ fn write_batch_delete_range_cf_basic() {
 }
 
 #[test]
-fn write_batch_delete_range_cf_inexact() {
+fn write_batch_delete_range_inexact() {
     let db = default_engine();
 
     db.engine.put(b"a", b"").unwrap();
@@ -131,7 +130,7 @@ fn write_batch_delete_range_cf_inexact() {
 
     let mut wb = db.engine.write_batch();
 
-    wb.delete_range_cf(CF_DEFAULT, b"b", b"f").unwrap();
+    wb.delete_range(b"b", b"f").unwrap();
     wb.write().unwrap();
 
     assert!(db.engine.get_value(b"a").unwrap().is_some());
@@ -144,7 +143,7 @@ fn write_batch_delete_range_cf_inexact() {
 }
 
 #[test]
-fn write_batch_delete_range_cf_after_put() {
+fn write_batch_delete_range_after_put() {
     let db = default_engine();
     let mut wb = db.engine.write_batch();
 
@@ -153,7 +152,7 @@ fn write_batch_delete_range_cf_after_put() {
     wb.put(b"c", b"").unwrap();
     wb.put(b"d", b"").unwrap();
     wb.put(b"e", b"").unwrap();
-    wb.delete_range_cf(CF_DEFAULT, b"b", b"e").unwrap();
+    wb.delete_range(b"b", b"e").unwrap();
     wb.write().unwrap();
 
     assert!(db.engine.get_value(b"a").unwrap().is_some());
@@ -164,7 +163,7 @@ fn write_batch_delete_range_cf_after_put() {
 }
 
 #[test]
-fn write_batch_delete_range_cf_none() {
+fn write_batch_delete_range_none() {
     let db = default_engine();
 
     db.engine.put(b"a", b"").unwrap();
@@ -172,7 +171,7 @@ fn write_batch_delete_range_cf_none() {
 
     let mut wb = db.engine.write_batch();
 
-    wb.delete_range_cf(CF_DEFAULT, b"b", b"e").unwrap();
+    wb.delete_range(b"b", b"e").unwrap();
     wb.write().unwrap();
 
     assert!(db.engine.get_value(b"a").unwrap().is_some());
@@ -183,7 +182,7 @@ fn write_batch_delete_range_cf_none() {
 }
 
 #[test]
-fn write_batch_delete_range_cf_twice() {
+fn write_batch_delete_range_twice() {
     let db = default_engine();
 
     db.engine.put(b"a", b"").unwrap();
@@ -194,8 +193,8 @@ fn write_batch_delete_range_cf_twice() {
 
     let mut wb = db.engine.write_batch();
 
-    wb.delete_range_cf(CF_DEFAULT, b"b", b"e").unwrap();
-    wb.delete_range_cf(CF_DEFAULT, b"b", b"e").unwrap();
+    wb.delete_range(b"b", b"e").unwrap();
+    wb.delete_range(b"b", b"e").unwrap();
     wb.write().unwrap();
 
     assert!(db.engine.get_value(b"a").unwrap().is_some());
@@ -206,7 +205,7 @@ fn write_batch_delete_range_cf_twice() {
 }
 
 #[test]
-fn write_batch_delete_range_cf_twice_1() {
+fn write_batch_delete_range_twice_1() {
     let db = default_engine();
 
     db.engine.put(b"a", b"").unwrap();
@@ -217,8 +216,8 @@ fn write_batch_delete_range_cf_twice_1() {
 
     let mut wb = db.engine.write_batch();
 
-    wb.delete_range_cf(CF_DEFAULT, b"b", b"e").unwrap();
-    wb.delete_range_cf(CF_DEFAULT, b"b", b"e").unwrap();
+    wb.delete_range(b"b", b"e").unwrap();
+    wb.delete_range(b"b", b"e").unwrap();
     wb.write().unwrap();
 
     assert!(db.engine.get_value(b"a").unwrap().is_some());
@@ -229,7 +228,7 @@ fn write_batch_delete_range_cf_twice_1() {
 }
 
 #[test]
-fn write_batch_delete_range_cf_twice_2() {
+fn write_batch_delete_range_twice_2() {
     let db = default_engine();
 
     db.engine.put(b"a", b"").unwrap();
@@ -240,10 +239,10 @@ fn write_batch_delete_range_cf_twice_2() {
 
     let mut wb = db.engine.write_batch();
 
-    wb.delete_range_cf(CF_DEFAULT, b"b", b"e").unwrap();
+    wb.delete_range(b"b", b"e").unwrap();
     wb.write().unwrap();
     db.engine.put(b"c", b"").unwrap();
-    wb.delete_range_cf(CF_DEFAULT, b"b", b"e").unwrap();
+    wb.delete_range(b"b", b"e").unwrap();
     wb.write().unwrap();
 
     assert!(db.engine.get_value(b"a").unwrap().is_some());
@@ -254,7 +253,7 @@ fn write_batch_delete_range_cf_twice_2() {
 }
 
 #[test]
-fn write_batch_delete_range_cf_empty_range() {
+fn write_batch_delete_range_empty_range() {
     let db = default_engine();
 
     db.engine.put(b"a", b"").unwrap();
@@ -263,7 +262,7 @@ fn write_batch_delete_range_cf_empty_range() {
 
     let mut wb = db.engine.write_batch();
 
-    wb.delete_range_cf(CF_DEFAULT, b"b", b"b").unwrap();
+    wb.delete_range(b"b", b"b").unwrap();
     wb.write().unwrap();
 
     assert!(db.engine.get_value(b"a").unwrap().is_some());
@@ -272,7 +271,7 @@ fn write_batch_delete_range_cf_empty_range() {
 }
 
 #[test]
-fn write_batch_delete_range_cf_backward_range() {
+fn write_batch_delete_range_backward_range() {
     let db = default_engine();
 
     db.engine.put(b"a", b"").unwrap();
@@ -281,7 +280,7 @@ fn write_batch_delete_range_cf_backward_range() {
 
     let mut wb = db.engine.write_batch();
 
-    wb.delete_range_cf(CF_DEFAULT, b"c", b"a").unwrap();
+    wb.delete_range(b"c", b"a").unwrap();
     assert!(
         recover_safe(|| {
             wb.write().unwrap();
@@ -295,7 +294,7 @@ fn write_batch_delete_range_cf_backward_range() {
 }
 
 #[test]
-fn write_batch_delete_range_cf_backward_range_partial_commit() {
+fn write_batch_delete_range_backward_range_partial_commit() {
     let db = default_engine();
 
     db.engine.put(b"a", b"").unwrap();
@@ -316,7 +315,7 @@ fn write_batch_delete_range_cf_backward_range_partial_commit() {
     // delete_range request immediately panic.
     wb.put(b"e", b"").unwrap();
     wb.delete(b"d").unwrap();
-    wb.delete_range_cf(CF_DEFAULT, b"c", b"a").unwrap();
+    wb.delete_range(b"c", b"a").unwrap();
     wb.put(b"f", b"").unwrap();
     wb.delete(b"a").unwrap();
 
@@ -369,7 +368,7 @@ fn write_batch_count_2() {
     assert_eq!(wb.count(), 1);
     wb.delete(b"a").unwrap();
     assert_eq!(wb.count(), 2);
-    wb.delete_range_cf(CF_DEFAULT, b"a", b"b").unwrap();
+    wb.delete_range(b"a", b"b").unwrap();
     assert_eq!(wb.count(), 3);
     wb.write().unwrap();
     assert_eq!(wb.count(), 3);
@@ -497,7 +496,7 @@ fn data_size() {
     wb.delete(b"a").unwrap();
     let size6 = wb.data_size();
     assert!(size5 < size6);
-    wb.delete_range_cf(CF_DEFAULT, b"a", b"b").unwrap();
+    wb.delete_range(b"a", b"b").unwrap();
     let size7 = wb.data_size();
     assert!(size6 < size7);
     wb.clear();
@@ -721,7 +720,7 @@ fn save_point_all_commands() {
     wb.set_save_point();
     wb.delete(b"a").unwrap();
     wb.put(b"b", b"").unwrap();
-    wb.delete_range_cf(CF_DEFAULT, b"c", b"e").unwrap();
+    wb.delete_range(b"c", b"e").unwrap();
 
     wb.rollback_to_save_point().unwrap();
     wb.write().unwrap();
