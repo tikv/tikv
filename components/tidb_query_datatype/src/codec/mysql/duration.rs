@@ -861,12 +861,9 @@ mod tests {
         ];
 
         for (input, fsp, expect, return_null) in cases {
-            let got = Duration::parse_consider_overflow(
-                &mut EvalContext::default(),
-                input,
-                fsp,
-                return_null,
-            );
+            let mut ctx =
+                EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
+            let got = Duration::parse_consider_overflow(&mut ctx, input, fsp, return_null);
             assert_eq!(got.ok().map(|d| d.to_string()), expect.map(str::to_string));
         }
     }
