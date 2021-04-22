@@ -11,7 +11,6 @@ use crate::codec::data_type::{ChunkedVec, LogicalRows, VectorValue};
 use crate::codec::datum_codec::RawDatumDecoder;
 use crate::codec::Result;
 use crate::expr::EvalContext;
-
 use crate::match_template_evaltype;
 
 /// A container stores an array of datums, which can be either raw (not decoded), or decoded into
