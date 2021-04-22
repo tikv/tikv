@@ -2270,6 +2270,8 @@ impl Default for BackupConfig {
     }
 }
 
+// TODO: `CdcConfig` is used by both `cdc` worker and `resolved ts` worker
+// should separate it into two configs
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -2277,6 +2279,7 @@ pub struct CdcConfig {
     pub min_ts_interval: ReadableDuration,
     pub old_value_cache_size: usize,
     pub hibernate_regions_compatible: bool,
+    pub scan_lock_pool_size: usize,
 }
 
 impl Default for CdcConfig {
@@ -2285,6 +2288,7 @@ impl Default for CdcConfig {
             min_ts_interval: ReadableDuration::secs(1),
             old_value_cache_size: 1024 * 1024,
             hibernate_regions_compatible: true,
+            scan_lock_pool_size: 2,
         }
     }
 }

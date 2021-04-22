@@ -533,10 +533,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 delegate.id
             );
         };
-        let change_cmd = ChangeObserver {
-            region_id,
-            observe_id: delegate.id,
-        };
+        let change_cmd = ChangeObserver::from_cdc(region_id, delegate.id);
         let txn_extra_op = request.get_extra_op();
         if txn_extra_op != TxnExtraOp::Noop {
             delegate.txn_extra_op = request.get_extra_op();
@@ -1316,7 +1313,6 @@ impl Initializer {
 
         // Now the resolver contains locks that remain unresolved after the scan.
         let mut resolver = scan_context.lock().unwrap().resolver.replace(None);
-        resolver.as_mut().unwrap().init();
         let resolved_ts = resolver
             .as_mut()
             .unwrap()
@@ -1324,7 +1320,7 @@ impl Initializer {
 
         let resolved_ts = ResolvedTs {
             regions: vec![self.region_id],
-            ts: resolved_ts.unwrap().into_inner(),
+            ts: resolved_ts.into_inner(),
             ..Default::default()
         };
 
@@ -1410,9 +1406,6 @@ impl Initializer {
 
     fn finish_building_resolver(&self, mut resolver: Resolver, region: Region, takes: Duration) {
         let observe_id = self.observe_id;
-        if !resolver.is_initialized() {
-            resolver.init();
-        }
         let rts = resolver.resolve(TimeStamp::zero());
         info!(
             "resolver initialized and schedule resolver ready";
@@ -2063,8 +2056,7 @@ mod tests {
             conn_id,
             version: semver::Version::new(4, 0, 6),
         });
-        let mut resolver = Resolver::new(1);
-        resolver.init();
+        let resolver = Resolver::new(1);
         let observe_id = ep.capture_regions[&1].id;
         ep.on_region_ready(observe_id, resolver, region.clone());
         ep.run(Task::MinTS {
@@ -2089,8 +2081,7 @@ mod tests {
             conn_id,
             version: semver::Version::new(4, 0, 6),
         });
-        let mut resolver = Resolver::new(2);
-        resolver.init();
+        let resolver = Resolver::new(2);
         region.set_id(2);
         let observe_id = ep.capture_regions[&2].id;
         ep.on_region_ready(observe_id, resolver, region);
@@ -2125,8 +2116,7 @@ mod tests {
             conn_id,
             version: semver::Version::new(4, 0, 5),
         });
-        let mut resolver = Resolver::new(3);
-        resolver.init();
+        let resolver = Resolver::new(3);
         region.set_id(3);
         let observe_id = ep.capture_regions[&3].id;
         ep.on_region_ready(observe_id, resolver, region);
