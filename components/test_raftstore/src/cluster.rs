@@ -1030,7 +1030,11 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn apply_state(&self, region_id: u64, store_id: u64) -> RaftApplyState {
         let key = keys::apply_state_key(region_id);
-        get_raft_msg(&self.engines[&store_id], &key).unwrap()
+        self.get_engine(store_id)
+            .c()
+            .get_msg_cf::<RaftApplyState>(engine_traits::CF_RAFT, &key)
+            .unwrap()
+            .unwrap()
     }
 
     pub fn raft_local_state(&self, region_id: u64, store_id: u64) -> RaftLocalState {
