@@ -294,6 +294,7 @@ fn write_batch_delete_range_backward_range() {
 }
 
 #[test]
+#[ignore] // see comment in test
 fn write_batch_delete_range_backward_range_partial_commit() {
     let db = default_engine();
 
