@@ -707,7 +707,7 @@ pub fn substring_index(
     } else {
         twoway::rfind_bytes
     };
-    let mut remaining = &s[..];
+    let mut remaining = s;
     let mut remaining_pattern_count = count.abs();
     let mut bound = 0;
     while remaining_pattern_count > 0 {
@@ -726,7 +726,7 @@ pub fn substring_index(
     }
 
     let result = if remaining_pattern_count > 0 {
-        &s[..]
+        s
     } else if count > 0 {
         &s[..bound - delim.len()]
     } else {
@@ -3881,7 +3881,7 @@ mod tests {
             (
                 "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
                 "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw\nMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw",
-            )
+            ),
         ];
 
         for (arg, expected) in cases {

@@ -8,9 +8,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crossbeam::channel::{self, select, tick};
 use engine_traits::{EncryptionKeyManager, FileEncryptionInfo};
+use fail::fail_point;
 use file_system::File;
 use kvproto::encryptionpb::{DataKey, EncryptionMethod, FileDictionary, FileInfo, KeyDictionary};
 use protobuf::Message;
+use tikv_util::{box_err, debug, error, info, thd_name, warn};
 
 use crate::config::EncryptionConfig;
 
@@ -201,9 +203,9 @@ impl Dicts {
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
 
         if method != EncryptionMethod::Plaintext {
-            info!("new encrypted file"; 
-                  "fname" => fname, 
-                  "method" => format!("{:?}", method), 
+            info!("new encrypted file";
+                  "fname" => fname,
+                  "method" => format!("{:?}", method),
                   "iv" => hex::encode(iv.as_slice()));
         } else {
             info!("new plaintext file"; "fname" => fname);

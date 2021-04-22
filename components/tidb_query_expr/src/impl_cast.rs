@@ -1145,9 +1145,10 @@ fn cast_string_as_time(
 ) -> Result<Option<Time>> {
     if let Some(val) = val {
         // Convert `val` to a string first and then parse it as a float string.
+        let val = String::from_utf8_lossy(val);
         Time::parse(
             ctx,
-            unsafe { std::str::from_utf8_unchecked(val) },
+            &*val,
             extra.ret_field_type.as_accessor().tp().try_into()?,
             extra.ret_field_type.get_decimal() as i8,
             // Enable round
@@ -2327,6 +2328,20 @@ mod tests {
                 .unwrap();
             assert_eq!(actual.to_string(), expected);
         }
+
+        // If the input is invalid UTF-8 bytes, it should return error.
+        let (res, ctx) = RpnFnScalarEvaluator::new()
+            .push_param(vec![0, 159, 146, 150])
+            .evaluate_raw(
+                FieldTypeBuilder::new().tp(FieldTypeTp::DateTime).build(),
+                ScalarFuncSig::CastStringAsTime,
+            );
+        assert!(matches!(res.unwrap(), ScalarValue::DateTime(None)));
+        check_warning(
+            &ctx,
+            Some(ERR_TRUNCATE_WRONG_VALUE),
+            "should have warning when casting invalid utf-8 to time",
+        );
     }
 
     #[test]
@@ -3039,7 +3054,13 @@ mod tests {
             assert!(
                 (output.unwrap().into_inner() - expected).abs() < std::f64::EPSILON,
                 "input:{:?}, expected:{:?}, flen:{:?}, decimal:{:?}, truncated:{:?}, overflow:{:?}, in_union:{:?}",
-                input, expected, flen, decimal, truncated, overflow, in_union
+                input,
+                expected,
+                flen,
+                decimal,
+                truncated,
+                overflow,
+                in_union
             );
             let (warning_cnt, warnings) = match (truncated, overflow) {
                 (true, true) => (2, vec![ERR_TRUNCATE_WRONG_VALUE, ERR_DATA_OUT_OF_RANGE]),
@@ -3057,7 +3078,7 @@ mod tests {
             assert_eq!(
                 ctx.warnings.warning_cnt, warning_cnt,
                 "input:{:?}, expected:{:?}, flen:{:?}, decimal:{:?}, truncated:{:?}, overflow:{:?}, in_union:{:?}, warnings:{:?}",
-                input, expected, flen, decimal, truncated, overflow, in_union,got_warnings,
+                input, expected, flen, decimal, truncated, overflow, in_union, got_warnings,
             );
             assert_eq!(got_warnings, warnings);
         }
@@ -4376,9 +4397,7 @@ mod tests {
                         }
                         // TODO: if add test case for Decimal::round failure,
                         //  then should check whether this setting is right.
-                        let res = base_res
-                            .clone()
-                            .round((origin_decimal - 1) as i8, RoundMode::HalfEven);
+                        let res = base_res.round((origin_decimal - 1) as i8, RoundMode::HalfEven);
                         if res.is_zero() {
                             truncate_as_warning = false;
                             overflow_as_warning = false;
@@ -4397,7 +4416,6 @@ mod tests {
                     }
                     ResType::Round => {
                         let r = base_res
-                            .clone()
                             .round(res_decimal as i8, RoundMode::HalfEven)
                             .unwrap();
                         if r == base_res {
@@ -4449,7 +4467,7 @@ mod tests {
                         .map(|x| x.as_ref().map(|x| x.to_string()));
                     let pd_res_log = pd_res.as_ref().map(|x| x.to_string());
                     let log = format!(
-                            "test_func_name: {}, \
+                        "test_func_name: {}, \
                          input: {}, base_res: {}, \
                          origin_flen: {}, origin_decimal: {}, \
                          res_flen: {}, res_decimal: {}, \
@@ -4457,14 +4475,27 @@ mod tests {
                          cond: {:?}, sign: {:?}, res_type: {:?}, \
                          overflow_as_warning: {}, truncate_as_warning: {}, expect_warning_err_code: {:?} \
                          expect: {}, expect_from_produce_dec_with_specified_tp(this is just for debug): {:?}, result: {:?}",
-                            func_name, input_as_debug_str_func(&input), base_res,
-                            origin_flen, origin_decimal,
-                            res_flen, res_decimal,
-                            in_union, is_unsigned, in_dml, in_dml_flag,
-                            cond, sign, res_type,
-                            overflow_as_warning, truncate_as_warning, warning_err_code,
-                            expect.to_string(), pd_res_log, cast_func_res_log
-                        );
+                        func_name,
+                        input_as_debug_str_func(&input),
+                        base_res,
+                        origin_flen,
+                        origin_decimal,
+                        res_flen,
+                        res_decimal,
+                        in_union,
+                        is_unsigned,
+                        in_dml,
+                        in_dml_flag,
+                        cond,
+                        sign,
+                        res_type,
+                        overflow_as_warning,
+                        truncate_as_warning,
+                        warning_err_code,
+                        expect.to_string(),
+                        pd_res_log,
+                        cast_func_res_log
+                    );
 
                     check_result(Some(&expect), &cast_func_res, log.as_str());
                     check_warning(&ctx, warning_err_code, log.as_str());
@@ -4860,7 +4891,7 @@ mod tests {
                 let val = val.map(|x| x.as_bytes());
                 cast_bytes_as_decimal(ctx, extra, val)
             },
-            |x| (*x).to_string(),
+            |x| x.to_string(),
             "cast_string_as_signed_decimal",
         )
     }
@@ -5067,7 +5098,7 @@ mod tests {
                 let val = val.map(|x| x.as_bytes());
                 cast_string_as_unsigned_decimal(ctx, extra, metadata, val)
             },
-            |x| (*x).to_string(),
+            |x| x.to_string(),
             "cast_string_as_unsigned_decimal",
         );
     }
@@ -5608,7 +5639,12 @@ mod tests {
                         ERR_DATA_OUT_OF_RANGE => {
                             let log = format!(
                                 "func_name:{}, input: {}, fsp: {}, output: {:?}, expect: {}, expect_warn: {}",
-                                func_name, func_to_debug_str(val.clone()), fsp, result_str, Duration::zero(), ERR_DATA_OUT_OF_RANGE
+                                func_name,
+                                func_to_debug_str(val.clone()),
+                                fsp,
+                                result_str,
+                                Duration::zero(),
+                                ERR_DATA_OUT_OF_RANGE
                             );
                             check_overflow(&ctx, true, log.as_str());
                             check_result(None, &result, log.as_str());
@@ -5616,7 +5652,13 @@ mod tests {
                         ERR_TRUNCATE_WRONG_VALUE => {
                             let log = format!(
                                 "func_name:{}, input: {}, fsp: {}, output: {:?}, output_warn: {:?}, expect: {}, expect_warn: {}",
-                                func_name, func_to_debug_str(val.clone()), fsp, result_str, ctx.warnings.warnings, Duration::zero(), WARN_DATA_TRUNCATED
+                                func_name,
+                                func_to_debug_str(val.clone()),
+                                fsp,
+                                result_str,
+                                ctx.warnings.warnings,
+                                Duration::zero(),
+                                WARN_DATA_TRUNCATED
                             );
                             check_warning(&ctx, Some(ERR_TRUNCATE_WRONG_VALUE), log.as_str());
                             check_result(None, &result, log.as_str());
@@ -5625,7 +5667,12 @@ mod tests {
                             let expect_err: tidb_query_common::error::Error = e.into();
                             let log = format!(
                                 "func_name:{}, input: {}, fsp: {}, output: {:?}, output_warn: {:?}, expect: {:?}",
-                                func_name, func_to_debug_str(val.clone()), fsp, result_str, ctx.warnings.warnings, expect_err
+                                func_name,
+                                func_to_debug_str(val.clone()),
+                                fsp,
+                                result_str,
+                                ctx.warnings.warnings,
+                                expect_err
                             );
                             assert!(result.is_err(), "log: {}", log)
                         }
@@ -5633,7 +5680,12 @@ mod tests {
                     Ok(v) => {
                         let log = format!(
                             "func_name:{}, input: {}, fsp: {}, output: {:?}, output_warn: {:?}, expect: {:?}",
-                            func_name, func_to_debug_str(val.clone()), fsp, result_str, ctx.warnings.warnings, v
+                            func_name,
+                            func_to_debug_str(val.clone()),
+                            fsp,
+                            result_str,
+                            ctx.warnings.warnings,
+                            v
                         );
                         check_result(Some(&v), &result, log.as_str())
                     }

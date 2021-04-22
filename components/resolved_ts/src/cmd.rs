@@ -6,8 +6,9 @@ use kvproto::errorpb;
 use kvproto::raft_cmdpb::{AdminCmdType, CmdType, Request};
 use raftstore::coprocessor::{Cmd, CmdBatch};
 use raftstore::errors::Error as RaftStoreError;
-use tikv::server::raftkv::WriteBatchFlags;
-use txn_types::{Key, Lock, LockType, TimeStamp, Value, Write, WriteRef, WriteType};
+use txn_types::{
+    Key, Lock, LockType, TimeStamp, Value, Write, WriteBatchFlags, WriteRef, WriteType,
+};
 
 #[derive(Debug, PartialEq)]
 pub enum ChangeRow {
@@ -84,7 +85,7 @@ impl ChangeLog {
                     Some(ChangeLog::Error(err_header))
                 }
             })
-            .filter_map(|v| v)
+            .flatten()
             .collect()
     }
 
@@ -145,7 +146,7 @@ impl ChangeLog {
                 }),
                 other => panic!("unexpected row pattern {:?}", other),
             })
-            .filter_map(|v| v)
+            .flatten()
             .collect()
     }
 }
@@ -270,7 +271,7 @@ mod tests {
     use tikv::server::raftkv::modifies_to_requests;
     use tikv::storage::kv::{MockEngineBuilder, TestEngineBuilder};
     use tikv::storage::lock_manager::DummyLockManager;
-    use tikv::storage::mvcc::{tests::write, Mutation, MvccTxn};
+    use tikv::storage::mvcc::{tests::write, Mutation, MvccTxn, SnapshotReader};
     use tikv::storage::txn::commands::one_pc_commit_ts;
     use tikv::storage::txn::tests::*;
     use tikv::storage::txn::{prewrite, CommitKind, TransactionKind, TransactionProperties};
@@ -288,13 +289,13 @@ mod tests {
         must_commit(&engine, b"k1", 1, 2);
 
         must_prewrite_put(&engine, b"k1", b"v2", b"k1", 3);
-        must_rollback(&engine, b"k1", 3);
+        must_rollback(&engine, b"k1", 3, false);
 
         must_prewrite_put(&engine, b"k1", &[b'v'; 512], b"k1", 4);
         must_commit(&engine, b"k1", 4, 5);
 
         must_prewrite_put(&engine, b"k1", b"v3", b"k1", 5);
-        must_rollback(&engine, b"k1", 5);
+        must_rollback(&engine, b"k1", 5, false);
 
         let k1 = Key::from_raw(b"k1");
         let rows: Vec<_> = engine
@@ -360,9 +361,11 @@ mod tests {
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let cm = ConcurrencyManager::new(42.into());
-        let mut txn = MvccTxn::new(snapshot, 10.into(), false, cm);
+        let mut txn = MvccTxn::new(10.into(), cm);
+        let mut reader = SnapshotReader::new(10.into(), snapshot, true);
         prewrite(
             &mut txn,
+            &mut reader,
             &TransactionProperties {
                 start_ts: 10.into(),
                 kind: TransactionKind::Optimistic(false),

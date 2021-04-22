@@ -10,6 +10,7 @@ use rocksdb::{
     DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType, HistogramData, DB,
 };
 use std::i64;
+use tikv_util::warn;
 
 make_auto_flush_static_metric! {
     pub label_enum TickerName {
@@ -118,7 +119,7 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
     let name_enum = match name {
         "kv" => TickerName::kv,
         "raft" => TickerName::raft,
-        unexpected => panic!(format!("unexpected name {}", unexpected)),
+        unexpected => panic!("unexpected name {}", unexpected),
     };
 
     match t {

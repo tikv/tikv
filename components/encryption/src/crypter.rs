@@ -5,7 +5,7 @@ use engine_traits::EncryptionMethod as DBEncryptionMethod;
 use kvproto::encryptionpb::EncryptionMethod;
 use openssl::symm::{self, Cipher as OCipher};
 use rand::{rngs::OsRng, RngCore};
-use tikv_util::impl_display_as_debug;
+use tikv_util::{box_err, impl_display_as_debug};
 
 use crate::{Error, Result};
 
@@ -249,7 +249,7 @@ mod tests {
         assert_eq!(ivs.len(), 100);
 
         for iv in ivs {
-            let iv1 = Iv::from_slice(&iv.as_slice()[..]).unwrap();
+            let iv1 = Iv::from_slice(iv.as_slice()).unwrap();
             assert_eq!(iv.as_slice(), iv1.as_slice());
         }
     }

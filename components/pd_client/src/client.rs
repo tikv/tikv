@@ -1,8 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use std::u64;
 
 use futures::channel::mpsc;
 use futures::compat::Future01CompatExt;
@@ -25,7 +27,7 @@ use yatp::task::future::TaskCell;
 use yatp::ThreadPool;
 
 use super::metrics::*;
-use super::util::{build_forward_metadata, check_resp_header, sync_request, Client, PdConnector};
+use super::util::{check_resp_header, sync_request, Client, PdConnector};
 use super::{Config, FeatureGate, PdFuture, UnixSecs};
 use super::{Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
 
@@ -74,7 +76,7 @@ impl RpcClient {
         let pd_connector = PdConnector::new(env.clone(), security_mgr.clone());
         for i in 0..retries {
             match pd_connector.validate_endpoints(cfg).await {
-                Ok((client, forwarded_host, members)) => {
+                Ok((client, target, members)) => {
                     let rpc_client = RpcClient {
                         cluster_id: members.get_header().get_cluster_id(),
                         pd_client: Arc::new(Client::new(
@@ -82,7 +84,7 @@ impl RpcClient {
                             security_mgr,
                             client,
                             members,
-                            forwarded_host,
+                            target,
                             cfg.enable_forwarding,
                         )),
                         monitor: monitor.clone(),
@@ -159,14 +161,12 @@ impl RpcClient {
     /// Creates a new call option with default request timeout.
     #[inline]
     fn call_option(client: &Client) -> CallOption {
-        let forwarded_host = &client.inner.rl().forwarded_host;
-        if !forwarded_host.is_empty() {
-            let metadata = build_forward_metadata(forwarded_host);
-            return CallOption::default()
-                .headers(metadata)
-                .timeout(Duration::from_secs(REQUEST_TIMEOUT));
-        }
-        CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT))
+        client
+            .inner
+            .rl()
+            .target_info()
+            .call_option()
+            .timeout(Duration::from_secs(REQUEST_TIMEOUT))
     }
 
     /// Gets given key's Region and Region's leader from PD.
@@ -523,11 +523,27 @@ impl PdClient for RpcClient {
                 debug!("heartbeat sender is refreshed");
                 let sender = left.take().expect("expect region heartbeat sink");
                 let (tx, rx) = mpsc::unbounded();
+                let pending_heartbeat = Arc::new(AtomicU64::new(0));
                 inner.hb_sender = Either::Right(tx);
+                inner.pending_heartbeat = pending_heartbeat.clone();
                 inner.client_stub.spawn(async move {
                     let mut sender = sender.sink_map_err(Error::Grpc);
+                    let mut last_report = u64::MAX;
                     let result = sender
-                        .send_all(&mut rx.map(|r| Ok((r, WriteFlags::default()))))
+                        .send_all(&mut rx.map(|r| {
+                            let last = pending_heartbeat.fetch_sub(1, Ordering::Relaxed);
+                            // Sender will update pending at every send operation, so as long as
+                            // pending task is increasing, pending count should be reported by
+                            // sender.
+                            if last + 10 < last_report || last == 1 {
+                                PD_PENDING_HEARTBEAT_GAUGE.set(last as i64 - 1);
+                                last_report = last;
+                            }
+                            if last > last_report {
+                                last_report = last - 1;
+                            }
+                            Ok((r, WriteFlags::default()))
+                        }))
                         .await;
                     match result {
                         Ok(()) => {
@@ -541,6 +557,8 @@ impl PdClient for RpcClient {
                 });
             }
 
+            let last = inner.pending_heartbeat.fetch_add(1, Ordering::Relaxed);
+            PD_PENDING_HEARTBEAT_GAUGE.set(last as i64 + 1);
             let sender = inner
                 .hb_sender
                 .as_mut()

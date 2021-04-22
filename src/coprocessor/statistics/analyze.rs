@@ -2,7 +2,7 @@
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
-use std::mem;
+
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -108,7 +108,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
             req.get_cmsketch_depth() as usize,
             req.get_cmsketch_width() as usize,
         );
-
+        let mut fms = FmSketch::new(req.get_sketch_size() as usize);
         let mut row_count = 0;
         let mut time_slice_start = Instant::now();
         let mut topn_heap = BinaryHeap::new();
@@ -156,6 +156,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
                     cms.insert(&data);
                 }
             }
+            fms.insert(&data);
             if stats_version == ANALYZE_VERSION_V2 {
                 hist.append(&data, true);
                 if cur_val.1 == data {
@@ -189,7 +190,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
             }
         }
 
-        let res = AnalyzeIndexResult::new(hist, cms).into_proto();
+        let res = AnalyzeIndexResult::new(hist, cms, Some(fms)).into_proto();
         let dt = box_try!(res.write_to_bytes());
         Ok(dt)
     }
@@ -201,7 +202,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
         let ret = match self.req.get_tp() {
             AnalyzeType::TypeIndex | AnalyzeType::TypeCommonHandle => {
                 let req = self.req.take_idx_req();
-                let ranges = mem::replace(&mut self.ranges, vec![]);
+                let ranges = std::mem::take(&mut self.ranges);
                 table::check_table_ranges(&ranges)?;
                 let mut scanner = RangesScanner::new(RangesScannerOptions {
                     storage: self.storage.take().unwrap(),
@@ -226,7 +227,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
             AnalyzeType::TypeColumn => {
                 let col_req = self.req.take_col_req();
                 let storage = self.storage.take().unwrap();
-                let ranges = mem::replace(&mut self.ranges, Vec::new());
+                let ranges = std::mem::take(&mut self.ranges);
                 let mut builder = SampleBuilder::new(col_req, None, storage, ranges)?;
                 let res = AnalyzeContext::handle_column(&mut builder).await;
                 builder.data.collect_storage_stats(&mut self.storage_stats);
@@ -238,7 +239,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
                 let col_req = self.req.take_col_req();
                 let idx_req = self.req.take_idx_req();
                 let storage = self.storage.take().unwrap();
-                let ranges = mem::replace(&mut self.ranges, Vec::new());
+                let ranges = std::mem::take(&mut self.ranges);
                 let mut builder = SampleBuilder::new(col_req, Some(idx_req), storage, ranges)?;
                 let res = AnalyzeContext::handle_mixed(&mut builder).await;
                 builder.data.collect_storage_stats(&mut self.storage_stats);
@@ -362,6 +363,7 @@ impl<S: Snapshot> SampleBuilder<S> {
         let mut time_slice_start = Instant::now();
         let mut common_handle_hist = Histogram::new(self.max_bucket_size);
         let mut common_handle_cms = CmSketch::new(self.cm_sketch_depth, self.cm_sketch_width);
+        let mut common_handle_fms = FmSketch::new(self.max_fm_sketch_size);
         while !is_drained {
             let time_slice_elapsed = time_slice_start.elapsed();
             if time_slice_elapsed > MAX_TIME_SLICE {
@@ -409,6 +411,7 @@ impl<S: Snapshot> SampleBuilder<S> {
                             common_handle_cms.insert(&data);
                         }
                     }
+                    common_handle_fms.insert(&data);
                     if self.stats_version == ANALYZE_VERSION_V2 {
                         common_handle_hist.append(&data, true);
                         if cur_val.1 == data {
@@ -479,6 +482,7 @@ impl<S: Snapshot> SampleBuilder<S> {
             Some(AnalyzeIndexResult::new(
                 common_handle_hist,
                 common_handle_cms,
+                Some(common_handle_fms),
             ))
         } else {
             None
@@ -590,11 +594,12 @@ impl AnalyzeColumnsResult {
 struct AnalyzeIndexResult {
     hist: Histogram,
     cms: Option<CmSketch>,
+    fms: Option<FmSketch>,
 }
 
 impl AnalyzeIndexResult {
-    fn new(hist: Histogram, cms: Option<CmSketch>) -> AnalyzeIndexResult {
-        AnalyzeIndexResult { hist, cms }
+    fn new(hist: Histogram, cms: Option<CmSketch>, fms: Option<FmSketch>) -> AnalyzeIndexResult {
+        AnalyzeIndexResult { hist, cms, fms }
     }
 
     fn into_proto(self) -> tipb::AnalyzeIndexResp {
@@ -602,6 +607,11 @@ impl AnalyzeIndexResult {
         res.set_hist(self.hist.into_proto());
         if let Some(c) = self.cms {
             res.set_cms(c.into_proto());
+        }
+        if let Some(f) = self.fms {
+            let mut s = tipb::SampleCollector::default();
+            s.set_fm_sketch(f.into_proto());
+            res.set_collector(s);
         }
         res
     }

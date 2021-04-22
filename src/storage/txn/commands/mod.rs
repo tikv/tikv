@@ -9,7 +9,7 @@ pub(crate) mod check_secondary_locks;
 pub(crate) mod check_txn_status;
 pub(crate) mod cleanup;
 pub(crate) mod commit;
-pub(crate) mod compare_and_set;
+pub(crate) mod compare_and_swap;
 pub(crate) mod mvcc_by_key;
 pub(crate) mod mvcc_by_start_ts;
 pub(crate) mod pause;
@@ -27,7 +27,7 @@ pub use check_secondary_locks::CheckSecondaryLocks;
 pub use check_txn_status::CheckTxnStatus;
 pub use cleanup::Cleanup;
 pub use commit::Commit;
-pub use compare_and_set::RawCompareAndSet;
+pub use compare_and_swap::RawCompareAndSwap;
 pub use mvcc_by_key::MvccByKey;
 pub use mvcc_by_start_ts::MvccByStartTs;
 pub use pause::Pause;
@@ -51,7 +51,7 @@ use txn_types::{Key, TimeStamp, Value, Write};
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::{self, LockManager, WaitTimeout};
 use crate::storage::mvcc::{Lock as MvccLock, MvccReader, ReleasedLock};
-use crate::storage::txn::latch::{self, Latches};
+use crate::storage::txn::latch;
 use crate::storage::txn::{ProcessResult, Result};
 use crate::storage::types::{
     MvccInfo, PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallbackType,
@@ -84,7 +84,7 @@ pub enum Command {
     Pause(Pause),
     MvccByKey(MvccByKey),
     MvccByStartTs(MvccByStartTs),
-    RawCompareAndSet(RawCompareAndSet),
+    RawCompareAndSwap(RawCompareAndSwap),
     RawAtomicStore(RawAtomicStore),
 }
 
@@ -457,7 +457,7 @@ pub trait CommandExt: Display {
 
     fn write_bytes(&self) -> usize;
 
-    fn gen_lock(&self, _latches: &Latches) -> latch::Lock;
+    fn gen_lock(&self) -> latch::Lock;
 }
 
 pub struct WriteContext<'a, L: LockManager> {
@@ -489,7 +489,7 @@ impl Command {
             Command::Pause(t) => t,
             Command::MvccByKey(t) => t,
             Command::MvccByStartTs(t) => t,
-            Command::RawCompareAndSet(t) => t,
+            Command::RawCompareAndSwap(t) => t,
             Command::RawAtomicStore(t) => t,
         }
     }
@@ -512,7 +512,7 @@ impl Command {
             Command::Pause(t) => t,
             Command::MvccByKey(t) => t,
             Command::MvccByStartTs(t) => t,
-            Command::RawCompareAndSet(t) => t,
+            Command::RawCompareAndSwap(t) => t,
             Command::RawAtomicStore(t) => t,
         }
     }
@@ -549,7 +549,7 @@ impl Command {
             Command::CheckTxnStatus(t) => t.process_write(snapshot, context),
             Command::CheckSecondaryLocks(t) => t.process_write(snapshot, context),
             Command::Pause(t) => t.process_write(snapshot, context),
-            Command::RawCompareAndSet(t) => t.process_write(snapshot, context),
+            Command::RawCompareAndSwap(t) => t.process_write(snapshot, context),
             Command::RawAtomicStore(t) => t.process_write(snapshot, context),
             _ => panic!("unsupported write command"),
         }
@@ -586,8 +586,8 @@ impl Command {
         self.command_ext().write_bytes()
     }
 
-    pub fn gen_lock(&self, latches: &Latches) -> latch::Lock {
-        self.command_ext().gen_lock(latches)
+    pub fn gen_lock(&self) -> latch::Lock {
+        self.command_ext().gen_lock()
     }
 
     pub fn can_be_pipelined(&self) -> bool {
@@ -665,7 +665,9 @@ pub mod test_util {
             _ => unreachable!(),
         };
         let ctx = Context::default();
-        engine.write(&ctx, ret.to_be_write).unwrap();
+        if !ret.to_be_write.modifies.is_empty() {
+            engine.write(&ctx, ret.to_be_write).unwrap();
+        }
         Ok(res)
     }
 
@@ -711,7 +713,7 @@ pub mod test_util {
         prewrite_command(engine, cm, statistics, cmd)
     }
 
-    pub fn pessimsitic_prewrite<E: Engine>(
+    pub fn pessimistic_prewrite<E: Engine>(
         engine: &E,
         statistics: &mut Statistics,
         mutations: Vec<(Mutation, bool)>,
@@ -721,7 +723,7 @@ pub mod test_util {
         one_pc_max_commit_ts: Option<u64>,
     ) -> Result<PrewriteResult> {
         let cm = ConcurrencyManager::new(start_ts.into());
-        pessimsitic_prewrite_with_cm(
+        pessimistic_prewrite_with_cm(
             engine,
             cm,
             statistics,
@@ -733,7 +735,7 @@ pub mod test_util {
         )
     }
 
-    pub fn pessimsitic_prewrite_with_cm<E: Engine>(
+    pub fn pessimistic_prewrite_with_cm<E: Engine>(
         engine: &E,
         cm: ConcurrencyManager,
         statistics: &mut Statistics,

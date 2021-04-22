@@ -1929,8 +1929,7 @@ fn main() {
     if let Some(matches) = matches.subcommand_matches("encryption-meta") {
         match matches.subcommand() {
             ("dump-key", Some(matches)) => {
-                let message =
-                    "This action will expose encryption key(s) as plaintext. Do not output the \
+                let message = "This action will expose encryption key(s) as plaintext. Do not output the \
                     result in file on disk.";
                 if !warning_prompt(message) {
                     return;
@@ -2382,7 +2381,7 @@ fn compact_whole_cluster(
         let mgr = Arc::clone(&mgr);
         let addr = s.address.clone();
         let (from, to) = (from.clone(), to.clone());
-        let cfs: Vec<String> = cfs.iter().map(|cf| (*cf).to_string()).collect();
+        let cfs: Vec<String> = cfs.iter().map(|cf| cf.to_string()).collect();
         let h = thread::Builder::new()
             .name(format!("compact-{}", addr))
             .spawn(move || {

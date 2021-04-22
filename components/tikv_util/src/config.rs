@@ -21,7 +21,7 @@ use configuration::ConfigValue;
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
-    #[error("0")]
+    #[error("{0}")]
     Limit(String),
     #[error("config address error: {0}")]
     Address(String),
@@ -633,6 +633,8 @@ mod check_data_dir {
     use std::fs;
     use std::path::Path;
     use std::sync::Mutex;
+
+    use lazy_static::lazy_static;
 
     use super::{canonicalize_path, ConfigError};
 

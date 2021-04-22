@@ -37,17 +37,11 @@ extern crate quick_error;
 #[macro_use]
 extern crate serde_derive;
 #[macro_use]
-extern crate slog_derive;
-#[macro_use]
-extern crate derive_more;
-#[macro_use]
 extern crate more_asserts;
 #[macro_use]
 extern crate vlog;
 #[macro_use]
 extern crate tikv_util;
-#[macro_use]
-extern crate failure;
 
 #[cfg(test)]
 extern crate test;

@@ -137,7 +137,7 @@ fn test_connect_follower() {
     let connect_leader_fp = "connect_leader";
     let server = MockServer::new(2);
     let eps = server.bind_addrs();
-    let mut cfg = new_config(eps.clone());
+    let mut cfg = new_config(eps);
 
     // test switch
     cfg.enable_forwarding = false;
@@ -207,10 +207,10 @@ fn test_get_tombstone_stores() {
     assert_eq!(s, all_stores);
 
     all_stores.push(store99.clone());
-    all_stores.sort_by(|a, b| a.get_id().cmp(&b.get_id()));
+    all_stores.sort_by_key(|a| a.get_id());
     // include tombstone, there should be 2 stores.
     let mut s = client.get_all_stores(false).unwrap();
-    s.sort_by(|a, b| a.get_id().cmp(&b.get_id()));
+    s.sort_by_key(|a| a.get_id());
     assert_eq!(s, all_stores);
 
     // Add another tombstone store.
@@ -219,9 +219,9 @@ fn test_get_tombstone_stores() {
     server.default_handler().add_store(store199.clone());
 
     all_stores.push(store199);
-    all_stores.sort_by(|a, b| a.get_id().cmp(&b.get_id()));
+    all_stores.sort_by_key(|a| a.get_id());
     let mut s = client.get_all_stores(false).unwrap();
-    s.sort_by(|a, b| a.get_id().cmp(&b.get_id()));
+    s.sort_by_key(|a| a.get_id());
     assert_eq!(s, all_stores);
 
     client.get_store(store_id).unwrap();
@@ -387,8 +387,8 @@ fn restart_leader(mgr: SecurityManager) {
     server.stop();
     server.start(&mgr, eps);
 
-    // RECONNECT_INTERVAL_SEC is 1s.
-    thread::sleep(Duration::from_secs(1));
+    // The GLOBAL_RECONNECT_INTERVAL is 0.1s so sleeps 0.2s here.
+    thread::sleep(Duration::from_millis(200));
 
     let region = block_on(client.get_region_by_id(region.get_id())).unwrap();
     assert_eq!(region.unwrap().get_id(), region_id);
@@ -571,6 +571,8 @@ fn test_cluster_version() {
     assert!(!feature_gate.can_enable(feature_c));
 
     // After reconnect the version should be still accessable.
+    // The GLOBAL_RECONNECT_INTERVAL is 0.1s so sleeps 0.2s here.
+    thread::sleep(Duration::from_millis(200));
     client.reconnect().unwrap();
     assert!(feature_gate.can_enable(feature_b));
     assert!(!feature_gate.can_enable(feature_c));

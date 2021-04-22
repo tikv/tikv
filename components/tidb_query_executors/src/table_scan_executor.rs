@@ -540,7 +540,7 @@ mod tests {
         fn point_ranges(&self) -> Vec<KeyRange> {
             self.data
                 .iter()
-                .map(|(row_id, _, _)| {
+                .map(|(row_id, ..)| {
                     let mut r = KeyRange::default();
                     r.set_start(table::encode_row_key(self.table_id, *row_id));
                     r.set_end(r.get_start().to_vec());
@@ -953,7 +953,7 @@ mod tests {
             let value: std::result::Result<
                 _,
                 Box<dyn Send + Sync + Fn() -> tidb_query_common::error::StorageError>,
-            > = Err(Box::new(|| failure::format_err!("locked").into()));
+            > = Err(Box::new(|| anyhow::Error::msg("locked").into()));
             kv.push((key, value));
         }
         {

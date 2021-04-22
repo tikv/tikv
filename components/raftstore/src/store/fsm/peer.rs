@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::iter::Iterator;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, u64};
@@ -12,10 +12,10 @@ use std::{cmp, u64};
 use batch_system::{BasicMailbox, Fsm};
 use collections::HashMap;
 use engine_traits::CF_RAFT;
-use engine_traits::{Engines, KvEngine, RaftEngine, WriteBatchExt};
+use engine_traits::{Engines, KvEngine, RaftEngine, SSTMetaInfo, WriteBatchExt};
 use error_code::ErrorCodeExt;
+use fail::fail_point;
 use kvproto::errorpb;
-use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{
@@ -34,7 +34,9 @@ use raft::{Ready, StateRole};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
+use tikv_util::{box_err, debug, error, info, trace, warn};
 use tikv_util::{escape, is_zero_duration, Either};
+use txn_types::WriteBatchFlags;
 
 use crate::coprocessor::RegionChangeEvent;
 use crate::store::cmd_resp::{bind_term, new_error};
@@ -1895,6 +1897,8 @@ where
         meta.pending_snapshot_regions
             .retain(|r| self.fsm.region_id() != r.get_id());
 
+        // Set the `safe_ts` to zero to reject incoming stale read request
+        self.fsm.peer.safe_ts.store(0, Ordering::Release);
         // Destroy read delegates.
         meta.readers.remove(&region_id);
 
@@ -1990,6 +1994,7 @@ where
             }
         }
         meta.leaders.remove(&region_id);
+        meta.peer_properties.remove(&region_id);
     }
 
     // Update some region infos
@@ -2020,7 +2025,7 @@ where
             match self.fsm.peer.raft_group.apply_conf_change(&cp.conf_change) {
                 Ok(_) => {}
                 // PD could dispatch redundant conf changes.
-                Err(raft::Error::NotExists(_, _)) | Err(raft::Error::Exists(_, _)) => {}
+                Err(raft::Error::NotExists(..)) | Err(raft::Error::Exists(..)) => {}
                 _ => unreachable!(),
             }
         } else {
@@ -2168,12 +2173,8 @@ where
         new_split_regions: HashMap<u64, apply::NewSplitPeer>,
     ) {
         fail_point!("on_split", self.ctx.store_id() == 3, |_| {});
-        self.register_split_region_check_tick();
-        let mut meta = self.ctx.store_meta.lock().unwrap();
-        let region_id = derived.get_id();
-        meta.set_region(&self.ctx.coprocessor_host, derived, &mut self.fsm.peer);
-        self.fsm.peer.post_split();
 
+        let region_id = derived.get_id();
         // Roughly estimate the size and keys for new regions.
         let new_region_count = regions.len() as u64;
         let estimated_size = self.fsm.peer.approximate_size.map(|x| x / new_region_count);
@@ -2183,9 +2184,38 @@ where
         self.fsm.peer.approximate_keys = None;
 
         let is_leader = self.fsm.peer.is_leader();
+        let mut no_tick = false;
         if is_leader {
             self.fsm.peer.approximate_size = estimated_size;
             self.fsm.peer.approximate_keys = estimated_keys;
+
+            if let Some(estimated_size) = self.fsm.peer.approximate_size {
+                if estimated_size > self.ctx.coprocessor_host.cfg.region_max_size.0 {
+                    info!(
+                        "trigger split check immediately";
+                        "region_id" => self.fsm.region_id(),
+                        "peer_id" => self.fsm.peer_id(),
+                        "size" => estimated_size,
+                    );
+                    self.fsm.peer.approximate_size = None;
+                    // trigger a split check immediately when size is still large
+                    self.ctx
+                        .router
+                        .force_send(region_id, PeerMsg::Tick(PeerTicks::SPLIT_REGION_CHECK))
+                        .unwrap();
+                    no_tick = true;
+                }
+            }
+        }
+        if !no_tick {
+            self.register_split_region_check_tick();
+        }
+
+        let mut meta = self.ctx.store_meta.lock().unwrap();
+        meta.set_region(&self.ctx.coprocessor_host, derived, &mut self.fsm.peer);
+        self.fsm.peer.post_split();
+
+        if is_leader {
             self.fsm.peer.heartbeat_pd(self.ctx);
             // Notify pd immediately to let it update the region meta.
             info!(
@@ -2336,6 +2366,7 @@ where
             assert!(not_exist, "[region {}] should not exist", new_region_id);
             meta.readers
                 .insert(new_region_id, ReadDelegate::from_peer(new_peer.get_peer()));
+            meta.peer_properties.insert(new_region_id, Arc::default());
             if last_region_id == new_region_id {
                 // To prevent from big region, the right region needs run split
                 // check again after split.
@@ -2521,7 +2552,9 @@ where
                         "something is wrong, maybe PD do not ensure all target peers exist before merging"
                     );
                 }
-                error!("something is wrong, maybe PD do not ensure all target peers exist before merging");
+                error!(
+                    "something is wrong, maybe PD do not ensure all target peers exist before merging"
+                );
                 Ok(false)
             }
         }
@@ -3053,8 +3086,12 @@ where
                     result: MergeResultKind::FromTargetSnapshotStep2,
                 }),
             ) {
-                panic!("{} failed to send merge result(FromTargetSnapshotStep2) to source region {}, err {}",
-                       self.fsm.peer.tag, r.get_id(), e);
+                panic!(
+                    "{} failed to send merge result(FromTargetSnapshotStep2) to source region {}, err {}",
+                    self.fsm.peer.tag,
+                    r.get_id(),
+                    e
+                );
             }
         }
     }
@@ -3215,7 +3252,13 @@ where
             }
         }
         let allow_replica_read = read_only && msg.get_header().get_replica_read();
-        if !(self.fsm.peer.is_leader() || is_read_index_request || allow_replica_read) {
+        let flags = WriteBatchFlags::from_bits_check(msg.get_header().get_flags());
+        let allow_stale_read = read_only && flags.contains(WriteBatchFlags::STALE_READ);
+        if !self.fsm.peer.is_leader()
+            && !is_read_index_request
+            && !allow_replica_read
+            && !allow_stale_read
+        {
             self.ctx.raft_metrics.invalid_proposal.not_leader += 1;
             let leader = self.fsm.peer.get_peer_from_cache(leader_id);
             self.fsm.hibernate_state.reset(GroupState::Chaos);
@@ -3898,11 +3941,18 @@ where
         self.propose_raft_command(req, Callback::None);
     }
 
-    fn on_ingest_sst_result(&mut self, ssts: Vec<SstMeta>) {
+    fn on_ingest_sst_result(&mut self, ssts: Vec<SSTMetaInfo>) {
+        let mut size = 0;
+        let mut keys = 0;
         for sst in &ssts {
-            self.fsm.peer.size_diff_hint += sst.get_length();
+            size += sst.total_bytes;
+            keys += sst.total_kvs;
         }
-        self.register_split_region_check_tick();
+        self.fsm.peer.approximate_size = Some(self.fsm.peer.approximate_size.unwrap_or(0) + size);
+        self.fsm.peer.approximate_keys = Some(self.fsm.peer.approximate_keys.unwrap_or(0) + keys);
+        if self.fsm.peer.is_leader() {
+            self.on_pd_heartbeat_tick();
+        }
     }
 
     /// Verify and store the hash to state. return true means the hash has been stored successfully.

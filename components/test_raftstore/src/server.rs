@@ -59,6 +59,7 @@ use tikv_util::config::VersionTrack;
 use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker};
 use tikv_util::HandyRwLock;
+use txn_types::TxnExtraScheduler;
 
 type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksEngine, RocksEngine>>;
 type SimulateServerTransport =
@@ -122,6 +123,7 @@ pub struct ServerCluster {
     pub pending_services: HashMap<u64, PendingServices>,
     pub coprocessor_hooks: HashMap<u64, CopHooks>,
     pub security_mgr: Arc<SecurityManager>,
+    pub txn_extra_schedulers: HashMap<u64, Arc<dyn TxnExtraScheduler>>,
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
     raft_client: RaftClient<AddressMap, RaftStoreBlackHole>,
@@ -164,6 +166,7 @@ impl ServerCluster {
             raft_client,
             concurrency_managers: HashMap::default(),
             env,
+            txn_extra_schedulers: HashMap::default(),
         }
     }
 
@@ -213,12 +216,14 @@ impl Simulator for ServerCluster {
 
         let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
 
-        // Now we cache the store address, so here we should re-use last
-        // listening address for the same store.
-        if let Some(addr) = self.addrs.get(node_id) {
-            cfg.server.addr = addr;
-        } else {
-            cfg.server.addr = format!("127.0.0.1:{}", test_util::alloc_port());
+        if cfg.server.addr == "127.0.0.1:0" {
+            // Now we cache the store address, so here we should re-use last
+            // listening address for the same store.
+            if let Some(addr) = self.addrs.get(node_id) {
+                cfg.server.addr = addr;
+            } else {
+                cfg.server.addr = format!("127.0.0.1:{}", test_util::alloc_port());
+            }
         }
 
         let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
@@ -228,7 +233,7 @@ impl Simulator for ServerCluster {
         let raft_engine = RaftKv::new(sim_router.clone(), engines.kv.clone());
 
         // Create coprocessor.
-        let mut coprocessor_host = CoprocessorHost::new(router.clone());
+        let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
 
         let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
 
@@ -245,7 +250,10 @@ impl Simulator for ServerCluster {
             raft_engine.clone(),
         ));
 
-        let engine = RaftKv::new(sim_router.clone(), engines.kv.clone());
+        let mut engine = RaftKv::new(sim_router.clone(), engines.kv.clone());
+        if let Some(scheduler) = self.txn_extra_schedulers.remove(&node_id) {
+            engine.set_txn_extra_scheduler(scheduler);
+        }
 
         let latest_ts =
             block_on(self.pd_client.get_tso()).expect("failed to get timestamp from PD");
@@ -327,8 +335,24 @@ impl Simulator for ServerCluster {
             ConfigController::default(),
         );
 
+        let apply_router = system.apply_router();
+        // Create node.
+        let mut raft_store = cfg.raft_store.clone();
+        raft_store.validate().unwrap();
+        let mut node = Node::new(
+            system,
+            &cfg.server,
+            Arc::new(VersionTrack::new(raft_store)),
+            Arc::clone(&self.pd_client),
+            state,
+            bg_worker.clone(),
+        );
+        node.try_bootstrap_store(engines.clone())?;
+        let node_id = node.id();
+
         for _ in 0..100 {
             let mut svr = Server::new(
+                node_id,
                 &server_cfg,
                 &security_mgr,
                 store.clone(),
@@ -371,31 +395,14 @@ impl Simulator for ServerCluster {
         let trans = server.transport();
         let simulate_trans = SimulateTransport::new(trans);
         let server_cfg = Arc::new(cfg.server.clone());
-        let apply_router = system.apply_router();
-
-        // Create node.
-        let mut raft_store = cfg.raft_store.clone();
-        raft_store.validate().unwrap();
-        let mut node = Node::new(
-            system,
-            &cfg.server,
-            Arc::new(VersionTrack::new(raft_store)),
-            Arc::clone(&self.pd_client),
-            state,
-            bg_worker.clone(),
-        );
 
         // Register the role change observer of the lock manager.
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
 
-        let pessimistic_txn_cfg = cfg.pessimistic_txn.clone();
+        let pessimistic_txn_cfg = cfg.pessimistic_txn;
 
-        let split_check_runner = SplitCheckRunner::new(
-            engines.kv.clone(),
-            router.clone(),
-            coprocessor_host.clone(),
-            cfg.coprocessor,
-        );
+        let split_check_runner =
+            SplitCheckRunner::new(engines.kv.clone(), router.clone(), coprocessor_host.clone());
         let split_check_scheduler = bg_worker.start("split-check", split_check_runner);
 
         node.start(

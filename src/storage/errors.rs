@@ -113,7 +113,7 @@ impl ErrorCodeExt for Error {
             ErrorInner::Io(_) => error_code::storage::IO,
             ErrorInner::SchedTooBusy => error_code::storage::SCHED_TOO_BUSY,
             ErrorInner::GcWorkerTooBusy => error_code::storage::GC_WORKER_TOO_BUSY,
-            ErrorInner::KeyTooLarge(_, _) => error_code::storage::KEY_TOO_LARGE,
+            ErrorInner::KeyTooLarge(..) => error_code::storage::KEY_TOO_LARGE,
             ErrorInner::InvalidCf(_) => error_code::storage::INVALID_CF,
             ErrorInner::TTLNotEnabled => error_code::storage::TTL_NOT_ENABLED,
         }
@@ -248,12 +248,10 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
             box MvccErrorInner::KeyIsLocked(info),
         )))))
         | Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Engine(EngineError(
-            box EngineErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(info))),
+            box EngineErrorInner::KeyIsLocked(info),
         )))))
         | Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(info))))
-        | Error(box ErrorInner::Engine(EngineError(box EngineErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::KeyIsLocked(info),
-        ))))) => {
+        | Error(box ErrorInner::Engine(EngineError(box EngineErrorInner::KeyIsLocked(info)))) => {
             key_error.set_locked(info.clone());
         }
         // failed in prewrite or pessimistic lock

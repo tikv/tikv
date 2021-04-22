@@ -50,9 +50,9 @@ fn test_rawkv() {
     cas_req.key = k.clone();
     cas_req.value = v0.clone();
     cas_req.previous_not_exist = true;
-    let resp = client.raw_compare_and_set(&cas_req).unwrap();
+    let resp = client.raw_compare_and_swap(&cas_req).unwrap();
     assert!(!resp.has_region_error());
-    assert!(!resp.get_not_equal());
+    assert!(resp.get_succeed());
 
     // Raw get
     let mut get_req = RawGetRequest::default();
@@ -64,8 +64,8 @@ fn test_rawkv() {
     cas_req.value = v1.clone();
     cas_req.previous_not_exist = false;
     cas_req.previous_value = v0;
-    let resp = client.raw_compare_and_set(&cas_req).unwrap();
-    assert!(!resp.get_not_equal());
+    let resp = client.raw_compare_and_swap(&cas_req).unwrap();
+    assert!(resp.get_succeed());
     let get_resp = client.raw_get(&get_req).unwrap();
     assert_eq!(get_resp.value, v1);
 
@@ -127,9 +127,9 @@ fn test_rawkv_ttl() {
     cas_req.value = v0.clone();
     cas_req.previous_not_exist = false;
     cas_req.previous_value = v1.clone();
-    let resp = client.raw_compare_and_set(&cas_req).unwrap();
+    let resp = client.raw_compare_and_swap(&cas_req).unwrap();
     assert!(!resp.has_region_error());
-    assert!(resp.get_not_equal());
+    assert!(!resp.get_succeed());
 
     let mut cas_req = RawCasRequest::default();
     cas_req.set_context(ctx.clone());
@@ -138,9 +138,9 @@ fn test_rawkv_ttl() {
     cas_req.previous_not_exist = true;
     cas_req.previous_value = vec![];
     cas_req.ttl = 100;
-    let resp = client.raw_compare_and_set(&cas_req).unwrap();
+    let resp = client.raw_compare_and_swap(&cas_req).unwrap();
     assert!(!resp.has_region_error());
-    assert!(!resp.get_not_equal());
+    assert!(resp.get_succeed());
     // Raw get
     let mut get_req = RawGetRequest::default();
     get_req.set_context(ctx.clone());
@@ -154,8 +154,8 @@ fn test_rawkv_ttl() {
     cas_req.previous_not_exist = false;
     cas_req.previous_value = v0;
     cas_req.ttl = 140;
-    let resp = client.raw_compare_and_set(&cas_req).unwrap();
-    assert!(!resp.get_not_equal());
+    let resp = client.raw_compare_and_swap(&cas_req).unwrap();
+    assert!(resp.get_succeed());
     let get_resp = client.raw_get(&get_req).unwrap();
     assert_eq!(get_resp.value, v1);
 
@@ -232,7 +232,7 @@ fn test_rawkv_ttl() {
     let mut put_req = RawPutRequest::default();
     put_req.set_context(ctx.clone());
     put_req.key = k.clone();
-    put_req.value = v.clone();
+    put_req.value = v;
     put_req.ttl = 1;
     let put_resp = client.raw_put(&put_req).unwrap();
     assert!(!put_resp.has_region_error());
@@ -241,8 +241,8 @@ fn test_rawkv_ttl() {
     std::thread::sleep(Duration::from_secs(1));
 
     let mut get_req = RawGetRequest::default();
-    get_req.set_context(ctx.clone());
-    get_req.key = k.clone();
+    get_req.set_context(ctx);
+    get_req.key = k;
     let get_resp = client.raw_get(&get_req).unwrap();
     assert!(!get_resp.has_region_error());
     assert!(get_resp.error.is_empty());
@@ -820,7 +820,7 @@ fn test_debug_region_size() {
 
     let mut req = debugpb::RegionSizeRequest::default();
     req.set_region_id(region_id);
-    req.set_cfs(cfs.iter().map(|s| (*s).to_string()).collect());
+    req.set_cfs(cfs.iter().map(|s| s.to_string()).collect());
     let entries: Vec<_> = debug_client
         .region_size(&req)
         .unwrap()
@@ -857,9 +857,11 @@ fn test_debug_fail_point() {
         .list_fail_points(&debugpb::ListFailPointsRequest::default())
         .unwrap();
     let entries = resp.get_entries();
-    assert!(entries
-        .iter()
-        .any(|e| e.get_name() == fp && e.get_actions() == act));
+    assert!(
+        entries
+            .iter()
+            .any(|e| e.get_name() == fp && e.get_actions() == act)
+    );
 
     let mut recover_req = debugpb::RecoverFailPointRequest::default();
     recover_req.set_name(fp.to_owned());
@@ -869,9 +871,11 @@ fn test_debug_fail_point() {
         .list_fail_points(&debugpb::ListFailPointsRequest::default())
         .unwrap();
     let entries = resp.get_entries();
-    assert!(entries
-        .iter()
-        .all(|e| !(e.get_name() == fp && e.get_actions() == act)));
+    assert!(
+        entries
+            .iter()
+            .all(|e| !(e.get_name() == fp && e.get_actions() == act))
+    );
 }
 
 #[test]
@@ -930,7 +934,7 @@ fn test_double_run_node() {
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
     let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap());
-    let coprocessor_host = CoprocessorHost::new(router);
+    let coprocessor_host = CoprocessorHost::new(router, raftstore::coprocessor::Config::default());
     let importer = {
         let dir = Path::new(engines.kv.path()).join("import-sst");
         Arc::new(SSTImporter::new(dir, None).unwrap())
@@ -1275,7 +1279,7 @@ fn test_prewrite_check_max_commit_ts() {
     assert_eq!(resp.get_min_commit_ts(), 101);
 
     let mut req = PrewriteRequest::default();
-    req.set_context(ctx);
+    req.set_context(ctx.clone());
     req.set_primary_lock(b"k2".to_vec());
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Put);
@@ -1283,11 +1287,39 @@ fn test_prewrite_check_max_commit_ts() {
     mutation.set_value(b"v2".to_vec());
     req.mut_mutations().push(mutation);
     req.set_start_version(20);
+    req.set_min_commit_ts(21);
     req.set_max_commit_ts(50);
     req.set_lock_ttl(20000);
     req.set_use_async_commit(true);
-    let resp = client.kv_prewrite(&req).unwrap();
-    assert_eq!(resp.get_min_commit_ts(), 0);
+    // Test the idempotency of prewrite when falling back to 2PC.
+    for _ in 0..2 {
+        let resp = client.kv_prewrite(&req).unwrap();
+        assert_eq!(resp.get_min_commit_ts(), 0);
+        assert_eq!(resp.get_one_pc_commit_ts(), 0);
+    }
+
+    // 1PC
+    let mut req = PrewriteRequest::default();
+    req.set_context(ctx);
+    req.set_primary_lock(b"k3".to_vec());
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(b"k3".to_vec());
+    mutation.set_value(b"v3".to_vec());
+    req.mut_mutations().push(mutation);
+    req.set_start_version(20);
+    req.set_min_commit_ts(21);
+    req.set_max_commit_ts(50);
+    req.set_lock_ttl(20000);
+    req.set_use_async_commit(true);
+    req.set_try_one_pc(true);
+    // Test the idempotency of prewrite when falling back to 2PC.
+    for _ in 0..2 {
+        let resp = client.kv_prewrite(&req).unwrap();
+        assert_eq!(resp.get_min_commit_ts(), 0);
+        assert_eq!(resp.get_one_pc_commit_ts(), 0);
+    }
+
     // There shouldn't be locks remaining in the lock table.
     assert!(cm.read_range_check(None, None, |_, _| Err(())).is_ok());
 }
@@ -1387,9 +1419,7 @@ macro_rules! test_func {
 }
 
 macro_rules! test_func_init {
-    ($client:ident, $ctx:ident, $call_opt:ident, $func:ident, $req:ident) => {{
-        test_func!($client, $ctx, $call_opt, $func, $req::default())
-    }};
+    ($client:ident, $ctx:ident, $call_opt:ident, $func:ident, $req:ident) => {{ test_func!($client, $ctx, $call_opt, $func, $req::default()) }};
     ($client:ident, $ctx:ident, $call_opt:ident, $func:ident, $req:ident, batch) => {{
         test_func!($client, $ctx, $call_opt, $func, {
             let mut req = $req::default();
@@ -1420,15 +1450,14 @@ fn setup_cluster() -> (Cluster<ServerCluster>, TikvClient, CallOption, Context) 
     let follower = region
         .get_peers()
         .iter()
-        .filter(|p| **p != leader)
-        .next()
+        .find(|p| **p != leader)
         .unwrap()
         .clone();
     let follower_addr = cluster.sim.rl().get_addr(follower.get_store_id());
     let epoch = cluster.get_region_epoch(region_id);
     let mut ctx = Context::default();
     ctx.set_region_id(region_id);
-    ctx.set_peer(leader.clone());
+    ctx.set_peer(leader);
     ctx.set_region_epoch(epoch);
 
     let env = Arc::new(Environment::new(1));
@@ -1570,7 +1599,7 @@ fn test_tikv_forwarding() {
     // Test if duplex can be redirect correctly.
     let cases = vec![
         (CallOption::default().timeout(Duration::from_secs(3)), false),
-        (call_opt.clone(), true),
+        (call_opt, true),
     ];
     for (opt, success) in cases {
         let (mut sender, receiver) = client.batch_commands_opt(opt).unwrap();
@@ -1619,7 +1648,7 @@ fn test_forwarding_reconnect() {
     cluster.stop_node(leader.get_store_id());
 
     let mut req = RawGetRequest::default();
-    req.set_context(ctx.clone());
+    req.set_context(ctx);
     // Large timeout value to ensure the error is from proxy instead of client.
     let timer = std::time::Instant::now();
     let timeout = Duration::from_secs(5);
@@ -1633,7 +1662,7 @@ fn test_forwarding_reconnect() {
     }
 
     cluster.run_node(leader.get_store_id()).unwrap();
-    let resp = client.raw_get_opt(&req, call_opt.clone()).unwrap();
+    let resp = client.raw_get_opt(&req, call_opt).unwrap();
     assert!(!resp.get_region_error().has_store_not_match(), "{:?}", resp);
 }
 
@@ -1652,7 +1681,7 @@ fn test_health_check() {
         ..Default::default()
     };
     let resp = client.check(&req).unwrap();
-    assert_eq!(ServingStatus::Serving, resp.status.into());
+    assert_eq!(ServingStatus::Serving, resp.status);
 
     cluster.shutdown();
     client.check(&req).unwrap_err();

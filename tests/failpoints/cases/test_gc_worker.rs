@@ -14,9 +14,8 @@ use raftstore::coprocessor::{
     RegionInfo, RegionInfoCallback, RegionInfoProvider, Result as CopResult, SeekRegionCallback,
 };
 use test_raftstore::*;
-use tikv::server::gc_worker::GcTask;
 use tikv::server::gc_worker::{
-    AutoGcConfig, GcSafePointProvider, Result as GcWorkerResult, TestGCRunner,
+    AutoGcConfig, GcSafePointProvider, GcTask, Result as GcWorkerResult, TestGCRunner,
 };
 use tikv::storage::kv::TestEngineBuilder;
 use tikv::storage::mvcc::tests::must_get_none;
@@ -107,7 +106,7 @@ fn test_observer_send_error() {
     );
     assert_eq!(must_check_lock_observer(&client, max_ts, true).len(), 1);
 
-    let observer_send_fp = "lock_observer_send";
+    let observer_send_fp = "lock_observer_send_full";
     fail::cfg(observer_send_fp, "return").unwrap();
     must_kv_prewrite(
         &client,

@@ -15,16 +15,23 @@ if [[ -n "$SHELL_DEBUG" ]] ; then
   set -x
 fi
 
-ALLOWED_CLIPPY_LINTS=(-A clippy::module_inception  \
+CLIPPY_LINTS=(-A clippy::module_inception  \
 	-A clippy::should_implement_trait \
 	-A clippy::new_without_default \
 	-A clippy::too_many_arguments \
 	-A clippy::blacklisted_name \
+	-A clippy::redundant_closure \
+	-A clippy::upper_case_acronyms \
+	-A clippy::field_reassign_with_default \
+	-A clippy::wrong_self_convention \
 	-A clippy::needless_range_loop \
+	-A clippy::inconsistent_struct_constructor \
 	-A clippy::new_ret_no_self \
 	-A clippy::unnecessary_sort_by \
-	-A clippy::unnecessary_wraps)
+	-A clippy::unnecessary_wraps \
+        -W clippy::dbg_macro \
+        -W clippy::todo)
 
 cargo clippy --workspace --no-default-features \
 	--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
-	--features "${TIKV_ENABLE_FEATURES}" "$@" -- "${ALLOWED_CLIPPY_LINTS[@]}"
+	--features "${TIKV_ENABLE_FEATURES}" "$@" -- "${CLIPPY_LINTS[@]}"

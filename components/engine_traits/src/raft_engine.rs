@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use crate::*;
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::Entry;
@@ -311,7 +313,7 @@ macro_rules! def_raft_engine {
                 }
 
                 // TODO: disable WAL here.
-                if !Mutable::is_empty(&raft_wb) {
+                if !WriteBatch::is_empty(&raft_wb) {
                     raft_wb.write()?;
                 }
                 Ok((to - from) as usize)
@@ -359,7 +361,7 @@ macro_rules! def_raft_engine {
             }
 
             fn is_empty(&self) -> bool {
-                Mutable::is_empty(self)
+                WriteBatch::is_empty(self)
             }
         }
 

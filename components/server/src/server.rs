@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 //! This module startups all the components of a TiKV server.
 //!
 //! It is responsible for reading from configs, starting up the various server components,
@@ -73,16 +75,11 @@ use tikv::{
         ttl::TTLChecker,
         Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID, GRPC_THREAD_PREFIX,
     },
-    storage::{
-        self,
-        config::{StorageConfigManger, MAX_RESERVED_SPACE_GB},
-        mvcc::MvccConsistencyCheckObserver,
-        Engine,
-    },
+    storage::{self, config::StorageConfigManger, mvcc::MvccConsistencyCheckObserver, Engine},
 };
 use tikv_util::{
     check_environment_variables,
-    config::{ensure_dir_exist, ReadableSize, VersionTrack},
+    config::{ensure_dir_exist, VersionTrack},
     sys::sys_quota::SysQuota,
     time::Monitor,
     timer::GLOBAL_TIMER_HANDLE,
@@ -216,7 +213,10 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let (resolver, state) =
             resolve::new_resolver(Arc::clone(&pd_client), &background_worker, router.clone());
 
-        let mut coprocessor_host = Some(CoprocessorHost::new(router.clone()));
+        let mut coprocessor_host = Some(CoprocessorHost::new(
+            router.clone(),
+            config.coprocessor.clone(),
+        ));
         let region_info_accessor = RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap());
 
         // Initialize concurrency manager
@@ -323,21 +323,19 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         std::fs::create_dir_all(&search_base)
             .unwrap_or_else(|_| panic!("create {} failed", search_base.display()));
 
-        for result in fs::read_dir(&search_base).unwrap() {
-            if let Ok(entry) = result {
-                if !entry.file_type().unwrap().is_file() {
-                    continue;
-                }
-                let file_path = entry.path();
-                let file_name = file_path.file_name().unwrap().to_str().unwrap();
-                if let Ok(addr) = file_name.replace('_', ":").parse::<SocketAddr>() {
-                    let ip = addr.ip();
-                    let port = addr.port();
-                    if cur_port == port
-                        && (cur_ip == ip || cur_ip.is_unspecified() || ip.is_unspecified())
-                    {
-                        let _ = try_lock_conflict_addr(file_path);
-                    }
+        for entry in fs::read_dir(&search_base).unwrap().flatten() {
+            if !entry.file_type().unwrap().is_file() {
+                continue;
+            }
+            let file_path = entry.path();
+            let file_name = file_path.file_name().unwrap().to_str().unwrap();
+            if let Ok(addr) = file_name.replace('_', ":").parse::<SocketAddr>() {
+                let ip = addr.ip();
+                let port = addr.port();
+                if cur_port == port
+                    && (cur_ip == ip || cur_ip.is_unspecified() || ip.is_unspecified())
+                {
+                    let _ = try_lock_conflict_addr(file_path);
                 }
             }
         }
@@ -377,18 +375,15 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
         file_system::reserve_space_for_recover(
             &self.config.storage.data_dir,
-            cmp::min(
-                ReadableSize::gb(MAX_RESERVED_SPACE_GB).0,
-                if self.config.storage.reserve_space.0 == 0 {
-                    0
-                } else {
-                    // Max one of configured `reserve_space` and `storage.capacity * 5%`.
-                    cmp::max(
-                        (capacity as f64 * 0.05) as u64,
-                        self.config.storage.reserve_space.0,
-                    )
-                },
-            ),
+            if self.config.storage.reserve_space.0 == 0 {
+                0
+            } else {
+                // Max one of configured `reserve_space` and `storage.capacity * 5%`.
+                cmp::max(
+                    (capacity as f64 * 0.05) as u64,
+                    self.config.storage.reserve_space.0,
+                )
+            },
         )
         .unwrap();
     }
@@ -602,14 +597,38 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             cop_read_pools.handle()
         };
 
+        // Create resolved ts worker
+        let mut rts_worker = Box::new(LazyWorker::new("resolved-ts"));
+        let rts_scheduler = rts_worker.scheduler();
+
         // Register cdc
         let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
         cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+        // Register resolved ts
+        let resolved_ts_ob = resolved_ts::Observer::new(rts_scheduler.clone());
+        resolved_ts_ob.register_to(self.coprocessor_host.as_mut().unwrap());
 
         let server_config = Arc::new(self.config.server.clone());
 
+        self.config
+            .raft_store
+            .validate()
+            .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
+        let raft_store = Arc::new(VersionTrack::new(self.config.raft_store.clone()));
+        let mut node = Node::new(
+            self.system.take().unwrap(),
+            &server_config,
+            raft_store.clone(),
+            self.pd_client.clone(),
+            self.state.clone(),
+            self.background_worker.clone(),
+        );
+        node.try_bootstrap_store(engines.engines.clone())
+            .unwrap_or_else(|e| fatal!("failed to bootstrap node id: {}", e));
+
         // Create server
         let server = Server::new(
+            node.id(),
             &server_config,
             &self.security_mgr,
             storage,
@@ -638,7 +657,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             engines.engines.kv.clone(),
             self.router.clone(),
             self.coprocessor_host.clone().unwrap(),
-            self.config.coprocessor.clone(),
         );
         let split_check_scheduler = self
             .background_worker
@@ -648,14 +666,9 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             Box::new(SplitCheckConfigManager(split_check_scheduler.clone())),
         );
 
-        self.config
-            .raft_store
-            .validate()
-            .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
-        let raft_store = Arc::new(VersionTrack::new(self.config.raft_store.clone()));
         cfg_controller.register(
             tikv::config::Module::Raftstore,
-            Box::new(RaftstoreConfigManager(raft_store.clone())),
+            Box::new(RaftstoreConfigManager(raft_store)),
         );
 
         let split_config_manager =
@@ -682,15 +695,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             .unwrap()
             .registry
             .register_consistency_check_observer(100, observer);
-
-        let mut node = Node::new(
-            self.system.take().unwrap(),
-            &server_config,
-            raft_store,
-            self.pd_client.clone(),
-            self.state.clone(),
-            self.background_worker.clone(),
-        );
 
         node.start(
             engines.engines.clone(),
@@ -741,6 +745,21 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         );
         cdc_worker.start_with_timer(cdc_endpoint);
         self.to_stop.push(cdc_worker);
+        // Start resolved ts
+        let rts_endpoint = resolved_ts::Endpoint::new(
+            &self.config.cdc,
+            rts_scheduler,
+            self.router.clone(),
+            engines.store_meta.clone(),
+            self.pd_client.clone(),
+            self.concurrency_manager.clone(),
+            server.env(),
+            self.security_mgr.clone(),
+            // TODO: replace to the cdc sinker
+            resolved_ts::DummySinker::new(),
+        );
+        rts_worker.start(rts_endpoint);
+        self.to_stop.push(rts_worker);
 
         self.servers = Some(Servers {
             lock_mgr,

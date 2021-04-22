@@ -4,7 +4,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use engine_traits::KvEngine;
-use kvproto::kvrpcpb::{ExtraOp as TxnExtraOp, IsolationLevel};
+use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::Region;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::{ChangeObserver, ObserveID};
@@ -128,12 +128,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                     }
                 }
                 ScanMode::LockOnly => {
-                    let mut reader = MvccReader::new(
-                        snap,
-                        Some(MvccScanMode::Forward),
-                        false,
-                        IsolationLevel::Si,
-                    );
+                    let mut reader = MvccReader::new(snap, Some(MvccScanMode::Forward), false);
                     let mut done = false;
                     let mut start = None;
                     while !done && !(task.is_cancelled)() {
@@ -175,10 +170,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
     ) -> Result<RegionSnapshot<E::Snapshot>> {
         let (cb, fut) = tikv_util::future::paired_future_callback();
         let before_start = task.before_start.take();
-        let change_cmd = ChangeObserver {
-            observe_id: task.id,
-            region_id: task.region.id,
-        };
+        let change_cmd = ChangeObserver::from_rts(task.region.id, task.id);
         raft_router.significant_send(
             task.region.id,
             SignificantMsg::CaptureChange {
@@ -194,7 +186,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
         )?;
         let mut resp = box_try!(fut.await);
         if resp.response.get_header().has_error() {
-            return Err(Error::Request(resp.response.take_header().take_error()));
+            return Err(Error::request(resp.response.take_header().take_error()));
         }
         Ok(resp.snapshot.unwrap())
     }

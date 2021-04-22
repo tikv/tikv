@@ -497,6 +497,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::JsonRemoveSig => json_remove_fn_meta(),
         ScalarFuncSig::JsonKeysSig => json_keys_fn_meta(),
         ScalarFuncSig::JsonKeys2ArgsSig => json_keys_fn_meta(),
+        ScalarFuncSig::JsonQuoteSig => json_quote_fn_meta(),
         // impl_like
         ScalarFuncSig::LikeSig => map_like_sig(ft)?,
         ScalarFuncSig::RegexpSig => regexp_fn_meta(),
@@ -679,6 +680,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::NullTimeDiff => null_time_diff_fn_meta(),
         ScalarFuncSig::AddDatetimeAndDuration => add_datetime_and_duration_fn_meta(),
         ScalarFuncSig::AddDatetimeAndString => add_datetime_and_string_fn_meta(),
+        ScalarFuncSig::AddDateAndString => add_date_and_string_fn_meta(),
         ScalarFuncSig::SubDatetimeAndDuration => sub_datetime_and_duration_fn_meta(),
         ScalarFuncSig::SubDatetimeAndString => sub_datetime_and_string_fn_meta(),
         ScalarFuncSig::FromDays => from_days_fn_meta(),

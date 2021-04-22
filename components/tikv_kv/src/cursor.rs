@@ -4,7 +4,6 @@ use std::cell::Cell;
 use std::cmp::Ordering;
 use std::ops::Bound;
 
-use engine_rocks::PerfContext;
 use engine_traits::CfName;
 use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
 use tikv_util::keybuilder::KeyBuilder;
@@ -12,7 +11,8 @@ use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 use txn_types::{Key, TimeStamp};
 
-use crate::storage::kv::{CfStatistics, Error, Iterator, Result, ScanMode, Snapshot, SEEK_BOUND};
+use crate::stats::{StatsCollector, StatsKind};
+use crate::{CfStatistics, Error, Iterator, Result, ScanMode, Snapshot, SEEK_BOUND};
 
 pub struct Cursor<I: Iterator> {
     iter: I,
@@ -329,36 +329,24 @@ impl<I: Iterator> Cursor<I> {
     #[inline]
     pub fn seek_to_first(&mut self, statistics: &mut CfStatistics) -> bool {
         assert!(!self.prefix_seek);
-        statistics.seek += 1;
         self.mark_unread();
-        let before = PerfContext::get().internal_delete_skipped_count() as usize;
-        let res = self.iter.seek_to_first().expect("Invalid Iterator");
-        statistics.seek_tombstone +=
-            PerfContext::get().internal_delete_skipped_count() as usize - before;
-        res
+        let _guard = StatsCollector::new(StatsKind::Seek, statistics);
+        self.iter.seek_to_first().expect("Invalid Iterator")
     }
 
     #[inline]
     pub fn seek_to_last(&mut self, statistics: &mut CfStatistics) -> bool {
         assert!(!self.prefix_seek);
-        statistics.seek += 1;
         self.mark_unread();
-        let before = PerfContext::get().internal_delete_skipped_count() as usize;
-        let res = self.iter.seek_to_last().expect("Invalid Iterator");
-        statistics.seek_tombstone +=
-            PerfContext::get().internal_delete_skipped_count() as usize - before;
-        res
+        let _guard = StatsCollector::new(StatsKind::Seek, statistics);
+        self.iter.seek_to_last().expect("Invalid Iterator")
     }
 
     #[inline]
     pub fn internal_seek(&mut self, key: &Key, statistics: &mut CfStatistics) -> Result<bool> {
-        statistics.seek += 1;
         self.mark_unread();
-        let before = PerfContext::get().internal_delete_skipped_count() as usize;
-        let res = self.iter.seek(key);
-        statistics.seek_tombstone +=
-            PerfContext::get().internal_delete_skipped_count() as usize - before;
-        res
+        let _guard = StatsCollector::new(StatsKind::Seek, statistics);
+        self.iter.seek(key)
     }
 
     #[inline]
@@ -367,35 +355,23 @@ impl<I: Iterator> Cursor<I> {
         key: &Key,
         statistics: &mut CfStatistics,
     ) -> Result<bool> {
-        statistics.seek_for_prev += 1;
         self.mark_unread();
-        let before = PerfContext::get().internal_delete_skipped_count() as usize;
-        let res = self.iter.seek_for_prev(key);
-        statistics.seek_for_prev_tombstone +=
-            PerfContext::get().internal_delete_skipped_count() as usize - before;
-        res
+        let _guard = StatsCollector::new(StatsKind::SeekForPrev, statistics);
+        self.iter.seek_for_prev(key)
     }
 
     #[inline]
     pub fn next(&mut self, statistics: &mut CfStatistics) -> bool {
-        statistics.next += 1;
         self.mark_unread();
-        let before = PerfContext::get().internal_delete_skipped_count() as usize;
-        let res = self.iter.next().expect("Invalid Iterator");
-        statistics.next_tombstone +=
-            PerfContext::get().internal_delete_skipped_count() as usize - before as usize;
-        res
+        let _guard = StatsCollector::new(StatsKind::Next, statistics);
+        self.iter.next().expect("Invalid Iterator")
     }
 
     #[inline]
     pub fn prev(&mut self, statistics: &mut CfStatistics) -> bool {
-        statistics.prev += 1;
         self.mark_unread();
-        let before = PerfContext::get().internal_delete_skipped_count() as usize;
-        let res = self.iter.prev().expect("Invalid Iterator");
-        statistics.prev_tombstone +=
-            PerfContext::get().internal_delete_skipped_count() as usize - before as usize;
-        res
+        let _guard = StatsCollector::new(StatsKind::Prev, statistics);
+        self.iter.prev().expect("Invalid Iterator")
     }
 
     #[inline]
@@ -597,7 +573,7 @@ mod tests {
     use tempfile::Builder;
     use txn_types::Key;
 
-    use crate::storage::{CfStatistics, Cursor, ScanMode};
+    use crate::{CfStatistics, Cursor, ScanMode};
     use engine_rocks::util::new_temp_engine;
     use raftstore::store::RegionSnapshot;
 
@@ -652,25 +628,33 @@ mod tests {
         let it = snap.iter(iter_opt);
         let mut iter = Cursor::new(it, ScanMode::Mixed, true);
 
-        assert!(!iter
-            .seek(&Key::from_encoded_slice(b"a2"), &mut statistics)
-            .unwrap());
-        assert!(iter
-            .seek(&Key::from_encoded_slice(b"a3"), &mut statistics)
-            .unwrap());
-        assert!(iter
-            .seek(&Key::from_encoded_slice(b"a9"), &mut statistics)
-            .is_err());
+        assert!(
+            !iter
+                .seek(&Key::from_encoded_slice(b"a2"), &mut statistics)
+                .unwrap()
+        );
+        assert!(
+            iter.seek(&Key::from_encoded_slice(b"a3"), &mut statistics)
+                .unwrap()
+        );
+        assert!(
+            iter.seek(&Key::from_encoded_slice(b"a9"), &mut statistics)
+                .is_err()
+        );
 
-        assert!(!iter
-            .seek_for_prev(&Key::from_encoded_slice(b"a6"), &mut statistics)
-            .unwrap());
-        assert!(iter
-            .seek_for_prev(&Key::from_encoded_slice(b"a3"), &mut statistics)
-            .unwrap());
-        assert!(iter
-            .seek_for_prev(&Key::from_encoded_slice(b"a1"), &mut statistics)
-            .is_err());
+        assert!(
+            !iter
+                .seek_for_prev(&Key::from_encoded_slice(b"a6"), &mut statistics)
+                .unwrap()
+        );
+        assert!(
+            iter.seek_for_prev(&Key::from_encoded_slice(b"a3"), &mut statistics)
+                .unwrap()
+        );
+        assert!(
+            iter.seek_for_prev(&Key::from_encoded_slice(b"a1"), &mut statistics)
+                .is_err()
+        );
     }
 
     #[test]
@@ -683,34 +667,42 @@ mod tests {
         let mut statistics = CfStatistics::default();
         let it = snap.iter(IterOptions::default());
         let mut iter = Cursor::new(it, ScanMode::Mixed, false);
-        assert!(!iter
-            .reverse_seek(&Key::from_encoded_slice(b"a2"), &mut statistics)
-            .unwrap());
-        assert!(iter
-            .reverse_seek(&Key::from_encoded_slice(b"a7"), &mut statistics)
-            .unwrap());
+        assert!(
+            !iter
+                .reverse_seek(&Key::from_encoded_slice(b"a2"), &mut statistics)
+                .unwrap()
+        );
+        assert!(
+            iter.reverse_seek(&Key::from_encoded_slice(b"a7"), &mut statistics)
+                .unwrap()
+        );
         let mut pair = (
             iter.key(&mut statistics).to_vec(),
             iter.value(&mut statistics).to_vec(),
         );
         assert_eq!(pair, (b"a5".to_vec(), b"v5".to_vec()));
-        assert!(iter
-            .reverse_seek(&Key::from_encoded_slice(b"a5"), &mut statistics)
-            .unwrap());
+        assert!(
+            iter.reverse_seek(&Key::from_encoded_slice(b"a5"), &mut statistics)
+                .unwrap()
+        );
         pair = (
             iter.key(&mut statistics).to_vec(),
             iter.value(&mut statistics).to_vec(),
         );
         assert_eq!(pair, (b"a3".to_vec(), b"v3".to_vec()));
-        assert!(!iter
-            .reverse_seek(&Key::from_encoded_slice(b"a3"), &mut statistics)
-            .unwrap());
-        assert!(iter
-            .reverse_seek(&Key::from_encoded_slice(b"a1"), &mut statistics)
-            .is_err());
-        assert!(iter
-            .reverse_seek(&Key::from_encoded_slice(b"a8"), &mut statistics)
-            .is_err());
+        assert!(
+            !iter
+                .reverse_seek(&Key::from_encoded_slice(b"a3"), &mut statistics)
+                .unwrap()
+        );
+        assert!(
+            iter.reverse_seek(&Key::from_encoded_slice(b"a1"), &mut statistics)
+                .is_err()
+        );
+        assert!(
+            iter.reverse_seek(&Key::from_encoded_slice(b"a8"), &mut statistics)
+                .is_err()
+        );
 
         assert!(iter.seek_to_last(&mut statistics));
         let mut res = vec![];
@@ -733,12 +725,15 @@ mod tests {
         let snap = RegionSnapshot::<RocksSnapshot>::from_raw(engines.kv, region);
         let it = snap.iter(IterOptions::default());
         let mut iter = Cursor::new(it, ScanMode::Mixed, false);
-        assert!(!iter
-            .reverse_seek(&Key::from_encoded_slice(b"a1"), &mut statistics)
-            .unwrap());
-        assert!(iter
-            .reverse_seek(&Key::from_encoded_slice(b"a2"), &mut statistics)
-            .unwrap());
+        assert!(
+            !iter
+                .reverse_seek(&Key::from_encoded_slice(b"a1"), &mut statistics)
+                .unwrap()
+        );
+        assert!(
+            iter.reverse_seek(&Key::from_encoded_slice(b"a2"), &mut statistics)
+                .unwrap()
+        );
         let pair = (
             iter.key(&mut statistics).to_vec(),
             iter.value(&mut statistics).to_vec(),

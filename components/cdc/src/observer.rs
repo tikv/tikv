@@ -7,6 +7,7 @@ use std::sync::{Arc, RwLock};
 use collections::HashMap;
 use engine_rocks::RocksEngine;
 use engine_traits::{KvEngine, ReadOptions, CF_DEFAULT, CF_WRITE};
+use fail::fail_point;
 use kvproto::metapb::{Peer, Region};
 use raft::StateRole;
 use raftstore::coprocessor::*;
@@ -16,6 +17,7 @@ use raftstore::Error as RaftStoreError;
 use tikv::storage::{Cursor, CursorBuilder, ScanMode, Snapshot as EngineSnapshot, Statistics};
 use tikv_util::time::Instant;
 use tikv_util::worker::Scheduler;
+use tikv_util::{error, warn};
 use txn_types::{Key, MutationType, OldValue, TimeStamp, Value, WriteRef, WriteType};
 
 use crate::endpoint::{Deregister, OldValueCache, Task};
@@ -100,22 +102,23 @@ impl CdcObserver {
 impl Coprocessor for CdcObserver {}
 
 impl<E: KvEngine> CmdObserver<E> for CdcObserver {
-    fn on_prepare_for_apply(&self, observe_id: ObserveID, region_id: u64) {
+    fn on_prepare_for_apply(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64) {
         self.cmd_batches
             .borrow_mut()
-            .push(CmdBatch::new(observe_id, region_id));
+            .push(CmdBatch::new(cdc_id, rts_id, region_id));
     }
 
-    fn on_apply_cmd(&self, observe_id: ObserveID, region_id: u64, cmd: Cmd) {
+    fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: Cmd) {
         self.cmd_batches
             .borrow_mut()
             .last_mut()
             .expect("should exist some cmd batch")
-            .push(observe_id, region_id, cmd);
+            .push(cdc_id, rts_id, region_id, cmd);
     }
 
     fn on_flush_apply(&self, engine: E) {
         fail_point!("before_cdc_flush_apply");
+        self.cmd_batches.borrow_mut().retain(|b| !b.is_empty());
         if !self.cmd_batches.borrow().is_empty() {
             let batches = self.cmd_batches.replace(Vec::default());
             let mut region = Region::default();
@@ -123,51 +126,52 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
             // Create a snapshot here for preventing the old value was GC-ed.
             let snapshot =
                 RegionSnapshot::from_snapshot(Arc::new(engine.snapshot()), Arc::new(region));
-            let mut reader = OldValueReader::new(snapshot);
-            let get_old_value = move |key,
-                                      query_ts,
-                                      old_value_cache: &mut OldValueCache,
-                                      statistics: &mut Statistics| {
+            let reader = OldValueReader::new(snapshot);
+            let get_old_value = move |key, query_ts, old_value_cache: &mut OldValueCache| {
                 old_value_cache.access_count += 1;
                 if let Some((old_value, mutation_type)) = old_value_cache.cache.remove(&key) {
-                    match mutation_type {
-                        MutationType::Insert => {
-                            assert!(!old_value.exists());
-                            return None;
-                        }
-                        MutationType::Put | MutationType::Delete => {
-                            if let OldValue::Value {
+                    return match mutation_type {
+                        MutationType::Insert => (None, None),
+                        MutationType::Put | MutationType::Delete => match old_value {
+                            OldValue::None => (None, None),
+                            OldValue::Value {
                                 start_ts,
                                 short_value,
-                            } = old_value
-                            {
-                                return short_value.or_else(|| {
+                            } => {
+                                let mut statistics = None;
+                                let value = short_value.or_else(|| {
+                                    statistics = Some(Statistics::default());
                                     let prev_key = key.truncate_ts().unwrap().append_ts(start_ts);
                                     let start = Instant::now();
                                     let mut opts = ReadOptions::new();
                                     opts.set_fill_cache(false);
-                                    let value = reader.get_value_default(&prev_key, statistics);
+                                    let value = reader
+                                        .get_value_default(&prev_key, statistics.as_mut().unwrap());
                                     CDC_OLD_VALUE_DURATION_HISTOGRAM
                                         .with_label_values(&["get"])
                                         .observe(start.elapsed().as_secs_f64());
                                     value
                                 });
+                                (value, statistics)
                             }
-                        }
+                            // Unspecified should not be added into cache.
+                            OldValue::Unspecified => unreachable!(),
+                        },
                         _ => unreachable!(),
-                    }
+                    };
                 }
                 // Cannot get old value from cache, seek for it in engine.
                 old_value_cache.miss_count += 1;
+                let mut statistics = Statistics::default();
                 let start = Instant::now();
                 let key = key.truncate_ts().unwrap().append_ts(query_ts);
                 let value = reader
-                    .near_seek_old_value(&key, statistics)
+                    .near_seek_old_value(&key, &mut statistics)
                     .unwrap_or_default();
                 CDC_OLD_VALUE_DURATION_HISTOGRAM
                     .with_label_values(&["seek"])
                     .observe(start.elapsed().as_secs_f64());
-                value
+                (value, Some(statistics))
             };
             if let Err(e) = self.sched.schedule(Task::MultiBatch {
                 multi: batches,
@@ -189,7 +193,7 @@ impl RoleObserver for CdcObserver {
                 let deregister = Deregister::Region {
                     region_id,
                     observe_id,
-                    err: CdcError::Request(store_err.into()),
+                    err: CdcError::request(store_err.into()),
                 };
                 if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
                     error!("schedule cdc task failed"; "error" => ?e);
@@ -214,7 +218,7 @@ impl RegionChangeObserver for CdcObserver {
                 let deregister = Deregister::Region {
                     region_id,
                     observe_id,
-                    err: CdcError::Request(store_err.into()),
+                    err: CdcError::request(store_err.into()),
                 };
                 if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
                     error!("schedule cdc task failed"; "error" => ?e);
@@ -246,7 +250,7 @@ impl<S: EngineSnapshot> OldValueReader<S> {
             .unwrap()
     }
 
-    fn get_value_default(&mut self, key: &Key, statistics: &mut Statistics) -> Option<Value> {
+    fn get_value_default(&self, key: &Key, statistics: &mut Statistics) -> Option<Value> {
         statistics.data.get += 1;
         let mut opts = ReadOptions::new();
         opts.set_fill_cache(false);
@@ -261,11 +265,7 @@ impl<S: EngineSnapshot> OldValueReader<S> {
     /// The key passed in should be a key with a timestamp. This function will returns
     /// the latest value of the entry if the user key is the same to the given key and
     /// the timestamp is older than or equal to the timestamp in the given key.
-    fn near_seek_old_value(
-        &mut self,
-        key: &Key,
-        statistics: &mut Statistics,
-    ) -> Result<Option<Value>> {
+    fn near_seek_old_value(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>> {
         let (user_key, seek_ts) = Key::split_on_ts_for(key.as_encoded()).unwrap();
         let mut write_cursor = self.new_write_cursor(key);
         if write_cursor.near_seek(key, &mut statistics.write)?
@@ -320,9 +320,12 @@ mod tests {
         let observe_id = ObserveID::new();
         let engine = TestEngineBuilder::new().build().unwrap().get_rocksdb();
 
-        <CdcObserver as CmdObserver<RocksEngine>>::on_prepare_for_apply(&observer, observe_id, 0);
+        <CdcObserver as CmdObserver<RocksEngine>>::on_prepare_for_apply(
+            &observer, observe_id, observe_id, 0,
+        );
         <CdcObserver as CmdObserver<RocksEngine>>::on_apply_cmd(
             &observer,
+            observe_id,
             observe_id,
             0,
             Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),
@@ -388,7 +391,7 @@ mod tests {
         let key = Key::from_raw(k);
 
         let must_get_eq = |ts: u64, value| {
-            let mut old_value_reader = OldValueReader::new(Arc::new(kv_engine.snapshot()));
+            let old_value_reader = OldValueReader::new(Arc::new(kv_engine.snapshot()));
             let mut statistics = Statistics::default();
             assert_eq!(
                 old_value_reader
@@ -406,7 +409,7 @@ mod tests {
 
         must_prewrite_put(&engine, k, b"v2", k, 2);
         must_get_eq(2, Some(b"v1".to_vec()));
-        must_rollback(&engine, k, 2);
+        must_rollback(&engine, k, 2, false);
 
         must_prewrite_put(&engine, k, b"v3", k, 3);
         must_get_eq(3, Some(b"v1".to_vec()));
@@ -422,7 +425,7 @@ mod tests {
 
         must_prewrite_delete(&engine, k, k, 6);
         must_get_eq(6, Some(vec![b'v'; 5120]));
-        must_rollback(&engine, k, 6);
+        must_rollback(&engine, k, 6, false);
 
         must_prewrite_put(&engine, k, b"v4", k, 7);
         must_commit(&engine, k, 7, 9);
@@ -439,7 +442,7 @@ mod tests {
         let kv_engine = engine.get_rocksdb();
 
         let must_get_eq = |key: &[u8], ts: u64, value| {
-            let mut old_value_reader = OldValueReader::new(Arc::new(kv_engine.snapshot()));
+            let old_value_reader = OldValueReader::new(Arc::new(kv_engine.snapshot()));
             let mut statistics = Statistics::default();
             assert_eq!(
                 old_value_reader

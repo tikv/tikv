@@ -1,6 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::server::metrics::{GcKeysCF, GcKeysDetail};
+use std::cell::RefCell;
+
+use super::metrics::{GcKeysCF, GcKeysDetail};
+use engine_rocks::PerfContext;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{ScanDetail, ScanDetailV2, ScanInfo};
 pub use raftstore::store::{FlowStatistics, FlowStatsReporter};
@@ -16,6 +19,63 @@ const STAT_NEXT_TOMBSTONE: &str = "next_tombstone";
 const STAT_PREV_TOMBSTONE: &str = "prev_tombstone";
 const STAT_SEEK_TOMBSTONE: &str = "seek_tombstone";
 const STAT_SEEK_FOR_PREV_TOMBSTONE: &str = "seek_for_prev_tombstone";
+const STAT_TTL_TOMBSTONE: &str = "ttl_tombstone";
+
+thread_local! {
+    pub static TTL_TOMBSTONE : RefCell<usize> = RefCell::new(0);
+}
+
+pub enum StatsKind {
+    Next,
+    Prev,
+    Seek,
+    SeekForPrev,
+}
+
+pub struct StatsCollector<'a> {
+    stats: &'a mut CfStatistics,
+    kind: StatsKind,
+
+    internal_tombstone: usize,
+    ttl_tombstone: usize,
+}
+
+impl<'a> StatsCollector<'a> {
+    pub fn new(kind: StatsKind, stats: &'a mut CfStatistics) -> Self {
+        StatsCollector {
+            stats,
+            kind,
+            internal_tombstone: PerfContext::get().internal_delete_skipped_count() as usize,
+            ttl_tombstone: TTL_TOMBSTONE.with(|m| *m.borrow()),
+        }
+    }
+}
+
+impl Drop for StatsCollector<'_> {
+    fn drop(&mut self) {
+        self.stats.ttl_tombstone += TTL_TOMBSTONE.with(|m| *m.borrow()) - self.ttl_tombstone;
+        let internal_tombstone =
+            PerfContext::get().internal_delete_skipped_count() as usize - self.internal_tombstone;
+        match self.kind {
+            StatsKind::Next => {
+                self.stats.next += 1;
+                self.stats.next_tombstone += internal_tombstone;
+            }
+            StatsKind::Prev => {
+                self.stats.prev += 1;
+                self.stats.prev_tombstone += internal_tombstone;
+            }
+            StatsKind::Seek => {
+                self.stats.seek += 1;
+                self.stats.seek_tombstone += internal_tombstone;
+            }
+            StatsKind::SeekForPrev => {
+                self.stats.seek_for_prev += 1;
+                self.stats.seek_for_prev_tombstone += internal_tombstone;
+            }
+        }
+    }
+}
 
 /// Statistics collects the ops taken when fetching data.
 #[derive(Default, Clone, Debug)]
@@ -36,7 +96,10 @@ pub struct CfStatistics {
     pub prev_tombstone: usize,
     pub seek_tombstone: usize,
     pub seek_for_prev_tombstone: usize,
+    pub ttl_tombstone: usize,
 }
+
+const STATS_COUNT: usize = 12;
 
 impl CfStatistics {
     #[inline]
@@ -44,7 +107,7 @@ impl CfStatistics {
         self.get + self.next + self.prev + self.seek + self.seek_for_prev
     }
 
-    pub fn details(&self) -> [(&'static str, usize); 11] {
+    pub fn details(&self) -> [(&'static str, usize); STATS_COUNT] {
         [
             (STAT_PROCESSED_KEYS, self.processed_keys),
             (STAT_GET, self.get),
@@ -57,10 +120,11 @@ impl CfStatistics {
             (STAT_PREV_TOMBSTONE, self.prev_tombstone),
             (STAT_SEEK_TOMBSTONE, self.seek_tombstone),
             (STAT_SEEK_FOR_PREV_TOMBSTONE, self.seek_for_prev_tombstone),
+            (STAT_TTL_TOMBSTONE, self.ttl_tombstone),
         ]
     }
 
-    pub fn details_enum(&self) -> [(GcKeysDetail, usize); 11] {
+    pub fn details_enum(&self) -> [(GcKeysDetail, usize); STATS_COUNT] {
         [
             (GcKeysDetail::processed_keys, self.processed_keys),
             (GcKeysDetail::get, self.get),
@@ -76,6 +140,7 @@ impl CfStatistics {
                 GcKeysDetail::seek_for_prev_tombstone,
                 self.seek_for_prev_tombstone,
             ),
+            (GcKeysDetail::ttl_tombstone, self.ttl_tombstone),
         ]
     }
 
@@ -94,6 +159,7 @@ impl CfStatistics {
         self.seek_for_prev_tombstone = self
             .seek_for_prev_tombstone
             .saturating_add(other.seek_for_prev_tombstone);
+        self.ttl_tombstone = self.ttl_tombstone.saturating_add(other.ttl_tombstone);
     }
 
     /// Deprecated
@@ -113,7 +179,7 @@ pub struct Statistics {
 }
 
 impl Statistics {
-    pub fn details(&self) -> [(&'static str, [(&'static str, usize); 11]); 3] {
+    pub fn details(&self) -> [(&'static str, [(&'static str, usize); STATS_COUNT]); 3] {
         [
             (CF_DEFAULT, self.data.details()),
             (CF_LOCK, self.lock.details()),
@@ -121,7 +187,7 @@ impl Statistics {
         ]
     }
 
-    pub fn details_enum(&self) -> [(GcKeysCF, [(GcKeysDetail, usize); 11]); 3] {
+    pub fn details_enum(&self) -> [(GcKeysCF, [(GcKeysDetail, usize); STATS_COUNT]); 3] {
         [
             (GcKeysCF::default, self.data.details_enum()),
             (GcKeysCF::lock, self.lock.details_enum()),

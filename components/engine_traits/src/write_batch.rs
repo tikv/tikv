@@ -30,46 +30,7 @@ pub trait WriteBatchExt: Sized {
 }
 
 /// A trait implemented by WriteBatch
-///
-/// FIXME: This trait is misnamed, as it is implemented only by WriteBatch and
-/// is filled with WriteBatch-specific methods. Merge it into WriteBatch.
 pub trait Mutable: Send {
-    /// The data size of a write batch
-    ///
-    /// This is necessarily engine-dependent. In RocksDB though it appears to
-    /// represent the byte length of all write commands in the batch, as
-    /// serialized in memory, prior to being written to disk.
-    fn data_size(&self) -> usize;
-
-    /// The number of commands in this batch
-    fn count(&self) -> usize;
-
-    /// Whether any commands have been issued to this batch
-    fn is_empty(&self) -> bool;
-
-    /// Whether the number of commands exceeds WRITE_BATCH_MAX_KEYS
-    ///
-    /// If so, the `write` method should be called.
-    fn should_write_to_engine(&self) -> bool;
-
-    /// Clears the WriteBatch of all commands
-    ///
-    /// It may be reused afterward as an empty batch.
-    fn clear(&mut self);
-
-    /// Push a save point onto the save point stack
-    fn set_save_point(&mut self);
-
-    /// Pop a save point from the save point stack
-    ///
-    /// This has no effect on the commands already issued to the write batch
-    fn pop_save_point(&mut self) -> Result<()>;
-
-    /// Revert all commands issued since the last save point
-    ///
-    /// Additionally pops the last save point from the save point stack.
-    fn rollback_to_save_point(&mut self) -> Result<()>;
-
     /// Write a key/value in the default column family
     fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()>;
 
@@ -129,4 +90,40 @@ pub trait WriteBatch<E: WriteBatchExt + Sized>: Mutable {
     fn write(&self) -> Result<()> {
         self.write_opt(&WriteOptions::default())
     }
+
+    /// The data size of a write batch
+    ///
+    /// This is necessarily engine-dependent. In RocksDB though it appears to
+    /// represent the byte length of all write commands in the batch, as
+    /// serialized in memory, prior to being written to disk.
+    fn data_size(&self) -> usize;
+
+    /// The number of commands in this batch
+    fn count(&self) -> usize;
+
+    /// Whether any commands have been issued to this batch
+    fn is_empty(&self) -> bool;
+
+    /// Whether the number of commands exceeds WRITE_BATCH_MAX_KEYS
+    ///
+    /// If so, the `write` method should be called.
+    fn should_write_to_engine(&self) -> bool;
+
+    /// Clears the WriteBatch of all commands
+    ///
+    /// It may be reused afterward as an empty batch.
+    fn clear(&mut self);
+
+    /// Push a save point onto the save point stack
+    fn set_save_point(&mut self);
+
+    /// Pop a save point from the save point stack
+    ///
+    /// This has no effect on the commands already issued to the write batch
+    fn pop_save_point(&mut self) -> Result<()>;
+
+    /// Revert all commands issued since the last save point
+    ///
+    /// Additionally pops the last save point from the save point stack.
+    fn rollback_to_save_point(&mut self) -> Result<()>;
 }

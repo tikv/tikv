@@ -6,6 +6,7 @@
 use std::future::Future;
 use std::sync::Arc;
 
+use fail::fail_point;
 use futures::channel::oneshot::{self, Canceled};
 use prometheus::{Histogram, IntCounter, IntGauge};
 use yatp::task::future;
