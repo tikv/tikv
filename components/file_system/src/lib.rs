@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(test)]
+#![feature(duration_consts_2)]
 
 #[macro_use]
 extern crate lazy_static;
@@ -53,12 +54,13 @@ pub enum IOType {
     // account it as foreground-write instead of foreground-read.
     ForegroundWrite = 2,
     Flush = 3,
-    Compaction = 4,
-    Replication = 5,
-    LoadBalance = 6,
-    Gc = 7,
-    Import = 8,
-    Export = 9,
+    LevelZeroCompaction = 4,
+    Compaction = 5,
+    Replication = 6,
+    LoadBalance = 7,
+    Gc = 8,
+    Import = 9,
+    Export = 10,
 }
 
 impl IOType {
@@ -68,6 +70,7 @@ impl IOType {
             IOType::ForegroundRead => "foreground_read",
             IOType::ForegroundWrite => "foreground_write",
             IOType::Flush => "flush",
+            IOType::LevelZeroCompaction => "level_zero_compaction",
             IOType::Compaction => "compaction",
             IOType::Replication => "replication",
             IOType::LoadBalance => "load_balance",
@@ -86,6 +89,7 @@ impl std::str::FromStr for IOType {
             "foreground_read" => Ok(IOType::ForegroundRead),
             "foreground_write" => Ok(IOType::ForegroundWrite),
             "flush" => Ok(IOType::Flush),
+            "level_zero_compaction" => Ok(IOType::LevelZeroCompaction),
             "compaction" => Ok(IOType::Compaction),
             "replication" => Ok(IOType::Replication),
             "load_balance" => Ok(IOType::LoadBalance),

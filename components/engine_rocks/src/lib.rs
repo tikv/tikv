@@ -75,9 +75,6 @@ pub use compact_listener::*;
 pub mod properties;
 pub use properties::*;
 
-pub mod rocks_info;
-pub use rocks_info::*;
-
 pub mod rocks_metrics;
 pub use rocks_metrics::*;
 

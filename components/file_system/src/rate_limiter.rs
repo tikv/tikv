@@ -1,7 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::metrics::{
-    tls_collect_rate_limiter_request_wait, RATE_LIMITER_REQUEST_ESCALATION_PROBABILITY,
+    tls_collect_rate_limiter_request_wait, RATE_LIMITER_MAX_BYTES_PER_SEC,
+    RATE_LIMITER_REQUEST_ESCALATION_PROBABILITY,
 };
 use super::{IOOp, IOPriority, IOType};
 
@@ -17,6 +18,7 @@ use strum::EnumCount;
 use tikv_util::time::Instant;
 
 const DEFAULT_REFILL_PERIOD: Duration = Duration::from_millis(50);
+const DEFAULT_REFILLS_PER_SEC: usize = (1.0 / DEFAULT_REFILL_PERIOD.as_secs_f32()) as usize;
 const MAX_WAIT_DURATION_PER_REQUEST: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
@@ -181,7 +183,7 @@ impl PriorityBasedIORateLimiterProtected {
         PriorityBasedIORateLimiterProtected {
             next_refill_time: Instant::now_coarse() + DEFAULT_REFILL_PERIOD,
             pending_bytes: [0; IOPriority::COUNT],
-            history_epoch_count_mul_16: 0,
+            history_epoch_count_mul_16: 10_000, // a large value to avoid cold start
             history_bytes: [0; IOPriority::COUNT],
         }
     }
@@ -289,7 +291,10 @@ impl PriorityBasedIORateLimiter {
     /// Dynamically changes the total IO flow threshold.
     fn set_bytes_per_sec(&self, bytes_per_sec: usize) {
         let now = (bytes_per_sec as f64 * DEFAULT_REFILL_PERIOD.as_secs_f64()) as usize;
-        self.bytes_per_epoch[IOPriority::High as usize].store(now, Ordering::Relaxed);
+        let before = self.bytes_per_epoch[IOPriority::High as usize].swap(now, Ordering::Relaxed);
+        RATE_LIMITER_MAX_BYTES_PER_SEC
+            .with_label_values(&[IOPriority::High.as_str()])
+            .set(bytes_per_sec as i64);
         if now == 0 {
             // Toggle off rate limit.
             // We hold this lock so a concurrent refill can't negate our effort.
@@ -297,6 +302,19 @@ impl PriorityBasedIORateLimiter {
             for p in &[IOPriority::Medium, IOPriority::Low] {
                 let pi = *p as usize;
                 self.bytes_per_epoch[pi].store(now, Ordering::Relaxed);
+                RATE_LIMITER_MAX_BYTES_PER_SEC
+                    .with_label_values(&[p.as_str()])
+                    .set(bytes_per_sec as i64);
+            }
+        } else if before == 0 && !self.strict {
+            // When toggling on rate limit in unstrict mode, high-priority request won't trigger
+            // refill. Need to broadcast this change.
+            for p in &[IOPriority::Medium, IOPriority::Low] {
+                let pi = *p as usize;
+                self.bytes_per_epoch[pi].store(now, Ordering::Relaxed);
+                RATE_LIMITER_MAX_BYTES_PER_SEC
+                    .with_label_values(&[p.as_str()])
+                    .set(bytes_per_sec as i64);
             }
         }
     }
@@ -334,6 +352,9 @@ impl PriorityBasedIORateLimiter {
             / DEFAULT_REFILL_PERIOD.as_secs_f32()) as usize;
         locked.next_refill_time = now + DEFAULT_REFILL_PERIOD;
         locked.history_epoch_count_mul_16 += skipped_epochs_mul_16 + 16;
+        if locked.history_epoch_count_mul_16 >= (UPDATE_BUDGETS_EVERY_N_EPOCHS << 4) {
+            locked.history_epoch_count_mul_16 = 0;
+        }
 
         debug_assert!(
             IOPriority::High as usize == IOPriority::Medium as usize + 1
@@ -352,25 +373,36 @@ impl PriorityBasedIORateLimiter {
             let to_serve_pending_bytes = std::cmp::min(locked.pending_bytes[p], limit);
             locked.pending_bytes[p] -= to_serve_pending_bytes;
             // Update throughput estimation over recent epochs.
-            let bytes_through = served_by_skipped_epochs
-                + std::cmp::min(
-                    self.bytes_through[p].swap(to_serve_pending_bytes, Ordering::Relaxed),
-                    limit,
-                );
-            let bytes_through_per_epoch = (bytes_through * 16) / (skipped_epochs_mul_16 + 16);
+            let mut served_by_oldest_epoch =
+                self.bytes_through[p].swap(to_serve_pending_bytes, Ordering::Relaxed);
+            if self.strict || p != IOPriority::High as usize {
+                // Don't cap high-priority IO flow unless in strict mode.
+                served_by_oldest_epoch = std::cmp::min(served_by_oldest_epoch, limit);
+            }
+            let bytes_through_per_epoch = ((served_by_oldest_epoch + served_by_skipped_epochs)
+                * 16)
+                / (skipped_epochs_mul_16 + 16);
             locked.history_bytes[p] =
                 std::cmp::max(locked.history_bytes[p], bytes_through_per_epoch);
-            if locked.history_epoch_count_mul_16 >= (UPDATE_BUDGETS_EVERY_N_EPOCHS << 4) {
+            if locked.history_epoch_count_mul_16 == 0 {
                 // Raw IO flow could be too spiky to converge. Use max over
                 // `UPDATE_BUDGETS_EVERY_N_EPOCHS` to re-allocate budgets.
                 let estimated_bytes_through = std::mem::replace(&mut locked.history_bytes[p], 0);
-                locked.history_epoch_count_mul_16 = 0;
                 limit = if limit > estimated_bytes_through {
                     limit - estimated_bytes_through
                 } else {
                     1 // A small positive value so that flow control isn't disabled.
                 };
                 self.bytes_per_epoch[p - 1].store(limit, Ordering::Relaxed);
+                if p == IOPriority::High as usize {
+                    RATE_LIMITER_MAX_BYTES_PER_SEC
+                        .with_label_values(&[IOPriority::Medium.as_str()])
+                        .set((limit * DEFAULT_REFILLS_PER_SEC) as i64);
+                } else {
+                    RATE_LIMITER_MAX_BYTES_PER_SEC
+                        .with_label_values(&[IOPriority::Low.as_str()])
+                        .set((limit * DEFAULT_REFILLS_PER_SEC) as i64);
+                }
             } else {
                 limit = self.bytes_per_epoch[p - 1].load(Ordering::Relaxed);
             }
@@ -449,11 +481,10 @@ impl IORateLimiter {
     /// less than the requested bytes, but must be greater than zero.
     pub fn request(&self, io_type: IOType, io_op: IOOp, mut bytes: usize) -> usize {
         if self.mode.contains(io_op) {
-            let priority = if self.should_escalate(io_type) {
-                IOPriority::High
-            } else {
-                self.priority_map[io_type as usize]
-            };
+            let mut priority = self.priority_map[io_type as usize];
+            if priority != IOPriority::High && self.should_escalate(io_type) {
+                priority = IOPriority::High;
+            }
             bytes = self.throughput_limiter.request(priority, bytes);
         }
         if let Some(stats) = &self.stats {
@@ -468,11 +499,10 @@ impl IORateLimiter {
     /// than zero.
     pub async fn async_request(&self, io_type: IOType, io_op: IOOp, mut bytes: usize) -> usize {
         if self.mode.contains(io_op) {
-            let priority = if self.should_escalate(io_type) {
-                IOPriority::High
-            } else {
-                self.priority_map[io_type as usize]
-            };
+            let mut priority = self.priority_map[io_type as usize];
+            if priority != IOPriority::High && self.should_escalate(io_type) {
+                priority = IOPriority::High;
+            }
             bytes = self.throughput_limiter.async_request(priority, bytes).await;
         }
         if let Some(stats) = &self.stats {
@@ -484,11 +514,10 @@ impl IORateLimiter {
     #[cfg(test)]
     fn request_with_skewed_clock(&self, io_type: IOType, io_op: IOOp, mut bytes: usize) -> usize {
         if self.mode.contains(io_op) {
-            let priority = if self.should_escalate(io_type) {
-                IOPriority::High
-            } else {
-                self.priority_map[io_type as usize]
-            };
+            let mut priority = self.priority_map[io_type as usize];
+            if priority != IOPriority::High && self.should_escalate(io_type) {
+                priority = IOPriority::High;
+            }
             bytes = self
                 .throughput_limiter
                 .request_with_skewed_clock(priority, bytes);
@@ -501,8 +530,9 @@ impl IORateLimiter {
 
     pub fn update_backlog(&self, io_type: IOType, normalized_backlog: f32) {
         debug_assert!(normalized_backlog <= 1.0);
-        let escalation_probability = if normalized_backlog > 0.5 {
-            (normalized_backlog - 0.5).sqrt()
+        let escalation_probability = if normalized_backlog >= 0.34 {
+            // Start escalating requests when backlog exceeds 1/3.
+            (normalized_backlog * 1.5 - 0.5).sqrt()
         } else {
             0.0
         };
@@ -717,8 +747,8 @@ mod tests {
     fn test_rate_limited_hybrid_flow() {
         let bytes_per_sec = 100000;
         let write_work = 50;
-        let compaction_work = 60;
-        let import_work = 10;
+        let compaction_work = 80;
+        let import_work = 50;
         let mut limiter = IORateLimiter::new_for_test();
         limiter.set_io_rate_limit(bytes_per_sec);
         limiter.set_io_priority(IOType::Compaction, IOPriority::Medium);

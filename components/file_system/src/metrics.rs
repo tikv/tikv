@@ -66,6 +66,12 @@ lazy_static! {
         "Request escalation probability of IO rate limiter",
         &["type"]
     ).unwrap();
+
+    pub static ref RATE_LIMITER_MAX_BYTES_PER_SEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_rate_limiter_max_bytes_per_sec",
+        "Request escalation probability of IO rate limiter",
+        &["type"]
+    ).unwrap();
 }
 
 pub struct FileSystemLocalMetrics {

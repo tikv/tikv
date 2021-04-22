@@ -25,12 +25,15 @@ use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{
     encryption::get_env as get_encrypted_env, file_system::get_env as get_inspected_env,
-    RocksEngine, RocksEngineResourceInfo,
+    RocksEngine,
 };
-use engine_traits::{compaction_job::CompactionJobInfo, Engines, RaftEngine, CF_DEFAULT, CF_WRITE};
+use engine_traits::{
+    compaction_job::CompactionJobInfo, CFOptionsExt, ColumnFamilyOptions, Engines, MiscExt,
+    RaftEngine, CF_DEFAULT, CF_LOCK, CF_WRITE,
+};
 use error_code::ErrorCodeExt;
 use file_system::{
-    set_io_rate_limiter, BytesFetcher, IORateLimiter, MetricsManager as IOMetricsManager,
+    set_io_rate_limiter, BytesFetcher, IORateLimiter, IOType, MetricsManager as IOMetricsManager,
 };
 use fs2::FileExt;
 use futures::executor::block_on;
@@ -78,6 +81,7 @@ use tikv::{
 use tikv_util::{
     check_environment_variables,
     config::{ensure_dir_exist, VersionTrack},
+    math::MovingMaxU32,
     sys::sys_quota::SysQuota,
     time::Monitor,
     worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker, Worker},
@@ -115,11 +119,11 @@ pub fn run_tikv(config: TiKvConfig) {
             tikv.init_yatp();
             tikv.init_encryption();
             let (limiter, fetcher) = tikv.init_io_utility();
-            let engines = tikv.init_raw_engines(Some(limiter.clone()));
+            let (engines, engines_info) = tikv.init_raw_engines(Some(limiter.clone()));
             tikv.init_engines(engines);
             let server_config = tikv.init_servers();
             tikv.register_services();
-            tikv.init_metrics_flusher(limiter, fetcher);
+            tikv.init_metrics_flusher(fetcher, engines_info);
             tikv.run_server(server_config);
             tikv.run_status_server();
 
@@ -873,21 +877,20 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         (limiter, fetcher)
     }
 
-    fn init_metrics_flusher(&mut self, limiter: Arc<IORateLimiter>, fetcher: BytesFetcher) {
+    fn init_metrics_flusher(
+        &mut self,
+        fetcher: BytesFetcher,
+        engines_info: Arc<EnginesResourceInfo>,
+    ) {
         let mut engine_metrics =
             EngineMetricsManager::new(self.engines.as_ref().unwrap().engines.clone());
         let mut io_metrics = IOMetricsManager::new(fetcher);
-        let rocks_info = Arc::new(RocksEngineResourceInfo::new(
-            self.engines.as_ref().unwrap().engines.kv.clone(),
-            limiter,
-            60, /*max_samples_to_preserve*/
-        ));
         self.background_worker
             .spawn_interval_task(DEFAULT_METRICS_FLUSH_INTERVAL, move || {
                 let now = Instant::now();
                 engine_metrics.flush(now);
                 io_metrics.flush(now);
-                rocks_info.update();
+                engines_info.update();
             });
     }
 
@@ -952,10 +955,10 @@ impl TiKVServer<RocksEngine> {
     fn init_raw_engines(
         &mut self,
         limiter: Option<Arc<IORateLimiter>>,
-    ) -> Engines<RocksEngine, RocksEngine> {
+    ) -> (Engines<RocksEngine, RocksEngine>, Arc<EnginesResourceInfo>) {
         let env =
             get_encrypted_env(self.encryption_key_manager.clone(), None /*base_env*/).unwrap();
-        let env = get_inspected_env(Some(env), limiter).unwrap();
+        let env = get_inspected_env(Some(env), limiter.clone()).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         // Create raft engine.
@@ -1013,7 +1016,14 @@ impl TiKVServer<RocksEngine> {
             )),
         );
 
-        engines
+        let engines_info = Arc::new(EnginesResourceInfo::new(
+            engines.kv.clone(),
+            Some(engines.raft.clone()),
+            limiter,
+            60, /*max_samples_to_preserve*/
+        ));
+
+        (engines, engines_info)
     }
 }
 
@@ -1021,10 +1031,13 @@ impl TiKVServer<RaftLogEngine> {
     fn init_raw_engines(
         &mut self,
         limiter: Option<Arc<IORateLimiter>>,
-    ) -> Engines<RocksEngine, RaftLogEngine> {
+    ) -> (
+        Engines<RocksEngine, RaftLogEngine>,
+        Arc<EnginesResourceInfo>,
+    ) {
         let env =
             get_encrypted_env(self.encryption_key_manager.clone(), None /*base_env*/).unwrap();
-        let env = get_inspected_env(Some(env), limiter).unwrap();
+        let env = get_inspected_env(Some(env), limiter.clone()).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         // Create raft engine.
@@ -1071,7 +1084,14 @@ impl TiKVServer<RaftLogEngine> {
             )),
         );
 
-        engines
+        let engines_info = Arc::new(EnginesResourceInfo::new(
+            engines.kv.clone(),
+            None, /*raft_engine*/
+            limiter,
+            60, /*max_samples_to_preserve*/
+        ));
+
+        (engines, engines_info)
     }
 }
 
@@ -1216,5 +1236,106 @@ impl<R: RaftEngine> EngineMetricsManager<R> {
             self.engines.raft.reset_statistics();
             self.last_reset = now;
         }
+    }
+}
+
+pub struct EnginesResourceInfo {
+    kv_engine: RocksEngine,
+    raft_engine: Option<RocksEngine>,
+    // Synchronize latest info with limiter
+    limiter: Option<Arc<IORateLimiter>>,
+    normalized_num_mem_tables: MovingMaxU32,
+    normalized_level_zero_num_files: MovingMaxU32,
+    normalized_pending_bytes: MovingMaxU32,
+}
+
+impl EnginesResourceInfo {
+    pub fn new(
+        kv_engine: RocksEngine,
+        raft_engine: Option<RocksEngine>,
+        limiter: Option<Arc<IORateLimiter>>,
+        max_samples_to_preserve: usize,
+    ) -> Self {
+        EnginesResourceInfo {
+            kv_engine,
+            raft_engine,
+            limiter,
+            normalized_num_mem_tables: MovingMaxU32::new(max_samples_to_preserve),
+            normalized_level_zero_num_files: MovingMaxU32::new(max_samples_to_preserve),
+            normalized_pending_bytes: MovingMaxU32::new(max_samples_to_preserve),
+        }
+    }
+
+    pub fn update(&self) {
+        let mut normalized_values = (
+            0, /*num_mem_tables*/
+            0, /*level_zero_num_files*/
+            0, /*pending_bytes*/
+        );
+
+        fn fetch_engine_cf(
+            engine: &RocksEngine,
+            cf: &str,
+            normalized_values: &mut (u32, u32, u32),
+        ) {
+            if let Ok(cf_opts) = engine.get_options_cf(cf) {
+                if let Ok(Some(n)) = engine.get_cf_num_immutable_mem_table(cf) {
+                    if cf_opts.get_max_write_buffer_number() > 0 {
+                        normalized_values.0 = std::cmp::max(
+                            normalized_values.0,
+                            n as u32 * 100 / cf_opts.get_max_write_buffer_number(),
+                        );
+                    }
+                }
+                if let Ok(Some(n)) = engine.get_cf_num_files_at_level(cf, 0) {
+                    if cf_opts.get_level_zero_slowdown_writes_trigger() > 0 {
+                        normalized_values.1 = std::cmp::max(
+                            normalized_values.1,
+                            n as u32 * 100 / cf_opts.get_level_zero_slowdown_writes_trigger(),
+                        );
+                    }
+                }
+                if let Ok(Some(b)) = engine.get_cf_compaction_pending_bytes(cf) {
+                    if cf_opts.get_soft_pending_compaction_bytes_limit() > 0 {
+                        normalized_values.2 = std::cmp::max(
+                            normalized_values.2,
+                            (b * 100 / cf_opts.get_soft_pending_compaction_bytes_limit()) as u32,
+                        );
+                    }
+                }
+            }
+        }
+
+        if let Some(raft_engine) = &self.raft_engine {
+            fetch_engine_cf(raft_engine, CF_DEFAULT, &mut normalized_values);
+        }
+        for cf in &[CF_DEFAULT, CF_WRITE, CF_LOCK] {
+            fetch_engine_cf(&self.kv_engine, cf, &mut normalized_values);
+        }
+        let num_mem_tables = self.normalized_num_mem_tables.add(normalized_values.0);
+        let level_zero_num_files = self
+            .normalized_level_zero_num_files
+            .add(normalized_values.1);
+        let pending_bytes = self.normalized_pending_bytes.add(normalized_values.2);
+        if let Some(limiter) = &self.limiter {
+            limiter.update_backlog(IOType::Flush, num_mem_tables as f32 / 100.0);
+            limiter.update_backlog(
+                IOType::LevelZeroCompaction,
+                level_zero_num_files as f32 / 100.0,
+            );
+            limiter.update_backlog(IOType::Compaction, pending_bytes as f32 / 100.0);
+        }
+    }
+
+    pub fn normalized_num_mem_tables(&self) -> f32 {
+        self.normalized_num_mem_tables.fetch() as f32 / 100.0
+    }
+
+    pub fn normalized_level_zero_num_files(&self) -> f32 {
+        self.normalized_level_zero_num_files.fetch() as f32 / 100.0
+    }
+
+    pub fn normalized_pending_bytes(&self) -> f32 {
+        self.normalized_pending_bytes.fetch() as f32 / 100.0
     }
 }

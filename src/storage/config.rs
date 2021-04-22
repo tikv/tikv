@@ -264,6 +264,9 @@ pub struct IORateLimitConfig {
     pub flush_priority: IOPriority,
     #[serde(with = "file_system::io_priority_serde")]
     #[config(skip)]
+    pub level_zero_compaction_priority: IOPriority,
+    #[serde(with = "file_system::io_priority_serde")]
+    #[config(skip)]
     pub compaction_priority: IOPriority,
     #[serde(with = "file_system::io_priority_serde")]
     #[config(skip)]
@@ -294,6 +297,7 @@ impl Default for IORateLimitConfig {
             foreground_read_priority: IOPriority::High,
             foreground_write_priority: IOPriority::High,
             flush_priority: IOPriority::Medium,
+            level_zero_compaction_priority: IOPriority::Medium,
             compaction_priority: IOPriority::Medium,
             replication_priority: IOPriority::High,
             load_balance_priority: IOPriority::High,
@@ -315,6 +319,10 @@ impl IORateLimitConfig {
         limiter.set_io_priority(IOType::ForegroundRead, self.foreground_read_priority);
         limiter.set_io_priority(IOType::ForegroundWrite, self.foreground_write_priority);
         limiter.set_io_priority(IOType::Flush, self.flush_priority);
+        limiter.set_io_priority(
+            IOType::LevelZeroCompaction,
+            self.level_zero_compaction_priority,
+        );
         limiter.set_io_priority(IOType::Compaction, self.compaction_priority);
         limiter.set_io_priority(IOType::Replication, self.replication_priority);
         limiter.set_io_priority(IOType::LoadBalance, self.load_balance_priority);

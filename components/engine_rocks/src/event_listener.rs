@@ -35,8 +35,12 @@ impl rocksdb::EventListener for RocksEventListener {
         }
     }
 
-    fn on_compaction_begin(&self, _info: &CompactionJobInfo) {
-        set_io_type(IOType::Compaction);
+    fn on_compaction_begin(&self, info: &CompactionJobInfo) {
+        if info.base_input_level() == 0 {
+            set_io_type(IOType::LevelZeroCompaction);
+        } else {
+            set_io_type(IOType::Compaction);
+        }
     }
 
     fn on_compaction_completed(&self, info: &CompactionJobInfo) {
@@ -56,17 +60,21 @@ impl rocksdb::EventListener for RocksEventListener {
                 &info.compaction_reason().to_string(),
             ])
             .inc();
-        if get_io_type() == IOType::Compaction {
+        if get_io_type() == IOType::Compaction || get_io_type() == IOType::LevelZeroCompaction {
             set_io_type(IOType::Other);
         }
     }
 
-    fn on_subcompaction_begin(&self, _info: &SubcompactionJobInfo) {
-        set_io_type(IOType::Compaction);
+    fn on_subcompaction_begin(&self, info: &SubcompactionJobInfo) {
+        if info.base_input_level() == 0 {
+            set_io_type(IOType::LevelZeroCompaction);
+        } else {
+            set_io_type(IOType::Compaction);
+        }
     }
 
     fn on_subcompaction_completed(&self, _info: &SubcompactionJobInfo) {
-        if get_io_type() == IOType::Compaction {
+        if get_io_type() == IOType::Compaction || get_io_type() == IOType::LevelZeroCompaction {
             set_io_type(IOType::Other);
         }
     }
