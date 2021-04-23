@@ -30,11 +30,13 @@ use kvproto::cdcpb::event::Event as Event_oneof_event;
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::Event_oneof_event;
 use std::collections::VecDeque;
+use std::fmt::Formatter;
 use std::pin::Pin;
 
 static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
-const CDC_MAX_RESP_SIZE: u32 = 6 * 1024 * 1024; // 6MB
+const CDC_MAX_RESP_SIZE: u32 = 6 * 1024 * 1024;
+// 6MB
 const CDC_EVENT_MAX_BATCH_SIZE: usize = 128;
 
 /// A unique identifier of a Connection.
@@ -169,6 +171,25 @@ enum EventBatcherSinkState {
     Closing,
 }
 
+impl std::fmt::Debug for EventBatcherSinkState {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EventBatcherSinkState::Ready(_) => {
+                f.debug_tuple("EventBatcherSinkState::Ready").finish()
+            }
+            EventBatcherSinkState::Sending(_) => {
+                f.debug_tuple("EventBatcherSinkState::Sending").finish()
+            }
+            EventBatcherSinkState::Flushing => {
+                f.debug_tuple("EventBatcherSinkState::Flushing").finish()
+            }
+            EventBatcherSinkState::Closing => {
+                f.debug_tuple("EventBatcherSinkState::Closing").finish()
+            }
+        }
+    }
+}
+
 pub struct EventBatcherSink<S, E>
 where
     S: Sink<(ChangeDataEvent, grpcio::WriteFlags), Error = E> + Send + Unpin,
@@ -210,12 +231,12 @@ where
                 _ => unreachable!(),
             }
         } else {
-            panic!("cdc unexpected EventBatcherSinkState");
+            panic!("cdc unexpected EventBatcherSinkState {:?}", old_state);
         }
     }
 }
 
-impl<S, E> Sink<(CdcEvent, grpcio::WriteFlags)> for EventBatcherSink<S, E>
+impl<S, E> Sink<CdcEvent> for EventBatcherSink<S, E>
 where
     S: Sink<(ChangeDataEvent, grpcio::WriteFlags), Error = E> + Send + Unpin,
 {
@@ -249,22 +270,14 @@ where
     }
 
     /// Will always succeed as long as called correctly.
-    fn start_send(self: Pin<&mut Self>, item: (CdcEvent, WriteFlags)) -> Result<(), Self::Error> {
+    fn start_send(self: Pin<&mut Self>, item: CdcEvent) -> Result<(), Self::Error> {
         let this = self.get_mut();
-        match this.state {
+        match &mut this.state {
             EventBatcherSinkState::Ready(ref mut buf) => {
-                buf.push(item.0);
+                buf.push(item);
                 Ok(())
             }
-            EventBatcherSinkState::Sending(_) => {
-                panic!("cdc unexpected start_send");
-            }
-            EventBatcherSinkState::Flushing => {
-                panic!("cdc unexpected start_send");
-            }
-            EventBatcherSinkState::Closing => {
-                panic!("sink is closing");
-            }
+            other => panic!("unexpected start_send with state: {:?}", other),
         }
     }
 
@@ -574,16 +587,12 @@ impl ChangeData for Service {
             // 2) the grpc sink has been closed,
             // 3) an error has occurred in the grpc sink,
             // or 4) the sink has been forced to close due to a congestion.
-            let drain_res = drainer.drain(
-                batched_sink,
-                // We disable buffering in the grpc library
-                WriteFlags::default().buffer_hint(false)
-            ).await;
+            let drain_res = drainer.drain(batched_sink).await;
             match drain_res {
                 Ok(_) => {
                     info!("cdc drainer exit"; "downstream" => peer.clone(), "conn_id" => ?conn_id);
                     let _ = sink.fail(RpcStatus::new(RpcStatusCode::CANCELLED, Some("upstreams closed".into()))).await;
-                },
+                }
                 Err(e) => {
                     error!("cdc drainer exit"; "downstream" => peer.clone(), "conn_id" => ?conn_id, "error" => ?e);
                     if let DrainerError::RateLimitExceededError = e {
@@ -629,7 +638,7 @@ mod tests {
                 let mut resolved_ts = ResolvedTs::default();
                 resolved_ts.set_ts(i);
                 batch_sink
-                    .send((CdcEvent::ResolvedTs(resolved_ts), flag))
+                    .send(CdcEvent::ResolvedTs(resolved_ts))
                     .await
                     .unwrap();
                 tokio::task::yield_now().await;
@@ -658,7 +667,7 @@ mod tests {
                 resolved_ts.set_ts(i);
                 poll_fn(|cx| batch_sink.poll_ready_unpin(cx)).await.unwrap();
                 batch_sink
-                    .start_send_unpin((CdcEvent::ResolvedTs(resolved_ts), flag))
+                    .start_send_unpin(CdcEvent::ResolvedTs(resolved_ts))
                     .unwrap();
             }
             batch_sink.flush().await.unwrap();
@@ -684,7 +693,7 @@ mod tests {
                 resolved_ts.set_ts(i);
                 poll_fn(|cx| batch_sink.poll_ready_unpin(cx)).await.unwrap();
                 batch_sink
-                    .start_send_unpin((CdcEvent::ResolvedTs(resolved_ts), flag))
+                    .start_send_unpin(CdcEvent::ResolvedTs(resolved_ts))
                     .unwrap();
             }
             batch_sink.flush().await.unwrap();

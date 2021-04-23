@@ -410,10 +410,9 @@ impl<E> Drainer<E> {
         }
     }
 
-    pub async fn drain<F: Copy, Error, S: Sink<(E, F), Error = Error> + Unpin>(
+    pub async fn drain<Error, S: Sink<E, Error = Error> + Unpin>(
         mut self,
         mut rpc_sink: S,
-        flag: F,
     ) -> Result<(), DrainerError<Error>> {
         let mut close_rx = self.close_rx.take().unwrap().fuse();
         let mut unflushed_size: usize = 0;
@@ -446,7 +445,7 @@ impl<E> Drainer<E> {
                             // One event has been successfully taken out of the queue,
                             // so one sender (who has been blocking) can now proceed.
                             self.state.wake_up_one_sender();
-                            rpc_sink.start_send_unpin((v, flag))
+                            rpc_sink.start_send_unpin(v)
                                 .map_err(|err| {
                                     self.state.wake_up_all_senders();
                                     DrainerError::RpcSinkError(err)
@@ -581,9 +580,7 @@ pub mod testing_util {
             let (rate_limiter, drainer) = new_pair::<CdcEvent>(1024, 1024);
             let batched_sink = EventBatcherSink::new(tx);
             runtime.spawn(async move {
-                let _ = drainer
-                    .drain(batched_sink, grpcio::WriteFlags::default())
-                    .await;
+                let _ = drainer.drain(batched_sink).await;
             });
 
             let rate_limiter_clone = rate_limiter.clone();
@@ -639,9 +636,6 @@ mod tests {
     use std::sync::Mutex;
 
     type MockCdcEvent = u64;
-    /// MockWriteFlag is used to mock grpcio::WriteFlags,
-    /// which is required for writing into the grpc stream sink (grpcio::DuplexSink).
-    type MockWriteFlag = ();
 
     #[derive(Debug, PartialEq, Eq)]
     enum MockRpcError {
@@ -729,7 +723,7 @@ mod tests {
         }
     }
 
-    impl Sink<(MockCdcEvent, MockWriteFlag)> for MockRpcSink {
+    impl Sink<MockCdcEvent> for MockRpcSink {
         type Error = MockRpcError;
 
         fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -748,15 +742,14 @@ mod tests {
             }
         }
 
-        fn start_send(self: Pin<&mut Self>, item: (u64, MockWriteFlag)) -> Result<(), Self::Error> {
+        fn start_send(self: Pin<&mut Self>, item: MockCdcEvent) -> Result<(), Self::Error> {
             if self.sink_closed.load(Ordering::SeqCst) {
                 return Err(MockRpcError::SinkClosed);
             }
             if let Some(err) = self.injected_send_error.lock().unwrap().take() {
                 return Err(err);
             }
-            let (value, _) = item;
-            *self.value.lock().unwrap() = Some(value);
+            *self.value.lock().unwrap() = Some(item);
             self.recv_waker.wake();
             Ok(())
         }
@@ -790,7 +783,7 @@ mod tests {
     async fn test_basic_realtime() -> Result<(), RateLimiterError> {
         let (rate_limiter, drainer) = new_pair::<MockCdcEvent>(1024, 1024);
         let mut mock_sink = MockRpcSink::new();
-        let drain_handle = tokio::spawn(drainer.drain(mock_sink.clone(), ()));
+        let drain_handle = tokio::spawn(drainer.drain(mock_sink.clone()));
 
         for i in 0..10u64 {
             rate_limiter.send_realtime_event(i)?;
@@ -815,7 +808,7 @@ mod tests {
     async fn test_basic_scan() -> Result<(), RateLimiterError> {
         let (rate_limiter, drainer) = new_pair::<MockCdcEvent>(1024, 1024);
         let mut mock_sink = MockRpcSink::new();
-        let drain_handle = tokio::spawn(drainer.drain(mock_sink.clone(), ()));
+        let drain_handle = tokio::spawn(drainer.drain(mock_sink.clone()));
 
         // to give the drainer a chance to run,
         // so that its implementation for Future can be properly tested.
@@ -845,7 +838,7 @@ mod tests {
     async fn test_realtime_disconnected() -> Result<(), RateLimiterError> {
         let (rate_limiter, drainer) = new_pair::<MockCdcEvent>(1024, 1024);
         let mut mock_sink = MockRpcSink::new();
-        let drain_handle = tokio::spawn(drainer.drain(mock_sink.clone(), ()));
+        let drain_handle = tokio::spawn(drainer.drain(mock_sink.clone()));
 
         // to give the drainer a chance to run,
         // so that its implementation for Future can be properly tested.
@@ -881,7 +874,7 @@ mod tests {
     async fn test_scan_disconnected() -> Result<(), RateLimiterError> {
         let (rate_limiter, drainer) = new_pair::<MockCdcEvent>(1024, 1024);
         let mut mock_sink = MockRpcSink::new();
-        let drain_handle = tokio::spawn(drainer.drain(mock_sink.clone(), ()));
+        let drain_handle = tokio::spawn(drainer.drain(mock_sink.clone()));
 
         // to give the drainer a chance to run,
         // so that its implementation for Future can be properly tested.
@@ -917,7 +910,7 @@ mod tests {
     async fn test_realtime_congested() -> Result<(), RateLimiterError> {
         let (rate_limiter, drainer) = new_pair::<MockCdcEvent>(1024, 5);
         let mut mock_sink = MockRpcSink::new();
-        let drain_handle = tokio::spawn(drainer.drain(mock_sink.clone(), ()));
+        let drain_handle = tokio::spawn(drainer.drain(mock_sink.clone()));
 
         // to give the drainer a chance to run,
         // so that its implementation for Future can be properly tested.
@@ -983,7 +976,7 @@ mod tests {
             1
         );
 
-        let drain_handle = tokio::spawn(drainer.drain(mock_sink.clone(), ()));
+        let drain_handle = tokio::spawn(drainer.drain(mock_sink.clone()));
         assert_eq!(mock_sink.recv().await.unwrap(), 1);
         assert_eq!(mock_sink.recv().await.unwrap(), 2);
         assert_eq!(mock_sink.recv().await.unwrap(), 3);
@@ -1008,7 +1001,7 @@ mod tests {
         let mut mock_sink = MockRpcSink::new();
 
         rate_limiter.send_realtime_event(1)?;
-        let drain_handle = tokio::spawn(drainer.drain(mock_sink.clone(), ()));
+        let drain_handle = tokio::spawn(drainer.drain(mock_sink.clone()));
         // Waits for the drainer to drain one event (given that MockRpcSink has internal buffer size 1),
         // so that the queue length becomes predictable for this unit test.
         tokio::time::delay_for(std::time::Duration::from_millis(200)).await;
@@ -1071,7 +1064,7 @@ mod tests {
     async fn test_rpc_sink_error() -> Result<(), RateLimiterError> {
         let (rate_limiter, drainer) = new_pair::<MockCdcEvent>(1024, 1024);
         let mock_sink = MockRpcSink::new();
-        let drain_handle = tokio::spawn(drainer.drain(mock_sink.clone(), ()));
+        let drain_handle = tokio::spawn(drainer.drain(mock_sink.clone()));
 
         for i in 0..10u64 {
             rate_limiter.send_realtime_event(i)?;
@@ -1093,7 +1086,7 @@ mod tests {
     async fn test_close_downstream() -> Result<(), RateLimiterError> {
         let (rate_limiter, drainer) = new_pair::<MockCdcEvent>(2, 1024);
         let mock_sink = MockRpcSink::new();
-        let drain_handle = tokio::spawn(drainer.drain(mock_sink.clone(), ()));
+        let drain_handle = tokio::spawn(drainer.drain(mock_sink.clone()));
 
         let rate_limiter = rate_limiter.with_region_id(1);
         let rate_limiter_clone = rate_limiter.clone();
@@ -1127,7 +1120,7 @@ mod tests {
     async fn test_single_thread_many_events() -> Result<(), RateLimiterError> {
         let (rate_limiter, drainer) = new_pair::<MockCdcEvent>(1024, 1024);
         let mut mock_sink = MockRpcSink::new();
-        let drain_handle = tokio::spawn(drainer.drain(mock_sink.clone(), ()));
+        let drain_handle = tokio::spawn(drainer.drain(mock_sink.clone()));
 
         tokio::task::yield_now().await;
 
@@ -1170,10 +1163,10 @@ mod tests {
 
     async fn do_test_multi_thread_many_events() -> Result<(), RateLimiterError> {
         let (rate_limiter, drainer) = new_pair::<MockCdcEvent>(1024, usize::MAX);
-        let (sink, mut rx) = futures::channel::mpsc::unbounded::<(MockCdcEvent, MockWriteFlag)>();
+        let (sink, mut rx) = futures::channel::mpsc::unbounded::<MockCdcEvent>();
 
         let drain_handle = tokio::spawn(async move {
-            match drainer.drain(sink, ()).await {
+            match drainer.drain(sink).await {
                 Ok(_) => {}
                 Err(err) => panic!("drainer exited with error {:?}", err),
             }
