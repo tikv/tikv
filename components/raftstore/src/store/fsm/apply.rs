@@ -4683,6 +4683,10 @@ mod tests {
         assert!(resp.get_header().has_error());
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.applied_index_term, 3);
+        assert_eq!(apply_res.apply_state.get_applied_index(), 9);
+        // The region will yield for batch ingesting sst.
+        let apply_res = fetch_apply_res(&rx);
+        assert_eq!(apply_res.applied_index_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 10);
         // The region will yield after timeout.
         let apply_res = fetch_apply_res(&rx);
@@ -4708,7 +4712,10 @@ mod tests {
         let index = write_batch_max_keys + 11;
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.apply_state.get_applied_index(), index as u64);
-        assert_eq!(obs.pre_query_count.load(Ordering::SeqCst), index);
+        // Ingest cmmand will be applied twice. First add sst to `ApplyContext.pending_ssts`
+        // and yield current fsm. Second finish apply and invoke callback. So `pre_query_count`
+        // will be one greater than the applied index but post_query_count will not.
+        assert_eq!(obs.pre_query_count.load(Ordering::SeqCst), index + 1);
         assert_eq!(obs.post_query_count.load(Ordering::SeqCst), index);
 
         system.shutdown();
