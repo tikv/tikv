@@ -104,9 +104,9 @@ struct TaskContext {
 }
 
 impl TaskContext {
-    fn new(task: Task, latches: &Latches, cb: StorageCallback) -> TaskContext {
+    fn new(task: Task, cb: StorageCallback) -> TaskContext {
         let tag = task.cmd.tag();
-        let lock = task.cmd.gen_lock(latches);
+        let lock = task.cmd.gen_lock();
         // Write command should acquire write lock.
         if !task.cmd.readonly() && !lock.is_write_lock() {
             panic!("write lock is expected for command {}", task.cmd);
@@ -188,7 +188,7 @@ impl<L: LockManager> SchedulerInner<L> {
     }
 
     fn new_task_context(&self, task: Task, callback: StorageCallback) -> TaskContext {
-        let tctx = TaskContext::new(task, &self.latches, callback);
+        let tctx = TaskContext::new(task, callback);
         let running_write_bytes = self
             .running_write_bytes
             .fetch_add(tctx.write_bytes, Ordering::AcqRel) as i64;
@@ -873,14 +873,14 @@ mod tests {
             .into_iter()
             .enumerate()
             .map(|(id, cmd)| {
-                let mut lock = cmd.gen_lock(&latches);
+                let mut lock = cmd.gen_lock();
                 assert_eq!(latches.acquire(&mut lock, id as u64), id == 0);
                 lock
             })
             .collect();
 
         for (id, cmd) in readonly_cmds.iter().enumerate() {
-            let mut lock = cmd.gen_lock(&latches);
+            let mut lock = cmd.gen_lock();
             assert!(latches.acquire(&mut lock, id as u64));
         }
 

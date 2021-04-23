@@ -148,7 +148,7 @@ fn test_stream_batch_row_limit() {
 
     let resps = handle_streaming_select(&endpoint, req, check_range);
     assert_eq!(resps.len(), 3);
-    let expected_output_counts = vec![vec![2 as i64], vec![2 as i64], vec![1 as i64]];
+    let expected_output_counts = vec![vec![2_i64], vec![2_i64], vec![1_i64]];
     for (i, resp) in resps.into_iter().enumerate() {
         let mut chunk = Chunk::default();
         chunk.merge_from_bytes(resp.get_data()).unwrap();

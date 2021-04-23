@@ -216,8 +216,8 @@ impl VectorValue {
                 }
                 size
             }
-            // TODO: implement here after we implement enum/set encoding
-            VectorValue::Enum(_) => unimplemented!(),
+            VectorValue::Enum(_) => logical_rows.len() * 9,
+            // TODO: implement here after we implement set encoding
             VectorValue::Set(_) => unimplemented!(),
         }
     }
@@ -260,8 +260,22 @@ impl VectorValue {
                 }
                 size
             }
-            // TODO: implement here after we implement enum/set encoding
-            VectorValue::Enum(_) => unimplemented!(),
+            VectorValue::Enum(vec) => {
+                let mut size = logical_rows.len() * 9 + 10;
+                for idx in logical_rows {
+                    let el = vec.get_option_ref(*idx);
+                    match el {
+                        Some(v) => {
+                            size += 8 /* Offset */ + v.len();
+                        }
+                        None => {
+                            size += 8;
+                        }
+                    }
+                }
+                size
+            }
+            // TODO: implement here after we implement set encoding
             VectorValue::Set(_) => unimplemented!(),
         }
     }
@@ -356,8 +370,18 @@ impl VectorValue {
                 }
                 Ok(())
             }
-            // TODO: implement enum/set encoding
-            VectorValue::Enum(_) => unimplemented!(),
+            VectorValue::Enum(ref vec) => {
+                match &vec.get_option_ref(row_index) {
+                    None => {
+                        output.write_evaluable_datum_null()?;
+                    }
+                    Some(ref val) => {
+                        output.write_evaluable_datum_enum_uint(*val)?;
+                    }
+                }
+                Ok(())
+            }
+            // TODO: implement set encoding
             VectorValue::Set(_) => unimplemented!(),
         }
     }

@@ -53,6 +53,7 @@ const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
 /// Service handles the RPC messages for the `Tikv` service.
 pub struct Service<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> {
+    store_id: u64,
     /// Used to handle requests related to GC.
     gc_worker: GcWorker<E, T>,
     // For handling KV requests.
@@ -80,6 +81,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Clone + 'static, E: Engine + Clone, L: Lo
 {
     fn clone(&self) -> Self {
         Service {
+            store_id: self.store_id,
             gc_worker: self.gc_worker.clone(),
             storage: self.storage.clone(),
             cop: self.cop.clone(),
@@ -97,6 +99,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Clone + 'static, E: Engine + Clone, L: Lo
 impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Service<T, E, L> {
     /// Constructs a new `Service` which provides the `Tikv` service.
     pub fn new(
+        store_id: u64,
         storage: Storage<E, L>,
         gc_worker: GcWorker<E, T>,
         cop: Endpoint<E>,
@@ -109,15 +112,16 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
         proxy: Proxy,
     ) -> Self {
         Service {
+            store_id,
             gc_worker,
             storage,
             cop,
             coprv2,
             ch,
             snap_scheduler,
+            enable_req_batch,
             grpc_thread_load,
             readpool_normal_thread_load,
-            enable_req_batch,
             proxy,
         }
     }
@@ -616,12 +620,21 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         stream: RequestStream<RaftMessage>,
         sink: ClientStreamingSink<Done>,
     ) {
+        let store_id = self.store_id;
         let ch = self.ch.clone();
         ctx.spawn(async move {
             let res = stream.map_err(Error::from).try_for_each(move |msg| {
                 RAFT_MESSAGE_RECV_COUNTER.inc();
-                let ret = ch.send_raft_msg(msg).map_err(Error::from);
-                future::ready(ret)
+                let to_store_id = msg.get_to_peer().get_store_id();
+                if to_store_id != store_id {
+                    future::err(Error::from(RaftStoreError::StoreNotMatch(
+                        to_store_id,
+                        store_id,
+                    )))
+                } else {
+                    let ret = ch.send_raft_msg(msg).map_err(Error::from);
+                    future::ready(ret)
+                }
             });
             let status = match res.await {
                 Err(e) => {
@@ -645,6 +658,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         sink: ClientStreamingSink<Done>,
     ) {
         info!("batch_raft RPC is called, new gRPC stream established");
+        let store_id = self.store_id;
         let ch = self.ch.clone();
         ctx.spawn(async move {
             let res = stream.map_err(Error::from).try_for_each(move |mut msgs| {
@@ -652,6 +666,13 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 RAFT_MESSAGE_RECV_COUNTER.inc_by(len as i64);
                 RAFT_MESSAGE_BATCH_SIZE.observe(len as f64);
                 for msg in msgs.take_msgs().into_iter() {
+                    let to_store_id = msg.get_to_peer().get_store_id();
+                    if to_store_id != store_id {
+                        return future::err(Error::from(RaftStoreError::StoreNotMatch(
+                            to_store_id,
+                            store_id,
+                        )));
+                    }
                     if let Err(e) = ch.send_raft_msg(msg) {
                         return future::err(Error::from(e));
                     }
@@ -1066,6 +1087,15 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
 
         ctx.spawn(task);
     }
+
+    fn get_store_safe_ts(
+        &mut self,
+        _: RpcContext<'_>,
+        _: StoreSafeTsRequest,
+        _: UnarySink<StoreSafeTsResponse>,
+    ) {
+        unimplemented!()
+    }
 }
 
 fn response_batch_commands_request<F>(
@@ -1203,17 +1233,15 @@ async fn future_handle_empty(
     res.set_test_id(req.get_test_id());
     // `BatchCommandsWaker` processes futures in notify. If delay_time is too small, notify
     // can be called immediately, so the future is polled recursively and lead to deadlock.
-    if req.get_delay_time() < 10 {
-        Ok(res)
-    } else {
+    if req.get_delay_time() >= 10 {
         let _ = tikv_util::timer::GLOBAL_TIMER_HANDLE
             .delay(
                 std::time::Instant::now() + std::time::Duration::from_millis(req.get_delay_time()),
             )
             .compat()
             .await;
-        Ok(res)
     }
+    Ok(res)
 }
 
 fn future_get<E: Engine, L: LockManager>(

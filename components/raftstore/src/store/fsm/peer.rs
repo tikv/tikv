@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::iter::Iterator;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, u64};
@@ -12,11 +12,10 @@ use std::{cmp, u64};
 use batch_system::{BasicMailbox, Fsm};
 use collections::HashMap;
 use engine_traits::CF_RAFT;
-use engine_traits::{Engines, KvEngine, RaftEngine, WriteBatchExt};
+use engine_traits::{Engines, KvEngine, RaftEngine, SSTMetaInfo, WriteBatchExt};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use kvproto::errorpb;
-use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{
@@ -37,6 +36,7 @@ use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
 use tikv_util::{box_err, debug, error, info, trace, warn};
 use tikv_util::{escape, is_zero_duration, Either};
+use txn_types::WriteBatchFlags;
 
 use crate::coprocessor::RegionChangeEvent;
 use crate::store::cmd_resp::{bind_term, new_error};
@@ -1897,6 +1897,8 @@ where
         meta.pending_snapshot_regions
             .retain(|r| self.fsm.region_id() != r.get_id());
 
+        // Set the `safe_ts` to zero to reject incoming stale read request
+        self.fsm.peer.safe_ts.store(0, Ordering::Release);
         // Destroy read delegates.
         meta.readers.remove(&region_id);
 
@@ -1992,6 +1994,7 @@ where
             }
         }
         meta.leaders.remove(&region_id);
+        meta.peer_properties.remove(&region_id);
     }
 
     // Update some region infos
@@ -2363,6 +2366,7 @@ where
             assert!(not_exist, "[region {}] should not exist", new_region_id);
             meta.readers
                 .insert(new_region_id, ReadDelegate::from_peer(new_peer.get_peer()));
+            meta.peer_properties.insert(new_region_id, Arc::default());
             if last_region_id == new_region_id {
                 // To prevent from big region, the right region needs run split
                 // check again after split.
@@ -3248,7 +3252,13 @@ where
             }
         }
         let allow_replica_read = read_only && msg.get_header().get_replica_read();
-        if !(self.fsm.peer.is_leader() || is_read_index_request || allow_replica_read) {
+        let flags = WriteBatchFlags::from_bits_check(msg.get_header().get_flags());
+        let allow_stale_read = read_only && flags.contains(WriteBatchFlags::STALE_READ);
+        if !self.fsm.peer.is_leader()
+            && !is_read_index_request
+            && !allow_replica_read
+            && !allow_stale_read
+        {
             self.ctx.raft_metrics.invalid_proposal.not_leader += 1;
             let leader = self.fsm.peer.get_peer_from_cache(leader_id);
             self.fsm.hibernate_state.reset(GroupState::Chaos);
@@ -3931,11 +3941,18 @@ where
         self.propose_raft_command(req, Callback::None);
     }
 
-    fn on_ingest_sst_result(&mut self, ssts: Vec<SstMeta>) {
+    fn on_ingest_sst_result(&mut self, ssts: Vec<SSTMetaInfo>) {
+        let mut size = 0;
+        let mut keys = 0;
         for sst in &ssts {
-            self.fsm.peer.size_diff_hint += sst.get_length();
+            size += sst.total_bytes;
+            keys += sst.total_kvs;
         }
-        self.register_split_region_check_tick();
+        self.fsm.peer.approximate_size = Some(self.fsm.peer.approximate_size.unwrap_or(0) + size);
+        self.fsm.peer.approximate_keys = Some(self.fsm.peer.approximate_keys.unwrap_or(0) + keys);
+        if self.fsm.peer.is_leader() {
+            self.on_pd_heartbeat_tick();
+        }
     }
 
     /// Verify and store the hash to state. return true means the hash has been stored successfully.

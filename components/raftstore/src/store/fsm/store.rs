@@ -4,12 +4,14 @@ use std::cmp::{Ord, Ordering as CmpOrdering};
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::ops::Deref;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{mem, u64};
 
-use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
+use batch_system::{
+    BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler, Priority,
+};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::PerfContext;
 use engine_traits::PerfContextKind;
@@ -119,6 +121,9 @@ pub struct StoreMeta {
     /// source_region_id -> need_atomic
     /// Used for reminding the source peer to switch to ready in `atomic_snap_regions`.
     pub destroyed_region_for_snap: HashMap<u64, bool>,
+    /// region-id -> peer_property
+    /// TODO: for now simply put the safe ts here, need to add more information here later.
+    pub peer_properties: HashMap<u64, Arc<AtomicU64>>,
 }
 
 impl StoreMeta {
@@ -135,6 +140,7 @@ impl StoreMeta {
             targets_map: HashMap::default(),
             atomic_snap_regions: HashMap::default(),
             destroyed_region_for_snap: HashMap::default(),
+            peer_properties: HashMap::default(),
         }
     }
 
@@ -709,7 +715,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
             if self.poll_ctx.tick_batch[idx].ticks.is_empty() {
                 continue;
             }
-            let peer_ticks = std::mem::replace(&mut self.poll_ctx.tick_batch[idx].ticks, vec![]);
+            let peer_ticks = std::mem::take(&mut self.poll_ctx.tick_batch[idx].ticks);
             let f = self
                 .poll_ctx
                 .timer
@@ -1050,7 +1056,7 @@ where
 {
     type Handler = RaftPoller<EK, ER, T>;
 
-    fn build(&mut self) -> RaftPoller<EK, ER, T> {
+    fn build(&mut self, _: Priority) -> RaftPoller<EK, ER, T> {
         let mut ctx = PollContext {
             processed_fsm_count: 0,
             cfg: self.cfg.value().clone(),
@@ -1280,6 +1286,8 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 let peer = peer_fsm.get_peer();
                 meta.readers
                     .insert(peer_fsm.region_id(), ReadDelegate::from_peer(peer));
+                meta.peer_properties
+                    .insert(peer_fsm.region_id(), Arc::default());
             }
         }
 
@@ -2389,7 +2397,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 );
                 None
             })
-            .filter_map(|r| r)
+            .flatten()
             .collect();
         cb(regions);
     }

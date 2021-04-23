@@ -1,8 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use std::u64;
 
 use futures::channel::mpsc;
 use futures::compat::Future01CompatExt;
@@ -521,11 +523,27 @@ impl PdClient for RpcClient {
                 debug!("heartbeat sender is refreshed");
                 let sender = left.take().expect("expect region heartbeat sink");
                 let (tx, rx) = mpsc::unbounded();
+                let pending_heartbeat = Arc::new(AtomicU64::new(0));
                 inner.hb_sender = Either::Right(tx);
+                inner.pending_heartbeat = pending_heartbeat.clone();
                 inner.client_stub.spawn(async move {
                     let mut sender = sender.sink_map_err(Error::Grpc);
+                    let mut last_report = u64::MAX;
                     let result = sender
-                        .send_all(&mut rx.map(|r| Ok((r, WriteFlags::default()))))
+                        .send_all(&mut rx.map(|r| {
+                            let last = pending_heartbeat.fetch_sub(1, Ordering::Relaxed);
+                            // Sender will update pending at every send operation, so as long as
+                            // pending task is increasing, pending count should be reported by
+                            // sender.
+                            if last + 10 < last_report || last == 1 {
+                                PD_PENDING_HEARTBEAT_GAUGE.set(last as i64 - 1);
+                                last_report = last;
+                            }
+                            if last > last_report {
+                                last_report = last - 1;
+                            }
+                            Ok((r, WriteFlags::default()))
+                        }))
                         .await;
                     match result {
                         Ok(()) => {
@@ -539,6 +557,8 @@ impl PdClient for RpcClient {
                 });
             }
 
+            let last = inner.pending_heartbeat.fetch_add(1, Ordering::Relaxed);
+            PD_PENDING_HEARTBEAT_GAUGE.set(last as i64 + 1);
             let sender = inner
                 .hb_sender
                 .as_mut()

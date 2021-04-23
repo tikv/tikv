@@ -132,7 +132,7 @@ fn write_fuzz_target_source_file(fuzzer: Fuzzer, target: &str) -> Result<()> {
 
 /// Run one target fuzz test with specific fuzzer
 fn run(fuzzer: Fuzzer, target: &str) -> Result<()> {
-    if FUZZ_TARGETS.iter().find(|x| *x == target).is_none() {
+    if !FUZZ_TARGETS.iter().any(|x| x == target) {
         panic!(
             "Unknown fuzz target `{}`. Run `list-targets` command to see available fuzz targets.",
             target

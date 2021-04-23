@@ -232,7 +232,7 @@ fn test_rawkv_ttl() {
     let mut put_req = RawPutRequest::default();
     put_req.set_context(ctx.clone());
     put_req.key = k.clone();
-    put_req.value = v.clone();
+    put_req.value = v;
     put_req.ttl = 1;
     let put_resp = client.raw_put(&put_req).unwrap();
     assert!(!put_resp.has_region_error());
@@ -241,8 +241,8 @@ fn test_rawkv_ttl() {
     std::thread::sleep(Duration::from_secs(1));
 
     let mut get_req = RawGetRequest::default();
-    get_req.set_context(ctx.clone());
-    get_req.key = k.clone();
+    get_req.set_context(ctx);
+    get_req.key = k;
     let get_resp = client.raw_get(&get_req).unwrap();
     assert!(!get_resp.has_region_error());
     assert!(get_resp.error.is_empty());
@@ -820,7 +820,7 @@ fn test_debug_region_size() {
 
     let mut req = debugpb::RegionSizeRequest::default();
     req.set_region_id(region_id);
-    req.set_cfs(cfs.iter().map(|s| (*s).to_string()).collect());
+    req.set_cfs(cfs.iter().map(|s| s.to_string()).collect());
     let entries: Vec<_> = debug_client
         .region_size(&req)
         .unwrap()
@@ -1450,15 +1450,14 @@ fn setup_cluster() -> (Cluster<ServerCluster>, TikvClient, CallOption, Context) 
     let follower = region
         .get_peers()
         .iter()
-        .filter(|p| **p != leader)
-        .next()
+        .find(|p| **p != leader)
         .unwrap()
         .clone();
     let follower_addr = cluster.sim.rl().get_addr(follower.get_store_id());
     let epoch = cluster.get_region_epoch(region_id);
     let mut ctx = Context::default();
     ctx.set_region_id(region_id);
-    ctx.set_peer(leader.clone());
+    ctx.set_peer(leader);
     ctx.set_region_epoch(epoch);
 
     let env = Arc::new(Environment::new(1));
@@ -1600,7 +1599,7 @@ fn test_tikv_forwarding() {
     // Test if duplex can be redirect correctly.
     let cases = vec![
         (CallOption::default().timeout(Duration::from_secs(3)), false),
-        (call_opt.clone(), true),
+        (call_opt, true),
     ];
     for (opt, success) in cases {
         let (mut sender, receiver) = client.batch_commands_opt(opt).unwrap();
@@ -1649,7 +1648,7 @@ fn test_forwarding_reconnect() {
     cluster.stop_node(leader.get_store_id());
 
     let mut req = RawGetRequest::default();
-    req.set_context(ctx.clone());
+    req.set_context(ctx);
     // Large timeout value to ensure the error is from proxy instead of client.
     let timer = std::time::Instant::now();
     let timeout = Duration::from_secs(5);
@@ -1663,7 +1662,7 @@ fn test_forwarding_reconnect() {
     }
 
     cluster.run_node(leader.get_store_id()).unwrap();
-    let resp = client.raw_get_opt(&req, call_opt.clone()).unwrap();
+    let resp = client.raw_get_opt(&req, call_opt).unwrap();
     assert!(!resp.get_region_error().has_store_not_match(), "{:?}", resp);
 }
 
@@ -1682,7 +1681,7 @@ fn test_health_check() {
         ..Default::default()
     };
     let resp = client.check(&req).unwrap();
-    assert_eq!(ServingStatus::Serving, resp.status.into());
+    assert_eq!(ServingStatus::Serving, resp.status);
 
     cluster.shutdown();
     client.check(&req).unwrap_err();

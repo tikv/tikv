@@ -51,7 +51,7 @@ use txn_types::{Key, TimeStamp, Value, Write};
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::{self, LockManager, WaitTimeout};
 use crate::storage::mvcc::{Lock as MvccLock, MvccReader, ReleasedLock};
-use crate::storage::txn::latch::{self, Latches};
+use crate::storage::txn::latch;
 use crate::storage::txn::{ProcessResult, Result};
 use crate::storage::types::{
     MvccInfo, PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallbackType,
@@ -457,7 +457,7 @@ pub trait CommandExt: Display {
 
     fn write_bytes(&self) -> usize;
 
-    fn gen_lock(&self, _latches: &Latches) -> latch::Lock;
+    fn gen_lock(&self) -> latch::Lock;
 }
 
 pub struct WriteContext<'a, L: LockManager> {
@@ -586,8 +586,8 @@ impl Command {
         self.command_ext().write_bytes()
     }
 
-    pub fn gen_lock(&self, latches: &Latches) -> latch::Lock {
-        self.command_ext().gen_lock(latches)
+    pub fn gen_lock(&self) -> latch::Lock {
+        self.command_ext().gen_lock()
     }
 
     pub fn can_be_pipelined(&self) -> bool {
