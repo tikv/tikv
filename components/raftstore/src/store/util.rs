@@ -983,9 +983,14 @@ impl RegionReadProgressCore {
 
     fn push_back(&mut self, item: (u64, u64)) {
         if self.pending_items.len() >= self.pending_items.capacity() {
-            // Randomly remove a item to make room for the incoming one
-            let idx = rand::random::<usize>() % self.pending_items.capacity();
-            self.pending_items.remove(idx);
+            // Stepping by one to evently remove the items, so the follower can keep
+            // the old items and use them to update the `safe_ts` even when the follower
+            // not catch up new enough data
+            let mut keep = false;
+            self.pending_items.retain(|_| {
+                keep = !keep;
+                keep
+            });
         }
         self.pending_items.push_back(item);
     }
@@ -1642,7 +1647,7 @@ mod tests {
         }
         assert_eq!(rrp.safe_ts(), 20);
         // the number of pending item should not exceed `cap`
-        assert_eq!(pending_items_num(&rrp), cap);
+        assert!(pending_items_num(&rrp) <= cap);
 
         // `safe_ts` will not update because previous items are dropped
         rrp.update_applied(200 - (cap as u64) - 1);
