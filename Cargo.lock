@@ -3808,14 +3808,18 @@ dependencies = [
  "collections",
  "concurrency_manager",
  "crossbeam 0.8.0",
+ "engine_rocks",
  "engine_traits",
  "fail",
  "futures 0.3.7",
  "grpcio",
  "hex 0.4.2",
  "kvproto",
+ "lazy_static",
  "log_wrappers",
+ "panic_hook",
  "pd_client",
+ "prometheus",
  "prost",
  "protobuf",
  "raft",
@@ -3823,6 +3827,9 @@ dependencies = [
  "security",
  "slog",
  "slog-global",
+ "tempfile",
+ "test_raftstore",
+ "test_util",
  "thiserror",
  "tikv",
  "tikv_util",
@@ -4291,6 +4298,7 @@ dependencies = [
  "raft_log_engine",
  "raftstore",
  "rand 0.7.3",
+ "resolved_ts",
  "security",
  "serde_json",
  "signal",
@@ -5552,7 +5560,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#71c2fd0fdbaafdd7c5a40863962b9065138d5f60"
+source = "git+https://github.com/pingcap/tipb.git#72c4feaa6da7d55d4a6be8adebed578b68676849"
 dependencies = [
  "lazy_static",
  "prost",
