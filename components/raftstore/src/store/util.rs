@@ -911,8 +911,6 @@ struct RegionReadProgressCore {
     safe_ts: u64,
     // `pending_items` is a *sorted* list of `(apply index, safe ts)` item
     pending_items: VecDeque<(u64, u64)>,
-    // the max size of `pending_items`
-    cap: usize,
 }
 
 impl RegionReadProgressCore {
@@ -921,7 +919,6 @@ impl RegionReadProgressCore {
             applied_index,
             safe_ts: 0,
             pending_items: VecDeque::with_capacity(cap),
-            cap,
         }
     }
 
@@ -985,9 +982,9 @@ impl RegionReadProgressCore {
     }
 
     fn push_back(&mut self, item: (u64, u64)) {
-        if self.pending_items.len() >= self.cap {
+        if self.pending_items.len() >= self.pending_items.capacity() {
             // Randomly remove a item to make room for the incoming one
-            let idx = rand::random::<usize>() % self.cap;
+            let idx = rand::random::<usize>() % self.pending_items.capacity();
             self.pending_items.remove(idx);
         }
         self.pending_items.push_back(item);
