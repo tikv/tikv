@@ -9,25 +9,36 @@ use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, RwLock};
 use std::thread;
 use std::time::Duration;
+use thiserror::Error;
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum PluginLoadingError {
-        Dylib(err: DylibError) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        CompilerMismatch(plugin_rustc_version: String, tikv_rustc_version: String) {
-            display("version mismatch of rustc: plugin was compiled with {}, but TiKV with {}", plugin_rustc_version, tikv_rustc_version)
-        }
-        TargetMismatch(plugin_target: String, tikv_target: String) {
-            display("target mismatch: plugin was compiled for {}, but TiKV for {}", plugin_target, tikv_target)
-        }
-        ApiMismatch(plugin_api: String, tikv_api: String) {
-            display("coprocessor_plugin_api mismatch: plugin was compiled with {}, but TiKV with {}", plugin_api, tikv_api)
-        }
-    }
+#[derive(Debug, Error)]
+pub enum PluginLoadingError {
+    #[error("failed to load library")]
+    Dylib(#[from] DylibError),
+
+    #[error(
+        "version mismatch of rustc: plugin was compiled with {plugin_rustc}, but TiKV with {tikv_rustc}"
+    )]
+    CompilerMismatch {
+        plugin_rustc: String,
+        tikv_rustc: String,
+    },
+
+    #[error(
+        "target mismatch: plugin was compiled for {plugin_target}, but TiKV for {tikv_target}"
+    )]
+    TargetMismatch {
+        plugin_target: String,
+        tikv_target: String,
+    },
+
+    #[error(
+        "coprocessor_plugin_api mismatch: plugin was compiled with {plugin_api}, but TiKV with {tikv_api}"
+    )]
+    ApiMismatch {
+        plugin_api: String,
+        tikv_api: String,
+    },
 }
 
 /// Helper function for error handling.
@@ -36,20 +47,20 @@ fn err_on_mismatch(
     tikv_build_info: &BuildInfo,
 ) -> Result<(), PluginLoadingError> {
     if plugin_build_info.api_version != tikv_build_info.api_version {
-        Err(PluginLoadingError::ApiMismatch(
-            plugin_build_info.api_version.to_string(),
-            tikv_build_info.api_version.to_string(),
-        ))
+        Err(PluginLoadingError::ApiMismatch {
+            plugin_api: plugin_build_info.api_version.to_string(),
+            tikv_api: tikv_build_info.api_version.to_string(),
+        })
     } else if plugin_build_info.rustc != tikv_build_info.rustc {
-        Err(PluginLoadingError::CompilerMismatch(
-            plugin_build_info.rustc.to_string(),
-            tikv_build_info.rustc.to_string(),
-        ))
+        Err(PluginLoadingError::CompilerMismatch {
+            plugin_rustc_version: plugin_build_info.rustc.to_string(),
+            tikv_rustc_version: tikv_build_info.rustc.to_string(),
+        })
     } else if plugin_build_info.target != tikv_build_info.target {
-        Err(PluginLoadingError::TargetMismatch(
-            plugin_build_info.target.to_string(),
-            tikv_build_info.target.to_string(),
-        ))
+        Err(PluginLoadingError::TargetMismatch {
+            plugin_target: plugin_build_info.target.to_string(),
+            tikv_target: tikv_build_info.target.to_string(),
+        })
     } else {
         Ok(())
     }
