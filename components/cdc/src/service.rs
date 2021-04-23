@@ -633,7 +633,6 @@ mod tests {
             futures::channel::mpsc::unbounded::<(ChangeDataEvent, grpcio::WriteFlags)>();
         let mut batch_sink = EventBatcherSink::new(sink);
         let send_task = tokio::spawn(async move {
-            let flag = grpcio::WriteFlags::default().buffer_hint(false);
             for i in 0..1000000u64 {
                 let mut resolved_ts = ResolvedTs::default();
                 resolved_ts.set_ts(i);
@@ -661,7 +660,6 @@ mod tests {
             futures::channel::mpsc::unbounded::<(ChangeDataEvent, grpcio::WriteFlags)>();
         let mut batch_sink = EventBatcherSink::new(sink);
         let send_task = tokio::spawn(async move {
-            let flag = grpcio::WriteFlags::default().buffer_hint(false);
             for i in 0..1000000u64 {
                 let mut resolved_ts = ResolvedTs::default();
                 resolved_ts.set_ts(i);
@@ -687,7 +685,6 @@ mod tests {
         let (sink, mut rx) = futures::channel::mpsc::channel(8);
         let mut batch_sink = EventBatcherSink::new(sink);
         let send_task = tokio::spawn(async move {
-            let flag = grpcio::WriteFlags::default().buffer_hint(false);
             for i in 0..1000u64 {
                 let mut resolved_ts = ResolvedTs::default();
                 resolved_ts.set_ts(i);
