@@ -70,7 +70,7 @@ pub trait RequestHandler: Send {
         // Do nothing by default
     }
 
-    fn collect_scan_stat(&mut self, _dest: &mut ExecSummary) {
+    fn collect_scan_stats(&mut self, _dest: &mut ExecSummary) {
         // Do nothing by default
     }
 
