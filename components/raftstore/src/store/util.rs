@@ -908,6 +908,8 @@ impl RegionReadProgress {
 #[derive(Debug)]
 struct RegionReadProgressCore {
     applied_index: u64,
+    // TODO: after region merged, the region's key range is extended and this
+    // region wide `safe_ts` should reset to `min(source_safe_ts, target_safe_ts)`
     safe_ts: u64,
     // `pending_items` is a *sorted* list of `(apply index, safe ts)` item
     pending_items: VecDeque<(u64, u64)>,
