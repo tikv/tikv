@@ -190,14 +190,14 @@ impl<'a> ToString for EnumRef<'a> {
 pub trait EnumEncoder: NumberEncoder {
     #[inline]
     fn write_enum(&mut self, data: EnumRef) -> Result<()> {
-        self.write_u64_le(*data.value as u64)?;
+        self.write_u64_le(*data.value)?;
         self.write_bytes(data.name)?;
         Ok(())
     }
 
     #[inline]
     fn write_enum_uint(&mut self, data: EnumRef) -> Result<()> {
-        self.write_u64_le(*data.value as u64)?;
+        self.write_u64_le(*data.value)?;
         Ok(())
     }
 
