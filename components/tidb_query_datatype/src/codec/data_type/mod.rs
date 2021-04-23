@@ -257,6 +257,10 @@ macro_rules! impl_evaluable_type {
     };
 }
 
+unsafe fn retain_lifetime_transmute<'a, T, U>(from: &'a T) -> &'a U {
+    std::mem::transmute(from)
+}
+
 impl Evaluable for Int {
     const EVAL_TYPE: EvalType = EvalType::Int;
 
@@ -266,7 +270,7 @@ impl Evaluable for Int {
             ScalarValue::Int(x) => x.as_ref(),
             ScalarValue::Enum(x) => x
                 .as_ref()
-                .map(|x| unsafe { &*(x.value_ref() as *const u64 as *const i64) }),
+                .map(|x| unsafe { retain_lifetime_transmute::<u64, i64>(x.value_ref()) }),
             _ => unimplemented!(),
         }
     }
@@ -276,7 +280,7 @@ impl Evaluable for Int {
         match v {
             ScalarValueRef::Int(x) => x,
             ScalarValueRef::Enum(x) => {
-                x.map(|x| unsafe { &*(x.value_ref() as *const u64 as *const i64) })
+                x.map(|x| unsafe { retain_lifetime_transmute::<u64, i64>(x.value_ref()) })
             }
             _ => unimplemented!(),
         }
