@@ -185,7 +185,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                         .as_ref()
                         .check_gc_fence_as_latest_version(reader.start_ts) =>
                 {
-                    Some(reader.load_data(&key, write.clone())?)
+                    Some(reader.load_data(&key, write)?)
                 }
                 WriteType::Delete | WriteType::Put => None,
                 WriteType::Lock | WriteType::Rollback => reader.get(&key, commit_ts.prev())?,
@@ -226,15 +226,14 @@ pub mod tests {
 
     #[cfg(test)]
     use crate::storage::{
-        kv::RocksSnapshot,
         mvcc::tests::*,
-        txn::actions::prewrite::tests::{old_value_put_delete_lock_insert, old_value_random},
+        txn::actions::prewrite::tests::{
+            old_value_put_delete_lock_insert, old_value_random, OldValueRandomTest,
+        },
         txn::commands::pessimistic_rollback,
         txn::tests::*,
         TestEngineBuilder,
     };
-    #[cfg(test)]
-    use std::sync::Arc;
 
     pub fn must_succeed_impl<E: Engine>(
         engine: &E,
@@ -887,11 +886,8 @@ pub mod tests {
     #[test]
     fn test_old_value_random() {
         let key = b"k1";
-        let mut tests: Vec<Box<dyn Fn(Arc<RocksSnapshot>, TimeStamp) -> MvccResult<OldValue>>> =
-            vec![];
-        let mut tests_require_old_value_none: Vec<
-            Box<dyn Fn(Arc<RocksSnapshot>, TimeStamp) -> MvccResult<OldValue>>,
-        > = vec![];
+        let mut tests: Vec<OldValueRandomTest> = vec![];
+        let mut tests_require_old_value_none: Vec<OldValueRandomTest> = vec![];
 
         for should_not_exist in &[true, false] {
             for need_value in &[true, false] {

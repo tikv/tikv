@@ -489,13 +489,8 @@ mod tests {
         let cases = vec![
             (OldValue::Unspecified, false),
             (OldValue::None, true),
-            (
-                OldValue::Value {
-                    short_value: None,
-                    start_ts: 0.into(),
-                },
-                true,
-            ),
+            (OldValue::Value { value: vec![] }, true),
+            (OldValue::ValueTimeStamp { start_ts: 0.into() }, true),
         ];
         for (old_value, v) in cases {
             assert_eq!(old_value.valid(), v);

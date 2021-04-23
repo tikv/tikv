@@ -1203,6 +1203,7 @@ pub mod tests {
 
     // Prepares a test case that put, delete and lock a key and returns
     // a timestamp for testing the case.
+    #[cfg(test)]
     pub fn old_value_put_delete_lock_insert<E: Engine>(engine: &E, key: &[u8]) -> TimeStamp {
         must_prewrite_put(engine, key, b"v1", key, 10);
         must_commit(engine, key, 10, 20);
@@ -1246,10 +1247,13 @@ pub mod tests {
         assert_eq!(old_value, OldValue::None);
     }
 
+    #[cfg(test)]
+    pub type OldValueRandomTest = Box<dyn Fn(Arc<RocksSnapshot>, TimeStamp) -> Result<OldValue>>;
+    #[cfg(test)]
     pub fn old_value_random(
         key: &[u8],
         require_old_value_none: bool,
-        tests: Vec<Box<dyn Fn(Arc<RocksSnapshot>, TimeStamp) -> Result<OldValue>>>,
+        tests: Vec<OldValueRandomTest>,
     ) {
         let mut ts = 1u64;
         let mut tso = || {
@@ -1354,7 +1358,7 @@ pub mod tests {
             require_old_value_none,
             vec![Box::new(move |snapshot, start_ts| {
                 let cm = ConcurrencyManager::new(start_ts);
-                let mut txn = MvccTxn::new(start_ts, cm.clone());
+                let mut txn = MvccTxn::new(start_ts, cm);
                 let mut reader = SnapshotReader::new(start_ts, snapshot, true);
                 let txn_props = TransactionProperties {
                     start_ts,
