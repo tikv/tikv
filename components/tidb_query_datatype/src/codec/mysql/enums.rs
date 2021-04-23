@@ -304,7 +304,7 @@ mod tests {
 
     #[test]
     fn test_as_str() {
-        let cases = vec![("c", 1, "c"), ("b", 2, "b"), ("a", 3, "a")];
+        let cases = vec![("c", &1, "c"), ("b", &2, "b"), ("a", &3, "a")];
 
         for (name, value, expect) in cases {
             let e = EnumRef {

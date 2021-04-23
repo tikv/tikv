@@ -174,10 +174,10 @@ mod tests {
         x.push(Some(Enum::new("我成功了".as_bytes().to_vec(), 3)));
 
         assert_eq!(x.get(0), None);
-        assert_eq!(x.get(1), Some(EnumRef::new("我强爆啊".as_bytes(), 2)));
+        assert_eq!(x.get(1), Some(EnumRef::new("我强爆啊".as_bytes(), &2)));
         assert_eq!(x.get(2), None);
-        assert_eq!(x.get(3), Some(EnumRef::new("我好强啊".as_bytes(), 1)));
-        assert_eq!(x.get(4), Some(EnumRef::new("我成功了".as_bytes(), 3)));
+        assert_eq!(x.get(3), Some(EnumRef::new("我好强啊".as_bytes(), &1)));
+        assert_eq!(x.get(4), Some(EnumRef::new("我成功了".as_bytes(), &3)));
         assert_eq!(x.len(), 5);
         assert!(!x.is_empty());
     }
@@ -197,7 +197,7 @@ mod tests {
         x.truncate(3);
         assert_eq!(x.len(), 3);
         assert_eq!(x.get(0), None);
-        assert_eq!(x.get(1), Some(EnumRef::new("我强爆啊".as_bytes(), 2)));
+        assert_eq!(x.get(1), Some(EnumRef::new("我强爆啊".as_bytes(), &2)));
         assert_eq!(x.get(2), None);
 
         x.truncate(1);
@@ -224,9 +224,9 @@ mod tests {
         assert!(y.is_empty());
 
         assert_eq!(x.get(0), None);
-        assert_eq!(x.get(1), Some(EnumRef::new("我强爆啊".as_bytes(), 2)));
+        assert_eq!(x.get(1), Some(EnumRef::new("我强爆啊".as_bytes(), &2)));
         assert_eq!(x.get(2), None);
-        assert_eq!(x.get(3), Some(EnumRef::new("我好强啊".as_bytes(), 1)));
-        assert_eq!(x.get(4), Some(EnumRef::new("我成功了".as_bytes(), 3)));
+        assert_eq!(x.get(3), Some(EnumRef::new("我好强啊".as_bytes(), &1)));
+        assert_eq!(x.get(4), Some(EnumRef::new("我成功了".as_bytes(), &3)));
     }
 }

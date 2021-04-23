@@ -191,7 +191,7 @@ mod tests {
 
         let mut result = [VectorValue::with_capacity(0, EvalType::Int)];
 
-        update!(state, &mut ctx, Some(EnumRef::new("bbb".as_bytes(), 1))).unwrap();
+        update!(state, &mut ctx, Some(EnumRef::new("bbb".as_bytes(), &1))).unwrap();
 
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
