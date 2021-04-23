@@ -2201,7 +2201,7 @@ impl Default for CdcConfig {
     fn default() -> Self {
         Self {
             min_ts_interval: ReadableDuration::secs(1),
-            old_value_cache_size: 1024 * 1024,
+            old_value_cache_size: 1024,
             hibernate_regions_compatible: true,
             scan_lock_pool_size: 2,
         }
