@@ -669,7 +669,7 @@ impl ImportDir {
     ) -> Result<SSTMetaInfo> {
         let path = self.join(meta)?;
         let path_str = path.save.to_str().unwrap();
-        let env = get_encrypted_env(key_manager.clone(), None /*base_env*/)?;
+        let env = get_encrypted_env(key_manager, None /*base_env*/)?;
         let env = get_inspected_env(Some(env))?;
         let sst_reader = RocksSstReader::open_with_env(&path_str, Some(env))?;
         sst_reader.verify_checksum()?;
@@ -694,7 +694,7 @@ impl ImportDir {
             super::prepare_sst_for_ingestion(&path.save, &path.clone, key_manager.as_deref())?;
             ingest_bytes += meta.get_length();
             engine.reset_global_seq(cf, &path.clone)?;
-            paths.entry(cf).or_insert(Vec::new()).push(path);
+            paths.entry(cf).or_insert_with(Vec::new).push(path);
         }
 
         let mut opts = E::IngestExternalFileOptions::new();
