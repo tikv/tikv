@@ -228,23 +228,21 @@ mod tests {
 
         let mut result = [VectorValue::with_capacity(0, EvalType::Enum)];
 
-        let mut buf = BufferVec::new();
-        buf.push("我好强啊");
-        buf.push("我太强啦");
-        let buf = Arc::new(buf);
-
-        update!(state, &mut ctx, Some(EnumRef::new(&buf, 1))).unwrap();
+        update!(state, &mut ctx, Some(EnumRef::new("bbb".as_bytes(), 1))).unwrap();
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(
             result[0].to_enum_vec(),
-            vec![Some(Enum::new(buf.clone(), 1))]
+            vec![Some(Enum::new("bbb".as_bytes().to_vec(), 1))]
         );
 
-        update!(state, &mut ctx, Some(EnumRef::new(&buf, 2))).unwrap();
+        update!(state, &mut ctx, Some(EnumRef::new("aaa".as_bytes(), 2))).unwrap();
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(
             result[0].to_enum_vec(),
-            vec![Some(Enum::new(buf.clone(), 1)), Some(Enum::new(buf, 1))]
+            vec![
+                Some(Enum::new("bbb".as_bytes().to_vec(), 1)),
+                Some(Enum::new("bbb".as_bytes().to_vec(), 1))
+            ]
         );
     }
 

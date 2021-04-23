@@ -65,7 +65,7 @@ type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksEngin
 type SimulateServerTransport =
     SimulateTransport<ServerTransport<SimulateStoreTransport, PdStoreAddrResolver>>;
 
-pub type SimulateEngine = RaftKv<SimulateStoreTransport>;
+pub type SimulateEngine = RaftKv<RocksEngine, SimulateStoreTransport>;
 
 #[derive(Default, Clone)]
 pub struct AddressMap {
@@ -108,7 +108,7 @@ struct ServerMeta {
     sim_trans: SimulateServerTransport,
     raw_router: RaftRouter<RocksEngine, RocksEngine>,
     raw_apply_router: ApplyRouter<RocksEngine>,
-    gc_worker: GcWorker<RaftKv<SimulateStoreTransport>, SimulateStoreTransport>,
+    gc_worker: GcWorker<RaftKv<RocksEngine, SimulateStoreTransport>, SimulateStoreTransport>,
 }
 
 type PendingServices = Vec<Box<dyn Fn() -> Service>>;
@@ -186,7 +186,7 @@ impl ServerCluster {
     pub fn get_gc_worker(
         &self,
         node_id: u64,
-    ) -> &GcWorker<RaftKv<SimulateStoreTransport>, SimulateStoreTransport> {
+    ) -> &GcWorker<RaftKv<RocksEngine, SimulateStoreTransport>, SimulateStoreTransport> {
         &self.metas.get(&node_id).unwrap().gc_worker
     }
 
@@ -216,12 +216,14 @@ impl Simulator for ServerCluster {
 
         let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
 
-        // Now we cache the store address, so here we should re-use last
-        // listening address for the same store.
-        if let Some(addr) = self.addrs.get(node_id) {
-            cfg.server.addr = addr;
-        } else {
-            cfg.server.addr = format!("127.0.0.1:{}", test_util::alloc_port());
+        if cfg.server.addr == "127.0.0.1:0" {
+            // Now we cache the store address, so here we should re-use last
+            // listening address for the same store.
+            if let Some(addr) = self.addrs.get(node_id) {
+                cfg.server.addr = addr;
+            } else {
+                cfg.server.addr = format!("127.0.0.1:{}", test_util::alloc_port());
+            }
         }
 
         let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
@@ -333,8 +335,24 @@ impl Simulator for ServerCluster {
             ConfigController::default(),
         );
 
+        let apply_router = system.apply_router();
+        // Create node.
+        let mut raft_store = cfg.raft_store.clone();
+        raft_store.validate().unwrap();
+        let mut node = Node::new(
+            system,
+            &cfg.server,
+            Arc::new(VersionTrack::new(raft_store)),
+            Arc::clone(&self.pd_client),
+            state,
+            bg_worker.clone(),
+        );
+        node.try_bootstrap_store(engines.clone())?;
+        let node_id = node.id();
+
         for _ in 0..100 {
             let mut svr = Server::new(
+                node_id,
                 &server_cfg,
                 &security_mgr,
                 store.clone(),
@@ -377,19 +395,6 @@ impl Simulator for ServerCluster {
         let trans = server.transport();
         let simulate_trans = SimulateTransport::new(trans);
         let server_cfg = Arc::new(cfg.server.clone());
-        let apply_router = system.apply_router();
-
-        // Create node.
-        let mut raft_store = cfg.raft_store.clone();
-        raft_store.validate().unwrap();
-        let mut node = Node::new(
-            system,
-            &cfg.server,
-            Arc::new(VersionTrack::new(raft_store)),
-            Arc::clone(&self.pd_client),
-            state,
-            bg_worker.clone(),
-        );
 
         // Register the role change observer of the lock manager.
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);

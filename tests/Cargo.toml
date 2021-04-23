@@ -182,4 +182,4 @@ file_system = { path = "../components/file_system" }
 
 [target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dev-dependencies]
 criterion-perf-events = "0.1"
-perfcnt = "0.6"
+perfcnt = "0.7"

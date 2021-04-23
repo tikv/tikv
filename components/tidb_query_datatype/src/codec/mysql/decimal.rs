@@ -930,18 +930,18 @@ impl Decimal {
     /// ceil the Decimal into a new Decimal.
     pub fn ceil(&self) -> Res<Decimal> {
         if !self.negative {
-            self.clone().round(0, RoundMode::Ceiling)
+            self.round(0, RoundMode::Ceiling)
         } else {
-            self.clone().round(0, RoundMode::Truncate)
+            self.round(0, RoundMode::Truncate)
         }
     }
 
     /// floor the Decimal into a new Decimal.
     pub fn floor(&self) -> Res<Decimal> {
         if !self.negative {
-            self.clone().round(0, RoundMode::Truncate)
+            self.round(0, RoundMode::Truncate)
         } else {
-            self.clone().round(0, RoundMode::Ceiling)
+            self.round(0, RoundMode::Ceiling)
         }
     }
 
@@ -2930,15 +2930,9 @@ mod tests {
 
         for (dec_str, scale, half_exp, trunc_exp, ceil_exp) in cases {
             let dec = dec_str.parse::<Decimal>().unwrap();
-            let res = dec
-                .clone()
-                .round(scale, RoundMode::HalfEven)
-                .map(|d| d.to_string());
+            let res = dec.round(scale, RoundMode::HalfEven).map(|d| d.to_string());
             assert_eq!(res, half_exp.map(|s| s.to_owned()));
-            let res = dec
-                .clone()
-                .round(scale, RoundMode::Truncate)
-                .map(|d| d.to_string());
+            let res = dec.round(scale, RoundMode::Truncate).map(|d| d.to_string());
             assert_eq!(res, trunc_exp.map(|s| s.to_owned()));
             let res = dec.round(scale, RoundMode::Ceiling).map(|d| d.to_string());
             assert_eq!(res, ceil_exp.map(|s| s.to_owned()));
