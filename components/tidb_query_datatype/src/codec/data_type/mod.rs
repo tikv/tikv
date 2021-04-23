@@ -257,8 +257,10 @@ macro_rules! impl_evaluable_type {
     };
 }
 
-unsafe fn retain_lifetime_transmute<'a, T, U>(from: &'a T) -> &'a U {
-    std::mem::transmute(from)
+unsafe fn retain_lifetime_transmute<T, U>(from: &T) -> &U {
+    // with the help of elided lifetime, we can ensure &T and &U
+    // shares the same lifetime.
+    &*(from as *const T as *const U)
 }
 
 impl Evaluable for Int {
