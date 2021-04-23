@@ -162,11 +162,7 @@ impl SSTImporter {
         }
     }
 
-    pub fn enter_normal_mode<E: KvEngine>(
-        &self,
-        db: E,
-        mf: RocksDBMetricsFn,
-    ) -> Result<bool> {
+    pub fn enter_normal_mode<E: KvEngine>(&self, db: E, mf: RocksDBMetricsFn) -> Result<bool> {
         self.switcher.enter_normal_mode(&db, mf)
     }
 

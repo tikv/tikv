@@ -102,7 +102,7 @@ impl ImportModeSwitcher {
                             match switcher.enter_normal_mode(&db, mf) {
                                 Err(e) => {
                                     error!(?e; "failed to put TiKV back into normal mode");
-                                },
+                                }
                                 Ok(success) => {
                                     if success {
                                         cb();
@@ -125,11 +125,7 @@ impl ImportModeSwitcher {
         executor.spawn_ok(timer_loop);
     }
 
-    pub fn enter_normal_mode<E: KvEngine>(
-        &self,
-        db: &E,
-        mf: RocksDBMetricsFn,
-    ) -> Result<bool> {
+    pub fn enter_normal_mode<E: KvEngine>(&self, db: &E, mf: RocksDBMetricsFn) -> Result<bool> {
         if !self.is_import.load(Ordering::Acquire) {
             return Ok(false);
         }
@@ -364,7 +360,11 @@ mod tests {
         let switcher = ImportModeSwitcher::new(&cfg);
         let finished = Arc::new(AtomicBool::new(false));
         let notify = finished.clone();
-        switcher.start(&threads, db.clone(), Box::new(move || notify.store(true, Ordering::Release)));
+        switcher.start(
+            &threads,
+            db.clone(),
+            Box::new(move || notify.store(true, Ordering::Release)),
+        );
         check_import_options(&db, &normal_db_options, &normal_cf_options);
         switcher.enter_import_mode(&db, mf).unwrap();
         check_import_options(&db, &import_db_options, &import_cf_options);

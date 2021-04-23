@@ -125,14 +125,15 @@ where
 
             match req.get_mode() {
                 SwitchMode::Normal => {
-                    let ret = self.importer.enter_normal_mode(
-                        self.engine.clone(),
-                        mf,
-                    );
-                    if ret.unwrap_or(false) {
-                        self.router.broadcast_normal(|| PeerMsg::SplitCheck);
+                    match self.importer.enter_normal_mode(self.engine.clone(), mf) {
+                        Ok(ret) => {
+                            if ret {
+                                self.router.broadcast_normal(|| PeerMsg::SplitCheck);
+                            }
+                            Ok(ret)
+                        }
+                        Err(e) => Err(e),
                     }
-                    ret
                 }
                 SwitchMode::Import => self.importer.enter_import_mode(self.engine.clone(), mf),
             }
