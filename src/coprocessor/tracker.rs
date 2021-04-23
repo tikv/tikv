@@ -165,7 +165,7 @@ impl Tracker {
         self.total_storage_stats.add(&storage_stats);
     }
 
-    pub fn collect_scan_stat(&mut self, exec_summary: ExecSummary){
+    pub fn collect_scan_stats(&mut self, exec_summary: ExecSummary){
         self.read_used_time = exec_summary.time_processed_ns as i64;
     }
 

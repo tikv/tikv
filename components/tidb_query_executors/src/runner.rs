@@ -511,7 +511,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         self.out_most_executor.collect_storage_stats(dest);
     }
 
-    pub fn collect_scan_stat(&mut self, dest: &mut ExecSummary) {
+    pub fn collect_scan_stats(&mut self, dest: &mut ExecSummary) {
         if !self.collect_exec_summary {
             return;
         }
