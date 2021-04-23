@@ -2,6 +2,16 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [5.0.1] - 2021-04-23
+
++ Improvements
+  + Use `zstd` to compress the Region snapshot [#10005](https://github.com/tikv/tikv/pull/10005)
++ Bug Fixes
+  + Fix the issue that the coprocessor fails to properly handle the signed or unsigned integer types in the `IN` expression [#10018](https://github.com/tikv/tikv/pull/10018)
+  + Fix the issue of many empty Regions after batch ingesting SST files [#10015](https://github.com/tikv/tikv/pull/10015)
+  + Fix the potential panic that occurs when the input of `cast_string_as_time` is invalid UTF-8 bytes [#9995](https://github.com/tikv/tikv/pull/9995)
+  + Fix a bug that TiKV cannot start up after the file dictionary file is damaged [#9992](https://github.com/tikv/tikv/pull/9992)
+
 ## [5.0.0] - 2021-04-07
 
 + Compatibility changes
