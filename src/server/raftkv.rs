@@ -9,10 +9,9 @@ use std::{
 use std::{sync::Arc, time::Duration};
 
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::CF_DEFAULT;
 use engine_traits::{CfName, KvEngine};
-use engine_traits::{MvccProperties, MvccPropertiesExt};
+use engine_traits::{MvccProperties, Snapshot};
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::{
     CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
@@ -113,18 +112,22 @@ impl From<Error> for kv::Error {
 
 /// `RaftKv` is a storage engine base on `RaftStore`.
 #[derive(Clone)]
-pub struct RaftKv<S>
+pub struct RaftKv<E, S>
 where
-    S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
+    E: KvEngine,
+    S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
     router: S,
-    engine: RocksEngine,
+    engine: E,
     txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
 }
 
-pub enum CmdRes {
+pub enum CmdRes<S>
+where
+    S: Snapshot,
+{
     Resp(Vec<Response>),
-    Snap(RegionSnapshot<RocksSnapshot>),
+    Snap(RegionSnapshot<S>),
 }
 
 fn new_ctx(resp: &RaftCmdResponse) -> CbContext {
@@ -148,7 +151,13 @@ fn check_raft_cmd_response(resp: &mut RaftCmdResponse, req_cnt: usize) -> Result
     Ok(())
 }
 
-fn on_write_result(mut write_resp: WriteResponse, req_cnt: usize) -> (CbContext, Result<CmdRes>) {
+fn on_write_result<S>(
+    mut write_resp: WriteResponse,
+    req_cnt: usize,
+) -> (CbContext, Result<CmdRes<S>>)
+where
+    S: Snapshot,
+{
     let cb_ctx = new_ctx(&write_resp.response);
     if let Err(e) = check_raft_cmd_response(&mut write_resp.response, req_cnt) {
         return (cb_ctx, Err(e));
@@ -157,10 +166,13 @@ fn on_write_result(mut write_resp: WriteResponse, req_cnt: usize) -> (CbContext,
     (cb_ctx, Ok(CmdRes::Resp(resps.into())))
 }
 
-fn on_read_result(
-    mut read_resp: ReadResponse<RocksSnapshot>,
+fn on_read_result<S>(
+    mut read_resp: ReadResponse<S>,
     req_cnt: usize,
-) -> (CbContext, Result<CmdRes>) {
+) -> (CbContext, Result<CmdRes<S>>)
+where
+    S: Snapshot,
+{
     let mut cb_ctx = new_ctx(&read_resp.response);
     cb_ctx.txn_extra_op = read_resp.txn_extra_op;
     if let Err(e) = check_raft_cmd_response(&mut read_resp.response, req_cnt) {
@@ -174,12 +186,13 @@ fn on_read_result(
     }
 }
 
-impl<S> RaftKv<S>
+impl<E, S> RaftKv<E, S>
 where
-    S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
+    E: KvEngine,
+    S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
     /// Create a RaftKv using specified configuration.
-    pub fn new(router: S, engine: RocksEngine) -> RaftKv<S> {
+    pub fn new(router: S, engine: E) -> RaftKv<E, S> {
         RaftKv {
             router,
             engine,
@@ -208,7 +221,7 @@ where
         &self,
         ctx: SnapContext<'_>,
         req: Request,
-        cb: Callback<CmdRes>,
+        cb: Callback<CmdRes<E::Snapshot>>,
     ) -> Result<()> {
         let mut header = self.new_request_header(&*ctx.pb_ctx);
         if ctx.pb_ctx.get_stale_read() && !ctx.start_ts.is_zero() {
@@ -239,7 +252,7 @@ where
         ctx: &Context,
         reqs: Vec<Request>,
         txn_extra: TxnExtra,
-        write_cb: Callback<CmdRes>,
+        write_cb: Callback<CmdRes<E::Snapshot>>,
         proposed_cb: Option<ExtCallback>,
         committed_cb: Option<ExtCallback>,
     ) -> Result<()> {
@@ -300,32 +313,35 @@ fn invalid_resp_type(exp: CmdType, act: CmdType) -> Error {
     ))
 }
 
-impl<S> Display for RaftKv<S>
+impl<E, S> Display for RaftKv<E, S>
 where
-    S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
+    E: KvEngine,
+    S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RaftKv")
     }
 }
 
-impl<S> Debug for RaftKv<S>
+impl<E, S> Debug for RaftKv<E, S>
 where
-    S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
+    E: KvEngine,
+    S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RaftKv")
     }
 }
 
-impl<S> Engine for RaftKv<S>
+impl<E, S> Engine for RaftKv<E, S>
 where
-    S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
+    E: KvEngine,
+    S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
-    type Snap = RegionSnapshot<RocksSnapshot>;
-    type Local = RocksEngine;
+    type Snap = RegionSnapshot<E::Snapshot>;
+    type Local = E;
 
-    fn kv_engine(&self) -> RocksEngine {
+    fn kv_engine(&self) -> E {
         self.engine.clone()
     }
 
@@ -335,7 +351,7 @@ where
         region.set_end_key(end_key.to_owned());
         // Use a fake peer to avoid panic.
         region.mut_peers().push(Default::default());
-        Ok(RegionSnapshot::<RocksSnapshot>::from_raw(
+        Ok(RegionSnapshot::<E::Snapshot>::from_raw(
             self.engine.clone(),
             region,
         ))
