@@ -219,13 +219,15 @@ where
         assert!(self.regions.get(&region_id).is_none());
         let observe_region = {
             let store_meta = self.store_meta.lock().unwrap();
-            if let Some(peer_properties) = store_meta.peer_properties.get(&region_id) {
+            if let Some(_read_progress) = store_meta.region_read_progress.get(&region_id) {
                 info!(
                     "register observe region";
                     "store id" => ?store_meta.store_id.clone(),
                     "region" => ?region
                 );
-                ObserveRegion::new(region.clone(), peer_properties.clone())
+                // FIXME: should use `read_progress` to initialize the `ObserveRegion::resolver`
+                // hence the resolver can update the `safe_ts`
+                ObserveRegion::new(region.clone(), Arc::default())
             } else {
                 warn!(
                     "try register unexit region";

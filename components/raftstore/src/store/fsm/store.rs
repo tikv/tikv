@@ -4,7 +4,7 @@ use std::cmp::{Ord, Ordering as CmpOrdering};
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::ops::Deref;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{mem, u64};
@@ -1293,8 +1293,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 let peer = peer_fsm.get_peer();
                 meta.readers
                     .insert(peer_fsm.region_id(), ReadDelegate::from_peer(peer));
-                meta.peer_properties
-                    .insert(peer_fsm.region_id(), Arc::default());
             }
         }
 
