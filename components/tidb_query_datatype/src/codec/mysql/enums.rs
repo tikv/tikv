@@ -42,7 +42,7 @@ impl Enum {
     pub fn as_ref(&self) -> EnumRef<'_> {
         EnumRef {
             name: &self.name,
-            value: self.value,
+            value: &self.value,
         }
     }
     fn get_value_name(value: u64, elems: &[String]) -> &[u8] {
@@ -107,41 +107,45 @@ impl ConvertTo<f64> for Enum {
 #[derive(Clone, Copy, Debug)]
 pub struct EnumRef<'a> {
     name: &'a [u8],
-    value: u64,
+    value: &'a u64,
 }
 
 impl<'a> EnumRef<'a> {
-    pub fn new(name: &'a [u8], value: u64) -> Self {
-        if value == 0 {
-            Self {
-                name: "".as_bytes(),
-                value,
-            }
+    pub fn new(name: &'a [u8], value: &'a u64) -> Self {
+        if *value == 0 {
+            Self { name: b"", value }
         } else {
             Self { name, value }
         }
     }
+
     pub fn to_owned(self) -> Enum {
         Enum {
             name: self.name.to_owned(),
-            value: self.value,
+            value: *self.value,
         }
     }
+
     pub fn is_empty(&self) -> bool {
-        self.value == 0
+        *self.value == 0
     }
+
     pub fn value(&self) -> u64 {
+        *self.value
+    }
+
+    pub fn value_ref(&self) -> &'a u64 {
         self.value
     }
-    pub fn value_ref(&self) -> &u64 {
-        &self.value
-    }
+
     pub fn name(&self) -> &'a [u8] {
         self.name
     }
+
     pub fn as_str(&self) -> Result<&str> {
         Ok(std::str::from_utf8(self.name)?)
     }
+
     pub fn len(&self) -> usize {
         8 + self.name.len()
     }
@@ -149,7 +153,7 @@ impl<'a> EnumRef<'a> {
 
 impl<'a> Display for EnumRef<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        if self.value == 0 {
+        if *self.value == 0 {
             return Ok(());
         }
 
@@ -186,14 +190,14 @@ impl<'a> ToString for EnumRef<'a> {
 pub trait EnumEncoder: NumberEncoder {
     #[inline]
     fn write_enum(&mut self, data: EnumRef) -> Result<()> {
-        self.write_u64_le(data.value as u64)?;
+        self.write_u64_le(*data.value as u64)?;
         self.write_bytes(data.name)?;
         Ok(())
     }
 
     #[inline]
     fn write_enum_uint(&mut self, data: EnumRef) -> Result<()> {
-        self.write_u64_le(data.value as u64)?;
+        self.write_u64_le(*data.value as u64)?;
         Ok(())
     }
 
@@ -410,9 +414,9 @@ mod tests {
     #[test]
     fn test_write_enum() {
         let data = [
-            EnumRef::new("a".as_bytes(), 3),
-            EnumRef::new("b".as_bytes(), 2),
-            EnumRef::new("c".as_bytes(), 1),
+            EnumRef::new("a".as_bytes(), &3),
+            EnumRef::new("b".as_bytes(), &2),
+            EnumRef::new("c".as_bytes(), &1),
         ];
         let res: &[u8] = &[
             3, 0, 0, 0, 0, 0, 0, 0, 97, // 1st

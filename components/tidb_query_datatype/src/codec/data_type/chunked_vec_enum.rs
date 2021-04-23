@@ -3,7 +3,7 @@
 use super::bit_vec::BitVec;
 use super::{ChunkRef, ChunkedVec, UnsafeRefInto};
 use super::{Enum, EnumRef};
-use crate::codec::data_type::{ChunkedVecBytes, ChunkedVecSized, Int};
+use crate::codec::data_type::{retain_lifetime_transmute, ChunkedVecBytes, ChunkedVecSized, Int};
 use crate::impl_chunked_vec_common;
 
 /// `ChunkedVecEnum` is a vector storing `Option<Enum>`.
@@ -35,7 +35,9 @@ impl ChunkedVecEnum {
         assert!(idx < self.len());
         if let Some(value) = self.values.get_option_ref(idx) {
             let name = self.names.get(idx).unwrap();
-            Some(EnumRef::new(name, *value as u64))
+            Some(EnumRef::new(name, unsafe {
+                retain_lifetime_transmute(value)
+            }))
         } else {
             None
         }
