@@ -23,7 +23,7 @@ use tikv_util::{debug, error, info, warn};
 use crate::delegate::{Downstream, DownstreamID};
 use crate::endpoint::{Deregister, Task};
 use crate::metrics::*;
-use crate::rate_limiter::{new_pair, DrainerError, RateLimiter};
+use crate::rate_limiter::{new_pair, RateLimiter};
 use futures::ready;
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::event::Event as Event_oneof_event;
@@ -588,6 +588,9 @@ impl ChangeData for Service {
             // 3) an error has occurred in the grpc sink,
             // or 4) the sink has been forced to close due to a congestion.
             let drain_res = drainer.drain(batched_sink).await;
+            // Note that we send `RpcStatusCode::CANCELLED` no matter what, because closing the sink
+            // produces an `io.EOF` in the golang client, which is not handled correctly in some versions
+            // of TiCDC.
             match drain_res {
                 Ok(_) => {
                     info!("cdc drainer exit"; "downstream" => peer.clone(), "conn_id" => ?conn_id);
@@ -595,9 +598,7 @@ impl ChangeData for Service {
                 }
                 Err(e) => {
                     error!("cdc drainer exit"; "downstream" => peer.clone(), "conn_id" => ?conn_id, "error" => ?e);
-                    if let DrainerError::RateLimitExceededError = e {
-                        let _ = sink.fail(RpcStatus::new(RpcStatusCode::CANCELLED, Some("stream congested".into()))).await;
-                    }
+                    let _ = sink.fail(RpcStatus::new(RpcStatusCode::CANCELLED, Some(format!("{:?}", e)))).await;
                 }
             }
             // Unregister this downstream only.
@@ -654,6 +655,9 @@ mod tests {
         send_task.await.unwrap();
     }
 
+    // The difference between this case and the previous one is that, we use the Sink API directly
+    // here by calling `start_send_unpin`, without calling `flush`. We aim to ensure that EventBatcherSink
+    // can flush the inner sink by itself.
     #[tokio::test]
     async fn test_event_batcher_sink_poll_ready_wait() {
         let (sink, mut rx) =
