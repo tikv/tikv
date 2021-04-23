@@ -1651,10 +1651,6 @@ mod tests {
         // the number of pending item should not exceed `cap`
         assert!(pending_items_num(&rrp) <= cap);
 
-        // `safe_ts` will not update because previous items are dropped
-        rrp.update_applied(200 - (cap as u64) - 1);
-        assert_eq!(rrp.safe_ts(), 20);
-
         // `applied_index` large than all pending items will clear all pending items
         rrp.update_applied(200);
         assert_eq!(rrp.safe_ts(), 199);
