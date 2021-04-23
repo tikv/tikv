@@ -369,13 +369,15 @@ where
     /// has been persisted to kvdb because this entry may replay because of panic or power-off, which
     /// happened before `WriteBatch::write` and after `SSTImporter::delete`. We shall make sure that
     /// this entry will never apply again at first, then we can delete the ssts files.
-    // delete_ssts: Vec<SSTMetaInfo>,
-    pending_ssts: Vec<SstMeta>,
+    delete_ssts: Vec<SSTMetaInfo>,
 
     /// The priority of this Handler.
     priority: Priority,
     /// Whether to yield high-latency operation to low-priority handler.
     yield_high_latency_operation: bool,
+
+    /// The ssts waiting to be ingested in `write_to_db`.
+    pending_ssts: Vec<SstMeta>,
 }
 
 impl<EK, W> ApplyContext<EK, W>
@@ -421,11 +423,12 @@ where
             use_delete_range: cfg.use_delete_range,
             perf_context: engine.get_perf_context(cfg.perf_level, PerfContextKind::RaftstoreApply),
             yield_duration: cfg.apply_yield_duration.0,
-            pending_ssts: vec![],
+            delete_ssts: vec![],
             store_id,
             pending_create_peers,
             priority,
             yield_high_latency_operation: cfg.apply_batch_system.low_priority_pool_size > 0,
+            pending_ssts: vec![],
         }
     }
 
@@ -502,8 +505,12 @@ where
                         tag, self.pending_ssts, e
                     );
                 });
-            for sst in self.pending_ssts.drain(..) {
-                self.importer.delete(&sst).unwrap_or_else(|e| {
+            self.pending_ssts = vec![];
+        }
+        if !self.delete_ssts.is_empty() {
+            let tag = self.tag.clone();
+            for sst in self.delete_ssts.drain(..) {
+                self.importer.delete(&sst.meta).unwrap_or_else(|e| {
                     panic!("{} cleanup ingested file {:?}: {:?}", tag, sst, e);
                 });
             }
@@ -1374,8 +1381,11 @@ where
                 }
                 CmdType::IngestSst => {
                     assert!(ctx.kv_wb.is_empty());
+                    assert_eq!(requests.len(), 1);
                     if self.pending_sst.is_none() {
-                        self.handle_ingest(ctx, req)?;
+                        let sst = req.get_ingest_sst().get_sst();
+                        self.handle_ingest(&ctx.importer, sst)?;
+                        ctx.pending_ssts.push(sst.to_owned());
                         return Ok((RaftCmdResponse::default(), ApplyResult::Yield));
                     }
                     ssts.push(self.pending_sst.take().unwrap());
@@ -1424,6 +1434,7 @@ where
                 };
                 dont_delete_ingested_sst_fp();
             }
+            ctx.delete_ssts.append(&mut ssts.clone());
             ApplyResult::Res(ExecResult::IngestSst { ssts })
         } else {
             ApplyResult::None
@@ -1594,13 +1605,7 @@ where
         Ok(resp)
     }
 
-    fn handle_ingest<W: WriteBatch<EK>>(
-        &mut self,
-        ctx: &mut ApplyContext<EK, W>,
-        req: &Request,
-    ) -> Result<()> {
-        let sst = req.get_ingest_sst().get_sst();
-
+    fn handle_ingest(&mut self, importer: &Arc<SSTImporter>, sst: &SstMeta) -> Result<()> {
         if let Err(e) = check_sst_for_ingestion(sst, &self.region) {
             error!(?e;
                  "ingest fail";
@@ -1610,10 +1615,10 @@ where
                  "region" => ?&self.region,
             );
             // This file is not valid, we can delete it here.
-            let _ = ctx.importer.delete(sst);
+            let _ = importer.delete(sst);
             return Err(e);
         }
-        match ctx.importer.validate(sst) {
+        match importer.validate(sst) {
             Ok(meta_info) => self.pending_sst = Some(meta_info),
             Err(e) => {
                 // If this failed, it means that the file is corrupted or something
