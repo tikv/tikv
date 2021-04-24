@@ -31,11 +31,11 @@ use raftstore::store::util::compare_region_epoch;
 use raftstore::Error as RaftStoreError;
 use resolved_ts::Resolver;
 use tikv::storage::txn::TxnEntry;
-use tikv_util::mpsc::batch::Sender as BatchSender;
 use tikv_util::time::Instant;
 use tikv_util::{debug, info, warn};
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
 
+use crate::channel::{SendError, Sink};
 use crate::endpoint::{OldValueCache, OldValueCallback};
 use crate::metrics::*;
 use crate::service::{CdcEvent, ConnID};
@@ -78,7 +78,7 @@ pub struct Downstream {
     // The IP address of downstream.
     peer: String,
     region_epoch: RegionEpoch,
-    sink: Option<BatchSender<CdcEvent>>,
+    sink: Option<Sink>,
     state: Arc<AtomicCell<DownstreamState>>,
     enable_old_value: bool,
 }
@@ -117,21 +117,20 @@ impl Downstream {
             return;
         }
         let sink = self.sink.as_ref().unwrap();
-        if let Err(e) = sink.try_send(CdcEvent::Event(event)) {
-            match e {
-                crossbeam::channel::TrySendError::Disconnected(_) => {
-                    debug!("cdc send event failed, disconnected";
-                        "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => self.req_id);
-                }
-                crossbeam::channel::TrySendError::Full(_) => {
-                    info!("cdc send event failed, full";
-                        "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => self.req_id);
-                }
+        match sink.unbounded_send(CdcEvent::Event(event)) {
+            Ok(_) => (),
+            Err(SendError::Disconnected) => {
+                debug!("cdc send event failed, disconnected";
+                    "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => self.req_id);
+            }
+            Err(SendError::Full) => {
+                info!("cdc send event failed, full";
+                    "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => self.req_id);
             }
         }
     }
 
-    pub fn set_sink(&mut self, sink: BatchSender<CdcEvent>) {
+    pub fn set_sink(&mut self, sink: Sink) {
         self.sink = Some(sink);
     }
 
@@ -452,20 +451,11 @@ impl Delegate {
         Ok(())
     }
 
-    pub fn on_scan(&mut self, downstream_id: DownstreamID, entries: Vec<Option<TxnEntry>>) {
-        let downstreams = if let Some(pending) = self.pending.as_mut() {
-            &pending.downstreams
-        } else {
-            &self.downstreams
-        };
-        let downstream = if let Some(d) = downstreams.iter().find(|d| d.id == downstream_id) {
-            d
-        } else {
-            warn!("cdc downstream not found";
-                "downstream_id" => ?downstream_id, "region_id" => self.region_id);
-            return;
-        };
-
+    pub(crate) fn convert_to_grpc_events(
+        region_id: u64,
+        request_id: u64,
+        entries: Vec<Option<TxnEntry>>,
+    ) -> Vec<Event> {
         let entries_len = entries.len();
         let mut rows = vec![Vec::with_capacity(entries_len)];
         let mut current_rows_size: usize = 0;
@@ -534,20 +524,40 @@ impl Delegate {
             }
         }
 
-        for rs in rows {
-            if !rs.is_empty() {
+        rows.into_iter()
+            .filter(|rs| !rs.is_empty())
+            .map(|rs| {
                 let event_entries = EventEntries {
                     entries: rs.into(),
                     ..Default::default()
                 };
-                let event = Event {
-                    region_id: self.region_id,
+                Event {
+                    region_id,
+                    request_id,
                     event: Some(Event_oneof_event::Entries(event_entries)),
                     ..Default::default()
-                };
-                downstream.sink_event(event);
-            }
-        }
+                }
+            })
+            .collect()
+    }
+
+    pub fn on_scan(&mut self, downstream_id: DownstreamID, entries: Vec<Option<TxnEntry>>) {
+        let downstreams = if let Some(pending) = self.pending.as_mut() {
+            &pending.downstreams
+        } else {
+            &self.downstreams
+        };
+        let downstream = if let Some(d) = downstreams.iter().find(|d| d.id == downstream_id) {
+            d
+        } else {
+            warn!("cdc downstream not found";
+                "downstream_id" => ?downstream_id, "region_id" => self.region_id);
+            return;
+        };
+
+        Self::convert_to_grpc_events(self.region_id, downstream.req_id, entries)
+            .into_iter()
+            .for_each(|e| downstream.sink_event(e))
     }
 
     fn sink_data(
@@ -864,7 +874,6 @@ mod tests {
     use kvproto::metapb::Region;
     use std::cell::Cell;
     use tikv::storage::mvcc::test_util::*;
-    use tikv_util::mpsc::batch::{self, BatchReceiver, VecCollector};
 
     #[test]
     fn test_error() {
@@ -876,8 +885,8 @@ mod tests {
         region.mut_region_epoch().set_conf_ver(2);
         let region_epoch = region.get_region_epoch().clone();
 
-        let (sink, rx) = batch::unbounded(1);
-        let rx = BatchReceiver::new(rx, 1, Vec::new, VecCollector);
+        let (sink, drain) = crate::channel::canal(1);
+        let rx = drain.drain();
         let request_id = 123;
         let mut downstream =
             Downstream::new(String::new(), region_epoch, request_id, ConnID::new(), true);
@@ -893,17 +902,16 @@ mod tests {
 
         let rx_wrap = Cell::new(Some(rx));
         let receive_error = || {
-            let (resps, rx) = block_on(rx_wrap.replace(None).unwrap().into_future());
+            let (event, rx) = block_on(rx_wrap.replace(None).unwrap().into_future());
             rx_wrap.set(Some(rx));
-            let mut resps = resps.unwrap();
-            assert_eq!(resps.len(), 1);
-            for r in &resps {
-                if let CdcEvent::Event(e) = r {
-                    assert_eq!(e.get_request_id(), request_id);
-                }
-            }
-            let cdc_event = &mut resps[0];
-            if let CdcEvent::Event(e) = cdc_event {
+            let event = event.unwrap();
+            assert!(
+                matches!(event, CdcEvent::Event(_)),
+                "unknown event {:?}",
+                event
+            );
+            if let CdcEvent::Event(mut e) = event {
+                assert_eq!(e.get_request_id(), request_id);
                 let event = e.event.take().unwrap();
                 match event {
                     Event_oneof_event::Error(err) => err,
@@ -1004,8 +1012,8 @@ mod tests {
         region.mut_region_epoch().set_conf_ver(2);
         let region_epoch = region.get_region_epoch().clone();
 
-        let (sink, rx) = batch::unbounded(1);
-        let rx = BatchReceiver::new(rx, 1, Vec::new, VecCollector);
+        let (sink, drain) = crate::channel::canal(1);
+        let rx = drain.drain();
         let request_id = 123;
         let mut downstream =
             Downstream::new(String::new(), region_epoch, request_id, ConnID::new(), true);
@@ -1018,17 +1026,16 @@ mod tests {
 
         let rx_wrap = Cell::new(Some(rx));
         let check_event = |event_rows: Vec<EventRow>| {
-            let (resps, rx) = block_on(rx_wrap.replace(None).unwrap().into_future());
+            let (event, rx) = block_on(rx_wrap.replace(None).unwrap().into_future());
             rx_wrap.set(Some(rx));
-            let mut resps = resps.unwrap();
-            assert_eq!(resps.len(), 1);
-            for r in &resps {
-                if let CdcEvent::Event(e) = r {
-                    assert_eq!(e.get_request_id(), request_id);
-                }
-            }
-            let cdc_event = resps.remove(0);
-            if let CdcEvent::Event(mut e) = cdc_event {
+            let event = event.unwrap();
+            assert!(
+                matches!(event, CdcEvent::Event(_)),
+                "unknown event {:?}",
+                event
+            );
+            if let CdcEvent::Event(mut e) = event {
+                assert_eq!(e.get_request_id(), request_id);
                 assert_eq!(e.region_id, region_id);
                 assert_eq!(e.index, 0);
                 let event = e.event.take().unwrap();

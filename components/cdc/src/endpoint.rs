@@ -11,6 +11,7 @@ use crossbeam::atomic::AtomicCell;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use fail::fail_point;
 use futures::compat::Future01CompatExt;
+use futures::SinkExt;
 use grpcio::{ChannelBuilder, Environment};
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::event::Event as Event_oneof_event;
@@ -41,6 +42,7 @@ use txn_types::{
     Key, Lock, LockType, MutationType, OldValue, TimeStamp, TxnExtra, TxnExtraScheduler,
 };
 
+use crate::channel::SendError;
 use crate::delegate::{Delegate, Downstream, DownstreamID, DownstreamState};
 use crate::metrics::*;
 use crate::service::{CdcEvent, Conn, ConnID, FeatureGate};
@@ -150,11 +152,6 @@ pub enum Task {
         region: Region,
         resolver: Resolver,
     },
-    IncrementalScan {
-        region_id: u64,
-        downstream_id: DownstreamID,
-        entries: Vec<Option<TxnEntry>>,
-    },
     RegisterMinTsEvent,
     // The result of ChangeCmd should be returned from CDC Endpoint to ensure
     // the downstream switches to Normal after the previous commands was sunk.
@@ -210,16 +207,6 @@ impl fmt::Debug for Task {
                 .field("type", &"resolver_ready")
                 .field("observe_id", &observe_id)
                 .field("region_id", &region.get_id())
-                .finish(),
-            Task::IncrementalScan {
-                ref region_id,
-                ref downstream_id,
-                ref entries,
-            } => de
-                .field("type", &"incremental_scan")
-                .field("region_id", &region_id)
-                .field("downstream", &downstream_id)
-                .field("scan_entries", &entries.len())
                 .finish(),
             Task::RegisterMinTsEvent => de.field("type", &"register_min_ts").finish(),
             Task::InitDownstream {
@@ -465,7 +452,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 return;
             }
         };
-        downstream.set_sink(conn.get_sink());
+        downstream.set_sink(conn.get_sink().clone());
 
         // TODO: Add a new task to close incompatible features.
         if let Some(e) = conn.check_version_and_set_feature(version) {
@@ -532,6 +519,8 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             region_id,
             conn_id,
             downstream_id,
+            sink: conn.get_sink().clone(),
+            request_id: request.get_request_id(),
             downstream_state: downstream_state.clone(),
             txn_extra_op: delegate.txn_extra_op,
             speed_limter: self.scan_speed_limter.clone(),
@@ -623,19 +612,6 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         }
     }
 
-    pub fn on_incremental_scan(
-        &mut self,
-        region_id: u64,
-        downstream_id: DownstreamID,
-        entries: Vec<Option<TxnEntry>>,
-    ) {
-        if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
-            delegate.on_scan(downstream_id, entries);
-        } else {
-            warn!("cdc region not found on incremental scan"; "region_id" => region_id);
-        }
-    }
-
     fn on_region_ready(&mut self, observe_id: ObserveID, resolver: Resolver, region: Region) {
         let region_id = region.get_id();
         if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
@@ -687,16 +663,16 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         };
 
         let send_cdc_event = |conn: &Conn, event| {
-            if let Err(e) = conn.get_sink().try_send(event) {
-                match e {
-                    crossbeam::channel::TrySendError::Disconnected(_) => {
-                        debug!("cdc send event failed, disconnected";
-                            "conn_id" => ?conn.get_id(), "downstream" => conn.get_peer());
-                    }
-                    crossbeam::channel::TrySendError::Full(_) => {
-                        info!("send event failed, full";
-                            "conn_id" => ?conn.get_id(), "downstream" => conn.get_peer());
-                    }
+            match conn.get_sink().unbounded_send(event) {
+                Ok(_) => (),
+                // TODO: handle errors.
+                Err(SendError::Disconnected) => {
+                    debug!("cdc send event failed, disconnected";
+                        "conn_id" => ?conn.get_id(), "downstream" => ?conn.get_peer());
+                }
+                Err(SendError::Full) => {
+                    info!("cdc send event failed, full";
+                        "conn_id" => ?conn.get_id(), "downstream" => ?conn.get_peer());
                 }
             }
         };
@@ -1033,20 +1009,18 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
     fn on_open_conn(&mut self, conn: Conn) {
         self.connections.insert(conn.get_id(), conn);
     }
-
-    fn flush_all(&self) {
-        self.connections.iter().for_each(|(_, conn)| conn.flush());
-    }
 }
 
 struct Initializer {
     sched: Scheduler<Task>,
+    sink: crate::channel::Sink,
 
     region_id: u64,
     observe_id: ObserveID,
     downstream_id: DownstreamID,
     downstream_state: Arc<AtomicCell<DownstreamState>>,
     conn_id: ConnID,
+    request_id: u64,
     checkpoint_ts: TimeStamp,
     txn_extra_op: TxnExtraOp,
 
@@ -1063,7 +1037,12 @@ impl Initializer {
         if let Some(region_snapshot) = resp.snapshot {
             assert_eq!(self.region_id, region_snapshot.get_region().get_id());
             let region = region_snapshot.get_region().clone();
-            self.async_incremental_scan(region_snapshot, region).await;
+            // Require barrier before finishing incremental scan, because
+            // CDC needs to make sure resovled ts events can only be sent after
+            // incremental scan is finished.
+            let require_barrier = true;
+            self.async_incremental_scan(region_snapshot, region, require_barrier)
+                .await;
             CDC_SCAN_TASKS.with_label_values(&["finish"]).inc();
         } else {
             CDC_SCAN_TASKS.with_label_values(&["abort"]).inc();
@@ -1084,7 +1063,12 @@ impl Initializer {
         }
     }
 
-    async fn async_incremental_scan<S: Snapshot + 'static>(&self, snap: S, region: Region) {
+    async fn async_incremental_scan<S: Snapshot + 'static>(
+        &self,
+        snap: S,
+        region: Region,
+        require_barrier: bool,
+    ) {
         let downstream_id = self.downstream_id;
         let region_id = region.get_id();
         debug!("cdc async incremental scan";
@@ -1107,6 +1091,7 @@ impl Initializer {
             .range(None, None)
             .build_delta_scanner(self.checkpoint_ts, self.txn_extra_op)
             .unwrap();
+        let conn_id = self.conn_id;
         let mut done = false;
         while !done {
             if self.downstream_state.load() != DownstreamState::Normal {
@@ -1114,7 +1099,7 @@ impl Initializer {
                     "region_id" => region_id,
                     "downstream_id" => ?downstream_id,
                     "observe_id" => ?self.observe_id,
-                    "conn_id" => ?self.conn_id);
+                    "conn_id" => ?conn_id);
                 self.deregister_downstream(None);
                 return;
             }
@@ -1132,13 +1117,16 @@ impl Initializer {
             }
             debug!("cdc scan entries"; "len" => entries.len(), "region_id" => region_id);
             fail_point!("before_schedule_incremental_scan");
-            let scanned = Task::IncrementalScan {
-                region_id,
-                downstream_id,
-                entries,
-            };
-            if let Err(e) = self.sched.schedule(scanned) {
-                error!("cdc schedule cdc task failed"; "error" => ?e, "region_id" => region_id);
+            if let Err(e) = self.sink_scan_events(entries, done, require_barrier).await {
+                let deregister = Deregister::Downstream {
+                    region_id,
+                    downstream_id,
+                    conn_id,
+                    err: Some(e),
+                };
+                if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
+                    error!("cdc schedule cdc task failed"; "error" => ?e, "region_id" => region_id);
+                }
                 return;
             }
         }
@@ -1193,6 +1181,42 @@ impl Initializer {
         }
 
         Ok(entries)
+    }
+
+    async fn sink_scan_events(
+        &self,
+        entries: Vec<Option<TxnEntry>>,
+        done: bool,
+        require_barrier: bool,
+    ) -> Result<()> {
+        let mut barrier = None;
+        let mut sink = self.sink.bounded_sink();
+        for event in Delegate::convert_to_grpc_events(self.region_id, self.request_id, entries) {
+            if let Err(e) = sink.send(CdcEvent::Event(event)).await {
+                error!("cdc send scan event failed"; "req_id" => ?self.request_id);
+                return Err(Error::Sink(e));
+            }
+        }
+        if done {
+            let (cb, fut) = tikv_util::future::paired_future_callback();
+            if let Err(e) = sink.send(CdcEvent::Barrier(Some(cb))).await {
+                error!("cdc send scan barrier failed"; "req_id" => ?self.request_id);
+                return Err(Error::Sink(e));
+            }
+            barrier = Some(fut);
+        }
+        if let Err(e) = sink.flush().await {
+            error!("cdc flush scan event failed"; "req_id" => ?self.request_id);
+            return Err(Error::Sink(e));
+        }
+        if require_barrier {
+            if let Some(barrier) = barrier {
+                // Make sure tikv sends out all scan events.
+                let _ = barrier.await;
+            }
+        }
+
+        Ok(())
     }
 
     fn finish_building_resolver(&self, mut resolver: Resolver, region: Region, takes: Duration) {
@@ -1260,13 +1284,6 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable for Endpoint<T> {
                 region,
             } => self.on_region_ready(observe_id, resolver, region),
             Task::Deregister(deregister) => self.on_deregister(deregister),
-            Task::IncrementalScan {
-                region_id,
-                downstream_id,
-                entries,
-            } => {
-                self.on_incremental_scan(region_id, downstream_id, entries);
-            }
             Task::MultiBatch {
                 multi,
                 old_value_cb,
@@ -1278,7 +1295,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable for Endpoint<T> {
                 downstream_state,
                 cb,
             } => {
-                info!("cdc downstream was initialized"; "downstream_id" => ?downstream_id);
+                info!("cdc downstream is initialized"; "downstream_id" => ?downstream_id);
                 let _ = downstream_state
                     .compare_exchange(DownstreamState::Uninitialized, DownstreamState::Normal);
                 cb();
@@ -1297,7 +1314,6 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable for Endpoint<T> {
                 }
             },
         }
-        self.flush_all();
     }
 }
 
@@ -1359,7 +1375,6 @@ impl TxnExtraScheduler for CdcTxnExtraScheduler {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use collections::HashSet;
     use engine_traits::DATA_CFS;
     use futures::executor::block_on;
@@ -1378,8 +1393,10 @@ mod tests {
     use tikv::storage::txn::tests::{must_acquire_pessimistic_lock, must_prewrite_put};
     use tikv::storage::TestEngineBuilder;
     use tikv_util::config::ReadableDuration;
-    use tikv_util::mpsc::batch;
     use tikv_util::worker::{dummy_scheduler, LazyWorker, ReceiverWrapper};
+
+    use super::*;
+    use crate::channel;
 
     struct ReceiverRunnable<T: Display + Send> {
         tx: Sender<T>,
@@ -1403,8 +1420,16 @@ mod tests {
 
     fn mock_initializer(
         speed_limit: usize,
-    ) -> (LazyWorker<Task>, Runtime, Initializer, Receiver<Task>) {
+        buffer: usize,
+    ) -> (
+        LazyWorker<Task>,
+        Runtime,
+        Initializer,
+        Receiver<Task>,
+        crate::channel::Drain,
+    ) {
         let (receiver_worker, rx) = new_receiver_worker();
+        let (sink, drain) = crate::channel::canal(buffer);
 
         let pool = Builder::new()
             .threaded_scheduler()
@@ -1415,12 +1440,14 @@ mod tests {
         let downstream_state = Arc::new(AtomicCell::new(DownstreamState::Normal));
         let initializer = Initializer {
             sched: receiver_worker.scheduler(),
+            sink,
 
             region_id: 1,
             observe_id: ObserveID::new(),
             downstream_id: DownstreamID::new(),
             downstream_state,
             conn_id: ConnID::new(),
+            request_id: 0,
             checkpoint_ts: 1.into(),
             speed_limter: Limiter::new(speed_limit as _),
             max_scan_batch_bytes: 1024 * 1024,
@@ -1429,7 +1456,7 @@ mod tests {
             build_resolver: true,
         };
 
-        (receiver_worker, pool, initializer, rx)
+        (receiver_worker, pool, initializer, rx, drain)
     }
 
     fn mock_endpoint(
@@ -1493,8 +1520,10 @@ mod tests {
 
         let region = Region::default();
         let snap = engine.snapshot(Default::default()).unwrap();
-
-        let (mut worker, _pool, mut initializer, rx) = mock_initializer(total_bytes);
+        // Buffer must be large enough to unblock async incremental scan.
+        let buffer = 1000;
+        let (mut worker, _pool, mut initializer, rx, _drain) =
+            mock_initializer(total_bytes, buffer);
         let check_result = || loop {
             let task = rx.recv().unwrap();
             match task {
@@ -1502,21 +1531,21 @@ mod tests {
                     assert_eq!(resolver.locks(), &expected_locks);
                     return;
                 }
-                Task::IncrementalScan { .. } => continue,
                 t => panic!("unepxected task {} received", t),
             }
         };
-
-        block_on(initializer.async_incremental_scan(snap.clone(), region.clone()));
+        // To not block test by barrier.
+        let require_barrier = false;
+        block_on(initializer.async_incremental_scan(snap.clone(), region.clone(), require_barrier));
         check_result();
 
         initializer.max_scan_batch_bytes = total_bytes;
-        block_on(initializer.async_incremental_scan(snap.clone(), region.clone()));
+        block_on(initializer.async_incremental_scan(snap.clone(), region.clone(), require_barrier));
         check_result();
 
         initializer.max_scan_batch_bytes = total_bytes / 3;
         let start_1_3 = Instant::now();
-        block_on(initializer.async_incremental_scan(snap.clone(), region.clone()));
+        block_on(initializer.async_incremental_scan(snap.clone(), region.clone(), require_barrier));
         check_result();
         // 2s to allow certain inaccuracy.
         assert!(
@@ -1527,7 +1556,7 @@ mod tests {
 
         let start_1_6 = Instant::now();
         initializer.max_scan_batch_bytes = total_bytes / 6;
-        block_on(initializer.async_incremental_scan(snap.clone(), region.clone()));
+        block_on(initializer.async_incremental_scan(snap.clone(), region.clone(), require_barrier));
         check_result();
         // 4s to allow certain inaccuracy.
         assert!(
@@ -1537,12 +1566,11 @@ mod tests {
         );
 
         initializer.build_resolver = false;
-        block_on(initializer.async_incremental_scan(snap.clone(), region.clone()));
+        block_on(initializer.async_incremental_scan(snap.clone(), region.clone(), require_barrier));
 
         loop {
             let task = rx.recv_timeout(Duration::from_secs(1));
             match task {
-                Ok(Task::IncrementalScan { .. }) => continue,
                 Ok(t) => panic!("unepxected task {} received", t),
                 Err(RecvTimeoutError::Timeout) => break,
                 Err(e) => panic!("unexpected err {:?}", e),
@@ -1551,7 +1579,7 @@ mod tests {
 
         // Test cancellation.
         initializer.downstream_state.store(DownstreamState::Stopped);
-        block_on(initializer.async_incremental_scan(snap, region));
+        block_on(initializer.async_incremental_scan(snap, region, require_barrier));
 
         loop {
             let task = rx.recv_timeout(Duration::from_secs(1));
@@ -1570,7 +1598,7 @@ mod tests {
 
     #[test]
     fn test_raftstore_is_busy() {
-        let (tx, _rx) = batch::unbounded(1);
+        let (tx, _rx) = channel::canal(1);
         let (mut ep, raft_router, mut task_rx) = mock_endpoint(&CdcConfig::default());
         // Fill the channel.
         let _raft_rx = raft_router.add_region(1 /* region id */, 1 /* cap */);
@@ -1621,7 +1649,8 @@ mod tests {
             ..Default::default()
         });
         let _raft_rx = raft_router.add_region(1 /* region id */, 100 /* cap */);
-        let (tx, rx) = batch::unbounded(1);
+        let (tx, rx) = channel::canal(1);
+        let mut rx = rx.drain();
 
         let conn = Conn::new(tx, String::new());
         let conn_id = conn.get_id();
@@ -1648,7 +1677,9 @@ mod tests {
             conn_id,
             version: semver::Version::new(4, 0, 6),
         });
-        let cdc_event = rx.recv_timeout(Duration::from_millis(500)).unwrap();
+        let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
+            .unwrap()
+            .unwrap();
         if let CdcEvent::Event(mut e) = cdc_event {
             assert_eq!(e.region_id, 1);
             assert_eq!(e.request_id, 2);
@@ -1672,7 +1703,9 @@ mod tests {
             conn_id,
             version: semver::Version::new(0, 0, 0),
         });
-        let cdc_event = rx.recv_timeout(Duration::from_millis(500)).unwrap();
+        let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
+            .unwrap()
+            .unwrap();
         if let CdcEvent::Event(mut e) = cdc_event {
             assert_eq!(e.region_id, 1);
             assert_eq!(e.request_id, 3);
@@ -1745,7 +1778,8 @@ mod tests {
         });
         let _raft_rx = raft_router.add_region(1 /* region id */, 100 /* cap */);
 
-        let (tx, rx) = batch::unbounded(1);
+        let (tx, rx) = channel::canal(1);
+        let mut rx = rx.drain();
         let mut region = Region::default();
         region.set_id(1);
         let conn = Conn::new(tx, String::new());
@@ -1770,7 +1804,9 @@ mod tests {
             regions: vec![1],
             min_ts: TimeStamp::from(1),
         });
-        let cdc_event = rx.recv_timeout(Duration::from_millis(500)).unwrap();
+        let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
+            .unwrap()
+            .unwrap();
         if let CdcEvent::ResolvedTs(r) = cdc_event {
             assert_eq!(r.regions, vec![1]);
             assert_eq!(r.ts, 1);
@@ -1795,7 +1831,9 @@ mod tests {
             regions: vec![1, 2],
             min_ts: TimeStamp::from(2),
         });
-        let cdc_event = rx.recv_timeout(Duration::from_millis(500)).unwrap();
+        let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
+            .unwrap()
+            .unwrap();
         if let CdcEvent::ResolvedTs(mut r) = cdc_event {
             r.regions.as_mut_slice().sort_unstable();
             assert_eq!(r.regions, vec![1, 2]);
@@ -1805,7 +1843,8 @@ mod tests {
         }
 
         // Register region 3 to another conn which is not support batch resolved ts.
-        let (tx, rx2) = batch::unbounded(1);
+        let (tx, rx2) = channel::canal(1);
+        let mut rx2 = rx2.drain();
         let mut region = Region::default();
         region.set_id(3);
         let conn = Conn::new(tx, String::new());
@@ -1827,7 +1866,9 @@ mod tests {
             regions: vec![1, 2, 3],
             min_ts: TimeStamp::from(3),
         });
-        let cdc_event = rx.recv_timeout(Duration::from_millis(500)).unwrap();
+        let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
+            .unwrap()
+            .unwrap();
         if let CdcEvent::ResolvedTs(mut r) = cdc_event {
             r.regions.as_mut_slice().sort_unstable();
             // Although region 3 is not register in the first conn, batch resolved ts
@@ -1837,7 +1878,9 @@ mod tests {
         } else {
             panic!("unknown cdc event {:?}", cdc_event);
         }
-        let cdc_event = rx2.recv_timeout(Duration::from_millis(500)).unwrap();
+        let cdc_event = channel::recv_timeout(&mut rx2, Duration::from_millis(500))
+            .unwrap()
+            .unwrap();
         if let CdcEvent::Event(mut e) = cdc_event {
             assert_eq!(e.region_id, 3);
             assert_eq!(e.request_id, 3);
@@ -1857,7 +1900,8 @@ mod tests {
     fn test_deregister() {
         let (mut ep, raft_router, _task_rx) = mock_endpoint(&CdcConfig::default());
         let _raft_rx = raft_router.add_region(1 /* region id */, 100 /* cap */);
-        let (tx, rx) = batch::unbounded(1);
+        let (tx, rx) = channel::canal(1);
+        let mut rx = rx.drain();
 
         let conn = Conn::new(tx, String::new());
         let conn_id = conn.get_id();
@@ -1887,7 +1931,9 @@ mod tests {
         };
         ep.run(Task::Deregister(deregister));
         loop {
-            let cdc_event = rx.recv_timeout(Duration::from_millis(500)).unwrap();
+            let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
+                .unwrap()
+                .unwrap();
             if let CdcEvent::Event(mut e) = cdc_event {
                 let event = e.event.take().unwrap();
                 match event {
@@ -1918,7 +1964,7 @@ mod tests {
             err: Some(Error::request(err_header.clone())),
         };
         ep.run(Task::Deregister(deregister));
-        assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
+        assert!(channel::recv_timeout(&mut rx, Duration::from_millis(200)).is_err());
         assert_eq!(ep.capture_regions.len(), 1);
 
         let deregister = Deregister::Downstream {
@@ -1928,7 +1974,9 @@ mod tests {
             err: Some(Error::request(err_header.clone())),
         };
         ep.run(Task::Deregister(deregister));
-        let cdc_event = rx.recv_timeout(Duration::from_millis(500)).unwrap();
+        let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
+            .unwrap()
+            .unwrap();
         loop {
             if let CdcEvent::Event(mut e) = cdc_event {
                 let event = e.event.take().unwrap();
@@ -1959,7 +2007,7 @@ mod tests {
             err: Error::request(err_header),
         };
         ep.run(Task::Deregister(deregister));
-        match rx.recv_timeout(Duration::from_millis(500)) {
+        match channel::recv_timeout(&mut rx, Duration::from_millis(500)) {
             Err(_) => (),
             Ok(other) => panic!("unknown event {:?}", other),
         }
