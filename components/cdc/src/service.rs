@@ -5,10 +5,10 @@ use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use futures::{stream, Future, Sink, Stream};
-use grpcio::{
-    DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus, RpcStatusCode, WriteFlags,
-};
+use futures::Sink as Sink03;
+use futures::{Future, Stream};
+use futures03::compat::Compat;
+use grpcio::{DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
 use kvproto::cdcpb::{
     ChangeData, ChangeDataEvent, ChangeDataRequest, Compatibility, Event, ResolvedTs,
 };
@@ -16,20 +16,15 @@ use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use protobuf::Message;
 use security::{check_common_name, SecurityManager};
 use tikv_util::collections::HashMap;
-use tikv_util::mpsc::batch::{self, BatchReceiver, Sender as BatchSender, VecCollector};
 use tikv_util::worker::*;
 
+use crate::channel::{canal, Sink};
 use crate::delegate::{Downstream, DownstreamID};
 use crate::endpoint::{Deregister, Task};
 
 static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
-const CDC_MSG_NOTIFY_COUNT: usize = 8;
 const CDC_MAX_RESP_SIZE: u32 = 6 * 1024 * 1024; // 6MB
-const CDC_MSG_MAX_BATCH_SIZE: usize = 128;
-// Assume the average size of event is 1KB.
-// 2 = (CDC_MSG_MAX_BATCH_SIZE * 1KB / CDC_EVENT_MAX_BATCH_SIZE).ceil() + 1 /* reserve for ResolvedTs */;
-const CDC_EVENT_MAX_BATCH_SIZE: usize = 2;
 
 /// A unique identifier of a Connection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -41,10 +36,10 @@ impl ConnID {
     }
 }
 
-#[derive(Clone)]
 pub enum CdcEvent {
     ResolvedTs(ResolvedTs),
     Event(Event),
+    Barrier(Option<Box<dyn FnOnce(()) + Send>>),
 }
 
 impl CdcEvent {
@@ -52,12 +47,13 @@ impl CdcEvent {
         match self {
             CdcEvent::ResolvedTs(ref r) => r.compute_size(),
             CdcEvent::Event(ref e) => e.compute_size(),
+            CdcEvent::Barrier(_) => 0,
         }
     }
 
     pub fn event(&self) -> &Event {
         match self {
-            CdcEvent::ResolvedTs(_) => unreachable!(),
+            CdcEvent::ResolvedTs(_) | CdcEvent::Barrier(_) => unreachable!(),
             CdcEvent::Event(ref e) => e,
         }
     }
@@ -65,7 +61,7 @@ impl CdcEvent {
     pub fn resolved_ts(&self) -> &ResolvedTs {
         match self {
             CdcEvent::ResolvedTs(ref r) => r,
-            CdcEvent::Event(_) => unreachable!(),
+            CdcEvent::Event(_) | CdcEvent::Barrier(_) => unreachable!(),
         }
     }
 }
@@ -73,6 +69,10 @@ impl CdcEvent {
 impl fmt::Debug for CdcEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            CdcEvent::Barrier(_) => {
+                let mut d = f.debug_tuple("Barrier");
+                d.finish()
+            }
             CdcEvent::ResolvedTs(ref r) => {
                 let mut d = f.debug_struct("ResolvedTs");
                 d.field("resolved ts", &r.ts);
@@ -104,13 +104,13 @@ impl fmt::Debug for CdcEvent {
     }
 }
 
-struct EventBatcher {
+pub struct EventBatcher {
     buffer: Vec<ChangeDataEvent>,
     last_size: u32,
 }
 
 impl EventBatcher {
-    fn with_capacity(cap: usize) -> EventBatcher {
+    pub fn with_capacity(cap: usize) -> EventBatcher {
         EventBatcher {
             buffer: Vec::with_capacity(cap),
             last_size: 0,
@@ -119,7 +119,7 @@ impl EventBatcher {
 
     // The size of the response should not exceed CDC_MAX_RESP_SIZE.
     // Split the events into multiple responses by CDC_MAX_RESP_SIZE here.
-    fn push(&mut self, event: CdcEvent) {
+    pub fn push(&mut self, event: CdcEvent) {
         let size = event.size();
         if size >= CDC_MAX_RESP_SIZE {
             warn!("cdc event too large"; "size" => size, "event" => ?event);
@@ -141,10 +141,14 @@ impl EventBatcher {
                 // Make sure the next message is not batched with ResolvedTs.
                 self.last_size = CDC_MAX_RESP_SIZE;
             }
+            CdcEvent::Barrier(_) => {
+                // Barrier requires events must be batched accross the barrier.
+                self.last_size = CDC_MAX_RESP_SIZE;
+            }
         }
     }
 
-    fn build(self) -> Vec<ChangeDataEvent> {
+    pub fn build(self) -> Vec<ChangeDataEvent> {
         self.buffer
     }
 }
@@ -159,14 +163,14 @@ bitflags::bitflags! {
 
 pub struct Conn {
     id: ConnID,
-    sink: BatchSender<CdcEvent>,
+    sink: Sink,
     downstreams: HashMap<u64, DownstreamID>,
     peer: String,
     version: Option<(semver::Version, FeatureGate)>,
 }
 
 impl Conn {
-    pub fn new(sink: BatchSender<CdcEvent>, peer: String) -> Conn {
+    pub fn new(sink: Sink, peer: String) -> Conn {
         Conn {
             id: ConnID::new(),
             sink,
@@ -224,8 +228,8 @@ impl Conn {
         self.downstreams
     }
 
-    pub fn get_sink(&self) -> BatchSender<CdcEvent> {
-        self.sink.clone()
+    pub fn get_sink(&self) -> &Sink {
+        &self.sink
     }
 
     pub fn subscribe(&mut self, region_id: u64, downstream_id: DownstreamID) -> bool {
@@ -244,14 +248,6 @@ impl Conn {
 
     pub fn downstream_id(&self, region_id: u64) -> Option<DownstreamID> {
         self.downstreams.get(&region_id).copied()
-    }
-
-    pub fn flush(&self) {
-        if !self.sink.is_empty() {
-            if let Some(notifier) = self.sink.get_notifier() {
-                notifier.notify();
-            }
-        }
     }
 }
 
@@ -286,10 +282,10 @@ impl ChangeData for Service {
         if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
             return;
         }
-        // TODO: make it a bounded channel.
-        let (tx, rx) = batch::unbounded(CDC_MSG_NOTIFY_COUNT);
+        // TODO explain 1024.
+        let (event_sink, event_drain) = canal(1024);
         let peer = ctx.peer();
-        let conn = Conn::new(tx, peer);
+        let conn = Conn::new(event_sink, peer);
         let conn_id = conn.get_id();
 
         if let Err(status) = self
@@ -341,25 +337,6 @@ impl ChangeData for Service {
                 })
         });
 
-        let rx = BatchReceiver::new(rx, CDC_MSG_MAX_BATCH_SIZE, Vec::new, VecCollector);
-        let rx = rx
-            .map(|events| {
-                let mut batcher = EventBatcher::with_capacity(CDC_EVENT_MAX_BATCH_SIZE);
-                events.into_iter().for_each(|e| batcher.push(e));
-                let resps = batcher.build();
-                let last_idx = resps.len() - 1;
-                stream::iter_ok(resps.into_iter().enumerate().map(move |(i, e)| {
-                    // Buffer messages and flush them at once.
-                    let write_flags = WriteFlags::default().buffer_hint(i != last_idx);
-                    (e, write_flags)
-                }))
-            })
-            .flatten()
-            .map_err(|_: ()| {
-                GrpcError::RpcFailure(RpcStatus::new(RpcStatusCode::INVALID_ARGUMENT, None))
-            });
-        let send_resp = sink.send_all(rx);
-
         let peer = ctx.peer();
         let scheduler = self.scheduler.clone();
         ctx.spawn(recv_req.then(move |res| {
@@ -381,6 +358,9 @@ impl ChangeData for Service {
 
         let peer = ctx.peer();
         let scheduler = self.scheduler.clone();
+
+        let rx = event_drain.drain_grpc_message();
+        let send_resp = sink.send_all(Compat::new(rx));
         ctx.spawn(send_resp.then(move |res| {
             // Unregister this downstream only.
             let deregister = Deregister::Conn(conn_id);
@@ -410,7 +390,8 @@ mod tests {
     #[cfg(not(feature = "prost-codec"))]
     use kvproto::cdcpb::{EventEntries, EventRow, Event_oneof_event};
 
-    use crate::service::{CdcEvent, EventBatcher, CDC_EVENT_MAX_BATCH_SIZE, CDC_MAX_RESP_SIZE};
+    use crate::channel::CDC_EVENT_MAX_BATCH_SIZE;
+    use crate::service::{CdcEvent, EventBatcher, CDC_MAX_RESP_SIZE};
 
     #[test]
     fn test_event_batcher() {
@@ -482,7 +463,10 @@ mod tests {
                 vec![CdcEvent::ResolvedTs(resolved_ts.clone())],
                 vec![CdcEvent::ResolvedTs(resolved_ts)],
                 vec![CdcEvent::Event(event_big.clone())],
-                vec![CdcEvent::Event(event_small); 2],
+                vec![
+                    CdcEvent::Event(event_small.clone()),
+                    CdcEvent::Event(event_small),
+                ],
                 vec![CdcEvent::Event(event_big)],
             ],
         );

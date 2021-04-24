@@ -61,6 +61,8 @@ prometheus = { version = "0.8", default-features = false, features = ["nightly",
 log_wrappers = { path = "../log_wrappers" }
 protobuf = "2.8"
 prost = "0.6"
+futures-timer = "3.0"
+matches = "0.1"
 
 [dev-dependencies]
 engine = { path = "../engine" }
