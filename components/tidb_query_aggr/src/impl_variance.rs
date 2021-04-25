@@ -477,8 +477,8 @@ mod tests {
         assert_eq!(result[1].to_decimal_vec(), &[None]);
         assert_eq!(result[2].to_decimal_vec(), &[None]);
 
-        update!(state, &mut ctx, Some(EnumRef::new("bbb".as_bytes(), 1))).unwrap();
-        update!(state, &mut ctx, Some(EnumRef::new("aaa".as_bytes(), 2))).unwrap();
+        update!(state, &mut ctx, Some(EnumRef::new("bbb".as_bytes(), &1))).unwrap();
+        update!(state, &mut ctx, Some(EnumRef::new("aaa".as_bytes(), &2))).unwrap();
         result[0].clear();
         result[1].clear();
         result[2].clear();
