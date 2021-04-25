@@ -67,7 +67,7 @@ fn get_cast_fn_rpn_meta(
                 cast_json_as_any_fn_meta::<Int>()
             }
         }
-        (EvalType::Enum, EvalType::Int) => cast_enum_as_any_fn_meta::<Int>(),
+        (EvalType::Enum, EvalType::Int) => cast_enum_as_int_fn_meta(),
 
         //  any as real
         (EvalType::Int, EvalType::Real) => {
@@ -107,7 +107,7 @@ fn get_cast_fn_rpn_meta(
         (EvalType::DateTime, EvalType::Real) => cast_any_as_any_fn_meta::<DateTime, Real>(),
         (EvalType::Duration, EvalType::Real) => cast_any_as_any_fn_meta::<Duration, Real>(),
         (EvalType::Json, EvalType::Real) => cast_json_as_any_fn_meta::<Real>(),
-        (EvalType::Enum, EvalType::Real) => cast_enum_as_any_fn_meta::<Real>(),
+        (EvalType::Enum, EvalType::Real) => cast_enum_as_real_fn_meta(),
 
         // any as string
         (EvalType::Int, EvalType::Bytes) => {
@@ -161,6 +161,7 @@ fn get_cast_fn_rpn_meta(
         (EvalType::DateTime, EvalType::Decimal) => cast_any_as_decimal_fn_meta::<DateTime>(),
         (EvalType::Duration, EvalType::Decimal) => cast_any_as_decimal_fn_meta::<Duration>(),
         (EvalType::Json, EvalType::Decimal) => cast_json_as_decimal_fn_meta(),
+        (EvalType::Enum, EvalType::Decimal) => cast_enum_as_decimal_fn_meta(),
 
         // any as duration
         (EvalType::Int, EvalType::Duration) => cast_int_as_duration_fn_meta(),
@@ -170,6 +171,7 @@ fn get_cast_fn_rpn_meta(
         (EvalType::DateTime, EvalType::Duration) => cast_time_as_duration_fn_meta(),
         (EvalType::Duration, EvalType::Duration) => cast_duration_as_duration_fn_meta(),
         (EvalType::Json, EvalType::Duration) => cast_json_as_duration_fn_meta(),
+        (EvalType::Enum, EvalType::Duration) => cast_enum_as_duration_fn_meta(),
 
         (EvalType::Int, EvalType::DateTime) => {
             if FieldTypeAccessor::tp(from_field_type) == FieldTypeTp::Year {
@@ -183,6 +185,7 @@ fn get_cast_fn_rpn_meta(
         (EvalType::Decimal, EvalType::DateTime) => cast_decimal_as_time_fn_meta(),
         (EvalType::DateTime, EvalType::DateTime) => cast_time_as_time_fn_meta(),
         (EvalType::Duration, EvalType::DateTime) => cast_duration_as_time_fn_meta(),
+        (EvalType::Enum, EvalType::DateTime) => cast_enum_as_time_fn_meta(),
 
         // any as json
         (EvalType::Int, EvalType::Json) => {
@@ -200,6 +203,7 @@ fn get_cast_fn_rpn_meta(
         (EvalType::DateTime, EvalType::Json) => cast_any_as_json_fn_meta::<DateTime>(),
         (EvalType::Duration, EvalType::Json) => cast_any_as_json_fn_meta::<Duration>(),
         (EvalType::Json, EvalType::Json) => cast_json_as_json_fn_meta(),
+        (EvalType::Enum, EvalType::Json) => cast_enum_as_json_fn_meta(),
 
         _ => return Err(other_err!("Unsupported cast from {} to {}", from, to)),
     };
@@ -1348,17 +1352,21 @@ fn cast_json_as_bytes(ctx: &mut EvalContext, val: Option<JsonRef>) -> Result<Opt
 
 #[rpn_fn(nullable, capture = [ctx])]
 #[inline]
-fn cast_enum_as_any<To: Evaluable + EvaluableRet + ConvertFrom<Enum>>(
-    ctx: &mut EvalContext,
-    val: Option<EnumRef>,
-) -> Result<Option<To>> {
+fn cast_enum_as_int(ctx: &mut EvalContext, val: Option<EnumRef>) -> Result<Option<Int>> {
     match val {
         None => Ok(None),
         Some(val) => {
-            let val = To::convert_from(ctx, val.to_owned())?;
+            let val: Int = val.convert(ctx)?;
             Ok(Some(val))
         }
     }
+}
+
+#[rpn_fn(nullable, capture = [ctx])]
+#[inline]
+fn cast_enum_as_real(ctx: &mut EvalContext, val: Option<EnumRef>) -> Result<Option<Real>> {
+    let val = cast_enum_as_int(ctx, val)?;
+    cast_signed_int_as_signed_real(val.as_ref())
 }
 
 #[rpn_fn(nullable, capture = [ctx, extra])]
@@ -1374,6 +1382,56 @@ fn cast_enum_as_bytes(
             let val = val.convert(ctx)?;
             cast_as_string_helper(ctx, extra, val)
         }
+    }
+}
+
+#[rpn_fn(nullable, capture = [ctx, extra])]
+#[inline]
+fn cast_enum_as_decimal(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: Option<EnumRef>,
+) -> Result<Option<Decimal>> {
+    let val = cast_enum_as_int(ctx, val)?;
+    cast_any_as_decimal(ctx, extra, val.as_ref())
+}
+
+#[rpn_fn(nullable, capture = [ctx, extra])]
+#[inline]
+fn cast_enum_as_duration(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: Option<EnumRef>,
+) -> Result<Option<Duration>> {
+    match cast_enum_as_bytes(ctx, extra, val)? {
+        None => Ok(None),
+        Some(val) => cast_bytes_as_duration(ctx, extra, Some(val.as_ref())),
+    }
+}
+
+#[rpn_fn(nullable, capture = [ctx, extra])]
+#[inline]
+fn cast_enum_as_time(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: Option<EnumRef>,
+) -> Result<Option<DateTime>> {
+    match cast_enum_as_bytes(ctx, extra, val)? {
+        None => Ok(None),
+        Some(val) => cast_string_as_time(ctx, extra, Some(val.as_ref())),
+    }
+}
+
+#[rpn_fn(nullable, capture = [ctx, extra])]
+#[inline]
+fn cast_enum_as_json(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: Option<EnumRef>,
+) -> Result<Option<Json>> {
+    match cast_enum_as_bytes(ctx, extra, val)? {
+        None => Ok(None),
+        Some(val) => cast_string_as_json(extra, Some(val.as_ref())),
     }
 }
 
@@ -1705,7 +1763,7 @@ mod tests {
 
     #[test]
     fn test_enum_as_int() {
-        test_none_with_ctx(cast_enum_as_any::<Int>);
+        test_none_with_ctx(cast_enum_as_int);
 
         let cs = vec![
             // (input, expect)
@@ -1717,7 +1775,7 @@ mod tests {
 
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
-            let r = cast_enum_as_any::<Int>(&mut ctx, Some(input));
+            let r = cast_enum_as_int(&mut ctx, Some(input));
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -1726,7 +1784,7 @@ mod tests {
 
     #[test]
     fn test_enum_as_real() {
-        test_none_with_ctx(cast_enum_as_any::<Real>);
+        test_none_with_ctx(cast_enum_as_real);
 
         let cs = vec![
             // (input, expect)
@@ -1738,7 +1796,7 @@ mod tests {
 
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
-            let r = cast_enum_as_any::<Real>(&mut ctx, Some(input));
+            let r = cast_enum_as_real(&mut ctx, Some(input));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
         }

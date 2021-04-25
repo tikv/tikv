@@ -5,7 +5,7 @@ use std::fmt::{Display, Formatter};
 
 use tipb::FieldType;
 
-use crate::codec::convert::{ConvertTo, ToInt};
+use crate::codec::convert::ToInt;
 use crate::codec::Result;
 use crate::expr::EvalContext;
 use crate::FieldTypeTp;
@@ -88,22 +88,6 @@ impl crate::codec::data_type::AsMySQLBool for Enum {
     }
 }
 
-impl ToInt for Enum {
-    fn to_int(&self, _ctx: &mut EvalContext, _tp: FieldTypeTp) -> Result<i64> {
-        Ok(self.value as i64)
-    }
-
-    fn to_uint(&self, _ctx: &mut EvalContext, _tp: FieldTypeTp) -> Result<u64> {
-        Ok(self.value)
-    }
-}
-
-impl ConvertTo<f64> for Enum {
-    fn convert(&self, _ctx: &mut EvalContext) -> Result<f64> {
-        Ok(self.value as f64)
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 pub struct EnumRef<'a> {
     name: &'a [u8],
@@ -177,6 +161,16 @@ impl<'a> PartialOrd for EnumRef<'a> {
     }
 }
 
+impl<'a> ToInt for EnumRef<'a> {
+    fn to_int(&self, _ctx: &mut EvalContext, _tp: FieldTypeTp) -> Result<i64> {
+        Ok(self.value as i64)
+    }
+
+    fn to_uint(&self, _ctx: &mut EvalContext, _tp: FieldTypeTp) -> Result<u64> {
+        Ok(self.value)
+    }
+}
+
 impl<'a> ToString for EnumRef<'a> {
     fn to_string(&self) -> String {
         String::from_utf8_lossy(self.name).to_string()
@@ -193,7 +187,7 @@ pub trait EnumEncoder: NumberEncoder {
 
     #[inline]
     fn write_enum_uint(&mut self, data: EnumRef) -> Result<()> {
-        self.write_u64_le(data.value as u64)?;
+        self.write_u64(data.value as u64)?;
         Ok(())
     }
 
@@ -272,7 +266,7 @@ pub trait EnumDecoder: NumberDecoder {
 
     #[inline]
     fn read_enum_from_chunk(&mut self) -> Result<Enum> {
-        let value = self.read_u64()?;
+        let value = self.read_u64_le()?;
         let name = String::from_utf8_lossy(self.bytes()).to_string();
         Ok(Enum::new(name.into_bytes(), value))
     }
