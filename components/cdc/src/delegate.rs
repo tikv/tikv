@@ -465,7 +465,10 @@ impl Delegate {
         if batch.cdc_id != self.id {
             return Ok(());
         }
-        for cmd in batch.into_iter(self.region_id) {
+        for cmd in batch
+            .into_iter(self.region_id)
+            .map(|cmd| Cmd::unwrap_arc(cmd))
+        {
             let Cmd {
                 index,
                 mut request,

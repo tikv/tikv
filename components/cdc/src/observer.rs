@@ -108,7 +108,7 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
             .push(CmdBatch::new(cdc_id, rts_id, region_id));
     }
 
-    fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: Cmd) {
+    fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: Arc<Cmd>) {
         self.cmd_batches
             .borrow_mut()
             .last_mut()
@@ -328,7 +328,11 @@ mod tests {
             observe_id,
             observe_id,
             0,
-            Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),
+            Arc::new(Cmd::new(
+                0,
+                RaftCmdRequest::default(),
+                RaftCmdResponse::default(),
+            )),
         );
         observer.on_flush_apply(engine);
 

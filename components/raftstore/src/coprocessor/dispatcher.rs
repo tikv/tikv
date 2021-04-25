@@ -3,6 +3,7 @@
 use std::marker::PhantomData;
 use std::mem;
 use std::ops::Deref;
+use std::sync::Arc;
 
 use engine_traits::{CfName, KvEngine};
 use kvproto::metapb::Region;
@@ -503,7 +504,13 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
     }
 
-    pub fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: Cmd) {
+    pub fn on_apply_cmd(
+        &self,
+        cdc_id: ObserveID,
+        rts_id: ObserveID,
+        region_id: u64,
+        cmd: Arc<Cmd>,
+    ) {
         if self.registry.cmd_observers.is_empty() {
             return;
         }
@@ -682,7 +689,7 @@ mod tests {
         fn on_prepare_for_apply(&self, _: ObserveID, _: ObserveID, _: u64) {
             self.called.fetch_add(11, Ordering::SeqCst);
         }
-        fn on_apply_cmd(&self, _: ObserveID, _: ObserveID, _: u64, _: Cmd) {
+        fn on_apply_cmd(&self, _: ObserveID, _: ObserveID, _: u64, _: Arc<Cmd>) {
             self.called.fetch_add(12, Ordering::SeqCst);
         }
         fn on_flush_apply(&self, _: PanicEngine) {
@@ -761,7 +768,11 @@ mod tests {
             observe_id,
             observe_id,
             0,
-            Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),
+            Arc::new(Cmd::new(
+                0,
+                RaftCmdRequest::default(),
+                RaftCmdResponse::default(),
+            )),
         );
         assert_all!(&[&ob.called], &[78]);
         host.on_flush_apply(PanicEngine);

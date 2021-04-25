@@ -1,5 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::ops::Deref;
+use std::sync::Arc;
 use std::vec::IntoIter;
 
 use engine_traits::CfName;
@@ -173,6 +175,10 @@ impl Cmd {
             response,
         }
     }
+
+    pub fn unwrap_arc(cmd: Arc<Cmd>) -> Cmd {
+        Arc::try_unwrap(cmd).unwrap_or_else(|cmd| cmd.deref().clone())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -180,7 +186,7 @@ pub struct CmdBatch {
     pub cdc_id: ObserveID,
     pub rts_id: ObserveID,
     pub region_id: u64,
-    pub cmds: Vec<Cmd>,
+    pub cmds: Vec<Arc<Cmd>>,
 }
 
 impl CmdBatch {
@@ -193,14 +199,14 @@ impl CmdBatch {
         }
     }
 
-    pub fn push(&mut self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: Cmd) {
+    pub fn push(&mut self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: Arc<Cmd>) {
         assert_eq!(region_id, self.region_id);
         assert_eq!(cdc_id, self.cdc_id);
         assert_eq!(rts_id, self.rts_id);
         self.cmds.push(cmd)
     }
 
-    pub fn into_iter(self, region_id: u64) -> IntoIter<Cmd> {
+    pub fn into_iter(self, region_id: u64) -> IntoIter<Arc<Cmd>> {
         assert_eq!(self.region_id, region_id);
         self.cmds.into_iter()
     }
@@ -216,13 +222,8 @@ impl CmdBatch {
     pub fn size(&self) -> usize {
         let mut cmd_bytes = 0;
         for cmd in self.cmds.iter() {
-            let Cmd {
-                ref request,
-                ref response,
-                ..
-            } = cmd;
-            if !response.get_header().has_error() && !request.has_admin_request() {
-                for req in request.requests.iter() {
+            if !cmd.response.get_header().has_error() && !cmd.request.has_admin_request() {
+                for req in cmd.request.requests.iter() {
                     let put = req.get_put();
                     cmd_bytes += put.get_key().len();
                     cmd_bytes += put.get_value().len();
@@ -237,7 +238,7 @@ pub trait CmdObserver<E>: Coprocessor {
     /// Hook to call after preparing for applying write requests.
     fn on_prepare_for_apply(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64);
     /// Hook to call after applying a write request.
-    fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: Cmd);
+    fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: Arc<Cmd>);
     /// Hook to call after flushing writes to db.
     fn on_flush_apply(&self, engine: E);
 }

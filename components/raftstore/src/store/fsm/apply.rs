@@ -288,12 +288,20 @@ impl ExecContext {
     }
 }
 
+struct PendingCallback<EK>
+where
+    EK: KvEngine,
+{
+    cb: Option<Callback<EK::Snapshot>>,
+    cmd: Arc<Cmd>,
+}
+
 struct ApplyCallback<EK>
 where
     EK: KvEngine,
 {
     region: Region,
-    cbs: Vec<(Option<Callback<EK::Snapshot>>, Cmd)>,
+    cbs: Vec<PendingCallback<EK>>,
 }
 
 impl<EK> ApplyCallback<EK>
@@ -306,7 +314,8 @@ where
     }
 
     fn invoke_all(self, host: &CoprocessorHost<EK>) {
-        for (cb, mut cmd) in self.cbs {
+        for PendingCallback { cb, cmd } in self.cbs {
+            let mut cmd = Cmd::unwrap_arc(cmd);
             host.post_apply(&self.region, &mut cmd);
             if let Some(cb) = cb {
                 cb.invoke_with_response(cmd.response)
@@ -314,8 +323,8 @@ where
         }
     }
 
-    fn push(&mut self, cb: Option<Callback<EK::Snapshot>>, cmd: Cmd) {
-        self.cbs.push((cb, cmd));
+    fn push(&mut self, cb: Option<Callback<EK::Snapshot>>, cmd: Arc<Cmd>) {
+        self.cbs.push(PendingCallback { cb, cmd });
     }
 }
 
@@ -990,11 +999,11 @@ where
         while let Some(mut cmd) = self.pending_cmds.pop_normal(std::u64::MAX, term - 1) {
             apply_ctx.cbs.last_mut().unwrap().push(
                 cmd.cb.take(),
-                Cmd::new(
+                Arc::new(Cmd::new(
                     cmd.index,
                     RaftCmdRequest::default(),
                     cmd_resp::err_resp(Error::StaleCommand, term),
-                ),
+                )),
             );
         }
         ApplyResult::None
@@ -1111,7 +1120,7 @@ where
         // store will call it after handing exec result.
         cmd_resp::bind_term(&mut resp, self.term);
         let cmd_cb = self.find_pending(index, term, is_conf_change_cmd(&cmd));
-        let cmd = Cmd::new(index, cmd, resp);
+        let cmd = Arc::new(Cmd::new(index, cmd, resp));
         apply_ctx.host.on_apply_cmd(
             self.observe_cmd.cdc_id,
             self.observe_cmd.rts_id,
@@ -4340,7 +4349,13 @@ mod tests {
                 .push(CmdBatch::new(cdc_id, rts_id, region_id));
         }
 
-        fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: Cmd) {
+        fn on_apply_cmd(
+            &self,
+            cdc_id: ObserveID,
+            rts_id: ObserveID,
+            region_id: u64,
+            cmd: Arc<Cmd>,
+        ) {
             self.cmd_batches
                 .borrow_mut()
                 .last_mut()

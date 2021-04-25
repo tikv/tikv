@@ -43,6 +43,7 @@ impl ChangeLog {
     pub fn encode_change_log(region_id: u64, batch: CmdBatch) -> Vec<ChangeLog> {
         batch
             .into_iter(region_id)
+            .map(|cmd| Cmd::unwrap_arc(cmd))
             .map(|cmd| {
                 let Cmd {
                     index,
