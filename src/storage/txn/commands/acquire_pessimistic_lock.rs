@@ -65,6 +65,7 @@ fn extract_lock_from_result<T>(res: &StorageResult<T>) -> Lock {
         )))))) => Lock {
             ts: info.get_lock_version().into(),
             hash: Key::from_raw(info.get_key()).gen_hash(),
+            key: info.take_key(),
         },
         _ => panic!("unexpected mvcc error"),
     }

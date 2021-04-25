@@ -5466,6 +5466,7 @@ mod tests {
             lock: Lock,
             is_first_lock: bool,
             timeout: Option<WaitTimeout>,
+            resource_group_tag: Vec<u8>,
         },
 
         WakeUp {
@@ -5506,6 +5507,7 @@ mod tests {
             lock: Lock,
             is_first_lock: bool,
             timeout: Option<WaitTimeout>,
+            resource_group_tag: Vec<u8>,
         ) {
             self.tx
                 .send(Msg::WaitFor {
@@ -5515,6 +5517,7 @@ mod tests {
                     lock,
                     is_first_lock,
                     timeout,
+                    resource_group_tag,
                 })
                 .unwrap();
         }

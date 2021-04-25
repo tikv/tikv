@@ -7,7 +7,7 @@ use super::waiter_manager::Scheduler as WaiterMgrScheduler;
 use super::{Error, Result};
 use crate::server::resolve::StoreAddrResolver;
 use crate::storage::lock_manager::Lock;
-use collections::{HashMap, HashSet};
+use collections::HashMap;
 use engine_rocks::RocksEngine;
 use futures::future::{self, FutureExt, TryFutureExt};
 use futures::sink::SinkExt;
@@ -39,34 +39,45 @@ use txn_types::TimeStamp;
 /// `Locks` is a set of locks belonging to one transaction.
 struct Locks {
     ts: TimeStamp,
-    hashes: Vec<u64>,
+    // (hash, key)
+    // The `key` is recorded as an diagnostic information. There may be multiple keys with the same
+    // hash, but it should be enough if we record only one of them.
+    keys: Vec<(u64, Vec<u8>)>,
+    resource_group_tag: Vec<u8>,
     last_detect_time: Instant,
 }
 
 impl Locks {
     /// Creates a new `Locks`.
-    fn new(ts: TimeStamp, hash: u64, last_detect_time: Instant) -> Self {
+    fn new(
+        ts: TimeStamp,
+        hash: u64,
+        key: Vec<u8>,
+        resource_group_tag: Vec<u8>,
+        last_detect_time: Instant,
+    ) -> Self {
         Self {
             ts,
-            hashes: vec![hash],
+            keys: vec![(hash, key)],
+            resource_group_tag,
             last_detect_time,
         }
     }
 
     /// Pushes the `hash` if not exist and updates `last_detect_time`.
-    fn push(&mut self, lock_hash: u64, now: Instant) {
-        if !self.hashes.contains(&lock_hash) {
-            self.hashes.push(lock_hash)
+    fn push(&mut self, lock_hash: u64, key: Vec<u8>, now: Instant) {
+        if !self.keys.iter().any(|(hash, _)| *hash == lock_hash) {
+            self.keys.push((lock_hash, key))
         }
         self.last_detect_time = now
     }
 
     /// Removes the `lock_hash` and returns true if the `Locks` is empty.
     fn remove(&mut self, lock_hash: u64) -> bool {
-        if let Some(idx) = self.hashes.iter().position(|hash| *hash == lock_hash) {
-            self.hashes.remove(idx);
+        if let Some(idx) = self.keys.iter().position(|(hash, _)| *hash == lock_hash) {
+            self.keys.remove(idx);
         }
-        self.hashes.is_empty()
+        self.keys.is_empty()
     }
 
     /// Returns true if the `Locks` is expired.
@@ -103,8 +114,16 @@ impl DetectTable {
         }
     }
 
-    /// Returns the key hash which causes deadlock.
-    pub fn detect(&mut self, txn_ts: TimeStamp, lock_ts: TimeStamp, lock_hash: u64) -> Option<u64> {
+    /// Returns the key hash which causes deadlock, and the current wait chain that forms the
+    /// deadlock with `txn_ts`'s waiting for txn at `lock_ts`.
+    pub fn detect(
+        &mut self,
+        txn_ts: TimeStamp,
+        lock_ts: TimeStamp,
+        lock_hash: u64,
+        lock_key: &Vec<u8>,
+        resource_group_tag: &Vec<u8>,
+    ) -> Option<(u64, Vec<WaitForEntry>)> {
         let _timer = DETECT_DURATION_HISTOGRAM.start_coarse_timer();
         TASK_COUNTER_METRICS.detect.inc();
 
@@ -112,41 +131,84 @@ impl DetectTable {
         self.active_expire();
 
         // If `txn_ts` is waiting for `lock_ts`, it won't cause deadlock.
-        if self.register_if_existed(txn_ts, lock_ts, lock_hash) {
+        // The `resource_group_tag` will be consumed if it's successfully registered.
+        if self.register_if_existed(txn_ts, lock_ts, lock_hash, lock_key, resource_group_tag) {
             return None;
         }
 
-        if let Some(deadlock_key_hash) = self.do_detect(txn_ts, lock_ts) {
+        if let Some((deadlock_key_hash, wait_chain)) = self.do_detect(txn_ts, lock_ts) {
             ERROR_COUNTER_METRICS.deadlock.inc();
-            return Some(deadlock_key_hash);
+            return Some((deadlock_key_hash, wait_chain));
         }
-        self.register(txn_ts, lock_ts, lock_hash);
+        self.register(txn_ts, lock_ts, lock_hash, lock_key, resource_group_tag);
         None
     }
 
-    /// Checks if there is an edge from `wait_for_ts` to `txn_ts`.
-    fn do_detect(&mut self, txn_ts: TimeStamp, wait_for_ts: TimeStamp) -> Option<u64> {
+    /// Checks if there is a path from `wait_for_ts` to `txn_ts`.
+    fn do_detect(
+        &mut self,
+        txn_ts: TimeStamp,
+        wait_for_ts: TimeStamp,
+    ) -> Option<(u64, Vec<WaitForEntry>)> {
         let now = self.now;
         let ttl = self.ttl;
 
         let mut stack = vec![wait_for_ts];
-        // Memorize the pushed vertexes to avoid duplicate search.
-        let mut pushed: HashSet<TimeStamp> = HashSet::default();
-        pushed.insert(wait_for_ts);
-        while let Some(wait_for_ts) = stack.pop() {
-            if let Some(wait_for) = self.wait_for_map.get_mut(&wait_for_ts) {
+        // Memorize the pushed vertexes to avoid duplicate search, and maps to the predecessor of
+        // the vertex.
+        // Since the graph is a DAG instead of a tree, a vertex may have multiple predecessors. But
+        // it's ok if we only remember one: for each vertex, if it has a route to the goal (txn_ts),
+        // we must be able to find the goal and exit this function before visiting the vertex one
+        // more time.
+        let mut pushed: HashMap<TimeStamp, TimeStamp> = HashMap::default();
+        pushed.insert(wait_for_ts, TimeStamp::zero());
+        while let Some(curr_ts) = stack.pop() {
+            if let Some(wait_for) = self.wait_for_map.get_mut(&curr_ts) {
                 // Remove expired edges.
                 wait_for.retain(|_, locks| !locks.is_expired(now, ttl));
                 if wait_for.is_empty() {
-                    self.wait_for_map.remove(&wait_for_ts);
+                    self.wait_for_map.remove(&curr_ts);
                 } else {
                     for (lock_ts, locks) in wait_for {
                         if *lock_ts == txn_ts {
-                            return Some(locks.hashes[0]);
+                            let hash = locks.keys[0].0;
+
+                            let mut wait_chain = Vec::with_capacity(2);
+                            // Generate the wait chain information.
+                            {
+                                let mut waiting_ts = curr_ts;
+                                let mut lock_ts = *lock_ts;
+                                let mut locks: &Locks = locks;
+                                loop {
+                                    let mut entry = WaitForEntry::default();
+                                    entry.set_txn(waiting_ts.into_inner());
+                                    entry.set_wait_for_txn(lock_ts.into_inner());
+                                    entry.set_key_hash(locks.keys[0].0);
+                                    entry.set_key(locks.keys[0].1.clone());
+                                    entry.set_resource_group_tag(locks.resource_group_tag.clone());
+                                    wait_chain.push(entry);
+
+                                    // Move backward
+                                    lock_ts = waiting_ts;
+                                    waiting_ts = *pushed.get(&waiting_ts).unwrap();
+                                    if waiting_ts.is_zero() {
+                                        assert_eq!(waiting_ts, wait_for_ts);
+                                        break;
+                                    }
+                                    locks = self
+                                        .wait_for_map
+                                        .get(&waiting_ts)
+                                        .unwrap()
+                                        .get(&lock_ts)
+                                        .unwrap();
+                                }
+                            }
+                            wait_chain.reverse();
+                            return Some((hash, wait_chain));
                         }
-                        if !pushed.contains(lock_ts) {
+                        if !pushed.contains_key(lock_ts) {
                             stack.push(*lock_ts);
-                            pushed.insert(*lock_ts);
+                            pushed.insert(*lock_ts, curr_ts);
                         }
                     }
                 }
@@ -156,15 +218,20 @@ impl DetectTable {
     }
 
     /// Returns true and adds to the detect table if `txn_ts` is waiting for `lock_ts`.
+    /// When the function returns true, `key` and `resource_group_tag` may be taken to store in the
+    /// waiting graph.
     fn register_if_existed(
         &mut self,
         txn_ts: TimeStamp,
         lock_ts: TimeStamp,
         lock_hash: u64,
+        key: &Vec<u8>,
+        resource_group_tag: &Vec<u8>,
     ) -> bool {
         if let Some(wait_for) = self.wait_for_map.get_mut(&txn_ts) {
             if let Some(locks) = wait_for.get_mut(&lock_ts) {
-                locks.push(lock_hash, self.now);
+                locks.push(lock_hash, key.clone(), self.now);
+                locks.resource_group_tag = resource_group_tag.clone();
                 return true;
             }
         }
@@ -172,10 +239,23 @@ impl DetectTable {
     }
 
     /// Adds to the detect table. The edge from `txn_ts` to `lock_ts` must not exist.
-    fn register(&mut self, txn_ts: TimeStamp, lock_ts: TimeStamp, lock_hash: u64) {
+    fn register(
+        &mut self,
+        txn_ts: TimeStamp,
+        lock_ts: TimeStamp,
+        lock_hash: u64,
+        key: &Vec<u8>,
+        resource_group_tag: &Vec<u8>,
+    ) {
         let wait_for = self.wait_for_map.entry(txn_ts).or_default();
         assert!(!wait_for.contains_key(&lock_ts));
-        let locks = Locks::new(lock_ts, lock_hash, self.now);
+        let locks = Locks::new(
+            lock_ts,
+            lock_hash,
+            key.clone(),
+            resource_group_tag.clone(),
+            self.now,
+        );
         wait_for.insert(locks.ts, locks);
     }
 
@@ -268,6 +348,8 @@ pub enum Task {
         tp: DetectType,
         txn_ts: TimeStamp,
         lock: Lock,
+        /// The `resource_group_tag` of the pessimistic lock request. Only valid when `tp == Detect`.
+        resource_group_tag: Vec<u8>,
     },
     /// The detect request of other nodes.
     DetectRpc {
@@ -291,10 +373,15 @@ pub enum Task {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Task::Detect { tp, txn_ts, lock } => write!(
+            Task::Detect {
+                tp,
+                txn_ts,
+                lock,
+                resource_group_tag,
+            } => write!(
                 f,
-                "Detect {{ tp: {:?}, txn_ts: {}, lock: {:?} }}",
-                tp, txn_ts, lock
+                "Detect {{ tp: {:?}, txn_ts: {}, lock: {:?}, resource_group_tag: {:?} }}",
+                tp, txn_ts, lock, resource_group_tag
             ),
             Task::DetectRpc { .. } => write!(f, "Detect Rpc"),
             Task::ChangeRole(role) => write!(f, "ChangeRole {{ role: {:?} }}", role),
@@ -325,11 +412,12 @@ impl Scheduler {
         }
     }
 
-    pub fn detect(&self, txn_ts: TimeStamp, lock: Lock) {
+    pub fn detect(&self, txn_ts: TimeStamp, lock: Lock, resource_group_tag: Vec<u8>) {
         self.notify_scheduler(Task::Detect {
             tp: DetectType::Detect,
             txn_ts,
             lock,
+            resource_group_tag,
         });
     }
 
@@ -338,6 +426,7 @@ impl Scheduler {
             tp: DetectType::CleanUpWaitFor,
             txn_ts,
             lock,
+            resource_group_tag: vec![],
         });
     }
 
@@ -346,6 +435,7 @@ impl Scheduler {
             tp: DetectType::CleanUp,
             txn_ts,
             lock: Lock::default(),
+            resource_group_tag: vec![],
         });
     }
 
@@ -647,6 +737,8 @@ where
                 txn,
                 wait_for_txn,
                 key_hash,
+                key,
+                resource_group_tag,
                 ..
             } = resp.take_entry();
             waiter_mgr_scheduler.deadlock(
@@ -654,8 +746,11 @@ where
                 Lock {
                     ts: wait_for_txn.into(),
                     hash: key_hash,
+                    key,
                 },
                 resp.get_deadlock_key_hash(),
+                resource_group_tag,
+                resp.take_wait_chain().into(),
             )
         }));
         spawn_local(send.map_err(|e| error!("leader client failed"; "err" => ?e)));
@@ -670,7 +765,13 @@ where
     ///
     /// If the client is None, reconnects the leader first, then sends the request to the leader.
     /// If sends failed, sets the client to None for retry.
-    fn send_request_to_leader(&mut self, tp: DetectType, txn_ts: TimeStamp, lock: Lock) -> bool {
+    fn send_request_to_leader(
+        &mut self,
+        tp: DetectType,
+        txn_ts: TimeStamp,
+        lock: Lock,
+        resource_group_tag: Vec<u8>,
+    ) -> bool {
         assert!(!self.is_leader() && self.leader_info.is_some());
 
         if self.leader_client.is_none() {
@@ -686,6 +787,8 @@ where
             entry.set_txn(txn_ts.into_inner());
             entry.set_wait_for_txn(lock.ts.into_inner());
             entry.set_key_hash(lock.hash);
+            entry.set_key(lock.key);
+            entry.set_resource_group_tag(resource_group_tag);
             let mut req = DeadlockRequest::default();
             req.set_tp(tp);
             req.set_entry(entry);
@@ -698,13 +801,26 @@ where
         false
     }
 
-    fn handle_detect_locally(&self, tp: DetectType, txn_ts: TimeStamp, lock: Lock) {
+    fn handle_detect_locally(
+        &self,
+        tp: DetectType,
+        txn_ts: TimeStamp,
+        lock: Lock,
+        resource_group_tag: Vec<u8>,
+    ) {
         let detect_table = &mut self.inner.borrow_mut().detect_table;
         match tp {
             DetectType::Detect => {
-                if let Some(deadlock_key_hash) = detect_table.detect(txn_ts, lock.ts, lock.hash) {
-                    self.waiter_mgr_scheduler
-                        .deadlock(txn_ts, lock, deadlock_key_hash);
+                if let Some((deadlock_key_hash, wait_chain)) =
+                    detect_table.detect(txn_ts, lock.ts, lock.hash, &lock.key, &resource_group_tag)
+                {
+                    self.waiter_mgr_scheduler.deadlock(
+                        txn_ts,
+                        lock,
+                        deadlock_key_hash,
+                        resource_group_tag,
+                        wait_chain,
+                    );
                 }
             }
             DetectType::CleanUpWaitFor => {
@@ -715,9 +831,15 @@ where
     }
 
     /// Handles detect requests of itself.
-    fn handle_detect(&mut self, tp: DetectType, txn_ts: TimeStamp, lock: Lock) {
+    fn handle_detect(
+        &mut self,
+        tp: DetectType,
+        txn_ts: TimeStamp,
+        lock: Lock,
+        resource_group_tag: Vec<u8>,
+    ) {
         if self.is_leader() {
-            self.handle_detect_locally(tp, txn_ts, lock);
+            self.handle_detect_locally(tp, txn_ts, lock, resource_group_tag);
         } else {
             for _ in 0..2 {
                 // TODO: If the leader hasn't been elected, it requests Pd for
@@ -727,7 +849,8 @@ where
                 if self.leader_client.is_none() && !self.refresh_leader_info() {
                     break;
                 }
-                if self.send_request_to_leader(tp, txn_ts, lock) {
+                if self.send_request_to_leader(tp, txn_ts, lock.clone(), resource_group_tag.clone())
+                {
                     return;
                 }
                 // Because the client is asynchronous, it won't be closed until failing to send a
@@ -768,17 +891,24 @@ where
                 txn,
                 wait_for_txn,
                 key_hash,
+                key,
+                resource_group_tag,
                 ..
             } = req.get_entry();
             let detect_table = &mut inner.detect_table;
             let res = match req.get_tp() {
                 DeadlockRequestType::Detect => {
-                    if let Some(deadlock_key_hash) =
-                        detect_table.detect(txn.into(), wait_for_txn.into(), *key_hash)
-                    {
+                    if let Some((deadlock_key_hash, wait_chain)) = detect_table.detect(
+                        txn.into(),
+                        wait_for_txn.into(),
+                        *key_hash,
+                        key,
+                        resource_group_tag,
+                    ) {
                         let mut resp = DeadlockResponse::default();
                         resp.set_entry(req.take_entry());
                         resp.set_deadlock_key_hash(deadlock_key_hash);
+                        resp.set_wait_chain(wait_chain.into());
                         Some((resp, WriteFlags::default()))
                     } else {
                         None
@@ -824,8 +954,13 @@ where
 {
     fn run(&mut self, task: Task) {
         match task {
-            Task::Detect { tp, txn_ts, lock } => {
-                self.handle_detect(tp, txn_ts, lock);
+            Task::Detect {
+                tp,
+                txn_ts,
+                lock,
+                resource_group_tag,
+            } => {
+                self.handle_detect(tp, txn_ts, lock, resource_group_tag);
             }
             Task::DetectRpc { stream, sink } => {
                 self.handle_detect_rpc(stream, sink);
@@ -933,7 +1068,7 @@ pub mod tests {
                 .unwrap()
                 .get(&1.into())
                 .unwrap()
-                .hashes
+                .keys
                 .len(),
             1
         );
@@ -947,7 +1082,7 @@ pub mod tests {
                 .unwrap()
                 .get(&1.into())
                 .unwrap()
-                .hashes
+                .keys
                 .len(),
             2
         );
@@ -961,7 +1096,7 @@ pub mod tests {
                 .unwrap()
                 .get(&1.into())
                 .unwrap()
-                .hashes
+                .keys
                 .len(),
             2
         );
@@ -976,7 +1111,7 @@ pub mod tests {
                 .unwrap()
                 .get(&2.into())
                 .unwrap()
-                .hashes
+                .keys
                 .len(),
             1
         );
@@ -990,7 +1125,7 @@ pub mod tests {
                 .unwrap()
                 .get(&1.into())
                 .unwrap()
-                .hashes
+                .keys
                 .len(),
             1
         );
@@ -1040,7 +1175,7 @@ pub mod tests {
                 .unwrap()
                 .get(&3.into())
                 .unwrap()
-                .hashes
+                .keys
                 .len(),
             2
         );

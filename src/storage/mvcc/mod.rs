@@ -67,7 +67,7 @@ quick_error! {
             display("write conflict, start_ts:{}, conflict_start_ts:{}, conflict_commit_ts:{}, key:{}, primary:{}",
                     start_ts, conflict_start_ts, conflict_commit_ts, log_wrappers::Value::key(key), log_wrappers::Value::key(primary))
         }
-        Deadlock { start_ts: TimeStamp, lock_ts: TimeStamp, lock_key: Vec<u8>, deadlock_key_hash: u64 } {
+        Deadlock { start_ts: TimeStamp, lock_ts: TimeStamp, lock_key: Vec<u8>, deadlock_key_hash: u64, wait_chain: Vec<kvproto::deadlock::WaitForEntry> } {
             display("deadlock occurs between txn:{} and txn:{}, lock_key:{}, deadlock_key_hash:{}",
                     start_ts, lock_ts, log_wrappers::Value::key(lock_key), deadlock_key_hash)
         }
@@ -142,11 +142,13 @@ impl ErrorInner {
                 lock_ts,
                 lock_key,
                 deadlock_key_hash,
+                wait_chain,
             } => Some(ErrorInner::Deadlock {
                 start_ts: *start_ts,
                 lock_ts: *lock_ts,
                 lock_key: lock_key.to_owned(),
                 deadlock_key_hash: *deadlock_key_hash,
+                wait_chain: wait_chain.clone(),
             }),
             ErrorInner::AlreadyExist { key } => Some(ErrorInner::AlreadyExist { key: key.clone() }),
             ErrorInner::DefaultNotFound { key } => Some(ErrorInner::DefaultNotFound {

@@ -233,6 +233,7 @@ impl LockManagerTrait for LockManager {
         lock: Lock,
         is_first_lock: bool,
         timeout: Option<WaitTimeout>,
+        resource_group_tag: Vec<u8>,
     ) {
         let timeout = match timeout {
             Some(t) => t,
@@ -245,13 +246,20 @@ impl LockManagerTrait for LockManager {
         // Increase `waiter_count` here to prevent there is an on-the-fly WaitFor msg
         // but the waiter_mgr haven't processed it, subsequent WakeUp msgs may be lost.
         self.waiter_count.fetch_add(1, Ordering::SeqCst);
-        self.waiter_mgr_scheduler
-            .wait_for(start_ts, cb, pr, lock, timeout);
+        self.waiter_mgr_scheduler.wait_for(
+            start_ts,
+            cb,
+            pr,
+            lock.clone(),
+            timeout,
+            resource_group_tag.clone(),
+        );
 
         // If it is the first lock the transaction tries to lock, it won't cause deadlock.
         if !is_first_lock {
             self.add_to_detected(start_ts);
-            self.detector_scheduler.detect(start_ts, lock);
+            self.detector_scheduler
+                .detect(start_ts, lock, resource_group_tag);
         }
     }
 

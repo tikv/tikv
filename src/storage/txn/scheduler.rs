@@ -524,6 +524,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         lock: lock_manager::Lock,
         is_first_lock: bool,
         wait_timeout: Option<WaitTimeout>,
+        resource_group_tag: Vec<u8>,
     ) {
         debug!("command waits for lock released"; "cid" => cid);
         let tctx = self.inner.dequeue_task_context(cid);
@@ -535,6 +536,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             lock,
             is_first_lock,
             wait_timeout,
+            resource_group_tag,
         );
         self.release_lock(&tctx.lock, cid);
     }
@@ -611,7 +613,13 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
     /// Processes a write command within a worker thread, then posts either a `WriteFinished`
     /// message if successful or a `FinishedWithErr` message back to the `Scheduler`.
-    fn process_write(self, engine: &E, snapshot: E::Snap, task: Task, statistics: &mut Statistics) {
+    fn process_write(
+        self,
+        engine: &E,
+        snapshot: E::Snap,
+        mut task: Task,
+        statistics: &mut Statistics,
+    ) {
         fail_point!("txn_before_process_write");
         let tag = task.cmd.tag();
         let cid = task.cid;
@@ -647,7 +655,19 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
                 if let Some((lock, is_first_lock, wait_timeout)) = lock_info {
-                    scheduler.on_wait_for_lock(cid, ts, pr, lock, is_first_lock, wait_timeout);
+                    // Currently only pessimistic_lock request may wait for other locks, and a
+                    // single request may wait lock at most once in its lifecycle. Take the tag out
+                    // instead of cloning it.
+                    let resource_group_tag = task.cmd.ctx_mut().take_resource_group_tag();
+                    scheduler.on_wait_for_lock(
+                        cid,
+                        ts,
+                        pr,
+                        lock,
+                        is_first_lock,
+                        wait_timeout,
+                        resource_group_tag,
+                    );
                 } else if to_be_write.modifies.is_empty() {
                     scheduler.on_write_finished(
                         cid,
