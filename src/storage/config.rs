@@ -301,7 +301,6 @@ impl Default for IORateLimitConfig {
             compaction_priority: IOPriority::Medium,
             replication_priority: IOPriority::High,
             load_balance_priority: IOPriority::High,
-            // GC writes are merged with foreground writes, must be set to high priority.
             gc_priority: IOPriority::High,
             import_priority: IOPriority::Low,
             export_priority: IOPriority::Low,

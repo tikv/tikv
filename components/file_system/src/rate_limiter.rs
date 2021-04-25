@@ -1,9 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::metrics::{
-    tls_collect_rate_limiter_request_wait, RATE_LIMITER_MAX_BYTES_PER_SEC,
-    RATE_LIMITER_REQUEST_ESCALATION_PROBABILITY,
-};
+use super::metrics::{RATE_LIMITER_MAX_BYTES_PER_SEC, RATE_LIMITER_REQUEST_ESCALATION_PROBABILITY};
 use super::{IOOp, IOPriority, IOType};
 
 use std::sync::{
@@ -272,7 +269,6 @@ macro_rules! request_imp {
             );
             wait = MAX_WAIT_DURATION_PER_REQUEST;
         }
-        tls_collect_rate_limiter_request_wait($priority.as_str(), wait);
         do_sleep!(wait, $mode);
         amount
     }};
@@ -293,29 +289,17 @@ impl PriorityBasedIORateLimiter {
         let now = (bytes_per_sec as f64 * DEFAULT_REFILL_PERIOD.as_secs_f64()) as usize;
         let before = self.bytes_per_epoch[IOPriority::High as usize].swap(now, Ordering::Relaxed);
         RATE_LIMITER_MAX_BYTES_PER_SEC
-            .with_label_values(&[IOPriority::High.as_str()])
+            .high
             .set(bytes_per_sec as i64);
-        if now == 0 {
-            // Toggle off rate limit.
-            // We hold this lock so a concurrent refill can't negate our effort.
+        if now == 0 || before == 0 {
+            // Toggle on or off rate limit.
             let _locked = self.protected.lock();
-            for p in &[IOPriority::Medium, IOPriority::Low] {
-                let pi = *p as usize;
-                self.bytes_per_epoch[pi].store(now, Ordering::Relaxed);
-                RATE_LIMITER_MAX_BYTES_PER_SEC
-                    .with_label_values(&[p.as_str()])
-                    .set(bytes_per_sec as i64);
-            }
-        } else if before == 0 && !self.strict {
-            // When toggling on rate limit in unstrict mode, high-priority request won't trigger
-            // refill. Need to broadcast this change.
-            for p in &[IOPriority::Medium, IOPriority::Low] {
-                let pi = *p as usize;
-                self.bytes_per_epoch[pi].store(now, Ordering::Relaxed);
-                RATE_LIMITER_MAX_BYTES_PER_SEC
-                    .with_label_values(&[p.as_str()])
-                    .set(bytes_per_sec as i64);
-            }
+            self.bytes_per_epoch[IOPriority::Medium as usize].store(now, Ordering::Relaxed);
+            RATE_LIMITER_MAX_BYTES_PER_SEC
+                .medium
+                .set(bytes_per_sec as i64);
+            self.bytes_per_epoch[IOPriority::Low as usize].store(now, Ordering::Relaxed);
+            RATE_LIMITER_MAX_BYTES_PER_SEC.low.set(bytes_per_sec as i64);
         }
     }
 
@@ -373,14 +357,11 @@ impl PriorityBasedIORateLimiter {
             let to_serve_pending_bytes = std::cmp::min(locked.pending_bytes[p], limit);
             locked.pending_bytes[p] -= to_serve_pending_bytes;
             // Update throughput estimation over recent epochs.
-            let mut served_by_oldest_epoch =
-                self.bytes_through[p].swap(to_serve_pending_bytes, Ordering::Relaxed);
-            if self.strict || p != IOPriority::High as usize {
-                // Don't cap high-priority IO flow unless in strict mode.
-                served_by_oldest_epoch = std::cmp::min(served_by_oldest_epoch, limit);
-            }
-            let bytes_through_per_epoch = ((served_by_oldest_epoch + served_by_skipped_epochs)
-                * 16)
+            let served_by_first_epoch = std::cmp::min(
+                self.bytes_through[p].swap(to_serve_pending_bytes, Ordering::Relaxed),
+                limit,
+            );
+            let bytes_through_per_epoch = ((served_by_first_epoch + served_by_skipped_epochs) * 16)
                 / (skipped_epochs_mul_16 + 16);
             locked.history_bytes[p] =
                 std::cmp::max(locked.history_bytes[p], bytes_through_per_epoch);
@@ -396,11 +377,11 @@ impl PriorityBasedIORateLimiter {
                 self.bytes_per_epoch[p - 1].store(limit, Ordering::Relaxed);
                 if p == IOPriority::High as usize {
                     RATE_LIMITER_MAX_BYTES_PER_SEC
-                        .with_label_values(&[IOPriority::Medium.as_str()])
+                        .medium
                         .set((limit * DEFAULT_REFILLS_PER_SEC) as i64);
                 } else {
                     RATE_LIMITER_MAX_BYTES_PER_SEC
-                        .with_label_values(&[IOPriority::Low.as_str()])
+                        .low
                         .set((limit * DEFAULT_REFILLS_PER_SEC) as i64);
                 }
             } else {
