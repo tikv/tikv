@@ -1767,10 +1767,10 @@ mod tests {
 
         let cs = vec![
             // (input, expect)
-            (EnumRef::new("enum".as_bytes(), 0), 0),
-            (EnumRef::new("int".as_bytes(), 1), 1),
-            (EnumRef::new("real".as_bytes(), 2), 2),
-            (EnumRef::new("string".as_bytes(), 3), 3),
+            (EnumRef::new("enum".as_bytes(), &0), 0),
+            (EnumRef::new("int".as_bytes(), &1), 1),
+            (EnumRef::new("real".as_bytes(), &2), 2),
+            (EnumRef::new("string".as_bytes(), &3), 3),
         ];
 
         for (input, expect) in cs {
@@ -1788,10 +1788,10 @@ mod tests {
 
         let cs = vec![
             // (input, expect)
-            (EnumRef::new("enum".as_bytes(), 0), Real::from(0.)),
-            (EnumRef::new("int".as_bytes(), 1), Real::from(1.)),
-            (EnumRef::new("real".as_bytes(), 2), Real::from(2.)),
-            (EnumRef::new("string".as_bytes(), 3), Real::from(3.)),
+            (EnumRef::new("enum".as_bytes(), &0), Real::from(0.)),
+            (EnumRef::new("int".as_bytes(), &1), Real::from(1.)),
+            (EnumRef::new("real".as_bytes(), &2), Real::from(2.)),
+            (EnumRef::new("string".as_bytes(), &3), Real::from(3.)),
         ];
 
         for (input, expect) in cs {
@@ -1809,22 +1809,22 @@ mod tests {
         let cs = vec![
             // (input, expect)
             (
-                EnumRef::new("enum".as_bytes(), 0),
+                EnumRef::new("enum".as_bytes(), &0),
                 Bytes::from(""),
                 String::from(""),
             ),
             (
-                EnumRef::new("int".as_bytes(), 1),
+                EnumRef::new("int".as_bytes(), &1),
                 Bytes::from("int"),
                 String::from("int"),
             ),
             (
-                EnumRef::new("real".as_bytes(), 2),
+                EnumRef::new("real".as_bytes(), &2),
                 Bytes::from("real"),
                 String::from("real"),
             ),
             (
-                EnumRef::new("string".as_bytes(), 3),
+                EnumRef::new("string".as_bytes(), &3),
                 Bytes::from("string"),
                 String::from("string"),
             ),
