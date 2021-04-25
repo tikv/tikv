@@ -282,8 +282,9 @@ impl ChangeData for Service {
         if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
             return;
         }
-        // TODO explain 1024.
-        let (event_sink, event_drain) = canal(1024);
+        // TODO explain buffer.
+        let buffer = 1024;
+        let (event_sink, event_drain) = canal(buffer);
         let peer = ctx.peer();
         let conn = Conn::new(event_sink, peer);
         let conn_id = conn.get_id();
@@ -481,12 +482,10 @@ mod tests {
         );
     }
 
-    fn new_rpc_suite(
-        memory_quota: MemoryQuota,
-    ) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
+    fn new_rpc_suite() -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
         let env = Arc::new(EnvBuilder::new().build());
         let (scheduler, rx) = dummy_scheduler();
-        let cdc_service = Service::new(scheduler, memory_quota);
+        let cdc_service = Service::new(scheduler);
         let builder =
             ServerBuilder::new(env.clone()).register_service(create_change_data(cdc_service));
         let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
@@ -501,8 +500,7 @@ mod tests {
     #[test]
     fn test_flow_control() {
         // Disable CDC sink memory quota.
-        let memory_quota = MemoryQuota::new(usize::MAX);
-        let (_server, client, mut task_rx) = new_rpc_suite(memory_quota);
+        let (_server, client, mut task_rx) = new_rpc_suite();
         // Create a event feed stream.
         let (mut tx, mut rx) = client.event_feed().unwrap();
         let mut req = ChangeDataRequest {
