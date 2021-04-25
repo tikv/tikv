@@ -326,14 +326,14 @@ mod tests {
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].to_decimal_vec(), &[None]);
 
-        update!(state, &mut ctx, Some(EnumRef::new("aaa".as_bytes(), 2))).unwrap();
+        update!(state, &mut ctx, Some(EnumRef::new("aaa".as_bytes(), &2))).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].to_decimal_vec(), vec![Some(Decimal::from(2))]);
 
-        update!(state, &mut ctx, Some(EnumRef::new("bbb".as_bytes(), 1))).unwrap();
-        update!(state, &mut ctx, Some(EnumRef::new("aaa".as_bytes(), 2))).unwrap();
-        update!(state, &mut ctx, Some(EnumRef::new("aaa".as_bytes(), 2))).unwrap();
+        update!(state, &mut ctx, Some(EnumRef::new("bbb".as_bytes(), &1))).unwrap();
+        update!(state, &mut ctx, Some(EnumRef::new("aaa".as_bytes(), &2))).unwrap();
+        update!(state, &mut ctx, Some(EnumRef::new("aaa".as_bytes(), &2))).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].to_decimal_vec(), vec![Some(Decimal::from(7))]);
