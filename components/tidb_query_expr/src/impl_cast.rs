@@ -5705,7 +5705,7 @@ mod tests {
         values: Vec<T>,
         func_val_cast: impl Fn(T) -> String,
         func_cast: FnCast,
-        expect_max: bool
+        expect_max: bool,
     ) where
         FnCast: Fn(&mut EvalContext, &RpnFnCallExtra, Option<T>) -> Result<Option<Duration>>,
     {
@@ -5745,7 +5745,11 @@ mod tests {
                                     ctx.warnings.warnings,
                                     max_expect,
                                 );
-                                check_result(Some(max_expect.as_ref().unwrap()), &result, log.as_str());
+                                check_result(
+                                    Some(max_expect.as_ref().unwrap()),
+                                    &result,
+                                    log.as_str(),
+                                );
                             } else {
                                 let log = format!(
                                     "func_name: {}, input: {}, output: {:?}, output_warn: {:?}, expect: {:?}",
@@ -5771,7 +5775,7 @@ mod tests {
                                 assert!(false, "{}", log.as_str());
                             }
                         }
-                    }
+                    },
                     _ => {
                         let log = format!(
                             "func_name: {}, input: {}, output: {:?}, output_warn: {:?}, expect: {}",
@@ -5814,11 +5818,7 @@ mod tests {
             "cast_real_as_duration",
         );
 
-        let values: Vec<f64> = vec![
-            99999999.0,
-            9995959.0,
-            -9995959.0,
-        ];
+        let values: Vec<f64> = vec![99999999.0, 9995959.0, -9995959.0];
 
         test_as_duration_overflow_helper(
             "cast_real_as_duration",
@@ -5851,10 +5851,7 @@ mod tests {
             "cast_bytes_as_duration",
         );
 
-        let values: Vec<BytesRef> = vec![
-            b"999:59:59.67",
-            b"-999:59:59.67",
-        ];
+        let values: Vec<BytesRef> = vec![b"999:59:59.67", b"-999:59:59.67"];
 
         test_as_duration_overflow_helper(
             "cast_bytes_as_duration",
@@ -5923,12 +5920,8 @@ mod tests {
         );
 
         let values = vec![
-            Decimal::from_bytes(b"9995959")
-                .unwrap()
-                .unwrap(),
-            Decimal::from_bytes(b"-9995959")
-                .unwrap()
-                .unwrap(),
+            Decimal::from_bytes(b"9995959").unwrap().unwrap(),
+            Decimal::from_bytes(b"-9995959").unwrap().unwrap(),
         ];
         let values_ref: Vec<&Decimal> = values.iter().collect();
         test_as_duration_overflow_helper(
