@@ -12,7 +12,7 @@ use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::codec::mysql::{EnumDecoder, JsonDecoder, MAX_FSP};
 use tidb_query_datatype::expr::EvalContext;
-use tidb_query_datatype::{codec::data_type::*, match_template_evaltype};
+use tidb_query_datatype::match_template_evaltype;
 
 /// Helper to build an `RpnExpression`.
 #[derive(Debug)]
