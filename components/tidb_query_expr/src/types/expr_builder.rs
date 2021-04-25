@@ -12,6 +12,7 @@ use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::codec::mysql::{EnumDecoder, JsonDecoder, MAX_FSP};
 use tidb_query_datatype::expr::EvalContext;
+use tidb_query_datatype::match_template_evaltype;
 
 /// Helper to build an `RpnExpression`.
 #[derive(Debug)]
@@ -373,7 +374,7 @@ fn handle_node_constant(
 
 #[inline]
 fn get_scalar_value_null(eval_type: EvalType) -> ScalarValue {
-    match_template_evaluable! {
+    match_template_evaltype! {
         TT, match eval_type {
             EvalType::TT => ScalarValue::TT(None),
         }
