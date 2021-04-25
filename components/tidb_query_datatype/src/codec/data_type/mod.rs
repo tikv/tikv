@@ -257,7 +257,47 @@ macro_rules! impl_evaluable_type {
     };
 }
 
-impl_evaluable_type! { Int }
+unsafe fn retain_lifetime_transmute<T, U>(from: &T) -> &U {
+    // with the help of elided lifetime, we can ensure &T and &U
+    // shares the same lifetime.
+    &*(from as *const T as *const U)
+}
+
+impl Evaluable for Int {
+    const EVAL_TYPE: EvalType = EvalType::Int;
+
+    #[inline]
+    fn borrow_scalar_value(v: &ScalarValue) -> Option<&Self> {
+        match v {
+            ScalarValue::Int(x) => x.as_ref(),
+            ScalarValue::Enum(x) => x
+                .as_ref()
+                .map(|x| unsafe { retain_lifetime_transmute::<u64, i64>(x.value_ref()) }),
+            _ => unimplemented!(),
+        }
+    }
+
+    #[inline]
+    fn borrow_scalar_value_ref(v: ScalarValueRef) -> Option<&Self> {
+        match v {
+            ScalarValueRef::Int(x) => x,
+            ScalarValueRef::Enum(x) => {
+                x.map(|x| unsafe { retain_lifetime_transmute::<u64, i64>(x.value_ref()) })
+            }
+            _ => unimplemented!(),
+        }
+    }
+
+    #[inline]
+    fn borrow_vector_value(v: &VectorValue) -> &ChunkedVecSized<Int> {
+        match v {
+            VectorValue::Int(x) => x,
+            VectorValue::Enum(x) => x.as_vec_int(),
+            _ => unimplemented!(),
+        }
+    }
+}
+
 impl_evaluable_type! { Real }
 impl_evaluable_type! { Decimal }
 impl_evaluable_type! { DateTime }
@@ -362,6 +402,7 @@ impl<'a> EvaluableRef<'a> for BytesRef<'a> {
     fn borrow_scalar_value(v: &'a ScalarValue) -> Option<Self> {
         match v {
             ScalarValue::Bytes(x) => x.as_ref().map(|x| x.as_slice()),
+            ScalarValue::Enum(x) => x.as_ref().map(|x| x.name()),
             _ => unimplemented!(),
         }
     }
@@ -370,6 +411,7 @@ impl<'a> EvaluableRef<'a> for BytesRef<'a> {
     fn borrow_scalar_value_ref(v: ScalarValueRef<'a>) -> Option<Self> {
         match v {
             ScalarValueRef::Bytes(x) => x,
+            ScalarValueRef::Enum(x) => x.map(|x| x.name()),
             _ => unimplemented!(),
         }
     }
@@ -378,6 +420,7 @@ impl<'a> EvaluableRef<'a> for BytesRef<'a> {
     fn borrow_vector_value(v: &'a VectorValue) -> &'a ChunkedVecBytes {
         match v {
             VectorValue::Bytes(x) => x,
+            VectorValue::Enum(x) => x.as_vec_bytes(),
             _ => unimplemented!(),
         }
     }
