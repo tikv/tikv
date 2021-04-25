@@ -1403,9 +1403,9 @@ fn cast_enum_as_duration(
     extra: &RpnFnCallExtra,
     val: Option<EnumRef>,
 ) -> Result<Option<Duration>> {
-    match cast_enum_as_bytes(ctx, extra, val)? {
+    match val {
         None => Ok(None),
-        Some(val) => cast_bytes_as_duration(ctx, extra, Some(val.as_ref())),
+        Some(val) => cast_bytes_as_duration(ctx, extra, Some(val.name())),
     }
 }
 
@@ -1416,22 +1416,18 @@ fn cast_enum_as_time(
     extra: &RpnFnCallExtra,
     val: Option<EnumRef>,
 ) -> Result<Option<DateTime>> {
-    match cast_enum_as_bytes(ctx, extra, val)? {
+    match val {
         None => Ok(None),
-        Some(val) => cast_string_as_time(ctx, extra, Some(val.as_ref())),
+        Some(val) => cast_string_as_time(ctx, extra, Some(val.name())),
     }
 }
 
-#[rpn_fn(nullable, capture = [ctx, extra])]
+#[rpn_fn(nullable, capture = [extra])]
 #[inline]
-fn cast_enum_as_json(
-    ctx: &mut EvalContext,
-    extra: &RpnFnCallExtra,
-    val: Option<EnumRef>,
-) -> Result<Option<Json>> {
-    match cast_enum_as_bytes(ctx, extra, val)? {
+fn cast_enum_as_json(extra: &RpnFnCallExtra, val: Option<EnumRef>) -> Result<Option<Json>> {
+    match val {
         None => Ok(None),
-        Some(val) => cast_string_as_json(extra, Some(val.as_ref())),
+        Some(val) => cast_string_as_json(extra, Some(val.name())),
     }
 }
 
@@ -1831,6 +1827,244 @@ mod tests {
         ];
 
         test_as_string_helper(cs, cast_enum_as_bytes, "cast_enum_as_bytes");
+    }
+
+    #[test]
+    fn test_cast_enum_as_decimal() {
+        test_none_with_ctx_and_extra(cast_enum_as_decimal);
+
+        let cs = vec![
+            (
+                EnumRef::new("enum0".as_bytes(), &0),
+                false,
+                false,
+                Decimal::from(0),
+            ),
+            (
+                EnumRef::new("enum1".as_bytes(), &1),
+                false,
+                false,
+                Decimal::from(1),
+            ),
+            (
+                EnumRef::new("enum2".as_bytes(), &2),
+                false,
+                false,
+                Decimal::from(2),
+            ),
+            (
+                EnumRef::new("enum3".as_bytes(), &3),
+                false,
+                false,
+                Decimal::from(3),
+            ),
+        ];
+        test_as_decimal_helper(
+            cs,
+            |ctx, extra, _, val| {
+                let val = val.map(|x| EnumRef::new(x.name(), x.value_ref()));
+                cast_enum_as_decimal(ctx, extra, val)
+            },
+            |x| x.to_string(),
+            "cast_real_as_decimal",
+        );
+    }
+
+    #[test]
+    fn test_cast_enum_as_duration() {
+        test_none_with_ctx_and_extra(cast_enum_as_duration);
+        let cs: Vec<EnumRef> = vec![
+            EnumRef::new("17:51:04.78".as_bytes(), &0),
+            EnumRef::new("17:51:04.78".as_bytes(), &1),
+            EnumRef::new("-17:51:04.78".as_bytes(), &2),
+            EnumRef::new("20000:20:20".as_bytes(), &3),
+            EnumRef::new("-20000:20:20".as_bytes(), &4),
+            EnumRef::new("abcdefg".as_bytes(), &5),
+        ];
+        test_as_duration_helper(
+            cs,
+            |x| String::from_utf8_lossy(x.name()).to_string(),
+            |x| String::from_utf8_lossy(x.name()).to_string(),
+            cast_enum_as_duration,
+            "cast_enum_as_duration",
+        );
+    }
+
+    #[test]
+    fn test_cast_enum_as_time() {
+        test_none_with_ctx_and_extra(cast_enum_as_time);
+        let mut ctx = EvalContext::default();
+        let cs = vec![
+            // (input, expect, fsp)
+            (
+                EnumRef::new("20190916101112".as_bytes(), &1),
+                Time::parse(
+                    &mut ctx,
+                    "2019-09-16 10:11:12",
+                    TimeType::DateTime,
+                    0,
+                    false,
+                )
+                .unwrap(),
+                0,
+            ),
+            (
+                EnumRef::new("190916101112.111".as_bytes(), &2),
+                Time::parse(
+                    &mut ctx,
+                    "2019-09-16 10:11:12.111",
+                    TimeType::DateTime,
+                    3,
+                    false,
+                )
+                .unwrap(),
+                3,
+            ),
+            (
+                EnumRef::new("20190916101112.111".as_bytes(), &3),
+                Time::parse(
+                    &mut ctx,
+                    "2019-09-16 10:11:12.111",
+                    TimeType::DateTime,
+                    3,
+                    false,
+                )
+                .unwrap(),
+                3,
+            ),
+            (
+                EnumRef::new("2019-12-31 23:59:59.99".as_bytes(), &3),
+                Time::parse(
+                    &mut ctx,
+                    "2020-01-01 00:00:00.0",
+                    TimeType::DateTime,
+                    1,
+                    false,
+                )
+                .unwrap(),
+                1,
+            ),
+        ];
+        for (input, expect, fsp) in cs {
+            let rft = FieldTypeConfig {
+                decimal: fsp as isize,
+                ..FieldTypeConfig::default()
+            }
+            .into();
+            let extra = make_extra(&rft);
+            let r = cast_enum_as_time(&mut ctx, &extra, Some(input));
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
+        }
+
+        let cs = vec![
+            EnumRef::new("2019-12-31 23:59:59.99".as_bytes(), &0),
+            EnumRef::new("abcdefg".as_bytes(), &0),
+            EnumRef::new("20199999-12-31 23:59:59.99".as_bytes(), &0),
+        ];
+        for input in cs {
+            let rft = FieldTypeConfig::default().into();
+            let extra = make_extra(&rft);
+            let r = cast_enum_as_time(&mut ctx, &extra, Some(input));
+            assert_eq!(r.unwrap().is_none(), true)
+        }
+    }
+
+    #[test]
+    fn test_enum_as_json() {
+        test_none_with_extra(cast_enum_as_json);
+
+        let mut jo1: BTreeMap<String, Json> = BTreeMap::new();
+        jo1.insert(
+            String::from("a"),
+            Json::from_string(String::from("b")).unwrap(),
+        );
+        // HasParseToJSONFlag
+
+        let cs = vec![
+            (
+                EnumRef::new("{\"a\": \"b\"}".as_bytes(), &1),
+                Json::from_object(jo1).unwrap(),
+                true,
+            ),
+            (
+                EnumRef::new("{}".as_bytes(), &1),
+                Json::from_object(BTreeMap::new()).unwrap(),
+                true,
+            ),
+            (
+                EnumRef::new("[1, 2, 3]".as_bytes(), &1),
+                Json::from_array(vec![
+                    Json::from_i64(1).unwrap(),
+                    Json::from_i64(2).unwrap(),
+                    Json::from_i64(3).unwrap(),
+                ])
+                .unwrap(),
+                true,
+            ),
+            (
+                EnumRef::new("[]".as_bytes(), &1),
+                Json::from_array(Vec::new()).unwrap(),
+                true,
+            ),
+            (
+                EnumRef::new("9223372036854775807".as_bytes(), &1),
+                Json::from_i64(9223372036854775807).unwrap(),
+                true,
+            ),
+            (
+                EnumRef::new("-9223372036854775808".as_bytes(), &1),
+                Json::from_i64(-9223372036854775808).unwrap(),
+                true,
+            ),
+            (
+                EnumRef::new("18446744073709551615".as_bytes(), &1),
+                Json::from_f64(18446744073709552000.0).unwrap(),
+                true,
+            ),
+            // FIXME: f64::MAX.to_string() to json should success
+            // (f64::MAX.to_string(), Json::from_f64(f64::MAX), true),
+            (
+                EnumRef::new("0.0".as_bytes(), &1),
+                Json::from_f64(0.0).unwrap(),
+                true,
+            ),
+            (
+                EnumRef::new("\"abcde\"".as_bytes(), &1),
+                Json::from_string("abcde".to_string()).unwrap(),
+                true,
+            ),
+            (
+                EnumRef::new("\"\"".as_bytes(), &1),
+                Json::from_string("".to_string()).unwrap(),
+                true,
+            ),
+            (
+                EnumRef::new("true".as_bytes(), &1),
+                Json::from_bool(true).unwrap(),
+                true,
+            ),
+            (
+                EnumRef::new("false".as_bytes(), &1),
+                Json::from_bool(false).unwrap(),
+                true,
+            ),
+        ];
+        for (input, expect, parse_to_json) in cs {
+            let mut rft = FieldType::default();
+            if parse_to_json {
+                let fta = rft.as_mut_accessor();
+                fta.set_flag(FieldTypeFlag::PARSE_TO_JSON);
+            }
+            let extra = make_extra(&rft);
+            let result = cast_enum_as_json(&extra, Some(input));
+            let result_str = result.as_ref().map(|x| x.as_ref().map(|x| x.to_string()));
+            let log = format!(
+                "input: {}, parse_to_json: {}, expect: {:?}, result: {:?}",
+                input, parse_to_json, expect, result_str
+            );
+            check_result(Some(&expect), &result, log.as_str());
+        }
     }
 
     #[test]
