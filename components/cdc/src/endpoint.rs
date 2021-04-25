@@ -48,7 +48,7 @@ use txn_types::{
     Key, Lock, LockType, MutationType, OldValue, TimeStamp, TxnExtra, TxnExtraScheduler,
 };
 
-use crate::channel::SendError;
+use crate::channel::{MemoryQuota, SendError};
 use crate::delegate::{Delegate, Downstream, DownstreamID, DownstreamState};
 use crate::metrics::*;
 use crate::service::{CdcEvent, Conn, ConnID, FeatureGate};
@@ -263,6 +263,8 @@ pub struct Endpoint<T> {
     resolved_region_count: usize,
     unresolved_region_count: usize,
 
+    sink_memory_quota: MemoryQuota,
+
     // store_id -> client
     tikv_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
     env: Arc<Environment>,
@@ -280,6 +282,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         concurrency_manager: ConcurrencyManager,
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
+        sink_memory_quota: MemoryQuota,
     ) -> Endpoint<T> {
         let workers = Builder::new()
             .threaded_scheduler()
@@ -293,6 +296,8 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             .core_threads(1)
             .build()
             .unwrap();
+        CDC_SINK_CAP.set(sink_memory_quota.cap() as i64);
+        CDC_OLD_VALUE_CACHE_CAP.set(cfg.old_value_cache_size as i64);
         let old_value_cache = OldValueCache::new(cfg.old_value_cache_size);
         let speed_limter = Limiter::new(if cfg.incremental_scan_speed_limit.0 > 0 {
             cfg.incremental_scan_speed_limit.0 as f64
@@ -326,6 +331,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             old_value_cache,
             resolved_region_count: 0,
             unresolved_region_count: 0,
+            sink_memory_quota,
             hibernate_regions_compatible: cfg.hibernate_regions_compatible,
             tikv_clients: Arc::new(Mutex::new(HashMap::default())),
         };
@@ -1362,6 +1368,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> RunnableWithTimer for Endpoint<T
         self.old_value_cache.access_count = 0;
         self.old_value_cache.miss_count = 0;
         self.old_value_cache.miss_none_count = 0;
+        CDC_SINK_BYTES.set(self.sink_memory_quota.len() as i64);
     }
 
     fn get_interval(&self) -> Duration {
@@ -1445,7 +1452,8 @@ mod tests {
         crate::channel::Drain,
     ) {
         let (receiver_worker, rx) = new_receiver_worker();
-        let (sink, drain) = crate::channel::canal(buffer);
+        let quota = crate::channel::MemoryQuota::new(usize::MAX);
+        let (sink, drain) = crate::channel::canal(buffer, quota);
 
         let pool = Builder::new()
             .threaded_scheduler()
@@ -1498,6 +1506,7 @@ mod tests {
             ConcurrencyManager::new(1.into()),
             env,
             security_mgr,
+            MemoryQuota::new(usize::MAX),
         );
         (ep, raft_router, task_rx)
     }
@@ -1648,7 +1657,8 @@ mod tests {
 
     #[test]
     fn test_raftstore_is_busy() {
-        let (tx, _rx) = channel::canal(1);
+        let quota = crate::channel::MemoryQuota::new(usize::MAX);
+        let (tx, _rx) = channel::canal(1, quota);
         let (mut ep, raft_router, mut task_rx) = mock_endpoint(&CdcConfig::default());
         // Fill the channel.
         let _raft_rx = raft_router.add_region(1 /* region id */, 1 /* cap */);
@@ -1699,7 +1709,8 @@ mod tests {
             ..Default::default()
         });
         let _raft_rx = raft_router.add_region(1 /* region id */, 100 /* cap */);
-        let (tx, rx) = channel::canal(1);
+        let quota = crate::channel::MemoryQuota::new(usize::MAX);
+        let (tx, rx) = channel::canal(1, quota);
         let mut rx = rx.drain();
 
         let conn = Conn::new(tx, String::new());
@@ -1828,7 +1839,8 @@ mod tests {
         });
         let _raft_rx = raft_router.add_region(1 /* region id */, 100 /* cap */);
 
-        let (tx, rx) = channel::canal(1);
+        let quota = crate::channel::MemoryQuota::new(usize::MAX);
+        let (tx, rx) = channel::canal(1, quota);
         let mut rx = rx.drain();
         let mut region = Region::default();
         region.set_id(1);
@@ -1893,7 +1905,8 @@ mod tests {
         }
 
         // Register region 3 to another conn which is not support batch resolved ts.
-        let (tx, rx2) = channel::canal(1);
+        let quota = crate::channel::MemoryQuota::new(usize::MAX);
+        let (tx, rx2) = channel::canal(1, quota);
         let mut rx2 = rx2.drain();
         let mut region = Region::default();
         region.set_id(3);
@@ -1950,7 +1963,8 @@ mod tests {
     fn test_deregister() {
         let (mut ep, raft_router, _task_rx) = mock_endpoint(&CdcConfig::default());
         let _raft_rx = raft_router.add_region(1 /* region id */, 100 /* cap */);
-        let (tx, rx) = channel::canal(1);
+        let quota = crate::channel::MemoryQuota::new(usize::MAX);
+        let (tx, rx) = channel::canal(1, quota);
         let mut rx = rx.drain();
 
         let conn = Conn::new(tx, String::new());

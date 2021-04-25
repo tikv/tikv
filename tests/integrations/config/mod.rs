@@ -663,6 +663,7 @@ fn test_serde_custom_tikv_config() {
         hibernate_regions_compatible: false,
         scan_lock_pool_size: 1,
         incremental_scan_speed_limit: ReadableSize(7),
+        sink_memory_quota: ReadableSize::mb(7),
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");

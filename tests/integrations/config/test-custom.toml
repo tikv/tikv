@@ -556,6 +556,7 @@ old-value-cache-size = 512
 hibernate-regions-compatible = false
 scan-lock-pool-size = 1
 incremental-scan-speed-limit = 7
+sink-memory-quota = "7MB"
 
 [split]
 detect-times = 10

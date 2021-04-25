@@ -884,7 +884,8 @@ mod tests {
         region.mut_region_epoch().set_conf_ver(2);
         let region_epoch = region.get_region_epoch().clone();
 
-        let (sink, drain) = crate::channel::canal(1);
+        let quota = crate::channel::MemoryQuota::new(usize::MAX);
+        let (sink, drain) = crate::channel::canal(1, quota);
         let rx = drain.drain();
         let request_id = 123;
         let mut downstream =
