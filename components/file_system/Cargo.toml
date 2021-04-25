@@ -5,7 +5,14 @@ edition = "2018"
 publish = false
 
 [features]
+default = ["protobuf-codec"]
 bcc-iosnoop = ["bcc"]
+protobuf-codec = [
+  "tikv_util/protobuf-codec",
+]
+prost-codec = [
+  "tikv_util/prost-codec",
+]
 
 [dependencies]
 collections = { path = "../collections" }
@@ -19,7 +26,7 @@ openssl = "0.10"
 prometheus = { version = "0.10", features = ["nightly"] }
 prometheus-static-metric = "0.4"
 tikv_alloc = { path = "../tikv_alloc" }
-tikv_util = { path = "../tikv_util" }
+tikv_util = { path = "../tikv_util", default-features = false }
 variant_count = "1.0.0"
 
 [dev-dependencies]
