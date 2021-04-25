@@ -5754,7 +5754,7 @@ mod tests {
                                 let log = format!(
                                     "func_name: {}, input: {}, output: {:?}, output_warn: {:?}, expect: {:?}",
                                     func_name,
-                                    func_val_cast(val.clone()),
+                                    func_val_cast(val),
                                     result_str,
                                     ctx.warnings.warnings,
                                     "None",
@@ -5767,7 +5767,7 @@ mod tests {
                                 let log = format!(
                                     "func_name: {}, input: {}, output: {:?}, output_warn: {:?}, expect: {:?}",
                                     func_name,
-                                    func_val_cast(val.clone()),
+                                    func_val_cast(val),
                                     result_str,
                                     ctx.warnings.warnings,
                                     "838:59:59 or -838:59:59",
@@ -5780,7 +5780,7 @@ mod tests {
                         let log = format!(
                             "func_name: {}, input: {}, output: {:?}, output_warn: {:?}, expect: {}",
                             func_name,
-                            func_val_cast(val.clone()),
+                            func_val_cast(val),
                             result_str,
                             ctx.warnings.warnings,
                             "Not Error",
