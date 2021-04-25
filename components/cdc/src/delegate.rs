@@ -123,7 +123,8 @@ impl Downstream {
                 debug!("cdc send event failed, disconnected";
                     "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => self.req_id);
             }
-            Err(SendError::Full) => {
+            // TODO handle errors.
+            Err(SendError::Full) | Err(SendError::Congest) => {
                 info!("cdc send event failed, full";
                     "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => self.req_id);
             }
@@ -455,7 +456,7 @@ impl Delegate {
         region_id: u64,
         request_id: u64,
         entries: Vec<Option<TxnEntry>>,
-    ) -> Vec<Event> {
+    ) -> Vec<CdcEvent> {
         let entries_len = entries.len();
         let mut rows = vec![Vec::with_capacity(entries_len)];
         let mut current_rows_size: usize = 0;
@@ -531,12 +532,12 @@ impl Delegate {
                     entries: rs.into(),
                     ..Default::default()
                 };
-                Event {
+                CdcEvent::Event(Event {
                     region_id,
                     request_id,
                     event: Some(Event_oneof_event::Entries(event_entries)),
                     ..Default::default()
-                }
+                })
             })
             .collect()
     }
@@ -557,7 +558,10 @@ impl Delegate {
 
         Self::convert_to_grpc_events(self.region_id, downstream.req_id, entries)
             .into_iter()
-            .for_each(|e| downstream.sink_event(e))
+            .for_each(|e| match e {
+                CdcEvent::Event(e) => downstream.sink_event(e),
+                _ => unreachable!(),
+            })
     }
 
     fn sink_data(
@@ -906,11 +910,11 @@ mod tests {
             rx_wrap.set(Some(rx));
             let event = event.unwrap();
             assert!(
-                matches!(event, CdcEvent::Event(_)),
+                matches!(event.0, CdcEvent::Event(_)),
                 "unknown event {:?}",
                 event
             );
-            if let CdcEvent::Event(mut e) = event {
+            if let CdcEvent::Event(mut e) = event.0 {
                 assert_eq!(e.get_request_id(), request_id);
                 let event = e.event.take().unwrap();
                 match event {
@@ -1030,11 +1034,11 @@ mod tests {
             rx_wrap.set(Some(rx));
             let event = event.unwrap();
             assert!(
-                matches!(event, CdcEvent::Event(_)),
+                matches!(event.0, CdcEvent::Event(_)),
                 "unknown event {:?}",
                 event
             );
-            if let CdcEvent::Event(mut e) = event {
+            if let CdcEvent::Event(mut e) = event.0 {
                 assert_eq!(e.get_request_id(), request_id);
                 assert_eq!(e.region_id, region_id);
                 assert_eq!(e.index, 0);
