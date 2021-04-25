@@ -94,9 +94,9 @@ mod tests {
                 1,     /*max_subcompactions*/
             )
             .unwrap();
-        assert!(stats.fetch(IOType::Compaction, IOOp::Read) > value_size * 4);
-        assert!(stats.fetch(IOType::Compaction, IOOp::Read) < value_size * 5);
-        assert!(stats.fetch(IOType::Compaction, IOOp::Write) > value_size * 3);
-        assert!(stats.fetch(IOType::Compaction, IOOp::Write) < value_size * 4);
+        assert!(stats.fetch(IOType::LevelZeroCompaction, IOOp::Read) > value_size * 4);
+        assert!(stats.fetch(IOType::LevelZeroCompaction, IOOp::Read) < value_size * 5);
+        assert!(stats.fetch(IOType::LevelZeroCompaction, IOOp::Write) > value_size * 3);
+        assert!(stats.fetch(IOType::LevelZeroCompaction, IOOp::Write) < value_size * 4);
     }
 }
