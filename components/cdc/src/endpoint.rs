@@ -46,7 +46,7 @@ use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
 use tokio_threadpool::{Builder, ThreadPool};
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
-use crate::channel::SendError;
+use crate::channel::{MemoryQuota, SendError};
 use crate::delegate::{Delegate, Downstream, DownstreamID, DownstreamState};
 use crate::metrics::*;
 use crate::service::{CdcEvent, Conn, ConnID, FeatureGate};
@@ -240,6 +240,7 @@ pub struct Endpoint<T> {
 
     workers: ThreadPool,
 
+    sink_memory_quota: MemoryQuota,
     scan_speed_limter: Limiter,
     max_scan_batch_bytes: usize,
     max_scan_batch_size: usize,
@@ -261,9 +262,11 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
         raft_router: T,
         observer: CdcObserver,
         store_meta: Arc<Mutex<StoreMeta>>,
+        sink_memory_quota: MemoryQuota,
     ) -> Endpoint<T> {
         let workers = Builder::new().name_prefix("cdcwkr").pool_size(4).build();
         let tso_worker = Builder::new().name_prefix("tso").pool_size(1).build();
+        CDC_SINK_CAP.set(sink_memory_quota.cap() as i64);
         let speed_limter = Limiter::new(if cfg.incremental_scan_speed_limit.0 > 0 {
             cfg.incremental_scan_speed_limit.0 as f64
         } else {
@@ -283,6 +286,7 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
             pd_client,
             tso_worker,
             timer: SteadyTimer::default(),
+            sink_memory_quota,
             scan_speed_limter: speed_limter,
             max_scan_batch_bytes,
             max_scan_batch_size,
@@ -1132,6 +1136,7 @@ impl<T: 'static + RaftStoreRouter> RunnableWithTimer<Task, ()> for Endpoint<T> {
         self.old_value_stats.access_count = 0;
         self.old_value_stats.miss_count = 0;
         self.old_value_stats.miss_none_count = 0;
+        CDC_SINK_BYTES.set(self.sink_memory_quota.in_use() as i64);
 
         timer.add_task(Duration::from_millis(METRICS_FLUSH_INTERVAL), ());
     }
@@ -1193,7 +1198,8 @@ mod tests {
         crate::channel::Drain,
     ) {
         let (receiver_worker, rx) = new_receiver_worker();
-        let (sink, drain) = crate::channel::canal(buffer);
+        let quota = crate::channel::MemoryQuota::new(std::usize::MAX);
+        let (sink, drain) = crate::channel::canal(buffer, quota);
 
         let pool = Builder::new()
             .name_prefix("test-initializer-worker")
@@ -1343,8 +1349,10 @@ mod tests {
             raft_router.clone(),
             observer,
             Arc::new(Mutex::new(StoreMeta::new(0))),
+            MemoryQuota::new(std::usize::MAX),
         );
-        let (tx, _rx) = channel::canal(1);
+        let quota = crate::channel::MemoryQuota::new(std::usize::MAX);
+        let (tx, _rx) = channel::canal(1, quota);
         // Fill the channel.
         let _raft_rx = raft_router.add_region(1 /* region id */, 1 /* cap */);
         loop {
@@ -1404,8 +1412,10 @@ mod tests {
             raft_router.clone(),
             observer,
             Arc::new(Mutex::new(StoreMeta::new(0))),
+            MemoryQuota::new(std::usize::MAX),
         );
-        let (tx, rx) = channel::canal(1);
+        let quota = crate::channel::MemoryQuota::new(std::usize::MAX);
+        let (tx, rx) = channel::canal(1, quota);
         let mut rx = rx.drain();
 
         let conn = Conn::new(tx, String::new());
@@ -1543,9 +1553,11 @@ mod tests {
             raft_router,
             observer,
             Arc::new(Mutex::new(StoreMeta::new(0))),
+            MemoryQuota::new(std::usize::MAX),
         );
 
-        let (tx, rx) = channel::canal(1);
+        let quota = crate::channel::MemoryQuota::new(std::usize::MAX);
+        let (tx, rx) = channel::canal(1, quota);
         let mut rx = rx.drain();
         let mut region = Region::default();
         region.set_id(1);
@@ -1612,7 +1624,8 @@ mod tests {
         }
 
         // Register region 3 to another conn which is not support batch resolved ts.
-        let (tx, rx2) = channel::canal(1);
+        let quota = crate::channel::MemoryQuota::new(std::usize::MAX);
+        let (tx, rx2) = channel::canal(1, quota);
         let mut rx2 = rx2.drain();
         let mut region = Region::default();
         region.set_id(3);
@@ -1680,8 +1693,10 @@ mod tests {
             raft_router,
             observer,
             Arc::new(Mutex::new(StoreMeta::new(0))),
+            MemoryQuota::new(std::usize::MAX),
         );
-        let (tx, rx) = channel::canal(1);
+        let quota = crate::channel::MemoryQuota::new(std::usize::MAX);
+        let (tx, rx) = channel::canal(1, quota);
         let mut rx = rx.drain();
 
         let conn = Conn::new(tx, String::new());

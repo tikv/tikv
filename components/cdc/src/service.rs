@@ -18,7 +18,7 @@ use security::{check_common_name, SecurityManager};
 use tikv_util::collections::HashMap;
 use tikv_util::worker::*;
 
-use crate::channel::{canal, Sink};
+use crate::channel::{canal, MemoryQuota, Sink};
 use crate::delegate::{Downstream, DownstreamID};
 use crate::endpoint::{Deregister, Task};
 
@@ -258,16 +258,22 @@ impl Conn {
 pub struct Service {
     scheduler: Scheduler<Task>,
     security_mgr: Arc<SecurityManager>,
+    memory_quota: MemoryQuota,
 }
 
 impl Service {
     /// Create a ChangeData service.
     ///
     /// It requires a scheduler of an `Endpoint` in order to schedule tasks.
-    pub fn new(scheduler: Scheduler<Task>, security_mgr: Arc<SecurityManager>) -> Service {
+    pub fn new(
+        scheduler: Scheduler<Task>,
+        security_mgr: Arc<SecurityManager>,
+        memory_quota: MemoryQuota,
+    ) -> Service {
         Service {
             scheduler,
             security_mgr,
+            memory_quota,
         }
     }
 }
@@ -284,7 +290,7 @@ impl ChangeData for Service {
         }
         // TODO explain buffer.
         let buffer = 1024;
-        let (event_sink, event_drain) = canal(buffer);
+        let (event_sink, event_drain) = canal(buffer, self.memory_quota.clone());
         let peer = ctx.peer();
         let conn = Conn::new(event_sink, peer);
         let conn_id = conn.get_id();
@@ -483,11 +489,12 @@ mod tests {
         );
     }
 
-    fn new_rpc_suite() -> (Server, ChangeDataClient, Receiver<Option<Task>>) {
+    fn new_rpc_suite(max_bytes: usize) -> (Server, ChangeDataClient, Receiver<Option<Task>>) {
         let security_mgr = Arc::new(SecurityManager::new(&Default::default()).unwrap());
         let env = Arc::new(EnvBuilder::new().build());
+        let memory_quota = MemoryQuota::new(max_bytes);
         let (scheduler, rx) = dummy_scheduler();
-        let cdc_service = Service::new(scheduler, security_mgr);
+        let cdc_service = Service::new(scheduler, security_mgr, memory_quota);
         let builder =
             ServerBuilder::new(env.clone()).register_service(create_change_data(cdc_service));
         let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
@@ -502,7 +509,8 @@ mod tests {
     #[test]
     fn test_flow_control() {
         // Disable CDC sink memory quota.
-        let (_server, client, task_rx) = new_rpc_suite();
+        let max_bytes = std::usize::MAX;
+        let (_server, client, task_rx) = new_rpc_suite(max_bytes);
         // Create a event feed stream.
         let (tx, rx) = client.event_feed().unwrap();
         let mut rx = Compat01As03::new(rx);

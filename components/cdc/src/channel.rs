@@ -1,5 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
+
 use futures03::{
     channel::mpsc::{
         channel, unbounded, Receiver, SendError as FuturesSendError, Sender, TrySendError,
@@ -17,17 +19,51 @@ const CDC_MSG_MAX_BATCH_SIZE: usize = 128;
 // 2 = (CDC_MSG_MAX_BATCH_SIZE * 1KB / service::CDC_MAX_RESP_SIZE).ceil() + 1 /* reserve for ResolvedTs */;
 pub const CDC_EVENT_MAX_BATCH_SIZE: usize = 2;
 
-pub fn canal(buffer: usize) -> (Sink, Drain) {
+#[derive(Clone)]
+pub struct MemoryQuota {
+    max_bytes: usize,
+    total_bytes: Arc<AtomicUsize>,
+}
+
+impl MemoryQuota {
+    pub fn new(max_bytes: usize) -> MemoryQuota {
+        MemoryQuota {
+            max_bytes,
+            total_bytes: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+    pub fn in_use(&self) -> usize {
+        self.total_bytes.load(Ordering::Relaxed)
+    }
+    pub fn cap(&self) -> usize {
+        self.max_bytes
+    }
+    fn alloc(&self, bytes: usize) -> bool {
+        if self.total_bytes.load(Ordering::Relaxed) <= self.max_bytes {
+            self.total_bytes.fetch_add(bytes, Ordering::Relaxed);
+            true
+        } else {
+            false
+        }
+    }
+    fn free(&self, bytes: usize) {
+        self.total_bytes.fetch_sub(bytes, Ordering::Relaxed);
+    }
+}
+
+pub fn canal(buffer: usize, memory_quota: MemoryQuota) -> (Sink, Drain) {
     let (unbounded_sender, unbounded_receiver) = unbounded();
     let (bounded_sender, bounded_receiver) = channel(buffer);
     (
         Sink {
             unbounded_sender,
             bounded_sender,
+            memory_quota: memory_quota.clone(),
         },
         Drain {
             unbounded_receiver,
             bounded_receiver,
+            memory_quota,
         },
     )
 }
@@ -74,12 +110,15 @@ impl_from_future_send_error! {
 pub struct Sink {
     unbounded_sender: UnboundedSender<(CdcEvent, usize)>,
     bounded_sender: Sender<(CdcEvent, usize)>,
+    memory_quota: MemoryQuota,
 }
 
 impl Sink {
     pub fn unbounded_send(&self, event: CdcEvent) -> Result<(), SendError> {
-        // TODO support memory quota by using event size.
         let bytes = event.size() as usize;
+        if !self.memory_quota.alloc(bytes) {
+            return Err(SendError::Congested);
+        }
         self.unbounded_sender
             .unbounded_send((event, bytes))
             .map_err(SendError::from)
@@ -88,6 +127,9 @@ impl Sink {
     pub async fn send_all(&mut self, events: Vec<CdcEvent>) -> Result<(), SendError> {
         for event in events {
             let bytes = event.size() as usize;
+            if !self.memory_quota.alloc(bytes) {
+                return Err(SendError::Congested);
+            }
             self.bounded_sender.feed((event, bytes)).await?;
         }
         self.bounded_sender.flush().await?;
@@ -98,6 +140,7 @@ impl Sink {
 pub struct Drain {
     unbounded_receiver: UnboundedReceiver<(CdcEvent, usize)>,
     bounded_receiver: Receiver<(CdcEvent, usize)>,
+    memory_quota: MemoryQuota,
 }
 
 impl Drain {
@@ -116,6 +159,7 @@ impl Drain {
     pub fn drain_grpc_message(
         self,
     ) -> impl Stream<Item = GrpcResult<(ChangeDataEvent, WriteFlags)>> {
+        let memory_quota = self.memory_quota.clone();
         self.drain()
             .ready_chunks(CDC_MSG_MAX_BATCH_SIZE)
             .map(move |events| {
@@ -127,6 +171,8 @@ impl Drain {
                 });
                 let resps = batcher.build();
                 let last_idx = resps.len() - 1;
+                // Events are about to be sent, free pending events memory counter.
+                memory_quota.free(bytes as _);
                 stream::iter(resps.into_iter().enumerate().map(move |(i, e)| {
                     // Buffer messages and flush them at once.
                     let write_flags = WriteFlags::default().buffer_hint(i != last_idx);
@@ -170,8 +216,9 @@ mod tests {
     use std::time::Duration;
 
     type Send = Box<dyn FnMut(CdcEvent) -> Result<(), SendError>>;
-    fn new_test_cancal(buffer: usize) -> (Send, Drain) {
-        let (mut tx, rx) = canal(buffer);
+    fn new_test_cancal(buffer: usize, max_bytes: usize) -> (Send, Drain) {
+        let memory_quota = MemoryQuota::new(max_bytes);
+        let (mut tx, rx) = canal(buffer, memory_quota);
         let mut flag = true;
         let send = move |event| {
             flag = !flag;
@@ -186,7 +233,7 @@ mod tests {
 
     #[test]
     fn test_barrier() {
-        let (mut send, rx) = new_test_cancal(10);
+        let (mut send, rx) = new_test_cancal(10, std::usize::MAX);
         send(CdcEvent::Event(Default::default())).unwrap();
         let (btx1, brx1) = mpsc::channel();
         send(CdcEvent::Barrier(Some(Box::new(move |()| {
@@ -219,7 +266,7 @@ mod tests {
 
     #[test]
     fn test_nonblocking_batch() {
-        let (mut send, rx) = new_test_cancal(CDC_MSG_MAX_BATCH_SIZE * 2);
+        let (mut send, rx) = new_test_cancal(CDC_MSG_MAX_BATCH_SIZE * 2, std::usize::MAX);
         let mut drain = rx.drain_grpc_message();
         for count in 1..CDC_EVENT_MAX_BATCH_SIZE + CDC_EVENT_MAX_BATCH_SIZE / 2 {
             for _ in 0..count {
@@ -231,5 +278,21 @@ mod tests {
         if recv_timeout(&mut drain, Duration::from_millis(100)).is_ok() {
             panic!("expect to be timeout");
         }
+    }
+
+    #[test]
+    fn test_congest() {
+        let mut e = kvproto::cdcpb::Event::default();
+        e.region_id = 1;
+        let event = CdcEvent::Event(e.clone());
+        assert!(event.size() != 0);
+        // 1KB
+        let max_pending_bytes = 1024;
+        let buffer = max_pending_bytes / event.size() + 1;
+        let (mut send, _rx) = new_test_cancal(buffer as _, max_pending_bytes as _);
+        for _ in 0..buffer {
+            send(CdcEvent::Event(e.clone())).unwrap();
+        }
+        assert_matches!(send(CdcEvent::Event(e)).unwrap_err(), SendError::Congested);
     }
 }
