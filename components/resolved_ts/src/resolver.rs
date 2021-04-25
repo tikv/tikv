@@ -16,7 +16,6 @@ pub struct Resolver {
     // start_ts -> locked keys.
     lock_ts_heap: BTreeMap<TimeStamp, HashSet<Arc<[u8]>>>,
     // The timestamps that guarantees no more commit will happen before.
-    // None if the resolver is not initialized.
     resolved_ts: Arc<AtomicU64>,
     // The timestamps that advance the resolved_ts when there is no more write.
     min_ts: TimeStamp,
