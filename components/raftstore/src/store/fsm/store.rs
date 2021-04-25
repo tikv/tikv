@@ -2386,18 +2386,21 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                             )
                             .is_ok()
                         {
-                            // TODO: instead of `store_meta`, using another fine grained mutex to protect
-                            // `region_read_progress`
-                            if let Some(pr) = meta.region_read_progress.get(&leader_info.region_id)
-                            {
-                                // TODO: `update_safe_ts` reqiure to acquire a mutex, although the mutex
-                                // won't be contended, but acquiring a large amount of uncontended mutexs
-                                // could still be time consuming, should move this operation to other thread
-                                // to avoid blocking `raftstore` threads
-                                pr.update_safe_ts(
-                                    leader_info.get_read_state().get_applied_index(),
-                                    leader_info.get_read_state().get_safe_ts(),
-                                );
+                            if leader_info.has_read_state() {
+                                // TODO: instead of `store_meta`, using another fine grained mutex to protect
+                                // `region_read_progress`
+                                if let Some(pr) =
+                                    meta.region_read_progress.get(&leader_info.region_id)
+                                {
+                                    // TODO: `update_safe_ts` reqiure to acquire a mutex, although the mutex
+                                    // won't be contended, but acquiring a large amount of uncontended mutexs
+                                    // could still be time consuming, should move this operation to other thread
+                                    // to avoid blocking `raftstore` threads
+                                    pr.update_safe_ts(
+                                        leader_info.get_read_state().get_applied_index(),
+                                        leader_info.get_read_state().get_safe_ts(),
+                                    );
+                                }
                             }
                             return Some(leader_info.region_id);
                         }
