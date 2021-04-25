@@ -5759,7 +5759,7 @@ mod tests {
                                     ctx.warnings.warnings,
                                     "None",
                                 );
-                                assert!(false, "{}", log.as_str());
+                                panic!("{}", log.as_str());
                             }
                         }
                         None => {
@@ -5772,7 +5772,7 @@ mod tests {
                                     ctx.warnings.warnings,
                                     "838:59:59 or -838:59:59",
                                 );
-                                assert!(false, "{}", log.as_str());
+                                panic!("{}", log.as_str());
                             }
                         }
                     },
@@ -5785,7 +5785,7 @@ mod tests {
                             ctx.warnings.warnings,
                             "Not Error",
                         );
-                        assert!(false, "{}", log);
+                        panic!("{}", log);
                     }
                 }
             }
