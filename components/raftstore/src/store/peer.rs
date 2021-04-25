@@ -45,6 +45,7 @@ use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, CollectedReady, Proposal};
 use crate::store::hibernate_state::GroupState;
 use crate::store::msg::RaftCommand;
+use crate::store::util::RegionReadProgress;
 use crate::store::worker::{HeartbeatTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
 use crate::store::{
     Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse,
@@ -77,6 +78,7 @@ use super::DestroyPeerJob;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
 const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000; // 1s
+const REGION_READ_PROGRESS_CAP: usize = 128;
 
 /// The returned states of the peer after checking whether it is stale
 #[derive(Debug, PartialEq, Eq)]
@@ -510,8 +512,7 @@ where
     /// task run when there are more than 1 pending tasks.
     pub pending_pd_heartbeat_tasks: Arc<AtomicU64>,
 
-    // TODO: `safe_ts` serve as a placehodler, should remove it later
-    pub safe_ts: Arc<AtomicU64>,
+    pub read_progress: Arc<RegionReadProgress>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -605,7 +606,10 @@ where
             cmd_epoch_checker: Default::default(),
             last_unpersisted_number: 0,
             pending_pd_heartbeat_tasks: Arc::new(AtomicU64::new(0)),
-            safe_ts: Arc::new(AtomicU64::new(0)),
+            read_progress: Arc::new(RegionReadProgress::new(
+                applied_index,
+                REGION_READ_PROGRESS_CAP,
+            )),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -1628,6 +1632,7 @@ where
                     );
                 }
                 self.post_pending_read_index_on_replica(ctx);
+                self.read_progress.update_applied(self.last_applying_idx);
             }
             CheckApplyingSnapStatus::Idle => {}
         }
@@ -1803,7 +1808,6 @@ where
             let mut meta = ctx.store_meta.lock().unwrap();
             meta.readers
                 .insert(self.region_id, ReadDelegate::from_peer(self));
-            meta.peer_properties.insert(self.region_id, Arc::default());
         }
 
         apply_snap_result
@@ -2119,11 +2123,11 @@ where
             panic!("{} should not applying snapshot.", self.tag);
         }
 
-        self.raft_group
-            .advance_apply_to(apply_state.get_applied_index());
+        let applied_index = apply_state.get_applied_index();
+        self.raft_group.advance_apply_to(applied_index);
 
         self.cmd_epoch_checker.advance_apply(
-            apply_state.get_applied_index(),
+            applied_index,
             self.term(),
             self.raft_group.store().region(),
         );
@@ -2149,6 +2153,8 @@ where
             }
         }
         self.pending_reads.gc();
+
+        self.read_progress.update_applied(applied_index);
 
         // Only leaders need to update applied_index_term.
         if progress_to_be_updated && self.is_leader() {
@@ -3213,7 +3219,7 @@ where
         let flags = WriteBatchFlags::from_bits_check(req.get_header().get_flags());
         if flags.contains(WriteBatchFlags::STALE_READ) {
             let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
-            let safe_ts = self.safe_ts.load(Ordering::Acquire);
+            let safe_ts = self.read_progress.safe_ts();
             if safe_ts < read_ts {
                 warn!(
                     "read rejected by safe timestamp";
@@ -3496,6 +3502,7 @@ where
             send_msg.set_start_key(region.get_start_key().to_vec());
             send_msg.set_end_key(region.get_end_key().to_vec());
         }
+
         send_msg.set_message(msg);
 
         if let Err(e) = trans.send(send_msg) {
