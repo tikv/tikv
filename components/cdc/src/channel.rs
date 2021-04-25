@@ -139,3 +139,78 @@ where
         }
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use futures::executor::block_on;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    fn new_test_cancal(
+        buffer: usize,
+    ) -> (Box<dyn FnMut(CdcEvent) -> Result<(), SendError>>, Drain) {
+        let (tx, rx) = canal(buffer);
+        let mut bounded_tx = tx.bounded_sink();
+        let mut flag = true;
+        let send = move |event| {
+            flag = !flag;
+            if flag {
+                tx.unbounded_send(event)
+            } else {
+                block_on(bounded_tx.send(event))
+            }
+        };
+        (Box::new(send), rx)
+    }
+
+    #[test]
+    fn test_barrier() {
+        let (mut send, rx) = new_test_cancal(10);
+        send(CdcEvent::Event(Default::default())).unwrap();
+        let (btx1, brx1) = mpsc::channel();
+        send(CdcEvent::Barrier(Some(Box::new(move |()| {
+            btx1.send(()).unwrap();
+        }))))
+        .unwrap();
+        send(CdcEvent::ResolvedTs(Default::default())).unwrap();
+        let (btx2, brx2) = mpsc::channel();
+        send(CdcEvent::Barrier(Some(Box::new(move |()| {
+            btx2.send(()).unwrap();
+        }))))
+        .unwrap();
+
+        let mut drain = rx.drain();
+        brx1.recv_timeout(Duration::from_millis(100)).unwrap_err();
+        brx2.recv_timeout(Duration::from_millis(100)).unwrap_err();
+        assert_matches!(block_on(drain.next()), Some(CdcEvent::Event(_)));
+        brx1.recv_timeout(Duration::from_millis(100)).unwrap_err();
+        brx2.recv_timeout(Duration::from_millis(100)).unwrap_err();
+        assert_matches!(block_on(drain.next()), Some(CdcEvent::Barrier(_)));
+        brx1.recv_timeout(Duration::from_millis(100)).unwrap();
+        brx2.recv_timeout(Duration::from_millis(100)).unwrap_err();
+        assert_matches!(block_on(drain.next()), Some(CdcEvent::ResolvedTs(_)));
+        brx2.recv_timeout(Duration::from_millis(100)).unwrap_err();
+        assert_matches!(block_on(drain.next()), Some(CdcEvent::Barrier(_)));
+        brx2.recv_timeout(Duration::from_millis(100)).unwrap();
+        brx1.recv_timeout(Duration::from_millis(100)).unwrap_err();
+        brx2.recv_timeout(Duration::from_millis(100)).unwrap_err();
+    }
+
+    #[test]
+    fn test_nonblocking_batch() {
+        let (mut send, rx) = new_test_cancal(CDC_MSG_MAX_BATCH_SIZE * 2);
+        let mut drain = rx.drain_grpc_message();
+        for count in 1..CDC_EVENT_MAX_BATCH_SIZE + CDC_EVENT_MAX_BATCH_SIZE / 2 {
+            for _ in 0..count {
+                send(CdcEvent::Event(Default::default())).unwrap();
+            }
+            recv_timeout(&mut drain, Duration::from_millis(100)).unwrap();
+        }
+
+        if let Ok(_) = recv_timeout(&mut drain, Duration::from_millis(100)) {
+            panic!("expect to be timeout");
+        }
+    }
+}
