@@ -167,11 +167,11 @@ impl<'a> PartialOrd for EnumRef<'a> {
 
 impl<'a> ToInt for EnumRef<'a> {
     fn to_int(&self, _ctx: &mut EvalContext, _tp: FieldTypeTp) -> Result<i64> {
-        Ok(self.value as i64)
+        Ok(*self.value as i64)
     }
 
     fn to_uint(&self, _ctx: &mut EvalContext, _tp: FieldTypeTp) -> Result<u64> {
-        Ok(self.value)
+        Ok(*self.value)
     }
 }
 
