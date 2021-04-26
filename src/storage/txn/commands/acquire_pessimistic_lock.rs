@@ -143,20 +143,21 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
 }
 
 #[test]
-fn test_extract_lock_from_result() {
+fn test_extract_lock_key_from_result() {
     use crate::storage::txn::LockInfo;
 
     let raw_key = b"key".to_vec();
     let key = Key::from_raw(&raw_key);
     let ts = 100;
     let mut info = LockInfo::default();
-    info.set_key(raw_key);
+    info.set_key(raw_key.clone());
     info.set_lock_version(ts);
     info.set_lock_ttl(100);
     let case = StorageError::from(StorageErrorInner::Txn(Error::from(ErrorInner::Mvcc(
         MvccError::from(MvccErrorInner::KeyIsLocked(info)),
     ))));
-    let lock = extract_lock_key_from_result::<()>(&Err(case));
+    let (lock, extracted_key) = extract_lock_key_from_result::<()>(&Err(case));
     assert_eq!(lock.ts, ts.into());
     assert_eq!(lock.hash, key.gen_hash());
+    assert_eq!(extracted_key, raw_key);
 }

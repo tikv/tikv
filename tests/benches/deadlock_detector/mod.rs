@@ -63,6 +63,8 @@ fn bench_detect(b: &mut Bencher, cfg: &Config) {
                 entry.get_txn().into(),
                 entry.get_wait_for_txn().into(),
                 entry.get_key_hash(),
+                &[],
+                &[],
             );
         }
     });

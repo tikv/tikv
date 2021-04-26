@@ -666,6 +666,7 @@ pub mod tests {
             cb: StorageCallback::Boolean(Box::new(|_| ())),
             pr: ProcessResult::Res,
             lock: Lock { ts: lock_ts, hash },
+            diag_ctx: DiagnosticContext::default(),
             delay: Delay::new(Instant::now()),
             _lifetime_timer: WAITER_LIFETIME_HISTOGRAM.start_coarse_timer(),
         }
@@ -768,6 +769,7 @@ pub mod tests {
             pr,
             lock,
             Instant::now() + Duration::from_millis(3000),
+            DiagnosticContext::default(),
         );
         (waiter, info, f)
     }
@@ -879,7 +881,7 @@ pub mod tests {
         // Deadlock
         let waiter_ts = TimeStamp::new(10);
         let (mut waiter, lock_info, f) = new_test_waiter(waiter_ts, 20.into(), 20);
-        waiter.deadlock_with(111);
+        waiter.deadlock_with(111, vec![]);
         waiter.notify();
         expect_deadlock(block_on(f).unwrap(), waiter_ts, lock_info, 111);
 
@@ -887,7 +889,7 @@ pub mod tests {
         let waiter_ts = TimeStamp::new(10);
         let (mut waiter, lock_info, f) = new_test_waiter(waiter_ts, 20.into(), 20);
         waiter.conflict_with(20.into(), 30.into());
-        waiter.deadlock_with(111);
+        waiter.deadlock_with(111, vec![]);
         waiter.notify();
         expect_deadlock(block_on(f).unwrap(), waiter_ts, lock_info, 111);
     }
@@ -1094,6 +1096,7 @@ pub mod tests {
             waiter.pr,
             waiter.lock,
             WaitTimeout::Millis(1000),
+            DiagnosticContext::default(),
         );
         assert_elapsed(
             || expect_key_is_locked(block_on(f).unwrap().unwrap(), lock_info),
@@ -1109,6 +1112,7 @@ pub mod tests {
             waiter.pr,
             waiter.lock,
             WaitTimeout::Millis(100),
+            DiagnosticContext::default(),
         );
         assert_elapsed(
             || expect_key_is_locked(block_on(f).unwrap().unwrap(), lock_info),
@@ -1124,6 +1128,7 @@ pub mod tests {
             waiter.pr,
             waiter.lock,
             WaitTimeout::Millis(3000),
+            DiagnosticContext::default(),
         );
         assert_elapsed(
             || expect_key_is_locked(block_on(f).unwrap().unwrap(), lock_info),
@@ -1153,6 +1158,7 @@ pub mod tests {
                 waiter.pr,
                 waiter.lock,
                 WaitTimeout::Millis(wait_for_lock_timeout),
+                DiagnosticContext::default(),
             );
             waiters_info.push((waiter_ts, lock_info, f));
         }
@@ -1183,6 +1189,7 @@ pub mod tests {
                 waiter.pr,
                 waiter.lock,
                 WaitTimeout::Millis(wait_for_lock_timeout),
+                DiagnosticContext::default(),
             );
             waiters_info.push((waiter_ts, lock_info, f));
         }
@@ -1231,6 +1238,7 @@ pub mod tests {
             waiter1.pr,
             waiter1.lock,
             WaitTimeout::Millis(wait_for_lock_timeout),
+            DiagnosticContext::default(),
         );
         let (waiter2, lock_info2, f2) = new_test_waiter(30.into(), lock.ts, lock.hash);
         // Waiter2's timeout is 50ms which is less than wake_up_delay_duration.
@@ -1240,6 +1248,7 @@ pub mod tests {
             waiter2.pr,
             waiter2.lock,
             WaitTimeout::Millis(50),
+            DiagnosticContext::default(),
         );
         let commit_ts = 15.into();
         let (tx, rx) = mpsc::sync_channel(1);
@@ -1281,8 +1290,9 @@ pub mod tests {
             waiter.pr,
             waiter.lock,
             WaitTimeout::Millis(1000),
+            DiagnosticContext::default(),
         );
-        scheduler.deadlock(waiter_ts, lock, 30);
+        scheduler.deadlock(waiter_ts, lock, 30, DiagnosticContext::default(), vec![]);
         assert_elapsed(
             || expect_deadlock(block_on(f).unwrap(), waiter_ts, lock_info, 30),
             0,
@@ -1308,6 +1318,7 @@ pub mod tests {
             waiter1.pr,
             waiter1.lock,
             WaitTimeout::Millis(1000),
+            DiagnosticContext::default(),
         );
         let (waiter2, lock_info2, f2) = new_test_waiter(waiter_ts, lock.ts, lock.hash);
         scheduler.wait_for(
@@ -1316,6 +1327,7 @@ pub mod tests {
             waiter2.pr,
             waiter2.lock,
             WaitTimeout::Millis(1000),
+            DiagnosticContext::default(),
         );
         // Should notify duplicated waiter immediately.
         assert_elapsed(

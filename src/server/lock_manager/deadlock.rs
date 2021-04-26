@@ -121,8 +121,8 @@ impl DetectTable {
         txn_ts: TimeStamp,
         lock_ts: TimeStamp,
         lock_hash: u64,
-        lock_key: &Vec<u8>,
-        resource_group_tag: &Vec<u8>,
+        lock_key: &[u8],
+        resource_group_tag: &[u8],
     ) -> Option<(u64, Vec<WaitForEntry>)> {
         let _timer = DETECT_DURATION_HISTOGRAM.start_coarse_timer();
         TASK_COUNTER_METRICS.detect.inc();
@@ -225,13 +225,13 @@ impl DetectTable {
         txn_ts: TimeStamp,
         lock_ts: TimeStamp,
         lock_hash: u64,
-        key: &Vec<u8>,
-        resource_group_tag: &Vec<u8>,
+        key: &[u8],
+        resource_group_tag: &[u8],
     ) -> bool {
         if let Some(wait_for) = self.wait_for_map.get_mut(&txn_ts) {
             if let Some(locks) = wait_for.get_mut(&lock_ts) {
-                locks.push(lock_hash, key.clone(), self.now);
-                locks.resource_group_tag = resource_group_tag.clone();
+                locks.push(lock_hash, key.to_vec(), self.now);
+                locks.resource_group_tag = resource_group_tag.to_vec();
                 return true;
             }
         }
@@ -244,16 +244,16 @@ impl DetectTable {
         txn_ts: TimeStamp,
         lock_ts: TimeStamp,
         lock_hash: u64,
-        key: &Vec<u8>,
-        resource_group_tag: &Vec<u8>,
+        key: &[u8],
+        resource_group_tag: &[u8],
     ) {
         let wait_for = self.wait_for_map.entry(txn_ts).or_default();
         assert!(!wait_for.contains_key(&lock_ts));
         let locks = Locks::new(
             lock_ts,
             lock_hash,
-            key.clone(),
-            resource_group_tag.clone(),
+            key.to_vec(),
+            resource_group_tag.to_vec(),
             self.now,
         );
         wait_for.insert(locks.ts, locks);
@@ -1053,16 +1053,28 @@ pub mod tests {
         let mut detect_table = DetectTable::new(Duration::from_secs(10));
 
         // Deadlock: 1 -> 2 -> 1
-        assert_eq!(detect_table.detect(1.into(), 2.into(), 2), None);
-        assert_eq!(detect_table.detect(2.into(), 1.into(), 1).unwrap(), 2);
+        assert_eq!(detect_table.detect(1.into(), 2.into(), 2, &[], &[]), None);
+        assert_eq!(
+            detect_table
+                .detect(2.into(), 1.into(), 1, &[], &[])
+                .unwrap()
+                .0,
+            2
+        );
         // Deadlock: 1 -> 2 -> 3 -> 1
-        assert_eq!(detect_table.detect(2.into(), 3.into(), 3), None);
-        assert_eq!(detect_table.detect(3.into(), 1.into(), 1).unwrap(), 3);
+        assert_eq!(detect_table.detect(2.into(), 3.into(), 3, &[], &[]), None);
+        assert_eq!(
+            detect_table
+                .detect(3.into(), 1.into(), 1, &[], &[])
+                .unwrap()
+                .0,
+            3
+        );
         detect_table.clean_up(2.into());
         assert_eq!(detect_table.wait_for_map.contains_key(&2.into()), false);
 
         // After cycle is broken, no deadlock.
-        assert_eq!(detect_table.detect(3.into(), 1.into(), 1), None);
+        assert_eq!(detect_table.detect(3.into(), 1.into(), 1, &[], &[]), None);
         assert_eq!(detect_table.wait_for_map.get(&3.into()).unwrap().len(), 1);
         assert_eq!(
             detect_table
@@ -1077,7 +1089,7 @@ pub mod tests {
         );
 
         // Different key_hash grows the list.
-        assert_eq!(detect_table.detect(3.into(), 1.into(), 2), None);
+        assert_eq!(detect_table.detect(3.into(), 1.into(), 2, &[], &[]), None);
         assert_eq!(
             detect_table
                 .wait_for_map
@@ -1091,7 +1103,7 @@ pub mod tests {
         );
 
         // Same key_hash doesn't grow the list.
-        assert_eq!(detect_table.detect(3.into(), 1.into(), 2), None);
+        assert_eq!(detect_table.detect(3.into(), 1.into(), 2, &[], &[]), None);
         assert_eq!(
             detect_table
                 .wait_for_map
@@ -1105,7 +1117,7 @@ pub mod tests {
         );
 
         // Different lock_ts grows the map.
-        assert_eq!(detect_table.detect(3.into(), 2.into(), 2), None);
+        assert_eq!(detect_table.detect(3.into(), 2.into(), 2, &[], &[]), None);
         assert_eq!(detect_table.wait_for_map.get(&3.into()).unwrap().len(), 2);
         assert_eq!(
             detect_table
@@ -1147,29 +1159,69 @@ pub mod tests {
         let mut detect_table = DetectTable::new(Duration::from_millis(100));
 
         // Deadlock
-        assert!(detect_table.detect(1.into(), 2.into(), 1).is_none());
-        assert!(detect_table.detect(2.into(), 1.into(), 2).is_some());
+        assert!(
+            detect_table
+                .detect(1.into(), 2.into(), 1, &[], &[])
+                .is_none()
+        );
+        assert!(
+            detect_table
+                .detect(2.into(), 1.into(), 2, &[], &[])
+                .is_some()
+        );
         // After sleep, the expired entry has been removed. So there is no deadlock.
         std::thread::sleep(Duration::from_millis(500));
         assert_eq!(detect_table.wait_for_map.len(), 1);
-        assert!(detect_table.detect(2.into(), 1.into(), 2).is_none());
+        assert!(
+            detect_table
+                .detect(2.into(), 1.into(), 2, &[], &[])
+                .is_none()
+        );
         assert_eq!(detect_table.wait_for_map.len(), 1);
 
         // `Detect` updates the last_detect_time, so the entry won't be removed.
         detect_table.clear();
-        assert!(detect_table.detect(1.into(), 2.into(), 1).is_none());
+        assert!(
+            detect_table
+                .detect(1.into(), 2.into(), 1, &[], &[])
+                .is_none()
+        );
         std::thread::sleep(Duration::from_millis(500));
-        assert!(detect_table.detect(1.into(), 2.into(), 1).is_none());
-        assert!(detect_table.detect(2.into(), 1.into(), 2).is_some());
+        assert!(
+            detect_table
+                .detect(1.into(), 2.into(), 1, &[], &[])
+                .is_none()
+        );
+        assert!(
+            detect_table
+                .detect(2.into(), 1.into(), 2, &[], &[])
+                .is_some()
+        );
 
         // Remove expired entry shrinking the map.
         detect_table.clear();
-        assert!(detect_table.detect(1.into(), 2.into(), 1).is_none());
-        assert!(detect_table.detect(1.into(), 3.into(), 1).is_none());
+        assert!(
+            detect_table
+                .detect(1.into(), 2.into(), 1, &[], &[])
+                .is_none()
+        );
+        assert!(
+            detect_table
+                .detect(1.into(), 3.into(), 1, &[], &[])
+                .is_none()
+        );
         assert_eq!(detect_table.wait_for_map.len(), 1);
         std::thread::sleep(Duration::from_millis(500));
-        assert!(detect_table.detect(1.into(), 3.into(), 2).is_none());
-        assert!(detect_table.detect(2.into(), 1.into(), 2).is_none());
+        assert!(
+            detect_table
+                .detect(1.into(), 3.into(), 2, &[], &[])
+                .is_none()
+        );
+        assert!(
+            detect_table
+                .detect(2.into(), 1.into(), 2, &[], &[])
+                .is_none()
+        );
         assert_eq!(detect_table.wait_for_map.get(&1.into()).unwrap().len(), 1);
         assert_eq!(
             detect_table
@@ -1183,9 +1235,17 @@ pub mod tests {
             2
         );
         std::thread::sleep(Duration::from_millis(500));
-        assert!(detect_table.detect(3.into(), 2.into(), 3).is_none());
+        assert!(
+            detect_table
+                .detect(3.into(), 2.into(), 3, &[], &[])
+                .is_none()
+        );
         assert_eq!(detect_table.wait_for_map.len(), 2);
-        assert!(detect_table.detect(3.into(), 1.into(), 3).is_none());
+        assert!(
+            detect_table
+                .detect(3.into(), 1.into(), 3, &[], &[])
+                .is_none()
+        );
         assert_eq!(detect_table.wait_for_map.len(), 1);
     }
 

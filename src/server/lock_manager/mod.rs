@@ -349,6 +349,7 @@ mod tests {
             waiter.lock,
             true,
             Some(WaitTimeout::Default),
+            DiagnosticContext::default(),
         );
         assert!(lock_mgr.has_waiter());
         assert_elapsed(
@@ -374,6 +375,7 @@ mod tests {
             waiter.lock,
             true,
             Some(WaitTimeout::Default),
+            DiagnosticContext::default(),
         );
         assert!(lock_mgr.has_waiter());
         lock_mgr.wake_up(lock.ts, vec![lock.hash], 30.into(), false);
@@ -393,6 +395,7 @@ mod tests {
             waiter1.lock,
             false,
             Some(WaitTimeout::Default),
+            DiagnosticContext::default(),
         );
         assert!(lock_mgr.has_waiter());
         let (waiter2, lock_info2, f2) = new_test_waiter(20.into(), 10.into(), 10);
@@ -403,6 +406,7 @@ mod tests {
             waiter2.lock,
             false,
             Some(WaitTimeout::Default),
+            DiagnosticContext::default(),
         );
         assert!(lock_mgr.has_waiter());
         assert_elapsed(
@@ -430,6 +434,7 @@ mod tests {
                 waiter.lock,
                 *is_first_lock,
                 Some(WaitTimeout::Default),
+                DiagnosticContext::default(),
             );
             assert!(lock_mgr.has_waiter());
             assert_eq!(lock_mgr.remove_from_detected(30.into()), !is_first_lock);
@@ -463,6 +468,7 @@ mod tests {
             waiter.lock,
             false,
             None,
+            DiagnosticContext::default(),
         );
         assert_elapsed(
             || expect_key_is_locked(block_on(f).unwrap().unwrap(), lock_info),
