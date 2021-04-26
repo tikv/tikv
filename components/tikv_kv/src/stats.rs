@@ -201,17 +201,8 @@ impl Statistics {
         self.data.add(&other.data);
     }
 
-    pub fn sum(&self) -> CfStatistics {
-        let mut statistics = CfStatistics::default();
-        statistics.processed_keys =
-            self.data.processed_keys + self.lock.processed_keys + self.write.processed_keys;
-        statistics.flow_stats.read_bytes = self.write.flow_stats.read_bytes
-            + self.data.flow_stats.read_bytes
-            + self.lock.flow_stats.read_bytes;
-        statistics.flow_stats.read_keys = self.write.flow_stats.read_keys
-            + self.data.flow_stats.read_keys
-            + self.lock.flow_stats.read_keys;
-        statistics
+    pub fn cf_stats(&self) -> [&CfStatistics; 3] {
+        [&self.data, &self.write, &self.lock]
     }
 
     /// Deprecated
