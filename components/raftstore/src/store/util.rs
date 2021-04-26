@@ -5,10 +5,17 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::{fmt, u64};
 
+<<<<<<< HEAD
 use engine_rocks::{set_perf_level, PerfContext, PerfLevel};
 use kvproto::kvrpcpb::KeyRange;
 use kvproto::metapb;
 use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
+=======
+use kvproto::kvrpcpb::KeyRange;
+use kvproto::metapb::{self, PeerRole};
+use kvproto::raft_cmdpb::{AdminCmdType, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest};
+use kvproto::raft_serverpb::RaftMessage;
+>>>>>>> 48c69157c... raftstore: faster lookup for admin epoch checker (#10081)
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
 use raft::INVALID_INDEX;
@@ -191,35 +198,40 @@ impl AdminCmdEpochState {
     }
 }
 
-lazy_static! {
-    /// WARNING: the existing settings in `ADMIN_CMD_EPOCH_MAP` **MUST NOT** be changed!!!
-    /// Changing any admin cmd's `AdminCmdEpochState` or the epoch-change behavior during applying
-    /// will break upgrade compatibility and correctness dependency of `CmdEpochChecker`.
-    /// Please remember it is very difficult to fix the issues arising from not following this rule.
-    ///
-    /// If you really want to change an admin cmd behavior, please add a new admin cmd and **do not**
-    /// delete the old one.
-    pub static ref ADMIN_CMD_EPOCH_MAP: HashMap<AdminCmdType, AdminCmdEpochState> = [
-        (AdminCmdType::InvalidAdmin, AdminCmdEpochState::new(false, false, false, false)),
-        (AdminCmdType::CompactLog, AdminCmdEpochState::new(false, false, false, false)),
-        (AdminCmdType::ComputeHash, AdminCmdEpochState::new(false, false, false, false)),
-        (AdminCmdType::VerifyHash, AdminCmdEpochState::new(false, false, false, false)),
+/// WARNING: the existing settings below **MUST NOT** be changed!!!
+/// Changing any admin cmd's `AdminCmdEpochState` or the epoch-change behavior during applying
+/// will break upgrade compatibility and correctness dependency of `CmdEpochChecker`.
+/// Please remember it is very difficult to fix the issues arising from not following this rule.
+///
+/// If you really want to change an admin cmd behavior, please add a new admin cmd and **DO NOT**
+/// delete the old one.
+pub fn admin_cmd_epoch_lookup(admin_cmp_type: AdminCmdType) -> AdminCmdEpochState {
+    match admin_cmp_type {
+        AdminCmdType::InvalidAdmin => AdminCmdEpochState::new(false, false, false, false),
+        AdminCmdType::CompactLog => AdminCmdEpochState::new(false, false, false, false),
+        AdminCmdType::ComputeHash => AdminCmdEpochState::new(false, false, false, false),
+        AdminCmdType::VerifyHash => AdminCmdEpochState::new(false, false, false, false),
         // Change peer
+<<<<<<< HEAD
         (AdminCmdType::ChangePeer, AdminCmdEpochState::new(false, true, false, true)),
+=======
+        AdminCmdType::ChangePeer => AdminCmdEpochState::new(false, true, false, true),
+        AdminCmdType::ChangePeerV2 => AdminCmdEpochState::new(false, true, false, true),
+>>>>>>> 48c69157c... raftstore: faster lookup for admin epoch checker (#10081)
         // Split
-        (AdminCmdType::Split, AdminCmdEpochState::new(true, true, true, false)),
-        (AdminCmdType::BatchSplit, AdminCmdEpochState::new(true, true, true, false)),
+        AdminCmdType::Split => AdminCmdEpochState::new(true, true, true, false),
+        AdminCmdType::BatchSplit => AdminCmdEpochState::new(true, true, true, false),
         // Merge
-        (AdminCmdType::PrepareMerge, AdminCmdEpochState::new(true, true, true, true)),
-        (AdminCmdType::CommitMerge, AdminCmdEpochState::new(true, true, true, false)),
-        (AdminCmdType::RollbackMerge, AdminCmdEpochState::new(true, true, true, false)),
+        AdminCmdType::PrepareMerge => AdminCmdEpochState::new(true, true, true, true),
+        AdminCmdType::CommitMerge => AdminCmdEpochState::new(true, true, true, false),
+        AdminCmdType::RollbackMerge => AdminCmdEpochState::new(true, true, true, false),
         // Transfer leader
-        (AdminCmdType::TransferLeader, AdminCmdEpochState::new(true, true, false, false)),
-    ].iter().copied().collect();
+        AdminCmdType::TransferLeader => AdminCmdEpochState::new(true, true, false, false),
+    }
 }
 
 /// WARNING: `NORMAL_REQ_CHECK_VER` and `NORMAL_REQ_CHECK_CONF_VER` **MUST NOT** be changed.
-/// The reason is the same as `ADMIN_CMD_EPOCH_MAP`.
+/// The reason is the same as `admin_cmd_epoch_lookup`.
 pub static NORMAL_REQ_CHECK_VER: bool = true;
 pub static NORMAL_REQ_CHECK_CONF_VER: bool = false;
 
@@ -232,9 +244,7 @@ pub fn check_region_epoch(
         // for get/set/delete, we don't care conf_version.
         (NORMAL_REQ_CHECK_VER, NORMAL_REQ_CHECK_CONF_VER)
     } else {
-        let epoch_state = *ADMIN_CMD_EPOCH_MAP
-            .get(&req.get_admin_request().get_cmd_type())
-            .unwrap();
+        let epoch_state = admin_cmd_epoch_lookup(req.get_admin_request().get_cmd_type());
         (epoch_state.check_ver, epoch_state.check_conf_ver)
     };
 
@@ -1330,11 +1340,76 @@ mod tests {
     }
 
     #[test]
+<<<<<<< HEAD
     fn test_admin_cmd_epoch_map_include_all_cmd_type() {
         #[cfg(feature = "protobuf-codec")]
         use protobuf::ProtobufEnum;
         for cmd_type in AdminCmdType::values() {
             assert!(ADMIN_CMD_EPOCH_MAP.contains_key(cmd_type));
         }
+=======
+    fn test_is_region_initialized() {
+        let mut region = metapb::Region::default();
+        assert!(!is_region_initialized(&region));
+        let peers = vec![new_peer(1, 2)];
+        region.set_peers(peers.into());
+        assert!(is_region_initialized(&region));
+    }
+
+    #[test]
+    fn test_region_read_progress() {
+        // Return the number of the pending (index, ts) item
+        fn pending_items_num(rrp: &RegionReadProgress) -> usize {
+            rrp.core.lock().unwrap().pending_items.len()
+        }
+
+        let cap = 10;
+        let rrp = RegionReadProgress::new(10, cap);
+        for i in 1..=20 {
+            rrp.update_safe_ts(i, i);
+        }
+        // `safe_ts` update according to its `applied_index`
+        assert_eq!(rrp.safe_ts(), 10);
+        assert_eq!(pending_items_num(&rrp), 10);
+
+        rrp.update_applied(20);
+        assert_eq!(rrp.safe_ts(), 20);
+        assert_eq!(pending_items_num(&rrp), 0);
+
+        for i in 100..200 {
+            rrp.update_safe_ts(i, i);
+        }
+        assert_eq!(rrp.safe_ts(), 20);
+        // the number of pending item should not exceed `cap`
+        assert!(pending_items_num(&rrp) <= cap);
+
+        // `applied_index` large than all pending items will clear all pending items
+        rrp.update_applied(200);
+        assert_eq!(rrp.safe_ts(), 199);
+        assert_eq!(pending_items_num(&rrp), 0);
+
+        // pending item can be updated instead of adding a new one
+        rrp.update_safe_ts(300, 300);
+        assert_eq!(pending_items_num(&rrp), 1);
+        rrp.update_safe_ts(200, 400);
+        assert_eq!(pending_items_num(&rrp), 1);
+        rrp.update_safe_ts(300, 500);
+        assert_eq!(pending_items_num(&rrp), 1);
+        rrp.update_safe_ts(301, 600);
+        assert_eq!(pending_items_num(&rrp), 2);
+        // `safe_ts` will update to 500 instead of 300
+        rrp.update_applied(300);
+        assert_eq!(rrp.safe_ts(), 500);
+        rrp.update_applied(301);
+        assert_eq!(rrp.safe_ts(), 600);
+        assert_eq!(pending_items_num(&rrp), 0);
+
+        // stale item will be ignored
+        rrp.update_safe_ts(300, 500);
+        rrp.update_safe_ts(301, 600);
+        rrp.update_safe_ts(400, 0);
+        rrp.update_safe_ts(0, 700);
+        assert_eq!(pending_items_num(&rrp), 0);
+>>>>>>> 48c69157c... raftstore: faster lookup for admin epoch checker (#10081)
     }
 }

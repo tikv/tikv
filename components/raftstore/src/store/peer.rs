@@ -36,8 +36,19 @@ use uuid::Uuid;
 use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
+<<<<<<< HEAD
 use crate::store::fsm::{
     apply, Apply, ApplyMetrics, ApplyTask, CollectedReady, GroupState, Proposal, RegionProposal,
+=======
+use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, CollectedReady, Proposal};
+use crate::store::hibernate_state::GroupState;
+use crate::store::msg::RaftCommand;
+use crate::store::util::{admin_cmd_epoch_lookup, RegionReadProgress};
+use crate::store::worker::{HeartbeatTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
+use crate::store::{
+    Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse,
+    SplitCheckTask,
+>>>>>>> 48c69157c... raftstore: faster lookup for admin epoch checker (#10081)
 };
 use crate::store::worker::{HeartbeatTask, ReadDelegate, ReadProgress, RegionTask};
 use crate::store::{Callback, Config, PdTask, ReadResponse, RegionSnapshot, SplitCheckTask};
@@ -58,8 +69,13 @@ use super::peer_storage::{
 use super::read_queue::{ReadIndexQueue, ReadIndexRequest};
 use super::transport::Transport;
 use super::util::{
+<<<<<<< HEAD
     self, check_region_epoch, is_initial_msg, AdminCmdEpochState, Lease, LeaseState,
     ADMIN_CMD_EPOCH_MAP, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
+=======
+    self, check_region_epoch, is_initial_msg, AdminCmdEpochState, ChangePeerI, ConfChangeKind,
+    Lease, LeaseState, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
+>>>>>>> 48c69157c... raftstore: faster lookup for admin epoch checker (#10081)
 };
 use super::DestroyPeerJob;
 
@@ -184,8 +200,13 @@ impl ProposedAdminCmd {
     }
 }
 
+<<<<<<< HEAD
 struct CmdEpochChecker {
     // Although it's a deque, because of the characteristics of the settings from `ADMIN_CMD_EPOCH_MAP`,
+=======
+struct CmdEpochChecker<S: Snapshot> {
+    // Although it's a deque, because of the characteristics of the settings from `admin_cmd_epoch_lookup`,
+>>>>>>> 48c69157c... raftstore: faster lookup for admin epoch checker (#10081)
     // the max size of admin cmd is 2, i.e. split/merge and change peer.
     proposed_admin_cmd: VecDeque<ProposedAdminCmd>,
     term: u64,
@@ -223,8 +244,7 @@ impl CmdEpochChecker {
             (NORMAL_REQ_CHECK_VER, NORMAL_REQ_CHECK_CONF_VER)
         } else {
             let cmd_type = req.get_admin_request().get_cmd_type();
-            // Due to `test_admin_cmd_epoch_map_include_all_cmd_type`, using unwrap is ok.
-            let epoch_state = *ADMIN_CMD_EPOCH_MAP.get(&cmd_type).unwrap();
+            let epoch_state = admin_cmd_epoch_lookup(cmd_type);
             (epoch_state.check_ver, epoch_state.check_conf_ver)
         };
         self.last_conflict_index(check_ver, check_conf_ver)
@@ -232,11 +252,19 @@ impl CmdEpochChecker {
 
     pub fn post_propose(&mut self, cmd_type: AdminCmdType, index: u64, term: u64) {
         self.maybe_update_term(term);
+<<<<<<< HEAD
         // Due to `test_admin_cmd_epoch_map_include_all_cmd_type`, using unwrap is ok.
         let epoch_state = *ADMIN_CMD_EPOCH_MAP.get(&cmd_type).unwrap();
         assert!(self
             .last_conflict_index(epoch_state.check_ver, epoch_state.check_conf_ver)
             .is_none());
+=======
+        let epoch_state = admin_cmd_epoch_lookup(cmd_type);
+        assert!(
+            self.last_conflict_index(epoch_state.check_ver, epoch_state.check_conf_ver)
+                .is_none()
+        );
+>>>>>>> 48c69157c... raftstore: faster lookup for admin epoch checker (#10081)
 
         if epoch_state.change_conf_ver || epoch_state.change_ver {
             if let Some(cmd) = self.proposed_admin_cmd.back() {
