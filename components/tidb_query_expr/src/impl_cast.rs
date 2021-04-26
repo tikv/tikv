@@ -995,9 +995,15 @@ fn cast_bytes_like_as_duration(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
     val: &[u8],
+    overflow_as_null: bool,
 ) -> Result<Option<Duration>> {
     let val = std::str::from_utf8(val).map_err(Error::Encoding)?;
-    let result = Duration::parse(ctx, val, extra.ret_field_type.get_decimal() as i8);
+    let result = Duration::parse_consider_overflow(
+        ctx,
+        val,
+        extra.ret_field_type.get_decimal() as i8,
+        overflow_as_null,
+    );
     match result {
         Ok(dur) => Ok(Some(dur)),
         Err(e) => match e.code() {
@@ -1022,7 +1028,7 @@ pub fn cast_real_as_duration(
     val: Option<&Real>,
 ) -> Result<Option<Duration>> {
     let v = skip_none!(val).into_inner().to_string();
-    cast_bytes_like_as_duration(ctx, extra, v.as_bytes())
+    cast_bytes_like_as_duration(ctx, extra, v.as_bytes(), true)
 }
 
 #[rpn_fn(nullable, capture = [ctx, extra])]
@@ -1033,7 +1039,7 @@ pub fn cast_bytes_as_duration(
     val: Option<BytesRef>,
 ) -> Result<Option<Duration>> {
     let v = skip_none!(val);
-    cast_bytes_like_as_duration(ctx, extra, v)
+    cast_bytes_like_as_duration(ctx, extra, v, false)
 }
 
 #[rpn_fn(nullable, capture = [ctx, extra])]
@@ -1044,7 +1050,7 @@ pub fn cast_decimal_as_duration(
     val: Option<&Decimal>,
 ) -> Result<Option<Duration>> {
     let v = skip_none!(val).to_string();
-    cast_bytes_like_as_duration(ctx, extra, v.as_bytes())
+    cast_bytes_like_as_duration(ctx, extra, v.as_bytes(), true)
 }
 
 #[rpn_fn(nullable, capture = [ctx, extra])]
@@ -1055,7 +1061,7 @@ pub fn cast_json_as_duration(
     val: Option<JsonRef>,
 ) -> Result<Option<Duration>> {
     let v = skip_none!(val).unquote()?;
-    cast_bytes_like_as_duration(ctx, extra, v.as_bytes())
+    cast_bytes_like_as_duration(ctx, extra, v.as_bytes(), false)
 }
 
 #[rpn_fn(nullable, capture = [ctx, extra])]
@@ -6060,6 +6066,98 @@ mod tests {
         }
     }
 
+    fn test_as_duration_overflow_helper<T: Clone, FnCast>(
+        func_name: &str,
+        values: Vec<T>,
+        func_val_cast: impl Fn(T) -> String,
+        func_cast: FnCast,
+        expect_max: bool,
+    ) where
+        FnCast: Fn(&mut EvalContext, &RpnFnCallExtra, Option<T>) -> Result<Option<Duration>>,
+    {
+        for val in values {
+            for fsp in MIN_FSP..=MAX_FSP {
+                let mut ctx = CtxConfig {
+                    overflow_as_warning: true,
+                    truncate_as_warning: true,
+                    ..CtxConfig::default()
+                }
+                .into();
+                let rft = FieldTypeConfig {
+                    decimal: fsp as isize,
+                    ..FieldTypeConfig::default()
+                }
+                .into();
+                let extra = make_extra(&rft);
+
+                let result = func_cast(&mut ctx, &extra, Some(val.clone()));
+                let result_str = result.as_ref().map(|x| x.map(|x| x.to_string()));
+                match result {
+                    Ok(v) => match v {
+                        Some(dur) => {
+                            if expect_max {
+                                let max_val_str: &str;
+                                if dur.is_neg() {
+                                    max_val_str = "-838:59:59";
+                                } else {
+                                    max_val_str = "838:59:59";
+                                }
+                                let max_expect = Duration::parse(&mut ctx, &max_val_str, fsp);
+                                let log = format!(
+                                    "func_name: {}, input: {}, output: {:?}, output_warn: {:?}, expect: {:?}",
+                                    func_name,
+                                    func_val_cast(val.clone()),
+                                    result_str,
+                                    ctx.warnings.warnings,
+                                    max_expect,
+                                );
+                                check_result(
+                                    Some(max_expect.as_ref().unwrap()),
+                                    &result,
+                                    log.as_str(),
+                                );
+                            } else {
+                                let log = format!(
+                                    "func_name: {}, input: {}, output: {:?}, output_warn: {:?}, expect: {:?}",
+                                    func_name,
+                                    func_val_cast(val),
+                                    result_str,
+                                    ctx.warnings.warnings,
+                                    "None",
+                                );
+                                panic!("{}", log.as_str());
+                            }
+                        }
+                        None => {
+                            if expect_max {
+                                let log = format!(
+                                    "func_name: {}, input: {}, output: {:?}, output_warn: {:?}, expect: {:?}",
+                                    func_name,
+                                    func_val_cast(val),
+                                    result_str,
+                                    ctx.warnings.warnings,
+                                    "838:59:59 or -838:59:59",
+                                );
+                                panic!("{}", log.as_str());
+                            }
+                        }
+                    },
+                    _ => {
+                        let log = format!(
+                            "func_name: {}, input: {}, output: {:?}, output_warn: {:?}, expect: {}",
+                            func_name,
+                            func_val_cast(val),
+                            result_str,
+                            ctx.warnings.warnings,
+                            "Not Error",
+                        );
+                        panic!("{}", log);
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn test_real_as_duration() {
         test_none_with_ctx_and_extra(cast_real_as_duration);
@@ -6084,6 +6182,19 @@ mod tests {
                 cast_real_as_duration(ctx, extra, val.as_ref())
             },
             "cast_real_as_duration",
+        );
+
+        let values: Vec<f64> = vec![99999999.0, 9995959.0, -9995959.0];
+
+        test_as_duration_overflow_helper(
+            "cast_real_as_duration",
+            values,
+            |x| x.to_string(),
+            |ctx, extra, val| {
+                let val = val.map(|x| Real::new(x).unwrap());
+                cast_real_as_duration(ctx, extra, val.as_ref())
+            },
+            false,
         )
     }
 
@@ -6105,6 +6216,16 @@ mod tests {
             cast_bytes_as_duration,
             "cast_bytes_as_duration",
         );
+
+        let values: Vec<BytesRef> = vec![b"999:59:59.67", b"-999:59:59.67"];
+
+        test_as_duration_overflow_helper(
+            "cast_bytes_as_duration",
+            values,
+            |x| String::from_utf8_lossy(x).to_string(),
+            cast_bytes_as_duration,
+            true,
+        )
     }
 
     #[test]
@@ -6163,6 +6284,19 @@ mod tests {
             cast_decimal_as_duration,
             "cast_decimal_as_duration",
         );
+
+        let values = vec![
+            Decimal::from_bytes(b"9995959").unwrap().unwrap(),
+            Decimal::from_bytes(b"-9995959").unwrap().unwrap(),
+        ];
+        let values_ref: Vec<&Decimal> = values.iter().collect();
+        test_as_duration_overflow_helper(
+            "cast_decimal_as_duration",
+            values_ref,
+            |x| x.to_string(),
+            cast_decimal_as_duration,
+            false,
+        )
     }
 
     #[test]

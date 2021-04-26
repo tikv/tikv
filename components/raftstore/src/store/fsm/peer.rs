@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::iter::Iterator;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, u64};
@@ -1897,8 +1897,11 @@ where
         meta.pending_snapshot_regions
             .retain(|r| self.fsm.region_id() != r.get_id());
 
-        // Set the `safe_ts` to zero to reject incoming stale read request
-        self.fsm.peer.safe_ts.store(0, Ordering::Release);
+        // Remove `read_progress` and call `clear` to set the `safe_ts` to zero to reject
+        // incoming stale read request
+        meta.region_read_progress.remove(&region_id);
+        self.fsm.peer.read_progress.clear();
+
         // Destroy read delegates.
         meta.readers.remove(&region_id);
 
@@ -1994,7 +1997,6 @@ where
             }
         }
         meta.leaders.remove(&region_id);
-        meta.peer_properties.remove(&region_id);
     }
 
     // Update some region infos
@@ -2366,7 +2368,8 @@ where
             assert!(not_exist, "[region {}] should not exist", new_region_id);
             meta.readers
                 .insert(new_region_id, ReadDelegate::from_peer(new_peer.get_peer()));
-            meta.peer_properties.insert(new_region_id, Arc::default());
+            meta.region_read_progress
+                .insert(new_region_id, new_peer.peer.read_progress.clone());
             if last_region_id == new_region_id {
                 // To prevent from big region, the right region needs run split
                 // check again after split.

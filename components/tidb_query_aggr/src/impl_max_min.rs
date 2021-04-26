@@ -5,9 +5,10 @@ use std::convert::TryFrom;
 
 use tidb_query_codegen::AggrFunction;
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::collation::*;
+use tidb_query_datatype::codec::collation::Collator;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::EvalContext;
+use tidb_query_datatype::match_template_collator;
 use tidb_query_datatype::{Collation, EvalType, FieldTypeAccessor};
 use tidb_query_expr::RpnExpression;
 use tipb::{Expr, ExprType, FieldType};

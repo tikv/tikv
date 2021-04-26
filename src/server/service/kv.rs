@@ -1034,11 +1034,27 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
 
     fn get_store_safe_ts(
         &mut self,
-        _: RpcContext<'_>,
-        _: StoreSafeTsRequest,
-        _: UnarySink<StoreSafeTsResponse>,
+        ctx: RpcContext<'_>,
+        mut request: StoreSafeTsRequest,
+        sink: UnarySink<StoreSafeTsResponse>,
     ) {
-        unimplemented!()
+        let key_range = request.take_key_range();
+        let (cb, resp) = paired_future_callback();
+        let ch = self.ch.clone();
+        let task = async move {
+            ch.send_store_msg(StoreMsg::GetStoreSafeTS { key_range, cb })?;
+            let store_safe_ts = resp.await?;
+            let mut resp = StoreSafeTsResponse::default();
+            resp.set_safe_ts(store_safe_ts);
+            sink.success(resp).await?;
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            warn!("call GetStoreSafeTS failed"; "err" => ?e);
+        })
+        .map(|_| ());
+
+        ctx.spawn(task);
     }
 }
 
