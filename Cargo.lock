@@ -4873,6 +4873,7 @@ dependencies = [
  "raft",
  "raftstore",
  "rand 0.7.3",
+ "resolved_ts",
  "security",
  "slog",
  "slog-global",

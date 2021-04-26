@@ -109,6 +109,7 @@ struct ServerMeta {
     raw_router: RaftRouter<RocksEngine, RocksEngine>,
     raw_apply_router: ApplyRouter<RocksEngine>,
     gc_worker: GcWorker<RaftKv<RocksEngine, SimulateStoreTransport>, SimulateStoreTransport>,
+    resolved_ts_worker: LazyWorker<resolved_ts::Task<RocksSnapshot>>,
 }
 
 type PendingServices = Vec<Box<dyn Fn() -> Service>>;
@@ -269,6 +270,25 @@ impl Simulator for ServerCluster {
         gc_worker
             .start_observe_lock_apply(&mut coprocessor_host, concurrency_manager.clone())
             .unwrap();
+
+        // Resolved TS
+        let mut resolved_ts_worker = LazyWorker::new("resolved-ts");
+        let resolved_ts_scheduler = resolved_ts_worker.scheduler();
+        let resolved_ts_ob = resolved_ts::Observer::new(resolved_ts_scheduler.clone());
+        resolved_ts_ob.register_to(&mut coprocessor_host);
+        // Start resolved ts worker
+        let resolved_ts_endpoint = resolved_ts::Endpoint::new(
+            &cfg.cdc,
+            resolved_ts_scheduler,
+            raft_router.clone(),
+            store_meta.clone(),
+            self.pd_client.clone(),
+            concurrency_manager.clone(),
+            self.env.clone(),
+            self.security_mgr.clone(),
+            resolved_ts::DummySinker::new(),
+        );
+        resolved_ts_worker.start(resolved_ts_endpoint);
 
         let mut lock_mgr = LockManager::new(cfg.pessimistic_txn.pipelined);
         let store = create_raft_storage(
@@ -448,6 +468,7 @@ impl Simulator for ServerCluster {
                 sim_router,
                 sim_trans: simulate_trans,
                 gc_worker,
+                resolved_ts_worker,
             },
         );
         self.addrs.insert(node_id, format!("{}", addr));
@@ -469,6 +490,7 @@ impl Simulator for ServerCluster {
         if let Some(mut meta) = self.metas.remove(&node_id) {
             meta.server.stop().unwrap();
             meta.node.stop();
+            meta.resolved_ts_worker.stop_worker();
         }
     }
 
