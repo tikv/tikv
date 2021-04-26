@@ -183,13 +183,6 @@ impl<'a> ToString for EnumRef<'a> {
 
 pub trait EnumEncoder: NumberEncoder {
     #[inline]
-    fn write_enum(&mut self, data: EnumRef) -> Result<()> {
-        self.write_u64_le(*data.value)?;
-        self.write_bytes(data.name)?;
-        Ok(())
-    }
-
-    #[inline]
     fn write_enum_uint(&mut self, data: EnumRef) -> Result<()> {
         self.write_u64(*data.value)?;
         Ok(())
@@ -420,7 +413,8 @@ mod tests {
 
         let mut buf = Vec::new();
         for datum in &data {
-            buf.write_enum(*datum).expect("write_enum");
+            buf.write_enum_to_chunk(*datum.value, datum.name)
+                .expect("write_enum");
         }
         assert_eq!(buf.as_slice(), res);
     }
