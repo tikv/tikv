@@ -1121,12 +1121,14 @@ where
         cmd_resp::bind_term(&mut resp, self.term);
         let cmd_cb = self.find_pending(index, term, is_conf_change_cmd(&cmd));
         let cmd = Arc::new(Cmd::new(index, cmd, resp));
-        apply_ctx.host.on_apply_cmd(
-            self.observe_cmd.cdc_id,
-            self.observe_cmd.rts_id,
-            self.region_id(),
-            cmd.clone(),
-        );
+        if self.observe_cmd.cdc_id.is_valid() || self.observe_cmd.rts_id.is_valid() {
+            apply_ctx.host.on_apply_cmd(
+                self.observe_cmd.cdc_id,
+                self.observe_cmd.rts_id,
+                self.region_id(),
+                cmd.clone(),
+            );
+        }
 
         apply_ctx.cbs.last_mut().unwrap().push(cmd_cb, cmd);
 
@@ -2883,7 +2885,7 @@ impl Debug for GenSnapTask {
     }
 }
 
-static OBSERVE_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
+static OBSERVE_ID_ALLOC: AtomicUsize = AtomicUsize::new(1);
 
 /// A unique identifier for checking stale observed commands.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -2892,6 +2894,10 @@ pub struct ObserveID(usize);
 impl ObserveID {
     pub fn new() -> ObserveID {
         ObserveID(OBSERVE_ID_ALLOC.fetch_add(1, Ordering::SeqCst))
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.0 != 0
     }
 }
 
