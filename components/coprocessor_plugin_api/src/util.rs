@@ -35,7 +35,7 @@ pub struct BuildInfo {
 impl BuildInfo {
     pub const fn get() -> Self {
         Self {
-            api_version: env!("API_VERSION"),
+            api_version: env!("CARGO_PKG_VERSION"),
             target: env!("TARGET"),
             rustc: env!("RUSTC_VERSION"),
         }
