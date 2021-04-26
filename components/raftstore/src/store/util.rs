@@ -7,12 +7,10 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 use std::{fmt, u64};
 
-use collections::HashMap;
 use kvproto::kvrpcpb::KeyRange;
 use kvproto::metapb::{self, PeerRole};
 use kvproto::raft_cmdpb::{AdminCmdType, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest};
 use kvproto::raft_serverpb::RaftMessage;
-use lazy_static::lazy_static;
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
 use raft::INVALID_INDEX;
@@ -199,36 +197,36 @@ impl AdminCmdEpochState {
     }
 }
 
-lazy_static! {
-    /// WARNING: the existing settings in `ADMIN_CMD_EPOCH_MAP` **MUST NOT** be changed!!!
-    /// Changing any admin cmd's `AdminCmdEpochState` or the epoch-change behavior during applying
-    /// will break upgrade compatibility and correctness dependency of `CmdEpochChecker`.
-    /// Please remember it is very difficult to fix the issues arising from not following this rule.
-    ///
-    /// If you really want to change an admin cmd behavior, please add a new admin cmd and **do not**
-    /// delete the old one.
-    pub static ref ADMIN_CMD_EPOCH_MAP: HashMap<AdminCmdType, AdminCmdEpochState> = [
-        (AdminCmdType::InvalidAdmin, AdminCmdEpochState::new(false, false, false, false)),
-        (AdminCmdType::CompactLog, AdminCmdEpochState::new(false, false, false, false)),
-        (AdminCmdType::ComputeHash, AdminCmdEpochState::new(false, false, false, false)),
-        (AdminCmdType::VerifyHash, AdminCmdEpochState::new(false, false, false, false)),
+/// WARNING: the existing settings below **MUST NOT** be changed!!!
+/// Changing any admin cmd's `AdminCmdEpochState` or the epoch-change behavior during applying
+/// will break upgrade compatibility and correctness dependency of `CmdEpochChecker`.
+/// Please remember it is very difficult to fix the issues arising from not following this rule.
+///
+/// If you really want to change an admin cmd behavior, please add a new admin cmd and **do not**
+/// delete the old one.
+pub fn admin_cmd_epoch_lookup(admin_cmp_type: AdminCmdType) -> AdminCmdEpochState {
+    match admin_cmp_type {
+        AdminCmdType::InvalidAdmin => AdminCmdEpochState::new(false, false, false, false),
+        AdminCmdType::CompactLog => AdminCmdEpochState::new(false, false, false, false),
+        AdminCmdType::ComputeHash => AdminCmdEpochState::new(false, false, false, false),
+        AdminCmdType::VerifyHash => AdminCmdEpochState::new(false, false, false, false),
         // Change peer
-        (AdminCmdType::ChangePeer, AdminCmdEpochState::new(false, true, false, true)),
-        (AdminCmdType::ChangePeerV2, AdminCmdEpochState::new(false, true, false, true)),
+        AdminCmdType::ChangePeer => AdminCmdEpochState::new(false, true, false, true),
+        AdminCmdType::ChangePeerV2 => AdminCmdEpochState::new(false, true, false, true),
         // Split
-        (AdminCmdType::Split, AdminCmdEpochState::new(true, true, true, false)),
-        (AdminCmdType::BatchSplit, AdminCmdEpochState::new(true, true, true, false)),
+        AdminCmdType::Split => AdminCmdEpochState::new(true, true, true, false),
+        AdminCmdType::BatchSplit => AdminCmdEpochState::new(true, true, true, false),
         // Merge
-        (AdminCmdType::PrepareMerge, AdminCmdEpochState::new(true, true, true, true)),
-        (AdminCmdType::CommitMerge, AdminCmdEpochState::new(true, true, true, false)),
-        (AdminCmdType::RollbackMerge, AdminCmdEpochState::new(true, true, true, false)),
+        AdminCmdType::PrepareMerge => AdminCmdEpochState::new(true, true, true, true),
+        AdminCmdType::CommitMerge => AdminCmdEpochState::new(true, true, true, false),
+        AdminCmdType::RollbackMerge => AdminCmdEpochState::new(true, true, true, false),
         // Transfer leader
-        (AdminCmdType::TransferLeader, AdminCmdEpochState::new(true, true, false, false)),
-    ].iter().copied().collect();
+        AdminCmdType::TransferLeader => AdminCmdEpochState::new(true, true, false, false),
+    }
 }
 
 /// WARNING: `NORMAL_REQ_CHECK_VER` and `NORMAL_REQ_CHECK_CONF_VER` **MUST NOT** be changed.
-/// The reason is the same as `ADMIN_CMD_EPOCH_MAP`.
+/// The reason is the same as `admin_cmd_epoch_lookup`.
 pub static NORMAL_REQ_CHECK_VER: bool = true;
 pub static NORMAL_REQ_CHECK_CONF_VER: bool = false;
 
@@ -241,9 +239,7 @@ pub fn check_region_epoch(
         // for get/set/delete, we don't care conf_version.
         (NORMAL_REQ_CHECK_VER, NORMAL_REQ_CHECK_CONF_VER)
     } else {
-        let epoch_state = *ADMIN_CMD_EPOCH_MAP
-            .get(&req.get_admin_request().get_cmd_type())
-            .unwrap();
+        let epoch_state = admin_cmd_epoch_lookup(req.get_admin_request().get_cmd_type());
         (epoch_state.check_ver, epoch_state.check_conf_ver)
     };
 
@@ -1613,15 +1609,6 @@ mod tests {
         let peers = vec![new_peer(1, 2)];
         region.set_peers(peers.into());
         assert!(is_region_initialized(&region));
-    }
-
-    #[test]
-    fn test_admin_cmd_epoch_map_include_all_cmd_type() {
-        #[cfg(feature = "protobuf-codec")]
-        use protobuf::ProtobufEnum;
-        for cmd_type in AdminCmdType::values() {
-            assert!(ADMIN_CMD_EPOCH_MAP.contains_key(cmd_type));
-        }
     }
 
     #[test]

@@ -59,10 +59,7 @@ use crate::store::peer::Peer;
 use crate::store::peer_storage::{
     self, write_initial_apply_state, write_peer_state, ENTRY_MEM_SIZE,
 };
-use crate::store::util::{
-    check_region_epoch, compare_region_epoch, is_learner, ChangePeerI, ConfChangeKind,
-    KeysInfoFormatter, ADMIN_CMD_EPOCH_MAP,
-};
+use crate::store::util::{check_region_epoch, compare_region_epoch, is_learner, ChangePeerI, ConfChangeKind, KeysInfoFormatter, admin_cmd_epoch_lookup};
 use crate::store::{cmd_resp, util, Config, RegionSnapshot, RegionTask};
 use crate::{Error, Result};
 
@@ -1213,8 +1210,8 @@ where
         }
         if let Some(epoch) = origin_epoch {
             let cmd_type = req.get_admin_request().get_cmd_type();
-            let epoch_state = *ADMIN_CMD_EPOCH_MAP.get(&cmd_type).unwrap();
-            // The chenge-epoch behavior **MUST BE** equal to the settings in `ADMIN_CMD_EPOCH_MAP`
+            let epoch_state = admin_cmd_epoch_lookup(cmd_type);
+            // The chenge-epoch behavior **MUST BE** equal to the settings in `admin_cmd_epoch_lookup`
             if (epoch_state.change_ver
                 && epoch.get_version() == self.region.get_region_epoch().get_version())
                 || (epoch_state.change_conf_ver
