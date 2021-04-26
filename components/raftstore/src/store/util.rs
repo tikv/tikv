@@ -202,7 +202,7 @@ impl AdminCmdEpochState {
 /// will break upgrade compatibility and correctness dependency of `CmdEpochChecker`.
 /// Please remember it is very difficult to fix the issues arising from not following this rule.
 ///
-/// If you really want to change an admin cmd behavior, please add a new admin cmd and **do not**
+/// If you really want to change an admin cmd behavior, please add a new admin cmd and **DO NOT**
 /// delete the old one.
 pub fn admin_cmd_epoch_lookup(admin_cmp_type: AdminCmdType) -> AdminCmdEpochState {
     match admin_cmp_type {
