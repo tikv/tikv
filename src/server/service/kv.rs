@@ -71,8 +71,6 @@ pub struct Service<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: Lock
 
     grpc_thread_load: Arc<ThreadLoad>,
 
-    readpool_normal_thread_load: Arc<ThreadLoad>,
-
     proxy: Proxy,
 }
 
@@ -90,7 +88,6 @@ impl<T: RaftStoreRouter<RocksEngine> + Clone + 'static, E: Engine + Clone, L: Lo
             snap_scheduler: self.snap_scheduler.clone(),
             enable_req_batch: self.enable_req_batch,
             grpc_thread_load: self.grpc_thread_load.clone(),
-            readpool_normal_thread_load: self.readpool_normal_thread_load.clone(),
             proxy: self.proxy.clone(),
         }
     }
@@ -107,7 +104,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
         grpc_thread_load: Arc<ThreadLoad>,
-        readpool_normal_thread_load: Arc<ThreadLoad>,
         enable_req_batch: bool,
         proxy: Proxy,
     ) -> Self {
@@ -121,7 +117,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
             snap_scheduler,
             enable_req_batch,
             grpc_thread_load,
-            readpool_normal_thread_load,
             proxy,
         }
     }
@@ -909,11 +904,12 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let request_handler = stream.try_for_each(move |mut req| {
             let request_ids = req.take_request_ids();
             let requests: Vec<_> = req.take_requests().into();
-            let mut batcher = if enable_req_batch && requests.len() > 2 {
-                Some(ReqBatcher::new())
-            } else {
-                None
-            };
+            let mut batcher =
+                if enable_req_batch && storage.is_readpool_busy() && requests.len() > 2 {
+                    Some(ReqBatcher::new())
+                } else {
+                    None
+                };
             GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
             for (id, req) in request_ids.into_iter().zip(requests) {
                 handle_batch_commands_request(

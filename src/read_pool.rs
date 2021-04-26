@@ -25,6 +25,7 @@ pub enum ReadPool {
         pool: yatp::ThreadPool<TaskCell>,
         running_tasks: IntGauge,
         max_tasks: usize,
+        pool_size: usize,
     },
 }
 
@@ -44,10 +45,12 @@ impl ReadPool {
                 pool,
                 running_tasks,
                 max_tasks,
+                pool_size,
             } => ReadPoolHandle::Yatp {
                 remote: pool.remote().clone(),
                 running_tasks: running_tasks.clone(),
                 max_tasks: *max_tasks,
+                pool_size: *pool_size,
             },
         }
     }
@@ -64,6 +67,7 @@ pub enum ReadPoolHandle {
         remote: Remote<TaskCell>,
         running_tasks: IntGauge,
         max_tasks: usize,
+        pool_size: usize,
     },
 }
 
@@ -90,6 +94,7 @@ impl ReadPoolHandle {
                 remote,
                 running_tasks,
                 max_tasks,
+                ..
             } => {
                 let running_tasks = running_tasks.clone();
                 // Note that the running task number limit is not strict.
@@ -100,6 +105,7 @@ impl ReadPoolHandle {
                     return Err(ReadPoolError::UnifiedReadPoolFull);
                 }
 
+                running_tasks.inc();
                 let fixed_level = match priority {
                     CommandPri::High => Some(0),
                     CommandPri::Normal => None,
@@ -108,7 +114,6 @@ impl ReadPoolHandle {
                 let extras = Extras::new_multilevel(task_id, fixed_level);
                 let task_cell = TaskCell::new(
                     async move {
-                        running_tasks.inc();
                         f.await;
                         running_tasks.dec();
                     },
@@ -142,6 +147,19 @@ impl ReadPoolHandle {
         async move {
             res?;
             rx.map_err(ReadPoolError::from).await
+        }
+    }
+
+    pub fn is_busy(&self) -> bool {
+        match self {
+            ReadPoolHandle::FuturePools {
+                read_pool_normal, ..
+            } => read_pool_normal.get_running_task_count() > read_pool_normal.get_pool_size(),
+            ReadPoolHandle::Yatp {
+                running_tasks,
+                pool_size,
+                ..
+            } => running_tasks.get() as usize > *pool_size,
         }
     }
 }
@@ -208,6 +226,7 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
         max_tasks: config
             .max_tasks_per_worker
             .saturating_mul(config.max_thread_count),
+        pool_size: config.max_thread_count,
     }
 }
 

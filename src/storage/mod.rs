@@ -247,6 +247,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         self.engine.release_snapshot();
     }
 
+    pub fn is_readpool_busy(&self) -> bool {
+        self.read_pool.is_busy()
+    }
+
     #[inline]
     fn with_tls_engine<F, R>(f: F) -> R
     where
