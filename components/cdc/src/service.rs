@@ -382,16 +382,25 @@ impl ChangeData for Service {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use futures03::executor::block_on;
+    use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder, WriteFlags};
     #[cfg(feature = "prost-codec")]
     use kvproto::cdcpb::event::{
         Entries as EventEntries, Event as Event_oneof_event, Row as EventRow,
     };
-    use kvproto::cdcpb::{ChangeDataEvent, Event, ResolvedTs};
+    use kvproto::cdcpb::{
+        create_change_data, ChangeDataClient, ChangeDataEvent, Event, ResolvedTs,
+    };
     #[cfg(not(feature = "prost-codec"))]
     use kvproto::cdcpb::{EventEntries, EventRow, Event_oneof_event};
 
-    use crate::channel::CDC_EVENT_MAX_BATCH_SIZE;
+    use crate::channel::{poll_timeout, recv_timeout, CDC_EVENT_MAX_BATCH_SIZE};
     use crate::service::{CdcEvent, EventBatcher, CDC_MAX_RESP_SIZE};
+
+    use super::*;
 
     #[test]
     fn test_event_batcher() {
@@ -470,5 +479,82 @@ mod tests {
                 vec![CdcEvent::Event(event_big)],
             ],
         );
+    }
+
+    fn new_rpc_suite(
+        memory_quota: MemoryQuota,
+    ) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
+        let env = Arc::new(EnvBuilder::new().build());
+        let (scheduler, rx) = dummy_scheduler();
+        let cdc_service = Service::new(scheduler, memory_quota);
+        let builder =
+            ServerBuilder::new(env.clone()).register_service(create_change_data(cdc_service));
+        let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
+        server.start();
+        let (_, port) = server.bind_addrs().next().unwrap();
+        let addr = format!("127.0.0.1:{}", port);
+        let channel = ChannelBuilder::new(env).connect(&addr);
+        let client = ChangeDataClient::new(channel);
+        (server, client, rx)
+    }
+
+    #[test]
+    fn test_flow_control() {
+        // Disable CDC sink memory quota.
+        let memory_quota = MemoryQuota::new(usize::MAX);
+        let (_server, client, mut task_rx) = new_rpc_suite(memory_quota);
+        // Create a event feed stream.
+        let (mut tx, mut rx) = client.event_feed().unwrap();
+        let mut req = ChangeDataRequest {
+            region_id: 1,
+            ..Default::default()
+        };
+        req.mut_header().set_ticdc_version("4.0.7".into());
+        block_on(tx.send((req, WriteFlags::default()))).unwrap();
+        let task = task_rx.recv_timeout(Duration::from_millis(100)).unwrap();
+        let conn = if let Some(Task::OpenConn { conn }) = task {
+            conn
+        } else {
+            panic!("expect to be Task::OpenConn");
+        };
+        let sink = conn.get_sink().clone();
+        // Approximate 1 KB.
+        let mut rts = ResolvedTs::default();
+        rts.set_regions(vec![u64::MAX; 128]);
+
+        let send = || {
+            let rts_ = rts.clone();
+            let mut sink_ = sink.clone();
+            Box::pin(async move { sink_.send_all(vec![CdcEvent::ResolvedTs(rts_)]).await })
+        };
+        let must_fill_window = || {
+            let mut window_size = 0;
+            loop {
+                if poll_timeout(&mut send(), Duration::from_millis(100)).is_err() {
+                    // Window is filled and flow control in sink is triggered.
+                    break;
+                }
+                window_size += 1;
+                // gRPC window size should not be larger than 1GB.
+                assert!(window_size <= 1024 * 1024);
+            }
+            window_size
+        };
+
+        // Fill gRPC window.
+        let window_size = must_fill_window();
+        assert_ne!(window_size, 0);
+        // After receiving a message, sink should be able to send again.
+        recv_timeout(&mut rx, Duration::from_millis(100))
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        poll_timeout(&mut send(), Duration::from_millis(100))
+            .unwrap()
+            .unwrap();
+        // gRPC client may update window size after receiving a message,
+        // though server should not be able to send messages infinitely.
+        let window_size = must_fill_window();
+        assert_ne!(window_size, 0);
     }
 }
