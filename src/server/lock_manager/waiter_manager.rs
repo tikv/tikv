@@ -3,7 +3,7 @@
 use super::config::Config;
 use super::deadlock::Scheduler as DetectorScheduler;
 use super::metrics::*;
-use crate::storage::lock_manager::{Lock, WaitTimeout};
+use crate::storage::lock_manager::{DiagnosticContext, Lock, WaitTimeout};
 use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, TimeStamp};
 use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 use crate::storage::{
@@ -103,7 +103,7 @@ pub enum Task {
         pr: ProcessResult,
         lock: Lock,
         timeout: WaitTimeout,
-        resource_group_tag: Vec<u8>,
+        diag_ctx: DiagnosticContext,
     },
     WakeUp {
         // lock info
@@ -119,7 +119,7 @@ pub enum Task {
         start_ts: TimeStamp,
         lock: Lock,
         deadlock_key_hash: u64,
-        resource_group_tag: Vec<u8>,
+        diag_ctx: DiagnosticContext,
         wait_chain: Vec<WaitForEntry>,
     },
     ChangeConfig {
@@ -141,17 +141,8 @@ impl Debug for Task {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Task::WaitFor {
-                start_ts,
-                lock,
-                resource_group_tag,
-                ..
-            } => {
-                write!(
-                    f,
-                    "txn:{} waiting for {}:{}, resource_group_tag: {:?}",
-                    start_ts, lock.ts, lock.hash, resource_group_tag
-                )
+            Task::WaitFor { start_ts, lock, .. } => {
+                write!(f, "txn:{} waiting for {}:{}", start_ts, lock.ts, lock.hash)
             }
             Task::WakeUp { lock_ts, .. } => write!(f, "waking up txns waiting for {}", lock_ts),
             Task::Dump { .. } => write!(f, "dump"),
@@ -183,7 +174,7 @@ pub(crate) struct Waiter {
     /// it causes deadlock.
     pub(crate) pr: ProcessResult,
     pub(crate) lock: Lock,
-    pub(crate) resource_group_tag: Vec<u8>,
+    pub(crate) diag_ctx: DiagnosticContext,
     delay: Delay,
     _lifetime_timer: HistogramTimer,
 }
@@ -195,7 +186,7 @@ impl Waiter {
         pr: ProcessResult,
         lock: Lock,
         deadline: Instant,
-        resource_group_tag: Vec<u8>,
+        diag_ctx: DiagnosticContext,
     ) -> Self {
         Self {
             start_ts,
@@ -203,7 +194,7 @@ impl Waiter {
             pr,
             lock,
             delay: Delay::new(deadline),
-            resource_group_tag,
+            diag_ctx,
             _lifetime_timer: WAITER_LIFETIME_HISTOGRAM.start_coarse_timer(),
         }
     }
@@ -414,7 +405,7 @@ impl Scheduler {
         pr: ProcessResult,
         lock: Lock,
         timeout: WaitTimeout,
-        resource_group_tag: Vec<u8>,
+        diag_ctx: DiagnosticContext,
     ) {
         self.notify_scheduler(Task::WaitFor {
             start_ts,
@@ -422,7 +413,7 @@ impl Scheduler {
             pr,
             lock,
             timeout,
-            resource_group_tag,
+            diag_ctx,
         });
     }
 
@@ -443,14 +434,14 @@ impl Scheduler {
         txn_ts: TimeStamp,
         lock: Lock,
         deadlock_key_hash: u64,
-        resource_group_tag: Vec<u8>,
+        diag_ctx: DiagnosticContext,
         wait_chain: Vec<WaitForEntry>,
     ) {
         self.notify_scheduler(Task::Deadlock {
             start_ts: txn_ts,
             lock,
             deadlock_key_hash,
-            resource_group_tag,
+            diag_ctx,
             wait_chain,
         });
     }
@@ -528,11 +519,7 @@ impl WaiterManager {
         let duration: Duration = self.wake_up_delay_duration.into();
         let new_timeout = Instant::now() + duration;
         for hash in hashes {
-            let lock = Lock {
-                ts: lock_ts,
-                hash,
-                key: vec![],
-            };
+            let lock = Lock { ts: lock_ts, hash };
             if let Some((mut oldest, others)) = wait_table.remove_oldest_waiter(lock) {
                 // Notify the oldest one immediately.
                 self.detector_scheduler
@@ -565,28 +552,19 @@ impl WaiterManager {
         waiter_ts: TimeStamp,
         lock: Lock,
         deadlock_key_hash: u64,
-        resource_group_tag: Vec<u8>,
+        diag_ctx: DiagnosticContext,
         mut wait_chain: Vec<WaitForEntry>,
     ) {
-        // Avoid moving `lock` to use it later.
-        let querying_lock = Lock {
-            ts: lock.ts,
-            hash: lock.hash,
-            ..Default::default()
-        };
-        if let Some(mut waiter) = self
-            .wait_table
-            .borrow_mut()
-            .remove_waiter(querying_lock, waiter_ts)
-        {
+        if let Some(mut waiter) = self.wait_table.borrow_mut().remove_waiter(lock, waiter_ts) {
             // The `wait_chain` doesn't include the final edge that caused the deadlock, which
-            // may reduce some deadlock RPC size.
+            // may reduce some deadlock RPC size. To pass it to the client, append this edge
+            // to the wait chain.
             let mut last_entry = WaitForEntry::default();
             last_entry.set_txn(waiter_ts.into_inner());
             last_entry.set_wait_for_txn(lock.ts.into_inner());
             last_entry.set_key_hash(lock.hash);
-            last_entry.set_key(lock.key);
-            last_entry.set_resource_group_tag(resource_group_tag);
+            last_entry.set_key(diag_ctx.key);
+            last_entry.set_resource_group_tag(diag_ctx.resource_group_tag);
             wait_chain.push(last_entry);
 
             waiter.deadlock_with(deadlock_key_hash, wait_chain);
@@ -622,7 +600,7 @@ impl FutureRunnable<Task> for WaiterManager {
                 pr,
                 lock,
                 timeout,
-                resource_group_tag,
+                diag_ctx,
             } => {
                 let waiter = Waiter::new(
                     start_ts,
@@ -630,7 +608,7 @@ impl FutureRunnable<Task> for WaiterManager {
                     pr,
                     lock,
                     self.normalize_deadline(timeout),
-                    resource_group_tag,
+                    diag_ctx,
                 );
                 self.handle_wait_for(waiter);
                 TASK_COUNTER_METRICS.wait_for.inc();
@@ -651,16 +629,10 @@ impl FutureRunnable<Task> for WaiterManager {
                 start_ts,
                 lock,
                 deadlock_key_hash,
-                resource_group_tag,
+                diag_ctx,
                 wait_chain,
             } => {
-                self.handle_deadlock(
-                    start_ts,
-                    lock,
-                    deadlock_key_hash,
-                    resource_group_tag,
-                    wait_chain,
-                );
+                self.handle_deadlock(start_ts, lock, deadlock_key_hash, diag_ctx, wait_chain);
             }
             Task::ChangeConfig { timeout, delay } => self.handle_config_change(timeout, delay),
             #[cfg(any(test, feature = "testexport"))]

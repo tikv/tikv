@@ -363,8 +363,8 @@ pub struct WriteResult {
     pub to_be_write: WriteData,
     pub rows: usize,
     pub pr: ProcessResult,
-    // (lock, is_first_lock, wait_timeout)
-    pub lock_info: Option<(lock_manager::Lock, bool, Option<WaitTimeout>)>,
+    // (lock, key, is_first_lock, wait_timeout)
+    pub lock_info: Option<(lock_manager::Lock, Vec<u8>, bool, Option<WaitTimeout>)>,
     pub lock_guards: Vec<KeyHandleGuard>,
     pub response_policy: ResponsePolicy,
 }

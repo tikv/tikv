@@ -6,7 +6,7 @@ use super::metrics::*;
 use super::waiter_manager::Scheduler as WaiterMgrScheduler;
 use super::{Error, Result};
 use crate::server::resolve::StoreAddrResolver;
-use crate::storage::lock_manager::Lock;
+use crate::storage::lock_manager::{DiagnosticContext, Lock};
 use collections::HashMap;
 use engine_rocks::RocksEngine;
 use futures::future::{self, FutureExt, TryFutureExt};
@@ -348,8 +348,8 @@ pub enum Task {
         tp: DetectType,
         txn_ts: TimeStamp,
         lock: Lock,
-        /// The `resource_group_tag` of the pessimistic lock request. Only valid when `tp == Detect`.
-        resource_group_tag: Vec<u8>,
+        // Only valid when `tp == Detect`.
+        diag_ctx: DiagnosticContext,
     },
     /// The detect request of other nodes.
     DetectRpc {
@@ -374,14 +374,11 @@ impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Task::Detect {
-                tp,
-                txn_ts,
-                lock,
-                resource_group_tag,
+                tp, txn_ts, lock, ..
             } => write!(
                 f,
-                "Detect {{ tp: {:?}, txn_ts: {}, lock: {:?}, resource_group_tag: {:?} }}",
-                tp, txn_ts, lock, resource_group_tag
+                "Detect {{ tp: {:?}, txn_ts: {}, lock: {:?} }}",
+                tp, txn_ts, lock
             ),
             Task::DetectRpc { .. } => write!(f, "Detect Rpc"),
             Task::ChangeRole(role) => write!(f, "ChangeRole {{ role: {:?} }}", role),
@@ -412,12 +409,12 @@ impl Scheduler {
         }
     }
 
-    pub fn detect(&self, txn_ts: TimeStamp, lock: Lock, resource_group_tag: Vec<u8>) {
+    pub fn detect(&self, txn_ts: TimeStamp, lock: Lock, diag_ctx: DiagnosticContext) {
         self.notify_scheduler(Task::Detect {
             tp: DetectType::Detect,
             txn_ts,
             lock,
-            resource_group_tag,
+            diag_ctx,
         });
     }
 
@@ -426,7 +423,7 @@ impl Scheduler {
             tp: DetectType::CleanUpWaitFor,
             txn_ts,
             lock,
-            resource_group_tag: vec![],
+            diag_ctx: DiagnosticContext::default(),
         });
     }
 
@@ -435,7 +432,7 @@ impl Scheduler {
             tp: DetectType::CleanUp,
             txn_ts,
             lock: Lock::default(),
-            resource_group_tag: vec![],
+            diag_ctx: DiagnosticContext::default(),
         });
     }
 
@@ -741,15 +738,18 @@ where
                 resource_group_tag,
                 ..
             } = resp.take_entry();
+            let diag_ctx = DiagnosticContext {
+                key,
+                resource_group_tag,
+            };
             waiter_mgr_scheduler.deadlock(
                 txn.into(),
                 Lock {
                     ts: wait_for_txn.into(),
                     hash: key_hash,
-                    key,
                 },
                 resp.get_deadlock_key_hash(),
-                resource_group_tag,
+                diag_ctx,
                 resp.take_wait_chain().into(),
             )
         }));
@@ -770,7 +770,7 @@ where
         tp: DetectType,
         txn_ts: TimeStamp,
         lock: Lock,
-        resource_group_tag: Vec<u8>,
+        diag_ctx: DiagnosticContext,
     ) -> bool {
         assert!(!self.is_leader() && self.leader_info.is_some());
 
@@ -787,8 +787,8 @@ where
             entry.set_txn(txn_ts.into_inner());
             entry.set_wait_for_txn(lock.ts.into_inner());
             entry.set_key_hash(lock.hash);
-            entry.set_key(lock.key);
-            entry.set_resource_group_tag(resource_group_tag);
+            entry.set_key(diag_ctx.key);
+            entry.set_resource_group_tag(diag_ctx.resource_group_tag);
             let mut req = DeadlockRequest::default();
             req.set_tp(tp);
             req.set_entry(entry);
@@ -806,19 +806,23 @@ where
         tp: DetectType,
         txn_ts: TimeStamp,
         lock: Lock,
-        resource_group_tag: Vec<u8>,
+        diag_ctx: DiagnosticContext,
     ) {
         let detect_table = &mut self.inner.borrow_mut().detect_table;
         match tp {
             DetectType::Detect => {
-                if let Some((deadlock_key_hash, wait_chain)) =
-                    detect_table.detect(txn_ts, lock.ts, lock.hash, &lock.key, &resource_group_tag)
-                {
+                if let Some((deadlock_key_hash, wait_chain)) = detect_table.detect(
+                    txn_ts,
+                    lock.ts,
+                    lock.hash,
+                    &diag_ctx.key,
+                    &diag_ctx.resource_group_tag,
+                ) {
                     self.waiter_mgr_scheduler.deadlock(
                         txn_ts,
                         lock,
                         deadlock_key_hash,
-                        resource_group_tag,
+                        diag_ctx,
                         wait_chain,
                     );
                 }
@@ -836,10 +840,10 @@ where
         tp: DetectType,
         txn_ts: TimeStamp,
         lock: Lock,
-        resource_group_tag: Vec<u8>,
+        diag_ctx: DiagnosticContext,
     ) {
         if self.is_leader() {
-            self.handle_detect_locally(tp, txn_ts, lock, resource_group_tag);
+            self.handle_detect_locally(tp, txn_ts, lock, diag_ctx);
         } else {
             for _ in 0..2 {
                 // TODO: If the leader hasn't been elected, it requests Pd for
@@ -849,8 +853,7 @@ where
                 if self.leader_client.is_none() && !self.refresh_leader_info() {
                     break;
                 }
-                if self.send_request_to_leader(tp, txn_ts, lock.clone(), resource_group_tag.clone())
-                {
+                if self.send_request_to_leader(tp, txn_ts, lock, diag_ctx.clone()) {
                     return;
                 }
                 // Because the client is asynchronous, it won't be closed until failing to send a
@@ -958,9 +961,9 @@ where
                 tp,
                 txn_ts,
                 lock,
-                resource_group_tag,
+                diag_ctx,
             } => {
-                self.handle_detect(tp, txn_ts, lock, resource_group_tag);
+                self.handle_detect(tp, txn_ts, lock, diag_ctx);
             }
             Task::DetectRpc { stream, sink } => {
                 self.handle_detect_rpc(stream, sink);

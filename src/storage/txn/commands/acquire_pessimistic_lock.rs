@@ -58,15 +58,17 @@ impl CommandExt for AcquirePessimisticLock {
     gen_lock!(keys: multiple(|x| &x.0));
 }
 
-fn extract_lock_from_result<T>(res: &StorageResult<T>) -> Lock {
+fn extract_lock_key_from_result<T>(res: &StorageResult<T>) -> (Lock, Vec<u8>) {
     match res {
         Err(StorageError(box StorageErrorInner::Txn(Error(box ErrorInner::Mvcc(MvccError(
             box MvccErrorInner::KeyIsLocked(info),
-        )))))) => Lock {
-            ts: info.get_lock_version().into(),
-            hash: Key::from_raw(info.get_key()).gen_hash(),
-            key: info.take_key(),
-        },
+        )))))) => {
+            let l = Lock {
+                ts: info.get_lock_version().into(),
+                hash: Key::from_raw(info.get_key()).gen_hash(),
+            };
+            (l, info.get_key().to_owned())
+        }
         _ => panic!("unexpected mvcc error"),
     }
 }
@@ -122,9 +124,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
             let write_data = WriteData::from_modifies(txn.into_modifies());
             (pr, write_data, rows, ctx, None)
         } else {
-            let lock = extract_lock_from_result(&res);
+            let (lock, key) = extract_lock_key_from_result(&res);
             let pr = ProcessResult::PessimisticLockRes { res };
-            let lock_info = Some((lock, self.is_first_lock, self.wait_timeout));
+            let lock_info = Some((lock, key, self.is_first_lock, self.wait_timeout));
             // Wait for lock released
             (pr, WriteData::default(), 0, ctx, lock_info)
         };
@@ -154,7 +156,7 @@ fn test_extract_lock_from_result() {
     let case = StorageError::from(StorageErrorInner::Txn(Error::from(ErrorInner::Mvcc(
         MvccError::from(MvccErrorInner::KeyIsLocked(info)),
     ))));
-    let lock = extract_lock_from_result::<()>(&Err(case));
+    let lock = extract_lock_key_from_result::<()>(&Err(case));
     assert_eq!(lock.ts, ts.into());
     assert_eq!(lock.hash, key.gen_hash());
 }

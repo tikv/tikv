@@ -4,11 +4,16 @@ use crate::storage::{txn::ProcessResult, types::StorageCallback};
 use std::time::Duration;
 use txn_types::TimeStamp;
 
-#[derive(Clone, PartialEq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct Lock {
     pub ts: TimeStamp,
     pub hash: u64,
+}
+
+#[derive(Clone, Default)]
+pub struct DiagnosticContext {
     pub key: Vec<u8>,
+    pub resource_group_tag: Vec<u8>,
 }
 
 /// Time to wait for lock released when encountering locks.
@@ -63,7 +68,7 @@ pub trait LockManager: Clone + Send + 'static {
         lock: Lock,
         is_first_lock: bool,
         timeout: Option<WaitTimeout>,
-        resource_group_tag: Vec<u8>,
+        diag_ctx: DiagnosticContext,
     );
 
     /// The locks with `lock_ts` and `hashes` are released, tries to wake up transactions.
@@ -96,7 +101,7 @@ impl LockManager for DummyLockManager {
         _lock: Lock,
         _is_first_lock: bool,
         _wait_timeout: Option<WaitTimeout>,
-        _resource_group_tag: Vec<u8>,
+        _diag_ctx: DiagnosticContext,
     ) {
     }
 
