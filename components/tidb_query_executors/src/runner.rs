@@ -16,11 +16,11 @@ use yatp::task::future::reschedule;
 
 use super::interface::{BatchExecutor, ExecuteStats};
 use super::*;
+use tidb_query_common::execute_stats::ExecSummary;
 use tidb_query_common::metrics::*;
 use tidb_query_common::storage::{IntervalRange, Storage};
 use tidb_query_common::Result;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext, EvalWarnings};
-use tidb_query_common::execute_stats::ExecSummary;
 
 // TODO: The value is chosen according to some very subjective experience, which is not tuned
 // carefully. We need to benchmark to find a best value. Also we may consider accepting this value
@@ -515,10 +515,9 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         if !self.collect_exec_summary {
             return;
         }
-        let result = self.exec_stats.summary_per_executor.clone();
-        match result.first(){
-            Some(exec_stat) => {dest.clone_from(exec_stat);}
-            None => {}
+        let result = &self.exec_stats.summary_per_executor;
+        if let Some(exec_stat) = result.first() {
+            dest.clone_from(exec_stat);
         }
     }
 

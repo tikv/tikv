@@ -39,7 +39,7 @@ use crate::storage::mvcc::TimeStamp;
 use crate::storage::Statistics;
 use async_trait::async_trait;
 use engine_rocks::PerfLevel;
-use kvproto::{coprocessor as coppb, kvrpcpb::{self}};
+use kvproto::{coprocessor as coppb, kvrpcpb};
 use metrics::ReqTag;
 use rand::prelude::*;
 use tikv_util::deadline::Deadline;

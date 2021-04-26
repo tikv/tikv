@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
-use tikv_util::time::{duration_to_sec, duration_to_ms, Instant};
+use tikv_util::time::{duration_to_ms, duration_to_sec, Instant};
 
 use super::batch::ReqBatcher;
 use crate::coprocessor::Endpoint;
@@ -297,7 +297,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
     fn kv_import(&mut self, _: RpcContext<'_>, _: ImportRequest, _: UnarySink<ImportResponse>) {
         unimplemented!();
     }
-    
+
     fn kv_gc(&mut self, ctx: RpcContext<'_>, _: GcRequest, sink: UnarySink<GcResponse>) {
         let e = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
         ctx.spawn(
@@ -1192,9 +1192,9 @@ fn future_get<E: Engine, L: LockManager>(
         Key::from_raw(req.get_key()),
         req.get_version().into(),
     );
-    let used_time = duration_to_ms(start.elapsed());
     async move {
         let v = v.await;
+        let used_time = duration_to_ms(start.elapsed());
         let mut resp = GetResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
@@ -1202,9 +1202,11 @@ fn future_get<E: Engine, L: LockManager>(
             match v {
                 Ok((val, statistics, perf_statistics_delta)) => {
                     let exec_detail_v2 = resp.mut_exec_details_v2();
-                    exec_detail_v2.mut_time_detail().set_kv_read_wall_time_ms(used_time as i64);
+                    exec_detail_v2
+                        .mut_time_detail()
+                        .set_kv_read_wall_time_ms(used_time as i64);
                     let scan_detail_v2 = exec_detail_v2.mut_scan_detail_v2();
-                    scan_detail_v2.set_read_bytes(statistics.data.flow_stats.read_bytes as u64);
+                    scan_detail_v2.set_read_bytes(statistics.sum().flow_stats.read_bytes as u64);
                     statistics.write_scan_detail(scan_detail_v2);
                     perf_statistics_delta.write_scan_detail(scan_detail_v2);
                     match val {
@@ -1266,10 +1268,10 @@ fn future_batch_get<E: Engine, L: LockManager>(
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
     let start = Instant::now();
     let v = storage.batch_get(req.take_context(), keys, req.get_version().into());
-    let used_time = duration_to_ms(start.elapsed());
 
     async move {
         let v = v.await;
+        let used_time = duration_to_ms(start.elapsed());
         let mut resp = BatchGetResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
@@ -1278,9 +1280,11 @@ fn future_batch_get<E: Engine, L: LockManager>(
                 Ok((kv_res, statistics, perf_statistics_delta)) => {
                     let pairs = map_kv_pairs(kv_res);
                     let exec_detail_v2 = resp.mut_exec_details_v2();
-                    exec_detail_v2.mut_time_detail().set_kv_read_wall_time_ms(used_time as i64);
+                    exec_detail_v2
+                        .mut_time_detail()
+                        .set_kv_read_wall_time_ms(used_time as i64);
                     let scan_detail_v2 = exec_detail_v2.mut_scan_detail_v2();
-                    scan_detail_v2.set_read_bytes(statistics.data.flow_stats.read_bytes as u64);
+                    scan_detail_v2.set_read_bytes(statistics.sum().flow_stats.read_bytes as u64);
                     statistics.write_scan_detail(scan_detail_v2);
                     perf_statistics_delta.write_scan_detail(scan_detail_v2);
                     resp.set_pairs(pairs.into());
