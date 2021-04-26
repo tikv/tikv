@@ -442,9 +442,9 @@ impl RowSampleCollector {
         columns_val: &[Vec<u8>],
         column_groups: &[tipb::AnalyzeColumnGroup],
     ) {
-        self.row_buf.clear();
         let col_len = columns_val.len();
         for i in 0..column_groups.len() {
+            self.row_buf.clear();
             let offsets = column_groups[i].get_column_offsets();
             let mut has_null = true;
             for j in 0..offsets.len() {
@@ -470,7 +470,7 @@ impl RowSampleCollector {
         for i in 0..columns_val.len() {
             if columns_val[i][0] == NIL_FLAG {
                 self.null_count[i] += 1;
-                return;
+                continue;
             }
             self.fm_sketches[i].insert(&columns_val[i]);
             self.total_sizes[i] += columns_val[i].len() as i64;
