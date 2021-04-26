@@ -174,7 +174,7 @@ pub(crate) struct Waiter {
     /// it causes deadlock.
     pub(crate) pr: ProcessResult,
     pub(crate) lock: Lock,
-    pub(crate) diag_ctx: DiagnosticContext,
+    pub diag_ctx: DiagnosticContext,
     delay: Delay,
     _lifetime_timer: HistogramTimer,
 }

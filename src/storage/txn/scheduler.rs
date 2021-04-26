@@ -617,7 +617,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         self,
         engine: &E,
         snapshot: E::Snap,
-        mut task: Task,
+        task: Task,
         statistics: &mut Statistics,
     ) {
         fail_point!("txn_before_process_write");
