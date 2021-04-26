@@ -84,6 +84,17 @@ impl Locks {
     fn is_expired(&self, now: Instant, ttl: Duration) -> bool {
         now.duration_since(self.last_detect_time) >= ttl
     }
+
+    /// Generate a `WaitForEntry` for the lock.
+    fn to_wait_for_entry(&self, waiter_ts: TimeStamp) -> WaitForEntry {
+        let mut entry = WaitForEntry::default();
+        entry.set_txn(waiter_ts.into_inner());
+        entry.set_wait_for_txn(self.ts.into_inner());
+        entry.set_key_hash(self.keys[0].0);
+        entry.set_key(self.keys[0].1.clone());
+        entry.set_resource_group_tag(self.resource_group_tag.clone());
+        entry
+    }
 }
 
 /// Used to detect the deadlock of wait-for-lock in the cluster.
@@ -160,6 +171,8 @@ impl DetectTable {
         // it's ok if we only remember one: for each vertex, if it has a route to the goal (txn_ts),
         // we must be able to find the goal and exit this function before visiting the vertex one
         // more time.
+        // TODO: The DFS algorithm can be refactored, so that each vertex in the current visiting
+        // path can be found in the stack. Then it will be much easier to retrieve the wait chain.
         let mut pushed: HashMap<TimeStamp, TimeStamp> = HashMap::default();
         pushed.insert(wait_for_ts, TimeStamp::zero());
         while let Some(curr_ts) = stack.pop() {
@@ -170,51 +183,64 @@ impl DetectTable {
                     self.wait_for_map.remove(&curr_ts);
                 } else {
                     for (lock_ts, locks) in wait_for {
-                        if *lock_ts == txn_ts {
+                        let lock_ts = *lock_ts;
+
+                        if lock_ts == txn_ts {
                             let hash = locks.keys[0].0;
-
-                            let mut wait_chain = Vec::with_capacity(2);
-                            // Generate the wait chain information.
-                            {
-                                let mut waiting_ts = curr_ts;
-                                let mut lock_ts = *lock_ts;
-                                let mut locks: &Locks = locks;
-                                loop {
-                                    let mut entry = WaitForEntry::default();
-                                    entry.set_txn(waiting_ts.into_inner());
-                                    entry.set_wait_for_txn(lock_ts.into_inner());
-                                    entry.set_key_hash(locks.keys[0].0);
-                                    entry.set_key(locks.keys[0].1.clone());
-                                    entry.set_resource_group_tag(locks.resource_group_tag.clone());
-                                    wait_chain.push(entry);
-
-                                    // Move backward
-                                    lock_ts = waiting_ts;
-                                    waiting_ts = *pushed.get(&waiting_ts).unwrap();
-                                    if waiting_ts.is_zero() {
-                                        assert_eq!(lock_ts, wait_for_ts);
-                                        break;
-                                    }
-                                    locks = self
-                                        .wait_for_map
-                                        .get(&waiting_ts)
-                                        .unwrap()
-                                        .get(&lock_ts)
-                                        .unwrap();
-                                }
-                            }
-                            wait_chain.reverse();
+                            let last_entry = locks.to_wait_for_entry(curr_ts);
+                            let mut wait_chain =
+                                self.generate_wait_chain(wait_for_ts, curr_ts, pushed);
+                            wait_chain.push(last_entry);
                             return Some((hash, wait_chain));
                         }
-                        if !pushed.contains_key(lock_ts) {
-                            stack.push(*lock_ts);
-                            pushed.insert(*lock_ts, curr_ts);
+
+                        #[allow(clippy::map_entry)]
+                        if !pushed.contains_key(&lock_ts) {
+                            stack.push(lock_ts);
+                            pushed.insert(lock_ts, curr_ts);
                         }
                     }
                 }
             }
         }
         None
+    }
+
+    /// Generate the wait chain after deadlock is detected. This function is part of implementation
+    /// of `do_detect`. It assumes there's a path from `start` to `end` in the waiting graph, and
+    /// every single edge `V1 -> V2` has an entry in `vertex_predecessors_map` so that
+    /// `vertex_predecessors_map[V2] == V1`, and `vertex_predecessors_map[V1] == 0`.
+    fn generate_wait_chain(
+        &self,
+        start: TimeStamp,
+        end: TimeStamp,
+        vertex_predecessors_map: HashMap<TimeStamp, TimeStamp>,
+    ) -> Vec<WaitForEntry> {
+        let mut wait_chain = Vec::with_capacity(3);
+
+        let mut lock_ts = end;
+        loop {
+            let waiter_ts = *vertex_predecessors_map.get(&lock_ts).unwrap();
+            if waiter_ts.is_zero() {
+                assert_eq!(lock_ts, start);
+                break;
+            }
+            let locks = self
+                .wait_for_map
+                .get(&waiter_ts)
+                .unwrap()
+                .get(&lock_ts)
+                .unwrap();
+
+            let entry = locks.to_wait_for_entry(waiter_ts);
+            wait_chain.push(entry);
+
+            // Move backward
+            lock_ts = waiter_ts;
+        }
+
+        wait_chain.reverse();
+        wait_chain
     }
 
     /// Returns true and adds to the detect table if `txn_ts` is waiting for `lock_ts`.
