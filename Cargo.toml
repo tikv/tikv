@@ -116,7 +116,6 @@ async-stream = "0.2"
 async-trait = "0.1"
 backtrace = "0.3"
 batch-system = { path = "components/batch-system", default-features = false }
-bitflags = "1.0.1"
 byteorder = "1.2"
 chrono = "0.4"
 codec = { path = "components/codec", default-features = false }
@@ -159,6 +158,7 @@ mime = "0.3.13"
 more-asserts = "0.2"
 murmur3 = "0.5.1"
 nom = { version = "5.1.0", default-features = false, features = ["std"] }
+notify = "4"
 num_cpus = "1"
 pd_client = { path = "components/pd_client", default-features = false }
 pin-project = "0.4.8"
@@ -218,7 +218,6 @@ test_sst_importer = { path = "components/test_sst_importer", default-features = 
 test_util = { path = "components/test_util", default-features = false }
 tokio = { version = "0.2", features = ["macros", "rt-threaded", "time"] }
 zipf = "6.1.0"
-example_plugin = { path = "components/test_coprocessor_plugin/example_plugin" }
 
 [patch.crates-io]
 # TODO: remove this when new raft-rs is published.

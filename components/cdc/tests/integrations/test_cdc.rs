@@ -18,12 +18,11 @@ use kvproto::cdcpb::{
 use kvproto::kvrpcpb::*;
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
-use test_raftstore::sleep_ms;
 use test_raftstore::*;
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Lock, LockType};
 
-use cdc::{metrics::CDC_RESOLVED_TS_ADVANCE_METHOD, Task};
+use cdc::{metrics::CDC_RESOLVED_TS_ADVANCE_METHOD, Task, Validate};
 
 #[test]
 fn test_cdc_basic() {
@@ -52,13 +51,13 @@ fn test_cdc_basic() {
     // There must be a delegate.
     let scheduler = suite.endpoints.values().next().unwrap().scheduler();
     scheduler
-        .schedule(Task::Validate(
+        .schedule(Task::Validate(Validate::Region(
             1,
             Box::new(|delegate| {
                 let d = delegate.unwrap();
                 assert_eq!(d.downstreams.len(), 1);
             }),
-        ))
+        )))
         .unwrap();
 
     let (k, v) = ("key1".to_owned(), "value".to_owned());
@@ -119,12 +118,12 @@ fn test_cdc_basic() {
     }
     // The delegate must be removed.
     scheduler
-        .schedule(Task::Validate(
+        .schedule(Task::Validate(Validate::Region(
             1,
             Box::new(|delegate| {
                 assert!(delegate.is_none());
             }),
-        ))
+        )))
         .unwrap();
 
     // request again.
@@ -145,13 +144,13 @@ fn test_cdc_basic() {
     // Sleep a while to make sure the stream is registered.
     sleep_ms(200);
     scheduler
-        .schedule(Task::Validate(
+        .schedule(Task::Validate(Validate::Region(
             1,
             Box::new(|delegate| {
                 let d = delegate.unwrap();
                 assert_eq!(d.downstreams.len(), 1);
             }),
-        ))
+        )))
         .unwrap();
 
     // Drop stream and cancel its server streaming.
@@ -159,12 +158,12 @@ fn test_cdc_basic() {
     // Sleep a while to make sure the stream is deregistered.
     sleep_ms(200);
     scheduler
-        .schedule(Task::Validate(
+        .schedule(Task::Validate(Validate::Region(
             1,
             Box::new(|delegate| {
                 assert!(delegate.is_none());
             }),
-        ))
+        )))
         .unwrap();
 
     // Stale region epoch.
@@ -218,14 +217,14 @@ fn test_cdc_not_leader() {
     let (tx, rx) = mpsc::channel();
     let tx_ = tx.clone();
     scheduler
-        .schedule(Task::Validate(
+        .schedule(Task::Validate(Validate::Region(
             1,
             Box::new(move |delegate| {
                 let d = delegate.unwrap();
                 assert_eq!(d.downstreams.len(), 1);
                 tx_.send(()).unwrap();
             }),
-        ))
+        )))
         .unwrap();
     rx.recv_timeout(Duration::from_secs(1)).unwrap();
     assert!(
@@ -266,13 +265,13 @@ fn test_cdc_not_leader() {
     // Sleep a while to make sure the stream is deregistered.
     sleep_ms(200);
     scheduler
-        .schedule(Task::Validate(
+        .schedule(Task::Validate(Validate::Region(
             1,
             Box::new(move |delegate| {
                 assert!(delegate.is_none());
                 tx.send(()).unwrap();
             }),
-        ))
+        )))
         .unwrap();
     rx.recv_timeout(Duration::from_millis(200)).unwrap();
 
@@ -864,13 +863,18 @@ fn test_old_value_basic() {
                             if row.get_start_ts() == ts3.into_inner()
                                 || row.get_start_ts() == ts4.into_inner()
                             {
-                                assert_eq!(row.get_old_value(), b"v1");
+                                assert_eq!(row.get_old_value(), b"v1", "{:?}", row);
                                 event_count += 1;
                             } else if row.get_start_ts() == ts8.into_inner() {
-                                assert_eq!(row.get_old_value(), vec![b'3'; 5120].as_slice());
+                                assert_eq!(
+                                    row.get_old_value(),
+                                    vec![b'3'; 5120].as_slice(),
+                                    "{:?}",
+                                    row
+                                );
                                 event_count += 1;
                             } else if row.get_start_ts() == ts9.into_inner() {
-                                assert_eq!(row.get_old_value(), b"v6");
+                                assert_eq!(row.get_old_value(), b"v6", "{:?}", row);
                                 event_count += 1;
                             }
                         }
@@ -968,11 +972,10 @@ fn test_old_value_multi_changefeeds() {
                         if row.get_type() == EventLogType::Prewrite {
                             if row.get_start_ts() == ts3.into_inner() {
                                 assert_eq!(row.get_old_value(), b"v1");
-                                event_count += 1;
                             } else {
                                 assert_eq!(row.get_old_value(), b"");
-                                event_count += 1;
                             }
+                            event_count += 1;
                         }
                     }
                 }
@@ -1245,6 +1248,140 @@ fn test_old_value_1pc() {
                 other => panic!("unknown event {:?}", other),
             }
         }
+    }
+
+    suite.stop();
+}
+
+#[test]
+fn test_old_value_cache() {
+    let mut suite = TestSuite::new(1);
+    let scheduler = suite.endpoints.values().next().unwrap().scheduler();
+    let mut req = suite.new_changedata_request(1);
+    req.set_extra_op(ExtraOp::ReadOldValue);
+    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
+    let _req_tx = block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    let mut events = receive_event(false).events.to_vec();
+    match events.remove(0).event.unwrap() {
+        Event_oneof_event::Entries(mut es) => {
+            let row = &es.take_entries().to_vec()[0];
+            assert_eq!(row.get_type(), EventLogType::Initialized);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+
+    // Insert value, simulate INSERT INTO.
+    let mut m1 = Mutation::default();
+    let k1 = b"k1".to_vec();
+    m1.set_op(Op::Insert);
+    m1.key = k1.clone();
+    m1.value = b"v1".to_vec();
+    suite.must_kv_prewrite(1, vec![m1], k1.clone(), 10.into());
+    let mut events = receive_event(false).events.to_vec();
+    match events.remove(0).event.unwrap() {
+        Event_oneof_event::Entries(mut es) => {
+            let row = &es.take_entries().to_vec()[0];
+            assert_eq!(row.get_value(), b"v1");
+            assert_eq!(row.get_old_value(), b"");
+            assert_eq!(row.get_type(), EventLogType::Prewrite);
+            assert_eq!(row.get_start_ts(), 10);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+    // k1 old value must be cached.
+    scheduler
+        .schedule(Task::Validate(Validate::OldValueCache(Box::new(
+            move |old_value_cache| {
+                assert_eq!(old_value_cache.access_count, 1);
+                assert_eq!(old_value_cache.miss_count, 0);
+            },
+        ))))
+        .unwrap();
+    suite.must_kv_commit(1, vec![k1], 10.into(), 15.into());
+    let mut events = receive_event(false).events.to_vec();
+    match events.remove(0).event.unwrap() {
+        Event_oneof_event::Entries(mut es) => {
+            let row = &es.take_entries().to_vec()[0];
+            assert_eq!(row.get_type(), EventLogType::Commit);
+            assert_eq!(row.get_commit_ts(), 15);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+
+    // Update a noexist value, simulate INSERT IGNORE INTO.
+    let mut m2 = Mutation::default();
+    let k2 = b"k2".to_vec();
+    m2.set_op(Op::Put);
+    m2.key = k2.clone();
+    m2.value = b"v2".to_vec();
+    suite.must_kv_prewrite(1, vec![m2], k2.clone(), 10.into());
+    let mut events = receive_event(false).events.to_vec();
+    match events.remove(0).event.unwrap() {
+        Event_oneof_event::Entries(mut es) => {
+            let row = &es.take_entries().to_vec()[0];
+            assert_eq!(row.get_value(), b"v2");
+            assert_eq!(row.get_old_value(), b"");
+            assert_eq!(row.get_type(), EventLogType::Prewrite);
+            assert_eq!(row.get_start_ts(), 10);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+    // k2 old value must be cached.
+    scheduler
+        .schedule(Task::Validate(Validate::OldValueCache(Box::new(
+            move |old_value_cache| {
+                assert_eq!(old_value_cache.access_count, 2);
+                assert_eq!(old_value_cache.miss_count, 0);
+            },
+        ))))
+        .unwrap();
+    suite.must_kv_commit(1, vec![k2], 10.into(), 15.into());
+    let mut events = receive_event(false).events.to_vec();
+    match events.remove(0).event.unwrap() {
+        Event_oneof_event::Entries(mut es) => {
+            let row = &es.take_entries().to_vec()[0];
+            assert_eq!(row.get_type(), EventLogType::Commit);
+            assert_eq!(row.get_commit_ts(), 15);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+
+    // Update an exist value, simulate UPDATE.
+    let mut m2 = Mutation::default();
+    let k2 = b"k2".to_vec();
+    m2.set_op(Op::Put);
+    m2.key = k2.clone();
+    m2.value = b"v3".to_vec();
+    suite.must_kv_prewrite(1, vec![m2], k2.clone(), 20.into());
+    let mut events = receive_event(false).events.to_vec();
+    match events.remove(0).event.unwrap() {
+        Event_oneof_event::Entries(mut es) => {
+            let row = &es.take_entries().to_vec()[0];
+            assert_eq!(row.get_value(), b"v3");
+            assert_eq!(row.get_old_value(), b"v2");
+            assert_eq!(row.get_type(), EventLogType::Prewrite);
+            assert_eq!(row.get_start_ts(), 20);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+    // k2 old value must be cached.
+    scheduler
+        .schedule(Task::Validate(Validate::OldValueCache(Box::new(
+            move |old_value_cache| {
+                assert_eq!(old_value_cache.access_count, 3);
+                assert_eq!(old_value_cache.miss_count, 0);
+            },
+        ))))
+        .unwrap();
+    suite.must_kv_commit(1, vec![k2], 20.into(), 25.into());
+    let mut events = receive_event(false).events.to_vec();
+    match events.remove(0).event.unwrap() {
+        Event_oneof_event::Entries(mut es) => {
+            let row = &es.take_entries().to_vec()[0];
+            assert_eq!(row.get_type(), EventLogType::Commit);
+            assert_eq!(row.get_commit_ts(), 25);
+        }
+        other => panic!("unknown event {:?}", other),
     }
 
     suite.stop();

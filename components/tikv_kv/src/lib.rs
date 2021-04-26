@@ -34,17 +34,20 @@ use std::{error, ptr, result};
 
 use engine_traits::util::append_expire_ts;
 use engine_traits::{CfName, CF_DEFAULT};
-use engine_traits::{IterOptions, KvEngine as LocalEngine, MvccProperties, ReadOptions};
+use engine_traits::{
+    IterOptions, KvEngine as LocalEngine, Mutable, MvccProperties, ReadOptions, WriteBatch,
+};
 use futures::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ExtraOp as TxnExtraOp, KeyRange};
+use tikv_util::escape;
 use txn_types::{Key, TimeStamp, TxnExtra, Value};
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::cursor::{Cursor, CursorBuilder};
 pub use self::mock_engine::{ExpectedWrite, MockEngineBuilder};
 pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
-pub use self::rocksdb_engine::{write_modifies, RocksEngine, RocksSnapshot};
+pub use self::rocksdb_engine::{RocksEngine, RocksSnapshot};
 pub use self::stats::{
     CfStatistics, FlowStatistics, FlowStatsReporter, Statistics, StatisticsSummary, TTL_TOMBSTONE,
 };
@@ -125,9 +128,9 @@ impl WriteData {
 pub struct SnapContext<'a> {
     pub pb_ctx: &'a Context,
     pub read_id: Option<ThreadReadId>,
-    // `start_ts` and `key_ranges` are used in replica read. They are sent to
-    // the leader via raft "read index" to check memory locks.
     pub start_ts: TimeStamp,
+    // `key_ranges` is used in replica read. It will send to
+    // the leader via raft "read index" to check memory locks.
     pub key_ranges: Vec<KeyRange>,
 }
 
@@ -472,6 +475,55 @@ pub fn drop_snapshot_callback<E: Engine>() -> (CbContext, Result<E::Snap>) {
     (CbContext::new(), Err(Error::from(ErrorInner::Request(err))))
 }
 
+/// Write modifications into a `BaseRocksEngine` instance.
+pub fn write_modifies(kv_engine: &impl LocalEngine, modifies: Vec<Modify>) -> Result<()> {
+    fail_point!("rockskv_write_modifies", |_| Err(box_err!("write failed")));
+
+    let mut wb = kv_engine.write_batch();
+    for rev in modifies {
+        let res = match rev {
+            Modify::Delete(cf, k) => {
+                if cf == CF_DEFAULT {
+                    trace!("RocksEngine: delete"; "key" => %k);
+                    wb.delete(k.as_encoded())
+                } else {
+                    trace!("RocksEngine: delete_cf"; "cf" => cf, "key" => %k);
+                    wb.delete_cf(cf, k.as_encoded())
+                }
+            }
+            Modify::Put(cf, k, v) => {
+                if cf == CF_DEFAULT {
+                    trace!("RocksEngine: put"; "key" => %k, "value" => escape(&v));
+                    wb.put(k.as_encoded(), &v)
+                } else {
+                    trace!("RocksEngine: put_cf"; "cf" => cf, "key" => %k, "value" => escape(&v));
+                    wb.put_cf(cf, k.as_encoded(), &v)
+                }
+            }
+            Modify::DeleteRange(cf, start_key, end_key, notify_only) => {
+                trace!(
+                    "RocksEngine: delete_range_cf";
+                    "cf" => cf,
+                    "start_key" => %start_key,
+                    "end_key" => %end_key,
+                    "notify_only" => notify_only,
+                );
+                if !notify_only {
+                    wb.delete_range_cf(cf, start_key.as_encoded(), end_key.as_encoded())
+                } else {
+                    Ok(())
+                }
+            }
+        };
+        // TODO: turn the error into an engine error.
+        if let Err(msg) = res {
+            return Err(box_err!("{}", msg));
+        }
+    }
+    wb.write()?;
+    Ok(())
+}
+
 pub mod tests {
     use super::*;
     use tikv_util::codec::bytes;
@@ -559,6 +611,7 @@ pub mod tests {
             cursor
                 .near_seek(&Key::from_raw(key), &mut statistics)
                 .unwrap(),
+            "{}",
             log_wrappers::hex_encode_upper(key)
         );
         assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
@@ -575,6 +628,7 @@ pub mod tests {
             cursor
                 .near_reverse_seek(&Key::from_raw(key), &mut statistics)
                 .unwrap(),
+            "{}",
             log_wrappers::hex_encode_upper(key)
         );
         assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));

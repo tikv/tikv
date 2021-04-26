@@ -811,7 +811,7 @@ fn dump_mvcc_properties(db: &Arc<DB>, start: &[u8], end: &[u8]) -> Result<Vec<(S
         ("mvcc.max_row_versions", mvcc_properties.max_row_versions),
     ]
     .iter()
-    .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+    .map(|(k, v)| ((*k).to_string(), v.to_string()))
     .collect();
 
     // Entries and delete marks of RocksDB.

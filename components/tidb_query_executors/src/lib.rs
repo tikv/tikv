@@ -11,7 +11,6 @@
 #![feature(proc_macro_hygiene)]
 #![feature(specialization)]
 #![feature(const_fn)]
-#![feature(decl_macro)]
 #![feature(const_fn_fn_ptr_basics)]
 #![feature(const_mut_refs)]
 

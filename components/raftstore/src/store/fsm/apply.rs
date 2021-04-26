@@ -15,7 +15,9 @@ use std::time::Duration;
 use std::vec::Drain;
 use std::{cmp, usize};
 
-use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
+use batch_system::{
+    BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler, Priority,
+};
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::PerfContext;
@@ -368,6 +370,11 @@ where
     /// happened before `WriteBatch::write` and after `SSTImporter::delete`. We shall make sure that
     /// this entry will never apply again at first, then we can delete the ssts files.
     delete_ssts: Vec<SSTMetaInfo>,
+
+    /// The priority of this Handler.
+    priority: Priority,
+    /// Whether to yield high-latency operation to low-priority handler.
+    yield_high_latency_operation: bool,
 }
 
 impl<EK, W> ApplyContext<EK, W>
@@ -386,6 +393,7 @@ where
         cfg: &Config,
         store_id: u64,
         pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
+        priority: Priority,
     ) -> ApplyContext<EK, W> {
         // If `enable_multi_batch_write` was set true, we create `RocksWriteBatchVec`.
         // Otherwise create `RocksWriteBatch`.
@@ -415,6 +423,8 @@ where
             delete_ssts: vec![],
             store_id,
             pending_create_peers,
+            priority,
+            yield_high_latency_operation: cfg.apply_batch_system.low_priority_pool_size > 0,
         }
     }
 
@@ -427,11 +437,12 @@ where
         self.cbs.push(ApplyCallback::new(delegate.region.clone()));
         self.last_applied_index = delegate.apply_state.get_applied_index();
 
-        if let Some(observe_cmd) = &delegate.observe_cmd {
-            let region_id = delegate.region_id();
-            // TODO: skip this step when we do not need to observe cmds.
-            self.host.prepare_for_apply(observe_cmd.id, region_id);
-        }
+        // TODO: skip this step when we do not need to observe cmds.
+        self.host.prepare_for_apply(
+            delegate.observe_cmd.cdc_id,
+            delegate.observe_cmd.rts_id,
+            delegate.region_id(),
+        );
     }
 
     /// Commits all changes have done for delegate. `persistent` indicates whether
@@ -552,7 +563,7 @@ where
         let is_synced = self.write_to_db();
 
         if !self.apply_res.is_empty() {
-            let apply_res = std::mem::replace(&mut self.apply_res, vec![]);
+            let apply_res = std::mem::take(&mut self.apply_res);
             self.notifier.notify(apply_res);
         }
 
@@ -634,6 +645,19 @@ fn should_write_to_engine(cmd: &RaftCmdRequest) -> bool {
         }
     }
 
+    false
+}
+
+/// Checks if a write has high-latency operation.
+fn has_high_latency_operation(cmd: &RaftCmdRequest) -> bool {
+    for req in cmd.get_requests() {
+        if req.has_delete_range() {
+            return true;
+        }
+        if req.has_ingest_sst() {
+            return true;
+        }
+    }
     false
 }
 
@@ -782,10 +806,14 @@ where
     last_sync_apply_index: u64,
 
     /// Info about cmd observer.
-    observe_cmd: Option<ObserveCmd>,
+    observe_cmd: ObserveCmd,
 
     /// The local metrics, and it will be flushed periodically.
     metrics: ApplyMetrics,
+
+    /// Priority in batch system. When applying some commands which have high latency,
+    /// we decrease the priority of current fsm to reduce the impact on other normal commands.
+    priority: Priority,
 }
 
 impl<EK> ApplyDelegate<EK>
@@ -812,7 +840,8 @@ where
             metrics: Default::default(),
             last_merge_version: 0,
             pending_request_snapshot_count: reg.pending_request_snapshot_count,
-            observe_cmd: None,
+            observe_cmd: ObserveCmd::default(),
+            priority: Priority::Normal,
         }
     }
 
@@ -888,7 +917,6 @@ where
                 }
             }
         }
-
         apply_ctx.finish_for(self, results);
 
         if self.pending_remove {
@@ -931,6 +959,13 @@ where
         if !data.is_empty() {
             let cmd = util::parse_data_at(data, index, &self.tag);
 
+            if apply_ctx.yield_high_latency_operation && has_high_latency_operation(&cmd) {
+                self.priority = Priority::Low;
+                if apply_ctx.priority != Priority::Low {
+                    apply_ctx.commit(self);
+                    return ApplyResult::Yield;
+                }
+            }
             if should_write_to_engine(&cmd) || apply_ctx.kv_wb().should_write_to_engine() {
                 apply_ctx.commit(self);
                 if let Some(start) = self.handle_start.as_ref() {
@@ -1077,11 +1112,12 @@ where
         cmd_resp::bind_term(&mut resp, self.term);
         let cmd_cb = self.find_pending(index, term, is_conf_change_cmd(&cmd));
         let cmd = Cmd::new(index, cmd, resp);
-        if let Some(observe_cmd) = self.observe_cmd.as_ref() {
-            apply_ctx
-                .host
-                .on_apply_cmd(observe_cmd.id, self.region_id(), cmd.clone());
-        }
+        apply_ctx.host.on_apply_cmd(
+            self.observe_cmd.cdc_id,
+            self.observe_cmd.rts_id,
+            self.region_id(),
+            cmd.clone(),
+        );
 
         apply_ctx.cbs.last_mut().unwrap().push(cmd_cb, cmd);
 
@@ -1491,7 +1527,7 @@ where
         if cf.is_empty() {
             cf = CF_DEFAULT;
         }
-        if ALL_CFS.iter().find(|x| **x == cf).is_none() {
+        if !ALL_CFS.iter().any(|x| *x == cf) {
             return Err(box_err!("invalid delete range command, cf: {:?}", cf));
         }
 
@@ -2852,19 +2888,51 @@ impl ObserveID {
 
 struct ObserveCmd {
     // TODO: Add flags to disable observing.
-    id: ObserveID,
+    cdc_id: ObserveID,
+    rts_id: ObserveID,
 }
 
 impl Debug for ObserveCmd {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ObserveCmd").field("id", &self.id).finish()
+        f.debug_struct("ObserveCmd")
+            .field("cdc_id", &self.cdc_id)
+            .field("rts_id", &self.rts_id)
+            .finish()
+    }
+}
+
+impl Default for ObserveCmd {
+    fn default() -> Self {
+        Self {
+            cdc_id: ObserveID(0),
+            rts_id: ObserveID(0),
+        }
     }
 }
 
 #[derive(Debug)]
 pub struct ChangeObserver {
-    pub observe_id: ObserveID,
-    pub region_id: u64,
+    cdc_id: Option<ObserveID>,
+    rts_id: Option<ObserveID>,
+    region_id: u64,
+}
+
+impl ChangeObserver {
+    pub fn from_cdc(region_id: u64, id: ObserveID) -> Self {
+        Self {
+            cdc_id: Some(id),
+            rts_id: None,
+            region_id,
+        }
+    }
+
+    pub fn from_rts(region_id: u64, id: ObserveID) -> Self {
+        Self {
+            cdc_id: None,
+            rts_id: Some(id),
+            region_id,
+        }
+    }
 }
 
 pub enum Msg<EK>
@@ -3271,11 +3339,20 @@ where
         cb: Callback<EK::Snapshot>,
     ) {
         let ChangeObserver {
-            observe_id,
+            cdc_id,
+            rts_id,
             region_id,
         } = cmd;
-        if let Some(observe_cmd) = self.delegate.observe_cmd.as_mut() {
-            if observe_cmd.id > observe_id {
+
+        if let Some(id) = cdc_id {
+            if self.delegate.observe_cmd.cdc_id > id {
+                notify_stale_req(self.delegate.term, cb);
+                return;
+            }
+        }
+
+        if let Some(id) = rts_id {
+            if self.delegate.observe_cmd.rts_id > id {
                 notify_stale_req(self.delegate.term, cb);
                 return;
             }
@@ -3314,7 +3391,12 @@ where
             }
         };
 
-        self.delegate.observe_cmd = Some(ObserveCmd { id: observe_id });
+        if let Some(id) = cdc_id {
+            self.delegate.observe_cmd.cdc_id = id;
+        }
+        if let Some(id) = rts_id {
+            self.delegate.observe_cmd.rts_id = id;
+        }
 
         cb.invoke_read(resp);
     }
@@ -3329,6 +3411,10 @@ where
             match drainer.next() {
                 Some(Msg::Apply { start, apply }) => {
                     APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(start.elapsed_secs());
+                    // If there is any apply task, we change this fsm to normal-priority.
+                    // When it meets a ingest-request or a delete-range request, it will change to
+                    // low-priority.
+                    self.delegate.priority = Priority::Normal;
                     self.handle_apply(apply_ctx, apply);
                     if let Some(ref mut state) = self.delegate.yield_state {
                         state.pending_msgs = drainer.collect();
@@ -3381,6 +3467,11 @@ where
         Self: Sized,
     {
         self.mailbox.take()
+    }
+
+    #[inline]
+    fn get_priority(&self) -> Priority {
+        self.delegate.priority
     }
 }
 
@@ -3509,6 +3600,10 @@ where
             }
         }
     }
+
+    fn get_priority(&self) -> Priority {
+        self.apply_ctx.priority
+    }
 }
 
 pub struct Builder<EK: KvEngine, W: WriteBatch<EK>> {
@@ -3557,7 +3652,7 @@ where
 {
     type Handler = ApplyPoller<EK, W>;
 
-    fn build(&mut self) -> ApplyPoller<EK, W> {
+    fn build(&mut self, priority: Priority) -> ApplyPoller<EK, W> {
         let cfg = self.cfg.value();
         ApplyPoller {
             msg_buf: Vec::with_capacity(cfg.messages_per_tick),
@@ -3572,6 +3667,7 @@ where
                 &cfg,
                 self.store_id,
                 self.pending_create_peers.clone(),
+                priority,
             ),
             messages_per_tick: cfg.messages_per_tick,
             cfg_tracker: self.cfg.clone().tracker(self.tag.clone()),
@@ -4240,24 +4336,27 @@ mod tests {
     where
         E: KvEngine,
     {
-        fn on_prepare_for_apply(&self, observe_id: ObserveID, region_id: u64) {
+        fn on_prepare_for_apply(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64) {
             self.cmd_batches
                 .borrow_mut()
-                .push(CmdBatch::new(observe_id, region_id));
+                .push(CmdBatch::new(cdc_id, rts_id, region_id));
         }
 
-        fn on_apply_cmd(&self, observe_id: ObserveID, region_id: u64, cmd: Cmd) {
+        fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: Cmd) {
             self.cmd_batches
                 .borrow_mut()
                 .last_mut()
                 .expect("should exist some cmd batch")
-                .push(observe_id, region_id, cmd);
+                .push(cdc_id, rts_id, region_id, cmd);
         }
 
         fn on_flush_apply(&self, _: E) {
             if !self.cmd_batches.borrow().is_empty() {
                 let batches = self.cmd_batches.replace(Vec::default());
                 for b in batches {
+                    if b.is_empty() {
+                        continue;
+                    }
                     if let Some(sink) = self.cmd_sink.as_ref() {
                         sink.lock().unwrap().send(b).unwrap();
                     }
@@ -4484,6 +4583,10 @@ mod tests {
         assert!(engine.get_value(&dk_k1).unwrap().is_none());
         assert!(engine.get_value(&dk_k2).unwrap().is_none());
         assert!(engine.get_value(&dk_k3).unwrap().is_none());
+        // The region will be rescheduled from normal-priority handler to
+        // low-priority, so the first apple_res.exec_res should be empty.
+        let apply_res = fetch_apply_res(&rx);
+        assert!(apply_res.exec_res.is_empty());
         fetch_apply_res(&rx);
 
         // UploadSST
@@ -4638,10 +4741,8 @@ mod tests {
             .build();
         router.schedule_task(1, Msg::apply(apply(peer_id, 1, 1, vec![put_entry], vec![])));
         fetch_apply_res(&rx);
-        // It must receive nothing because no region registered.
-        cmdbatch_rx
-            .recv_timeout(Duration::from_millis(100))
-            .unwrap_err();
+        let cmd_batch = cmdbatch_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert_eq!(cmd_batch.len(), 1);
         let (block_tx, block_rx) = mpsc::channel::<()>();
         router.schedule_task(
             1,
@@ -4666,7 +4767,8 @@ mod tests {
             Msg::Change {
                 region_epoch: region_epoch.clone(),
                 cmd: ChangeObserver {
-                    observe_id,
+                    cdc_id: Some(observe_id),
+                    rts_id: Some(observe_id),
                     region_id: 1,
                 },
                 cb: Callback::Read(Box::new(|resp: ReadResponse<KvTestSnapshot>| {
@@ -4715,7 +4817,7 @@ mod tests {
             Msg::apply(apply(peer_id, 1, 2, vec![put_entry1, put_entry2], vec![])),
         );
         let cmd_batch = cmdbatch_rx.recv_timeout(Duration::from_secs(3)).unwrap();
-        assert_eq!(2, cmd_batch.len());
+        assert_eq!(1, cmd_batch.len());
 
         // Stop observer regoin 1.
         enabled.store(false, Ordering::SeqCst);
@@ -4731,7 +4833,8 @@ mod tests {
             Msg::Change {
                 region_epoch,
                 cmd: ChangeObserver {
-                    observe_id,
+                    cdc_id: Some(observe_id),
+                    rts_id: Some(observe_id),
                     region_id: 2,
                 },
                 cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
@@ -4908,7 +5011,8 @@ mod tests {
             Msg::Change {
                 region_epoch: region_epoch.clone(),
                 cmd: ChangeObserver {
-                    observe_id,
+                    cdc_id: Some(observe_id),
+                    rts_id: Some(observe_id),
                     region_id: 1,
                 },
                 cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
@@ -5066,7 +5170,8 @@ mod tests {
             Msg::Change {
                 region_epoch,
                 cmd: ChangeObserver {
-                    observe_id,
+                    cdc_id: Some(observe_id),
+                    rts_id: Some(observe_id),
                     region_id: 1,
                 },
                 cb: Callback::Read(Box::new(move |resp: ReadResponse<_>| {
