@@ -331,7 +331,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
     }
 
     async fn collect_column_stats(&mut self) -> Result<AnalyzeSamplingResult> {
-        use tidb_query_datatype::codec::collation::{match_template_collator, Collator};
+        use tidb_query_datatype::{codec::collation::Collator, match_template_collator};
 
         let mut is_drained = false;
         let mut time_slice_start = Instant::now();
@@ -456,7 +456,7 @@ impl RowSampleCollector {
             // We only maintain the null count for single column case.
             if has_null && offsets.len() == 1 {
                 self.null_count[col_len + i] += 1;
-                continue
+                continue;
             }
             // Use a in place murmur3 to replace this memory copy.
             for j in 0..offsets.len() {
@@ -588,7 +588,8 @@ impl<S: Snapshot> SampleBuilder<S> {
     async fn collect_columns_stats(
         &mut self,
     ) -> Result<(AnalyzeColumnsResult, Option<AnalyzeIndexResult>)> {
-        use tidb_query_datatype::codec::collation::{match_template_collator, Collator};
+        use tidb_query_datatype::codec::collation::Collator;
+        use tidb_query_datatype::match_template_collator;
         let columns_without_handle_len =
             self.columns_info.len() - self.columns_info[0].get_pk_handle() as usize;
 

@@ -1,9 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::VecDeque;
 use std::fmt::Display;
 use std::option::Option;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::{fmt, u64};
 
 use collections::HashMap;
@@ -836,6 +837,167 @@ impl Display for MsgType<'_> {
     }
 }
 
+/// `RegionReadProgress` is used to keep track of the replica's `safe_ts`, the replica can handle a read
+/// request directly without requiring leader lease or read index iff `safe_ts` >= `read_ts` (the `read_ts`
+/// is usually stale i.e seconds ago).
+///
+/// `safe_ts` is updated by the `(apply index, safe ts)` item:
+/// ```
+/// if self.applied_index >= item.apply_index {
+///     self.safe_ts = max(self.safe_ts, item.safe_ts)
+/// }
+/// ```
+///
+/// For the leader, the `(apply index, safe ts)` item is publish by the `resolved-ts` worker periodically.
+/// For the followers, the item is sync periodically from the leader through the `CheckLeader` rpc.
+///
+/// The intend is to make the item's `safe ts` larger (more up to date) and `apply index` smaller (require less data)
+#[derive(Debug)]
+pub struct RegionReadProgress {
+    // `core` used to keep track and update `safe_ts`, it should
+    // not be accessed outside to avoid dead lock
+    core: Mutex<RegionReadProgressCore>,
+    // The fast path to read `safe_ts` and `applied_index` without
+    // acquiring the mutex on `core`
+    safe_ts: AtomicU64,
+    applied_index: AtomicU64,
+}
+
+impl RegionReadProgress {
+    pub fn new(applied_index: u64, cap: usize) -> RegionReadProgress {
+        RegionReadProgress {
+            core: Mutex::new(RegionReadProgressCore::new(applied_index, cap)),
+            applied_index: AtomicU64::from(applied_index),
+            safe_ts: AtomicU64::from(0),
+        }
+    }
+
+    pub fn update_applied(&self, applied: u64) {
+        let mut core = self.core.lock().unwrap();
+        if let Some(ts) = core.update_applied(applied) {
+            self.safe_ts.store(ts, AtomicOrdering::Release);
+        }
+        self.applied_index.store(applied, AtomicOrdering::Release);
+    }
+
+    pub fn update_safe_ts(&self, apply_index: u64, ts: u64) {
+        if apply_index == 0 || ts == 0 {
+            return;
+        }
+        let mut core = self.core.lock().unwrap();
+        if let Some(ts) = core.update_safe_ts(apply_index, ts) {
+            self.safe_ts.store(ts, AtomicOrdering::Release);
+        }
+    }
+
+    pub fn clear(&self) {
+        let mut core = self.core.lock().unwrap();
+        core.clear();
+        self.safe_ts.store(0, AtomicOrdering::Release);
+    }
+
+    pub fn applied_index(&self) -> u64 {
+        self.applied_index.load(AtomicOrdering::Acquire)
+    }
+
+    pub fn safe_ts(&self) -> u64 {
+        self.safe_ts.load(AtomicOrdering::Acquire)
+    }
+}
+
+#[derive(Debug)]
+struct RegionReadProgressCore {
+    applied_index: u64,
+    // TODO: after region merged, the region's key range is extended and this
+    // region wide `safe_ts` should reset to `min(source_safe_ts, target_safe_ts)`
+    safe_ts: u64,
+    // `pending_items` is a *sorted* list of `(apply index, safe ts)` item
+    pending_items: VecDeque<(u64, u64)>,
+}
+
+impl RegionReadProgressCore {
+    fn new(applied_index: u64, cap: usize) -> RegionReadProgressCore {
+        RegionReadProgressCore {
+            applied_index,
+            safe_ts: 0,
+            pending_items: VecDeque::with_capacity(cap),
+        }
+    }
+
+    // Return the `safe_ts` if it is updated
+    fn update_applied(&mut self, applied: u64) -> Option<u64> {
+        // The apply index should not decrease
+        assert!(applied >= self.applied_index);
+        self.applied_index = applied;
+        // Consume pending items with `apply_index` less or equal to `self.applied_index`
+        let mut ts_to_update = self.safe_ts;
+        while let Some((idx, ts)) = self.pending_items.pop_front() {
+            if self.applied_index < idx {
+                self.pending_items.push_front((idx, ts));
+                break;
+            }
+            if ts_to_update < ts {
+                ts_to_update = ts;
+            }
+        }
+        if self.safe_ts < ts_to_update {
+            self.safe_ts = ts_to_update;
+            Some(ts_to_update)
+        } else {
+            None
+        }
+    }
+
+    // Return the `safe_ts` if it is updated
+    fn update_safe_ts(&mut self, apply_index: u64, ts: u64) -> Option<u64> {
+        // The peer has enough data, try update `safe_ts` directly
+        if self.applied_index >= apply_index {
+            let mut updated_ts = None;
+            if self.safe_ts < ts {
+                self.safe_ts = ts;
+                updated_ts = Some(ts);
+            }
+            return updated_ts;
+        }
+        // The peer doesn't has enough data, keep the item for future use
+        if let Some(item) = self.pending_items.back_mut() {
+            // Discord the item if it has a smaller `safe_ts`
+            if item.1 >= ts {
+                return None;
+            }
+            // Discord the item if it has a smaller `apply_index`
+            if item.0 >= apply_index {
+                // Instead of adding a new item, try update the last one,
+                // update the last item's `safe_ts` if the incoming item
+                // require a less or equal `apply_index` with a larger `safe_ts`
+                item.1 = ts;
+                return None;
+            }
+        }
+        self.push_back((apply_index, ts));
+        None
+    }
+
+    fn clear(&mut self) {
+        self.pending_items.clear();
+        self.safe_ts = 0;
+    }
+
+    fn push_back(&mut self, item: (u64, u64)) {
+        if self.pending_items.len() >= self.pending_items.capacity() {
+            // Stepping by one to evently remove the items, so the follower can keep
+            // the old items and use them to update the `safe_ts` even when the follower
+            // not catch up new enough data
+            let mut keep = false;
+            self.pending_items.retain(|_| {
+                keep = !keep;
+                keep
+            });
+        }
+        self.pending_items.push_back(item);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::thread;
@@ -1460,5 +1622,61 @@ mod tests {
         for cmd_type in AdminCmdType::values() {
             assert!(ADMIN_CMD_EPOCH_MAP.contains_key(cmd_type));
         }
+    }
+
+    #[test]
+    fn test_region_read_progress() {
+        // Return the number of the pending (index, ts) item
+        fn pending_items_num(rrp: &RegionReadProgress) -> usize {
+            rrp.core.lock().unwrap().pending_items.len()
+        }
+
+        let cap = 10;
+        let rrp = RegionReadProgress::new(10, cap);
+        for i in 1..=20 {
+            rrp.update_safe_ts(i, i);
+        }
+        // `safe_ts` update according to its `applied_index`
+        assert_eq!(rrp.safe_ts(), 10);
+        assert_eq!(pending_items_num(&rrp), 10);
+
+        rrp.update_applied(20);
+        assert_eq!(rrp.safe_ts(), 20);
+        assert_eq!(pending_items_num(&rrp), 0);
+
+        for i in 100..200 {
+            rrp.update_safe_ts(i, i);
+        }
+        assert_eq!(rrp.safe_ts(), 20);
+        // the number of pending item should not exceed `cap`
+        assert!(pending_items_num(&rrp) <= cap);
+
+        // `applied_index` large than all pending items will clear all pending items
+        rrp.update_applied(200);
+        assert_eq!(rrp.safe_ts(), 199);
+        assert_eq!(pending_items_num(&rrp), 0);
+
+        // pending item can be updated instead of adding a new one
+        rrp.update_safe_ts(300, 300);
+        assert_eq!(pending_items_num(&rrp), 1);
+        rrp.update_safe_ts(200, 400);
+        assert_eq!(pending_items_num(&rrp), 1);
+        rrp.update_safe_ts(300, 500);
+        assert_eq!(pending_items_num(&rrp), 1);
+        rrp.update_safe_ts(301, 600);
+        assert_eq!(pending_items_num(&rrp), 2);
+        // `safe_ts` will update to 500 instead of 300
+        rrp.update_applied(300);
+        assert_eq!(rrp.safe_ts(), 500);
+        rrp.update_applied(301);
+        assert_eq!(rrp.safe_ts(), 600);
+        assert_eq!(pending_items_num(&rrp), 0);
+
+        // stale item will be ignored
+        rrp.update_safe_ts(300, 500);
+        rrp.update_safe_ts(301, 600);
+        rrp.update_safe_ts(400, 0);
+        rrp.update_safe_ts(0, 700);
+        assert_eq!(pending_items_num(&rrp), 0);
     }
 }
