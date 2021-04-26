@@ -2794,8 +2794,8 @@ where
     pub index: u64,
     pub term: u64,
     pub cb: Callback<S>,
-    /// `renew_lease_time` contains the last time when a peer starts to renew lease.
-    pub renew_lease_time: Option<Timespec>,
+    /// `propose_time` is set to the last time when a peer starts to renew lease.
+    pub propose_time: Option<Timespec>,
     pub must_pass_epoch_check: bool,
 }
 
@@ -4007,7 +4007,7 @@ mod tests {
             index,
             term,
             cb,
-            renew_lease_time: None,
+            propose_time: None,
             must_pass_epoch_check: false,
         }
     }
