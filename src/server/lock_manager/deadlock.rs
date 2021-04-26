@@ -192,7 +192,7 @@ impl DetectTable {
                                     lock_ts = waiting_ts;
                                     waiting_ts = *pushed.get(&waiting_ts).unwrap();
                                     if waiting_ts.is_zero() {
-                                        assert_eq!(waiting_ts, wait_for_ts);
+                                        assert_eq!(lock_ts, wait_for_ts);
                                         break;
                                     }
                                     locks = self
@@ -1247,6 +1247,117 @@ pub mod tests {
                 .is_none()
         );
         assert_eq!(detect_table.wait_for_map.len(), 1);
+    }
+
+    #[test]
+    fn test_deadlock_generating_wait_chain() {
+        #[derive(Clone, Copy, Debug, PartialEq)]
+        struct Edge<'a> {
+            ts: u64,
+            lock_ts: u64,
+            hash: u64,
+            key: &'a [u8],
+            tag: &'a [u8],
+        }
+
+        let new_edge = |ts, lock_ts, hash, key, tag| Edge {
+            ts,
+            lock_ts,
+            hash,
+            key,
+            tag,
+        };
+
+        // Detect specified edges sequentially, and expects the last one will cause the deadlock.
+        let test_once = |edges: &[Edge]| {
+            let mut detect_table = DetectTable::new(Duration::from_millis(100));
+            let mut edge_map = HashMap::default();
+
+            for e in &edges[0..edges.len() - 1] {
+                assert!(
+                    detect_table
+                        .detect(e.ts.into(), e.lock_ts.into(), e.hash, e.key, e.tag)
+                        .is_none()
+                );
+                edge_map.insert((e.ts, e.lock_ts), *e);
+            }
+
+            let last = edges.last().unwrap();
+            let (_, wait_chain) = detect_table
+                .detect(
+                    last.ts.into(),
+                    last.lock_ts.into(),
+                    last.hash,
+                    last.key,
+                    last.tag,
+                )
+                .unwrap();
+            // Walk through the wait chain
+            let mut current_position = last.lock_ts;
+            for (i, entry) in wait_chain.iter().enumerate() {
+                let edge = Edge {
+                    ts: entry.get_txn(),
+                    lock_ts: entry.get_wait_for_txn(),
+                    hash: entry.get_key_hash(),
+                    key: entry.get_key(),
+                    tag: entry.get_resource_group_tag(),
+                };
+                let expect_edge = edge_map.get(&(edge.ts, edge.lock_ts)).unwrap();
+                assert_eq!(
+                    edge, *expect_edge,
+                    "failed at item {}, full wait chain {:?}",
+                    i, wait_chain
+                );
+                assert_eq!(
+                    edge.ts, current_position,
+                    "failed at item {}, full wait chain {:?}",
+                    i, wait_chain
+                );
+                current_position = edge.lock_ts;
+            }
+            assert_eq!(current_position, last.ts);
+        };
+
+        test_once(&[
+            new_edge(1, 2, 11, b"k1", b"tag1"),
+            new_edge(2, 1, 12, b"k2", b"tag2"),
+        ]);
+
+        test_once(&[
+            new_edge(1, 2, 11, b"k1", b"tag1"),
+            new_edge(2, 3, 12, b"k2", b"tag2"),
+            new_edge(3, 1, 13, b"k3", b"tag3"),
+        ]);
+
+        test_once(&[
+            new_edge(1, 2, 11, b"k12", b"tag12"),
+            new_edge(2, 3, 12, b"k23", b"tag23"),
+            new_edge(2, 4, 13, b"k24", b"tag24"),
+            new_edge(4, 1, 14, b"k41", b"tag41"),
+        ]);
+
+        test_once(&[
+            new_edge(1, 2, 11, b"k12", b"tag12"),
+            new_edge(1, 3, 12, b"k13", b"tag13"),
+            new_edge(2, 4, 13, b"k24", b"tag24"),
+            new_edge(3, 5, 14, b"k35", b"tag35"),
+            new_edge(2, 5, 15, b"k25", b"tag25"),
+            new_edge(5, 6, 16, b"k56", b"tag56"),
+            new_edge(6, 1, 17, b"k61", b"tag61"),
+        ]);
+
+        use rand::seq::SliceRandom;
+        let mut case = vec![
+            new_edge(1, 2, 11, b"k12", b"tag12"),
+            new_edge(1, 3, 12, b"k13", b"tag13"),
+            new_edge(2, 4, 13, b"k24", b"tag24"),
+            new_edge(3, 5, 14, b"k35", b"tag35"),
+            new_edge(2, 5, 15, b"k25", b"tag25"),
+            new_edge(5, 6, 16, b"k56", b"tag56"),
+        ];
+        case.shuffle(&mut rand::thread_rng());
+        case.push(new_edge(6, 1, 17, b"k61", b"tag61"));
+        test_once(&case);
     }
 
     pub(crate) struct MockPdClient;
