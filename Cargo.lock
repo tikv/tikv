@@ -735,6 +735,7 @@ name = "coprocessor_plugin_api"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "rustc_version",
 ]
 
 [[package]]

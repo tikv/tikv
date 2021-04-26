@@ -7,3 +7,6 @@ publish = false
 
 [dependencies]
 async-trait = "0.1"
+
+[build-dependencies]
+rustc_version = "0.2"
