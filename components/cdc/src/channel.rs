@@ -129,13 +129,21 @@ pub fn recv_timeout<S, I>(s: &mut S, dur: std::time::Duration) -> Result<Option<
 where
     S: Stream<Item = I> + Unpin,
 {
+    poll_timeout(&mut s.next(), dur)
+}
+
+#[cfg(test)]
+pub fn poll_timeout<F, I>(fut: &mut F, dur: std::time::Duration) -> Result<I, ()>
+where
+    F: std::future::Future<Output = I> + Unpin,
+{
     use futures::FutureExt;
     let mut timeout = futures_timer::Delay::new(dur).fuse();
-    let mut s = s.fuse();
+    let mut f = fut.fuse();
     futures::executor::block_on(async {
         futures::select! {
             () = timeout => Err(()),
-            item = s.next() => Ok(item),
+            item = f => Ok(item),
         }
     })
 }
