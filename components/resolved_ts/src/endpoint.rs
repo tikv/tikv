@@ -391,7 +391,7 @@ where
             .filter_map(|batch| {
                 if !batch.is_empty() {
                     if let Some(observe_region) = self.regions.get_mut(&batch.region_id) {
-                        let observe_id = batch.cdc_id;
+                        let observe_id = batch.rts_id;
                         let region_id = observe_region.meta.id;
                         if observe_region.observe_id == observe_id {
                             let logs = ChangeLog::encode_change_log(region_id, batch);
@@ -407,7 +407,7 @@ where
                         } else {
                             debug!("resolved ts CmdBatch discarded";
                                 "region_id" => batch.region_id,
-                                "observe_id" => ?batch.cdc_id,
+                                "observe_id" => ?batch.rts_id,
                                 "current" => ?observe_region.observe_id,
                             );
                         }
