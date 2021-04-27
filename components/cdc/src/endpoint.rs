@@ -13,8 +13,15 @@ use fail::fail_point;
 use futures::compat::Future01CompatExt;
 use grpcio::{ChannelBuilder, Environment};
 #[cfg(feature = "prost-codec")]
-use kvproto::cdcpb::event::Event as Event_oneof_event;
-use kvproto::cdcpb::*;
+use kvproto::cdcpb::{
+    event::Event as Event_oneof_event, ChangeDataRequest,
+    DuplicateRequest as ErrorDuplicateRequest, Error as EventError, Event,
+};
+#[cfg(not(feature = "prost-codec"))]
+use kvproto::cdcpb::{
+    ChangeDataRequest, DuplicateRequest as ErrorDuplicateRequest, Error as EventError, Event,
+    Event_oneof_event, ResolvedTs,
+};
 use kvproto::kvrpcpb::{CheckLeaderRequest, ExtraOp as TxnExtraOp, LeaderInfo};
 use kvproto::metapb::{PeerRole, Region};
 use kvproto::tikvpb::TikvClient;
@@ -460,11 +467,17 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         // TODO: Add a new task to close incompatible features.
         if let Some(e) = conn.check_version_and_set_feature(version) {
             // The downstream has not registered yet, send error right away.
-            downstream.sink_compatibility_error(region_id, e);
+            let mut err_event = EventError::default();
+            err_event.set_compatibility(e);
+            let _ = downstream.sink_error_event(region_id, err_event);
             return;
         }
-        if !conn.subscribe(request.get_region_id(), downstream_id) {
-            downstream.sink_duplicate_error(request.get_region_id());
+        if !conn.subscribe(region_id, downstream_id) {
+            let mut err_event = EventError::default();
+            let mut err = ErrorDuplicateRequest::default();
+            err.set_region_id(region_id);
+            err_event.set_duplicate_request(err);
+            let _ = downstream.sink_error_event(region_id, err_event);
             error!("cdc duplicate register";
                 "region_id" => region_id,
                 "conn_id" => ?conn_id,
@@ -666,14 +679,14 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         };
 
         let send_cdc_event = |conn: &Conn, event| {
+            // No need force send, as resolved ts messages is sent regularly.
+            // And errors can be ignored.
             match conn.get_sink().unbounded_send(event) {
                 Ok(_) => (),
-                // TODO: handle errors.
                 Err(SendError::Disconnected) => {
                     debug!("cdc send event failed, disconnected";
                         "conn_id" => ?conn.get_id(), "downstream" => ?conn.get_peer());
                 }
-                // TODO handle errors.
                 Err(SendError::Full) | Err(SendError::Congest) => {
                     info!("cdc send event failed, full";
                         "conn_id" => ?conn.get_id(), "downstream" => ?conn.get_peer());
@@ -703,23 +716,38 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         let downstream_id = match conn.downstream_id(region_id) {
             Some(downstream_id) => downstream_id,
             // No such region registers in the connection.
-            None => return,
+            None => {
+                info!("cdc send resolved ts failed, no region downstream id found";
+                    "region_id" => region_id);
+                return;
+            }
         };
         let delegate = match self.capture_regions.get(&region_id) {
             Some(delegate) => delegate,
             // No such region registers in the endpoint.
-            None => return,
+            None => {
+                info!("cdc send resolved ts failed, no region delegate found";
+                    "region_id" => region_id, "downstream_id" => ?downstream_id);
+                return;
+            }
         };
         let downstream = match delegate.downstream(downstream_id) {
             Some(downstream) => downstream,
             // No such downstream registers in the delegate.
-            None => return,
+            None => {
+                info!("cdc send resolved ts failed, no region downstream found";
+                    "region_id" => region_id, "downstream_id" => ?downstream_id);
+                return;
+            }
         };
-        downstream.sink_event(Event {
+        let resolved_ts_event = Event {
             region_id,
             event: Some(Event_oneof_event::ResolvedTs(resolved_ts)),
             ..Default::default()
-        });
+        };
+        // No need force send, as resolved ts messages is sent regularly.
+        // And errors can be ignored.
+        let _ = downstream.sink_event(resolved_ts_event);
     }
 
     fn register_min_ts_event(&self) {
@@ -1373,8 +1401,9 @@ mod tests {
     use collections::HashSet;
     use engine_traits::DATA_CFS;
     use futures::executor::block_on;
+    use kvproto::cdcpb::Header;
     #[cfg(feature = "prost-codec")]
-    use kvproto::cdcpb::event::Event as Event_oneof_event;
+    use kvproto::cdcpb::{event::Event as Event_oneof_event, Header};
     use kvproto::errorpb::Error as ErrorHeader;
     use raftstore::errors::Error as RaftStoreError;
     use raftstore::store::msg::CasualMessage;
