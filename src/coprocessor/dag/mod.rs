@@ -113,8 +113,8 @@ impl RequestHandler for BatchDAGHandler {
         self.runner.collect_storage_stats(dest);
     }
 
-    fn collect_scan_stats(&mut self, dest: &mut ExecSummary) {
-        self.runner.collect_scan_stats(dest);
+    fn collect_kv_read_time(&mut self, dest: &mut ExecSummary) {
+        self.runner.collect_kv_read_time(dest);
     }
 }
 

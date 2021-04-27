@@ -428,10 +428,10 @@ impl<E: Engine> Endpoint<E> {
         // execution metrics.
         let mut storage_stats = Statistics::default();
         let mut exec_summary = ExecSummary::default();
-        handler.collect_scan_stats(&mut exec_summary);
+        handler.collect_kv_read_time(&mut exec_summary);
         handler.collect_scan_statistics(&mut storage_stats);
         tracker.collect_storage_statistics(storage_stats);
-        tracker.collect_scan_stats(exec_summary);
+        tracker.collect_kv_read_time(exec_summary);
         let (exec_details, exec_details_v2) = tracker.get_exec_details();
         tracker.on_finish_all_items();
 
