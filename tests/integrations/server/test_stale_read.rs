@@ -70,7 +70,9 @@ fn test_stale_read_basic_flow_replicate() {
     let mut cluster = new_server_cluster(0, 3);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
+
     cluster.run();
+    cluster.sim.wl().start_resolved_ts_worker();
 
     cluster.must_transfer_leader(1, new_peer(1, 1));
     let mut leader_client = PeerClient::new(&cluster, 1, new_peer(1, 1));
@@ -149,7 +151,9 @@ fn test_stale_read_basic_flow_lock() {
     let mut cluster = new_server_cluster(0, 3);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
+
     cluster.run();
+    cluster.sim.wl().start_resolved_ts_worker();
 
     cluster.must_transfer_leader(1, new_peer(1, 1));
     let leader_client = PeerClient::new(&cluster, 1, new_peer(1, 1));
