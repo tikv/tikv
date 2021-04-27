@@ -36,6 +36,36 @@ lazy_static! {
         "Total number of CDC captured regions"
     )
     .unwrap();
+<<<<<<< HEAD
+=======
+    pub static ref CDC_OLD_VALUE_CACHE_LEN: IntGauge = register_int_gauge!(
+        "tikv_cdc_old_value_cache_length",
+        "Number of elements in old value cache"
+    )
+    .unwrap();
+    pub static ref CDC_OLD_VALUE_CACHE_CAP: IntGauge = register_int_gauge!(
+        "tikv_cdc_old_value_cache_capacity",
+        "Capacity of old value cache"
+    )
+    .unwrap();
+    pub static ref CDC_OLD_VALUE_CACHE_MISS: IntGauge = register_int_gauge!(
+        "tikv_cdc_old_value_cache_miss",
+        "Count of old value cache missing"
+    )
+    .unwrap();
+    pub static ref CDC_OLD_VALUE_CACHE_MISS_NONE: IntGauge = register_int_gauge!(
+        "tikv_cdc_old_value_cache_miss_none",
+        "Count of None old value cache missing"
+    )
+    .unwrap();
+    pub static ref CDC_OLD_VALUE_CACHE_ACCESS: IntGauge = register_int_gauge!(
+        "tikv_cdc_old_value_cache_access",
+        "Count of old value cache accessing"
+    )
+    .unwrap();
+    pub static ref CDC_OLD_VALUE_CACHE_BYTES: IntGauge =
+        register_int_gauge!("tikv_cdc_old_value_cache_bytes", "Bytes of old value cache").unwrap();
+>>>>>>> 3b234d021... cdc, txn: improve CDC old value cache hit ratio in pessimistic txn (#10072)
     pub static ref CDC_OLD_VALUE_SCAN_DETAILS: IntCounterVec = register_int_counter_vec!(
         "tikv_cdc_old_value_scan_details",
         "Bucketed counter of scan details for old value",

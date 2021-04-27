@@ -50,8 +50,18 @@ use futures03::prelude::*;
 use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, KeyRange, RawGetRequest};
 use raftstore::store::util::build_key_range;
 use rand::prelude::*;
+<<<<<<< HEAD
 use std::sync::{atomic, Arc};
 use txn_types::{Key, KvPair, TimeStamp, TsSet, Value};
+=======
+use std::{
+    borrow::Cow,
+    iter,
+    sync::{atomic, Arc},
+};
+use tikv_util::time::{Instant, ThreadReadId};
+use txn_types::{Key, KvPair, Lock, Mutation, OldValues, TimeStamp, TsSet, Value};
+>>>>>>> 3b234d021... cdc, txn: improve CDC old value cache hit ratio in pessimistic txn (#10072)
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
@@ -1381,6 +1391,7 @@ pub mod test_util {
             None,
             return_values,
             for_update_ts.next(),
+            OldValues::default(),
             Context::default(),
         )
     }
@@ -4239,4 +4250,967 @@ mod tests {
         test_pessimistic_lock_impl(false);
         test_pessimistic_lock_impl(true);
     }
+<<<<<<< HEAD
+=======
+
+    pub enum Msg {
+        WaitFor {
+            start_ts: TimeStamp,
+            cb: StorageCallback,
+            pr: ProcessResult,
+            lock: Lock,
+            is_first_lock: bool,
+            timeout: Option<WaitTimeout>,
+        },
+
+        WakeUp {
+            lock_ts: TimeStamp,
+            hashes: Vec<u64>,
+            commit_ts: TimeStamp,
+            is_pessimistic_txn: bool,
+        },
+    }
+
+    // `ProxyLockMgr` sends all msgs it received to `Sender`.
+    // It's used to check whether we send right messages to lock manager.
+    #[derive(Clone)]
+    pub struct ProxyLockMgr {
+        tx: Sender<Msg>,
+        has_waiter: Arc<AtomicBool>,
+    }
+
+    impl ProxyLockMgr {
+        pub fn new(tx: Sender<Msg>) -> Self {
+            Self {
+                tx,
+                has_waiter: Arc::new(AtomicBool::new(false)),
+            }
+        }
+
+        pub fn set_has_waiter(&mut self, has_waiter: bool) {
+            self.has_waiter.store(has_waiter, Ordering::Relaxed);
+        }
+    }
+
+    impl LockManager for ProxyLockMgr {
+        fn wait_for(
+            &self,
+            start_ts: TimeStamp,
+            cb: StorageCallback,
+            pr: ProcessResult,
+            lock: Lock,
+            is_first_lock: bool,
+            timeout: Option<WaitTimeout>,
+        ) {
+            self.tx
+                .send(Msg::WaitFor {
+                    start_ts,
+                    cb,
+                    pr,
+                    lock,
+                    is_first_lock,
+                    timeout,
+                })
+                .unwrap();
+        }
+
+        fn wake_up(
+            &self,
+            lock_ts: TimeStamp,
+            hashes: Vec<u64>,
+            commit_ts: TimeStamp,
+            is_pessimistic_txn: bool,
+        ) {
+            self.tx
+                .send(Msg::WakeUp {
+                    lock_ts,
+                    hashes,
+                    commit_ts,
+                    is_pessimistic_txn,
+                })
+                .unwrap();
+        }
+
+        fn has_waiter(&self) -> bool {
+            self.has_waiter.load(Ordering::Relaxed)
+        }
+    }
+
+    // Test whether `Storage` sends right wait-for-lock msgs to `LockManager`.
+    #[test]
+    fn validate_wait_for_lock_msg() {
+        let (msg_tx, msg_rx) = channel();
+        let storage = TestStorageBuilder::from_engine_and_lock_mgr(
+            TestEngineBuilder::new().build().unwrap(),
+            ProxyLockMgr::new(msg_tx),
+        )
+        .build()
+        .unwrap();
+
+        let (k, v) = (b"k".to_vec(), b"v".to_vec());
+        let (tx, rx) = channel();
+        // Write lock-k.
+        storage
+            .sched_txn_command(
+                commands::Prewrite::with_defaults(
+                    vec![Mutation::Put((Key::from_raw(&k), v))],
+                    k.clone(),
+                    10.into(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        // No wait for msg
+        assert!(msg_rx.try_recv().is_err());
+
+        // Meet lock-k.
+        storage
+            .sched_txn_command(
+                commands::AcquirePessimisticLock::new(
+                    vec![(Key::from_raw(b"foo"), false), (Key::from_raw(&k), false)],
+                    k.clone(),
+                    20.into(),
+                    3000,
+                    true,
+                    20.into(),
+                    Some(WaitTimeout::Millis(100)),
+                    false,
+                    21.into(),
+                    OldValues::default(),
+                    Context::default(),
+                ),
+                expect_ok_callback(tx, 0),
+            )
+            .unwrap();
+        // The transaction should be waiting for lock released so cb won't be called.
+        rx.recv_timeout(Duration::from_millis(500)).unwrap_err();
+
+        let msg = msg_rx.try_recv().unwrap();
+        // Check msg validation.
+        match msg {
+            Msg::WaitFor {
+                start_ts,
+                pr,
+                lock,
+                is_first_lock,
+                timeout,
+                ..
+            } => {
+                assert_eq!(start_ts, TimeStamp::new(20));
+                assert_eq!(
+                    lock,
+                    Lock {
+                        ts: 10.into(),
+                        hash: Key::from_raw(&k).gen_hash(),
+                    }
+                );
+                assert_eq!(is_first_lock, true);
+                assert_eq!(timeout, Some(WaitTimeout::Millis(100)));
+                match pr {
+                    ProcessResult::PessimisticLockRes { res } => match res {
+                        Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
+                            MvccError(box MvccErrorInner::KeyIsLocked(info)),
+                        ))))) => {
+                            assert_eq!(info.get_key(), k.as_slice());
+                            assert_eq!(info.get_primary_lock(), k.as_slice());
+                            assert_eq!(info.get_lock_version(), 10);
+                        }
+                        _ => panic!("unexpected error"),
+                    },
+                    _ => panic!("unexpected process result"),
+                };
+            }
+
+            _ => panic!("unexpected msg"),
+        }
+    }
+
+    // Test whether `Storage` sends right wake-up msgs to `LockManager`
+    #[test]
+    fn validate_wake_up_msg() {
+        fn assert_wake_up_msg_eq(
+            msg: Msg,
+            expected_lock_ts: TimeStamp,
+            expected_hashes: Vec<u64>,
+            expected_commit_ts: TimeStamp,
+            expected_is_pessimistic_txn: bool,
+        ) {
+            match msg {
+                Msg::WakeUp {
+                    lock_ts,
+                    hashes,
+                    commit_ts,
+                    is_pessimistic_txn,
+                } => {
+                    assert_eq!(lock_ts, expected_lock_ts);
+                    assert_eq!(hashes, expected_hashes);
+                    assert_eq!(commit_ts, expected_commit_ts);
+                    assert_eq!(is_pessimistic_txn, expected_is_pessimistic_txn);
+                }
+                _ => panic!("unexpected msg"),
+            }
+        }
+
+        let (msg_tx, msg_rx) = channel();
+        let mut lock_mgr = ProxyLockMgr::new(msg_tx);
+        lock_mgr.set_has_waiter(true);
+        let storage = TestStorageBuilder::from_engine_and_lock_mgr(
+            TestEngineBuilder::new().build().unwrap(),
+            lock_mgr,
+        )
+        .build()
+        .unwrap();
+
+        let (tx, rx) = channel();
+        let prewrite_locks = |keys: &[Key], ts: TimeStamp| {
+            storage
+                .sched_txn_command(
+                    commands::Prewrite::with_defaults(
+                        keys.iter()
+                            .map(|k| Mutation::Put((k.clone(), b"v".to_vec())))
+                            .collect(),
+                        keys[0].to_raw().unwrap(),
+                        ts,
+                    ),
+                    expect_ok_callback(tx.clone(), 0),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+        };
+        let acquire_pessimistic_locks = |keys: &[Key], ts: TimeStamp| {
+            storage
+                .sched_txn_command(
+                    new_acquire_pessimistic_lock_command(
+                        keys.iter().map(|k| (k.clone(), false)).collect(),
+                        ts,
+                        ts,
+                        false,
+                    ),
+                    expect_ok_callback(tx.clone(), 0),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+        };
+
+        let keys = vec![
+            Key::from_raw(b"a"),
+            Key::from_raw(b"b"),
+            Key::from_raw(b"c"),
+        ];
+        let key_hashes: Vec<u64> = keys.iter().map(|k| k.gen_hash()).collect();
+
+        // Commit
+        prewrite_locks(&keys, 10.into());
+        // If locks don't exsit, hashes of released locks should be empty.
+        for empty_hashes in &[false, true] {
+            storage
+                .sched_txn_command(
+                    commands::Commit::new(keys.clone(), 10.into(), 20.into(), Context::default()),
+                    expect_ok_callback(tx.clone(), 0),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+
+            let msg = msg_rx.recv().unwrap();
+            let hashes = if *empty_hashes {
+                Vec::new()
+            } else {
+                key_hashes.clone()
+            };
+            assert_wake_up_msg_eq(msg, 10.into(), hashes, 20.into(), false);
+        }
+
+        // Cleanup
+        for pessimistic in &[false, true] {
+            let mut ts = TimeStamp::new(30);
+            if *pessimistic {
+                ts.incr();
+                acquire_pessimistic_locks(&keys[..1], ts);
+            } else {
+                prewrite_locks(&keys[..1], ts);
+            }
+            for empty_hashes in &[false, true] {
+                storage
+                    .sched_txn_command(
+                        commands::Cleanup::new(
+                            keys[0].clone(),
+                            ts,
+                            TimeStamp::max(),
+                            Context::default(),
+                        ),
+                        expect_ok_callback(tx.clone(), 0),
+                    )
+                    .unwrap();
+                rx.recv().unwrap();
+
+                let msg = msg_rx.recv().unwrap();
+                let (hashes, pessimistic) = if *empty_hashes {
+                    (Vec::new(), false)
+                } else {
+                    (key_hashes[..1].to_vec(), *pessimistic)
+                };
+                assert_wake_up_msg_eq(msg, ts, hashes, 0.into(), pessimistic);
+            }
+        }
+
+        // Rollback
+        for pessimistic in &[false, true] {
+            let mut ts = TimeStamp::new(40);
+            if *pessimistic {
+                ts.incr();
+                acquire_pessimistic_locks(&keys, ts);
+            } else {
+                prewrite_locks(&keys, ts);
+            }
+            for empty_hashes in &[false, true] {
+                storage
+                    .sched_txn_command(
+                        commands::Rollback::new(keys.clone(), ts, Context::default()),
+                        expect_ok_callback(tx.clone(), 0),
+                    )
+                    .unwrap();
+                rx.recv().unwrap();
+
+                let msg = msg_rx.recv().unwrap();
+                let (hashes, pessimistic) = if *empty_hashes {
+                    (Vec::new(), false)
+                } else {
+                    (key_hashes.clone(), *pessimistic)
+                };
+                assert_wake_up_msg_eq(msg, ts, hashes, 0.into(), pessimistic);
+            }
+        }
+
+        // PessimisticRollback
+        acquire_pessimistic_locks(&keys, 50.into());
+        for empty_hashes in &[false, true] {
+            storage
+                .sched_txn_command(
+                    commands::PessimisticRollback::new(
+                        keys.clone(),
+                        50.into(),
+                        50.into(),
+                        Context::default(),
+                    ),
+                    expect_ok_callback(tx.clone(), 0),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+
+            let msg = msg_rx.recv().unwrap();
+            let (hashes, pessimistic) = if *empty_hashes {
+                (Vec::new(), false)
+            } else {
+                (key_hashes.clone(), true)
+            };
+            assert_wake_up_msg_eq(msg, 50.into(), hashes, 0.into(), pessimistic);
+        }
+
+        // ResolveLockLite
+        for commit in &[false, true] {
+            let mut start_ts = TimeStamp::new(60);
+            let commit_ts = if *commit {
+                start_ts.incr();
+                start_ts.next()
+            } else {
+                TimeStamp::zero()
+            };
+            prewrite_locks(&keys, start_ts);
+            for empty_hashes in &[false, true] {
+                storage
+                    .sched_txn_command(
+                        commands::ResolveLockLite::new(
+                            start_ts,
+                            commit_ts,
+                            keys.clone(),
+                            Context::default(),
+                        ),
+                        expect_ok_callback(tx.clone(), 0),
+                    )
+                    .unwrap();
+                rx.recv().unwrap();
+
+                let msg = msg_rx.recv().unwrap();
+                let hashes = if *empty_hashes {
+                    Vec::new()
+                } else {
+                    key_hashes.clone()
+                };
+                assert_wake_up_msg_eq(msg, start_ts, hashes, commit_ts, false);
+            }
+        }
+
+        // ResolveLock
+        let mut txn_status = HashMap::default();
+        acquire_pessimistic_locks(&keys, 70.into());
+        // Rollback start_ts=70
+        txn_status.insert(TimeStamp::new(70), TimeStamp::zero());
+        let committed_keys = vec![
+            Key::from_raw(b"d"),
+            Key::from_raw(b"e"),
+            Key::from_raw(b"f"),
+        ];
+        let committed_key_hashes: Vec<u64> = committed_keys.iter().map(|k| k.gen_hash()).collect();
+        // Commit start_ts=75
+        prewrite_locks(&committed_keys, 75.into());
+        txn_status.insert(TimeStamp::new(75), TimeStamp::new(76));
+        storage
+            .sched_txn_command(
+                commands::ResolveLockReadPhase::new(txn_status, None, Context::default()),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        let mut msg1 = msg_rx.recv().unwrap();
+        let mut msg2 = msg_rx.recv().unwrap();
+        match msg1 {
+            Msg::WakeUp { lock_ts, .. } => {
+                if lock_ts != TimeStamp::new(70) {
+                    // Let msg1 be the msg of rolled back transaction.
+                    std::mem::swap(&mut msg1, &mut msg2);
+                }
+                assert_wake_up_msg_eq(msg1, 70.into(), key_hashes, 0.into(), true);
+                assert_wake_up_msg_eq(msg2, 75.into(), committed_key_hashes, 76.into(), false);
+            }
+            _ => panic!("unexpect msg"),
+        }
+
+        // CheckTxnStatus
+        let key = Key::from_raw(b"k");
+        let start_ts = TimeStamp::compose(100, 0);
+        storage
+            .sched_txn_command(
+                commands::Prewrite::with_lock_ttl(
+                    vec![Mutation::Put((key.clone(), b"v".to_vec()))],
+                    key.to_raw().unwrap(),
+                    start_ts,
+                    100,
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Not expire
+        storage
+            .sched_txn_command(
+                commands::CheckTxnStatus::new(
+                    key.clone(),
+                    start_ts,
+                    TimeStamp::compose(110, 0),
+                    TimeStamp::compose(150, 0),
+                    false,
+                    false,
+                    false,
+                    Context::default(),
+                ),
+                expect_value_callback(
+                    tx.clone(),
+                    0,
+                    TxnStatus::uncommitted(
+                        txn_types::Lock::new(
+                            LockType::Put,
+                            b"k".to_vec(),
+                            start_ts,
+                            100,
+                            Some(b"v".to_vec()),
+                            0.into(),
+                            0,
+                            0.into(),
+                        ),
+                        false,
+                    ),
+                ),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        // No msg
+        assert!(msg_rx.try_recv().is_err());
+
+        // Expired
+        storage
+            .sched_txn_command(
+                commands::CheckTxnStatus::new(
+                    key.clone(),
+                    start_ts,
+                    TimeStamp::compose(110, 0),
+                    TimeStamp::compose(201, 0),
+                    false,
+                    false,
+                    false,
+                    Context::default(),
+                ),
+                expect_value_callback(tx.clone(), 0, TxnStatus::TtlExpire),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        assert_wake_up_msg_eq(
+            msg_rx.recv().unwrap(),
+            start_ts,
+            vec![key.gen_hash()],
+            0.into(),
+            false,
+        );
+    }
+
+    #[test]
+    fn test_check_memory_locks() {
+        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
+            .build()
+            .unwrap();
+        let cm = storage.get_concurrency_manager();
+        let key = Key::from_raw(b"key");
+        let guard = block_on(cm.lock_key(&key));
+        guard.with_lock(|lock| {
+            *lock = Some(txn_types::Lock::new(
+                LockType::Put,
+                b"key".to_vec(),
+                10.into(),
+                100,
+                Some(vec![]),
+                0.into(),
+                1,
+                20.into(),
+            ));
+        });
+
+        let mut ctx = Context::default();
+        ctx.set_isolation_level(IsolationLevel::Si);
+
+        // Test get
+        let key_error = extract_key_error(
+            &block_on(storage.get(ctx.clone(), key.clone(), 100.into())).unwrap_err(),
+        );
+        assert_eq!(key_error.get_locked().get_key(), b"key");
+
+        // Test batch_get
+        let key_error = extract_key_error(
+            &block_on(storage.batch_get(ctx.clone(), vec![Key::from_raw(b"a"), key], 100.into()))
+                .unwrap_err(),
+        );
+        assert_eq!(key_error.get_locked().get_key(), b"key");
+
+        // Test scan
+        let key_error = extract_key_error(
+            &block_on(storage.scan(
+                ctx.clone(),
+                Key::from_raw(b"a"),
+                None,
+                10,
+                0,
+                100.into(),
+                false,
+                false,
+            ))
+            .unwrap_err(),
+        );
+        assert_eq!(key_error.get_locked().get_key(), b"key");
+
+        // Test batch_get_command
+        let mut req1 = GetRequest::default();
+        req1.set_context(ctx.clone());
+        req1.set_key(b"a".to_vec());
+        req1.set_version(50);
+        let mut req2 = GetRequest::default();
+        req2.set_context(ctx);
+        req2.set_key(b"key".to_vec());
+        req2.set_version(100);
+        let res = block_on(storage.batch_get_command(vec![req1, req2])).unwrap();
+        assert!(res[0].is_ok());
+        let key_error = extract_key_error(&res[1].as_ref().unwrap_err());
+        assert_eq!(key_error.get_locked().get_key(), b"key");
+    }
+
+    #[test]
+    fn test_async_commit_prewrite() {
+        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
+            .build()
+            .unwrap();
+        let cm = storage.concurrency_manager.clone();
+        cm.update_max_ts(10.into());
+
+        // Optimistic prewrite
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::Prewrite::new(
+                    vec![
+                        Mutation::Put((Key::from_raw(b"a"), b"v".to_vec())),
+                        Mutation::Put((Key::from_raw(b"b"), b"v".to_vec())),
+                        Mutation::Put((Key::from_raw(b"c"), b"v".to_vec())),
+                    ],
+                    b"c".to_vec(),
+                    100.into(),
+                    1000,
+                    false,
+                    3,
+                    TimeStamp::default(),
+                    TimeStamp::default(),
+                    Some(vec![b"a".to_vec(), b"b".to_vec()]),
+                    false,
+                    Context::default(),
+                ),
+                Box::new(move |res| {
+                    tx.send(res).unwrap();
+                }),
+            )
+            .unwrap();
+        let res = rx.recv().unwrap().unwrap();
+        assert_eq!(res.min_commit_ts, 101.into());
+
+        // Pessimistic prewrite
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                new_acquire_pessimistic_lock_command(
+                    vec![(Key::from_raw(b"d"), false), (Key::from_raw(b"e"), false)],
+                    200,
+                    300,
+                    false,
+                ),
+                expect_ok_callback(tx, 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        cm.update_max_ts(1000.into());
+
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::PrewritePessimistic::new(
+                    vec![
+                        (Mutation::Put((Key::from_raw(b"d"), b"v".to_vec())), true),
+                        (Mutation::Put((Key::from_raw(b"e"), b"v".to_vec())), true),
+                    ],
+                    b"d".to_vec(),
+                    200.into(),
+                    1000,
+                    400.into(),
+                    2,
+                    401.into(),
+                    TimeStamp::default(),
+                    Some(vec![b"e".to_vec()]),
+                    false,
+                    Context::default(),
+                ),
+                Box::new(move |res| {
+                    tx.send(res).unwrap();
+                }),
+            )
+            .unwrap();
+        let res = rx.recv().unwrap().unwrap();
+        assert_eq!(res.min_commit_ts, 1001.into());
+    }
+
+    // This is one of the series of tests to test overlapped timestamps.
+    // Overlapped ts means there is a rollback record and a commit record with the same ts.
+    // In this test we check that if rollback happens before commit, then they should not have overlapped ts,
+    // which is an expected property.
+    #[test]
+    fn test_overlapped_ts_rollback_before_prewrite() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+            engine.clone(),
+            DummyLockManager {},
+        )
+        .build()
+        .unwrap();
+
+        let (k1, v1) = (b"key1", b"v1");
+        let (k2, v2) = (b"key2", b"v2");
+        let key1 = Key::from_raw(k1);
+        let key2 = Key::from_raw(k2);
+        let value1 = v1.to_vec();
+        let value2 = v2.to_vec();
+
+        let (tx, rx) = channel();
+
+        // T1 acquires lock on k1, start_ts = 1, for_update_ts = 3
+        storage
+            .sched_txn_command(
+                commands::AcquirePessimisticLock::new(
+                    vec![(key1.clone(), false)],
+                    k1.to_vec(),
+                    1.into(),
+                    0,
+                    true,
+                    3.into(),
+                    None,
+                    false,
+                    0.into(),
+                    OldValues::default(),
+                    Default::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // T2 acquires lock on k2, start_ts = 10, for_update_ts = 15
+        storage
+            .sched_txn_command(
+                commands::AcquirePessimisticLock::new(
+                    vec![(key2.clone(), false)],
+                    k2.to_vec(),
+                    10.into(),
+                    0,
+                    true,
+                    15.into(),
+                    None,
+                    false,
+                    0.into(),
+                    OldValues::default(),
+                    Default::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // T2 pessimistically prewrites, start_ts = 10, lock ttl = 0
+        storage
+            .sched_txn_command(
+                commands::PrewritePessimistic::new(
+                    vec![(Mutation::Put((key2.clone(), value2.clone())), true)],
+                    k2.to_vec(),
+                    10.into(),
+                    0,
+                    15.into(),
+                    1,
+                    0.into(),
+                    100.into(),
+                    None,
+                    false,
+                    Default::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // T3 checks T2, which rolls back key2 and pushes max_ts to 10
+        // use a large timestamp to make the lock expire so key2 will be rolled back.
+        storage
+            .sched_txn_command(
+                commands::CheckTxnStatus::new(
+                    key2.clone(),
+                    10.into(),
+                    ((1 << 18) + 8).into(),
+                    ((1 << 18) + 8).into(),
+                    true,
+                    false,
+                    false,
+                    Default::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        must_unlocked(&engine, k2);
+        must_written(&engine, k2, 10, 10, WriteType::Rollback);
+
+        // T1 prewrites, start_ts = 1, for_update_ts = 3
+        storage
+            .sched_txn_command(
+                commands::PrewritePessimistic::new(
+                    vec![
+                        (Mutation::Put((key1.clone(), value1)), true),
+                        (Mutation::Put((key2.clone(), value2)), false),
+                    ],
+                    k1.to_vec(),
+                    1.into(),
+                    0,
+                    3.into(),
+                    2,
+                    0.into(),
+                    (1 << 19).into(),
+                    Some(vec![k2.to_vec()]),
+                    false,
+                    Default::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // T1.commit_ts must be pushed to be larger than T2.start_ts (if we resolve T1)
+        storage
+            .sched_txn_command(
+                commands::CheckSecondaryLocks::new(vec![key1, key2], 1.into(), Default::default()),
+                Box::new(move |res| {
+                    let pr = res.unwrap();
+                    match pr {
+                        SecondaryLocksStatus::Locked(l) => {
+                            let min_commit_ts = l
+                                .iter()
+                                .map(|lock_info| lock_info.min_commit_ts)
+                                .max()
+                                .unwrap();
+                            tx.send(min_commit_ts as i32).unwrap();
+                        }
+                        _ => unreachable!(),
+                    }
+                }),
+            )
+            .unwrap();
+        assert!(rx.recv().unwrap() > 10);
+    }
+    // this test shows that the scheduler take `response_policy` in `WriteResult` serious,
+    // ie. call the callback at expected stage when writing to the engine
+    #[test]
+    fn test_scheduler_response_policy() {
+        struct Case<T: 'static + StorageCallbackType + Send> {
+            expected_writes: Vec<ExpectedWrite>,
+
+            command: TypedCommand<T>,
+            pipelined_pessimistic_lock: bool,
+        }
+
+        impl<T: 'static + StorageCallbackType + Send> Case<T> {
+            fn run(self) {
+                let mut builder =
+                    MockEngineBuilder::from_rocks_engine(TestEngineBuilder::new().build().unwrap());
+                for expected_write in self.expected_writes {
+                    builder = builder.add_expected_write(expected_write)
+                }
+                let engine = builder.build();
+                let mut builder =
+                    TestStorageBuilder::from_engine_and_lock_mgr(engine, DummyLockManager {});
+                builder.config.enable_async_apply_prewrite = true;
+                if self.pipelined_pessimistic_lock {
+                    builder
+                        .pipelined_pessimistic_lock
+                        .store(true, Ordering::Relaxed);
+                }
+                let storage = builder.build().unwrap();
+                let (tx, rx) = channel();
+                storage
+                    .sched_txn_command(
+                        self.command,
+                        Box::new(move |res| {
+                            tx.send(res).unwrap();
+                        }),
+                    )
+                    .unwrap();
+                rx.recv().unwrap().unwrap();
+            }
+        }
+
+        let keys = [b"k1", b"k2"];
+        let values = [b"v1", b"v2"];
+        let mutations = vec![
+            Mutation::Put((Key::from_raw(keys[0]), keys[0].to_vec())),
+            Mutation::Put((Key::from_raw(keys[1]), values[1].to_vec())),
+        ];
+
+        let on_applied_case = Case {
+            // this case's command return ResponsePolicy::OnApplied
+            // tested by `test_response_stage` in command::prewrite
+            expected_writes: vec![
+                ExpectedWrite::new()
+                    .expect_no_committed_cb()
+                    .expect_no_proposed_cb(),
+                ExpectedWrite::new()
+                    .expect_no_committed_cb()
+                    .expect_no_proposed_cb(),
+            ],
+
+            command: Prewrite::new(
+                mutations.clone(),
+                keys[0].to_vec(),
+                TimeStamp::new(10),
+                0,
+                false,
+                1,
+                TimeStamp::default(),
+                TimeStamp::default(),
+                None,
+                false,
+                Context::default(),
+            ),
+            pipelined_pessimistic_lock: false,
+        };
+        let on_commited_case = Case {
+            // this case's command return ResponsePolicy::OnCommitted
+            // tested by `test_response_stage` in command::prewrite
+            expected_writes: vec![
+                ExpectedWrite::new().expect_committed_cb(),
+                ExpectedWrite::new().expect_committed_cb(),
+            ],
+
+            command: Prewrite::new(
+                mutations,
+                keys[0].to_vec(),
+                TimeStamp::new(10),
+                0,
+                false,
+                1,
+                TimeStamp::default(),
+                TimeStamp::default(),
+                Some(vec![]),
+                false,
+                Context::default(),
+            ),
+            pipelined_pessimistic_lock: false,
+        };
+        let on_proposed_case = Case {
+            // this case's command return ResponsePolicy::OnProposed
+            // untested, but all AcquirePessimisticLock should return ResponsePolicy::OnProposed now
+            // and the scheduler expected to take OnProposed serious when
+            // enable pipelined pessimistic lock
+            expected_writes: vec![
+                ExpectedWrite::new().expect_proposed_cb(),
+                ExpectedWrite::new().expect_proposed_cb(),
+            ],
+
+            command: AcquirePessimisticLock::new(
+                keys.iter().map(|&it| (Key::from_raw(it), true)).collect(),
+                keys[0].to_vec(),
+                TimeStamp::new(10),
+                0,
+                false,
+                TimeStamp::new(11),
+                None,
+                false,
+                TimeStamp::new(12),
+                OldValues::default(),
+                Context::default(),
+            ),
+            pipelined_pessimistic_lock: true,
+        };
+        let on_proposed_fallback_case = Case {
+            // this case's command return ResponsePolicy::OnProposed
+            // but when pipelined pessimistic lock is off,
+            // the scheduler should fallback to use OnApplied
+            expected_writes: vec![
+                ExpectedWrite::new().expect_no_proposed_cb(),
+                ExpectedWrite::new().expect_no_proposed_cb(),
+            ],
+
+            command: AcquirePessimisticLock::new(
+                keys.iter().map(|&it| (Key::from_raw(it), true)).collect(),
+                keys[0].to_vec(),
+                TimeStamp::new(10),
+                0,
+                false,
+                TimeStamp::new(11),
+                None,
+                false,
+                TimeStamp::new(12),
+                OldValues::default(),
+                Context::default(),
+            ),
+            pipelined_pessimistic_lock: false,
+        };
+
+        on_applied_case.run();
+        on_commited_case.run();
+        on_proposed_case.run();
+        on_proposed_fallback_case.run();
+    }
+>>>>>>> 3b234d021... cdc, txn: improve CDC old value cache hit ratio in pessimistic txn (#10072)
 }

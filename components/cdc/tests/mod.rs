@@ -128,8 +128,13 @@ impl TestSuite {
     }
 
     pub fn stop(mut self) {
+<<<<<<< HEAD
         for (_, mut worker) in self.endpoints {
             worker.stop().unwrap().join().unwrap();
+=======
+        for (_, worker) in self.endpoints.drain() {
+            worker.stop_worker();
+>>>>>>> 3b234d021... cdc, txn: improve CDC old value cache hit ratio in pessimistic txn (#10072)
         }
         self.cluster.shutdown();
     }

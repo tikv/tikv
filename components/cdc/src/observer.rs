@@ -128,6 +128,7 @@ impl CmdObserver<RocksEngine> for CdcObserver {
             let mut region = Region::default();
             region.mut_peers().push(Peer::default());
             // Create a snapshot here for preventing the old value was GC-ed.
+<<<<<<< HEAD
             let snapshot = RegionSnapshot::from_snapshot(engine.snapshot().into_sync(), region);
             let mut reader = OldValueReader::new(snapshot);
             let get_old_value = move |key, query_ts, statistics: &mut Statistics| {
@@ -141,16 +142,50 @@ impl CmdObserver<RocksEngine> for CdcObserver {
                             if let Some(old_value) = old_value {
                                 let start_ts = old_value.start_ts;
                                 return old_value.short_value.or_else(|| {
+=======
+            let snapshot =
+                RegionSnapshot::from_snapshot(Arc::new(engine.snapshot()), Arc::new(region));
+            let reader = OldValueReader::new(snapshot);
+            let get_old_value = move |key, query_ts, old_value_cache: &mut OldValueCache| {
+                old_value_cache.access_count += 1;
+                if let Some((old_value, mutation_type)) = old_value_cache.cache.remove(&key) {
+                    return match mutation_type {
+                        // Old value of an Insert is guaranteed to be None.
+                        Some(MutationType::Insert) => {
+                            assert_eq!(old_value, OldValue::None);
+                            (None, None)
+                        }
+                        // For Put, Delete or a mutation type we do not know,
+                        // we read old value from the cache.
+                        Some(MutationType::Put) | Some(MutationType::Delete) | None => {
+                            match old_value {
+                                OldValue::None => (None, None),
+                                OldValue::Value { value } => (Some(value), None),
+                                OldValue::ValueTimeStamp { start_ts } => {
+                                    let mut statistics = Statistics::default();
+>>>>>>> 3b234d021... cdc, txn: improve CDC old value cache hit ratio in pessimistic txn (#10072)
                                     let prev_key = key.truncate_ts().unwrap().append_ts(start_ts);
                                     let start = Instant::now();
                                     let mut opts = ReadOptions::new();
                                     opts.set_fill_cache(false);
+<<<<<<< HEAD
                                     let value = reader.get_value_default(&prev_key, statistics);
                                     CDC_OLD_VALUE_DURATION_HISTOGRAM
                                         .with_label_values(&["get"])
                                         .observe(start.elapsed().as_secs_f64());
                                     value
                                 });
+=======
+                                    let value =
+                                        reader.get_value_default(&prev_key, &mut statistics);
+                                    CDC_OLD_VALUE_DURATION_HISTOGRAM
+                                        .with_label_values(&["get"])
+                                        .observe(start.elapsed().as_secs_f64());
+                                    (value, Some(statistics))
+                                }
+                                // Unspecified should not be added into cache.
+                                OldValue::Unspecified => unreachable!(),
+>>>>>>> 3b234d021... cdc, txn: improve CDC old value cache hit ratio in pessimistic txn (#10072)
                             }
                         }
                         _ => unreachable!(),
@@ -165,7 +200,14 @@ impl CmdObserver<RocksEngine> for CdcObserver {
                 CDC_OLD_VALUE_DURATION_HISTOGRAM
                     .with_label_values(&["seek"])
                     .observe(start.elapsed().as_secs_f64());
+<<<<<<< HEAD
                 value
+=======
+                if value.is_none() {
+                    old_value_cache.miss_none_count += 1;
+                }
+                (value, Some(statistics))
+>>>>>>> 3b234d021... cdc, txn: improve CDC old value cache hit ratio in pessimistic txn (#10072)
             };
             if let Err(e) = self.sched.schedule(Task::MultiBatch {
                 multi: batches,

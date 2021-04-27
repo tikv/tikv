@@ -570,6 +570,7 @@ impl Delegate {
                 }
                 continue;
             }
+<<<<<<< HEAD
             let mut put = req.take_put();
             match put.cf.as_str() {
                 "write" => {
@@ -578,6 +579,45 @@ impl Delegate {
                     if skip {
                         continue;
                     }
+=======
+        }
+        // Skip broadcast if there is no Put or Delete.
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let mut entries = Vec::with_capacity(rows.len());
+        for (_, v) in rows {
+            entries.push(v);
+        }
+        let event_entries = EventEntries {
+            entries: entries.into(),
+            ..Default::default()
+        };
+        let change_data_event = Event {
+            region_id: self.region_id,
+            index,
+            event: Some(Event_oneof_event::Entries(event_entries)),
+            ..Default::default()
+        };
+        self.broadcast(change_data_event, true);
+        Ok(())
+    }
+
+    fn sink_put(
+        &mut self,
+        mut put: PutRequest,
+        is_one_pc: bool,
+        rows: &mut HashMap<Vec<u8>, EventRow>,
+        mut read_old_value: impl FnMut(&mut EventRow, /* read_old_ts */ TimeStamp),
+    ) {
+        match put.cf.as_str() {
+            "write" => {
+                let mut row = EventRow::default();
+                let skip = decode_write(put.take_key(), put.get_value(), &mut row, true);
+                if skip {
+                    return;
+                }
+>>>>>>> 3b234d021... cdc, txn: improve CDC old value cache hit ratio in pessimistic txn (#10072)
 
                     // In order to advance resolved ts,
                     // we must untrack inflight txns if they are committed.

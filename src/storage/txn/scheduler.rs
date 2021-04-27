@@ -547,7 +547,7 @@ mod tests {
     use crate::storage::mvcc::{self, Mutation};
     use crate::storage::txn::{commands, latch::*};
     use kvproto::kvrpcpb::Context;
-    use txn_types::Key;
+    use txn_types::{Key, OldValues};
 
     #[test]
     fn test_command_latches() {
@@ -576,6 +576,7 @@ mod tests {
                 Some(WaitTimeout::Default),
                 false,
                 TimeStamp::default(),
+                OldValues::default(),
                 Context::default(),
             )
             .into(),
