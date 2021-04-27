@@ -78,6 +78,8 @@
 //! `--features=mem-profiling` to cargo for eather `tikv_alloc` or
 //! `tikv`.
 
+#![feature(get_mut_unchecked)]
+
 #[cfg(feature = "mem-profiling")]
 #[macro_use]
 extern crate log;
@@ -112,6 +114,8 @@ mod imp;
 mod imp;
 
 pub use crate::imp::*;
+
+pub mod trace;
 
 #[global_allocator]
 static ALLOC: imp::Allocator = imp::allocator();

@@ -5400,6 +5400,7 @@ dependencies = [
 name = "tikv_alloc"
 version = "0.1.0"
 dependencies = [
+ "fxhash",
  "lazy_static",
  "libc 0.2.86",
  "log",
