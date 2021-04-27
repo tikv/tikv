@@ -290,13 +290,15 @@ impl Simulator for ServerCluster {
             .start_observe_lock_apply(&mut coprocessor_host, concurrency_manager.clone())
             .unwrap();
 
-        // Resolved TS
+        // Resolved ts worker
         let resolved_ts_worker = LazyWorker::new("resolved-ts");
         let resolved_ts_scheduler = resolved_ts_worker.scheduler();
-        let resolved_ts_ob = resolved_ts::Observer::new(resolved_ts_scheduler.clone());
+        let mut resolved_ts_ob = resolved_ts::Observer::new(resolved_ts_scheduler.clone());
+        // Disable old value
+        resolved_ts_ob.disable_old_value();
         resolved_ts_ob.register_to(&mut coprocessor_host);
 
-        // Start resolved ts worker
+        // Resolved ts endpoint
         let resolved_ts_endpoint = resolved_ts::Endpoint::new(
             &cfg.cdc,
             resolved_ts_scheduler,

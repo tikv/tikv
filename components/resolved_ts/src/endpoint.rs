@@ -384,7 +384,7 @@ where
     fn handle_change_log(
         &mut self,
         cmd_batch: Vec<CmdBatch>,
-        snapshot: RegionSnapshot<E::Snapshot>,
+        snapshot: Option<RegionSnapshot<E::Snapshot>>,
     ) {
         let logs = cmd_batch
             .into_iter()
@@ -416,7 +416,10 @@ where
                 None
             })
             .collect();
-        self.sinker.sink_cmd(logs, snapshot);
+        match snapshot {
+            Some(snap) => self.sinker.sink_cmd_with_old_value(logs, snap),
+            None => self.sinker.sink_cmd(logs),
+        }
     }
 
     fn handle_scan_locks(
@@ -461,7 +464,7 @@ pub enum Task<S: Snapshot> {
     },
     ChangeLog {
         cmd_batch: Vec<CmdBatch>,
-        snapshot: RegionSnapshot<S>,
+        snapshot: Option<RegionSnapshot<S>>,
     },
     ScanLocks {
         region_id: u64,
