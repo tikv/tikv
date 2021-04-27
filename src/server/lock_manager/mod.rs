@@ -335,6 +335,13 @@ mod tests {
         lock_mgr
     }
 
+    fn diag_ctx(key: &[u8], resource_group_tag: &[u8]) -> DiagnosticContext {
+        DiagnosticContext {
+            key: key.to_owned(),
+            resource_group_tag: resource_group_tag.to_owned(),
+        }
+    }
+
     #[test]
     fn test_single_lock_manager() {
         let lock_mgr = start_lock_manager();
@@ -395,7 +402,7 @@ mod tests {
             waiter1.lock,
             false,
             Some(WaitTimeout::Default),
-            DiagnosticContext::default(),
+            diag_ctx(b"k1", b"tag1"),
         );
         assert!(lock_mgr.has_waiter());
         let (waiter2, lock_info2, f2) = new_test_waiter(20.into(), 10.into(), 10);
@@ -406,11 +413,19 @@ mod tests {
             waiter2.lock,
             false,
             Some(WaitTimeout::Default),
-            DiagnosticContext::default(),
+            diag_ctx(b"k2", b"tag2"),
         );
         assert!(lock_mgr.has_waiter());
         assert_elapsed(
-            || expect_deadlock(block_on(f2).unwrap(), 20.into(), lock_info2, 20),
+            || {
+                expect_deadlock(
+                    block_on(f2).unwrap(),
+                    20.into(),
+                    lock_info2,
+                    20,
+                    &[(10, 20, b"k1", b"tag1"), (20, 10, b"k2", b"tag2")],
+                )
+            },
             0,
             500,
         );

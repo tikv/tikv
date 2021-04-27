@@ -127,6 +127,9 @@ impl DetectTable {
 
     /// Returns the key hash which causes deadlock, and the current wait chain that forms the
     /// deadlock with `txn_ts`'s waiting for txn at `lock_ts`.
+    /// Note that the current detecting edge is not included in the returned wait chain. This is
+    /// intended to reduce RPC message size since the information about current detecting txn is
+    /// included in a separated field.
     pub fn detect(
         &mut self,
         txn_ts: TimeStamp,
@@ -216,6 +219,8 @@ impl DetectTable {
         end: TimeStamp,
         vertex_predecessors_map: HashMap<TimeStamp, TimeStamp>,
     ) -> Vec<WaitForEntry> {
+        // It's rare that a deadlock formed by too many transactions. Preallocating a few elements
+        // should be enough in most cases.
         let mut wait_chain = Vec::with_capacity(3);
 
         let mut lock_ts = end;
@@ -756,28 +761,15 @@ where
         );
         let waiter_mgr_scheduler = self.waiter_mgr_scheduler.clone();
         let (send, recv) = leader_client.register_detect_handler(Box::new(move |mut resp| {
-            let WaitForEntry {
-                txn,
-                wait_for_txn,
-                key_hash,
-                key,
-                resource_group_tag,
-                ..
-            } = resp.take_entry();
-            let diag_ctx = DiagnosticContext {
-                key,
-                resource_group_tag,
+            let entry = resp.take_entry();
+            let txn = entry.txn.into();
+            let lock = Lock {
+                ts: entry.wait_for_txn.into(),
+                hash: entry.key_hash,
             };
-            waiter_mgr_scheduler.deadlock(
-                txn.into(),
-                Lock {
-                    ts: wait_for_txn.into(),
-                    hash: key_hash,
-                },
-                resp.get_deadlock_key_hash(),
-                diag_ctx,
-                resp.take_wait_chain().into(),
-            )
+            let mut wait_chain: Vec<_> = resp.take_wait_chain().into();
+            wait_chain.push(entry);
+            waiter_mgr_scheduler.deadlock(txn, lock, resp.get_deadlock_key_hash(), wait_chain)
         }));
         spawn_local(send.map_err(|e| error!("leader client failed"; "err" => ?e)));
         // No need to log it again.
@@ -837,20 +829,22 @@ where
         let detect_table = &mut self.inner.borrow_mut().detect_table;
         match tp {
             DetectType::Detect => {
-                if let Some((deadlock_key_hash, wait_chain)) = detect_table.detect(
+                if let Some((deadlock_key_hash, mut wait_chain)) = detect_table.detect(
                     txn_ts,
                     lock.ts,
                     lock.hash,
                     &diag_ctx.key,
                     &diag_ctx.resource_group_tag,
                 ) {
-                    self.waiter_mgr_scheduler.deadlock(
-                        txn_ts,
-                        lock,
-                        deadlock_key_hash,
-                        diag_ctx,
-                        wait_chain,
-                    );
+                    let mut last_entry = WaitForEntry::default();
+                    last_entry.set_txn(txn_ts.into_inner());
+                    last_entry.set_wait_for_txn(lock.ts.into_inner());
+                    last_entry.set_key_hash(lock.hash);
+                    last_entry.set_key(diag_ctx.key);
+                    last_entry.set_resource_group_tag(diag_ctx.resource_group_tag);
+                    wait_chain.push(last_entry);
+                    self.waiter_mgr_scheduler
+                        .deadlock(txn_ts, lock, deadlock_key_hash, wait_chain);
                 }
             }
             DetectType::CleanUpWaitFor => {
@@ -1318,6 +1312,7 @@ pub mod tests {
                     last.tag,
                 )
                 .unwrap();
+
             // Walk through the wait chain
             let mut current_position = last.lock_ts;
             for (i, entry) in wait_chain.iter().enumerate() {
@@ -1341,7 +1336,11 @@ pub mod tests {
                 );
                 current_position = edge.lock_ts;
             }
-            assert_eq!(current_position, last.ts);
+            assert_eq!(
+                current_position, last.ts,
+                "incorrect wait chain {:?}",
+                wait_chain
+            );
         };
 
         test_once(&[
