@@ -454,6 +454,7 @@ fn is_library_file<P: AsRef<Path>>(path: P) -> bool {
 //        let loaded_plugin = unsafe { LoadedPlugin::new(&library_path).unwrap() };
 //
 //        assert_eq!(loaded_plugin.name(), "example_plugin");
+//        assert_eq!(loaded_plugin.version(), &Version::parse("0.1.0").unwrap());
 //    }
 //
 //    #[test]
