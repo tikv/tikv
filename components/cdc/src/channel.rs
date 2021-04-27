@@ -152,7 +152,7 @@ where
 {
     use futures03::FutureExt;
     let mut timeout = futures_timer::Delay::new(dur).fuse();
-    let mut s = fut.fuse();
+    let mut f = fut.fuse();
     futures03::executor::block_on(async {
         futures03::select! {
             () = timeout => Err(()),

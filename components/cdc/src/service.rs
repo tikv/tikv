@@ -386,7 +386,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use futures03::executor::block_on;
+    use futures03::compat::Compat01As03;
     use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder, WriteFlags};
     #[cfg(feature = "prost-codec")]
     use kvproto::cdcpb::event::{
@@ -397,6 +397,7 @@ mod tests {
     };
     #[cfg(not(feature = "prost-codec"))]
     use kvproto::cdcpb::{EventEntries, EventRow, Event_oneof_event};
+    use tikv_util::mpsc::Receiver;
 
     use crate::channel::{poll_timeout, recv_timeout, CDC_EVENT_MAX_BATCH_SIZE};
     use crate::service::{CdcEvent, EventBatcher, CDC_MAX_RESP_SIZE};
@@ -482,10 +483,11 @@ mod tests {
         );
     }
 
-    fn new_rpc_suite() -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
+    fn new_rpc_suite() -> (Server, ChangeDataClient, Receiver<Option<Task>>) {
+        let security_mgr = Arc::new(SecurityManager::new(&Default::default()).unwrap());
         let env = Arc::new(EnvBuilder::new().build());
         let (scheduler, rx) = dummy_scheduler();
-        let cdc_service = Service::new(scheduler);
+        let cdc_service = Service::new(scheduler, security_mgr);
         let builder =
             ServerBuilder::new(env.clone()).register_service(create_change_data(cdc_service));
         let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
@@ -500,15 +502,16 @@ mod tests {
     #[test]
     fn test_flow_control() {
         // Disable CDC sink memory quota.
-        let (_server, client, mut task_rx) = new_rpc_suite();
+        let (_server, client, task_rx) = new_rpc_suite();
         // Create a event feed stream.
-        let (mut tx, mut rx) = client.event_feed().unwrap();
+        let (tx, rx) = client.event_feed().unwrap();
+        let mut rx = Compat01As03::new(rx);
         let mut req = ChangeDataRequest {
             region_id: 1,
             ..Default::default()
         };
         req.mut_header().set_ticdc_version("4.0.7".into());
-        block_on(tx.send((req, WriteFlags::default()))).unwrap();
+        let _tx = tx.send((req, WriteFlags::default())).wait().unwrap();
         let task = task_rx.recv_timeout(Duration::from_millis(100)).unwrap();
         let conn = if let Some(Task::OpenConn { conn }) = task {
             conn
@@ -518,7 +521,7 @@ mod tests {
         let sink = conn.get_sink().clone();
         // Approximate 1 KB.
         let mut rts = ResolvedTs::default();
-        rts.set_regions(vec![u64::MAX; 128]);
+        rts.set_regions(vec![std::u64::MAX; 128]);
 
         let send = || {
             let rts_ = rts.clone();
