@@ -1,18 +1,27 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{
+    atomic::Ordering,
+    atomic::{AtomicBool, AtomicUsize},
+    Arc,
+};
+use std::task::{Context, Poll};
+use std::time::{Duration, Instant};
 
 use futures::{
     channel::mpsc::{
         channel, unbounded, Receiver, SendError as FuturesSendError, Sender, TrySendError,
         UnboundedReceiver, UnboundedSender,
     },
+    executor::block_on,
     stream, SinkExt, Stream, StreamExt,
 };
 use grpcio::{Result as GrpcResult, WriteFlags};
 use kvproto::cdcpb::ChangeDataEvent;
 
-use tikv_util::impl_display_as_debug;
+use tikv_util::{impl_display_as_debug, slow_log, warn};
 
 use crate::service::{CdcEvent, EventBatcher};
 
@@ -42,11 +51,21 @@ impl MemoryQuota {
         self.max_bytes
     }
     fn alloc(&self, bytes: usize) -> bool {
-        if self.total_bytes.load(Ordering::Relaxed) <= self.max_bytes {
-            self.total_bytes.fetch_add(bytes, Ordering::Relaxed);
-            true
-        } else {
-            false
+        let mut total_bytes = self.total_bytes.load(Ordering::Relaxed);
+        loop {
+            if total_bytes + bytes > self.max_bytes {
+                return false;
+            }
+            let new_total_bytes = total_bytes + bytes;
+            match self.total_bytes.compare_exchange(
+                total_bytes,
+                new_total_bytes,
+                Ordering::Acquire,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return true,
+                Err(current) => total_bytes = current,
+            }
         }
     }
     fn free(&self, bytes: usize) {
@@ -57,16 +76,19 @@ impl MemoryQuota {
 pub fn canal(buffer: usize, memory_quota: MemoryQuota) -> (Sink, Drain) {
     let (unbounded_sender, unbounded_receiver) = unbounded();
     let (bounded_sender, bounded_receiver) = channel(buffer);
+    let closed = Arc::new(AtomicBool::new(false));
     (
         Sink {
             unbounded_sender,
             bounded_sender,
             memory_quota: memory_quota.clone(),
+            closed: closed.clone(),
         },
         Drain {
             unbounded_receiver,
             bounded_receiver,
             memory_quota,
+            closed,
         },
     )
 }
@@ -110,10 +132,14 @@ pub struct Sink {
     unbounded_sender: UnboundedSender<(CdcEvent, usize)>,
     bounded_sender: Sender<(CdcEvent, usize)>,
     memory_quota: MemoryQuota,
+    closed: Arc<AtomicBool>,
 }
 
 impl Sink {
     pub fn unbounded_send(&self, event: CdcEvent) -> Result<(), SendError> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(SendError::Disconnected);
+        }
         let bytes = event.size() as usize;
         if !self.memory_quota.alloc(bytes) {
             return Err(SendError::Congested);
@@ -124,6 +150,9 @@ impl Sink {
     }
 
     pub async fn send_all(&mut self, events: Vec<CdcEvent>) -> Result<(), SendError> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(SendError::Disconnected);
+        }
         for event in events {
             let bytes = event.size() as usize;
             if !self.memory_quota.alloc(bytes) {
@@ -140,6 +169,7 @@ pub struct Drain {
     unbounded_receiver: UnboundedReceiver<(CdcEvent, usize)>,
     bounded_receiver: Receiver<(CdcEvent, usize)>,
     memory_quota: MemoryQuota,
+    closed: Arc<AtomicBool>,
 }
 
 impl Drain {
@@ -159,7 +189,9 @@ impl Drain {
         self,
     ) -> impl Stream<Item = GrpcResult<(ChangeDataEvent, WriteFlags)>> {
         let memory_quota = self.memory_quota.clone();
-        self.drain()
+        let closed = self.closed.clone();
+        let stream = self
+            .drain()
             .ready_chunks(CDC_MSG_MAX_BATCH_SIZE)
             .map(move |events| {
                 let mut bytes = 0;
@@ -178,7 +210,55 @@ impl Drain {
                     GrpcResult::Ok((e, write_flags))
                 }))
             })
-            .flatten()
+            .flatten();
+        DrainGrpcMessage { stream, closed }
+    }
+}
+
+struct DrainGrpcMessage<S: Stream + Unpin> {
+    stream: S,
+    closed: Arc<AtomicBool>,
+}
+
+impl<S: Stream + Unpin> Stream for DrainGrpcMessage<S> {
+    type Item = S::Item;
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.stream).poll_next(cx)
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.stream.size_hint()
+    }
+}
+
+impl<S: Stream + Unpin> Drop for DrainGrpcMessage<S> {
+    // Must poll all pending messages to free memory quota.
+    fn drop(&mut self) {
+        // Receiver maybe dropped before senders, so set closed flag to prevent
+        // futher messages.
+        self.closed.store(true, Ordering::Release);
+        std::sync::atomic::compiler_fence(Ordering::SeqCst);
+        let start = Instant::now();
+        let mut drain = Box::pin(async {
+            loop {
+                let mut next = self.stream.next();
+                let item = futures::future::poll_fn(|cx| {
+                    match Pin::new(&mut next).poll(cx) {
+                        // In case it is dropped before senders.
+                        Poll::Pending => Poll::Ready(None),
+                        t => t,
+                    }
+                })
+                .await;
+                if item.is_none() {
+                    break;
+                }
+            }
+        });
+        block_on(&mut drain);
+        let takes = start.elapsed();
+        if takes >= Duration::from_millis(500) {
+            slow_log!(takes, "drop DrainGrpcMessage too slow");
+        }
     }
 }
 
@@ -210,7 +290,6 @@ where
 mod tests {
     use super::*;
 
-    use futures::executor::block_on;
     use std::sync::mpsc;
     use std::time::Duration;
 
@@ -287,11 +366,57 @@ mod tests {
         assert!(event.size() != 0);
         // 1KB
         let max_pending_bytes = 1024;
-        let buffer = max_pending_bytes / event.size() + 1;
+        let buffer = max_pending_bytes / event.size();
         let (mut send, _rx) = new_test_cancal(buffer as _, max_pending_bytes as _);
         for _ in 0..buffer {
             send(CdcEvent::Event(e.clone())).unwrap();
         }
         assert_matches!(send(CdcEvent::Event(e)).unwrap_err(), SendError::Congested);
+    }
+
+    #[test]
+    fn test_channel_memory_leak() {
+        let mut e = kvproto::cdcpb::Event::default();
+        e.region_id = 1;
+        let event = CdcEvent::Event(e.clone());
+        assert!(event.size() != 0);
+        // 1KB
+        let max_pending_bytes = 1024;
+        let buffer = max_pending_bytes / event.size() + 1;
+        // Make sure memory quota is freed when rx is dropped before tx.
+        {
+            let (mut send, rx) = new_test_cancal(buffer as _, max_pending_bytes as _);
+            loop {
+                match send(CdcEvent::Event(e.clone())) {
+                    Ok(_) => (),
+                    Err(e) => {
+                        assert_matches!(e, SendError::Congested);
+                        break;
+                    }
+                }
+            }
+            let memory_quota = rx.memory_quota.clone();
+            assert_eq!(memory_quota.alloc(event.size() as _), false,);
+            drop(rx.drain_grpc_message());
+            assert_eq!(memory_quota.alloc(1024), true,);
+        }
+        // Make sure memory quota is freed when tx is dropped before rx.
+        {
+            let (mut send, rx) = new_test_cancal(buffer as _, max_pending_bytes as _);
+            loop {
+                match send(CdcEvent::Event(e.clone())) {
+                    Ok(_) => (),
+                    Err(e) => {
+                        assert_matches!(e, SendError::Congested);
+                        break;
+                    }
+                }
+            }
+            let memory_quota = rx.memory_quota.clone();
+            assert_eq!(memory_quota.alloc(event.size() as _), false,);
+            drop(send);
+            drop(rx.drain_grpc_message());
+            assert_eq!(memory_quota.alloc(1024), true,);
+        }
     }
 }
