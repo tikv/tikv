@@ -4,10 +4,43 @@ use super::allocator::HostAllocatorPtr;
 use super::plugin_api::CoprocessorPlugin;
 
 /// Name of the exported constructor function for the plugin in the `dylib`.
-pub const PLUGIN_CONSTRUCTOR_SYMBOL: &[u8] = b"_plugin_create";
+pub static PLUGIN_CONSTRUCTOR_SYMBOL: &[u8] = b"_plugin_create";
+/// Name of the exported function to get build information about the plugin.
+pub static PLUGIN_GET_BUILD_INFO_SYMBOL: &[u8] = b"_plugin_get_build_info";
+
 /// Type signature of the exported constructor function for the plugin in the `dylib`.
+/// See also [`PLUGIN_CONSTRUCTOR_SYMBOL`].
 pub type PluginConstructorSignature =
     unsafe fn(host_allocator: HostAllocatorPtr) -> *mut dyn CoprocessorPlugin;
+
+/// Type signature of the exported function to get build information about the plugin.
+/// See also [`PLUGIN_GET_BUILD_INFO_SYMBOL`].
+pub type PluginGetBuildInfoSignature = extern "C" fn() -> BuildInfo;
+
+/// Automatically collected build information about the plugin that is exposed from the library.
+///
+/// Will be automatically created when using [`declare_plugin!(...)`](declare_plugin) and will be
+/// used by TiKV when a plugin is loaded to determine whether there are compilation mismatches.
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuildInfo {
+    /// Version of the [`coprocessor_plugin_api`](crate) crate that was used to compile this plugin.
+    pub api_version: &'static str,
+    /// Target triple for which platform this plugin was compiled.
+    pub target: &'static str,
+    /// Version of the Rust compiler that was used for compilation.
+    pub rustc: &'static str,
+}
+
+impl BuildInfo {
+    pub const fn get() -> Self {
+        Self {
+            api_version: env!("API_VERSION"),
+            target: env!("TARGET"),
+            rustc: env!("RUSTC_VERSION"),
+        }
+    }
+}
 
 /// Declare a plugin for the library so that it can be loaded by TiKV.
 ///
@@ -27,11 +60,16 @@ macro_rules! declare_plugin {
         static HOST_ALLOCATOR: $crate::allocator::HostAllocator =
             $crate::allocator::HostAllocator::new();
 
-        #[cfg(not(test))]
+        #[no_mangle]
+        pub unsafe extern "C" fn _plugin_get_build_info() -> $crate::BuildInfo {
+            $crate::BuildInfo::get()
+        }
+
         #[no_mangle]
         pub unsafe extern "C" fn _plugin_create(
             host_allocator: $crate::allocator::HostAllocatorPtr,
         ) -> *mut $crate::CoprocessorPlugin {
+            #[cfg(not(test))]
             HOST_ALLOCATOR.set_allocator(host_allocator);
 
             let boxed: Box<dyn $crate::CoprocessorPlugin> = Box::new($plugin_ctor);
@@ -54,6 +92,7 @@ macro_rules! declare_plugin {
 ///
 /// *Note: Depending on artifacts of other crates will be easier with
 /// [this RFC](https://github.com/rust-lang/cargo/issues/9096).*
+#[doc(hidden)]
 pub fn pkgname_to_libname(pkgname: &str) -> String {
     let pkgname = pkgname.to_string().replace("-", "_");
     if cfg!(target_os = "windows") {
