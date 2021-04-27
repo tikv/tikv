@@ -80,7 +80,7 @@ impl Endpoint {
             .then(|| {})
             .ok_or_else(|| {
                 CoprocessorError::Other(format!(
-                    "The plugin '{}' with version '{}' does not satisfy the version constraint '{:?}'",
+                    "The plugin '{}' with version '{}' does not satisfy the version constraint '{}'",
                     plugin.name(),
                     plugin_version,
                     version_req,
