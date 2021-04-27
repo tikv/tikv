@@ -535,10 +535,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 delegate.id
             );
         };
-        let change_cmd = ChangeObserver {
-            region_id,
-            observe_id: delegate.id,
-        };
+        let change_cmd = ChangeObserver::from_cdc(region_id, delegate.id);
         let txn_extra_op = request.get_extra_op();
         if txn_extra_op != TxnExtraOp::Noop {
             delegate.txn_extra_op = request.get_extra_op();
@@ -1252,6 +1249,8 @@ impl Initializer {
             // unlock incremental_scan_state
         }
 
+        fail_point!("cdc_after_incremental_scan_blocks_regional_errors");
+
         let mut done = false;
         while !done {
             if self.downstream_state.load() != DownstreamState::Normal {
@@ -1259,6 +1258,7 @@ impl Initializer {
                     "region_id" => region_id,
                     "downstream_id" => ?downstream_id,
                     "observe_id" => ?self.observe_id);
+                self.deregister_downstream(None);
                 return;
             }
             let scan_context = scan_context.clone();
@@ -1289,8 +1289,6 @@ impl Initializer {
                 done = true;
             }
 
-            fail_point!("before_schedule_incremental_scan");
-
             let downstream = self.downstream.as_ref().unwrap();
             let events =
                 Delegate::convert_to_grpc_events(region_id, downstream.get_req_id(), entries);
@@ -1317,7 +1315,6 @@ impl Initializer {
 
         // Now the resolver contains locks that remain unresolved after the scan.
         let mut resolver = scan_context.lock().unwrap().resolver.replace(None);
-        resolver.as_mut().unwrap().init();
         let resolved_ts = resolver
             .as_mut()
             .unwrap()
@@ -1325,7 +1322,7 @@ impl Initializer {
 
         let resolved_ts = ResolvedTs {
             regions: vec![self.region_id],
-            ts: resolved_ts.unwrap().into_inner(),
+            ts: resolved_ts.into_inner(),
             ..Default::default()
         };
 
@@ -1357,6 +1354,7 @@ impl Initializer {
                     info!("cdc incremental scan finished after region error, sending error"; "err_event" => ?err_event);
                     self.downstream_state.store(DownstreamState::Stopped);
                     self.downstream.as_ref().unwrap().sink_error(err_event);
+                    return;
                 }
                 other => {
                     panic!("unexpected incremental scan state {:?}", other);
@@ -1410,9 +1408,6 @@ impl Initializer {
 
     fn finish_building_resolver(&self, mut resolver: Resolver, region: Region, takes: Duration) {
         let observe_id = self.observe_id;
-        if !resolver.is_initialized() {
-            resolver.init();
-        }
         let rts = resolver.resolve(TimeStamp::zero());
         info!(
             "resolver initialized and schedule resolver ready";
@@ -1901,8 +1896,11 @@ mod tests {
         loop {
             let task = rx.recv_timeout(Duration::from_secs(1));
             match task {
-                Ok(t) => panic!("unepxected task {} received", t),
-                Err(RecvTimeoutError::Timeout) => break,
+                Ok(Task::Deregister(Deregister::Downstream { region_id, .. })) => {
+                    assert_eq!(region_id, initializer.region_id);
+                    break;
+                }
+                Ok(other) => panic!("unexpected task {:?}", other),
                 Err(e) => panic!("unexpected err {:?}", e),
             }
         }
@@ -2062,8 +2060,7 @@ mod tests {
             conn_id,
             version: semver::Version::new(4, 0, 6),
         });
-        let mut resolver = Resolver::new(1);
-        resolver.init();
+        let resolver = Resolver::new(1);
         let observe_id = ep.capture_regions[&1].id;
         ep.on_region_ready(observe_id, resolver, region.clone());
         ep.run(Task::MinTS {
@@ -2088,8 +2085,7 @@ mod tests {
             conn_id,
             version: semver::Version::new(4, 0, 6),
         });
-        let mut resolver = Resolver::new(2);
-        resolver.init();
+        let resolver = Resolver::new(2);
         region.set_id(2);
         let observe_id = ep.capture_regions[&2].id;
         ep.on_region_ready(observe_id, resolver, region);
@@ -2124,8 +2120,7 @@ mod tests {
             conn_id,
             version: semver::Version::new(4, 0, 5),
         });
-        let mut resolver = Resolver::new(3);
-        resolver.init();
+        let resolver = Resolver::new(3);
         region.set_id(3);
         let observe_id = ep.capture_regions[&3].id;
         ep.on_region_ready(observe_id, resolver, region);
