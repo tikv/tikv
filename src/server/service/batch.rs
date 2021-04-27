@@ -53,7 +53,7 @@ impl ReqBatcher {
         storage: &Storage<E, L>,
         tx: &Sender<(u64, batch_commands_response::Response)>,
     ) {
-        if self.gets.len() > 10 {
+        if self.gets.len() > 5 {
             let gets = std::mem::take(&mut self.gets);
             let ids = std::mem::take(&mut self.get_ids);
             future_batch_get_command(storage, ids, gets, tx.clone());

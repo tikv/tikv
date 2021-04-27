@@ -154,12 +154,12 @@ impl ReadPoolHandle {
         match self {
             ReadPoolHandle::FuturePools {
                 read_pool_normal, ..
-            } => read_pool_normal.get_running_task_count() > read_pool_normal.get_pool_size(),
+            } => read_pool_normal.get_running_task_count() > read_pool_normal.get_pool_size() * 2,
             ReadPoolHandle::Yatp {
                 running_tasks,
                 pool_size,
                 ..
-            } => running_tasks.get() as usize > *pool_size,
+            } => running_tasks.get() as usize > *pool_size * 2,
         }
     }
 }
