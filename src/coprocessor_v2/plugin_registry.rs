@@ -17,6 +17,9 @@ pub enum PluginLoadingError {
     #[error("failed to load library")]
     Dylib(#[from] DylibError),
 
+    #[error("plugin version string does not follow SemVer standard")]
+    VersionParseError(#[from] semver::SemVerError),
+
     #[error(
         "version mismatch of rustc: plugin was compiled with {plugin_rustc}, but TiKV with {tikv_rustc}"
     )]
@@ -338,10 +341,12 @@ impl PluginRegistryInner {
 
 /// A wrapper around a loaded raw coprocessor plugin library.
 pub struct LoadedPlugin {
+    /// The name of the plugin.
+    name: String,
+    /// The version of the plugin.
+    version: Version,
     /// Pointer to a [`CoprocessorPlugin`] in the loaded `lib`.
     plugin: Box<dyn CoprocessorPlugin>,
-    /// Some information about the plugin, like name and version.
-    info: PluginInfo,
 }
 
 impl LoadedPlugin {
@@ -379,6 +384,8 @@ impl LoadedPlugin {
         err_on_mismatch(&plugin_build_info, &tikv_build_info)?;
 
         let info = get_plugin_info();
+        let name = info.name.to_string();
+        let version = Version::parse(info.version)?;
 
         let host_allocator = HostAllocatorPtr {
             alloc_fn: std::alloc::alloc,
@@ -391,17 +398,21 @@ impl LoadedPlugin {
         // Leak library so that we will never drop it
         std::mem::forget(lib);
 
-        Ok(LoadedPlugin { plugin, info })
+        Ok(LoadedPlugin {
+            name,
+            version,
+            plugin,
+        })
     }
 
     /// Returns the name of the plugin.
     pub fn name(&self) -> &str {
-        self.info.name
+        &self.name
     }
 
     /// Returns the version of the plugin.
-    pub fn version(&self) -> Version {
-        Version::parse(self.info.version).unwrap()
+    pub fn version(&self) -> &Version {
+        &self.version
     }
 }
 
