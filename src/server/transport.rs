@@ -49,7 +49,7 @@ impl<T, S, E> Transport for ServerTransport<T, S, E>
 where
     T: RaftStoreRouter<E> + Unpin + 'static,
     S: StoreAddrResolver + Unpin + 'static,
-    E: KvEngine + Unpin,
+    E: KvEngine,
 {
     fn send(&mut self, msg: RaftMessage) -> RaftStoreResult<()> {
         match self.raft_client.send(msg) {

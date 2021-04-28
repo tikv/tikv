@@ -428,7 +428,7 @@ impl<R, M, B, E> Future for RaftCall<R, M, B, E>
 where
     R: RaftStoreRouter<E> + Unpin + 'static,
     B: Buffer<OutputMessage = M> + Unpin,
-    E: KvEngine + Unpin,
+    E: KvEngine,
 {
     type Output = ();
 
@@ -521,7 +521,7 @@ impl<S, R, E> StreamBackEnd<S, R, E>
 where
     S: StoreAddrResolver,
     R: RaftStoreRouter<E> + Unpin + 'static,
-    E: KvEngine + Unpin
+    E: KvEngine
 {
     fn resolve(&self) -> impl Future<Output = server::Result<String>> {
         let (tx, rx) = oneshot::channel();
@@ -662,7 +662,7 @@ async fn start<S, R, E>(
 ) where
     S: StoreAddrResolver + Send,
     R: RaftStoreRouter<E> + Unpin + Send + 'static,
-    E: KvEngine + Unpin
+    E: KvEngine
 {
     let mut last_wake_time = Instant::now();
     let mut retry_times = 0;
@@ -773,7 +773,7 @@ impl<S, R, E> RaftClient<S, R, E>
 where
     S: StoreAddrResolver + Send + 'static,
     R: RaftStoreRouter<E> + Unpin + Send + 'static,
-    E: KvEngine + Unpin,
+    E: KvEngine,
 {
     pub fn new(builder: ConnectionBuilder<S, R>) -> RaftClient<S, R, E> {
         let future_pool = Arc::new(
