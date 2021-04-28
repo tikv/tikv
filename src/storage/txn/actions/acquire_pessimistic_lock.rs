@@ -3,6 +3,7 @@ use crate::storage::mvcc::{
     ErrorInner, MvccTxn, Result as MvccResult,
 };
 use crate::storage::txn::actions::check_data_constraint::check_data_constraint;
+use crate::storage::txn::actions::get_old_value::get_old_value;
 use crate::storage::Snapshot;
 use txn_types::{Key, Lock, LockType, OldValue, TimeStamp, Value, Write, WriteType};
 
@@ -44,7 +45,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         need_old_value: bool,
         need_value: bool,
         val: Option<&Value>,
-        reader: &mut SnapshotReader<S>,
+        txn: &mut MvccTxn<S>,
         key: &Key,
         prev_write_loaded: bool,
         prev_write: Option<Write>,
@@ -60,7 +61,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
             })
         } else if prev_write_loaded {
             Ok(match prev_write {
-                Some(write) => reader.get_old_value(&key, write)?,
+                Some(write) => get_old_value(txn, &key, write)?,
                 None => OldValue::None,
             })
         } else {
@@ -92,7 +93,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
             need_old_value,
             need_value,
             val.as_ref(),
-            reader,
+            txn,
             &key,
             prev_write_loaded,
             prev_write,
@@ -116,18 +117,14 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         return Ok((val, old_value));
     }
 
-<<<<<<< HEAD
-    if let Some((commit_ts, write)) = txn.reader.seek_write(&key, TimeStamp::max())? {
-=======
     // Following seek_write read the previous write.
     let (prev_write_loaded, mut prev_write) = (true, None);
-    if let Some((commit_ts, write)) = reader.seek_write(&key, TimeStamp::max())? {
+    if let Some((commit_ts, write)) = txn.reader.seek_write(&key, TimeStamp::max())? {
         // Find a previous write.
         if need_old_value {
             prev_write = Some(write.clone());
         }
 
->>>>>>> 3b234d021... cdc, txn: improve CDC old value cache hit ratio in pessimistic txn (#10072)
         // The isolation level of pessimistic transactions is RC. `for_update_ts` is
         // the commit_ts of the data this transaction read. If exists a commit version
         // whose commit timestamp is larger than current `for_update_ts`, the
@@ -203,7 +200,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         need_old_value,
         need_value,
         val.as_ref(),
-        reader,
+        txn,
         &key,
         prev_write_loaded,
         prev_write,
@@ -858,15 +855,13 @@ pub mod tests {
             for need_value in &[true, false] {
                 let snapshot = engine.snapshot(Default::default()).unwrap();
                 let cm = ConcurrencyManager::new(start_ts);
-                let mut txn = MvccTxn::new(start_ts, cm);
-                let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+                let mut txn = MvccTxn::new(snapshot, start_ts, false, cm);
                 let need_old_value = true;
                 let lock_ttl = 0;
                 let for_update_ts = start_ts;
                 let min_commit_ts = 0.into();
                 let (_, old_value) = acquire_pessimistic_lock(
                     &mut txn,
-                    &mut reader,
                     key.clone(),
                     key.as_encoded(),
                     *should_not_exist,
@@ -895,15 +890,13 @@ pub mod tests {
                 let t = Box::new(move |snapshot, start_ts| {
                     let key = Key::from_raw(key);
                     let cm = ConcurrencyManager::new(start_ts);
-                    let mut txn = MvccTxn::new(start_ts, cm);
-                    let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+                    let mut txn = MvccTxn::new(snapshot, start_ts, false, cm);
                     let need_old_value = true;
                     let lock_ttl = 0;
                     let for_update_ts = start_ts;
                     let min_commit_ts = 0.into();
                     let (_, old_value) = acquire_pessimistic_lock(
                         &mut txn,
-                        &mut reader,
                         key.clone(),
                         key.as_encoded(),
                         should_not_exist,

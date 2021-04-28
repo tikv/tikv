@@ -1262,19 +1262,15 @@ pub mod tests {
                         must_commit(&engine, key, start_ts, commit_ts);
                     }
                     3 => {
-<<<<<<< HEAD
-                        must_prewrite_put(&engine, b"k1", &[i as u8], b"k1", start_ts);
-                        must_rollback(&engine, b"k1", start_ts);
-=======
                         must_prewrite_put(&engine, key, &[i as u8], key, start_ts);
-                        must_rollback(&engine, key, start_ts, false);
->>>>>>> 3b234d021... cdc, txn: improve CDC old value cache hit ratio in pessimistic txn (#10072)
+                        must_rollback(&engine, key, start_ts);
                     }
                     _ => unreachable!(),
                 }
             }
             let start_ts = TimeStamp::from(tso());
             let snapshot = engine.snapshot(Default::default()).unwrap();
+            let cm = ConcurrencyManager::new(start_ts);
             let expect = {
                 let mut txn = MvccTxn::new(snapshot.clone(), start_ts, false, cm.clone());
                 if let Some(write) = txn
@@ -1309,31 +1305,6 @@ pub mod tests {
         }
     }
 
-<<<<<<< HEAD
-            let mut txn = MvccTxn::new(snapshot.clone(), start_ts, false, cm.clone());
-            let txn_props = TransactionProperties {
-                start_ts,
-                kind: TransactionKind::Optimistic(false),
-                commit_kind: CommitKind::TwoPc,
-                primary: b"k1",
-                txn_size: 0,
-                lock_ttl: 0,
-                min_commit_ts: TimeStamp::default(),
-                need_old_value: true,
-            };
-            let (_, old_value) = prewrite(
-                &mut txn,
-                &txn_props,
-                Mutation::Put((Key::from_raw(b"k1"), b"v2".to_vec())),
-                &None,
-                false,
-            )
-            .unwrap();
-            assert_eq!(old_value, expect, "seed: {} ops: {:?}", seed, ops);
-
-            if expect == OldValue::None {
-                let mut txn = MvccTxn::new(snapshot, start_ts, false, cm);
-=======
     #[test]
     fn test_old_value_random() {
         let key = b"k1";
@@ -1343,8 +1314,7 @@ pub mod tests {
             require_old_value_none,
             vec![Box::new(move |snapshot, start_ts| {
                 let cm = ConcurrencyManager::new(start_ts);
-                let mut txn = MvccTxn::new(start_ts, cm);
-                let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+                let mut txn = MvccTxn::new(snapshot, start_ts, false, cm);
                 let txn_props = TransactionProperties {
                     start_ts,
                     kind: TransactionKind::Optimistic(false),
@@ -1357,7 +1327,6 @@ pub mod tests {
                 };
                 let (_, old_value) = prewrite(
                     &mut txn,
-                    &mut reader,
                     &txn_props,
                     Mutation::Put((Key::from_raw(key), b"v2".to_vec())),
                     &None,
@@ -1377,8 +1346,7 @@ pub mod tests {
             require_old_value_none,
             vec![Box::new(move |snapshot, start_ts| {
                 let cm = ConcurrencyManager::new(start_ts);
-                let mut txn = MvccTxn::new(start_ts, cm);
-                let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+                let mut txn = MvccTxn::new(snapshot, start_ts, false, cm);
                 let txn_props = TransactionProperties {
                     start_ts,
                     kind: TransactionKind::Optimistic(false),
@@ -1389,7 +1357,6 @@ pub mod tests {
                     min_commit_ts: TimeStamp::default(),
                     need_old_value: true,
                 };
->>>>>>> 3b234d021... cdc, txn: improve CDC old value cache hit ratio in pessimistic txn (#10072)
                 let (_, old_value) = prewrite(
                     &mut txn,
                     &txn_props,

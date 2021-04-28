@@ -89,12 +89,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
         for (k, should_not_exist) in keys {
             match acquire_pessimistic_lock(
                 &mut txn,
-<<<<<<< HEAD
-                k,
-=======
-                &mut reader,
                 k.clone(),
->>>>>>> 3b234d021... cdc, txn: improve CDC old value cache hit ratio in pessimistic txn (#10072)
                 &self.primary,
                 should_not_exist,
                 self.lock_ttl,
