@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cell::RefCell};
+use std::cell::RefCell;
 use std::time::Duration;
 
 use super::metrics::{GcKeysCF, GcKeysDetail};
@@ -231,11 +231,11 @@ impl Statistics {
 
     pub fn write_scan_detail(&self, detail_v2: &mut ScanDetailV2) {
         let read_bytes: usize = self
-                        .cf_stats()
-                        .iter()
-                        .map(|&stat| stat.flow_stats.read_bytes)
-                        .sum();
-                    detail_v2.set_read_bytes(read_bytes as u64);
+            .cf_stats()
+            .iter()
+            .map(|&stat| stat.flow_stats.read_bytes)
+            .sum();
+        detail_v2.set_read_bytes(read_bytes as u64);
         detail_v2.set_processed_versions(self.write.processed_keys as u64);
         detail_v2.set_total_versions(self.write.total_op_count() as u64);
     }

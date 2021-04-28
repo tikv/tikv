@@ -1,10 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    borrow::Cow,
-    cmp::Ordering,
-    time::Instant,
-};
+use std::{borrow::Cow, cmp::Ordering, time::Instant};
 
 use engine_traits::CF_DEFAULT;
 use kvproto::kvrpcpb::IsolationLevel;
