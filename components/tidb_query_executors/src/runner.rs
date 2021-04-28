@@ -16,7 +16,6 @@ use yatp::task::future::reschedule;
 
 use super::interface::{BatchExecutor, ExecuteStats};
 use super::*;
-use tidb_query_common::execute_stats::ExecSummary;
 use tidb_query_common::metrics::*;
 use tidb_query_common::storage::{IntervalRange, Storage};
 use tidb_query_common::Result;
@@ -509,16 +508,6 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
     pub fn collect_storage_stats(&mut self, dest: &mut SS) {
         self.out_most_executor.collect_storage_stats(dest);
-    }
-
-    pub fn collect_kv_read_time(&mut self, dest: &mut ExecSummary) {
-        if !self.collect_exec_summary {
-            return;
-        }
-        let result = &self.exec_stats.summary_per_executor;
-        if let Some(exec_stat) = result.first() {
-            dest.clone_from(exec_stat);
-        }
     }
 
     pub fn can_be_cached(&self) -> bool {

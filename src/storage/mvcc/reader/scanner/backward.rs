@@ -1,6 +1,10 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{borrow::Cow, cmp::Ordering};
+use std::{
+    borrow::Cow,
+    cmp::Ordering,
+    time::Instant,
+};
 
 use engine_traits::CF_DEFAULT;
 use kvproto::kvrpcpb::IsolationLevel;
@@ -72,117 +76,122 @@ impl<S: Snapshot> BackwardKvScanner<S> {
 
     /// Get the next key-value pair, in backward order.
     pub fn read_next(&mut self) -> Result<Option<(Key, Value)>> {
-        if !self.is_started {
-            if self.cfg.upper_bound.is_some() {
-                // TODO: `seek_to_last` is better, however it has performance issues currently.
-                // TODO: We have no guarantee about whether or not the upper_bound has a
-                // timestamp suffix, so currently it is not safe to change write_cursor's
-                // reverse_seek to seek_for_prev. However in future, once we have different types
-                // for them, this can be done safely.
-                self.write_cursor.reverse_seek(
-                    self.cfg.upper_bound.as_ref().unwrap(),
-                    &mut self.statistics.write,
-                )?;
-                self.lock_cursor.reverse_seek(
-                    self.cfg.upper_bound.as_ref().unwrap(),
-                    &mut self.statistics.lock,
-                )?;
-            } else {
-                self.write_cursor.seek_to_last(&mut self.statistics.write);
-                self.lock_cursor.seek_to_last(&mut self.statistics.lock);
-            }
-            self.is_started = true;
-        }
-
-        // Similar to forward scanner, the general idea is to simultaneously step write
-        // cursor and lock cursor. Please refer to `ForwardKvScanner` for details.
-
-        loop {
-            let (current_user_key, has_write, has_lock) = {
-                let w_key = if self.write_cursor.valid()? {
-                    Some(self.write_cursor.key(&mut self.statistics.write))
+        let mut f = || {
+            if !self.is_started {
+                if self.cfg.upper_bound.is_some() {
+                    // TODO: `seek_to_last` is better, however it has performance issues currently.
+                    // TODO: We have no guarantee about whether or not the upper_bound has a
+                    // timestamp suffix, so currently it is not safe to change write_cursor's
+                    // reverse_seek to seek_for_prev. However in future, once we have different types
+                    // for them, this can be done safely.
+                    self.write_cursor.reverse_seek(
+                        self.cfg.upper_bound.as_ref().unwrap(),
+                        &mut self.statistics.write,
+                    )?;
+                    self.lock_cursor.reverse_seek(
+                        self.cfg.upper_bound.as_ref().unwrap(),
+                        &mut self.statistics.lock,
+                    )?;
                 } else {
-                    None
-                };
-                let l_key = if self.lock_cursor.valid()? {
-                    Some(self.lock_cursor.key(&mut self.statistics.lock))
-                } else {
-                    None
-                };
+                    self.write_cursor.seek_to_last(&mut self.statistics.write);
+                    self.lock_cursor.seek_to_last(&mut self.statistics.lock);
+                }
+                self.is_started = true;
+            }
 
-                // `res` is `(current_user_key_slice, has_write, has_lock)`
-                let res = match (w_key, l_key) {
-                    (None, None) => return Ok(None),
-                    (None, Some(lk)) => (lk, false, true),
-                    (Some(wk), None) => (Key::truncate_ts_for(wk)?, true, false),
-                    (Some(wk), Some(lk)) => {
-                        let write_user_key = Key::truncate_ts_for(wk)?;
-                        match write_user_key.cmp(lk) {
-                            Ordering::Less => {
-                                // We are scanning from largest user key to smallest user key, so this
-                                // indicate that we meet a lock first, thus its corresponding write
-                                // does not exist.
-                                (lk, false, true)
+            // Similar to forward scanner, the general idea is to simultaneously step write
+            // cursor and lock cursor. Please refer to `ForwardKvScanner` for details.
+            loop {
+                let (current_user_key, has_write, has_lock) = {
+                    let w_key = if self.write_cursor.valid()? {
+                        Some(self.write_cursor.key(&mut self.statistics.write))
+                    } else {
+                        None
+                    };
+                    let l_key = if self.lock_cursor.valid()? {
+                        Some(self.lock_cursor.key(&mut self.statistics.lock))
+                    } else {
+                        None
+                    };
+
+                    // `res` is `(current_user_key_slice, has_write, has_lock)`
+                    let res = match (w_key, l_key) {
+                        (None, None) => return Ok(None),
+                        (None, Some(lk)) => (lk, false, true),
+                        (Some(wk), None) => (Key::truncate_ts_for(wk)?, true, false),
+                        (Some(wk), Some(lk)) => {
+                            let write_user_key = Key::truncate_ts_for(wk)?;
+                            match write_user_key.cmp(lk) {
+                                Ordering::Less => {
+                                    // We are scanning from largest user key to smallest user key, so this
+                                    // indicate that we meet a lock first, thus its corresponding write
+                                    // does not exist.
+                                    (lk, false, true)
+                                }
+                                Ordering::Greater => {
+                                    // We meet write first, so the lock of the write key does not exist.
+                                    (write_user_key, true, false)
+                                }
+                                Ordering::Equal => (write_user_key, true, true),
                             }
-                            Ordering::Greater => {
-                                // We meet write first, so the lock of the write key does not exist.
-                                (write_user_key, true, false)
-                            }
-                            Ordering::Equal => (write_user_key, true, true),
                         }
-                    }
+                    };
+
+                    // Use `from_encoded_slice` to reserve space for ts, so later we can append ts to
+                    // the key or its clones without reallocation.
+                    (Key::from_encoded_slice(res.0), res.1, res.2)
                 };
 
-                // Use `from_encoded_slice` to reserve space for ts, so later we can append ts to
-                // the key or its clones without reallocation.
-                (Key::from_encoded_slice(res.0), res.1, res.2)
-            };
+                let mut result = Ok(None);
+                let mut met_prev_user_key = false;
+                let ts = self.cfg.ts;
 
-            let mut result = Ok(None);
-            let mut met_prev_user_key = false;
-            let ts = self.cfg.ts;
-
-            if has_lock {
-                match self.cfg.isolation_level {
-                    IsolationLevel::Si => {
-                        let lock = {
-                            let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
-                            Lock::parse(lock_value)?
-                        };
-                        if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
-                            self.met_newer_ts_data = NewerTsCheckState::Met;
+                if has_lock {
+                    match self.cfg.isolation_level {
+                        IsolationLevel::Si => {
+                            let lock = {
+                                let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
+                                Lock::parse(lock_value)?
+                            };
+                            if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
+                                self.met_newer_ts_data = NewerTsCheckState::Met;
+                            }
+                            result = Lock::check_ts_conflict(
+                                Cow::Owned(lock),
+                                &current_user_key,
+                                ts,
+                                &self.cfg.bypass_locks,
+                            )
+                            .map(|_| None)
+                            .map_err(Into::into);
+                            if result.is_err() {
+                                self.statistics.lock.processed_keys += 1;
+                            }
                         }
-                        result = Lock::check_ts_conflict(
-                            Cow::Owned(lock),
-                            &current_user_key,
-                            ts,
-                            &self.cfg.bypass_locks,
-                        )
-                        .map(|_| None)
-                        .map_err(Into::into);
-                        if result.is_err() {
-                            self.statistics.lock.processed_keys += 1;
-                        }
+                        IsolationLevel::Rc => {}
                     }
-                    IsolationLevel::Rc => {}
+                    self.lock_cursor.prev(&mut self.statistics.lock);
                 }
-                self.lock_cursor.prev(&mut self.statistics.lock);
-            }
-            if has_write {
-                if result.is_ok() {
-                    result = self.reverse_get(&current_user_key, ts, &mut met_prev_user_key);
+                if has_write {
+                    if result.is_ok() {
+                        result = self.reverse_get(&current_user_key, ts, &mut met_prev_user_key);
+                    }
+                    if !met_prev_user_key {
+                        // Skip rest later versions and point to previous user key.
+                        self.move_write_cursor_to_prev_user_key(&current_user_key)?;
+                    }
                 }
-                if !met_prev_user_key {
-                    // Skip rest later versions and point to previous user key.
-                    self.move_write_cursor_to_prev_user_key(&current_user_key)?;
-                }
-            }
 
-            if let Some(v) = result? {
-                self.statistics.write.processed_keys += 1;
-                return Ok(Some((current_user_key, v)));
+                if let Some(v) = result? {
+                    self.statistics.write.processed_keys += 1;
+                    return Ok(Some((current_user_key, v)));
+                }
             }
-        }
+        };
+        let timer = Instant::now();
+        let result = f();
+        self.statistics.wall_time += timer.elapsed();
+        result
     }
 
     /// Attempt to get the value of a key specified by `user_key` and `self.cfg.ts` in reverse order.

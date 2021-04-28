@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{borrow::Cow, cmp::Ordering};
+use std::{borrow::Cow, cmp::Ordering, time::Instant};
 
 use engine_traits::CF_DEFAULT;
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
@@ -159,127 +159,130 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
 
     /// Get the next key-value pair, in forward order.
     pub fn read_next(&mut self) -> Result<Option<P::Output>> {
-        if !self.is_started {
-            if self.cfg.lower_bound.is_some() {
-                // TODO: `seek_to_first` is better, however it has performance issues currently.
-                self.cursors.write.seek(
-                    self.cfg.lower_bound.as_ref().unwrap(),
-                    &mut self.statistics.write,
-                )?;
-                self.cursors.lock.seek(
-                    self.cfg.lower_bound.as_ref().unwrap(),
-                    &mut self.statistics.lock,
-                )?;
-            } else {
-                self.cursors.write.seek_to_first(&mut self.statistics.write);
-                self.cursors.lock.seek_to_first(&mut self.statistics.lock);
+        let mut f = || {
+            if !self.is_started {
+                if self.cfg.lower_bound.is_some() {
+                    // TODO: `seek_to_first` is better, however it has performance issues currently.
+                    self.cursors.write.seek(
+                        self.cfg.lower_bound.as_ref().unwrap(),
+                        &mut self.statistics.write,
+                    )?;
+                    self.cursors.lock.seek(
+                        self.cfg.lower_bound.as_ref().unwrap(),
+                        &mut self.statistics.lock,
+                    )?;
+                } else {
+                    self.cursors.write.seek_to_first(&mut self.statistics.write);
+                    self.cursors.lock.seek_to_first(&mut self.statistics.lock);
+                }
+                self.is_started = true;
             }
-            self.is_started = true;
-        }
+            // The general idea is to simultaneously step write cursor and lock cursor.
+            // TODO: We don't need to seek lock CF if isolation level is RC.
+            loop {
+                // `current_user_key` is `min(user_key(write_cursor), lock_cursor)`, indicating
+                // the encoded user key we are currently dealing with. It may not have a write, or
+                // may not have a lock. It is not a slice to avoid data being invalidated after
+                // cursor moving.
+                //
+                // `has_write` indicates whether `current_user_key` has at least one corresponding
+                // `write`. If there is one, it is what current write cursor pointing to. The pointed
+                // `write` must be the most recent (i.e. largest `commit_ts`) write of
+                // `current_user_key`.
+                //
+                // `has_lock` indicates whether `current_user_key` has a corresponding `lock`. If
+                // there is one, it is what current lock cursor pointing to.
+                let (mut current_user_key, has_write, has_lock) = {
+                    let w_key = if self.cursors.write.valid()? {
+                        Some(self.cursors.write.key(&mut self.statistics.write))
+                    } else {
+                        None
+                    };
+                    let l_key = if self.cursors.lock.valid()? {
+                        Some(self.cursors.lock.key(&mut self.statistics.lock))
+                    } else {
+                        None
+                    };
 
-        // The general idea is to simultaneously step write cursor and lock cursor.
-
-        // TODO: We don't need to seek lock CF if isolation level is RC.
-
-        loop {
-            // `current_user_key` is `min(user_key(write_cursor), lock_cursor)`, indicating
-            // the encoded user key we are currently dealing with. It may not have a write, or
-            // may not have a lock. It is not a slice to avoid data being invalidated after
-            // cursor moving.
-            //
-            // `has_write` indicates whether `current_user_key` has at least one corresponding
-            // `write`. If there is one, it is what current write cursor pointing to. The pointed
-            // `write` must be the most recent (i.e. largest `commit_ts`) write of
-            // `current_user_key`.
-            //
-            // `has_lock` indicates whether `current_user_key` has a corresponding `lock`. If
-            // there is one, it is what current lock cursor pointing to.
-            let (mut current_user_key, has_write, has_lock) = {
-                let w_key = if self.cursors.write.valid()? {
-                    Some(self.cursors.write.key(&mut self.statistics.write))
-                } else {
-                    None
-                };
-                let l_key = if self.cursors.lock.valid()? {
-                    Some(self.cursors.lock.key(&mut self.statistics.lock))
-                } else {
-                    None
-                };
-
-                // `res` is `(current_user_key_slice, has_write, has_lock)`
-                let res = match (w_key, l_key) {
-                    (None, None) => {
-                        // Both cursors yield `None`: we know that there is nothing remaining.
-                        return Ok(None);
-                    }
-                    (None, Some(k)) => {
-                        // Write cursor yields `None` but lock cursor yields something:
-                        // In RC, it means we got nothing.
-                        // In SI, we need to check if the lock will cause conflict.
-                        (k, false, true)
-                    }
-                    (Some(k), None) => {
-                        // Write cursor yields something but lock cursor yields `None`:
-                        // We need to further step write cursor to our desired version
-                        (Key::truncate_ts_for(k)?, true, false)
-                    }
-                    (Some(wk), Some(lk)) => {
-                        let write_user_key = Key::truncate_ts_for(wk)?;
-                        match write_user_key.cmp(lk) {
-                            Ordering::Less => {
-                                // Write cursor user key < lock cursor, it means the lock of the
-                                // current key that write cursor is pointing to does not exist.
-                                (write_user_key, true, false)
-                            }
-                            Ordering::Greater => {
-                                // Write cursor user key > lock cursor, it means we got a lock of a
-                                // key that does not have a write. In SI, we need to check if the
-                                // lock will cause conflict.
-                                (lk, false, true)
-                            }
-                            Ordering::Equal => {
-                                // Write cursor user key == lock cursor, it means the lock of the
-                                // current key that write cursor is pointing to *exists*.
-                                (lk, true, true)
+                    // `res` is `(current_user_key_slice, has_write, has_lock)`
+                    let res = match (w_key, l_key) {
+                        (None, None) => {
+                            // Both cursors yield `None`: we know that there is nothing remaining.
+                            return Ok(None);
+                        }
+                        (None, Some(k)) => {
+                            // Write cursor yields `None` but lock cursor yields something:
+                            // In RC, it means we got nothing.
+                            // In SI, we need to check if the lock will cause conflict.
+                            (k, false, true)
+                        }
+                        (Some(k), None) => {
+                            // Write cursor yields something but lock cursor yields `None`:
+                            // We need to further step write cursor to our desired version
+                            (Key::truncate_ts_for(k)?, true, false)
+                        }
+                        (Some(wk), Some(lk)) => {
+                            let write_user_key = Key::truncate_ts_for(wk)?;
+                            match write_user_key.cmp(lk) {
+                                Ordering::Less => {
+                                    // Write cursor user key < lock cursor, it means the lock of the
+                                    // current key that write cursor is pointing to does not exist.
+                                    (write_user_key, true, false)
+                                }
+                                Ordering::Greater => {
+                                    // Write cursor user key > lock cursor, it means we got a lock of a
+                                    // key that does not have a write. In SI, we need to check if the
+                                    // lock will cause conflict.
+                                    (lk, false, true)
+                                }
+                                Ordering::Equal => {
+                                    // Write cursor user key == lock cursor, it means the lock of the
+                                    // current key that write cursor is pointing to *exists*.
+                                    (lk, true, true)
+                                }
                             }
                         }
+                    };
+
+                    // Use `from_encoded_slice` to reserve space for ts, so later we can append ts to
+                    // the key or its clones without reallocation.
+                    (Key::from_encoded_slice(res.0), res.1, res.2)
+                };
+
+                if has_lock {
+                    if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
+                        self.met_newer_ts_data = NewerTsCheckState::Met;
                     }
-                };
-
-                // Use `from_encoded_slice` to reserve space for ts, so later we can append ts to
-                // the key or its clones without reallocation.
-                (Key::from_encoded_slice(res.0), res.1, res.2)
-            };
-
-            if has_lock {
-                if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
-                    self.met_newer_ts_data = NewerTsCheckState::Met;
-                }
-                current_user_key = match self.scan_policy.handle_lock(
-                    current_user_key,
-                    &mut self.cfg,
-                    &mut self.cursors,
-                    &mut self.statistics,
-                )? {
-                    HandleRes::Return(output) => return Ok(Some(output)),
-                    HandleRes::Skip(key) => key,
-                };
-            }
-            if has_write {
-                let is_current_user_key = self.move_write_cursor_to_ts(&current_user_key)?;
-                if is_current_user_key {
-                    if let HandleRes::Return(output) = self.scan_policy.handle_write(
+                    current_user_key = match self.scan_policy.handle_lock(
                         current_user_key,
                         &mut self.cfg,
                         &mut self.cursors,
                         &mut self.statistics,
                     )? {
-                        self.statistics.write.processed_keys += 1;
-                        return Ok(Some(output));
+                        HandleRes::Return(output) => return Ok(Some(output)),
+                        HandleRes::Skip(key) => key,
+                    };
+                }
+                if has_write {
+                    let is_current_user_key = self.move_write_cursor_to_ts(&current_user_key)?;
+                    if is_current_user_key {
+                        if let HandleRes::Return(output) = self.scan_policy.handle_write(
+                            current_user_key,
+                            &mut self.cfg,
+                            &mut self.cursors,
+                            &mut self.statistics,
+                        )? {
+                            self.statistics.write.processed_keys += 1;
+                            return Ok(Some(output));
+                        }
                     }
                 }
             }
-        }
+        };
+        let timer = Instant::now();
+        let result = f();
+        self.statistics.wall_time += timer.elapsed();
+        result
     }
 
     /// Try to move the write cursor to the `self.cfg.ts` version of the given key.
