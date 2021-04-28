@@ -342,7 +342,8 @@ impl<S: Snapshot> SampleBuilder<S> {
     async fn collect_columns_stats(
         &mut self,
     ) -> Result<(AnalyzeColumnsResult, Option<AnalyzeIndexResult>)> {
-        use tidb_query_datatype::codec::collation::{match_template_collator, Collator};
+        use tidb_query_datatype::codec::collation::Collator;
+        use tidb_query_datatype::match_template_collator;
         let columns_without_handle_len =
             self.columns_info.len() - self.columns_info[0].get_pk_handle() as usize;
 

@@ -48,8 +48,8 @@ use tidb_query_datatype::{Collation, FieldTypeAccessor, FieldTypeFlag};
 use tipb::{Expr, FieldType, ScalarFuncSig};
 
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::collation::*;
 use tidb_query_datatype::codec::data_type::*;
+use tidb_query_datatype::match_template_collator;
 
 use self::impl_arithmetic::*;
 use self::impl_cast::*;
