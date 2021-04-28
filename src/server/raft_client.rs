@@ -511,16 +511,18 @@ impl<S, R> ConnectionBuilder<S, R> {
 
 /// StreamBackEnd watches lifetime of a connection and handles reconnecting,
 /// spawn new RPC.
-struct StreamBackEnd<S, R> {
+struct StreamBackEnd<S, R, E> {
     store_id: u64,
     queue: Arc<Queue>,
     builder: ConnectionBuilder<S, R>,
+    engine: PhantomData<E>,
 }
 
-impl<S, R> StreamBackEnd<S, R>
+impl<S, R, E> StreamBackEnd<S, R, E>
 where
     S: StoreAddrResolver,
-    R: RaftStoreRouter<RocksEngine> + Unpin + 'static,
+    R: RaftStoreRouter<E> + Unpin + 'static,
+    E: KvEngine + Unpin
 {
     fn resolve(&self) -> impl Future<Output = server::Result<String>> {
         let (tx, rx) = oneshot::channel();
@@ -599,7 +601,7 @@ where
             lifetime: Some(tx),
             store_id: self.store_id,
             addr,
-            engine: PhantomData::<RocksEngine>,
+            engine: PhantomData::<E>,
         };
         // TODO: verify it will be notified if client is dropped while env still alive.
         client.spawn(call);
@@ -619,7 +621,7 @@ where
             lifetime: Some(tx),
             store_id: self.store_id,
             addr,
-            engine: PhantomData::<RocksEngine>,
+            engine: PhantomData::<E>,
         };
         client.spawn(call);
         rx
@@ -655,7 +657,7 @@ async fn maybe_backoff(cfg: &Config, last_wake_time: &mut Instant, retry_times: 
 ///
 /// Every failure during the process should trigger retry automatically.
 async fn start<S, R>(
-    back_end: StreamBackEnd<S, R>,
+    back_end: StreamBackEnd<S, R, RocksEngine>,
     conn_id: usize,
     pool: Arc<Mutex<ConnectionPool>>,
 ) where
@@ -809,6 +811,7 @@ where
                         store_id,
                         queue: queue.clone(),
                         builder: self.builder.clone(),
+                        engine: PhantomData::<RocksEngine>,
                     };
                     self.future_pool
                         .spawn(start(back_end, conn_id, self.pool.clone()));
