@@ -6,6 +6,7 @@ use crate::server::{self, Config, StoreAddrResolver};
 use collections::{HashMap, HashSet};
 use crossbeam::queue::ArrayQueue;
 use engine_rocks::RocksEngine;
+use engine_traits::KvEngine;
 use futures::channel::oneshot;
 use futures::compat::Future01CompatExt;
 use futures::task::{Context, Poll, Waker};
@@ -296,9 +297,10 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static> SnapshotReporter<T> {
     }
 }
 
-fn report_unreachable<R>(router: &R, msg: &RaftMessage)
+fn report_unreachable<R, E>(router: &R, msg: &RaftMessage)
 where
-    R: RaftStoreRouter<RocksEngine>,
+    R: RaftStoreRouter<E>,
+    E: KvEngine,
 {
     let to_peer = msg.get_to_peer();
     if msg.get_message().has_snapshot() {
