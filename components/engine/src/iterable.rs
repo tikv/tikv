@@ -68,6 +68,7 @@ impl IterOptionsExt for IterOption {
     fn build_read_opts(self) -> ReadOptions {
         let mut opts = ReadOptions::new();
         opts.fill_cache(self.fill_cache());
+        opts.set_max_skippable_internal_keys(self.max_skippable_internal_keys());
         if self.key_only() {
             opts.set_titan_key_only(true);
         }

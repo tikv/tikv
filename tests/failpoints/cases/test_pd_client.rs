@@ -73,13 +73,17 @@ fn test_pd_client_deadlock() {
     for (name, func) in test_funcs {
         fail::cfg(leader_client_reconnect_fp, "pause").unwrap();
         // Wait for the PD client thread blocking on the fail point.
-        // The RECONNECT_INTERVAL_SEC is 1s so sleeps 2s here.
-        thread::sleep(Duration::from_secs(2));
+        // The GLOBAL_RECONNECT_INTERVAL is 0.1s so sleeps 0.2s here.
+        thread::sleep(Duration::from_millis(200));
 
         let (tx, rx) = mpsc::channel();
         let handle = thread::spawn(move || {
             func();
             tx.send(()).unwrap();
+        });
+        // Only allow to reconnect once for a func.
+        client.handle_reconnect(move || {
+            fail::cfg(leader_client_reconnect_fp, "return").unwrap();
         });
         // Remove the fail point to let the PD client thread go on.
         fail::remove(leader_client_reconnect_fp);
@@ -109,4 +113,25 @@ fn test_pd_client_deadlock() {
         ))
         .forget();
     rx.recv_timeout(Duration::from_millis(3000)).unwrap();
+}
+
+// Reconnection will be speed limited.
+#[test]
+fn test_reconnect_limit() {
+    let leader_client_reconnect_fp = "leader_client_reconnect";
+    let (_server, client) = new_test_server_and_client(ReadableDuration::secs(100));
+
+    // The GLOBAL_RECONNECT_INTERVAL is 0.1s so sleeps 0.2s here.
+    thread::sleep(Duration::from_millis(200));
+
+    // The first reconnection will succeed, and the last_update will not be updated.
+    fail::cfg(leader_client_reconnect_fp, "return").unwrap();
+    client.reconnect().unwrap();
+    // The subsequent reconnection will be cancelled.
+    for _ in 0..10 {
+        let ret = client.reconnect();
+        assert!(format!("{:?}", ret.unwrap_err()).contains("cancel reconnection"));
+    }
+
+    fail::remove(leader_client_reconnect_fp);
 }
