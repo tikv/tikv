@@ -3502,42 +3502,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "resolved_ts"
-version = "0.0.1"
-dependencies = [
- "collections",
- "concurrency_manager",
- "crossbeam 0.8.0",
- "engine_rocks",
- "engine_traits",
- "fail",
- "futures 0.3.7",
- "grpcio",
- "hex 0.4.2",
- "kvproto",
- "lazy_static",
- "log_wrappers",
- "panic_hook",
- "pd_client",
- "prometheus",
- "prost",
- "protobuf",
- "raft",
- "raftstore",
- "security",
- "slog",
- "slog-global",
- "tempfile",
- "test_raftstore",
- "test_util",
- "thiserror",
- "tikv",
- "tikv_util",
- "tokio",
- "txn_types",
-]
-
-[[package]]
 name = "rev_lines"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4022,7 +3986,6 @@ dependencies = [
  "raft_log_engine",
  "raftstore",
  "rand",
- "resolved_ts",
  "security",
  "serde_json",
  "slog",
@@ -4488,39 +4451,6 @@ checksum = "5e6b677dd1e8214ea1ef4297f85dbcbed8e8cdddb561040cc998ca2551c37561"
 dependencies = [
  "byteorder",
  "winapi 0.3.8",
-]
-
-[[package]]
-name = "test_raftstore"
-version = "0.0.1"
-dependencies = [
- "collections",
- "concurrency_manager",
- "crossbeam 0.8.0",
- "encryption_export",
- "engine_rocks",
- "engine_traits",
- "fail",
- "futures 0.3.7",
- "grpcio",
- "keys",
- "kvproto",
- "lazy_static",
- "log_wrappers",
- "pd_client",
- "raft",
- "raftstore",
- "rand",
- "security",
- "slog",
- "slog-global",
- "tempfile",
- "test_util",
- "tikv",
- "tikv_util",
- "tokio",
- "tokio-timer",
- "txn_types",
 ]
 
 [[package]]

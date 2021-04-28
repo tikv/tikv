@@ -638,14 +638,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             cop_read_pools.handle()
         };
 
-        // Create resolved ts worker
-        let mut rts_worker = Box::new(LazyWorker::new("resolved-ts"));
-        let rts_scheduler = rts_worker.scheduler();
-
-        // Register resolved ts
-        let resolved_ts_ob = resolved_ts::Observer::new(rts_scheduler.clone());
-        resolved_ts_ob.register_to(self.coprocessor_host.as_mut().unwrap());
-
         let server_config = Arc::new(self.config.server.clone());
 
         self.config
@@ -741,22 +733,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             ));
             self.to_stop.push(ttl_checker);
         }
-
-        // Start resolved ts
-        let rts_endpoint = resolved_ts::Endpoint::new(
-            &self.config.cdc,
-            rts_scheduler,
-            self.router.clone(),
-            engines.store_meta.clone(),
-            self.pd_client.clone(),
-            self.concurrency_manager.clone(),
-            server.env(),
-            self.security_mgr.clone(),
-            // TODO: replace to the cdc sinker
-            resolved_ts::DummySinker::new(),
-        );
-        rts_worker.start(rts_endpoint);
-        self.to_stop.push(rts_worker);
 
         self.servers = Some(Servers {
             lock_mgr,
