@@ -13,6 +13,9 @@ use tikv_util::future::poll_future_notify;
 use tikv_util::mpsc::batch::Sender;
 use tikv_util::time::{duration_to_sec, Instant};
 
+pub const MAX_BATCH_GET_REQUEST_COUNT: usize = 6;
+pub const MAX_BATCH_RAW_GET_REQUEST_COUNT: usize = 16;
+
 pub struct ReqBatcher {
     gets: Vec<GetRequest>,
     raw_gets: Vec<RawGetRequest>,
@@ -53,12 +56,12 @@ impl ReqBatcher {
         storage: &Storage<E, L>,
         tx: &Sender<(u64, batch_commands_response::Response)>,
     ) {
-        if self.gets.len() > 5 {
+        if self.gets.len() > MAX_BATCH_GET_REQUEST_COUNT {
             let gets = std::mem::take(&mut self.gets);
             let ids = std::mem::take(&mut self.get_ids);
             future_batch_get_command(storage, ids, gets, tx.clone());
         }
-        if self.raw_gets.len() > 16 {
+        if self.raw_gets.len() > MAX_BATCH_RAW_GET_REQUEST_COUNT {
             let gets = std::mem::take(&mut self.raw_gets);
             let ids = std::mem::take(&mut self.raw_get_ids);
             future_batch_raw_get_command(storage, ids, gets, tx.clone());

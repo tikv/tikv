@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use tikv_util::time::{duration_to_sec, Instant};
 
-use super::batch::ReqBatcher;
+use super::batch::{ReqBatcher, MAX_BATCH_GET_REQUEST_COUNT};
 use crate::coprocessor::Endpoint;
 use crate::coprocessor_v2;
 use crate::server::gc_worker::GcWorker;
@@ -904,13 +904,13 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let request_handler = stream.try_for_each(move |mut req| {
             let request_ids = req.take_request_ids();
             let requests: Vec<_> = req.take_requests().into();
-            let mut batcher =
-                if enable_req_batch && storage.is_readpool_busy() && requests.len() > 2 {
-                    Some(ReqBatcher::new())
-                } else {
-                    None
-                };
+            let mut batcher = if enable_req_batch && storage.is_readpool_busy() {
+                Some(ReqBatcher::new())
+            } else {
+                None
+            };
             GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
+            let mut req_len = requests.len();
             for (id, req) in request_ids.into_iter().zip(requests) {
                 handle_batch_commands_request(
                     &mut batcher,
@@ -922,10 +922,17 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                     req,
                     &tx,
                 );
+                req_len -= 1;
+                if enable_req_batch
+                    && batcher.is_none()
+                    && req_len >= MAX_BATCH_GET_REQUEST_COUNT
+                    && storage.is_readpool_busy()
+                {
+                    batcher = Some(ReqBatcher::new());
+                }
             }
             if let Some(mut batch) = batcher {
                 batch.commit(&storage, &tx);
-                storage.release_snapshot();
             }
             future::ok(())
         });
@@ -1054,7 +1061,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
     }
 }
 
-fn response_batch_commands_request<F>(
+pub fn response_batch_commands_request<F>(
     id: u64,
     resp: F,
     tx: Sender<(u64, batch_commands_response::Response)>,
@@ -1194,7 +1201,7 @@ async fn future_handle_empty(
     Ok(res)
 }
 
-fn future_get<E: Engine, L: LockManager>(
+pub fn future_get<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: GetRequest,
 ) -> impl Future<Output = ServerResult<GetResponse>> {
@@ -1367,7 +1374,7 @@ fn future_delete_range<E: Engine, L: LockManager>(
     }
 }
 
-fn future_raw_get<E: Engine, L: LockManager>(
+pub fn future_raw_get<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: RawGetRequest,
 ) -> impl Future<Output = ServerResult<RawGetResponse>> {

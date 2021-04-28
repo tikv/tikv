@@ -2,6 +2,7 @@
 
 use self::metrics::*;
 use crate::config::UnifiedReadPoolConfig;
+use crate::server::service::MAX_BATCH_GET_REQUEST_COUNT;
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter};
 use file_system::{set_io_type, IOType};
 use futures::channel::oneshot;
@@ -50,7 +51,7 @@ impl ReadPool {
                 remote: pool.remote().clone(),
                 running_tasks: running_tasks.clone(),
                 max_tasks: *max_tasks,
-                pool_size: *pool_size,
+                max_task_limit_to_busy: (*pool_size * (MAX_BATCH_GET_REQUEST_COUNT - 1)) as i64,
             },
         }
     }
@@ -67,7 +68,7 @@ pub enum ReadPoolHandle {
         remote: Remote<TaskCell>,
         running_tasks: IntGauge,
         max_tasks: usize,
-        pool_size: usize,
+        max_task_limit_to_busy: i64,
     },
 }
 
@@ -154,12 +155,15 @@ impl ReadPoolHandle {
         match self {
             ReadPoolHandle::FuturePools {
                 read_pool_normal, ..
-            } => read_pool_normal.get_running_task_count() > read_pool_normal.get_pool_size() * 2,
+            } => {
+                read_pool_normal.get_running_task_count()
+                    > read_pool_normal.get_pool_size() * MAX_BATCH_GET_REQUEST_COUNT
+            }
             ReadPoolHandle::Yatp {
                 running_tasks,
-                pool_size,
+                max_task_limit_to_busy,
                 ..
-            } => running_tasks.get() as usize > *pool_size * 2,
+            } => running_tasks.get() > *max_task_limit_to_busy,
         }
     }
 }
