@@ -44,7 +44,7 @@ impl StoreAddrResolver for StaticResolver {
     }
 }
 
-fn get_raft_client<R, T>(router: R, resolver: T) -> RaftClient<T, R>
+fn get_raft_client<R, T>(router: R, resolver: T) -> RaftClient<T, R, RocksEngine>
 where
     R: RaftStoreRouter<RocksEngine> + Unpin + 'static,
     T: StoreAddrResolver + 'static,
@@ -58,7 +58,7 @@ where
     RaftClient::new(builder)
 }
 
-fn get_raft_client_by_port(port: u16) -> RaftClient<StaticResolver, RaftStoreBlackHole> {
+fn get_raft_client_by_port(port: u16) -> RaftClient<StaticResolver, RaftStoreBlackHole, RocksEngine> {
     get_raft_client(RaftStoreBlackHole, StaticResolver::new(port))
 }
 
