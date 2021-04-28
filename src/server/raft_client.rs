@@ -7,6 +7,7 @@ use collections::{HashMap, HashSet};
 use crossbeam::queue::ArrayQueue;
 use engine_rocks::RocksEngine;
 use engine_traits::KvEngine;
+use std::marker::PhantomData;
 use futures::channel::oneshot;
 use futures::compat::Future01CompatExt;
 use futures::task::{Context, Poll, Waker};
@@ -260,14 +261,17 @@ impl Buffer for MessageBuffer {
 }
 
 /// Reporter reports whether a snapshot is sent successfully.
-struct SnapshotReporter<T> {
+struct SnapshotReporter<T, E> {
     raft_router: T,
+    engine: PhantomData<E>,
     region_id: u64,
     to_peer_id: u64,
     to_store_id: u64,
 }
 
-impl<T: RaftStoreRouter<RocksEngine> + 'static> SnapshotReporter<T> {
+impl<T, E> SnapshotReporter<T, E>
+where T: RaftStoreRouter<E> + 'static, E: KvEngine
+{
     pub fn report(&self, status: SnapshotStatus) {
         debug!(
             "send snapshot";
@@ -348,13 +352,14 @@ where
     R: RaftStoreRouter<RocksEngine> + 'static,
     B: Buffer<OutputMessage = M>,
 {
-    fn new_snapshot_reporter(&self, msg: &RaftMessage) -> SnapshotReporter<R> {
+    fn new_snapshot_reporter(&self, msg: &RaftMessage) -> SnapshotReporter<R, RocksEngine> {
         let region_id = msg.get_region_id();
         let to_peer_id = msg.get_to_peer().get_id();
         let to_store_id = msg.get_to_peer().get_store_id();
 
         SnapshotReporter {
             raft_router: self.router.clone(),
+            engine: PhantomData,
             region_id,
             to_peer_id,
             to_store_id,
