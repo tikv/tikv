@@ -53,7 +53,7 @@ use crate::storage::{
     get_priority_tag, types::StorageCallback, Error as StorageError,
     ErrorInner as StorageErrorInner,
 };
-use ctx::{Tags, Ctx, FutureExt, M_TXN};
+use ctx::{Ctx, FutureExt, Tags, M_TXN};
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
 
@@ -402,9 +402,12 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                             .get_sched_pool(task.cmd.priority())
                             .clone()
                             .pool
-                            .spawn(async move {
-                                sched.finish_with_err(task.cid, Error::from(err));
-                            }.in_tags(M_TXN, Ctx::extract_tags(M_TXN)))
+                            .spawn(
+                                async move {
+                                    sched.finish_with_err(task.cid, Error::from(err));
+                                }
+                                .in_tags(M_TXN, Ctx::extract_tags(M_TXN)),
+                            )
                             .unwrap();
                     }
                 }
@@ -569,38 +572,41 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         self.get_sched_pool(task.cmd.priority())
             .clone()
             .pool
-            .spawn(async move {
-                fail_point!("scheduler_async_snapshot_finish");
-                SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
+            .spawn(
+                async move {
+                    fail_point!("scheduler_async_snapshot_finish");
+                    SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
 
-                let read_duration = Instant::now_coarse();
+                    let read_duration = Instant::now_coarse();
 
-                let region_id = task.cmd.ctx().get_region_id();
-                let ts = task.cmd.ts();
-                let timer = Instant::now_coarse();
-                let mut statistics = Statistics::default();
+                    let region_id = task.cmd.ctx().get_region_id();
+                    let ts = task.cmd.ts();
+                    let timer = Instant::now_coarse();
+                    let mut statistics = Statistics::default();
 
-                if task.cmd.readonly() {
-                    self.process_read(snapshot, task, &mut statistics);
-                } else {
-                    // Safety: `self.sched_pool` ensures a TLS engine exists.
-                    unsafe {
-                        with_tls_engine(|engine| {
-                            self.process_write(engine, snapshot, task, &mut statistics)
-                        });
-                    }
-                };
-                tls_collect_scan_details(tag.get_str(), &statistics);
-                slow_log!(
-                    timer.elapsed(),
-                    "[region {}] scheduler handle command: {}, ts: {}",
-                    region_id,
-                    tag,
-                    ts
-                );
+                    if task.cmd.readonly() {
+                        self.process_read(snapshot, task, &mut statistics);
+                    } else {
+                        // Safety: `self.sched_pool` ensures a TLS engine exists.
+                        unsafe {
+                            with_tls_engine(|engine| {
+                                self.process_write(engine, snapshot, task, &mut statistics)
+                            });
+                        }
+                    };
+                    tls_collect_scan_details(tag.get_str(), &statistics);
+                    slow_log!(
+                        timer.elapsed(),
+                        "[region {}] scheduler handle command: {}, ts: {}",
+                        region_id,
+                        tag,
+                        ts
+                    );
 
-                tls_collect_read_duration(tag.get_str(), read_duration.elapsed());
-            }.in_tags(M_TXN, Ctx::extract_tags(M_TXN)))
+                    tls_collect_read_duration(tag.get_str(), read_duration.elapsed());
+                }
+                .in_tags(M_TXN, Ctx::extract_tags(M_TXN)),
+            )
             .unwrap();
     }
 

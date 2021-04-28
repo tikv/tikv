@@ -27,6 +27,7 @@ use crate::storage::kv::{
     ExtCallback, Modify, SnapContext, WriteData,
 };
 use crate::storage::{self, kv};
+use ctx::{Ctx, M_RAFT};
 use raftstore::{coprocessor::dispatcher::BoxReadIndexObserver, store::RegionSnapshot};
 use raftstore::{
     coprocessor::Coprocessor,
@@ -40,7 +41,6 @@ use raftstore::{coprocessor::ReadIndexObserver, errors::Error as RaftServerError
 use tikv_util::codec::number::NumberEncoder;
 use tikv_util::time::Instant;
 use txn_types::WriteBatchFlags;
-use ctx::{M_RAFT, Ctx};
 
 quick_error! {
     #[derive(Debug)]

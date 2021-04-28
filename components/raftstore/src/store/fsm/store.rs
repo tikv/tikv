@@ -77,8 +77,8 @@ use crate::store::{
 };
 use crate::Result;
 use concurrency_manager::ConcurrencyManager;
+use ctx::{Ctx, M_RAFT};
 use tikv_util::future::poll_future_notify;
-use ctx::{M_RAFT, Ctx};
 
 type Key = Vec<u8>;
 

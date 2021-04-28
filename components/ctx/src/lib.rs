@@ -1,12 +1,14 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::cell::RefCell;
+use std::iter::{once, FromIterator};
 use std::ops::DerefMut;
 use std::sync::Arc;
-use std::iter::{once, FromIterator};
-
-use smallvec::SmallVec;
 use std::marker::PhantomData;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering::Relaxed;
+
+use smallvec::SmallVec;
 
 pub static M_GRPC: &'static str = "M_GRPC";
 pub static M_TXN: &'static str = "M_TXN";
@@ -26,9 +28,7 @@ impl Tag {
     /// simulated id
     pub fn new(mut id: String) -> Tag {
         id.push_str(&format!("_{}", ID.fetch_add(1, Relaxed)));
-        Tag {
-            id: Arc::new(id),
-        }
+        Tag { id: Arc::new(id) }
     }
 }
 
@@ -60,10 +60,7 @@ impl Module {
     }
 
     pub fn new_with_tags(name: &'static str, tags: SmallVec<[Tag; 2]>) -> Self {
-        Self {
-            name,
-            tags,
-        }
+        Self { name, tags }
     }
 }
 
@@ -88,7 +85,11 @@ impl Ctx {
     fn with_module_check<T>(module_name: &'static str, f: impl FnOnce(&mut Module) -> T) -> T {
         Self::with_ctx(move |c| {
             if let Some(m) = c.module_stack.last_mut() {
-                assert_eq!(module_name, m.name, "unmatched module name: {} != {}", module_name, m.name);
+                assert_eq!(
+                    module_name, m.name,
+                    "unmatched module name: {} != {}",
+                    module_name, m.name
+                );
                 f(m)
             } else {
                 panic!("No context");
@@ -111,7 +112,11 @@ impl Ctx {
 
     pub fn inherit_module(name: &'static str) -> Handle {
         let index = Self::with_ctx(|c| {
-            let tags = c.module_stack.last().map(|m| m.tags.clone()).unwrap_or_default();
+            let tags = c
+                .module_stack
+                .last()
+                .map(|m| m.tags.clone())
+                .unwrap_or_default();
             c.module_stack.push(Module::new_with_tags(name, tags));
             c.module_stack.len()
         });
@@ -142,7 +147,7 @@ pub struct Handle {
     check_index: usize,
     module_name: &'static str,
     // impl !Send, !Sync
-    _p: PhantomData<*const ()>
+    _p: PhantomData<*const ()>,
 }
 
 impl Drop for Handle {
@@ -150,7 +155,11 @@ impl Drop for Handle {
         Ctx::with_ctx(|c| {
             assert_eq!(c.module_stack.len(), self.check_index, "unmatched index");
             let m = c.module_stack.pop().unwrap();
-            assert_eq!(self.module_name, m.name, "unmatched module name: {} != {}", self.module_name, m.name);
+            assert_eq!(
+                self.module_name, m.name,
+                "unmatched module name: {} != {}",
+                self.module_name, m.name
+            );
         })
     }
 }
@@ -179,7 +188,10 @@ pub struct InTags<T> {
 impl<T: std::future::Future> std::future::Future for InTags<T> {
     type Output = T::Output;
 
-    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
         let this = self.project();
 
         let _handle = Ctx::enter_module(this.module_name);

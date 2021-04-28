@@ -76,6 +76,7 @@ use crate::storage::{
     types::StorageCallbackType,
 };
 use concurrency_manager::ConcurrencyManager;
+use ctx::{Ctx, M_TXN};
 use engine_traits::{CfName, CF_DEFAULT, DATA_CFS};
 use futures::prelude::*;
 use kvproto::kvrpcpb::{
@@ -90,7 +91,6 @@ use std::{
 };
 use tikv_util::time::{Instant, ThreadReadId};
 use txn_types::{Key, KvPair, Lock, Mutation, OldValues, TimeStamp, TsSet, Value};
-use ctx::{M_TXN, Ctx};
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
