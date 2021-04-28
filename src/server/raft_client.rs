@@ -656,13 +656,14 @@ async fn maybe_backoff(cfg: &Config, last_wake_time: &mut Instant, retry_times: 
 /// 4. fallback to legacy API if incompatible
 ///
 /// Every failure during the process should trigger retry automatically.
-async fn start<S, R>(
-    back_end: StreamBackEnd<S, R, RocksEngine>,
+async fn start<S, R, E>(
+    back_end: StreamBackEnd<S, R, E>,
     conn_id: usize,
     pool: Arc<Mutex<ConnectionPool>>,
 ) where
     S: StoreAddrResolver + Send,
-    R: RaftStoreRouter<RocksEngine> + Unpin + Send + 'static,
+    R: RaftStoreRouter<E> + Unpin + Send + 'static,
+    E: KvEngine + Unpin
 {
     let mut last_wake_time = Instant::now();
     let mut retry_times = 0;
