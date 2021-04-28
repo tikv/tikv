@@ -545,53 +545,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cmd"
-version = "0.0.1"
-dependencies = [
- "chrono",
- "clap",
- "collections",
- "concurrency_manager",
- "crossbeam",
- "encryption_export",
- "engine_rocks",
- "engine_traits",
- "error_code",
- "file_system",
- "fs2",
- "futures 0.3.7",
- "grpcio",
- "hex 0.4.2",
- "keys",
- "kvproto",
- "libc",
- "log",
- "log_wrappers",
- "nix 0.11.1",
- "pd_client",
- "prometheus",
- "promptly",
- "protobuf",
- "raft",
- "raft_log_engine",
- "raftstore",
- "rand",
- "security",
- "serde_json",
- "slog",
- "slog-global",
- "tempfile",
- "tikv",
- "tikv_alloc",
- "tikv_util",
- "tokio",
- "toml",
- "txn_types",
- "vlog",
- "yatp",
-]
-
-[[package]]
 name = "codec"
 version = "0.0.1"
 dependencies = [
@@ -3288,7 +3241,7 @@ dependencies = [
 name = "raftstore-proxy"
 version = "0.0.1"
 dependencies = [
- "cmd",
+ "server",
 ]
 
 [[package]]
@@ -3889,6 +3842,54 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "server"
+version = "0.0.1"
+dependencies = [
+ "chrono",
+ "clap",
+ "collections",
+ "concurrency_manager",
+ "crossbeam",
+ "encryption",
+ "encryption_export",
+ "engine_rocks",
+ "engine_traits",
+ "error_code",
+ "file_system",
+ "fs2",
+ "futures 0.3.7",
+ "grpcio",
+ "hex 0.4.2",
+ "keys",
+ "kvproto",
+ "libc",
+ "log",
+ "log_wrappers",
+ "nix 0.11.1",
+ "pd_client",
+ "prometheus",
+ "promptly",
+ "protobuf",
+ "raft",
+ "raft_log_engine",
+ "raftstore",
+ "rand",
+ "security",
+ "serde_json",
+ "slog",
+ "slog-global",
+ "tempfile",
+ "tikv",
+ "tikv_alloc",
+ "tikv_util",
+ "tokio",
+ "toml",
+ "txn_types",
+ "vlog",
+ "yatp",
 ]
 
 [[package]]

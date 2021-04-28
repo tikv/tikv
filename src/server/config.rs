@@ -284,7 +284,7 @@ impl Config {
                 None => {
                     return Err(box_err!(
                         "should set engine name with env variable `ENGINE_LABEL_VALUE`"
-                    ))
+                    ));
                 }
                 Some(name) => name.to_owned(),
             };

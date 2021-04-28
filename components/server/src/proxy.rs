@@ -12,10 +12,6 @@ use std::ffi::CStr;
 use std::os::raw::{c_char, c_int};
 use tikv::config::TiKvConfig;
 
-pub fn print_proxy_version() {
-    println!("{}", crate::proxy_version_info());
-}
-
 pub unsafe fn run_proxy(
     argc: c_int,
     argv: *const *const c_char,

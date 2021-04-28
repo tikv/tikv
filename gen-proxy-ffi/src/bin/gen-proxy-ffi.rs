@@ -51,7 +51,10 @@ fn read_version_file(version_cpp_file: &str) -> (String, u32) {
 }
 
 fn make_version_file(md5_sum: String, version: u32, tar_version_head_path: &str) {
-    let buff = format!("//{}//{}//\n#pragma once\n#include <cstdint>\nnamespace DB {{ constexpr uint32_t RAFT_STORE_PROXY_VERSION = {}; }}", md5_sum, version, version);
+    let buff = format!(
+        "//{}//{}//\n#pragma once\n#include <cstdint>\nnamespace DB {{ constexpr uint32_t RAFT_STORE_PROXY_VERSION = {}; }}",
+        md5_sum, version, version
+    );
     let tmp_path = format!("{}.tmp", tar_version_head_path);
     let mut file = fs::File::create(&tmp_path).expect("Couldn't create tmp cpp version head file");
     file.write(buff.as_bytes()).unwrap();
@@ -97,8 +100,8 @@ fn gen_ffi_code() {
             println!("Check md5 sum equal");
         } else {
             println!(
-                "Check md5 sum not equal, original is {}, current is {}, start to generate rust code with version {}", ori_md5_sum, md5_sum,
-                new_version
+                "Check md5 sum not equal, original is {}, current is {}, start to generate rust code with version {}",
+                ori_md5_sum, md5_sum, new_version
             );
             make_version_file(md5_sum, new_version, version_cpp_file.as_str());
         }

@@ -38,4 +38,8 @@ fn log_proxy_info() {
     }
 }
 
-pub use proxy::{print_proxy_version, run_proxy};
+pub fn print_proxy_version() {
+    println!("{}", proxy_version_info());
+}
+
+pub use proxy::run_proxy;

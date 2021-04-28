@@ -10,4 +10,4 @@ name = "raftstore_proxy"
 crate-type = ["cdylib"]
 
 [dependencies]
-cmd = { path = "../cmd" }
+server = { path = "../components/server" }
