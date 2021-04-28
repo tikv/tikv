@@ -211,6 +211,7 @@ uuid = { version = "0.8.1", features = ["serde", "v4"] }
 vlog = "0.1.4"
 walkdir = "2"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+ctx = { path = "components/ctx" }
 
 [dev-dependencies]
 panic_hook = { path = "components/panic_hook" }
@@ -284,7 +285,8 @@ members = [
   "components/file_system",
   "components/collections",
   "components/coprocessor_plugin_api",
-  "components/test_coprocessor_plugin/example_plugin"
+  "components/test_coprocessor_plugin/example_plugin",
+  "components/ctx",
 ]
 default-members = ["cmd/tikv-server", "cmd/tikv-ctl"]
 

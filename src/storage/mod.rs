@@ -90,6 +90,7 @@ use std::{
 };
 use tikv_util::time::{Instant, ThreadReadId};
 use txn_types::{Key, KvPair, Lock, Mutation, OldValues, TimeStamp, TsSet, Value};
+use ctx::{M_TXN, Ctx};
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
@@ -871,6 +872,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         cmd: TypedCommand<T>,
         callback: Callback<T>,
     ) -> Result<()> {
+        let _handle = Ctx::inherit_module(M_TXN);
+
         use crate::storage::txn::commands::{
             AcquirePessimisticLock, Prewrite, PrewritePessimistic,
         };

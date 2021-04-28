@@ -1043,6 +1043,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ctx"
+version = "0.0.1"
+dependencies = [
+ "pin-project 0.4.8",
+ "smallvec",
+]
+
+[[package]]
 name = "darling"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3527,6 +3535,7 @@ dependencies = [
  "configuration",
  "crc32fast",
  "crossbeam 0.8.0",
+ "ctx",
  "encryption",
  "engine_panic",
  "engine_rocks",
@@ -5247,6 +5256,7 @@ dependencies = [
  "crc32fast",
  "crc64fast",
  "crossbeam 0.8.0",
+ "ctx",
  "encryption_export",
  "engine_panic",
  "engine_rocks",

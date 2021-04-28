@@ -35,6 +35,7 @@ use tikv_util::{debug, error};
 
 use super::metrics::*;
 use crate::store::fsm::store::StoreMeta;
+use ctx::{Ctx, M_RAFT};
 
 pub trait ReadExecutor<E: KvEngine> {
     fn get_engine(&self) -> &E;
@@ -407,6 +408,7 @@ where
         debug!("localreader redirects command"; "command" => ?cmd);
         let region_id = cmd.request.get_header().get_region_id();
         let mut err = errorpb::Error::default();
+        cmd.tags = Some(Ctx::extract_tags(M_RAFT));
         match self.router.send(cmd) {
             Ok(()) => return,
             Err(TrySendError::Full(c)) => {
@@ -423,6 +425,7 @@ where
                 cmd = c;
             }
         }
+        Ctx::extend_tags(M_RAFT, cmd.tags.unwrap());
 
         let mut resp = RaftCmdResponse::default();
         resp.mut_header().set_error(err);

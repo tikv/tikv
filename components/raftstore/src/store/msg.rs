@@ -24,6 +24,7 @@ use crate::store::SnapKey;
 use tikv_util::escape;
 
 use super::{AbstractPeer, RegionSnapshot};
+use ctx::Tags;
 
 #[derive(Debug)]
 pub struct ReadResponse<S: Snapshot> {
@@ -404,6 +405,7 @@ pub struct RaftCommand<S: Snapshot> {
     pub send_time: Instant,
     pub request: RaftCmdRequest,
     pub callback: Callback<S>,
+    pub tags: Option<Tags>,
 }
 
 impl<S: Snapshot> RaftCommand<S> {
@@ -413,6 +415,7 @@ impl<S: Snapshot> RaftCommand<S> {
             request,
             callback,
             send_time: Instant::now(),
+            tags: None,
         }
     }
 }

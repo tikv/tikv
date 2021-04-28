@@ -47,6 +47,7 @@ use tikv_util::future::{paired_future_callback, poll_future_notify};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
 use tikv_util::worker::Scheduler;
 use txn_types::{self, Key};
+use ctx::{Tag, Ctx, FutureExt as _, M_GRPC};
 
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
@@ -133,6 +134,10 @@ macro_rules! handle_request {
             forward_unary!(self.proxy, $fn_name, ctx, req, sink);
             let begin_instant = Instant::now_coarse();
 
+            let _handle = Ctx::enter_module(M_GRPC);
+            let tag = Tag::new(stringify!($fn_name).to_owned());
+            Ctx::push_tag(M_GRPC, tag);
+
             let resp = $future_name(&self.storage, req);
             let task = async move {
                 let resp = resp.await?;
@@ -151,7 +156,7 @@ macro_rules! handle_request {
             })
             .map(|_|());
 
-            ctx.spawn(task);
+            ctx.spawn(task.in_tags(M_GRPC, Ctx::extract_tags(M_GRPC)));
         }
     }
 }
