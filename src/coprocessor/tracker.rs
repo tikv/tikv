@@ -67,7 +67,6 @@ pub struct Tracker {
     total_perf_stats: PerfStatisticsDelta, // Accumulated perf statistics
     slow_log_threshold: Duration,
 
-    kv_engine_read_time_ms: u64,
     // Request info, used to print slow log.
     pub req_ctx: ReqContext,
 }
@@ -91,7 +90,6 @@ impl Tracker {
             total_suspend_time: Duration::default(),
             total_process_time: Duration::default(),
             total_storage_stats: Statistics::default(),
-            kv_engine_read_time_ms: u64::default(),
             total_perf_stats: PerfStatisticsDelta::default(),
             slow_log_threshold,
             req_ctx,
