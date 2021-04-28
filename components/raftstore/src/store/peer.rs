@@ -45,6 +45,7 @@ use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, CollectedReady, Proposal};
 use crate::store::hibernate_state::GroupState;
 use crate::store::msg::RaftCommand;
+use crate::store::util::{admin_cmd_epoch_lookup, RegionReadProgress};
 use crate::store::worker::{HeartbeatTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
 use crate::store::{
     Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse,
@@ -53,11 +54,13 @@ use crate::store::{
 use crate::{Error, Result};
 use collections::{HashMap, HashSet};
 use pd_client::INVALID_ID;
+use tikv_util::codec::number::decode_u64;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::time::{Instant as UtilInstant, ThreadReadId};
 use tikv_util::worker::{FutureScheduler, Scheduler};
 use tikv_util::Either;
 use tikv_util::{box_err, debug, error, info, warn};
+use txn_types::WriteBatchFlags;
 
 use super::cmd_resp;
 use super::local_metrics::{RaftReadyMetrics, RaftSendMessageMetrics};
@@ -69,12 +72,13 @@ use super::read_queue::{ReadIndexQueue, ReadIndexRequest};
 use super::transport::Transport;
 use super::util::{
     self, check_region_epoch, is_initial_msg, AdminCmdEpochState, ChangePeerI, ConfChangeKind,
-    Lease, LeaseState, ADMIN_CMD_EPOCH_MAP, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
+    Lease, LeaseState, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
 };
 use super::DestroyPeerJob;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
 const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000; // 1s
+const REGION_READ_PROGRESS_CAP: usize = 128;
 
 /// The returned states of the peer after checking whether it is stale
 #[derive(Debug, PartialEq, Eq)]
@@ -104,7 +108,7 @@ impl<S: Snapshot> ProposalQueue<S> {
         self.queue
             .binary_search_by_key(&(term, index), |p: &Proposal<_>| (p.term, p.index))
             .ok()
-            .map(|i| self.queue[i].renew_lease_time)
+            .map(|i| self.queue[i].propose_time)
             .flatten()
     }
 
@@ -241,7 +245,7 @@ impl<S: Snapshot> ProposedAdminCmd<S> {
 }
 
 struct CmdEpochChecker<S: Snapshot> {
-    // Although it's a deque, because of the characteristics of the settings from `ADMIN_CMD_EPOCH_MAP`,
+    // Although it's a deque, because of the characteristics of the settings from `admin_cmd_epoch_lookup`,
     // the max size of admin cmd is 2, i.e. split/merge and change peer.
     proposed_admin_cmd: VecDeque<ProposedAdminCmd<S>>,
     term: u64,
@@ -279,8 +283,7 @@ impl<S: Snapshot> CmdEpochChecker<S> {
             (NORMAL_REQ_CHECK_VER, NORMAL_REQ_CHECK_CONF_VER)
         } else {
             let cmd_type = req.get_admin_request().get_cmd_type();
-            // Due to `test_admin_cmd_epoch_map_include_all_cmd_type`, using unwrap is ok.
-            let epoch_state = *ADMIN_CMD_EPOCH_MAP.get(&cmd_type).unwrap();
+            let epoch_state = admin_cmd_epoch_lookup(cmd_type);
             (epoch_state.check_ver, epoch_state.check_conf_ver)
         };
         self.last_conflict_index(check_ver, check_conf_ver)
@@ -288,8 +291,7 @@ impl<S: Snapshot> CmdEpochChecker<S> {
 
     pub fn post_propose(&mut self, cmd_type: AdminCmdType, index: u64, term: u64) {
         self.maybe_update_term(term);
-        // Due to `test_admin_cmd_epoch_map_include_all_cmd_type`, using unwrap is ok.
-        let epoch_state = *ADMIN_CMD_EPOCH_MAP.get(&cmd_type).unwrap();
+        let epoch_state = admin_cmd_epoch_lookup(cmd_type);
         assert!(
             self.last_conflict_index(epoch_state.check_ver, epoch_state.check_conf_ver)
                 .is_none()
@@ -507,6 +509,8 @@ where
     /// reading rocksdb. To avoid unnecessary io operations, we always let the later
     /// task run when there are more than 1 pending tasks.
     pub pending_pd_heartbeat_tasks: Arc<AtomicU64>,
+
+    pub read_progress: Arc<RegionReadProgress>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -600,6 +604,10 @@ where
             cmd_epoch_checker: Default::default(),
             last_unpersisted_number: 0,
             pending_pd_heartbeat_tasks: Arc::new(AtomicU64::new(0)),
+            read_progress: Arc::new(RegionReadProgress::new(
+                applied_index,
+                REGION_READ_PROGRESS_CAP,
+            )),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -1622,6 +1630,7 @@ where
                     );
                 }
                 self.post_pending_read_index_on_replica(ctx);
+                self.read_progress.update_applied(self.last_applying_idx);
             }
             CheckApplyingSnapStatus::Idle => {}
         }
@@ -2073,7 +2082,7 @@ where
             self.post_pending_read_index_on_replica(ctx);
         } else {
             self.pending_reads.advance_leader_reads(states);
-            propose_time = self.pending_reads.last_ready().map(|r| r.renew_lease_time);
+            propose_time = self.pending_reads.last_ready().map(|r| r.propose_time);
             if self.ready_to_handle_read() {
                 while let Some(mut read) = self.pending_reads.pop_front() {
                     self.response_read(&mut read, ctx, false);
@@ -2112,11 +2121,11 @@ where
             panic!("{} should not applying snapshot.", self.tag);
         }
 
-        self.raft_group
-            .advance_apply_to(apply_state.get_applied_index());
+        let applied_index = apply_state.get_applied_index();
+        self.raft_group.advance_apply_to(applied_index);
 
         self.cmd_epoch_checker.advance_apply(
-            apply_state.get_applied_index(),
+            applied_index,
             self.term(),
             self.raft_group.store().region(),
         );
@@ -2142,6 +2151,8 @@ where
             }
         }
         self.pending_reads.gc();
+
+        self.read_progress.update_applied(applied_index);
 
         // Only leaders need to update applied_index_term.
         if progress_to_be_updated && self.is_leader() {
@@ -2192,11 +2203,9 @@ where
         } else {
             self.leader_lease.renew(ts);
             let term = self.term();
-            if let Some(remote_lease) = self.leader_lease.maybe_new_remote_lease(term) {
-                Some(ReadProgress::leader_lease(remote_lease))
-            } else {
-                None
-            }
+            self.leader_lease
+                .maybe_new_remote_lease(term)
+                .map(ReadProgress::leader_lease)
         };
         if let Some(progress) = progress {
             let mut meta = ctx.store_meta.lock().unwrap();
@@ -2264,7 +2273,7 @@ where
 
         let policy = self.inspect(&req);
         let res = match policy {
-            Ok(RequestPolicy::ReadLocal) => {
+            Ok(RequestPolicy::ReadLocal) | Ok(RequestPolicy::StaleRead) => {
                 self.read_local(ctx, req, cb);
                 return false;
             }
@@ -2310,7 +2319,7 @@ where
                     index: idx,
                     term: self.term(),
                     cb,
-                    renew_lease_time: None,
+                    propose_time: None,
                     must_pass_epoch_check: has_applied_to_current_term,
                 };
                 if let Some(cmd_type) = req_admin_cmd_type {
@@ -2332,7 +2341,7 @@ where
         if poll_ctx.current_time.is_none() {
             poll_ctx.current_time = Some(monotonic_raw_now());
         }
-        p.renew_lease_time = poll_ctx.current_time;
+        p.propose_time = poll_ctx.current_time;
 
         self.proposals.push(p);
     }
@@ -2640,7 +2649,7 @@ where
             return false;
         }
 
-        let renew_lease_time = monotonic_raw_now();
+        let now = monotonic_raw_now();
         if self.is_leader() {
             match self.inspect_lease() {
                 // Here combine the new read request with the previous one even if the lease expired is
@@ -2655,7 +2664,9 @@ where
                     let commit_index = self.get_store().commit_index();
                     if let Some(read) = self.pending_reads.back_mut() {
                         let max_lease = poll_ctx.cfg.raft_store_max_leader_lease();
-                        if read.renew_lease_time + max_lease > renew_lease_time {
+                        if read.propose_time + max_lease > now {
+                            // A read request proposed in the current lease is found; combine the new
+                            // read request to that previous one, so that no proposing needed.
                             read.push_command(req, cb, commit_index);
                             return false;
                         }
@@ -2732,7 +2743,7 @@ where
             return false;
         }
 
-        let mut read = ReadIndexRequest::with_command(id, req, cb, renew_lease_time);
+        let mut read = ReadIndexRequest::with_command(id, req, cb, now);
         read.addition_request = request.map(Box::new);
         self.pending_reads.push_back(read, self.is_leader());
         self.should_wake_up = true;
@@ -2747,7 +2758,7 @@ where
 
         // TimeoutNow has been sent out, so we need to propose explicitly to
         // update leader lease.
-        if self.leader_lease.inspect(Some(renew_lease_time)) == LeaseState::Suspect {
+        if self.leader_lease.inspect(Some(now)) == LeaseState::Suspect {
             let req = RaftCmdRequest::default();
             if let Ok(Either::Left(index)) = self.propose_normal(poll_ctx, req) {
                 let p = Proposal {
@@ -2755,7 +2766,7 @@ where
                     index,
                     term: self.term(),
                     cb: Callback::None,
-                    renew_lease_time: Some(renew_lease_time),
+                    propose_time: Some(now),
                     must_pass_epoch_check: false,
                 };
                 self.post_propose(poll_ctx, p);
@@ -2792,7 +2803,20 @@ where
                 }
             }
         }
-        Ok((min_m.unwrap_or(0), min_c.unwrap_or(0)))
+        let (mut min_m, min_c) = (min_m.unwrap_or(0), min_c.unwrap_or(0));
+        if min_m < min_c {
+            warn!(
+                "min_matched < min_committed, raft progress is inaccurate";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+                "min_matched" => min_m,
+                "min_committed" => min_c,
+            );
+            // Reset `min_matched` to `min_committed`, since the raft log at `min_committed` is
+            // known to be committed in all peers, all of the peers should also have replicated it
+            min_m = min_c;
+        }
+        Ok((min_m, min_c))
     }
 
     fn pre_propose_prepare_merge<T>(
@@ -2814,7 +2838,6 @@ where
                 last_index
             ));
         }
-        assert!(min_matched >= min_committed);
         let mut entry_size = 0;
         for entry in self
             .raft_group
@@ -3193,6 +3216,31 @@ where
                 };
             }
         }
+        let flags = WriteBatchFlags::from_bits_check(req.get_header().get_flags());
+        if flags.contains(WriteBatchFlags::STALE_READ) {
+            let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
+            let safe_ts = self.read_progress.safe_ts();
+            if safe_ts < read_ts {
+                warn!(
+                    "read rejected by safe timestamp";
+                    "safe ts" => safe_ts,
+                    "read ts" => read_ts,
+                    "tag" => &self.tag
+                );
+                let mut response = cmd_resp::new_error(Error::DataIsNotReady(
+                    region.get_id(),
+                    self.peer_id(),
+                    safe_ts,
+                ));
+                cmd_resp::bind_term(&mut response, self.term());
+                return ReadResponse {
+                    response,
+                    snapshot: None,
+                    txn_extra_op: TxnExtraOp::Noop,
+                };
+            }
+        }
+
         let mut resp = ctx.execute(&req, &Arc::new(region), read_index, None);
         if let Some(snap) = resp.snapshot.as_mut() {
             snap.max_ts_sync_status = Some(self.max_ts_sync_status.clone());
@@ -3454,6 +3502,7 @@ where
             send_msg.set_start_key(region.get_start_key().to_vec());
             send_msg.set_end_key(region.get_end_key().to_vec());
         }
+
         send_msg.set_message(msg);
 
         if let Err(e) = trans.send(send_msg) {
@@ -3582,6 +3631,7 @@ where
 pub enum RequestPolicy {
     // Handle the read request directly without dispatch.
     ReadLocal,
+    StaleRead,
     // Handle the read request via raft's SafeReadIndex mechanism.
     ReadIndex,
     ProposeNormal,
@@ -3632,6 +3682,11 @@ pub trait RequestInspector {
 
         if has_write {
             return Ok(RequestPolicy::ProposeNormal);
+        }
+
+        let flags = WriteBatchFlags::from_bits_check(req.get_header().get_flags());
+        if flags.contains(WriteBatchFlags::STALE_READ) {
+            return Ok(RequestPolicy::StaleRead);
         }
 
         if req.get_header().get_read_quorum() {
@@ -3908,6 +3963,17 @@ mod tests {
             table.push((req.clone(), policy));
         }
 
+        // Stale read
+        for op in &[CmdType::Get, CmdType::Snap] {
+            let mut req = req.clone();
+            let mut request = raft_cmdpb::Request::default();
+            request.set_cmd_type(*op);
+            req.set_requests(vec![request].into());
+            req.mut_header()
+                .set_flags(txn_types::WriteBatchFlags::STALE_READ.bits());
+            table.push((req, RequestPolicy::StaleRead));
+        }
+
         for &applied_to_index_term in &[true, false] {
             for &lease_state in &[LeaseState::Expired, LeaseState::Suspect, LeaseState::Valid] {
                 for (req, mut policy) in table.clone() {
@@ -3974,7 +4040,7 @@ mod tests {
                 index,
                 term: gen_term(index),
                 cb: Callback::write(Box::new(|_| {})),
-                renew_lease_time: Some(u64_to_timespec(index)),
+                propose_time: Some(u64_to_timespec(index)),
                 must_pass_epoch_check: false,
             });
         };
@@ -4048,7 +4114,7 @@ mod tests {
                 term,
                 cb,
                 is_conf_change: false,
-                renew_lease_time: None,
+                propose_time: None,
                 must_pass_epoch_check: false,
             });
         }

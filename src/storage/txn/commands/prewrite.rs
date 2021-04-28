@@ -451,9 +451,10 @@ impl<K: PrewriteKind> Prewriter<K> {
                     if need_min_commit_ts && final_min_commit_ts < ts {
                         final_min_commit_ts = ts;
                     }
-                    if old_value.specified() {
+                    if old_value.valid() {
                         let key = key.append_ts(txn.start_ts);
-                        self.old_values.insert(key, (old_value, mutation_type));
+                        self.old_values
+                            .insert(key, (old_value, Some(mutation_type)));
                     }
                 }
                 Err(MvccError(box MvccErrorInner::CommitTsTooLarge { .. })) | Ok((..)) => {
@@ -712,12 +713,13 @@ pub(in crate::storage::txn) fn fallback_1pc_locks(txn: &mut MvccTxn) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::txn::actions::acquire_pessimistic_lock::tests::must_pessimistic_locked;
     use crate::storage::{
         mvcc::{tests::*, Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{
             commands::test_util::prewrite_command,
             commands::test_util::{
-                commit, pessimsitic_prewrite_with_cm, prewrite, prewrite_with_cm, rollback,
+                commit, pessimistic_prewrite_with_cm, prewrite, prewrite_with_cm, rollback,
             },
             tests::{must_acquire_pessimistic_lock, must_rollback},
             Error, ErrorInner,
@@ -954,7 +956,7 @@ mod tests {
         let mut statistics = Statistics::default();
         prewrite_with_cm(
             &engine,
-            cm,
+            cm.clone(),
             &mut statistics,
             mutations,
             key.to_vec(),
@@ -962,6 +964,43 @@ mod tests {
             Some(60),
         )
         .unwrap();
+
+        // Test a 1PC request should not be partially written when encounters error on the halfway.
+        // If some of the keys are successfully written as committed state, the atomicity will be
+        // broken.
+        let (k1, v1) = (b"k1", b"v1");
+        let (k2, v2) = (b"k2", b"v2");
+        // Lock k2.
+        let mut statistics = Statistics::default();
+        prewrite_with_cm(
+            &engine,
+            cm.clone(),
+            &mut statistics,
+            vec![Mutation::Put((Key::from_raw(k2), v2.to_vec()))],
+            k2.to_vec(),
+            50,
+            None,
+        )
+        .unwrap();
+        // Try 1PC on the two keys and it will fail on the second one.
+        let mutations = vec![
+            Mutation::Put((Key::from_raw(k1), v1.to_vec())),
+            Mutation::Put((Key::from_raw(k2), v2.to_vec())),
+        ];
+        prewrite_with_cm(
+            &engine,
+            cm,
+            &mut statistics,
+            mutations,
+            k1.to_vec(),
+            60,
+            Some(70),
+        )
+        .unwrap_err();
+        must_unlocked(&engine, k1);
+        must_locked(&engine, k2, 50);
+        must_get_commit_ts_none(&engine, k1, 60);
+        must_get_commit_ts_none(&engine, k2, 60);
     }
 
     #[test]
@@ -975,7 +1014,7 @@ mod tests {
 
         let mutations = vec![(Mutation::Put((Key::from_raw(key), value.to_vec())), true)];
         let mut statistics = Statistics::default();
-        pessimsitic_prewrite_with_cm(
+        pessimistic_prewrite_with_cm(
             &engine,
             cm.clone(),
             &mut statistics,
@@ -1001,7 +1040,7 @@ mod tests {
             (Mutation::Put((Key::from_raw(k2), v2.to_vec())), false),
         ];
         statistics = Statistics::default();
-        pessimsitic_prewrite_with_cm(
+        pessimistic_prewrite_with_cm(
             &engine,
             cm.clone(),
             &mut statistics,
@@ -1025,9 +1064,9 @@ mod tests {
 
         let mutations = vec![(Mutation::Put((Key::from_raw(k1), v1.to_vec())), true)];
         statistics = Statistics::default();
-        let res = pessimsitic_prewrite_with_cm(
+        let res = pessimistic_prewrite_with_cm(
             &engine,
-            cm,
+            cm.clone(),
             &mut statistics,
             mutations,
             k1.to_vec(),
@@ -1039,6 +1078,46 @@ mod tests {
         assert!(res.min_commit_ts.is_zero());
         assert!(res.one_pc_commit_ts.is_zero());
         must_locked(&engine, k1, 20);
+
+        must_rollback(&engine, k1, 20, true);
+
+        // Test a 1PC request should not be partially written when encounters error on the halfway.
+        // If some of the keys are successfully written as committed state, the atomicity will be
+        // broken.
+
+        // Lock k2 with a optimistic lock.
+        let mut statistics = Statistics::default();
+        prewrite_with_cm(
+            &engine,
+            cm.clone(),
+            &mut statistics,
+            vec![Mutation::Put((Key::from_raw(k2), v2.to_vec()))],
+            k2.to_vec(),
+            50,
+            None,
+        )
+        .unwrap();
+        // Try 1PC on the two keys and it will fail on the second one.
+        let mutations = vec![
+            (Mutation::Put((Key::from_raw(k1), v1.to_vec())), true),
+            (Mutation::Put((Key::from_raw(k2), v2.to_vec())), false),
+        ];
+        must_acquire_pessimistic_lock(&engine, k1, k1, 60, 60);
+        pessimistic_prewrite_with_cm(
+            &engine,
+            cm,
+            &mut statistics,
+            mutations,
+            k1.to_vec(),
+            60,
+            60,
+            Some(70),
+        )
+        .unwrap_err();
+        must_pessimistic_locked(&engine, k1, 60, 60);
+        must_locked(&engine, k2, 50);
+        must_get_commit_ts_none(&engine, k1, 60);
+        must_get_commit_ts_none(&engine, k2, 60);
     }
 
     #[test]

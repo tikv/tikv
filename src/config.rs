@@ -34,7 +34,7 @@ use engine_rocks::{
     DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt};
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_VER_DEFAULT, CF_WRITE};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use keys::region_raft_prefix_len;
 use pd_client::Config as PdConfig;
 use raft_log_engine::RaftEngineConfig as RawRaftEngineConfig;
@@ -76,7 +76,6 @@ fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
         (false, CF_DEFAULT) => (0.25, 0, 128 * MB as usize),
         (false, CF_LOCK) => (0.02, 0, 128 * MB as usize),
         (false, CF_WRITE) => (0.15, 0, 128 * MB as usize),
-        (false, CF_VER_DEFAULT) => (0.25, 0, 128 * MB as usize),
         _ => unreachable!(),
     };
     let mut size = (total_mem as f64 * ratio) as usize;
@@ -159,40 +158,63 @@ impl TitanCfConfig {
     }
 }
 
-fn get_background_job_limit(
-    default_background_jobs: i32,
-    default_background_flushes: i32,
-    default_sub_compactions: u32,
-    default_background_gc: i32,
-) -> (i32, i32, u32, i32) {
-    let cpu_num = SysQuota::new().cpu_cores_quota();
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct BackgroundJobLimits {
+    max_background_jobs: u32,
+    max_background_flushes: u32,
+    max_sub_compactions: u32,
+    max_titan_background_gc: u32,
+}
+
+const KVDB_DEFAULT_BACKGROUND_JOB_LIMITS: BackgroundJobLimits = BackgroundJobLimits {
+    max_background_jobs: 10,
+    max_background_flushes: 4,
+    max_sub_compactions: 3,
+    max_titan_background_gc: 4,
+};
+
+const RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS: BackgroundJobLimits = BackgroundJobLimits {
+    max_background_jobs: 4,
+    max_background_flushes: 1,
+    max_sub_compactions: 2,
+    max_titan_background_gc: 4,
+};
+
+fn get_background_job_limits_impl(
+    cpu_num: u32,
+    defaults: &BackgroundJobLimits,
+) -> BackgroundJobLimits {
     // At the minimum, we should have two background jobs: one for flush and one for compaction.
     // Otherwise, the number of background jobs should not exceed cpu_num - 1.
     // By default, rocksdb assign (max_background_jobs / 4) threads dedicated for flush, and
     // the rest shared by flush and compaction.
-    let max_background_jobs: i32 =
-        cmp::max(2, cmp::min(default_background_jobs, (cpu_num - 1.0) as i32));
-    // Scale flush threads proportionally to background jobs. Also make sure the number of flush
+    let max_background_jobs = cmp::max(2, cmp::min(defaults.max_background_jobs, cpu_num));
+    // Scale flush threads proportionally to cpu cores. Also make sure the number of flush
     // threads doesn't exceed total jobs.
-    let max_background_flushes: i32 = cmp::min(
-        cmp::max(default_background_flushes, max_background_jobs / 4),
-        max_background_jobs - 1,
+    let max_background_flushes = cmp::min(
+        (max_background_jobs + 2) / 3,
+        defaults.max_background_flushes,
     );
     // Cap max_sub_compactions to allow at least two compactions.
     let max_compactions = max_background_jobs - max_background_flushes;
     let max_sub_compactions: u32 = cmp::max(
         1,
-        cmp::min(default_sub_compactions, (max_compactions - 1) as u32),
+        cmp::min(defaults.max_sub_compactions, (max_compactions - 1) as u32),
     );
     // Maximum background GC threads for Titan
-    let max_background_gc: i32 = cmp::min(default_background_gc, cpu_num as i32);
+    let max_titan_background_gc = cmp::min(defaults.max_titan_background_gc, cpu_num);
 
-    (
+    BackgroundJobLimits {
         max_background_jobs,
         max_background_flushes,
         max_sub_compactions,
-        max_background_gc,
-    )
+        max_titan_background_gc,
+    }
+}
+
+fn get_background_job_limits(defaults: &BackgroundJobLimits) -> BackgroundJobLimits {
+    let cpu_num = cmp::max(SysQuota::new().cpu_cores_quota() as u32, 1);
+    get_background_job_limits_impl(cpu_num, defaults)
 }
 
 macro_rules! cf_config {
@@ -806,80 +828,6 @@ impl RaftCfConfig {
     }
 }
 
-cf_config!(VersionCfConfig);
-
-impl Default for VersionCfConfig {
-    fn default() -> VersionCfConfig {
-        VersionCfConfig {
-            block_size: ReadableSize::kb(64),
-            block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_VER_DEFAULT) as u64),
-            disable_block_cache: false,
-            cache_index_and_filter_blocks: true,
-            pin_l0_filter_and_index_blocks: true,
-            use_bloom_filter: true,
-            optimize_filters_for_hits: true,
-            whole_key_filtering: true,
-            bloom_filter_bits_per_key: 10,
-            block_based_bloom_filter: false,
-            read_amp_bytes_per_bit: 0,
-            compression_per_level: [
-                DBCompressionType::No,
-                DBCompressionType::No,
-                DBCompressionType::Lz4,
-                DBCompressionType::Lz4,
-                DBCompressionType::Lz4,
-                DBCompressionType::Zstd,
-                DBCompressionType::Zstd,
-            ],
-            write_buffer_size: ReadableSize::mb(128),
-            max_write_buffer_number: 5,
-            min_write_buffer_number_to_merge: 1,
-            max_bytes_for_level_base: ReadableSize::mb(512),
-            target_file_size_base: ReadableSize::mb(8),
-            level0_file_num_compaction_trigger: 4,
-            level0_slowdown_writes_trigger: 20,
-            level0_stop_writes_trigger: 36,
-            max_compaction_bytes: ReadableSize::gb(2),
-            compaction_pri: CompactionPriority::MinOverlappingRatio,
-            dynamic_level_bytes: true,
-            num_levels: 7,
-            max_bytes_for_level_multiplier: 10,
-            compaction_style: DBCompactionStyle::Level,
-            disable_auto_compactions: false,
-            soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
-            hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
-            force_consistency_checks: false,
-            prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
-            prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
-            enable_doubly_skiplist: true,
-            enable_compaction_guard: false,
-            compaction_guard_min_output_file_size: ReadableSize::mb(8),
-            compaction_guard_max_output_file_size: ReadableSize::mb(128),
-            titan: TitanCfConfig::default(),
-            bottommost_level_compression: DBCompressionType::Zstd,
-            bottommost_zstd_compression_dict_size: 0,
-            bottommost_zstd_compression_sample_size: 0,
-        }
-    }
-}
-
-impl VersionCfConfig {
-    pub fn build_opt(
-        &self,
-        cache: &Option<Cache>,
-        region_info_accessor: Option<&RegionInfoAccessor>,
-    ) -> ColumnFamilyOptions {
-        let mut cf_opts = build_cf_opt!(self, CF_VER_DEFAULT, cache, region_info_accessor);
-        let f = Box::new(RangePropertiesCollectorFactory {
-            prop_size_index_distance: self.prop_size_index_distance,
-            prop_keys_index_distance: self.prop_keys_index_distance,
-        });
-        cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
-        cf_opts.set_titandb_options(&self.titan.build_opts());
-        cf_opts
-    }
-}
-
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -990,18 +938,15 @@ pub struct DbConfig {
     pub lockcf: LockCfConfig,
     #[config(submodule)]
     pub raftcf: RaftCfConfig,
-    #[config(submodule)]
-    pub ver_defaultcf: VersionCfConfig,
     #[config(skip)]
     pub titan: TitanDBConfig,
 }
 
 impl Default for DbConfig {
     fn default() -> DbConfig {
-        let (max_background_jobs, max_background_flushes, max_sub_compactions, max_background_gc) =
-            get_background_job_limit(8, 2, 3, 4);
+        let bg_job_limits = get_background_job_limits(&KVDB_DEFAULT_BACKGROUND_JOB_LIMITS);
         let titan_config = TitanDBConfig {
-            max_background_gc,
+            max_background_gc: bg_job_limits.max_titan_background_gc as i32,
             ..Default::default()
         };
         DbConfig {
@@ -1010,8 +955,8 @@ impl Default for DbConfig {
             wal_ttl_seconds: 0,
             wal_size_limit: ReadableSize::kb(0),
             max_total_wal_size: ReadableSize::gb(4),
-            max_background_jobs,
-            max_background_flushes,
+            max_background_jobs: bg_job_limits.max_background_jobs as i32,
+            max_background_flushes: bg_job_limits.max_background_flushes as i32,
             max_manifest_file_size: ReadableSize::mb(128),
             create_if_missing: true,
             max_open_files: 40960,
@@ -1030,7 +975,7 @@ impl Default for DbConfig {
             rate_limiter_auto_tuned: true,
             bytes_per_sync: ReadableSize::mb(1),
             wal_bytes_per_sync: ReadableSize::kb(512),
-            max_sub_compactions,
+            max_sub_compactions: bg_job_limits.max_sub_compactions as u32,
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
@@ -1040,7 +985,6 @@ impl Default for DbConfig {
             writecf: WriteCfConfig::default(),
             lockcf: LockCfConfig::default(),
             raftcf: RaftCfConfig::default(),
-            ver_defaultcf: VersionCfConfig::default(),
             titan: titan_config,
         }
     }
@@ -1128,10 +1072,6 @@ impl DbConfig {
             ),
             // TODO: remove CF_RAFT.
             CFOptions::new(CF_RAFT, self.raftcf.build_opt(cache)),
-            CFOptions::new(
-                CF_VER_DEFAULT,
-                self.ver_defaultcf.build_opt(cache, region_info_accessor),
-            ),
         ]
     }
 
@@ -1140,7 +1080,6 @@ impl DbConfig {
         self.lockcf.validate()?;
         self.writecf.validate()?;
         self.raftcf.validate()?;
-        self.ver_defaultcf.validate()?;
         self.titan.validate()?;
         if self.enable_unordered_write {
             if self.titan.enabled {
@@ -1158,7 +1097,6 @@ impl DbConfig {
         write_into_metrics!(self.lockcf, CF_LOCK, CONFIG_ROCKSDB_GAUGE);
         write_into_metrics!(self.writecf, CF_WRITE, CONFIG_ROCKSDB_GAUGE);
         write_into_metrics!(self.raftcf, CF_RAFT, CONFIG_ROCKSDB_GAUGE);
-        write_into_metrics!(self.ver_defaultcf, CF_VER_DEFAULT, CONFIG_ROCKSDB_GAUGE);
     }
 }
 
@@ -1293,10 +1231,9 @@ pub struct RaftDbConfig {
 
 impl Default for RaftDbConfig {
     fn default() -> RaftDbConfig {
-        let (max_background_jobs, max_background_flushes, max_sub_compactions, max_background_gc) =
-            get_background_job_limit(4, 1, 2, 4);
+        let bg_job_limits = get_background_job_limits(&RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS);
         let titan_config = TitanDBConfig {
-            max_background_gc,
+            max_background_gc: bg_job_limits.max_titan_background_gc as i32,
             ..Default::default()
         };
         RaftDbConfig {
@@ -1305,8 +1242,8 @@ impl Default for RaftDbConfig {
             wal_ttl_seconds: 0,
             wal_size_limit: ReadableSize::kb(0),
             max_total_wal_size: ReadableSize::gb(4),
-            max_background_jobs,
-            max_background_flushes,
+            max_background_jobs: bg_job_limits.max_background_jobs as i32,
+            max_background_flushes: bg_job_limits.max_background_flushes as i32,
             max_manifest_file_size: ReadableSize::mb(20),
             create_if_missing: true,
             max_open_files: 40960,
@@ -1318,7 +1255,7 @@ impl Default for RaftDbConfig {
             info_log_keep_log_file_num: 10,
             info_log_dir: "".to_owned(),
             info_log_level: LogLevel::Info,
-            max_sub_compactions,
+            max_sub_compactions: bg_job_limits.max_sub_compactions as u32,
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
@@ -1531,7 +1468,6 @@ impl DBConfigManger {
             | (DBType::Kv, CF_WRITE)
             | (DBType::Kv, CF_LOCK)
             | (DBType::Kv, CF_RAFT)
-            | (DBType::Kv, CF_VER_DEFAULT)
             | (DBType::Raft, CF_DEFAULT) => Ok(()),
             _ => Err(format!("invalid cf {:?} for db {:?}", cf, self.db_type).into()),
         }
@@ -1807,7 +1743,7 @@ macro_rules! readpool_config {
 
         impl $struct_name {
             /// Builds configurations for low, normal and high priority pools.
-            pub fn to_yatp_pool_configs(&self) -> Vec<yatp_pool::Config> {
+            pub fn to_yatp_pool_configs(self) -> Vec<yatp_pool::Config> {
                 vec![
                     yatp_pool::Config {
                         workers: self.low_concurrency,
@@ -2246,6 +2182,8 @@ impl Default for BackupConfig {
     }
 }
 
+// TODO: `CdcConfig` is used by both `cdc` worker and `resolved ts` worker
+// should separate it into two configs
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -2253,6 +2191,7 @@ pub struct CdcConfig {
     pub min_ts_interval: ReadableDuration,
     pub old_value_cache_size: usize,
     pub hibernate_regions_compatible: bool,
+    pub scan_lock_pool_size: usize,
 }
 
 impl Default for CdcConfig {
@@ -2261,6 +2200,7 @@ impl Default for CdcConfig {
             min_ts_interval: ReadableDuration::secs(1),
             old_value_cache_size: 1024 * 1024,
             hibernate_regions_compatible: true,
+            scan_lock_pool_size: 1,
         }
     }
 }
@@ -3071,6 +3011,7 @@ impl ConfigController {
 
 #[cfg(test)]
 mod tests {
+    use itertools::Itertools;
     use tempfile::Builder;
 
     use super::*;
@@ -3710,5 +3651,135 @@ mod tests {
             cfg.raft_store.region_split_check_diff.0,
             default_region_split_check_diff + 1
         );
+    }
+
+    #[test]
+    fn test_background_job_limits() {
+        assert_eq!(
+            get_background_job_limits_impl(1 /*cpu_num*/, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS),
+            BackgroundJobLimits {
+                max_background_jobs: 2,
+                max_background_flushes: 1,
+                max_sub_compactions: 1,
+                max_titan_background_gc: 1,
+            }
+        );
+        assert_eq!(
+            get_background_job_limits_impl(2 /*cpu_num*/, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS),
+            BackgroundJobLimits {
+                max_background_jobs: 2,
+                max_background_flushes: 1,
+                max_sub_compactions: 1,
+                max_titan_background_gc: 2,
+            }
+        );
+        assert_eq!(
+            get_background_job_limits_impl(4 /*cpu_num*/, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS),
+            BackgroundJobLimits {
+                max_background_jobs: 4,
+                max_background_flushes: 2,
+                max_sub_compactions: 1,
+                max_titan_background_gc: 4,
+            }
+        );
+        assert_eq!(
+            get_background_job_limits_impl(8 /*cpu_num*/, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS),
+            BackgroundJobLimits {
+                max_background_jobs: 8,
+                max_background_flushes: 3,
+                max_sub_compactions: 3,
+                max_titan_background_gc: 4,
+            }
+        );
+        assert_eq!(
+            get_background_job_limits_impl(
+                16, /*cpu_num*/
+                &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
+            ),
+            BackgroundJobLimits {
+                max_background_jobs: 10,
+                max_background_flushes: 4,
+                max_sub_compactions: 3,
+                max_titan_background_gc: 4,
+            }
+        );
+    }
+
+    #[test]
+    fn test_config_template_is_valid() {
+        let template_config = std::include_str!("../etc/config-template.toml")
+            .lines()
+            .map(|l| l.strip_prefix('#').unwrap_or(l))
+            .join("\n");
+
+        let mut cfg: TiKvConfig = toml::from_str(&template_config).unwrap();
+        cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn test_config_template_no_superfluous_keys() {
+        let template_config = std::include_str!("../etc/config-template.toml")
+            .lines()
+            .map(|l| l.strip_prefix('#').unwrap_or(l))
+            .join("\n");
+
+        let mut deserializer = toml::Deserializer::new(&template_config);
+        let mut unrecognized_keys = Vec::new();
+        let _: TiKvConfig = serde_ignored::deserialize(&mut deserializer, |key| {
+            unrecognized_keys.push(key.to_string())
+        })
+        .unwrap();
+
+        // Don't use `is_empty()` so we see which keys are superfluous on failure.
+        assert_eq!(unrecognized_keys, Vec::<String>::new());
+    }
+
+    #[test]
+    fn test_config_template_matches_default() {
+        let template_config = std::include_str!("../etc/config-template.toml")
+            .lines()
+            .map(|l| l.strip_prefix('#').unwrap_or(l))
+            .join("\n");
+
+        let mut cfg: TiKvConfig = toml::from_str(&template_config).unwrap();
+        let mut default_cfg = TiKvConfig::default();
+
+        // Some default values are computed based on the environment.
+        // Because we can't set config values for these in `config-template.toml`, we will handle
+        // them manually.
+        cfg.readpool.unified.max_thread_count = default_cfg.readpool.unified.max_thread_count;
+        cfg.readpool.storage.high_concurrency = default_cfg.readpool.storage.high_concurrency;
+        cfg.readpool.storage.normal_concurrency = default_cfg.readpool.storage.normal_concurrency;
+        cfg.readpool.storage.low_concurrency = default_cfg.readpool.storage.low_concurrency;
+        cfg.readpool.coprocessor.high_concurrency =
+            default_cfg.readpool.coprocessor.high_concurrency;
+        cfg.readpool.coprocessor.normal_concurrency =
+            default_cfg.readpool.coprocessor.normal_concurrency;
+        cfg.readpool.coprocessor.low_concurrency = default_cfg.readpool.coprocessor.low_concurrency;
+        cfg.server.grpc_memory_pool_quota = default_cfg.server.grpc_memory_pool_quota;
+        cfg.server.background_thread_count = default_cfg.server.background_thread_count;
+        cfg.server.end_point_max_concurrency = default_cfg.server.end_point_max_concurrency;
+        cfg.storage.scheduler_worker_pool_size = default_cfg.storage.scheduler_worker_pool_size;
+        cfg.rocksdb.max_background_jobs = default_cfg.rocksdb.max_background_jobs;
+        cfg.rocksdb.max_background_flushes = default_cfg.rocksdb.max_background_flushes;
+        cfg.rocksdb.max_sub_compactions = default_cfg.rocksdb.max_sub_compactions;
+        cfg.rocksdb.titan.max_background_gc = default_cfg.rocksdb.titan.max_background_gc;
+        cfg.raftdb.max_background_jobs = default_cfg.raftdb.max_background_jobs;
+        cfg.raftdb.max_background_flushes = default_cfg.raftdb.max_background_flushes;
+        cfg.raftdb.max_sub_compactions = default_cfg.raftdb.max_sub_compactions;
+        cfg.raftdb.titan.max_background_gc = default_cfg.raftdb.titan.max_background_gc;
+        cfg.backup.num_threads = default_cfg.backup.num_threads;
+
+        // There is another set of config values that we can't directly compare:
+        // When the default values are `None`, but are then resolved to `Some(_)` later on.
+        default_cfg.readpool.storage.adjust_use_unified_pool();
+        default_cfg.readpool.coprocessor.adjust_use_unified_pool();
+        default_cfg.security.redact_info_log = Some(false);
+
+        // Other special cases.
+        cfg.pd.retry_max_count = default_cfg.pd.retry_max_count; // Both -1 and isize::MAX are the same.
+        cfg.storage.block_cache.capacity = OptionReadableSize(None); // Either `None` and a value is computed or `Some(_)` fixed value.
+
+        assert_eq!(cfg, default_cfg);
     }
 }

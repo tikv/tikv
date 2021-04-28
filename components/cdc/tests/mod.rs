@@ -54,7 +54,7 @@ pub fn new_event_feed(
         let mut events;
         {
             let mut event_feed = event_feed_wrap_clone.lock().unwrap();
-            events = (*event_feed).take();
+            events = event_feed.take();
         }
         let events_rx = if let Some(events_rx) = events.as_mut() {
             events_rx
@@ -176,8 +176,8 @@ impl TestSuite {
     }
 
     pub fn stop(mut self) {
-        for (_, mut worker) in self.endpoints {
-            worker.stop();
+        for (_, worker) in self.endpoints.drain() {
+            worker.stop_worker();
         }
         self.cluster.shutdown();
     }

@@ -75,11 +75,12 @@ pub struct Server<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolve
 impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Server<T, S> {
     #[allow(clippy::too_many_arguments)]
     pub fn new<E: Engine, L: LockManager>(
+        store_id: u64,
         cfg: &Arc<Config>,
         security_mgr: &Arc<SecurityManager>,
         storage: Storage<E, L>,
         cop: Endpoint<E>,
-        coprv2: coprocessor_v2::Endpoint<E>,
+        coprv2: coprocessor_v2::Endpoint,
         raft_router: T,
         resolver: S,
         snap_mgr: SnapManager,
@@ -110,6 +111,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
 
         let proxy = Proxy::new(security_mgr.clone(), &env, cfg.clone());
         let kv_service = KvService::new(
+            store_id,
             storage,
             gc_worker,
             cop,
@@ -476,8 +478,10 @@ mod tests {
                 .build()
                 .unwrap(),
         );
+        let mock_store_id = 5;
         let addr = Arc::new(Mutex::new(None));
         let mut server = Server::new(
+            mock_store_id,
             &cfg,
             &security_mgr,
             storage,

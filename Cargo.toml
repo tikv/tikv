@@ -54,9 +54,11 @@ protobuf-codec = [
   "tidb_query_executors/protobuf-codec",
   "tidb_query_expr/protobuf-codec",
   "tipb/protobuf-codec",
+  "tikv_kv/protobuf-codec",
   "tikv_util/protobuf-codec",
   "txn_types/protobuf-codec",
   "grpcio-health/protobuf-codec",
+  "file_system/protobuf-codec",
 ]
 prost-codec = [
   "batch-system/prost-codec",
@@ -85,9 +87,11 @@ prost-codec = [
   "tidb_query_executors/prost-codec",
   "tidb_query_expr/prost-codec",
   "tipb/prost-codec",
+  "tikv_kv/prost-codec",
   "tikv_util/prost-codec",
   "txn_types/prost-codec",
   "grpcio-health/prost-codec",
+  "file_system/prost-codec",
 ]
 testexport = ["raftstore/testexport"]
 test-engines-rocksdb = [
@@ -113,7 +117,6 @@ async-stream = "0.2"
 async-trait = "0.1"
 backtrace = "0.3"
 batch-system = { path = "components/batch-system", default-features = false }
-bitflags = "1.0.1"
 byteorder = "1.2"
 chrono = "0.4"
 codec = { path = "components/codec", default-features = false }
@@ -121,7 +124,7 @@ concurrency_manager = { path = "components/concurrency_manager", default-feature
 configuration = { path = "components/configuration" }
 crc32fast = "1.2"
 crc64fast = "0.1"
-crossbeam = "0.7.2"
+crossbeam = "0.8"
 encryption_export = { path = "components/encryption/export", default-features = false }
 engine_panic = { path = "components/engine_panic", default-features = false }
 engine_rocks = { path = "components/engine_rocks", default-features = false }
@@ -130,7 +133,7 @@ engine_traits = { path = "components/engine_traits", default-features = false }
 engine_traits_tests = { path = "components/engine_traits_tests", default-features = false }
 error_code = { path = "components/error_code", default-features = false }
 fail = "0.4"
-file_system = { path = "components/file_system" }
+file_system = { path = "components/file_system", default-features = false }
 fs2 = "0.4"
 futures = { version = "0.3", features = ["thread-pool", "compat"] }
 futures-executor = "0.3.1"
@@ -156,6 +159,7 @@ mime = "0.3.13"
 more-asserts = "0.2"
 murmur3 = "0.5.1"
 nom = { version = "5.1.0", default-features = false, features = ["std"] }
+notify = "4"
 num_cpus = "1"
 pd_client = { path = "components/pd_client", default-features = false }
 pin-project = "0.4.8"
@@ -192,7 +196,7 @@ tidb_query_expr = { path = "components/tidb_query_expr", default-features = fals
 tidb_query_aggr = { path = "components/tidb_query_aggr", default-features = false }
 tidb_query_executors = { path = "components/tidb_query_executors", default-features = false }
 tikv_alloc = { path = "components/tikv_alloc" }
-tikv_kv = { path = "components/tikv_kv" }
+tikv_kv = { path = "components/tikv_kv", default-features = false }
 tikv_util = { path = "components/tikv_util", default-features = false }
 collections = { path = "components/collections" }
 coprocessor_plugin_api = { path = "components/coprocessor_plugin_api" }
@@ -207,14 +211,12 @@ url = "2"
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 vlog = "0.1.4"
 walkdir = "2"
-minitrace = { git = "https://github.com/pingcap-incubator/minitrace-rust.git", branch = "master" }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [dev-dependencies]
 panic_hook = { path = "components/panic_hook" }
 tokio = { version = "0.2", features = ["macros", "rt-threaded", "time"] }
 zipf = "6.1.0"
-example_plugin = { path = "components/test_coprocessor_plugin/example_plugin" }
 
 [patch.crates-io]
 # TODO: remove this when new raft-rs is published.

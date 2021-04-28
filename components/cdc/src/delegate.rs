@@ -1,8 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cell::RefCell;
 use std::mem;
-use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -32,11 +30,10 @@ use raftstore::store::fsm::ObserveID;
 use raftstore::store::util::compare_region_epoch;
 use raftstore::Error as RaftStoreError;
 use resolved_ts::Resolver;
-use tikv::storage::Statistics;
-use tikv::{server::raftkv::WriteBatchFlags, storage::txn::TxnEntry};
+use tikv::storage::txn::TxnEntry;
 use tikv_util::time::Instant;
 use tikv_util::{debug, info, warn};
-use txn_types::{Key, Lock, LockType, TimeStamp, WriteRef, WriteType};
+use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
 
 use crate::endpoint::{OldValueCache, OldValueCallback};
 use crate::metrics::*;
@@ -284,7 +281,7 @@ impl Delegate {
                     "conn_id" => ?downstream.get_conn_id(),
                     "req_id" => downstream.req_id,
                     "err" => ?e);
-                let err = Error::Request(e.into());
+                let err = Error::request(e.into());
                 let change_data_error = self.error_event(err);
                 downstream.sink_event(change_data_error);
                 return false;
@@ -450,10 +447,7 @@ impl Delegate {
         }
         debug!("try to advance ts"; "region_id" => self.region_id, "min_ts" => min_ts);
         let resolver = self.resolver.as_mut().unwrap();
-        let resolved_ts = match resolver.resolve(min_ts) {
-            Some(rts) => rts,
-            None => return None,
-        };
+        let resolved_ts = resolver.resolve(min_ts);
         debug!("resolved ts updated";
             "region_id" => self.region_id, "resolved_ts" => resolved_ts);
         CDC_RESOLVED_TS_GAP_HISTOGRAM
@@ -464,11 +458,11 @@ impl Delegate {
     pub fn on_batch(
         &mut self,
         batch: CmdBatch,
-        old_value_cb: Rc<RefCell<OldValueCallback>>,
+        old_value_cb: &OldValueCallback,
         old_value_cache: &mut OldValueCache,
     ) -> Result<()> {
         // Stale CmdBatch, drop it sliently.
-        if batch.observe_id != self.id {
+        if batch.cdc_id != self.id {
             return Ok(());
         }
         for cmd in batch.into_iter(self.region_id) {
@@ -485,7 +479,7 @@ impl Delegate {
                     self.sink_data(
                         index,
                         request.requests.into(),
-                        old_value_cb.clone(),
+                        old_value_cb,
                         old_value_cache,
                         is_one_pc,
                     )?;
@@ -495,7 +489,7 @@ impl Delegate {
             } else {
                 let err_header = response.mut_header().take_error();
                 self.mark_failed();
-                return Err(Error::Request(err_header));
+                return Err(Error::request(err_header));
             }
         }
         Ok(())
@@ -613,7 +607,7 @@ impl Delegate {
         &mut self,
         index: u64,
         requests: Vec<Request>,
-        old_value_cb: Rc<RefCell<OldValueCallback>>,
+        old_value_cb: &OldValueCallback,
         old_value_cache: &mut OldValueCache,
         is_one_pc: bool,
     ) -> Result<()> {
@@ -622,19 +616,18 @@ impl Delegate {
             if txn_extra_op == TxnExtraOp::ReadOldValue {
                 let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
                 let start = Instant::now();
-
-                let mut statistics = Statistics::default();
-                row.old_value =
-                    old_value_cb.borrow_mut()(key, read_old_ts, old_value_cache, &mut statistics)
-                        .unwrap_or_default();
+                let (old_value, statistics) = old_value_cb(key, read_old_ts, old_value_cache);
+                row.old_value = old_value.unwrap_or_default();
                 CDC_OLD_VALUE_DURATION_HISTOGRAM
                     .with_label_values(&["all"])
                     .observe(start.elapsed().as_secs_f64());
-                for (cf, cf_details) in statistics.details().iter() {
-                    for (tag, count) in cf_details.iter() {
-                        CDC_OLD_VALUE_SCAN_DETAILS
-                            .with_label_values(&[*cf, *tag])
-                            .inc_by(*count as i64);
+                if let Some(statistics) = statistics {
+                    for (cf, cf_details) in statistics.details().iter() {
+                        for (tag, count) in cf_details.iter() {
+                            CDC_OLD_VALUE_SCAN_DETAILS
+                                .with_label_values(&[*cf, *tag])
+                                .inc_by(*count as i64);
+                        }
                     }
                 }
             }
@@ -655,6 +648,10 @@ impl Delegate {
                     );
                 }
             }
+        }
+        // Skip broadcast if there is no Put or Delete.
+        if rows.is_empty() {
+            return Ok(());
         }
         let mut entries = Vec::with_capacity(rows.len());
         for (_, v) in rows {
@@ -704,7 +701,7 @@ impl Delegate {
                 };
                 // validate commit_ts must be greater than the current resolved_ts
                 if let (Some(resolver), Some(commit_ts)) = (&self.resolver, commit_ts) {
-                    assert!(commit_ts > resolver.resolved_ts().unwrap_or_default());
+                    assert!(commit_ts > resolver.resolved_ts());
                 }
 
                 match rows.get_mut(&row.key) {
@@ -811,7 +808,7 @@ impl Delegate {
             _ => return Ok(()),
         };
         self.mark_failed();
-        Err(Error::Request(store_err.into()))
+        Err(Error::request(store_err.into()))
     }
 }
 
@@ -831,7 +828,7 @@ fn make_overlapped_rollback(key: Key, row: &mut EventRow) {
     row.start_ts = key.decode_ts().unwrap().into_inner();
     row.commit_ts = 0;
     row.key = key.truncate_ts().unwrap().into_raw().unwrap();
-    row.op_type = EventRowOpType::Unknown;
+    row.op_type = EventRowOpType::Unknown as _;
     set_event_row_type(row, EventLogType::Rollback);
 }
 
@@ -952,8 +949,7 @@ mod tests {
         delegate.subscribe(downstream);
         let enabled = delegate.enabled();
         assert!(enabled.load(Ordering::SeqCst));
-        let mut resolver = Resolver::new(region_id);
-        resolver.init();
+        let resolver = Resolver::new(region_id);
         for downstream in delegate.on_region_ready(resolver, region) {
             delegate.subscribe(downstream);
         }
@@ -976,7 +972,7 @@ mod tests {
 
         let mut err_header = ErrorHeader::default();
         err_header.set_not_leader(Default::default());
-        delegate.stop(Error::Request(err_header));
+        delegate.stop(Error::request(err_header));
         let err = receive_error();
         assert!(err.has_not_leader());
         // Enable is disabled by any error.
@@ -984,13 +980,13 @@ mod tests {
 
         let mut err_header = ErrorHeader::default();
         err_header.set_region_not_found(Default::default());
-        delegate.stop(Error::Request(err_header));
+        delegate.stop(Error::request(err_header));
         let err = receive_error();
         assert!(err.has_region_not_found());
 
         let mut err_header = ErrorHeader::default();
         err_header.set_epoch_not_match(Default::default());
-        delegate.stop(Error::Request(err_header));
+        delegate.stop(Error::request(err_header));
         let err = receive_error();
         assert!(err.has_epoch_not_match());
 
@@ -1159,8 +1155,7 @@ mod tests {
         set_event_row_type(&mut row3, EventLogType::Initialized);
         check_event(vec![row1, row2, row3]);
 
-        let mut resolver = Resolver::new(region_id);
-        resolver.init();
+        let resolver = Resolver::new(region_id);
         delegate.on_region_ready(resolver, region);
     }
 }

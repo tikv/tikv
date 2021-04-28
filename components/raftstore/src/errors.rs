@@ -5,7 +5,7 @@ use std::io;
 use std::net;
 use std::result;
 
-use crossbeam::TrySendError;
+use crossbeam::channel::TrySendError;
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::{errorpb, metapb};
 #[cfg(feature = "prost-codec")]
@@ -60,6 +60,9 @@ quick_error! {
                 log_wrappers::Value::key(region.get_start_key()),
                 log_wrappers::Value::key(region.get_end_key()),
                 region.get_id())
+        }
+        DataIsNotReady(region_id: u64, peer_id: u64, safe_ts: u64) {
+            display("peer {} is not ready, max_ts {}, region {}", peer_id, safe_ts, region_id)
         }
         Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
@@ -226,6 +229,13 @@ impl From<Error> for errorpb::Error {
                     .set_start_key(start.to_vec());
                 errorpb.mut_key_not_in_region().set_end_key(end.to_vec());
             }
+            Error::DataIsNotReady(region_id, peer_id, safe_ts) => {
+                let mut e = errorpb::DataIsNotReady::default();
+                e.set_region_id(region_id);
+                e.set_peer_id(peer_id);
+                e.set_safe_ts(safe_ts);
+                errorpb.set_data_is_not_ready(e);
+            }
             _ => {}
         };
 
@@ -287,6 +297,7 @@ impl ErrorCodeExt for Error {
             Error::ProstDecode(_) => error_code::raftstore::PROTOBUF,
             #[cfg(feature = "prost-codec")]
             Error::ProstEncode(_) => error_code::raftstore::PROTOBUF,
+            Error::DataIsNotReady(..) => error_code::raftstore::DATA_IS_NOT_READY,
 
             Error::Other(_) => error_code::raftstore::UNKNOWN,
         }

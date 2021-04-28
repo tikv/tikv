@@ -218,10 +218,6 @@ impl Write {
             gc_fence: self.gc_fence,
         }
     }
-
-    pub fn may_have_old_value(&self) -> bool {
-        matches!(self.write_type, WriteType::Put | WriteType::Delete)
-    }
 }
 
 #[derive(PartialEq, Clone)]

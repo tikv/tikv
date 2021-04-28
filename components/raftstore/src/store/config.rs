@@ -429,6 +429,10 @@ impl Config {
         if self.store_batch_system.pool_size == 0 {
             return Err(box_err!("store-pool-size should be greater than 0"));
         }
+        if self.store_batch_system.low_priority_pool_size > 0 {
+            // The store thread pool doesn't need a low-priority thread currently.
+            self.store_batch_system.low_priority_pool_size = 0;
+        }
         if let Some(size) = self.store_batch_system.max_batch_size {
             if size == 0 {
                 return Err(box_err!("store-max-batch-size should be greater than 0"));
