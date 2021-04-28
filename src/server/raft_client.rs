@@ -5,7 +5,6 @@ use crate::server::snap::Task as SnapTask;
 use crate::server::{self, Config, StoreAddrResolver};
 use collections::{HashMap, HashSet};
 use crossbeam::queue::ArrayQueue;
-use engine_rocks::RocksEngine;
 use engine_traits::KvEngine;
 use std::marker::PhantomData;
 use futures::channel::oneshot;
@@ -760,21 +759,23 @@ struct CachedQueue {
 /// }
 /// raft_client.flush();
 /// ```
-pub struct RaftClient<S, R> {
+pub struct RaftClient<S, R, E> {
     pool: Arc<Mutex<ConnectionPool>>,
     cache: LruCache<(u64, usize), CachedQueue>,
     need_flush: Vec<(u64, usize)>,
     full_stores: Vec<(u64, usize)>,
     future_pool: Arc<ThreadPool<TaskCell>>,
     builder: ConnectionBuilder<S, R>,
+    engine: PhantomData<E>,
 }
 
-impl<S, R> RaftClient<S, R>
+impl<S, R, E> RaftClient<S, R, E>
 where
     S: StoreAddrResolver + Send + 'static,
-    R: RaftStoreRouter<RocksEngine> + Unpin + Send + 'static,
+    R: RaftStoreRouter<E> + Unpin + Send + 'static,
+    E: KvEngine + Unpin,
 {
-    pub fn new(builder: ConnectionBuilder<S, R>) -> RaftClient<S, R> {
+    pub fn new(builder: ConnectionBuilder<S, R>) -> RaftClient<S, R, E> {
         let future_pool = Arc::new(
             yatp::Builder::new(thd_name!("raft-stream"))
                 .max_thread_count(1)
@@ -787,6 +788,7 @@ where
             full_stores: vec![],
             future_pool,
             builder,
+            engine: PhantomData::<E>,
         }
     }
 
@@ -812,7 +814,7 @@ where
                         store_id,
                         queue: queue.clone(),
                         builder: self.builder.clone(),
-                        engine: PhantomData::<RocksEngine>,
+                        engine: PhantomData::<E>,
                     };
                     self.future_pool
                         .spawn(start(back_end, conn_id, self.pool.clone()));
@@ -942,7 +944,7 @@ where
     }
 }
 
-impl<S, R> Clone for RaftClient<S, R>
+impl<S, R, E> Clone for RaftClient<S, R, E>
 where
     S: Clone,
     R: Clone,
@@ -955,6 +957,7 @@ where
             full_stores: vec![],
             future_pool: self.future_pool.clone(),
             builder: self.builder.clone(),
+            engine: PhantomData::<E>,
         }
     }
 }
