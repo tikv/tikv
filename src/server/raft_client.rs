@@ -335,7 +335,7 @@ fn grpc_error_is_unimplemented(e: &grpcio::Error) -> bool {
 }
 
 /// Struct tracks the lifetime of a `raft` or `batch_raft` RPC.
-struct RaftCall<R, M, B> {
+struct RaftCall<R, M, B, E> {
     sender: ClientCStreamSender<M>,
     receiver: ClientCStreamReceiver<Done>,
     queue: Arc<Queue>,
@@ -345,14 +345,16 @@ struct RaftCall<R, M, B> {
     lifetime: Option<oneshot::Sender<()>>,
     store_id: u64,
     addr: String,
+    engine: PhantomData<E>,
 }
 
-impl<R, M, B> RaftCall<R, M, B>
+impl<R, M, B, E> RaftCall<R, M, B, E>
 where
-    R: RaftStoreRouter<RocksEngine> + 'static,
+    R: RaftStoreRouter<E> + 'static,
     B: Buffer<OutputMessage = M>,
+    E: KvEngine,
 {
-    fn new_snapshot_reporter(&self, msg: &RaftMessage) -> SnapshotReporter<R, RocksEngine> {
+    fn new_snapshot_reporter(&self, msg: &RaftMessage) -> SnapshotReporter<R, E> {
         let region_id = msg.get_region_id();
         let to_peer_id = msg.get_to_peer().get_id();
         let to_store_id = msg.get_to_peer().get_store_id();
@@ -423,10 +425,11 @@ where
     }
 }
 
-impl<R, M, B> Future for RaftCall<R, M, B>
+impl<R, M, B, E> Future for RaftCall<R, M, B, E>
 where
-    R: RaftStoreRouter<RocksEngine> + Unpin + 'static,
+    R: RaftStoreRouter<E> + Unpin + 'static,
     B: Buffer<OutputMessage = M> + Unpin,
+    E: KvEngine + Unpin,
 {
     type Output = ();
 
@@ -596,6 +599,7 @@ where
             lifetime: Some(tx),
             store_id: self.store_id,
             addr,
+            engine: PhantomData::<RocksEngine>,
         };
         // TODO: verify it will be notified if client is dropped while env still alive.
         client.spawn(call);
@@ -615,6 +619,7 @@ where
             lifetime: Some(tx),
             store_id: self.store_id,
             addr,
+            engine: PhantomData::<RocksEngine>,
         };
         client.spawn(call);
         rx
