@@ -281,7 +281,7 @@ fn test_analyze_sampling() {
     assert_eq!(collector.get_null_counts(), vec![0, 1, 0]);
     assert_eq!(collector.get_count(), 9);
     assert_eq!(collector.get_fm_sketch().len(), 3);
-    assert_eq!(collector.get_total_size(), vec![81, 64, 16]);
+    assert_eq!(collector.get_total_size(), vec![81, 64, 18]);
 }
 
 #[test]
