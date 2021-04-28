@@ -35,7 +35,10 @@ where
 }
 
 impl<T, S, E> ServerTransport<T, S, E>
-where E: KvEngine, T: RaftStoreRouter<E> + 'static, S: StoreAddrResolver + 'static
+where
+    E: KvEngine,
+    T: RaftStoreRouter<E> + 'static,
+    S: StoreAddrResolver + 'static,
 {
     pub fn new(raft_client: RaftClient<S, T, E>) -> ServerTransport<T, S, E> {
         ServerTransport {

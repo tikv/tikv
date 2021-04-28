@@ -58,7 +58,9 @@ where
     RaftClient::new(builder)
 }
 
-fn get_raft_client_by_port(port: u16) -> RaftClient<StaticResolver, RaftStoreBlackHole, RocksEngine> {
+fn get_raft_client_by_port(
+    port: u16,
+) -> RaftClient<StaticResolver, RaftStoreBlackHole, RocksEngine> {
     get_raft_client(RaftStoreBlackHole, StaticResolver::new(port))
 }
 

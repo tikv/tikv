@@ -6,7 +6,6 @@ use crate::server::{self, Config, StoreAddrResolver};
 use collections::{HashMap, HashSet};
 use crossbeam::queue::ArrayQueue;
 use engine_traits::KvEngine;
-use std::marker::PhantomData;
 use futures::channel::oneshot;
 use futures::compat::Future01CompatExt;
 use futures::task::{Context, Poll, Waker};
@@ -23,6 +22,7 @@ use raftstore::router::RaftStoreRouter;
 use security::SecurityManager;
 use std::collections::VecDeque;
 use std::ffi::CString;
+use std::marker::PhantomData;
 use std::marker::Unpin;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -269,7 +269,9 @@ struct SnapshotReporter<T, E> {
 }
 
 impl<T, E> SnapshotReporter<T, E>
-where T: RaftStoreRouter<E> + 'static, E: KvEngine
+where
+    T: RaftStoreRouter<E> + 'static,
+    E: KvEngine,
 {
     pub fn report(&self, status: SnapshotStatus) {
         debug!(
@@ -521,7 +523,7 @@ impl<S, R, E> StreamBackEnd<S, R, E>
 where
     S: StoreAddrResolver,
     R: RaftStoreRouter<E> + Unpin + 'static,
-    E: KvEngine
+    E: KvEngine,
 {
     fn resolve(&self) -> impl Future<Output = server::Result<String>> {
         let (tx, rx) = oneshot::channel();
@@ -662,7 +664,7 @@ async fn start<S, R, E>(
 ) where
     S: StoreAddrResolver + Send,
     R: RaftStoreRouter<E> + Unpin + Send + 'static,
-    E: KvEngine
+    E: KvEngine,
 {
     let mut last_wake_time = Instant::now();
     let mut retry_times = 0;
