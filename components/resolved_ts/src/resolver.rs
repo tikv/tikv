@@ -1,9 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use collections::{HashMap, HashSet};
+use raftstore::store::RegionReadProgress;
 use std::cmp;
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use txn_types::TimeStamp;
 
@@ -16,28 +16,37 @@ pub struct Resolver {
     // start_ts -> locked keys.
     lock_ts_heap: BTreeMap<TimeStamp, HashSet<Arc<[u8]>>>,
     // The timestamps that guarantees no more commit will happen before.
-    resolved_ts: Arc<AtomicU64>,
+    resolved_ts: TimeStamp,
+    // The highest index `Resolver` had been tracked
+    tracked_index: u64,
+    // The region read progress used to utilize `resolved_ts` to serve stale read request
+    read_progress: Option<Arc<RegionReadProgress>>,
     // The timestamps that advance the resolved_ts when there is no more write.
     min_ts: TimeStamp,
 }
 
 impl Resolver {
     pub fn new(region_id: u64) -> Resolver {
-        Resolver::from_shared(region_id, Arc::default())
+        Resolver::with_read_progress(region_id, None)
     }
 
-    pub fn from_shared(region_id: u64, resolved_ts: Arc<AtomicU64>) -> Resolver {
+    pub fn with_read_progress(
+        region_id: u64,
+        read_progress: Option<Arc<RegionReadProgress>>,
+    ) -> Resolver {
         Resolver {
             region_id,
-            resolved_ts,
+            resolved_ts: TimeStamp::zero(),
             locks_by_key: HashMap::default(),
             lock_ts_heap: BTreeMap::new(),
+            read_progress,
+            tracked_index: 0,
             min_ts: TimeStamp::zero(),
         }
     }
 
     pub fn resolved_ts(&self) -> TimeStamp {
-        self.resolved_ts.load(Ordering::Acquire).into()
+        self.resolved_ts
     }
 
     pub fn locks(&self) -> &BTreeMap<TimeStamp, HashSet<Arc<[u8]>>> {
@@ -79,6 +88,12 @@ impl Resolver {
         }
     }
 
+    // Update `tracked_index`, should be called after `track_lock` and `untrack_lock`
+    pub fn update_tracked_index(&mut self, index: u64) {
+        assert!(self.tracked_index < index);
+        self.tracked_index = index;
+    }
+
     /// Try to advance resolved ts.
     ///
     /// `min_ts` advances the resolver even if there is no write.
@@ -91,9 +106,14 @@ impl Resolver {
 
         // No more commit happens before the ts.
         let new_resolved_ts = cmp::min(min_start_ts, min_ts);
-        let prev_ts = self
-            .resolved_ts
-            .fetch_max(new_resolved_ts.into_inner(), Ordering::Relaxed);
+
+        // Resolved ts never decrease.
+        self.resolved_ts = cmp::max(self.resolved_ts, new_resolved_ts);
+
+        // Publish an `(apply index, safe ts)` item into the region read progress
+        if let Some(rrp) = &self.read_progress {
+            rrp.update_safe_ts(self.tracked_index, self.resolved_ts.into_inner());
+        }
 
         let new_min_ts = if has_lock {
             // If there are some lock, the min_ts must be smaller than
@@ -106,7 +126,7 @@ impl Resolver {
         // Min ts never decrease.
         self.min_ts = cmp::max(self.min_ts, new_min_ts);
 
-        cmp::max(TimeStamp::new(prev_ts), new_resolved_ts)
+        self.resolved_ts
     }
 }
 

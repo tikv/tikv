@@ -3368,7 +3368,9 @@ where
         ) {
             Ok(()) => {
                 // Commit the writebatch for ensuring the following snapshot can get all previous writes.
-                if apply_ctx.kv_wb().count() > 0 {
+                if apply_ctx.last_applied_index < self.delegate.apply_state.get_applied_index()
+                    || apply_ctx.kv_wb().count() > 0
+                {
                     apply_ctx.commit(&mut self.delegate);
                 }
                 ReadResponse {
