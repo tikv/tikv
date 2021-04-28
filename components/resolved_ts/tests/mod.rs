@@ -1,111 +1,48 @@
-// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::*;
 use std::time::Duration;
 
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::RocksEngine;
-use futures::executor::block_on;
-use futures::StreamExt;
+use engine_rocks::{RocksEngine, RocksSnapshot};
+use grpcio::ClientUnaryReceiver;
 use grpcio::{ChannelBuilder, Environment};
-use grpcio::{ClientDuplexReceiver, ClientDuplexSender, ClientUnaryReceiver};
-use kvproto::cdcpb::{create_change_data, ChangeDataClient, ChangeDataEvent, ChangeDataRequest};
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb::TikvClient;
 use raftstore::coprocessor::CoprocessorHost;
 use test_raftstore::*;
+use tikv::config::CdcConfig;
 use tikv_util::worker::LazyWorker;
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
 
-use cdc::{CdcObserver, Task};
+use resolved_ts::{Observer, Task};
 static INIT: Once = Once::new();
 
 pub fn init() {
     INIT.call_once(test_util::setup_for_ci);
 }
 
-#[derive(Clone)]
-pub struct ClientReceiver {
-    receiver: Arc<Mutex<Option<ClientDuplexReceiver<ChangeDataEvent>>>>,
-}
-
-impl ClientReceiver {
-    pub fn replace(&self, rx: Option<ClientDuplexReceiver<ChangeDataEvent>>) {
-        let mut receiver = self.receiver.lock().unwrap();
-        *receiver = rx;
-    }
-}
-
-#[allow(clippy::type_complexity)]
-pub fn new_event_feed(
-    client: &ChangeDataClient,
-) -> (
-    ClientDuplexSender<ChangeDataRequest>,
-    ClientReceiver,
-    Box<dyn Fn(bool) -> ChangeDataEvent + Send>,
-) {
-    let (req_tx, resp_rx) = client.event_feed().unwrap();
-    let event_feed_wrap = Arc::new(Mutex::new(Some(resp_rx)));
-    let event_feed_wrap_clone = event_feed_wrap.clone();
-
-    let receive_event = move |keep_resolved_ts: bool| loop {
-        let mut events;
-        {
-            let mut event_feed = event_feed_wrap_clone.lock().unwrap();
-            events = event_feed.take();
-        }
-        let events_rx = if let Some(events_rx) = events.as_mut() {
-            events_rx
-        } else {
-            return ChangeDataEvent::default();
-        };
-        let change_data = if let Some(event) = block_on(events_rx.next()) {
-            event
-        } else {
-            return ChangeDataEvent::default();
-        };
-        {
-            let mut event_feed = event_feed_wrap_clone.lock().unwrap();
-            *event_feed = events;
-        }
-        let change_data_event = change_data.unwrap_or_default();
-        if !keep_resolved_ts && change_data_event.has_resolved_ts() {
-            continue;
-        }
-        tikv_util::info!("receive event {:?}", change_data_event);
-        break change_data_event;
-    };
-    (
-        req_tx,
-        ClientReceiver {
-            receiver: event_feed_wrap,
-        },
-        Box::new(receive_event),
-    )
-}
-
 pub struct TestSuite {
     pub cluster: Cluster<ServerCluster>,
-    pub endpoints: HashMap<u64, LazyWorker<Task>>,
-    pub obs: HashMap<u64, CdcObserver>,
+    pub endpoints: HashMap<u64, LazyWorker<Task<RocksSnapshot>>>,
+    pub obs: HashMap<u64, Observer<RocksEngine>>,
     tikv_cli: HashMap<u64, TikvClient>,
-    cdc_cli: HashMap<u64, ChangeDataClient>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
 
     env: Arc<Environment>,
 }
 
 impl TestSuite {
-    pub fn new(count: usize) -> TestSuite {
+    pub fn new(count: usize) -> Self {
         let mut cluster = new_server_cluster(1, count);
         // Increase the Raft tick interval to make this test case running reliably.
         configure_for_lease_read(&mut cluster, Some(100), None);
         Self::with_cluster(count, cluster)
     }
 
-    pub fn with_cluster(count: usize, mut cluster: Cluster<ServerCluster>) -> TestSuite {
+    pub fn with_cluster(count: usize, mut cluster: Cluster<ServerCluster>) -> Self {
         init();
         let pd_cli = cluster.pd_client.clone();
         let mut endpoints = HashMap::default();
@@ -119,22 +56,11 @@ impl TestSuite {
 
             // Register cdc service to gRPC server.
             let scheduler = worker.scheduler();
-            sim.pending_services
-                .entry(id)
-                .or_default()
-                .push(Box::new(move || {
-                    create_change_data(cdc::Service::new(scheduler.clone()))
-                }));
-            sim.txn_extra_schedulers.insert(
-                id,
-                Arc::new(cdc::CdcTxnExtraScheduler::new(worker.scheduler().clone())),
-            );
-            let scheduler = worker.scheduler();
-            let cdc_ob = cdc::CdcObserver::new(scheduler.clone());
-            obs.insert(id, cdc_ob.clone());
+            let rts_ob = resolved_ts::Observer::new(scheduler.clone());
+            obs.insert(id, rts_ob.clone());
             sim.coprocessor_hooks.entry(id).or_default().push(Box::new(
-                move |host: &mut CoprocessorHost<RocksEngine>| {
-                    cdc_ob.register_to(host);
+                move |host: &mut CoprocessorHost<_>| {
+                    rts_ob.register_to(host);
                 },
             ));
             endpoints.insert(id, worker);
@@ -144,24 +70,25 @@ impl TestSuite {
         for (id, worker) in &mut endpoints {
             let sim = cluster.sim.wl();
             let raft_router = sim.get_server_router(*id);
-            let cdc_ob = obs.get(&id).unwrap().clone();
             let cm = sim.get_concurrency_manager(*id);
             let env = Arc::new(Environment::new(1));
-            let mut cdc_endpoint = cdc::Endpoint::new(
-                &cluster.cfg.cdc,
-                pd_cli.clone(),
+            let cfg = CdcConfig {
+                min_ts_interval: tikv_util::config::ReadableDuration(Duration::from_millis(100)),
+                ..Default::default()
+            };
+            let rts_endpoint = resolved_ts::Endpoint::new(
+                &cfg,
                 worker.scheduler(),
                 raft_router,
-                cdc_ob,
                 cluster.store_metas[id].clone(),
+                pd_cli.clone(),
                 cm.clone(),
                 env,
                 sim.security_mgr.clone(),
+                resolved_ts::DummySinker::new(),
             );
-            cdc_endpoint.set_min_ts_interval(Duration::from_millis(100));
-            cdc_endpoint.set_scan_batch_size(2);
             concurrency_managers.insert(*id, cm);
-            worker.start(cdc_endpoint);
+            worker.start(rts_endpoint);
         }
 
         TestSuite {
@@ -171,25 +98,14 @@ impl TestSuite {
             concurrency_managers,
             env: Arc::new(Environment::new(1)),
             tikv_cli: HashMap::default(),
-            cdc_cli: HashMap::default(),
         }
     }
 
     pub fn stop(mut self) {
-        for (_, worker) in self.endpoints.drain() {
-            worker.stop_worker();
+        for (_, mut worker) in self.endpoints {
+            worker.stop();
         }
         self.cluster.shutdown();
-    }
-
-    pub fn new_changedata_request(&mut self, region_id: u64) -> ChangeDataRequest {
-        let mut req = ChangeDataRequest {
-            region_id,
-            ..Default::default()
-        };
-        req.set_region_epoch(self.get_context(region_id).take_region_epoch());
-        req.mut_header().set_ticdc_version("4.0.7".into());
-        req
     }
 
     pub fn must_kv_prewrite(
@@ -393,33 +309,39 @@ impl TestSuite {
             })
     }
 
-    pub fn get_region_cdc_client(&mut self, region_id: u64) -> &ChangeDataClient {
-        let leader = self.cluster.leader_of_region(region_id).unwrap();
-        let store_id = leader.get_store_id();
-        let addr = self.cluster.sim.rl().get_addr(store_id);
-        let env = self.env.clone();
-        self.cdc_cli.entry(store_id).or_insert_with(|| {
-            let channel = ChannelBuilder::new(env)
-                .max_receive_message_len(std::i32::MAX)
-                .connect(&addr);
-            ChangeDataClient::new(channel)
-        })
-    }
-
-    pub fn get_store_cdc_client(&mut self, store_id: u64) -> &ChangeDataClient {
-        let addr = self.cluster.sim.rl().get_addr(store_id);
-        let env = self.env.clone();
-        self.cdc_cli.entry(store_id).or_insert_with(|| {
-            let channel = ChannelBuilder::new(env).connect(&addr);
-            ChangeDataClient::new(channel)
-        })
-    }
-
     pub fn get_txn_concurrency_manager(&self, store_id: u64) -> Option<ConcurrencyManager> {
         self.concurrency_managers.get(&store_id).cloned()
     }
 
     pub fn set_tso(&self, ts: impl Into<TimeStamp>) {
         self.cluster.pd_client.set_tso(ts.into());
+    }
+
+    pub fn region_resolved_ts(&mut self, region_id: u64) -> Option<TimeStamp> {
+        let leader = self.cluster.leader_of_region(region_id)?;
+        let meta = self.cluster.store_metas[&leader.store_id].lock().unwrap();
+        Some(meta.region_read_progress[&region_id].safe_ts().into())
+    }
+
+    pub fn must_get_rts(&mut self, region_id: u64, rts: TimeStamp) {
+        for _ in 0..50 {
+            if let Some(ts) = self.region_resolved_ts(region_id) {
+                if rts == ts {
+                    return;
+                }
+            }
+            sleep_ms(100)
+        }
+    }
+
+    pub fn must_get_rts_ge(&mut self, region_id: u64, rts: TimeStamp) {
+        for _ in 0..50 {
+            if let Some(ts) = self.region_resolved_ts(region_id) {
+                if rts < ts {
+                    return;
+                }
+            }
+            sleep_ms(100)
+        }
     }
 }

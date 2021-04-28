@@ -5,9 +5,10 @@ use std::convert::TryFrom;
 
 use tidb_query_codegen::AggrFunction;
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::collation::*;
+use tidb_query_datatype::codec::collation::Collator;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::EvalContext;
+use tidb_query_datatype::match_template_collator;
 use tidb_query_datatype::{Collation, EvalType, FieldTypeAccessor};
 use tidb_query_expr::RpnExpression;
 use tipb::{Expr, ExprType, FieldType};
@@ -523,27 +524,25 @@ mod tests {
 
         let mut result = [VectorValue::with_capacity(0, EvalType::Enum)];
 
-        let mut buf = BufferVec::new();
-        buf.push("B - 我好强啊");
-        buf.push("A - 我太强啦");
-        let buf = Arc::new(buf);
-
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].to_enum_vec(), &[None]);
 
-        update!(state, &mut ctx, Some(EnumRef::new(&buf, 1))).unwrap();
+        update!(state, &mut ctx, Some(EnumRef::new("bbb".as_bytes(), &1))).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(
             result[0].to_enum_vec(),
-            vec![Some(Enum::new(buf.clone(), 1))]
+            vec![Some(Enum::new("bbb".as_bytes().to_vec(), 1))]
         );
 
-        update!(state, &mut ctx, Some(EnumRef::new(&buf, 1))).unwrap();
-        update!(state, &mut ctx, Some(EnumRef::new(&buf, 2))).unwrap();
+        update!(state, &mut ctx, Some(EnumRef::new("bbb".as_bytes(), &1))).unwrap();
+        update!(state, &mut ctx, Some(EnumRef::new("aaa".as_bytes(), &2))).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].to_enum_vec(), vec![Some(Enum::new(buf, 1))]);
+        assert_eq!(
+            result[0].to_enum_vec(),
+            vec![Some(Enum::new("bbb".as_bytes().to_vec(), 1))]
+        );
     }
 
     #[test]

@@ -119,7 +119,10 @@ fn test_observe_duplicate_cmd() {
     suite.stop();
 }
 
-#[test]
+// TODO: Change cmd is not used currently, so the test is unneeded,
+// uncomment it after change cmd is used again
+// #[test]
+#[allow(dead_code)]
 fn test_delayed_change_cmd() {
     let mut cluster = new_server_cluster(1, 3);
     configure_for_lease_read(&mut cluster, Some(50), Some(20));

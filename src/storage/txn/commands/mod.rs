@@ -46,7 +46,7 @@ use std::iter;
 use std::marker::PhantomData;
 
 use kvproto::kvrpcpb::*;
-use txn_types::{Key, TimeStamp, Value, Write};
+use txn_types::{Key, OldValues, TimeStamp, Value, Write};
 
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::{self, LockManager, WaitTimeout};
@@ -202,6 +202,7 @@ impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLock
             WaitTimeout::from_encoded(req.get_wait_timeout()),
             req.get_return_values(),
             req.get_min_commit_ts().into(),
+            OldValues::default(),
             req.take_context(),
         )
     }
