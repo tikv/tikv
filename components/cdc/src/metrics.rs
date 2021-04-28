@@ -51,6 +51,11 @@ lazy_static! {
         "Count of old value cache missing"
     )
     .unwrap();
+    pub static ref CDC_OLD_VALUE_CACHE_MISS_NONE: IntGauge = register_int_gauge!(
+        "tikv_cdc_old_value_cache_miss_none",
+        "Count of None old value cache missing"
+    )
+    .unwrap();
     pub static ref CDC_OLD_VALUE_CACHE_ACCESS: IntGauge = register_int_gauge!(
         "tikv_cdc_old_value_cache_access",
         "Count of old value cache accessing"
