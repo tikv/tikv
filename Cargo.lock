@@ -5304,6 +5304,7 @@ dependencies = [
  "regex",
  "rev_lines",
  "security",
+ "semver 0.11.0",
  "serde",
  "serde_derive",
  "serde_ignored",

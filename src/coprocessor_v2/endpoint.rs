@@ -2,7 +2,9 @@
 
 use coprocessor_plugin_api::{CoprocessorPlugin, PluginError, RawResponse, Region, RegionEpoch};
 use kvproto::coprocessor_v2 as coprv2pb;
+use semver::VersionReq;
 use std::future::Future;
+use std::ops::Not;
 use std::sync::Arc;
 
 use super::plugin_registry::PluginRegistry;
@@ -65,6 +67,23 @@ impl Endpoint {
                 CoprocessorError::Other(format!(
                     "No registered coprocessor with name '{}'",
                     req.copr_name
+                ))
+            })?;
+
+        // Check whether the found plugin satisfies the version constraint.
+        let version_req = VersionReq::parse(&req.copr_version_constraint)
+            .map_err(|e| CoprocessorError::Other(format!("{}", e)))?;
+        let plugin_version = plugin.version();
+        version_req
+            .matches(&plugin_version)
+            .not()
+            .then(|| {})
+            .ok_or_else(|| {
+                CoprocessorError::Other(format!(
+                    "The plugin '{}' with version '{}' does not satisfy the version constraint '{}'",
+                    plugin.name(),
+                    plugin_version,
+                    version_req,
                 ))
             })?;
 
