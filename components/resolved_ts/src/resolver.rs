@@ -17,7 +17,7 @@ pub struct Resolver {
     lock_ts_heap: BTreeMap<TimeStamp, HashSet<Arc<[u8]>>>,
     // The timestamps that guarantees no more commit will happen before.
     resolved_ts: TimeStamp,
-    // The region read progress used to utilize `resolved_ts` to serve stale read request
+    // The region read progress is used to utilize `resolved_ts` to serve stale read request
     read_progress: Arc<RegionReadProgress>,
     // The timestamps that advance the resolved_ts when there is no more write.
     min_ts: TimeStamp,
