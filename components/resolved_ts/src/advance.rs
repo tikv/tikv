@@ -227,9 +227,10 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
                                 continue;
                             }
                             let mut read_state = ReadState::default();
-                            if let Some(rp) = meta.region_read_progress.get(&region_id) {
-                                read_state.set_applied_index(rp.applied_index());
-                                read_state.set_safe_ts(rp.safe_ts());
+                            if let Some(rrp) = meta.region_read_progress.get(&region_id) {
+                                let rs = rrp.read_state();
+                                read_state.set_applied_index(rs.idx);
+                                read_state.set_safe_ts(rs.ts);
                             }
                             let mut leader_info = LeaderInfo::default();
                             leader_info.set_peer_id(*leader_id);
