@@ -254,7 +254,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
         match group_by_result {
             RpnStackNode::Scalar { value, .. } => {
                 match_template::match_template! {
-                    TT = [Int, Bytes, Real, Duration, Decimal, DateTime],
+                    TT = [Int, Bytes, Real, Duration, Decimal, DateTime, Enum],
                     match value {
                         ScalarValue::TT(v) => {
                             if let Groups::TT(group) = &mut self.groups {
@@ -279,7 +279,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
                 let group_by_logical_rows = value.logical_rows_struct();
 
                 match_template::match_template! {
-                    TT = [Int, Real, Duration, Decimal, DateTime],
+                    TT = [Int, Real, Duration, Decimal, DateTime, Enum],
                     match group_by_physical_vec {
                         VectorValue::TT(v) => {
                             if let Groups::TT(group) = &mut self.groups {
