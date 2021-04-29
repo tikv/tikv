@@ -8,7 +8,7 @@ use super::{Error, Result};
 use crate::server::resolve::StoreAddrResolver;
 use crate::storage::lock_manager::Lock;
 use collections::{HashMap, HashSet};
-use engine_rocks::RocksEngine;
+use engine_traits::KvEngine;
 use futures::future::{self, FutureExt, TryFutureExt};
 use futures::sink::SinkExt;
 use futures::stream::TryStreamExt;
@@ -402,7 +402,7 @@ impl RoleChangeNotifier {
         }
     }
 
-    pub(crate) fn register(self, host: &mut CoprocessorHost<RocksEngine>) {
+    pub(crate) fn register(self, host: &mut CoprocessorHost<impl KvEngine>) {
         host.registry
             .register_role_observer(1, BoxRoleObserver::new(self.clone()));
         host.registry
@@ -909,6 +909,7 @@ pub mod tests {
     use futures::executor::block_on;
     use security::SecurityConfig;
     use tikv_util::worker::FutureWorker;
+    use engine_rocks::RocksEngine;
 
     #[test]
     fn test_detect_table() {
