@@ -31,6 +31,7 @@ pub trait KvEngine:
     + Sync
     + Clone
     + Debug
+    + Unpin
     + 'static
 {
     /// A consistent read-only snapshot of the database
