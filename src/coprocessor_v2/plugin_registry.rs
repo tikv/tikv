@@ -3,6 +3,7 @@
 use coprocessor_plugin_api::{allocator::HostAllocatorPtr, *};
 use libloading::{Error as DylibError, Library, Symbol};
 use notify::{DebouncedEvent, RecursiveMode, Watcher};
+use semver::Version;
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -15,6 +16,9 @@ use thiserror::Error;
 pub enum PluginLoadingError {
     #[error("failed to load library")]
     Dylib(#[from] DylibError),
+
+    #[error("plugin version string does not follow SemVer standard")]
+    VersionParseError(#[from] semver::SemVerError),
 
     #[error(
         "version mismatch of rustc: plugin was compiled with {plugin_rustc}, but TiKV with {tikv_rustc}"
@@ -175,7 +179,7 @@ impl PluginRegistry {
     /// Finds a plugin by its name. The plugin must have been loaded before with [`load_plugin()`].
     ///
     /// Plugins are indexed by the name that is returned by [`CoprocessorPlugin::name()`].
-    pub fn get_plugin(&self, plugin_name: &str) -> Option<Arc<impl CoprocessorPlugin>> {
+    pub fn get_plugin(&self, plugin_name: &str) -> Option<Arc<LoadedPlugin>> {
         self.inner.read().unwrap().get_plugin(plugin_name)
     }
 
@@ -185,10 +189,7 @@ impl PluginRegistry {
     /// `"./coprocessors/plugin1.so"` would be *different* from `"coprocessors/plugin1.so"`
     /// (note the leading `./`). The same applies when the associated path was changed with
     /// [`update_plugin_path()`].
-    pub fn get_plugin_by_path<P: AsRef<OsStr>>(
-        &self,
-        plugin_path: P,
-    ) -> Option<Arc<impl CoprocessorPlugin>> {
+    pub fn get_plugin_by_path<P: AsRef<OsStr>>(&self, plugin_path: P) -> Option<Arc<LoadedPlugin>> {
         self.inner.read().unwrap().get_plugin_by_path(plugin_path)
     }
 
@@ -211,10 +212,7 @@ impl PluginRegistry {
     /// name.
     ///
     /// Returns the name of the loaded plugin.
-    pub fn load_plugin<P: AsRef<OsStr>>(
-        &self,
-        file_name: P,
-    ) -> Result<&'static str, PluginLoadingError> {
+    pub fn load_plugin<P: AsRef<OsStr>>(&self, file_name: P) -> Result<String, PluginLoadingError> {
         self.inner.write().unwrap().load_plugin(file_name)
     }
 
@@ -228,7 +226,7 @@ impl PluginRegistry {
     pub fn load_plugins_from_dir(
         &self,
         dir_name: impl Into<PathBuf>,
-    ) -> std::io::Result<Vec<&'static str>> {
+    ) -> std::io::Result<Vec<String>> {
         let dir_name = dir_name.into();
         let mut loaded_plugins = Vec::new();
 
@@ -281,17 +279,14 @@ struct PluginRegistryInner {
 
 impl PluginRegistryInner {
     #[inline]
-    pub fn get_plugin(&self, plugin_name: &str) -> Option<Arc<impl CoprocessorPlugin>> {
+    pub fn get_plugin(&self, plugin_name: &str) -> Option<Arc<LoadedPlugin>> {
         self.loaded_plugins
             .get(plugin_name)
             .map(|(_path, plugin)| plugin.clone())
     }
 
     #[inline]
-    pub fn get_plugin_by_path<P: AsRef<OsStr>>(
-        &self,
-        plugin_path: P,
-    ) -> Option<Arc<impl CoprocessorPlugin>> {
+    pub fn get_plugin_by_path<P: AsRef<OsStr>>(&self, plugin_path: P) -> Option<Arc<LoadedPlugin>> {
         self.loaded_plugins
             .iter()
             .find(|(_, (path, _))| path == plugin_path.as_ref())
@@ -307,7 +302,7 @@ impl PluginRegistryInner {
     pub fn load_plugin<P: AsRef<OsStr>>(
         &mut self,
         filename: P,
-    ) -> Result<&'static str, PluginLoadingError> {
+    ) -> Result<String, PluginLoadingError> {
         let plugin = unsafe { LoadedPlugin::new(&filename) };
         if let Err(err) = &plugin {
             let filename = filename.as_ref().to_string_lossy();
@@ -315,10 +310,10 @@ impl PluginRegistryInner {
         }
         let plugin = plugin?;
 
-        let plugin_name = plugin.name();
+        let plugin_name = plugin.name().to_string();
 
         self.loaded_plugins.insert(
-            plugin_name.to_string(),
+            plugin_name.clone(),
             (filename.as_ref().to_os_string(), Arc::new(plugin)),
         );
         Ok(plugin_name)
@@ -345,7 +340,11 @@ impl PluginRegistryInner {
 }
 
 /// A wrapper around a loaded raw coprocessor plugin library.
-struct LoadedPlugin {
+pub struct LoadedPlugin {
+    /// The name of the plugin.
+    name: String,
+    /// The version of the plugin.
+    version: Version,
     /// Pointer to a [`CoprocessorPlugin`] in the loaded `lib`.
     plugin: Box<dyn CoprocessorPlugin>,
 }
@@ -374,34 +373,50 @@ impl LoadedPlugin {
 
         let get_build_info: Symbol<PluginGetBuildInfoSignature> =
             lib.get(PLUGIN_GET_BUILD_INFO_SYMBOL)?;
+        let get_plugin_info: Symbol<PluginGetPluginInfoSignature> =
+            lib.get(PLUGIN_GET_PLUGIN_INFO_SYMBOL)?;
+        let plugin_constructor: Symbol<PluginConstructorSignature> =
+            lib.get(PLUGIN_CONSTRUCTOR_SYMBOL)?;
 
         // It's important to check the ABI before calling the constructor.
         let plugin_build_info = get_build_info();
         let tikv_build_info = BuildInfo::get();
         err_on_mismatch(&plugin_build_info, &tikv_build_info)?;
 
-        let constructor: Symbol<PluginConstructorSignature> = lib.get(PLUGIN_CONSTRUCTOR_SYMBOL)?;
+        let info = get_plugin_info();
+        let name = info.name.to_string();
+        let version = Version::parse(info.version)?;
 
         let host_allocator = HostAllocatorPtr {
             alloc_fn: std::alloc::alloc,
             dealloc_fn: std::alloc::dealloc,
         };
 
-        let boxed_raw_plugin = constructor(host_allocator);
+        let boxed_raw_plugin = plugin_constructor(host_allocator);
         let plugin = Box::from_raw(boxed_raw_plugin);
 
         // Leak library so that we will never drop it
         std::mem::forget(lib);
 
-        Ok(LoadedPlugin { plugin })
+        Ok(LoadedPlugin {
+            name,
+            version,
+            plugin,
+        })
+    }
+
+    /// Returns the name of the plugin.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the version of the plugin.
+    pub fn version(&self) -> &Version {
+        &self.version
     }
 }
 
 impl CoprocessorPlugin for LoadedPlugin {
-    fn name(&self) -> &'static str {
-        self.plugin.name()
-    }
-
     fn on_raw_coprocessor_request(
         &self,
         region: &Region,
@@ -438,7 +453,8 @@ fn is_library_file<P: AsRef<Path>>(path: P) -> bool {
 //        let library_path = pkgname_to_libname("example-plugin");
 //        let loaded_plugin = unsafe { LoadedPlugin::new(&library_path).unwrap() };
 //
-//        assert_eq!(loaded_plugin.name(), "example-plugin");
+//        assert_eq!(loaded_plugin.name(), "example_plugin");
+//        assert_eq!(loaded_plugin.version(), &Version::parse("0.1.0").unwrap());
 //    }
 //
 //    #[test]
@@ -447,13 +463,13 @@ fn is_library_file<P: AsRef<Path>>(path: P) -> bool {
 //        let library_path = pkgname_to_libname("example-plugin");
 //        let plugin_name = registry.load_plugin(&library_path).unwrap();
 //
-//        let plugin = registry.get_plugin(plugin_name).unwrap();
+//        let plugin = registry.get_plugin(&plugin_name).unwrap();
 //
-//        assert_eq!(plugin.name(), "example-plugin");
-//        assert_eq!(registry.loaded_plugin_names(), vec!["example-plugin"]);
+//        assert_eq!(plugin.name(), "example_plugin");
+//        assert_eq!(registry.loaded_plugin_names(), vec!["example_plugin"]);
 //        assert_eq!(
 //            registry
-//                .get_path_for_plugin("example-plugin")
+//                .get_path_for_plugin("example_plugin")
 //                .unwrap()
 //                .to_string_lossy(),
 //            library_path
@@ -470,18 +486,18 @@ fn is_library_file<P: AsRef<Path>>(path: P) -> bool {
 //
 //        assert_eq!(
 //            registry
-//                .get_path_for_plugin(plugin_name)
+//                .get_path_for_plugin(&plugin_name)
 //                .unwrap()
 //                .to_str()
 //                .unwrap(),
 //            &library_path
 //        );
 //
-//        registry.update_plugin_path(plugin_name, &library_path_2);
+//        registry.update_plugin_path(&plugin_name, &library_path_2);
 //
 //        assert_eq!(
 //            registry
-//                .get_path_for_plugin(plugin_name)
+//                .get_path_for_plugin(&plugin_name)
 //                .unwrap()
 //                .to_str()
 //                .unwrap(),
@@ -496,11 +512,11 @@ fn is_library_file<P: AsRef<Path>>(path: P) -> bool {
 //
 //        let plugin_name = registry.load_plugin(&library_path).unwrap();
 //
-//        assert!(registry.get_plugin(plugin_name).is_some());
+//        assert!(registry.get_plugin(&plugin_name).is_some());
 //
-//        registry.unload_plugin(plugin_name);
+//        registry.unload_plugin(&plugin_name);
 //
-//        assert!(registry.get_plugin(plugin_name).is_none());
+//        assert!(registry.get_plugin(&plugin_name).is_none());
 //        assert_eq!(registry.loaded_plugin_names().len(), 0);
 //    }
 //
@@ -512,7 +528,7 @@ fn is_library_file<P: AsRef<Path>>(path: P) -> bool {
 //        let coprocessor_dir = build_dir.join("coprocessors");
 //        let library_path = coprocessor_dir.join(pkgname_to_libname("example-plugin"));
 //        let library_path_2 = coprocessor_dir.join(pkgname_to_libname("example-plugin-2"));
-//        let plugin_name = "example-plugin";
+//        let plugin_name = "example_plugin";
 //
 //        // Make sure we have an existing, but empty coprocessor directory.
 //        std::fs::create_dir_all(&coprocessor_dir).unwrap();
