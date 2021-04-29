@@ -27,7 +27,7 @@ use tidb_query_expr::{RpnExpression, RpnExpressionBuilder, RpnStackNode};
 macro_rules! match_template_hashable {
     ($t:tt, $($tail:tt)*) => {{
         match_template::match_template! {
-            $t = [Int, Real, Bytes, Duration, Decimal, DateTime],
+            $t = [Int, Real, Bytes, Duration, Decimal, DateTime, Enum],
             $($tail)*
         }
     }}
@@ -196,6 +196,7 @@ enum Groups {
     Duration(HashMap<Option<Duration>, usize>),
     Decimal(HashMap<Option<Decimal>, usize>),
     DateTime(HashMap<Option<DateTime>, usize>),
+    Enum(HashMap<Option<Enum>, usize>),
 }
 
 impl Groups {
