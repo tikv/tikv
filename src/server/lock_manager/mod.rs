@@ -188,7 +188,10 @@ impl LockManager {
 
     /// Creates a `RoleChangeNotifier` of the deadlock detector worker and registers it to
     /// the `CoprocessorHost` to observe the role change events of the leader region.
-    pub fn register_detector_role_change_observer(&self, host: &mut CoprocessorHost<impl KvEngine>) {
+    pub fn register_detector_role_change_observer(
+        &self,
+        host: &mut CoprocessorHost<impl KvEngine>,
+    ) {
         let role_change_notifier = RoleChangeNotifier::new(self.detector_scheduler.clone());
         role_change_notifier.register(host);
     }
@@ -286,10 +289,10 @@ mod tests {
     use self::metrics::*;
     use self::waiter_manager::tests::*;
     use super::*;
+    use engine_test::kv::KvTestEngine;
     use raftstore::coprocessor::RegionChangeEvent;
     use security::SecurityConfig;
     use tikv_util::config::ReadableDuration;
-    use engine_test::kv::KvTestEngine;
 
     use std::thread;
     use std::time::Duration;
