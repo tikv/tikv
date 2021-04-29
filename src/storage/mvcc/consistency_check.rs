@@ -420,12 +420,12 @@ mod tests {
     use crate::storage::kv::TestEngineBuilder;
     use crate::storage::txn::tests::must_rollback;
     use crate::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
-    use engine_rocks::RocksEngine;
+    use engine_test::kv::KvTestEngine;
 
     #[test]
     fn test_update_context() {
         let safe_point = Arc::new(AtomicU64::new((123 << PHYSICAL_SHIFT_BITS) * 1000));
-        let observer = Mvcc::<RocksEngine>::new(safe_point);
+        let observer = Mvcc::<KvTestEngine>::new(safe_point);
 
         let mut context = Vec::new();
         assert!(observer.update_context(&mut context));
@@ -471,8 +471,7 @@ mod tests {
     #[test]
     fn test_mvcc_info_collector() {
         use crate::storage::mvcc::Write;
-        use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
-        use engine_rocks::raw_util::CFOptions;
+        use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions};
         use engine_traits::SyncMutable;
         use txn_types::TimeStamp;
 
@@ -481,20 +480,17 @@ mod tests {
             .tempdir()
             .unwrap();
         let path = tmp.path().to_str().unwrap();
-        let engine = Arc::new(
-            engine_rocks::raw_util::new_engine_opt(
-                path,
-                DBOptions::new(),
-                vec![
-                    CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
-                    CFOptions::new(CF_WRITE, ColumnFamilyOptions::new()),
-                    CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
-                    CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
-                ],
-            )
-            .unwrap(),
-        );
-        let engine = RocksEngine::from_db(engine);
+        let engine = engine_test::kv::new_engine_opt(
+            path,
+            DBOptions::new(),
+            vec![
+                CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
+                CFOptions::new(CF_WRITE, ColumnFamilyOptions::new()),
+                CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
+                CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
+            ],
+        )
+        .unwrap();
 
         let cf_default_data = vec![
             (b"k1", b"v", 5.into()),
