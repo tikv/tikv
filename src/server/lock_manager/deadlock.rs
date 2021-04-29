@@ -909,7 +909,7 @@ pub mod tests {
     use futures::executor::block_on;
     use security::SecurityConfig;
     use tikv_util::worker::FutureWorker;
-    use engine_rocks::RocksEngine;
+    use engine_test::kv::KvTestEngine;
 
     #[test]
     fn test_detect_table() {
@@ -1066,7 +1066,7 @@ pub mod tests {
     }
 
     fn start_deadlock_detector(
-        host: &mut CoprocessorHost<RocksEngine>,
+        host: &mut CoprocessorHost<KvTestEngine>,
     ) -> (FutureWorker<Task>, Scheduler) {
         let waiter_mgr_worker = FutureWorker::new("dummy-waiter-mgr");
         let waiter_mgr_scheduler = WaiterMgrScheduler::new(waiter_mgr_worker.scheduler());
