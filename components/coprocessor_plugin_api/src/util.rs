@@ -64,6 +64,8 @@ pub struct PluginInfo {
 /// * `declare_plugin!(plugin_name, plugin_ctor)` automatically fetches the version from `Cargo.toml`.
 /// * `declare_plugin!(plugin_ctor)` automatically fetches plugin name and version from `Cargo.toml`.
 ///
+/// The types of `plugin_name` and `plugin_version` have to be `&'static str` literals.
+///
 /// # Notes
 /// This works by automatically generating an `extern "C"` function with a
 /// pre-defined signature and symbol name. Therefore you will only be able to
