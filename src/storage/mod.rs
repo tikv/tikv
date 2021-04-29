@@ -89,7 +89,7 @@ use std::{
     sync::{atomic, Arc},
 };
 use tikv_util::time::{Instant, ThreadReadId};
-use txn_types::{Key, KvPair, Lock, Mutation, TimeStamp, TsSet, Value};
+use txn_types::{Key, KvPair, Lock, Mutation, OldValues, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
@@ -425,7 +425,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             CMD,
                         ) {
                             Ok(mut snap_ctx) => {
-                                snap_ctx.read_id = read_id.clone();
+                                snap_ctx.read_id = if ctx.get_stale_read() {
+                                    None
+                                } else {
+                                    read_id.clone()
+                                };
                                 snap_ctx
                             }
                             Err(e) => {
@@ -673,24 +677,19 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .observe(begin_instant.elapsed().as_secs_f64());
                 }
 
-                let snap_ctx = if need_check_locks_in_replica_read(&ctx) {
+                let mut snap_ctx = SnapContext {
+                    pb_ctx: &ctx,
+                    start_ts,
+                    ..Default::default()
+                };
+                if need_check_locks_in_replica_read(&ctx) {
                     let mut key_range = KeyRange::default();
                     key_range.set_start_key(start_key.as_encoded().to_vec());
                     if let Some(end_key) = &end_key {
                         key_range.set_end_key(end_key.as_encoded().to_vec());
                     }
-                    SnapContext {
-                        pb_ctx: &ctx,
-                        read_id: None,
-                        start_ts,
-                        key_ranges: vec![key_range],
-                    }
-                } else {
-                    SnapContext {
-                        pb_ctx: &ctx,
-                        ..Default::default()
-                    }
-                };
+                    snap_ctx.key_ranges = vec![key_range];
+                }
 
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
@@ -1892,6 +1891,7 @@ pub mod test_util {
             None,
             return_values,
             for_update_ts.next(),
+            OldValues::default(),
             Context::default(),
         )
     }
@@ -5589,6 +5589,7 @@ mod tests {
                     Some(WaitTimeout::Millis(100)),
                     false,
                     21.into(),
+                    OldValues::default(),
                     Context::default(),
                 ),
                 expect_ok_callback(tx, 0),
@@ -6152,6 +6153,7 @@ mod tests {
                     None,
                     false,
                     0.into(),
+                    OldValues::default(),
                     Default::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -6172,6 +6174,7 @@ mod tests {
                     None,
                     false,
                     0.into(),
+                    OldValues::default(),
                     Default::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -6386,6 +6389,7 @@ mod tests {
                 None,
                 false,
                 TimeStamp::new(12),
+                OldValues::default(),
                 Context::default(),
             ),
             pipelined_pessimistic_lock: true,
@@ -6409,6 +6413,7 @@ mod tests {
                 None,
                 false,
                 TimeStamp::new(12),
+                OldValues::default(),
                 Context::default(),
             ),
             pipelined_pessimistic_lock: false,

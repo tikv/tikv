@@ -120,6 +120,13 @@ impl<'a> ConvertTo<Bytes> for JsonRef<'a> {
     }
 }
 
+impl<'a> ConvertTo<Bytes> for EnumRef<'a> {
+    #[inline]
+    fn convert(&self, _: &mut EvalContext) -> Result<Bytes> {
+        Ok(self.to_string().into_bytes())
+    }
+}
+
 /// Returns the max u64 values of different mysql types
 ///
 /// # Panics

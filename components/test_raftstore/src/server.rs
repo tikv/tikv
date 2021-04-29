@@ -65,7 +65,7 @@ type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksEngin
 type SimulateServerTransport =
     SimulateTransport<ServerTransport<SimulateStoreTransport, PdStoreAddrResolver>>;
 
-pub type SimulateEngine = RaftKv<SimulateStoreTransport>;
+pub type SimulateEngine = RaftKv<RocksEngine, SimulateStoreTransport>;
 
 #[derive(Default, Clone)]
 pub struct AddressMap {
@@ -108,7 +108,7 @@ struct ServerMeta {
     sim_trans: SimulateServerTransport,
     raw_router: RaftRouter<RocksEngine, RocksEngine>,
     raw_apply_router: ApplyRouter<RocksEngine>,
-    gc_worker: GcWorker<RaftKv<SimulateStoreTransport>, SimulateStoreTransport>,
+    gc_worker: GcWorker<RaftKv<RocksEngine, SimulateStoreTransport>, SimulateStoreTransport>,
 }
 
 type PendingServices = Vec<Box<dyn Fn() -> Service>>;
@@ -186,7 +186,7 @@ impl ServerCluster {
     pub fn get_gc_worker(
         &self,
         node_id: u64,
-    ) -> &GcWorker<RaftKv<SimulateStoreTransport>, SimulateStoreTransport> {
+    ) -> &GcWorker<RaftKv<RocksEngine, SimulateStoreTransport>, SimulateStoreTransport> {
         &self.metas.get(&node_id).unwrap().gc_worker
     }
 

@@ -15,7 +15,7 @@ mod observer;
 mod rate_limiter;
 mod service;
 
-pub use endpoint::{CdcTxnExtraScheduler, Endpoint, Task};
+pub use endpoint::{CdcTxnExtraScheduler, Endpoint, Task, Validate};
 pub use errors::{Error, Result};
 pub use observer::CdcObserver;
 pub use service::Service;

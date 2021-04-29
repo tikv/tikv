@@ -12,20 +12,25 @@ use codec::prelude::*;
 use num::Unsigned;
 
 use crate::codec::Result;
-use collator::*;
 
-pub macro match_template_collator($t:tt, $($tail:tt)*) {
-    match_template::match_template! {
-        $t = [
-            Binary => CollatorBinary,
-            Utf8Mb4Bin => CollatorUtf8Mb4Bin,
-            Utf8Mb4BinNoPadding => CollatorUtf8Mb4BinNoPadding,
-            Utf8Mb4GeneralCi => CollatorUtf8Mb4GeneralCi,
-            Utf8Mb4UnicodeCi => CollatorUtf8Mb4UnicodeCi,
-            Latin1Bin => CollatorLatin1Bin,
-        ],
-        $($tail)*
-    }
+#[macro_export]
+macro_rules! match_template_collator {
+     ($t:tt, $($tail:tt)*) => {{
+         #[allow(unused_imports)]
+         use $crate::codec::collation::collator::*;
+
+         match_template::match_template! {
+             $t = [
+                Binary => CollatorBinary,
+                Utf8Mb4Bin => CollatorUtf8Mb4Bin,
+                Utf8Mb4BinNoPadding => CollatorUtf8Mb4BinNoPadding,
+                Utf8Mb4GeneralCi => CollatorUtf8Mb4GeneralCi,
+                Utf8Mb4UnicodeCi => CollatorUtf8Mb4UnicodeCi,
+                Latin1Bin => CollatorLatin1Bin,
+            ],
+            $($tail)*
+         }
+     }}
 }
 
 pub trait Charset {

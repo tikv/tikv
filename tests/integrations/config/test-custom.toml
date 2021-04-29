@@ -424,67 +424,6 @@ enable-compaction-guard = true
 compaction-guard-min-output-file-size = "12MB"
 compaction-guard-max-output-file-size = "34MB"
 
-[rocksdb.ver-defaultcf]
-block-size = "12KB"
-block-cache-size = "12GB"
-disable-block-cache = false
-cache-index-and-filter-blocks = false
-pin-l0-filter-and-index-blocks = false
-use-bloom-filter = false
-optimize-filters-for-hits = false
-whole-key-filtering = true
-bloom-filter-bits-per-key = 123
-block-based-bloom-filter = true
-read-amp-bytes-per-bit = 0
-compression-per-level = [
-    "no",
-    "no",
-    "zstd",
-    "zstd",
-    "no",
-    "zstd",
-    "lz4",
-]
-write-buffer-size = "1MB"
-max-write-buffer-number = 12
-min-write-buffer-number-to-merge = 12
-max-bytes-for-level-base = "12KB"
-target-file-size-base = "123KB"
-level0-file-num-compaction-trigger = 123
-level0-slowdown-writes-trigger = 123
-level0-stop-writes-trigger = 123
-max-compaction-bytes = "1GB"
-compaction-pri = 3
-dynamic-level-bytes = true
-num-levels = 4
-max-bytes-for-level-multiplier = 8
-compaction-style = 1
-disable-auto-compactions = true
-soft-pending-compaction-bytes-limit = "12GB"
-hard-pending-compaction-bytes-limit = "12GB"
-force-consistency-checks = true
-prop-size-index-distance = 4000000
-prop-keys-index-distance = 40000
-enable-doubly-skiplist = false
-enable-compaction-guard = true
-compaction-guard-min-output-file-size = "12MB"
-compaction-guard-max-output-file-size = "34MB"
-
-[rocksdb.ver-defaultcf.titan]
-min-blob-size = "2018B"
-blob-file-compression = "zstd"
-blob-cache-size = "12GB"
-min-gc-batch-size = "12KB"
-max-gc-batch-size = "12MB"
-discardable-ratio = 0.00156
-sample-ratio = 0.982
-merge-small-file-threshold = "21KB"
-blob-run-mode = "fallback"
-level-merge = true
-range-merge = true
-max-sorted-runs = 100
-gc-merge-rewrite = true
-
 [raftdb]
 wal-recovery-mode = 3
 wal-dir = "/var"
@@ -631,6 +570,7 @@ pipelined = false
 min-ts-interval = "4s"
 old-value-cache-size = 512
 hibernate-regions-compatible = false
+scan-lock-pool-size = 1
 
 [split]
 detect-times = 10
