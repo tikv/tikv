@@ -247,8 +247,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         self.engine.release_snapshot();
     }
 
-    pub fn is_readpool_busy(&self) -> bool {
-        self.read_pool.is_busy()
+    pub fn get_readpool_queue_per_worker(&self) -> usize {
+        self.read_pool.get_queue_size_per_worker()
     }
 
     #[inline]

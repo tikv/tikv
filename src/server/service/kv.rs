@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use tikv_util::time::{duration_to_sec, Instant};
 
-use super::batch::{ReqBatcher, MAX_BATCH_GET_REQUEST_COUNT};
+use super::batch::{ReqBatcher, MIN_BATCH_GET_REQUEST_COUNT};
 use crate::coprocessor::Endpoint;
 use crate::coprocessor_v2;
 use crate::server::gc_worker::GcWorker;
@@ -904,13 +904,13 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let request_handler = stream.try_for_each(move |mut req| {
             let request_ids = req.take_request_ids();
             let requests: Vec<_> = req.take_requests().into();
-            let mut batcher = if enable_req_batch && storage.is_readpool_busy() {
-                Some(ReqBatcher::new())
-            } else {
-                None
-            };
+            let mut batcher =
+                if enable_req_batch && request_ids.len() >= MIN_BATCH_GET_REQUEST_COUNT {
+                    Some(ReqBatcher::new())
+                } else {
+                    None
+                };
             GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
-            let mut req_len = requests.len();
             for (id, req) in request_ids.into_iter().zip(requests) {
                 handle_batch_commands_request(
                     &mut batcher,
@@ -922,17 +922,14 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                     req,
                     &tx,
                 );
-                req_len -= 1;
-                if enable_req_batch
-                    && batcher.is_none()
-                    && req_len >= MAX_BATCH_GET_REQUEST_COUNT
-                    && storage.is_readpool_busy()
-                {
-                    batcher = Some(ReqBatcher::new());
+                if let Some(batch) = batcher.as_mut() {
+                    let queue = storage.get_readpool_queue_per_worker();
+                    batch.maybe_commit(&storage, &tx, queue);
                 }
             }
             if let Some(mut batch) = batcher {
-                batch.commit(&storage, &tx);
+                let queue = storage.get_readpool_queue_per_worker();
+                batch.commit(&storage, &tx, queue);
             }
             future::ok(())
         });
@@ -1115,7 +1112,6 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
                 },
                 Some(batch_commands_request::request::Cmd::Get(req)) => {
                     if batcher.as_mut().map_or(false, |req_batch| {
-                        req_batch.maybe_commit(storage, tx);
                         req_batch.can_batch_get(&req)
                     }) {
                         batcher.as_mut().unwrap().add_get_request(req, id);
@@ -1129,7 +1125,6 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
                 },
                 Some(batch_commands_request::request::Cmd::RawGet(req)) => {
                     if batcher.as_mut().map_or(false, |req_batch| {
-                        req_batch.maybe_commit(storage, tx);
                         req_batch.can_batch_raw_get(&req)
                     }) {
                         batcher.as_mut().unwrap().add_raw_get_request(req, id);

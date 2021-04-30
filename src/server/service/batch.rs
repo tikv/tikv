@@ -1,20 +1,23 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::server::metrics::GRPC_MSG_HISTOGRAM_STATIC;
-use crate::server::service::kv::batch_commands_response;
+use crate::server::metrics::{GrpcTypeKind, GRPC_MSG_FAIL_COUNTER, GRPC_MSG_HISTOGRAM_STATIC};
+use crate::server::service::kv::{
+    batch_commands_response, future_get, response_batch_commands_request,
+};
 use crate::storage::{
     errors::{extract_key_error, extract_region_error},
     kv::Engine,
     lock_manager::LockManager,
     Storage,
 };
+use futures::future::TryFutureExt;
 use kvproto::kvrpcpb::*;
 use tikv_util::future::poll_future_notify;
 use tikv_util::mpsc::batch::Sender;
 use tikv_util::time::{duration_to_sec, Instant};
 
-pub const MAX_BATCH_GET_REQUEST_COUNT: usize = 6;
-pub const MAX_BATCH_RAW_GET_REQUEST_COUNT: usize = 16;
+pub const MAX_BATCH_GET_REQUEST_COUNT: usize = 16;
+pub const MIN_BATCH_GET_REQUEST_COUNT: usize = 4;
 
 pub struct ReqBatcher {
     gets: Vec<GetRequest>,
@@ -51,17 +54,29 @@ impl ReqBatcher {
         self.raw_get_ids.push(id);
     }
 
+    // If the length of queue is very long, we may keep the request to get a larger batch.
+    // But if the length of queue is short, we shall schedule the request in parallel at once.
+    // Because if we schedule the requests store before, the readpool may become busy and the
+    // following requests can change the strategy.
     pub fn maybe_commit<E: Engine, L: LockManager>(
         &mut self,
         storage: &Storage<E, L>,
         tx: &Sender<(u64, batch_commands_response::Response)>,
+        mut queue_size: usize,
     ) {
-        if self.gets.len() > MAX_BATCH_GET_REQUEST_COUNT {
-            let gets = std::mem::take(&mut self.gets);
-            let ids = std::mem::take(&mut self.get_ids);
-            future_batch_get_command(storage, ids, gets, tx.clone());
+        queue_size = std::cmp::min(queue_size, MAX_BATCH_GET_REQUEST_COUNT);
+        if queue_size >= MIN_BATCH_GET_REQUEST_COUNT  {
+            if self.gets.len() >= queue_size {
+                let gets = std::mem::take(&mut self.gets);
+                let ids = std::mem::take(&mut self.get_ids);
+                future_batch_get_command(storage, ids, gets, tx.clone());
+            }
+        } else if self.gets.len() >= MIN_BATCH_GET_REQUEST_COUNT {
+            self.run_kv_get_in_parallel(storage, tx);
         }
-        if self.raw_gets.len() > MAX_BATCH_RAW_GET_REQUEST_COUNT {
+        if (queue_size >= MIN_BATCH_GET_REQUEST_COUNT && self.raw_gets.len() > queue_size)
+            || self.raw_gets.len() >= MAX_BATCH_GET_REQUEST_COUNT
+        {
             let gets = std::mem::take(&mut self.raw_gets);
             let ids = std::mem::take(&mut self.raw_get_ids);
             future_batch_raw_get_command(storage, ids, gets, tx.clone());
@@ -72,16 +87,46 @@ impl ReqBatcher {
         &mut self,
         storage: &Storage<E, L>,
         tx: &Sender<(u64, batch_commands_response::Response)>,
+        queue_size: usize,
     ) {
         if !self.gets.is_empty() {
-            let gets = std::mem::take(&mut self.gets);
-            let ids = std::mem::take(&mut self.get_ids);
-            future_batch_get_command(storage, ids, gets, tx.clone());
+            if queue_size >= MIN_BATCH_GET_REQUEST_COUNT {
+                let gets = std::mem::take(&mut self.gets);
+                let ids = std::mem::take(&mut self.get_ids);
+                future_batch_get_command(storage, ids, gets, tx.clone());
+            } else {
+                self.run_kv_get_in_parallel(storage, tx);
+            }
         }
         if !self.raw_gets.is_empty() {
             let gets = std::mem::take(&mut self.raw_gets);
             let ids = std::mem::take(&mut self.raw_get_ids);
             future_batch_raw_get_command(storage, ids, gets, tx.clone());
+        }
+    }
+
+    fn run_kv_get_in_parallel<E: Engine, L: LockManager>(
+        &mut self,
+        storage: &Storage<E, L>,
+        tx: &Sender<(u64, batch_commands_response::Response)>,
+    ) {
+        let gets = std::mem::take(&mut self.gets);
+        let ids = std::mem::take(&mut self.get_ids);
+        let begin_instant = Instant::now();
+        for (id, req) in ids.into_iter().zip(gets) {
+            let resp = future_get(storage, req)
+                .map_ok(|resp| batch_commands_response::Response {
+                    cmd: Some(batch_commands_response::response::Cmd::Get(resp)),
+                    ..Default::default()
+                })
+                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_get.inc());
+            response_batch_commands_request(
+                id,
+                resp,
+                tx.clone(),
+                begin_instant,
+                GrpcTypeKind::kv_get,
+            );
         }
     }
 }
