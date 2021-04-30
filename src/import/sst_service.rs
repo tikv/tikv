@@ -1,12 +1,13 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::f64::INFINITY;
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use collections::HashSet;
 
-use engine_traits::{name_to_cf, KvEngine, CF_DEFAULT};
+use engine_traits::{name_to_cf, KvEngine, CF_WRITE};
 use file_system::{set_io_type, IOType};
 use futures::executor::{ThreadPool, ThreadPoolBuilder};
 use futures::{TryFutureExt, TryStreamExt};
@@ -19,6 +20,7 @@ use kvproto::import_sstpb::write_request::*;
 use kvproto::import_sstpb::WriteRequest_oneof_chunk as Chunk;
 use kvproto::import_sstpb::*;
 
+use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::*;
 
 use crate::server::CONFIG_ROCKSDB_GAUGE;
@@ -97,6 +99,97 @@ where
         let mut slots = task_slots.lock().unwrap();
         let p = sst_meta_to_path(meta)?;
         Ok(slots.remove(&p))
+    }
+
+    fn check_write_stall(&self) -> Option<errorpb::Error> {
+        if self.switcher.get_mode() == SwitchMode::Normal
+            && self
+                .engine
+                .ingest_maybe_slowdown_writes(CF_WRITE)
+                .expect("cf")
+        {
+            let mut errorpb = errorpb::Error::default();
+            let err = "too many sst files are ingesting";
+            let mut server_is_busy_err = errorpb::ServerIsBusy::default();
+            server_is_busy_err.set_reason(err.to_string());
+            errorpb.set_message(err.to_string());
+            errorpb.set_server_is_busy(server_is_busy_err);
+            return Some(errorpb);
+        }
+        None
+    }
+
+    fn ingest_files(
+        &self,
+        mut context: Context,
+        label: &'static str,
+        ssts: Vec<SstMeta>,
+    ) -> impl Future<Output = Result<IngestResponse>> {
+        let mut header = RaftRequestHeader::default();
+        let region_id = context.get_region_id();
+        header.set_peer(context.take_peer());
+        header.set_region_id(region_id);
+        header.set_region_epoch(context.take_region_epoch());
+        let mut req = Request::default();
+        req.set_cmd_type(CmdType::Snap);
+        let mut cmd = RaftCmdRequest::default();
+        cmd.set_header(header.clone());
+        cmd.set_requests(vec![req].into());
+        let (cb, future) = paired_future_callback();
+
+        let router = self.router.clone();
+        let importer = self.importer.clone();
+        async move {
+            let mut resp = IngestResponse::default();
+            if let Err(e) = router.send(RaftCommand::new(cmd, Callback::Read(cb))) {
+                let e = handle_send_error(region_id, e);
+                resp.set_error(e.into());
+                return Ok(resp);
+            }
+
+            // Make ingest command.
+            let mut cmd = RaftCmdRequest::default();
+            cmd.set_header(header);
+            for sst in ssts.iter() {
+                let mut ingest = Request::default();
+                ingest.set_cmd_type(CmdType::IngestSst);
+                ingest.mut_ingest_sst().set_sst(sst.clone());
+                cmd.mut_requests().push(ingest);
+            }
+
+            let mut res = future.await.map_err(Error::from)?;
+            fail_point!("import::sst_service::ingest");
+            let mut header = res.response.take_header();
+            if header.has_error() {
+                pb_error_inc(label, header.get_error());
+                resp.set_error(header.take_error());
+                return Ok(resp);
+            }
+            cmd.mut_header().set_term(header.get_current_term());
+            // Here we shall check whether the file has been ingested before. This operation
+            // must execute after geting a snapshot from raftstore to make sure that the
+            // current leader has applied to current term.
+            for sst in ssts.iter() {
+                if !importer.exist(&sst) {
+                    return Ok(resp);
+                }
+            }
+
+            let (cb, future) = paired_future_callback();
+            if let Err(e) = router.send(RaftCommand::new(cmd, Callback::write(cb))) {
+                let e = handle_send_error(region_id, e);
+                resp.set_error(e.into());
+                return Ok(resp);
+            }
+
+            let mut res = future.await.map_err(Error::from)?;
+            let mut header = res.response.take_header();
+            if header.has_error() {
+                pb_error_inc(label, header.get_error());
+                resp.set_error(header.take_error());
+            }
+            Ok(resp)
+        }
     }
 }
 
@@ -251,18 +344,7 @@ where
         let timer = Instant::now_coarse();
 
         let mut resp = IngestResponse::default();
-        let mut errorpb = errorpb::Error::default();
-        if self.switcher.get_mode() == SwitchMode::Normal
-            && self
-                .engine
-                .ingest_maybe_slowdown_writes(CF_DEFAULT)
-                .expect("cf")
-        {
-            let err = "too many sst files are ingesting";
-            let mut server_is_busy_err = errorpb::ServerIsBusy::default();
-            server_is_busy_err.set_reason(err.to_string());
-            errorpb.set_message(err.to_string());
-            errorpb.set_server_is_busy(server_is_busy_err);
+        if let Some(errorpb) = self.check_write_stall() {
             resp.set_error(errorpb);
             ctx.spawn(
                 sink.success(resp)
@@ -271,6 +353,7 @@ where
             return;
         }
 
+        let mut errorpb = errorpb::Error::default();
         if !Self::acquire_lock(&self.task_slots, req.get_sst()).unwrap_or(false) {
             errorpb.set_message(Error::FileConflict.to_string());
             resp.set_error(errorpb);
@@ -281,76 +364,64 @@ where
             return;
         }
 
-        let meta = req.take_sst();
-        let mut header = RaftRequestHeader::default();
-        let mut context = req.take_context();
-        let region_id = context.get_region_id();
-        header.set_peer(context.take_peer());
-        header.set_region_id(region_id);
-        header.set_region_epoch(context.take_region_epoch());
-        let mut req = Request::default();
-        req.set_cmd_type(CmdType::Snap);
-        let mut cmd = RaftCmdRequest::default();
-        cmd.set_header(header.clone());
-        cmd.set_requests(vec![req].into());
-        let (cb, future) = paired_future_callback();
-
-        let router = self.router.clone();
         let task_slots = self.task_slots.clone();
-        let importer = self.importer.clone();
-
+        let meta = req.take_sst();
+        let f = self.ingest_files(req.take_context(), label, vec![meta.clone()]);
         let handle_task = async move {
-            let m = meta.clone();
-            let res = async move {
-                let mut resp = IngestResponse::default();
-                if let Err(e) = router.send(RaftCommand::new(cmd, Callback::Read(cb))) {
-                    let e = handle_send_error(region_id, e);
-                    resp.set_error(e.into());
-                    return Ok(resp);
-                }
-
-                // Make ingest command.
-                let mut ingest = Request::default();
-                ingest.set_cmd_type(CmdType::IngestSst);
-                ingest.mut_ingest_sst().set_sst(m.clone());
-
-                let mut cmd = RaftCmdRequest::default();
-                cmd.set_header(header);
-                cmd.mut_requests().push(ingest);
-
-                let mut res = future.await.map_err(Error::from)?;
-                fail_point!("import::sst_service::ingest");
-                let mut header = res.response.take_header();
-                if header.has_error() {
-                    pb_error_inc(label, header.get_error());
-                    resp.set_error(header.take_error());
-                    return Ok(resp);
-                }
-                cmd.mut_header().set_term(header.get_current_term());
-                // Here we shall check whether the file has been ingested before. This operation
-                // must execute after geting a snapshot from raftstore to make sure that the
-                // current leader has applied to current term.
-                if !importer.exist(&m) {
-                    return Ok(resp);
-                }
-
-                let (cb, future) = paired_future_callback();
-                if let Err(e) = router.send(RaftCommand::new(cmd, Callback::write(cb))) {
-                    let e = handle_send_error(region_id, e);
-                    resp.set_error(e.into());
-                    return Ok(resp);
-                }
-
-                let mut res = future.await.map_err(Error::from)?;
-                let mut header = res.response.take_header();
-                if header.has_error() {
-                    pb_error_inc(label, header.get_error());
-                    resp.set_error(header.take_error());
-                }
-                Ok(resp)
-            };
-            let res = res.await;
+            let res = f.await;
             Self::release_lock(&task_slots, &meta).unwrap();
+            send_rpc_response!(res, sink, label, timer);
+        };
+        self.threads.spawn_ok(handle_task);
+    }
+
+    /// Ingest multiple files by sending a raft command to raftstore.
+    ///
+    fn multi_ingest(
+        &mut self,
+        ctx: RpcContext<'_>,
+        mut req: MultiIngestRequest,
+        sink: UnarySink<IngestResponse>,
+    ) {
+        let label = "multi-ingest";
+        let timer = Instant::now_coarse();
+
+        let mut resp = IngestResponse::default();
+        if let Some(errorpb) = self.check_write_stall() {
+            resp.set_error(errorpb);
+            ctx.spawn(
+                sink.success(resp)
+                    .unwrap_or_else(|e| warn!("send rpc failed"; "err" => %e)),
+            );
+            return;
+        }
+
+        let mut errorpb = errorpb::Error::default();
+        let mut metas = vec![];
+        for sst in req.get_sst() {
+            if Self::acquire_lock(&self.task_slots, sst).unwrap_or(false) {
+                metas.push(sst.clone());
+            }
+        }
+        if metas.len() < req.get_sst().len() {
+            for m in metas {
+                Self::release_lock(&self.task_slots, &m).unwrap();
+            }
+            errorpb.set_message(Error::FileConflict.to_string());
+            resp.set_error(errorpb);
+            ctx.spawn(
+                sink.success(resp)
+                    .unwrap_or_else(|e| warn!("send rpc failed"; "err" => %e)),
+            );
+            return;
+        }
+        let task_slots = self.task_slots.clone();
+        let f = self.ingest_files(req.take_context(),label, req.take_sst().into());
+        let handle_task = async move {
+            let res = f.await;
+            for m in metas {
+                Self::release_lock(&task_slots, &m).unwrap();
+            }
             send_rpc_response!(res, sink, label, timer);
         };
         self.threads.spawn_ok(handle_task);
