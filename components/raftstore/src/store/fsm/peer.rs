@@ -3575,13 +3575,6 @@ where
             return;
         }
 
-        // When Lightning or BR is importing data to TiKV, their ingest-request may fail because of
-        // region-epoch not matched. So we hope TiKV do not check region size and split region during
-        // importing.
-        if self.ctx.importer.get_mode() == SwitchMode::Import {
-            return;
-        }
-
         // When restart, the approximate size will be None. The split check will first
         // check the region size, and then check whether the region should split. This
         // should work even if we change the region max size.
@@ -3593,6 +3586,14 @@ where
         {
             return;
         }
+
+        // When Lightning or BR is importing data to TiKV, their ingest-request may fail because of
+        // region-epoch not matched. So we hope TiKV do not check region size and split region during
+        // importing.
+        if self.ctx.importer.get_mode() == SwitchMode::Import {
+            return;
+        }
+
         if self.schedule_check_split() {
             self.register_split_region_check_tick();
         }
