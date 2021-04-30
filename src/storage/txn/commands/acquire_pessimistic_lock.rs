@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use txn_types::{Key, TimeStamp};
+use kvproto::kvrpcpb::ExtraOp;
+use txn_types::{Key, OldValues, TimeStamp, TxnExtra};
 
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::{Lock, LockManager, WaitTimeout};
@@ -39,6 +40,7 @@ command! {
             /// later read in the same transaction.
             return_values: bool,
             min_commit_ts: TimeStamp,
+            old_values: OldValues,
         }
 }
 
@@ -71,7 +73,7 @@ fn extract_lock_from_result<T>(res: &StorageResult<T>) -> Lock {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock {
-    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+    fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let (start_ts, ctx, keys) = (self.start_ts, self.ctx, self.keys);
         let mut txn = MvccTxn::new(start_ts, context.concurrency_manager);
         let mut reader = SnapshotReader::new(start_ts, snapshot, !ctx.get_not_fill_cache());
@@ -82,21 +84,29 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
         } else {
             Ok(PessimisticLockRes::Empty)
         };
+        let need_old_value = context.extra_op == ExtraOp::ReadOldValue;
         for (k, should_not_exist) in keys {
             match acquire_pessimistic_lock(
                 &mut txn,
                 &mut reader,
-                k,
+                k.clone(),
                 &self.primary,
                 should_not_exist,
                 self.lock_ttl,
                 self.for_update_ts,
                 self.return_values,
                 self.min_commit_ts,
+                need_old_value,
             ) {
-                Ok(val) => {
+                Ok((val, old_value)) => {
                     if self.return_values {
                         res.as_mut().unwrap().push(val);
+                    }
+                    if old_value.valid() {
+                        let key = k.append_ts(txn.start_ts);
+                        // MutationType is unknown in AcquirePessimisticLock stage.
+                        let mutation_type = None;
+                        self.old_values.insert(key, (old_value, mutation_type));
                     }
                 }
                 Err(e @ MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
@@ -118,7 +128,12 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
         // no conflict
         let (pr, to_be_write, rows, ctx, lock_info) = if res.is_ok() {
             let pr = ProcessResult::PessimisticLockRes { res };
-            let write_data = WriteData::from_modifies(txn.into_modifies());
+            let extra = TxnExtra {
+                old_values: self.old_values,
+                // One pc status is unkown AcquirePessimisticLock stage.
+                one_pc: false,
+            };
+            let write_data = WriteData::new(txn.into_modifies(), extra);
             (pr, write_data, rows, ctx, None)
         } else {
             let lock = extract_lock_from_result(&res);

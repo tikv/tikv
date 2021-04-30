@@ -1254,12 +1254,13 @@ fn test_old_value_1pc() {
 }
 
 #[test]
-fn test_old_value_cache() {
+fn test_old_value_cache_hit() {
     let mut suite = TestSuite::new(1);
     let scheduler = suite.endpoints.values().next().unwrap().scheduler();
     let mut req = suite.new_changedata_request(1);
     req.set_extra_op(ExtraOp::ReadOldValue);
-    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
+    let (mut req_tx, event_feed_wrap, receive_event) =
+        new_event_feed(suite.get_region_cdc_client(1));
     let _req_tx = block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
     let mut events = receive_event(false).events.to_vec();
     match events.remove(0).event.unwrap() {
@@ -1269,6 +1270,7 @@ fn test_old_value_cache() {
         }
         other => panic!("unknown event {:?}", other),
     }
+    let (tx, rx) = mpsc::channel();
 
     // Insert value, simulate INSERT INTO.
     let mut m1 = Mutation::default();
@@ -1289,14 +1291,18 @@ fn test_old_value_cache() {
         other => panic!("unknown event {:?}", other),
     }
     // k1 old value must be cached.
+    let tx_ = tx.clone();
     scheduler
         .schedule(Task::Validate(Validate::OldValueCache(Box::new(
             move |old_value_cache| {
-                assert_eq!(old_value_cache.access_count, 1);
-                assert_eq!(old_value_cache.miss_count, 0);
+                tx_.send((old_value_cache.access_count, old_value_cache.miss_count))
+                    .unwrap();
             },
         ))))
         .unwrap();
+    let (access_count, miss_count) = rx.recv().unwrap();
+    assert_eq!(access_count, 1);
+    assert_eq!(miss_count, 0);
     suite.must_kv_commit(1, vec![k1], 10.into(), 15.into());
     let mut events = receive_event(false).events.to_vec();
     match events.remove(0).event.unwrap() {
@@ -1327,14 +1333,18 @@ fn test_old_value_cache() {
         other => panic!("unknown event {:?}", other),
     }
     // k2 old value must be cached.
+    let tx_ = tx.clone();
     scheduler
         .schedule(Task::Validate(Validate::OldValueCache(Box::new(
             move |old_value_cache| {
-                assert_eq!(old_value_cache.access_count, 2);
-                assert_eq!(old_value_cache.miss_count, 0);
+                tx_.send((old_value_cache.access_count, old_value_cache.miss_count))
+                    .unwrap();
             },
         ))))
         .unwrap();
+    let (access_count, miss_count) = rx.recv().unwrap();
+    assert_eq!(access_count, 2);
+    assert_eq!(miss_count, 0);
     suite.must_kv_commit(1, vec![k2], 10.into(), 15.into());
     let mut events = receive_event(false).events.to_vec();
     match events.remove(0).event.unwrap() {
@@ -1365,14 +1375,18 @@ fn test_old_value_cache() {
         other => panic!("unknown event {:?}", other),
     }
     // k2 old value must be cached.
+    let tx_ = tx;
     scheduler
         .schedule(Task::Validate(Validate::OldValueCache(Box::new(
             move |old_value_cache| {
-                assert_eq!(old_value_cache.access_count, 3);
-                assert_eq!(old_value_cache.miss_count, 0);
+                tx_.send((old_value_cache.access_count, old_value_cache.miss_count))
+                    .unwrap();
             },
         ))))
         .unwrap();
+    let (access_count, miss_count) = rx.recv().unwrap();
+    assert_eq!(access_count, 3);
+    assert_eq!(miss_count, 0);
     suite.must_kv_commit(1, vec![k2], 20.into(), 25.into());
     let mut events = receive_event(false).events.to_vec();
     match events.remove(0).event.unwrap() {
@@ -1384,6 +1398,147 @@ fn test_old_value_cache() {
         other => panic!("unknown event {:?}", other),
     }
 
+    event_feed_wrap.replace(None);
+    suite.stop();
+}
+
+#[test]
+fn test_old_value_cache_hit_pessimistic() {
+    let mut suite = TestSuite::new(1);
+    let scheduler = suite.endpoints.values().next().unwrap().scheduler();
+    let mut req = suite.new_changedata_request(1);
+    req.set_extra_op(ExtraOp::ReadOldValue);
+    let (mut req_tx, event_feed_wrap, receive_event) =
+        new_event_feed(suite.get_region_cdc_client(1));
+    let _req_tx = block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    let mut events = receive_event(false).events.to_vec();
+    match events.remove(0).event.unwrap() {
+        Event_oneof_event::Entries(mut es) => {
+            let row = &es.take_entries().to_vec()[0];
+            assert_eq!(row.get_type(), EventLogType::Initialized);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+    let (tx, rx) = mpsc::channel();
+
+    // Insert a value in pessimistic txn.
+    let mut m3 = Mutation::default();
+    let k3 = b"k3".to_vec();
+    m3.set_op(Op::PessimisticLock);
+    m3.key = k3.clone();
+    suite.must_acquire_pessimistic_lock(1, vec![m3.clone()], k3.clone(), 10.into(), 10.into());
+    // CDC does not outputs PessimisticLock.
+    // No cache access.
+    let tx_ = tx.clone();
+    scheduler
+        .schedule(Task::Validate(Validate::OldValueCache(Box::new(
+            move |old_value_cache| {
+                tx_.send((old_value_cache.access_count, old_value_cache.miss_count))
+                    .unwrap();
+            },
+        ))))
+        .unwrap();
+    let (access_count, miss_count) = rx.recv().unwrap();
+    assert_eq!(access_count, 0);
+    assert_eq!(miss_count, 0);
+    m3.set_op(Op::Put);
+    m3.value = b"v1".to_vec();
+    suite.must_kv_pessimistic_prewrite(1, vec![m3], k3.clone(), 10.into(), 10.into());
+    let mut events = receive_event(false).events.to_vec();
+    match events.remove(0).event.unwrap() {
+        Event_oneof_event::Entries(mut es) => {
+            let row = &es.take_entries().to_vec()[0];
+            assert_eq!(row.get_value(), b"v1");
+            assert_eq!(row.get_old_value(), b"");
+            assert_eq!(row.get_type(), EventLogType::Prewrite);
+            assert_eq!(row.get_start_ts(), 10);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+    // k3 old value must be cached.
+    let tx_ = tx.clone();
+    scheduler
+        .schedule(Task::Validate(Validate::OldValueCache(Box::new(
+            move |old_value_cache| {
+                tx_.send((old_value_cache.access_count, old_value_cache.miss_count))
+                    .unwrap();
+            },
+        ))))
+        .unwrap();
+    let (access_count, miss_count) = rx.recv().unwrap();
+    assert_eq!(access_count, 1);
+    assert_eq!(miss_count, 0);
+
+    suite.must_kv_commit(1, vec![k3], 10.into(), 15.into());
+    let mut events = receive_event(false).events.to_vec();
+    match events.remove(0).event.unwrap() {
+        Event_oneof_event::Entries(mut es) => {
+            let row = &es.take_entries().to_vec()[0];
+            assert_eq!(row.get_type(), EventLogType::Commit);
+            assert_eq!(row.get_commit_ts(), 15);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+
+    // Update a value in pessimistic txn.
+    let mut m3 = Mutation::default();
+    let k3 = b"k3".to_vec();
+    m3.set_op(Op::PessimisticLock);
+    m3.key = k3.clone();
+    suite.must_acquire_pessimistic_lock(1, vec![m3.clone()], k3.clone(), 20.into(), 20.into());
+    // CDC does not outputs PessimisticLock.
+    // No cache access.
+    let tx_ = tx.clone();
+    scheduler
+        .schedule(Task::Validate(Validate::OldValueCache(Box::new(
+            move |old_value_cache| {
+                tx_.send((old_value_cache.access_count, old_value_cache.miss_count))
+                    .unwrap();
+            },
+        ))))
+        .unwrap();
+    let (access_count, miss_count) = rx.recv().unwrap();
+    assert_eq!(access_count, 1);
+    assert_eq!(miss_count, 0);
+    m3.set_op(Op::Put);
+    m3.value = b"v2".to_vec();
+    suite.must_kv_pessimistic_prewrite(1, vec![m3], k3.clone(), 20.into(), 20.into());
+    let mut events = receive_event(false).events.to_vec();
+    match events.remove(0).event.unwrap() {
+        Event_oneof_event::Entries(mut es) => {
+            let row = &es.take_entries().to_vec()[0];
+            assert_eq!(row.get_value(), b"v2");
+            assert_eq!(row.get_old_value(), b"v1");
+            assert_eq!(row.get_type(), EventLogType::Prewrite);
+            assert_eq!(row.get_start_ts(), 20);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+    // k3 old value must be cached.
+    let tx_ = tx;
+    scheduler
+        .schedule(Task::Validate(Validate::OldValueCache(Box::new(
+            move |old_value_cache| {
+                tx_.send((old_value_cache.access_count, old_value_cache.miss_count))
+                    .unwrap();
+            },
+        ))))
+        .unwrap();
+    let (access_count, miss_count) = rx.recv().unwrap();
+    assert_eq!(access_count, 2);
+    assert_eq!(miss_count, 0);
+    suite.must_kv_commit(1, vec![k3], 20.into(), 25.into());
+    let mut events = receive_event(false).events.to_vec();
+    match events.remove(0).event.unwrap() {
+        Event_oneof_event::Entries(mut es) => {
+            let row = &es.take_entries().to_vec()[0];
+            assert_eq!(row.get_type(), EventLogType::Commit);
+            assert_eq!(row.get_commit_ts(), 25);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+
+    event_feed_wrap.replace(None);
     suite.stop();
 }
 
