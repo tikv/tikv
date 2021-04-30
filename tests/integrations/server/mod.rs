@@ -6,7 +6,6 @@ mod lock_manager;
 mod raft_client;
 mod security;
 mod status_server;
-mod test_stale_read;
 
 use std::sync::Arc;
 

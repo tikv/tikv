@@ -81,13 +81,9 @@ fn test_stale_read_basic_flow_replicate() {
     leader_client.ctx.set_stale_read(true);
     follower_client2.ctx.set_stale_read(true);
 
-    // Filter read index request of follower 2, so it can't perform normal
-    // follower read
-    cluster.add_send_filter(CloneFilterFactory(
-        RegionPacketFilter::new(1, 2)
-            .direction(Direction::Send)
-            .msg_type(MessageType::MsgReadIndex),
-    ));
+    // There should be no read index message while handling stale read request
+    let on_step_read_index_msg = "on_step_read_index_msg";
+    fail::cfg(on_step_read_index_msg, "panic").unwrap();
 
     let commit_ts1 = leader_client.must_kv_write(
         &pd_client,
@@ -129,13 +125,8 @@ fn test_stale_read_basic_flow_replicate() {
         block_on(pd_client.get_tso()).unwrap().into_inner(),
     );
 
-    // clear the `MsgAppend` filter but keep the `MsgReadIndex` filter
+    // clear the `MsgAppend` filter
     cluster.clear_send_filters();
-    cluster.add_send_filter(CloneFilterFactory(
-        RegionPacketFilter::new(1, 2)
-            .direction(Direction::Send)
-            .msg_type(MessageType::MsgReadIndex),
-    ));
 
     // Now we can read `value2` with the newest ts
     follower_client2.must_kv_read_equal(
@@ -143,6 +134,7 @@ fn test_stale_read_basic_flow_replicate() {
         b"value2".to_vec(),
         block_on(pd_client.get_tso()).unwrap().into_inner(),
     );
+    fail::remove(on_step_read_index_msg);
 }
 
 // Testing how mvcc locks could effect stale read service
@@ -160,13 +152,9 @@ fn test_stale_read_basic_flow_lock() {
     let mut follower_client2 = PeerClient::new(&cluster, 1, new_peer(2, 2));
     follower_client2.ctx.set_stale_read(true);
 
-    // Disable read index request of follower 2, so it can't perform normal
-    // follower read
-    cluster.add_send_filter(CloneFilterFactory(
-        RegionPacketFilter::new(1, 2)
-            .direction(Direction::Send)
-            .msg_type(MessageType::MsgReadIndex),
-    ));
+    // There should be no read index message while handling stale read request
+    let on_step_read_index_msg = "on_step_read_index_msg";
+    fail::cfg(on_step_read_index_msg, "panic").unwrap();
 
     // Write `(key1, value1)`
     let commit_ts1 = leader_client.must_kv_write(
@@ -228,4 +216,5 @@ fn test_stale_read_basic_flow_lock() {
         b"value1".to_vec(),
         block_on(pd_client.get_tso()).unwrap().into_inner(),
     );
+    fail::remove(on_step_read_index_msg);
 }
