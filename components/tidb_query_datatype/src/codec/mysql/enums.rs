@@ -5,7 +5,7 @@ use std::fmt::{Display, Formatter};
 
 use tipb::FieldType;
 
-use crate::codec::convert::{ConvertTo, ToInt};
+use crate::codec::convert::ToInt;
 use crate::codec::Result;
 use crate::expr::EvalContext;
 use crate::FieldTypeTp;
@@ -42,7 +42,7 @@ impl Enum {
     pub fn as_ref(&self) -> EnumRef<'_> {
         EnumRef {
             name: &self.name,
-            value: self.value,
+            value: &self.value,
         }
     }
     fn get_value_name(value: u64, elems: &[String]) -> &[u8] {
@@ -88,60 +88,48 @@ impl crate::codec::data_type::AsMySQLBool for Enum {
     }
 }
 
-impl ToInt for Enum {
-    fn to_int(&self, _ctx: &mut EvalContext, _tp: FieldTypeTp) -> Result<i64> {
-        Ok(self.value as i64)
-    }
-
-    fn to_uint(&self, _ctx: &mut EvalContext, _tp: FieldTypeTp) -> Result<u64> {
-        Ok(self.value)
-    }
-}
-
-impl ConvertTo<f64> for Enum {
-    fn convert(&self, _ctx: &mut EvalContext) -> Result<f64> {
-        Ok(self.value as f64)
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 pub struct EnumRef<'a> {
     name: &'a [u8],
-    value: u64,
+    value: &'a u64,
 }
 
 impl<'a> EnumRef<'a> {
-    pub fn new(name: &'a [u8], value: u64) -> Self {
-        if value == 0 {
-            Self {
-                name: "".as_bytes(),
-                value,
-            }
+    pub fn new(name: &'a [u8], value: &'a u64) -> Self {
+        if *value == 0 {
+            Self { name: b"", value }
         } else {
             Self { name, value }
         }
     }
+
     pub fn to_owned(self) -> Enum {
         Enum {
             name: self.name.to_owned(),
-            value: self.value,
+            value: *self.value,
         }
     }
+
     pub fn is_empty(&self) -> bool {
-        self.value == 0
+        *self.value == 0
     }
+
     pub fn value(&self) -> u64 {
+        *self.value
+    }
+
+    pub fn value_ref(&self) -> &'a u64 {
         self.value
     }
-    pub fn value_ref(&self) -> &u64 {
-        &self.value
-    }
+
     pub fn name(&self) -> &'a [u8] {
         self.name
     }
+
     pub fn as_str(&self) -> Result<&str> {
         Ok(std::str::from_utf8(self.name)?)
     }
+
     pub fn len(&self) -> usize {
         8 + self.name.len()
     }
@@ -149,7 +137,7 @@ impl<'a> EnumRef<'a> {
 
 impl<'a> Display for EnumRef<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        if self.value == 0 {
+        if *self.value == 0 {
             return Ok(());
         }
 
@@ -177,6 +165,16 @@ impl<'a> PartialOrd for EnumRef<'a> {
     }
 }
 
+impl<'a> ToInt for EnumRef<'a> {
+    fn to_int(&self, _ctx: &mut EvalContext, _tp: FieldTypeTp) -> Result<i64> {
+        Ok(*self.value as i64)
+    }
+
+    fn to_uint(&self, _ctx: &mut EvalContext, _tp: FieldTypeTp) -> Result<u64> {
+        Ok(*self.value)
+    }
+}
+
 impl<'a> ToString for EnumRef<'a> {
     fn to_string(&self) -> String {
         String::from_utf8_lossy(self.name).to_string()
@@ -185,15 +183,8 @@ impl<'a> ToString for EnumRef<'a> {
 
 pub trait EnumEncoder: NumberEncoder {
     #[inline]
-    fn write_enum(&mut self, data: EnumRef) -> Result<()> {
-        self.write_u64_le(data.value as u64)?;
-        self.write_bytes(data.name)?;
-        Ok(())
-    }
-
-    #[inline]
     fn write_enum_uint(&mut self, data: EnumRef) -> Result<()> {
-        self.write_u64_le(data.value as u64)?;
+        self.write_u64(*data.value)?;
         Ok(())
     }
 
@@ -272,7 +263,7 @@ pub trait EnumDecoder: NumberDecoder {
 
     #[inline]
     fn read_enum_from_chunk(&mut self) -> Result<Enum> {
-        let value = self.read_u64()?;
+        let value = self.read_u64_le()?;
         let name = String::from_utf8_lossy(self.bytes()).to_string();
         Ok(Enum::new(name.into_bytes(), value))
     }
@@ -300,7 +291,7 @@ mod tests {
 
     #[test]
     fn test_as_str() {
-        let cases = vec![("c", 1, "c"), ("b", 2, "b"), ("a", 3, "a")];
+        let cases = vec![("c", &1, "c"), ("b", &2, "b"), ("a", &3, "a")];
 
         for (name, value, expect) in cases {
             let e = EnumRef {
@@ -410,9 +401,9 @@ mod tests {
     #[test]
     fn test_write_enum() {
         let data = [
-            EnumRef::new("a".as_bytes(), 3),
-            EnumRef::new("b".as_bytes(), 2),
-            EnumRef::new("c".as_bytes(), 1),
+            EnumRef::new("a".as_bytes(), &3),
+            EnumRef::new("b".as_bytes(), &2),
+            EnumRef::new("c".as_bytes(), &1),
         ];
         let res: &[u8] = &[
             3, 0, 0, 0, 0, 0, 0, 0, 97, // 1st
@@ -422,7 +413,8 @@ mod tests {
 
         let mut buf = Vec::new();
         for datum in &data {
-            buf.write_enum(*datum).expect("write_enum");
+            buf.write_enum_to_chunk(*datum.value, datum.name)
+                .expect("write_enum");
         }
         assert_eq!(buf.as_slice(), res);
     }

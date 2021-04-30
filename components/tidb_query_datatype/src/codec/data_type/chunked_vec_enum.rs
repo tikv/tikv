@@ -3,7 +3,7 @@
 use super::bit_vec::BitVec;
 use super::{ChunkRef, ChunkedVec, UnsafeRefInto};
 use super::{Enum, EnumRef};
-use crate::codec::data_type::{ChunkedVecBytes, ChunkedVecSized, Int};
+use crate::codec::data_type::{retain_lifetime_transmute, ChunkedVecBytes, ChunkedVecSized, Int};
 use crate::impl_chunked_vec_common;
 
 /// `ChunkedVecEnum` is a vector storing `Option<Enum>`.
@@ -35,7 +35,9 @@ impl ChunkedVecEnum {
         assert!(idx < self.len());
         if let Some(value) = self.values.get_option_ref(idx) {
             let name = self.names.get(idx).unwrap();
-            Some(EnumRef::new(name, *value as u64))
+            Some(EnumRef::new(name, unsafe {
+                retain_lifetime_transmute(value)
+            }))
         } else {
             None
         }
@@ -172,10 +174,10 @@ mod tests {
         x.push(Some(Enum::new("我成功了".as_bytes().to_vec(), 3)));
 
         assert_eq!(x.get(0), None);
-        assert_eq!(x.get(1), Some(EnumRef::new("我强爆啊".as_bytes(), 2)));
+        assert_eq!(x.get(1), Some(EnumRef::new("我强爆啊".as_bytes(), &2)));
         assert_eq!(x.get(2), None);
-        assert_eq!(x.get(3), Some(EnumRef::new("我好强啊".as_bytes(), 1)));
-        assert_eq!(x.get(4), Some(EnumRef::new("我成功了".as_bytes(), 3)));
+        assert_eq!(x.get(3), Some(EnumRef::new("我好强啊".as_bytes(), &1)));
+        assert_eq!(x.get(4), Some(EnumRef::new("我成功了".as_bytes(), &3)));
         assert_eq!(x.len(), 5);
         assert!(!x.is_empty());
     }
@@ -195,7 +197,7 @@ mod tests {
         x.truncate(3);
         assert_eq!(x.len(), 3);
         assert_eq!(x.get(0), None);
-        assert_eq!(x.get(1), Some(EnumRef::new("我强爆啊".as_bytes(), 2)));
+        assert_eq!(x.get(1), Some(EnumRef::new("我强爆啊".as_bytes(), &2)));
         assert_eq!(x.get(2), None);
 
         x.truncate(1);
@@ -222,9 +224,9 @@ mod tests {
         assert!(y.is_empty());
 
         assert_eq!(x.get(0), None);
-        assert_eq!(x.get(1), Some(EnumRef::new("我强爆啊".as_bytes(), 2)));
+        assert_eq!(x.get(1), Some(EnumRef::new("我强爆啊".as_bytes(), &2)));
         assert_eq!(x.get(2), None);
-        assert_eq!(x.get(3), Some(EnumRef::new("我好强啊".as_bytes(), 1)));
-        assert_eq!(x.get(4), Some(EnumRef::new("我成功了".as_bytes(), 3)));
+        assert_eq!(x.get(3), Some(EnumRef::new("我好强啊".as_bytes(), &1)));
+        assert_eq!(x.get(4), Some(EnumRef::new("我成功了".as_bytes(), &3)));
     }
 }

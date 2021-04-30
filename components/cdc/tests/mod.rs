@@ -176,8 +176,8 @@ impl TestSuite {
     }
 
     pub fn stop(mut self) {
-        for (_, mut worker) in self.endpoints {
-            worker.stop();
+        for (_, worker) in self.endpoints.drain() {
+            worker.stop_worker();
         }
         self.cluster.shutdown();
     }

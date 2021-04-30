@@ -13,6 +13,19 @@ mod vector;
 
 pub use logical_rows::{LogicalRows, BATCH_MAX_SIZE, IDENTICAL_LOGICAL_ROWS};
 
+#[macro_export]
+macro_rules! match_template_evaltype {
+    ($t:tt, $($tail:tt)*) => {{
+        #[allow(unused_imports)]
+        use $crate::codec::data_type::{Int, Real, Decimal, Bytes, DateTime, Duration, Json, Set, Enum};
+
+        match_template::match_template! {
+            $t = [Int, Real, Decimal, Bytes, DateTime, Duration, Json, Set, Enum],
+            $($tail)*
+        }}
+    }
+}
+
 // Concrete eval types without a nullable wrapper.
 pub type Int = i64;
 pub type Real = ordered_float::NotNan<f64>;
@@ -147,13 +160,6 @@ impl<'a> AsMySQLBool for Option<SetRef<'a>> {
     }
 }
 
-pub macro match_template_evaluable($t:tt, $($tail:tt)*) {
-    match_template::match_template! {
-        $t = [Int, Real, Decimal, Bytes, DateTime, Duration, Json, Set, Enum],
-        $($tail)*
-    }
-}
-
 pub trait ChunkRef<'a, T: EvaluableRef<'a>>: Copy + Clone + std::fmt::Debug + Send + Sync {
     fn get_option_ref(self, idx: usize) -> Option<T>;
 
@@ -257,6 +263,12 @@ macro_rules! impl_evaluable_type {
     };
 }
 
+unsafe fn retain_lifetime_transmute<T, U>(from: &T) -> &U {
+    // with the help of elided lifetime, we can ensure &T and &U
+    // shares the same lifetime.
+    &*(from as *const T as *const U)
+}
+
 impl Evaluable for Int {
     const EVAL_TYPE: EvalType = EvalType::Int;
 
@@ -266,7 +278,7 @@ impl Evaluable for Int {
             ScalarValue::Int(x) => x.as_ref(),
             ScalarValue::Enum(x) => x
                 .as_ref()
-                .map(|x| unsafe { &*(x.value_ref() as *const u64 as *const i64) }),
+                .map(|x| unsafe { retain_lifetime_transmute::<u64, i64>(x.value_ref()) }),
             _ => unimplemented!(),
         }
     }
@@ -276,7 +288,7 @@ impl Evaluable for Int {
         match v {
             ScalarValueRef::Int(x) => x,
             ScalarValueRef::Enum(x) => {
-                x.map(|x| unsafe { &*(x.value_ref() as *const u64 as *const i64) })
+                x.map(|x| unsafe { retain_lifetime_transmute::<u64, i64>(x.value_ref()) })
             }
             _ => unimplemented!(),
         }

@@ -18,16 +18,19 @@ use tidb_query_aggr::*;
 use tidb_query_common::storage::IntervalRange;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-use tidb_query_datatype::codec::collation::{match_template_collator, SortKey};
+use tidb_query_datatype::codec::collation::SortKey;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
+use tidb_query_datatype::match_template_collator;
 use tidb_query_expr::{RpnExpression, RpnExpressionBuilder, RpnStackNode};
 
-pub macro match_template_hashable($t:tt, $($tail:tt)*) {
-    match_template::match_template! {
-        $t = [Int, Real, Bytes, Duration, Decimal, DateTime],
-        $($tail)*
-    }
+macro_rules! match_template_hashable {
+    ($t:tt, $($tail:tt)*) => {{
+        match_template::match_template! {
+            $t = [Int, Real, Bytes, Duration, Decimal, DateTime],
+            $($tail)*
+        }
+    }}
 }
 
 /// Fast Hash Aggregation Executor uses hash when comparing group key. It only supports one
