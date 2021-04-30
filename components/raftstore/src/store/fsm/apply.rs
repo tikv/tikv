@@ -346,7 +346,6 @@ where
     kv_wb_last_bytes: u64,
     kv_wb_last_keys: u64,
 
-    last_applied_index: u64,
     committed_count: usize,
 
     // Whether synchronize WAL is preferred.
@@ -416,7 +415,6 @@ where
             apply_res: vec![],
             kv_wb_last_bytes: 0,
             kv_wb_last_keys: 0,
-            last_applied_index: 0,
             committed_count: 0,
             sync_log_hint: false,
             exec_ctx: None,
@@ -439,7 +437,6 @@ where
     /// After all delegates are handled, `write_to_db` method should be called.
     pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate<EK>) {
         self.cbs.push(ApplyCallback::new(delegate.region.clone()));
-        self.last_applied_index = delegate.apply_state.get_applied_index();
 
         // TODO: skip this step when we do not need to observe cmds.
         self.host.prepare_for_apply(
@@ -454,11 +451,9 @@ where
     ///
     /// This call is valid only when it's between a `prepare_for` and `finish_for`.
     pub fn commit(&mut self, delegate: &mut ApplyDelegate<EK>) {
-        if self.last_applied_index < delegate.apply_state.get_applied_index() {
+        if delegate.last_sync_apply_index < delegate.apply_state.get_applied_index() {
             delegate.write_apply_state(self.kv_wb_mut());
         }
-        // last_applied_index doesn't need to be updated, set persistent to true will
-        // force it call `prepare_for` automatically.
         self.commit_opt(delegate, true);
     }
 
@@ -467,6 +462,7 @@ where
         if persistent {
             self.write_to_db();
             self.prepare_for(delegate);
+            delegate.last_sync_apply_index = delegate.apply_state.get_applied_index();
         }
         self.kv_wb_last_bytes = self.kv_wb().data_size() as u64;
         self.kv_wb_last_keys = self.kv_wb().count() as u64;
@@ -476,6 +472,21 @@ where
     /// If it returns true, all pending writes are persisted in engines.
     pub fn write_to_db(&mut self) -> bool {
         let need_sync = self.sync_log_hint;
+        // There may be put or delete requests after ingest request in the same fsm.
+        // To guarantee the correct order, we must ingest the pending_sst first, and
+        // then perssit the kv write batch to engine.
+        if !self.pending_ssts.is_empty() {
+            let tag = self.tag.clone();
+            self.importer
+                .ingest(&self.pending_ssts, &self.engine)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{} failed to ingest ssts {:?}: {:?}",
+                        tag, self.pending_ssts, e
+                    );
+                });
+            self.pending_ssts = vec![];
+        }
         if !self.kv_wb_mut().is_empty() {
             let mut write_opts = engine_traits::WriteOptions::new();
             write_opts.set_sync(need_sync);
@@ -495,18 +506,6 @@ where
             }
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
-        }
-        if !self.pending_ssts.is_empty() {
-            let tag = self.tag.clone();
-            self.importer
-                .ingest(&self.pending_ssts, &self.engine)
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "{} failed to ingest ssts {:?}: {:?}",
-                        tag, self.pending_ssts, e
-                    );
-                });
-            self.pending_ssts = vec![];
         }
         if !self.delete_ssts.is_empty() {
             let tag = self.tag.clone();
@@ -830,12 +829,6 @@ where
     /// Priority in batch system. When applying some commands which have high latency,
     /// we decrease the priority of current fsm to reduce the impact on other normal commands.
     priority: Priority,
-
-    /// The sst waiting to be ingested. We always delay ingestion to `write_to_db` so that multiple
-    /// ingest commands can be group into a batch for low apply duration. The commands after the ingest
-    /// command must not be processed before ingestion is finished. So yield a fsm when it first
-    /// processed a ingest command. After recovering from yield, the pending sst should be ingested.
-    pending_sst: Option<SSTMetaInfo>,
 }
 
 impl<EK> ApplyDelegate<EK>
@@ -864,7 +857,6 @@ where
             pending_request_snapshot_count: reg.pending_request_snapshot_count,
             observe_cmd: ObserveCmd::default(),
             priority: Priority::Normal,
-            pending_sst: None,
         }
     }
 
@@ -982,15 +974,22 @@ where
         if !data.is_empty() {
             let cmd = util::parse_data_at(data, index, &self.tag);
 
+            let has_unsynced_data =
+                self.last_sync_apply_index < self.apply_state.get_applied_index();
+
             if apply_ctx.yield_high_latency_operation && has_high_latency_operation(&cmd) {
                 self.priority = Priority::Low;
                 if apply_ctx.priority != Priority::Low {
-                    apply_ctx.commit(self);
+                    if has_unsynced_data {
+                        apply_ctx.commit(self);
+                    }
                     return ApplyResult::Yield;
                 }
             }
             if should_write_to_engine(&cmd) || apply_ctx.kv_wb().should_write_to_engine() {
-                apply_ctx.commit(self);
+                if has_unsynced_data {
+                    apply_ctx.commit(self);
+                }
                 if let Some(start) = self.handle_start.as_ref() {
                     if start.elapsed() >= apply_ctx.yield_duration {
                         return ApplyResult::Yield;
@@ -1384,14 +1383,7 @@ where
                 CmdType::IngestSst => {
                     assert!(ctx.kv_wb.is_empty());
                     assert_eq!(requests.len(), 1);
-                    if self.pending_sst.is_none() {
-                        let sst = req.get_ingest_sst().get_sst();
-                        self.handle_ingest(&ctx.importer, sst)?;
-                        ctx.pending_ssts.push(sst.to_owned());
-                        return Ok((RaftCmdResponse::default(), ApplyResult::Yield));
-                    }
-                    ssts.push(self.pending_sst.take().unwrap());
-                    Ok(Response::default())
+                    self.handle_ingest_sst(ctx, req, &mut ssts)
                 }
                 // Readonly commands are handled in raftstore directly.
                 // Don't panic here in case there are old entries need to be applied.
@@ -1607,7 +1599,14 @@ where
         Ok(resp)
     }
 
-    fn handle_ingest(&mut self, importer: &Arc<SSTImporter>, sst: &SstMeta) -> Result<()> {
+    fn handle_ingest_sst<W: WriteBatch<EK>>(
+        &mut self,
+        ctx: &mut ApplyContext<EK, W>,
+        req: &Request,
+        ssts: &mut Vec<SSTMetaInfo>,
+    ) -> Result<Response> {
+        let sst = req.get_ingest_sst().get_sst();
+
         if let Err(e) = check_sst_for_ingestion(sst, &self.region) {
             error!(?e;
                  "ingest fail";
@@ -1617,18 +1616,20 @@ where
                  "region" => ?&self.region,
             );
             // This file is not valid, we can delete it here.
-            let _ = importer.delete(sst);
+            let _ = ctx.importer.delete(sst);
             return Err(e);
         }
-        match importer.validate(sst) {
-            Ok(meta_info) => self.pending_sst = Some(meta_info),
+
+        match ctx.importer.validate(sst) {
+            Ok(meta_info) => ssts.push(meta_info),
             Err(e) => {
                 // If this failed, it means that the file is corrupted or something
                 // is wrong with the engine, but we can do nothing about that.
                 panic!("{} ingest {:?}: {:?}", self.tag, sst, e);
             }
-        }
-        Ok(())
+        };
+        ctx.pending_ssts.push(sst.to_owned());
+        Ok(Response::default())
     }
 }
 
@@ -3621,11 +3622,9 @@ where
     }
 
     fn end(&mut self, fsms: &mut [Box<ApplyFsm<EK>>]) {
-        let is_synced = self.apply_ctx.flush();
-        if is_synced {
-            for fsm in fsms {
-                fsm.delegate.last_sync_apply_index = fsm.delegate.apply_state.get_applied_index();
-            }
+        self.apply_ctx.flush();
+        for fsm in fsms {
+            fsm.delegate.last_sync_apply_index = fsm.delegate.apply_state.get_applied_index();
         }
     }
 
@@ -4683,10 +4682,6 @@ mod tests {
         assert!(resp.get_header().has_error());
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.applied_index_term, 3);
-        assert_eq!(apply_res.apply_state.get_applied_index(), 9);
-        // The region will yield for batch ingesting sst.
-        let apply_res = fetch_apply_res(&rx);
-        assert_eq!(apply_res.applied_index_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 10);
         // The region will yield after timeout.
         let apply_res = fetch_apply_res(&rx);
@@ -4712,10 +4707,7 @@ mod tests {
         let index = write_batch_max_keys + 11;
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.apply_state.get_applied_index(), index as u64);
-        // Ingest cmmand will be applied twice. First add sst to `ApplyContext.pending_ssts`
-        // and yield current fsm. Second finish apply and invoke callback. So `pre_query_count`
-        // will be one greater than the applied index but post_query_count will not.
-        assert_eq!(obs.pre_query_count.load(Ordering::SeqCst), index + 1);
+        assert_eq!(obs.pre_query_count.load(Ordering::SeqCst), index);
         assert_eq!(obs.post_query_count.load(Ordering::SeqCst), index);
 
         system.shutdown();
