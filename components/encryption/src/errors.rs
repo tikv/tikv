@@ -13,6 +13,10 @@ pub enum Error {
     Other(Box<dyn error::Error + Sync + Send>),
     #[fail(display = "RocksDB error {}", _0)]
     Rocks(String),
+    // Only when the parsing record is the last one, and the
+    // length is insufficient or the crc checksum fails.
+    #[fail(display = "Recoverable tail record corruption while parsing file dictionary")]
+    TailRecordParseIncomplete,
     #[fail(display = "IO error {}", _0)]
     Io(IoError),
     #[fail(display = "OpenSSL error {}", _0)]
@@ -67,6 +71,7 @@ pub type Result<T> = result::Result<T, Error>;
 impl ErrorCodeExt for Error {
     fn error_code(&self) -> ErrorCode {
         match self {
+            Error::TailRecordParseIncomplete => error_code::encryption::PARSE_INCOMPLETE,
             Error::Rocks(_) => error_code::encryption::ROCKS,
             Error::Io(_) => error_code::encryption::IO,
             Error::Crypter(_) => error_code::encryption::CRYPTER,
