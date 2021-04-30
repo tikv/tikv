@@ -398,12 +398,12 @@ where
 
         let mut errorpb = errorpb::Error::default();
         let mut metas = vec![];
-        for sst in req.get_sst() {
+        for sst in req.get_ssts() {
             if Self::acquire_lock(&self.task_slots, sst).unwrap_or(false) {
                 metas.push(sst.clone());
             }
         }
-        if metas.len() < req.get_sst().len() {
+        if metas.len() < req.get_ssts().len() {
             for m in metas {
                 Self::release_lock(&self.task_slots, &m).unwrap();
             }
@@ -416,7 +416,7 @@ where
             return;
         }
         let task_slots = self.task_slots.clone();
-        let f = self.ingest_files(req.take_context(),label, req.take_sst().into());
+        let f = self.ingest_files(req.take_context(), label, req.take_ssts().into());
         let handle_task = async move {
             let res = f.await;
             for m in metas {
