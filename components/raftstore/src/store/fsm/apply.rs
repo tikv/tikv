@@ -472,9 +472,9 @@ where
     /// If it returns true, all pending writes are persisted in engines.
     pub fn write_to_db(&mut self) -> bool {
         let need_sync = self.sync_log_hint;
-        // There may be put or delete requests after ingest request in the same fsm.
+        // There may be put and delete requests after ingest request in the same fsm.
         // To guarantee the correct order, we must ingest the pending_sst first, and
-        // then perssit the kv write batch to engine.
+        // then persist the kv write batch to engine.
         if !self.pending_ssts.is_empty() {
             let tag = self.tag.clone();
             self.importer
@@ -1121,9 +1121,6 @@ where
         if let ApplyResult::WaitMergeSource(_) = exec_result {
             return exec_result;
         }
-        if let ApplyResult::Yield = exec_result {
-            return exec_result;
-        }
 
         debug!(
             "applied command";
@@ -1198,9 +1195,6 @@ where
             }
         };
         if let ApplyResult::WaitMergeSource(_) = exec_result {
-            return (resp, exec_result);
-        }
-        if let ApplyResult::Yield = exec_result {
             return (resp, exec_result);
         }
 
