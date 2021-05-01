@@ -447,15 +447,25 @@ fn is_library_file<P: AsRef<Path>>(path: P) -> bool {
 mod tests {
     use super::*;
     use coprocessor_plugin_api::pkgname_to_libname;
+    use std::sync::Once;
+
+    static INIT: Once = Once::new();
 
     #[cfg(target_os = "linux")]
     static EXAMPLE_PLUGIN: &'static [u8] =
         include_bytes!("../../target/debug/libexample_plugin.so");
 
+    fn initialize_library() -> PathBuf {
+        let lib_path = std::env::temp_dir().join(&pkgname_to_libname("example-plugin"));
+        INIT.call_once(|| {
+            std::fs::write(&lib_path, EXAMPLE_PLUGIN).unwrap();
+        });
+        lib_path
+    }
+
     #[test]
     fn load_plugin() {
-        let library_path = pkgname_to_libname("example-plugin");
-        std::fs::write(&library_path, EXAMPLE_PLUGIN).unwrap();
+        let library_path = initialize_library();
 
         let loaded_plugin = unsafe { LoadedPlugin::new(&library_path).unwrap() };
 
@@ -465,8 +475,7 @@ mod tests {
 
     #[test]
     fn registry_load_and_get_plugin() {
-        let library_path = pkgname_to_libname("example-plugin");
-        std::fs::write(&library_path, EXAMPLE_PLUGIN).unwrap();
+        let library_path = initialize_library();
 
         let registry = PluginRegistry::new();
         let plugin_name = registry.load_plugin(&library_path).unwrap();
@@ -476,48 +485,39 @@ mod tests {
         assert_eq!(plugin.name(), "example_plugin");
         assert_eq!(registry.loaded_plugin_names(), vec!["example_plugin"]);
         assert_eq!(
-            registry
-                .get_path_for_plugin("example_plugin")
-                .unwrap()
-                .to_string_lossy(),
-            library_path
+            registry.get_path_for_plugin("example_plugin").unwrap(),
+            library_path.as_os_str()
         );
     }
 
     #[test]
     fn update_plugin_path() {
-        let library_path = pkgname_to_libname("example-plugin");
-        let library_path_2 = pkgname_to_libname("example-plugin-2");
-        std::fs::write(&library_path, EXAMPLE_PLUGIN).unwrap();
+        let library_path = initialize_library();
+
+        let library_path_2 = library_path
+            .parent()
+            .unwrap()
+            .join(pkgname_to_libname("example-plugin-2"));
 
         let registry = PluginRegistry::new();
         let plugin_name = registry.load_plugin(&library_path).unwrap();
 
         assert_eq!(
-            registry
-                .get_path_for_plugin(&plugin_name)
-                .unwrap()
-                .to_str()
-                .unwrap(),
-            &library_path
+            registry.get_path_for_plugin(&plugin_name).unwrap(),
+            library_path.as_os_str()
         );
 
         registry.update_plugin_path(&plugin_name, &library_path_2);
 
         assert_eq!(
-            registry
-                .get_path_for_plugin(&plugin_name)
-                .unwrap()
-                .to_str()
-                .unwrap(),
-            &library_path_2
+            registry.get_path_for_plugin(&plugin_name).unwrap(),
+            library_path_2.into_os_string()
         );
     }
 
     #[test]
     fn registry_unload_plugin() {
-        let library_path = pkgname_to_libname("example-plugin");
-        std::fs::write(&library_path, EXAMPLE_PLUGIN).unwrap();
+        let library_path = initialize_library();
 
         let registry = PluginRegistry::new();
 
@@ -533,10 +533,9 @@ mod tests {
 
     #[test]
     fn plugin_registry_hot_reloading() {
-        let build_dir = std::env::current_exe()
-            .map(|p| p.as_path().parent().unwrap().to_owned())
-            .unwrap();
-        let coprocessor_dir = build_dir.join("coprocessors");
+        let original_library_path = initialize_library();
+
+        let coprocessor_dir = std::env::temp_dir().join("coprocessors");
         let library_path = coprocessor_dir.join(pkgname_to_libname("example-plugin"));
         let library_path_2 = coprocessor_dir.join(pkgname_to_libname("example-plugin-2"));
         let plugin_name = "example_plugin";
@@ -550,7 +549,7 @@ mod tests {
         registry.start_hot_reloading(&coprocessor_dir).unwrap();
 
         // trigger loading
-        std::fs::write(&library_path, EXAMPLE_PLUGIN).unwrap();
+        std::fs::copy(&original_library_path, &library_path).unwrap();
         std::thread::sleep(Duration::from_secs(4));
 
         assert!(registry.get_plugin(plugin_name).is_some());
