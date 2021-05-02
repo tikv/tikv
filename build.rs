@@ -13,6 +13,8 @@ fn main() {
         .parent()
         .unwrap();
     let plugin_path = build_dir.join("libexample_plugin.so");
+
+    println!("cargo:rerun-if-changed={}", plugin_path.display());
     println!(
         "cargo:rustc-env=CARGO_DYLIB_FILE_EXAMPLE_PLUGIN={}",
         plugin_path.display()
