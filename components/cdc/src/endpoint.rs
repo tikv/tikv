@@ -5,6 +5,12 @@ use std::fmt;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::channel::SendError;
+use crate::delegate::{Delegate, Downstream, DownstreamID, DownstreamState};
+use crate::metrics::*;
+use crate::old_value::{OldValueCache, OldValueCallback};
+use crate::service::{CdcEvent, Conn, ConnID, FeatureGate};
+use crate::{CdcObserver, Error, Result};
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::atomic::AtomicCell;
@@ -43,14 +49,8 @@ use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
 use tikv_util::{box_err, box_try, debug, error, impl_display_as_debug, info, warn};
 use tokio::runtime::{Builder, Runtime};
+use tokio::sync::Semaphore;
 use txn_types::{Key, Lock, LockType, TimeStamp, TxnExtra, TxnExtraScheduler};
-
-use crate::channel::SendError;
-use crate::delegate::{Delegate, Downstream, DownstreamID, DownstreamState};
-use crate::metrics::*;
-use crate::old_value::{OldValueCache, OldValueCallback};
-use crate::service::{CdcEvent, Conn, ConnID, FeatureGate};
-use crate::{CdcObserver, Error, Result};
 
 const FEATURE_RESOLVED_TS_STORE: Feature = Feature::require(5, 0, 0);
 
@@ -227,6 +227,7 @@ pub struct Endpoint<T> {
     concurrency_manager: ConcurrencyManager,
 
     workers: Runtime,
+    scan_concurrency_semaphore: Arc<Semaphore>,
 
     scan_speed_limter: Limiter,
     max_scan_batch_bytes: usize,
@@ -265,6 +266,8 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             .core_threads(4)
             .build()
             .unwrap();
+        let scan_concurrency = 16;
+        let scan_concurrency_semaphore = Arc::new(Semaphore::new(scan_concurrency));
         let tso_worker = Builder::new()
             .threaded_scheduler()
             .thread_name("tso")
@@ -294,6 +297,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             max_scan_batch_bytes,
             max_scan_batch_size,
             workers,
+            scan_concurrency_semaphore,
             raft_router,
             observer,
             store_meta,
@@ -566,7 +570,9 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             deregister_downstream(Error::request(e.into()));
             return;
         }
+        let scan_concurrency_semaphore = self.scan_concurrency_semaphore.clone();
         self.workers.spawn(async move {
+            let _permit = scan_concurrency_semaphore.acquire().await;
             match fut.await {
                 Ok(resp) => init.on_change_cmd(resp).await,
                 Err(e) => deregister_downstream(Error::Other(box_err!(e))),
