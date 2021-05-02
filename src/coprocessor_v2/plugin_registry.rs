@@ -450,7 +450,7 @@ mod tests {
     use std::sync::Once;
 
     static INIT: Once = Once::new();
-    static EXAMPLE_PLUGIN: &'static [u8] = include_bytes!(env!("CARGO_DYLIB_FILE_EXAMPLE_PLUGIN"));
+    static EXAMPLE_PLUGIN: &[u8] = include_bytes!(env!("CARGO_DYLIB_FILE_EXAMPLE_PLUGIN"));
 
     fn initialize_library() -> PathBuf {
         let lib_path = std::env::temp_dir().join(&pkgname_to_libname("example-plugin"));
