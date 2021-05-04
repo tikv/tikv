@@ -669,7 +669,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                 .get(CMD)
                                 .locked
                                 .observe(begin_instant.elapsed().as_secs_f64());
-                            mvcc::Error::from(e)
+                            txn::Error::from_mvcc(e)
                         })?;
                     CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC
                         .get(CMD)
@@ -800,7 +800,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                 .get(CMD)
                                 .locked
                                 .observe(begin_instant.elapsed().as_secs_f64());
-                            Err(mvcc::Error::from(mvcc::ErrorInner::KeyIsLocked(
+                            Err(txn::Error::from_mvcc(mvcc::ErrorInner::KeyIsLocked(
                                 lock.clone().into_lock_info(key.to_raw()?),
                             )))
                         } else {
@@ -1667,7 +1667,7 @@ fn prepare_snap_ctx<'a>(
                         .get(cmd)
                         .locked
                         .observe(begin_instant.elapsed().as_secs_f64());
-                    mvcc::Error::from(e)
+                    txn::Error::from_mvcc(e)
                 })?;
         }
         CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC

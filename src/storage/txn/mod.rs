@@ -20,6 +20,7 @@ mod latch;
 mod store;
 
 use crate::storage::{
+    mvcc::Error as MvccError,
     types::{MvccInfo, PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, TxnStatus},
     Error as StorageError, Result as StorageResult,
 };
@@ -186,6 +187,10 @@ pub struct Error(pub Box<ErrorInner>);
 impl Error {
     pub fn maybe_clone(&self) -> Option<Error> {
         self.0.maybe_clone().map(Error::from)
+    }
+    pub fn from_mvcc<T: Into<MvccError>>(err: T) -> Self {
+        let err = err.into();
+        Error::from(ErrorInner::Mvcc(err))
     }
 }
 

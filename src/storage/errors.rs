@@ -7,7 +7,7 @@ use std::io::Error as IoError;
 
 use crate::storage::{
     kv::{self, Error as EngineError, ErrorInner as EngineErrorInner},
-    mvcc::{self, Error as MvccError, ErrorInner as MvccErrorInner},
+    mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
     txn::{self, Error as TxnError, ErrorInner as TxnErrorInner},
     Result,
 };
@@ -26,11 +26,6 @@ quick_error! {
             display("{}", err)
         }
         Txn(err: txn::Error) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        Mvcc(err: mvcc::Error) {
             from()
             cause(err)
             display("{}", err)
@@ -107,7 +102,6 @@ impl ErrorCodeExt for Error {
         match self.0.as_ref() {
             ErrorInner::Engine(e) => e.error_code(),
             ErrorInner::Txn(e) => e.error_code(),
-            ErrorInner::Mvcc(e) => e.error_code(),
             ErrorInner::Closed => error_code::storage::CLOSED,
             ErrorInner::Other(_) => error_code::storage::UNKNOWN,
             ErrorInner::Io(_) => error_code::storage::IO,
@@ -250,7 +244,6 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
         | Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Engine(EngineError(
             box EngineErrorInner::KeyIsLocked(info),
         )))))
-        | Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(info))))
         | Error(box ErrorInner::Engine(EngineError(box EngineErrorInner::KeyIsLocked(info)))) => {
             key_error.set_locked(info.clone());
         }
