@@ -197,9 +197,11 @@ fn future_batch_get_command<E: Engine, L: LockManager>(
         GetCommandResponseConsumer { tx: tx.clone() },
     );
     let f = async move {
-        if let Err(e) = res.await {
+        // This error can only cause by readpool busy.
+        let res = res.await;
+        if let Some(e) = extract_region_error(&res) {
             let mut resp = GetResponse::default();
-            resp.set_error(extract_key_error(&e));
+            resp.set_region_error(e);
             for id in ids {
                 let res = batch_commands_response::Response {
                     cmd: Some(batch_commands_response::response::Cmd::Get(resp.clone())),
@@ -225,15 +227,17 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager>(
 ) {
     let ids = requests.clone();
     let begin_instant = tikv_util::time::Instant::now_coarse();
-    let ret = storage.raw_batch_get_command(
+    let res = storage.raw_batch_get_command(
         gets,
         requests,
         GetCommandResponseConsumer { tx: tx.clone() },
     );
     let f = async move {
-        if let Err(e) = ret.await {
+        // This error can only cause by readpool busy.
+        let res = res.await;
+        if let Some(e) = extract_region_error(&res) {
             let mut resp = RawGetResponse::default();
-            resp.set_error(format!("{}", e));
+            resp.set_region_error(e);
             for id in ids {
                 let res = batch_commands_response::Response {
                     cmd: Some(batch_commands_response::response::Cmd::RawGet(resp.clone())),
