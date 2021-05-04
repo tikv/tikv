@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use tikv_util::time::{duration_to_sec, Instant};
 
-use super::batch::{ReqBatcher, MIN_BATCH_GET_REQUEST_COUNT};
+use super::batch::{BatcherBuilder, ReqBatcher};
 use crate::coprocessor::Endpoint;
 use crate::coprocessor_v2;
 use crate::server::gc_worker::GcWorker;
@@ -900,16 +900,13 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let storage = self.storage.clone();
         let cop = self.cop.clone();
         let coprv2 = self.coprv2.clone();
-        let enable_req_batch = self.enable_req_batch;
+        let pool_size = storage.get_normal_pool_size();
+        let batch_builder = BatcherBuilder::new(self.enable_req_batch, pool_size);
         let request_handler = stream.try_for_each(move |mut req| {
             let request_ids = req.take_request_ids();
             let requests: Vec<_> = req.take_requests().into();
-            let mut batcher =
-                if enable_req_batch && request_ids.len() >= MIN_BATCH_GET_REQUEST_COUNT {
-                    Some(ReqBatcher::new())
-                } else {
-                    None
-                };
+            let queue = storage.get_readpool_queue_per_worker();
+            let mut batcher = batch_builder.build(queue, request_ids.len());
             GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
             for (id, req) in request_ids.into_iter().zip(requests) {
                 handle_batch_commands_request(
@@ -923,13 +920,11 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                     &tx,
                 );
                 if let Some(batch) = batcher.as_mut() {
-                    let queue = storage.get_readpool_queue_per_worker();
-                    batch.maybe_commit(&storage, &tx, queue);
+                    batch.maybe_commit(&storage, &tx);
                 }
             }
             if let Some(mut batch) = batcher {
-                let queue = storage.get_readpool_queue_per_worker();
-                batch.commit(&storage, &tx, queue);
+                batch.commit(&storage, &tx);
             }
             future::ok(())
         });
@@ -1369,7 +1364,7 @@ fn future_delete_range<E: Engine, L: LockManager>(
     }
 }
 
-pub fn future_raw_get<E: Engine, L: LockManager>(
+fn future_raw_get<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: RawGetRequest,
 ) -> impl Future<Output = ServerResult<RawGetResponse>> {

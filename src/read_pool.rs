@@ -150,6 +150,15 @@ impl ReadPoolHandle {
         }
     }
 
+    pub fn get_normal_pool_size(&self) -> usize {
+        match self {
+            ReadPoolHandle::FuturePools {
+                read_pool_normal, ..
+            } => read_pool_normal.get_pool_size(),
+            ReadPoolHandle::Yatp { pool_size, .. } => *pool_size,
+        }
+    }
+
     pub fn get_queue_size_per_worker(&self) -> usize {
         match self {
             ReadPoolHandle::FuturePools {
