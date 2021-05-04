@@ -33,7 +33,8 @@ fn locate_coprocessor_plugins(plugin_names: &[&str]) {
         let plugin_path = build_dir.join(pkgname_to_libname(plugin_name));
         println!("cargo:rerun-if-changed={}", plugin_path.display());
         println!(
-            "cargo:rustc-env=CARGO_DYLIB_FILE_EXAMPLE_PLUGIN={}",
+            "cargo:rustc-env=CARGO_DYLIB_FILE_{}={}",
+            plugin_name.to_string().replace("-", "_").to_uppercase(),
             plugin_path.display()
         );
     }
