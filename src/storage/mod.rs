@@ -396,7 +396,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         &self,
         requests: Vec<GetRequest>,
         ids: Vec<u64>,
-        processor: P,
+        consumer: P,
     ) -> impl Future<Output = Result<()>> {
         const CMD: CommandKind = CommandKind::batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
@@ -442,7 +442,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             snap_ctx
                         }
                         Err(e) => {
-                            processor.consume(id, Err(e));
+                            consumer.consume(id, Err(e));
                             continue;
                         }
                     };
@@ -486,19 +486,19 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                     let stat = point_getter.take_statistics();
                                     metrics::tls_collect_read_flow(region_id, &stat);
                                     statistics.add(&stat);
-                                    processor.consume(
+                                    consumer.consume(
                                         id,
                                         v.map_err(|e| Error::from(txn::Error::from(e)))
                                             .map(|v| (v, stat, perf_statistics.delta())),
                                     );
                                 }
                                 Err(e) => {
-                                    processor.consume(id, Err(Error::from(txn::Error::from(e))));
+                                    consumer.consume(id, Err(Error::from(txn::Error::from(e))));
                                 }
                             }
                         }
                         Err(e) => {
-                            processor.consume(id, Err(e));
+                            consumer.consume(id, Err(e));
                         }
                     }
                 }
@@ -1012,7 +1012,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         &self,
         gets: Vec<RawGetRequest>,
         ids: Vec<u64>,
-        processor: P,
+        consumer: P,
     ) -> impl Future<Output = Result<()>> {
         const CMD: CommandKind = CommandKind::raw_batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
@@ -1059,7 +1059,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             let store = RawStore::new(snapshot, enable_ttl);
                             match Self::rawkv_cf(&cf) {
                                 Ok(cf) => {
-                                    processor.consume(
+                                    consumer.consume(
                                         id,
                                         store.raw_get_key_value(
                                             cf,
@@ -1070,12 +1070,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                     tls_collect_read_flow(ctx.get_region_id(), &stats);
                                 }
                                 Err(e) => {
-                                    processor.consume(id, Err(e));
+                                    consumer.consume(id, Err(e));
                                 }
                             }
                         }
                         Err(e) => {
-                            processor.consume(id, Err(e));
+                            consumer.consume(id, Err(e));
                         }
                     }
                 }
