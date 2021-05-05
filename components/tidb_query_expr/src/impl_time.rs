@@ -873,7 +873,7 @@ mod tests {
             (Some("12:00:00"), Some("00:00:01"), Some("11:59:59")),
             (Some("24:00:00"), Some("00:00:01"), Some("23:59:59")),
             (Some("24:00:01"), Some("00:00:02"), Some("23:59:59")),
-            // (None, None, None),
+            (None, None, None),
         ];
         let mut ctx = EvalContext::default();
         for (duration, string, exp) in cases {
@@ -881,7 +881,6 @@ mod tests {
             let duration = duration.map(|arg1| Duration::parse(&mut ctx, arg1, MAX_FSP).unwrap());
             let string = string.map(|arg2| arg2.as_bytes().to_vec());
 
-            // let string = string.map(|arg2| Duration::parse(&mut ctx, arg2, MAX_FSP).unwrap());
             let output = RpnFnScalarEvaluator::new()
                 .push_param(duration)
                 .push_param(string)
