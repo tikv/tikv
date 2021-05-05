@@ -2370,6 +2370,19 @@ impl TiKvConfig {
         if kv_db_path == self.raft_store.raftdb_path {
             return Err("raft_store.raftdb_path can not same with storage.data_dir/db".into());
         }
+        let kv_db_wal_path = if self.rocksdb.wal_dir.is_empty() {
+            config::canonicalize_path(&kv_db_path)?
+        } else {
+            config::canonicalize_path(&self.rocksdb.wal_dir)?
+        };
+        let raft_db_wal_path = if self.raftdb.wal_dir.is_empty() {
+            config::canonicalize_path(&self.raft_store.raftdb_path)?
+        } else {
+            config::canonicalize_path(&self.raftdb.wal_dir)?
+        };
+        if kv_db_wal_path == raft_db_wal_path {
+            return Err("raftdb.wal_dir can not same with rocksdb.wal_dir".into());
+        }
         if !self.raft_engine.enable {
             if RocksEngine::exists(&kv_db_path)
                 && !RocksEngine::exists(&self.raft_store.raftdb_path)
@@ -3654,6 +3667,34 @@ mod tests {
             cfg.raft_store.region_split_check_diff.0,
             default_region_split_check_diff + 1
         );
+    }
+
+    #[test]
+    fn test_validate_tikv_wal_config() {
+        let mut cfg = TiKvConfig::default();
+        assert!(cfg.validate().is_ok());
+
+        let mut cfg = TiKvConfig::default();
+        cfg.storage.data_dir = String::from("/data");
+        cfg.raft_store.raftdb_path = String::from("/data/db");
+        assert!(!cfg.validate().is_ok());
+
+        let mut cfg = TiKvConfig::default();
+        cfg.storage.data_dir = String::from("/kvdb");
+        cfg.raft_store.raftdb_path = String::from("/raftdb/db");
+        cfg.rocksdb.wal_dir = String::from("/raftdb/db");
+        assert!(!cfg.validate().is_ok());
+
+        let mut cfg = TiKvConfig::default();
+        cfg.storage.data_dir = String::from("/kvdb");
+        cfg.raft_store.raftdb_path = String::from("/raftdb/db");
+        cfg.raftdb.wal_dir = String::from("/kvdb/db");
+        assert!(!cfg.validate().is_ok());
+
+        let mut cfg = TiKvConfig::default();
+        cfg.rocksdb.wal_dir = String::from("/wal");
+        cfg.raftdb.wal_dir = String::from("/wal");
+        assert!(!cfg.validate().is_ok());
     }
 
     #[test]

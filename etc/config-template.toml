@@ -410,13 +410,14 @@
 ## 3 : SkipAnyCorruptedRecords, Recovery after a disaster;
 # wal-recovery-mode = 2
 
-## RocksDB WAL directory.
+## KV RocksDB WAL directory.
 ## This config specifies the absolute directory path for WAL.
 ## If it is not set, the log files will be in the same directory as data. When you set the path to
 ## RocksDB directory in memory like in `/dev/shm`, you may want to set`wal-dir` to a directory on a
 ## persistent storage. See https://github.com/facebook/rocksdb/wiki/How-to-persist-in-memory-RocksDB-database .
 ## If there are two disks on the machine, storing RocksDB data and WAL logs on different disks can
 ## improve performance.
+## Make surce NEVER set this config the same as `raftdb.wal-dir`.
 # wal-dir = ""
 
 ## The following two fields affect how archived WAL will be deleted.
@@ -785,13 +786,14 @@
 # enable-statistics = true
 # stats-dump-period = "10m"
 
-## RocksDB WAL directory.
+## Raft RocksDB WAL directory.
 ## This config specifies the absolute directory path for WAL.
 ## If it is not set, the log files will be in the same directory as data. When you set the path to
 ## RocksDB directory in memory like in `/dev/shm`, you may want to set`wal-dir` to a directory on a
 ## persistent storage. See https://github.com/facebook/rocksdb/wiki/How-to-persist-in-memory-RocksDB-database .
 ## If there are two disks on the machine, storing RocksDB data and WAL logs on different disks can
 ## improve performance.
+## Make surce NEVER set this config the same as `rocksdb.wal-dir`.
 # wal-dir = ""
 
 # compaction-readahead-size = 0
