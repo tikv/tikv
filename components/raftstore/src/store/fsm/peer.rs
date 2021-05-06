@@ -2187,7 +2187,7 @@ where
         self.fsm.peer.post_split();
 
         // If `estimated_size` or `estimated_keys` equals none, the leader will schedule a
-        // split-check task in
+        // split-check task before sending heartbeat to pd.
         let need_check_split = estimated_size.is_some() && estimated_keys.is_some();
 
         let is_leader = self.fsm.peer.is_leader();
