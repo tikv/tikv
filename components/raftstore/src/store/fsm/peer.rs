@@ -14,6 +14,7 @@ use engine_traits::{Engines, KvEngine, RaftEngine, SSTMetaInfo, WriteBatchExt};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use kvproto::errorpb;
+use kvproto::import_sstpb::SwitchMode;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{
@@ -521,6 +522,19 @@ where
                 }
                 PeerMsg::Noop => {}
                 PeerMsg::UpdateReplicationMode => self.on_update_replication_mode(),
+                PeerMsg::SplitCheck => {
+                    // If the current `approximate_size` is larger than `region_max_size`, this region
+                    // may ingest a large file which is imported by `BR` or `lightning`, we shall check it
+                    let check_size = self.fsm.peer.approximate_size.map_or(true, |size| {
+                        size > self.ctx.coprocessor_host.cfg.region_max_size.0
+                    });
+                    let check_keys = self.fsm.peer.approximate_keys.map_or(true, |keys| {
+                        keys > self.ctx.coprocessor_host.cfg.region_max_keys
+                    });
+                    if self.fsm.peer.is_leader() && (check_size || check_keys) {
+                        self.schedule_check_split();
+                    }
+                }
             }
         }
         // Propose batch request which may be still waiting for more raft-command
@@ -3522,6 +3536,19 @@ where
             return;
         }
 
+        // When Lightning or BR is importing data to TiKV, their ingest-request may fail because of
+        // region-epoch not matched. So we hope TiKV do not check region size and split region during
+        // importing.
+        if self.ctx.importer.get_mode() == SwitchMode::Import {
+            return;
+        }
+
+        if self.schedule_check_split() {
+            self.register_split_region_check_tick();
+        }
+    }
+
+    fn schedule_check_split(&mut self) -> bool {
         // bulk insert too fast may cause snapshot stale very soon, worst case it stale before
         // sending. so when snapshot is generating or sending, skip split check at most 3 times.
         // There is a trade off between region size and snapshot success rate. Split check is
@@ -3532,7 +3559,7 @@ where
             && self.fsm.skip_split_count < self.region_split_skip_max_count()
         {
             self.fsm.skip_split_count += 1;
-            return;
+            return false;
         }
         self.fsm.skip_split_count = 0;
 

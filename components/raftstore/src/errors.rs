@@ -62,7 +62,7 @@ quick_error! {
                 region.get_id())
         }
         DataIsNotReady(region_id: u64, peer_id: u64, safe_ts: u64) {
-            display("peer {} is not ready, max_ts {}, region {}", peer_id, safe_ts, region_id)
+            display("peer {} is not ready, safe_ts {}, region {}", peer_id, safe_ts, region_id)
         }
         Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
