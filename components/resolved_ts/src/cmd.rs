@@ -229,11 +229,12 @@ fn group_row_changes(requests: Vec<Request>) -> HashMap<Key, RowChange> {
                         row.lock = Some(KeyOp::Put(None, value));
                     }
                     "" | CF_DEFAULT => {
-                        let ts = key.decode_ts().unwrap();
-                        let key = key.truncate_ts().unwrap();
-                        let mut row = changes.entry(key).or_default();
-                        assert!(row.default.is_none());
-                        row.default = Some(KeyOp::Put(Some(ts), value));
+                        if let Ok(ts) = key.decode_ts() {
+                            let key = key.truncate_ts().unwrap();
+                            let mut row = changes.entry(key).or_default();
+                            assert!(row.default.is_none());
+                            row.default = Some(KeyOp::Put(Some(ts), value));
+                        }
                     }
                     other => {
                         panic!("invalid cf {}", other);
