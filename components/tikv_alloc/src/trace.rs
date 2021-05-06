@@ -10,7 +10,7 @@ use std::{
     fmt::{self, Display},
 };
 
-pub type HashMap<K, V> =
+type HashMap<K, V> =
     std::collections::HashMap<K, V, std::hash::BuildHasherDefault<fxhash::FxHasher>>;
 
 #[derive(Debug, PartialEq, Copy, Clone, Hash, Eq)]
@@ -69,50 +69,64 @@ impl Display for Id {
 
 #[derive(Clone, Copy)]
 pub enum TraceEvent {
-    Add,
-    Sub,
-    Reset,
+    Add(usize),
+    Sub(usize),
+    Reset(usize),
 }
 
 pub trait MemoryTrace {
-    fn trace(&self, event: TraceEvent, val: usize);
+    fn trace(&self, event: TraceEvent);
     fn snapshot(&self, parent: &mut MemoryTraceSnapshot);
-    fn sub_trace(&self, id: Id) -> Option<Arc<dyn MemoryTrace>>;
+    fn sub_trace(&self, id: Id) -> Option<Arc<dyn MemoryTrace + Send + Sync>>;
+    fn add_sub_trace(&mut self, id: Id, trace: Arc<dyn MemoryTrace + Send + Sync>);
 }
 
 pub struct MemoryTraceNode {
-    id: Id,
-    parent: Option<Weak<MemoryTraceNode>>,
+    pub id: Id,
+    parent: Option<Weak<dyn MemoryTrace + Send + Sync>>,
     trace: AtomicUsize,
-    children: HashMap<Id, Arc<dyn MemoryTrace>>,
+    children: HashMap<Id, Arc<dyn MemoryTrace + Send + Sync>>,
 }
 
 impl MemoryTraceNode {
-    fn parent_trace(&self, event: TraceEvent, val: usize) {
+    pub fn new(id: impl Into<Id>) -> MemoryTraceNode {
+        MemoryTraceNode {
+            id: id.into(),
+            parent: None,
+            trace: std::sync::atomic::AtomicUsize::default(),
+            children: HashMap::default(),
+        }
+    }
+
+    fn parent_trace(&self, event: TraceEvent) {
         if let Some(parent) = self.parent.as_ref() {
             if let Some(p) = parent.upgrade() {
-                p.trace(event, val);
+                p.trace(event);
             }
         }
+    }
+
+    pub fn set_parent(&mut self, parent: &Arc<dyn MemoryTrace + Send + Sync>) {
+        self.parent = Some(Arc::downgrade(parent));
     }
 }
 
 impl MemoryTrace for MemoryTraceNode {
-    fn trace(&self, event: TraceEvent, val: usize) {
+    fn trace(&self, event: TraceEvent) {
         match event {
-            TraceEvent::Add => {
+            TraceEvent::Add(val) => {
                 self.trace.fetch_add(val, Ordering::Relaxed);
-                self.parent_trace(event, val);
+                self.parent_trace(event);
             }
-            TraceEvent::Sub => {
+            TraceEvent::Sub(val) => {
                 self.trace.fetch_sub(val, Ordering::Relaxed);
-                self.parent_trace(event, val);
+                self.parent_trace(event);
             }
-            TraceEvent::Reset => {
+            TraceEvent::Reset(val) => {
                 let prev = self.trace.swap(val, Ordering::Relaxed);
                 match prev.cmp(&val) {
-                    cmp::Ordering::Greater => self.parent_trace(TraceEvent::Sub, prev - val),
-                    cmp::Ordering::Less => self.parent_trace(TraceEvent::Add, val - prev),
+                    cmp::Ordering::Greater => self.parent_trace(TraceEvent::Sub(prev - val)),
+                    cmp::Ordering::Less => self.parent_trace(TraceEvent::Add(val - prev)),
                     cmp::Ordering::Equal => (),
                 }
             }
@@ -125,14 +139,18 @@ impl MemoryTrace for MemoryTraceNode {
             trace: self.trace.load(Ordering::Relaxed),
             children: vec![],
         };
-        for (_, child) in &self.children {
+        for child in self.children.values() {
             child.snapshot(&mut snap);
         }
         parent.children.push(snap);
     }
 
-    fn sub_trace(&self, id: Id) -> Option<Arc<dyn MemoryTrace>> {
+    fn sub_trace(&self, id: Id) -> Option<Arc<dyn MemoryTrace + Send + Sync>> {
         self.children.get(&id).cloned()
+    }
+
+    fn add_sub_trace(&mut self, id: Id, trace: Arc<dyn MemoryTrace + Send + Sync>) {
+        self.children.insert(id, trace);
     }
 }
 
@@ -142,25 +160,25 @@ pub struct MemoryTraceSnapshot {
     pub children: Vec<MemoryTraceSnapshot>,
 }
 
+#[macro_export]
 macro_rules! mem_trace {
     ($name: ident) => {
         {
-            Arc::new(MemoryTraceNode {
-                id: stringify!($name).into(),
-                parent: None,
-                trace: AtomicUsize::default(),
-                children: Vec::new(),
-            })
+            use tikv_alloc::trace::MemoryTraceNode;
+
+            std::sync::Arc::new(MemoryTraceNode::new(stringify!($name)))
         }
     };
     ($name: ident, [$($child:tt),+]) => {
         {
+            use tikv_alloc::trace::MemoryTrace;
+
             let mut node = mem_trace!($name);
             $(
                 let mut child = mem_trace!($child);
                 unsafe {
-                    std::sync::Arc::get_mut_unchecked(&mut child).parent = Some(Arc::downgrade(&node));
-                    std::sync::Arc::get_mut_unchecked(&mut node).children.push(child);
+                    std::sync::Arc::get_mut_unchecked(&mut child).set_parent(&(node.clone() as Arc<dyn MemoryTrace + Send + Sync>));
+                    std::sync::Arc::get_mut_unchecked(&mut node).add_sub_trace(child.id, child);
                 }
             )*
             node

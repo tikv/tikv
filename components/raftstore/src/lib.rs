@@ -7,6 +7,7 @@
 #![feature(min_specialization)]
 #![feature(box_patterns)]
 #![feature(vecdeque_binary_search)]
+#![feature(get_mut_unchecked)]
 
 #[cfg(test)]
 extern crate test;

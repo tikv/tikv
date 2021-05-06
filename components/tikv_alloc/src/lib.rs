@@ -115,6 +115,7 @@ mod imp;
 
 pub use crate::imp::*;
 
+#[macro_use]
 pub mod trace;
 
 #[global_allocator]
