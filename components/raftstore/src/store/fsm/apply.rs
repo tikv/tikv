@@ -3729,6 +3729,7 @@ mod tests {
     use uuid::Uuid;
 
     use crate::store::{Config, RegionTask};
+    use sst_importer::Config as ImportConfig;
     use test_sst_importer::*;
     use tikv_util::config::VersionTrack;
     use tikv_util::worker::dummy_scheduler;
@@ -3749,7 +3750,8 @@ mod tests {
 
     pub fn create_tmp_importer(path: &str) -> (TempDir, Arc<SSTImporter>) {
         let dir = Builder::new().prefix(path).tempdir().unwrap();
-        let importer = Arc::new(SSTImporter::new(dir.path(), None).unwrap());
+        let importer =
+            Arc::new(SSTImporter::new(&ImportConfig::default(), dir.path(), None).unwrap());
         (dir, importer)
     }
 
