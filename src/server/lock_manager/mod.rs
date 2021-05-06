@@ -29,7 +29,7 @@ use raftstore::coprocessor::CoprocessorHost;
 use crate::storage::lock_manager::DiagnosticContext;
 use collections::HashSet;
 use crossbeam::utils::CachePadded;
-use engine_rocks::RocksEngine;
+use engine_traits::KvEngine;
 use parking_lot::Mutex;
 use pd_client::PdClient;
 use security::SecurityManager;
@@ -189,7 +189,10 @@ impl LockManager {
 
     /// Creates a `RoleChangeNotifier` of the deadlock detector worker and registers it to
     /// the `CoprocessorHost` to observe the role change events of the leader region.
-    pub fn register_detector_role_change_observer(&self, host: &mut CoprocessorHost<RocksEngine>) {
+    pub fn register_detector_role_change_observer(
+        &self,
+        host: &mut CoprocessorHost<impl KvEngine>,
+    ) {
         let role_change_notifier = RoleChangeNotifier::new(self.detector_scheduler.clone());
         role_change_notifier.register(host);
     }
@@ -288,6 +291,7 @@ mod tests {
     use self::metrics::*;
     use self::waiter_manager::tests::*;
     use super::*;
+    use engine_test::kv::KvTestEngine;
     use raftstore::coprocessor::RegionChangeEvent;
     use security::SecurityConfig;
     use tikv_util::config::ReadableDuration;
@@ -300,7 +304,7 @@ mod tests {
     use raft::StateRole;
 
     fn start_lock_manager() -> LockManager {
-        let mut coprocessor_host = CoprocessorHost::default();
+        let mut coprocessor_host = CoprocessorHost::<KvTestEngine>::default();
 
         let mut lock_mgr = LockManager::new(false);
         let cfg = Config {

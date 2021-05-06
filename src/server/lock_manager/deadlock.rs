@@ -8,7 +8,7 @@ use super::{Error, Result};
 use crate::server::resolve::StoreAddrResolver;
 use crate::storage::lock_manager::{DiagnosticContext, Lock};
 use collections::HashMap;
-use engine_rocks::RocksEngine;
+use engine_traits::KvEngine;
 use futures::future::{self, FutureExt, TryFutureExt};
 use futures::sink::SinkExt;
 use futures::stream::TryStreamExt;
@@ -520,7 +520,7 @@ impl RoleChangeNotifier {
         }
     }
 
-    pub(crate) fn register(self, host: &mut CoprocessorHost<RocksEngine>) {
+    pub(crate) fn register(self, host: &mut CoprocessorHost<impl KvEngine>) {
         host.registry
             .register_role_observer(1, BoxRoleObserver::new(self.clone()));
         host.registry
@@ -1064,6 +1064,7 @@ impl Deadlock for Service {
 pub mod tests {
     use super::*;
     use crate::server::resolve::Callback;
+    use engine_test::kv::KvTestEngine;
     use futures::executor::block_on;
     use security::SecurityConfig;
     use tikv_util::worker::FutureWorker;
@@ -1399,7 +1400,7 @@ pub mod tests {
     }
 
     fn start_deadlock_detector(
-        host: &mut CoprocessorHost<RocksEngine>,
+        host: &mut CoprocessorHost<KvTestEngine>,
     ) -> (FutureWorker<Task>, Scheduler) {
         let waiter_mgr_worker = FutureWorker::new("dummy-waiter-mgr");
         let waiter_mgr_scheduler = WaiterMgrScheduler::new(waiter_mgr_worker.scheduler());
