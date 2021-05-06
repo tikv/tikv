@@ -166,7 +166,6 @@ pnet_datalink = "0.23"
 prost = "0.7"
 pprof = { version = "^0.4", default-features = false, features = ["flamegraph", "protobuf"] }
 protobuf = "2.8"
-quick-error = "1.2.3"
 raft = { version = "0.6.0-alpha", default-features = false }
 raftstore = { path = "components/raftstore", default-features = false }
 raft_log_engine = { path = "components/raft_log_engine", default-features = false }
