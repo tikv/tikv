@@ -2182,40 +2182,18 @@ where
         // It's not correct anymore, so set it to None to let split checker update it.
         self.fsm.peer.approximate_size = None;
         self.fsm.peer.approximate_keys = None;
-
-        let is_leader = self.fsm.peer.is_leader();
-        let mut no_tick = false;
-        if is_leader {
-            self.fsm.peer.approximate_size = estimated_size;
-            self.fsm.peer.approximate_keys = estimated_keys;
-
-            if let Some(estimated_size) = self.fsm.peer.approximate_size {
-                if estimated_size > self.ctx.coprocessor_host.cfg.region_max_size.0 {
-                    info!(
-                        "trigger split check immediately";
-                        "region_id" => self.fsm.region_id(),
-                        "peer_id" => self.fsm.peer_id(),
-                        "size" => estimated_size,
-                    );
-                    self.fsm.peer.approximate_size = None;
-                    // trigger a split check immediately when size is still large
-                    self.ctx
-                        .router
-                        .force_send(region_id, PeerMsg::Tick(PeerTicks::SPLIT_REGION_CHECK))
-                        .unwrap();
-                    no_tick = true;
-                }
-            }
-        }
-        if !no_tick {
-            self.register_split_region_check_tick();
-        }
-
         let mut meta = self.ctx.store_meta.lock().unwrap();
         meta.set_region(&self.ctx.coprocessor_host, derived, &mut self.fsm.peer);
         self.fsm.peer.post_split();
 
+        // If `estimated_size` or `estimated_keys` equals none, the leader will schedule a
+        // split-check task in
+        let need_check_split = estimated_size.is_some() && estimated_keys.is_some();
+
+        let is_leader = self.fsm.peer.is_leader();
         if is_leader {
+            self.fsm.peer.approximate_size = estimated_size;
+            self.fsm.peer.approximate_keys = estimated_keys;
             self.fsm.peer.heartbeat_pd(self.ctx);
             // Notify pd immediately to let it update the region meta.
             info!(
@@ -2224,6 +2202,9 @@ where
                 "peer_id" => self.fsm.peer_id(),
                 "split_count" => regions.len(),
             );
+            if need_check_split {
+                self.fsm.peer.schedule_check_split(self.ctx);
+            }
             // Now pd only uses ReportBatchSplit for history operation show,
             // so we send it independently here.
             let task = PdTask::ReportBatchSplit {
@@ -2235,18 +2216,6 @@ where
                     "region_id" => self.fsm.region_id(),
                     "peer_id" => self.fsm.peer_id(),
                     "err" => %e,
-                );
-            }
-            if let Err(e) = self.ctx.split_check_scheduler.schedule(
-                SplitCheckTask::GetRegionApproximateSizeAndKeys {
-                    region: self.fsm.peer.region().clone(),
-                },
-            ) {
-                error!(
-                    "failed to schedule split check task";
-                    "region_id" => self.fsm.region_id(),
-                    "peer_id" => self.fsm.peer_id(),
-                    "err" => ?e,
                 );
             }
         }
@@ -2353,6 +2322,9 @@ where
                 // The new peer is likely to become leader, send a heartbeat immediately to reduce
                 // client query miss.
                 new_peer.peer.heartbeat_pd(self.ctx);
+                if need_check_split {
+                    new_peer.peer.schedule_check_split(self.ctx);
+                }
             }
 
             new_peer.peer.activate(self.ctx);
@@ -2390,20 +2362,6 @@ where
                     {
                         warn!("handle first requset failed"; "region_id" => region_id, "error" => ?e);
                     }
-                }
-            }
-
-            if is_leader {
-                // The size and keys for new region may be far from the real value.
-                // So we let split checker to update it immediately.
-                if let Err(e) = self.ctx.split_check_scheduler.schedule(
-                    SplitCheckTask::GetRegionApproximateSizeAndKeys { region: new_region },
-                ) {
-                    error!(
-                        "failed to schedule split check task";
-                        "region_id" => new_region_id,
-                        "err" => ?e,
-                    );
                 }
             }
         }

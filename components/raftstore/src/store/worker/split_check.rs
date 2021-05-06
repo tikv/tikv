@@ -14,7 +14,6 @@ use kvproto::pdpb::CheckPolicy;
 use crate::coprocessor::Config;
 use crate::coprocessor::CoprocessorHost;
 use crate::coprocessor::SplitCheckerHost;
-use crate::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
 use crate::store::{Callback, CasualMessage, CasualRouter};
 use crate::Result;
 use configuration::{ConfigChange, Configuration};
@@ -135,9 +134,6 @@ pub enum Task {
     ChangeConfig(ConfigChange),
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&Config) + Send>),
-    GetRegionApproximateSizeAndKeys {
-        region: Region,
-    },
 }
 
 impl Task {
@@ -164,11 +160,6 @@ impl Display for Task {
             Task::ChangeConfig(_) => write!(f, "[split check worker] Change Config Task"),
             #[cfg(any(test, feature = "testexport"))]
             Task::Validate(_) => write!(f, "[split check worker] Validate config"),
-            Task::GetRegionApproximateSizeAndKeys { region, .. } => write!(
-                f,
-                "[split check worker] Get region approximate size and keys for region {}",
-                region.get_id()
-            ),
         }
     }
 }
@@ -341,20 +332,6 @@ where
             Task::ChangeConfig(c) => self.change_cfg(c),
             #[cfg(any(test, feature = "testexport"))]
             Task::Validate(f) => f(&self.coprocessor.cfg),
-            Task::GetRegionApproximateSizeAndKeys { region } => {
-                let size =
-                    get_region_approximate_size(&self.engine, &region, 0).unwrap_or_default();
-                let keys =
-                    get_region_approximate_keys(&self.engine, &region, 0).unwrap_or_default();
-                let _ = self.router.send(
-                    region.get_id(),
-                    CasualMessage::RegionApproximateSize { size },
-                );
-                let _ = self.router.send(
-                    region.get_id(),
-                    CasualMessage::RegionApproximateKeys { keys },
-                );
-            }
         }
     }
 }
