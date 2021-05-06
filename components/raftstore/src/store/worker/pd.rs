@@ -694,6 +694,8 @@ where
         for (region_id, region_peer) in &mut self.region_peers {
             let read_bytes = region_peer.read_bytes - region_peer.last_store_report_read_bytes;
             let read_keys = region_peer.read_keys - region_peer.last_store_report_read_keys;
+            region_peer.last_store_report_read_bytes = region_peer.read_bytes;
+            region_peer.last_store_report_read_keys = region_peer.read_keys;
             // TODO: select hotspot peer by binaray heap in future
             if read_bytes < hotspot_byte_report_threshold()
                 || read_keys < hotspot_key_report_threshold()
@@ -705,8 +707,6 @@ where
             peer_stat.set_read_bytes(read_bytes);
             peer_stat.set_read_keys(read_keys);
             stats.peer_stats.push(peer_stat);
-            region_peer.last_store_report_read_bytes = region_peer.read_bytes;
-            region_peer.last_store_report_read_keys = region_peer.read_keys;
         }
 
         let disk_cap = disk_stats.total_space();
