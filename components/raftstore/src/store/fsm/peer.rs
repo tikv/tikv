@@ -4,8 +4,6 @@ use std::borrow::Cow;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::iter::Iterator;
-use std::sync::atomic::AtomicU64;
-use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, u64};
 
@@ -2242,8 +2240,6 @@ where
             if let Err(e) = self.ctx.split_check_scheduler.schedule(
                 SplitCheckTask::GetRegionApproximateSizeAndKeys {
                     region: self.fsm.peer.region().clone(),
-                    pending_tasks: Arc::new(AtomicU64::new(1)),
-                    cb: Box::new(move |_, _| {}),
                 },
             ) {
                 error!(
@@ -2401,11 +2397,7 @@ where
                 // The size and keys for new region may be far from the real value.
                 // So we let split checker to update it immediately.
                 if let Err(e) = self.ctx.split_check_scheduler.schedule(
-                    SplitCheckTask::GetRegionApproximateSizeAndKeys {
-                        region: new_region,
-                        pending_tasks: Arc::new(AtomicU64::new(1)),
-                        cb: Box::new(move |_, _| {}),
-                    },
+                    SplitCheckTask::GetRegionApproximateSizeAndKeys { region: new_region },
                 ) {
                     error!(
                         "failed to schedule split check task";
@@ -3586,18 +3578,7 @@ where
         }
         self.fsm.skip_split_count = 0;
 
-        let task =
-            SplitCheckTask::split_check(self.fsm.peer.region().clone(), true, CheckPolicy::Scan);
-        if let Err(e) = self.ctx.split_check_scheduler.schedule(task) {
-            error!(
-                "failed to schedule split check";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "err" => %e,
-            );
-        }
-        self.fsm.peer.size_diff_hint = 0;
-        self.fsm.peer.compaction_declined_bytes = 0;
+        self.fsm.peer.schedule_check_split(self.ctx);
         self.register_split_region_check_tick();
     }
 
@@ -3711,12 +3692,19 @@ where
 
     fn on_approximate_region_size(&mut self, size: u64) {
         self.fsm.peer.approximate_size = Some(size);
+        if self.fsm.peer.pending_pd_heartbeat_tasks && self.fsm.peer.approximate_keys.is_some() {
+            self.fsm.peer.heartbeat_pd(self.ctx);
+        }
         self.register_split_region_check_tick();
         self.register_pd_heartbeat_tick();
     }
 
     fn on_approximate_region_keys(&mut self, keys: u64) {
         self.fsm.peer.approximate_keys = Some(keys);
+        if self.fsm.peer.pending_pd_heartbeat_tasks && self.fsm.peer.approximate_size.is_some() {
+            self.fsm.peer.heartbeat_pd(self.ctx);
+        }
+
         self.register_split_region_check_tick();
         self.register_pd_heartbeat_tick();
     }

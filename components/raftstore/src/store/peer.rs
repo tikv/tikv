@@ -16,6 +16,7 @@ use fail::fail_point;
 use kvproto::errorpb;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{self, PeerRole};
+use kvproto::pdpb::CheckPolicy;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
     self, AdminCmdType, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
@@ -505,10 +506,7 @@ where
     /// The number of the last unpersisted ready.
     last_unpersisted_number: u64,
 
-    /// The number of pending pd heartbeat tasks. Pd heartbeat task may be blocked by
-    /// reading rocksdb. To avoid unnecessary io operations, we always let the later
-    /// task run when there are more than 1 pending tasks.
-    pub pending_pd_heartbeat_tasks: Arc<AtomicU64>,
+    pub pending_pd_heartbeat_tasks: bool,
 
     pub read_progress: Arc<RegionReadProgress>,
 }
@@ -603,7 +601,7 @@ where
             max_ts_sync_status: Arc::new(AtomicU64::new(0)),
             cmd_epoch_checker: Default::default(),
             last_unpersisted_number: 0,
-            pending_pd_heartbeat_tasks: Arc::new(AtomicU64::new(0)),
+            pending_pd_heartbeat_tasks: false,
             read_progress: Arc::new(RegionReadProgress::new(
                 applied_index,
                 REGION_READ_PROGRESS_CAP,
@@ -3383,45 +3381,28 @@ where
                     "err" => ?e,
                 );
             }
+            self.pending_pd_heartbeat_tasks = false;
             return;
         }
+        fail_point!("schedule_check_split");
+        if self.pending_pd_heartbeat_tasks {
+            return;
+        }
+        self.pending_pd_heartbeat_tasks = true;
+        self.schedule_check_split(ctx);
+    }
 
-        if self.pending_pd_heartbeat_tasks.load(Ordering::SeqCst) > 2 {
-            return;
-        }
-        let region_id = self.region_id;
-        let peer_id = self.peer.get_id();
-        let scheduler = ctx.pd_scheduler.clone();
-        let split_check_task = SplitCheckTask::GetRegionApproximateSizeAndKeys {
-            region: self.region().clone(),
-            pending_tasks: self.pending_pd_heartbeat_tasks.clone(),
-            cb: Box::new(move |size: u64, keys: u64| {
-                if let PdTask::Heartbeat(mut h) = task {
-                    h.approximate_size = size;
-                    h.approximate_keys = keys;
-                    if let Err(e) = scheduler.schedule(PdTask::Heartbeat(h)) {
-                        error!(
-                            "failed to notify pd";
-                            "region_id" => region_id,
-                            "peer_id" => peer_id,
-                            "err" => ?e,
-                        );
-                    }
-                }
-            }),
-        };
-        self.pending_pd_heartbeat_tasks
-            .fetch_add(1, Ordering::SeqCst);
-        if let Err(e) = ctx.split_check_scheduler.schedule(split_check_task) {
+    pub fn schedule_check_split<T>(&mut self, ctx: &PollContext<EK, ER, T>) {
+        let task = SplitCheckTask::split_check(self.region().clone(), true, CheckPolicy::Scan);
+        if let Err(e) = ctx.split_check_scheduler.schedule(task) {
             error!(
-                "failed to notify pd";
-                "region_id" => region_id,
-                "peer_id" => peer_id,
-                "err" => ?e,
+                "failed to schedule split check";
+                "region_id" => self.region().get_id(),
+                "err" => %e,
             );
-            self.pending_pd_heartbeat_tasks
-                .fetch_sub(1, Ordering::SeqCst);
         }
+        self.size_diff_hint = 0;
+        self.compaction_declined_bytes = 0;
     }
 
     fn prepare_raft_message(&self) -> RaftMessage {
