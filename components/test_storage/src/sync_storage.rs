@@ -11,8 +11,8 @@ use tikv::storage::config::Config;
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::{
-    txn::commands, Engine, PerfStatisticsDelta, PrewriteResult, Result, Statistics, Storage,
-    TestEngineBuilder, TestStorageBuilder, TxnStatus,
+    test_util::GetProcessor, txn::commands, Engine, PerfStatisticsDelta, PrewriteResult, Result,
+    Statistics, Storage, TestEngineBuilder, TestStorageBuilder, TxnStatus,
 };
 use txn_types::{Key, KvPair, Mutation, TimeStamp, Value};
 
@@ -127,7 +127,8 @@ impl<E: Engine> SyncTestStorage<E> {
         ctx: Context,
         keys: &[&[u8]],
         start_ts: u64,
-    ) -> Result<Vec<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>> {
+    ) -> Result<Vec<Option<Vec<u8>>>> {
+        let mut ids = vec![];
         let requests: Vec<GetRequest> = keys
             .to_owned()
             .into_iter()
@@ -136,13 +137,14 @@ impl<E: Engine> SyncTestStorage<E> {
                 req.set_context(ctx.clone());
                 req.set_key(key.to_owned());
                 req.set_version(start_ts);
+                ids.push(ids.len() as u64);
                 req
             })
             .collect();
-        let resp = block_on(self.store.batch_get_command(requests))?;
+        let p = GetProcessor::new();
+        block_on(self.store.batch_get_command(requests, ids, p.clone()))?;
         let mut values = vec![];
-
-        for value in resp.into_iter() {
+        for value in p.take_data().into_iter() {
             values.push(value?);
         }
         Ok(values)

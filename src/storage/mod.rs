@@ -1811,6 +1811,7 @@ pub trait ResponseBatchConsumer<ConsumeResponse: Sized>: Send {
 pub mod test_util {
     use super::*;
     use crate::storage::txn::commands;
+    use std::sync::Mutex;
     use std::{
         fmt::Debug,
         sync::mpsc::{channel, Sender},
@@ -1944,6 +1945,50 @@ pub mod test_util {
             .unwrap();
         rx.recv().unwrap();
     }
+
+    pub struct GetResult {
+        id: u64,
+        res: Result<Option<Vec<u8>>>,
+    }
+
+    #[derive(Clone)]
+    pub struct GetProcessor {
+        pub data: Arc<Mutex<Vec<GetResult>>>,
+    }
+
+    impl GetProcessor {
+        pub fn new() -> Self {
+            Self {
+                data: Arc::new(Mutex::new(vec![])),
+            }
+        }
+
+        pub fn take_data(self) -> Vec<Result<Option<Vec<u8>>>> {
+            let mut data = self.data.lock().unwrap();
+            let mut results = std::mem::take(&mut *data);
+            results.sort_by_key(|k| k.id);
+            results.into_iter().map(|v| v.res).collect()
+        }
+    }
+
+    impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)> for GetProcessor {
+        fn consume(
+            &self,
+            id: u64,
+            res: Result<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>,
+        ) {
+            self.data.lock().unwrap().push(GetResult {
+                id,
+                res: res.map(|(v, ..)| v),
+            });
+        }
+    }
+
+    impl ResponseBatchConsumer<Option<Vec<u8>>> for GetProcessor {
+        fn consume(&self, id: u64, res: Result<Option<Vec<u8>>>) {
+            self.data.lock().unwrap().push(GetResult { id, res });
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1970,10 +2015,8 @@ mod tests {
     use engine_rocks::raw_util::CFOptions;
     use engine_traits::{CF_LOCK, CF_RAFT, CF_WRITE};
     use errors::extract_key_error;
-    use errors::extract_region_error;
     use futures::executor::block_on;
     use kvproto::kvrpcpb::{CommandPri, Op};
-    use std::sync::Mutex;
     use std::{
         sync::{
             atomic::{AtomicBool, Ordering},
@@ -1984,42 +2027,6 @@ mod tests {
     };
     use tikv_util::config::ReadableSize;
     use txn_types::{Mutation, WriteType};
-
-    #[derive(Clone)]
-    pub struct GetProcessor {
-        pub data: Arc<Mutex<Vec<(u64, Result<Option<Vec<u8>>>)>>>,
-    }
-
-    impl GetProcessor {
-        pub fn new() -> Self {
-            Self {
-                data: Arc::new(Mutex::new(vec![])),
-            }
-        }
-
-        pub fn take_data(self) -> Vec<Result<Option<Vec<u8>>>> {
-            let mut data = self.data.lock().unwrap();
-            let mut results = std::mem::take(&mut *data);
-            results.sort_by_key(|k| k.0);
-            results.into_iter().map(|v| v.1).collect()
-        }
-    }
-
-    impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)> for GetProcessor {
-        fn consume(
-            &self,
-            id: u64,
-            res: Result<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>,
-        ) {
-            self.data.lock().unwrap().push((id, res.map(|(v, ..)| v)));
-        }
-    }
-
-    impl ResponseBatchConsumer<Option<Vec<u8>>> for GetProcessor {
-        fn consume(&self, id: u64, res: Result<Option<Vec<u8>>>) {
-            self.data.lock().unwrap().push((id, res));
-        }
-    }
 
     #[test]
     fn test_prewrite_blocks_read() {
