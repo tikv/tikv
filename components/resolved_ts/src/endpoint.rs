@@ -428,14 +428,14 @@ where
     fn handle_change_log(
         &mut self,
         cmd_batch: Vec<CmdBatch>,
-        snapshot: RegionSnapshot<E::Snapshot>,
+        snapshot: Option<RegionSnapshot<E::Snapshot>>,
     ) {
         let logs = cmd_batch
             .into_iter()
             .filter_map(|batch| {
                 if !batch.is_empty() {
                     if let Some(observe_region) = self.regions.get_mut(&batch.region_id) {
-                        let observe_id = batch.cdc_id;
+                        let observe_id = batch.rts_id;
                         let region_id = observe_region.meta.id;
                         if observe_region.observe_id == observe_id {
                             let logs = ChangeLog::encode_change_log(region_id, batch);
@@ -451,7 +451,7 @@ where
                         } else {
                             debug!("resolved ts CmdBatch discarded";
                                 "region_id" => batch.region_id,
-                                "observe_id" => ?batch.cdc_id,
+                                "observe_id" => ?batch.rts_id,
                                 "current" => ?observe_region.observe_id,
                             );
                         }
@@ -460,7 +460,10 @@ where
                 None
             })
             .collect();
-        self.sinker.sink_cmd(logs, snapshot);
+        match snapshot {
+            Some(snap) => self.sinker.sink_cmd_with_old_value(logs, snap),
+            None => self.sinker.sink_cmd(logs),
+        }
     }
 
     fn handle_scan_locks(
@@ -506,7 +509,7 @@ pub enum Task<S: Snapshot> {
     },
     ChangeLog {
         cmd_batch: Vec<CmdBatch>,
-        snapshot: RegionSnapshot<S>,
+        snapshot: Option<RegionSnapshot<S>>,
     },
     ScanLocks {
         region_id: u64,
