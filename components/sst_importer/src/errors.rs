@@ -42,29 +42,41 @@ pub fn error_inc(type_: &str, err: &Error) {
 pub enum Error {
     #[error("{0}")]
     Io(#[from] IoError),
+
     #[error("{0}")]
     Grpc(#[from] GrpcError),
+
     #[error("{0}")]
     Uuid(#[from] UuidError),
+
     #[error("{0}")]
     Future(#[from] Canceled),
+
     // FIXME: Remove concrete 'rocks' type
     #[error("RocksDB {0}")]
     RocksDB(String),
+
     #[error("Engine {0:?}")]
     EngineTraits(#[from] engine_traits::Error),
+
     #[error("{0}")]
     ParseIntError(#[from] ParseIntError),
+
     #[error("File {0:?} exists, cannot {1}")]
     FileExists(PathBuf, &'static str),
+
     #[error("File {0:?} corrupted: {1}")]
     FileCorrupted(PathBuf, String),
+
     #[error("Invalid SST path {0:?}")]
     InvalidSSTPath(PathBuf),
+
     #[error("invalid chunk")]
     InvalidChunk,
+
     #[error("{0}")]
     Engine(Box<dyn StdError + Send + Sync + 'static>),
+
     #[error("Cannot read {url}/{name} into {}: {err}", local_path.display())]
     CannotReadExternalStorage {
         url: String,
@@ -73,6 +85,7 @@ pub enum Error {
         #[source]
         err: IoError,
     },
+
     #[error(
         "{what} has wrong prefix: key {} does not start with {}",
         log_wrappers::Value::key(&key), log_wrappers::Value::key(&prefix)
@@ -82,12 +95,16 @@ pub enum Error {
         key: Vec<u8>,
         prefix: Vec<u8>,
     },
+
     #[error("bad format {0}")]
     BadFormat(String),
+
     #[error("Encryption {0:?}")]
     Encryption(#[from] EncryptionError),
+
     #[error("Codec {0}")]
     CodecError(#[from] CodecError),
+
     #[error("ingest file conflict")]
     FileConflict,
 }
