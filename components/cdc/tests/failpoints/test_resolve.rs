@@ -192,7 +192,7 @@ fn test_joint_confchange() {
             let event = receive_event(true);
             if let Some(resolved_ts) = event.resolved_ts.as_ref() {
                 let ts = resolved_ts.ts;
-                assert!(ts > last_resolved_ts);
+                assert!(ts >= last_resolved_ts);
                 last_resolved_ts = ts;
                 i += 1;
             }

@@ -1,9 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use collections::{HashMap, HashSet};
+use raftstore::store::util::RegionReadProgress;
 use std::cmp;
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use txn_types::TimeStamp;
 
@@ -16,7 +16,9 @@ pub struct Resolver {
     // start_ts -> locked keys.
     lock_ts_heap: BTreeMap<TimeStamp, HashSet<Arc<[u8]>>>,
     // The timestamps that guarantees no more commit will happen before.
-    resolved_ts: Arc<AtomicU64>,
+    resolved_ts: TimeStamp,
+    // The region read progress is used to utilize `resolved_ts` to serve stale read request
+    read_progress: Arc<RegionReadProgress>,
     // The timestamps that advance the resolved_ts when there is no more write.
     min_ts: TimeStamp,
 }
@@ -26,10 +28,11 @@ impl Resolver {
         Resolver::from_shared(region_id, Arc::default())
     }
 
-    pub fn from_shared(region_id: u64, resolved_ts: Arc<AtomicU64>) -> Resolver {
+    pub fn from_shared(region_id: u64, read_progress: Arc<RegionReadProgress>) -> Resolver {
         Resolver {
             region_id,
-            resolved_ts,
+            resolved_ts: TimeStamp::zero(),
+            read_progress,
             locks_by_key: HashMap::default(),
             lock_ts_heap: BTreeMap::new(),
             min_ts: TimeStamp::zero(),
@@ -37,7 +40,7 @@ impl Resolver {
     }
 
     pub fn resolved_ts(&self) -> TimeStamp {
-        self.resolved_ts.load(Ordering::Acquire).into()
+        self.resolved_ts
     }
 
     pub fn locks(&self) -> &BTreeMap<TimeStamp, HashSet<Arc<[u8]>>> {
@@ -91,9 +94,15 @@ impl Resolver {
 
         // No more commit happens before the ts.
         let new_resolved_ts = cmp::min(min_start_ts, min_ts);
-        let prev_ts = self
-            .resolved_ts
-            .fetch_max(new_resolved_ts.into_inner(), Ordering::Relaxed);
+
+        // Resolved ts never decrease.
+        self.resolved_ts = cmp::max(self.resolved_ts, new_resolved_ts);
+
+        // Update region read progress
+        // TODO: should use `RegionReadProgress::update_safe_ts` to avoid direct
+        // write to `safe_ts`
+        self.read_progress
+            .fetch_max_safe_ts(self.resolved_ts.into_inner());
 
         let new_min_ts = if has_lock {
             // If there are some lock, the min_ts must be smaller than
@@ -106,7 +115,7 @@ impl Resolver {
         // Min ts never decrease.
         self.min_ts = cmp::max(self.min_ts, new_min_ts);
 
-        cmp::max(TimeStamp::new(prev_ts), new_resolved_ts)
+        self.resolved_ts
     }
 }
 
