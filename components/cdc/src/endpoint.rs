@@ -361,10 +361,15 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 if is_last {
                     let delegate = self.capture_regions.remove(&region_id).unwrap();
                     if let Some(reader) = self.store_meta.lock().unwrap().readers.get(&region_id) {
-                        reader
+                        if let Err(e) = reader
                             .txn_extra_op
                             .compare_exchange(TxnExtraOp::ReadOldValue, TxnExtraOp::Noop)
-                            .unwrap();
+                        {
+                            panic!(
+                                "unexpect txn extra op {:?}, region_id: {:?}, downstream_id: {:?}, conn_id: {:?}",
+                                e, region_id, downstream_id, conn_id
+                            );
+                        }
                     }
                     // Do not continue to observe the events of the region.
                     let oid = self.observer.unsubscribe_region(region_id, delegate.id);
