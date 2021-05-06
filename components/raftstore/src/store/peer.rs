@@ -35,6 +35,7 @@ use raft::{
 };
 use raft_proto::ConfChangeI;
 use smallvec::SmallVec;
+use tikv_util::memory::HeapSize;
 use time::Timespec;
 use uuid::Uuid;
 
