@@ -80,7 +80,6 @@ prometheus = { version = "0.10", features = ["nightly"] }
 prometheus-static-metric = "0.4"
 prost = { version = "0.7", optional = true }
 protobuf = "2.8"
-quick-error = "1.2.3"
 raft = { version = "0.6.0-alpha", default-features = false }
 raft-proto = { version = "0.6.0-alpha", default-features = false }
 rand = "0.7.3"

@@ -3551,7 +3551,6 @@ dependencies = [
  "prometheus-static-metric",
  "prost",
  "protobuf",
- "quick-error",
  "raft",
  "raft-proto",
  "rand 0.7.3",
