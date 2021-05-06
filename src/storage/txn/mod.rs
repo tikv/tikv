@@ -7,24 +7,16 @@ pub mod sched_pool;
 pub mod scheduler;
 
 mod actions;
-
-pub use actions::{
-    acquire_pessimistic_lock::acquire_pessimistic_lock,
-    cleanup::cleanup,
-    commit::commit,
-    gc::gc,
-    prewrite::{prewrite, CommitKind, TransactionKind, TransactionProperties},
-};
-
 mod latch;
 mod store;
 
 use std::error::Error as StdError;
 use std::io::Error as IoError;
 
-use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::kvrpcpb::LockInfo;
 use thiserror::Error;
+
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use txn_types::{Key, TimeStamp, Value};
 
 use crate::storage::{
@@ -32,6 +24,13 @@ use crate::storage::{
     Error as StorageError, Result as StorageResult,
 };
 
+pub use self::actions::{
+    acquire_pessimistic_lock::acquire_pessimistic_lock,
+    cleanup::cleanup,
+    commit::commit,
+    gc::gc,
+    prewrite::{prewrite, CommitKind, TransactionKind, TransactionProperties},
+};
 pub use self::commands::{Command, RESOLVE_LOCK_BATCH_SIZE};
 pub use self::latch::{Latches, Lock};
 pub use self::scheduler::Scheduler;
@@ -91,60 +90,51 @@ impl ProcessResult {
     }
 }
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum ErrorInner {
-        Engine(err: crate::storage::kv::Error) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        Codec(err: tikv_util::codec::Error) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        ProtoBuf(err: protobuf::error::ProtobufError) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        Mvcc(err: crate::storage::mvcc::Error) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        Other(err: Box<dyn StdError + Sync + Send>) {
-            from()
-            cause(err.as_ref())
-            display("{:?}", err)
-        }
-        Io(err: IoError) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        InvalidTxnTso {start_ts: TimeStamp, commit_ts: TimeStamp} {
-            display("Invalid transaction tso with start_ts:{},commit_ts:{}",
-                        start_ts,
-                        commit_ts)
-        }
-        InvalidReqRange {start: Option<Vec<u8>>,
-                        end: Option<Vec<u8>>,
-                        lower_bound: Option<Vec<u8>>,
-                        upper_bound: Option<Vec<u8>>} {
-            display("Request range exceeds bound, request range:[{}, end:{}), physical bound:[{}, {})",
-                        start.as_ref().map(|x| &x[..]).map(log_wrappers::Value::key).map(|x| format!("{:?}", x)).unwrap_or_else(|| "(none)".to_owned()),
-                        end.as_ref().map(|x| &x[..]).map(log_wrappers::Value::key).map(|x| format!("{:?}", x)).unwrap_or_else(|| "(none)".to_owned()),
-                        lower_bound.as_ref().map(|x| &x[..]).map(log_wrappers::Value::key).map(|x| format!("{:?}", x)).unwrap_or_else(|| "(none)".to_owned()),
-                        upper_bound.as_ref().map(|x| &x[..]).map(log_wrappers::Value::key).map(|x| format!("{:?}", x)).unwrap_or_else(|| "(none)".to_owned()))
-        }
-        MaxTimestampNotSynced { region_id: u64, start_ts: TimeStamp } {
-            display("Prewrite for async commit fails due to potentially stale max timestamp, start_ts: {}, region_id: {}",
-                        start_ts,
-                        region_id)
-        }
-    }
+#[derive(Debug, Error)]
+pub enum ErrorInner {
+    #[error("{0}")]
+    Engine(#[from] crate::storage::kv::Error),
+
+    #[error("{0}")]
+    Codec(#[from] tikv_util::codec::Error),
+
+    #[error("{0}")]
+    ProtoBuf(#[from] protobuf::error::ProtobufError),
+
+    #[error("{0}")]
+    Mvcc(#[from] crate::storage::mvcc::Error),
+
+    #[error("{0:?}")]
+    Other(#[from] Box<dyn StdError + Sync + Send>),
+
+    #[error("{0}")]
+    Io(#[from] IoError),
+
+    #[error("Invalid transaction tso with start_ts:{start_ts}, commit_ts:{commit_ts}")]
+    InvalidTxnTso {
+        start_ts: TimeStamp,
+        commit_ts: TimeStamp,
+    },
+
+    #[error(
+        "Request range exceeds bound, request range:[{}, {}), physical bound:[{}, {})",
+        .start.as_ref().map(|x| &x[..]).map(log_wrappers::Value::key).map(|x| format!("{:?}", x)).unwrap_or_else(|| "(none)".to_owned()),
+        .end.as_ref().map(|x| &x[..]).map(log_wrappers::Value::key).map(|x| format!("{:?}", x)).unwrap_or_else(|| "(none)".to_owned()),
+        .lower_bound.as_ref().map(|x| &x[..]).map(log_wrappers::Value::key).map(|x| format!("{:?}", x)).unwrap_or_else(|| "(none)".to_owned()),
+        .upper_bound.as_ref().map(|x| &x[..]).map(log_wrappers::Value::key).map(|x| format!("{:?}", x)).unwrap_or_else(|| "(none)".to_owned())
+    )]
+    InvalidReqRange {
+        start: Option<Vec<u8>>,
+        end: Option<Vec<u8>>,
+        lower_bound: Option<Vec<u8>>,
+        upper_bound: Option<Vec<u8>>,
+    },
+
+    #[error(
+        "Prewrite for async commit fails due to potentially stale max timestamp, \
+        start_ts: {start_ts}, region_id: {region_id}"
+    )]
+    MaxTimestampNotSynced { region_id: u64, start_ts: TimeStamp },
 }
 
 impl ErrorInner {
