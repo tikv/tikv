@@ -3564,6 +3564,7 @@ dependencies = [
  "sst_importer",
  "tempfile",
  "test_sst_importer",
+ "thiserror",
  "tidb_query_datatype",
  "tikv_alloc",
  "tikv_util",
