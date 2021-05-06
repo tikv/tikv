@@ -3675,26 +3675,33 @@ mod tests {
         assert!(cfg.validate().is_ok());
 
         let mut cfg = TiKvConfig::default();
-        cfg.storage.data_dir = String::from("/data");
-        cfg.raft_store.raftdb_path = String::from("/data/db");
+        cfg.storage.data_dir = String::from("./data");
+        cfg.raft_store.raftdb_path = String::from("./data/db");
         assert!(!cfg.validate().is_ok());
 
         let mut cfg = TiKvConfig::default();
-        cfg.storage.data_dir = String::from("/kvdb");
-        cfg.raft_store.raftdb_path = String::from("/raftdb/db");
-        cfg.rocksdb.wal_dir = String::from("/raftdb/db");
+        cfg.storage.data_dir = String::from("./data/kvdb");
+        cfg.raft_store.raftdb_path = String::from("./data/raftdb/db");
+        cfg.rocksdb.wal_dir = String::from("./data/raftdb/db");
         assert!(!cfg.validate().is_ok());
 
         let mut cfg = TiKvConfig::default();
-        cfg.storage.data_dir = String::from("/kvdb");
-        cfg.raft_store.raftdb_path = String::from("/raftdb/db");
-        cfg.raftdb.wal_dir = String::from("/kvdb/db");
+        cfg.storage.data_dir = String::from("./data/kvdb");
+        cfg.raft_store.raftdb_path = String::from("./data/raftdb/db");
+        cfg.raftdb.wal_dir = String::from("./data/kvdb/db");
         assert!(!cfg.validate().is_ok());
 
         let mut cfg = TiKvConfig::default();
-        cfg.rocksdb.wal_dir = String::from("/wal");
-        cfg.raftdb.wal_dir = String::from("/wal");
+        cfg.rocksdb.wal_dir = String::from("./data/wal");
+        cfg.raftdb.wal_dir = String::from("./data/wal");
         assert!(!cfg.validate().is_ok());
+
+        let mut cfg = TiKvConfig::default();
+        cfg.storage.data_dir = String::from("./data/kvdb");
+        cfg.raft_store.raftdb_path = String::from("./data/raftdb/db");
+        cfg.rocksdb.wal_dir = String::from("./data/kvdb/db");
+        cfg.raftdb.wal_dir = String::from("./data/raftdb/db");
+        assert!(cfg.validate().is_ok());
     }
 
     #[test]
