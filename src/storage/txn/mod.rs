@@ -19,16 +19,18 @@ pub use actions::{
 mod latch;
 mod store;
 
+use std::error::Error as StdError;
+use std::io::Error as IoError;
+
+use error_code::{self, ErrorCode, ErrorCodeExt};
+use kvproto::kvrpcpb::LockInfo;
+use thiserror::Error;
+use txn_types::{Key, TimeStamp, Value};
+
 use crate::storage::{
     types::{MvccInfo, PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, TxnStatus},
     Error as StorageError, Result as StorageResult,
 };
-use error_code::{self, ErrorCode, ErrorCodeExt};
-use kvproto::kvrpcpb::LockInfo;
-use std::error;
-use std::fmt;
-use std::io::Error as IoError;
-use txn_types::{Key, TimeStamp, Value};
 
 pub use self::commands::{Command, RESOLVE_LOCK_BATCH_SIZE};
 pub use self::latch::{Latches, Lock};
@@ -112,7 +114,7 @@ quick_error! {
             cause(err)
             display("{}", err)
         }
-        Other(err: Box<dyn error::Error + Sync + Send>) {
+        Other(err: Box<dyn StdError + Sync + Send>) {
             from()
             cause(err.as_ref())
             display("{:?}", err)
@@ -181,29 +183,13 @@ impl ErrorInner {
     }
 }
 
-pub struct Error(pub Box<ErrorInner>);
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct Error(#[from] pub Box<ErrorInner>);
 
 impl Error {
     pub fn maybe_clone(&self) -> Option<Error> {
         self.0.maybe_clone().map(Error::from)
-    }
-}
-
-impl fmt::Debug for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&self.0, f)
-    }
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        std::error::Error::source(&self.0)
     }
 }
 

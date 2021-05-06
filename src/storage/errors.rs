@@ -5,15 +5,17 @@ use std::error;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
 
+use error_code::{self, ErrorCode, ErrorCodeExt};
+use kvproto::{errorpb, kvrpcpb};
+use thiserror::Error;
+use txn_types::{KvPair, TimeStamp};
+
 use crate::storage::{
     kv::{self, Error as EngineError, ErrorInner as EngineErrorInner},
     mvcc::{self, Error as MvccError, ErrorInner as MvccErrorInner},
     txn::{self, Error as TxnError, ErrorInner as TxnErrorInner},
     Result,
 };
-use error_code::{self, ErrorCode, ErrorCodeExt};
-use kvproto::{errorpb, kvrpcpb};
-use txn_types::{KvPair, TimeStamp};
 
 quick_error! {
     #[derive(Debug)]
@@ -67,25 +69,9 @@ quick_error! {
 }
 
 /// Errors for storage module. Wrapper type of `ErrorInner`.
-pub struct Error(pub Box<ErrorInner>);
-
-impl fmt::Debug for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&self.0, f)
-    }
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        std::error::Error::source(&self.0)
-    }
-}
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct Error(#[from] pub Box<ErrorInner>);
 
 impl From<ErrorInner> for Error {
     #[inline]
