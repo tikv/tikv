@@ -470,6 +470,11 @@ fn test_gen_snapshot_with_no_committed_entries_ready() {
     must_get_equal(&cluster.get_engine(3), b"k9", b"v1");
 }
 
+// Test snapshot generating can be canceled by Raft log GC correctly. It does
+// 1. pause snapshot generating with a failpoint, and then add a new peer;
+// 2. append more Raft logs to the region to trigger raft log compactions;
+// 3. disable the failpoint to continue snapshot generating;
+// 4. the generated snapshot should have a larger index than the latest `truncated_idx`.
 #[test]
 fn test_cancel_snapshot_generating() {
     let mut cluster = new_node_cluster(0, 5);
@@ -501,8 +506,10 @@ fn test_cancel_snapshot_generating() {
     pd_client.must_add_peer(rid, new_learner_peer(4, 4));
 
     // Snapshot generatings will be canceled by raft log GC.
-    (0..100).for_each(|_| cluster.must_put(b"kk", b"vv"));
-    cluster.wait_log_truncated(rid, 1, 112);
+    let mut truncated_idx = cluster.truncated_state(rid, 1).get_index();
+    truncated_idx += 20;
+    (0..20).for_each(|_| cluster.must_put(b"kk", b"vv"));
+    cluster.wait_log_truncated(rid, 1, truncated_idx);
 
     fail::cfg("before_region_gen_snap", "off").unwrap();
     // Wait for all snapshot generating tasks are consumed.
@@ -518,6 +525,6 @@ fn test_cancel_snapshot_generating() {
         }
         let parts: Vec<_> = file_name[0..file_name.len() - 5].split('_').collect();
         let snap_index = parts[3].parse::<u64>().unwrap();
-        assert!(snap_index > 112u64);
+        assert!(snap_index > truncated_idx);
     }
 }
