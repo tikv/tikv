@@ -4,7 +4,7 @@ use std::cmp::{Ord, Ordering as CmpOrdering};
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::ops::Deref;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{mem, u64};
@@ -330,7 +330,6 @@ where
     pub pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
     pub raft_metrics: RaftMetrics,
     pub snap_mgr: SnapManager,
-    pub applying_snap_count: Arc<AtomicUsize>,
     pub coprocessor_host: CoprocessorHost<EK>,
     pub timer: SteadyTimer,
     pub trans: T,
@@ -882,7 +881,6 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     trans: T,
     global_stat: GlobalStoreStat,
     pub engines: Engines<EK, ER>,
-    applying_snap_count: Arc<AtomicUsize>,
     global_replication_state: Arc<Mutex<GlobalReplicationState>>,
     feature_gate: FeatureGate,
 }
@@ -1081,7 +1079,6 @@ where
             pending_create_peers: self.pending_create_peers.clone(),
             raft_metrics: RaftMetrics::default(),
             snap_mgr: self.snap_mgr.clone(),
-            applying_snap_count: self.applying_snap_count.clone(),
             coprocessor_host: self.coprocessor_host.clone(),
             timer: SteadyTimer::default(),
             trans: self.trans.clone(),
@@ -1237,7 +1234,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             global_stat: GlobalStoreStat::default(),
             store_meta,
             pending_create_peers: Arc::new(Mutex::new(HashMap::default())),
-            applying_snap_count: Arc::new(AtomicUsize::new(0)),
             feature_gate: pd_client.feature_gate().clone(),
         };
         let region_peers = builder.init()?;
@@ -1941,12 +1937,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
             .with_label_values(&["receiving"])
             .set(snap_stats.receiving_count as i64);
-
-        let apply_snapshot_count = self.ctx.applying_snap_count.load(Ordering::SeqCst);
-        stats.set_applying_snap_count(apply_snapshot_count as u32);
-        STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
-            .with_label_values(&["applying"])
-            .set(apply_snapshot_count as i64);
 
         stats.set_start_time(self.fsm.store.start_time.unwrap().sec as u32);
 
