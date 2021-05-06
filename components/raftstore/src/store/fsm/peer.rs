@@ -527,14 +527,13 @@ where
                 PeerMsg::SplitCheck => {
                     // If the current `approximate_size` is larger than `region_max_size`, this region
                     // may ingest a large file which is imported by `BR` or `lightning`, we shall check it
-                    let approximate_size =
-                        self.fsm.peer.approximate_size.unwrap_or(u64::max_value());
-                    let approximate_keys =
-                        self.fsm.peer.approximate_keys.unwrap_or(u64::max_value());
-                    if self.fsm.peer.is_leader()
-                        && (approximate_size > self.ctx.coprocessor_host.cfg.region_max_size.0
-                            || approximate_keys > self.ctx.coprocessor_host.cfg.region_max_keys)
-                    {
+                    let check_size = self.fsm.peer.approximate_size.map_or(true, |size| {
+                        size > self.ctx.coprocessor_host.cfg.region_max_size.0
+                    });
+                    let check_keys = self.fsm.peer.approximate_keys.map_or(true, |keys| {
+                        keys > self.ctx.coprocessor_host.cfg.region_max_keys
+                    });
+                    if self.fsm.peer.is_leader() && (check_size || check_keys) {
                         self.schedule_check_split();
                     }
                 }
