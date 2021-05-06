@@ -3435,7 +3435,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine?branch=master#cd3f999f80d62bb7705fb59d17888b7d9733fa59"
+source = "git+https://github.com/tikv/raft-engine?branch=master#8d559deaf53a3d1daf482f4523f71d33f4cd715f"
 dependencies = [
  "byteorder",
  "crc32fast",

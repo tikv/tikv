@@ -2370,29 +2370,18 @@ impl TiKvConfig {
         if kv_db_path == self.raft_store.raftdb_path {
             return Err("raft_store.raftdb_path can not same with storage.data_dir/db".into());
         }
-        if !self.raft_engine.enable {
-            if RocksEngine::exists(&kv_db_path)
-                && !RocksEngine::exists(&self.raft_store.raftdb_path)
-            {
-                return Err("default rocksdb exist, but raftdb not exist".into());
-            }
-            if !RocksEngine::exists(&kv_db_path)
-                && RocksEngine::exists(&self.raft_store.raftdb_path)
-            {
-                return Err("default rocksdb not exist, but raftdb exist".into());
-            }
-        } else {
-            if RocksEngine::exists(&kv_db_path)
-                && !RaftLogEngine::exists(&self.raft_engine.config.dir)
-                && !RocksEngine::exists(&self.raft_store.raftdb_path)
-            {
-                return Err("default rocksdb exist, but raftdb and raft engine not exist".into());
-            }
-            if !RocksEngine::exists(&kv_db_path)
-                && RaftLogEngine::exists(&self.raft_engine.config.dir)
-            {
-                return Err("default rocksdb not exist, but raft engine exist".into());
-            }
+
+        if RocksEngine::exists(&kv_db_path)
+            && !RocksEngine::exists(&self.raft_store.raftdb_path)
+            && !RaftLogEngine::exists(&self.raft_engine.config.dir)
+        {
+            return Err("default rocksdb exist, but raftdb and raft engine not exist".into());
+        }
+        if !RocksEngine::exists(&kv_db_path)
+            && (RocksEngine::exists(&self.raft_store.raftdb_path)
+                || RaftLogEngine::exists(&self.raft_engine.config.dir))
+        {
+            return Err("default rocksdb not exist, but raftdb or raft engine exist".into());
         }
 
         // Check blob file dir is empty when titan is disabled
@@ -2594,25 +2583,23 @@ impl TiKvConfig {
             }
         }
 
-        if last_cfg.raft_store.raftdb_path != self.raft_store.raftdb_path {
+        if last_cfg.raft_store.raftdb_path != self.raft_store.raftdb_path
+            && !last_cfg.raft_engine.enable
+        {
             return Err(format!(
-                "raft dir have been changed, former raft dir is '{}', \
-                 current raft dir is '{}', please check if it is expected.",
+                "raft db dir have been changed, former is '{}', \
+                 current is '{}', please check if it is expected.",
                 last_cfg.raft_store.raftdb_path, self.raft_store.raftdb_path
             ));
         }
-        if last_cfg.raft_engine.enable
-            && self.raft_engine.enable
-            && last_cfg.raft_engine.config.dir != self.raft_engine.config.dir
+        if last_cfg.raft_engine.config.dir != self.raft_engine.config.dir
+            && last_cfg.raft_engine.enable
         {
             return Err(format!(
                 "raft engine dir have been changed, former is '{}', \
                  current is '{}', please check if it is expected.",
                 last_cfg.raft_engine.config.dir, self.raft_engine.config.dir
             ));
-        }
-        if last_cfg.raft_engine.enable && !self.raft_engine.enable {
-            return Err("raft engine can't be disabled after switched on.".to_owned());
         }
         if last_cfg.storage.enable_ttl && !self.storage.enable_ttl {
             return Err("can't disable ttl on a ttl instance".to_owned());
