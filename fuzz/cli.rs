@@ -54,6 +54,14 @@ enum Cli {
         /// The target fuzz to run.
         target: String,
     },
+    /// Build matched fuzz test with specific fuzzer.
+    #[structopt(name = "build")]
+    Build {
+        /// The fuzzer to use.
+        fuzzer: Fuzzer,
+        /// The target fuzz to run.
+        target: String,
+    },
 }
 
 arg_enum! {
@@ -91,6 +99,12 @@ fn main() -> Result<(), i32> {
         Cli::Run { fuzzer, target } => {
             if let Err(error) = run(fuzzer, &target) {
                 eprintln!("Running fuzzer failed: {}", error);
+                return Err(1);
+            }
+        }
+        Cli::Build { fuzzer, target } => {
+            if let Err(error) = build(fuzzer, &target) {
+                eprintln!("Building fuzzer failed: {}", error);
                 return Err(1);
             }
         }
@@ -146,6 +160,22 @@ fn run(fuzzer: Fuzzer, target: &str) -> Result<()> {
     }
 }
 
+/// Build one target fuzz test with specific fuzzer
+fn build(fuzzer: Fuzzer, target: &str) -> Result<()> {
+    if !FUZZ_TARGETS.iter().any(|x| x == target) {
+        panic!(
+            "Unknown fuzz target `{}`. Run `list-targets` command to see available fuzz targets.",
+            target
+        );
+    }
+    write_fuzz_target_source_file(fuzzer, target)?;
+    match fuzzer {
+        Fuzzer::Afl => build_afl(target),
+        Fuzzer::Honggfuzz => build_honggfuzz(target),
+        Fuzzer::Libfuzzer => build_libfuzzer(target),
+    }
+}
+
 /// Get input seeds for fuzz target
 fn get_seed_dir(target: &str) -> PathBuf {
     let seeds_dir = SEED_ROOT.join(target);
@@ -182,6 +212,32 @@ fn pre_check(command: &mut Command, hint: &str) -> Result<()> {
     } else {
         Ok(())
     }
+}
+
+/// Build one target fuzz test using AFL
+fn build_afl(target: &str) -> Result<()> {
+    let fuzzer = Fuzzer::Afl;
+    pre_check(
+        Command::new("cargo").args(&["afl", "--version"]),
+        "cargo install afl",
+    )?;
+
+    let fuzzer_build = Command::new("cargo")
+        .args(&["afl", "build", "--bin", target])
+        .current_dir(fuzzer.directory())
+        .spawn()
+        .context(format!("Failed to build {}", fuzzer))?
+        .wait()
+        .context(format!("Failed to complete building {}", fuzzer))?;
+
+    if !fuzzer_build.success() {
+        return Err(anyhow!(
+            "error building afl instrumented binary, exit code {:?}",
+            fuzzer_build.code()
+        ));
+    }
+
+    Ok(())
 }
 
 /// Run one target fuzz test using AFL
@@ -238,6 +294,45 @@ fn run_afl(target: &str) -> Result<()> {
     Ok(())
 }
 
+/// Build one target fuzz test using Honggfuzz
+fn build_honggfuzz(target: &str) -> Result<()> {
+    pre_check(
+        Command::new("cargo").args(&["hfuzz", "version"]),
+        "cargo install honggfuzz --version 0.5.45",
+    )?;
+
+    let fuzzer = Fuzzer::Honggfuzz;
+
+    let mut rust_flags = env::var("RUSTFLAGS").unwrap_or_default();
+    rust_flags.push_str(" -Zsanitizer=address");
+
+    let fuzzer_bin = Command::new("cargo")
+        .args(&[
+            "hfuzz",
+            "build",
+            "--target-dir",
+            "../../target",
+            "--bin",
+            target,
+        ])
+        .env("RUSTFLAGS", &rust_flags)
+        .current_dir(fuzzer.directory())
+        .spawn()
+        .context(format!("Failed to build {}", fuzzer))?
+        .wait()
+        .context(format!("Failed to wait {}", fuzzer))?;
+
+    if !fuzzer_bin.success() {
+        return Err(anyhow!(
+            "{} exited with code {:?}",
+            fuzzer,
+            fuzzer_bin.code()
+        ));
+    }
+
+    Ok(())
+}
+
 /// Run one target fuzz test using Honggfuzz
 fn run_honggfuzz(target: &str) -> Result<()> {
     pre_check(
@@ -265,6 +360,63 @@ fn run_honggfuzz(target: &str) -> Result<()> {
         .current_dir(fuzzer.directory())
         .spawn()
         .context(format!("Failed to run {}", fuzzer))?
+        .wait()
+        .context(format!("Failed to wait {}", fuzzer))?;
+
+    if !fuzzer_bin.success() {
+        return Err(anyhow!(
+            "{} exited with code {:?}",
+            fuzzer,
+            fuzzer_bin.code()
+        ));
+    }
+
+    Ok(())
+}
+
+/// Build one target fuzz test using Libfuzzer
+fn build_libfuzzer(target: &str) -> Result<()> {
+    let fuzzer = Fuzzer::Libfuzzer;
+
+    #[cfg(target_os = "macos")]
+    let target_platform = "x86_64-apple-darwin";
+    #[cfg(target_os = "linux")]
+    let target_platform = "x86_64-unknown-linux-gnu";
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    panic!("libfuzzer-sys only supports Linux and macOS");
+
+    // FIXME: The -C codegen-units=1 and -C incremental=..
+    // below seem to workaround some difficult issues in Rust nightly
+    // https://github.com/rust-lang/rust/issues/53945.
+    // If this is ever fixed remember to remove the fuzz-incremental
+    // entry from .gitignore.
+    let mut rust_flags = env::var("RUSTFLAGS").unwrap_or_default();
+    rust_flags.push_str(
+        " --cfg fuzzing \
+         -C codegen-units=1 \
+         -C incremental=fuzz-incremental \
+         -C passes=sancov \
+         -C llvm-args=-sanitizer-coverage-level=4 \
+         -C llvm-args=-sanitizer-coverage-trace-compares \
+         -C llvm-args=-sanitizer-coverage-inline-8bit-counters \
+         -C llvm-args=-sanitizer-coverage-trace-geps \
+         -C llvm-args=-sanitizer-coverage-prune-blocks=0 \
+         -C debug-assertions=on \
+         -C debuginfo=0 \
+         -C opt-level=3 \
+         -Z sanitizer=address",
+    );
+
+    let mut asan_options = env::var("ASAN_OPTIONS").unwrap_or_default();
+    asan_options.push_str(" detect_odr_violation=0");
+
+    let fuzzer_bin = Command::new("cargo")
+        .args(&["build", "--target", &target_platform, "--bin", target, "--"])
+        .env("RUSTFLAGS", &rust_flags)
+        .env("ASAN_OPTIONS", &asan_options)
+        .current_dir(fuzzer.directory())
+        .spawn()
+        .context(format!("Failed to build {}", fuzzer))?
         .wait()
         .context(format!("Failed to wait {}", fuzzer))?;
 
