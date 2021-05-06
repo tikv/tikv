@@ -532,7 +532,7 @@ where
                         keys > self.ctx.coprocessor_host.cfg.region_max_keys
                     });
                     if self.fsm.peer.is_leader() && (check_size || check_keys) {
-                        self.schedule_check_split();
+                        self.fsm.peer.schedule_check_split(self.ctx);
                     }
                 }
             }
@@ -3543,12 +3543,6 @@ where
             return;
         }
 
-        if self.schedule_check_split() {
-            self.register_split_region_check_tick();
-        }
-    }
-
-    fn schedule_check_split(&mut self) -> bool {
         // bulk insert too fast may cause snapshot stale very soon, worst case it stale before
         // sending. so when snapshot is generating or sending, skip split check at most 3 times.
         // There is a trade off between region size and snapshot success rate. Split check is
@@ -3559,7 +3553,7 @@ where
             && self.fsm.skip_split_count < self.region_split_skip_max_count()
         {
             self.fsm.skip_split_count += 1;
-            return false;
+            return;
         }
         self.fsm.skip_split_count = 0;
 

@@ -3389,11 +3389,10 @@ where
         if self.pending_pd_heartbeat_tasks {
             return;
         }
-        self.pending_pd_heartbeat_tasks = true;
-        self.schedule_check_split(ctx);
+        self.pending_pd_heartbeat_tasks = self.schedule_check_split(ctx);
     }
 
-    pub fn schedule_check_split<T>(&mut self, ctx: &PollContext<EK, ER, T>) {
+    pub fn schedule_check_split<T>(&mut self, ctx: &PollContext<EK, ER, T>) -> bool {
         let task = SplitCheckTask::split_check(self.region().clone(), true, CheckPolicy::Scan);
         if let Err(e) = ctx.split_check_scheduler.schedule(task) {
             error!(
@@ -3401,9 +3400,11 @@ where
                 "region_id" => self.region().get_id(),
                 "err" => %e,
             );
+            return false;
         }
         self.size_diff_hint = 0;
         self.compaction_declined_bytes = 0;
+        true
     }
 
     fn prepare_raft_message(&self) -> RaftMessage {
