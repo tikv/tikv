@@ -1,15 +1,16 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::kvrpcpb::ExtraOp;
+use kvproto::kvrpcpb::{ExtraOp, LockInfo};
 use txn_types::{Key, OldValues, TimeStamp, TxnExtra};
 
 use crate::storage::kv::WriteData;
-use crate::storage::lock_manager::{Lock, LockManager, WaitTimeout};
+use crate::storage::lock_manager::{LockManager, WaitTimeout};
 use crate::storage::mvcc::{
     Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader,
 };
 use crate::storage::txn::commands::{
     Command, CommandExt, ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
+    WriteResultLockInfo,
 };
 use crate::storage::txn::{acquire_pessimistic_lock, Error, ErrorInner, Result};
 use crate::storage::{
@@ -60,17 +61,11 @@ impl CommandExt for AcquirePessimisticLock {
     gen_lock!(keys: multiple(|x| &x.0));
 }
 
-fn extract_lock_key_from_result<T>(res: &StorageResult<T>) -> (Lock, Vec<u8>) {
+fn extract_lock_info_from_result<T>(res: &StorageResult<T>) -> &LockInfo {
     match res {
         Err(StorageError(box StorageErrorInner::Txn(Error(box ErrorInner::Mvcc(MvccError(
             box MvccErrorInner::KeyIsLocked(info),
-        )))))) => {
-            let l = Lock {
-                ts: info.get_lock_version().into(),
-                hash: Key::from_raw(info.get_key()).gen_hash(),
-            };
-            (l, info.get_key().to_owned())
-        }
+        )))))) => info,
         _ => panic!("unexpected mvcc error"),
     }
 }
@@ -139,11 +134,15 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
             let write_data = WriteData::new(txn.into_modifies(), extra);
             (pr, write_data, rows, ctx, None)
         } else {
-            let (lock, key) = extract_lock_key_from_result(&res);
+            let lock_info_pb = extract_lock_info_from_result(&res);
+            let lock_info = WriteResultLockInfo::from_lock_info_pb(
+                lock_info_pb,
+                self.is_first_lock,
+                self.wait_timeout,
+            );
             let pr = ProcessResult::PessimisticLockRes { res };
-            let lock_info = Some((lock, key, self.is_first_lock, self.wait_timeout));
             // Wait for lock released
-            (pr, WriteData::default(), 0, ctx, lock_info)
+            (pr, WriteData::default(), 0, ctx, Some(lock_info))
         };
         Ok(WriteResult {
             ctx,
@@ -157,22 +156,34 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
     }
 }
 
-#[test]
-fn test_extract_lock_key_from_result() {
-    use crate::storage::txn::LockInfo;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    let raw_key = b"key".to_vec();
-    let key = Key::from_raw(&raw_key);
-    let ts = 100;
-    let mut info = LockInfo::default();
-    info.set_key(raw_key.clone());
-    info.set_lock_version(ts);
-    info.set_lock_ttl(100);
-    let case = StorageError::from(StorageErrorInner::Txn(Error::from(ErrorInner::Mvcc(
-        MvccError::from(MvccErrorInner::KeyIsLocked(info)),
-    ))));
-    let (lock, extracted_key) = extract_lock_key_from_result::<()>(&Err(case));
-    assert_eq!(lock.ts, ts.into());
-    assert_eq!(lock.hash, key.gen_hash());
-    assert_eq!(extracted_key, raw_key);
+    #[test]
+    fn test_gen_lock_info_from_result() {
+        let raw_key = b"key".to_vec();
+        let key = Key::from_raw(&raw_key);
+        let ts = 100;
+        let is_first_lock = true;
+        let wait_timeout = WaitTimeout::from_encoded(200);
+
+        let mut info = LockInfo::default();
+        info.set_key(raw_key.clone());
+        info.set_lock_version(ts);
+        info.set_lock_ttl(100);
+        let case = StorageError::from(StorageErrorInner::Txn(Error::from(ErrorInner::Mvcc(
+            MvccError::from(MvccErrorInner::KeyIsLocked(info)),
+        ))));
+        let lock_info = WriteResultLockInfo::from_lock_info_pb(
+            extract_lock_info_from_result::<()>(&Err(case)),
+            is_first_lock,
+            wait_timeout,
+        );
+        assert_eq!(lock_info.lock.ts, ts.into());
+        assert_eq!(lock_info.lock.hash, key.gen_hash());
+        assert_eq!(lock_info.key, raw_key);
+        assert_eq!(lock_info.is_first_lock, is_first_lock);
+        assert_eq!(lock_info.wait_timeout, wait_timeout);
+    }
 }

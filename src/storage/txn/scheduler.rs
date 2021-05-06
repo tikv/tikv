@@ -42,7 +42,9 @@ use crate::storage::metrics::{
     SCHED_CONTEX_GAUGE, SCHED_HISTOGRAM_VEC_STATIC, SCHED_LATCH_HISTOGRAM_VEC,
     SCHED_STAGE_COUNTER_VEC, SCHED_TOO_BUSY_COUNTER_VEC, SCHED_WRITING_BYTES_GAUGE,
 };
-use crate::storage::txn::commands::{ResponsePolicy, WriteContext, WriteResult};
+use crate::storage::txn::commands::{
+    ResponsePolicy, WriteContext, WriteResult, WriteResultLockInfo,
+};
 use crate::storage::txn::{
     commands::Command,
     latch::{Latches, Lock},
@@ -648,7 +650,13 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             }) => {
                 SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
-                if let Some((lock, key, is_first_lock, wait_timeout)) = lock_info {
+                if let Some(lock_info) = lock_info {
+                    let WriteResultLockInfo {
+                        lock,
+                        key,
+                        is_first_lock,
+                        wait_timeout,
+                    } = lock_info;
                     // Currently only pessimistic_lock request may wait for other locks, and a
                     // single request may wait lock at most once in its lifecycle. Take the tag out
                     // instead of cloning it.
