@@ -951,15 +951,13 @@ where
         {
             tried = true;
             last_canceled = canceled.load(Ordering::SeqCst);
-            if !last_canceled {
-                match receiver.try_recv() {
-                    Err(TryRecvError::Disconnected) => {}
-                    Err(TryRecvError::Empty) => {
-                        let e = raft::StorageError::SnapshotTemporarilyUnavailable;
-                        return Err(raft::Error::Store(e));
-                    }
-                    Ok(s) => snap = Some(s),
+            match receiver.try_recv() {
+                Err(TryRecvError::Empty) => {
+                    let e = raft::StorageError::SnapshotTemporarilyUnavailable;
+                    return Err(raft::Error::Store(e));
                 }
+                Ok(s) if !last_canceled => snap = Some(s),
+                Err(TryRecvError::Disconnected) | Ok(_) => {}
             }
         }
 
