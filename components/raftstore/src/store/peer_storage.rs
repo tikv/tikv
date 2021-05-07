@@ -1358,10 +1358,11 @@ where
             if !canceled.load(Ordering::SeqCst) {
                 if let Some(idx) = compact_to {
                     let snap_index = index.load(Ordering::SeqCst);
-                    if snap_index > 0 && idx > snap_index + 1 {
-                        canceled.store(true, Ordering::SeqCst);
+                    if snap_index == 0 || idx <= snap_index + 1 {
+                        return;
                     }
                 }
+                canceled.store(true, Ordering::SeqCst);
             }
         }
     }
