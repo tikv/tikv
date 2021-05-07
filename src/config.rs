@@ -2349,14 +2349,18 @@ impl TiKvConfig {
         let default_raftdb_path = config::canonicalize_sub_path(&self.storage.data_dir, "raft")?;
         if self.raft_store.raftdb_path.is_empty() {
             self.raft_store.raftdb_path = default_raftdb_path;
-        } else {
+        } else if self.raft_store.raftdb_path != default_raftdb_path
+            && RocksEngine::exists(&self.raft_store.raftdb_path)
+        {
             self.raft_store.raftdb_path = config::canonicalize_path(&self.raft_store.raftdb_path)?;
         }
 
         let default_er_path = config::canonicalize_sub_path(&self.storage.data_dir, "raft-engine")?;
         if self.raft_engine.config.dir.is_empty() {
             self.raft_engine.config.dir = default_er_path;
-        } else {
+        } else if self.raft_engine.config.dir != default_er_path
+            && RaftLogEngine::exists(&self.raft_engine.config.dir)
+        {
             self.raft_engine.config.dir = config::canonicalize_path(&self.raft_engine.config.dir)?;
         }
 
