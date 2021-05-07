@@ -1056,6 +1056,15 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
 
         ctx.spawn(task);
     }
+
+    fn get_lock_wait_info(
+        &mut self,
+        _: RpcContext<'_>,
+        _: GetLockWaitInfoRequest,
+        _: UnarySink<GetLockWaitInfoResponse>,
+    ) {
+        unimplemented!()
+    }
 }
 
 fn response_batch_commands_request<F>(
