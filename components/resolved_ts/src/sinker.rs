@@ -15,7 +15,9 @@ pub struct SinkCmd {
 }
 
 pub trait CmdSinker<S: Snapshot>: Send {
-    fn sink_cmd(&mut self, sink_cmd: Vec<SinkCmd>, snapshot: RegionSnapshot<S>);
+    fn sink_cmd(&mut self, sink_cmd: Vec<SinkCmd>);
+
+    fn sink_cmd_with_old_value(&mut self, sink_cmd: Vec<SinkCmd>, snapshot: RegionSnapshot<S>);
 
     fn sink_resolved_ts(&mut self, regions: Vec<u64>, ts: TimeStamp);
 }
@@ -29,7 +31,9 @@ impl<S: Snapshot> DummySinker<S> {
 }
 
 impl<S: Snapshot> CmdSinker<S> for DummySinker<S> {
-    fn sink_cmd(&mut self, _sink_cmd: Vec<SinkCmd>, _snapshot: RegionSnapshot<S>) {}
+    fn sink_cmd(&mut self, _sink_cmd: Vec<SinkCmd>) {}
+
+    fn sink_cmd_with_old_value(&mut self, _sink_cmd: Vec<SinkCmd>, _snapshot: RegionSnapshot<S>) {}
 
     fn sink_resolved_ts(&mut self, _regions: Vec<u64>, _ts: TimeStamp) {}
 }

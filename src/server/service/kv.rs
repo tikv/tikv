@@ -625,10 +625,10 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 RAFT_MESSAGE_RECV_COUNTER.inc();
                 let to_store_id = msg.get_to_peer().get_store_id();
                 if to_store_id != store_id {
-                    future::err(Error::from(RaftStoreError::StoreNotMatch(
+                    future::err(Error::from(RaftStoreError::StoreNotMatch {
                         to_store_id,
-                        store_id,
-                    )))
+                        my_store_id: store_id,
+                    }))
                 } else {
                     let ret = ch.send_raft_msg(msg).map_err(Error::from);
                     future::ready(ret)
@@ -666,10 +666,10 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 for msg in msgs.take_msgs().into_iter() {
                     let to_store_id = msg.get_to_peer().get_store_id();
                     if to_store_id != store_id {
-                        return future::err(Error::from(RaftStoreError::StoreNotMatch(
+                        return future::err(Error::from(RaftStoreError::StoreNotMatch {
                             to_store_id,
-                            store_id,
-                        )));
+                            my_store_id: store_id,
+                        }));
                     }
                     if let Err(e) = ch.send_raft_msg(msg) {
                         return future::err(Error::from(e));

@@ -180,10 +180,10 @@ macro_rules! check_key_size {
         for k in $key_iter {
             let key_size = k.len();
             if key_size > $max_key_size {
-                $callback(Err(Error::from(ErrorInner::KeyTooLarge(
-                    key_size,
-                    $max_key_size,
-                ))));
+                $callback(Err(Error::from(ErrorInner::KeyTooLarge {
+                    size: key_size,
+                    limit: $max_key_size,
+                })));
                 return Ok(());
             }
         }
