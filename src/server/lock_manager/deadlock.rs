@@ -40,7 +40,7 @@ use txn_types::TimeStamp;
 struct Locks {
     ts: TimeStamp,
     // (hash, key)
-    // The `key` is recorded as an diagnostic information. There may be multiple keys with the same
+    // The `key` is recorded as diagnostic information. There may be multiple keys with the same
     // hash, but it should be enough if we record only one of them.
     keys: Vec<(u64, Vec<u8>)>,
     resource_group_tag: Vec<u8>,
@@ -174,8 +174,6 @@ impl DetectTable {
         // it's ok if we only remember one: for each vertex, if it has a route to the goal (txn_ts),
         // we must be able to find the goal and exit this function before visiting the vertex one
         // more time.
-        // TODO: The DFS algorithm can be refactored, so that each vertex in the current visiting
-        // path can be found in the stack. Then it will be much easier to retrieve the wait chain.
         let mut pushed: HashMap<TimeStamp, TimeStamp> = HashMap::default();
         pushed.insert(wait_for_ts, TimeStamp::zero());
         while let Some(curr_ts) = stack.pop() {

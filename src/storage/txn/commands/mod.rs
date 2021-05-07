@@ -364,7 +364,6 @@ pub struct WriteResult {
     pub to_be_write: WriteData,
     pub rows: usize,
     pub pr: ProcessResult,
-    // (lock, key, is_first_lock, wait_timeout)
     pub lock_info: Option<WriteResultLockInfo>,
     pub lock_guards: Vec<KeyHandleGuard>,
     pub response_policy: ResponsePolicy,

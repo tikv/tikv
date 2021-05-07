@@ -552,10 +552,6 @@ impl WaiterManager {
         wait_chain: Vec<WaitForEntry>,
     ) {
         if let Some(mut waiter) = self.wait_table.borrow_mut().remove_waiter(lock, waiter_ts) {
-            // The `wait_chain` doesn't include the final edge that caused the deadlock, which
-            // may reduce some deadlock RPC size. To pass it to the client, append this edge
-            // to the wait chain.
-
             waiter.deadlock_with(deadlock_key_hash, wait_chain);
             waiter.notify();
         }
