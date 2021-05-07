@@ -29,11 +29,10 @@ impl Endpoint {
     pub fn new(copr_cfg: &Config) -> Self {
         let mut plugin_registry = PluginRegistry::new();
 
-        std::fs::create_dir_all(&copr_cfg.coprocessor_plugin_directory)
-            .expect("Unable to create directory for coprocessor plugins.");
-        plugin_registry
-            .start_hot_reloading(&copr_cfg.coprocessor_plugin_directory)
-            .expect("Unable to load coprocessor plugins from directory.");
+        let r = plugin_registry.start_hot_reloading(&copr_cfg.coprocessor_plugin_directory);
+        if let Err(err) = r {
+            warn!("unable to start hot-reloading for coprocessor plugins."; "coprocessor_directory" => &copr_cfg.coprocessor_plugin_directory, "error" => ?err);
+        }
 
         Self {
             plugin_registry: Arc::new(plugin_registry),
