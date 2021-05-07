@@ -2207,7 +2207,6 @@ where
             self.fsm.peer.approximate_size = estimated_size;
             self.fsm.peer.approximate_keys = estimated_keys;
             self.fsm.peer.heartbeat_pd(self.ctx);
-            self.register_pd_heartbeat_tick();
             // Notify pd immediately to let it update the region meta.
             info!(
                 "notify pd with split";
@@ -2371,6 +2370,10 @@ where
                     }
                 }
             }
+        }
+        drop(meta);
+        if is_leader {
+            self.register_pd_heartbeat_tick();
         }
         fail_point!("after_split", self.ctx.store_id() == 3, |_| {});
     }
