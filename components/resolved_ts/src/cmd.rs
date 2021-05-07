@@ -237,7 +237,7 @@ fn group_row_changes(requests: Vec<Request>) -> HashMap<Key, RowChange> {
                         }
                     }
                     other => {
-                        panic!("invalid cf {}", other);
+                        debug!("resolved ts invalid cf {}", other);
                     }
                 }
             }
@@ -251,7 +251,7 @@ fn group_row_changes(requests: Vec<Request>) -> HashMap<Key, RowChange> {
                     }
                     "" | CF_WRITE | CF_DEFAULT => {}
                     other => {
-                        panic!("invalid cf {}", other);
+                        debug!("resolved ts invalid cf {}", other);
                     }
                 }
             }
