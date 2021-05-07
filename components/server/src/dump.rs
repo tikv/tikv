@@ -28,6 +28,7 @@ const CONSUME_THRESHOLD: usize = 32 * 1024;
 ///     4. Delete the original raftdb safely.
 pub fn check_and_dump_raft_db(
     raftdb_path: &str,
+    wal_dir: &str,
     engine: &RaftLogEngine,
     env: Arc<Env>,
     thread_num: usize,
@@ -37,6 +38,9 @@ pub fn check_and_dump_raft_db(
         return;
     }
     let mut opt = DBOptions::default();
+    if !wal_dir.is_empty() {
+        opt.set_wal_dir(wal_dir);
+    }
     opt.set_env(env);
     let db = engine_rocks::raw_util::new_engine_opt(raftdb_path, opt, vec![])
         .unwrap_or_else(|s| fatal!("failed to create origin raft engine: {}", s));
@@ -175,6 +179,10 @@ fn get_dirty_raftdb(path: &str) -> PathBuf {
     flag_path
 }
 
+// if build failed when running the tests alone, try the following command instead:
+// # enable feature 'protobuf-codec', 'test-engines-rocksdb' and disable the others.
+// cargo test --no-default-features --features protobuf-codec,test-engines-rocksdb --package server --lib -- dump::tests --nocapture
+// references: https://github.com/tikv/tikv/issues/6145, https://github.com/tikv/tikv/issues/6591, https://github.com/tikv/tikv/pull/6626
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,6 +222,7 @@ mod tests {
         let raft_engine = RaftLogEngine::new(raft_config);
         check_and_dump_raft_db(
             raftdb_path.to_str().unwrap(),
+            "",
             &raft_engine,
             Arc::new(Env::default()),
             4,
@@ -221,6 +230,96 @@ mod tests {
         assert(1, &raft_engine);
         assert(5, &raft_engine);
         assert(15, &raft_engine);
+    }
+
+    #[test]
+    fn test_dump_with_separate_wal() {
+        let data_path = tempfile::Builder::new().tempdir().unwrap().into_path();
+        let mut raftdb_path = data_path.clone();
+        let mut raftengine_path = data_path;
+        raftdb_path.push("raft");
+        raftengine_path.push("raft-engine");
+        let mut raftdb_wal_path = raftdb_path.clone();
+        raftdb_wal_path.push("wal");
+        {
+            let mut db_opt = DBOptions::new();
+            db_opt.set_wal_dir(raftdb_wal_path.to_str().unwrap());
+            let db = engine_rocks::raw_util::new_engine_opt(
+                raftdb_path.to_str().unwrap(),
+                db_opt,
+                vec![],
+            )
+            .unwrap_or_else(|s| fatal!("failed to create raft engine: {}", s));
+            let raft_engine = RocksEngine::from_db(Arc::new(db));
+            let mut batch = raft_engine.log_batch(0);
+            set_write_batch(1, &mut batch);
+            raft_engine.consume(&mut batch, true).unwrap();
+            set_write_batch(5, &mut batch);
+            raft_engine.consume(&mut batch, true).unwrap();
+            set_write_batch(15, &mut batch);
+            raft_engine.consume(&mut batch, true).unwrap();
+            raft_engine.sync().unwrap();
+        }
+        // RaftEngine
+        let raft_config = RaftEngineConfig {
+            dir: raftengine_path.to_str().unwrap().to_owned(),
+            ..Default::default()
+        };
+        let raft_engine = RaftLogEngine::new(raft_config);
+        check_and_dump_raft_db(
+            raftdb_path.to_str().unwrap(),
+            raftdb_wal_path.to_str().unwrap(),
+            &raft_engine,
+            Arc::new(Env::default()),
+            4,
+        );
+        assert(1, &raft_engine);
+        assert(5, &raft_engine);
+        assert(15, &raft_engine);
+    }
+
+    #[test]
+    fn test_dump_with_separate_wal_without_config_when_dump() {
+        let data_path = tempfile::Builder::new().tempdir().unwrap().into_path();
+        let mut raftdb_path = data_path.clone();
+        let mut raftengine_path = data_path;
+        raftdb_path.push("raft");
+        raftengine_path.push("raft-engine");
+        let mut raftdb_wal_path = raftdb_path.clone();
+        raftdb_wal_path.push("wal");
+        {
+            let mut db_opt = DBOptions::new();
+            db_opt.set_wal_dir(raftdb_wal_path.to_str().unwrap());
+            let db = engine_rocks::raw_util::new_engine_opt(
+                raftdb_path.to_str().unwrap(),
+                db_opt,
+                vec![],
+            )
+            .unwrap_or_else(|s| fatal!("failed to create raft engine: {}", s));
+            let raft_engine = RocksEngine::from_db(Arc::new(db));
+            let mut batch = raft_engine.log_batch(0);
+            set_write_batch(1, &mut batch);
+            raft_engine.consume(&mut batch, true).unwrap();
+            set_write_batch(5, &mut batch);
+            raft_engine.consume(&mut batch, true).unwrap();
+            set_write_batch(15, &mut batch);
+            raft_engine.consume(&mut batch, true).unwrap();
+            raft_engine.sync().unwrap();
+        }
+        // RaftEngine
+        let raft_config = RaftEngineConfig {
+            dir: raftengine_path.to_str().unwrap().to_owned(),
+            ..Default::default()
+        };
+        let raft_engine = RaftLogEngine::new(raft_config);
+        check_and_dump_raft_db(
+            raftdb_path.to_str().unwrap(),
+            "",
+            &raft_engine,
+            Arc::new(Env::default()),
+            4,
+        );
+        assert_eq!(None, raft_engine.get_raft_state(1).unwrap());
     }
 
     // Insert some data into log batch.

@@ -1061,6 +1061,7 @@ impl TiKVServer<RaftLogEngine> {
         // Try to dump and recover raft data.
         crate::dump::check_and_dump_raft_db(
             &self.config.raft_store.raftdb_path,
+            &self.config.raftdb.wal_dir,
             &raft_engine,
             env.clone(),
             8,
