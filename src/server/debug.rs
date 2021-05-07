@@ -4,10 +4,20 @@ use std::iter::FromIterator;
 use std::path::Path;
 use std::sync::Arc;
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
-use std::{error, result};
+use std::{error::Error as StdError, result};
 
+use kvproto::debugpb::{self, Db as DBType};
+use kvproto::metapb::Region;
+use kvproto::raft_serverpb::*;
+use protobuf::Message;
+use raft::eraftpb::Entry;
+use raft::{self, RawNode};
+use thiserror::Error;
+
+use collections::HashSet;
 use engine_rocks::raw::{CompactOptions, DBBottommostLevelCompaction, DB};
 use engine_rocks::util::get_cf_handle;
+use engine_rocks::RocksMvccProperties;
 use engine_rocks::{Compat, RocksEngine, RocksEngineIterator, RocksWriteBatch};
 use engine_traits::{
     Engines, IterOptions, Iterable, Iterator as EngineIterator, Mutable, Peekable, RaftEngine,
@@ -15,17 +25,6 @@ use engine_traits::{
     WriteBatch, WriteOptions,
 };
 use engine_traits::{MvccProperties, Range, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use kvproto::debugpb::{self, Db as DBType};
-use kvproto::metapb::Region;
-use kvproto::raft_serverpb::*;
-use protobuf::Message;
-use raft::eraftpb::Entry;
-use raft::{self, RawNode};
-
-use crate::config::ConfigController;
-use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
-use collections::HashSet;
-use engine_rocks::RocksMvccProperties;
 use raftstore::coprocessor::get_region_approximate_middle;
 use raftstore::store::util as raftstore_util;
 use raftstore::store::PeerStorage;
@@ -36,25 +35,23 @@ use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Worker;
 use txn_types::Key;
 
+use crate::config::ConfigController;
+use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
+
 pub use crate::storage::mvcc::MvccInfoIterator;
 
 pub type Result<T> = result::Result<T, Error>;
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        InvalidArgument(msg: String) {
-            display("Invalid Argument {:?}", msg)
-        }
-        NotFound(msg: String) {
-            display("Not Found {:?}", msg)
-        }
-        Other(err: Box<dyn error::Error + Sync + Send>) {
-            from()
-            cause(err.as_ref())
-            display("{:?}", err)
-        }
-    }
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("Invalid Argument {0:?}")]
+    InvalidArgument(String),
+
+    #[error("Not Found {0:?}")]
+    NotFound(String),
+
+    #[error("{0:?}")]
+    Other(#[from] Box<dyn StdError + Sync + Send>),
 }
 
 /// Describes the meta information of a Region.

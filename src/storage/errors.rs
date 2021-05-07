@@ -1,9 +1,15 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! Types for storage related errors and associated helper methods.
-use std::error;
+use std::error::Error as StdError;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
+
+use kvproto::{errorpb, kvrpcpb};
+use thiserror::Error;
+
+use error_code::{self, ErrorCode, ErrorCodeExt};
+use txn_types::{KvPair, TimeStamp};
 
 use crate::storage::{
     kv::{self, Error as EngineError, ErrorInner as EngineErrorInner},
@@ -11,81 +17,48 @@ use crate::storage::{
     txn::{self, Error as TxnError, ErrorInner as TxnErrorInner},
     Result,
 };
-use error_code::{self, ErrorCode, ErrorCodeExt};
-use kvproto::{errorpb, kvrpcpb};
-use txn_types::{KvPair, TimeStamp};
 
-quick_error! {
-    #[derive(Debug)]
-    /// Detailed errors for storage operations. This enum also unifies code for basic error
-    /// handling functionality in a single place instead of being spread out.
-    pub enum ErrorInner {
-        Engine(err: kv::Error) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        Txn(err: txn::Error) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        Mvcc(err: mvcc::Error) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        Closed {
-            display("storage is closed.")
-        }
-        Other(err: Box<dyn error::Error + Send + Sync>) {
-            from()
-            cause(err.as_ref())
-            display("{}", err)
-        }
-        Io(err: IoError) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        SchedTooBusy {
-            display("scheduler is too busy")
-        }
-        GcWorkerTooBusy {
-            display("gc worker is too busy")
-        }
-        KeyTooLarge(size: usize, limit: usize) {
-            display("max key size exceeded, size: {}, limit: {}", size, limit)
-        }
-        InvalidCf (cf_name: String) {
-            display("invalid cf name: {}", cf_name)
-        }
-        TTLNotEnabled {
-            display("ttl is not enabled, but get put request with ttl")
-        }
-    }
+#[derive(Debug, Error)]
+/// Detailed errors for storage operations. This enum also unifies code for basic error
+/// handling functionality in a single place instead of being spread out.
+pub enum ErrorInner {
+    #[error("{0}")]
+    Engine(#[from] kv::Error),
+
+    #[error("{0}")]
+    Txn(#[from] txn::Error),
+
+    #[error("{0}")]
+    Mvcc(#[from] mvcc::Error),
+
+    #[error("storage is closed.")]
+    Closed,
+    #[error("{0}")]
+    Other(#[from] Box<dyn StdError + Send + Sync>),
+
+    #[error("{0}")]
+    Io(#[from] IoError),
+
+    #[error("scheduler is too busy")]
+    SchedTooBusy,
+
+    #[error("gc worker is too busy")]
+    GcWorkerTooBusy,
+
+    #[error("max key size exceeded, size: {}, limit: {}", .size, .limit)]
+    KeyTooLarge { size: usize, limit: usize },
+
+    #[error("invalid cf name: {0}")]
+    InvalidCf(String),
+
+    #[error("ttl is not enabled, but get put request with ttl")]
+    TTLNotEnabled,
 }
 
 /// Errors for storage module. Wrapper type of `ErrorInner`.
-pub struct Error(pub Box<ErrorInner>);
-
-impl fmt::Debug for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&self.0, f)
-    }
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        std::error::Error::source(&self.0)
-    }
-}
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct Error(#[from] pub Box<ErrorInner>);
 
 impl From<ErrorInner> for Error {
     #[inline]
@@ -113,7 +86,7 @@ impl ErrorCodeExt for Error {
             ErrorInner::Io(_) => error_code::storage::IO,
             ErrorInner::SchedTooBusy => error_code::storage::SCHED_TOO_BUSY,
             ErrorInner::GcWorkerTooBusy => error_code::storage::GC_WORKER_TOO_BUSY,
-            ErrorInner::KeyTooLarge(..) => error_code::storage::KEY_TOO_LARGE,
+            ErrorInner::KeyTooLarge { .. } => error_code::storage::KEY_TOO_LARGE,
             ErrorInner::InvalidCf(_) => error_code::storage::INVALID_CF,
             ErrorInner::TTLNotEnabled => error_code::storage::TTL_NOT_ENABLED,
         }
