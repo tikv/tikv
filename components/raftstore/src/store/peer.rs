@@ -58,8 +58,8 @@ use super::peer_storage::{
 use super::read_queue::{ReadIndexQueue, ReadIndexRequest};
 use super::transport::Transport;
 use super::util::{
-    self, check_region_epoch, is_initial_msg, AdminCmdEpochState, Lease, LeaseState,
-    NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER, admin_cmd_epoch_lookup,
+    self, admin_cmd_epoch_lookup, check_region_epoch, is_initial_msg, AdminCmdEpochState, Lease,
+    LeaseState, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
 };
 use super::DestroyPeerJob;
 
