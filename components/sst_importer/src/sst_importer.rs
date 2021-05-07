@@ -258,13 +258,11 @@ impl SSTImporter {
                 meta.length,
                 MINIMUM_READ_SPEED,
             ))
-            .map_err(|e| {
-                Error::CannotReadExternalStorage(
-                    url.to_string(),
-                    name.to_owned(),
-                    path.temp.to_owned(),
-                    e,
-                )
+            .map_err(|e| Error::CannotReadExternalStorage {
+                url: url.to_string(),
+                name: name.to_owned(),
+                local_path: path.temp.to_owned(),
+                err: e,
             })?;
 
             OpenOptions::new()
@@ -307,17 +305,17 @@ impl SSTImporter {
 
         let range_start =
             keys::rewrite::rewrite_prefix_of_start_bound(new_prefix, old_prefix, range_start_bound)
-                .map_err(|_| {
-                    Error::WrongKeyPrefix(
-                        "SST start range",
-                        range_start.to_vec(),
-                        new_prefix.to_vec(),
-                    )
+                .map_err(|_| Error::WrongKeyPrefix {
+                    what: "SST start range",
+                    key: range_start.to_vec(),
+                    prefix: new_prefix.to_vec(),
                 })?;
         let range_end =
             keys::rewrite::rewrite_prefix_of_end_bound(new_prefix, old_prefix, range_end_bound)
-                .map_err(|_| {
-                    Error::WrongKeyPrefix("SST end range", range_end.to_vec(), new_prefix.to_vec())
+                .map_err(|_| Error::WrongKeyPrefix {
+                    what: "SST end range",
+                    key: range_end.to_vec(),
+                    prefix: new_prefix.to_vec(),
                 })?;
 
         let start_rename_rewrite = Instant::now();
@@ -393,11 +391,11 @@ impl SSTImporter {
                 break;
             }
             if !old_key.starts_with(old_prefix) {
-                return Err(Error::WrongKeyPrefix(
-                    "Key in SST",
-                    keys::origin_key(iter.key()).to_vec(),
-                    old_prefix.to_vec(),
-                ));
+                return Err(Error::WrongKeyPrefix {
+                    what: "Key in SST",
+                    key: keys::origin_key(iter.key()).to_vec(),
+                    prefix: old_prefix.to_vec(),
+                });
             }
             key.truncate(new_prefix_data_key_len);
             key.extend_from_slice(&old_key[old_prefix.len()..]);
@@ -1798,7 +1796,7 @@ mod tests {
         );
 
         match &result {
-            Err(Error::WrongKeyPrefix(_, key, prefix)) => {
+            Err(Error::WrongKeyPrefix { key, prefix, .. }) => {
                 assert_eq!(key, b"t123_r01");
                 assert_eq!(prefix, b"xxx");
             }

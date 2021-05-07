@@ -12,8 +12,6 @@ extern crate derive_more;
 #[macro_use(fail_point)]
 extern crate fail;
 #[macro_use]
-extern crate quick_error;
-#[macro_use]
 extern crate slog_derive;
 #[macro_use]
 extern crate tikv_util;
@@ -28,7 +26,6 @@ mod rocksdb_engine;
 mod stats;
 
 use std::cell::UnsafeCell;
-use std::fmt;
 use std::time::Duration;
 use std::{error, ptr, result};
 
@@ -40,6 +37,7 @@ use engine_traits::{
 use futures::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ExtraOp as TxnExtraOp, KeyRange};
+use thiserror::Error;
 use tikv_util::escape;
 use txn_types::{Key, TimeStamp, TxnExtra, Value};
 
@@ -298,34 +296,29 @@ pub enum ScanMode {
     Mixed,
 }
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum ErrorInner {
-        Request(err: ErrorHeader) {
-            from()
-            description(err.get_message())
-            display("{:?}", err)
-        }
-        Timeout(d: Duration) {
-            display("timeout after {:?}", d)
-        }
-        EmptyRequest {
-            display("an empty request")
-        }
-        KeyIsLocked(info: kvproto::kvrpcpb::LockInfo) {
-            display("key is locked (backoff or cleanup) {:?}", info)
-        }
-        Other(err: Box<dyn error::Error + Send + Sync>) {
-            from()
-            cause(err.as_ref())
-            display("unknown error {:?}", err)
-        }
+#[derive(Debug, Error)]
+pub enum ErrorInner {
+    #[error("{0:?}")]
+    Request(ErrorHeader),
+    #[error("timeout after {0:?}")]
+    Timeout(Duration),
+    #[error("an empty requets")]
+    EmptyRequest,
+    #[error("key is locked (backoff or cleanup) {0:?}")]
+    KeyIsLocked(kvproto::kvrpcpb::LockInfo),
+    #[error("unknown error {0:?}")]
+    Other(#[from] Box<dyn error::Error + Send + Sync>),
+}
+
+impl From<ErrorHeader> for ErrorInner {
+    fn from(err: ErrorHeader) -> Self {
+        Self::Request(err)
     }
 }
 
 impl From<engine_traits::Error> for ErrorInner {
-    fn from(err: engine_traits::Error) -> ErrorInner {
-        ErrorInner::Request(err.into_other())
+    fn from(err: engine_traits::Error) -> Self {
+        Self::Request(err.into_other())
     }
 }
 
@@ -341,29 +334,13 @@ impl ErrorInner {
     }
 }
 
-pub struct Error(pub Box<ErrorInner>);
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct Error(#[from] pub Box<ErrorInner>);
 
 impl Error {
     pub fn maybe_clone(&self) -> Option<Error> {
         self.0.maybe_clone().map(Error::from)
-    }
-}
-
-impl fmt::Debug for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&self.0, f)
-    }
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        std::error::Error::source(&self.0)
     }
 }
 
