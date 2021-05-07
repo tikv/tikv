@@ -3381,7 +3381,9 @@ where
         }
         fail_point!("schedule_check_split");
         if !self.has_calculated_region_size {
-            self.schedule_check_split(ctx);
+            if ctx.importer.get_mode() != SwitchMode::Import {
+                self.schedule_check_split(ctx);
+            }
         }
     }
 

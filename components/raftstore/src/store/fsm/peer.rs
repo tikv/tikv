@@ -522,20 +522,6 @@ where
                 }
                 PeerMsg::Noop => {}
                 PeerMsg::UpdateReplicationMode => self.on_update_replication_mode(),
-                PeerMsg::SplitCheck => {
-                    // If the current `approximate_size` is larger than `region_max_size`, this region
-                    // may ingest a large file which is imported by `BR` or `lightning`, we shall check it
-
-                    if self.fsm.peer.is_leader()
-                        && (!self.fsm.peer.has_calculated_region_size
-                            || self.fsm.peer.approximate_size
-                                > self.ctx.coprocessor_host.cfg.region_max_size.0
-                            || self.fsm.peer.approximate_keys
-                                > self.ctx.coprocessor_host.cfg.region_max_keys)
-                    {
-                        self.fsm.peer.schedule_check_split(self.ctx);
-                    }
-                }
             }
         }
         // Propose batch request which may be still waiting for more raft-command
