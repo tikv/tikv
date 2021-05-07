@@ -106,7 +106,7 @@ where
     }
 
     fn check_write_stall(&self) -> Option<errorpb::Error> {
-        if self.switcher.get_mode() == SwitchMode::Normal
+        if self.importer.get_mode() == SwitchMode::Normal
             && self
                 .engine
                 .ingest_maybe_slowdown_writes(CF_WRITE)
@@ -145,8 +145,7 @@ where
         let importer = self.importer.clone();
         async move {
             let mut resp = IngestResponse::default();
-            if let Err(e) = router.send(RaftCommand::new(cmd, Callback::Read(cb))) {
-                let e = handle_send_error(region_id, e);
+            if let Err(e) = router.send_command(cmd, Callback::Read(cb)) {
                 resp.set_error(e.into());
                 return Ok(resp);
             }
@@ -180,8 +179,7 @@ where
             }
 
             let (cb, future) = paired_future_callback();
-            if let Err(e) = router.send(RaftCommand::new(cmd, Callback::write(cb))) {
-                let e = handle_send_error(region_id, e);
+            if let Err(e) = router.send_command(cmd, Callback::write(cb)) {
                 resp.set_error(e.into());
                 return Ok(resp);
             }
