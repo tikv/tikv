@@ -218,6 +218,7 @@ pub(crate) fn make_txn_error(
                 lock_ts: TimeStamp::zero(),
                 lock_key: key.to_raw().unwrap(),
                 deadlock_key_hash: 0,
+                wait_chain: vec![],
             },
             "alreadyexist" => ErrorInner::AlreadyExist {
                 key: key.to_raw().unwrap(),
