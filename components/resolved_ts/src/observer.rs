@@ -67,12 +67,12 @@ impl<E: KvEngine> CmdObserver<E> for Observer<E> {
             .push(CmdBatch::new(cdc_id, rts_id, region_id));
     }
 
-    fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: Cmd) {
+    fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: &Cmd) {
         self.cmd_batches
             .borrow_mut()
             .last_mut()
             .unwrap_or_else(|| panic!("region {} should exist some cmd batch", region_id))
-            .push(cdc_id, rts_id, region_id, cmd);
+            .push(cdc_id, rts_id, region_id, cmd.clone());
     }
 
     fn on_flush_apply(&self, engine: E) {

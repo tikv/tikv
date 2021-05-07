@@ -108,12 +108,12 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
             .push(CmdBatch::new(cdc_id, rts_id, region_id));
     }
 
-    fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: Cmd) {
+    fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: &Cmd) {
         self.cmd_batches
             .borrow_mut()
             .last_mut()
             .expect("should exist some cmd batch")
-            .push(cdc_id, rts_id, region_id, cmd);
+            .push(cdc_id, rts_id, region_id, cmd.clone());
     }
 
     fn on_flush_apply(&self, engine: E) {
@@ -333,7 +333,7 @@ mod tests {
             observe_id,
             observe_id,
             0,
-            Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),
+            &Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),
         );
         observer.on_flush_apply(engine);
 

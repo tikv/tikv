@@ -237,7 +237,7 @@ pub trait CmdObserver<E>: Coprocessor {
     /// Hook to call after preparing for applying write requests.
     fn on_prepare_for_apply(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64);
     /// Hook to call after applying a write request.
-    fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: Cmd);
+    fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: &Cmd);
     /// Hook to call after flushing writes to db.
     fn on_flush_apply(&self, engine: E);
 }

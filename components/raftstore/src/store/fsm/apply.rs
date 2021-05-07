@@ -1116,7 +1116,7 @@ where
             self.observe_cmd.cdc_id,
             self.observe_cmd.rts_id,
             self.region_id(),
-            cmd.clone(),
+            &cmd,
         );
 
         apply_ctx.cbs.last_mut().unwrap().push(cmd_cb, cmd);
@@ -4342,12 +4342,12 @@ mod tests {
                 .push(CmdBatch::new(cdc_id, rts_id, region_id));
         }
 
-        fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: Cmd) {
+        fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: &Cmd) {
             self.cmd_batches
                 .borrow_mut()
                 .last_mut()
                 .expect("should exist some cmd batch")
-                .push(cdc_id, rts_id, region_id, cmd);
+                .push(cdc_id, rts_id, region_id, cmd.clone());
         }
 
         fn on_flush_apply(&self, _: E) {
