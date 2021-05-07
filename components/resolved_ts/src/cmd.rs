@@ -209,6 +209,7 @@ struct RowChange {
 
 fn group_row_changes(requests: Vec<Request>) -> HashMap<Key, RowChange> {
     let mut changes: HashMap<Key, RowChange> = HashMap::default();
+    // The changes about default cf was recorded here and need to be matched with a `write` or a `lock`.
     let mut unmatched_default = HashMap::default();
     for mut req in requests {
         match req.get_cmd_type() {
