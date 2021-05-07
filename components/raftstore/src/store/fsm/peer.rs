@@ -3525,6 +3525,8 @@ where
         // should work even if we change the region max size.
         // If peer says should update approximate size, update region size and check
         // whether the region should split.
+        // We assume that `has_calculated_region_size` is only set true when receives an
+        // accurate value sent from split-check thread.
         if self.fsm.peer.has_calculated_region_size
             && self.fsm.peer.compaction_declined_bytes < self.ctx.cfg.region_split_check_diff.0
             && self.fsm.peer.size_diff_hint < self.ctx.cfg.region_split_check_diff.0
@@ -3910,8 +3912,8 @@ where
             size += sst.total_bytes;
             keys += sst.total_kvs;
         }
-        self.fsm.peer.approximate_size = self.fsm.peer.approximate_size + size;
-        self.fsm.peer.approximate_keys = self.fsm.peer.approximate_keys + keys;
+        self.fsm.peer.approximate_size += size;
+        self.fsm.peer.approximate_keys += keys;
         // The ingested file may be overlapped with the data in engine, so we need to check it
         // again to get the actually value.
         self.fsm.peer.has_calculated_region_size = false;
