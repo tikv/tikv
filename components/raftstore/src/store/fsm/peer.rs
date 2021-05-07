@@ -526,15 +526,14 @@ where
                     // If the current `approximate_size` is larger than `region_max_size`, this region
                     // may ingest a large file which is imported by `BR` or `lightning`, we shall check it
 
-                    if self.fsm.peer.is_leader() {
-                        if !self.fsm.peer.has_calculated_region_size
+                    if self.fsm.peer.is_leader()
+                        && (!self.fsm.peer.has_calculated_region_size
                             || self.fsm.peer.approximate_size
                                 > self.ctx.coprocessor_host.cfg.region_max_size.0
                             || self.fsm.peer.approximate_keys
-                                > self.ctx.coprocessor_host.cfg.region_max_keys
-                        {
-                            self.fsm.peer.schedule_check_split(self.ctx);
-                        }
+                                > self.ctx.coprocessor_host.cfg.region_max_keys)
+                    {
+                        self.fsm.peer.schedule_check_split(self.ctx);
                     }
                 }
             }
@@ -2208,6 +2207,7 @@ where
             self.fsm.peer.approximate_size = estimated_size;
             self.fsm.peer.approximate_keys = estimated_keys;
             self.fsm.peer.heartbeat_pd(self.ctx);
+            self.register_pd_heartbeat_tick();
             // Notify pd immediately to let it update the region meta.
             info!(
                 "notify pd with split";
