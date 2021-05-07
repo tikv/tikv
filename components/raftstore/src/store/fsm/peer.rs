@@ -3491,18 +3491,7 @@ where
     }
 
     fn on_split_region_check_tick(&mut self) {
-        if !self.ctx.cfg.hibernate_regions {
-            self.register_split_region_check_tick();
-        }
         if !self.fsm.peer.is_leader() {
-            return;
-        }
-
-        // To avoid frequent scan, we only add new scan tasks if all previous tasks
-        // have finished.
-        // TODO: check whether a gc progress has been started.
-        if self.ctx.split_check_scheduler.is_busy() {
-            self.register_split_region_check_tick();
             return;
         }
 
@@ -3520,11 +3509,19 @@ where
             return;
         }
 
+        self.register_split_region_check_tick();
+
+        // To avoid frequent scan, we only add new scan tasks if all previous tasks
+        // have finished.
+        // TODO: check whether a gc progress has been started.
+        if self.ctx.split_check_scheduler.is_busy() {
+            return;
+        }
+
         // When Lightning or BR is importing data to TiKV, their ingest-request may fail because of
         // region-epoch not matched. So we hope TiKV do not check region size and split region during
         // importing.
         if self.ctx.importer.get_mode() == SwitchMode::Import {
-            self.register_split_region_check_tick();
             return;
         }
 
@@ -3538,13 +3535,11 @@ where
             && self.fsm.skip_split_count < self.region_split_skip_max_count()
         {
             self.fsm.skip_split_count += 1;
-            self.register_split_region_check_tick();
             return;
         }
         self.fsm.skip_split_count = 0;
 
         self.fsm.peer.schedule_check_split(self.ctx);
-        self.register_split_region_check_tick();
     }
 
     fn on_prepare_split_region(
@@ -3905,6 +3900,7 @@ where
         self.fsm.peer.has_calculated_region_size = false;
         if self.fsm.peer.is_leader() {
             self.on_pd_heartbeat_tick();
+            self.register_split_region_check_tick();
         }
     }
 
