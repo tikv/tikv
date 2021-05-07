@@ -3380,11 +3380,6 @@ where
             return;
         }
         fail_point!("schedule_check_split");
-        if !self.has_calculated_region_size {
-            if ctx.importer.get_mode() != SwitchMode::Import {
-                self.schedule_check_split(ctx);
-            }
-        }
     }
 
     pub fn schedule_check_split<T>(&mut self, ctx: &PollContext<EK, ER, T>) {

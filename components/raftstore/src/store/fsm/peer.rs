@@ -2359,7 +2359,7 @@ where
         }
         drop(meta);
         if is_leader {
-            self.register_pd_heartbeat_tick();
+            self.register_split_region_check_tick();
         }
         fail_point!("after_split", self.ctx.store_id() == 3, |_| {});
     }
@@ -3896,7 +3896,7 @@ where
         self.fsm.peer.approximate_size += size;
         self.fsm.peer.approximate_keys += keys;
         // The ingested file may be overlapped with the data in engine, so we need to check it
-        // again to get the actually value.
+        // again to get the accurate value.
         self.fsm.peer.has_calculated_region_size = false;
         if self.fsm.peer.is_leader() {
             self.on_pd_heartbeat_tick();
