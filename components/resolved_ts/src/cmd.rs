@@ -209,6 +209,7 @@ struct RowChange {
 
 fn group_row_changes(requests: Vec<Request>) -> HashMap<Key, RowChange> {
     let mut changes: HashMap<Key, RowChange> = HashMap::default();
+    let mut unmatched_default = HashMap::default();
     for mut req in requests {
         match req.get_cmd_type() {
             CmdType::Put => {
@@ -231,9 +232,7 @@ fn group_row_changes(requests: Vec<Request>) -> HashMap<Key, RowChange> {
                     "" | CF_DEFAULT => {
                         if let Ok(ts) = key.decode_ts() {
                             let key = key.truncate_ts().unwrap();
-                            let mut row = changes.entry(key).or_default();
-                            assert!(row.default.is_none());
-                            row.default = Some(KeyOp::Put(Some(ts), value));
+                            unmatched_default.insert(key, KeyOp::Put(Some(ts), value));
                         }
                     }
                     other => {
@@ -263,6 +262,11 @@ fn group_row_changes(requests: Vec<Request>) -> HashMap<Key, RowChange> {
             }
         }
     }
+    for (key, default) in unmatched_default {
+        if let Some(row) = changes.get_mut(&key) {
+            row.default = Some(default);
+        }
+    }
     changes
 }
 
@@ -277,6 +281,7 @@ mod tests {
     use tikv::storage::txn::tests::*;
     use tikv::storage::txn::{prewrite, CommitKind, TransactionKind, TransactionProperties};
     use tikv::storage::Engine;
+    use tikv_kv::Modify;
     use txn_types::{Key, LockType, WriteType};
 
     use super::{group_row_changes, ChangeLog, ChangeRow};
@@ -285,6 +290,13 @@ mod tests {
     fn test_cmd_encode() {
         let rocks_engine = TestEngineBuilder::new().build().unwrap();
         let engine = MockEngineBuilder::from_rocks_engine(rocks_engine).build();
+
+        let reqs = modifies_to_requests(vec![Modify::Put(
+            "default",
+            Key::from_raw(b"k1"),
+            b"v1".to_vec(),
+        )]);
+        assert!(ChangeLog::encode_rows(group_row_changes(reqs), false).is_empty());
 
         must_prewrite_put(&engine, b"k1", b"v1", b"k1", 1);
         must_commit(&engine, b"k1", 1, 2);
