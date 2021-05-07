@@ -4908,6 +4908,7 @@ dependencies = [
  "lazy_static",
  "log_wrappers",
  "pd_client",
+ "protobuf",
  "raft",
  "raftstore",
  "rand 0.7.3",
