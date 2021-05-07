@@ -457,17 +457,63 @@ impl<'de> Deserialize<'de> for ReadableDuration {
     }
 }
 
+fn canonicalize_imp<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
+    fn canonicalize_non_existing_path<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
+        use std::path::Component;
+        let mut components = path.as_ref().components().peekable();
+        let mut last_canonicalized = None;
+        let mut should_canonicalize = true;
+        let mut ret = if let Some(c @ Component::Prefix(..)) = components.peek().cloned() {
+            components.next();
+            PathBuf::from(c.as_os_str())
+        } else {
+            PathBuf::new()
+        };
+        for component in components {
+            match component {
+                Component::Prefix(..) => unreachable!(),
+                Component::RootDir => {
+                    ret.push(component.as_os_str());
+                }
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    ret.pop();
+                }
+                Component::Normal(c) => {
+                    // We try to canonicalize a longest path based on fs info.
+                    if should_canonicalize {
+                        match ret.as_path().canonicalize() {
+                            Ok(path) => {
+                                last_canonicalized.replace(path);
+                            }
+                            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                                if last_canonicalized.is_some() {
+                                    ret = last_canonicalized.take().unwrap();
+                                }
+                                should_canonicalize = false;
+                            }
+                            other => return other,
+                        }
+                    }
+                    ret.push(c);
+                }
+            }
+        }
+        Ok(ret)
+    }
+    match path.as_ref().canonicalize() {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => canonicalize_non_existing_path(path),
+        other => other,
+    }
+}
+
 pub fn canonicalize_path(path: &str) -> Result<String, Box<dyn Error>> {
     canonicalize_sub_path(path, "")
 }
 
 pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<dyn Error>> {
     let path = Path::new(path);
-    let mut path = match path.canonicalize() {
-        Ok(path) => path,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => PathBuf::from(path),
-        Err(e) => return Err(Box::new(e) as Box<dyn Error>),
-    };
+    let mut path = canonicalize_imp(path)?;
     if !sub_path.is_empty() {
         path = path.join(Path::new(sub_path));
     }
@@ -478,7 +524,7 @@ pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<d
 }
 
 pub fn canonicalize_log_dir(path: &str, filename: &str) -> Result<String, Box<dyn Error>> {
-    let mut path = Path::new(path).canonicalize()?;
+    let mut path = canonicalize_imp(Path::new(path))?;
     if path.is_file() {
         return Ok(format!("{}", path.display()));
     }
@@ -1353,15 +1399,25 @@ mod tests {
             tmp_dir.canonicalize().unwrap().join("test1.dump")
         );
 
+        // canonicalize a non-existing path
         let path2 = format!("{}", tmp_dir.to_path_buf().join("test2").display());
-        assert!(canonicalize_path(&path2).is_ok());
-        ensure_dir_exist(&path2).unwrap();
         let res_path2 = canonicalize_path(&path2).unwrap();
+        let path2_complex = format!(
+            "{}",
+            tmp_dir
+                .to_path_buf()
+                .join("./non_existing/../test2")
+                .display()
+        );
+        let res_path2_complex = canonicalize_path(&path2_complex).unwrap();
+        assert_eq!(Path::new(&res_path2), Path::new(&res_path2_complex),);
+        ensure_dir_exist(&path2).unwrap();
         assert_eq!(
             Path::new(&res_path2),
-            Path::new(&path2).canonicalize().unwrap()
+            Path::new(&path2).canonicalize().unwrap(),
         );
 
+        // canonicalize a file
         let path2 = format!("{}", tmp_dir.to_path_buf().join("test2.dump").display());
         {
             File::create(&path2).unwrap();
