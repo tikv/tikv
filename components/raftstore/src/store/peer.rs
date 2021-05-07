@@ -43,10 +43,6 @@ use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, CollectedReady, Proposal};
 use crate::store::hibernate_state::GroupState;
 use crate::store::msg::RaftCommand;
-<<<<<<< HEAD
-=======
-use crate::store::util::{admin_cmd_epoch_lookup, RegionReadProgress};
->>>>>>> 48c69157c... raftstore: faster lookup for admin epoch checker (#10081)
 use crate::store::worker::{HeartbeatTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
 use crate::store::{
     Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse,
@@ -73,6 +69,7 @@ use super::util::{
     Lease, LeaseState, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
 };
 use super::DestroyPeerJob;
+use crate::store::util::admin_cmd_epoch_lookup;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
 const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000; // 1s
@@ -288,19 +285,10 @@ impl<S: Snapshot> CmdEpochChecker<S> {
 
     pub fn post_propose(&mut self, cmd_type: AdminCmdType, index: u64, term: u64) {
         self.maybe_update_term(term);
-<<<<<<< HEAD
-        // Due to `test_admin_cmd_epoch_map_include_all_cmd_type`, using unwrap is ok.
-        let epoch_state = *ADMIN_CMD_EPOCH_MAP.get(&cmd_type).unwrap();
+        let epoch_state = admin_cmd_epoch_lookup(cmd_type);
         assert!(self
             .last_conflict_index(epoch_state.check_ver, epoch_state.check_conf_ver)
             .is_none());
-=======
-        let epoch_state = admin_cmd_epoch_lookup(cmd_type);
-        assert!(
-            self.last_conflict_index(epoch_state.check_ver, epoch_state.check_conf_ver)
-                .is_none()
-        );
->>>>>>> 48c69157c... raftstore: faster lookup for admin epoch checker (#10081)
 
         if epoch_state.change_conf_ver || epoch_state.change_ver {
             if let Some(cmd) = self.proposed_admin_cmd.back() {
