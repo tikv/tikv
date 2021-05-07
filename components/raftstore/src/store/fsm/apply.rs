@@ -648,23 +648,13 @@ fn should_write_to_engine(cmd: &RaftCmdRequest) -> bool {
             _ => {}
         }
     }
-
-    // Some commands may modify keys covered by the current write batch, so we
-    // must write the current write batch to the engine first.
-    for req in cmd.get_requests() {
-        if req.has_delete_range() {
-            return true;
-        }
-        if req.has_ingest_sst() {
-            return true;
-        }
-    }
-
     false
 }
 
 /// Checks if a write has high-latency operation.
 fn has_high_latency_operation(cmd: &RaftCmdRequest) -> bool {
+    // Some commands may modify keys covered by the current write batch, so we
+    // must write the current write batch to the engine first.
     for req in cmd.get_requests() {
         if req.has_delete_range() {
             return true;
@@ -974,27 +964,24 @@ where
         if !data.is_empty() {
             let cmd = util::parse_data_at(data, index, &self.tag);
 
-            let has_unsynced_data =
-                self.last_sync_apply_index < self.apply_state.get_applied_index();
-
-            if apply_ctx.yield_high_latency_operation && has_high_latency_operation(&cmd) {
-                self.priority = Priority::Low;
-                if apply_ctx.priority != Priority::Low {
-                    if has_unsynced_data {
-                        apply_ctx.commit(self);
-                    }
-                    return ApplyResult::Yield;
+            let mut need_sync =
+                should_write_to_engine(&cmd) || apply_ctx.kv_wb().should_write_to_engine();
+            if has_high_latency_operation(&cmd) {
+                need_sync |= self.last_sync_apply_index != self.apply_state.get_applied_index();
+                if apply_ctx.yield_high_latency_operation {
+                    self.priority = Priority::Low;
                 }
             }
-            if should_write_to_engine(&cmd) || apply_ctx.kv_wb().should_write_to_engine() {
-                if has_unsynced_data {
-                    apply_ctx.commit(self);
-                }
+            if need_sync {
+                apply_ctx.commit(self);
                 if let Some(start) = self.handle_start.as_ref() {
                     if start.elapsed() >= apply_ctx.yield_duration {
                         return ApplyResult::Yield;
                     }
                 }
+            }
+            if self.priority == Priority::Low && apply_ctx.priority != Priority::Low {
+                return ApplyResult::Yield;
             }
 
             return self.process_raft_cmd(apply_ctx, index, term, cmd);
@@ -1371,14 +1358,9 @@ where
                 CmdType::Put => self.handle_put(ctx.kv_wb_mut(), req),
                 CmdType::Delete => self.handle_delete(ctx.kv_wb_mut(), req),
                 CmdType::DeleteRange => {
-                    assert!(ctx.kv_wb.is_empty());
                     self.handle_delete_range(&ctx.engine, req, &mut ranges, ctx.use_delete_range)
                 }
-                CmdType::IngestSst => {
-                    assert!(ctx.kv_wb.is_empty());
-                    assert_eq!(requests.len(), 1);
-                    self.handle_ingest_sst(ctx, req, &mut ssts)
-                }
+                CmdType::IngestSst => self.handle_ingest_sst(ctx, req, &mut ssts),
                 // Readonly commands are handled in raftstore directly.
                 // Don't panic here in case there are old entries need to be applied.
                 // It's also safe to skip them here, because a restart must have happened,
@@ -3931,7 +3913,6 @@ mod tests {
         req.set_ingest_sst(IngestSstRequest::default());
         let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
-        assert_eq!(should_write_to_engine(&cmd), true);
         assert_eq!(should_sync_log(&cmd), true);
 
         // Normal command
@@ -3946,6 +3927,17 @@ mod tests {
         req.mut_admin_request()
             .set_cmd_type(AdminCmdType::ComputeHash);
         assert_eq!(should_write_to_engine(&req), true);
+    }
+
+    #[test]
+    fn test_has_high_latency_operation() {
+        // Normal command
+        let mut req = Request::default();
+        req.set_cmd_type(CmdType::Put);
+        req.set_put(PutRequest::default());
+        let mut cmd = RaftCmdRequest::default();
+        cmd.mut_requests().push(req);
+        assert_eq!(has_high_latency_operation(&cmd), false);
 
         // IngestSst command
         let mut req = Request::default();
@@ -3953,7 +3945,15 @@ mod tests {
         req.set_ingest_sst(IngestSstRequest::default());
         let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
-        assert_eq!(should_write_to_engine(&cmd), true);
+        assert_eq!(has_high_latency_operation(&cmd), true);
+
+        // DeleteRange command
+        let mut req = Request::default();
+        req.set_cmd_type(CmdType::DeleteRange);
+        req.set_delete_range(DeleteRangeRequest::default());
+        let mut cmd = RaftCmdRequest::default();
+        cmd.mut_requests().push(req);
+        assert_eq!(has_high_latency_operation(&cmd), true);
     }
 
     fn validate<F, E>(router: &ApplyRouter<E>, region_id: u64, validate: F)
@@ -4705,6 +4705,133 @@ mod tests {
         assert_eq!(obs.post_query_count.load(Ordering::SeqCst), index);
 
         system.shutdown();
+    }
+
+    #[test]
+    fn test_handle_ingest_sst() {
+        let (_path, engine) = create_tmp_engine("test-ingest");
+        let (import_dir, importer) = create_tmp_importer("test-ingest");
+        let obs = ApplyObserver::default();
+        let mut host = CoprocessorHost::<KvTestEngine>::default();
+        host.registry
+            .register_query_observer(1, BoxQueryObserver::new(obs.clone()));
+
+        let (tx, rx) = mpsc::channel();
+        let (region_scheduler, _) = dummy_scheduler();
+        let sender = Box::new(TestNotifier { tx });
+        let cfg = {
+            let mut cfg = Config::default();
+            cfg.apply_batch_system.pool_size = 1;
+            cfg.apply_batch_system.low_priority_pool_size = 0;
+            Arc::new(VersionTrack::new(cfg))
+        };
+        let (router, mut system) = create_apply_batch_system(&cfg.value());
+        let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
+        let builder = super::Builder::<KvTestEngine, KvTestWriteBatch> {
+            tag: "test-store".to_owned(),
+            cfg,
+            sender,
+            region_scheduler,
+            coprocessor_host: host,
+            importer: importer.clone(),
+            engine: engine.clone(),
+            router: router.clone(),
+            _phantom: Default::default(),
+            store_id: 1,
+            pending_create_peers,
+        };
+        system.spawn("test-ingest".to_owned(), builder);
+
+        let mut reg = Registration {
+            id: 1,
+            ..Default::default()
+        };
+        reg.region.set_id(1);
+        reg.region.mut_peers().push(new_peer(1, 1));
+        reg.region.set_start_key(b"k1".to_vec());
+        reg.region.set_end_key(b"k2".to_vec());
+        reg.region.mut_region_epoch().set_conf_ver(1);
+        reg.region.mut_region_epoch().set_version(3);
+        router.schedule_task(1, Msg::Registration(reg));
+
+        // Test whether put commands and ingest commands are applied to engine in a correct order.
+        // We will generate 3 entries which are put, ingest and put respectively. For a same key,
+        // it can exist in multiple entries or in a single entries. We will test all all the possible
+        // keys exsiting combinations.
+        let mut keys = Vec::new();
+        let keys_count = 1 << 3;
+        for i in 0..keys_count {
+            keys.push(format!("k1/{}", i).as_bytes().to_vec());
+        }
+        let mut expected_vals = Vec::new();
+        expected_vals.resize(keys_count, Vec::new());
+
+        let mut entry1 = EntryBuilder::new(1, 1);
+        for i in 0..keys_count {
+            if (i & 1) > 0 {
+                entry1 = entry1.put(&keys[i], b"1");
+                expected_vals[i] = b"1".to_vec();
+            }
+        }
+        let entry1 = entry1.epoch(1, 3).build();
+
+        let mut kvs: Vec<(&[u8], &[u8])> = Vec::new();
+        for i in 0..keys_count {
+            if (i & 2) > 0 {
+                kvs.push((&keys[i], b"2"));
+                expected_vals[i] = b"2".to_vec();
+            }
+        }
+        let sst_path = import_dir.path().join("test.sst");
+        let (mut meta1, data1) = gen_sst_file_with_kvs(&sst_path, &kvs);
+        meta1.set_region_id(1);
+        meta1.mut_region_epoch().set_conf_ver(1);
+        meta1.mut_region_epoch().set_version(3);
+        let mut file1 = importer.create(&meta1).unwrap();
+        file1.append(&data1).unwrap();
+        file1.finish().unwrap();
+        let entry2 = EntryBuilder::new(2, 1)
+            .ingest_sst(&meta1)
+            .epoch(1, 3)
+            .build();
+
+        let mut entry3 = EntryBuilder::new(3, 1);
+        for i in 0..keys_count {
+            if (i & 4) > 0 {
+                entry3 = entry3.put(&keys[i], b"3");
+                expected_vals[i] = b"3".to_vec();
+            }
+        }
+        let entry3 = entry3.epoch(1, 3).build();
+
+        let (capture_tx, capture_rx) = mpsc::channel();
+        router.schedule_task(
+            1,
+            Msg::apply(apply(
+                1,
+                1,
+                1,
+                vec![entry1, entry2, entry3],
+                vec![
+                    cb(1, 1, capture_tx.clone()),
+                    cb(2, 1, capture_tx.clone()),
+                    cb(3, 1, capture_tx.clone()),
+                ],
+            )),
+        );
+        let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(!resp.get_header().has_error(), "{:?}", resp);
+        let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(!resp.get_header().has_error(), "{:?}", resp);
+        let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(!resp.get_header().has_error(), "{:?}", resp);
+        fetch_apply_res(&rx);
+
+        // Verify the engine keys.
+        for i in 1..keys_count {
+            let dk = keys::data_key(&keys[i]);
+            assert_eq!(engine.get_value(&dk).unwrap().unwrap(), &expected_vals[i]);
+        }
     }
 
     #[test]
