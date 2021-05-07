@@ -13,6 +13,7 @@ fn test_resolved_ts_basic() {
     let mut suite = TestSuite::new(1);
     let region = suite.cluster.get_region(&[]);
     let (k, v) = (b"k1", b"v");
+    suite.cluster.must_put(k, v);
     // Prewrite
     let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     let mut mutation = Mutation::default();

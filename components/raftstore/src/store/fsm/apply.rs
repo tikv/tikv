@@ -2794,8 +2794,8 @@ where
     pub index: u64,
     pub term: u64,
     pub cb: Callback<S>,
-    /// `renew_lease_time` contains the last time when a peer starts to renew lease.
-    pub renew_lease_time: Option<Timespec>,
+    /// `propose_time` is set to the last time when a peer starts to renew lease.
+    pub propose_time: Option<Timespec>,
     pub must_pass_epoch_check: bool,
 }
 
@@ -3836,6 +3836,7 @@ mod tests {
     use uuid::Uuid;
 
     use crate::store::{Config, RegionTask};
+    use sst_importer::Config as ImportConfig;
     use test_sst_importer::*;
     use tikv_util::config::VersionTrack;
     use tikv_util::worker::dummy_scheduler;
@@ -3856,7 +3857,8 @@ mod tests {
 
     pub fn create_tmp_importer(path: &str) -> (TempDir, Arc<SSTImporter>) {
         let dir = Builder::new().prefix(path).tempdir().unwrap();
-        let importer = Arc::new(SSTImporter::new(dir.path(), None).unwrap());
+        let importer =
+            Arc::new(SSTImporter::new(&ImportConfig::default(), dir.path(), None).unwrap());
         (dir, importer)
     }
 
@@ -4007,7 +4009,7 @@ mod tests {
             index,
             term,
             cb,
-            renew_lease_time: None,
+            propose_time: None,
             must_pass_epoch_check: false,
         }
     }
