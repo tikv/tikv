@@ -45,10 +45,6 @@ impl From<StorageError> for PluginError {
 /// Plugins can run setup code in their constructor and teardown code by implementing
 /// [`std::ops::Drop`].
 pub trait CoprocessorPlugin: Send + Sync {
-    /// Returns the name of the plugin.
-    /// Requests that are sent to TiKV coprocessor must have a matching `copr_name` field.
-    fn name(&self) -> &'static str;
-
     /// Handles a request to the coprocessor.
     ///
     /// The data in the `request` parameter is exactly the same data that was passed with the
