@@ -195,8 +195,8 @@ mod tests {
         let data_path = tempfile::Builder::new().tempdir().unwrap().into_path();
         let mut raftdb_path = data_path.clone();
         let mut raftengine_path = data_path;
-        raftdb_path.push("raft");
-        raftengine_path.push("raft-engine");
+        raftdb_path.push("test-raft");
+        raftengine_path.push("test-raft-engine");
         {
             let db = engine_rocks::raw_util::new_engine_opt(
                 raftdb_path.to_str().unwrap(),
@@ -214,22 +214,25 @@ mod tests {
             raft_engine.consume(&mut batch, true).unwrap();
             raft_engine.sync().unwrap();
         }
-        // RaftEngine
-        let raft_config = RaftEngineConfig {
-            dir: raftengine_path.to_str().unwrap().to_owned(),
-            ..Default::default()
-        };
-        let raft_engine = RaftLogEngine::new(raft_config);
-        check_and_dump_raft_db(
-            raftdb_path.to_str().unwrap(),
-            "",
-            &raft_engine,
-            Arc::new(Env::default()),
-            4,
-        );
-        assert(1, &raft_engine);
-        assert(5, &raft_engine);
-        assert(15, &raft_engine);
+
+        {
+            // RaftEngine
+            let raft_config = RaftEngineConfig {
+                dir: raftengine_path.to_str().unwrap().to_owned(),
+                ..Default::default()
+            };
+            let raft_engine_r = RaftLogEngine::new(raft_config);
+            check_and_dump_raft_db(
+                raftdb_path.to_str().unwrap(),
+                "",
+                &raft_engine_r,
+                Arc::new(Env::default()),
+                4,
+            );
+            assert(1, &raft_engine_r);
+            assert(5, &raft_engine_r);
+            assert(15, &raft_engine_r);
+        }
     }
 
     #[test]
@@ -237,10 +240,10 @@ mod tests {
         let data_path = tempfile::Builder::new().tempdir().unwrap().into_path();
         let mut raftdb_path = data_path.clone();
         let mut raftengine_path = data_path;
-        raftdb_path.push("raft");
-        raftengine_path.push("raft-engine");
+        raftdb_path.push("test-raft");
+        raftengine_path.push("test-raft-engine");
         let mut raftdb_wal_path = raftdb_path.clone();
-        raftdb_wal_path.push("wal");
+        raftdb_wal_path.push("test-wal");
         {
             let mut db_opt = DBOptions::new();
             db_opt.set_wal_dir(raftdb_wal_path.to_str().unwrap());
@@ -260,33 +263,36 @@ mod tests {
             raft_engine.consume(&mut batch, true).unwrap();
             raft_engine.sync().unwrap();
         }
-        // RaftEngine
-        let raft_config = RaftEngineConfig {
-            dir: raftengine_path.to_str().unwrap().to_owned(),
-            ..Default::default()
-        };
-        let raft_engine = RaftLogEngine::new(raft_config);
-        check_and_dump_raft_db(
-            raftdb_path.to_str().unwrap(),
-            raftdb_wal_path.to_str().unwrap(),
-            &raft_engine,
-            Arc::new(Env::default()),
-            4,
-        );
-        assert(1, &raft_engine);
-        assert(5, &raft_engine);
-        assert(15, &raft_engine);
+
+        {
+            // RaftEngine
+            let raft_config = RaftEngineConfig {
+                dir: raftengine_path.to_str().unwrap().to_owned(),
+                ..Default::default()
+            };
+            let raft_engine_r = RaftLogEngine::new(raft_config);
+            check_and_dump_raft_db(
+                raftdb_path.to_str().unwrap(),
+                raftdb_wal_path.to_str().unwrap(),
+                &raft_engine_r,
+                Arc::new(Env::default()),
+                4,
+            );
+            assert(1, &raft_engine_r);
+            assert(5, &raft_engine_r);
+            assert(15, &raft_engine_r);
+        }
     }
 
     #[test]
-    fn test_dump_with_separate_wal_without_config_when_dump() {
+    fn test_dump_with_separate_wal_without_config_wal() {
         let data_path = tempfile::Builder::new().tempdir().unwrap().into_path();
         let mut raftdb_path = data_path.clone();
         let mut raftengine_path = data_path;
-        raftdb_path.push("raft");
-        raftengine_path.push("raft-engine");
+        raftdb_path.push("test-raft");
+        raftengine_path.push("test-raft-engine");
         let mut raftdb_wal_path = raftdb_path.clone();
-        raftdb_wal_path.push("wal");
+        raftdb_wal_path.push("test-wal");
         {
             let mut db_opt = DBOptions::new();
             db_opt.set_wal_dir(raftdb_wal_path.to_str().unwrap());
@@ -306,20 +312,23 @@ mod tests {
             raft_engine.consume(&mut batch, true).unwrap();
             raft_engine.sync().unwrap();
         }
-        // RaftEngine
-        let raft_config = RaftEngineConfig {
-            dir: raftengine_path.to_str().unwrap().to_owned(),
-            ..Default::default()
-        };
-        let raft_engine = RaftLogEngine::new(raft_config);
-        check_and_dump_raft_db(
-            raftdb_path.to_str().unwrap(),
-            "",
-            &raft_engine,
-            Arc::new(Env::default()),
-            4,
-        );
-        assert_eq!(None, raft_engine.get_raft_state(1).unwrap());
+
+        {
+            // RaftEngine
+            let raft_config = RaftEngineConfig {
+                dir: raftengine_path.to_str().unwrap().to_owned(),
+                ..Default::default()
+            };
+            let raft_engine_r = RaftLogEngine::new(raft_config);
+            check_and_dump_raft_db(
+                raftdb_path.to_str().unwrap(),
+                "",
+                &raft_engine_r,
+                Arc::new(Env::default()),
+                4,
+            );
+            assert_eq!(None, raft_engine_r.get_raft_state(1).unwrap());
+        }
     }
 
     // Insert some data into log batch.

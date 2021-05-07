@@ -260,19 +260,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     fn init_config(mut config: TiKvConfig) -> ConfigController {
         validate_and_persist_config(&mut config, true);
 
-        // ensure critical directories exist
-        // - ensure kvdb dir exist
         ensure_dir_exist(&config.storage.data_dir).unwrap();
-        // - ensure kvdb wal dir exists if wal-dir is set
         if !config.rocksdb.wal_dir.is_empty() {
             ensure_dir_exist(&config.rocksdb.wal_dir).unwrap();
         }
         if config.raft_engine.enable {
             ensure_dir_exist(&config.raft_engine.config().dir).unwrap();
         } else {
-            // - ensure raftdb dir exists
             ensure_dir_exist(&config.raft_store.raftdb_path).unwrap();
-            // - ensure raftdb wal dir exists if wal-dir is set
             if !config.raftdb.wal_dir.is_empty() {
                 ensure_dir_exist(&config.raftdb.wal_dir).unwrap();
             }

@@ -415,7 +415,7 @@
 ## If it is not set, the log files will be in the same directory as data.
 ## If there are two disks on the machine, storing RocksDB data and WAL logs on different disks can
 ## improve performance.
-## Make surce NEVER set this config the same as `raftdb.wal-dir`.
+## Do not set this config the same as `raftdb.wal-dir`.
 # wal-dir = ""
 
 ## The following two fields affect how archived WAL will be deleted.
@@ -789,7 +789,7 @@
 ## If it is not set, the log files will be in the same directory as data.
 ## If there are two disks on the machine, storing RocksDB data and WAL logs on different disks can
 ## improve performance.
-## Make surce NEVER set this config the same as `rocksdb.wal-dir`.
+## Do not set this config the same as `rocksdb.wal-dir`.
 # wal-dir = ""
 
 # compaction-readahead-size = 0
