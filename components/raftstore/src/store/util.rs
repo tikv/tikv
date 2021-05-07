@@ -889,8 +889,13 @@ impl RegionReadProgress {
         self.safe_ts.store(0, AtomicOrdering::Release);
     }
 
+    // Get the latest `read_state`
     pub fn read_state(&self) -> ReadState {
-        self.core.lock().unwrap().read_state.clone()
+        let core = self.core.lock().unwrap();
+        core.pending_items
+            .back()
+            .unwrap_or(&core.read_state)
+            .clone()
     }
 
     pub fn safe_ts(&self) -> u64 {
