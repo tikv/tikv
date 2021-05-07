@@ -298,7 +298,7 @@ fn run_afl(target: &str) -> Result<()> {
 fn build_honggfuzz(target: &str) -> Result<()> {
     pre_check(
         Command::new("cargo").args(&["hfuzz", "version"]),
-        "cargo install honggfuzz --version 0.5.45",
+        "cargo install honggfuzz",
     )?;
 
     let fuzzer = Fuzzer::Honggfuzz;
@@ -337,7 +337,7 @@ fn build_honggfuzz(target: &str) -> Result<()> {
 fn run_honggfuzz(target: &str) -> Result<()> {
     pre_check(
         Command::new("cargo").args(&["hfuzz", "version"]),
-        "cargo install honggfuzz --version 0.5.45",
+        "cargo install honggfuzz",
     )?;
 
     let fuzzer = Fuzzer::Honggfuzz;
