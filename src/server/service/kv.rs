@@ -927,13 +927,13 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                     let status = match res {
                         Err(e) => {
                             let msg = format!("{:?}", e);
-                            error!("dispatch raft msg from gRPC to raftstore fail"; "err" => %msg);
+                            error!("dispatch raft msg from gRPC to raftstore fail: {}", msg);
                             RpcStatus::new(RpcStatusCode::Unknown, Some(msg))
                         }
                         Ok(_) => RpcStatus::new(RpcStatusCode::Unknown, None),
                     };
                     sink.fail(status)
-                        .map_err(|e| error!("KvService::raft send response fail"; "err" => ?e))
+                        .map_err(|e| error!("KvService::raft send response fail: {}", e))
                 }),
         );
     }
