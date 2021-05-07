@@ -15,14 +15,14 @@ use std::ffi::CString;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
 
+use super::metrics::*;
+use super::{Config, Error, Result};
 use futures::sync::mpsc::{self, UnboundedSender};
 use futures::sync::oneshot::{self, Sender};
 use futures::{stream, Future, Sink, Stream};
 use grpc::{ChannelBuilder, Environment, WriteFlags};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
-use super::metrics::*;
-use super::{Config, Error, Result};
 use util::collections::HashMap;
 use util::security::SecurityManager;
 
