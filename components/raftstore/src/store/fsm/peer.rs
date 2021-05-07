@@ -2359,7 +2359,7 @@ where
         }
         drop(meta);
         if is_leader {
-            self.register_split_region_check_tick();
+            self.on_split_region_check_tick();
         }
         fail_point!("after_split", self.ctx.store_id() == 3, |_| {});
     }
