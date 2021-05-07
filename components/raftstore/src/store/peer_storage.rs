@@ -1346,8 +1346,8 @@ where
         self.check_applying_snap() != CheckApplyingSnapStatus::Applying
     }
 
-    /// Cancel generating snapshot, return true if there is such a job.
-    pub fn cancel_generating_snap(&mut self, compact_to: Option<u64>) -> bool {
+    /// Cancel generating snapshot.
+    pub fn cancel_generating_snap(&mut self, compact_to: Option<u64>) {
         let snap_state = self.snap_state.borrow();
         if let SnapState::Generating {
             ref canceled,
@@ -1355,16 +1355,15 @@ where
             ..
         } = *snap_state
         {
-            if let Some(idx) = compact_to {
-                let snap_index = index.load(Ordering::SeqCst);
-                if snap_index == 0 || idx <= snap_index + 1 {
-                    return false;
+            if !canceled.load(Ordering::SeqCst) {
+                if let Some(idx) = compact_to {
+                    let snap_index = index.load(Ordering::SeqCst);
+                    if snap_index > 0 && idx > snap_index + 1 {
+                        canceled.store(true, Ordering::SeqCst);
+                    }
                 }
             }
-            canceled.store(true, Ordering::SeqCst);
-            return true;
         }
-        false
     }
 
     #[inline]
