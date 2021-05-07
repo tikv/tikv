@@ -43,15 +43,7 @@ use crate::store::metrics::*;
 use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
 use crate::store::peer::Peer;
 use crate::store::peer_storage::{self, write_initial_apply_state, write_peer_state};
-use crate::store::util::{
-<<<<<<< HEAD
-    check_region_epoch, compare_region_epoch, KeysInfoFormatter, PerfContextStatistics,
-    ADMIN_CMD_EPOCH_MAP,
-=======
-    admin_cmd_epoch_lookup, check_region_epoch, compare_region_epoch, is_learner, ChangePeerI,
-    ConfChangeKind, KeysInfoFormatter,
->>>>>>> 48c69157c... raftstore: faster lookup for admin epoch checker (#10081)
-};
+use crate::store::util::{check_region_epoch, compare_region_epoch, KeysInfoFormatter, PerfContextStatistics, admin_cmd_epoch_lookup};
 use crate::store::{cmd_resp, util, Config, RegionSnapshot, RegionTask};
 use crate::{observe_perf_context_type, report_perf_context, Error, Result};
 

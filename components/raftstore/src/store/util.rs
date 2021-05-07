@@ -5,21 +5,13 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::{fmt, u64};
 
-<<<<<<< HEAD
 use engine_rocks::{set_perf_level, PerfContext, PerfLevel};
 use kvproto::kvrpcpb::KeyRange;
 use kvproto::metapb;
 use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
-=======
-use kvproto::kvrpcpb::KeyRange;
-use kvproto::metapb::{self, PeerRole};
-use kvproto::raft_cmdpb::{AdminCmdType, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest};
-use kvproto::raft_serverpb::RaftMessage;
->>>>>>> 48c69157c... raftstore: faster lookup for admin epoch checker (#10081)
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
 use raft::INVALID_INDEX;
-use tikv_util::collections::HashMap;
 use tikv_util::time::monotonic_raw_now;
 use time::{Duration, Timespec};
 
@@ -212,12 +204,7 @@ pub fn admin_cmd_epoch_lookup(admin_cmp_type: AdminCmdType) -> AdminCmdEpochStat
         AdminCmdType::ComputeHash => AdminCmdEpochState::new(false, false, false, false),
         AdminCmdType::VerifyHash => AdminCmdEpochState::new(false, false, false, false),
         // Change peer
-<<<<<<< HEAD
-        (AdminCmdType::ChangePeer, AdminCmdEpochState::new(false, true, false, true)),
-=======
         AdminCmdType::ChangePeer => AdminCmdEpochState::new(false, true, false, true),
-        AdminCmdType::ChangePeerV2 => AdminCmdEpochState::new(false, true, false, true),
->>>>>>> 48c69157c... raftstore: faster lookup for admin epoch checker (#10081)
         // Split
         AdminCmdType::Split => AdminCmdEpochState::new(true, true, true, false),
         AdminCmdType::BatchSplit => AdminCmdEpochState::new(true, true, true, false),
@@ -1337,79 +1324,5 @@ mod tests {
             let quorum = super::integration_on_half_fail_quorum_fn(voter_count);
             assert_eq!(quorum, expected_quorum);
         }
-    }
-
-    #[test]
-<<<<<<< HEAD
-    fn test_admin_cmd_epoch_map_include_all_cmd_type() {
-        #[cfg(feature = "protobuf-codec")]
-        use protobuf::ProtobufEnum;
-        for cmd_type in AdminCmdType::values() {
-            assert!(ADMIN_CMD_EPOCH_MAP.contains_key(cmd_type));
-        }
-=======
-    fn test_is_region_initialized() {
-        let mut region = metapb::Region::default();
-        assert!(!is_region_initialized(&region));
-        let peers = vec![new_peer(1, 2)];
-        region.set_peers(peers.into());
-        assert!(is_region_initialized(&region));
-    }
-
-    #[test]
-    fn test_region_read_progress() {
-        // Return the number of the pending (index, ts) item
-        fn pending_items_num(rrp: &RegionReadProgress) -> usize {
-            rrp.core.lock().unwrap().pending_items.len()
-        }
-
-        let cap = 10;
-        let rrp = RegionReadProgress::new(10, cap);
-        for i in 1..=20 {
-            rrp.update_safe_ts(i, i);
-        }
-        // `safe_ts` update according to its `applied_index`
-        assert_eq!(rrp.safe_ts(), 10);
-        assert_eq!(pending_items_num(&rrp), 10);
-
-        rrp.update_applied(20);
-        assert_eq!(rrp.safe_ts(), 20);
-        assert_eq!(pending_items_num(&rrp), 0);
-
-        for i in 100..200 {
-            rrp.update_safe_ts(i, i);
-        }
-        assert_eq!(rrp.safe_ts(), 20);
-        // the number of pending item should not exceed `cap`
-        assert!(pending_items_num(&rrp) <= cap);
-
-        // `applied_index` large than all pending items will clear all pending items
-        rrp.update_applied(200);
-        assert_eq!(rrp.safe_ts(), 199);
-        assert_eq!(pending_items_num(&rrp), 0);
-
-        // pending item can be updated instead of adding a new one
-        rrp.update_safe_ts(300, 300);
-        assert_eq!(pending_items_num(&rrp), 1);
-        rrp.update_safe_ts(200, 400);
-        assert_eq!(pending_items_num(&rrp), 1);
-        rrp.update_safe_ts(300, 500);
-        assert_eq!(pending_items_num(&rrp), 1);
-        rrp.update_safe_ts(301, 600);
-        assert_eq!(pending_items_num(&rrp), 2);
-        // `safe_ts` will update to 500 instead of 300
-        rrp.update_applied(300);
-        assert_eq!(rrp.safe_ts(), 500);
-        rrp.update_applied(301);
-        assert_eq!(rrp.safe_ts(), 600);
-        assert_eq!(pending_items_num(&rrp), 0);
-
-        // stale item will be ignored
-        rrp.update_safe_ts(300, 500);
-        rrp.update_safe_ts(301, 600);
-        rrp.update_safe_ts(400, 0);
-        rrp.update_safe_ts(0, 700);
-        assert_eq!(pending_items_num(&rrp), 0);
->>>>>>> 48c69157c... raftstore: faster lookup for admin epoch checker (#10081)
     }
 }
