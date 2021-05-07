@@ -912,7 +912,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         &self,
         ctx: RpcContext,
         stream: RequestStream<RaftMessage>,
-        _: ClientStreamingSink<Done>,
+        sink: ClientStreamingSink<Done>,
     ) {
         let ch = self.ch.clone();
         ctx.spawn(
@@ -923,7 +923,18 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                     future::result(ch.send_raft_msg(msg)).map_err(Error::from)
                 })
                 .map_err(|e| error!("send raft msg to raft store fail: {}", e))
-                .then(|_| future::ok::<_, ()>(())),
+                .then(|res| {
+                    let status = match res {
+                        Err(e) => {
+                            let msg = format!("{:?}", e);
+                            error!("dispatch raft msg from gRPC to raftstore fail"; "err" => %msg);
+                            RpcStatus::new(RpcStatusCode::Unknown, Some(msg))
+                        }
+                        Ok(_) => RpcStatus::new(RpcStatusCode::Unknown, None),
+                    };
+                    sink.fail(status)
+                        .map_err(|e| error!("KvService::raft send response fail"; "err" => ?e))
+                }),
         );
     }
 
