@@ -1,11 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::mpsc;
 use std::sync::Arc;
-use std::sync::{mpsc, Mutex};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use std::sync::mpsc::channel;
 use test_raftstore::*;
 use tikv_util::config::*;
 use tikv_util::time::UnixSecs as PdInstant;
@@ -206,7 +205,7 @@ fn test_region_heartbeat_term() {
 }
 
 #[test]
-fn test_region_heartbeat_when_size_or_keys_is_none() {
+fn test_region_heartbeat_report_approximate_size() {
     let mut cluster = new_server_cluster(0, 3);
     cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
     cluster.run();
@@ -215,22 +214,12 @@ fn test_region_heartbeat_when_size_or_keys_is_none() {
         cluster.must_put_cf("write", k.as_bytes(), v.as_bytes());
     }
     cluster.must_flush_cf("write", true);
-    fail::cfg("region_size_or_keys_none", "return").unwrap();
-    let (tx, rx) = channel();
-    let tx = Arc::new(Mutex::new(tx));
-    fail::cfg_callback("schedule_check_split", move || {
-        tx.lock().unwrap().send(()).unwrap();
-        fail::remove("region_size_or_keys_none");
-    })
-    .unwrap();
 
     let ids = cluster.get_node_ids();
     for id in ids {
         cluster.stop_node(id);
         cluster.run_node(id).unwrap();
     }
-
-    rx.recv().unwrap();
 
     let region_id = cluster.get_region_id(b"");
     for _ in 0..10 {

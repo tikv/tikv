@@ -525,14 +525,16 @@ where
                 PeerMsg::SplitCheck => {
                     // If the current `approximate_size` is larger than `region_max_size`, this region
                     // may ingest a large file which is imported by `BR` or `lightning`, we shall check it
-                    let check_size = self.fsm.peer.approximate_size.map_or(true, |size| {
-                        size > self.ctx.coprocessor_host.cfg.region_max_size.0
-                    });
-                    let check_keys = self.fsm.peer.approximate_keys.map_or(true, |keys| {
-                        keys > self.ctx.coprocessor_host.cfg.region_max_keys
-                    });
-                    if self.fsm.peer.is_leader() && (check_size || check_keys) {
-                        self.fsm.peer.schedule_check_split(self.ctx);
+
+                    if self.fsm.peer.is_leader() {
+                        if !self.fsm.peer.has_calculated_region_size
+                            || self.fsm.peer.approximate_size
+                                > self.ctx.coprocessor_host.cfg.region_max_size.0
+                            || self.fsm.peer.approximate_keys
+                                > self.ctx.coprocessor_host.cfg.region_max_keys
+                        {
+                            self.fsm.peer.schedule_check_split(self.ctx);
+                        }
                     }
                 }
             }
@@ -769,8 +771,9 @@ where
     }
 
     fn on_clear_region_size(&mut self) {
-        self.fsm.peer.approximate_size = None;
-        self.fsm.peer.approximate_keys = None;
+        self.fsm.peer.approximate_size = 0;
+        self.fsm.peer.approximate_keys = 0;
+        self.fsm.peer.has_calculated_region_size = false;
         self.register_split_region_check_tick();
     }
 
@@ -2191,18 +2194,14 @@ where
         let region_id = derived.get_id();
         // Roughly estimate the size and keys for new regions.
         let new_region_count = regions.len() as u64;
-        let estimated_size = self.fsm.peer.approximate_size.map(|x| x / new_region_count);
-        let estimated_keys = self.fsm.peer.approximate_keys.map(|x| x / new_region_count);
+        let estimated_size = self.fsm.peer.approximate_size / new_region_count;
+        let estimated_keys = self.fsm.peer.approximate_keys / new_region_count;
         // It's not correct anymore, so set it to None to let split checker update it.
-        self.fsm.peer.approximate_size = None;
-        self.fsm.peer.approximate_keys = None;
         let mut meta = self.ctx.store_meta.lock().unwrap();
         meta.set_region(&self.ctx.coprocessor_host, derived, &mut self.fsm.peer);
         self.fsm.peer.post_split();
 
-        // If `estimated_size` or `estimated_keys` equals none, the leader will schedule a
-        // split-check task before sending heartbeat to pd.
-        let need_check_split = estimated_size.is_some() && estimated_keys.is_some();
+        self.fsm.peer.has_calculated_region_size = false;
 
         let is_leader = self.fsm.peer.is_leader();
         if is_leader {
@@ -2216,9 +2215,6 @@ where
                 "peer_id" => self.fsm.peer_id(),
                 "split_count" => regions.len(),
             );
-            if need_check_split {
-                self.fsm.peer.schedule_check_split(self.ctx);
-            }
             // Now pd only uses ReportBatchSplit for history operation show,
             // so we send it independently here.
             let task = PdTask::ReportBatchSplit {
@@ -2336,9 +2332,6 @@ where
                 // The new peer is likely to become leader, send a heartbeat immediately to reduce
                 // client query miss.
                 new_peer.peer.heartbeat_pd(self.ctx);
-                if need_check_split {
-                    new_peer.peer.schedule_check_split(self.ctx);
-                }
             }
 
             new_peer.peer.activate(self.ctx);
@@ -3524,12 +3517,12 @@ where
             return;
         }
 
-        // When restart, the approximate size will be None. The split check will first
+        // When restart, the has_calculated_region_size will be false. The split check will first
         // check the region size, and then check whether the region should split. This
         // should work even if we change the region max size.
         // If peer says should update approximate size, update region size and check
         // whether the region should split.
-        if self.fsm.peer.approximate_size.is_some()
+        if self.fsm.peer.has_calculated_region_size
             && self.fsm.peer.compaction_declined_bytes < self.ctx.cfg.region_split_check_diff.0
             && self.fsm.peer.size_diff_hint < self.ctx.cfg.region_split_check_diff.0
         {
@@ -3540,6 +3533,7 @@ where
         // region-epoch not matched. So we hope TiKV do not check region size and split region during
         // importing.
         if self.ctx.importer.get_mode() == SwitchMode::Import {
+            self.register_split_region_check_tick();
             return;
         }
 
@@ -3553,6 +3547,7 @@ where
             && self.fsm.skip_split_count < self.region_split_skip_max_count()
         {
             self.fsm.skip_split_count += 1;
+            self.register_split_region_check_tick();
             return;
         }
         self.fsm.skip_split_count = 0;
@@ -3670,20 +3665,14 @@ where
     }
 
     fn on_approximate_region_size(&mut self, size: u64) {
-        self.fsm.peer.approximate_size = Some(size);
-        if self.fsm.peer.pending_pd_heartbeat_tasks && self.fsm.peer.approximate_keys.is_some() {
-            self.fsm.peer.heartbeat_pd(self.ctx);
-        }
+        self.fsm.peer.approximate_size = size;
+        self.fsm.peer.has_calculated_region_size = true;
         self.register_split_region_check_tick();
         self.register_pd_heartbeat_tick();
     }
 
     fn on_approximate_region_keys(&mut self, keys: u64) {
-        self.fsm.peer.approximate_keys = Some(keys);
-        if self.fsm.peer.pending_pd_heartbeat_tasks && self.fsm.peer.approximate_size.is_some() {
-            self.fsm.peer.heartbeat_pd(self.ctx);
-        }
-
+        self.fsm.peer.approximate_keys = keys;
         self.register_split_region_check_tick();
         self.register_pd_heartbeat_tick();
     }
@@ -3918,8 +3907,11 @@ where
             size += sst.total_bytes;
             keys += sst.total_kvs;
         }
-        self.fsm.peer.approximate_size = Some(self.fsm.peer.approximate_size.unwrap_or(0) + size);
-        self.fsm.peer.approximate_keys = Some(self.fsm.peer.approximate_keys.unwrap_or(0) + keys);
+        self.fsm.peer.approximate_size = self.fsm.peer.approximate_size + size;
+        self.fsm.peer.approximate_keys = self.fsm.peer.approximate_keys + keys;
+        // The ingested file may be overlapped with the data in engine, so we need to check it
+        // again to get the actually value.
+        self.fsm.peer.has_calculated_region_size = false;
         if self.fsm.peer.is_leader() {
             self.on_pd_heartbeat_tick();
         }
