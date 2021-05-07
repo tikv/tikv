@@ -191,11 +191,13 @@ impl Default for StoreStat {
 pub struct PeerStat {
     pub read_bytes: u64,
     pub read_keys: u64,
+    // last_region_report_attributes records the state of the last region heartbeat
     pub last_region_report_read_bytes: u64,
     pub last_region_report_read_keys: u64,
     pub last_region_report_written_bytes: u64,
     pub last_region_report_written_keys: u64,
     pub last_region_report_ts: UnixSecs,
+    // last_store_report_attributes records the state of the last store heartbeat
     pub last_store_report_read_bytes: u64,
     pub last_store_report_read_keys: u64,
     pub approximate_keys: u64,
