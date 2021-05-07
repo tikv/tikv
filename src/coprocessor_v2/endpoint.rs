@@ -29,9 +29,12 @@ impl Endpoint {
     pub fn new(copr_cfg: &Config) -> Self {
         let mut plugin_registry = PluginRegistry::new();
 
-        let r = plugin_registry.start_hot_reloading(&copr_cfg.coprocessor_plugin_directory);
-        if let Err(err) = r {
-            warn!("unable to start hot-reloading for coprocessor plugins."; "coprocessor_directory" => &copr_cfg.coprocessor_plugin_directory, "error" => ?err);
+        // Enable hot-reloading of plugins if the user configured a directory.
+        if let Some(plugin_directory) = &copr_cfg.coprocessor_plugin_directory {
+            let r = plugin_registry.start_hot_reloading(plugin_directory);
+            if let Err(err) = r {
+                warn!("unable to start hot-reloading for coprocessor plugins."; "coprocessor_directory" => plugin_directory, "error" => ?err);
+            }
         }
 
         Self {
