@@ -23,17 +23,23 @@ pub enum GroupState {
     Idle,
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum LeaderState {
     Awaken,
     Poll(Vec<u64>),
     Hibernated,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct HibernateState {
     group: GroupState,
     leader: LeaderState,
+}
+
+#[derive(Debug)]
+pub struct HibernateResult {
+    pub hibernated: bool,
+    pub state_changed: bool,
 }
 
 impl HibernateState {
@@ -67,28 +73,45 @@ impl HibernateState {
         gate.can_enable(NEGOTIATION_HIBERNATE)
     }
 
-    pub fn maybe_hibernate(&mut self, my_id: u64, region: &Region) -> bool {
+    pub fn maybe_hibernate(&mut self, my_id: u64, region: &Region) -> HibernateResult {
         let peers = region.get_peers();
         let v = match &mut self.leader {
             LeaderState::Awaken => {
                 self.leader = LeaderState::Poll(Vec::with_capacity(peers.len()));
-                return false;
+                return HibernateResult {
+                    hibernated: false,
+                    state_changed: true,
+                };
             }
             LeaderState::Poll(v) => v,
-            LeaderState::Hibernated => return true,
+            LeaderState::Hibernated => {
+                return HibernateResult {
+                    hibernated: true,
+                    state_changed: false,
+                };
+            }
         };
         // 1 is for leader itself, which is not counted into votes.
         if v.len() + 1 < peers.len() {
-            return false;
+            return HibernateResult {
+                hibernated: false,
+                state_changed: false,
+            };
         }
         if peers
             .iter()
             .all(|p| p.get_id() == my_id || v.contains(&p.get_id()))
         {
             self.leader = LeaderState::Hibernated;
-            true
+            HibernateResult {
+                hibernated: true,
+                state_changed: true,
+            }
         } else {
-            false
+            HibernateResult {
+                hibernated: false,
+                state_changed: false,
+            }
         }
     }
 }

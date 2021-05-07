@@ -8,9 +8,11 @@ use std::time::Duration;
 
 use super::metrics::*;
 use super::{
-    BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
-    RegionChangeEvent, RegionChangeObserver, Result, RoleObserver,
+    BoxHibernateStateChangeObserver, BoxRegionChangeObserver, BoxRoleObserver, Coprocessor,
+    CoprocessorHost, HibernateStateChangeObserver, ObserverContext, RegionChangeEvent,
+    RegionChangeObserver, Result, RoleObserver,
 };
+use crate::store::HibernateState;
 use collections::HashMap;
 use engine_traits::KvEngine;
 use keys::{data_end_key, data_key};
@@ -37,10 +39,26 @@ use tikv_util::{box_err, debug, info, warn};
 /// `RaftStoreEvent` Represents events dispatched from raftstore coprocessor.
 #[derive(Debug)]
 pub enum RaftStoreEvent {
-    CreateRegion { region: Region, role: StateRole },
-    UpdateRegion { region: Region, role: StateRole },
-    DestroyRegion { region: Region },
-    RoleChange { region: Region, role: StateRole },
+    CreateRegion {
+        region: Region,
+        role: StateRole,
+    },
+    UpdateRegion {
+        region: Region,
+        role: StateRole,
+    },
+    DestroyRegion {
+        region: Region,
+    },
+    RoleChange {
+        region: Region,
+        role: StateRole,
+    },
+    HibernateStateChange {
+        region: Region,
+        role: StateRole,
+        hibernate_state: HibernateState,
+    },
 }
 
 impl RaftStoreEvent {
@@ -49,7 +67,8 @@ impl RaftStoreEvent {
             RaftStoreEvent::CreateRegion { region, .. }
             | RaftStoreEvent::UpdateRegion { region, .. }
             | RaftStoreEvent::DestroyRegion { region, .. }
-            | RaftStoreEvent::RoleChange { region, .. } => region,
+            | RaftStoreEvent::RoleChange { region, .. }
+            | RaftStoreEvent::HibernateStateChange { region, .. } => region,
         }
     }
 }
@@ -58,11 +77,16 @@ impl RaftStoreEvent {
 pub struct RegionInfo {
     pub region: Region,
     pub role: StateRole,
+    pub hibernate_state: HibernateState,
 }
 
 impl RegionInfo {
-    pub fn new(region: Region, role: StateRole) -> Self {
-        Self { region, role }
+    pub fn new(region: Region, role: StateRole, hibernate_state: HibernateState) -> Self {
+        Self {
+            region,
+            role,
+            hibernate_state,
+        }
     }
 }
 
@@ -154,6 +178,25 @@ impl RoleObserver for RegionEventListener {
     }
 }
 
+impl HibernateStateChangeObserver for RegionEventListener {
+    fn on_hibernate_state_changed(
+        &self,
+        context: &mut ObserverContext<'_>,
+        role: StateRole,
+        hibernate_state: HibernateState,
+    ) {
+        let region = context.region().clone();
+        let event = RaftStoreEvent::HibernateStateChange {
+            region,
+            role,
+            hibernate_state,
+        };
+        self.scheduler
+            .schedule(RegionInfoQuery::RaftStoreEvent(event))
+            .unwrap();
+    }
+}
+
 /// Creates an `RegionEventListener` and register it to given coprocessor host.
 fn register_region_event_listener(
     host: &mut CoprocessorHost<impl KvEngine>,
@@ -164,7 +207,11 @@ fn register_region_event_listener(
     host.registry
         .register_role_observer(1, BoxRoleObserver::new(listener.clone()));
     host.registry
-        .register_region_change_observer(1, BoxRegionChangeObserver::new(listener));
+        .register_region_change_observer(1, BoxRegionChangeObserver::new(listener.clone()));
+    host.registry.register_hibernate_state_change_observer(
+        1,
+        BoxHibernateStateChangeObserver::new(listener),
+    );
 }
 
 /// `RegionCollector` is the place where we hold all region information we collected, and the
@@ -185,7 +232,12 @@ impl RegionCollector {
         }
     }
 
-    pub fn create_region(&mut self, region: Region, role: StateRole) {
+    pub fn create_region(
+        &mut self,
+        region: Region,
+        role: StateRole,
+        hibernate_state: HibernateState,
+    ) {
         let end_key = data_end_key(region.get_end_key());
         let region_id = region.get_id();
 
@@ -195,7 +247,7 @@ impl RegionCollector {
         // TODO: Should we set it follower?
         assert!(
             self.regions
-                .insert(region_id, RegionInfo::new(region, role))
+                .insert(region_id, RegionInfo::new(region, role, hibernate_state))
                 .is_none(),
             "trying to create new region {} but it already exists.",
             region_id
@@ -241,7 +293,7 @@ impl RegionCollector {
             );
             self.update_region(region);
         } else {
-            self.create_region(region, role);
+            self.create_region(region, role, HibernateState::ordered());
         }
     }
 
@@ -253,7 +305,7 @@ impl RegionCollector {
                 "trying to update region but it doesn't exist, try to create it";
                 "region_id" => region.get_id(),
             );
-            self.create_region(region, role);
+            self.create_region(region, role, HibernateState::ordered());
         }
     }
 
@@ -288,7 +340,27 @@ impl RegionCollector {
             "role change on region but the region doesn't exist. create it.";
             "region_id" => region_id,
         );
-        self.create_region(region, new_role);
+        self.create_region(region, new_role, HibernateState::ordered());
+    }
+
+    fn handle_hibernate_state_change(
+        &mut self,
+        region: Region,
+        role: StateRole,
+        new_state: HibernateState,
+    ) {
+        let region_id = region.get_id();
+
+        if let Some(r) = self.regions.get_mut(&region_id) {
+            r.hibernate_state = new_state;
+            return;
+        }
+
+        warn!(
+            "hibernate state change on region but the region doesn't exist. create it.";
+            "region_id" => region_id,
+        );
+        self.create_region(region, role, new_state);
     }
 
     /// Determines whether `region_to_check`'s epoch is stale compared to `current`'s epoch
@@ -428,6 +500,13 @@ impl RegionCollector {
             }
             RaftStoreEvent::RoleChange { region, role } => {
                 self.handle_role_change(region, role);
+            }
+            RaftStoreEvent::HibernateStateChange {
+                region,
+                role,
+                hibernate_state,
+            } => {
+                self.handle_hibernate_state_change(region, role, hibernate_state);
             }
         }
     }

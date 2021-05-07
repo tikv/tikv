@@ -21,8 +21,8 @@ pub use self::config::{Config, ConsistencyCheckMethod};
 pub use self::consistency_check::{ConsistencyCheckObserver, Raw as RawConsistencyCheckObserver};
 pub use self::dispatcher::{
     BoxAdminObserver, BoxApplySnapshotObserver, BoxCmdObserver, BoxConsistencyCheckObserver,
-    BoxQueryObserver, BoxRegionChangeObserver, BoxRoleObserver, BoxSplitCheckObserver,
-    CoprocessorHost, Registry,
+    BoxHibernateStateChangeObserver, BoxQueryObserver, BoxRegionChangeObserver, BoxRoleObserver,
+    BoxSplitCheckObserver, CoprocessorHost, Registry,
 };
 pub use self::error::{Error, Result};
 pub use self::region_info_accessor::{
@@ -35,8 +35,8 @@ pub use self::split_check::{
     TableCheckObserver,
 };
 
-use crate::store::fsm::ObserveID;
 pub use crate::store::KeyEntry;
+use crate::store::{fsm::ObserveID, HibernateState};
 
 /// Coprocessor is used to provide a convenient way to inject code to
 /// KV processing.
@@ -156,6 +156,17 @@ pub enum RegionChangeEvent {
 pub trait RegionChangeObserver: Coprocessor {
     /// Hook to call when a region changed on this TiKV
     fn on_region_changed(&self, _: &mut ObserverContext<'_>, _: RegionChangeEvent, _: StateRole) {}
+}
+
+pub trait HibernateStateChangeObserver: Coprocessor {
+    // Hook to call when the hibernate state of a region changed.
+    fn on_hibernate_state_changed(
+        &self,
+        _: &mut ObserverContext<'_>,
+        _role: StateRole,
+        _new_state: HibernateState,
+    ) {
+    }
 }
 
 #[derive(Clone, Debug)]

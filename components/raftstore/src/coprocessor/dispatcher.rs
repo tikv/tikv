@@ -148,6 +148,11 @@ impl_box_observer!(
     WrappedRegionChangeObserver
 );
 impl_box_observer!(
+    BoxHibernateStateChangeObserver,
+    HibernateStateChangeObserver,
+    WrappedHibernateRegionChangeObserver
+);
+impl_box_observer!(
     BoxReadIndexObserver,
     ReadIndexObserver,
     WrappedReadIndexObserver
@@ -172,6 +177,7 @@ where
     consistency_check_observers: Vec<Entry<BoxConsistencyCheckObserver<E>>>,
     role_observers: Vec<Entry<BoxRoleObserver>>,
     region_change_observers: Vec<Entry<BoxRegionChangeObserver>>,
+    hibernate_state_change_observers: Vec<Entry<BoxHibernateStateChangeObserver>>,
     cmd_observers: Vec<Entry<BoxCmdObserver<E>>>,
     read_index_observers: Vec<Entry<BoxReadIndexObserver>>,
     // TODO: add endpoint
@@ -187,6 +193,7 @@ impl<E: KvEngine> Default for Registry<E> {
             consistency_check_observers: Default::default(),
             role_observers: Default::default(),
             region_change_observers: Default::default(),
+            hibernate_state_change_observers: Default::default(),
             cmd_observers: Default::default(),
             read_index_observers: Default::default(),
         }
@@ -241,6 +248,14 @@ impl<E: KvEngine> Registry<E> {
 
     pub fn register_region_change_observer(&mut self, priority: u32, rlo: BoxRegionChangeObserver) {
         push!(priority, rlo, self.region_change_observers);
+    }
+
+    pub fn register_hibernate_state_change_observer(
+        &mut self,
+        priority: u32,
+        observer: BoxHibernateStateChangeObserver,
+    ) {
+        push!(priority, observer, self.hibernate_state_change_observers);
     }
 
     pub fn register_cmd_observer(&mut self, priority: u32, rlo: BoxCmdObserver<E>) {
@@ -491,6 +506,21 @@ impl<E: KvEngine> CoprocessorHost<E> {
             on_region_changed,
             event,
             role
+        );
+    }
+
+    pub fn on_hibernate_state_changed(
+        &self,
+        region: &Region,
+        role: StateRole,
+        hibernate_state: HibernateState,
+    ) {
+        loop_ob!(
+            region,
+            &self.registry.hibernate_state_change_observers,
+            on_hibernate_state_changed,
+            role,
+            hibernate_state.clone()
         );
     }
 
