@@ -494,7 +494,9 @@ fn canonicalize_fallback<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
         } else {
             PathBuf::new()
         };
-        while let Some(c @ (Component::Prefix(..) | Component::RootDir)) = components.peek().cloned() {
+        while let Some(c @ (Component::Prefix(..) | Component::RootDir)) =
+            components.peek().cloned()
+        {
             components.next();
             ret.push(c.as_os_str());
         }
@@ -516,7 +518,10 @@ fn canonicalize_fallback<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
                         }
                     }
                 }
-                Component::Prefix(..) | Component::RootDir | Component::ParentDir | Component::CurDir => unreachable!(),
+                Component::Prefix(..)
+                | Component::RootDir
+                | Component::ParentDir
+                | Component::CurDir => unreachable!(),
             }
         }
         Ok(ret)
@@ -1446,7 +1451,12 @@ mod tests {
         }
         for first in &nodes {
             for second in &nodes {
-                let path = format!("{}/{}/../{}/non_existing", tmp_dir.to_str().unwrap(), first, second);
+                let path = format!(
+                    "{}/{}/../{}/non_existing",
+                    tmp_dir.to_str().unwrap(),
+                    first,
+                    second
+                );
                 let res_path = canonicalize_path(&path).unwrap();
                 // resolve to second/non_existing
                 if *second == "non_existing" {
