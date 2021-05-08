@@ -458,17 +458,16 @@ impl<'de> Deserialize<'de> for ReadableDuration {
 }
 
 fn canonicalize_imp<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
-    fn canonicalize_non_existing_path<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
+    fn normalize<P: AsRef<Path>>(path: P) -> PathBuf {
         use std::path::Component;
         let mut components = path.as_ref().components().peekable();
-        let mut last_canonicalized = None;
-        let mut should_canonicalize = true;
         let mut ret = if let Some(c @ Component::Prefix(..)) = components.peek().cloned() {
             components.next();
             PathBuf::from(c.as_os_str())
         } else {
             PathBuf::new()
         };
+
         for component in components {
             match component {
                 Component::Prefix(..) => unreachable!(),
@@ -480,29 +479,51 @@ fn canonicalize_imp<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
                     ret.pop();
                 }
                 Component::Normal(c) => {
+                    ret.push(c);
+                }
+            }
+        }
+        ret
+    }
+    fn try_canonicalize_normalized_path<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
+        use std::path::Component;
+        let mut components = path.as_ref().components().peekable();
+        let mut should_canonicalize = true;
+        let mut ret = if let Some(c @ Component::Prefix(..)) = components.peek().cloned() {
+            components.next();
+            PathBuf::from(c.as_os_str())
+        } else {
+            PathBuf::new()
+        };
+        for component in components {
+            match component {
+                Component::RootDir => {
+                    ret.push(component.as_os_str());
+                }
+                Component::Normal(c) => {
+                    ret.push(c);
                     // We try to canonicalize a longest path based on fs info.
                     if should_canonicalize {
                         match ret.as_path().canonicalize() {
                             Ok(path) => {
-                                last_canonicalized.replace(path);
+                                ret = path;
                             }
                             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                                if last_canonicalized.is_some() {
-                                    ret = last_canonicalized.take().unwrap();
-                                }
                                 should_canonicalize = false;
                             }
                             other => return other,
                         }
                     }
-                    ret.push(c);
                 }
+                Component::Prefix(..) | Component::ParentDir | Component::CurDir => unreachable!(),
             }
         }
         Ok(ret)
     }
     match path.as_ref().canonicalize() {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => canonicalize_non_existing_path(path),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            try_canonicalize_normalized_path(normalize(path))
+        }
         other => other,
     }
 }
@@ -1416,6 +1437,42 @@ mod tests {
             Path::new(&res_path2),
             Path::new(&path2).canonicalize().unwrap(),
         );
+
+        ensure_dir_exist(&format!("{}", tmp_dir.to_path_buf().join("dir").display())).unwrap();
+        let mut nodes = vec!["non_existing", "dir"];
+        #[cfg(target_os = "linux")]
+        {
+            std::os::unix::fs::symlink(
+                &tmp_dir.to_path_buf().join("dir"),
+                &tmp_dir.to_path_buf().join("symlink"),
+            )
+            .unwrap();
+            nodes.push("symlink");
+        }
+        for first in &nodes {
+            for second in &nodes {
+                let path = format!(
+                    "{}",
+                    tmp_dir
+                        .to_path_buf()
+                        .join(format!("{}/../{}/non_existing", first, second))
+                        .display()
+                );
+                let res_path = canonicalize_path(&path).unwrap();
+                // resolve to second/non_existing
+                if *second == "non_existing" {
+                    assert_eq!(
+                        Path::new(&res_path),
+                        tmp_dir.to_path_buf().join("non_existing/non_existing")
+                    );
+                } else {
+                    assert_eq!(
+                        Path::new(&res_path),
+                        tmp_dir.to_path_buf().join("dir/non_existing")
+                    );
+                }
+            }
+        }
 
         // canonicalize a file
         let path2 = format!("{}", tmp_dir.to_path_buf().join("test2.dump").display());
