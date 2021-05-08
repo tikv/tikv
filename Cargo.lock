@@ -445,6 +445,7 @@ dependencies = [
  "fail",
  "failure",
  "futures 0.1.29",
+ "futures 0.3.7",
  "grpcio",
  "kvproto",
  "lazy_static",
