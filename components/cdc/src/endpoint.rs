@@ -526,6 +526,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 reader.txn_extra_op.store(txn_extra_op);
             }
         }
+        let observe_id = delegate.id;
         let init = Initializer {
             sched,
             region_id,
@@ -536,7 +537,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             speed_limter: self.scan_speed_limter.clone(),
             max_scan_batch_bytes: self.max_scan_batch_bytes,
             max_scan_batch_size: self.max_scan_batch_size,
-            observe_id: delegate.id,
+            observe_id,
             checkpoint_ts: checkpoint_ts.into(),
             build_resolver: is_new_delegate,
         };
@@ -545,11 +546,22 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         let scheduler = self.scheduler.clone();
         let deregister_downstream = move |err| {
             warn!("cdc send capture change cmd failed"; "region_id" => region_id, "error" => ?err);
-            let deregister = Deregister::Downstream {
-                region_id,
-                downstream_id,
-                conn_id,
-                err: Some(err),
+            let deregister = if is_new_delegate {
+                // Deregister region if it's the first scan task, because the
+                // task also build resolver.
+                // TODO: add tests.
+                Deregister::Region {
+                    region_id,
+                    observe_id,
+                    err,
+                }
+            } else {
+                Deregister::Downstream {
+                    region_id,
+                    downstream_id,
+                    conn_id,
+                    err: Some(err),
+                }
             };
             if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
                 error!("cdc schedule cdc task failed"; "error" => ?e);
