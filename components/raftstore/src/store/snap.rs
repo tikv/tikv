@@ -2,7 +2,6 @@
 
 use std::borrow::Cow;
 use std::cmp::{self, Ordering as CmpOrdering, Reverse};
-use std::f64::INFINITY;
 use std::fmt::{self, Display, Formatter};
 use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::{self, ErrorKind, Read, Write};
