@@ -1,12 +1,12 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::path::Path;
+use std::path::PathBuf;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    pub coprocessor_plugin_directory: Option<Path>,
+    pub coprocessor_plugin_directory: Option<PathBuf>,
 }
 
 impl Default for Config {
