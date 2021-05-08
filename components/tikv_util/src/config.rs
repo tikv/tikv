@@ -1420,24 +1420,7 @@ mod tests {
             tmp_dir.canonicalize().unwrap().join("test1.dump")
         );
 
-        // canonicalize a non-existing path
-        let path2 = format!("{}", tmp_dir.to_path_buf().join("test2").display());
-        let res_path2 = canonicalize_path(&path2).unwrap();
-        let path2_complex = format!(
-            "{}",
-            tmp_dir
-                .to_path_buf()
-                .join("./non_existing/../test2")
-                .display()
-        );
-        let res_path2_complex = canonicalize_path(&path2_complex).unwrap();
-        assert_eq!(Path::new(&res_path2), Path::new(&res_path2_complex),);
-        ensure_dir_exist(&path2).unwrap();
-        assert_eq!(
-            Path::new(&res_path2),
-            Path::new(&path2).canonicalize().unwrap(),
-        );
-
+        // canonicalize a path containing symlink and non-existing nodes
         ensure_dir_exist(&format!("{}", tmp_dir.to_path_buf().join("dir").display())).unwrap();
         let mut nodes = vec!["non_existing", "dir"];
         #[cfg(target_os = "linux")]
