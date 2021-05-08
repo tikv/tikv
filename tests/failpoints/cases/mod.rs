@@ -14,6 +14,7 @@ mod test_merge;
 mod test_pd_client;
 mod test_pending_peers;
 mod test_replica_read;
+mod test_replica_stale_read;
 mod test_server;
 mod test_snap;
 mod test_split_region;
