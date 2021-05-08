@@ -524,6 +524,12 @@ fn test_inspected_snapshot() {
     assert_ne!(stats.fetch(IOType::LoadBalance, IOOp::Write), 0);
 }
 
+// Test snapshot generating and receiving can share one I/O limiter fairly.
+// 1. Bootstrap a 1 Region, 1 replica cluster;
+// 2. Add a peer on store 2 for the Region, so that there is a snapshot received on store 2;
+// 3. Rename the received snapshot on store 2, and then keep sending it back to store 1;
+// 4. Add another peer for the Region, so store 1 will generate a new snapshot;
+// 5. Test the generating can success while the store keeps receiving snapshots from store 2.
 #[test]
 fn test_gen_during_heavy_recv() {
     let mut cluster = new_server_cluster(0, 3);
@@ -534,7 +540,7 @@ fn test_gen_during_heavy_recv() {
     pd_client.disable_default_operator();
     let rid = cluster.run_conf_change();
 
-    // Put about 1M data into the region.
+    // 1M random value to ensure the region snapshot is large enough.
     cluster.must_put(b"key-0000", b"value");
     for i in 1..1024 {
         let key = format!("key-{:04}", i).into_bytes();
