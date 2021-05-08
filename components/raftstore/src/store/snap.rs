@@ -11,29 +11,29 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
-use std::{error, result, str, thread, time, u64};
+use std::{error::Error as StdError, result, str, thread, time, u64};
 
-use encryption::{
-    create_aes_ctr_crypter, encryption_method_from_db_encryption_method, DataKeyManager, Iv,
-};
-use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use engine_traits::{EncryptionKeyManager, KvEngine};
 use fail::fail_point;
 use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
 use kvproto::raft_serverpb::{SnapshotCfFile, SnapshotMeta};
+use openssl::symm::{Cipher, Crypter, Mode};
 use protobuf::Message;
-use quick_error::quick_error;
 use raft::eraftpb::Snapshot as RaftSnapshot;
+use thiserror::Error;
 
 use collections::{HashMap, HashMapEntry as Entry};
+use encryption::{
+    create_aes_ctr_crypter, encryption_method_from_db_encryption_method, DataKeyManager, Iv,
+};
+use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{EncryptionKeyManager, KvEngine};
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use file_system::{
     calc_crc32, calc_crc32_and_size, delete_file_if_exist, file_exists, get_file_size, sync_dir,
 };
 use keys::{enc_end_key, enc_start_key};
-use openssl::symm::{Cipher, Crypter, Mode};
 use tikv_util::time::{duration_to_sec, Limiter};
 use tikv_util::HandyRwLock;
 use tikv_util::{box_err, box_try, debug, error, info, map, warn};
@@ -73,21 +73,16 @@ const META_FILE_SUFFIX: &str = ".meta";
 const DELETE_RETRY_MAX_TIMES: u32 = 6;
 const DELETE_RETRY_TIME_MILLIS: u64 = 500;
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        Abort {
-            display("abort")
-        }
-        TooManySnapshots {
-            display("too many snapshots")
-        }
-        Other(err: Box<dyn error::Error + Sync + Send>) {
-            from()
-            cause(err.as_ref())
-            display("snap failed {:?}", err)
-        }
-    }
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("abort")]
+    Abort,
+
+    #[error("too many snapshots")]
+    TooManySnapshots,
+
+    #[error("snap failed {0:?}")]
+    Other(#[from] Box<dyn StdError + Sync + Send>),
 }
 
 impl From<io::Error> for Error {
@@ -468,7 +463,7 @@ impl Snap {
         mgr: &SnapManagerCore,
     ) -> RaftStoreResult<Self> {
         let mut s = Self::new(dir, key, true, CheckPolicy::ErrNotAllowed, mgr)?;
-        s.mgr.limiter = Limiter::new(INFINITY);
+        s.mgr.limiter = Limiter::new(f64::INFINITY);
 
         if !s.exists() {
             // Skip the initialization below if it doesn't exists.
@@ -545,7 +540,7 @@ impl Snap {
         mgr: &SnapManagerCore,
     ) -> RaftStoreResult<Self> {
         let mut s = Self::new(dir, key, false, CheckPolicy::ErrNotAllowed, mgr)?;
-        s.mgr.limiter = Limiter::new(INFINITY);
+        s.mgr.limiter = Limiter::new(f64::INFINITY);
         Ok(s)
     }
 
@@ -1559,7 +1554,7 @@ impl SnapManagerBuilder {
         let limiter = Limiter::new(if self.max_write_bytes_per_sec > 0 {
             self.max_write_bytes_per_sec as f64
         } else {
-            INFINITY
+            f64::INFINITY
         });
         let max_total_size = if self.max_total_size > 0 {
             self.max_total_size
@@ -1582,7 +1577,6 @@ impl SnapManagerBuilder {
 #[cfg(test)]
 pub mod tests {
     use std::cmp;
-    use std::f64::INFINITY;
     use std::fs::{self, File, OpenOptions};
     use std::io::{self, Read, Seek, SeekFrom, Write};
     use std::path::{Path, PathBuf};
@@ -1753,7 +1747,7 @@ pub mod tests {
         SnapManagerCore {
             base: path.to_owned(),
             registry: Arc::new(RwLock::new(map![])),
-            limiter: Limiter::new(INFINITY),
+            limiter: Limiter::new(f64::INFINITY),
             temp_sst_id: Arc::new(AtomicU64::new(0)),
             encryption_key_manager: None,
         }

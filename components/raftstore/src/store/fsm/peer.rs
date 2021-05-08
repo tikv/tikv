@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::iter::Iterator;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, u64};
@@ -16,6 +16,7 @@ use engine_traits::{Engines, KvEngine, RaftEngine, SSTMetaInfo, WriteBatchExt};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use kvproto::errorpb;
+use kvproto::import_sstpb::SwitchMode;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{
@@ -523,6 +524,19 @@ where
                 }
                 PeerMsg::Noop => {}
                 PeerMsg::UpdateReplicationMode => self.on_update_replication_mode(),
+                PeerMsg::SplitCheck => {
+                    // If the current `approximate_size` is larger than `region_max_size`, this region
+                    // may ingest a large file which is imported by `BR` or `lightning`, we shall check it
+                    let check_size = self.fsm.peer.approximate_size.map_or(true, |size| {
+                        size > self.ctx.coprocessor_host.cfg.region_max_size.0
+                    });
+                    let check_keys = self.fsm.peer.approximate_keys.map_or(true, |keys| {
+                        keys > self.ctx.coprocessor_host.cfg.region_max_keys
+                    });
+                    if self.fsm.peer.is_leader() && (check_size || check_keys) {
+                        self.schedule_check_split();
+                    }
+                }
             }
         }
         // Propose batch request which may be still waiting for more raft-command
@@ -1897,8 +1911,11 @@ where
         meta.pending_snapshot_regions
             .retain(|r| self.fsm.region_id() != r.get_id());
 
-        // Set the `safe_ts` to zero to reject incoming stale read request
-        self.fsm.peer.safe_ts.store(0, Ordering::Release);
+        // Remove `read_progress` and call `clear` to set the `safe_ts` to zero to reject
+        // incoming stale read request
+        meta.region_read_progress.remove(&region_id);
+        self.fsm.peer.read_progress.clear();
+
         // Destroy read delegates.
         meta.readers.remove(&region_id);
 
@@ -2019,6 +2036,8 @@ where
             // Apply failed, skip.
             return;
         }
+
+        self.fsm.peer.mut_store().cancel_generating_snap(None);
 
         if cp.index >= self.fsm.peer.raft_group.raft.raft_log.first_index() {
             match self.fsm.peer.raft_group.apply_conf_change(&cp.conf_change) {
@@ -2365,6 +2384,8 @@ where
             assert!(not_exist, "[region {}] should not exist", new_region_id);
             meta.readers
                 .insert(new_region_id, ReadDelegate::from_peer(new_peer.get_peer()));
+            meta.region_read_progress
+                .insert(new_region_id, new_peer.peer.read_progress.clone());
             if last_region_id == new_region_id {
                 // To prevent from big region, the right region needs run split
                 // check again after split.
@@ -3567,6 +3588,19 @@ where
             return;
         }
 
+        // When Lightning or BR is importing data to TiKV, their ingest-request may fail because of
+        // region-epoch not matched. So we hope TiKV do not check region size and split region during
+        // importing.
+        if self.ctx.importer.get_mode() == SwitchMode::Import {
+            return;
+        }
+
+        if self.schedule_check_split() {
+            self.register_split_region_check_tick();
+        }
+    }
+
+    fn schedule_check_split(&mut self) -> bool {
         // bulk insert too fast may cause snapshot stale very soon, worst case it stale before
         // sending. so when snapshot is generating or sending, skip split check at most 3 times.
         // There is a trade off between region size and snapshot success rate. Split check is
@@ -3577,7 +3611,7 @@ where
             && self.fsm.skip_split_count < self.region_split_skip_max_count()
         {
             self.fsm.skip_split_count += 1;
-            return;
+            return false;
         }
         self.fsm.skip_split_count = 0;
 
@@ -3593,7 +3627,7 @@ where
         }
         self.fsm.peer.size_diff_hint = 0;
         self.fsm.peer.compaction_declined_bytes = 0;
-        self.register_split_region_check_tick();
+        true
     }
 
     fn on_prepare_split_region(

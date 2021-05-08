@@ -56,7 +56,7 @@ pub struct Server<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolve
     builder_or_server: Option<Either<ServerBuilder, GrpcServer>>,
     local_addr: SocketAddr,
     // Transport.
-    trans: ServerTransport<T, S>,
+    trans: ServerTransport<T, S, RocksEngine>,
     raft_router: T,
     // For sending/receiving snapshots.
     snap_mgr: SnapManager,
@@ -185,7 +185,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
         self.debug_thread_pool.handle()
     }
 
-    pub fn transport(&self) -> ServerTransport<T, S> {
+    pub fn transport(&self) -> ServerTransport<T, S, RocksEngine> {
         self.trans.clone()
     }
 

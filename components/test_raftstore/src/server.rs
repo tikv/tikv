@@ -64,9 +64,9 @@ use txn_types::TxnExtraScheduler;
 
 type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksEngine, RocksEngine>>;
 type SimulateServerTransport =
-    SimulateTransport<ServerTransport<SimulateStoreTransport, PdStoreAddrResolver>>;
+    SimulateTransport<ServerTransport<SimulateStoreTransport, PdStoreAddrResolver, RocksEngine>>;
 
-pub type SimulateEngine = RaftKv<SimulateStoreTransport>;
+pub type SimulateEngine = RaftKv<RocksEngine, SimulateStoreTransport>;
 
 #[derive(Default, Clone)]
 pub struct AddressMap {
@@ -109,7 +109,19 @@ struct ServerMeta {
     sim_trans: SimulateServerTransport,
     raw_router: RaftRouter<RocksEngine, RocksEngine>,
     raw_apply_router: ApplyRouter<RocksEngine>,
-    gc_worker: GcWorker<RaftKv<SimulateStoreTransport>, SimulateStoreTransport>,
+    gc_worker: GcWorker<RaftKv<RocksEngine, SimulateStoreTransport>, SimulateStoreTransport>,
+    resolved_ts_worker: ResolvedTsWorker,
+}
+
+struct ResolvedTsWorker {
+    endpoint: Option<
+        resolved_ts::Endpoint<
+            ServerRaftStoreRouter<RocksEngine, RocksEngine>,
+            RocksEngine,
+            resolved_ts::DummySinker<RocksSnapshot>,
+        >,
+    >,
+    worker: LazyWorker<resolved_ts::Task<RocksSnapshot>>,
 }
 
 type PendingServices = Vec<Box<dyn Fn() -> Service>>;
@@ -128,7 +140,7 @@ pub struct ServerCluster {
     snap_paths: HashMap<u64, TempDir>,
     snap_mgrs: HashMap<u64, SnapManager>,
     pd_client: Arc<TestPdClient>,
-    raft_client: RaftClient<AddressMap, RaftStoreBlackHole>,
+    raft_client: RaftClient<AddressMap, RaftStoreBlackHole, RocksEngine>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
     env: Arc<Environment>,
 }
@@ -189,12 +201,20 @@ impl ServerCluster {
     pub fn get_gc_worker(
         &self,
         node_id: u64,
-    ) -> &GcWorker<RaftKv<SimulateStoreTransport>, SimulateStoreTransport> {
+    ) -> &GcWorker<RaftKv<RocksEngine, SimulateStoreTransport>, SimulateStoreTransport> {
         &self.metas.get(&node_id).unwrap().gc_worker
     }
 
     pub fn get_concurrency_manager(&self, node_id: u64) -> ConcurrencyManager {
         self.concurrency_managers.get(&node_id).unwrap().clone()
+    }
+
+    pub fn start_resolved_ts_worker(&mut self) {
+        for (_, meta) in self.metas.iter_mut() {
+            if let Some(endpoint) = meta.resolved_ts_worker.endpoint.take() {
+                meta.resolved_ts_worker.worker.start(endpoint);
+            }
+        }
     }
 }
 
@@ -273,6 +293,32 @@ impl Simulator for ServerCluster {
             .start_observe_lock_apply(&mut coprocessor_host, concurrency_manager.clone())
             .unwrap();
 
+        // Resolved ts worker
+        let resolved_ts_worker = LazyWorker::new("resolved-ts");
+        let resolved_ts_scheduler = resolved_ts_worker.scheduler();
+        let mut resolved_ts_ob = resolved_ts::Observer::new(resolved_ts_scheduler.clone());
+        // Disable old value
+        resolved_ts_ob.disable_old_value();
+        resolved_ts_ob.register_to(&mut coprocessor_host);
+
+        // Resolved ts endpoint
+        let resolved_ts_endpoint = resolved_ts::Endpoint::new(
+            &cfg.cdc,
+            resolved_ts_scheduler,
+            raft_router.clone(),
+            store_meta.clone(),
+            self.pd_client.clone(),
+            concurrency_manager.clone(),
+            self.env.clone(),
+            self.security_mgr.clone(),
+            resolved_ts::DummySinker::new(),
+        );
+
+        let resolved_ts_worker = ResolvedTsWorker {
+            endpoint: Some(resolved_ts_endpoint),
+            worker: resolved_ts_worker,
+        };
+
         let mut lock_mgr = LockManager::new(cfg.pessimistic_txn.pipelined);
         let store = create_raft_storage(
             engine,
@@ -289,7 +335,7 @@ impl Simulator for ServerCluster {
         // Create import service.
         let importer = {
             let dir = Path::new(engines.kv.path()).join("import-sst");
-            Arc::new(SSTImporter::new(dir, key_manager.clone()).unwrap())
+            Arc::new(SSTImporter::new(&cfg.import, dir, key_manager.clone()).unwrap())
         };
         let import_service = ImportSSTService::new(
             cfg.import.clone(),
@@ -454,6 +500,7 @@ impl Simulator for ServerCluster {
                 sim_router,
                 sim_trans: simulate_trans,
                 gc_worker,
+                resolved_ts_worker,
             },
         );
         self.addrs.insert(node_id, format!("{}", addr));
@@ -479,6 +526,10 @@ impl Simulator for ServerCluster {
         if let Some(mut meta) = self.metas.remove(&node_id) {
             meta.server.stop().unwrap();
             meta.node.stop();
+            // resolved ts worker started, let's stop it
+            if meta.resolved_ts_worker.endpoint.is_none() {
+                meta.resolved_ts_worker.worker.stop_worker();
+            }
         }
     }
 

@@ -17,14 +17,12 @@ use kvproto::raft_serverpb::*;
 use protobuf::Message as _;
 use raft::eraftpb::{Message, MessageType};
 use raftstore::store::SNAPSHOT_VERSION;
-use raftstore::store::*;
-use raftstore::Result;
+use raftstore::{store::*, Result};
 use rand::Rng;
 use security::SecurityManager;
 use test_raftstore::*;
 use tikv::server::snap::send_snap;
-use tikv_util::config::*;
-use tikv_util::HandyRwLock;
+use tikv_util::{config::*, HandyRwLock};
 
 fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
