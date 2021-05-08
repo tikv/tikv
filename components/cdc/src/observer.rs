@@ -11,7 +11,6 @@ use fail::fail_point;
 use kvproto::metapb::{Peer, Region};
 use raft::StateRole;
 use raftstore::coprocessor::*;
-use raftstore::store::fsm::ObserveID;
 use raftstore::store::RegionSnapshot;
 use raftstore::Error as RaftStoreError;
 use tikv::storage::{Cursor, CursorBuilder, ScanMode, Snapshot as EngineSnapshot, Statistics};
@@ -36,6 +35,7 @@ pub struct CdcObserver {
     // TODO: it may become a bottleneck, find a better way to manage the registry.
     observe_regions: Arc<RwLock<HashMap<u64, ObserveID>>>,
     cmd_batches: RefCell<Vec<CmdBatch>>,
+    last_batch_level: RefCell<ObserveLevel>,
 }
 
 impl CdcObserver {
@@ -48,6 +48,7 @@ impl CdcObserver {
             sched,
             observe_regions: Arc::default(),
             cmd_batches: RefCell::default(),
+            last_batch_level: RefCell::from(ObserveLevel::None),
         }
     }
 
@@ -102,18 +103,29 @@ impl CdcObserver {
 impl Coprocessor for CdcObserver {}
 
 impl<E: KvEngine> CmdObserver<E> for CdcObserver {
-    fn on_prepare_for_apply(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64) {
+    fn on_prepare_for_apply(&self, cdc: &ObserveHandle, rts: &ObserveHandle, region_id: u64) {
+        *self.last_batch_level.borrow_mut() = if cdc.is_observing() {
+            ObserveLevel::All
+        } else {
+            ObserveLevel::None
+        };
+        if *self.last_batch_level.borrow() == ObserveLevel::None {
+            return;
+        }
         self.cmd_batches
             .borrow_mut()
-            .push(CmdBatch::new(cdc_id, rts_id, region_id));
+            .push(CmdBatch::new(cdc.id, rts.id, region_id));
     }
 
     fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: &Cmd) {
+        if *self.last_batch_level.borrow() == ObserveLevel::None {
+            return;
+        }
         self.cmd_batches
             .borrow_mut()
             .last_mut()
             .expect("should exist some cmd batch")
-            .push(cdc_id, rts_id, region_id, cmd.clone());
+            .push(cdc_id, rts_id, region_id, ObserveCmd::from_cmd(cmd, false));
     }
 
     fn on_flush_apply(&self, engine: E) {
@@ -322,16 +334,19 @@ mod tests {
     fn test_register_and_deregister() {
         let (scheduler, mut rx) = tikv_util::worker::dummy_scheduler();
         let observer = CdcObserver::new(scheduler);
-        let observe_id = ObserveID::new();
+        let observe_id = ObserveHandle::new();
         let engine = TestEngineBuilder::new().build().unwrap().get_rocksdb();
 
         <CdcObserver as CmdObserver<RocksEngine>>::on_prepare_for_apply(
-            &observer, observe_id, observe_id, 0,
+            &observer,
+            &observe_id,
+            &observe_id,
+            0,
         );
         <CdcObserver as CmdObserver<RocksEngine>>::on_apply_cmd(
             &observer,
-            observe_id,
-            observe_id,
+            observe_id.id,
+            observe_id.id,
             0,
             &Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),
         );

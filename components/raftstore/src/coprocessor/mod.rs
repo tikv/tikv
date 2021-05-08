@@ -1,11 +1,18 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::vec::IntoIter;
 
 use engine_traits::CfName;
+use engine_traits::{CF_LOCK, CF_WRITE};
+use kvproto::errorpb;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
-use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request};
+use kvproto::raft_cmdpb::{
+    AdminRequest, AdminResponse, CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader,
+    Request,
+};
 use raft::{eraftpb, StateRole};
 
 pub mod config;
@@ -34,8 +41,6 @@ pub use self::split_check::{
     HalfCheckObserver, Host as SplitCheckerHost, KeysCheckObserver, SizeCheckObserver,
     TableCheckObserver,
 };
-
-use crate::store::fsm::ObserveID;
 pub use crate::store::KeyEntry;
 
 /// Coprocessor is used to provide a convenient way to inject code to
@@ -175,12 +180,117 @@ impl Cmd {
     }
 }
 
+static OBSERVE_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
+
+/// A unique identifier for checking stale observed commands.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct ObserveID(usize);
+
+impl ObserveID {
+    pub fn new() -> ObserveID {
+        ObserveID(OBSERVE_ID_ALLOC.fetch_add(1, Ordering::SeqCst))
+    }
+}
+
+#[derive(Clone, Default, Debug)]
+pub struct ObserveHandle {
+    pub id: ObserveID,
+    observing: Arc<AtomicBool>,
+}
+
+impl ObserveHandle {
+    pub fn new() -> ObserveHandle {
+        ObserveHandle {
+            id: ObserveID::new(),
+            observing: Arc::new(AtomicBool::new(true)),
+        }
+    }
+
+    pub fn with_id(id: usize) -> ObserveHandle {
+        ObserveHandle {
+            id: ObserveID(id),
+            observing: Arc::new(AtomicBool::new(true)),
+        }
+    }
+
+    pub fn is_observing(&self) -> bool {
+        self.observing.load(Ordering::Acquire)
+    }
+
+    pub fn stop_observing(&self) {
+        self.observing.store(false, Ordering::Release)
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ObserveLevel {
+    None,
+    LockRelated,
+    All,
+}
+
+#[derive(Clone, Debug)]
+pub enum ObserveCmd {
+    Err(errorpb::Error),
+    Admin {
+        req: AdminRequest,
+        resp: AdminResponse,
+    },
+    Data {
+        index: u64,
+        header: RaftRequestHeader,
+        requests: Vec<Request>,
+    },
+}
+
+impl ObserveCmd {
+    pub fn from_cmd(cmd: &Cmd, lock_only: bool) -> ObserveCmd {
+        if cmd.response.get_header().has_error() {
+            return ObserveCmd::Err(cmd.response.get_header().get_error().clone());
+        }
+        if cmd.request.has_admin_request() {
+            return ObserveCmd::Admin {
+                req: cmd.request.get_admin_request().clone(),
+                resp: cmd.response.get_admin_response().clone(),
+            };
+        }
+        if !lock_only {
+            return ObserveCmd::Data {
+                index: cmd.index,
+                header: cmd.request.get_header().clone(),
+                requests: cmd.request.get_requests().to_vec(),
+            };
+        }
+        let requests = cmd
+            .request
+            .get_requests()
+            .iter()
+            .filter_map(|req| {
+                let cf = match req.get_cmd_type() {
+                    CmdType::Put => req.get_put().cf.as_str(),
+                    CmdType::Delete => req.get_delete().cf.as_str(),
+                    _ => "",
+                };
+                match cf {
+                    CF_LOCK | CF_WRITE => Some(req.clone()),
+                    _ => None,
+                }
+            })
+            .collect();
+        ObserveCmd::Data {
+            index: cmd.index,
+            header: cmd.request.get_header().clone(),
+            requests,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct CmdBatch {
     pub cdc_id: ObserveID,
     pub rts_id: ObserveID,
     pub region_id: u64,
-    pub cmds: Vec<Cmd>,
+    pub cmds: Vec<ObserveCmd>,
 }
 
 impl CmdBatch {
@@ -193,14 +303,14 @@ impl CmdBatch {
         }
     }
 
-    pub fn push(&mut self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: Cmd) {
+    pub fn push(&mut self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: ObserveCmd) {
         assert_eq!(region_id, self.region_id);
         assert_eq!(cdc_id, self.cdc_id);
         assert_eq!(rts_id, self.rts_id);
         self.cmds.push(cmd)
     }
 
-    pub fn into_iter(self, region_id: u64) -> IntoIter<Cmd> {
+    pub fn into_iter(self, region_id: u64) -> IntoIter<ObserveCmd> {
         assert_eq!(self.region_id, region_id);
         self.cmds.into_iter()
     }
@@ -216,13 +326,8 @@ impl CmdBatch {
     pub fn size(&self) -> usize {
         let mut cmd_bytes = 0;
         for cmd in self.cmds.iter() {
-            let Cmd {
-                ref request,
-                ref response,
-                ..
-            } = cmd;
-            if !response.get_header().has_error() && !request.has_admin_request() {
-                for req in request.requests.iter() {
+            if let ObserveCmd::Data { ref requests, .. } = cmd {
+                for req in requests.iter() {
                     let put = req.get_put();
                     cmd_bytes += put.get_key().len();
                     cmd_bytes += put.get_value().len();
@@ -235,7 +340,7 @@ impl CmdBatch {
 
 pub trait CmdObserver<E>: Coprocessor {
     /// Hook to call after preparing for applying write requests.
-    fn on_prepare_for_apply(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64);
+    fn on_prepare_for_apply(&self, cdc_id: &ObserveHandle, rts_id: &ObserveHandle, region_id: u64);
     /// Hook to call after applying a write request.
     fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: &Cmd);
     /// Hook to call after flushing writes to db.

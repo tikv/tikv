@@ -7,7 +7,6 @@ use engine_traits::KvEngine;
 use kvproto::metapb::{Peer, Region};
 use raft::StateRole;
 use raftstore::coprocessor::*;
-use raftstore::store::fsm::ObserveID;
 use raftstore::store::RegionSnapshot;
 use tikv_util::worker::Scheduler;
 
@@ -17,6 +16,7 @@ pub struct Observer<E: KvEngine> {
     cmd_batches: RefCell<Vec<CmdBatch>>,
     scheduler: Scheduler<Task<E::Snapshot>>,
     need_old_value: bool,
+    last_batch_level: RefCell<ObserveLevel>,
 }
 
 impl<E: KvEngine> Observer<E> {
@@ -25,6 +25,7 @@ impl<E: KvEngine> Observer<E> {
             cmd_batches: RefCell::default(),
             scheduler,
             need_old_value: true,
+            last_batch_level: RefCell::from(ObserveLevel::None),
         }
     }
 
@@ -54,6 +55,7 @@ impl<E: KvEngine> Clone for Observer<E> {
             cmd_batches: self.cmd_batches.clone(),
             scheduler: self.scheduler.clone(),
             need_old_value: self.need_old_value,
+            last_batch_level: self.last_batch_level.clone(),
         }
     }
 }
@@ -61,18 +63,40 @@ impl<E: KvEngine> Clone for Observer<E> {
 impl<E: KvEngine> Coprocessor for Observer<E> {}
 
 impl<E: KvEngine> CmdObserver<E> for Observer<E> {
-    fn on_prepare_for_apply(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64) {
+    fn on_prepare_for_apply(&self, cdc: &ObserveHandle, rts: &ObserveHandle, region_id: u64) {
+        *self.last_batch_level.borrow_mut() = match (cdc.is_observing(), rts.is_observing()) {
+            // Observe all data if `cdc` worker is observing
+            (true, _) => ObserveLevel::All,
+            // Observe lock related data if only `resolved-ts` worker is observing
+            (false, true) => ObserveLevel::LockRelated,
+            // No observer
+            (false, false) => ObserveLevel::None,
+        };
+        if *self.last_batch_level.borrow() == ObserveLevel::None {
+            return;
+        }
         self.cmd_batches
             .borrow_mut()
-            .push(CmdBatch::new(cdc_id, rts_id, region_id));
+            .push(CmdBatch::new(cdc.id, rts.id, region_id));
     }
 
     fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: &Cmd) {
+        if *self.last_batch_level.borrow() == ObserveLevel::None {
+            return;
+        }
         self.cmd_batches
             .borrow_mut()
             .last_mut()
             .unwrap_or_else(|| panic!("region {} should exist some cmd batch", region_id))
-            .push(cdc_id, rts_id, region_id, cmd.clone());
+            .push(
+                cdc_id,
+                rts_id,
+                region_id,
+                ObserveCmd::from_cmd(
+                    cmd,
+                    *self.last_batch_level.borrow() == ObserveLevel::LockRelated,
+                ),
+            );
     }
 
     fn on_flush_apply(&self, engine: E) {

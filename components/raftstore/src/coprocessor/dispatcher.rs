@@ -494,7 +494,12 @@ impl<E: KvEngine> CoprocessorHost<E> {
         );
     }
 
-    pub fn prepare_for_apply(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64) {
+    pub fn prepare_for_apply(
+        &self,
+        cdc_id: &ObserveHandle,
+        rts_id: &ObserveHandle,
+        region_id: u64,
+    ) {
         for cmd_ob in &self.registry.cmd_observers {
             cmd_ob
                 .observer
@@ -561,7 +566,6 @@ impl<E: KvEngine> CoprocessorHost<E> {
 #[cfg(test)]
 mod tests {
     use crate::coprocessor::*;
-    use std::sync::atomic::*;
     use std::sync::Arc;
 
     use engine_panic::PanicEngine;
@@ -667,7 +671,7 @@ mod tests {
     }
 
     impl CmdObserver<PanicEngine> for TestCoprocessor {
-        fn on_prepare_for_apply(&self, _: ObserveID, _: ObserveID, _: u64) {
+        fn on_prepare_for_apply(&self, _: &ObserveHandle, _: &ObserveHandle, _: u64) {
             self.called.fetch_add(11, Ordering::SeqCst);
         }
         fn on_apply_cmd(&self, _: ObserveID, _: ObserveID, _: u64, _: &Cmd) {
@@ -742,12 +746,12 @@ mod tests {
         assert_all!(&[&ob.called], &[45]);
         host.post_apply_sst_from_snapshot(&region, "default", "");
         assert_all!(&[&ob.called], &[55]);
-        let observe_id = ObserveID::new();
-        host.prepare_for_apply(observe_id, observe_id, 0);
+        let observe_id = ObserveHandle::new();
+        host.prepare_for_apply(&observe_id, &observe_id, 0);
         assert_all!(&[&ob.called], &[66]);
         host.on_apply_cmd(
-            observe_id,
-            observe_id,
+            observe_id.id,
+            observe_id.id,
             0,
             &Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),
         );
