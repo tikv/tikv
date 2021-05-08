@@ -334,23 +334,23 @@ mod tests {
     fn test_register_and_deregister() {
         let (scheduler, mut rx) = tikv_util::worker::dummy_scheduler();
         let observer = CdcObserver::new(scheduler);
-        let observe_id = ObserveHandle::new();
+        let observe_handle = ObserveHandle::new();
         let engine = TestEngineBuilder::new().build().unwrap().get_rocksdb();
 
         <CdcObserver as CmdObserver<RocksEngine>>::on_prepare_for_apply(
             &observer,
-            &observe_id,
-            &observe_id,
+            &observe_handle,
+            &observe_handle,
             0,
         );
         <CdcObserver as CmdObserver<RocksEngine>>::on_apply_cmd(
             &observer,
-            observe_id.id,
-            observe_id.id,
+            observe_handle.id,
+            observe_handle.id,
             0,
             &Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),
         );
-        observer.on_flush_apply(engine);
+        observer.on_flush_apply(engine.clone());
 
         match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
             Task::MultiBatch { multi, .. } => {
@@ -358,6 +358,28 @@ mod tests {
                 assert_eq!(multi[0].len(), 1);
             }
             _ => panic!("unexpected task"),
+        };
+
+        // Stop observing cmd
+        observe_handle.stop_observing();
+        <CdcObserver as CmdObserver<RocksEngine>>::on_prepare_for_apply(
+            &observer,
+            &observe_handle,
+            &observe_handle,
+            0,
+        );
+        <CdcObserver as CmdObserver<RocksEngine>>::on_apply_cmd(
+            &observer,
+            observe_handle.id,
+            observe_handle.id,
+            0,
+            &Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),
+        );
+        observer.on_flush_apply(engine);
+
+        match rx.recv_timeout(Duration::from_millis(10)) {
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            _ => panic!("unexpected result"),
         };
 
         // Does not send unsubscribed region events.
