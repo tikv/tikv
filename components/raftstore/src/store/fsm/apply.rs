@@ -4739,7 +4739,7 @@ mod tests {
         let obs = ApplyObserver::default();
         let mut host = CoprocessorHost::<KvTestEngine>::default();
         host.registry
-            .register_query_observer(1, BoxQueryObserver::new(obs.clone()));
+            .register_query_observer(1, BoxQueryObserver::new(obs));
 
         let (tx, rx) = mpsc::channel();
         let (region_scheduler, _) = dummy_scheduler();
@@ -4840,7 +4840,7 @@ mod tests {
                 vec![
                     cb(1, 1, capture_tx.clone()),
                     cb(2, 1, capture_tx.clone()),
-                    cb(3, 1, capture_tx.clone()),
+                    cb(3, 1, capture_tx),
                 ],
             )),
         );
