@@ -33,7 +33,7 @@ impl Endpoint {
         if let Some(plugin_directory) = &copr_cfg.coprocessor_plugin_directory {
             let r = plugin_registry.start_hot_reloading(plugin_directory);
             if let Err(err) = r {
-                warn!("unable to start hot-reloading for coprocessor plugins."; "coprocessor_directory" => plugin_directory, "error" => ?err);
+                warn!("unable to start hot-reloading for coprocessor plugins."; "coprocessor_directory" => plugin_directory.display(), "error" => ?err);
             }
         }
 
