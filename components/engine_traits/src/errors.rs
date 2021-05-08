@@ -14,7 +14,7 @@ pub enum Error {
     // FIXME: It should not know Region.
     #[error(
         "Key {} is out of [region {}] [{}, {})",
-        log_wrappers::Value::key(&key), region_id, log_wrappers::Value::key(&start), log_wrappers::Value::key(&end)
+        log_wrappers::Value::key(.key), .region_id, log_wrappers::Value::key(.start), log_wrappers::Value::key(.end)
     )]
     NotInRange {
         key: Vec<u8>,
