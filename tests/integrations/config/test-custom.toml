@@ -521,3 +521,4 @@ pipelined = true
 
 [cdc]
 min-ts-interval = "4s"
+incremental-scan-speed-limit = 7
