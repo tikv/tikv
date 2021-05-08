@@ -457,10 +457,10 @@ impl<'de> Deserialize<'de> for ReadableDuration {
     }
 }
 
-fn canonicalize_imp<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
-    fn normalize<P: AsRef<Path>>(path: P) -> PathBuf {
+fn canonicalize_fallback<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
+    fn normalize(path: &Path) -> PathBuf {
         use std::path::Component;
-        let mut components = path.as_ref().components().peekable();
+        let mut components = path.components().peekable();
         let mut ret = if let Some(c @ Component::Prefix(..)) = components.peek().cloned() {
             components.next();
             PathBuf::from(c.as_os_str())
@@ -485,21 +485,22 @@ fn canonicalize_imp<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
         }
         ret
     }
-    fn try_canonicalize_normalized_path<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
+    fn try_canonicalize_normalized_path(path: &Path) -> std::io::Result<PathBuf> {
         use std::path::Component;
-        let mut components = path.as_ref().components().peekable();
+        let mut components = path.components().peekable();
         let mut should_canonicalize = true;
-        let mut ret = if let Some(c @ Component::Prefix(..)) = components.peek().cloned() {
-            components.next();
-            PathBuf::from(c.as_os_str())
+        let mut ret = if path.is_relative() {
+            Path::new(".").canonicalize()?
         } else {
             PathBuf::new()
         };
+        while let Some(c @ (Component::Prefix(..) | Component::RootDir)) = components.peek().cloned() {
+            components.next();
+            ret.push(c.as_os_str());
+        }
+
         for component in components {
             match component {
-                Component::RootDir => {
-                    ret.push(component.as_os_str());
-                }
                 Component::Normal(c) => {
                     ret.push(c);
                     // We try to canonicalize a longest path based on fs info.
@@ -515,15 +516,18 @@ fn canonicalize_imp<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
                         }
                     }
                 }
-                Component::Prefix(..) | Component::ParentDir | Component::CurDir => unreachable!(),
+                Component::Prefix(..) | Component::RootDir | Component::ParentDir | Component::CurDir => unreachable!(),
             }
         }
         Ok(ret)
     }
+    try_canonicalize_normalized_path(&normalize(path.as_ref()))
+}
+
+/// Normalizes the path and canonicalizes its longest physically existing sub-path.
+fn canonicalize_imp<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
     match path.as_ref().canonicalize() {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            try_canonicalize_normalized_path(normalize(path))
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => canonicalize_fallback(path),
         other => other,
     }
 }
@@ -1420,6 +1424,14 @@ mod tests {
             tmp_dir.canonicalize().unwrap().join("test1.dump")
         );
 
+        let cases = vec![".", "/../../"];
+        for case in &cases {
+            assert_eq!(
+                Path::new(&canonicalize_fallback(case).unwrap()),
+                Path::new(case).canonicalize().unwrap(),
+            );
+        }
+
         // canonicalize a path containing symlink and non-existing nodes
         ensure_dir_exist(&format!("{}", tmp_dir.to_path_buf().join("dir").display())).unwrap();
         let mut nodes = vec!["non_existing", "dir"];
@@ -1434,13 +1446,7 @@ mod tests {
         }
         for first in &nodes {
             for second in &nodes {
-                let path = format!(
-                    "{}",
-                    tmp_dir
-                        .to_path_buf()
-                        .join(format!("{}/../{}/non_existing", first, second))
-                        .display()
-                );
+                let path = format!("{}/{}/../{}/non_existing", tmp_dir.to_str().unwrap(), first, second);
                 let res_path = canonicalize_path(&path).unwrap();
                 // resolve to second/non_existing
                 if *second == "non_existing" {
