@@ -549,7 +549,6 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             let deregister = if is_new_delegate {
                 // Deregister region if it's the first scan task, because the
                 // task also build resolver.
-                // TODO: add tests.
                 Deregister::Region {
                     region_id,
                     observe_id,
@@ -1617,7 +1616,7 @@ mod tests {
 
     #[test]
     fn test_register() {
-        let (mut ep, raft_router, _task_rx) = mock_endpoint(&CdcConfig {
+        let (mut ep, raft_router, mut task_rx) = mock_endpoint(&CdcConfig {
             min_ts_interval: ReadableDuration(Duration::from_secs(60)),
             ..Default::default()
         });
@@ -1688,6 +1687,54 @@ mod tests {
             panic!("unknown cdc event {:?}", cdc_event);
         }
         assert_eq!(ep.capture_regions.len(), 1);
+
+        // The first scan task of a region is initiated in register, and when it
+        // fails, it should send a deregister region task, otherwise the region
+        // delegate does not have resolver.
+        //
+        // Test non-exist regoin in raft router.
+        let mut req = ChangeDataRequest::default();
+        req.set_region_id(100);
+        let region_epoch = req.get_region_epoch().clone();
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 1, conn_id, true);
+        ep.run(Task::Register {
+            request: req.clone(),
+            downstream,
+            conn_id,
+            version: semver::Version::new(4, 0, 6),
+        });
+        // Region 100 is inserted into capture_regions.
+        assert_eq!(ep.capture_regions.len(), 2);
+        let task = task_rx.recv_timeout(Duration::from_millis(100)).unwrap();
+        match task.unwrap() {
+            Task::Deregister(Deregister::Region { region_id, err, .. }) => {
+                assert_eq!(region_id, 100);
+                assert!(matches!(err, Error::Request(_)), "{:?}", err);
+            }
+            other => panic!("unexpected task {:?}", other),
+        }
+
+        // Test errors on CaptureChange message.
+        req.set_region_id(101);
+        let raft_rx = raft_router.add_region(101 /* region id */, 100 /* cap */);
+        let downstream = Downstream::new("".to_string(), region_epoch, 1, conn_id, true);
+        ep.run(Task::Register {
+            request: req,
+            downstream,
+            conn_id,
+            version: semver::Version::new(4, 0, 6),
+        });
+        // Drop CaptureChange message, it should cause scan task failure.
+        let _ = raft_rx.recv_timeout(Duration::from_millis(100)).unwrap();
+        assert_eq!(ep.capture_regions.len(), 3);
+        let task = task_rx.recv_timeout(Duration::from_millis(100)).unwrap();
+        match task.unwrap() {
+            Task::Deregister(Deregister::Region { region_id, err, .. }) => {
+                assert_eq!(region_id, 101);
+                assert!(matches!(err, Error::Other(_)), "{:?}", err);
+            }
+            other => panic!("unexpected task {:?}", other),
+        }
     }
 
     #[test]
