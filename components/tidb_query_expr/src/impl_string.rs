@@ -652,7 +652,7 @@ pub fn make_set(raw_args: &[ScalarValueRef]) -> Result<Option<Bytes>> {
 #[inline]
 pub fn elt(raw_args: &[ScalarValueRef]) -> Result<Option<Bytes>> {
     assert!(raw_args.len() >= 2);
-    let index = raw_args[0].as_int();
+    let index: Option<&Int> = EvaluableRef::borrow_scalar_value_ref(raw_args[0]);
     Ok(match index {
         None => None,
         Some(i) => {
@@ -660,7 +660,9 @@ pub fn elt(raw_args: &[ScalarValueRef]) -> Result<Option<Bytes>> {
             if i <= 0 || i + 1 > raw_args.len() as i64 {
                 return Ok(None);
             }
-            raw_args[i as usize].as_bytes().map(|x| x.to_vec())
+            let bytes: Option<BytesRef> =
+                EvaluableRef::borrow_scalar_value_ref(raw_args[i as usize]);
+            bytes.map(|x| x.to_vec())
         }
     })
 }
@@ -3350,6 +3352,26 @@ mod tests {
                     Some(b"Hello World!".to_vec()).into(),
                 ],
                 Some("Cześć".as_bytes().to_vec()),
+            ),
+            (
+                vec![
+                    Some(1).into(),
+                    tidb_query_datatype::codec::data_type::ScalarValue::Enum(Some(Enum::new(
+                        "aaa".as_bytes().to_vec(),
+                        1u64,
+                    ))),
+                ],
+                Some("aaa".as_bytes().to_vec()),
+            ),
+            (
+                vec![
+                    tidb_query_datatype::codec::data_type::ScalarValue::Enum(Some(Enum::new(
+                        "aaa".as_bytes().to_vec(),
+                        1u64,
+                    ))),
+                    Some(b"bbb".to_vec()).into(),
+                ],
+                Some("bbb".as_bytes().to_vec()),
             ),
         ];
         for (args, expect_output) in test_cases {
