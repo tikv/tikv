@@ -373,7 +373,7 @@
 ## Plugins in this directory will be automatically loaded by TiKV.
 ## If a coprocessor plugin file is deleted, it will be automatically unloaded.
 ## If the config value is not set, hot-reloading will be disabled.
-# coprocessor-plugin-directory = "coprocessors"
+# coprocessor-plugin-directory = "./coprocessors"
 
 [rocksdb]
 ## Maximum number of threads of RocksDB background jobs.
