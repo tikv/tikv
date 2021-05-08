@@ -470,22 +470,16 @@ fn canonicalize_fallback<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
             ret.push(c.as_os_str());
         }
 
-        let mut normal_nodes = 0;
         for component in components {
             match component {
                 Component::Prefix(..) | Component::RootDir => unreachable!(),
                 Component::CurDir => {}
                 c @ Component::ParentDir => {
-                    if normal_nodes > 0 {
-                        ret.pop();
-                    } else {
+                    if !ret.pop() {
                         ret.push(c.as_os_str());
                     }
                 }
-                Component::Normal(c) => {
-                    ret.push(c);
-                    normal_nodes += 1;
-                }
+                Component::Normal(c) => ret.push(c),
             }
         }
         ret
@@ -506,7 +500,7 @@ fn canonicalize_fallback<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
             components.next();
             ret.push(c.as_os_str());
         }
-        // Normalize will only preserve leading ParentDir.
+        // normalize() will only preserve leading ParentDir.
         while let Some(Component::ParentDir) = components.peek().cloned() {
             components.next();
             ret.pop();
