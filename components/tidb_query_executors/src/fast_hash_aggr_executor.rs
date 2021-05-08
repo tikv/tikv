@@ -27,7 +27,7 @@ use tidb_query_expr::{RpnExpression, RpnExpressionBuilder, RpnStackNode};
 macro_rules! match_template_hashable {
     ($t:tt, $($tail:tt)*) => {{
         match_template::match_template! {
-            $t = [Int, Real, Bytes, Duration, Decimal, DateTime],
+            $t = [Int, Real, Bytes, Duration, Decimal, DateTime, Enum],
             $($tail)*
         }
     }}
@@ -196,6 +196,7 @@ enum Groups {
     Duration(HashMap<Option<Duration>, usize>),
     Decimal(HashMap<Option<Decimal>, usize>),
     DateTime(HashMap<Option<DateTime>, usize>),
+    Enum(HashMap<Option<Enum>, usize>),
 }
 
 impl Groups {
@@ -254,7 +255,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
         match group_by_result {
             RpnStackNode::Scalar { value, .. } => {
                 match_template::match_template! {
-                    TT = [Int, Bytes, Real, Duration, Decimal, DateTime],
+                    TT = [Int, Bytes, Real, Duration, Decimal, DateTime, Enum],
                     match value {
                         ScalarValue::TT(v) => {
                             if let Groups::TT(group) = &mut self.groups {
@@ -279,7 +280,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
                 let group_by_logical_rows = value.logical_rows_struct();
 
                 match_template::match_template! {
-                    TT = [Int, Real, Duration, Decimal, DateTime],
+                    TT = [Int, Real, Duration, Decimal, DateTime, Enum],
                     match group_by_physical_vec {
                         VectorValue::TT(v) => {
                             if let Groups::TT(group) = &mut self.groups {
@@ -1064,5 +1065,88 @@ mod tests {
                 .unwrap();
             assert_eq!(r.physical_columns[0].decoded().to_int_vec(), &[Some(1)]);
         }
+    }
+
+    #[test]
+    fn test_group_by_enum_column() {
+        // This test creates a hash aggregation executor with the following aggregate functions:
+        // - COUNT(1)
+        // And group by:
+        // - col_0(enum_type)
+
+        let group_by_exp = || {
+            RpnExpressionBuilder::new_for_test()
+                .push_column_ref_for_test(0)
+                .build_for_test()
+        };
+
+        let aggr_definitions = || {
+            vec![
+                ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
+                    .push_child(ExprDefBuilder::constant_int(1))
+                    .build(),
+            ]
+        };
+
+        let exec_builder = |src_exec| {
+            Box::new(BatchFastHashAggregationExecutor::new_for_test(
+                src_exec,
+                group_by_exp(),
+                aggr_definitions(),
+                AllAggrDefinitionParser,
+            )) as Box<dyn BatchExecutor<StorageStats = ()>>
+        };
+
+        let src_exec = MockExecutor::new(
+            vec![FieldTypeTp::Enum.into()],
+            vec![BatchExecuteResult {
+                physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Enum(
+                    vec![
+                        None,
+                        Some(Enum::new(Vec::from("aaaa".as_bytes()), 1)),
+                        Some(Enum::new(Vec::from("bbbb".as_bytes()), 2)),
+                        Some(Enum::new(Vec::from("bbbb".as_bytes()), 2)),
+                        Some(Enum::new(Vec::from("cccc".as_bytes()), 3)),
+                        Some(Enum::new(Vec::from("cccc".as_bytes()), 3)),
+                        Some(Enum::new(Vec::from("cccc".as_bytes()), 3)),
+                    ]
+                    .into(),
+                )]),
+                logical_rows: vec![6, 4, 5, 1, 3, 2, 0],
+                warnings: EvalWarnings::default(),
+                is_drained: Ok(true),
+            }],
+        );
+        let mut exec = exec_builder(src_exec);
+        let r = exec.next_batch(4);
+        assert_eq!(r.physical_columns.rows_len(), 4);
+        assert_eq!(r.physical_columns.columns_len(), 2);
+
+        let mut sort_column: Vec<(usize, _)> = r.physical_columns[1]
+            .decoded()
+            .to_enum_vec()
+            .into_iter()
+            .enumerate()
+            .collect();
+        sort_column.sort_by(|a, b| a.1.cmp(&b.1));
+
+        let ordered_column: Vec<_> = sort_column
+            .iter()
+            .map(|(idx, _)| r.physical_columns[1].decoded().to_enum_vec()[*idx].clone())
+            .collect();
+        assert_eq!(
+            &ordered_column,
+            &[
+                None,
+                Some(Enum::new(Vec::from("aaaa".as_bytes()), 1)),
+                Some(Enum::new(Vec::from("bbbb".as_bytes()), 2)),
+                Some(Enum::new(Vec::from("cccc".as_bytes()), 3))
+            ]
+        );
+        let ordered_column: Vec<_> = sort_column
+            .iter()
+            .map(|(idx, _)| r.physical_columns[0].decoded().to_int_vec()[*idx])
+            .collect();
+        assert_eq!(&ordered_column, &[Some(1), Some(1), Some(2), Some(3)]);
     }
 }
