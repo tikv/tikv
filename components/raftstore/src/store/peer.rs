@@ -1393,6 +1393,7 @@ where
                 }
                 StateRole::Follower => {
                     self.leader_lease.expire();
+                    self.mut_store().cancel_generating_snap(None);
                 }
                 _ => {}
             }
