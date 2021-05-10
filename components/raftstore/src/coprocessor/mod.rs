@@ -77,7 +77,7 @@ pub trait AdminObserver: Coprocessor {
     fn pre_apply_admin(&self, _: &mut ObserverContext<'_>, _: &AdminRequest) {}
 
     /// Hook to call after applying admin request.
-    fn post_apply_admin(&self, _: &mut ObserverContext<'_>, _: &mut AdminResponse) {}
+    fn post_apply_admin(&self, _: &mut ObserverContext<'_>, _: &AdminResponse) {}
 }
 
 pub trait QueryObserver: Coprocessor {
@@ -92,7 +92,7 @@ pub trait QueryObserver: Coprocessor {
     fn pre_apply_query(&self, _: &mut ObserverContext<'_>, _: &[Request]) {}
 
     /// Hook to call after applying write request.
-    fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &mut Cmd) {}
+    fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &Cmd) {}
 }
 
 pub trait ApplySnapshotObserver: Coprocessor {

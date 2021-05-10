@@ -315,10 +315,11 @@ where
 
     fn invoke_all(self, host: &CoprocessorHost<EK>) {
         for PendingCallback { cb, cmd } in self.cbs {
-            let mut cmd = Cmd::unwrap_arc(cmd);
-            host.post_apply(&self.region, &mut cmd);
+            host.post_apply(&self.region, cmd.as_ref());
             if let Some(cb) = cb {
-                cb.invoke_with_response(cmd.response)
+                let response = Arc::try_unwrap(cmd)
+                    .map_or_else(|cmd| cmd.response.clone(), |cmd| cmd.response);
+                cb.invoke_with_response(response)
             };
         }
     }
@@ -4365,7 +4366,7 @@ mod tests {
             self.pre_query_count.fetch_add(1, Ordering::SeqCst);
         }
 
-        fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &mut Cmd) {
+        fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &Cmd) {
             self.post_query_count.fetch_add(1, Ordering::SeqCst);
         }
     }
