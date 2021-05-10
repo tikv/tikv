@@ -1020,6 +1020,21 @@ where
         self.raft_group.snap()
     }
 
+    #[inline]
+    pub fn proposal_size(&self) -> usize {
+        self.proposals.queue.heap_size() + self.pending_reads.heap_size()
+    }
+
+    #[inline]
+    pub fn rest_size(&self) -> usize {
+        self.peer_cache.borrow().heap_size()
+            + self.peer_heartbeats.heap_size()
+            + self.peers_start_pending_time.heap_size()
+            + self.down_peer_ids.heap_size()
+            + self.check_stale_peers.heap_size()
+            + self.want_rollback_merge_peers.heap_size()
+    }
+
     fn add_ready_metric(&self, ready: &Ready, metrics: &mut RaftReadyMetrics) {
         metrics.message += ready.messages().len() as u64;
         metrics.commit += ready.committed_entries().len() as u64;

@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::VecDeque;
-use std::{cmp, mem, u64, usize};
+use std::{cmp, u64, usize};
 
 use crate::store::fsm::apply;
 use crate::store::metrics::*;

@@ -38,7 +38,9 @@ use engine_traits::{RaftEngine, RaftLogBatch};
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use pd_client::{FeatureGate, PdClient};
 use sst_importer::SSTImporter;
+use tikv_alloc::trace::{Id, MemoryTrace, TraceEvent};
 use tikv_util::config::{Tracker, VersionTrack};
+use tikv_util::memory::HeapSize;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::timer::SteadyTimer;
@@ -46,7 +48,6 @@ use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
 use tikv_util::{box_err, box_try, debug, error, info, slow_log, warn};
 use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
 
-use crate::coprocessor::split_observer::SplitObserver;
 use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
 use crate::store::config::Config;
 use crate::store::fsm::metrics::*;
@@ -60,6 +61,7 @@ use crate::store::fsm::{
     CollectedReady,
 };
 use crate::store::local_metrics::RaftMetrics;
+use crate::store::memory::RAFTSTORE_MEM_TRACE;
 use crate::store::metrics::*;
 use crate::store::peer_storage::{self, HandleRaftReadyContext};
 use crate::store::transport::Transport;
@@ -76,6 +78,7 @@ use crate::store::{
     SignificantMsg, SnapManager, StoreMsg, StoreTick,
 };
 use crate::Result;
+use crate::{coprocessor::split_observer::SplitObserver, store::memory::RaftContextTrace};
 use concurrency_manager::ConcurrencyManager;
 use tikv_util::future::poll_future_notify;
 
@@ -347,6 +350,7 @@ where
     pub perf_context: EK::PerfContext,
     pub tick_batch: Vec<PeerTickBatch>,
     pub node_start_time: Option<TiInstant>,
+    pub trace: RaftContextTrace,
 }
 
 impl<EK, ER, T> HandleRaftReadyContext<EK::WriteBatch, ER::LogBatch> for PollContext<EK, ER, T>
@@ -682,6 +686,13 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
                     .post_raft_ready_append(ready);
             }
         }
+        for peer in peers {
+            if let Some(event) = peer.update_memory_trace(&self.poll_ctx.cfg) {
+                RAFTSTORE_MEM_TRACE
+                    .sub_trace(Id::Name("peers"))
+                    .trace(event);
+            }
+        }
         let dur = self.timer.elapsed();
         if !self.poll_ctx.store_stat.is_busy {
             let election_timeout = Duration::from_millis(
@@ -859,6 +870,27 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         if self.poll_ctx.trans.need_flush() {
             self.poll_ctx.trans.flush();
         }
+        let mut size = self.poll_ctx.ready_res.heap_size();
+        size += self.store_msg_buf.heap_size();
+        size += self.peer_msg_buf.heap_size();
+        size += mem::size_of::<Self>();
+        let trace = RaftContextTrace {
+            write_batch: self.poll_ctx.kv_wb.data_size() + self.poll_ctx.raft_wb.data_size(),
+            rest: size,
+        };
+        if let Some(event) = self.poll_ctx.trace.reset(trace) {
+            RAFTSTORE_MEM_TRACE
+                .sub_trace(Id::Name("raft_context"))
+                .trace(event);
+        }
+    }
+}
+
+impl<EK: KvEngine, ER: RaftEngine, T> Drop for RaftPoller<EK, ER, T> {
+    fn drop(&mut self) {
+        RAFTSTORE_MEM_TRACE
+            .sub_trace(Id::Name("raft_context"))
+            .trace(TraceEvent::Sub(self.poll_ctx.trace.sum()));
     }
 }
 
@@ -1100,6 +1132,7 @@ where
             tick_batch: vec![PeerTickBatch::default(); 256],
             node_start_time: Some(TiInstant::now_coarse()),
             feature_gate: self.feature_gate.clone(),
+            trace: RaftContextTrace::default(),
         };
         ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());

@@ -19,7 +19,6 @@ lazy_static! {
 
 #[derive(MemoryTraceHelper, Default)]
 pub struct PeerMemoryTrace {
-    pub log_cache: usize,
     pub raft_machine: usize,
     pub proposals: usize,
     pub rest: usize,

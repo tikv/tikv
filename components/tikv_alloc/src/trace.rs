@@ -77,7 +77,7 @@ pub enum TraceEvent {
 pub trait MemoryTrace {
     fn trace(&self, event: TraceEvent);
     fn snapshot(&self, parent: &mut MemoryTraceSnapshot);
-    fn sub_trace(&self, id: Id) -> Option<Arc<dyn MemoryTrace + Send + Sync>>;
+    fn sub_trace(&self, id: Id) -> Arc<dyn MemoryTrace + Send + Sync>;
     fn add_sub_trace(&mut self, id: Id, trace: Arc<dyn MemoryTrace + Send + Sync>);
 }
 
@@ -145,8 +145,8 @@ impl MemoryTrace for MemoryTraceNode {
         parent.children.push(snap);
     }
 
-    fn sub_trace(&self, id: Id) -> Option<Arc<dyn MemoryTrace + Send + Sync>> {
-        self.children.get(&id).cloned()
+    fn sub_trace(&self, id: Id) -> Arc<dyn MemoryTrace + Send + Sync> {
+        self.children.get(&id).cloned().unwrap()
     }
 
     fn add_sub_trace(&mut self, id: Id, trace: Arc<dyn MemoryTrace + Send + Sync>) {

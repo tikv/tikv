@@ -12,12 +12,13 @@ use syn::{parse_macro_input, Data, DeriveInput, Fields};
 pub fn memory_trace_reset_derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = input.ident;
-    let imp;
+    let reset_imp;
+    let sum_imp;
 
     match input.data {
         Data::Struct(ref s) => match s.fields {
             Fields::Named(ref fields) => {
-                let total = fields.named.iter().map(|f| {
+                let reset_total = fields.named.iter().map(|f| {
                     let name = &f.ident;
                     quote! {
                         lhs_sum += self.#name;
@@ -25,21 +26,30 @@ pub fn memory_trace_reset_derive(input: TokenStream) -> TokenStream {
                         self.#name = rhs.#name;
                     }
                 });
-                let sum = quote! {
-                    #(#total)*
-                };
-                imp = quote! {
+                reset_imp = quote! {
                     use tikv_alloc::trace::TraceEvent;
                     use std::cmp::Ordering;
 
                     let mut lhs_sum: usize = 0;
                     let mut rhs_sum: usize = 0;
-                    #sum
+                    #(#reset_total)*
                     match lhs_sum.cmp(&rhs_sum) {
                         Ordering::Greater => Some(TraceEvent::Sub(lhs_sum-rhs_sum)),
                         Ordering::Less => Some(TraceEvent::Add(rhs_sum-lhs_sum)),
                         Ordering::Equal => None,
                     }
+                };
+
+                let sum_total = fields.named.iter().map(|f| {
+                    let name = &f.ident;
+                    quote! {
+                        sum += self.#name;
+                    }
+                });
+                sum_imp = quote! {
+                    let mut sum: usize = 0;
+                    #(#sum_total)*
+                    sum
                 };
             }
             _ => unimplemented!(),
@@ -50,7 +60,12 @@ pub fn memory_trace_reset_derive(input: TokenStream) -> TokenStream {
         impl #name {
             #[inline]
             pub fn reset(&mut self, rhs: Self) -> Option<tikv_alloc::trace::TraceEvent> {
-                #imp
+                #reset_imp
+            }
+
+            #[inline]
+            pub fn sum(&self) -> usize {
+                #sum_imp
             }
         }
     };

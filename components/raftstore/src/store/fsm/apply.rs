@@ -13,7 +13,7 @@ use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::vec::Drain;
-use std::{cmp, usize};
+use std::{cmp, mem, usize};
 
 use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler, Priority,
@@ -42,17 +42,19 @@ use raft::eraftpb::{
 };
 use raft_proto::ConfChangeI;
 use sst_importer::SSTImporter;
-use tikv_util::config::{Tracker, VersionTrack};
+use tikv_alloc::trace::{Id, MemoryTrace, TraceEvent};
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant};
 use tikv_util::worker::Scheduler;
 use tikv_util::{box_err, box_try, debug, error, info, safe_panic, slow_log, warn};
+use tikv_util::{
+    config::{Tracker, VersionTrack},
+    memory::HeapSize,
+};
 use tikv_util::{Either, MustConsumeVec};
 use time::Timespec;
 use uuid::Builder as UuidBuilder;
 
-use crate::coprocessor::{Cmd, CoprocessorHost};
-use crate::store::fsm::RaftPollerBuilder;
 use crate::store::metrics::*;
 use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
 use crate::store::peer::Peer;
@@ -64,6 +66,11 @@ use crate::store::util::{
     ConfChangeKind, KeysInfoFormatter,
 };
 use crate::store::{cmd_resp, util, Config, RegionSnapshot, RegionTask};
+use crate::store::{fsm::RaftPollerBuilder, memory::ApplyMemoryTrace};
+use crate::{
+    coprocessor::{Cmd, CoprocessorHost},
+    store::memory::{ApplyContextTrace, RAFTSTORE_MEM_TRACE},
+};
 use crate::{Error, Result};
 
 use super::metrics::*;
@@ -173,6 +180,16 @@ where
     // TODO: seems we don't need to separate conf change from normal entries.
     fn set_conf_change(&mut self, cmd: PendingCmd<S>) {
         self.conf_change = Some(cmd);
+    }
+}
+
+impl<S> HeapSize for PendingCmdQueue<S>
+where
+    S: Snapshot,
+{
+    #[inline]
+    fn heap_size(&self) -> usize {
+        self.normals.capacity() * mem::size_of::<PendingCmd<S>>()
     }
 }
 
@@ -375,6 +392,8 @@ where
     priority: Priority,
     /// Whether to yield high-latency operation to low-priority handler.
     yield_high_latency_operation: bool,
+
+    trace: ApplyContextTrace,
 }
 
 impl<EK, W> ApplyContext<EK, W>
@@ -425,6 +444,7 @@ where
             pending_create_peers,
             priority,
             yield_high_latency_operation: cfg.apply_batch_system.low_priority_pool_size > 0,
+            trace: ApplyContextTrace::default(),
         }
     }
 
@@ -712,6 +732,7 @@ where
     /// the source peer has applied its logs and pending entries
     /// are all handled.
     pending_msgs: Vec<Msg<EK>>,
+    approximate_size: usize,
 }
 
 impl<EK> Debug for YieldState<EK>
@@ -731,6 +752,23 @@ impl Debug for WaitSourceMergeState {
         f.debug_struct("WaitSourceMergeState")
             .field("logs_up_to_date", &self.logs_up_to_date)
             .finish()
+    }
+}
+
+impl<EK> HeapSize for YieldState<EK>
+where
+    EK: KvEngine,
+{
+    fn heap_size(&self) -> usize {
+        let mut size = self.pending_entries.capacity() * mem::size_of::<Entry>()
+            + self.pending_msgs.capacity() * mem::size_of::<Msg<EK>>();
+        for e in &self.pending_entries {
+            size += e.get_data().len() + e.get_context().len();
+        }
+        for m in &self.pending_msgs {
+            size += m.heap_size();
+        }
+        size
     }
 }
 
@@ -814,6 +852,8 @@ where
     /// Priority in batch system. When applying some commands which have high latency,
     /// we decrease the priority of current fsm to reduce the impact on other normal commands.
     priority: Priority,
+
+    trace: ApplyMemoryTrace,
 }
 
 impl<EK> ApplyDelegate<EK>
@@ -842,6 +882,7 @@ where
             pending_request_snapshot_count: reg.pending_request_snapshot_count,
             observe_cmd: ObserveCmd::default(),
             priority: Priority::Normal,
+            trace: ApplyMemoryTrace::default(),
         }
     }
 
@@ -909,6 +950,7 @@ where
                     self.yield_state = Some(YieldState {
                         pending_entries,
                         pending_msgs: Vec::default(),
+                        approximate_size: 0,
                     });
                     if let ApplyResult::WaitMergeSource(logs_up_to_date) = res {
                         self.wait_merge_state = Some(WaitSourceMergeState { logs_up_to_date });
@@ -1237,6 +1279,9 @@ where
     fn destroy<W: WriteBatch<EK>>(&mut self, apply_ctx: &mut ApplyContext<EK, W>) {
         self.stopped = true;
         apply_ctx.router.close(self.region_id());
+        RAFTSTORE_MEM_TRACE
+            .sub_trace(Id::Name("applys"))
+            .trace(TraceEvent::Sub(self.trace.sum()));
         for cmd in self.pending_cmds.normals.drain(..) {
             notify_region_removed(self.region.get_id(), self.id, cmd);
         }
@@ -3007,6 +3052,23 @@ where
     }
 }
 
+impl<EK> HeapSize for Msg<EK>
+where
+    EK: KvEngine,
+{
+    #[inline]
+    fn heap_size(&self) -> usize {
+        match self {
+            Msg::Apply { apply, .. } => apply.entries_mem_size as usize,
+            Msg::Registration(r) => r.region.heap_size(),
+            Msg::LogsUpToDate(_) => 8,
+            Msg::Snapshot(_) | Msg::Destroy(_) | Msg::Noop | Msg::Change { .. } => 0,
+            #[cfg(any(test, feature = "testexport"))]
+            Msg::Validate(..) => 0,
+        }
+    }
+}
+
 #[derive(Default, Clone, Debug, PartialEq)]
 pub struct ApplyMetrics {
     /// an inaccurate difference in region size since last reset.
@@ -3439,6 +3501,21 @@ where
                 None => break,
             }
         }
+        let s = self.delegate.yield_state.as_mut().map_or(0, |s| {
+            if s.approximate_size == 0 {
+                s.approximate_size = s.heap_size();
+            }
+            s.approximate_size
+        });
+        let trace = ApplyMemoryTrace {
+            pending_cmds: self.delegate.pending_cmds.heap_size(),
+            rest: s + mem::size_of::<Self>(),
+        };
+        if let Some(event) = self.delegate.trace.reset(trace) {
+            RAFTSTORE_MEM_TRACE
+                .sub_trace(Id::Name("applys"))
+                .trace(event);
+        }
     }
 }
 
@@ -3506,6 +3583,19 @@ where
     apply_ctx: ApplyContext<EK, W>,
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
+    trace: ApplyContextTrace,
+}
+
+impl<EK, W> Drop for ApplyPoller<EK, W>
+where
+    EK: KvEngine,
+    W: WriteBatch<EK>,
+{
+    fn drop(&mut self) {
+        RAFTSTORE_MEM_TRACE
+            .sub_trace(Id::Name("apply_context"))
+            .trace(TraceEvent::Sub(self.trace.sum()));
+    }
 }
 
 impl<EK, W> PollHandler<ApplyFsm<EK>, ControlFsm> for ApplyPoller<EK, W>
@@ -3604,6 +3694,22 @@ where
     fn get_priority(&self) -> Priority {
         self.apply_ctx.priority
     }
+
+    fn pause(&mut self) {
+        let mut size = self.apply_ctx.apply_res.heap_size();
+        size += self.msg_buf.heap_size();
+        size += mem::size_of::<Self>();
+        // TODO: record raft batch size, there is no API ATM.
+        let trace = ApplyContextTrace {
+            cbs_size: self.apply_ctx.cbs.heap_size(),
+            rest: size,
+        };
+        if let Some(event) = self.apply_ctx.trace.reset(trace) {
+            RAFTSTORE_MEM_TRACE
+                .sub_trace(Id::Name("apply_context"))
+                .trace(event);
+        }
+    }
 }
 
 pub struct Builder<EK: KvEngine, W: WriteBatch<EK>> {
@@ -3671,6 +3777,7 @@ where
             ),
             messages_per_tick: cfg.messages_per_tick,
             cfg_tracker: self.cfg.clone().tracker(self.tag.clone()),
+            trace: ApplyContextTrace::default(),
         }
     }
 }
