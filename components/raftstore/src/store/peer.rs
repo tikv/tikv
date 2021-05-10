@@ -16,7 +16,6 @@ use fail::fail_point;
 use kvproto::errorpb;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{self, PeerRole};
-use kvproto::pdpb::CheckPolicy;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
     self, AdminCmdType, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
@@ -50,7 +49,6 @@ use crate::store::util::{admin_cmd_epoch_lookup, RegionReadProgress};
 use crate::store::worker::{HeartbeatTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
 use crate::store::{
     Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse,
-    SplitCheckTask,
 };
 use crate::{Error, Result};
 use collections::{HashMap, HashSet};
@@ -3380,20 +3378,6 @@ where
             return;
         }
         fail_point!("schedule_check_split");
-    }
-
-    pub fn schedule_check_split<T>(&mut self, ctx: &PollContext<EK, ER, T>) {
-        let task = SplitCheckTask::split_check(self.region().clone(), true, CheckPolicy::Scan);
-        if let Err(e) = ctx.split_check_scheduler.schedule(task) {
-            error!(
-                "failed to schedule split check";
-                "region_id" => self.region().get_id(),
-                "err" => %e,
-            );
-            return;
-        }
-        self.size_diff_hint = 0;
-        self.compaction_declined_bytes = 0;
     }
 
     fn prepare_raft_message(&self) -> RaftMessage {

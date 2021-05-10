@@ -2181,11 +2181,11 @@ where
         let new_region_count = regions.len() as u64;
         let estimated_size = self.fsm.peer.approximate_size / new_region_count;
         let estimated_keys = self.fsm.peer.approximate_keys / new_region_count;
-        // It's not correct anymore, so set it to None to let split checker update it.
         let mut meta = self.ctx.store_meta.lock().unwrap();
         meta.set_region(&self.ctx.coprocessor_host, derived, &mut self.fsm.peer);
         self.fsm.peer.post_split();
 
+        // It's not correct anymore, so set it to false to schedule a split check task.
         self.fsm.peer.has_calculated_region_size = false;
 
         let is_leader = self.fsm.peer.is_leader();
@@ -3538,8 +3538,18 @@ where
             return;
         }
         self.fsm.skip_split_count = 0;
-
-        self.fsm.peer.schedule_check_split(self.ctx);
+        let task = SplitCheckTask::split_check(self.region().clone(), true, CheckPolicy::Scan);
+        if let Err(e) = self.ctx.split_check_scheduler.schedule(task) {
+            error!(
+                "failed to schedule split check";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "err" => %e,
+            );
+            return;
+        }
+        self.fsm.peer.size_diff_hint = 0;
+        self.fsm.peer.compaction_declined_bytes = 0;
     }
 
     fn on_prepare_split_region(
