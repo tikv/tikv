@@ -652,7 +652,7 @@ pub fn make_set(raw_args: &[ScalarValueRef]) -> Result<Option<Bytes>> {
 #[inline]
 pub fn elt(raw_args: &[ScalarValueRef]) -> Result<Option<Bytes>> {
     assert!(raw_args.len() >= 2);
-    let index: Option<&Int> = EvaluableRef::borrow_scalar_value_ref(raw_args[0]);
+    let index = raw_args[0].as_int();
     Ok(match index {
         None => None,
         Some(i) => {
@@ -660,9 +660,7 @@ pub fn elt(raw_args: &[ScalarValueRef]) -> Result<Option<Bytes>> {
             if i <= 0 || i + 1 > raw_args.len() as i64 {
                 return Ok(None);
             }
-            let bytes: Option<BytesRef> =
-                EvaluableRef::borrow_scalar_value_ref(raw_args[i as usize]);
-            bytes.map(|x| x.to_vec())
+            raw_args[i as usize].as_bytes().map(|x| x.to_vec())
         }
     })
 }

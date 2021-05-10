@@ -378,28 +378,14 @@ macro_rules! impl_as_ref {
         impl ScalarValue {
             #[inline]
             pub fn $name(&self) -> Option<&$ty> {
-                match self {
-                    ScalarValue::$ty(v) => v.as_ref(),
-                    other => panic!(
-                        "Cannot cast {} scalar value into {}",
-                        other.eval_type(),
-                        stringify!($ty),
-                    ),
-                }
+                Evaluable::borrow_scalar_value(self)
             }
         }
 
         impl<'a> ScalarValueRef<'a> {
             #[inline]
             pub fn $name(&'a self) -> Option<&'a $ty> {
-                match self {
-                    ScalarValueRef::$ty(v) => v.clone(),
-                    other => panic!(
-                        "Cannot cast {} scalar value into {}",
-                        other.eval_type(),
-                        stringify!($ty),
-                    ),
-                }
+                Evaluable::borrow_scalar_value_ref(*self)
             }
         }
     };
@@ -442,28 +428,14 @@ impl<'a> ScalarValueRef<'a> {
 impl ScalarValue {
     #[inline]
     pub fn as_bytes(&self) -> Option<BytesRef> {
-        match self {
-            ScalarValue::Bytes(v) => v.as_ref().map(|x| x.as_slice()),
-            other => panic!(
-                "Cannot cast {} scalar value into {}",
-                other.eval_type(),
-                stringify!(Bytes),
-            ),
-        }
+        EvaluableRef::borrow_scalar_value(self)
     }
 }
 
 impl<'a> ScalarValueRef<'a> {
     #[inline]
     pub fn as_bytes(&'a self) -> Option<BytesRef<'a>> {
-        match self {
-            ScalarValueRef::Bytes(v) => *v,
-            other => panic!(
-                "Cannot cast {} scalar value into {}",
-                other.eval_type(),
-                stringify!(Bytes),
-            ),
-        }
+        EvaluableRef::borrow_scalar_value_ref(*self)
     }
 }
 
