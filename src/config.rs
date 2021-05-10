@@ -2349,18 +2349,14 @@ impl TiKvConfig {
         let default_raftdb_path = config::canonicalize_sub_path(&self.storage.data_dir, "raft")?;
         if self.raft_store.raftdb_path.is_empty() {
             self.raft_store.raftdb_path = default_raftdb_path;
-        } else if self.raft_store.raftdb_path != default_raftdb_path
-            && RocksEngine::exists(&self.raft_store.raftdb_path)
-        {
+        } else {
             self.raft_store.raftdb_path = config::canonicalize_path(&self.raft_store.raftdb_path)?;
         }
 
         let default_er_path = config::canonicalize_sub_path(&self.storage.data_dir, "raft-engine")?;
         if self.raft_engine.config.dir.is_empty() {
             self.raft_engine.config.dir = default_er_path;
-        } else if self.raft_engine.config.dir != default_er_path
-            && RaftLogEngine::exists(&self.raft_engine.config.dir)
-        {
+        } else {
             self.raft_engine.config.dir = config::canonicalize_path(&self.raft_engine.config.dir)?;
         }
 
@@ -2369,6 +2365,19 @@ impl TiKvConfig {
 
         if kv_db_path == self.raft_store.raftdb_path {
             return Err("raft_store.raftdb_path can not same with storage.data_dir/db".into());
+        }
+        let kv_db_wal_path = if self.rocksdb.wal_dir.is_empty() {
+            config::canonicalize_path(&kv_db_path)?
+        } else {
+            config::canonicalize_path(&self.rocksdb.wal_dir)?
+        };
+        let raft_db_wal_path = if self.raftdb.wal_dir.is_empty() {
+            config::canonicalize_path(&self.raft_store.raftdb_path)?
+        } else {
+            config::canonicalize_path(&self.raftdb.wal_dir)?
+        };
+        if kv_db_wal_path == raft_db_wal_path {
+            return Err("raftdb.wal_dir can not same with rocksdb.wal_dir".into());
         }
         if !self.raft_engine.enable {
             if RocksEngine::exists(&kv_db_path)
@@ -3654,6 +3663,67 @@ mod tests {
             cfg.raft_store.region_split_check_diff.0,
             default_region_split_check_diff + 1
         );
+    }
+
+    #[test]
+    fn test_validate_tikv_wal_config() {
+        let tmp_path = tempfile::Builder::new().tempdir().unwrap().into_path();
+        macro_rules! tmp_path_string_generate {
+            ($base:expr, $($sub:expr),+) => {{
+                let mut path: ::std::path::PathBuf = $base.clone();
+                $(
+                    path.push($sub);
+                )*
+                String::from(path.to_str().unwrap())
+            }}
+        }
+
+        {
+            let mut cfg = TiKvConfig::default();
+            assert!(cfg.validate().is_ok());
+        }
+
+        {
+            let mut cfg = TiKvConfig::default();
+            cfg.storage.data_dir = tmp_path_string_generate!(tmp_path, "data");
+            cfg.raft_store.raftdb_path = tmp_path_string_generate!(tmp_path, "data", "db");
+            assert!(!cfg.validate().is_ok());
+        }
+
+        {
+            let mut cfg = TiKvConfig::default();
+            cfg.storage.data_dir = tmp_path_string_generate!(tmp_path, "data", "kvdb");
+            cfg.raft_store.raftdb_path =
+                tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
+            cfg.rocksdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
+            assert!(!cfg.validate().is_ok());
+        }
+
+        {
+            let mut cfg = TiKvConfig::default();
+            cfg.storage.data_dir = tmp_path_string_generate!(tmp_path, "data", "kvdb");
+            cfg.raft_store.raftdb_path =
+                tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
+            cfg.raftdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "kvdb", "db");
+            assert!(!cfg.validate().is_ok());
+        }
+
+        {
+            let mut cfg = TiKvConfig::default();
+            cfg.rocksdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "wal");
+            cfg.raftdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "wal");
+            assert!(!cfg.validate().is_ok());
+        }
+
+        {
+            let mut cfg = TiKvConfig::default();
+            cfg.storage.data_dir = tmp_path_string_generate!(tmp_path, "data", "kvdb");
+            cfg.raft_store.raftdb_path =
+                tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
+            cfg.rocksdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "kvdb", "db");
+            cfg.raftdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
+            assert!(cfg.validate().is_ok());
+        }
     }
 
     #[test]

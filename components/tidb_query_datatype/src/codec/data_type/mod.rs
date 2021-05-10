@@ -13,6 +13,19 @@ mod vector;
 
 pub use logical_rows::{LogicalRows, BATCH_MAX_SIZE, IDENTICAL_LOGICAL_ROWS};
 
+#[macro_export]
+macro_rules! match_template_evaltype {
+    ($t:tt, $($tail:tt)*) => {{
+        #[allow(unused_imports)]
+        use $crate::codec::data_type::{Int, Real, Decimal, Bytes, DateTime, Duration, Json, Set, Enum};
+
+        match_template::match_template! {
+            $t = [Int, Real, Decimal, Bytes, DateTime, Duration, Json, Set, Enum],
+            $($tail)*
+        }}
+    }
+}
+
 // Concrete eval types without a nullable wrapper.
 pub type Int = i64;
 pub type Real = ordered_float::NotNan<f64>;
@@ -144,13 +157,6 @@ impl<'a> AsMySQLBool for Option<SetRef<'a>> {
             None => Ok(false),
             Some(ref v) => v.as_mysql_bool(context),
         }
-    }
-}
-
-pub macro match_template_evaluable($t:tt, $($tail:tt)*) {
-    match_template::match_template! {
-        $t = [Int, Real, Decimal, Bytes, DateTime, Duration, Json, Set, Enum],
-        $($tail)*
     }
 }
 

@@ -18,7 +18,7 @@ use kvproto::raft_cmdpb::{
 use time::Timespec;
 
 use crate::errors::RAFTSTORE_IS_BUSY;
-use crate::store::util::{self, LeaseState, RemoteLease};
+use crate::store::util::{self, LeaseState, RegionReadProgress, RemoteLease};
 use crate::store::{
     cmd_resp, Callback, Peer, ProposalRouter, RaftCommand, ReadResponse, RegionSnapshot,
     RequestInspector, RequestPolicy,
@@ -149,8 +149,7 @@ pub struct ReadDelegate {
     tag: String,
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     max_ts_sync_status: Arc<AtomicU64>,
-    // TODO: `safe_ts` serve as a placehodler, should remove it later
-    pub safe_ts: Arc<AtomicU64>,
+    read_progress: Arc<RegionReadProgress>,
 
     // `track_ver` used to keep the local `ReadDelegate` in `LocalReader`
     // up-to-date with the global `ReadDelegate` stored at `StoreMeta`
@@ -222,7 +221,7 @@ impl ReadDelegate {
             tag: format!("[region {}] {}", region_id, peer_id),
             txn_extra_op: peer.txn_extra_op.clone(),
             max_ts_sync_status: peer.max_ts_sync_status.clone(),
-            safe_ts: Arc::clone(&peer.safe_ts),
+            read_progress: peer.read_progress.clone(),
             track_ver: TrackVer::new(),
         }
     }
@@ -274,7 +273,7 @@ impl ReadDelegate {
         read_ts: u64,
         metrics: &mut ReadMetrics,
     ) -> std::result::Result<(), ReadResponse<S>> {
-        let safe_ts = self.safe_ts.load(Ordering::Acquire);
+        let safe_ts = self.read_progress.safe_ts();
         if safe_ts >= read_ts {
             return Ok(());
         }
@@ -285,11 +284,11 @@ impl ReadDelegate {
             "read ts" => read_ts
         );
         metrics.rejected_by_safe_timestamp += 1;
-        let mut response = cmd_resp::new_error(Error::DataIsNotReady(
-            self.region.get_id(),
-            self.peer_id,
+        let mut response = cmd_resp::new_error(Error::DataIsNotReady {
+            region_id: self.region.get_id(),
+            peer_id: self.peer_id,
             safe_ts,
-        ));
+        });
         cmd_resp::bind_term(&mut response, self.term);
         Err(ReadResponse {
             response,
@@ -917,7 +916,7 @@ mod tests {
         region1.set_region_epoch(epoch13.clone());
         let term6 = 6;
         let mut lease = Lease::new(Duration::seconds(1)); // 1s is long enough.
-        let safe_ts = Arc::new(AtomicU64::new(1));
+        let read_progress = Arc::new(RegionReadProgress::new(1, 1));
 
         let mut cmd = RaftCmdRequest::default();
         let mut header = RaftRequestHeader::default();
@@ -952,7 +951,7 @@ mod tests {
                 last_valid_ts: Timespec::new(0, 0),
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
                 max_ts_sync_status: Arc::new(AtomicU64::new(0)),
-                safe_ts: Arc::clone(&safe_ts),
+                read_progress: read_progress.clone(),
                 track_ver: TrackVer::new(),
             };
             meta.readers.insert(1, read_delegate);
@@ -1132,7 +1131,8 @@ mod tests {
 
         // Stale read
         assert_eq!(reader.metrics.rejected_by_safe_timestamp, 0);
-        assert_eq!(safe_ts.load(Ordering::Relaxed), 1);
+        read_progress.update_safe_ts(1, 1);
+        assert_eq!(read_progress.safe_ts(), 1);
 
         let data = {
             let mut d = [0u8; 8];
@@ -1153,7 +1153,8 @@ mod tests {
         must_not_redirect(&mut reader, &rx, task);
         assert_eq!(reader.metrics.rejected_by_safe_timestamp, 1);
 
-        safe_ts.store(2, Ordering::SeqCst);
+        read_progress.update_safe_ts(1, 2);
+        assert_eq!(read_progress.safe_ts(), 2);
         let task = RaftCommand::<KvTestSnapshot>::new(cmd, Callback::Read(Box::new(move |_| {})));
         must_not_redirect(&mut reader, &rx, task);
         assert_eq!(reader.metrics.rejected_by_safe_timestamp, 1);
@@ -1192,7 +1193,7 @@ mod tests {
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
                 max_ts_sync_status: Arc::new(AtomicU64::new(0)),
                 track_ver: TrackVer::new(),
-                safe_ts: Arc::new(AtomicU64::new(0)),
+                read_progress: Arc::new(RegionReadProgress::new(0, 0)),
             };
             meta.readers.insert(1, read_delegate);
         }

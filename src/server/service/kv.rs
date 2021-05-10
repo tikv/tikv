@@ -625,10 +625,10 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 RAFT_MESSAGE_RECV_COUNTER.inc();
                 let to_store_id = msg.get_to_peer().get_store_id();
                 if to_store_id != store_id {
-                    future::err(Error::from(RaftStoreError::StoreNotMatch(
+                    future::err(Error::from(RaftStoreError::StoreNotMatch {
                         to_store_id,
-                        store_id,
-                    )))
+                        my_store_id: store_id,
+                    }))
                 } else {
                     let ret = ch.send_raft_msg(msg).map_err(Error::from);
                     future::ready(ret)
@@ -666,10 +666,10 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 for msg in msgs.take_msgs().into_iter() {
                     let to_store_id = msg.get_to_peer().get_store_id();
                     if to_store_id != store_id {
-                        return future::err(Error::from(RaftStoreError::StoreNotMatch(
+                        return future::err(Error::from(RaftStoreError::StoreNotMatch {
                             to_store_id,
-                            store_id,
-                        )));
+                            my_store_id: store_id,
+                        }));
                     }
                     if let Err(e) = ch.send_raft_msg(msg) {
                         return future::err(Error::from(e));
@@ -1034,9 +1034,34 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
 
     fn get_store_safe_ts(
         &mut self,
+        ctx: RpcContext<'_>,
+        mut request: StoreSafeTsRequest,
+        sink: UnarySink<StoreSafeTsResponse>,
+    ) {
+        let key_range = request.take_key_range();
+        let (cb, resp) = paired_future_callback();
+        let ch = self.ch.clone();
+        let task = async move {
+            ch.send_store_msg(StoreMsg::GetStoreSafeTS { key_range, cb })?;
+            let store_safe_ts = resp.await?;
+            let mut resp = StoreSafeTsResponse::default();
+            resp.set_safe_ts(store_safe_ts);
+            sink.success(resp).await?;
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            warn!("call GetStoreSafeTS failed"; "err" => ?e);
+        })
+        .map(|_| ());
+
+        ctx.spawn(task);
+    }
+
+    fn get_lock_wait_info(
+        &mut self,
         _: RpcContext<'_>,
-        _: StoreSafeTsRequest,
-        _: UnarySink<StoreSafeTsResponse>,
+        _: GetLockWaitInfoRequest,
+        _: UnarySink<GetLockWaitInfoResponse>,
     ) {
         unimplemented!()
     }

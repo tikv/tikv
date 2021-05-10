@@ -652,6 +652,10 @@ impl Delegate {
                 }
             }
         }
+        // Skip broadcast if there is no Put or Delete.
+        if rows.is_empty() {
+            return Ok(());
+        }
         let mut entries = Vec::with_capacity(rows.len());
         for (_, v) in rows {
             entries.push(v);

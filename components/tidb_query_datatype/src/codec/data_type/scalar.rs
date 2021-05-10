@@ -2,7 +2,8 @@
 
 use std::cmp::Ordering;
 
-use crate::codec::collation::{match_template_collator, Collator};
+use crate::codec::collation::Collator;
+use crate::{match_template_collator, match_template_evaltype};
 use crate::{Collation, EvalType, FieldTypeAccessor};
 use match_template::match_template;
 use tipb::FieldType;
@@ -38,7 +39,7 @@ pub enum ScalarValue {
 impl ScalarValue {
     #[inline]
     pub fn eval_type(&self) -> EvalType {
-        match_template_evaluable! {
+        match_template_evaltype! {
             TT, match self {
                 ScalarValue::TT(_) => EvalType::TT,
             }
@@ -62,7 +63,7 @@ impl ScalarValue {
 
     #[inline]
     pub fn is_none(&self) -> bool {
-        match_template_evaluable! {
+        match_template_evaltype! {
             TT, match self {
                 ScalarValue::TT(v) => v.is_none(),
             }
@@ -71,7 +72,7 @@ impl ScalarValue {
 
     #[inline]
     pub fn is_some(&self) -> bool {
-        match_template_evaluable! {
+        match_template_evaltype! {
             TT, match self {
                 ScalarValue::TT(v) => v.is_some(),
             }
@@ -82,7 +83,7 @@ impl ScalarValue {
 impl AsMySQLBool for ScalarValue {
     #[inline]
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
-        match_template_evaluable! {
+        match_template_evaltype! {
             TT, match self {
                 ScalarValue::TT(v) => v.as_ref().as_mysql_bool(context),
             }
@@ -201,7 +202,7 @@ impl<'a> ScalarValueRef<'a> {
 
     #[inline]
     pub fn eval_type(&self) -> EvalType {
-        match_template_evaluable! {
+        match_template_evaltype! {
             TT, match self {
                 ScalarValueRef::TT(_) => EvalType::TT,
             }
@@ -339,7 +340,7 @@ impl<'a> ScalarValueRef<'a> {
         field_type: &FieldType,
     ) -> crate::codec::Result<Ordering> {
         Ok(match_template! {
-            TT = [Real, Decimal, DateTime, Duration, Json],
+            TT = [Real, Decimal, DateTime, Duration, Json, Enum],
             match (self, other) {
                 (ScalarValueRef::TT(v1), ScalarValueRef::TT(v2)) => v1.cmp(v2),
                 (ScalarValueRef::Int(v1), ScalarValueRef::Int(v2)) => compare_int(&v1.cloned(), &v2.cloned(), &field_type),
@@ -475,7 +476,7 @@ impl<'a> Ord for ScalarValueRef<'a> {
 
 impl<'a> PartialOrd for ScalarValueRef<'a> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match_template_evaluable! {
+        match_template_evaltype! {
             TT, match (self, other) {
                 // v1 and v2 are `Option<T>`. However, in MySQL NULL values are considered lower
                 // than any non-NULL value, so using `Option::PartialOrd` directly is fine.
