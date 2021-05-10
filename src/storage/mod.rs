@@ -1805,6 +1805,7 @@ pub trait ResponseBatchConsumer<ConsumeResponse: Sized>: Send {
 pub mod test_util {
     use super::*;
     use crate::storage::txn::commands;
+    use std::sync::Mutex;
     use std::{
         fmt::Debug,
         sync::mpsc::{channel, Sender},
@@ -1938,6 +1939,50 @@ pub mod test_util {
             .unwrap();
         rx.recv().unwrap();
     }
+
+    pub struct GetResult {
+        id: u64,
+        res: Result<Option<Vec<u8>>>,
+    }
+
+    #[derive(Clone)]
+    pub struct GetConsumer {
+        pub data: Arc<Mutex<Vec<GetResult>>>,
+    }
+
+    impl GetConsumer {
+        pub fn new() -> Self {
+            Self {
+                data: Arc::new(Mutex::new(vec![])),
+            }
+        }
+
+        pub fn take_data(self) -> Vec<Result<Option<Vec<u8>>>> {
+            let mut data = self.data.lock().unwrap();
+            let mut results = std::mem::take(&mut *data);
+            results.sort_by_key(|k| k.id);
+            results.into_iter().map(|v| v.res).collect()
+        }
+    }
+
+    impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)> for GetConsumer {
+        fn consume(
+            &self,
+            id: u64,
+            res: Result<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>,
+        ) {
+            self.data.lock().unwrap().push(GetResult {
+                id,
+                res: res.map(|(v, ..)| v),
+            });
+        }
+    }
+
+    impl ResponseBatchConsumer<Option<Vec<u8>>> for GetConsumer {
+        fn consume(&self, id: u64, res: Result<Option<Vec<u8>>>) {
+            self.data.lock().unwrap().push(GetResult { id, res });
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1964,10 +2009,8 @@ mod tests {
     use engine_rocks::raw_util::CFOptions;
     use engine_traits::{ALL_CFS, CF_LOCK, CF_RAFT, CF_WRITE};
     use errors::extract_key_error;
-    use errors::extract_region_error;
     use futures::executor::block_on;
     use kvproto::kvrpcpb::{CommandPri, Op};
-    use std::sync::Mutex;
     use std::{
         sync::{
             atomic::{AtomicBool, Ordering},
@@ -1978,42 +2021,6 @@ mod tests {
     };
     use tikv_util::config::ReadableSize;
     use txn_types::{Mutation, WriteType};
-
-    #[derive(Clone)]
-    pub struct GetProcessor {
-        pub data: Arc<Mutex<Vec<(u64, Result<Option<Vec<u8>>>)>>>,
-    }
-
-    impl GetProcessor {
-        pub fn new() -> Self {
-            Self {
-                data: Arc::new(Mutex::new(vec![])),
-            }
-        }
-
-        pub fn take_data(self) -> Vec<Result<Option<Vec<u8>>>> {
-            let mut data = self.data.lock().unwrap();
-            let mut results = std::mem::take(&mut *data);
-            results.sort_by_key(|k| k.0);
-            results.into_iter().map(|v| v.1).collect()
-        }
-    }
-
-    impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)> for GetProcessor {
-        fn consume(
-            &self,
-            id: u64,
-            res: Result<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>,
-        ) {
-            self.data.lock().unwrap().push((id, res.map(|(v, ..)| v)));
-        }
-    }
-
-    impl ResponseBatchConsumer<Option<Vec<u8>>> for GetProcessor {
-        fn consume(&self, id: u64, res: Result<Option<Vec<u8>>>) {
-            self.data.lock().unwrap().push((id, res));
-        }
-    }
 
     #[test]
     fn test_prewrite_blocks_read() {
@@ -2182,14 +2189,14 @@ mod tests {
                 1.into(),
             )),
         );
-        let processor = GetProcessor::new();
+        let consumer = GetConsumer::new();
         block_on(storage.batch_get_command(
             vec![create_get_request(b"c", 1), create_get_request(b"d", 1)],
             vec![1, 2],
-            processor.clone(),
+            consumer.clone(),
         ))
         .unwrap();
-        let data = processor.take_data();
+        let data = consumer.take_data();
         for v in data {
             expect_error(
                 |e| match e {
@@ -2864,14 +2871,14 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        let processor = GetProcessor::new();
+        let consumer = GetConsumer::new();
         block_on(storage.batch_get_command(
             vec![create_get_request(b"c", 2), create_get_request(b"d", 2)],
             vec![1, 2],
-            processor.clone(),
+            consumer.clone(),
         ))
         .unwrap();
-        let mut x = processor.take_data();
+        let mut x = consumer.take_data();
         expect_error(
             |e| match e {
                 Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
@@ -2898,7 +2905,7 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        let processor = GetProcessor::new();
+        let consumer = GetConsumer::new();
         block_on(storage.batch_get_command(
             vec![
                 create_get_request(b"c", 5),
@@ -2907,11 +2914,11 @@ mod tests {
                 create_get_request(b"b", 5),
             ],
             vec![1, 2, 3, 4],
-            processor.clone(),
+            consumer.clone(),
         ))
         .unwrap();
 
-        let x: Vec<Option<Vec<u8>>> = processor
+        let x: Vec<Option<Vec<u8>>> = consumer
             .take_data()
             .into_iter()
             .map(|x| x.unwrap())
@@ -3622,9 +3629,9 @@ mod tests {
             })
             .collect();
         let results: Vec<Option<Vec<u8>>> = test_data.into_iter().map(|(_, v)| Some(v)).collect();
-        let processor = GetProcessor::new();
-        block_on(storage.raw_batch_get_command(cmds, ids, processor.clone())).unwrap();
-        let x: Vec<Option<Vec<u8>>> = processor
+        let consumer = GetConsumer::new();
+        block_on(storage.raw_batch_get_command(cmds, ids, consumer.clone())).unwrap();
+        let x: Vec<Option<Vec<u8>>> = consumer
             .take_data()
             .into_iter()
             .map(|x| x.unwrap())
@@ -6099,10 +6106,10 @@ mod tests {
         req2.set_context(ctx);
         req2.set_key(b"key".to_vec());
         req2.set_version(100);
-        let processor = GetProcessor::new();
-        block_on(storage.batch_get_command(vec![req1, req2], vec![1, 2], processor.clone()))
+        let consumer = GetConsumer::new();
+        block_on(storage.batch_get_command(vec![req1, req2], vec![1, 2], consumer.clone()))
             .unwrap();
-        let res = processor.take_data();
+        let res = consumer.take_data();
         assert!(res[0].is_ok());
         let key_error = extract_key_error(&res[1].as_ref().unwrap_err());
         assert_eq!(key_error.get_locked().get_key(), b"key");

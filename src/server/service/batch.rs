@@ -109,13 +109,15 @@ impl BatcherBuilder {
         if !self.enable_batch {
             return None;
         }
-        if queue_per_worker >= MAX_QUEUE_SIZE_PER_WORKER {
-            return Some(ReqBatcher::new(req_batch_size));
-        }
         if req_batch_size > self.pool_size * MIN_BATCH_GET_REQUEST_COUNT
             && queue_per_worker >= MIN_BATCH_GET_REQUEST_COUNT
         {
             return Some(ReqBatcher::new(req_batch_size / self.pool_size));
+        }
+        if req_batch_size >= MIN_BATCH_GET_REQUEST_COUNT
+            && queue_per_worker >= MAX_QUEUE_SIZE_PER_WORKER
+        {
+            return Some(ReqBatcher::new(req_batch_size));
         }
         None
     }

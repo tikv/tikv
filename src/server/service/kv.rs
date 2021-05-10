@@ -1053,7 +1053,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
     }
 }
 
-pub fn response_batch_commands_request<F>(
+fn response_batch_commands_request<F>(
     id: u64,
     resp: F,
     tx: Sender<(u64, batch_commands_response::Response)>,
@@ -1191,7 +1191,7 @@ async fn future_handle_empty(
     Ok(res)
 }
 
-pub fn future_get<E: Engine, L: LockManager>(
+fn future_get<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: GetRequest,
 ) -> impl Future<Output = ServerResult<GetResponse>> {
