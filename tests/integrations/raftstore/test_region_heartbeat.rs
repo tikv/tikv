@@ -228,7 +228,6 @@ fn test_region_heartbeat_report_approximate_size() {
     let mut approximate_size = 0;
     let mut approximate_keys = 0;
     for _ in 0..10 {
-        sleep_ms(100);
         approximate_size = cluster
             .pd_client
             .get_region_approximate_size(region_id)
@@ -240,6 +239,7 @@ fn test_region_heartbeat_report_approximate_size() {
         if approximate_size > 0 && approximate_keys > 0 {
             break;
         }
+        sleep_ms(100);
     }
     assert!(approximate_size > 0 && approximate_keys > 0);
 
@@ -253,17 +253,24 @@ fn test_region_heartbeat_report_approximate_size() {
         let k = format!("k{}", i);
         cluster.must_put_cf("write", k.as_bytes(), value.as_bytes());
     }
-    let size = cluster
-        .pd_client
-        .get_region_approximate_size(region_id)
-        .unwrap_or_default();
-    let keys = cluster
-        .pd_client
-        .get_region_approximate_keys(region_id)
-        .unwrap_or_default();
-    let region_number = cluster.pd_client.get_regions_number();
-
+    let mut size = 0;
+    let mut keys = 0;
+    for _ in 0..10 {
+        size = cluster
+            .pd_client
+            .get_region_approximate_size(region_id)
+            .unwrap_or_default();
+        keys = cluster
+            .pd_client
+            .get_region_approximate_keys(region_id)
+            .unwrap_or_default();
+        if size > approximate_size && keys > approximate_keys {
+            break;
+        }
+        sleep_ms(100);
+    }
     // The region does not split, but it still refreshes the approximate_size.
+    let region_number = cluster.pd_client.get_regions_number();
     assert_eq!(region_number, 1);
     assert!(size > approximate_size && keys > approximate_keys);
 }
