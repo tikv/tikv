@@ -400,28 +400,14 @@ impl_as_ref! { Duration, as_duration }
 impl ScalarValue {
     #[inline]
     pub fn as_json(&self) -> Option<JsonRef> {
-        match self {
-            ScalarValue::Json(v) => v.as_ref().map(|x| x.as_ref()),
-            other => panic!(
-                "Cannot cast {} scalar value into {}",
-                other.eval_type(),
-                stringify!(Json),
-            ),
-        }
+        EvaluableRef::borrow_scalar_value(self)
     }
 }
 
 impl<'a> ScalarValueRef<'a> {
     #[inline]
     pub fn as_json(&'a self) -> Option<JsonRef<'a>> {
-        match self {
-            ScalarValueRef::Json(v) => *v,
-            other => panic!(
-                "Cannot cast {} scalar value into {}",
-                other.eval_type(),
-                stringify!(Json),
-            ),
-        }
+        EvaluableRef::borrow_scalar_value_ref(*self)
     }
 }
 
