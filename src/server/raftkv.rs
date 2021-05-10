@@ -1,25 +1,41 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::result;
-use std::{borrow::Cow, io::Error as IoError};
 use std::{
+    borrow::Cow,
     fmt::{self, Debug, Display, Formatter},
-    mem,
+    io::Error as IoError,
+    mem, result,
+    sync::Arc,
+    time::Duration,
 };
-use std::{sync::Arc, time::Duration};
+
+use raft::eraftpb::{self, MessageType};
+use thiserror::Error;
 
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::CF_DEFAULT;
-use engine_traits::{CfName, KvEngine};
-use engine_traits::{MvccProperties, Snapshot};
-use kvproto::kvrpcpb::Context;
-use kvproto::raft_cmdpb::{
-    CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
-    RaftRequestHeader, Request, Response,
+use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot, CF_DEFAULT};
+use kvproto::{
+    errorpb,
+    kvrpcpb::Context,
+    metapb,
+    raft_cmdpb::{
+        CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
+        RaftRequestHeader, Request, Response,
+    },
 };
-use kvproto::{errorpb, metapb};
-use raft::eraftpb::{self, MessageType};
-use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler};
+use raftstore::{
+    coprocessor::{
+        dispatcher::BoxReadIndexObserver, Coprocessor, CoprocessorHost, ReadIndexObserver,
+    },
+    errors::Error as RaftServerError,
+    router::{LocalReadRouter, RaftStoreRouter},
+    store::{
+        Callback as StoreCallback, ReadIndexContext, ReadResponse, RegionSnapshot, WriteResponse,
+    },
+};
+use tikv_util::codec::number::NumberEncoder;
+use tikv_util::time::Instant;
+use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
 use super::metrics::*;
 use crate::storage::kv::{
@@ -27,48 +43,26 @@ use crate::storage::kv::{
     ExtCallback, Modify, SnapContext, WriteData,
 };
 use crate::storage::{self, kv};
-use raftstore::{coprocessor::dispatcher::BoxReadIndexObserver, store::RegionSnapshot};
-use raftstore::{
-    coprocessor::Coprocessor,
-    router::{LocalReadRouter, RaftStoreRouter},
-};
-use raftstore::{
-    coprocessor::CoprocessorHost,
-    store::{Callback as StoreCallback, ReadIndexContext, ReadResponse, WriteResponse},
-};
-use raftstore::{coprocessor::ReadIndexObserver, errors::Error as RaftServerError};
-use tikv_util::codec::number::NumberEncoder;
-use tikv_util::time::Instant;
-use txn_types::WriteBatchFlags;
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        RequestFailed(e: errorpb::Error) {
-            from()
-            display("{}", e.get_message())
-        }
-        Io(e: IoError) {
-            from()
-            cause(e)
-            display("{}", e)
-        }
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("{}", .0.get_message())]
+    RequestFailed(errorpb::Error),
 
-        Server(e: RaftServerError) {
-            from()
-            cause(e)
-            display("{}", e)
-        }
-        InvalidResponse(reason: String) {
-            display("{}", reason)
-        }
-        InvalidRequest(reason: String) {
-            display("{}", reason)
-        }
-        Timeout(d: Duration) {
-            display("timeout after {:?}", d)
-        }
-    }
+    #[error("{0}")]
+    Io(#[from] IoError),
+
+    #[error("{0}")]
+    Server(#[from] RaftServerError),
+
+    #[error("{0}")]
+    InvalidResponse(String),
+
+    #[error("{0}")]
+    InvalidRequest(String),
+
+    #[error("timeout after {0:?}")]
+    Timeout(Duration),
 }
 
 fn get_status_kind_from_error(e: &Error) -> RequestStatusKind {

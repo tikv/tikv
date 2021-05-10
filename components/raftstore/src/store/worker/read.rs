@@ -284,11 +284,11 @@ impl ReadDelegate {
             "read ts" => read_ts
         );
         metrics.rejected_by_safe_timestamp += 1;
-        let mut response = cmd_resp::new_error(Error::DataIsNotReady(
-            self.region.get_id(),
-            self.peer_id,
+        let mut response = cmd_resp::new_error(Error::DataIsNotReady {
+            region_id: self.region.get_id(),
+            peer_id: self.peer_id,
             safe_ts,
-        ));
+        });
         cmd_resp::bind_term(&mut response, self.term);
         Err(ReadResponse {
             response,
