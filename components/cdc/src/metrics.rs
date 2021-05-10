@@ -47,16 +47,6 @@ lazy_static! {
         "Total number of CDC captured regions"
     )
     .unwrap();
-    pub static ref CDC_SINK_BYTES: IntGauge = register_int_gauge!(
-        "tikv_cdc_sink_memory_bytes",
-        "Total bytes of memory used in CDC sink"
-    )
-    .unwrap();
-    pub static ref CDC_SINK_CAP: IntGauge = register_int_gauge!(
-        "tikv_cdc_sink_memory_capacity",
-        "Capacity of CDC sink capacity in bytes"
-    )
-    .unwrap();
     pub static ref CDC_REGION_RESOLVE_STATUS_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_cdc_region_resolve_status",
         "The status of CDC captured regions",

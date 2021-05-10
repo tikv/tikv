@@ -546,28 +546,6 @@ impl Delegate {
             .collect()
     }
 
-    pub fn on_scan(&mut self, downstream_id: DownstreamID, entries: Vec<Option<TxnEntry>>) {
-        let downstreams = if let Some(pending) = self.pending.as_mut() {
-            &pending.downstreams
-        } else {
-            &self.downstreams
-        };
-        let downstream = if let Some(d) = downstreams.iter().find(|d| d.id == downstream_id) {
-            d
-        } else {
-            warn!("cdc downstream not found";
-                "downstream_id" => ?downstream_id, "region_id" => self.region_id);
-            return;
-        };
-
-        Self::convert_to_grpc_events(self.region_id, downstream.req_id, entries)
-            .into_iter()
-            .for_each(|e| match e {
-                CdcEvent::Event(e) => downstream.sink_event(e),
-                _ => unreachable!(),
-            })
-    }
-
     fn sink_data(
         &mut self,
         index: u64,
@@ -814,7 +792,6 @@ mod tests {
     use kvproto::errorpb::Error as ErrorHeader;
     use kvproto::metapb::Region;
     use std::cell::Cell;
-    use tikv::storage::mvcc::test_util::*;
 
     #[test]
     fn test_error() {
@@ -942,110 +919,5 @@ mod tests {
         let mut err = receive_error();
         assert!(err.has_epoch_not_match());
         assert!(err.take_epoch_not_match().current_regions.is_empty());
-    }
-
-    #[test]
-    fn test_scan() {
-        let region_id = 1;
-        let mut region = Region::default();
-        region.set_id(region_id);
-        region.mut_peers().push(Default::default());
-        region.mut_region_epoch().set_version(2);
-        region.mut_region_epoch().set_conf_ver(2);
-        let region_epoch = region.get_region_epoch().clone();
-
-        let (sink, drain) = crate::channel::canal(1);
-        let rx = drain.drain();
-        let request_id = 123;
-        let mut downstream =
-            Downstream::new(String::new(), region_epoch, request_id, ConnID::new(), true);
-        let downstream_id = downstream.get_id();
-        downstream.set_sink(sink);
-        let mut delegate = Delegate::new(region_id);
-        delegate.subscribe(downstream);
-        let enabled = delegate.enabled();
-        assert!(enabled.load(Ordering::SeqCst));
-
-        let rx_wrap = Cell::new(Some(rx));
-        let check_event = |event_rows: Vec<EventRow>| {
-            let (event, rx) = block_on(rx_wrap.replace(None).unwrap().into_future());
-            rx_wrap.set(Some(rx));
-            let event = event.unwrap();
-            assert!(
-                matches!(event.0, CdcEvent::Event(_)),
-                "unknown event {:?}",
-                event
-            );
-            if let CdcEvent::Event(mut e) = event.0 {
-                assert_eq!(e.get_request_id(), request_id);
-                assert_eq!(e.region_id, region_id);
-                assert_eq!(e.index, 0);
-                let event = e.event.take().unwrap();
-                match event {
-                    Event_oneof_event::Entries(entries) => {
-                        assert_eq!(entries.entries.as_slice(), event_rows.as_slice());
-                    }
-                    other => panic!("unknown event {:?}", other),
-                }
-            }
-        };
-
-        // Stashed in pending before region ready.
-        let entries = vec![
-            Some(
-                EntryBuilder::default()
-                    .key(b"a")
-                    .value(b"b")
-                    .start_ts(1.into())
-                    .commit_ts(0.into())
-                    .primary(&[])
-                    .for_update_ts(0.into())
-                    .build_prewrite(LockType::Put, false),
-            ),
-            Some(
-                EntryBuilder::default()
-                    .key(b"a")
-                    .value(b"b")
-                    .start_ts(1.into())
-                    .commit_ts(2.into())
-                    .primary(&[])
-                    .for_update_ts(0.into())
-                    .build_commit(WriteType::Put, false),
-            ),
-            Some(
-                EntryBuilder::default()
-                    .key(b"a")
-                    .value(b"b")
-                    .start_ts(3.into())
-                    .commit_ts(0.into())
-                    .primary(&[])
-                    .for_update_ts(0.into())
-                    .build_rollback(),
-            ),
-            None,
-        ];
-        delegate.on_scan(downstream_id, entries);
-        // Flush all pending entries.
-        let mut row1 = EventRow::default();
-        row1.start_ts = 1;
-        row1.commit_ts = 0;
-        row1.key = b"a".to_vec();
-        row1.op_type = EventRowOpType::Put.into();
-        set_event_row_type(&mut row1, EventLogType::Prewrite);
-        row1.value = b"b".to_vec();
-        let mut row2 = EventRow::default();
-        row2.start_ts = 1;
-        row2.commit_ts = 2;
-        row2.key = b"a".to_vec();
-        row2.op_type = EventRowOpType::Put.into();
-        set_event_row_type(&mut row2, EventLogType::Committed);
-        row2.value = b"b".to_vec();
-        let mut row3 = EventRow::default();
-        set_event_row_type(&mut row3, EventLogType::Initialized);
-        check_event(vec![row1, row2, row3]);
-
-        let mut resolver = Resolver::new(region_id);
-        resolver.init();
-        delegate.on_region_ready(resolver, region);
     }
 }
