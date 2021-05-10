@@ -116,7 +116,7 @@ where
     let mut remained_quota = 0;
     box_try!(snap.scan_cf(cf, start_key, end_key, false, |key, value| {
         let entry_len = key.len() + value.len();
-        if entry_len > remained_quota {
+        while entry_len > remained_quota {
             // It's possible to acquire more than necessary, but let it be.
             io_limiter.blocking_consume(IO_LIMITER_CHUNK_SIZE);
             remained_quota += IO_LIMITER_CHUNK_SIZE;

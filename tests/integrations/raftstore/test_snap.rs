@@ -628,14 +628,14 @@ fn send_a_large_snapshot(
     // Construct a snapshot data.
     let mut snap_data = RaftSnapshotData::default();
     snap_data.mut_region().id = region_id;
+    snap_data.set_version(SNAPSHOT_VERSION);
+    snap_data.set_meta(snap_meta);
     snap_data.set_file_size(
         mgr.get_snapshot_for_sending(&SnapKey::new(region_id, term, index))
             .unwrap()
             .total_size()
             .unwrap(),
     );
-    snap_data.set_version(SNAPSHOT_VERSION);
-    snap_data.set_meta(snap_meta);
 
     // Construct a raft message.
     let mut msg = RaftMessage::default();
