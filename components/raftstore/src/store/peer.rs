@@ -1114,6 +1114,7 @@ where
         }
         let msg_type = m.get_msg_type();
         if msg_type == MessageType::MsgReadIndex {
+            fail_point!("on_step_read_index_msg");
             ctx.coprocessor_host.on_step_read_index(&mut m);
             // Must use the commit index of `PeerStorage` instead of the commit index
             // in raft-rs which may be greater than the former one.
@@ -1392,6 +1393,7 @@ where
                 }
                 StateRole::Follower => {
                     self.leader_lease.expire();
+                    self.mut_store().cancel_generating_snap(None);
                 }
                 _ => {}
             }
@@ -2579,16 +2581,16 @@ where
 
         // See more in ready_to_handle_read().
         if self.is_splitting() {
-            return Err(Error::ReadIndexNotReady(
-                "can not read index due to split",
-                self.region_id,
-            ));
+            return Err(Error::ReadIndexNotReady {
+                reason: "can not read index due to split",
+                region_id: self.region_id,
+            });
         }
         if self.is_merging() {
-            return Err(Error::ReadIndexNotReady(
-                "can not read index due to merge",
-                self.region_id,
-            ));
+            return Err(Error::ReadIndexNotReady {
+                reason: "can not read index due to merge",
+                region_id: self.region_id,
+            });
         }
         Ok(())
     }
@@ -2983,7 +2985,10 @@ where
                 "peer_id" => self.peer.get_id(),
                 "size" => data.len(),
             );
-            return Err(Error::RaftEntryTooLarge(self.region_id, data.len() as u64));
+            return Err(Error::RaftEntryTooLarge {
+                region_id: self.region_id,
+                entry_size: data.len() as u64,
+            });
         }
 
         let propose_index = self.next_proposal_index();
@@ -3227,11 +3232,11 @@ where
                     "read ts" => read_ts,
                     "tag" => &self.tag
                 );
-                let mut response = cmd_resp::new_error(Error::DataIsNotReady(
-                    region.get_id(),
-                    self.peer_id(),
+                let mut response = cmd_resp::new_error(Error::DataIsNotReady {
+                    region_id: region.get_id(),
+                    peer_id: self.peer_id(),
                     safe_ts,
-                ));
+                });
                 cmd_resp::bind_term(&mut response, self.term());
                 return ReadResponse {
                     response,
