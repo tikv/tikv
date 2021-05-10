@@ -2162,7 +2162,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#7d50a22e4b4fb0da7e003ac72d639711cf3ead5e"
+source = "git+https://github.com/pingcap/kvproto.git#fd4f2a3fa1dd8767f5a434e9795494b875fd4c39"
 dependencies = [
  "futures 0.3.7",
  "grpcio",
@@ -3843,6 +3843,7 @@ dependencies = [
  "test_util",
  "thiserror",
  "tikv",
+ "tikv_kv",
  "tikv_util",
  "tokio",
  "txn_types",
@@ -4908,6 +4909,7 @@ dependencies = [
  "lazy_static",
  "log_wrappers",
  "pd_client",
+ "protobuf",
  "raft",
  "raftstore",
  "rand 0.7.3",

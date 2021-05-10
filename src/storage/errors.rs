@@ -275,6 +275,7 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
                 lock_ts,
                 lock_key,
                 deadlock_key_hash,
+                wait_chain,
                 ..
             },
         ))))) => {
@@ -283,6 +284,7 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
             deadlock.set_lock_ts(lock_ts.into_inner());
             deadlock.set_lock_key(lock_key.to_owned());
             deadlock.set_deadlock_key_hash(*deadlock_key_hash);
+            deadlock.set_wait_chain(wait_chain.clone().into());
             key_error.set_deadlock(deadlock);
         }
         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(

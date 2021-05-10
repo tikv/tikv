@@ -1928,6 +1928,7 @@ mod tests {
 
     use crate::config::TitanDBConfig;
     use crate::storage::kv::{ExpectedWrite, MockEngineBuilder};
+    use crate::storage::lock_manager::DiagnosticContext;
     use crate::storage::mvcc::LockType;
     use crate::storage::txn::commands::{AcquirePessimisticLock, Prewrite};
     use crate::storage::{
@@ -5467,6 +5468,7 @@ mod tests {
             lock: Lock,
             is_first_lock: bool,
             timeout: Option<WaitTimeout>,
+            diag_ctx: DiagnosticContext,
         },
 
         WakeUp {
@@ -5507,6 +5509,7 @@ mod tests {
             lock: Lock,
             is_first_lock: bool,
             timeout: Option<WaitTimeout>,
+            diag_ctx: DiagnosticContext,
         ) {
             self.tx
                 .send(Msg::WaitFor {
@@ -5516,6 +5519,7 @@ mod tests {
                     lock,
                     is_first_lock,
                     timeout,
+                    diag_ctx,
                 })
                 .unwrap();
         }
