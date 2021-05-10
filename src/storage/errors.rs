@@ -18,7 +18,6 @@ use crate::storage::{
     Result,
 };
 
-
 #[derive(Debug, Error)]
 /// Detailed errors for storage operations. This enum also unifies code for basic error
 /// handling functionality in a single place instead of being spread out.
