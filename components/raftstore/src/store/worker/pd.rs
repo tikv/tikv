@@ -1141,32 +1141,20 @@ where
                     peer_stat.approximate_keys = hb_task.approximate_keys;
                     let read_bytes_delta = peer_stat.read_bytes - peer_stat.last_read_bytes;
                     let read_keys_delta = peer_stat.read_keys - peer_stat.last_read_keys;
-                    let written_bytes_delta = if let Some(delta) = hb_task
+                    let written_bytes_delta = hb_task
                         .written_bytes
                         .checked_sub(peer_stat.last_written_bytes)
-                    {
-                        delta
-                    } else {
-                        error!(
-                            "subtracting written_bytes and last_written_bytes overflowed";
-                            "region_id" => hb_task.region.get_id(),
-                            "peer_id" => hb_task.peer.get_id(),
-                        );
-                        0
-                    };
-                    let written_keys_delta = if let Some(delta) = hb_task
+                        .unwrap_or_else(|| {
+                            error!(
+                                "subtracting written_bytes and last_written_bytes overflowed";
+                                "region_id" => hb_task.region.get_id(),
+                                "peer_id" => hb_task.peer.get_id(),
+                            );
+                            0
+                        });
+                    let written_keys_delta = hb_task
                         .written_keys
-                        .checked_sub(peer_stat.last_written_keys)
-                    {
-                        delta
-                    } else {
-                        error!(
-                            "subtracting written_keys and last_written_keys overflowed";
-                            "region_id" => hb_task.region.get_id(),
-                            "peer_id" => hb_task.peer.get_id(),
-                        );
-                        0
-                    };
+                        .saturating_sub(peer_stat.last_written_keys);
                     let mut last_report_ts = peer_stat.last_report_ts;
                     peer_stat.last_written_bytes = hb_task.written_bytes;
                     peer_stat.last_written_keys = hb_task.written_keys;
