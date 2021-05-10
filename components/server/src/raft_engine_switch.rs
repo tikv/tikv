@@ -2,7 +2,10 @@
 
 use crossbeam::channel::{unbounded, Receiver};
 use engine_rocks::{self, raw::Env, RocksEngine};
-use engine_traits::{Iterable, Iterator, RaftEngine, RaftLogBatch, SeekKey};
+use engine_traits::{
+    CompactExt, DeleteStrategy, Error as EngineError, Iterable, Iterator, MiscExt, RaftEngine,
+    RaftLogBatch, Range, SeekKey,
+};
 use file_system::delete_dir_if_exist;
 use kvproto::raft_serverpb::RaftLocalState;
 use protobuf::Message;
@@ -39,6 +42,33 @@ fn rename_to_tmp_dir<P1: AsRef<Path>, P2: AsRef<Path>>(src: P1, dst: P2) {
     info!("Rename {:?} to {:?} correctly", src.as_ref(), dst.as_ref());
 }
 
+fn clear_raft_engine(engine: &RaftLogEngine) -> Result<(), EngineError> {
+    let mut batch_to_clean = engine.log_batch(0);
+    for id in engine.raft_groups() {
+        let state = engine.get_raft_state(id)?.unwrap();
+        engine.clean(id, &state, &mut batch_to_clean)?;
+    }
+    engine.consume(&mut batch_to_clean, true).map(|_| ())
+}
+
+fn clear_raft_db(engine: &RocksEngine) -> Result<(), EngineError> {
+    let start_key = keys::raft_log_key(0, 0);
+    let end_key = keys::raft_log_key(u64::MAX, u64::MAX);
+    engine.compact_range("default", Some(&start_key), Some(&end_key), false, 2)?;
+
+    let range = Range::new(&start_key, &end_key);
+    engine.delete_ranges_cf("default", DeleteStrategy::DeleteFiles, &[range])?;
+    engine.sync()?;
+
+    let mut count = 0;
+    engine.scan(&start_key, &end_key, false, |_, _| {
+        count += 1;
+        Ok(true)
+    })?;
+    assert_eq!(count, 0);
+    Ok(())
+}
+
 /// Check the potential original raftdb directory and try to dump data out.
 ///
 /// Procedure:
@@ -59,6 +89,9 @@ pub fn check_and_dump_raft_db(
         remove_tmp_dir(&dirty_raftdb_path);
         return;
     }
+
+    // Clean the target engine if it exists.
+    clear_raft_engine(engine).expect("clear_raft_engine");
 
     let config_raftdb = &config.raftdb;
     let mut raft_db_opts = config_raftdb.build_opt();
@@ -188,6 +221,9 @@ pub fn check_and_dump_raft_engine(config: &TiKvConfig, engine: &RocksEngine, thr
         return;
     }
 
+    // Clean the target engine if it exists.
+    clear_raft_db(engine).expect("clear_raft_db");
+
     let src_engine = RaftLogEngine::new(raft_engine_config.clone());
 
     let count_size = Arc::new(AtomicUsize::new(0));
@@ -261,7 +297,7 @@ mod tests {
     use super::*;
     use engine_rocks::raw::DBOptions;
 
-    fn do_test_switch(custom_raft_db_wal: bool) {
+    fn do_test_switch(custom_raft_db_wal: bool, continue_on_aborted: bool) {
         let data_path = tempfile::Builder::new().tempdir().unwrap().into_path();
         let mut raftdb_path = data_path.clone();
         let mut raft_engine_path = data_path;
@@ -298,10 +334,18 @@ mod tests {
 
         // Dump logs from RocksEngine to RaftLogEngine.
         let raft_engine = RaftLogEngine::new(cfg.raft_engine.config());
+        if continue_on_aborted {
+            let mut batch = raft_engine.log_batch(0);
+            set_write_batch(25, &mut batch);
+            raft_engine.consume(&mut batch, false).unwrap();
+            assert(25, &raft_engine);
+        }
+
         check_and_dump_raft_db(&cfg, &raft_engine, &Arc::new(Env::default()), 4);
         assert(1, &raft_engine);
         assert(5, &raft_engine);
         assert(15, &raft_engine);
+        assert_no(25, &raft_engine);
         drop(raft_engine);
 
         // Dump logs from RaftLogEngine to RocksEngine.
@@ -314,20 +358,32 @@ mod tests {
             .unwrap();
             RocksEngine::from_db(Arc::new(db))
         };
+        if continue_on_aborted {
+            let mut batch = rocks_engine.log_batch(0);
+            set_write_batch(25, &mut batch);
+            rocks_engine.consume(&mut batch, false).unwrap();
+            assert(25, &rocks_engine);
+        }
         check_and_dump_raft_engine(&cfg, &rocks_engine, 4);
         assert(1, &rocks_engine);
         assert(5, &rocks_engine);
         assert(15, &rocks_engine);
+        assert_no(25, &rocks_engine);
     }
 
     #[test]
     fn test_switch() {
-        do_test_switch(false);
+        do_test_switch(false, false);
     }
 
     #[test]
     fn test_switch_with_seperate_wal() {
-        do_test_switch(true);
+        do_test_switch(true, false);
+    }
+
+    #[test]
+    fn test_switch_continue_on_aborted() {
+        do_test_switch(false, true);
     }
 
     // Insert some data into log batch.
@@ -349,7 +405,14 @@ mod tests {
         let state = engine.get_raft_state(num).unwrap().unwrap();
         assert_eq!(state.get_last_index(), num);
         for i in 0..num {
-            let _entry = engine.get_entry(num, i).unwrap().unwrap();
+            assert!(engine.get_entry(num, i).unwrap().is_some());
+        }
+    }
+
+    fn assert_no<T: RaftEngine>(num: u64, engine: &T) {
+        assert!(engine.get_raft_state(num).unwrap().is_none());
+        for i in 0..num {
+            assert!(engine.get_entry(num, i).unwrap().is_none());
         }
     }
 }

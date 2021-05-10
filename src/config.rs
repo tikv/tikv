@@ -2368,7 +2368,7 @@ impl TiKvConfig {
             config::canonicalize_sub_path(&self.storage.data_dir, DEFAULT_ROCKSDB_SUB_DIR)?;
 
         if kv_db_path == self.raft_store.raftdb_path {
-            return Err("raft_store.raftdb_path can not same with storage.data_dir/db".into());
+            return Err("raft_store.raftdb_path can't be same with storage.data_dir/db".into());
         }
 
         let kv_db_wal_path = if self.rocksdb.wal_dir.is_empty() {
@@ -2382,20 +2382,20 @@ impl TiKvConfig {
             config::canonicalize_path(&self.raftdb.wal_dir)?
         };
         if kv_db_wal_path == raft_db_wal_path {
-            return Err("raftdb.wal_dir can not same with rocksdb.wal_dir".into());
+            return Err("raftdb.wal_dir can't be same with rocksdb.wal_dir".into());
         }
 
         if RocksEngine::exists(&kv_db_path)
             && !RocksEngine::exists(&self.raft_store.raftdb_path)
             && !RaftLogEngine::exists(&self.raft_engine.config.dir)
         {
-            return Err("default rocksdb exist, but raftdb and raft engine not exist".into());
+            return Err("default rocksdb exists, but raftdb and raft engine doesn't exist".into());
         }
         if !RocksEngine::exists(&kv_db_path)
             && (RocksEngine::exists(&self.raft_store.raftdb_path)
                 || RaftLogEngine::exists(&self.raft_engine.config.dir))
         {
-            return Err("default rocksdb not exist, but raftdb or raft engine exist".into());
+            return Err("default rocksdb doesn't exist, but raftdb or raft engine exists".into());
         }
 
         // Check blob file dir is empty when titan is disabled
