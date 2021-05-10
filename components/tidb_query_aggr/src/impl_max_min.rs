@@ -8,7 +8,7 @@ use tidb_query_common::Result;
 use tidb_query_datatype::codec::collation::*;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::EvalContext;
-use tidb_query_datatype::{Collation, EvalType, FieldTypeAccessor};
+use tidb_query_datatype::{Collation, EvalType, FieldTypeAccessor, FieldTypeFlag};
 use tidb_query_expr::RpnExpression;
 use tipb::{Expr, ExprType, FieldType};
 
@@ -64,6 +64,7 @@ impl<E: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
         assert_eq!(root_expr.get_tp(), E::TP);
         let eval_type =
             EvalType::try_from(exp.ret_field_type(src_schema).as_accessor().tp()).unwrap();
+        let is_unsigned = exp.ret_field_type(src_schema).as_accessor().flag().contains(FieldTypeFlag::UNSIGNED);
 
         let out_ft = root_expr.take_field_type();
         let out_et = box_try!(EvalType::try_from(out_ft.as_accessor().tp()));
@@ -82,7 +83,6 @@ impl<E: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
 
         match_template::match_template! {
             T = [
-                Int => &'static Int,
                 Real => &'static Real,
                 Duration => &'static Duration,
                 Decimal => &'static Decimal,
@@ -91,6 +91,10 @@ impl<E: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
             ],
             match eval_type {
                 EvalType::T => Ok(Box::new(AggFnExtremum::<T, E>::new())),
+                EvalType::Int => match is_unsigned {
+                    false => Ok(Box::new(AggFnExtremumForInt::<E, false>::new())),
+                    true => Ok(Box::new(AggFnExtremumForInt::<E, true>::new())),
+                },
                 EvalType::Enum => Ok(Box::new(AggFnExtremumForEnum::<E>::new())),
                 EvalType::Set => Ok(Box::new(AggFnExtremumForSet::<E>::new())),
                 EvalType::Bytes => match_template_collator! {
@@ -444,6 +448,91 @@ where
     #[inline]
     fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
         target[0].push(self.extremum_value.clone());
+        Ok(())
+    }
+}
+
+#[derive(Debug, AggrFunction)]
+#[aggr_function(state = AggFnStateExtremumForInt::<E, IS_UNSIGNED>::new())]
+pub struct AggFnExtremumForInt<E, const IS_UNSIGNED: bool>
+where
+   E: Extremum,
+   VectorValue: VectorValueExt<Int>,
+{
+    _phantom: std::marker::PhantomData<E>,
+}
+
+impl<E, const IS_UNSIGNED: bool> AggFnExtremumForInt<E, IS_UNSIGNED>
+where
+    E: Extremum,
+    VectorValue: VectorValueExt<Int>,
+{
+    pub fn new() -> Self {
+        Self {
+            _phantom: std::marker::PhantomData,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct AggFnStateExtremumForInt<E, const IS_UNSIGNED: bool>
+where
+    E: Extremum,
+    VectorValue: VectorValueExt<Int>,
+{
+    extremum: Option<Int>,
+    _phantom: std::marker::PhantomData<E>,
+}
+
+impl<E, const IS_UNSIGNED: bool> AggFnStateExtremumForInt<E, IS_UNSIGNED>
+where
+    E: Extremum,
+    VectorValue: VectorValueExt<Int>,
+{
+    pub fn new() -> Self {
+        Self {
+            extremum: None,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    #[inline]
+    pub fn update_concrete(&mut self, _ctx: &mut EvalContext, value: Option<&Int>) -> Result<()> {
+        if value.is_some() {
+            if self.extremum.is_none() {
+                self.extremum = value.map(|x| *x);
+            } else {
+                if IS_UNSIGNED {
+                    let v1 = self.extremum.map(|x| x as u64);
+                    let v2 = value.map(|x| *x as u64);
+                    if v1 < v2 {
+                        self.extremum = value.map(|x| *x);
+                    }
+                } else {
+                    let v1 = self.extremum.map(|x| x as i64);
+                    let v2 = value.map(|x| *x as i64);
+                    if v1 < v2 {
+                        self.extremum = value.map(|x| *x);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<E, const IS_UNSIGNED: bool> super::ConcreteAggrFunctionState for AggFnStateExtremumForInt<E, IS_UNSIGNED>
+where
+    E: Extremum,
+    VectorValue: VectorValueExt<Int>,
+{
+    type ParameterType = &'static Int;
+
+    impl_concrete_state! { Self::ParameterType }
+
+    #[inline]
+    fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
+        target[0].push(self.extremum.clone());
         Ok(())
     }
 }
