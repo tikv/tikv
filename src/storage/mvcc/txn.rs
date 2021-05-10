@@ -142,7 +142,7 @@ impl<S: Snapshot> MvccTxn<S> {
         self.writes.modifies.push(write);
     }
 
-    fn put_write(&mut self, key: Key, ts: TimeStamp, value: Value) {
+    pub(crate) fn put_write(&mut self, key: Key, ts: TimeStamp, value: Value) {
         let write = Modify::Put(CF_WRITE, key.append_ts(ts), value);
         self.write_size += write.size();
         self.writes.modifies.push(write);
@@ -455,7 +455,28 @@ impl<S: Snapshot> MvccTxn<S> {
             self.amend_pessimistic_lock(&key)?;
         }
 
-        self.check_extra_op(&key, mutation_type, None)?;
+        let old_value = if self.extra_op == ExtraOp::ReadOldValue
+            && matches!(
+                mutation_type,
+                // Only Put, Delete and Insert may have old value.
+                MutationType::Put | MutationType::Delete | MutationType::Insert
+            ) {
+            if mutation_type == MutationType::Insert {
+                // The previous write of an Insert is guaranteed to be None.
+                OldValue::None
+            } else {
+                // Pessimistic prewrite doesn't read the previous write, set old value
+                // to `Unspecified` to read it from engine later.
+                OldValue::Unspecified
+            }
+        } else {
+            OldValue::Unspecified
+        };
+        if old_value.valid() {
+            self.writes
+                .extra
+                .add_old_value(key.clone(), old_value, mutation_type)
+        }
         // No need to check data constraint, it's resolved by pessimistic locks.
         self.prewrite_key_value(
             key,
@@ -585,7 +606,40 @@ impl<S: Snapshot> MvccTxn<S> {
             return Ok(());
         }
 
-        self.check_extra_op(&key, mutation_type, prev_write.map(|v| v.1))?;
+        let old_value = if self.extra_op == ExtraOp::ReadOldValue
+            && matches!(
+                mutation_type,
+                // Only Put, Delete and Insert may have old value.
+                MutationType::Put | MutationType::Delete | MutationType::Insert
+            ) {
+            if mutation_type == MutationType::Insert {
+                // The previous write of an Insert is guaranteed to be None.
+                OldValue::None
+            } else if skip_constraint_check {
+                // The mutation does not read previous write if it skips constraint
+                // check.
+                // Pessimistic transaction always skip constraint check in
+                // "prewrite" stage, as it checks constraint in
+                // "acquire pessimistic lock" stage.
+                OldValue::Unspecified
+            } else if let Some(w) = prev_write {
+                // The mutation reads and get a previous write.
+                self.reader.get_old_value(&key, self.start_ts, w.1)?
+            } else {
+                // There is no previous write.
+                OldValue::None
+            }
+        } else {
+            OldValue::Unspecified
+        };
+        if old_value.valid() {
+            self.writes.extra.add_old_value(
+                key.clone().append_ts(self.start_ts),
+                old_value,
+                mutation_type,
+            )
+        }
+
         self.prewrite_key_value(
             key,
             lock_type.unwrap(),
@@ -1005,54 +1059,6 @@ impl<S: Snapshot> MvccTxn<S> {
             deleted_versions,
             is_completed,
         })
-    }
-
-    // Check and execute the extra operation.
-    // Currently we use it only for reading the old value for CDC.
-    fn check_extra_op(
-        &mut self,
-        key: &Key,
-        mutation_type: MutationType,
-        prev_write: Option<Write>,
-    ) -> Result<()> {
-        use crate::storage::mvcc::reader::seek_for_valid_write;
-
-        if self.extra_op == ExtraOp::ReadOldValue
-            && (mutation_type == MutationType::Put || mutation_type == MutationType::Delete)
-        {
-            let old_value = if let Some(w) = prev_write {
-                // If write is Rollback or Lock, seek for valid write record.
-                if w.write_type == WriteType::Rollback || w.write_type == WriteType::Lock {
-                    let write_cursor = self.reader.write_cursor.as_mut().unwrap();
-                    // Skip the current write record.
-                    write_cursor.next(&mut self.reader.statistics.write);
-                    let write = seek_for_valid_write(
-                        write_cursor,
-                        key,
-                        self.start_ts,
-                        &mut self.reader.statistics,
-                    )?;
-                    write.map(|w| OldValue {
-                        short_value: w.short_value,
-                        start_ts: w.start_ts,
-                    })
-                } else {
-                    Some(OldValue {
-                        short_value: w.short_value,
-                        start_ts: w.start_ts,
-                    })
-                }
-            } else {
-                None
-            };
-            // If write is None or cannot find a previously valid write record.
-            self.writes.extra.add_old_value(
-                key.clone().append_ts(self.start_ts),
-                old_value,
-                mutation_type,
-            );
-        }
-        Ok(())
     }
 }
 
@@ -2956,130 +2962,6 @@ mod tests {
         );
         must_pessimistic_locked(&engine, k, 75, 75);
         must_pessimistic_rollback(&engine, k, 75, 75);
-    }
-
-    #[test]
-    fn test_extra_op_old_value() {
-        let engine = TestEngineBuilder::new().build().unwrap();
-        let key = Key::from_raw(b"key");
-        let ctx = Context::default();
-
-        let new_old_value = |short_value, start_ts| OldValue {
-            short_value,
-            start_ts,
-        };
-
-        let cases = vec![
-            (
-                Mutation::Put((key.clone(), b"v0".to_vec())),
-                false,
-                5,
-                5,
-                None,
-                true,
-            ),
-            (
-                Mutation::Put((key.clone(), b"v1".to_vec())),
-                false,
-                6,
-                6,
-                Some(new_old_value(Some(b"v0".to_vec()), 5.into())),
-                true,
-            ),
-            (Mutation::Lock(key.clone()), false, 7, 7, None, false),
-            (
-                Mutation::Lock(key.clone()),
-                false,
-                8,
-                8,
-                Some(new_old_value(Some(b"v1".to_vec()), 6.into())),
-                false,
-            ),
-            (
-                Mutation::Put((key.clone(), vec![b'0'; 5120])),
-                false,
-                9,
-                9,
-                Some(new_old_value(Some(b"v1".to_vec()), 6.into())),
-                true,
-            ),
-            (
-                Mutation::Put((key.clone(), b"v3".to_vec())),
-                false,
-                10,
-                10,
-                Some(new_old_value(None, 9.into())),
-                true,
-            ),
-            (
-                Mutation::Put((key.clone(), b"v4".to_vec())),
-                true,
-                11,
-                11,
-                None,
-                true,
-            ),
-        ];
-
-        let write = |modifies| {
-            engine.write(&ctx, modifies).unwrap();
-        };
-
-        let new_txn = |start_ts| {
-            let snapshot = engine.snapshot(&ctx).unwrap();
-            MvccTxn::new(snapshot, start_ts, true)
-        };
-
-        for case in cases {
-            let (mutation, is_pessimistic, start_ts, commit_ts, old_value, check_old_value) = case;
-            let mutation_type = mutation.mutation_type();
-            let mut txn = new_txn(start_ts.into());
-            txn.extra_op = ExtraOp::ReadOldValue;
-            if is_pessimistic {
-                txn.acquire_pessimistic_lock(
-                    key.clone(),
-                    b"key",
-                    false,
-                    0,
-                    start_ts.into(),
-                    false,
-                    TimeStamp::zero(),
-                )
-                .unwrap();
-                write(WriteData::from_modifies(txn.into_modifies()));
-                txn = new_txn(start_ts.into());
-                txn.extra_op = ExtraOp::ReadOldValue;
-                txn.pessimistic_prewrite(
-                    mutation,
-                    b"key",
-                    true,
-                    0,
-                    start_ts.into(),
-                    0,
-                    TimeStamp::zero(),
-                )
-                .unwrap();
-            } else {
-                txn.prewrite(mutation, b"key", false, 0, 0, TimeStamp::default())
-                    .unwrap();
-            }
-            if check_old_value {
-                let extra = txn.take_extra();
-                let ts_key = key.clone().append_ts(start_ts.into());
-                assert!(
-                    extra.get_old_values().get(&ts_key).is_some(),
-                    "{}",
-                    start_ts
-                );
-                assert_eq!(extra.get_old_values()[&ts_key], (old_value, mutation_type));
-            }
-            write(WriteData::from_modifies(txn.into_modifies()));
-            let mut txn = new_txn(start_ts.into());
-            txn.commit(key.clone(), commit_ts.into()).unwrap();
-            engine
-                .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
-                .unwrap();
-        }
     }
 
     #[test]

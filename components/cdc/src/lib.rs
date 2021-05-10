@@ -12,7 +12,7 @@ extern crate tikv_util;
 mod delegate;
 mod endpoint;
 mod errors;
-mod metrics;
+pub mod metrics;
 mod observer;
 mod service;
 
