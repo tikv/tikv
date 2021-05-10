@@ -2592,6 +2592,14 @@ impl TiKvConfig {
                 last_cfg.raft_store.raftdb_path, self.raft_store.raftdb_path
             ));
         }
+        if last_cfg.raftdb.wal_dir != self.raftdb.wal_dir
+            && !last_cfg.raft_engine.enable {
+            return Err(format!(
+                "raft db wal dir have been changed, former is '{}', \
+                 current is '{}', please check if it is expected.",
+                last_cfg.raftdb.wal_dir, self.raftdb.wal_dir
+            ));
+        }
         if last_cfg.raft_engine.config.dir != self.raft_engine.config.dir
             && last_cfg.raft_engine.enable
         {

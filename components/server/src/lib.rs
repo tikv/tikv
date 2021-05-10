@@ -5,6 +5,6 @@ extern crate tikv_util;
 
 #[macro_use]
 pub mod setup;
-pub mod raft_log_engine_switch;
+pub mod raft_engine_switch;
 pub mod server;
 pub mod signal_handler;

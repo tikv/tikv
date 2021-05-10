@@ -47,7 +47,7 @@ fn rename_to_tmp_dir<P1: AsRef<Path>, P2: AsRef<Path>>(src: P1, dst: P2) {
 ///     2. Scan and dump raft data into raft engine.
 ///     3. Rename original raftdb dir to indicate that dump operation is done.
 ///     4. Delete the original raftdb safely.
-pub fn check_and_dump_raftdb(
+pub fn check_and_dump_raft_db(
     config: &TiKvConfig,
     engine: &RaftLogEngine,
     env: &Arc<Env>,
@@ -261,24 +261,28 @@ mod tests {
     use super::*;
     use engine_rocks::raw::DBOptions;
 
-    #[test]
-    fn test_dump() {
+    fn do_test_switch(custom_raft_db_wal: bool) {
         let data_path = tempfile::Builder::new().tempdir().unwrap().into_path();
         let mut raftdb_path = data_path.clone();
         let mut raft_engine_path = data_path;
+        let mut raftdb_wal_path = raftdb_path.clone();
         raftdb_path.push("raft");
         raft_engine_path.push("raft-engine");
+        if custom_raft_db_wal {
+            raftdb_wal_path.push("test-wal");
+        }
 
         let mut cfg = TiKvConfig::default();
         cfg.raft_store.raftdb_path = raftdb_path.to_str().unwrap().to_owned();
+        cfg.raftdb.wal_dir = raftdb_wal_path.to_str().unwrap().to_owned();
         cfg.raft_engine.mut_config().dir = raft_engine_path.to_str().unwrap().to_owned();
 
         // Prepare some data for the RocksEngine.
         {
             let db = engine_rocks::raw_util::new_engine_opt(
                 &cfg.raft_store.raftdb_path,
-                DBOptions::new(),
-                vec![],
+                cfg.raftdb.build_opt(),
+                cfg.raftdb.build_cf_opts(&None),
             )
             .unwrap();
             let engine = RocksEngine::from_db(Arc::new(db));
@@ -294,7 +298,7 @@ mod tests {
 
         // Dump logs from RocksEngine to RaftLogEngine.
         let raft_engine = RaftLogEngine::new(cfg.raft_engine.config());
-        check_and_dump_raftdb(&cfg, &raft_engine, &Arc::new(Env::default()), 4);
+        check_and_dump_raft_db(&cfg, &raft_engine, &Arc::new(Env::default()), 4);
         assert(1, &raft_engine);
         assert(5, &raft_engine);
         assert(15, &raft_engine);
@@ -314,6 +318,16 @@ mod tests {
         assert(1, &rocks_engine);
         assert(5, &rocks_engine);
         assert(15, &rocks_engine);
+    }
+
+    #[test]
+    fn test_switch() {
+        do_test_switch(false);
+    }
+
+    #[test]
+    fn test_switch_with_seperate_wal() {
+        do_test_switch(true);
     }
 
     // Insert some data into log batch.
