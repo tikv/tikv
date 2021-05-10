@@ -16,6 +16,17 @@ lazy_static! {
         exponential_buckets(0.005, 2.0, 20).unwrap()
     )
     .unwrap();
+    pub static ref CDC_SCAN_BYTES: IntCounter = register_int_counter!(
+        "tikv_cdc_scan_bytes_total",
+        "Total bytes of CDC incremental scan"
+    )
+    .unwrap();
+    pub static ref CDC_SCAN_TASKS: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_cdc_scan_tasks",
+        "Total number of CDC incremental scan tasks",
+        &["type"]
+    )
+    .unwrap();
     pub static ref CDC_MIN_RESOLVED_TS_REGION: IntGauge = register_int_gauge!(
         "tikv_cdc_min_resolved_ts_region",
         "The region which has minimal resolved ts"
@@ -46,6 +57,12 @@ lazy_static! {
         "Capacity of old value cache"
     )
     .unwrap();
+    pub static ref CDC_REGION_RESOLVE_STATUS_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_cdc_region_resolve_status",
+        "The status of CDC captured regions",
+        &["status"]
+    )
+    .unwrap();
     pub static ref CDC_OLD_VALUE_CACHE_MISS: IntGauge = register_int_gauge!(
         "tikv_cdc_old_value_cache_miss",
         "Count of old value cache missing"
@@ -74,23 +91,6 @@ lazy_static! {
         "Bucketed histogram of cdc old value scan duration",
         &["tag"],
         exponential_buckets(0.0001, 2.0, 20).unwrap()
-    )
-    .unwrap();
-    pub static ref CDC_SCAN_BLOCK_DURATION_HISTOGRAM: Histogram = register_histogram!(
-        "tikv_scan_block_duration",
-        "Bucketed histogram of cdc scan block duration",
-        exponential_buckets(0.005, 2.0, 20).unwrap()
-    )
-    .unwrap();
-    pub static ref CDC_SINK_QUEUE_SIZE_HISTOGRAM: Histogram = register_histogram!(
-        "tikv_cdc_sink_queue_size",
-        "Bucketed histogram of cdc sink queue size",
-        exponential_buckets(1.0, 2.0, 20).unwrap()
-    )
-    .unwrap();
-    pub static ref CDC_GRPC_WRITE_RESOLVED_TS: IntGauge = register_int_gauge!(
-        "tikv_cdc_grpc_write_resolved_ts",
-        "The latest resolved ts written to the grpc stream"
     )
     .unwrap();
     pub static ref CDC_RESOLVED_TS_ADVANCE_METHOD: IntGauge = register_int_gauge!(
