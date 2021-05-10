@@ -189,6 +189,7 @@ impl Default for StoreStat {
 
 #[derive(Default)]
 pub struct PeerStat {
+    pub peer_id: Option<u64>,
     pub read_bytes: u64,
     pub read_keys: u64,
     pub last_read_bytes: u64,
@@ -198,6 +199,15 @@ pub struct PeerStat {
     pub last_report_ts: UnixSecs,
     pub approximate_keys: u64,
     pub approximate_size: u64,
+}
+
+impl PeerStat {
+    pub fn new(peer_id: u64) -> Self {
+        PeerStat {
+            peer_id: Some(peer_id),
+            ..Default::default()
+        }
+    }
 }
 
 impl<E> Display for Task<E>
@@ -1111,7 +1121,22 @@ where
                     let peer_stat = self
                         .region_peers
                         .entry(hb_task.region.get_id())
-                        .or_insert_with(PeerStat::default);
+                        .or_insert_with(|| PeerStat::new(hb_task.peer.get_id()));
+                    if let Some(peer_id) = peer_stat.peer_id {
+                        if peer_id != hb_task.peer.get_id() {
+                            error!(
+                                "heartbeat and peer_stat peer id mismatch";
+                                "region_id" => hb_task.region.get_id(),
+                                "hb_peer_id" => hb_task.peer.get_id(),
+                                "stat_peer_id" => peer_id
+                            );
+                            peer_stat.last_written_bytes = 0;
+                            peer_stat.last_written_keys = 0;
+                        }
+                    } else {
+                        peer_stat.peer_id.replace(hb_task.peer.get_id());
+                    }
+
                     peer_stat.approximate_size = hb_task.approximate_size;
                     peer_stat.approximate_keys = hb_task.approximate_keys;
                     let read_bytes_delta = peer_stat.read_bytes - peer_stat.last_read_bytes;
