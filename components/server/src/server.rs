@@ -258,13 +258,21 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     /// - If the max open file descriptor limit is not high enough to support
     ///   the main database and the raft database.
     fn init_config(mut config: TiKvConfig) -> ConfigController {
+        validate_and_persist_config(&mut config, true);
+
         ensure_dir_exist(&config.storage.data_dir).unwrap();
+        if !config.rocksdb.wal_dir.is_empty() {
+            ensure_dir_exist(&config.rocksdb.wal_dir).unwrap();
+        }
         if config.raft_engine.enable {
             ensure_dir_exist(&config.raft_engine.config().dir).unwrap();
         } else {
             ensure_dir_exist(&config.raft_store.raftdb_path).unwrap();
+            if !config.raftdb.wal_dir.is_empty() {
+                ensure_dir_exist(&config.raftdb.wal_dir).unwrap();
+            }
         }
-        validate_and_persist_config(&mut config, true);
+
         check_system_config(&config);
 
         tikv_util::set_panic_hook(false, &config.storage.data_dir);
@@ -1054,6 +1062,7 @@ impl TiKVServer<RaftLogEngine> {
         // Try to dump and recover raft data.
         crate::dump::check_and_dump_raft_db(
             &self.config.raft_store.raftdb_path,
+            &self.config.raftdb.wal_dir,
             &raft_engine,
             env.clone(),
             8,
