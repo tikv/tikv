@@ -8,6 +8,7 @@ pub struct RocksdbLogger;
 
 impl Logger for RocksdbLogger {
     fn logv(&self, log_level: InfoLogLevel, log: &str) {
+        println!("RocksdbLogger.logv(level={:?})", log_level);
         match log_level {
             InfoLogLevel::Header => info!(#"rocksdb_log_header", "{}", log),
             InfoLogLevel::Debug => debug!(#"rocksdb_log", "{}", log),
