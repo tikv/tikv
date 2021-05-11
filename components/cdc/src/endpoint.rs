@@ -1150,15 +1150,7 @@ impl Initializer {
             debug!("cdc scan entries"; "len" => entries.len(), "region_id" => region_id);
             fail_point!("before_schedule_incremental_scan");
             if let Err(e) = self.sink_scan_events(entries, done, require_barrier).await {
-                let deregister = Deregister::Downstream {
-                    region_id,
-                    downstream_id,
-                    conn_id,
-                    err: Some(e),
-                };
-                if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
-                    error!("cdc schedule cdc task failed"; "error" => ?e, "region_id" => region_id);
-                }
+                self.deregister_downstream(Some(e));
                 return;
             }
         }
@@ -1546,8 +1538,7 @@ mod tests {
         let snap = engine.snapshot(Default::default()).unwrap();
         // Buffer must be large enough to unblock async incremental scan.
         let buffer = 1000;
-        let (mut worker, _pool, mut initializer, rx, _drain) =
-            mock_initializer(total_bytes, buffer);
+        let (mut worker, _pool, mut initializer, rx, drain) = mock_initializer(total_bytes, buffer);
         let check_result = || loop {
             let task = rx.recv().unwrap();
             match task {
@@ -1593,7 +1584,7 @@ mod tests {
         block_on(initializer.async_incremental_scan(snap.clone(), region.clone(), require_barrier));
 
         loop {
-            let task = rx.recv_timeout(Duration::from_secs(1));
+            let task = rx.recv_timeout(Duration::from_millis(100));
             match task {
                 Ok(t) => panic!("unepxected task {} received", t),
                 Err(RecvTimeoutError::Timeout) => break,
@@ -1603,12 +1594,47 @@ mod tests {
 
         // Test cancellation.
         initializer.downstream_state.store(DownstreamState::Stopped);
-        block_on(initializer.async_incremental_scan(snap, region, require_barrier));
+        block_on(initializer.async_incremental_scan(snap.clone(), region.clone(), require_barrier));
 
         loop {
-            let task = rx.recv_timeout(Duration::from_secs(1));
+            let task = rx.recv_timeout(Duration::from_millis(100));
             match task {
                 Ok(Task::Deregister(Deregister::Downstream { region_id, .. })) => {
+                    assert_eq!(region_id, initializer.region_id);
+                    break;
+                }
+                Ok(other) => panic!("unexpected task {:?}", other),
+                Err(e) => panic!("unexpected err {:?}", e),
+            }
+        }
+
+        // Test deregister regoin when resolver fails to build.
+        // Scan is canceled.
+        initializer.build_resolver = true;
+        initializer.downstream_state.store(DownstreamState::Stopped);
+        block_on(initializer.async_incremental_scan(snap.clone(), region.clone(), require_barrier));
+
+        loop {
+            let task = rx.recv_timeout(Duration::from_millis(100));
+            match task {
+                Ok(Task::Deregister(Deregister::Region { region_id, .. })) => {
+                    assert_eq!(region_id, initializer.region_id);
+                    break;
+                }
+                Ok(other) => panic!("unexpected task {:?}", other),
+                Err(e) => panic!("unexpected err {:?}", e),
+            }
+        }
+
+        // Sink is disconnected.
+        drop(drain);
+        initializer.build_resolver = true;
+        initializer.downstream_state.store(DownstreamState::Normal);
+        block_on(initializer.async_incremental_scan(snap, region, require_barrier));
+        loop {
+            let task = rx.recv_timeout(Duration::from_millis(100));
+            match task {
+                Ok(Task::Deregister(Deregister::Region { region_id, .. })) => {
                     assert_eq!(region_id, initializer.region_id);
                     break;
                 }
