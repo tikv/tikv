@@ -300,7 +300,7 @@ pub enum CasualMessage<EK: KvEngine> {
         hash: Vec<u8>,
     },
 
-    /// Approximate size of target region.
+    /// Approximate size of target region. This message can only be sent by split-check thread.
     RegionApproximateSize {
         size: u64,
     },
@@ -431,9 +431,7 @@ pub enum PeerMsg<EK: KvEngine> {
     /// that the raft node will not work anymore.
     Tick(PeerTicks),
     /// Result of applying committed entries. The message can't be lost.
-    ApplyRes {
-        res: ApplyTaskRes<EK::Snapshot>,
-    },
+    ApplyRes { res: ApplyTaskRes<EK::Snapshot> },
     /// Message that can't be lost but rarely created. If they are lost, real bad
     /// things happen like some peers will be considered dead in the group.
     SignificantMsg(SignificantMsg<EK::Snapshot>),
@@ -447,7 +445,6 @@ pub enum PeerMsg<EK: KvEngine> {
     HeartbeatPd,
     /// Asks region to change replication mode.
     UpdateReplicationMode,
-    SplitCheck,
 }
 
 impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
@@ -467,7 +464,6 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
             PeerMsg::CasualMessage(msg) => write!(fmt, "CasualMessage {:?}", msg),
             PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
             PeerMsg::UpdateReplicationMode => write!(fmt, "UpdateReplicationMode"),
-            PeerMsg::SplitCheck => write!(fmt, "SplitCheck"),
         }
     }
 }
