@@ -677,17 +677,19 @@ impl Delegate {
                 }
             }
         }
-        let mut entries = Vec::with_capacity(rows.len());
-        for (_, v) in rows {
-            entries.push(v);
+        if !rows.is_empty() {
+            let mut entries = Vec::with_capacity(rows.len());
+            for (_, v) in rows {
+                entries.push(v);
+            }
+            let mut event_entries = EventEntries::default();
+            event_entries.entries = entries.into();
+            let mut change_data_event = Event::default();
+            change_data_event.region_id = self.region_id;
+            change_data_event.index = index;
+            change_data_event.event = Some(Event_oneof_event::Entries(event_entries));
+            self.broadcast(change_data_event, true);
         }
-        let mut event_entries = EventEntries::default();
-        event_entries.entries = entries.into();
-        let mut change_data_event = Event::default();
-        change_data_event.region_id = self.region_id;
-        change_data_event.index = index;
-        change_data_event.event = Some(Event_oneof_event::Entries(event_entries));
-        self.broadcast(change_data_event, true);
         Ok(())
     }
 

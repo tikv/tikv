@@ -475,7 +475,7 @@ impl<S: Snapshot> MvccTxn<S> {
         if old_value.valid() {
             self.writes
                 .extra
-                .add_old_value(key.clone(), old_value, mutation_type)
+                .add_old_value(key.clone().append_ts(self.start_ts), old_value, mutation_type)
         }
         // No need to check data constraint, it's resolved by pessimistic locks.
         self.prewrite_key_value(

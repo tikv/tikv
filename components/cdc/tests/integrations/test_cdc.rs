@@ -1085,5 +1085,33 @@ fn test_old_value_cache() {
         other => panic!("unknown event {:?}", other),
     }
 
+    // Update an exist value with pessimistic lock, simulate UPDATE.
+    let mut m3 = Mutation::default();
+    let k3 = b"k3".to_vec();
+    m3.set_op(Op::PessimisticLock);
+    m3.key = k3.clone();
+    m3.value = b"v4".to_vec();
+    suite.must_acquire_pessimistic_lock(1, vec![m3.clone()], k3.clone(), 30.into(), 32.into());
+    m3.set_op(Op::Insert);
+    suite.must_kv_pessimistic_prewrite(1, vec![m3], k3, 30.into(), 32.into());
+    let mut events = receive_event(false).events.to_vec();
+    match events.remove(0).event.unwrap() {
+        Event_oneof_event::Entries(mut es) => {
+            let row = &es.take_entries().to_vec()[0];
+            assert_eq!(row.get_value(), b"v4");
+            assert_eq!(row.get_old_value(), b"");
+            assert_eq!(row.get_type(), EventLogType::Prewrite);
+            assert_eq!(row.get_start_ts(), 30);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+    // k3 mutation type must be cached.
+    assert_eq!(
+        CDC_OLD_VALUE_DURATION_HISTOGRAM
+            .with_label_values(&["seek"])
+            .get_sample_count(),
+        0
+    );
+
     suite.stop();
 }
