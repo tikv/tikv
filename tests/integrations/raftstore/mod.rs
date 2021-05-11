@@ -24,7 +24,6 @@ mod test_split_region;
 mod test_stale_peer;
 mod test_stats;
 mod test_status_command;
-mod test_store_heartbeat;
 mod test_tombstone;
 mod test_transfer_leader;
 mod test_transport;

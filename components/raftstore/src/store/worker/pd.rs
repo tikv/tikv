@@ -425,8 +425,8 @@ where
     }
 }
 
-const HOTSPOT_KEY_THRESHOLD: u64 = 128;
-const HOTSPOT_BYTE_THRESHOLD: u64 = 8 * 1024;
+const HOTSPOT_KEY_RATE_THRESHOLD: u64 = 128;
+const HOTSPOT_BYTE_RATE_THRESHOLD: u64 = 8 * 1024;
 
 // TODO: support dyamic configure threshold in future
 fn hotspot_key_report_threshold() -> u64 {
@@ -434,10 +434,10 @@ fn hotspot_key_report_threshold() -> u64 {
     let threshold = (|| {
         fail_point!("mock_hotspot_threshold", |arg| arg
             .map_or(0, |e| e.parse().unwrap()));
-        HOTSPOT_KEY_THRESHOLD * 10
+        HOTSPOT_KEY_RATE_THRESHOLD * 10
     })();
     #[cfg(not(feature = "failpoints"))]
-    let threshold = HOTSPOT_KEY_THRESHOLD * 10;
+    let threshold = HOTSPOT_KEY_RATE_THRESHOLD * 10;
 
     threshold
 }
@@ -447,10 +447,10 @@ fn hotspot_byte_report_threshold() -> u64 {
     let threshold = (|| {
         fail_point!("mock_hotspot_threshold", |arg| arg
             .map_or(0, |e| e.parse().unwrap()));
-        HOTSPOT_BYTE_THRESHOLD * 10
+        HOTSPOT_BYTE_RATE_THRESHOLD * 10
     })();
     #[cfg(not(feature = "failpoints"))]
-    let threshold = HOTSPOT_BYTE_THRESHOLD * 10;
+    let threshold = HOTSPOT_BYTE_RATE_THRESHOLD * 10;
 
     threshold
 }
@@ -700,7 +700,7 @@ where
             region_peer.last_store_report_read_keys = region_peer.read_keys;
             // TODO: select hotspot peer by binaray heap in future
             if read_bytes < hotspot_byte_report_threshold()
-                || read_keys < hotspot_key_report_threshold()
+                && read_keys < hotspot_key_report_threshold()
             {
                 continue;
             }
