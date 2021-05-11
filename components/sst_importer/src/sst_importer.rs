@@ -61,13 +61,8 @@ impl SSTImporter {
         })
     }
 
-    pub fn start_switch_mode_check<E: KvEngine>(
-        &self,
-        executor: &ThreadPool,
-        db: E,
-        cb: Box<dyn Fn() + Send>,
-    ) {
-        self.switcher.start(executor, db, cb);
+    pub fn start_switch_mode_check<E: KvEngine>(&self, executor: &ThreadPool, db: E) {
+        self.switcher.start(executor, db);
     }
 
     pub fn get_path(&self, meta: &SstMeta) -> PathBuf {
