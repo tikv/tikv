@@ -28,7 +28,7 @@ use tikv::storage::txn::{
     EntryBatch, Error as TxnError, SnapshotStore, TxnEntryScanner, TxnEntryStore,
 };
 use tikv::storage::Statistics;
-use tikv_util::time::Limiter;
+use tikv_util::time::{Limiter, ThreadReadId};
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 use tikv_util::{
     box_err, debug, defer, error, error_unknown, impl_display_as_debug, info, slow_log, thd_name,
@@ -156,6 +156,7 @@ impl BackupRange {
         backup_ts: TimeStamp,
         begin_ts: TimeStamp,
         storage: &LimitedStorage,
+        read_id: &ThreadReadId,
     ) -> Result<(Vec<File>, Statistics)> {
         assert!(!self.is_raw_kv);
 
@@ -187,6 +188,7 @@ impl BackupRange {
         assert!(!ctx.get_replica_read());
         let snap_ctx = SnapContext {
             pb_ctx: &ctx,
+            read_id: Some(read_id.clone()),
             ..Default::default()
         };
 
@@ -319,6 +321,7 @@ impl BackupRange {
         &self,
         writer: &mut BackupRawKVWriter,
         engine: &E,
+        read_id: &ThreadReadId,
     ) -> Result<Statistics> {
         assert!(self.is_raw_kv);
 
@@ -328,6 +331,7 @@ impl BackupRange {
         ctx.set_peer(self.leader.clone());
         let snap_ctx = SnapContext {
             pb_ctx: &ctx,
+            read_id: Some(read_id.clone()),
             ..Default::default()
         };
         let snapshot = match engine.snapshot(snap_ctx) {
@@ -385,6 +389,7 @@ impl BackupRange {
         cf: CfName,
         compression_type: Option<SstCompressionType>,
         compression_level: i32,
+        read_id: &ThreadReadId,
     ) -> Result<(Vec<File>, Statistics)> {
         let mut writer = match BackupRawKVWriter::new(
             db,
@@ -400,7 +405,7 @@ impl BackupRange {
                 return Err(e);
             }
         };
-        let stat = match self.backup_raw(&mut writer, engine) {
+        let stat = match self.backup_raw(&mut writer, engine, read_id) {
             Ok(s) => s,
             Err(e) => return Err(e),
         };
@@ -659,6 +664,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         let concurrency_manager = self.concurrency_manager.clone();
         let batch_size = self.config_manager.0.read().unwrap().batch_size;
         let sst_max_size = self.config_manager.0.read().unwrap().sst_max_size.0;
+        let read_id = ThreadReadId::new();
 
         // TODO: make it async.
         self.pool.borrow_mut().spawn(move || {
@@ -728,6 +734,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                                 cf,
                                 ct,
                                 request.compression_level,
+                                &read_id,
                             ),
                             brange.start_key.map_or_else(Vec::new, |k| k.into_encoded()),
                             brange.end_key.map_or_else(Vec::new, |k| k.into_encoded()),
@@ -750,6 +757,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                                 backup_ts,
                                 start_ts,
                                 &storage,
+                                &read_id,
                             ),
                             brange
                                 .start_key
