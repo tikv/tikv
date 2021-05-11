@@ -846,7 +846,7 @@ impl Column {
     // Append an Enum datum to the column
     #[inline]
     pub fn append_enum(&mut self, e: EnumRef) -> Result<()> {
-        self.data.write_enum(e)?;
+        self.data.write_enum_to_chunk(e.value(), e.name())?;
         self.finished_append_var();
         Ok(())
     }

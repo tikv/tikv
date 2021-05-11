@@ -50,6 +50,7 @@ use tikv_util::sys::sys_quota::SysQuota;
 use tikv_util::time::duration_to_sec;
 use tikv_util::yatp_pool;
 
+use crate::coprocessor_v2::Config as CoprocessorV2Config;
 use crate::import::Config as ImportConfig;
 use crate::server::gc_worker::GcConfig;
 use crate::server::gc_worker::WriteCompactionFilterFactory;
@@ -2195,15 +2196,19 @@ pub struct CdcConfig {
     pub old_value_cache_size: usize,
     pub hibernate_regions_compatible: bool,
     pub scan_lock_pool_size: usize,
+    pub incremental_scan_speed_limit: ReadableSize,
 }
 
 impl Default for CdcConfig {
     fn default() -> Self {
         Self {
             min_ts_interval: ReadableDuration::secs(1),
-            old_value_cache_size: 1024 * 1024,
+            old_value_cache_size: 1024,
             hibernate_regions_compatible: true,
             scan_lock_pool_size: 2,
+            // TiCDC requires a SSD, the typical write speed of SSD
+            // is more than 500MB/s, so 128MB/s is enough.
+            incremental_scan_speed_limit: ReadableSize::mb(128),
         }
     }
 }
@@ -2267,6 +2272,9 @@ pub struct TiKvConfig {
     #[config(submodule)]
     pub coprocessor: CopConfig,
 
+    #[config(skip)]
+    pub coprocessor_v2: CoprocessorV2Config,
+
     #[config(submodule)]
     pub rocksdb: DbConfig,
 
@@ -2316,6 +2324,7 @@ impl Default for TiKvConfig {
             metric: MetricConfig::default(),
             raft_store: RaftstoreConfig::default(),
             coprocessor: CopConfig::default(),
+            coprocessor_v2: CoprocessorV2Config::default(),
             pd: PdConfig::default(),
             rocksdb: DbConfig::default(),
             raftdb: RaftDbConfig::default(),
@@ -2349,18 +2358,14 @@ impl TiKvConfig {
         let default_raftdb_path = config::canonicalize_sub_path(&self.storage.data_dir, "raft")?;
         if self.raft_store.raftdb_path.is_empty() {
             self.raft_store.raftdb_path = default_raftdb_path;
-        } else if self.raft_store.raftdb_path != default_raftdb_path
-            && RocksEngine::exists(&self.raft_store.raftdb_path)
-        {
+        } else {
             self.raft_store.raftdb_path = config::canonicalize_path(&self.raft_store.raftdb_path)?;
         }
 
         let default_er_path = config::canonicalize_sub_path(&self.storage.data_dir, "raft-engine")?;
         if self.raft_engine.config.dir.is_empty() {
             self.raft_engine.config.dir = default_er_path;
-        } else if self.raft_engine.config.dir != default_er_path
-            && RaftLogEngine::exists(&self.raft_engine.config.dir)
-        {
+        } else {
             self.raft_engine.config.dir = config::canonicalize_path(&self.raft_engine.config.dir)?;
         }
 
@@ -2369,6 +2374,19 @@ impl TiKvConfig {
 
         if kv_db_path == self.raft_store.raftdb_path {
             return Err("raft_store.raftdb_path can not same with storage.data_dir/db".into());
+        }
+        let kv_db_wal_path = if self.rocksdb.wal_dir.is_empty() {
+            config::canonicalize_path(&kv_db_path)?
+        } else {
+            config::canonicalize_path(&self.rocksdb.wal_dir)?
+        };
+        let raft_db_wal_path = if self.raftdb.wal_dir.is_empty() {
+            config::canonicalize_path(&self.raft_store.raftdb_path)?
+        } else {
+            config::canonicalize_path(&self.raftdb.wal_dir)?
+        };
+        if kv_db_wal_path == raft_db_wal_path {
+            return Err("raftdb.wal_dir can not same with rocksdb.wal_dir".into());
         }
         if !self.raft_engine.enable {
             if RocksEngine::exists(&kv_db_path)
@@ -3657,6 +3675,67 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_tikv_wal_config() {
+        let tmp_path = tempfile::Builder::new().tempdir().unwrap().into_path();
+        macro_rules! tmp_path_string_generate {
+            ($base:expr, $($sub:expr),+) => {{
+                let mut path: ::std::path::PathBuf = $base.clone();
+                $(
+                    path.push($sub);
+                )*
+                String::from(path.to_str().unwrap())
+            }}
+        }
+
+        {
+            let mut cfg = TiKvConfig::default();
+            assert!(cfg.validate().is_ok());
+        }
+
+        {
+            let mut cfg = TiKvConfig::default();
+            cfg.storage.data_dir = tmp_path_string_generate!(tmp_path, "data");
+            cfg.raft_store.raftdb_path = tmp_path_string_generate!(tmp_path, "data", "db");
+            assert!(!cfg.validate().is_ok());
+        }
+
+        {
+            let mut cfg = TiKvConfig::default();
+            cfg.storage.data_dir = tmp_path_string_generate!(tmp_path, "data", "kvdb");
+            cfg.raft_store.raftdb_path =
+                tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
+            cfg.rocksdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
+            assert!(!cfg.validate().is_ok());
+        }
+
+        {
+            let mut cfg = TiKvConfig::default();
+            cfg.storage.data_dir = tmp_path_string_generate!(tmp_path, "data", "kvdb");
+            cfg.raft_store.raftdb_path =
+                tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
+            cfg.raftdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "kvdb", "db");
+            assert!(!cfg.validate().is_ok());
+        }
+
+        {
+            let mut cfg = TiKvConfig::default();
+            cfg.rocksdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "wal");
+            cfg.raftdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "wal");
+            assert!(!cfg.validate().is_ok());
+        }
+
+        {
+            let mut cfg = TiKvConfig::default();
+            cfg.storage.data_dir = tmp_path_string_generate!(tmp_path, "data", "kvdb");
+            cfg.raft_store.raftdb_path =
+                tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
+            cfg.rocksdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "kvdb", "db");
+            cfg.raftdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
+            assert!(cfg.validate().is_ok());
+        }
+    }
+
+    #[test]
     fn test_background_job_limits() {
         assert_eq!(
             get_background_job_limits_impl(1 /*cpu_num*/, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS),
@@ -3782,6 +3861,7 @@ mod tests {
         // Other special cases.
         cfg.pd.retry_max_count = default_cfg.pd.retry_max_count; // Both -1 and isize::MAX are the same.
         cfg.storage.block_cache.capacity = OptionReadableSize(None); // Either `None` and a value is computed or `Some(_)` fixed value.
+        cfg.coprocessor_v2.coprocessor_plugin_directory = None; // Default is `None`, which is represented by not setting the key.
 
         assert_eq!(cfg, default_cfg);
     }
