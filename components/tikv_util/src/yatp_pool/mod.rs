@@ -15,10 +15,7 @@ use yatp::ThreadPool;
 pub(crate) const TICK_INTERVAL: Duration = Duration::from_secs(1);
 
 fn tick_interval() -> Duration {
-    fail_point!("mock_tick_interval", |_| {
-        let mock_tick_interval = Duration::from_millis(10);
-        mock_tick_interval
-    });
+    fail_point!("mock_tick_interval", |_| { Duration::from_millis(10) });
     TICK_INTERVAL
 }
 

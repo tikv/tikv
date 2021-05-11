@@ -431,28 +431,16 @@ const HOTSPOT_BYTE_RATE_THRESHOLD: u64 = 8 * 1024;
 // TODO: support dyamic configure threshold in future
 fn hotspot_key_report_threshold() -> u64 {
     #[cfg(feature = "failpoints")]
-    let threshold = (|| {
-        fail_point!("mock_hotspot_threshold", |arg| arg
-            .map_or(0, |e| e.parse().unwrap()));
-        HOTSPOT_KEY_RATE_THRESHOLD * 10
-    })();
-    #[cfg(not(feature = "failpoints"))]
-    let threshold = HOTSPOT_KEY_RATE_THRESHOLD * 10;
+    fail_point!("mock_hotspot_threshold", |_| { 0 });
 
-    threshold
+    HOTSPOT_KEY_RATE_THRESHOLD * 10
 }
 
 fn hotspot_byte_report_threshold() -> u64 {
     #[cfg(feature = "failpoints")]
-    let threshold = (|| {
-        fail_point!("mock_hotspot_threshold", |arg| arg
-            .map_or(0, |e| e.parse().unwrap()));
-        HOTSPOT_BYTE_RATE_THRESHOLD * 10
-    })();
-    #[cfg(not(feature = "failpoints"))]
-    let threshold = HOTSPOT_BYTE_RATE_THRESHOLD * 10;
+    fail_point!("mock_hotspot_threshold", |_| { 0 });
 
-    threshold
+    HOTSPOT_BYTE_RATE_THRESHOLD * 10
 }
 
 pub struct Runner<EK, ER, T>
