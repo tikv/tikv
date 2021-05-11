@@ -490,6 +490,7 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                 reader.txn_extra_op.store(txn_extra_op);
             }
         }
+        let observe_id = delegate.id;
         let init = Initializer {
             sched,
             region_id,
@@ -500,7 +501,7 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
             speed_limter: self.scan_speed_limter.clone(),
             max_scan_batch_bytes: self.max_scan_batch_bytes,
             max_scan_batch_size: self.max_scan_batch_size,
-            observe_id: delegate.id,
+            observe_id,
             checkpoint_ts: checkpoint_ts.into(),
             build_resolver: is_new_delegate,
         };
@@ -509,11 +510,21 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
         let scheduler = self.scheduler.clone();
         let deregister_downstream = move |err| {
             warn!("cdc send capture change cmd failed"; "region_id" => region_id, "error" => ?err);
-            let deregister = Deregister::Downstream {
-                region_id,
-                downstream_id,
-                conn_id,
-                err: Some(err),
+            let deregister = if is_new_delegate {
+                // Deregister region if it's the first scan task, because the
+                // task also build resolver.
+                Deregister::Region {
+                    region_id,
+                    observe_id,
+                    err,
+                }
+            } else {
+                Deregister::Downstream {
+                    region_id,
+                    downstream_id,
+                    conn_id,
+                    err: Some(err),
+                }
             };
             if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
                 error!("cdc schedule cdc task failed"; "error" => ?e);
@@ -832,7 +843,6 @@ impl Initializer {
 
     async fn async_incremental_scan<S: Snapshot + 'static>(&self, snap: S, region: Region) {
         let downstream_id = self.downstream_id;
-        let conn_id = self.conn_id;
         let region_id = region.get_id();
         debug!("cdc async incremental scan";
             "region_id" => region_id,
@@ -862,22 +872,14 @@ impl Initializer {
                     "downstream_id" => ?downstream_id,
                     "observe_id" => ?self.observe_id,
                     "conn_id" => ?self.conn_id);
+                self.deregister_downstream(None);
                 return;
             }
             let entries = match self.scan_batch(&mut scanner, resolver.as_mut()).await {
                 Ok(res) => res,
                 Err(e) => {
                     error!("cdc scan entries failed"; "error" => ?e, "region_id" => region_id);
-                    // TODO: record in metrics.
-                    let deregister = Deregister::Downstream {
-                        region_id,
-                        downstream_id,
-                        conn_id,
-                        err: Some(e),
-                    };
-                    if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
-                        error!("cdc schedule cdc task failed"; "error" => ?e, "region_id" => region_id);
-                    }
+                    self.deregister_downstream(Some(e));
                     return;
                 }
             };
@@ -911,6 +913,10 @@ impl Initializer {
         scanner: &mut DeltaScanner<S>,
         resolver: Option<&mut Resolver>,
     ) -> Result<Vec<Option<TxnEntry>>> {
+        fail_point!("cdc_scan_batch_fail", |_| {
+            Err(Error::Rocks("injected error".to_string()))
+        });
+
         let mut entries = Vec::with_capacity(self.max_scan_batch_size);
         let mut total_bytes = 0;
         let mut total_size = 0;
@@ -972,6 +978,27 @@ impl Initializer {
             region,
         }) {
             error!("cdc schedule task failed"; "error" => ?e);
+        }
+    }
+
+    fn deregister_downstream(&self, err: Option<Error>) {
+        // TODO: record in metrics.
+        let deregister = if self.build_resolver {
+            Deregister::Region {
+                region_id: self.region_id,
+                observe_id: self.observe_id,
+                err: err.unwrap_or_else(|| Error::Other(box_err!("scan error"))), // TODO: convert rate_limiter error
+            }
+        } else {
+            Deregister::Downstream {
+                region_id: self.region_id,
+                downstream_id: self.downstream_id,
+                conn_id: self.conn_id,
+                err, // TODO: convert rate_limiter error
+            }
+        };
+        if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
+            error!("cdc schedule task failed"; "error" => ?e, "region_id" => self.region_id);
         }
     }
 }
@@ -1145,10 +1172,11 @@ mod tests {
             expected_locks.entry(ts).or_default().insert(k.to_vec());
         }
 
-        let region = Region::default();
+        let mut region = Region::default();
         let snap = engine.snapshot(&Context::default()).unwrap();
 
         let (mut worker, _pool, mut initializer, rx) = mock_initializer(total_bytes);
+        region.id = initializer.region_id;
         let check_result = || loop {
             let task = rx.recv().unwrap();
             match task {
@@ -1205,13 +1233,21 @@ mod tests {
 
         // Test cancellation.
         initializer.downstream_state.store(DownstreamState::Stopped);
-        block_on(initializer.async_incremental_scan(snap, region));
+        block_on(initializer.async_incremental_scan(snap, region.clone()));
 
         loop {
             let task = rx.recv_timeout(Duration::from_secs(1));
             match task {
+                Ok(Task::Deregister(Deregister::Downstream { region_id, .. })) => {
+                    assert_eq!(
+                        region_id,
+                        region.get_id(),
+                        "unexpected region id {:?}",
+                        region_id
+                    );
+                    break;
+                }
                 Ok(t) => panic!("unepxected task {} received", t),
-                Err(RecvTimeoutError::Timeout) => break,
                 Err(e) => panic!("unexpected err {:?}", e),
             }
         }
@@ -1279,7 +1315,7 @@ mod tests {
 
     #[test]
     fn test_register() {
-        let (task_sched, _task_rx) = dummy_scheduler();
+        let (task_sched, task_rx) = dummy_scheduler();
         let raft_router = MockRaftStoreRouter::new();
         let _raft_rx = raft_router.add_region(1 /* region id */, 100 /* cap */);
         let observer = CdcObserver::new(task_sched.clone());
@@ -1291,7 +1327,7 @@ mod tests {
             },
             pd_client,
             task_sched,
-            raft_router,
+            raft_router.clone(),
             observer,
             Arc::new(Mutex::new(StoreMeta::new(0))),
         );
@@ -1361,6 +1397,54 @@ mod tests {
             panic!("unknown cdc event {:?}", cdc_event);
         }
         assert_eq!(ep.capture_regions.len(), 1);
+
+        // The first scan task of a region is initiated in register, and when it
+        // fails, it should send a deregister region task, otherwise the region
+        // delegate does not have resolver.
+        //
+        // Test non-exist regoin in raft router.
+        let mut req = ChangeDataRequest::default();
+        req.set_region_id(100);
+        let region_epoch = req.get_region_epoch().clone();
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 1, conn_id, true);
+        ep.run(Task::Register {
+            request: req.clone(),
+            downstream,
+            conn_id,
+            version: semver::Version::new(4, 0, 8),
+        });
+        // Region 100 is inserted into capture_regions.
+        assert_eq!(ep.capture_regions.len(), 2);
+        let task = task_rx.recv_timeout(Duration::from_millis(100)).unwrap();
+        match task.unwrap() {
+            Task::Deregister(Deregister::Region { region_id, err, .. }) => {
+                assert_eq!(region_id, 100);
+                assert!(matches!(err, Error::Request(_)), "{:?}", err);
+            }
+            other => panic!("unexpected task {:?}", other),
+        }
+
+        // Test errors on CaptureChange message.
+        req.set_region_id(101);
+        let raft_rx = raft_router.add_region(101 /* region id */, 100 /* cap */);
+        let downstream = Downstream::new("".to_string(), region_epoch, 1, conn_id, true);
+        ep.run(Task::Register {
+            request: req,
+            downstream,
+            conn_id,
+            version: semver::Version::new(4, 0, 8),
+        });
+        // Drop CaptureChange message, it should cause scan task failure.
+        let _ = raft_rx.recv_timeout(Duration::from_millis(100)).unwrap();
+        assert_eq!(ep.capture_regions.len(), 3);
+        let task = task_rx.recv_timeout(Duration::from_millis(100)).unwrap();
+        match task.unwrap() {
+            Task::Deregister(Deregister::Region { region_id, err, .. }) => {
+                assert_eq!(region_id, 101);
+                assert!(matches!(err, Error::Other(_)), "{:?}", err);
+            }
+            other => panic!("unexpected task {:?}", other),
+        }
     }
 
     #[test]
