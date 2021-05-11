@@ -21,7 +21,7 @@ mod metrics;
 mod observer;
 mod service;
 
-pub use endpoint::{Endpoint, Task, Validate};
+pub use endpoint::{Endpoint, OldValueStats, Task, Validate};
 pub use errors::{Error, Result};
 pub use observer::CdcObserver;
 pub use service::Service;

@@ -967,7 +967,8 @@ fn test_old_value_cache() {
     let scheduler = suite.endpoints.values().next().unwrap().scheduler();
     let mut req = suite.new_changedata_request(1);
     req.set_extra_op(ExtraOp::ReadOldValue);
-    let (req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
+    let (req_tx, event_feed_wrap, receive_event) =
+        new_event_feed(suite.get_region_cdc_client(1));
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
     let mut events = receive_event(false).events.to_vec();
     match events.remove(0).event.unwrap() {
@@ -977,6 +978,7 @@ fn test_old_value_cache() {
         }
         other => panic!("unknown event {:?}", other),
     }
+    let (tx, rx) = mpsc::channel();
 
     // Insert value, simulate INSERT INTO.
     let mut m1 = Mutation::default();
@@ -997,14 +999,18 @@ fn test_old_value_cache() {
         other => panic!("unknown event {:?}", other),
     }
     // k1 old value must be cached.
+    let tx_ = tx.clone();
     scheduler
-        .schedule(Task::Validate(Validate::OldValueCache(
-            1,
-            Box::new(move |cnt| {
-                assert_eq!(cnt, 0);
-            }),
-        )))
+        .schedule(Task::Validate(Validate::OldValueCache(Box::new(
+            move |old_value_stats| {
+                tx_.send((old_value_stats.access_count, old_value_stats.miss_count))
+                    .unwrap();
+            },
+        ))))
         .unwrap();
+    let (access_count, miss_count) = rx.recv().unwrap();
+    assert_eq!(access_count, 1);
+    assert_eq!(miss_count, 0);
     suite.must_kv_commit(1, vec![k1], 10.into(), 15.into());
     let mut events = receive_event(false).events.to_vec();
     match events.remove(0).event.unwrap() {
@@ -1034,14 +1040,18 @@ fn test_old_value_cache() {
         }
         other => panic!("unknown event {:?}", other),
     }
+    let tx_ = tx.clone();
     scheduler
-        .schedule(Task::Validate(Validate::OldValueCache(
-            1,
-            Box::new(move |cnt| {
-                assert_eq!(cnt, 0);
-            }),
-        )))
+        .schedule(Task::Validate(Validate::OldValueCache(Box::new(
+            move |old_value_stats| {
+                tx_.send((old_value_stats.access_count, old_value_stats.miss_count))
+                    .unwrap();
+            },
+        ))))
         .unwrap();
+    let (access_count, miss_count) = rx.recv().unwrap();
+    assert_eq!(access_count, 2);
+    assert_eq!(miss_count, 0);
     suite.must_kv_commit(1, vec![k2], 10.into(), 15.into());
     let mut events = receive_event(false).events.to_vec();
     match events.remove(0).event.unwrap() {
@@ -1072,14 +1082,18 @@ fn test_old_value_cache() {
         other => panic!("unknown event {:?}", other),
     }
     // k2 old value must be cached.
+    let tx_ = tx.clone();
     scheduler
-        .schedule(Task::Validate(Validate::OldValueCache(
-            1,
-            Box::new(move |cnt| {
-                assert_eq!(cnt, 0);
-            }),
-        )))
+        .schedule(Task::Validate(Validate::OldValueCache(Box::new(
+            move |old_value_stats| {
+                tx_.send((old_value_stats.access_count, old_value_stats.miss_count))
+                    .unwrap();
+            },
+        ))))
         .unwrap();
+    let (access_count, miss_count) = rx.recv().unwrap();
+    assert_eq!(access_count, 3);
+    assert_eq!(miss_count, 0);
     suite.must_kv_commit(1, vec![k2], 20.into(), 25.into());
     let mut events = receive_event(false).events.to_vec();
     match events.remove(0).event.unwrap() {
@@ -1112,14 +1126,19 @@ fn test_old_value_cache() {
         other => panic!("unknown event {:?}", other),
     }
     // k3 mutation type must be cached.
+    let tx_ = tx.clone();
     scheduler
-        .schedule(Task::Validate(Validate::OldValueCache(
-            1,
-            Box::new(move |cnt| {
-                assert_eq!(cnt, 0);
-            }),
-        )))
+        .schedule(Task::Validate(Validate::OldValueCache(Box::new(
+            move |old_value_stats| {
+                tx_.send((old_value_stats.access_count, old_value_stats.miss_count))
+                    .unwrap();
+            },
+        ))))
         .unwrap();
+    let (access_count, miss_count) = rx.recv().unwrap();
+    assert_eq!(access_count, 4);
+    assert_eq!(miss_count, 0);
 
+    event_feed_wrap.replace(None);
     suite.stop();
 }

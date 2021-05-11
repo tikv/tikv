@@ -109,12 +109,13 @@ impl fmt::Debug for Deregister {
 
 type InitCallback = Box<dyn FnOnce() + Send>;
 // Callback returns (old_value, statistics, is_cache_missed).
-pub(crate) type OldValueCallback =
-    Box<dyn FnMut(Key, TimeStamp) -> (Option<Vec<u8>>, Option<Statistics>, bool) + Send>;
+pub(crate) type OldValueCallback = Box<
+    dyn FnMut(Key, TimeStamp, &mut OldValueStats) -> (Option<Vec<u8>>, Option<Statistics>) + Send,
+>;
 
 pub enum Validate {
     Region(u64, Box<dyn FnOnce(Option<&Delegate>) + Send>),
-    OldValueCache(u64, Box<dyn FnOnce(usize) + Send>),
+    OldValueCache(Box<dyn FnOnce(&OldValueStats) + Send>),
 }
 
 pub enum Task {
@@ -209,13 +210,20 @@ impl fmt::Debug for Task {
                 .finish(),
             Task::Validate(validate) => match validate {
                 Validate::Region(region_id, _) => de.field("region_id", &region_id).finish(),
-                Validate::OldValueCache(region_id, _) => de.field("region_id", &region_id).finish(),
+                Validate::OldValueCache(_) => de.finish(),
             },
         }
     }
 }
 
 const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
+
+#[derive(Default)]
+pub struct OldValueStats {
+    pub access_count: usize,
+    pub miss_count: usize,
+    pub miss_none_count: usize,
+}
 
 pub struct Endpoint<T> {
     capture_regions: HashMap<u64, Delegate>,
@@ -242,6 +250,7 @@ pub struct Endpoint<T> {
     // stats
     resolved_region_count: usize,
     unresolved_region_count: usize,
+    old_value_stats: OldValueStats,
 }
 
 impl<T: 'static + RaftStoreRouter> Endpoint<T> {
@@ -283,6 +292,7 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
             min_ts_region_id: 0,
             resolved_region_count: 0,
             unresolved_region_count: 0,
+            old_value_stats: OldValueStats::default(),
         };
         ep.register_min_ts_event();
         ep
@@ -589,7 +599,9 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                     // Skip the batch if the delegate has failed.
                     continue;
                 }
-                if let Err(e) = delegate.on_batch(batch, old_value_cb.clone()) {
+                if let Err(e) =
+                    delegate.on_batch(batch, old_value_cb.clone(), &mut self.old_value_stats)
+                {
                     assert!(delegate.has_failed());
                     // Delegate has error, deregister the corresponding region.
                     deregister = Some(Deregister::Region {
@@ -1087,13 +1099,8 @@ impl<T: 'static + RaftStoreRouter> Runnable<Task> for Endpoint<T> {
                 Validate::Region(region_id, validate) => {
                     validate(self.capture_regions.get(&region_id));
                 }
-                Validate::OldValueCache(region_id, validate) => {
-                    validate(
-                        self.capture_regions
-                            .get(&region_id)
-                            .unwrap()
-                            .old_value_cache_miss_cnt,
-                    );
+                Validate::OldValueCache(validate) => {
+                    validate(&self.old_value_stats);
                 }
             },
         }
@@ -1115,6 +1122,13 @@ impl<T: 'static + RaftStoreRouter> RunnableWithTimer<Task, ()> for Endpoint<T> {
         }
         self.min_resolved_ts = TimeStamp::max();
         self.min_ts_region_id = 0;
+
+        CDC_OLD_VALUE_CACHE_ACCESS.add(self.old_value_stats.access_count as i64);
+        CDC_OLD_VALUE_CACHE_MISS.add(self.old_value_stats.miss_count as i64);
+        CDC_OLD_VALUE_CACHE_MISS_NONE.add(self.old_value_stats.miss_none_count as i64);
+        self.old_value_stats.access_count = 0;
+        self.old_value_stats.miss_count = 0;
+        self.old_value_stats.miss_none_count = 0;
 
         timer.add_task(Duration::from_millis(METRICS_FLUSH_INTERVAL), ());
     }

@@ -36,6 +36,7 @@ use txn_types::{Key, Lock, LockType, TimeStamp, WriteRef, WriteType};
 
 use crate::channel::{SendError, Sink};
 use crate::endpoint::OldValueCallback;
+use crate::endpoint::OldValueStats;
 use crate::metrics::*;
 use crate::service::{CdcEvent, ConnID};
 use crate::{Error, Result};
@@ -430,6 +431,7 @@ impl Delegate {
         &mut self,
         batch: CmdBatch,
         old_value_cb: Rc<RefCell<OldValueCallback>>,
+        old_value_stats: &mut OldValueStats,
     ) -> Result<()> {
         // Stale CmdBatch, drop it sliently.
         if batch.observe_id != self.id {
@@ -447,7 +449,12 @@ impl Delegate {
                 return Err(Error::Request(err_header));
             }
             if !request.has_admin_request() {
-                self.sink_data(index, request.requests.into(), old_value_cb.clone())?;
+                self.sink_data(
+                    index,
+                    request.requests.into(),
+                    old_value_cb.clone(),
+                    old_value_stats,
+                )?;
             } else {
                 self.sink_admin(request.take_admin_request(), response.take_admin_response())?;
             }
@@ -550,6 +557,7 @@ impl Delegate {
         index: u64,
         requests: Vec<Request>,
         old_value_cb: Rc<RefCell<OldValueCallback>>,
+        old_value_stats: &mut OldValueStats,
     ) -> Result<()> {
         let mut rows = HashMap::default();
         for mut req in requests {
@@ -616,14 +624,11 @@ impl Delegate {
                     if self.txn_extra_op == TxnExtraOp::ReadOldValue {
                         let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
                         let start = Instant::now();
-                        let (old_value, statistics, cache_hitted) =
-                            old_value_cb.borrow_mut().as_mut()(
-                                key,
-                                std::cmp::max(for_update_ts, row.start_ts.into()),
-                            );
-                        if !cache_hitted {
-                            self.old_value_cache_miss_cnt += 1;
-                        }
+                        let (old_value, statistics) = old_value_cb.borrow_mut().as_mut()(
+                            key,
+                            std::cmp::max(for_update_ts, row.start_ts.into()),
+                            old_value_stats,
+                        );
                         row.old_value = old_value.unwrap_or_default();
                         CDC_OLD_VALUE_DURATION_HISTOGRAM
                             .with_label_values(&["all"])

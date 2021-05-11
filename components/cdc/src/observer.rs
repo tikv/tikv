@@ -23,7 +23,7 @@ use txn_types::{
     Key, Lock, MutationType, OldValue, TimeStamp, TxnExtra, Value, WriteRef, WriteType,
 };
 
-use crate::endpoint::{Deregister, Task};
+use crate::endpoint::{Deregister, OldValueStats, Task};
 use crate::metrics::*;
 use crate::{Error as CdcError, Result};
 
@@ -132,20 +132,21 @@ impl CmdObserver<RocksEngine> for CdcObserver {
             // Create a snapshot here for preventing the old value was GC-ed.
             let snapshot = RegionSnapshot::from_snapshot(engine.snapshot().into_sync(), region);
             let mut reader = OldValueReader::new(snapshot);
-            let get_old_value = move |key, query_ts| {
-                if let Some((old_value, mutation_type)) = txn_extra.mut_old_values().remove(&key) {
+            let get_old_value = move |key, query_ts, old_value_stats: &mut OldValueStats| {
+                old_value_stats.access_count += 1;
+                if let Some((old_value, mutation_type)) = txn_extra.mut_old_values().get(&key) {
                     return match mutation_type {
-                        MutationType::Insert => (None, None, true),
+                        MutationType::Insert => (None, None),
                         MutationType::Put | MutationType::Delete => match old_value {
-                            OldValue::None => (None, None, true),
+                            OldValue::None => (None, None),
                             OldValue::Value {
                                 start_ts,
                                 short_value,
                             } => {
                                 let mut statistics = None;
-                                let value = short_value.or_else(|| {
+                                let value = short_value.to_owned().or_else(|| {
                                     statistics = Some(Statistics::default());
-                                    let prev_key = key.truncate_ts().unwrap().append_ts(start_ts);
+                                    let prev_key = key.truncate_ts().unwrap().append_ts(*start_ts);
                                     let start = Instant::now();
                                     let mut opts = ReadOptions::new();
                                     opts.set_fill_cache(false);
@@ -156,7 +157,7 @@ impl CmdObserver<RocksEngine> for CdcObserver {
                                         .observe(start.elapsed().as_secs_f64());
                                     value
                                 });
-                                (value, statistics, true)
+                                (value, statistics)
                             }
                             // Unspecified should not be added into cache.
                             OldValue::Unspecified => unreachable!(),
@@ -165,6 +166,7 @@ impl CmdObserver<RocksEngine> for CdcObserver {
                     };
                 }
                 // Cannot get old value from cache, seek for it in engine.
+                old_value_stats.miss_count += 1;
                 let start = Instant::now();
                 let mut statistics = Statistics::default();
                 let key = key.truncate_ts().unwrap().append_ts(query_ts);
@@ -174,7 +176,10 @@ impl CmdObserver<RocksEngine> for CdcObserver {
                 CDC_OLD_VALUE_DURATION_HISTOGRAM
                     .with_label_values(&["seek"])
                     .observe(start.elapsed().as_secs_f64());
-                (value, Some(statistics), false)
+                if value.is_none() {
+                    old_value_stats.miss_none_count += 1;
+                }
+                (value, Some(statistics))
             };
             if let Err(e) = self.sched.schedule(Task::MultiBatch {
                 multi: batches,
