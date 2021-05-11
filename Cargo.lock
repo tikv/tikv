@@ -2161,7 +2161,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#7d50a22e4b4fb0da7e003ac72d639711cf3ead5e"
+source = "git+https://github.com/pingcap/kvproto.git#fd4f2a3fa1dd8767f5a434e9795494b875fd4c39"
 dependencies = [
  "futures 0.3.7",
  "grpcio",
@@ -3551,7 +3551,6 @@ dependencies = [
  "prometheus-static-metric",
  "prost",
  "protobuf",
- "quick-error",
  "raft",
  "raft-proto",
  "rand 0.7.3",
@@ -3564,6 +3563,7 @@ dependencies = [
  "sst_importer",
  "tempfile",
  "test_sst_importer",
+ "thiserror",
  "tidb_query_datatype",
  "tikv_alloc",
  "tikv_util",
@@ -3842,6 +3842,7 @@ dependencies = [
  "test_util",
  "thiserror",
  "tikv",
+ "tikv_kv",
  "tikv_util",
  "tokio",
  "txn_types",
@@ -4525,7 +4526,6 @@ dependencies = [
  "lazy_static",
  "log_wrappers",
  "prometheus",
- "quick-error",
  "serde",
  "serde_derive",
  "slog",
@@ -4533,6 +4533,7 @@ dependencies = [
  "tempfile",
  "test_sst_importer",
  "test_util",
+ "thiserror",
  "tikv_alloc",
  "tikv_util",
  "tokio",
@@ -4907,6 +4908,7 @@ dependencies = [
  "lazy_static",
  "log_wrappers",
  "pd_client",
+ "protobuf",
  "raft",
  "raftstore",
  "rand 0.7.3",
@@ -5298,7 +5300,6 @@ dependencies = [
  "prometheus-static-metric",
  "prost",
  "protobuf",
- "quick-error",
  "raft",
  "raft_log_engine",
  "raftstore",
@@ -5470,12 +5471,12 @@ dependencies = [
  "panic_hook",
  "prometheus",
  "prometheus-static-metric",
- "quick-error",
  "raftstore",
  "slog",
  "slog-global",
  "slog_derive",
  "tempfile",
+ "thiserror",
  "tikv_util",
  "txn_types",
  "vlog",

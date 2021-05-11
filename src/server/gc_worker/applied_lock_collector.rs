@@ -14,7 +14,8 @@ use kvproto::kvrpcpb::LockInfo;
 use kvproto::raft_cmdpb::CmdType;
 use tikv_util::worker::{Builder as WorkerBuilder, Runnable, ScheduleError, Scheduler, Worker};
 
-use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, Lock, TimeStamp};
+use crate::storage::mvcc::{ErrorInner as MvccErrorInner, Lock, TimeStamp};
+use crate::storage::txn::Error as TxnError;
 use raftstore::coprocessor::{
     ApplySnapshotObserver, BoxApplySnapshotObserver, BoxQueryObserver, Cmd, Coprocessor,
     CoprocessorHost, ObserverContext, QueryObserver,
@@ -238,7 +239,7 @@ impl ApplySnapshotObserver for LockObserver {
             .map(|(key, value)| {
                 Lock::parse(value)
                     .map(|lock| (key, lock))
-                    .map_err(|e| ErrorInner::Mvcc(e.into()).into())
+                    .map_err(|e| ErrorInner::Txn(TxnError::from_mvcc(e)).into())
             })
             .filter(|result| result.is_err() || result.as_ref().unwrap().1.ts <= max_ts)
             .map(|result| {
@@ -335,7 +336,7 @@ impl LockCollectorRunner {
             .map(|(k, l)| {
                 k.to_raw()
                     .map(|raw_key| l.clone().into_lock_info(raw_key))
-                    .map_err(|e| Error::from(MvccError::from(e)))
+                    .map_err(|e| Error::from(TxnError::from_mvcc(e)))
             })
             .collect();
 
@@ -437,7 +438,7 @@ impl AppliedLockCollector {
                 // `Lock::check_ts_conflict` can't be used here, because LockType::Lock
                 // can't be ignored in this case.
                 if lock.ts <= max_ts {
-                    Err(MvccError::from(MvccErrorInner::KeyIsLocked(
+                    Err(TxnError::from_mvcc(MvccErrorInner::KeyIsLocked(
                         lock.clone().into_lock_info(key.to_raw()?),
                     )))
                 } else {

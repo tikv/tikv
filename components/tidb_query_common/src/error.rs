@@ -4,7 +4,6 @@ use std::convert::Infallible;
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use thiserror::Error;
-use tikv_util::impl_format_delegate_newtype;
 
 #[derive(Debug, Error)]
 pub enum EvaluateError {
@@ -96,10 +95,16 @@ pub enum ErrorInner {
     Evaluate(#[source] EvaluateError),
 }
 
-#[derive(Debug)]
-pub struct Error(pub Box<ErrorInner>);
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct Error(#[from] pub Box<ErrorInner>);
 
-impl_format_delegate_newtype!(Error);
+impl From<ErrorInner> for Error {
+    #[inline]
+    fn from(e: ErrorInner) -> Self {
+        Error(Box::new(e))
+    }
+}
 
 impl From<StorageError> for Error {
     #[inline]
