@@ -2,9 +2,12 @@
 
 use coprocessor_plugin_api::{CoprocessorPlugin, PluginError, RawResponse, Region, RegionEpoch};
 use kvproto::coprocessor_v2 as coprv2pb;
+use semver::VersionReq;
 use std::future::Future;
+use std::ops::Not;
 use std::sync::Arc;
 
+use super::config::Config;
 use super::plugin_registry::PluginRegistry;
 use super::raw_storage_impl::RawStorageImpl;
 use crate::storage::{self, lock_manager::LockManager, Engine, Storage};
@@ -23,9 +26,19 @@ pub struct Endpoint {
 impl tikv_util::AssertSend for Endpoint {}
 
 impl Endpoint {
-    pub fn new() -> Self {
+    pub fn new(copr_cfg: &Config) -> Self {
+        let mut plugin_registry = PluginRegistry::new();
+
+        // Enable hot-reloading of plugins if the user configured a directory.
+        if let Some(plugin_directory) = &copr_cfg.coprocessor_plugin_directory {
+            let r = plugin_registry.start_hot_reloading(plugin_directory);
+            if let Err(err) = r {
+                warn!("unable to start hot-reloading for coprocessor plugins."; "coprocessor_directory" => plugin_directory.display(), "error" => ?err);
+            }
+        }
+
         Self {
-            plugin_registry: Arc::new(PluginRegistry::new()),
+            plugin_registry: Arc::new(plugin_registry),
         }
     }
 
@@ -65,6 +78,23 @@ impl Endpoint {
                 CoprocessorError::Other(format!(
                     "No registered coprocessor with name '{}'",
                     req.copr_name
+                ))
+            })?;
+
+        // Check whether the found plugin satisfies the version constraint.
+        let version_req = VersionReq::parse(&req.copr_version_constraint)
+            .map_err(|e| CoprocessorError::Other(format!("{}", e)))?;
+        let plugin_version = plugin.version();
+        version_req
+            .matches(&plugin_version)
+            .not()
+            .then(|| {})
+            .ok_or_else(|| {
+                CoprocessorError::Other(format!(
+                    "The plugin '{}' with version '{}' does not satisfy the version constraint '{}'",
+                    plugin.name(),
+                    plugin_version,
+                    version_req,
                 ))
             })?;
 

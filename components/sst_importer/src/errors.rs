@@ -28,8 +28,8 @@ pub fn error_inc(type_: &str, err: &Error) {
         Error::FileCorrupted(..) => "file_corrupt",
         Error::InvalidSSTPath(..) => "invalid_sst",
         Error::Engine(..) => "engine",
-        Error::CannotReadExternalStorage(..) => "read_external_storage",
-        Error::WrongKeyPrefix(..) => "wrong_prefix",
+        Error::CannotReadExternalStorage { .. } => "read_external_storage",
+        Error::WrongKeyPrefix { .. } => "wrong_prefix",
         Error::BadFormat(..) => "bad_format",
         Error::Encryption(..) => "encryption",
         Error::CodecError(..) => "codec",
@@ -38,85 +38,80 @@ pub fn error_inc(type_: &str, err: &Error) {
     IMPORTER_ERROR_VEC.with_label_values(&[type_, label]).inc();
 }
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        Io(err: IoError) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        Grpc(err: GrpcError) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        Uuid(err: UuidError) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        Future(err: Canceled) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        // FIXME: Remove concrete 'rocks' type
-        RocksDB(msg: String) {
-            from()
-            display("RocksDB {}", msg)
-        }
-        EngineTraits(err: engine_traits::Error) {
-            from()
-            display("Engine {:?}", err)
-        }
-        ParseIntError(err: ParseIntError) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        FileExists(path: PathBuf, action: &'static str) {
-            display("File {:?} exists, cannot {}", path, action)
-        }
-        FileCorrupted(path: PathBuf, reason: String) {
-            display("File {:?} corrupted: {}", path, reason)
-        }
-        InvalidSSTPath(path: PathBuf) {
-            display("Invalid SST path {:?}", path)
-        }
-        InvalidChunk {
-            display("invalid chunk")
-        }
-        Engine(err: Box<dyn StdError + Send + Sync + 'static>) {
-            display("{}", err)
-        }
-        CannotReadExternalStorage(url: String, name: String, local_path: PathBuf, err: IoError) {
-            cause(err)
-            display("Cannot read {}/{} into {}: {}", url, name, local_path.display(), err)
-        }
-        WrongKeyPrefix(what: &'static str, key: Vec<u8>, prefix: Vec<u8>) {
-            display("\
-                {} has wrong prefix: key {} does not start with {}",
-                what,
-                log_wrappers::Value::key(&key),
-                log_wrappers::Value::key(&prefix),
-            )
-        }
-        BadFormat(msg: String) {
-            display("bad format {}", msg)
-        }
-        Encryption(err: EncryptionError) {
-            from()
-            display("Encryption {:?}", err)
-        }
-        CodecError(err: CodecError) {
-            from()
-            cause(err)
-            display("Codec {}", err)
-        }
-        FileConflict {
-            display("ingest file conflict")
-        }
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("{0}")]
+    Io(#[from] IoError),
+
+    #[error("{0}")]
+    Grpc(#[from] GrpcError),
+
+    #[error("{0}")]
+    Uuid(#[from] UuidError),
+
+    #[error("{0}")]
+    Future(#[from] Canceled),
+
+    // FIXME: Remove concrete 'rocks' type
+    #[error("RocksDB {0}")]
+    RocksDB(String),
+
+    #[error("Engine {0:?}")]
+    EngineTraits(#[from] engine_traits::Error),
+
+    #[error("{0}")]
+    ParseIntError(#[from] ParseIntError),
+
+    #[error("File {0:?} exists, cannot {1}")]
+    FileExists(PathBuf, &'static str),
+
+    #[error("File {0:?} corrupted: {1}")]
+    FileCorrupted(PathBuf, String),
+
+    #[error("Invalid SST path {0:?}")]
+    InvalidSSTPath(PathBuf),
+
+    #[error("invalid chunk")]
+    InvalidChunk,
+
+    #[error("{0}")]
+    Engine(Box<dyn StdError + Send + Sync + 'static>),
+
+    #[error("Cannot read {url}/{name} into {}: {err}", local_path.display())]
+    CannotReadExternalStorage {
+        url: String,
+        name: String,
+        local_path: PathBuf,
+        #[source]
+        err: IoError,
+    },
+
+    #[error(
+        "{what} has wrong prefix: key {} does not start with {}",
+        log_wrappers::Value::key(&key), log_wrappers::Value::key(&prefix)
+    )]
+    WrongKeyPrefix {
+        what: &'static str,
+        key: Vec<u8>,
+        prefix: Vec<u8>,
+    },
+
+    #[error("bad format {0}")]
+    BadFormat(String),
+
+    #[error("Encryption {0:?}")]
+    Encryption(#[from] EncryptionError),
+
+    #[error("Codec {0}")]
+    CodecError(#[from] CodecError),
+
+    #[error("ingest file conflict")]
+    FileConflict,
+}
+
+impl From<String> for Error {
+    fn from(msg: String) -> Self {
+        Self::RocksDB(msg)
     }
 }
 
@@ -145,10 +140,10 @@ impl ErrorCodeExt for Error {
             Error::InvalidSSTPath(_) => error_code::sst_importer::INVALID_SST_PATH,
             Error::InvalidChunk => error_code::sst_importer::INVALID_CHUNK,
             Error::Engine(_) => error_code::sst_importer::ENGINE,
-            Error::CannotReadExternalStorage(..) => {
+            Error::CannotReadExternalStorage { .. } => {
                 error_code::sst_importer::CANNOT_READ_EXTERNAL_STORAGE
             }
-            Error::WrongKeyPrefix(..) => error_code::sst_importer::WRONG_KEY_PREFIX,
+            Error::WrongKeyPrefix { .. } => error_code::sst_importer::WRONG_KEY_PREFIX,
             Error::BadFormat(_) => error_code::sst_importer::BAD_FORMAT,
             Error::Encryption(e) => e.error_code(),
             Error::CodecError(e) => e.error_code(),
