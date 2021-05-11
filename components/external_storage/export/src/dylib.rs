@@ -37,10 +37,10 @@ pub extern "C" fn external_storage_init(error: &mut ffi_support::ExternError) {
                 .enable_all()
                 .build()
                 .context("build runtime")?;
-            match RUNTIME.set(runtime) {
-                Err(_) => error!("runtime already set"),
-                _ => (),
+            if RUNTIME.set(runtime).is_err() {
+                error!("runtime already set")
             }
+            #[allow(clippy::unit_arg)]
             Ok(*guarded)
         })()
         .context("external_storage_init")
@@ -64,7 +64,7 @@ pub unsafe extern "C" fn external_storage_write(
             let buffer = get_buffer(data, len);
             let req: proto::ExternalStorageWriteRequest = protobuf::parse_from_bytes(buffer)?;
             info!("write request {:?}", req.get_object_name());
-            Ok(write_receiver(&runtime, req)?)
+            write_receiver(&runtime, req)
         })()
         .context("external_storage_write")
         .map_err(anyhow_to_extern_err)
@@ -238,7 +238,7 @@ pub mod staticlib {
         let mut e = ffi_support::ExternError::default();
         external_storage_init(&mut e);
         if e.get_code() != ffi_support::ErrorCode::SUCCESS {
-            Err(extern_to_io_err(e))?;
+            return Err(extern_to_io_err(e));
         }
         Ok(())
     }

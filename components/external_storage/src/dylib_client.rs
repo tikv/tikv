@@ -135,7 +135,7 @@ fn external_storage_init_ffi_dynamic(library: &libloading::Library) -> io::Resul
         func(&mut e);
     }
     if e.get_code() != ffi_support::ErrorCode::SUCCESS {
-        Err(extern_to_io_err(e))?;
+        return Err(extern_to_io_err(e));
     }
     Ok(())
 }
@@ -151,7 +151,7 @@ fn call_ffi_dynamic(
         func(&mut e, bytes);
     }
     if e.get_code() != ffi_support::ErrorCode::SUCCESS {
-        Err(extern_to_io_err(e))?;
+        return Err(extern_to_io_err(e));
     }
     Ok(())
 }

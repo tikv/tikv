@@ -121,9 +121,7 @@ pub fn make_rpc_error(err: io::Error) -> grpcio::RpcStatus {
     )
 }
 
-fn bind_socket(
-    socket_path: &std::path::PathBuf,
-) -> anyhow::Result<std::os::unix::net::UnixListener> {
+fn bind_socket(socket_path: &std::path::Path) -> anyhow::Result<std::os::unix::net::UnixListener> {
     let msg = format!("bind socket {:?}", &socket_path);
     info!("{}", msg);
     std::os::unix::net::UnixListener::bind(&socket_path).context(msg)

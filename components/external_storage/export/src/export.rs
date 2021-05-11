@@ -87,7 +87,7 @@ pub fn create_backend(backend: &Backend) -> io::Result<Box<dyn ExternalStorage>>
     match create_config(backend) {
         Some(config) => {
             let conf = config?;
-            grpc_client::new_client(backend.clone(), conf.name(), conf.url()?.clone())
+            grpc_client::new_client(backend.clone(), conf.name(), conf.url()?)
         }
         None => Err(bad_backend(backend.clone())),
     }
@@ -98,11 +98,11 @@ pub fn create_backend(backend: &Backend) -> io::Result<Box<dyn ExternalStorage>>
     match create_config(backend) {
         Some(config) => {
             let conf = config?;
-            let r = dylib_client::new_client(backend.clone(), conf.name(), conf.url()?.clone());
+            let r = dylib_client::new_client(backend.clone(), conf.name(), conf.url()?);
             match r {
                 Err(e) if e.kind() == io::ErrorKind::AddrNotAvailable => {
                     warn!("could not open dll for external_storage_export");
-                    dylib::staticlib::new_client(backend.clone(), conf.name(), conf.url()?.clone())
+                    dylib::staticlib::new_client(backend.clone(), conf.name(), conf.url()?)
                 }
                 _ => r,
             }

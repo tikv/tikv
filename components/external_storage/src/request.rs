@@ -60,11 +60,13 @@ pub fn restore_sender(
 ) -> io::Result<proto::ExternalStorageRestoreRequest> {
     // TODO: send speed_limiter
     let mut req = proto::ExternalStorageRestoreRequest::default();
-    req.set_object_name(storage_name.to_string().clone());
-    let restore_str = restore_name.to_str().ok_or(io::Error::new(
-        ErrorKind::InvalidData,
-        format!("could not convert to str {:?}", &restore_name),
-    ))?;
+    req.set_object_name(storage_name.to_string());
+    let restore_str = restore_name.to_str().ok_or_else(|| {
+        io::Error::new(
+            ErrorKind::InvalidData,
+            format!("could not convert to str {:?}", &restore_name),
+        )
+    })?;
     req.set_restore_name(restore_str.to_string());
     req.set_content_length(expected_length);
     let mut sb = proto::StorageBackend::default();
