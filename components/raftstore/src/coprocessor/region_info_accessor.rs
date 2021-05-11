@@ -101,7 +101,7 @@ pub type SeekRegionCallback = Box<dyn FnOnce(&mut dyn Iterator<Item = &RegionInf
 pub enum RegionInfoQuery {
     RaftStoreEvent(RaftStoreEvent),
     SeekRegion {
-        from: Vec<u8>,
+        from: Option<Vec<u8>>,
         callback: SeekRegionCallback,
     },
     FindRegionById {
@@ -121,9 +121,10 @@ impl Display for RegionInfoQuery {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
             RegionInfoQuery::RaftStoreEvent(e) => write!(f, "RaftStoreEvent({:?})", e),
-            RegionInfoQuery::SeekRegion { from, .. } => {
-                write!(f, "SeekRegion(from: {})", log_wrappers::Value::key(&from))
-            }
+            RegionInfoQuery::SeekRegion { from, .. } => match from {
+                Some(key) => write!(f, "SeekRegion(from: {})", log_wrappers::Value::key(&key)),
+                None => write!(f, "SeekRegion(unbounded)"),
+            },
             RegionInfoQuery::FindRegionById { region_id, .. } => {
                 write!(f, "FindRegionById(region_id: {})", region_id)
             }
@@ -434,11 +435,14 @@ impl RegionCollector {
         true
     }
 
-    pub fn handle_seek_region(&self, from_key: Vec<u8>, callback: SeekRegionCallback) {
-        let from_key = data_key(&from_key);
+    pub fn handle_seek_region(&self, from_key: Option<Vec<u8>>, callback: SeekRegionCallback) {
+        let from = match from_key {
+            Some(key) => Excluded(data_key(&key)),
+            None => Unbounded,
+        };
         let mut iter = self
             .region_ranges
-            .range((Excluded(from_key), Unbounded))
+            .range((from, Unbounded))
             .map(|(_, region_id)| &self.regions[region_id]);
         callback(&mut iter)
     }
@@ -610,8 +614,8 @@ impl RegionInfoAccessor {
 
 pub trait RegionInfoProvider: Send + Sync {
     /// Get a iterator of regions that contains `from` or have keys larger than `from`, and invoke
-    /// the callback to process the result.
-    fn seek_region(&self, _from: &[u8], _callback: SeekRegionCallback) -> Result<()> {
+    /// the callback to process the result. If `from` is None, iterate through all regions.
+    fn seek_region(&self, _from: Option<&[u8]>, _callback: SeekRegionCallback) -> Result<()> {
         unimplemented!()
     }
 
@@ -629,9 +633,9 @@ pub trait RegionInfoProvider: Send + Sync {
 }
 
 impl RegionInfoProvider for RegionInfoAccessor {
-    fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> Result<()> {
+    fn seek_region(&self, from: Option<&[u8]>, callback: SeekRegionCallback) -> Result<()> {
         let msg = RegionInfoQuery::SeekRegion {
-            from: from.to_vec(),
+            from: from.map(|key| key.to_vec()),
             callback,
         };
         self.scheduler

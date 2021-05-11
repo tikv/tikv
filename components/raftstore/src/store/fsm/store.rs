@@ -47,7 +47,9 @@ use tikv_util::{box_err, box_try, debug, error, info, slow_log, warn};
 use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
 
 use crate::coprocessor::split_observer::SplitObserver;
-use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
+use crate::coprocessor::{
+    BoxAdminObserver, CoprocessorHost, RegionChangeEvent, RegionInfoAccessor,
+};
 use crate::store::config::Config;
 use crate::store::fsm::metrics::*;
 use crate::store::fsm::peer::{
@@ -66,8 +68,9 @@ use crate::store::transport::Transport;
 use crate::store::util::{is_initial_msg, RegionReadProgress};
 use crate::store::worker::{
     AutoSplitController, CleanupRunner, CleanupSSTRunner, CleanupSSTTask, CleanupTask,
-    CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner,
-    RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RegionRunner, RegionTask, SplitCheckTask,
+    CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
+    FlushRegionMetricsRunner, FlushRegionMetricsTask, PdRunner, RaftlogGcRunner, RaftlogGcTask,
+    ReadDelegate, RegionRunner, RegionTask, SplitCheckTask,
 };
 use crate::store::PdTask;
 use crate::store::PeerTicks;
@@ -312,6 +315,7 @@ where
     // handle Compact, CleanupSST task
     pub cleanup_scheduler: Scheduler<CleanupTask>,
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
+    pub flush_region_metrics_scheduler: Scheduler<FlushRegionMetricsTask>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     pub apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
@@ -871,6 +875,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     split_check_scheduler: Scheduler<SplitCheckTask>,
     cleanup_scheduler: Scheduler<CleanupTask>,
     raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
+    flush_region_metrics_scheduler: Scheduler<FlushRegionMetricsTask>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
@@ -1076,6 +1081,7 @@ where
             router: self.router.clone(),
             cleanup_scheduler: self.cleanup_scheduler.clone(),
             raftlog_gc_scheduler: self.raftlog_gc_scheduler.clone(),
+            flush_region_metrics_scheduler: self.flush_region_metrics_scheduler.clone(),
             importer: self.importer.clone(),
             store_meta: self.store_meta.clone(),
             pending_create_peers: self.pending_create_peers.clone(),
@@ -1167,6 +1173,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         auto_split_controller: AutoSplitController,
         global_replication_state: Arc<Mutex<GlobalReplicationState>>,
         concurrency_manager: ConcurrencyManager,
+        region_info_accessor: RegionInfoAccessor,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1217,6 +1224,11 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .background_worker
             .start("consistency-check", consistency_check_runner);
 
+        let region_metrics_flusher = FlushRegionMetricsRunner::new(region_info_accessor);
+        let flush_region_metrics_scheduler = workers
+            .background_worker
+            .start("region-metrics", region_metrics_flusher);
+
         let mut builder = RaftPollerBuilder {
             cfg,
             store: meta,
@@ -1228,6 +1240,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             consistency_check_scheduler,
             cleanup_scheduler,
             raftlog_gc_scheduler,
+            flush_region_metrics_scheduler,
             apply_router: self.apply_router.clone(),
             trans,
             coprocessor_host,

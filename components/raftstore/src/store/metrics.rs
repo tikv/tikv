@@ -201,17 +201,23 @@ make_auto_flush_static_metric! {
 
 make_static_metric! {
     pub struct HibernateStateGauge: IntGauge {
-        "group_state" => {
+        "role" => {
+            leader,
+            non_leader,
+        },
+        "state" => {
             ordered,
             chaos,
             pre_chaos,
             idle,
-        },
-        "leader_state" => {
+        }
+    }
+
+    pub struct HibernateLeaderStateGauge: IntGauge {
+        "state" => {
             awaken,
             poll,
             hibernated,
-            follower,
         }
     }
 }
@@ -541,6 +547,12 @@ lazy_static! {
         HibernateStateGauge,
         "tikv_raftstore_hibernate_state_count",
         "Region count in different hibernate states",
-        &["group_state", "leader_state"]
+        &["role", "state"]
+    ).unwrap();
+    pub static ref HIBERNATE_LEADER_STATE: HibernateLeaderStateGauge = register_static_int_gauge_vec!(
+        HibernateLeaderStateGauge,
+        "tikv_raftstore_hibernate_leader_state_count",
+        "Leader count in different hibernate leader states",
+        &["state"]
     ).unwrap();
 }

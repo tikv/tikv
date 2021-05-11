@@ -497,7 +497,7 @@ impl<R: RegionInfoProvider> Progress<R> {
         let raw_kv = self.is_raw_kv;
         let cf_name = self.cf;
         let res = self.region_info.seek_region(
-            &start_key_,
+            Some(&start_key_),
             Box::new(move |iter| {
                 let mut count = 0;
                 for info in iter {

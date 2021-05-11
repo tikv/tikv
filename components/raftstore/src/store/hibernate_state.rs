@@ -9,7 +9,7 @@ use serde_derive::{Deserialize, Serialize};
 const NEGOTIATION_HIBERNATE: Feature = Feature::require(5, 0, 0);
 
 /// Represents state of the group.
-#[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize, Hash)]
 pub enum GroupState {
     /// The group is working generally, leader keeps
     /// replicating data to followers.
@@ -32,8 +32,8 @@ pub enum LeaderState {
 
 #[derive(Clone, Debug)]
 pub struct HibernateState {
-    group: GroupState,
-    leader: LeaderState,
+    pub group: GroupState,
+    pub leader: LeaderState,
 }
 
 #[derive(Debug)]
