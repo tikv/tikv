@@ -102,22 +102,23 @@ impl CdcObserver {
 impl Coprocessor for CdcObserver {}
 
 impl<E: KvEngine> CmdObserver<E> for CdcObserver {
-    fn on_prepare_for_apply(&self, observe_id: ObserveID, region_id: u64) {
+    fn on_prepare_for_apply(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64) {
         self.cmd_batches
             .borrow_mut()
-            .push(CmdBatch::new(observe_id, region_id));
+            .push(CmdBatch::new(cdc_id, rts_id, region_id));
     }
 
-    fn on_apply_cmd(&self, observe_id: ObserveID, region_id: u64, cmd: Cmd) {
+    fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: Cmd) {
         self.cmd_batches
             .borrow_mut()
             .last_mut()
             .expect("should exist some cmd batch")
-            .push(observe_id, region_id, cmd);
+            .push(cdc_id, rts_id, region_id, cmd);
     }
 
     fn on_flush_apply(&self, engine: E) {
         fail_point!("before_cdc_flush_apply");
+        self.cmd_batches.borrow_mut().retain(|b| !b.is_empty());
         if !self.cmd_batches.borrow().is_empty() {
             let batches = self.cmd_batches.replace(Vec::default());
             let mut region = Region::default();
@@ -130,32 +131,34 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
                 old_value_cache.access_count += 1;
                 if let Some((old_value, mutation_type)) = old_value_cache.cache.remove(&key) {
                     return match mutation_type {
-                        MutationType::Insert => (None, None),
-                        MutationType::Put | MutationType::Delete => match old_value {
-                            OldValue::None => (None, None),
-                            OldValue::Value {
-                                start_ts,
-                                short_value,
-                            } => {
-                                let mut statistics = None;
-                                let value = short_value.or_else(|| {
-                                    statistics = Some(Statistics::default());
+                        // Old value of an Insert is guaranteed to be None.
+                        Some(MutationType::Insert) => {
+                            assert_eq!(old_value, OldValue::None);
+                            (None, None)
+                        }
+                        // For Put, Delete or a mutation type we do not know,
+                        // we read old value from the cache.
+                        Some(MutationType::Put) | Some(MutationType::Delete) | None => {
+                            match old_value {
+                                OldValue::None => (None, None),
+                                OldValue::Value { value } => (Some(value), None),
+                                OldValue::ValueTimeStamp { start_ts } => {
+                                    let mut statistics = Statistics::default();
                                     let prev_key = key.truncate_ts().unwrap().append_ts(start_ts);
                                     let start = Instant::now();
                                     let mut opts = ReadOptions::new();
                                     opts.set_fill_cache(false);
-                                    let value = reader
-                                        .get_value_default(&prev_key, statistics.as_mut().unwrap());
+                                    let value =
+                                        reader.get_value_default(&prev_key, &mut statistics);
                                     CDC_OLD_VALUE_DURATION_HISTOGRAM
                                         .with_label_values(&["get"])
                                         .observe(start.elapsed().as_secs_f64());
-                                    value
-                                });
-                                (value, statistics)
+                                    (value, Some(statistics))
+                                }
+                                // Unspecified should not be added into cache.
+                                OldValue::Unspecified => unreachable!(),
                             }
-                            // Unspecified should not be added into cache.
-                            OldValue::Unspecified => unreachable!(),
-                        },
+                        }
                         _ => unreachable!(),
                     };
                 }
@@ -170,13 +173,16 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
                 CDC_OLD_VALUE_DURATION_HISTOGRAM
                     .with_label_values(&["seek"])
                     .observe(start.elapsed().as_secs_f64());
+                if value.is_none() {
+                    old_value_cache.miss_none_count += 1;
+                }
                 (value, Some(statistics))
             };
             if let Err(e) = self.sched.schedule(Task::MultiBatch {
                 multi: batches,
                 old_value_cb: Box::new(get_old_value),
             }) {
-                warn!("schedule cdc task failed"; "error" => ?e);
+                warn!("cdc schedule task failed"; "error" => ?e);
             }
         }
     }
@@ -195,7 +201,7 @@ impl RoleObserver for CdcObserver {
                     err: CdcError::request(store_err.into()),
                 };
                 if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
-                    error!("schedule cdc task failed"; "error" => ?e);
+                    error!("cdc schedule cdc task failed"; "error" => ?e);
                 }
             }
         }
@@ -220,7 +226,7 @@ impl RegionChangeObserver for CdcObserver {
                     err: CdcError::request(store_err.into()),
                 };
                 if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
-                    error!("schedule cdc task failed"; "error" => ?e);
+                    error!("cdc schedule cdc task failed"; "error" => ?e);
                 }
             }
         }
@@ -319,9 +325,12 @@ mod tests {
         let observe_id = ObserveID::new();
         let engine = TestEngineBuilder::new().build().unwrap().get_rocksdb();
 
-        <CdcObserver as CmdObserver<RocksEngine>>::on_prepare_for_apply(&observer, observe_id, 0);
+        <CdcObserver as CmdObserver<RocksEngine>>::on_prepare_for_apply(
+            &observer, observe_id, observe_id, 0,
+        );
         <CdcObserver as CmdObserver<RocksEngine>>::on_apply_cmd(
             &observer,
+            observe_id,
             observe_id,
             0,
             Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),

@@ -124,7 +124,6 @@ async-stream = "0.2"
 async-trait = "0.1"
 backtrace = "0.3"
 batch-system = { path = "components/batch-system", default-features = false }
-bitflags = "1.0.1"
 byteorder = "1.2"
 chrono = "0.4"
 codec = { path = "components/codec", default-features = false }
@@ -175,7 +174,6 @@ pnet_datalink = "0.23"
 prost = "0.7"
 pprof = { version = "^0.4", default-features = false, features = ["flamegraph", "protobuf"] }
 protobuf = "2.8"
-quick-error = "1.2.3"
 raft = { version = "0.6.0-alpha", default-features = false }
 raftstore = { path = "components/raftstore", default-features = false }
 raft_log_engine = { path = "components/raft_log_engine", default-features = false }
@@ -183,6 +181,7 @@ rand = "0.7.3"
 regex = "1.3"
 rev_lines = "0.2.1"
 security = { path = "components/security", default-features = false }
+semver = "0.11"
 serde = { version = "1.0", features = ["derive"] }
 serde_derive = "1.0"
 serde_ignored = "0.1"
@@ -229,7 +228,9 @@ tokio = { version = "0.2", features = ["macros", "rt-threaded", "time"] }
 zipf = "6.1.0"
 
 [patch.'https://github.com/pingcap/kvproto']
-kvproto = { rev = "6212d77cfd9f1ea1ddc2139be0cda23895d84956", git = "https://github.com/gregwebs/kvproto.git", default-features = false }
+kvproto = { rev = "a695ca28f52471e5e17f602655842eb3d67beef8", git = "https://github.com/gregwebs/kvproto.git", default-features = false }
+[build-dependencies]
+example_plugin = { path = "components/test_coprocessor_plugin/example_plugin" }
 
 [patch.crates-io]
 # TODO: remove this when new raft-rs is published.

@@ -168,7 +168,7 @@ struct TiKVServer<ER: RaftEngine> {
 struct TiKVEngines<ER: RaftEngine> {
     engines: Engines<RocksEngine, ER>,
     store_meta: Arc<Mutex<StoreMeta>>,
-    engine: RaftKv<ServerRaftStoreRouter<RocksEngine, ER>>,
+    engine: RaftKv<RocksEngine, ServerRaftStoreRouter<RocksEngine, ER>>,
 }
 
 struct Servers<ER: RaftEngine> {
@@ -258,13 +258,21 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     /// - If the max open file descriptor limit is not high enough to support
     ///   the main database and the raft database.
     fn init_config(mut config: TiKvConfig) -> ConfigController {
+        validate_and_persist_config(&mut config, true);
+
         ensure_dir_exist(&config.storage.data_dir).unwrap();
+        if !config.rocksdb.wal_dir.is_empty() {
+            ensure_dir_exist(&config.rocksdb.wal_dir).unwrap();
+        }
         if config.raft_engine.enable {
             ensure_dir_exist(&config.raft_engine.config().dir).unwrap();
         } else {
             ensure_dir_exist(&config.raft_store.raftdb_path).unwrap();
+            if !config.raftdb.wal_dir.is_empty() {
+                ensure_dir_exist(&config.raftdb.wal_dir).unwrap();
+            }
         }
-        validate_and_persist_config(&mut config, true);
+
         check_system_config(&config);
 
         tikv_util::set_panic_hook(false, &config.storage.data_dir);
@@ -457,7 +465,10 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
     fn init_gc_worker(
         &mut self,
-    ) -> GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine, ER>>, RaftRouter<RocksEngine, ER>> {
+    ) -> GcWorker<
+        RaftKv<RocksEngine, ServerRaftStoreRouter<RocksEngine, ER>>,
+        RaftRouter<RocksEngine, ER>,
+    > {
         let engines = self.engines.as_ref().unwrap();
         let mut gc_worker = GcWorker::new(
             engines.engine.clone(),
@@ -597,9 +608,16 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             cop_read_pools.handle()
         };
 
+        // Create resolved ts worker
+        let mut rts_worker = Box::new(LazyWorker::new("resolved-ts"));
+        let rts_scheduler = rts_worker.scheduler();
+
         // Register cdc
         let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
         cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+        // Register resolved ts
+        let resolved_ts_ob = resolved_ts::Observer::new(rts_scheduler.clone());
+        resolved_ts_ob.register_to(self.coprocessor_host.as_mut().unwrap());
 
         let server_config = Arc::new(self.config.server.clone());
 
@@ -631,7 +649,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 self.concurrency_manager.clone(),
                 engine_rocks::raw_util::to_raw_perf_level(self.config.coprocessor.perf_level),
             ),
-            coprocessor_v2::Endpoint::new(),
+            coprocessor_v2::Endpoint::new(&self.config.coprocessor_v2),
             self.router.clone(),
             self.resolver.clone(),
             snap_mgr.clone(),
@@ -643,8 +661,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
 
         let import_path = self.store_path.join("import");
-        let importer =
-            Arc::new(SSTImporter::new(import_path, self.encryption_key_manager.clone()).unwrap());
+        let importer = Arc::new(
+            SSTImporter::new(
+                &self.config.import,
+                import_path,
+                self.encryption_key_manager.clone(),
+            )
+            .unwrap(),
+        );
 
         let split_check_runner = SplitCheckRunner::new(
             engines.engines.kv.clone(),
@@ -738,6 +762,21 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         );
         cdc_worker.start_with_timer(cdc_endpoint);
         self.to_stop.push(cdc_worker);
+        // Start resolved ts
+        let rts_endpoint = resolved_ts::Endpoint::new(
+            &self.config.cdc,
+            rts_scheduler,
+            self.router.clone(),
+            engines.store_meta.clone(),
+            self.pd_client.clone(),
+            self.concurrency_manager.clone(),
+            server.env(),
+            self.security_mgr.clone(),
+            // TODO: replace to the cdc sinker
+            resolved_ts::DummySinker::new(),
+        );
+        rts_worker.start(rts_endpoint);
+        self.to_stop.push(rts_worker);
 
         self.servers = Some(Servers {
             lock_mgr,
@@ -1023,6 +1062,7 @@ impl TiKVServer<RaftLogEngine> {
         // Try to dump and recover raft data.
         crate::dump::check_and_dump_raft_db(
             &self.config.raft_store.raftdb_path,
+            &self.config.raftdb.wal_dir,
             &raft_engine,
             env.clone(),
             8,

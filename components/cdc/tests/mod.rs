@@ -15,6 +15,7 @@ use kvproto::kvrpcpb::*;
 use kvproto::tikvpb::TikvClient;
 use raftstore::coprocessor::CoprocessorHost;
 use test_raftstore::*;
+use tikv::config::CdcConfig;
 use tikv_util::worker::LazyWorker;
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
@@ -74,7 +75,7 @@ pub fn new_event_feed(
         if !keep_resolved_ts && change_data_event.has_resolved_ts() {
             continue;
         }
-        tikv_util::info!("receive event {:?}", change_data_event);
+        tikv_util::info!("cdc receive event {:?}", change_data_event);
         break change_data_event;
     };
     (
@@ -148,7 +149,7 @@ impl TestSuite {
             let cm = sim.get_concurrency_manager(*id);
             let env = Arc::new(Environment::new(1));
             let mut cdc_endpoint = cdc::Endpoint::new(
-                &cluster.cfg.cdc,
+                &CdcConfig::default(),
                 pd_cli.clone(),
                 worker.scheduler(),
                 raft_router,
@@ -159,7 +160,7 @@ impl TestSuite {
                 sim.security_mgr.clone(),
             );
             cdc_endpoint.set_min_ts_interval(Duration::from_millis(100));
-            cdc_endpoint.set_scan_batch_size(2);
+            cdc_endpoint.set_max_scan_batch_size(2);
             concurrency_managers.insert(*id, cm);
             worker.start(cdc_endpoint);
         }
@@ -176,8 +177,8 @@ impl TestSuite {
     }
 
     pub fn stop(mut self) {
-        for (_, mut worker) in self.endpoints {
-            worker.stop();
+        for (_, worker) in self.endpoints.drain() {
+            worker.stop_worker();
         }
         self.cluster.shutdown();
     }
@@ -188,7 +189,10 @@ impl TestSuite {
             ..Default::default()
         };
         req.set_region_epoch(self.get_context(region_id).take_region_epoch());
-        req.mut_header().set_ticdc_version("4.0.7".into());
+        // Assume batch resolved ts will be release in v4.0.7
+        // For easy of testing (nightly CI), we lower the gate to v4.0.6
+        // TODO bump the version when cherry pick to release branch.
+        req.mut_header().set_ticdc_version("4.0.6".into());
         req
     }
 

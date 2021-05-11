@@ -89,7 +89,7 @@ use std::{
     sync::{atomic, Arc},
 };
 use tikv_util::time::{Instant, ThreadReadId};
-use txn_types::{Key, KvPair, Lock, Mutation, TimeStamp, TsSet, Value};
+use txn_types::{Key, KvPair, Lock, Mutation, OldValues, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
@@ -180,10 +180,10 @@ macro_rules! check_key_size {
         for k in $key_iter {
             let key_size = k.len();
             if key_size > $max_key_size {
-                $callback(Err(Error::from(ErrorInner::KeyTooLarge(
-                    key_size,
-                    $max_key_size,
-                ))));
+                $callback(Err(Error::from(ErrorInner::KeyTooLarge {
+                    size: key_size,
+                    limit: $max_key_size,
+                })));
                 return Ok(());
             }
         }
@@ -425,7 +425,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             CMD,
                         ) {
                             Ok(mut snap_ctx) => {
-                                snap_ctx.read_id = read_id.clone();
+                                snap_ctx.read_id = if ctx.get_stale_read() {
+                                    None
+                                } else {
+                                    read_id.clone()
+                                };
                                 snap_ctx
                             }
                             Err(e) => {
@@ -665,7 +669,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                 .get(CMD)
                                 .locked
                                 .observe(begin_instant.elapsed().as_secs_f64());
-                            mvcc::Error::from(e)
+                            txn::Error::from_mvcc(e)
                         })?;
                     CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC
                         .get(CMD)
@@ -673,24 +677,19 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .observe(begin_instant.elapsed().as_secs_f64());
                 }
 
-                let snap_ctx = if need_check_locks_in_replica_read(&ctx) {
+                let mut snap_ctx = SnapContext {
+                    pb_ctx: &ctx,
+                    start_ts,
+                    ..Default::default()
+                };
+                if need_check_locks_in_replica_read(&ctx) {
                     let mut key_range = KeyRange::default();
                     key_range.set_start_key(start_key.as_encoded().to_vec());
                     if let Some(end_key) = &end_key {
                         key_range.set_end_key(end_key.as_encoded().to_vec());
                     }
-                    SnapContext {
-                        pb_ctx: &ctx,
-                        read_id: None,
-                        start_ts,
-                        key_ranges: vec![key_range],
-                    }
-                } else {
-                    SnapContext {
-                        pb_ctx: &ctx,
-                        ..Default::default()
-                    }
-                };
+                    snap_ctx.key_ranges = vec![key_range];
+                }
 
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
@@ -801,7 +800,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                 .get(CMD)
                                 .locked
                                 .observe(begin_instant.elapsed().as_secs_f64());
-                            Err(mvcc::Error::from(mvcc::ErrorInner::KeyIsLocked(
+                            Err(txn::Error::from_mvcc(mvcc::ErrorInner::KeyIsLocked(
                                 lock.clone().into_lock_info(key.to_raw()?),
                             )))
                         } else {
@@ -1668,7 +1667,7 @@ fn prepare_snap_ctx<'a>(
                         .get(cmd)
                         .locked
                         .observe(begin_instant.elapsed().as_secs_f64());
-                    mvcc::Error::from(e)
+                    txn::Error::from_mvcc(e)
                 })?;
         }
         CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC
@@ -1892,6 +1891,7 @@ pub mod test_util {
             None,
             return_values,
             for_update_ts.next(),
+            OldValues::default(),
             Context::default(),
         )
     }
@@ -1928,6 +1928,7 @@ mod tests {
 
     use crate::config::TitanDBConfig;
     use crate::storage::kv::{ExpectedWrite, MockEngineBuilder};
+    use crate::storage::lock_manager::DiagnosticContext;
     use crate::storage::mvcc::LockType;
     use crate::storage::txn::commands::{AcquirePessimisticLock, Prewrite};
     use crate::storage::{
@@ -1987,8 +1988,8 @@ mod tests {
         let result = block_on(storage.get(Context::default(), Key::from_raw(b"x"), 100.into()));
         assert!(matches!(
             result,
-            Err(Error(box ErrorInner::Mvcc(mvcc::Error(
-                box mvcc::ErrorInner::KeyIsLocked { .. }
+            Err(Error(box ErrorInner::Txn(txn::Error(
+                box txn::ErrorInner::Mvcc(mvcc::Error(box mvcc::ErrorInner::KeyIsLocked { .. }))
             ))))
         ));
     }
@@ -5467,6 +5468,7 @@ mod tests {
             lock: Lock,
             is_first_lock: bool,
             timeout: Option<WaitTimeout>,
+            diag_ctx: DiagnosticContext,
         },
 
         WakeUp {
@@ -5507,6 +5509,7 @@ mod tests {
             lock: Lock,
             is_first_lock: bool,
             timeout: Option<WaitTimeout>,
+            diag_ctx: DiagnosticContext,
         ) {
             self.tx
                 .send(Msg::WaitFor {
@@ -5516,6 +5519,7 @@ mod tests {
                     lock,
                     is_first_lock,
                     timeout,
+                    diag_ctx,
                 })
                 .unwrap();
         }
@@ -5583,6 +5587,7 @@ mod tests {
                     Some(WaitTimeout::Millis(100)),
                     false,
                     21.into(),
+                    OldValues::default(),
                     Context::default(),
                 ),
                 expect_ok_callback(tx, 0),
@@ -6146,6 +6151,7 @@ mod tests {
                     None,
                     false,
                     0.into(),
+                    OldValues::default(),
                     Default::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -6166,6 +6172,7 @@ mod tests {
                     None,
                     false,
                     0.into(),
+                    OldValues::default(),
                     Default::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -6380,6 +6387,7 @@ mod tests {
                 None,
                 false,
                 TimeStamp::new(12),
+                OldValues::default(),
                 Context::default(),
             ),
             pipelined_pessimistic_lock: true,
@@ -6403,6 +6411,7 @@ mod tests {
                 None,
                 false,
                 TimeStamp::new(12),
+                OldValues::default(),
                 Context::default(),
             ),
             pipelined_pessimistic_lock: false,

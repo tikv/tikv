@@ -83,7 +83,6 @@ prometheus = { version = "0.10", features = ["nightly"] }
 prometheus-static-metric = "0.4"
 prost = { version = "0.7", optional = true }
 protobuf = "2.8"
-quick-error = "1.2.3"
 raft = { version = "0.6.0-alpha", default-features = false }
 raft-proto = { version = "0.6.0-alpha", default-features = false }
 rand = "0.7.3"
@@ -95,6 +94,7 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 smallvec = "1.4"
 sst_importer = { path = "../sst_importer", default-features = false }
 tempfile = "3.0"
+thiserror = "1.0"
 tidb_query_datatype = { path = "../tidb_query_datatype", default-features = false }
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util", default-features = false }
