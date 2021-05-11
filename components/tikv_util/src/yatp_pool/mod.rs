@@ -5,6 +5,7 @@ mod metrics;
 pub use future_pool::{Full, FuturePool};
 
 use crate::time::{Duration, Instant};
+use fail::fail_point;
 use std::sync::Arc;
 use yatp::pool::{CloneRunnerBuilder, Local, Runner};
 use yatp::queue::{multilevel, QueueType};
@@ -12,6 +13,14 @@ use yatp::task::future::{Runner as FutureRunner, TaskCell};
 use yatp::ThreadPool;
 
 pub(crate) const TICK_INTERVAL: Duration = Duration::from_secs(1);
+
+fn tick_interval() -> Duration {
+    fail_point!("mock_tick_interval", |_| {
+        let mock_tick_interval = Duration::from_millis(10);
+        mock_tick_interval
+    });
+    TICK_INTERVAL
+}
 
 pub trait PoolTicker: Send + Clone + 'static {
     fn on_tick(&mut self);
@@ -33,7 +42,7 @@ impl<T: PoolTicker> TickerWrapper<T> {
 
     pub fn try_tick(&mut self) {
         let now = Instant::now_coarse();
-        if now.duration_since(self.last_tick_time) < TICK_INTERVAL {
+        if now.duration_since(self.last_tick_time) < tick_interval() {
             return;
         }
         self.last_tick_time = now;

@@ -90,8 +90,9 @@ fn test_node_simple_store_stats() {
 #[test]
 fn test_store_heartbeat_report_hotspots() {
     fail::cfg("mock_hotspot_threshold", "return(0)").unwrap();
+    fail::cfg("mock_tick_interval", "return(0)").unwrap();
     let (cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
-        cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(100);
+        cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(10);
     });
     let (k, v) = (b"key".to_vec(), b"v2".to_vec());
 
@@ -110,8 +111,8 @@ fn test_store_heartbeat_report_hotspots() {
         get_req.key = k.clone();
         let get_resp = client.raw_get(&get_req).unwrap();
         assert_eq!(get_resp.value, v);
-        sleep_ms(10);
     }
+    sleep_ms(50);
     let region_id = cluster.get_region_id(b"");
     let store_id = 1;
     let hot_peers = cluster.pd_client.get_store_hotspots(store_id).unwrap();
@@ -119,5 +120,6 @@ fn test_store_heartbeat_report_hotspots() {
     assert_eq!(peer_stat.get_region_id(), region_id);
     assert!(peer_stat.get_read_keys() > 0);
     assert!(peer_stat.get_read_bytes() > 0);
+    fail::remove("mock_tick_interval");
     fail::remove("mock_hotspot_threshold");
 }
