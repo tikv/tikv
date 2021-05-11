@@ -36,7 +36,7 @@ pub fn canal(buffer: usize) -> (Sink, Drain) {
 pub enum SendError {
     Full,
     Disconnected,
-    Congest,
+    Congested,
 }
 
 impl std::error::Error for SendError {}

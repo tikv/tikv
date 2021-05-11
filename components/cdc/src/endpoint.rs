@@ -653,7 +653,7 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                     debug!("cdc send event failed, disconnected";
                         "conn_id" => ?conn.get_id(), "downstream" => ?conn.get_peer());
                 }
-                Err(SendError::Full) | Err(SendError::Congest) => {
+                Err(SendError::Full) | Err(SendError::Congested) => {
                     info!("cdc send event failed, full";
                         "conn_id" => ?conn.get_id(), "downstream" => ?conn.get_peer());
                 }
