@@ -25,6 +25,7 @@
 // FIXME: ditto. probably a result of the above
 #![allow(clippy::no_effect)]
 #![feature(box_patterns)]
+#![feature(matches_macro)]
 
 #[macro_use]
 extern crate failure;
