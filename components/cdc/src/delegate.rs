@@ -429,8 +429,8 @@ impl Delegate {
         let mut pending = self.pending.take().unwrap();
         for lock in pending.take_locks() {
             match lock {
-                PendingLock::Track { key, start_ts } => resolver.track_lock(start_ts, key),
-                PendingLock::Untrack { key } => resolver.untrack_lock(&key),
+                PendingLock::Track { key, start_ts } => resolver.track_lock(start_ts, key, None),
+                PendingLock::Untrack { key } => resolver.untrack_lock(&key, None),
             }
         }
         self.resolver = Some(resolver);
@@ -737,7 +737,7 @@ impl Delegate {
                 // we must track inflight txns.
                 match self.resolver {
                     Some(ref mut resolver) => {
-                        resolver.track_lock(row.start_ts.into(), row.key.clone())
+                        resolver.track_lock(row.start_ts.into(), row.key.clone(), None)
                     }
                     None => {
                         assert!(self.pending.is_some(), "region resolver not ready");
@@ -769,7 +769,7 @@ impl Delegate {
             "lock" => {
                 let raw_key = Key::from_encoded(delete.take_key()).into_raw().unwrap();
                 match self.resolver {
-                    Some(ref mut resolver) => resolver.untrack_lock(&raw_key),
+                    Some(ref mut resolver) => resolver.untrack_lock(&raw_key, None),
                     None => {
                         assert!(self.pending.is_some(), "region resolver not ready");
                         let key_len = raw_key.len();

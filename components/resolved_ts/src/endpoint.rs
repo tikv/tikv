@@ -141,16 +141,15 @@ impl ObserveRegion {
                         }
                         ChangeLog::Rows { rows, index } => {
                             rows.iter().for_each(|row| match row {
-                                ChangeRow::Prewrite { key, start_ts, .. } => {
-                                    self.resolver.track_lock(*start_ts, key.to_raw().unwrap())
-                                }
-                                ChangeRow::Commit { key, .. } => {
-                                    self.resolver.untrack_lock(&key.to_raw().unwrap())
-                                }
+                                ChangeRow::Prewrite { key, start_ts, .. } => self
+                                    .resolver
+                                    .track_lock(*start_ts, key.to_raw().unwrap(), Some(*index)),
+                                ChangeRow::Commit { key, .. } => self
+                                    .resolver
+                                    .untrack_lock(&key.to_raw().unwrap(), Some(*index)),
                                 // One pc command do not contains any lock, so just skip it
                                 ChangeRow::OnePc { .. } => {}
                             });
-                            self.resolver.update_tracked_index(*index);
                         }
                     }
                 }
@@ -167,12 +166,11 @@ impl ObserveRegion {
                         panic!("region {:?} resolver has ready", self.meta.id)
                     }
                     for (key, lock) in locks {
-                        self.resolver.track_lock(lock.ts, key.to_raw().unwrap());
+                        self.resolver
+                            .track_lock(lock.ts, key.to_raw().unwrap(), Some(apply_index));
                     }
                 }
                 ScanEntry::None => {
-                    // Update tracked index to the scanned data
-                    self.resolver.update_tracked_index(apply_index);
                     let status =
                         std::mem::replace(&mut self.resolver_status, ResolverStatus::Ready);
                     match status {
@@ -182,17 +180,15 @@ impl ObserveRegion {
                             ..
                         } => {
                             locks.into_iter().for_each(|lock| match lock {
-                                PendingLock::Track { key, start_ts } => {
-                                    self.resolver.track_lock(start_ts, key.to_raw().unwrap())
-                                }
-                                PendingLock::Untrack { key, .. } => {
-                                    self.resolver.untrack_lock(&key.to_raw().unwrap())
-                                }
+                                PendingLock::Track { key, start_ts } => self.resolver.track_lock(
+                                    start_ts,
+                                    key.to_raw().unwrap(),
+                                    Some(tracked_index),
+                                ),
+                                PendingLock::Untrack { key, .. } => self
+                                    .resolver
+                                    .untrack_lock(&key.to_raw().unwrap(), Some(tracked_index)),
                             });
-                            // Update tracked index to the pending data
-                            if tracked_index != 0 {
-                                self.resolver.update_tracked_index(tracked_index);
-                            }
                             debug!(
                                 "Resolver initialized";
                                 "region" => self.meta.id,

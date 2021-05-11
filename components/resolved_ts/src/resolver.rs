@@ -53,7 +53,17 @@ impl Resolver {
         &self.lock_ts_heap
     }
 
-    pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>) {
+    pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>, index: Option<u64>) {
+        if let Some(index) = index {
+            assert!(
+                self.tracked_index <= index,
+                "region {}, tracked_index: {}, incoming index: {}",
+                self.region_id,
+                self.tracked_index,
+                index
+            );
+            self.tracked_index = index;
+        }
         debug!(
             "track lock {}@{}, region {}",
             &log_wrappers::Value::key(&key),
@@ -65,7 +75,17 @@ impl Resolver {
         self.lock_ts_heap.entry(start_ts).or_default().insert(key);
     }
 
-    pub fn untrack_lock(&mut self, key: &[u8]) {
+    pub fn untrack_lock(&mut self, key: &[u8], index: Option<u64>) {
+        if let Some(index) = index {
+            assert!(
+                self.tracked_index <= index,
+                "region {}, tracked_index: {}, incoming index: {}",
+                self.region_id,
+                self.tracked_index,
+                index
+            );
+            self.tracked_index = index;
+        }
         let start_ts = if let Some(start_ts) = self.locks_by_key.remove(key) {
             start_ts
         } else {
@@ -86,18 +106,6 @@ impl Resolver {
                 self.lock_ts_heap.remove(&start_ts);
             }
         }
-    }
-
-    // Update `tracked_index`, should be called after `track_lock` and `untrack_lock`
-    pub fn update_tracked_index(&mut self, index: u64) {
-        assert!(
-            self.tracked_index < index,
-            "region {}, tracked_index: {}, incoming index: {}",
-            self.region_id,
-            self.tracked_index,
-            index
-        );
-        self.tracked_index = index;
     }
 
     /// Try to advance resolved ts.
@@ -207,9 +215,9 @@ mod tests {
             for e in case.clone() {
                 match e {
                     Event::Lock(start_ts, key) => {
-                        resolver.track_lock(start_ts.into(), key.into_raw().unwrap())
+                        resolver.track_lock(start_ts.into(), key.into_raw().unwrap(), None)
                     }
-                    Event::Unlock(key) => resolver.untrack_lock(&key.into_raw().unwrap()),
+                    Event::Unlock(key) => resolver.untrack_lock(&key.into_raw().unwrap(), None),
                     Event::Resolve(min_ts, expect) => {
                         assert_eq!(resolver.resolve(min_ts.into()), expect.into(), "case {}", i)
                     }
