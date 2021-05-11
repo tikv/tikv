@@ -240,7 +240,11 @@ macro_rules! impl_evaluable_type {
             fn borrow_scalar_value(v: &ScalarValue) -> Option<&Self> {
                 match v {
                     ScalarValue::$ty(x) => x.as_ref(),
-                    _ => unimplemented!(),
+                    other => panic!(
+                        "Cannot cast {} scalar value into {}",
+                        other.eval_type(),
+                        stringify!($ty),
+                    ),
                 }
             }
 
@@ -248,7 +252,11 @@ macro_rules! impl_evaluable_type {
             fn borrow_scalar_value_ref<'a>(v: ScalarValueRef<'a>) -> Option<&'a Self> {
                 match v {
                     ScalarValueRef::$ty(x) => x,
-                    _ => unimplemented!(),
+                    other => panic!(
+                        "Cannot cast {} scalar value into {}",
+                        other.eval_type(),
+                        stringify!($ty),
+                    ),
                 }
             }
 
@@ -256,7 +264,11 @@ macro_rules! impl_evaluable_type {
             fn borrow_vector_value(v: &VectorValue) -> &ChunkedVecSized<$ty> {
                 match v {
                     VectorValue::$ty(x) => x,
-                    _ => unimplemented!(),
+                    other => panic!(
+                        "Cannot cast {} scalar value into {}",
+                        other.eval_type(),
+                        stringify!($ty),
+                    ),
                 }
             }
         }
@@ -279,7 +291,11 @@ impl Evaluable for Int {
             ScalarValue::Enum(x) => x
                 .as_ref()
                 .map(|x| unsafe { retain_lifetime_transmute::<u64, i64>(x.value_ref()) }),
-            _ => unimplemented!(),
+            other => panic!(
+                "Cannot cast {} scalar value into {}",
+                other.eval_type(),
+                stringify!(Int),
+            ),
         }
     }
 
@@ -290,7 +306,11 @@ impl Evaluable for Int {
             ScalarValueRef::Enum(x) => {
                 x.map(|x| unsafe { retain_lifetime_transmute::<u64, i64>(x.value_ref()) })
             }
-            _ => unimplemented!(),
+            other => panic!(
+                "Cannot cast {} scalar value into {}",
+                other.eval_type(),
+                stringify!(Int),
+            ),
         }
     }
 
@@ -299,7 +319,11 @@ impl Evaluable for Int {
         match v {
             VectorValue::Int(x) => x,
             VectorValue::Enum(x) => x.as_vec_int(),
-            _ => unimplemented!(),
+            other => panic!(
+                "Cannot cast {} scalar value into {}",
+                other.eval_type(),
+                stringify!(Int),
+            ),
         }
     }
 }
@@ -409,7 +433,11 @@ impl<'a> EvaluableRef<'a> for BytesRef<'a> {
         match v {
             ScalarValue::Bytes(x) => x.as_ref().map(|x| x.as_slice()),
             ScalarValue::Enum(x) => x.as_ref().map(|x| x.name()),
-            _ => unimplemented!(),
+            other => panic!(
+                "Cannot cast {} scalar value into {}",
+                other.eval_type(),
+                stringify!(Bytes),
+            ),
         }
     }
 
@@ -418,7 +446,11 @@ impl<'a> EvaluableRef<'a> for BytesRef<'a> {
         match v {
             ScalarValueRef::Bytes(x) => x,
             ScalarValueRef::Enum(x) => x.map(|x| x.name()),
-            _ => unimplemented!(),
+            other => panic!(
+                "Cannot cast {} scalar value into {}",
+                other.eval_type(),
+                stringify!(Bytes),
+            ),
         }
     }
 
@@ -427,7 +459,11 @@ impl<'a> EvaluableRef<'a> for BytesRef<'a> {
         match v {
             VectorValue::Bytes(x) => x,
             VectorValue::Enum(x) => x.as_vec_bytes(),
-            _ => unimplemented!(),
+            other => panic!(
+                "Cannot cast {} scalar value into {}",
+                other.eval_type(),
+                stringify!(Bytes),
+            ),
         }
     }
 
@@ -475,7 +511,11 @@ impl<'a> EvaluableRef<'a> for JsonRef<'a> {
     fn borrow_scalar_value(v: &'a ScalarValue) -> Option<Self> {
         match v {
             ScalarValue::Json(x) => x.as_ref().map(|x| x.as_ref()),
-            _ => unimplemented!(),
+            other => panic!(
+                "Cannot cast {} scalar value into {}",
+                other.eval_type(),
+                stringify!(Json),
+            ),
         }
     }
 
@@ -483,7 +523,11 @@ impl<'a> EvaluableRef<'a> for JsonRef<'a> {
     fn borrow_scalar_value_ref(v: ScalarValueRef<'a>) -> Option<Self> {
         match v {
             ScalarValueRef::Json(x) => x,
-            _ => unimplemented!(),
+            other => panic!(
+                "Cannot cast {} scalar value into {}",
+                other.eval_type(),
+                stringify!(Json),
+            ),
         }
     }
 
@@ -491,7 +535,11 @@ impl<'a> EvaluableRef<'a> for JsonRef<'a> {
     fn borrow_vector_value(v: &VectorValue) -> &ChunkedVecJson {
         match v {
             VectorValue::Json(x) => x,
-            _ => unimplemented!(),
+            other => panic!(
+                "Cannot cast {} scalar value into {}",
+                other.eval_type(),
+                stringify!(Json),
+            ),
         }
     }
 
@@ -515,21 +563,33 @@ impl<'a> EvaluableRef<'a> for EnumRef<'a> {
     fn borrow_scalar_value(v: &'a ScalarValue) -> Option<Self> {
         match v {
             ScalarValue::Enum(x) => x.as_ref().map(|x| x.as_ref()),
-            _ => unimplemented!(),
+            other => panic!(
+                "Cannot cast {} scalar value into {}",
+                other.eval_type(),
+                stringify!(Enum),
+            ),
         }
     }
     #[inline]
     fn borrow_scalar_value_ref(v: ScalarValueRef<'a>) -> Option<Self> {
         match v {
             ScalarValueRef::Enum(x) => x,
-            _ => unimplemented!(),
+            other => panic!(
+                "Cannot cast {} scalar value into {}",
+                other.eval_type(),
+                stringify!(Enum),
+            ),
         }
     }
     #[inline]
     fn borrow_vector_value(v: &VectorValue) -> &ChunkedVecEnum {
         match v {
             VectorValue::Enum(x) => x,
-            _ => unimplemented!(),
+            other => panic!(
+                "Cannot cast {} scalar value into {}",
+                other.eval_type(),
+                stringify!(Enum),
+            ),
         }
     }
     #[inline]
@@ -550,21 +610,33 @@ impl<'a> EvaluableRef<'a> for SetRef<'a> {
     fn borrow_scalar_value(v: &'a ScalarValue) -> Option<Self> {
         match v {
             ScalarValue::Set(x) => x.as_ref().map(|x| x.as_ref()),
-            _ => unimplemented!(),
+            other => panic!(
+                "Cannot cast {} scalar value into {}",
+                other.eval_type(),
+                stringify!(Set),
+            ),
         }
     }
     #[inline]
     fn borrow_scalar_value_ref(v: ScalarValueRef<'a>) -> Option<Self> {
         match v {
             ScalarValueRef::Set(x) => x,
-            _ => unimplemented!(),
+            other => panic!(
+                "Cannot cast {} scalar value into {}",
+                other.eval_type(),
+                stringify!(Set),
+            ),
         }
     }
     #[inline]
     fn borrow_vector_value(v: &'a VectorValue) -> &ChunkedVecSet {
         match v {
             VectorValue::Set(x) => x,
-            _ => unimplemented!(),
+            other => panic!(
+                "Cannot cast {} scalar value into {}",
+                other.eval_type(),
+                stringify!(Set),
+            ),
         }
     }
     #[inline]

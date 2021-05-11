@@ -160,6 +160,7 @@ fn test_cdc_double_scan_io_error() {
 }
 
 #[test]
+#[ignore = "TODO: support continue scan after region split"]
 fn test_cdc_scan_continues_after_region_split() {
     fail::cfg("cdc_after_incremental_scan_blocks_regional_errors", "pause").unwrap();
 
