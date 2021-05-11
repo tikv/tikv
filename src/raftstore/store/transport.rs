@@ -2,7 +2,7 @@
 
 use crate::raftstore::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, StoreMsg};
 use crate::raftstore::{DiscardReason, Error, Result};
-use crossbeam::TrySendError;
+use crossbeam::channel::TrySendError;
 use kvproto::raft_serverpb::RaftMessage;
 use std::sync::mpsc;
 
