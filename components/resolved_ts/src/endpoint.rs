@@ -25,7 +25,7 @@ use txn_types::{Key, TimeStamp};
 
 use crate::advance::AdvanceTsWorker;
 use crate::cmd::{ChangeLog, ChangeRow};
-use crate::errors::Result;
+use crate::errors::{Error, Result};
 use crate::resolver::Resolver;
 use crate::scanner::{ScanEntry, ScanMode, ScanTask, ScannerPool};
 use crate::sinker::{CmdSinker, SinkCmd};
@@ -87,14 +87,8 @@ impl ObserveRegion {
             } => {
                 for log in change_logs {
                     match log {
-                        ChangeLog::Error(e) => {
-                            debug!(
-                                "skip change log error";
-                                "region" => self.meta.id,
-                                "error" => ?e,
-                            );
-                            continue;
-                        }
+                        // TODO: not need to return `Err` for region error
+                        ChangeLog::Error(e) => return Err(Error::request(e.clone())),
                         ChangeLog::Rows { rows, index } => {
                             rows.iter().for_each(|row| match row {
                                 ChangeRow::Prewrite { key, start_ts, .. } => {
@@ -131,14 +125,7 @@ impl ObserveRegion {
             ResolverStatus::Ready => {
                 for log in change_logs {
                     match log {
-                        ChangeLog::Error(e) => {
-                            debug!(
-                                "skip change log error";
-                                "region" => self.meta.id,
-                                "error" => ?e,
-                            );
-                            continue;
-                        }
+                        ChangeLog::Error(e) => return Err(Error::request(e.clone())),
                         ChangeLog::Rows { rows, index } => {
                             rows.iter().for_each(|row| match row {
                                 ChangeRow::Prewrite { key, start_ts, .. } => self
