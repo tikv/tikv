@@ -16,7 +16,7 @@ use crate::service::{CdcEvent, EventBatcher};
 
 const CDC_MSG_MAX_BATCH_SIZE: usize = 128;
 // Assume the average size of event is 1KB.
-// 2 = (CDC_MSG_MAX_BATCH_SIZE * 1KB / CDC_EVENT_MAX_BATCH_SIZE).ceil() + 1 /* reserve for ResolvedTs */;
+// 2 = (CDC_MSG_MAX_BATCH_SIZE * 1KB / service::CDC_MAX_RESP_SIZE).ceil() + 1 /* reserve for ResolvedTs */;
 pub const CDC_EVENT_MAX_BATCH_SIZE: usize = 2;
 
 pub fn canal(buffer: usize) -> (Sink, Drain) {
