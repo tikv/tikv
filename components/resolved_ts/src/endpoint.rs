@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use concurrency_manager::ConcurrencyManager;
@@ -16,7 +16,7 @@ use raft::StateRole;
 use raftstore::coprocessor::CmdBatch;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::{ObserveID, StoreMeta};
-use raftstore::store::util;
+use raftstore::store::util::{self, RegionReadProgress};
 use raftstore::store::RegionSnapshot;
 use security::SecurityManager;
 use tikv::config::CdcConfig;
@@ -64,7 +64,7 @@ struct ObserveRegion {
 }
 
 impl ObserveRegion {
-    fn new(meta: Region, resolved_ts: Arc<AtomicU64>) -> Self {
+    fn new(meta: Region, resolved_ts: Arc<RegionReadProgress>) -> Self {
         ObserveRegion {
             resolver: Resolver::from_shared(meta.id, resolved_ts),
             meta,
@@ -219,15 +219,13 @@ where
         assert!(self.regions.get(&region_id).is_none());
         let observe_region = {
             let store_meta = self.store_meta.lock().unwrap();
-            if let Some(_read_progress) = store_meta.region_read_progress.get(&region_id) {
+            if let Some(read_progress) = store_meta.region_read_progress.get(&region_id) {
                 info!(
                     "register observe region";
                     "store id" => ?store_meta.store_id.clone(),
                     "region" => ?region
                 );
-                // FIXME: should use `read_progress` to initialize the `ObserveRegion::resolver`
-                // hence the resolver can update the `safe_ts`
-                ObserveRegion::new(region.clone(), Arc::default())
+                ObserveRegion::new(region.clone(), Arc::clone(read_progress))
             } else {
                 warn!(
                     "try register unexit region";
@@ -386,14 +384,14 @@ where
     fn handle_change_log(
         &mut self,
         cmd_batch: Vec<CmdBatch>,
-        snapshot: RegionSnapshot<E::Snapshot>,
+        snapshot: Option<RegionSnapshot<E::Snapshot>>,
     ) {
         let logs = cmd_batch
             .into_iter()
             .filter_map(|batch| {
                 if !batch.is_empty() {
                     if let Some(observe_region) = self.regions.get_mut(&batch.region_id) {
-                        let observe_id = batch.cdc_id;
+                        let observe_id = batch.rts_id;
                         let region_id = observe_region.meta.id;
                         if observe_region.observe_id == observe_id {
                             let logs = ChangeLog::encode_change_log(region_id, batch);
@@ -409,7 +407,7 @@ where
                         } else {
                             debug!("resolved ts CmdBatch discarded";
                                 "region_id" => batch.region_id,
-                                "observe_id" => ?batch.cdc_id,
+                                "observe_id" => ?batch.rts_id,
                                 "current" => ?observe_region.observe_id,
                             );
                         }
@@ -418,7 +416,10 @@ where
                 None
             })
             .collect();
-        self.sinker.sink_cmd(logs, snapshot);
+        match snapshot {
+            Some(snap) => self.sinker.sink_cmd_with_old_value(logs, snap),
+            None => self.sinker.sink_cmd(logs),
+        }
     }
 
     fn handle_scan_locks(
@@ -463,7 +464,7 @@ pub enum Task<S: Snapshot> {
     },
     ChangeLog {
         cmd_batch: Vec<CmdBatch>,
-        snapshot: RegionSnapshot<S>,
+        snapshot: Option<RegionSnapshot<S>>,
     },
     ScanLocks {
         region_id: u64,

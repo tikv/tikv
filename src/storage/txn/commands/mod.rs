@@ -46,7 +46,7 @@ use std::iter;
 use std::marker::PhantomData;
 
 use kvproto::kvrpcpb::*;
-use txn_types::{Key, TimeStamp, Value, Write};
+use txn_types::{Key, OldValues, TimeStamp, Value, Write};
 
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::{self, LockManager, WaitTimeout};
@@ -202,6 +202,7 @@ impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLock
             WaitTimeout::from_encoded(req.get_wait_timeout()),
             req.get_return_values(),
             req.get_min_commit_ts().into(),
+            OldValues::default(),
             req.take_context(),
         )
     }
@@ -363,10 +364,36 @@ pub struct WriteResult {
     pub to_be_write: WriteData,
     pub rows: usize,
     pub pr: ProcessResult,
-    // (lock, is_first_lock, wait_timeout)
-    pub lock_info: Option<(lock_manager::Lock, bool, Option<WaitTimeout>)>,
+    pub lock_info: Option<WriteResultLockInfo>,
     pub lock_guards: Vec<KeyHandleGuard>,
     pub response_policy: ResponsePolicy,
+}
+
+pub struct WriteResultLockInfo {
+    pub lock: lock_manager::Lock,
+    pub key: Vec<u8>,
+    pub is_first_lock: bool,
+    pub wait_timeout: Option<WaitTimeout>,
+}
+
+impl WriteResultLockInfo {
+    pub fn from_lock_info_pb(
+        lock_info: &LockInfo,
+        is_first_lock: bool,
+        wait_timeout: Option<WaitTimeout>,
+    ) -> Self {
+        let lock = lock_manager::Lock {
+            ts: lock_info.get_lock_version().into(),
+            hash: Key::from_raw(lock_info.get_key()).gen_hash(),
+        };
+        let key = lock_info.get_key().to_owned();
+        Self {
+            lock,
+            key,
+            is_first_lock,
+            wait_timeout,
+        }
+    }
 }
 
 impl ReleasedLocks {
