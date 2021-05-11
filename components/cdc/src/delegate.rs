@@ -124,7 +124,7 @@ impl Downstream {
                 Err(Error::Sink(SendError::Disconnected))
             }
             // TODO handle errors.
-            Err(e @ SendError::Full) | Err(e @ SendError::Congest) => {
+            Err(e @ SendError::Full) | Err(e @ SendError::Congested) => {
                 info!("cdc send event failed, full";
                     "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => self.req_id);
                 Err(Error::Sink(e))
