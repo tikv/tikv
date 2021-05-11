@@ -2368,12 +2368,15 @@ impl TiKvConfig {
         } else {
             self.raft_engine.config.dir = config::canonicalize_path(&self.raft_engine.config.dir)?;
         }
+        if self.raft_engine.config.dir == self.raft_store.raftdb_path {
+            return Err("raft_engine.config.dir can't be same as raft_store.raftdb_path".into());
+        }
 
         let kv_db_path =
             config::canonicalize_sub_path(&self.storage.data_dir, DEFAULT_ROCKSDB_SUB_DIR)?;
 
         if kv_db_path == self.raft_store.raftdb_path {
-            return Err("raft_store.raftdb_path can't be same with storage.data_dir/db".into());
+            return Err("raft_store.raftdb_path can't be same as storage.data_dir/db".into());
         }
 
         let kv_db_wal_path = if self.rocksdb.wal_dir.is_empty() {
@@ -2387,7 +2390,7 @@ impl TiKvConfig {
             config::canonicalize_path(&self.raftdb.wal_dir)?
         };
         if kv_db_wal_path == raft_db_wal_path {
-            return Err("raftdb.wal_dir can't be same with rocksdb.wal_dir".into());
+            return Err("raftdb.wal_dir can't be same as rocksdb.wal_dir".into());
         }
 
         if RocksEngine::exists(&kv_db_path)
