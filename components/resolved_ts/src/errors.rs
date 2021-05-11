@@ -5,12 +5,13 @@ use std::io::Error as IoError;
 use engine_traits::Error as EngineTraitsError;
 use kvproto::errorpb::Error as ErrorHeader;
 use raftstore::Error as RaftstoreError;
+use thiserror::Error;
 use tikv::storage::kv::{Error as EngineError, ErrorInner as EngineErrorInner};
 use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 use txn_types::Error as TxnTypesError;
 
-#[derive(thiserror::Error, Debug)]
+#[derive(Debug, Error)]
 pub enum Error {
     #[error("IO error {0}")]
     Io(#[from] IoError),
