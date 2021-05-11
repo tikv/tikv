@@ -62,7 +62,7 @@ impl Service {
 }
 
 impl proto::ExternalStorage for Service {
-    fn write(
+    fn save(
         &mut self,
         _ctx: grpcio::RpcContext,
         req: proto::ExternalStorageWriteRequest,

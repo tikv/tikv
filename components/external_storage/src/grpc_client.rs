@@ -82,7 +82,7 @@ impl ExternalStorage for ExternalStorageClient {
             )?;
             info!("grpc write request");
             self.rpc
-                .write(&req)
+                .save(&req)
                 .map_err(rpc_error_to_io)
                 .context("rpc write")?;
             info!("grpc write request finished");
