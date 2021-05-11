@@ -54,6 +54,13 @@ impl SSTImporter {
         })
     }
 
+<<<<<<< HEAD
+=======
+    pub fn start_switch_mode_check<E: KvEngine>(&self, executor: &ThreadPool, db: E) {
+        self.switcher.start(executor, db);
+    }
+
+>>>>>>> 50e71b481... raftstore: fix not schedule split check (#10119)
     pub fn get_path(&self, meta: &SstMeta) -> PathBuf {
         let path = self.dir.join(meta).unwrap();
         path.save

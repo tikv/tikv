@@ -4,8 +4,6 @@ use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
-use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
-use std::sync::Arc;
 
 use engine_traits::{CfName, IterOptions, Iterable, Iterator, KvEngine, CF_WRITE, LARGE_CFS};
 use kvproto::metapb::Region;
@@ -15,7 +13,6 @@ use kvproto::pdpb::CheckPolicy;
 use crate::coprocessor::Config;
 use crate::coprocessor::CoprocessorHost;
 use crate::coprocessor::SplitCheckerHost;
-use crate::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
 use crate::store::{Callback, CasualMessage, CasualRouter};
 use crate::Result;
 use configuration::{ConfigChange, Configuration};
@@ -135,11 +132,6 @@ pub enum Task {
     ChangeConfig(ConfigChange),
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&Config) + Send>),
-    GetRegionApproximateSizeAndKeys {
-        region: Region,
-        pending_tasks: Arc<AtomicU64>,
-        cb: Box<dyn FnOnce(u64, u64) + Send>,
-    },
 }
 
 impl Task {
@@ -166,11 +158,6 @@ impl Display for Task {
             Task::ChangeConfig(_) => write!(f, "[split check worker] Change Config Task"),
             #[cfg(any(test, feature = "testexport"))]
             Task::Validate(_) => write!(f, "[split check worker] Validate config"),
-            Task::GetRegionApproximateSizeAndKeys { region, .. } => write!(
-                f,
-                "[split check worker] Get region approximate size and keys for region {}",
-                region.get_id()
-            ),
         }
     }
 }
@@ -348,6 +335,7 @@ where
             } => self.check_split(&region, auto_split, policy),
             Task::ChangeConfig(c) => self.change_cfg(c),
             #[cfg(any(test, feature = "testexport"))]
+<<<<<<< HEAD
             Task::Validate(f) => f(&self.cfg),
             Task::GetRegionApproximateSizeAndKeys {
                 region,
@@ -371,6 +359,9 @@ where
                 );
                 cb(size, keys);
             }
+=======
+            Task::Validate(f) => f(&self.coprocessor.cfg),
+>>>>>>> 50e71b481... raftstore: fix not schedule split check (#10119)
         }
     }
 }

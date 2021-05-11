@@ -86,6 +86,10 @@ impl<E: KvEngine> ImportModeSwitcher<E> {
             metrics_fn: mf,
         }));
 
+<<<<<<< HEAD
+=======
+    pub fn start<E: KvEngine>(&self, executor: &ThreadPool, db: E) {
+>>>>>>> 50e71b481... raftstore: fix not schedule split check (#10119)
         // spawn a background future to put TiKV back into normal mode after timeout
         let switcher = Arc::downgrade(&inner);
         let timer_loop = async move {
@@ -97,8 +101,13 @@ impl<E: KvEngine> ImportModeSwitcher<E> {
                     if now >= switcher.next_check {
                         if switcher.mode == SwitchMode::Import {
                             let mf = switcher.metrics_fn;
+<<<<<<< HEAD
                             if switcher.enter_normal_mode(mf).is_err() {
                                 error!("failed to put TiKV back into normal mode");
+=======
+                            if let Err(e) = switcher.enter_normal_mode(&db, mf) {
+                                error!(?e; "failed to put TiKV back into normal mode");
+>>>>>>> 50e71b481... raftstore: fix not schedule split check (#10119)
                             }
                         }
                         switcher.next_check = now + switcher.timeout
@@ -301,7 +310,12 @@ mod tests {
             .create()
             .unwrap();
 
+<<<<<<< HEAD
         let mut switcher = ImportModeSwitcher::new(&cfg, &threads, db.clone());
+=======
+        let switcher = ImportModeSwitcher::new(&cfg);
+        switcher.start(&threads, db.clone());
+>>>>>>> 50e71b481... raftstore: fix not schedule split check (#10119)
         check_import_options(&db, &normal_db_options, &normal_cf_options);
         switcher.enter_import_mode(mf).unwrap();
         check_import_options(&db, &import_db_options, &import_cf_options);
@@ -338,7 +352,12 @@ mod tests {
             .create()
             .unwrap();
 
+<<<<<<< HEAD
         let mut switcher = ImportModeSwitcher::new(&cfg, &threads, db.clone());
+=======
+        let switcher = ImportModeSwitcher::new(&cfg);
+        switcher.start(&threads, db.clone());
+>>>>>>> 50e71b481... raftstore: fix not schedule split check (#10119)
         check_import_options(&db, &normal_db_options, &normal_cf_options);
         switcher.enter_import_mode(mf).unwrap();
         check_import_options(&db, &import_db_options, &import_cf_options);
