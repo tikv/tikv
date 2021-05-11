@@ -90,7 +90,13 @@ impl Resolver {
 
     // Update `tracked_index`, should be called after `track_lock` and `untrack_lock`
     pub fn update_tracked_index(&mut self, index: u64) {
-        assert!(self.tracked_index < index);
+        assert!(
+            self.tracked_index < index,
+            "region {}, tracked_index: {}, incoming index: {}",
+            self.region_id,
+            self.tracked_index,
+            index
+        );
         self.tracked_index = index;
     }
 

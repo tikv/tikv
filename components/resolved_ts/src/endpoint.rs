@@ -116,7 +116,13 @@ impl ObserveRegion {
                                 // One pc command do not contains any lock, so just skip it
                                 ChangeRow::OnePc { .. } => {}
                             });
-                            assert!(*tracked_index < *index);
+                            assert!(
+                                *tracked_index < *index,
+                                "region {}, tracked_index: {}, incoming index: {}",
+                                self.meta.id,
+                                *tracked_index,
+                                *index
+                            );
                             *tracked_index = *index;
                         }
                     }
