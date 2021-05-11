@@ -5,32 +5,20 @@ extern crate clap;
 #[macro_use]
 extern crate vlog;
 
-use std::borrow::ToOwned;
-use std::cmp::Ordering;
-use std::error::Error;
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufRead, BufReader};
-use std::path::{Path, PathBuf};
-use std::string::ToString;
-use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
-use std::{process, str, u64};
-
 use clap::{crate_authors, App, AppSettings, Arg, ArgMatches, SubCommand};
-use futures::{executor::block_on, future, stream, Stream, StreamExt, TryStreamExt};
-use grpcio::{CallOption, ChannelBuilder, Environment};
-use protobuf::Message;
-
 use encryption_export::{
     create_backend, data_key_manager_from_config, encryption_method_from_db_encryption_method,
     DataKeyManager, DecrypterReader, Iv,
 };
 use engine_rocks::encryption::get_env;
+use engine_rocks::raw_util::new_engine_opt;
 use engine_rocks::RocksEngine;
-use engine_traits::{EncryptionKeyManager, Engines, RaftEngine};
-use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{
+    EncryptionKeyManager, Engines, RaftEngine, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE,
+};
 use file_system::calc_crc32;
+use futures::{executor::block_on, future, stream, Stream, StreamExt, TryStreamExt};
+use grpcio::{CallOption, ChannelBuilder, Environment};
 use kvproto::debugpb::{Db as DBType, *};
 use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::kvrpcpb::{MvccInfo, SplitRegionRequest};
@@ -39,13 +27,25 @@ use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::{PeerState, SnapshotMeta};
 use kvproto::tikvpb::TikvClient;
 use pd_client::{Config as PdConfig, PdClient, RpcClient};
+use protobuf::Message;
 use raft::eraftpb::{ConfChange, ConfChangeV2, Entry, EntryType};
 use raft_log_engine::RaftLogEngine;
 use raftstore::store::INIT_EPOCH_CONF_VER;
 use security::{SecurityConfig, SecurityManager};
+use std::borrow::ToOwned;
+use std::cmp::Ordering;
+use std::error::Error;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, BufRead, BufReader};
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use tikv::config::{ConfigController, TiKvConfig};
+use std::string::ToString;
+use std::sync::Arc;
+use std::time::Duration;
+use std::{process, str, thread, u64};
+use tikv::config::{ConfigController, TiKvConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
+use tikv_util::config::canonicalize_sub_path;
 use tikv_util::{escape, unescape};
 use txn_types::Key;
 
@@ -62,70 +62,56 @@ fn perror_and_exit<E: Error>(prefix: &str, e: E) -> ! {
 }
 
 fn new_debug_executor(
-    db: Option<&str>,
-    raft_db: Option<&str>,
+    cfg: &TiKvConfig,
+    data_dir: Option<&str>,
     skip_paranoid_checks: bool,
     host: Option<&str>,
-    cfg: &TiKvConfig,
     mgr: Arc<SecurityManager>,
 ) -> Box<dyn DebugExecutor> {
-    match (host, db) {
-        (None, Some(kv_path)) => {
-            let key_manager =
-                data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
-                    .unwrap()
-                    .map(Arc::new);
-            let cache = cfg.storage.block_cache.build_shared_cache();
-            let shared_block_cache = cache.is_some();
-            let env = get_env(key_manager, None).unwrap();
+    if let Some(remote) = host {
+        return Box::new(new_debug_client(remote, mgr)) as Box<dyn DebugExecutor>;
+    }
 
-            let mut kv_db_opts = cfg.rocksdb.build_opt();
-            kv_db_opts.set_env(env.clone());
-            kv_db_opts.set_paranoid_checks(!skip_paranoid_checks);
-            let kv_cfs_opts = cfg
-                .rocksdb
-                .build_cf_opts(&cache, None, cfg.storage.enable_ttl);
-            let kv_path = PathBuf::from(kv_path).canonicalize().unwrap();
-            let kv_path = kv_path.to_str().unwrap();
-            let kv_db =
-                engine_rocks::raw_util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
-            let mut kv_db = RocksEngine::from_db(Arc::new(kv_db));
-            kv_db.set_shared_block_cache(shared_block_cache);
+    let data_dir = data_dir.unwrap();
+    let kv_path = canonicalize_sub_path(data_dir, DEFAULT_ROCKSDB_SUB_DIR).unwrap();
 
-            let mut raft_path = raft_db
-                .map(ToString::to_string)
-                .unwrap_or_else(|| format!("{}/../raft", kv_path));
-            raft_path = PathBuf::from(raft_path)
-                .canonicalize()
-                .unwrap()
-                .to_str()
-                .map(ToString::to_string)
-                .unwrap();
+    let key_manager = data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
+        .unwrap()
+        .map(Arc::new);
 
-            let cfg_controller = ConfigController::default();
-            if !cfg.raft_engine.enable {
-                let mut raft_db_opts = cfg.raftdb.build_opt();
-                raft_db_opts.set_env(env);
-                let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
-                let raft_db = engine_rocks::raw_util::new_engine_opt(
-                    &raft_path,
-                    raft_db_opts,
-                    raft_db_cf_opts,
-                )
-                .unwrap();
-                let mut raft_db = RocksEngine::from_db(Arc::new(raft_db));
-                raft_db.set_shared_block_cache(shared_block_cache);
-                let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
-                Box::new(debugger) as Box<dyn DebugExecutor>
-            } else {
-                let config = cfg.raft_engine.config();
-                let raft_db = RaftLogEngine::new(config);
-                let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
-                Box::new(debugger) as Box<dyn DebugExecutor>
-            }
-        }
-        (Some(remote), None) => Box::new(new_debug_client(remote, mgr)) as Box<dyn DebugExecutor>,
-        _ => unreachable!(),
+    let cache = cfg.storage.block_cache.build_shared_cache();
+    let shared_block_cache = cache.is_some();
+    let env = get_env(key_manager, None).unwrap();
+
+    let mut kv_db_opts = cfg.rocksdb.build_opt();
+    kv_db_opts.set_env(env.clone());
+    kv_db_opts.set_paranoid_checks(!skip_paranoid_checks);
+    let kv_cfs_opts = cfg
+        .rocksdb
+        .build_cf_opts(&cache, None, cfg.storage.enable_ttl);
+    let kv_path = PathBuf::from(kv_path).canonicalize().unwrap();
+    let kv_path = kv_path.to_str().unwrap();
+    let kv_db = new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
+    let mut kv_db = RocksEngine::from_db(Arc::new(kv_db));
+    kv_db.set_shared_block_cache(shared_block_cache);
+
+    let cfg_controller = ConfigController::default();
+    if !cfg.raft_engine.enable {
+        let mut raft_db_opts = cfg.raftdb.build_opt();
+        raft_db_opts.set_env(env);
+        let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
+        let raft_path = canonicalize_sub_path(data_dir, &cfg.raft_store.raftdb_path).unwrap();
+        let raft_db = new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts).unwrap();
+        let mut raft_db = RocksEngine::from_db(Arc::new(raft_db));
+        raft_db.set_shared_block_cache(shared_block_cache);
+        let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
+        Box::new(debugger) as Box<dyn DebugExecutor>
+    } else {
+        let mut config = cfg.raft_engine.config();
+        config.dir = canonicalize_sub_path(data_dir, &config.dir).unwrap();
+        let raft_db = RaftLogEngine::new(config);
+        let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
+        Box::new(debugger) as Box<dyn DebugExecutor>
     }
 }
 
@@ -327,13 +313,12 @@ trait DebugExecutor {
     fn diff_region(
         &self,
         region: u64,
-        db: Option<&str>,
-        raft_db: Option<&str>,
-        host: Option<&str>,
-        cfg: &TiKvConfig,
+        to_host: Option<&str>,
+        to_data_dir: Option<&str>,
+        to_config: &TiKvConfig,
         mgr: Arc<SecurityManager>,
     ) {
-        let rhs_debug_executor = new_debug_executor(db, raft_db, false, host, cfg, mgr);
+        let rhs_debug_executor = new_debug_executor(to_config, to_data_dir, false, to_host, mgr);
 
         let r1 = self.get_region_info(region);
         let r2 = rhs_debug_executor.get_region_info(region);
@@ -1045,31 +1030,14 @@ fn main() {
         .version(version_info.as_ref())
         .long_version(version_info.as_ref())
         .setting(AppSettings::AllowExternalSubcommands)
+        // Some general arguments.
         .arg(
-            Arg::with_name("db")
-                .long("db")
+            Arg::with_name("pd")
+                .long("pd")
                 .takes_value(true)
-                .help("Set the rocksdb path"),
+                .help("Set the address of pd"),
         )
-        .arg(
-            Arg::with_name("raftdb")
-                .long("raftdb")
-                .takes_value(true)
-                .help("Set the raft rocksdb path"),
-        )
-        .arg(
-            Arg::with_name("skip-paranoid-checks")
-                .required(false)
-                .long("skip-paranoid-checks")
-                .takes_value(false)
-                .help("Skip paranoid checks when open rocksdb"),
-        )
-        .arg(
-            Arg::with_name("config")
-                .long("config")
-                .takes_value(true)
-                .help("Set the config for rocksdb"),
-        )
+        // Arguments for remote mode.
         .arg(
             Arg::with_name("host")
                 .long("host")
@@ -1097,6 +1065,42 @@ fn main() {
                 .takes_value(true)
                 .help("Set the private key path"),
         )
+        // Arguments for local mode.
+        .arg(
+            Arg::with_name("config")
+                .long("config")
+                .takes_value(true)
+                .help("TiKV config path, by default it's <deploy-dir>/conf/tikv.toml"),
+        )
+        .arg(
+            Arg::with_name("data_dir")
+                .long("data-dir")
+                .takes_value(true)
+                .help("TiKV data-dir, check <deploy-dir>/scripts/run.sh to get it"),
+        )
+        .arg(
+            Arg::with_name("skip-paranoid-checks")
+                .required(false)
+                .long("skip-paranoid-checks")
+                .takes_value(false)
+                .help("Skip paranoid checks when open rocksdb"),
+        )
+        // Deprecated arguments.
+        .arg(
+            Arg::with_name("db")
+                .long("db")
+                .takes_value(true)
+                .help("Set the rocksdb path")
+                .validator(|_| Err("DEPRECATED!!! Use --data-dir and --config instead".to_owned())),
+        )
+        .arg(
+            Arg::with_name("raftdb")
+                .long("raftdb")
+                .takes_value(true)
+                .help("Set the raft rocksdb path")
+                .validator(|_| Err("DEPRECATED!!! Use --data-dir and --config instead".to_owned())),
+        )
+        // Encode & decode keys.
         .arg(
             Arg::with_name("hex-to-escaped")
                 .conflicts_with("escaped-to-hex")
@@ -1124,12 +1128,6 @@ fn main() {
                 .long("encode")
                 .takes_value(true)
                 .help("Encode a key in escaped format"),
-        )
-        .arg(
-            Arg::with_name("pd")
-                .long("pd")
-                .takes_value(true)
-                .help("Set the address of pd"),
         )
         .subcommand(
             SubCommand::with_name("raft")
@@ -1352,15 +1350,29 @@ fn main() {
                 )
                 .arg(
                     Arg::with_name("to_db")
-                        .required_unless("to_host")
                         .conflicts_with("to_host")
                         .long("to-db")
                         .takes_value(true)
-                        .help("To which db path"),
+                        .help("To which db path")
+                        .validator(|_| Err("DEPRECATED!!! Use --to-data-dir and --to-config instead".to_owned())),
+                )
+                .arg(
+                    Arg::with_name("to_data_dir")
+                        .conflicts_with("to_host")
+                        .long("to-data-dir")
+                        .takes_value(true)
+                        .help("data-dir of the target TiKV"),
+                )
+                .arg(
+                    Arg::with_name("to_config")
+                        .conflicts_with("to_host")
+                        .long("to-config")
+                        .takes_value(true)
+                        .help("config of the target TiKV"),
                 )
                 .arg(
                     Arg::with_name("to_host")
-                        .required_unless("to_db")
+                        .required_unless("to_data_dir")
                         .conflicts_with("to_db")
                         .long("to-host")
                         .takes_value(true)
@@ -1981,19 +1993,12 @@ fn main() {
     }
 
     // Deal with all subcommands about db or host.
-    let db = matches.value_of("db");
+    let data_dir = matches.value_of("data_dir");
     let skip_paranoid_checks = matches.is_present("skip-paranoid-checks");
-    let raft_db = matches.value_of("raftdb");
     let host = matches.value_of("host");
 
-    let debug_executor = new_debug_executor(
-        db,
-        raft_db,
-        skip_paranoid_checks,
-        host,
-        &cfg,
-        Arc::clone(&mgr),
-    );
+    let debug_executor =
+        new_debug_executor(&cfg, data_dir, skip_paranoid_checks, host, Arc::clone(&mgr));
 
     if let Some(matches) = matches.subcommand_matches("print") {
         let cf = matches.value_of("cf").unwrap();
@@ -2056,9 +2061,15 @@ fn main() {
         debug_executor.dump_mvccs_infos(from, vec![], 0, cfs, start_ts, commit_ts);
     } else if let Some(matches) = matches.subcommand_matches("diff") {
         let region = matches.value_of("region").unwrap().parse().unwrap();
-        let to_db = matches.value_of("to_db");
+        let to_data_dir = matches.value_of("to_data_dir");
         let to_host = matches.value_of("to_host");
-        debug_executor.diff_region(region, to_db, None, to_host, &cfg, mgr);
+        let to_config = matches
+            .value_of("to_config")
+            .map_or_else(TiKvConfig::default, |path| {
+                let s = fs::read_to_string(&path).unwrap();
+                toml::from_str(&s).unwrap()
+            });
+        debug_executor.diff_region(region, to_host, to_data_dir, &to_config, mgr);
     } else if let Some(matches) = matches.subcommand_matches("compact") {
         let db = matches.value_of("db").unwrap();
         let db_type = if db == "kv" { DBType::Kv } else { DBType::Raft };
@@ -2386,7 +2397,7 @@ fn compact_whole_cluster(
             .name(format!("compact-{}", addr))
             .spawn(move || {
                 tikv_alloc::add_thread_memory_accessor();
-                let debug_executor = new_debug_executor(None, None, false, Some(&addr), &cfg, mgr);
+                let debug_executor = new_debug_executor(&cfg, None, false, Some(&addr), mgr);
                 for cf in cfs {
                     debug_executor.compact(
                         Some(&addr),
