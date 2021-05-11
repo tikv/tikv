@@ -36,8 +36,18 @@ use uuid::Uuid;
 use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
+<<<<<<< HEAD
 use crate::store::fsm::{
     apply, Apply, ApplyMetrics, ApplyTask, CollectedReady, GroupState, Proposal, RegionProposal,
+=======
+use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, CollectedReady, Proposal};
+use crate::store::hibernate_state::GroupState;
+use crate::store::msg::RaftCommand;
+use crate::store::util::{admin_cmd_epoch_lookup, RegionReadProgress};
+use crate::store::worker::{HeartbeatTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
+use crate::store::{
+    Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse,
+>>>>>>> 50e71b481... raftstore: fix not schedule split check (#10119)
 };
 use crate::store::worker::{HeartbeatTask, ReadDelegate, ReadProgress, RegionTask};
 use crate::store::{Callback, Config, PdTask, ReadResponse, RegionSnapshot, SplitCheckTask};
@@ -360,9 +370,13 @@ pub struct Peer {
     /// of deleted entries.
     pub compaction_declined_bytes: u64,
     /// Approximate size of the region.
-    pub approximate_size: Option<u64>,
+    pub approximate_size: u64,
     /// Approximate keys of the region.
-    pub approximate_keys: Option<u64>,
+    pub approximate_keys: u64,
+    /// Whether this region has calculated region size by split-check thread. If we just splitted
+    ///  the region or ingested one file which may be overlapped with the existed data, the
+    /// `approximate_size` is not very accurate.
+    pub has_calculated_region_size: bool,
 
     /// The state for consistency check.
     pub consistency_state: ConsistencyState,
@@ -409,10 +423,14 @@ pub struct Peer {
     /// Check whether this proposal can be proposed based on its epoch
     cmd_epoch_checker: CmdEpochChecker,
 
+<<<<<<< HEAD
     /// The number of pending pd heartbeat tasks. Pd heartbeat task may be blocked by
     /// reading rocksdb. To avoid unnecessary io operations, we always let the later
     /// task run when there are more than 1 pending tasks.
     pub pending_pd_heartbeat_tasks: Arc<AtomicU64>,
+=======
+    pub read_progress: Arc<RegionReadProgress>,
+>>>>>>> 50e71b481... raftstore: fix not schedule split check (#10119)
 }
 
 impl Peer {
@@ -464,8 +482,9 @@ impl Peer {
             down_peer_ids: vec![],
             size_diff_hint: 0,
             delete_keys_hint: 0,
-            approximate_size: None,
-            approximate_keys: None,
+            approximate_size: 0,
+            approximate_keys: 0,
+            has_calculated_region_size: false,
             compaction_declined_bytes: 0,
             leader_unreachable: false,
             pending_remove: false,
@@ -496,7 +515,15 @@ impl Peer {
             check_stale_peers: vec![],
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
             cmd_epoch_checker: Default::default(),
+<<<<<<< HEAD
             pending_pd_heartbeat_tasks: Arc::new(AtomicU64::new(0)),
+=======
+            last_unpersisted_number: 0,
+            read_progress: Arc::new(RegionReadProgress::new(
+                applied_index,
+                REGION_READ_PROGRESS_CAP,
+            )),
+>>>>>>> 50e71b481... raftstore: fix not schedule split check (#10119)
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -2825,12 +2852,63 @@ impl Peer {
         None
     }
 
+<<<<<<< HEAD
     pub fn is_region_size_or_keys_none(&self) -> bool {
         fail_point!("region_size_or_keys_none", |_| true);
         self.approximate_size.is_none() || self.approximate_keys.is_none()
     }
 
     pub fn heartbeat_pd<T, C>(&mut self, ctx: &PollContext<T, C>) {
+=======
+    fn region_replication_status(&mut self) -> Option<RegionReplicationStatus> {
+        if self.replication_mode_version == 0 {
+            return None;
+        }
+        let mut status = RegionReplicationStatus {
+            state_id: self.replication_mode_version,
+            ..Default::default()
+        };
+        let state = if !self.replication_sync {
+            if self.dr_auto_sync_state != DrAutoSyncState::Async {
+                let res = self.raft_group.raft.check_group_commit_consistent();
+                if Some(true) != res {
+                    let mut buffer: SmallVec<[(u64, u64, u64); 5]> = SmallVec::new();
+                    if self.get_store().applied_index_term() >= self.term() {
+                        let progress = self.raft_group.raft.prs();
+                        for (id, p) in progress.iter() {
+                            if !progress.conf().voters().contains(*id) {
+                                continue;
+                            }
+                            buffer.push((*id, p.commit_group_id, p.matched));
+                        }
+                    };
+                    info!(
+                        "still not reach integrity over label";
+                        "status" => ?res,
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.id,
+                        "progress" => ?buffer
+                    );
+                } else {
+                    self.replication_sync = true;
+                }
+                match res {
+                    Some(true) => RegionReplicationState::IntegrityOverLabel,
+                    Some(false) => RegionReplicationState::SimpleMajority,
+                    None => RegionReplicationState::Unknown,
+                }
+            } else {
+                RegionReplicationState::SimpleMajority
+            }
+        } else {
+            RegionReplicationState::IntegrityOverLabel
+        };
+        status.set_state(state);
+        Some(status)
+    }
+
+    pub fn heartbeat_pd<T>(&mut self, ctx: &PollContext<EK, ER, T>) {
+>>>>>>> 50e71b481... raftstore: fix not schedule split check (#10119)
         let task = PdTask::Heartbeat(HeartbeatTask {
             term: self.term(),
             region: self.region().clone(),
@@ -2839,57 +2917,25 @@ impl Peer {
             pending_peers: self.collect_pending_peers(ctx),
             written_bytes: self.peer_stat.written_bytes,
             written_keys: self.peer_stat.written_keys,
+<<<<<<< HEAD
             approximate_size: self.approximate_size.unwrap_or_default(),
             approximate_keys: self.approximate_keys.unwrap_or_default(),
+=======
+            approximate_size: self.approximate_size,
+            approximate_keys: self.approximate_keys,
+            replication_status: self.region_replication_status(),
+>>>>>>> 50e71b481... raftstore: fix not schedule split check (#10119)
         });
-        if !self.is_region_size_or_keys_none() {
-            if let Err(e) = ctx.pd_scheduler.schedule(task) {
-                error!(
-                    "failed to notify pd";
-                    "region_id" => self.region_id,
-                    "peer_id" => self.peer.get_id(),
-                    "err" => ?e,
-                );
-            }
-            return;
-        }
-
-        if self.pending_pd_heartbeat_tasks.load(Ordering::SeqCst) > 2 {
-            return;
-        }
-        let region_id = self.region_id;
-        let peer_id = self.peer.get_id();
-        let scheduler = ctx.pd_scheduler.clone();
-        let split_check_task = SplitCheckTask::GetRegionApproximateSizeAndKeys {
-            region: self.region().clone(),
-            pending_tasks: self.pending_pd_heartbeat_tasks.clone(),
-            cb: Box::new(move |size: u64, keys: u64| {
-                if let PdTask::Heartbeat(mut h) = task {
-                    h.approximate_size = size;
-                    h.approximate_keys = keys;
-                    if let Err(e) = scheduler.schedule(PdTask::Heartbeat(h)) {
-                        error!(
-                            "failed to notify pd";
-                            "region_id" => region_id,
-                            "peer_id" => peer_id,
-                            "err" => ?e,
-                        );
-                    }
-                }
-            }),
-        };
-        self.pending_pd_heartbeat_tasks
-            .fetch_add(1, Ordering::SeqCst);
-        if let Err(e) = ctx.split_check_scheduler.schedule(split_check_task) {
+        if let Err(e) = ctx.pd_scheduler.schedule(task) {
             error!(
                 "failed to notify pd";
-                "region_id" => region_id,
-                "peer_id" => peer_id,
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
                 "err" => ?e,
             );
-            self.pending_pd_heartbeat_tasks
-                .fetch_sub(1, Ordering::SeqCst);
+            return;
         }
+        fail_point!("schedule_check_split");
     }
 
     fn send_raft_message<T: Transport>(&mut self, msg: eraftpb::Message, trans: &mut T) {

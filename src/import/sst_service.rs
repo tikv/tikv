@@ -1,6 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::f64::INFINITY;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -29,10 +28,15 @@ use kvproto::raft_cmdpb::*;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use engine_rocks::RocksEngine;
 use engine_traits::{SstExt, SstWriterBuilder};
+<<<<<<< HEAD
 use raftstore::router::handle_send_error;
 use raftstore::store::{Callback, ProposalRouter, RaftCommand};
 use security::{check_common_name, SecurityManager};
 
+=======
+use raftstore::router::RaftStoreRouter;
+use raftstore::store::Callback;
+>>>>>>> 50e71b481... raftstore: fix not schedule split check (#10119)
 use sst_importer::send_rpc_response;
 use tikv_util::future::create_stream_with_buffer;
 use tikv_util::future::paired_std_future_callback;
@@ -76,15 +80,23 @@ where
             .name_prefix("sst-importer")
             .create()
             .unwrap();
+<<<<<<< HEAD
+=======
+        importer.start_switch_mode_check(&threads, engine.clone());
+>>>>>>> 50e71b481... raftstore: fix not schedule split check (#10119)
         ImportSSTService {
             cfg,
             engine,
             threads,
             router,
             importer,
+<<<<<<< HEAD
             switcher: Arc::new(Mutex::new(ImportModeSwitcher::new())),
             limiter: Limiter::new(INFINITY),
             security_mgr,
+=======
+            limiter: Limiter::new(f64::INFINITY),
+>>>>>>> 50e71b481... raftstore: fix not schedule split check (#10119)
             task_slots: Arc::new(Mutex::new(HashSet::default())),
         }
     }
@@ -124,12 +136,17 @@ where
             }
 
             match req.get_mode() {
+<<<<<<< HEAD
                 SwitchMode::Normal => {
                     switcher.enter_normal_mode(RocksEngine::from_ref(&self.engine), mf)
                 }
                 SwitchMode::Import => {
                     switcher.enter_import_mode(RocksEngine::from_ref(&self.engine), mf)
                 }
+=======
+                SwitchMode::Normal => self.importer.enter_normal_mode(self.engine.clone(), mf),
+                SwitchMode::Import => self.importer.enter_import_mode(self.engine.clone(), mf),
+>>>>>>> 50e71b481... raftstore: fix not schedule split check (#10119)
             }
         };
         match res {
@@ -436,7 +453,7 @@ where
         self.limiter.set_speed_limit(if speed_limit > 0 {
             speed_limit as f64
         } else {
-            INFINITY
+            f64::INFINITY
         });
 
         let ctx_task = async move {

@@ -4,8 +4,6 @@ use std::borrow::Cow;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::iter::Iterator;
-use std::sync::atomic::AtomicU64;
-use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, u64};
 
@@ -490,6 +488,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     }
                 }
                 PeerMsg::Noop => {}
+<<<<<<< HEAD
+=======
+                PeerMsg::UpdateReplicationMode => self.on_update_replication_mode(),
+>>>>>>> 50e71b481... raftstore: fix not schedule split check (#10119)
             }
         }
         // Propose batch request which may be still waiting for more raft-command
@@ -702,8 +704,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn on_clear_region_size(&mut self) {
-        self.fsm.peer.approximate_size = None;
-        self.fsm.peer.approximate_keys = None;
+        self.fsm.peer.approximate_size = 0;
+        self.fsm.peer.approximate_keys = 0;
+        self.fsm.peer.has_calculated_region_size = false;
         self.register_split_region_check_tick();
     }
 
@@ -1959,11 +1962,22 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
         // Roughly estimate the size and keys for new regions.
         let new_region_count = regions.len() as u64;
+<<<<<<< HEAD
         let estimated_size = self.fsm.peer.approximate_size.map(|x| x / new_region_count);
         let estimated_keys = self.fsm.peer.approximate_keys.map(|x| x / new_region_count);
         // It's not correct anymore, so set it to None to let split checker update it.
         self.fsm.peer.approximate_size = None;
         self.fsm.peer.approximate_keys = None;
+=======
+        let estimated_size = self.fsm.peer.approximate_size / new_region_count;
+        let estimated_keys = self.fsm.peer.approximate_keys / new_region_count;
+        let mut meta = self.ctx.store_meta.lock().unwrap();
+        meta.set_region(&self.ctx.coprocessor_host, derived, &mut self.fsm.peer);
+        self.fsm.peer.post_split();
+
+        // It's not correct anymore, so set it to false to schedule a split check task.
+        self.fsm.peer.has_calculated_region_size = false;
+>>>>>>> 50e71b481... raftstore: fix not schedule split check (#10119)
 
         let is_leader = self.fsm.peer.is_leader();
         if is_leader {
@@ -1988,20 +2002,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     "region_id" => self.fsm.region_id(),
                     "peer_id" => self.fsm.peer_id(),
                     "err" => %e,
-                );
-            }
-            if let Err(e) = self.ctx.split_check_scheduler.schedule(
-                SplitCheckTask::GetRegionApproximateSizeAndKeys {
-                    region: self.fsm.peer.region().clone(),
-                    pending_tasks: Arc::new(AtomicU64::new(1)),
-                    cb: Box::new(move |_, _| {}),
-                },
-            ) {
-                error!(
-                    "failed to schedule split check task";
-                    "region_id" => self.fsm.region_id(),
-                    "peer_id" => self.fsm.peer_id(),
-                    "err" => ?e,
                 );
             }
         }
@@ -2111,24 +2111,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     }
                 }
             }
-
-            if is_leader {
-                // The size and keys for new region may be far from the real value.
-                // So we let split checker to update it immediately.
-                if let Err(e) = self.ctx.split_check_scheduler.schedule(
-                    SplitCheckTask::GetRegionApproximateSizeAndKeys {
-                        region: new_region,
-                        pending_tasks: Arc::new(AtomicU64::new(1)),
-                        cb: Box::new(move |_, _| {}),
-                    },
-                ) {
-                    error!(
-                        "failed to schedule split check task";
-                        "region_id" => new_region_id,
-                        "err" => ?e,
-                    );
-                }
-            }
+        }
+        drop(meta);
+        if is_leader {
+            self.on_split_region_check_tick();
         }
         fail_point!("after_split", self.ctx.store_id() == 3, |_| {});
     }
@@ -3206,34 +3192,59 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn on_split_region_check_tick(&mut self) {
-        if !self.ctx.cfg.hibernate_regions {
-            self.register_split_region_check_tick();
-        }
         if !self.fsm.peer.is_leader() {
             return;
         }
 
-        // To avoid frequent scan, we only add new scan tasks if all previous tasks
-        // have finished.
-        // TODO: check whether a gc progress has been started.
-        if self.ctx.split_check_scheduler.is_busy() {
-            self.register_split_region_check_tick();
-            return;
-        }
-
-        // When restart, the approximate size will be None. The split check will first
+        // When restart, the has_calculated_region_size will be false. The split check will first
         // check the region size, and then check whether the region should split. This
         // should work even if we change the region max size.
         // If peer says should update approximate size, update region size and check
         // whether the region should split.
-        if self.fsm.peer.approximate_size.is_some()
+        // We assume that `has_calculated_region_size` is only set true when receives an
+        // accurate value sent from split-check thread.
+        if self.fsm.peer.has_calculated_region_size
             && self.fsm.peer.compaction_declined_bytes < self.ctx.cfg.region_split_check_diff.0
             && self.fsm.peer.size_diff_hint < self.ctx.cfg.region_split_check_diff.0
         {
             return;
         }
+<<<<<<< HEAD
         let task =
             SplitCheckTask::split_check(self.fsm.peer.region().clone(), true, CheckPolicy::Scan);
+=======
+
+        self.register_split_region_check_tick();
+
+        // To avoid frequent scan, we only add new scan tasks if all previous tasks
+        // have finished.
+        // TODO: check whether a gc progress has been started.
+        if self.ctx.split_check_scheduler.is_busy() {
+            return;
+        }
+
+        // When Lightning or BR is importing data to TiKV, their ingest-request may fail because of
+        // region-epoch not matched. So we hope TiKV do not check region size and split region during
+        // importing.
+        if self.ctx.importer.get_mode() == SwitchMode::Import {
+            return;
+        }
+
+        // bulk insert too fast may cause snapshot stale very soon, worst case it stale before
+        // sending. so when snapshot is generating or sending, skip split check at most 3 times.
+        // There is a trade off between region size and snapshot success rate. Split check is
+        // triggered every 10 seconds. If a snapshot can't be generated in 30 seconds, it might be
+        // just too large to be generated. Split it into smaller size can help generation. check
+        // issue 330 for more info.
+        if self.fsm.peer.get_store().is_generating_snapshot()
+            && self.fsm.skip_split_count < self.region_split_skip_max_count()
+        {
+            self.fsm.skip_split_count += 1;
+            return;
+        }
+        self.fsm.skip_split_count = 0;
+        let task = SplitCheckTask::split_check(self.region().clone(), true, CheckPolicy::Scan);
+>>>>>>> 50e71b481... raftstore: fix not schedule split check (#10119)
         if let Err(e) = self.ctx.split_check_scheduler.schedule(task) {
             error!(
                 "failed to schedule split check";
@@ -3241,10 +3252,14 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 "peer_id" => self.fsm.peer_id(),
                 "err" => %e,
             );
+            return;
         }
         self.fsm.peer.size_diff_hint = 0;
         self.fsm.peer.compaction_declined_bytes = 0;
+<<<<<<< HEAD
         self.register_split_region_check_tick();
+=======
+>>>>>>> 50e71b481... raftstore: fix not schedule split check (#10119)
     }
 
     fn on_prepare_split_region(
@@ -3356,13 +3371,14 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn on_approximate_region_size(&mut self, size: u64) {
-        self.fsm.peer.approximate_size = Some(size);
+        self.fsm.peer.approximate_size = size;
+        self.fsm.peer.has_calculated_region_size = true;
         self.register_split_region_check_tick();
         self.register_pd_heartbeat_tick();
     }
 
     fn on_approximate_region_keys(&mut self, keys: u64) {
-        self.fsm.peer.approximate_keys = Some(keys);
+        self.fsm.peer.approximate_keys = keys;
         self.register_split_region_check_tick();
         self.register_pd_heartbeat_tick();
     }
@@ -3573,7 +3589,21 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn on_ingest_sst_result(&mut self, ssts: Vec<SstMeta>) {
         for sst in &ssts {
+<<<<<<< HEAD
             self.fsm.peer.size_diff_hint += sst.get_length();
+=======
+            size += sst.total_bytes;
+            keys += sst.total_kvs;
+        }
+        self.fsm.peer.approximate_size += size;
+        self.fsm.peer.approximate_keys += keys;
+        // The ingested file may be overlapped with the data in engine, so we need to check it
+        // again to get the accurate value.
+        self.fsm.peer.has_calculated_region_size = false;
+        if self.fsm.peer.is_leader() {
+            self.on_pd_heartbeat_tick();
+            self.register_split_region_check_tick();
+>>>>>>> 50e71b481... raftstore: fix not schedule split check (#10119)
         }
         self.register_split_region_check_tick();
     }
