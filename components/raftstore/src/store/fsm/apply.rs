@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
@@ -2877,15 +2877,27 @@ pub struct CatchUpLogs {
 
 pub struct GenSnapTask {
     pub(crate) region_id: u64,
+    // Fill it after the RocksDB snapshot is taken.
+    pub index: Arc<AtomicU64>,
+    // Fetch it to cancel the task if necessary.
+    pub canceled: Arc<AtomicBool>,
+
     snap_notifier: SyncSender<RaftSnapshot>,
     // indicates whether the snapshot is triggered due to load balance
     for_balance: bool,
 }
 
 impl GenSnapTask {
-    pub fn new(region_id: u64, snap_notifier: SyncSender<RaftSnapshot>) -> GenSnapTask {
+    pub fn new(
+        region_id: u64,
+        index: Arc<AtomicU64>,
+        canceled: Arc<AtomicBool>,
+        snap_notifier: SyncSender<RaftSnapshot>,
+    ) -> GenSnapTask {
         GenSnapTask {
             region_id,
+            index,
+            canceled,
             snap_notifier,
             for_balance: false,
         }
@@ -2905,12 +2917,15 @@ impl GenSnapTask {
     where
         EK: KvEngine,
     {
+        self.index
+            .store(last_applied_state.applied_index, Ordering::SeqCst);
         let snapshot = RegionTask::Gen {
             region_id: self.region_id,
             notifier: self.snap_notifier,
             for_balance: self.for_balance,
             last_applied_index_term,
             last_applied_state,
+            canceled: self.canceled,
             // This snapshot may be held for a long time, which may cause too many
             // open files in rocksdb.
             kv_snap,
@@ -3978,6 +3993,14 @@ mod tests {
 
     use super::*;
 
+    impl GenSnapTask {
+        fn new_for_test(region_id: u64, snap_notifier: SyncSender<RaftSnapshot>) -> GenSnapTask {
+            let index = Arc::new(AtomicU64::new(0));
+            let canceled = Arc::new(AtomicBool::new(false));
+            Self::new(region_id, index, canceled, snap_notifier)
+        }
+    }
+
     pub fn create_tmp_engine(path: &str) -> (TempDir, KvTestEngine) {
         let path = Builder::new().prefix(path).tempdir().unwrap();
         let engine = new_engine(
@@ -4252,7 +4275,7 @@ mod tests {
             2,
             vec![
                 Msg::apply(apply(1, 2, 11, vec![new_entry(5, 5, false)], vec![])),
-                Msg::Snapshot(GenSnapTask::new(2, snap_tx)),
+                Msg::Snapshot(GenSnapTask::new_for_test(2, snap_tx)),
             ],
         );
         let apply_res = match rx.recv_timeout(Duration::from_secs(3)) {

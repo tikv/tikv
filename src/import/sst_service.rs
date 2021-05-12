@@ -1,6 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::f64::INFINITY;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -24,7 +23,7 @@ use kvproto::raft_cmdpb::*;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use engine_traits::{SstExt, SstWriterBuilder};
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::{Callback, PeerMsg};
+use raftstore::store::Callback;
 use sst_importer::send_rpc_response;
 use tikv_util::future::create_stream_with_buffer;
 use tikv_util::future::paired_future_callback;
@@ -73,21 +72,14 @@ where
             .before_stop(move |_| tikv_alloc::remove_thread_memory_accessor())
             .create()
             .unwrap();
-        let r = router.clone();
-        importer.start_switch_mode_check(
-            &threads,
-            engine.clone(),
-            Box::new(move || {
-                r.broadcast_normal(|| PeerMsg::SplitCheck);
-            }),
-        );
+        importer.start_switch_mode_check(&threads, engine.clone());
         ImportSSTService {
             cfg,
             engine,
             threads,
             router,
             importer,
-            limiter: Limiter::new(INFINITY),
+            limiter: Limiter::new(f64::INFINITY),
             task_slots: Arc::new(Mutex::new(HashSet::default())),
         }
     }
@@ -124,17 +116,7 @@ where
             }
 
             match req.get_mode() {
-                SwitchMode::Normal => {
-                    match self.importer.enter_normal_mode(self.engine.clone(), mf) {
-                        Ok(ret) => {
-                            if ret {
-                                self.router.broadcast_normal(|| PeerMsg::SplitCheck);
-                            }
-                            Ok(ret)
-                        }
-                        Err(e) => Err(e),
-                    }
-                }
+                SwitchMode::Normal => self.importer.enter_normal_mode(self.engine.clone(), mf),
                 SwitchMode::Import => self.importer.enter_import_mode(self.engine.clone(), mf),
             }
         };
@@ -430,7 +412,7 @@ where
         self.limiter.set_speed_limit(if speed_limit > 0 {
             speed_limit as f64
         } else {
-            INFINITY
+            f64::INFINITY
         });
 
         let ctx_task = async move {
@@ -497,6 +479,15 @@ where
 
         self.threads.spawn_ok(buf_driver);
         self.threads.spawn_ok(handle_task);
+    }
+
+    fn multi_ingest(
+        &mut self,
+        _: RpcContext<'_>,
+        _: MultiIngestRequest,
+        _: UnarySink<kvproto::import_sstpb::IngestResponse>,
+    ) {
+        unimplemented!()
     }
 }
 
