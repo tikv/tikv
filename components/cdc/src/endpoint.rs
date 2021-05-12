@@ -270,7 +270,10 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
             INFINITY
         });
         // For scan efficiency, the scan batch bytes should be around 1MB.
-        let max_scan_batch_bytes = 1024 * 1024;
+        // TODO: To avoid consume too much memory when there are many concurrent
+        //       scan tasks (peak memory = 1MB * N tasks), we reduce the size
+        //       to 16KB as a workaround.
+        let max_scan_batch_bytes = 16 * 1024;
         // Assume 1KB per entry.
         let max_scan_batch_size = 1024;
         let ep = Endpoint {
