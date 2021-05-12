@@ -109,7 +109,7 @@ impl fmt::Debug for Deregister {
 
 type InitCallback = Box<dyn FnOnce() + Send>;
 pub(crate) type OldValueCallback =
-    Box<dyn FnMut(Key, TimeStamp, &mut Statistics) -> Option<Vec<u8>> + Send>;
+    Box<dyn FnMut(Key, TimeStamp) -> (Option<Vec<u8>>, Option<Statistics>) + Send>;
 
 pub enum Task {
     Register {

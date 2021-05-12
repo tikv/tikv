@@ -4640,6 +4640,7 @@ dependencies = [
  "log",
  "log_wrappers",
  "match_template",
+ "matches",
  "mime",
  "more-asserts",
  "murmur3",
