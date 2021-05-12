@@ -128,8 +128,8 @@ impl ReqCpuCollector {
             last_collect_instant: now,
             last_gc_instant: now,
 
-            thread_stats: Default::default(),
-            current_window_records: Default::default(),
+            thread_stats: HashMap::default(),
+            current_window_records: RequestCpuRecords::default(),
         }
     }
 
@@ -155,24 +155,29 @@ impl ReqCpuCollector {
 
     pub fn record(&mut self) {
         for (tid, thread_stat) in &mut self.thread_stats {
-            if let Ok(stat) = procinfo::pid::stat_task(*PID, *tid) {
-                let prev_cpu_clock = (thread_stat.prev_stat.utime as u64)
-                    .wrapping_add(thread_stat.prev_stat.stime as u64);
-                let current_cpu_clock = (stat.utime as u64).wrapping_add(stat.stime as u64);
-                thread_stat.prev_stat = stat;
+            if let Some(req_tags) = thread_stat.shared_ptr.take() {
+                if !self.current_window_records.records.contains_key(&req_tags) {
+                    self.current_window_records
+                        .records
+                        .insert(req_tags.clone(), 0);
+                }
+                let ms = self
+                    .current_window_records
+                    .records
+                    .get_mut(&req_tags)
+                    .unwrap();
+                let prev = thread_stat.shared_ptr.swap(req_tags);
+                assert!(prev.is_none());
 
-                let delta_ms =
-                    current_cpu_clock.wrapping_sub(prev_cpu_clock) * 1_000 / (*CLK_TCK as u64);
-                if let Some(req_tags) = thread_stat.shared_ptr.take() {
-                    if let Some(ms) = self.current_window_records.records.get_mut(&req_tags) {
-                        *ms += delta_ms;
-                    } else {
-                        self.current_window_records
-                            .records
-                            .insert(req_tags.clone(), delta_ms);
-                    }
-                    let prev = thread_stat.shared_ptr.swap(req_tags);
-                    assert!(prev.is_none());
+                if let Ok(stat) = procinfo::pid::stat_task(*PID, *tid) {
+                    let prev_cpu_clock = (thread_stat.prev_stat.utime as u64)
+                        .wrapping_add(thread_stat.prev_stat.stime as u64);
+                    let current_cpu_clock = (stat.utime as u64).wrapping_add(stat.stime as u64);
+                    thread_stat.prev_stat = stat;
+
+                    let delta_ms =
+                        current_cpu_clock.wrapping_sub(prev_cpu_clock) * 1_000 / (*CLK_TCK as u64);
+                    *ms += delta_ms;
                 }
             }
         }
