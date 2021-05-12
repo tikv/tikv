@@ -222,10 +222,14 @@ impl ObserveHandle {
     }
 }
 
+// `ObserveLevel` describe what data the observer want to observe
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ObserveLevel {
+    // Don't observe any data
     None,
+    // Only observe lock related data (i.e `lock_cf`, `write_cf`)
     LockRelated,
+    // Observe all data
     All,
 }
 
