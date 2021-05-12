@@ -3912,6 +3912,8 @@ dependencies = [
  "libc 0.2.86",
  "pin-project 1.0.1",
  "procinfo",
+ "prometheus",
+ "prometheus-static-metric",
  "rand 0.8.3",
 ]
 

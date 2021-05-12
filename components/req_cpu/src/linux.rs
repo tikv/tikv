@@ -169,6 +169,7 @@ impl ReqCpuCollector {
                 let prev = thread_stat.shared_ptr.swap(req_tags);
                 assert!(prev.is_none());
 
+                STAT_TASK_COUNT.inc();
                 if let Ok(stat) = procinfo::pid::stat_task(*PID, *tid) {
                     let prev_cpu_clock = (thread_stat.prev_stat.utime as u64)
                         .wrapping_add(thread_stat.prev_stat.stime as u64);
@@ -325,4 +326,12 @@ mod tests {
         let r = r.lock().unwrap();
         assert!(r.records.iter().next().is_some());
     }
+}
+
+lazy_static! {
+    static ref STAT_TASK_COUNT: prometheus::IntCounter = prometheus::register_int_counter!(
+        "tikv_req_cpu_stat_task_count",
+        "Counter of stat_task call"
+    )
+    .unwrap();
 }
