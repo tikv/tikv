@@ -19,38 +19,41 @@ pub fn get_old_value<S: EngineSnapshot>(
     old_value_cache: &mut OldValueCache,
     reader: &OldValueReader<S>,
 ) -> (Option<Value>, Option<Statistics>) {
+    old_value_cache.access_count += 1;
     if let Some((old_value, mutation_type)) = old_value_cache.cache.remove(&key) {
         return match mutation_type {
-            MutationType::Insert => (None, None),
-            MutationType::Put | MutationType::Delete => match old_value {
-                OldValue::None => (None, None),
-                OldValue::Value {
-                    start_ts,
-                    short_value,
-                } => {
-                    let mut statistics = None;
-                    let value = short_value.or_else(|| {
-                        statistics = Some(Statistics::default());
+            // Old value of an Insert is guaranteed to be None.
+            Some(MutationType::Insert) => {
+                assert_eq!(old_value, OldValue::None);
+                (None, None)
+            }
+            // For Put, Delete or a mutation type we do not know,
+            // we read old value from the cache.
+            Some(MutationType::Put) | Some(MutationType::Delete) | None => {
+                match old_value {
+                    OldValue::None => (None, None),
+                    OldValue::Value { value } => (Some(value), None),
+                    OldValue::ValueTimeStamp { start_ts } => {
+                        let mut statistics = Statistics::default();
                         let prev_key = key.truncate_ts().unwrap().append_ts(start_ts);
                         let start = Instant::now();
                         let mut opts = ReadOptions::new();
                         opts.set_fill_cache(false);
-                        let value =
-                            reader.get_value_default(&prev_key, statistics.as_mut().unwrap());
+                        let value = reader.get_value_default(&prev_key, &mut statistics);
                         CDC_OLD_VALUE_DURATION_HISTOGRAM
                             .with_label_values(&["get"])
                             .observe(start.elapsed().as_secs_f64());
-                        value
-                    });
-                    (value, statistics)
+                        (value, Some(statistics))
+                    }
+                    // Unspecified should not be added into cache.
+                    OldValue::Unspecified => unreachable!(),
                 }
-                // Unspecified should not be added into cache.
-                OldValue::Unspecified => unreachable!(),
-            },
+            }
             _ => unreachable!(),
         };
     }
     // Cannot get old value from cache, seek for it in engine.
+    old_value_cache.miss_count += 1;
     let mut statistics = Statistics::default();
     let start = Instant::now();
     let key = key.truncate_ts().unwrap().append_ts(query_ts);
@@ -60,6 +63,9 @@ pub fn get_old_value<S: EngineSnapshot>(
     CDC_OLD_VALUE_DURATION_HISTOGRAM
         .with_label_values(&["seek"])
         .observe(start.elapsed().as_secs_f64());
+    if value.is_none() {
+        old_value_cache.miss_none_count += 1;
+    }
     (value, Some(statistics))
 }
 
@@ -67,20 +73,22 @@ pub(crate) type OldValueCallback =
     Box<dyn Fn(Key, TimeStamp, &mut OldValueCache) -> (Option<Vec<u8>>, Option<Statistics>) + Send>;
 
 #[derive(Default)]
-struct OldValueCacheSizeTrace(u64);
+pub struct OldValueCacheSizeTrace(u64);
 
-impl CacheSizeTrace<Key, (OldValue, MutationType)> for OldValueCacheSizeTrace {
+impl CacheSizeTrace<Key, (OldValue, Option<MutationType>)> for OldValueCacheSizeTrace {
     fn current_size(&self) -> u64 {
         self.0
     }
 
-    fn trace_insert(&mut self, key: &Key, value: &(OldValue, MutationType)) {
-        let sum = key.as_encoded().len() + value.0.size() + std::mem::size_of::<MutationType>();
+    fn trace_insert(&mut self, key: &Key, value: &(OldValue, Option<MutationType>)) {
+        let sum =
+            key.as_encoded().len() + value.0.size() + std::mem::size_of::<Option<MutationType>>();
         self.0 += sum as u64;
     }
 
-    fn trace_remove(&mut self, key: &Key, value: &(OldValue, MutationType)) {
-        let sum = key.as_encoded().len() + value.0.size() + std::mem::size_of::<MutationType>();
+    fn trace_remove(&mut self, key: &Key, value: &(OldValue, Option<MutationType>)) {
+        let sum =
+            key.as_encoded().len() + value.0.size() + std::mem::size_of::<Option<MutationType>>();
         self.0 -= sum as u64;
     }
 
@@ -90,9 +98,10 @@ impl CacheSizeTrace<Key, (OldValue, MutationType)> for OldValueCacheSizeTrace {
 }
 
 pub struct OldValueCache {
-    cache: RawLruCache<Key, (OldValue, MutationType), OldValueCacheSizeTrace>,
-    pub miss_count: usize,
+    pub cache: RawLruCache<Key, (OldValue, Option<MutationType>), OldValueCacheSizeTrace>,
     pub access_count: usize,
+    pub miss_count: usize,
+    pub miss_none_count: usize,
 }
 
 impl OldValueCache {
@@ -106,29 +115,10 @@ impl OldValueCache {
         };
         OldValueCache {
             cache: RawLruCache::with_capacity(capacity),
-            miss_count: 0,
             access_count: 0,
+            miss_count: 0,
+            miss_none_count: 0,
         }
-    }
-
-    pub fn get(&mut self, key: &Key) -> Option<(OldValue, MutationType)> {
-        self.access_count += 1;
-        self.cache.remove(key).or_else(|| {
-            self.miss_count += 1;
-            None
-        })
-    }
-
-    pub fn insert(&mut self, key: Key, value: (OldValue, MutationType)) {
-        self.cache.insert(key, value);
-    }
-
-    pub fn size(&self) -> u64 {
-        self.cache.size()
-    }
-
-    pub fn count(&self) -> usize {
-        self.cache.count()
     }
 }
 

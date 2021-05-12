@@ -1,19 +1,15 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(box_patterns)]
-#![feature(async_closure)]
-#![recursion_limit = "512"]
+#![feature(assert_matches)]
 
-extern crate futures;
-extern crate tokio;
-
+mod channel;
 mod delegate;
 mod endpoint;
 mod errors;
 pub mod metrics;
 mod observer;
 mod old_value;
-mod rate_limiter;
 mod service;
 
 pub use endpoint::{CdcTxnExtraScheduler, Endpoint, Task, Validate};

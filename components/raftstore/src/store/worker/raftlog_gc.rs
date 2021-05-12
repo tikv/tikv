@@ -1,17 +1,18 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::error;
+use std::error::Error as StdError;
 use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::Sender;
 
-use crate::store::{CasualMessage, CasualRouter};
+use thiserror::Error;
 
 use engine_traits::{Engines, KvEngine, RaftEngine};
 use file_system::{IOType, WithIOType};
-use quick_error::quick_error;
 use tikv_util::time::Duration;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 use tikv_util::{box_try, debug, error, warn};
+
+use crate::store::{CasualMessage, CasualRouter};
 
 const MAX_GC_REGION_BATCH: usize = 128;
 const COMPACT_LOG_INTERVAL: Duration = Duration::from_secs(60);
@@ -52,15 +53,10 @@ impl Display for Task {
     }
 }
 
-quick_error! {
-    #[derive(Debug)]
-    enum Error {
-        Other(err: Box<dyn error::Error + Sync + Send>) {
-            from()
-            cause(err.as_ref())
-            display("raftlog gc failed {:?}", err)
-        }
-    }
+#[derive(Debug, Error)]
+enum Error {
+    #[error("raftlog gc failed {0:?}")]
+    Other(#[from] Box<dyn StdError + Sync + Send>),
 }
 
 pub struct Runner<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> {

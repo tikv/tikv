@@ -494,20 +494,19 @@ impl<E: KvEngine> CoprocessorHost<E> {
         );
     }
 
-    pub fn prepare_for_apply(&self, observe_id: ObserveID, region_id: u64) {
+    pub fn prepare_for_apply(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64) {
         for cmd_ob in &self.registry.cmd_observers {
             cmd_ob
                 .observer
                 .inner()
-                .on_prepare_for_apply(observe_id, region_id);
+                .on_prepare_for_apply(cdc_id, rts_id, region_id);
         }
     }
 
-    pub fn on_apply_cmd(&self, observe_id: ObserveID, region_id: u64, cmd: Cmd) {
-        assert!(
-            !self.registry.cmd_observers.is_empty(),
-            "CmdObserver is not registered"
-        );
+    pub fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: Cmd) {
+        if self.registry.cmd_observers.is_empty() {
+            return;
+        }
         for i in 0..self.registry.cmd_observers.len() - 1 {
             self.registry
                 .cmd_observers
@@ -515,7 +514,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
                 .unwrap()
                 .observer
                 .inner()
-                .on_apply_cmd(observe_id, region_id, cmd.clone())
+                .on_apply_cmd(cdc_id, rts_id, region_id, cmd.clone())
         }
         self.registry
             .cmd_observers
@@ -523,7 +522,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
             .unwrap()
             .observer
             .inner()
-            .on_apply_cmd(observe_id, region_id, cmd)
+            .on_apply_cmd(cdc_id, rts_id, region_id, cmd)
     }
 
     pub fn on_flush_apply(&self, engine: E) {
@@ -680,10 +679,10 @@ mod tests {
     }
 
     impl CmdObserver<PanicEngine> for TestCoprocessor {
-        fn on_prepare_for_apply(&self, _: ObserveID, _: u64) {
+        fn on_prepare_for_apply(&self, _: ObserveID, _: ObserveID, _: u64) {
             self.called.fetch_add(11, Ordering::SeqCst);
         }
-        fn on_apply_cmd(&self, _: ObserveID, _: u64, _: Cmd) {
+        fn on_apply_cmd(&self, _: ObserveID, _: ObserveID, _: u64, _: Cmd) {
             self.called.fetch_add(12, Ordering::SeqCst);
         }
         fn on_flush_apply(&self, _: PanicEngine) {
@@ -756,9 +755,10 @@ mod tests {
         host.post_apply_sst_from_snapshot(&region, "default", "");
         assert_all!(&[&ob.called], &[55]);
         let observe_id = ObserveID::new();
-        host.prepare_for_apply(observe_id, 0);
+        host.prepare_for_apply(observe_id, observe_id, 0);
         assert_all!(&[&ob.called], &[66]);
         host.on_apply_cmd(
+            observe_id,
             observe_id,
             0,
             Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),

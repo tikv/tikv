@@ -109,3 +109,6 @@ num-threads = 1
 [pessimistic-txn]
 wait-for-lock-timeout = "3s"
 wake-up-delay-duration = "100ms"
+
+[cdc]
+min-ts-interval = "10ms"
