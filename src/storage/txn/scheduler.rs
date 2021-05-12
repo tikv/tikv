@@ -32,6 +32,7 @@ use kvproto::kvrpcpb::{CommandPri, ExtraOp};
 use tikv_util::{callback::must_call, time::Instant};
 use txn_types::TimeStamp;
 
+use crate::server::lock_manager::waiter_manager;
 use crate::storage::kv::{
     drop_snapshot_callback, with_tls_engine, Engine, ExtCallback, Result as EngineResult,
     SnapContext, Statistics,
@@ -239,6 +240,10 @@ impl<L: LockManager> SchedulerInner<L> {
         }
         None
     }
+
+    fn dump_wait_for_entries(&self, cb: waiter_manager::Callback) {
+        self.lock_mgr.dump_wait_for_entries(cb);
+    }
 }
 
 /// Scheduler which schedules the execution of `storage::Command`s.
@@ -292,6 +297,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             engine: Some(engine),
             inner,
         }
+    }
+
+    pub fn dump_wait_for_entries(&self, cb: waiter_manager::Callback) {
+        self.inner.dump_wait_for_entries(cb);
     }
 
     pub(in crate::storage) fn run_cmd(&self, cmd: Command, callback: StorageCallback) {

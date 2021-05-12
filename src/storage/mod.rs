@@ -65,6 +65,7 @@ use crate::storage::metrics::CommandKind;
 use crate::storage::mvcc::MvccReader;
 use crate::storage::txn::commands::{RawAtomicStore, RawCompareAndSwap};
 
+use crate::server::lock_manager::waiter_manager;
 use crate::storage::{
     config::Config,
     kv::{with_tls_engine, Modify, WriteData},
@@ -231,6 +232,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
     pub fn get_concurrency_manager(&self) -> ConcurrencyManager {
         self.concurrency_manager.clone()
+    }
+
+    pub fn dump_wait_for_entries(&self, cb: waiter_manager::Callback) {
+        self.sched.dump_wait_for_entries(cb);
     }
 
     /// Get a snapshot of `engine`.
@@ -5543,6 +5548,10 @@ mod tests {
 
         fn has_waiter(&self) -> bool {
             self.has_waiter.load(Ordering::Relaxed)
+        }
+
+        fn dump_wait_for_entries(&self, cb: waiter_manager::Callback) {
+            unimplemented!()
         }
     }
 
