@@ -1501,11 +1501,6 @@ mod tests {
             written: Vec<(Write, TimeStamp)>,
         }
         let cases = vec![
-            // prev_write is None
-            Case {
-                expected: OldValue::None,
-                written: vec![],
-            },
             // prev_write is Rollback, and there exists a more previous valid write
             Case {
                 expected: OldValue::Value {
