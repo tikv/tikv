@@ -35,6 +35,18 @@ impl RaftLogEngine {
         }
         fs::read_dir(&path).unwrap().next().is_some()
     }
+
+    pub fn raft_groups(&self) -> Vec<u64> {
+        self.0.raft_groups()
+    }
+
+    pub fn first_index(&self, raft_id: u64) -> Option<u64> {
+        self.0.first_index(raft_id)
+    }
+
+    pub fn last_index(&self, raft_id: u64) -> Option<u64> {
+        self.0.last_index(raft_id)
+    }
 }
 
 #[derive(Default)]

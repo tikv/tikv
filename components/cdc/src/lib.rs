@@ -3,6 +3,7 @@
 #![feature(box_patterns)]
 #![feature(assert_matches)]
 
+mod channel;
 mod delegate;
 mod endpoint;
 mod errors;
