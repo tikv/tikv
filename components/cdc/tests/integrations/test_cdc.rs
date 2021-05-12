@@ -18,8 +18,7 @@ use pd_client::PdClient;
 use test_raftstore::sleep_ms;
 use test_raftstore::*;
 
-use cdc::metrics::*;
-use cdc::Task;
+use cdc::{Task, Validate};
 
 #[test]
 fn test_cdc_basic() {
@@ -47,13 +46,13 @@ fn test_cdc_basic() {
     // There must be a delegate.
     let scheduler = suite.endpoints.values().next().unwrap().scheduler();
     scheduler
-        .schedule(Task::Validate(
+        .schedule(Task::Validate(Validate::Region(
             1,
             Box::new(|delegate| {
                 let d = delegate.unwrap();
                 assert_eq!(d.downstreams.len(), 1);
             }),
-        ))
+        )))
         .unwrap();
 
     let (k, v) = ("key1".to_owned(), "value".to_owned());
@@ -114,12 +113,12 @@ fn test_cdc_basic() {
     }
     // The delegate must be removed.
     scheduler
-        .schedule(Task::Validate(
+        .schedule(Task::Validate(Validate::Region(
             1,
             Box::new(|delegate| {
                 assert!(delegate.is_none());
             }),
-        ))
+        )))
         .unwrap();
 
     // request again.
@@ -140,13 +139,13 @@ fn test_cdc_basic() {
     // Sleep a while to make sure the stream is registered.
     sleep_ms(200);
     scheduler
-        .schedule(Task::Validate(
+        .schedule(Task::Validate(Validate::Region(
             1,
             Box::new(|delegate| {
                 let d = delegate.unwrap();
                 assert_eq!(d.downstreams.len(), 1);
             }),
-        ))
+        )))
         .unwrap();
 
     // Drop stream and cancel its server streaming.
@@ -154,12 +153,12 @@ fn test_cdc_basic() {
     // Sleep a while to make sure the stream is deregistered.
     sleep_ms(200);
     scheduler
-        .schedule(Task::Validate(
+        .schedule(Task::Validate(Validate::Region(
             1,
             Box::new(|delegate| {
                 assert!(delegate.is_none());
             }),
-        ))
+        )))
         .unwrap();
 
     // Stale region epoch.
@@ -215,14 +214,14 @@ fn test_cdc_not_leader() {
     let (tx, rx) = mpsc::channel();
     let tx_ = tx.clone();
     scheduler
-        .schedule(Task::Validate(
+        .schedule(Task::Validate(Validate::Region(
             1,
             Box::new(move |delegate| {
                 let d = delegate.unwrap();
                 assert_eq!(d.downstreams.len(), 1);
                 tx_.send(()).unwrap();
             }),
-        ))
+        )))
         .unwrap();
     rx.recv_timeout(Duration::from_secs(1)).unwrap();
     assert!(suite
@@ -259,13 +258,13 @@ fn test_cdc_not_leader() {
     // Sleep a while to make sure the stream is deregistered.
     sleep_ms(200);
     scheduler
-        .schedule(Task::Validate(
+        .schedule(Task::Validate(Validate::Region(
             1,
             Box::new(move |delegate| {
                 assert!(delegate.is_none());
                 tx.send(()).unwrap();
             }),
-        ))
+        )))
         .unwrap();
     rx.recv_timeout(Duration::from_millis(200)).unwrap();
 
@@ -965,6 +964,7 @@ fn test_old_value_multi_changefeeds() {
 #[test]
 fn test_old_value_cache() {
     let mut suite = TestSuite::new(1);
+    let scheduler = suite.endpoints.values().next().unwrap().scheduler();
     let mut req = suite.new_changedata_request(1);
     req.set_extra_op(ExtraOp::ReadOldValue);
     let (req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
@@ -997,12 +997,14 @@ fn test_old_value_cache() {
         other => panic!("unknown event {:?}", other),
     }
     // k1 old value must be cached.
-    assert_eq!(
-        CDC_OLD_VALUE_DURATION_HISTOGRAM
-            .with_label_values(&["seek"])
-            .get_sample_count(),
-        0
-    );
+    scheduler
+        .schedule(Task::Validate(Validate::OldValueCache(
+            1,
+            Box::new(move |cnt| {
+                assert_eq!(cnt, 0);
+            }),
+        )))
+        .unwrap();
     suite.must_kv_commit(1, vec![k1], 10.into(), 15.into());
     let mut events = receive_event(false).events.to_vec();
     match events.remove(0).event.unwrap() {
@@ -1032,12 +1034,14 @@ fn test_old_value_cache() {
         }
         other => panic!("unknown event {:?}", other),
     }
-    assert_eq!(
-        CDC_OLD_VALUE_DURATION_HISTOGRAM
-            .with_label_values(&["seek"])
-            .get_sample_count(),
-        0
-    );
+    scheduler
+        .schedule(Task::Validate(Validate::OldValueCache(
+            1,
+            Box::new(move |cnt| {
+                assert_eq!(cnt, 0);
+            }),
+        )))
+        .unwrap();
     suite.must_kv_commit(1, vec![k2], 10.into(), 15.into());
     let mut events = receive_event(false).events.to_vec();
     match events.remove(0).event.unwrap() {
@@ -1068,12 +1072,14 @@ fn test_old_value_cache() {
         other => panic!("unknown event {:?}", other),
     }
     // k2 old value must be cached.
-    assert_eq!(
-        CDC_OLD_VALUE_DURATION_HISTOGRAM
-            .with_label_values(&["seek"])
-            .get_sample_count(),
-        0
-    );
+    scheduler
+        .schedule(Task::Validate(Validate::OldValueCache(
+            1,
+            Box::new(move |cnt| {
+                assert_eq!(cnt, 0);
+            }),
+        )))
+        .unwrap();
     suite.must_kv_commit(1, vec![k2], 20.into(), 25.into());
     let mut events = receive_event(false).events.to_vec();
     match events.remove(0).event.unwrap() {
@@ -1106,12 +1112,14 @@ fn test_old_value_cache() {
         other => panic!("unknown event {:?}", other),
     }
     // k3 mutation type must be cached.
-    assert_eq!(
-        CDC_OLD_VALUE_DURATION_HISTOGRAM
-            .with_label_values(&["seek"])
-            .get_sample_count(),
-        0
-    );
+    scheduler
+        .schedule(Task::Validate(Validate::OldValueCache(
+            1,
+            Box::new(move |cnt| {
+                assert_eq!(cnt, 0);
+            }),
+        )))
+        .unwrap();
 
     suite.stop();
 }

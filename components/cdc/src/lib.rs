@@ -17,11 +17,11 @@ mod channel;
 mod delegate;
 mod endpoint;
 mod errors;
-pub mod metrics;
+mod metrics;
 mod observer;
 mod service;
 
-pub use endpoint::{Endpoint, Task};
+pub use endpoint::{Endpoint, Task, Validate};
 pub use errors::{Error, Result};
 pub use observer::CdcObserver;
 pub use service::Service;

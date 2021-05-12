@@ -135,9 +135,9 @@ impl CmdObserver<RocksEngine> for CdcObserver {
             let get_old_value = move |key, query_ts| {
                 if let Some((old_value, mutation_type)) = txn_extra.mut_old_values().remove(&key) {
                     return match mutation_type {
-                        MutationType::Insert => (None, None),
+                        MutationType::Insert => (None, None, true),
                         MutationType::Put | MutationType::Delete => match old_value {
-                            OldValue::None => (None, None),
+                            OldValue::None => (None, None, true),
                             OldValue::Value {
                                 start_ts,
                                 short_value,
@@ -156,7 +156,7 @@ impl CmdObserver<RocksEngine> for CdcObserver {
                                         .observe(start.elapsed().as_secs_f64());
                                     value
                                 });
-                                (value, statistics)
+                                (value, statistics, true)
                             }
                             // Unspecified should not be added into cache.
                             OldValue::Unspecified => unreachable!(),
@@ -174,7 +174,7 @@ impl CmdObserver<RocksEngine> for CdcObserver {
                 CDC_OLD_VALUE_DURATION_HISTOGRAM
                     .with_label_values(&["seek"])
                     .observe(start.elapsed().as_secs_f64());
-                (value, Some(statistics))
+                (value, Some(statistics), false)
             };
             if let Err(e) = self.sched.schedule(Task::MultiBatch {
                 multi: batches,

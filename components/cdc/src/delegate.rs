@@ -204,6 +204,7 @@ pub struct Delegate {
     enabled: Arc<AtomicBool>,
     failed: bool,
     pub txn_extra_op: TxnExtraOp,
+    pub old_value_cache_miss_cnt: usize,
 }
 
 impl Delegate {
@@ -219,6 +220,7 @@ impl Delegate {
             enabled: Arc::new(AtomicBool::new(true)),
             failed: false,
             txn_extra_op: TxnExtraOp::default(),
+            old_value_cache_miss_cnt: 0,
         }
     }
 
@@ -614,10 +616,14 @@ impl Delegate {
                     if self.txn_extra_op == TxnExtraOp::ReadOldValue {
                         let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
                         let start = Instant::now();
-                        let (old_value, statistics) = old_value_cb.borrow_mut().as_mut()(
-                            key,
-                            std::cmp::max(for_update_ts, row.start_ts.into()),
-                        );
+                        let (old_value, statistics, cache_hitted) =
+                            old_value_cb.borrow_mut().as_mut()(
+                                key,
+                                std::cmp::max(for_update_ts, row.start_ts.into()),
+                            );
+                        if !cache_hitted {
+                            self.old_value_cache_miss_cnt += 1;
+                        }
                         row.old_value = old_value.unwrap_or_default();
                         CDC_OLD_VALUE_DURATION_HISTOGRAM
                             .with_label_values(&["all"])
