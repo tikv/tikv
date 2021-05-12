@@ -19,7 +19,9 @@ use tikv::storage::{Cursor, ScanMode, Snapshot as EngineSnapshot, Statistics};
 use tikv_util::collections::HashMap;
 use tikv_util::time::Instant;
 use tikv_util::worker::Scheduler;
-use txn_types::{Key, Lock, MutationType, TimeStamp, TxnExtra, Value, WriteRef, WriteType};
+use txn_types::{
+    Key, Lock, MutationType, OldValue, TimeStamp, TxnExtra, Value, WriteRef, WriteType,
+};
 
 use crate::endpoint::{Deregister, Task};
 use crate::metrics::*;
@@ -130,42 +132,49 @@ impl CmdObserver<RocksEngine> for CdcObserver {
             // Create a snapshot here for preventing the old value was GC-ed.
             let snapshot = RegionSnapshot::from_snapshot(engine.snapshot().into_sync(), region);
             let mut reader = OldValueReader::new(snapshot);
-            let get_old_value = move |key, query_ts, statistics: &mut Statistics| {
+            let get_old_value = move |key, query_ts| {
                 if let Some((old_value, mutation_type)) = txn_extra.mut_old_values().remove(&key) {
-                    match mutation_type {
-                        MutationType::Insert => {
-                            assert!(old_value.is_none());
-                            return None;
-                        }
-                        MutationType::Put | MutationType::Delete => {
-                            if let Some(old_value) = old_value {
-                                let start_ts = old_value.start_ts;
-                                return old_value.short_value.or_else(|| {
+                    return match mutation_type {
+                        MutationType::Insert => (None, None),
+                        MutationType::Put | MutationType::Delete => match old_value {
+                            OldValue::None => (None, None),
+                            OldValue::Value {
+                                start_ts,
+                                short_value,
+                            } => {
+                                let mut statistics = None;
+                                let value = short_value.or_else(|| {
+                                    statistics = Some(Statistics::default());
                                     let prev_key = key.truncate_ts().unwrap().append_ts(start_ts);
                                     let start = Instant::now();
                                     let mut opts = ReadOptions::new();
                                     opts.set_fill_cache(false);
-                                    let value = reader.get_value_default(&prev_key, statistics);
+                                    let value = reader
+                                        .get_value_default(&prev_key, statistics.as_mut().unwrap());
                                     CDC_OLD_VALUE_DURATION_HISTOGRAM
                                         .with_label_values(&["get"])
                                         .observe(start.elapsed().as_secs_f64());
                                     value
                                 });
+                                (value, statistics)
                             }
-                        }
+                            // Unspecified should not be added into cache.
+                            OldValue::Unspecified => unreachable!(),
+                        },
                         _ => unreachable!(),
-                    }
+                    };
                 }
                 // Cannot get old value from cache, seek for it in engine.
                 let start = Instant::now();
+                let mut statistics = Statistics::default();
                 let key = key.truncate_ts().unwrap().append_ts(query_ts);
                 let value = reader
-                    .near_seek_old_value(&key, statistics)
+                    .near_seek_old_value(&key, &mut statistics)
                     .unwrap_or_default();
                 CDC_OLD_VALUE_DURATION_HISTOGRAM
                     .with_label_values(&["seek"])
                     .observe(start.elapsed().as_secs_f64());
-                value
+                (value, Some(statistics))
             };
             if let Err(e) = self.sched.schedule(Task::MultiBatch {
                 multi: batches,
