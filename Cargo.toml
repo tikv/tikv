@@ -104,6 +104,7 @@ libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { path = "components/log_wrappers" }
 match_template = { path = "components/match_template" }
+matches = "0.1.8"
 mime = "0.3.13"
 more-asserts = "0.1"
 murmur3 = "0.5.1"
