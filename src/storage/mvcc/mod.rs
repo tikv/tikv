@@ -103,6 +103,7 @@ pub enum ErrorInner {
         lock_ts: TimeStamp,
         lock_key: Vec<u8>,
         deadlock_key_hash: u64,
+        wait_chain: Vec<kvproto::deadlock::WaitForEntry>,
     },
 
     #[error("key {} already exists", log_wrappers::Value::key(.key))]
@@ -195,11 +196,13 @@ impl ErrorInner {
                 lock_ts,
                 lock_key,
                 deadlock_key_hash,
+                wait_chain,
             } => Some(ErrorInner::Deadlock {
                 start_ts: *start_ts,
                 lock_ts: *lock_ts,
                 lock_key: lock_key.to_owned(),
                 deadlock_key_hash: *deadlock_key_hash,
+                wait_chain: wait_chain.clone(),
             }),
             ErrorInner::AlreadyExist { key } => Some(ErrorInner::AlreadyExist { key: key.clone() }),
             ErrorInner::DefaultNotFound { key } => Some(ErrorInner::DefaultNotFound {

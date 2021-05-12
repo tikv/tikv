@@ -194,7 +194,7 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
                 multi: batches,
                 old_value_cb: Box::new(get_old_value),
             }) {
-                warn!("schedule cdc task failed"; "error" => ?e);
+                warn!("cdc schedule task failed"; "error" => ?e);
             }
         }
     }
@@ -213,7 +213,7 @@ impl RoleObserver for CdcObserver {
                     err: CdcError::request(store_err.into()),
                 };
                 if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
-                    error!("schedule cdc task failed"; "error" => ?e);
+                    error!("cdc schedule cdc task failed"; "error" => ?e);
                 }
             }
         }
@@ -238,7 +238,7 @@ impl RegionChangeObserver for CdcObserver {
                     err: CdcError::request(store_err.into()),
                 };
                 if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
-                    error!("schedule cdc task failed"; "error" => ?e);
+                    error!("cdc schedule cdc task failed"; "error" => ?e);
                 }
             }
         }
