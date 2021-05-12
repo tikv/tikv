@@ -16,7 +16,7 @@ pub struct Observer<E: KvEngine> {
     cmd_batches: RefCell<Vec<CmdBatch>>,
     scheduler: Scheduler<Task<E::Snapshot>>,
     need_old_value: bool,
-    last_batch_level: RefCell<ObserveLevel>,
+    last_batch_observing: RefCell<bool>,
 }
 
 impl<E: KvEngine> Observer<E> {
@@ -25,7 +25,7 @@ impl<E: KvEngine> Observer<E> {
             cmd_batches: RefCell::default(),
             scheduler,
             need_old_value: true,
-            last_batch_level: RefCell::from(ObserveLevel::None),
+            last_batch_observing: RefCell::from(false),
         }
     }
 
@@ -55,7 +55,7 @@ impl<E: KvEngine> Clone for Observer<E> {
             cmd_batches: self.cmd_batches.clone(),
             scheduler: self.scheduler.clone(),
             need_old_value: self.need_old_value,
-            last_batch_level: self.last_batch_level.clone(),
+            last_batch_observing: self.last_batch_observing.clone(),
         }
     }
 }
@@ -64,15 +64,9 @@ impl<E: KvEngine> Coprocessor for Observer<E> {}
 
 impl<E: KvEngine> CmdObserver<E> for Observer<E> {
     fn on_prepare_for_apply(&self, cdc: &ObserveHandle, rts: &ObserveHandle, region_id: u64) {
-        *self.last_batch_level.borrow_mut() = match (cdc.is_observing(), rts.is_observing()) {
-            // Observe all data if `cdc` worker is observing
-            (true, _) => ObserveLevel::All,
-            // Observe lock related data if only `resolved-ts` worker is observing
-            (false, true) => ObserveLevel::LockRelated,
-            // No observer
-            (false, false) => ObserveLevel::None,
-        };
-        if *self.last_batch_level.borrow() == ObserveLevel::None {
+        // TODO: Should not care about whether `cdc` is observing
+        *self.last_batch_observing.borrow_mut() = cdc.is_observing() || rts.is_observing();
+        if !*self.last_batch_observing.borrow() {
             return;
         }
         self.cmd_batches
@@ -81,22 +75,14 @@ impl<E: KvEngine> CmdObserver<E> for Observer<E> {
     }
 
     fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: &Cmd) {
-        if *self.last_batch_level.borrow() == ObserveLevel::None {
+        if !*self.last_batch_observing.borrow() {
             return;
         }
         self.cmd_batches
             .borrow_mut()
             .last_mut()
             .unwrap_or_else(|| panic!("region {} should exist some cmd batch", region_id))
-            .push(
-                cdc_id,
-                rts_id,
-                region_id,
-                ObserveCmd::from_cmd(
-                    cmd,
-                    *self.last_batch_level.borrow() == ObserveLevel::LockRelated,
-                ),
-            );
+            .push(cdc_id, rts_id, region_id, cmd.clone());
     }
 
     fn on_flush_apply(&self, engine: E) {
@@ -185,9 +171,7 @@ mod test {
             Task::ChangeLog { cmd_batch, .. } => {
                 assert_eq!(cmd_batch.len(), 1);
                 assert_eq!(cmd_batch[0].len(), 1);
-                assert!(
-                    matches!(&cmd_batch[0].cmds[0], ObserveCmd::Data {requests, ..} if requests == &data)
-                );
+                assert_eq!(&cmd_batch[0].cmds[0].request.get_requests(), &data);
             }
             _ => panic!("unexpected task"),
         };
@@ -198,7 +182,7 @@ mod test {
         let (scheduler, mut rx) = dummy_scheduler();
         let observer = Observer::new(scheduler);
         let engine = TestEngineBuilder::new().build().unwrap().get_rocksdb();
-        let mut data = vec![
+        let data = vec![
             put_cf(CF_LOCK, b"k1", b"v"),
             put_cf(CF_DEFAULT, b"k2", b"v"),
             put_cf(CF_LOCK, b"k3", b"v"),
@@ -236,8 +220,7 @@ mod test {
         observer.on_prepare_for_apply(&cdc_handle, &rts_handle, 0);
         observer.on_apply_cmd(cdc_handle.id, rts_handle.id, 0, &cmd);
         observer.on_flush_apply(engine.clone());
-        // Only observe lock related data
-        data.retain(|p| p.get_put().cf != CF_DEFAULT);
+        // Still observe all data
         expect_recv(&mut rx, data);
 
         // Both cdc and resolved-ts worker are not observing

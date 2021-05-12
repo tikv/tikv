@@ -25,7 +25,7 @@ use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, AdminResponse, CmdType, DeleteRequest, PutRequest, Request,
 };
-use raftstore::coprocessor::{CmdBatch, ObserveCmd, ObserveHandle};
+use raftstore::coprocessor::{Cmd, CmdBatch, ObserveHandle};
 use raftstore::store::util::compare_region_epoch;
 use raftstore::Error as RaftStoreError;
 use resolved_ts::Resolver;
@@ -413,23 +413,28 @@ impl Delegate {
             return Ok(());
         }
         for cmd in batch.into_iter(self.region_id) {
-            match cmd {
-                ObserveCmd::Data {
+            let Cmd {
+                index,
+                mut request,
+                mut response,
+            } = cmd;
+            if response.get_header().has_error() {
+                let err_header = response.mut_header().take_error();
+                self.mark_failed();
+                return Err(Error::request(err_header));
+            }
+            if !request.has_admin_request() {
+                let flags = WriteBatchFlags::from_bits_truncate(request.get_header().get_flags());
+                let is_one_pc = flags.contains(WriteBatchFlags::ONE_PC);
+                self.sink_data(
                     index,
-                    header,
-                    requests,
-                } => {
-                    let flags = WriteBatchFlags::from_bits_truncate(header.get_flags());
-                    let is_one_pc = flags.contains(WriteBatchFlags::ONE_PC);
-                    self.sink_data(index, requests, old_value_cb, old_value_cache, is_one_pc)?;
-                }
-                ObserveCmd::Admin { req, resp } => {
-                    self.sink_admin(req, resp)?;
-                }
-                ObserveCmd::Err(err) => {
-                    self.mark_failed();
-                    return Err(Error::request(err));
-                }
+                    request.requests.into(),
+                    old_value_cb,
+                    old_value_cache,
+                    is_one_pc,
+                )?;
+            } else {
+                self.sink_admin(request.take_admin_request(), response.take_admin_response())?;
             }
         }
         Ok(())

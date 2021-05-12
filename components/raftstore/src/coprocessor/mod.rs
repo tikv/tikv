@@ -5,14 +5,9 @@ use std::sync::Arc;
 use std::vec::IntoIter;
 
 use engine_traits::CfName;
-use engine_traits::{CF_LOCK, CF_WRITE};
-use kvproto::errorpb;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
-use kvproto::raft_cmdpb::{
-    AdminRequest, AdminResponse, CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader,
-    Request,
-};
+use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request};
 use raft::{eraftpb, StateRole};
 
 pub mod config;
@@ -222,79 +217,12 @@ impl ObserveHandle {
     }
 }
 
-// `ObserveLevel` describe what data the observer want to observe
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum ObserveLevel {
-    // Don't observe any data
-    None,
-    // Only observe lock related data (i.e `lock_cf`, `write_cf`)
-    LockRelated,
-    // Observe all data
-    All,
-}
-
-#[derive(Clone, Debug)]
-pub enum ObserveCmd {
-    Err(errorpb::Error),
-    Admin {
-        req: AdminRequest,
-        resp: AdminResponse,
-    },
-    Data {
-        index: u64,
-        header: RaftRequestHeader,
-        requests: Vec<Request>,
-    },
-}
-
-impl ObserveCmd {
-    pub fn from_cmd(cmd: &Cmd, lock_only: bool) -> ObserveCmd {
-        if cmd.response.get_header().has_error() {
-            return ObserveCmd::Err(cmd.response.get_header().get_error().clone());
-        }
-        if cmd.request.has_admin_request() {
-            return ObserveCmd::Admin {
-                req: cmd.request.get_admin_request().clone(),
-                resp: cmd.response.get_admin_response().clone(),
-            };
-        }
-        if !lock_only {
-            return ObserveCmd::Data {
-                index: cmd.index,
-                header: cmd.request.get_header().clone(),
-                requests: cmd.request.get_requests().to_vec(),
-            };
-        }
-        let requests = cmd
-            .request
-            .get_requests()
-            .iter()
-            .filter_map(|req| {
-                let cf = match req.get_cmd_type() {
-                    CmdType::Put => req.get_put().cf.as_str(),
-                    CmdType::Delete => req.get_delete().cf.as_str(),
-                    _ => "",
-                };
-                match cf {
-                    CF_LOCK | CF_WRITE => Some(req.clone()),
-                    _ => None,
-                }
-            })
-            .collect();
-        ObserveCmd::Data {
-            index: cmd.index,
-            header: cmd.request.get_header().clone(),
-            requests,
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct CmdBatch {
     pub cdc_id: ObserveID,
     pub rts_id: ObserveID,
     pub region_id: u64,
-    pub cmds: Vec<ObserveCmd>,
+    pub cmds: Vec<Cmd>,
 }
 
 impl CmdBatch {
@@ -307,14 +235,14 @@ impl CmdBatch {
         }
     }
 
-    pub fn push(&mut self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: ObserveCmd) {
+    pub fn push(&mut self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: Cmd) {
         assert_eq!(region_id, self.region_id);
         assert_eq!(cdc_id, self.cdc_id);
         assert_eq!(rts_id, self.rts_id);
         self.cmds.push(cmd)
     }
 
-    pub fn into_iter(self, region_id: u64) -> IntoIter<ObserveCmd> {
+    pub fn into_iter(self, region_id: u64) -> IntoIter<Cmd> {
         assert_eq!(self.region_id, region_id);
         self.cmds.into_iter()
     }
@@ -330,8 +258,13 @@ impl CmdBatch {
     pub fn size(&self) -> usize {
         let mut cmd_bytes = 0;
         for cmd in self.cmds.iter() {
-            if let ObserveCmd::Data { ref requests, .. } = cmd {
-                for req in requests.iter() {
+            let Cmd {
+                ref request,
+                ref response,
+                ..
+            } = cmd;
+            if !response.get_header().has_error() && !request.has_admin_request() {
+                for req in request.requests.iter() {
                     let put = req.get_put();
                     cmd_bytes += put.get_key().len();
                     cmd_bytes += put.get_value().len();

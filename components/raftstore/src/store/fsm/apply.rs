@@ -4348,7 +4348,7 @@ mod tests {
                 .borrow_mut()
                 .last_mut()
                 .expect("should exist some cmd batch")
-                .push(cdc_id, rts_id, region_id, ObserveCmd::from_cmd(cmd, false));
+                .push(cdc_id, rts_id, region_id, cmd.clone());
         }
 
         fn on_flush_apply(&self, _: E) {
@@ -4785,10 +4785,6 @@ mod tests {
         let cmd_batch = cmdbatch_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert_eq!(cmd_batch.cdc_id, ObserveHandle::with_id(0).id);
         assert_eq!(cmd_batch.rts_id, ObserveHandle::with_id(0).id);
-        assert!(matches!(
-            cmd_batch.into_iter(1).next().unwrap(),
-            ObserveCmd::Data {requests, ..} if requests[0].get_put().key == b"k0" && requests[0].get_put().value == b"v0"
-        ));
 
         let (capture_tx, capture_rx) = mpsc::channel();
         let put_entry = EntryBuilder::new(3, 2)
@@ -4812,10 +4808,7 @@ mod tests {
         let cmd_batch = cmdbatch_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert_eq!(cmd_batch.cdc_id, observe_handle.id);
         assert_eq!(cmd_batch.rts_id, observe_handle.id);
-        assert!(matches!(
-            cmd_batch.into_iter(1).next().unwrap(),
-            ObserveCmd::Data {requests, ..} if requests[0].get_put().cf == CF_LOCK && requests[0].get_put().key == b"k1" && requests[0].get_put().value == b"v1"
-        ));
+        assert_eq!(resp, cmd_batch.into_iter(1).next().unwrap().response);
 
         let put_entry1 = EntryBuilder::new(4, 2)
             .put(b"k2", b"v2")

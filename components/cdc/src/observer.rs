@@ -35,7 +35,7 @@ pub struct CdcObserver {
     // TODO: it may become a bottleneck, find a better way to manage the registry.
     observe_regions: Arc<RwLock<HashMap<u64, ObserveID>>>,
     cmd_batches: RefCell<Vec<CmdBatch>>,
-    last_batch_level: RefCell<ObserveLevel>,
+    last_batch_observing: RefCell<bool>,
 }
 
 impl CdcObserver {
@@ -48,7 +48,7 @@ impl CdcObserver {
             sched,
             observe_regions: Arc::default(),
             cmd_batches: RefCell::default(),
-            last_batch_level: RefCell::from(ObserveLevel::None),
+            last_batch_observing: RefCell::from(false),
         }
     }
 
@@ -104,12 +104,8 @@ impl Coprocessor for CdcObserver {}
 
 impl<E: KvEngine> CmdObserver<E> for CdcObserver {
     fn on_prepare_for_apply(&self, cdc: &ObserveHandle, rts: &ObserveHandle, region_id: u64) {
-        *self.last_batch_level.borrow_mut() = if cdc.is_observing() {
-            ObserveLevel::All
-        } else {
-            ObserveLevel::None
-        };
-        if *self.last_batch_level.borrow() == ObserveLevel::None {
+        *self.last_batch_observing.borrow_mut() = cdc.is_observing();
+        if !*self.last_batch_observing.borrow() {
             return;
         }
         self.cmd_batches
@@ -118,14 +114,14 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
     }
 
     fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: &Cmd) {
-        if *self.last_batch_level.borrow() == ObserveLevel::None {
+        if !*self.last_batch_observing.borrow() {
             return;
         }
         self.cmd_batches
             .borrow_mut()
             .last_mut()
             .expect("should exist some cmd batch")
-            .push(cdc_id, rts_id, region_id, ObserveCmd::from_cmd(cmd, false));
+            .push(cdc_id, rts_id, region_id, cmd.clone());
     }
 
     fn on_flush_apply(&self, engine: E) {
