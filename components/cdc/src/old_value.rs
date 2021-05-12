@@ -5,7 +5,7 @@ use std::ops::Deref;
 use engine_traits::{ReadOptions, CF_DEFAULT, CF_WRITE};
 use tikv::storage::{Cursor, CursorBuilder, ScanMode, Snapshot as EngineSnapshot, Statistics};
 use tikv_util::config::OptionReadableSize;
-use tikv_util::lru::{CacheSizeTrace, RawLruCache};
+use tikv_util::lru::{CacheSizeTrace, LruCache};
 use tikv_util::sys::sys_quota::SysQuota;
 use tikv_util::time::Instant;
 use txn_types::{Key, MutationType, OldValue, TimeStamp, Value, WriteRef, WriteType};
@@ -98,7 +98,7 @@ impl CacheSizeTrace<Key, (OldValue, Option<MutationType>)> for OldValueCacheSize
 }
 
 pub struct OldValueCache {
-    pub cache: RawLruCache<Key, (OldValue, Option<MutationType>), OldValueCacheSizeTrace>,
+    pub cache: LruCache<Key, (OldValue, Option<MutationType>), OldValueCacheSizeTrace>,
     pub access_count: usize,
     pub miss_count: usize,
     pub miss_none_count: usize,
@@ -114,7 +114,7 @@ impl OldValueCache {
             Some(c) => c.0,
         };
         OldValueCache {
-            cache: RawLruCache::with_capacity(capacity),
+            cache: LruCache::with_capacity_sample_and_trace(capacity, 0, OldValueCacheSizeTrace(0)),
             access_count: 0,
             miss_count: 0,
             miss_none_count: 0,

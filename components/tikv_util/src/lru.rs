@@ -2,7 +2,6 @@
 
 use collections::{HashMap, HashMapEntry};
 use std::hash::Hash;
-use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 use std::ptr::{self, NonNull};
 
@@ -133,16 +132,16 @@ impl<K> Trace<K> {
     }
 }
 
-pub trait CacheSizeTrace<K, V>: Default {
+pub trait CacheSizeTrace<K, V> {
     fn current_size(&self) -> u64;
     fn trace_insert(&mut self, key: &K, value: &V);
     fn trace_remove(&mut self, key: &K, value: &V);
     fn set(&mut self, val: u64);
 }
 
-pub struct CountTrace<K, V>(pub u64, PhantomData<(K, V)>);
+pub struct CountTrace(u64);
 
-impl<K, V> CacheSizeTrace<K, V> for CountTrace<K, V> {
+impl<K, V> CacheSizeTrace<K, V> for CountTrace {
     fn current_size(&self) -> u64 {
         self.0
     }
@@ -160,20 +159,20 @@ impl<K, V> CacheSizeTrace<K, V> for CountTrace<K, V> {
     }
 }
 
-impl<K, V> Default for CountTrace<K, V> {
+impl Default for CountTrace {
     fn default() -> Self {
-        Self(0, PhantomData::default())
+        Self(0)
     }
 }
 
-pub struct RawLruCache<K, V, T> {
+pub struct LruCache<K, V, T = CountTrace> {
     map: HashMap<K, ValueEntry<K, V>>,
     trace: Trace<K>,
     capacity: u64,
     size_trace: T,
 }
 
-impl<K, V, T> RawLruCache<K, V, T> {
+impl<K, V, T> LruCache<K, V, T> {
     #[inline]
     pub fn clear(&mut self) {
         self.map.clear();
@@ -190,36 +189,54 @@ impl<K, V, T> RawLruCache<K, V, T> {
     }
 }
 
-impl<K, V, T> RawLruCache<K, V, T>
-where
-    T: CacheSizeTrace<K, V>,
-{
-    pub fn with_capacity(capacity: u64) -> RawLruCache<K, V, T> {
-        RawLruCache::with_capacity_and_sample(capacity, 0)
+impl<K, V> LruCache<K, V, CountTrace> {
+    pub fn with_capacity(capacity: u64) -> LruCache<K, V> {
+        LruCache::with_capacity_and_sample(capacity, 0)
     }
 
-    pub fn with_capacity_and_sample(mut capacity: u64, sample_mask: usize) -> RawLruCache<K, V, T> {
+    pub fn with_capacity_and_sample(mut capacity: u64, sample_mask: usize) -> LruCache<K, V> {
         if capacity == 0 {
             capacity = 1;
         }
-        RawLruCache {
+        LruCache {
             map: HashMap::default(),
             trace: Trace::new(sample_mask),
             capacity,
-            size_trace: T::default(),
+            size_trace: CountTrace::default(),
         }
-    }
-
-    pub fn size(&self) -> u64 {
-        self.size_trace.current_size()
     }
 }
 
-impl<K, V, T> RawLruCache<K, V, T>
+impl<K, V, T> LruCache<K, V, T>
+where
+    T: CacheSizeTrace<K, V>,
+{
+    pub fn with_capacity_sample_and_trace(
+        mut capacity: u64,
+        sample_mask: usize,
+        trace: T,
+    ) -> LruCache<K, V, T> {
+        if capacity == 0 {
+            capacity = 1;
+        }
+        LruCache {
+            map: HashMap::default(),
+            trace: Trace::new(sample_mask),
+            capacity,
+            size_trace: trace,
+        }
+    }
+}
+
+impl<K, V, T> LruCache<K, V, T>
 where
     K: Eq + Hash + Clone + std::fmt::Debug,
     T: CacheSizeTrace<K, V>,
 {
+    pub fn size(&self) -> u64 {
+        self.size_trace.current_size()
+    }
+
     #[inline]
     pub fn insert(&mut self, key: K, value: V) {
         let mut old_key = None;
@@ -300,15 +317,13 @@ where
     }
 }
 
-unsafe impl<K: Send, V: Send, T: Send> Send for RawLruCache<K, V, T> {}
+unsafe impl<K: Send, V: Send, T: Send> Send for LruCache<K, V, T> {}
 
-impl<K, V, T> Drop for RawLruCache<K, V, T> {
+impl<K, V, T> Drop for LruCache<K, V, T> {
     fn drop(&mut self) {
         self.clear();
     }
 }
-
-pub type LruCache<K, V> = RawLruCache<K, V, CountTrace<K, V>>;
 
 impl<K, V> LruCache<K, V>
 where
@@ -319,13 +334,14 @@ where
         if new_cap == 0 {
             new_cap = 1;
         }
-        if new_cap < self.capacity && self.size_trace.current_size() > new_cap {
-            for _ in new_cap..self.size_trace.current_size() {
+        let current_size = CacheSizeTrace::<K, V>::current_size(&self.size_trace);
+        if new_cap < self.capacity && current_size > new_cap {
+            for _ in new_cap..current_size {
                 let key = self.trace.remove_tail();
                 self.map.remove(&key);
             }
             self.map.shrink_to_fit();
-            self.size_trace.set(new_cap);
+            CacheSizeTrace::<K, V>::set(&mut self.size_trace, new_cap);
         }
         self.capacity = new_cap;
     }
