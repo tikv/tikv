@@ -79,10 +79,10 @@ impl ObserveRegion {
     }
 
     fn track_change_log(&mut self, change_logs: &[ChangeLog]) -> Result<()> {
-        match self.resolver_status {
+        match &mut self.resolver_status {
             ResolverStatus::Pending {
-                ref mut locks,
-                ref mut tracked_index,
+                locks,
+                tracked_index,
                 ..
             } => {
                 for log in change_logs {
