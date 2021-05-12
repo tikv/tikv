@@ -106,6 +106,8 @@ test-engines-panic = [
   "raftstore/test-engines-panic",
 ]
 jemalloc = ["tikv/jemalloc"]
+mimalloc = ["tikv/mimalloc"]
+snmalloc = ["tikv/snmalloc"]
 mem-profiling = ["tikv/mem-profiling"]
 sse = ["tikv/sse"]
 portable = ["tikv/portable"]

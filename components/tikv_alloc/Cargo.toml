@@ -11,7 +11,7 @@ jemalloc = ["tikv-jemallocator", "tikv-jemalloc-ctl", "tikv-jemalloc-sys"]
 # Build jemalloc's profiling features. Without this
 # certain profile functions will return nothing.
 mem-profiling = ["tikv-jemallocator/profiling", "log"]
-mimalloc = ["mimalloc"]
+snmalloc = ["snmalloc-rs"]
 
 [dependencies]
 libc = "0.2"
@@ -42,4 +42,8 @@ features = ["bundled"]
 
 [dependencies.mimalloc]
 version = "0.1.25"
+optional = true
+
+[dependencies.snmalloc-rs]
+version = "0.2"
 optional = true

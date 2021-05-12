@@ -2200,6 +2200,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "libmimalloc-sys"
+version = "0.1.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2396cf99d2f58611cd69f0efeee4af3d2e2c7b61bed433515029163aa567e65c"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
 source = "git+https://github.com/tikv/rust-rocksdb.git#317625fb85ef201e89d1d3a59340005419efcd1e"
@@ -2379,22 +2388,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "mimalloc-sys"
-version = "0.1.6"
+name = "mimalloc"
+version = "0.1.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4aa3cefb626f6ae3d0b2f71c5378c89d2b1d4d7bc246b0ca9a7ee61a4daad291"
+checksum = "1e7c6b11afd1e5e689ac96b6d18b1fc763398fe3d7eed99e8773426bc2033dfb"
 dependencies = [
- "cc",
- "libc 0.2.86",
-]
-
-[[package]]
-name = "mimallocator"
-version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d44fe4ebf6b538fcf39d9975c2b90bb3232d1ba8e8bffeacd004f27b20c577a"
-dependencies = [
- "mimalloc-sys",
+ "libmimalloc-sys",
 ]
 
 [[package]]
@@ -4450,6 +4449,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "snmalloc-rs"
+version = "0.2.27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f5a6194d59b08fc87381e7c8a04ab4ab9967282b00f409bb742e08f3514ed0b"
+dependencies = [
+ "snmalloc-sys",
+]
+
+[[package]]
+name = "snmalloc-sys"
+version = "0.2.27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9518813a25ab2704a6df4968f609aa6949705409b6a854dcc87018d12961cbc8"
+dependencies = [
+ "cmake",
+]
+
+[[package]]
 name = "socket2"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5404,7 +5421,8 @@ dependencies = [
  "lazy_static",
  "libc 0.2.86",
  "log",
- "mimallocator",
+ "mimalloc",
+ "snmalloc-rs",
  "tcmalloc",
  "tempfile",
  "tikv-jemalloc-ctl",
