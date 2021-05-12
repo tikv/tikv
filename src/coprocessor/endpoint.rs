@@ -32,6 +32,7 @@ use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::PerfLevel;
+use req_cpu::{FutureExt, RequestTags};
 use txn_types::Lock;
 
 /// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
@@ -456,13 +457,21 @@ impl<E: Engine> Endpoint<E> {
     ) -> impl Future<Output = Result<coppb::Response>> {
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx.build_task_id();
+        let req_tags = Arc::new(RequestTags {
+            store_id: req_ctx.context.get_peer().get_store_id(),
+            region_id: req_ctx.context.get_region_id(),
+            peer_id: req_ctx.context.get_peer().get_id(),
+            request_id: task_id,
+            extra_attachment: vec![],
+        });
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
 
         let res = self
             .read_pool
             .spawn_handle(
-                Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder),
+                Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder)
+                    .in_tags(req_tags),
                 priority,
                 task_id,
             )

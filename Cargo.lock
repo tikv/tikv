@@ -3903,6 +3903,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "req_cpu"
+version = "0.0.1"
+dependencies = [
+ "collections",
+ "crossbeam",
+ "lazy_static",
+ "libc 0.2.86",
+ "pin-project 1.0.1",
+ "procinfo",
+ "rand 0.8.3",
+]
+
+[[package]]
 name = "reqwest"
 version = "0.10.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5429,6 +5442,7 @@ dependencies = [
  "raftstore",
  "rand 0.7.3",
  "regex",
+ "req_cpu",
  "rev_lines",
  "security",
  "semver 0.11.0",

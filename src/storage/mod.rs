@@ -84,6 +84,7 @@ use kvproto::kvrpcpb::{
 };
 use raftstore::store::util::build_key_range;
 use rand::prelude::*;
+use req_cpu::{FutureExt, RequestTags};
 use std::{
     borrow::Cow,
     iter,
@@ -318,6 +319,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
         let concurrency_manager = self.concurrency_manager.clone();
+        let req_tags = Arc::new(RequestTags {
+            store_id: ctx.get_peer().get_store_id(),
+            region_id: ctx.get_region_id(),
+            peer_id: ctx.get_peer().get_id(),
+            request_id: ctx.get_task_id(),
+            extra_attachment: vec![],
+        });
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -382,7 +390,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                     Ok((result?, statistics, perf_statistics.delta()))
                 }
-            },
+            }
+            .in_tags(req_tags),
             priority,
             thread_rng().next_u64(),
         );
@@ -452,6 +461,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         }
                     };
 
+                    let req_tags = Arc::new(RequestTags {
+                        store_id: ctx.get_peer().get_store_id(),
+                        region_id: ctx.get_region_id(),
+                        peer_id: ctx.get_peer().get_id(),
+                        request_id: ctx.get_task_id(),
+                        extra_attachment: vec![],
+                    });
+
                     let snap = Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx));
                     req_snaps.push((
                         snap,
@@ -462,6 +479,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         bypass_locks,
                         region_id,
                         id,
+                        req_tags,
                     ));
                 }
                 Self::with_tls_engine(|engine| engine.release_snapshot());
@@ -475,9 +493,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         bypass_locks,
                         region_id,
                         id,
+                        req_tags,
                     ) = req_snap;
                     match snap.await {
                         Ok(snapshot) => {
+                            let _g = req_tags.attach();
                             match PointGetterBuilder::new(snapshot, start_ts)
                                 .fill_cache(fill_cache)
                                 .isolation_level(isolation_level)
@@ -536,6 +556,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
         let concurrency_manager = self.concurrency_manager.clone();
+        let req_tags = Arc::new(RequestTags {
+            store_id: ctx.get_peer().get_store_id(),
+            region_id: ctx.get_region_id(),
+            peer_id: ctx.get_peer().get_id(),
+            request_id: ctx.get_task_id(),
+            extra_attachment: vec![],
+        });
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -609,7 +636,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                     Ok((result?, statistics, perf_statistics.delta()))
                 }
-            },
+            }
+            .in_tags(req_tags),
             priority,
             thread_rng().next_u64(),
         );

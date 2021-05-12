@@ -220,6 +220,7 @@ url = "2"
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 walkdir = "2"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+req_cpu = { path = "components/req_cpu" }
 
 [dev-dependencies]
 panic_hook = { path = "components/panic_hook" }
@@ -312,13 +313,14 @@ members = [
   "components/file_system",
   "components/collections",
   "components/coprocessor_plugin_api",
-  "components/test_coprocessor_plugin/example_plugin"
+  "components/test_coprocessor_plugin/example_plugin",
+  "components/req_cpu",
 ]
 default-members = ["cmd/tikv-server", "cmd/tikv-ctl"]
 
 [profile.dev]
 opt-level = 0
-debug = 1 # required for line numbers in tests, see tikv #5049
+#debug = 1 # required for line numbers in tests, see tikv #5049
 codegen-units = 4
 lto = false
 incremental = true
