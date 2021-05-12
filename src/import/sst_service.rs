@@ -109,6 +109,7 @@ where
     ) {
         todo!()
     }
+
     fn switch_mode(
         &mut self,
         ctx: RpcContext<'_>,
