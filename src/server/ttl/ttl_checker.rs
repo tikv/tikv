@@ -72,7 +72,7 @@ impl<E: KvEngine, R: RegionInfoProvider> RunnableWithTimer for TTLChecker<E, R> 
         loop {
             let (tx, rx) = mpsc::channel();
             if let Err(e) = self.region_info_provider.seek_region(
-                Some(&key),
+                &key,
                 Box::new(move |iter| {
                     let mut scanned_regions = 0;
                     let mut start_key = None;

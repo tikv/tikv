@@ -19,7 +19,6 @@ use kvproto::raft_serverpb::StoreIdent;
 use kvproto::replication_modepb::ReplicationStatus;
 use pd_client::{Error as PdError, PdClient, INVALID_ID};
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
-use raftstore::coprocessor::RegionInfoAccessor;
 use raftstore::router::{LocalReadRouter, RaftStoreRouter};
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
@@ -162,7 +161,6 @@ where
         split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
-        region_info_accessor: RegionInfoAccessor,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -198,7 +196,6 @@ where
             split_check_scheduler,
             auto_split_controller,
             concurrency_manager,
-            region_info_accessor,
         )?;
 
         Ok(())
@@ -380,7 +377,6 @@ where
         split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
-        region_info_accessor: RegionInfoAccessor,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -411,7 +407,6 @@ where
             auto_split_controller,
             self.state.clone(),
             concurrency_manager,
-            region_info_accessor,
         )?;
         Ok(())
     }

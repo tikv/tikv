@@ -12,7 +12,7 @@ use super::{
     CoprocessorHost, HibernateStateChangeObserver, ObserverContext, RegionChangeEvent,
     RegionChangeObserver, Result, RoleObserver,
 };
-use crate::store::HibernateState;
+use crate::store::{GroupState, HibernateState, LeaderState};
 use collections::HashMap;
 use engine_traits::KvEngine;
 use keys::{data_end_key, data_key};
@@ -101,7 +101,7 @@ pub type SeekRegionCallback = Box<dyn FnOnce(&mut dyn Iterator<Item = &RegionInf
 pub enum RegionInfoQuery {
     RaftStoreEvent(RaftStoreEvent),
     SeekRegion {
-        from: Option<Vec<u8>>,
+        from: Vec<u8>,
         callback: SeekRegionCallback,
     },
     FindRegionById {
@@ -121,10 +121,9 @@ impl Display for RegionInfoQuery {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
             RegionInfoQuery::RaftStoreEvent(e) => write!(f, "RaftStoreEvent({:?})", e),
-            RegionInfoQuery::SeekRegion { from, .. } => match from {
-                Some(key) => write!(f, "SeekRegion(from: {})", log_wrappers::Value::key(&key)),
-                None => write!(f, "SeekRegion(unbounded)"),
-            },
+            RegionInfoQuery::SeekRegion { from, .. } => {
+                write!(f, "SeekRegion(from: {})", log_wrappers::Value::key(&from))
+            }
             RegionInfoQuery::FindRegionById { region_id, .. } => {
                 write!(f, "FindRegionById(region_id: {})", region_id)
             }
@@ -435,14 +434,10 @@ impl RegionCollector {
         true
     }
 
-    pub fn handle_seek_region(&self, from_key: Option<Vec<u8>>, callback: SeekRegionCallback) {
-        let from = match from_key {
-            Some(key) => Excluded(data_key(&key)),
-            None => Unbounded,
-        };
+    pub fn handle_seek_region(&self, from_key: Vec<u8>, callback: SeekRegionCallback) {
         let mut iter = self
             .region_ranges
-            .range((from, Unbounded))
+            .range((Excluded(from_key), Unbounded))
             .map(|(_, region_id)| &self.regions[region_id]);
         callback(&mut iter)
     }
@@ -554,11 +549,42 @@ impl RunnableWithTimer for RegionCollector {
     fn on_timeout(&mut self) {
         let mut count = 0;
         let mut leader = 0;
+        let mut hibernate_states: HashMap<String, HashMap<String, usize>> = HashMap::default();
+        let mut hibernate_leader_states: HashMap<String, usize> = HashMap::default();
         for r in self.regions.values() {
             count += 1;
             if r.role == StateRole::Leader {
                 leader += 1;
+                *(hibernate_leader_states
+                    .entry(
+                        (match r.hibernate_state.leader {
+                            LeaderState::Awaken => "awaken",
+                            LeaderState::Poll(_) => "poll",
+                            LeaderState::Hibernated => "hibernated",
+                        })
+                        .to_string(),
+                    )
+                    .or_default()) += 1
             }
+            *(hibernate_states
+                .entry(
+                    (match r.role {
+                        StateRole::Leader => "leader",
+                        _ => "non_leader",
+                    })
+                    .to_string(),
+                )
+                .or_default()
+                .entry(
+                    (match r.hibernate_state.group {
+                        GroupState::Ordered => "ordered",
+                        GroupState::Chaos => "chaos",
+                        GroupState::PreChaos => "pre_chaos",
+                        GroupState::Idle => "idle",
+                    })
+                    .to_string(),
+                )
+                .or_default()) += 1;
         }
         REGION_COUNT_GAUGE_VEC
             .with_label_values(&["region"])
@@ -566,6 +592,18 @@ impl RunnableWithTimer for RegionCollector {
         REGION_COUNT_GAUGE_VEC
             .with_label_values(&["leader"])
             .set(leader);
+        for (role, states) in hibernate_states.iter() {
+            for (state, &count) in states.iter() {
+                HIBERNATE_STATE_GAUGE_VEC
+                    .with_label_values(&[role, state])
+                    .set(count as _);
+            }
+        }
+        for (state, &count) in hibernate_leader_states.iter() {
+            HIBERNATE_LEADER_STATE_GAUGE_VEC
+                .with_label_values(&[state])
+                .set(count as _);
+        }
     }
     fn get_interval(&self) -> Duration {
         Duration::from_millis(METRICS_FLUSH_INTERVAL)
@@ -615,7 +653,7 @@ impl RegionInfoAccessor {
 pub trait RegionInfoProvider: Send + Sync {
     /// Get a iterator of regions that contains `from` or have keys larger than `from`, and invoke
     /// the callback to process the result. If `from` is None, iterate through all regions.
-    fn seek_region(&self, _from: Option<&[u8]>, _callback: SeekRegionCallback) -> Result<()> {
+    fn seek_region(&self, _from: &[u8], _callback: SeekRegionCallback) -> Result<()> {
         unimplemented!()
     }
 
@@ -633,9 +671,9 @@ pub trait RegionInfoProvider: Send + Sync {
 }
 
 impl RegionInfoProvider for RegionInfoAccessor {
-    fn seek_region(&self, from: Option<&[u8]>, callback: SeekRegionCallback) -> Result<()> {
+    fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> Result<()> {
         let msg = RegionInfoQuery::SeekRegion {
-            from: from.map(|key| key.to_vec()),
+            from: from.to_vec(),
             callback,
         };
         self.scheduler

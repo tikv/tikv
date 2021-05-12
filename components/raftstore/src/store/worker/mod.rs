@@ -5,7 +5,6 @@ mod cleanup_sst;
 mod compact;
 mod consistency_check;
 mod metrics;
-mod metrics_flusher;
 mod pd;
 mod raftlog_gc;
 mod read;
@@ -18,9 +17,6 @@ pub use self::cleanup::{Runner as CleanupRunner, Task as CleanupTask};
 pub use self::cleanup_sst::{Runner as CleanupSSTRunner, Task as CleanupSSTTask};
 pub use self::compact::{Runner as CompactRunner, Task as CompactTask};
 pub use self::consistency_check::{Runner as ConsistencyCheckRunner, Task as ConsistencyCheckTask};
-pub use self::metrics_flusher::{
-    Runner as FlushRegionMetricsRunner, Task as FlushRegionMetricsTask,
-};
 pub use self::pd::{
     FlowStatistics, FlowStatsReporter, HeartbeatTask, Runner as PdRunner, Task as PdTask,
 };

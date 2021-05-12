@@ -564,7 +564,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static> GcManager<S, R> {
         let store_id = self.cfg.self_store_id;
 
         let res = self.cfg.region_info_provider.seek_region(
-            Some(key.as_encoded()),
+            key.as_encoded(),
             Box::new(move |iter| {
                 let mut scanned_regions = 0;
                 for info in iter {

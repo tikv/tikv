@@ -24,4 +24,16 @@ lazy_static! {
         "Number of regions collected in region_collector",
         &["type"]
     ).unwrap();
+
+    pub static ref HIBERNATE_STATE_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_raftstore_hibernate_state_count",
+        "Region count in different hibernate states",
+        &["role", "state"]
+    ).unwrap();
+
+    pub static ref HIBERNATE_LEADER_STATE_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_raftstore_hibernate_leader_state_count",
+        "Leader count in different hibernate leader states",
+        &["state"]
+    ).unwrap();
 }
