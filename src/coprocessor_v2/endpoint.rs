@@ -7,6 +7,7 @@ use std::future::Future;
 use std::ops::Not;
 use std::sync::Arc;
 
+use super::config::Config;
 use super::plugin_registry::PluginRegistry;
 use super::raw_storage_impl::RawStorageImpl;
 use crate::storage::{self, lock_manager::LockManager, Engine, Storage};
@@ -25,9 +26,19 @@ pub struct Endpoint {
 impl tikv_util::AssertSend for Endpoint {}
 
 impl Endpoint {
-    pub fn new() -> Self {
+    pub fn new(copr_cfg: &Config) -> Self {
+        let mut plugin_registry = PluginRegistry::new();
+
+        // Enable hot-reloading of plugins if the user configured a directory.
+        if let Some(plugin_directory) = &copr_cfg.coprocessor_plugin_directory {
+            let r = plugin_registry.start_hot_reloading(plugin_directory);
+            if let Err(err) = r {
+                warn!("unable to start hot-reloading for coprocessor plugins."; "coprocessor_directory" => plugin_directory.display(), "error" => ?err);
+            }
+        }
+
         Self {
-            plugin_registry: Arc::new(PluginRegistry::new()),
+            plugin_registry: Arc::new(plugin_registry),
         }
     }
 
