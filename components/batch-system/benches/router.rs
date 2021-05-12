@@ -3,6 +3,7 @@
 use batch_system::test_runner::*;
 use batch_system::*;
 use criterion::*;
+use std::sync::Arc;
 
 fn bench_send(c: &mut Criterion) {
     let (control_tx, control_fsm) = Runner::new(100000);
@@ -10,7 +11,7 @@ fn bench_send(c: &mut Criterion) {
         batch_system::create_system(&Config::default(), control_tx, control_fsm);
     system.spawn("test".to_owned(), Builder::new());
     let (normal_tx, normal_fsm) = Runner::new(100000);
-    let normal_box = BasicMailbox::new(normal_tx, normal_fsm);
+    let normal_box = BasicMailbox::new(normal_tx, normal_fsm, Arc::default());
     router.register(1, normal_box);
 
     c.bench_function("router::send", |b| {

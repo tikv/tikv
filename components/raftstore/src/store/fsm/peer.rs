@@ -1986,6 +1986,15 @@ where
         RAFTSTORE_MEM_TRACE
             .sub_trace(Id::Name("peers"))
             .trace(TraceEvent::Sub(self.fsm.trace.sum()));
+        let router_trace = self.ctx.router.trace();
+        RAFTSTORE_MEM_TRACE
+            .sub_trace(Id::Name("raft_router"))
+            .sub_trace(Id::Name("alive"))
+            .trace(TraceEvent::Reset(router_trace.alive));
+        RAFTSTORE_MEM_TRACE
+            .sub_trace(Id::Name("raft_router"))
+            .sub_trace(Id::Name("leak"))
+            .trace(TraceEvent::Reset(router_trace.leak));
 
         if is_initialized
             && !merged_by_target
@@ -2375,6 +2384,15 @@ where
                 RAFTSTORE_MEM_TRACE
                     .sub_trace(Id::Name("peers"))
                     .trace(TraceEvent::Sub(self.fsm.trace.sum()));
+                let router_trace = self.ctx.router.trace();
+                RAFTSTORE_MEM_TRACE
+                    .sub_trace(Id::Name("raft_router"))
+                    .sub_trace(Id::Name("alive"))
+                    .trace(TraceEvent::Reset(router_trace.alive));
+                RAFTSTORE_MEM_TRACE
+                    .sub_trace(Id::Name("raft_router"))
+                    .sub_trace(Id::Name("leak"))
+                    .trace(TraceEvent::Reset(router_trace.leak));
             }
 
             let (sender, mut new_peer) = match PeerFsm::create(
@@ -2432,7 +2450,7 @@ where
                 // check again after split.
                 new_peer.peer.size_diff_hint = self.ctx.cfg.region_split_check_diff.0;
             }
-            let mailbox = BasicMailbox::new(sender, new_peer);
+            let mailbox = BasicMailbox::new(sender, new_peer, self.ctx.router.state_cnt().clone());
             self.ctx.router.register(new_region_id, mailbox);
             self.ctx
                 .router

@@ -11,8 +11,8 @@ lazy_static! {
             applys,
             raft_context,
             apply_context,
-            raft_router,
-            apply_router
+            (raft_router, [alive, leak]),
+            (apply_router, [alive, leak])
         ]
     );
 }

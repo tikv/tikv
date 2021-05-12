@@ -172,6 +172,23 @@ where
     pub router: BatchRouter<PeerFsm<EK, ER>, StoreFsm<EK>>,
 }
 
+impl<EK, ER> Drop for RaftRouter<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    fn drop(&mut self) {
+        RAFTSTORE_MEM_TRACE
+            .sub_trace(Id::Name("raft_router"))
+            .sub_trace(Id::Name("alive"))
+            .trace(TraceEvent::Reset(0));
+        RAFTSTORE_MEM_TRACE
+            .sub_trace(Id::Name("raft_router"))
+            .sub_trace(Id::Name("leak"))
+            .trace(TraceEvent::Reset(0));
+    }
+}
+
 impl<EK, ER> Clone for RaftRouter<EK, ER>
 where
     EK: KvEngine,
@@ -1339,7 +1356,10 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let mut address = Vec::with_capacity(region_peers.len());
         for (tx, fsm) in region_peers {
             address.push(fsm.region_id());
-            mailboxes.push((fsm.region_id(), BasicMailbox::new(tx, fsm)));
+            mailboxes.push((
+                fsm.region_id(),
+                BasicMailbox::new(tx, fsm, self.router.state_cnt().clone()),
+            ));
         }
         self.router.register_all(mailboxes);
 
@@ -1819,7 +1839,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         meta.region_read_progress
             .insert(region_id, peer.peer.read_progress.clone());
 
-        let mailbox = BasicMailbox::new(tx, peer);
+        let mailbox = BasicMailbox::new(tx, peer, self.ctx.router.state_cnt().clone());
         self.ctx.router.register(region_id, mailbox);
         self.ctx
             .router

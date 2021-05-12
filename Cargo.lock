@@ -286,6 +286,7 @@ dependencies = [
  "serde_derive",
  "slog",
  "slog-global",
+ "tikv_alloc",
  "tikv_util",
 ]
 
