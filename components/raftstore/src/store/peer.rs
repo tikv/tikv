@@ -501,15 +501,6 @@ where
 
     /// The number of the last unpersisted ready.
     last_unpersisted_number: u64,
-
-<<<<<<< HEAD
-    /// The number of pending pd heartbeat tasks. Pd heartbeat task may be blocked by
-    /// reading rocksdb. To avoid unnecessary io operations, we always let the later
-    /// task run when there are more than 1 pending tasks.
-    pub pending_pd_heartbeat_tasks: Arc<AtomicU64>,
-=======
-    pub read_progress: Arc<RegionReadProgress>,
->>>>>>> 50e71b481... raftstore: fix not schedule split check (#10119)
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -603,14 +594,6 @@ where
             max_ts_sync_status: Arc::new(AtomicU64::new(0)),
             cmd_epoch_checker: Default::default(),
             last_unpersisted_number: 0,
-<<<<<<< HEAD
-            pending_pd_heartbeat_tasks: Arc::new(AtomicU64::new(0)),
-=======
-            read_progress: Arc::new(RegionReadProgress::new(
-                applied_index,
-                REGION_READ_PROGRESS_CAP,
-            )),
->>>>>>> 50e71b481... raftstore: fix not schedule split check (#10119)
         };
 
         // If this region has only one peer and I am the one, campaign directly.

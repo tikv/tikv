@@ -13,6 +13,7 @@ use engine_traits::CF_RAFT;
 use engine_traits::{Engines, KvEngine, RaftEngine, SSTMetaInfo, WriteBatchExt};
 use error_code::ErrorCodeExt;
 use kvproto::errorpb;
+use kvproto::import_sstpb::SwitchMode;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{
@@ -2166,21 +2167,11 @@ where
         new_split_regions: HashMap<u64, apply::NewSplitPeer>,
     ) {
         fail_point!("on_split", self.ctx.store_id() == 3, |_| {});
-        self.register_split_region_check_tick();
-        let mut meta = self.ctx.store_meta.lock().unwrap();
-        let region_id = derived.get_id();
-        meta.set_region(&self.ctx.coprocessor_host, derived, &mut self.fsm.peer);
-        self.fsm.peer.post_split();
 
+        let region_id = derived.get_id();
         // Roughly estimate the size and keys for new regions.
         let new_region_count = regions.len() as u64;
-<<<<<<< HEAD
-        let estimated_size = self.fsm.peer.approximate_size.map(|x| x / new_region_count);
-        let estimated_keys = self.fsm.peer.approximate_keys.map(|x| x / new_region_count);
-        // It's not correct anymore, so set it to None to let split checker update it.
-        self.fsm.peer.approximate_size = None;
-        self.fsm.peer.approximate_keys = None;
-=======
+
         let estimated_size = self.fsm.peer.approximate_size / new_region_count;
         let estimated_keys = self.fsm.peer.approximate_keys / new_region_count;
         let mut meta = self.ctx.store_meta.lock().unwrap();
@@ -2189,7 +2180,6 @@ where
 
         // It's not correct anymore, so set it to false to schedule a split check task.
         self.fsm.peer.has_calculated_region_size = false;
->>>>>>> 50e71b481... raftstore: fix not schedule split check (#10119)
 
         let is_leader = self.fsm.peer.is_leader();
         if is_leader {
@@ -3498,8 +3488,6 @@ where
             return;
         }
 
-<<<<<<< HEAD
-=======
         self.register_split_region_check_tick();
 
         // To avoid frequent scan, we only add new scan tasks if all previous tasks
@@ -3516,7 +3504,6 @@ where
             return;
         }
 
->>>>>>> 50e71b481... raftstore: fix not schedule split check (#10119)
         // bulk insert too fast may cause snapshot stale very soon, worst case it stale before
         // sending. so when snapshot is generating or sending, skip split check at most 3 times.
         // There is a trade off between region size and snapshot success rate. Split check is
@@ -3542,10 +3529,6 @@ where
         }
         self.fsm.peer.size_diff_hint = 0;
         self.fsm.peer.compaction_declined_bytes = 0;
-<<<<<<< HEAD
-        self.register_split_region_check_tick();
-=======
->>>>>>> 50e71b481... raftstore: fix not schedule split check (#10119)
     }
 
     fn on_prepare_split_region(
