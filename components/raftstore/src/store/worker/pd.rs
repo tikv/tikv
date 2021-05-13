@@ -191,11 +191,15 @@ impl Default for StoreStat {
 pub struct PeerStat {
     pub read_bytes: u64,
     pub read_keys: u64,
-    pub last_read_bytes: u64,
-    pub last_read_keys: u64,
-    pub last_written_bytes: u64,
-    pub last_written_keys: u64,
-    pub last_report_ts: UnixSecs,
+    // last_region_report_attributes records the state of the last region heartbeat
+    pub last_region_report_read_bytes: u64,
+    pub last_region_report_read_keys: u64,
+    pub last_region_report_written_bytes: u64,
+    pub last_region_report_written_keys: u64,
+    pub last_region_report_ts: UnixSecs,
+    // last_store_report_attributes records the state of the last store heartbeat
+    pub last_store_report_read_bytes: u64,
+    pub last_store_report_read_keys: u64,
     pub approximate_keys: u64,
     pub approximate_size: u64,
 }
@@ -419,6 +423,24 @@ where
     pub fn get_sender(&self) -> &Option<Sender<ReadStats>> {
         &self.sender
     }
+}
+
+const HOTSPOT_KEY_RATE_THRESHOLD: u64 = 128;
+const HOTSPOT_BYTE_RATE_THRESHOLD: u64 = 8 * 1024;
+
+// TODO: support dyamic configure threshold in future
+fn hotspot_key_report_threshold() -> u64 {
+    #[cfg(feature = "failpoints")]
+    fail_point!("mock_hotspot_threshold", |_| { 0 });
+
+    HOTSPOT_KEY_RATE_THRESHOLD * 10
+}
+
+fn hotspot_byte_report_threshold() -> u64 {
+    #[cfg(feature = "failpoints")]
+    fail_point!("mock_hotspot_threshold", |_| { 0 });
+
+    HOTSPOT_BYTE_RATE_THRESHOLD * 10
 }
 
 pub struct Runner<EK, ER, T>
@@ -658,6 +680,24 @@ where
             }
             Ok(stats) => stats,
         };
+
+        for (region_id, region_peer) in &mut self.region_peers {
+            let read_bytes = region_peer.read_bytes - region_peer.last_store_report_read_bytes;
+            let read_keys = region_peer.read_keys - region_peer.last_store_report_read_keys;
+            region_peer.last_store_report_read_bytes = region_peer.read_bytes;
+            region_peer.last_store_report_read_keys = region_peer.read_keys;
+            // TODO: select hotspot peer by binaray heap in future
+            if read_bytes < hotspot_byte_report_threshold()
+                && read_keys < hotspot_key_report_threshold()
+            {
+                continue;
+            }
+            let mut peer_stat = pdpb::PeerStat::default();
+            peer_stat.set_region_id(*region_id);
+            peer_stat.set_read_bytes(read_bytes);
+            peer_stat.set_read_keys(read_keys);
+            stats.peer_stats.push(peer_stat);
+        }
 
         let disk_cap = disk_stats.total_space();
         let capacity = if store_info.capacity == 0 || disk_cap < store_info.capacity {
@@ -1114,16 +1154,20 @@ where
                         .or_insert_with(PeerStat::default);
                     peer_stat.approximate_size = hb_task.approximate_size;
                     peer_stat.approximate_keys = hb_task.approximate_keys;
-                    let read_bytes_delta = peer_stat.read_bytes - peer_stat.last_read_bytes;
-                    let read_keys_delta = peer_stat.read_keys - peer_stat.last_read_keys;
-                    let written_bytes_delta = hb_task.written_bytes - peer_stat.last_written_bytes;
-                    let written_keys_delta = hb_task.written_keys - peer_stat.last_written_keys;
-                    let mut last_report_ts = peer_stat.last_report_ts;
-                    peer_stat.last_written_bytes = hb_task.written_bytes;
-                    peer_stat.last_written_keys = hb_task.written_keys;
-                    peer_stat.last_read_bytes = peer_stat.read_bytes;
-                    peer_stat.last_read_keys = peer_stat.read_keys;
-                    peer_stat.last_report_ts = UnixSecs::now();
+                    let read_bytes_delta =
+                        peer_stat.read_bytes - peer_stat.last_region_report_read_bytes;
+                    let read_keys_delta =
+                        peer_stat.read_keys - peer_stat.last_region_report_read_keys;
+                    let written_bytes_delta =
+                        hb_task.written_bytes - peer_stat.last_region_report_written_bytes;
+                    let written_keys_delta =
+                        hb_task.written_keys - peer_stat.last_region_report_written_keys;
+                    let mut last_report_ts = peer_stat.last_region_report_ts;
+                    peer_stat.last_region_report_written_bytes = hb_task.written_bytes;
+                    peer_stat.last_region_report_written_keys = hb_task.written_keys;
+                    peer_stat.last_region_report_read_bytes = peer_stat.read_bytes;
+                    peer_stat.last_region_report_read_keys = peer_stat.read_keys;
+                    peer_stat.last_region_report_ts = UnixSecs::now();
                     if last_report_ts.is_zero() {
                         last_report_ts = self.start_ts;
                     }
