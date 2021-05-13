@@ -10,6 +10,8 @@ use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 use txn_types::Error as TxnTypesError;
 
+use crate::channel::SendError;
+
 /// The error type for cdc.
 #[derive(Debug, Fail)]
 pub enum Error {
@@ -29,6 +31,8 @@ pub enum Error {
     Request(ErrorHeader),
     #[fail(display = "Engine traits error {}", _0)]
     EngineTraits(EngineTraitsError),
+    #[fail(display = "Sink send error {}", _0)]
+    Sink(SendError),
 }
 
 macro_rules! impl_from {
