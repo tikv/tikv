@@ -4,6 +4,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use engine_traits::KvEngine;
+use futures::compat::Future01CompatExt;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::Region;
 use raftstore::router::RaftStoreRouter;
@@ -168,6 +169,10 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
         task: &mut ScanTask,
         raft_router: T,
     ) -> Result<RegionSnapshot<E::Snapshot>> {
+        let _ = tikv_util::timer::GLOBAL_TIMER_HANDLE
+            .delay(std::time::Instant::now() + std::time::Duration::from_millis(1000))
+            .compat()
+            .await;
         let (cb, fut) = tikv_util::future::paired_future_callback();
         let before_start = task.before_start.take();
         let change_cmd = ChangeObserver::from_rts(task.region.id, task.id);
