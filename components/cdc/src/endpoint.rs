@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::RefCell;
+use std::f64::INFINITY;
 use std::fmt;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -11,6 +12,8 @@ use engine_rocks::RocksEngine;
 use futures::future::Future;
 use futures::sink::Sink;
 use futures::stream::Stream;
+use futures03::compat::Compat;
+use futures03::future::FutureExt;
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::event::Event as Event_oneof_event;
 use kvproto::cdcpb::*;
@@ -29,7 +32,7 @@ use tikv::storage::txn::TxnEntry;
 use tikv::storage::txn::TxnEntryScanner;
 use tikv::storage::Statistics;
 use tikv_util::collections::HashMap;
-use tikv_util::time::Instant;
+use tikv_util::time::{Instant, Limiter};
 use tikv_util::timer::{SteadyTimer, Timer};
 use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
 use tokio_threadpool::{Builder, ThreadPool};
@@ -97,7 +100,7 @@ impl fmt::Debug for Deregister {
 
 type InitCallback = Box<dyn FnOnce() + Send>;
 pub(crate) type OldValueCallback =
-    Box<dyn FnMut(Key, TimeStamp, &mut Statistics) -> Option<Vec<u8>> + Send>;
+    Box<dyn FnMut(Key, TimeStamp) -> (Option<Vec<u8>>, Option<Statistics>) + Send>;
 
 pub enum Task {
     Register {
@@ -221,14 +224,21 @@ pub struct Endpoint<T> {
     pd_client: Arc<dyn PdClient>,
     timer: SteadyTimer,
     min_ts_interval: Duration,
-    scan_batch_size: usize,
     tso_worker: ThreadPool,
     store_meta: Arc<Mutex<StoreMeta>>,
 
     workers: ThreadPool,
 
+    scan_speed_limter: Limiter,
+    max_scan_batch_bytes: usize,
+    max_scan_batch_size: usize,
+
     min_resolved_ts: TimeStamp,
     min_ts_region_id: u64,
+
+    // stats
+    resolved_region_count: usize,
+    unresolved_region_count: usize,
 }
 
 impl<T: 'static + RaftStoreRouter> Endpoint<T> {
@@ -242,6 +252,18 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
     ) -> Endpoint<T> {
         let workers = Builder::new().name_prefix("cdcwkr").pool_size(4).build();
         let tso_worker = Builder::new().name_prefix("tso").pool_size(1).build();
+        let speed_limter = Limiter::new(if cfg.incremental_scan_speed_limit.0 > 0 {
+            cfg.incremental_scan_speed_limit.0 as f64
+        } else {
+            INFINITY
+        });
+        // For scan efficiency, the scan batch bytes should be around 1MB.
+        // TODO: To avoid consume too much memory when there are many concurrent
+        //       scan tasks (peak memory = 1MB * N tasks), we reduce the size
+        //       to 16KB as a workaround.
+        let max_scan_batch_bytes = 16 * 1024;
+        // Assume 1KB per entry.
+        let max_scan_batch_size = 1024;
         let ep = Endpoint {
             capture_regions: HashMap::default(),
             connections: HashMap::default(),
@@ -249,14 +271,18 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
             pd_client,
             tso_worker,
             timer: SteadyTimer::default(),
+            scan_speed_limter: speed_limter,
+            max_scan_batch_bytes,
+            max_scan_batch_size,
             workers,
             raft_router,
             observer,
             store_meta,
-            scan_batch_size: 1024,
             min_ts_interval: cfg.min_ts_interval.0,
             min_resolved_ts: TimeStamp::max(),
             min_ts_region_id: 0,
+            resolved_region_count: 0,
+            unresolved_region_count: 0,
         };
         ep.register_min_ts_event();
         ep
@@ -274,8 +300,8 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
         self.min_ts_interval = dur;
     }
 
-    pub fn set_scan_batch_size(&mut self, scan_batch_size: usize) {
-        self.scan_batch_size = scan_batch_size;
+    pub fn set_max_scan_batch_size(&mut self, max_scan_batch_size: usize) {
+        self.max_scan_batch_size = max_scan_batch_size;
     }
 
     fn on_deregister(&mut self, deregister: Deregister) {
@@ -388,7 +414,7 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
         let conn = match self.connections.get_mut(&conn_id) {
             Some(conn) => conn,
             None => {
-                error!("register for a nonexistent connection";
+                error!("cdc register for a nonexistent connection";
                     "region_id" => region_id, "conn_id" => ?conn_id);
                 return;
             }
@@ -403,7 +429,7 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
         }
         if !conn.subscribe(request.get_region_id(), downstream_id) {
             downstream.sink_duplicate_error(request.get_region_id());
-            error!("duplicate register";
+            error!("cdc duplicate register";
                 "region_id" => region_id,
                 "conn_id" => ?conn_id,
                 "req_id" => request.get_request_id(),
@@ -426,7 +452,6 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
         let downstream_state = downstream.get_state();
         let checkpoint_ts = request.checkpoint_ts;
         let sched = self.scheduler.clone();
-        let batch_size = self.scan_batch_size;
 
         if !delegate.subscribe(downstream) {
             conn.unsubscribe(request.get_region_id());
@@ -465,31 +490,44 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                 reader.txn_extra_op.store(txn_extra_op);
             }
         }
+        let observe_id = delegate.id;
         let init = Initializer {
             sched,
             region_id,
             conn_id,
             downstream_id,
-            batch_size,
             downstream_state: downstream_state.clone(),
             txn_extra_op: delegate.txn_extra_op,
-            observe_id: delegate.id,
+            speed_limter: self.scan_speed_limter.clone(),
+            max_scan_batch_bytes: self.max_scan_batch_bytes,
+            max_scan_batch_size: self.max_scan_batch_size,
+            observe_id,
             checkpoint_ts: checkpoint_ts.into(),
             build_resolver: is_new_delegate,
         };
 
-        let (cb, fut) = tikv_util::future::paired_future_callback();
+        let (cb, fut) = tikv_util::future::paired_std_future_callback();
         let scheduler = self.scheduler.clone();
         let deregister_downstream = move |err| {
             warn!("cdc send capture change cmd failed"; "region_id" => region_id, "error" => ?err);
-            let deregister = Deregister::Downstream {
-                region_id,
-                downstream_id,
-                conn_id,
-                err: Some(err),
+            let deregister = if is_new_delegate {
+                // Deregister region if it's the first scan task, because the
+                // task also build resolver.
+                Deregister::Region {
+                    region_id,
+                    observe_id,
+                    err,
+                }
+            } else {
+                Deregister::Downstream {
+                    region_id,
+                    downstream_id,
+                    conn_id,
+                    err: Some(err),
+                }
             };
             if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
-                error!("schedule cdc task failed"; "error" => ?e);
+                error!("cdc schedule cdc task failed"; "error" => ?e);
             }
         };
         let scheduler = self.scheduler.clone();
@@ -506,7 +544,7 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                             cb(resp);
                         }),
                     }) {
-                        error!("schedule cdc task failed"; "error" => ?e);
+                        error!("cdc schedule cdc task failed"; "error" => ?e);
                     }
                 })),
             },
@@ -514,13 +552,16 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
             deregister_downstream(Error::Request(e.into()));
             return;
         }
-        self.workers.spawn(fut.then(move |res| {
-            match res {
-                Ok(resp) => init.on_change_cmd(resp),
-                Err(e) => deregister_downstream(Error::Other(box_err!(e))),
-            };
-            Ok(())
-        }));
+        self.workers.spawn(Compat::new(
+            async move {
+                match fut.await {
+                    Ok(resp) => init.on_change_cmd(resp).await,
+                    Err(e) => deregister_downstream(Error::Other(box_err!(e))),
+                };
+            }
+            .unit_error()
+            .boxed(),
+        ));
     }
 
     pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>, old_value_cb: OldValueCallback) {
@@ -559,7 +600,7 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
         if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
             delegate.on_scan(downstream_id, entries);
         } else {
-            warn!("region not found on incremental scan"; "region_id" => region_id);
+            warn!("cdc region not found on incremental scan"; "region_id" => region_id);
         }
     }
 
@@ -575,18 +616,19 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                     }
                 }
             } else {
-                debug!("stale region ready";
+                debug!("cdc stale region ready";
                     "region_id" => region.get_id(),
                     "observe_id" => ?observe_id,
                     "current_id" => ?delegate.id);
             }
         } else {
-            debug!("region not found on region ready (finish building resolver)";
+            debug!("cdc region not found on region ready (finish building resolver)";
                 "region_id" => region.get_id());
         }
     }
 
     fn on_min_ts(&mut self, regions: Vec<u64>, min_ts: TimeStamp) {
+        let total_region_count = regions.len();
         let mut resolved_regions = Vec::with_capacity(regions.len());
         self.min_resolved_ts = TimeStamp::max();
         for region_id in regions {
@@ -600,6 +642,8 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                 }
             }
         }
+        self.resolved_region_count = resolved_regions.len();
+        self.unresolved_region_count = total_region_count - self.resolved_region_count;
         self.broadcast_resolved_ts(resolved_regions);
     }
 
@@ -612,7 +656,7 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
             if let Err(e) = conn.get_sink().try_send(event) {
                 match e {
                     crossbeam::channel::TrySendError::Disconnected(_) => {
-                        debug!("send event failed, disconnected";
+                        debug!("cdc send event failed, disconnected";
                             "conn_id" => ?conn.get_id(), "downstream" => conn.get_peer());
                     }
                     crossbeam::channel::TrySendError::Full(_) => {
@@ -761,19 +805,25 @@ struct Initializer {
     downstream_state: Arc<AtomicCell<DownstreamState>>,
     conn_id: ConnID,
     checkpoint_ts: TimeStamp,
-    batch_size: usize,
     txn_extra_op: TxnExtraOp,
+
+    speed_limter: Limiter,
+    max_scan_batch_bytes: usize,
+    max_scan_batch_size: usize,
 
     build_resolver: bool,
 }
 
 impl Initializer {
-    fn on_change_cmd(&self, mut resp: ReadResponse<RocksEngine>) {
+    async fn on_change_cmd(&self, mut resp: ReadResponse<RocksEngine>) {
+        CDC_SCAN_TASKS.with_label_values(&["total"]).inc();
         if let Some(region_snapshot) = resp.snapshot {
             assert_eq!(self.region_id, region_snapshot.get_region().get_id());
             let region = region_snapshot.get_region().clone();
-            self.async_incremental_scan(region_snapshot, region);
+            self.async_incremental_scan(region_snapshot, region).await;
+            CDC_SCAN_TASKS.with_label_values(&["finish"]).inc();
         } else {
+            CDC_SCAN_TASKS.with_label_values(&["abort"]).inc();
             assert!(
                 resp.response.get_header().has_error(),
                 "no snapshot and no error? {:?}",
@@ -786,16 +836,15 @@ impl Initializer {
                 err: Error::Request(err),
             };
             if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
-                error!("schedule cdc task failed"; "error" => ?e);
+                error!("cdc schedule cdc task failed"; "error" => ?e);
             }
         }
     }
 
-    fn async_incremental_scan<S: Snapshot + 'static>(&self, snap: S, region: Region) {
+    async fn async_incremental_scan<S: Snapshot + 'static>(&self, snap: S, region: Region) {
         let downstream_id = self.downstream_id;
-        let conn_id = self.conn_id;
         let region_id = region.get_id();
-        debug!("async incremental scan";
+        debug!("cdc async incremental scan";
             "region_id" => region_id,
             "downstream_id" => ?downstream_id,
             "observe_id" => ?self.observe_id);
@@ -818,26 +867,19 @@ impl Initializer {
         let mut done = false;
         while !done {
             if self.downstream_state.load() != DownstreamState::Normal {
-                info!("async incremental scan canceled";
+                info!("cdc async incremental scan canceled";
                     "region_id" => region_id,
                     "downstream_id" => ?downstream_id,
-                    "observe_id" => ?self.observe_id);
+                    "observe_id" => ?self.observe_id,
+                    "conn_id" => ?self.conn_id);
+                self.deregister_downstream(None);
                 return;
             }
-            let entries = match Self::scan_batch(&mut scanner, self.batch_size, resolver.as_mut()) {
+            let entries = match self.scan_batch(&mut scanner, resolver.as_mut()).await {
                 Ok(res) => res,
                 Err(e) => {
                     error!("cdc scan entries failed"; "error" => ?e, "region_id" => region_id);
-                    // TODO: record in metrics.
-                    let deregister = Deregister::Downstream {
-                        region_id,
-                        downstream_id,
-                        conn_id,
-                        err: Some(e),
-                    };
-                    if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
-                        error!("schedule cdc task failed"; "error" => ?e, "region_id" => region_id);
-                    }
+                    self.deregister_downstream(Some(e));
                     return;
                 }
             };
@@ -853,7 +895,7 @@ impl Initializer {
                 entries,
             };
             if let Err(e) = self.sched.schedule(scanned) {
-                error!("schedule cdc task failed"; "error" => ?e, "region_id" => region_id);
+                error!("cdc schedule cdc task failed"; "error" => ?e, "region_id" => region_id);
                 return;
             }
         }
@@ -866,15 +908,23 @@ impl Initializer {
         CDC_SCAN_DURATION_HISTOGRAM.observe(takes.as_secs_f64());
     }
 
-    fn scan_batch<S: Snapshot>(
+    async fn scan_batch<S: Snapshot>(
+        &self,
         scanner: &mut DeltaScanner<S>,
-        batch_size: usize,
         resolver: Option<&mut Resolver>,
     ) -> Result<Vec<Option<TxnEntry>>> {
-        let mut entries = Vec::with_capacity(batch_size);
-        while entries.len() < entries.capacity() {
+        fail_point!("cdc_scan_batch_fail", |_| {
+            Err(Error::Rocks("injected error".to_string()))
+        });
+
+        let mut entries = Vec::with_capacity(self.max_scan_batch_size);
+        let mut total_bytes = 0;
+        let mut total_size = 0;
+        while total_bytes <= self.max_scan_batch_bytes && total_size < self.max_scan_batch_size {
+            total_size += 1;
             match scanner.next_entry()? {
                 Some(entry) => {
+                    total_bytes += entry.size();
                     entries.push(Some(entry));
                 }
                 None => {
@@ -882,6 +932,10 @@ impl Initializer {
                     break;
                 }
             }
+        }
+        if total_bytes > 0 {
+            self.speed_limter.consume(total_bytes).await;
+            CDC_SCAN_BYTES.inc_by(total_bytes as _);
         }
 
         if let Some(resolver) = resolver {
@@ -907,8 +961,10 @@ impl Initializer {
         resolver.init();
         let rts = resolver.resolve(TimeStamp::zero());
         info!(
-            "resolver initialized and schedule resolver ready";
+            "cdc resolver initialized and schedule resolver ready";
             "region_id" => region.get_id(),
+            "conn_id" => ?self.conn_id,
+            "downstream_id" => ?self.downstream_id,
             "resolved_ts" => rts,
             "lock_count" => resolver.locks().len(),
             "observe_id" => ?observe_id,
@@ -921,14 +977,35 @@ impl Initializer {
             resolver,
             region,
         }) {
-            error!("schedule task failed"; "error" => ?e);
+            error!("cdc schedule task failed"; "error" => ?e);
+        }
+    }
+
+    fn deregister_downstream(&self, err: Option<Error>) {
+        // TODO: record in metrics.
+        let deregister = if self.build_resolver {
+            Deregister::Region {
+                region_id: self.region_id,
+                observe_id: self.observe_id,
+                err: err.unwrap_or_else(|| Error::Other(box_err!("scan error"))), // TODO: convert rate_limiter error
+            }
+        } else {
+            Deregister::Downstream {
+                region_id: self.region_id,
+                downstream_id: self.downstream_id,
+                conn_id: self.conn_id,
+                err, // TODO: convert rate_limiter error
+            }
+        };
+        if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
+            error!("cdc schedule task failed"; "error" => ?e, "region_id" => self.region_id);
         }
     }
 }
 
 impl<T: 'static + RaftStoreRouter> Runnable<Task> for Endpoint<T> {
     fn run(&mut self, task: Task) {
-        debug!("run cdc task"; "task" => %task);
+        debug!("cdc run task"; "task" => %task);
         match task {
             Task::MinTS { regions, min_ts } => self.on_min_ts(regions, min_ts),
             Task::Register {
@@ -961,7 +1038,7 @@ impl<T: 'static + RaftStoreRouter> Runnable<Task> for Endpoint<T> {
                 downstream_state,
                 cb,
             } => {
-                debug!("downstream was initialized"; "downstream_id" => ?downstream_id);
+                debug!("cdc downstream was initialized"; "downstream_id" => ?downstream_id);
                 downstream_state
                     .compare_and_swap(DownstreamState::Uninitialized, DownstreamState::Normal);
                 cb();
@@ -977,6 +1054,12 @@ impl<T: 'static + RaftStoreRouter> Runnable<Task> for Endpoint<T> {
 impl<T: 'static + RaftStoreRouter> RunnableWithTimer<Task, ()> for Endpoint<T> {
     fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
         CDC_CAPTURED_REGION_COUNT.set(self.capture_regions.len() as i64);
+        CDC_REGION_RESOLVE_STATUS_GAUGE_VEC
+            .with_label_values(&["unresolved"])
+            .set(self.unresolved_region_count as _);
+        CDC_REGION_RESOLVE_STATUS_GAUGE_VEC
+            .with_label_values(&["resolved"])
+            .set(self.resolved_region_count as _);
         if self.min_resolved_ts != TimeStamp::max() {
             CDC_MIN_RESOLVED_TS_REGION.set(self.min_ts_region_id as i64);
             CDC_MIN_RESOLVED_TS.set(self.min_resolved_ts.physical() as i64);
@@ -992,6 +1075,7 @@ impl<T: 'static + RaftStoreRouter> RunnableWithTimer<Task, ()> for Endpoint<T> {
 mod tests {
     use super::*;
     use engine_traits::DATA_CFS;
+    use futures03::executor::block_on;
     #[cfg(feature = "prost-codec")]
     use kvproto::cdcpb::event::Event as Event_oneof_event;
     use kvproto::errorpb::Error as ErrorHeader;
@@ -1030,7 +1114,9 @@ mod tests {
         (worker, rx)
     }
 
-    fn mock_initializer() -> (Worker<Task>, ThreadPool, Initializer, Receiver<Task>) {
+    fn mock_initializer(
+        speed_limit: usize,
+    ) -> (Worker<Task>, ThreadPool, Initializer, Receiver<Task>) {
         let (receiver_worker, rx) = new_receiver_worker();
 
         let pool = Builder::new()
@@ -1047,7 +1133,9 @@ mod tests {
             downstream_state,
             conn_id: ConnID::new(),
             checkpoint_ts: 1.into(),
-            batch_size: 1,
+            speed_limter: Limiter::new(speed_limit as _),
+            max_scan_batch_bytes: 1024 * 1024,
+            max_scan_batch_size: 1024,
             txn_extra_op: TxnExtraOp::Noop,
             build_resolver: true,
         };
@@ -1057,8 +1145,6 @@ mod tests {
 
     #[test]
     fn test_initializer_build_resolver() {
-        let (mut worker, _pool, mut initializer, rx) = mock_initializer();
-
         let temp = TempDir::new().unwrap();
         let engine = TestEngineBuilder::new()
             .path(temp.path())
@@ -1068,23 +1154,29 @@ mod tests {
 
         let mut expected_locks = BTreeMap::<TimeStamp, HashSet<Vec<u8>>>::new();
 
+        let mut total_bytes = 0;
         // Pessimistic locks should not be tracked
         for i in 0..10 {
             let k = &[b'k', i];
+            total_bytes += k.len();
             let ts = TimeStamp::new(i as _);
             must_acquire_pessimistic_lock(&engine, k, k, ts, ts);
         }
 
         for i in 10..100 {
             let (k, v) = (&[b'k', i], &[b'v', i]);
+            total_bytes += k.len();
+            total_bytes += v.len();
             let ts = TimeStamp::new(i as _);
             must_prewrite_put(&engine, k, v, k, ts);
             expected_locks.entry(ts).or_default().insert(k.to_vec());
         }
 
-        let region = Region::default();
+        let mut region = Region::default();
         let snap = engine.snapshot(&Context::default()).unwrap();
 
+        let (mut worker, _pool, mut initializer, rx) = mock_initializer(total_bytes);
+        region.id = initializer.region_id;
         let check_result = || loop {
             let task = rx.recv().unwrap();
             match task {
@@ -1097,22 +1189,37 @@ mod tests {
             }
         };
 
-        initializer.async_incremental_scan(snap.clone(), region.clone());
-        check_result();
-        initializer.batch_size = 1000;
-        initializer.async_incremental_scan(snap.clone(), region.clone());
+        block_on(initializer.async_incremental_scan(snap.clone(), region.clone()));
         check_result();
 
-        initializer.batch_size = 10;
-        initializer.async_incremental_scan(snap.clone(), region.clone());
+        initializer.max_scan_batch_bytes = total_bytes;
+        block_on(initializer.async_incremental_scan(snap.clone(), region.clone()));
         check_result();
 
-        initializer.batch_size = 11;
-        initializer.async_incremental_scan(snap.clone(), region.clone());
+        initializer.max_scan_batch_bytes = total_bytes / 3;
+        let start_1_3 = Instant::now();
+        block_on(initializer.async_incremental_scan(snap.clone(), region.clone()));
         check_result();
+        // 2s to allow certain inaccuracy.
+        assert!(
+            start_1_3.elapsed() >= Duration::new(2, 0),
+            "{:?}",
+            start_1_3.elapsed()
+        );
+
+        let start_1_6 = Instant::now();
+        initializer.max_scan_batch_bytes = total_bytes / 6;
+        block_on(initializer.async_incremental_scan(snap.clone(), region.clone()));
+        check_result();
+        // 4s to allow certain inaccuracy.
+        assert!(
+            start_1_6.elapsed() >= Duration::new(4, 0),
+            "{:?}",
+            start_1_6.elapsed()
+        );
 
         initializer.build_resolver = false;
-        initializer.async_incremental_scan(snap.clone(), region.clone());
+        block_on(initializer.async_incremental_scan(snap.clone(), region.clone()));
 
         loop {
             let task = rx.recv_timeout(Duration::from_secs(1));
@@ -1126,13 +1233,21 @@ mod tests {
 
         // Test cancellation.
         initializer.downstream_state.store(DownstreamState::Stopped);
-        initializer.async_incremental_scan(snap, region);
+        block_on(initializer.async_incremental_scan(snap, region.clone()));
 
         loop {
             let task = rx.recv_timeout(Duration::from_secs(1));
             match task {
+                Ok(Task::Deregister(Deregister::Downstream { region_id, .. })) => {
+                    assert_eq!(
+                        region_id,
+                        region.get_id(),
+                        "unexpected region id {:?}",
+                        region_id
+                    );
+                    break;
+                }
                 Ok(t) => panic!("unepxected task {} received", t),
-                Err(RecvTimeoutError::Timeout) => break,
                 Err(e) => panic!("unexpected err {:?}", e),
             }
         }
@@ -1200,7 +1315,7 @@ mod tests {
 
     #[test]
     fn test_register() {
-        let (task_sched, _task_rx) = dummy_scheduler();
+        let (task_sched, task_rx) = dummy_scheduler();
         let raft_router = MockRaftStoreRouter::new();
         let _raft_rx = raft_router.add_region(1 /* region id */, 100 /* cap */);
         let observer = CdcObserver::new(task_sched.clone());
@@ -1212,7 +1327,7 @@ mod tests {
             },
             pd_client,
             task_sched,
-            raft_router,
+            raft_router.clone(),
             observer,
             Arc::new(Mutex::new(StoreMeta::new(0))),
         );
@@ -1282,6 +1397,54 @@ mod tests {
             panic!("unknown cdc event {:?}", cdc_event);
         }
         assert_eq!(ep.capture_regions.len(), 1);
+
+        // The first scan task of a region is initiated in register, and when it
+        // fails, it should send a deregister region task, otherwise the region
+        // delegate does not have resolver.
+        //
+        // Test non-exist regoin in raft router.
+        let mut req = ChangeDataRequest::default();
+        req.set_region_id(100);
+        let region_epoch = req.get_region_epoch().clone();
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 1, conn_id, true);
+        ep.run(Task::Register {
+            request: req.clone(),
+            downstream,
+            conn_id,
+            version: semver::Version::new(4, 0, 8),
+        });
+        // Region 100 is inserted into capture_regions.
+        assert_eq!(ep.capture_regions.len(), 2);
+        let task = task_rx.recv_timeout(Duration::from_millis(100)).unwrap();
+        match task.unwrap() {
+            Task::Deregister(Deregister::Region { region_id, err, .. }) => {
+                assert_eq!(region_id, 100);
+                assert!(matches!(err, Error::Request(_)), "{:?}", err);
+            }
+            other => panic!("unexpected task {:?}", other),
+        }
+
+        // Test errors on CaptureChange message.
+        req.set_region_id(101);
+        let raft_rx = raft_router.add_region(101 /* region id */, 100 /* cap */);
+        let downstream = Downstream::new("".to_string(), region_epoch, 1, conn_id, true);
+        ep.run(Task::Register {
+            request: req,
+            downstream,
+            conn_id,
+            version: semver::Version::new(4, 0, 8),
+        });
+        // Drop CaptureChange message, it should cause scan task failure.
+        let _ = raft_rx.recv_timeout(Duration::from_millis(100)).unwrap();
+        assert_eq!(ep.capture_regions.len(), 3);
+        let task = task_rx.recv_timeout(Duration::from_millis(100)).unwrap();
+        match task.unwrap() {
+            Task::Deregister(Deregister::Region { region_id, err, .. }) => {
+                assert_eq!(region_id, 101);
+                assert!(matches!(err, Error::Other(_)), "{:?}", err);
+            }
+            other => panic!("unexpected task {:?}", other),
+        }
     }
 
     #[test]

@@ -18,6 +18,7 @@ use pd_client::PdClient;
 use test_raftstore::sleep_ms;
 use test_raftstore::*;
 
+use cdc::metrics::*;
 use cdc::Task;
 
 #[test]
@@ -680,10 +681,6 @@ fn test_cdc_batch_size_limit() {
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1, "{:?}", events.len());
-    while events.len() < 3 {
-        events.extend(receive_event(false).events.into_iter());
-    }
-    assert_eq!(events.len(), 3, "{:?}", events.len());
     match events.remove(0).event.unwrap() {
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 1);
@@ -693,29 +690,27 @@ fn test_cdc_batch_size_limit() {
         }
         other => panic!("unknown event {:?}", other),
     }
-    match events.remove(0).event.unwrap() {
-        Event_oneof_event::Entries(es) => {
-            assert!(es.entries.len() == 1);
-            let e = &es.entries[0];
-            assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", e.get_type());
-            assert_eq!(e.key, b"k2", "{:?}", e.key);
+    // For the rest 2 events, Committed and Initialized.
+    let mut entries = vec![];
+    while entries.len() < 2 {
+        match receive_event(false).events.remove(0).event.unwrap() {
+            Event_oneof_event::Entries(es) => {
+                entries.extend(es.entries.into_iter());
+            }
+            other => panic!("unknown event {:?}", other),
         }
-        other => panic!("unknown event {:?}", other),
     }
-    match events.pop().unwrap().event.unwrap() {
-        // Then it outputs Initialized event.
-        Event_oneof_event::Entries(es) => {
-            assert!(es.entries.len() == 1);
-            let e = &es.entries[0];
-            assert_eq!(
-                e.get_type(),
-                EventLogType::Initialized,
-                "{:?}",
-                e.get_type()
-            );
-        }
-        other => panic!("unknown event {:?}", other),
-    }
+    assert_eq!(entries.len(), 2, "{:?}", entries);
+    let e = &entries[0];
+    assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", e.get_type());
+    assert_eq!(e.key, b"k2", "{:?}", e.key);
+    let e = &entries[1];
+    assert_eq!(
+        e.get_type(),
+        EventLogType::Initialized,
+        "{:?}",
+        e.get_type()
+    );
 
     // Prewrite
     let start_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
@@ -964,5 +959,159 @@ fn test_old_value_multi_changefeeds() {
 
     event_feed_wrap_1.replace(None);
     event_feed_wrap_2.replace(None);
+    suite.stop();
+}
+
+#[test]
+fn test_old_value_cache() {
+    let mut suite = TestSuite::new(1);
+    let mut req = suite.new_changedata_request(1);
+    req.set_extra_op(ExtraOp::ReadOldValue);
+    let (req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
+    let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+    let mut events = receive_event(false).events.to_vec();
+    match events.remove(0).event.unwrap() {
+        Event_oneof_event::Entries(mut es) => {
+            let row = &es.take_entries().to_vec()[0];
+            assert_eq!(row.get_type(), EventLogType::Initialized);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+
+    // Insert value, simulate INSERT INTO.
+    let mut m1 = Mutation::default();
+    let k1 = b"k1".to_vec();
+    m1.set_op(Op::Insert);
+    m1.key = k1.clone();
+    m1.value = b"v1".to_vec();
+    suite.must_kv_prewrite(1, vec![m1], k1.clone(), 10.into());
+    let mut events = receive_event(false).events.to_vec();
+    match events.remove(0).event.unwrap() {
+        Event_oneof_event::Entries(mut es) => {
+            let row = &es.take_entries().to_vec()[0];
+            assert_eq!(row.get_value(), b"v1");
+            assert_eq!(row.get_old_value(), b"");
+            assert_eq!(row.get_type(), EventLogType::Prewrite);
+            assert_eq!(row.get_start_ts(), 10);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+    // k1 old value must be cached.
+    assert_eq!(
+        CDC_OLD_VALUE_DURATION_HISTOGRAM
+            .with_label_values(&["seek"])
+            .get_sample_count(),
+        0
+    );
+    suite.must_kv_commit(1, vec![k1], 10.into(), 15.into());
+    let mut events = receive_event(false).events.to_vec();
+    match events.remove(0).event.unwrap() {
+        Event_oneof_event::Entries(mut es) => {
+            let row = &es.take_entries().to_vec()[0];
+            assert_eq!(row.get_type(), EventLogType::Commit);
+            assert_eq!(row.get_commit_ts(), 15);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+
+    // Update a noexist value, simulate INSERT IGNORE INTO.
+    let mut m2 = Mutation::default();
+    let k2 = b"k2".to_vec();
+    m2.set_op(Op::Put);
+    m2.key = k2.clone();
+    m2.value = b"v2".to_vec();
+    suite.must_kv_prewrite(1, vec![m2], k2.clone(), 10.into());
+    let mut events = receive_event(false).events.to_vec();
+    match events.remove(0).event.unwrap() {
+        Event_oneof_event::Entries(mut es) => {
+            let row = &es.take_entries().to_vec()[0];
+            assert_eq!(row.get_value(), b"v2");
+            assert_eq!(row.get_old_value(), b"");
+            assert_eq!(row.get_type(), EventLogType::Prewrite);
+            assert_eq!(row.get_start_ts(), 10);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+    assert_eq!(
+        CDC_OLD_VALUE_DURATION_HISTOGRAM
+            .with_label_values(&["seek"])
+            .get_sample_count(),
+        0
+    );
+    suite.must_kv_commit(1, vec![k2], 10.into(), 15.into());
+    let mut events = receive_event(false).events.to_vec();
+    match events.remove(0).event.unwrap() {
+        Event_oneof_event::Entries(mut es) => {
+            let row = &es.take_entries().to_vec()[0];
+            assert_eq!(row.get_type(), EventLogType::Commit);
+            assert_eq!(row.get_commit_ts(), 15);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+
+    // Update an exist value, simulate UPDATE.
+    let mut m2 = Mutation::default();
+    let k2 = b"k2".to_vec();
+    m2.set_op(Op::Put);
+    m2.key = k2.clone();
+    m2.value = b"v3".to_vec();
+    suite.must_kv_prewrite(1, vec![m2], k2.clone(), 20.into());
+    let mut events = receive_event(false).events.to_vec();
+    match events.remove(0).event.unwrap() {
+        Event_oneof_event::Entries(mut es) => {
+            let row = &es.take_entries().to_vec()[0];
+            assert_eq!(row.get_value(), b"v3");
+            assert_eq!(row.get_old_value(), b"v2");
+            assert_eq!(row.get_type(), EventLogType::Prewrite);
+            assert_eq!(row.get_start_ts(), 20);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+    // k2 old value must be cached.
+    assert_eq!(
+        CDC_OLD_VALUE_DURATION_HISTOGRAM
+            .with_label_values(&["seek"])
+            .get_sample_count(),
+        0
+    );
+    suite.must_kv_commit(1, vec![k2], 20.into(), 25.into());
+    let mut events = receive_event(false).events.to_vec();
+    match events.remove(0).event.unwrap() {
+        Event_oneof_event::Entries(mut es) => {
+            let row = &es.take_entries().to_vec()[0];
+            assert_eq!(row.get_type(), EventLogType::Commit);
+            assert_eq!(row.get_commit_ts(), 25);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+
+    // Update an exist value with pessimistic lock, simulate UPDATE.
+    let mut m3 = Mutation::default();
+    let k3 = b"k3".to_vec();
+    m3.set_op(Op::PessimisticLock);
+    m3.key = k3.clone();
+    m3.value = b"v4".to_vec();
+    suite.must_acquire_pessimistic_lock(1, vec![m3.clone()], k3.clone(), 30.into(), 32.into());
+    m3.set_op(Op::Insert);
+    suite.must_kv_pessimistic_prewrite(1, vec![m3], k3, 30.into(), 32.into());
+    let mut events = receive_event(false).events.to_vec();
+    match events.remove(0).event.unwrap() {
+        Event_oneof_event::Entries(mut es) => {
+            let row = &es.take_entries().to_vec()[0];
+            assert_eq!(row.get_value(), b"v4");
+            assert_eq!(row.get_old_value(), b"");
+            assert_eq!(row.get_type(), EventLogType::Prewrite);
+            assert_eq!(row.get_start_ts(), 30);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+    // k3 mutation type must be cached.
+    assert_eq!(
+        CDC_OLD_VALUE_DURATION_HISTOGRAM
+            .with_label_values(&["seek"])
+            .get_sample_count(),
+        0
+    );
+
     suite.stop();
 }
