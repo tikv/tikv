@@ -1793,7 +1793,7 @@ mod tests {
         );
 
         match &result {
-            Err(Error::WrongKeyPrefix { key, prefix, .. }) => {
+            Err(Error::WrongKeyPrefix(_, key, prefix)) => {
                 assert_eq!(key, b"t123_r01");
                 assert_eq!(prefix, b"xxx");
             }
