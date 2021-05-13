@@ -67,7 +67,7 @@ pub const PANIC_MARK_FILE_CONTENT: &[u8] = b"\
     The panic mark file is generated once TiKV encounter unrecoverable data corruption. \
     The TiKV node will not restart. Do NOT delete the panic mark file to force TiKV \
     restart. It would not fix the data corruption issue and could make the corruption \
-    more widespread. Please replace the TiKV node instead.";
+    more widespread. Please replace the TiKV node instead.\n";
 
 pub fn panic_mark_file_path<P: AsRef<Path>>(data_dir: P) -> PathBuf {
     data_dir.as_ref().join(PANIC_MARK_FILE)
