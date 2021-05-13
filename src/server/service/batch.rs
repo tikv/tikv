@@ -200,7 +200,7 @@ fn future_batch_get_command<E: Engine, L: LockManager>(
     begin_instant: tikv_util::time::Instant,
 ) {
     REQUEST_BATCH_SIZE_HISTOGRAM_VEC
-        .point_get
+        .kv_get
         .observe(gets.len() as f64);
     let ids = requests.clone();
     let res = storage.batch_get_command(
@@ -238,6 +238,9 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager>(
     tx: Sender<(u64, batch_commands_response::Response)>,
     begin_instant: tikv_util::time::Instant,
 ) {
+    REQUEST_BATCH_SIZE_HISTOGRAM_VEC
+        .raw_get
+        .observe(gets.len() as f64);
     let ids = requests.clone();
     let res = storage.raw_batch_get_command(
         gets,
