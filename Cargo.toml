@@ -156,7 +156,7 @@ hyper-openssl = "0.8"
 http = "0"
 into_other = { path = "components/into_other", default-features = false }
 keys = { path = "components/keys", default-features = false }
-kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+kvproto = { rev = "511a3225c29f9272af83d28efed92eba835cd34f", git = "https://github.com/pingcap/kvproto.git", default-features = false }
 lazy_static = "1.3"
 libc = "0.2"
 libloading = "0.7"
@@ -227,8 +227,6 @@ test_util = { path = "components/test_util", default-features = false }
 tokio = { version = "0.2", features = ["macros", "rt-threaded", "time"] }
 zipf = "6.1.0"
 
-[patch.'https://github.com/pingcap/kvproto']
-kvproto = { rev = "a695ca28f52471e5e17f602655842eb3d67beef8", git = "https://github.com/gregwebs/kvproto.git", default-features = false }
 [build-dependencies]
 example_plugin = { path = "components/test_coprocessor_plugin/example_plugin" }
 
