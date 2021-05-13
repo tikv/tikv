@@ -53,6 +53,21 @@ lazy_static! {
         &["status"]
     )
     .unwrap();
+    pub static ref CDC_OLD_VALUE_CACHE_MISS: IntGauge = register_int_gauge!(
+        "tikv_cdc_old_value_cache_miss",
+        "Count of old value cache missing"
+    )
+    .unwrap();
+    pub static ref CDC_OLD_VALUE_CACHE_MISS_NONE: IntGauge = register_int_gauge!(
+        "tikv_cdc_old_value_cache_miss_none",
+        "Count of None old value cache missing"
+    )
+    .unwrap();
+    pub static ref CDC_OLD_VALUE_CACHE_ACCESS: IntGauge = register_int_gauge!(
+        "tikv_cdc_old_value_cache_access",
+        "Count of old value cache accessing"
+    )
+    .unwrap();
     pub static ref CDC_OLD_VALUE_SCAN_DETAILS: IntCounterVec = register_int_counter_vec!(
         "tikv_cdc_old_value_scan_details",
         "Bucketed counter of scan details for old value",
