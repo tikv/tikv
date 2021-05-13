@@ -101,15 +101,6 @@ where
     E: KvEngine,
     Router: 'static + RaftStoreRouter<E>,
 {
-    fn multi_ingest(
-        &mut self,
-        _: RpcContext<'_>,
-        _: MultiIngestRequest,
-        _: UnarySink<kvproto::import_sstpb::IngestResponse>,
-    ) {
-        //todo!() just for the compile
-    }
-
     fn switch_mode(
         &mut self,
         ctx: RpcContext<'_>,
