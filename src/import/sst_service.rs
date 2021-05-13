@@ -551,15 +551,6 @@ where
         self.threads.spawn_ok(buf_driver);
         self.threads.spawn_ok(handle_task);
     }
-
-    fn multi_ingest(
-        &mut self,
-        _: RpcContext<'_>,
-        _: MultiIngestRequest,
-        _: UnarySink<kvproto::import_sstpb::IngestResponse>,
-    ) {
-        unimplemented!()
-    }
 }
 
 // add error statistics from pb error response
