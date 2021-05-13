@@ -277,7 +277,9 @@ impl EntryCache {
         } else {
             TraceEvent::Sub(-self.mem_size_change as usize)
         };
-        RAFTSTORE_MEM_TRACE.sub_trace(Id::Name("peers")).trace(event);
+        RAFTSTORE_MEM_TRACE
+            .sub_trace(Id::Name("peers"))
+            .trace(event);
         RAFT_ENTRIES_CACHES_GAUGE.add(self.mem_size_change);
         self.mem_size_change = 0;
     }
