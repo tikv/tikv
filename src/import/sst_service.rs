@@ -1,6 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::f64::INFINITY;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -23,14 +22,13 @@ use kvproto::raft_cmdpb::*;
 
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use engine_traits::{SstExt, SstWriterBuilder};
-use raftstore::router::handle_send_error;
-use raftstore::store::{Callback, ProposalRouter, RaftCommand};
+use raftstore::router::RaftStoreRouter;
+use raftstore::store::Callback;
 use sst_importer::send_rpc_response;
 use tikv_util::future::create_stream_with_buffer;
 use tikv_util::future::paired_future_callback;
 use tikv_util::time::{Instant, Limiter};
 
-use sst_importer::import_mode::*;
 use sst_importer::metrics::*;
 use sst_importer::service::*;
 use sst_importer::{error_inc, sst_meta_to_path, Config, Error, Result, SSTImporter};
@@ -49,7 +47,6 @@ where
     router: Router,
     threads: ThreadPool,
     importer: Arc<SSTImporter>,
-    switcher: ImportModeSwitcher<E>,
     limiter: Limiter,
     task_slots: Arc<Mutex<HashSet<PathBuf>>>,
 }
@@ -57,7 +54,7 @@ where
 impl<E, Router> ImportSSTService<E, Router>
 where
     E: KvEngine,
-    Router: ProposalRouter<E::Snapshot> + Clone,
+    Router: 'static + RaftStoreRouter<E>,
 {
     pub fn new(
         cfg: Config,
@@ -75,15 +72,14 @@ where
             .before_stop(move |_| tikv_alloc::remove_thread_memory_accessor())
             .create()
             .unwrap();
-        let switcher = ImportModeSwitcher::new(&cfg, &threads, engine.clone());
+        importer.start_switch_mode_check(&threads, engine.clone());
         ImportSSTService {
             cfg,
             engine,
             threads,
             router,
             importer,
-            switcher,
-            limiter: Limiter::new(INFINITY),
+            limiter: Limiter::new(f64::INFINITY),
             task_slots: Arc::new(Mutex::new(HashSet::default())),
         }
     }
@@ -103,7 +99,7 @@ where
 impl<E, Router> ImportSst for ImportSSTService<E, Router>
 where
     E: KvEngine,
-    Router: 'static + ProposalRouter<E::Snapshot> + Clone + Send,
+    Router: 'static + RaftStoreRouter<E>,
 {
     fn switch_mode(
         &mut self,
@@ -120,8 +116,8 @@ where
             }
 
             match req.get_mode() {
-                SwitchMode::Normal => self.switcher.enter_normal_mode(mf),
-                SwitchMode::Import => self.switcher.enter_import_mode(mf),
+                SwitchMode::Normal => self.importer.enter_normal_mode(self.engine.clone(), mf),
+                SwitchMode::Import => self.importer.enter_import_mode(self.engine.clone(), mf),
             }
         };
         match res {
@@ -252,7 +248,7 @@ where
 
         let mut resp = IngestResponse::default();
         let mut errorpb = errorpb::Error::default();
-        if self.switcher.get_mode() == SwitchMode::Normal
+        if self.importer.get_mode() == SwitchMode::Normal
             && self
                 .engine
                 .ingest_maybe_slowdown_writes(CF_DEFAULT)
@@ -303,8 +299,7 @@ where
             let m = meta.clone();
             let res = async move {
                 let mut resp = IngestResponse::default();
-                if let Err(e) = router.send(RaftCommand::new(cmd, Callback::Read(cb))) {
-                    let e = handle_send_error(region_id, e);
+                if let Err(e) = router.send_command(cmd, Callback::Read(cb)) {
                     resp.set_error(e.into());
                     return Ok(resp);
                 }
@@ -335,8 +330,7 @@ where
                 }
 
                 let (cb, future) = paired_future_callback();
-                if let Err(e) = router.send(RaftCommand::new(cmd, Callback::write(cb))) {
-                    let e = handle_send_error(region_id, e);
+                if let Err(e) = router.send_command(cmd, Callback::write(cb)) {
                     resp.set_error(e.into());
                     return Ok(resp);
                 }
@@ -418,7 +412,7 @@ where
         self.limiter.set_speed_limit(if speed_limit > 0 {
             speed_limit as f64
         } else {
-            INFINITY
+            f64::INFINITY
         });
 
         let ctx_task = async move {
@@ -485,6 +479,15 @@ where
 
         self.threads.spawn_ok(buf_driver);
         self.threads.spawn_ok(handle_task);
+    }
+
+    fn multi_ingest(
+        &mut self,
+        _: RpcContext<'_>,
+        _: MultiIngestRequest,
+        _: UnarySink<kvproto::import_sstpb::IngestResponse>,
+    ) {
+        unimplemented!()
     }
 }
 

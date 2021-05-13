@@ -679,6 +679,7 @@ fn test_serde_custom_tikv_config() {
         old_value_cache_size: 512,
         hibernate_regions_compatible: false,
         scan_lock_pool_size: 1,
+        incremental_scan_speed_limit: ReadableSize(7),
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");

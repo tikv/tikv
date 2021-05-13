@@ -88,6 +88,13 @@ impl crate::codec::data_type::AsMySQLBool for Enum {
     }
 }
 
+impl std::hash::Hash for Enum {
+    #[inline]
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.value.hash(state)
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct EnumRef<'a> {
     name: &'a [u8],

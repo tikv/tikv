@@ -6,17 +6,14 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
-use kvproto::raft_serverpb::*;
-use raft::eraftpb::{Message, MessageType};
-
 use engine_rocks::Compat;
 use engine_traits::Peekable;
 use file_system::{IOOp, IOType};
-use raftstore::store::*;
-use raftstore::Result;
+use kvproto::raft_serverpb::*;
+use raft::eraftpb::{Message, MessageType};
+use raftstore::{store::*, Result};
 use test_raftstore::*;
-use tikv_util::config::*;
-use tikv_util::HandyRwLock;
+use tikv_util::{config::*, HandyRwLock};
 
 fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;

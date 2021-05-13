@@ -5,12 +5,13 @@ use std::{error, result};
 
 use engine_traits::Error as EngineTraitsError;
 use kvproto::errorpb::Error as ErrorHeader;
-use std::time::Duration;
 use thiserror::Error;
 use tikv::storage::kv::{Error as EngineError, ErrorInner as EngineErrorInner};
 use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 use txn_types::Error as TxnTypesError;
+
+use crate::channel::SendError;
 
 /// The error type for cdc.
 #[derive(Debug, Error)]
@@ -31,10 +32,8 @@ pub enum Error {
     Request(Box<ErrorHeader>),
     #[error("Engine traits error {0}")]
     EngineTraits(#[from] EngineTraitsError),
-    #[error("Incremental scan timed out {0:?}")]
-    ScanTimedOut(Duration),
-    #[error("Fail to get real time stream start")]
-    GetRealTimeStartFailed,
+    #[error("Sink send error {0:?}")]
+    Sink(#[from] SendError),
 }
 
 impl Error {
