@@ -9,15 +9,19 @@ extern crate failure;
 extern crate fail;
 #[macro_use]
 extern crate tikv_util;
+#[cfg(test)]
+#[macro_use]
+extern crate matches;
 
+mod channel;
 mod delegate;
 mod endpoint;
 mod errors;
-pub mod metrics;
+mod metrics;
 mod observer;
 mod service;
 
-pub use endpoint::{Endpoint, Task};
+pub use endpoint::{Endpoint, OldValueStats, Task, Validate};
 pub use errors::{Error, Result};
 pub use observer::CdcObserver;
 pub use service::Service;
