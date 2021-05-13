@@ -5550,7 +5550,7 @@ mod tests {
             self.has_waiter.load(Ordering::Relaxed)
         }
 
-        fn dump_wait_for_entries(&self, cb: waiter_manager::Callback) {
+        fn dump_wait_for_entries(&self, _cb: waiter_manager::Callback) {
             unimplemented!()
         }
     }

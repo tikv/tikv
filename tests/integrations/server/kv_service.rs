@@ -1687,3 +1687,24 @@ fn test_health_check() {
     cluster.shutdown();
     client.check(&req).unwrap_err();
 }
+
+#[test]
+fn test_wait_chain_api() {
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let client2 = client.clone();
+
+    must_kv_pessimistic_lock(&client, ctx.clone(), b"a".to_vec(), 20);
+    let handle = thread::spawn(move || {
+        kv_pessimistic_lock(&client2, ctx.clone(), vec![b"a".to_vec()], 30, 30, false);
+    });
+    thread::sleep(Duration::from_millis(10));
+    // lock_ttl is 20ms, so the lock should be in waiting state here.
+    let req = GetLockWaitInfoRequest::default();
+    let resp = client.get_lock_wait_info(&req).unwrap();
+    let entries = resp.entries.to_vec();
+
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].txn, 30);
+    assert_eq!(entries[0].wait_for_txn, 20);
+    handle.join().unwrap();
+}

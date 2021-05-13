@@ -1071,7 +1071,8 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             response.set_entries(RepeatedField::from_vec(res));
             sink.success(response).await?;
             ServerResult::Ok(())
-        }.map_err(|e| {
+        }
+        .map_err(|e| {
             warn!("call dump_wait_for_entries failed"; "err" => ?e);
         })
         .map(|_| ());
