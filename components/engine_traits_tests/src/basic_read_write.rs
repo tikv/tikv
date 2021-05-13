@@ -12,7 +12,7 @@ fn non_cf_methods_are_default_cf() {
     let db = engine_cfs(ALL_CFS);
     // Use the non-cf put function
     db.engine.put(b"foo", b"bar").unwrap();
-    // Retreive with the cf get function
+    // Retrieve with the cf get function
     let value = db.engine.get_value_cf(CF_DEFAULT, b"foo").unwrap();
     let value = value.expect("value");
     assert_eq!(b"bar", &*value);

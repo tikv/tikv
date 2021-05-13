@@ -151,7 +151,7 @@ impl Default for Config {
             grpc_stream_initial_window_size: ReadableSize(DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE),
             grpc_memory_pool_quota: ReadableSize(DEFAULT_GRPC_MEMORY_POOL_QUOTA),
             // There will be a heartbeat every secs, it's weird a connection will be idle for more
-            // than 10 senconds.
+            // than 10 seconds.
             grpc_keepalive_time: ReadableDuration::secs(10),
             grpc_keepalive_timeout: ReadableDuration::secs(3),
             concurrent_send_snap_limit: 32,

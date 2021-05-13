@@ -14,7 +14,7 @@ pub enum PerfLevel {
 /// Extensions for measuring engine performance.
 ///
 /// A PerfContext is created with a specific measurement level,
-/// and a 'kind' which represents wich tikv subsystem measurements are being
+/// and a 'kind' which represents which tikv subsystem measurements are being
 /// collected for.
 ///
 /// In rocks, `PerfContext` uses global state, and does not require

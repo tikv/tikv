@@ -177,7 +177,7 @@ fn test_stale_read_basic_flow_lock() {
         b"key1".to_vec(),
     );
 
-    // Assert `(key1, value2)` can't be readed with `commit_ts2` due to it's larger than the `start_ts` of `key2`.
+    // Assert `(key1, value2)` can't be read with `commit_ts2` due to it's larger than the `start_ts` of `key2`.
     let resp = follower_client2.kv_read(b"key1".to_vec(), commit_ts2);
     assert!(resp.get_region_error().has_data_is_not_ready());
     // Still can read `(key1, value1)` since `commit_ts1` is less than the `key2` lock's `start_ts`

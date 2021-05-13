@@ -1733,7 +1733,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             if msg.get_region_epoch().get_version() > exist_region.get_region_epoch().get_version()
             {
                 // If new region's epoch version is greater than exist region's, the exist region
-                // may has been merged/splitted already.
+                // may has been merged/split already.
                 let _ = self.ctx.router.force_send(
                     exist_region.get_id(),
                     PeerMsg::CasualMessage(CasualMessage::RegionOverlapped),
@@ -2382,8 +2382,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                                 if let Some(pr) =
                                     meta.region_read_progress.get(&leader_info.region_id)
                                 {
-                                    // TODO: `update_safe_ts` reqiure to acquire a mutex, although the mutex
-                                    // won't be contended, but acquiring a large amount of uncontended mutexs
+                                    // TODO: `update_safe_ts` require to acquire a mutex, although the mutex
+                                    // won't be contended, but acquiring a large amount of uncontended mutexes
                                     // could still be time consuming, should move this operation to other thread
                                     // to avoid blocking `raftstore` threads
                                     pr.update_safe_ts(

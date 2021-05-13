@@ -2791,7 +2791,7 @@ fn to_config_change(change: HashMap<String, String>) -> CfgResult<ConfigChange> 
                 field.replace("-", "_")
             };
             return match typed.get(&f) {
-                None => Err(format!("unexpect fields: {}", field).into()),
+                None => Err(format!("unexpected fields: {}", field).into()),
                 Some(ConfigValue::Skip) => {
                     Err(format!("config {} can not be changed", field).into())
                 }
@@ -2802,7 +2802,7 @@ fn to_config_change(change: HashMap<String, String>) -> CfgResult<ConfigChange> 
                     {
                         return helper(fields, n_dst, m, value);
                     }
-                    panic!("unexpect config value");
+                    panic!("unexpected config value");
                 }
                 Some(v) => {
                     if fields.is_empty() {
@@ -2815,7 +2815,7 @@ fn to_config_change(change: HashMap<String, String>) -> CfgResult<ConfigChange> 
                         };
                     }
                     let c: Vec<_> = fields.into_iter().rev().collect();
-                    Err(format!("unexpect fields: {}", c[..].join(".")).into())
+                    Err(format!("unexpected fields: {}", c[..].join(".")).into())
                 }
             };
         }
@@ -2866,7 +2866,7 @@ fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, 
                 Some(ConfigValue::Module(m)) => helper(fields, m),
                 Some(c) => {
                     if !fields.is_empty() {
-                        return Err(format!("unexpect fields: {:?}", fields).into());
+                        return Err(format!("unexpected fields: {:?}", fields).into());
                     }
                     match c {
                         ConfigValue::Duration(_)
@@ -2977,7 +2977,7 @@ impl ConfigController {
         for (name, change) in diff.into_iter() {
             match change {
                 ConfigValue::Module(change) => {
-                    // update a submodule's config only if changes had been sucessfully
+                    // update a submodule's config only if changes had been successfully
                     // dispatched to corresponding config manager, to avoid dispatch change twice
                     if let Some(mgr) = inner.config_mgrs.get_mut(&Module::from(name.as_str())) {
                         if let Err(e) = mgr.dispatch(change.clone()) {

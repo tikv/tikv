@@ -976,7 +976,7 @@ where
 
             return self.process_raft_cmd(apply_ctx, index, term, cmd);
         }
-        // TOOD(cdc): should we observe empty cmd, aka leader change?
+        // TODO(cdc): should we observe empty cmd, aka leader change?
 
         self.apply_state.set_applied_index(index);
         self.applied_index_term = term;
@@ -1424,7 +1424,7 @@ where
         self.metrics.size_diff_hint += value.len() as i64;
         if !req.get_put().get_cf().is_empty() {
             let cf = req.get_put().get_cf();
-            // TODO: don't allow write preseved cfs.
+            // TODO: don't allow write preserved cfs.
             if cf == CF_LOCK {
                 self.metrics.lock_cf_written_bytes += key.len() as u64;
                 self.metrics.lock_cf_written_bytes += value.len() as u64;
@@ -2213,7 +2213,7 @@ where
                         // This peer must be the first one on local store. So if this peer is created on the other side,
                         // it means no `RegionLocalState` in kv engine.
                         panic!(
-                            "{} failed to replace region {} peer {} because state {:?} alread exist in kv engine",
+                            "{} failed to replace region {} peer {} because state {:?} already exist in kv engine",
                             self.tag, region_id, new_split_peer.peer_id, state
                         );
                     }

@@ -155,13 +155,13 @@ fn test_request_in_joint_state() {
 
     // Request can be handled as usual
     cluster.must_put(b"k2", b"v2");
-    // Both new and old configuation have the newest log
+    // Both new and old configuration have the newest log
     must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
     must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
 
     let region = cluster.get_region(b"k1");
 
-    // Isolated peer 2, so the old configuation can't reach quorum
+    // Isolated peer 2, so the old configuration can't reach quorum
     cluster.add_send_filter(IsolationFilterFactory::new(2));
     let rx = cluster
         .async_request(put_request(&region, 1, b"k3", b"v3"))
@@ -172,7 +172,7 @@ fn test_request_in_joint_state() {
     );
     cluster.clear_send_filters();
 
-    // Isolated peer 3, so the new configuation can't reach quorum
+    // Isolated peer 3, so the new configuration can't reach quorum
     cluster.add_send_filter(IsolationFilterFactory::new(3));
     let rx = cluster
         .async_request(put_request(&region, 1, b"k4", b"v4"))

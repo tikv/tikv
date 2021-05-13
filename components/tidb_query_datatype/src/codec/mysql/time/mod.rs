@@ -202,7 +202,7 @@ impl TryFrom<FieldTypeTp> for TimeType {
             FieldTypeTp::Date => TimeType::Date,
             FieldTypeTp::DateTime => TimeType::DateTime,
             FieldTypeTp::Timestamp => TimeType::Timestamp,
-            // TODO: Remove the support of transfering `Unspecified` to `DateTime`
+            // TODO: Remove the support of transferring `Unspecified` to `DateTime`
             FieldTypeTp::Unspecified => TimeType::DateTime,
             _ => return Err(box_err!("Time does not support field type {}", time_type)),
         })

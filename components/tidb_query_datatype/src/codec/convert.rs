@@ -559,10 +559,10 @@ fn decimal_as_u64(ctx: &mut EvalContext, dec: Decimal, tp: FieldTypeTp) -> Resul
 /// in best effort, but without context.
 pub fn bytes_to_int_without_context(bytes: &[u8]) -> Result<i64> {
     // trim
-    let mut trimed = bytes.iter().skip_while(|&&b| b == b' ' || b == b'\t');
+    let mut trimmed = bytes.iter().skip_while(|&&b| b == b' ' || b == b'\t');
     let mut negative = false;
     let mut r = Some(0i64);
-    if let Some(&c) = trimed.next() {
+    if let Some(&c) = trimmed.next() {
         if c == b'-' {
             negative = true;
         } else if (b'0'..=b'9').contains(&c) {
@@ -571,7 +571,7 @@ pub fn bytes_to_int_without_context(bytes: &[u8]) -> Result<i64> {
             return Ok(0);
         }
 
-        for c in trimed.take_while(|&c| (b'0'..=b'9').contains(c)) {
+        for c in trimmed.take_while(|&c| (b'0'..=b'9').contains(c)) {
             let cur = i64::from(*c - b'0');
             r = r.and_then(|r| r.checked_mul(10)).and_then(|r| {
                 if negative {
@@ -593,16 +593,16 @@ pub fn bytes_to_int_without_context(bytes: &[u8]) -> Result<i64> {
 /// in best effort, but without context.
 pub fn bytes_to_uint_without_context(bytes: &[u8]) -> Result<u64> {
     // trim
-    let mut trimed = bytes.iter().skip_while(|&&b| b == b' ' || b == b'\t');
+    let mut trimmed = bytes.iter().skip_while(|&&b| b == b' ' || b == b'\t');
     let mut r = Some(0u64);
-    if let Some(&c) = trimed.next() {
+    if let Some(&c) = trimmed.next() {
         if (b'0'..=b'9').contains(&c) {
             r = Some(u64::from(c) - u64::from(b'0'));
         } else if c != b'+' {
             return Ok(0);
         }
 
-        for c in trimed.take_while(|&c| (b'0'..=b'9').contains(c)) {
+        for c in trimmed.take_while(|&c| (b'0'..=b'9').contains(c)) {
             r = r
                 .and_then(|r| r.checked_mul(10))
                 .and_then(|r| r.checked_add(u64::from(*c - b'0')));

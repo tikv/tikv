@@ -221,7 +221,7 @@ pub trait PollHandler<N, C> {
     /// This function is called when handling readiness for control FSM.
     ///
     /// If returned value is Some, then it represents a length of channel. This
-    /// function will only be called for the same fsm after channel's lengh is
+    /// function will only be called for the same fsm after channel's length is
     /// larger than the value. If it returns None, then this function will
     /// still be called for the same FSM in the next loop unless the FSM is
     /// stopped.

@@ -738,7 +738,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         };
 
         if let Err(e) = self.ch.send_casual_msg(region_id, req) {
-            // Retrun region error instead a gRPC error.
+            // Return region error instead a gRPC error.
             let mut resp = SplitRegionResponse::default();
             resp.set_region_error(raftstore_error_to_region_error(e, region_id));
             ctx.spawn(
@@ -833,7 +833,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         // We must deal with all requests which acquire read-quorum in raftstore-thread,
         // so just send it as an command.
         if let Err(e) = self.ch.send_command(cmd, Callback::Read(cb)) {
-            // Retrun region error instead a gRPC error.
+            // Return region error instead a gRPC error.
             let mut resp = ReadIndexResponse::default();
             resp.set_region_error(raftstore_error_to_region_error(e, region_id));
             ctx.spawn(

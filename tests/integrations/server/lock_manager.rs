@@ -208,7 +208,7 @@ fn test_detect_deadlock_basic() {
 fn test_detect_deadlock_when_transfer_leader() {
     let mut cluster = new_cluster_for_deadlock_test(3);
     // Transfer the leader of region 1 to store(2).
-    // The leader of deadlock detector should also be transfered to store(2).
+    // The leader of deadlock detector should also be transferred to store(2).
     must_transfer_leader(&mut cluster, b"", 2);
     deadlock_detector_leader_must_be(&mut cluster, 2);
     must_detect_deadlock(&mut cluster, b"k", 10);
@@ -221,7 +221,7 @@ fn test_detect_deadlock_when_split_region() {
     // After split, the leader is still store(1).
     deadlock_detector_leader_must_be(&mut cluster, 1);
     must_detect_deadlock(&mut cluster, b"k", 10);
-    // Transfer the new region's leader to store(2) and deadlock occours on it.
+    // Transfer the new region's leader to store(2) and deadlock occurs on it.
     must_transfer_leader(&mut cluster, b"k1", 2);
     deadlock_detector_leader_must_be(&mut cluster, 1);
     must_detect_deadlock(&mut cluster, b"k1", 10);
@@ -231,7 +231,7 @@ fn test_detect_deadlock_when_split_region() {
 fn test_detect_deadlock_when_transfer_region() {
     let mut cluster = new_cluster_for_deadlock_test(4);
     // Transfer the leader region to store(4) and the leader of deadlock detector should be
-    // also transfered.
+    // also transferred.
     must_transfer_region(&mut cluster, b"k", 1, 4, 4);
     deadlock_detector_leader_must_be(&mut cluster, 4);
     must_detect_deadlock(&mut cluster, b"k", 10);

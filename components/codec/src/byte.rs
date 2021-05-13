@@ -1334,7 +1334,7 @@ mod benches {
         let mut offset = 0;
         let chunk_len = ENC_GROUP_SIZE + 1;
         loop {
-            // everytime make ENC_GROUP_SIZE + 1 elements as a decode unit
+            // every time make ENC_GROUP_SIZE + 1 elements as a decode unit
             let next_offset = offset + chunk_len;
             let chunk = if next_offset <= data.len() {
                 &data[offset..next_offset]
@@ -1398,7 +1398,7 @@ mod benches {
                 );
             }
             write_offset += ENC_GROUP_SIZE;
-            // everytime make ENC_GROUP_SIZE + 1 elements as a decode unit
+            // every time make ENC_GROUP_SIZE + 1 elements as a decode unit
             read_offset += ENC_GROUP_SIZE + 1;
 
             // the last byte in decode unit is for marker which indicates pad size

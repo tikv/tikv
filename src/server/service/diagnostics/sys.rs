@@ -375,7 +375,7 @@ fn disk_hardware_info(collector: &mut Vec<ServerInfoItem>) {
             (
                 "fstype",
                 std::str::from_utf8(disk.get_file_system())
-                    .unwrap_or("unkonwn")
+                    .unwrap_or("unknown")
                     .to_string(),
             ),
             (

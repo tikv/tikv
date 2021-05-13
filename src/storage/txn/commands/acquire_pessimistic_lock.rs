@@ -128,7 +128,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
             let pr = ProcessResult::PessimisticLockRes { res };
             let extra = TxnExtra {
                 old_values: self.old_values,
-                // One pc status is unkown AcquirePessimisticLock stage.
+                // One pc status is unknown AcquirePessimisticLock stage.
                 one_pc: false,
             };
             let write_data = WriteData::new(txn.into_modifies(), extra);

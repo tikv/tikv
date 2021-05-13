@@ -260,7 +260,7 @@ where
                 ref write_io_rates,
             } => write!(
                 f,
-                "get store's informations: cpu_usages {:?}, read_io_rates {:?}, write_io_rates {:?}",
+                "get store's information: cpu_usages {:?}, read_io_rates {:?}, write_io_rates {:?}",
                 cpu_usages, read_io_rates, write_io_rates,
             ),
             Task::UpdateMaxTimestamp { region_id, .. } => write!(
@@ -831,7 +831,7 @@ where
                     }
                 }
                 Ok(None) => {
-                    // splitted Region has not yet reported to PD.
+                    // split Region has not yet reported to PD.
                     // TODO: handle merge
                 }
                 Err(e) => {

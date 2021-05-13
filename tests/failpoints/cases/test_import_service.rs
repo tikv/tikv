@@ -121,7 +121,7 @@ fn test_ingest_reentrant() {
         .get_path(&meta);
 
     let checksum1 = calc_crc32(save_path.clone()).unwrap();
-    // Do ingest and it will ingest successs.
+    // Do ingest and it will ingest success.
     let resp = import.ingest(&ingest).unwrap();
     assert!(!resp.has_error());
 

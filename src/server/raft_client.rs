@@ -91,7 +91,7 @@ impl Queue {
         self.connected.store(false, Ordering::SeqCst);
     }
 
-    /// Wakes up consumer to retrive message.
+    /// Wakes up consumer to retrieve message.
     fn notify(&self) {
         if !self.buf.is_empty() {
             let t = self.waker.lock().unwrap().take();
@@ -293,7 +293,7 @@ where
                 .report_snapshot_status(self.region_id, self.to_peer_id, status)
         {
             error!(?e;
-                "report snapshot to peer failes";
+                "report snapshot to peer fails";
                 "to_peer_id" => self.to_peer_id,
                 "to_store_id" => self.to_store_id,
                 "region_id" => self.region_id,

@@ -5712,7 +5712,7 @@ mod tests {
 
         // Commit
         prewrite_locks(&keys, 10.into());
-        // If locks don't exsit, hashes of released locks should be empty.
+        // If locks don't exist, hashes of released locks should be empty.
         for empty_hashes in &[false, true] {
             storage
                 .sched_txn_command(
@@ -5884,7 +5884,7 @@ mod tests {
                 assert_wake_up_msg_eq(msg1, 70.into(), key_hashes, 0.into(), true);
                 assert_wake_up_msg_eq(msg2, 75.into(), committed_key_hashes, 76.into(), false);
             }
-            _ => panic!("unexpect msg"),
+            _ => panic!("unexpected msg"),
         }
 
         // CheckTxnStatus

@@ -142,13 +142,13 @@ pub enum TxnEntry {
         write: KvPair,
         old_value: Option<Value>,
     },
-    // TOOD: Add more entry if needed.
+    // TODO: Add more entry if needed.
 }
 
 impl TxnEntry {
     /// This method will return a kv pair whose
     /// content and encode are same as a kv pair
-    /// reture by ```StoreScanner::next```
+    /// returned by ```StoreScanner::next```
     pub fn into_kvpair(self) -> Result<(Vec<u8>, Vec<u8>)> {
         match self {
             TxnEntry::Commit { default, write, .. } => {

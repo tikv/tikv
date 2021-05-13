@@ -230,7 +230,7 @@ pub trait JsonDecoder: NumberDecoder {
     // `read_json` decodes value encoded by `write_json` before.
     fn read_json(&mut self) -> Result<Json> {
         if self.bytes().is_empty() {
-            return Err(box_err!("Cant read json from empty bytes"));
+            return Err(box_err!("Can't read json from empty bytes"));
         }
         let tp: JsonType = self.read_u8()?.try_into()?;
         let value = match tp {

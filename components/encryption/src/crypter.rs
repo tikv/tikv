@@ -69,9 +69,9 @@ pub fn get_method_key_length(method: EncryptionMethod) -> usize {
     }
 }
 
-// IV's the length should be 12 btyes for GCM mode.
+// IV's the length should be 12 bytes for GCM mode.
 const GCM_IV_12: usize = 12;
-// IV's the length should be 16 btyes for CTR mode.
+// IV's the length should be 16 bytes for CTR mode.
 const CTR_IV_16: usize = 16;
 
 #[derive(Debug, Clone, Copy)]
@@ -120,7 +120,7 @@ impl Iv {
     }
 }
 
-// The length GCM tag must be 16 btyes.
+// The length GCM tag must be 16 bytes.
 const GCM_TAG_LEN: usize = 16;
 
 pub struct AesGcmTag([u8; GCM_TAG_LEN]);

@@ -168,7 +168,7 @@ impl DetectTable {
         let ttl = self.ttl;
 
         let mut stack = vec![wait_for_ts];
-        // Memorize the pushed vertexes to avoid duplicate search, and maps to the predecessor of
+        // Memorize the pushed vertices to avoid duplicate search, and maps to the predecessor of
         // the vertex.
         // Since the graph is a DAG instead of a tree, a vertex may have multiple predecessors. But
         // it's ok if we only remember one: for each vertex, if it has a route to the goal (txn_ts),

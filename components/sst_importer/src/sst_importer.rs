@@ -1814,7 +1814,7 @@ mod tests {
         let mut batch = WriteBatch::default();
         let mut pairs = vec![];
 
-        // put short value kv in wirte cf
+        // put short value kv in write cf
         let mut pair = Pair::default();
         pair.set_key(b"k1".to_vec());
         pair.set_value(b"short_value".to_vec());

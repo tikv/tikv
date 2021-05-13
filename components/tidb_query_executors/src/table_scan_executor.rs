@@ -339,7 +339,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
                 let (datum, remain) = datum::split_datum(handle, false)?;
                 handle = remain;
 
-                // If the column info of the coresponding primary column id is missing, we ignore this slice of the datum.
+                // If the column info of the corresponding primary column id is missing, we ignore this slice of the datum.
                 if let Some(&index) = index {
                     if !self.is_column_filled[index] {
                         columns[index].mut_raw().push(datum);

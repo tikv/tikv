@@ -295,7 +295,7 @@ where
         Some(res)
     }
 
-    /// Raft could have not been ready to handle the poped task. So put it back into the queue.
+    /// Raft could have not been ready to handle the popped task. So put it back into the queue.
     pub fn push_front(&mut self, read: ReadIndexRequest<S>) {
         debug_assert!(read.read_index.is_some());
         self.reads.push_front(read);
@@ -496,7 +496,7 @@ mod tests {
             ..Default::default()
         };
 
-        // Push a pending comand when the peer is follower.
+        // Push a pending command when the peer is follower.
         let id = Uuid::new_v4();
         let req = ReadIndexRequest::with_command(
             id,
@@ -540,7 +540,7 @@ mod tests {
             ..Default::default()
         };
 
-        // Push a pending read comand when the peer is leader.
+        // Push a pending read command when the peer is leader.
         let id = Uuid::new_v4();
         let req = ReadIndexRequest::with_command(
             id,
@@ -583,7 +583,7 @@ mod tests {
 
         let ids: [Uuid; 2] = [Uuid::new_v4(), Uuid::new_v4()];
         for id in &ids {
-            // Push a pending read comand when the peer is follower.
+            // Push a pending read command when the peer is follower.
             let req = ReadIndexRequest::with_command(
                 *id,
                 RaftCmdRequest::default(),

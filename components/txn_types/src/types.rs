@@ -218,7 +218,7 @@ impl Key {
 
 impl Clone for Key {
     fn clone(&self) -> Self {
-        // default clone implemention use self.len() to reserve capacity
+        // default clone implementation use self.len() to reserve capacity
         // for the sake of appending ts, we need to reserve more
         let mut key = Vec::with_capacity(self.0.capacity());
         key.extend_from_slice(&self.0);

@@ -349,7 +349,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                             .compare_exchange(TxnExtraOp::ReadOldValue, TxnExtraOp::Noop)
                         {
                             panic!(
-                                "unexpect txn extra op {:?}, region_id: {:?}, downstream_id: {:?}, conn_id: {:?}",
+                                "unexpected txn extra op {:?}, region_id: {:?}, downstream_id: {:?}, conn_id: {:?}",
                                 e, region_id, downstream_id, conn_id
                             );
                         }

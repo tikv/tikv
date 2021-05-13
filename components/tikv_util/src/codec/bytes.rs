@@ -175,7 +175,7 @@ pub fn decode_bytes(data: &mut BytesSlice<'_>, desc: bool) -> Result<Vec<u8>> {
     let mut offset = 0;
     let chunk_len = ENC_GROUP_SIZE + 1;
     loop {
-        // everytime make ENC_GROUP_SIZE + 1 elements as a decode unit
+        // every time make ENC_GROUP_SIZE + 1 elements as a decode unit
         let next_offset = offset + chunk_len;
         let chunk = if next_offset <= data.len() {
             &data[offset..next_offset]
@@ -240,7 +240,7 @@ pub fn decode_bytes_in_place(data: &mut Vec<u8>, desc: bool) -> Result<()> {
             );
         }
         write_offset += ENC_GROUP_SIZE;
-        // everytime make ENC_GROUP_SIZE + 1 elements as a decode unit
+        // every time make ENC_GROUP_SIZE + 1 elements as a decode unit
         read_offset += ENC_GROUP_SIZE + 1;
 
         // the last byte in decode unit is for marker which indicates pad size
@@ -395,7 +395,7 @@ mod tests {
             assert_eq!(encode_bytes(&source), asc);
             assert_eq!(encode_bytes_desc(&source), desc);
 
-            // apppend timestamp, the timestamp bytes should not affect decode result
+            // append timestamp, the timestamp bytes should not affect decode result
             asc.encode_u64_desc(0).unwrap();
             desc.encode_u64_desc(0).unwrap();
             {

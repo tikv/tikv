@@ -302,7 +302,7 @@ impl FromStr for ReadableDuration {
     fn from_str(dur_str: &str) -> Result<ReadableDuration, String> {
         let dur_str = dur_str.trim();
         if !dur_str.is_ascii() {
-            return Err(format!("unexpect ascii string: {}", dur_str));
+            return Err(format!("unexpected ascii string: {}", dur_str));
         }
         let err_msg = "valid duration, only d, h, m, s, ms are supported.".to_owned();
         let mut left = dur_str.as_bytes();
@@ -664,7 +664,7 @@ mod check_kernel {
     /// `check_kernel_params` checks kernel parameters, following are checked so far:
     ///   - `net.core.somaxconn` should be greater or equal to 32768.
     ///   - `net.ipv4.tcp_syncookies` should be 0
-    ///   - `vm.swappiness` shoud be 0
+    ///   - `vm.swappiness` should be 0
     ///
     /// Note that: It works on **Linux** only.
     pub fn check_kernel() -> Vec<ConfigError> {
@@ -1146,7 +1146,7 @@ impl TomlLine {
         TomlLine::parse_kv(kv)
     }
 
-    // Parse `Keys`, only bare keys and dotted keys are supportted
+    // Parse `Keys`, only bare keys and dotted keys are supported
     // bare keys only contains chars of A-Za-z0-9_-
     // dotted keys are a sequence of bare key joined with a '.'
     fn parse_key(s: &str) -> Option<String> {
@@ -1178,7 +1178,7 @@ impl TomlLine {
     }
 }
 
-/// TomlWriter use to update the config file and only cover the most commom toml
+/// TomlWriter use to update the config file and only cover the most common toml
 /// format that used by tikv config file, toml format like: quoted keys, multi-line
 /// value, inline table, etc, are not supported, see <https://github.com/toml-lang/toml>
 /// for more detail.

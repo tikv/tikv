@@ -123,7 +123,7 @@ fn test_generate_snapshot() {
     fail::cfg("snapshot_delete_after_send", "off").unwrap();
     must_empty_dir(cluster.get_snap_dir(1));
 
-    // The task is droped so that we can't get the snapshot on store 5.
+    // The task is dropped so that we can't get the snapshot on store 5.
     fail::cfg("snapshot_enter_do_build", "pause").unwrap();
     must_get_none(&cluster.get_engine(5), b"k2");
 
@@ -436,7 +436,7 @@ fn test_receive_old_snapshot() {
     fail::remove(peer_2_handle_snap_mgr_gc_fp);
 }
 
-/// Test if snapshot can be genereated when there is a ready with no newly
+/// Test if snapshot can be generated when there is a ready with no newly
 /// committed entries.
 /// The failpoint `before_no_ready_gen_snap_task` is used for skipping
 /// the code path that snapshot is generated when there is no ready.

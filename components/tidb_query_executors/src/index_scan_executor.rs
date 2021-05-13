@@ -64,7 +64,7 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
         // forbidden soon.
         //
         // Note 4: When process global indexes, an extra partition ID column with column ID
-        // `table::EXTRA_PARTITION_ID_COL_ID` will append to column info to indicate which partiton
+        // `table::EXTRA_PARTITION_ID_COL_ID` will append to column info to indicate which partition
         // handles belong to. See https://github.com/pingcap/parser/pull/1010 for more information.
         let pid_column_cnt = columns_info.last().map_or(0, |ci| {
             (ci.get_column_id() == table::EXTRA_PARTITION_ID_COL_ID) as usize

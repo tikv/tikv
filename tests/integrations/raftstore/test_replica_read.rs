@@ -57,7 +57,7 @@ fn test_replica_read_not_applied() {
     configure_for_lease_read(&mut cluster, Some(50), Some(30));
     let max_lease = Duration::from_secs(1);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
-    // After the leader has committed to its term, pending reads on followers can be responsed.
+    // After the leader has committed to its term, pending reads on followers can be responded.
     // However followers can receive `ReadIndexResp` after become candidate if the leader has
     // hibernated. So, disable the feature to avoid read requests on followers to be cleared as
     // stale.
@@ -239,7 +239,7 @@ fn test_read_hibernated_region() {
 }
 
 /// The read index response can advance the commit index.
-/// But in previous implemtation, we forget to set term in read index response
+/// But in previous implementation, we forget to set term in read index response
 /// which causes panic in raft-rs. This test is to reproduce the case.
 #[test]
 fn test_replica_read_on_stale_peer() {
@@ -299,7 +299,7 @@ fn test_read_index_out_of_order() {
     );
     cluster.sim.wl().add_recv_filter(1, filter);
 
-    // Can't get read resonse because heartbeat responses are blocked.
+    // Can't get read response because heartbeat responses are blocked.
     let r1 = cluster.get_region(b"k1");
     let resp1 = async_read_on_peer(&mut cluster, new_peer(1, 1), r1.clone(), b"k1", true, true);
     assert!(resp1.recv_timeout(Duration::from_secs(2)).is_err());
@@ -487,7 +487,7 @@ fn test_read_local_after_snapshpot_replace_peer() {
     cluster.must_put(b"k3", b"v3");
     // wait peer 1003 apply snapshot
     must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
-    // value can be readed from `engine` doesn't mean applying snapshot is finished
+    // value can be read from `engine` doesn't mean applying snapshot is finished
     // wait little more time
     sleep_ms(100);
 
@@ -496,7 +496,7 @@ fn test_read_local_after_snapshpot_replace_peer() {
     let resp = resp.recv_timeout(Duration::from_secs(1)).unwrap();
     // should not have `mismatch peer id` error
     if resp.get_header().has_error() {
-        panic!("unexpect err: {:?}", resp.get_header().get_error());
+        panic!("unexpected err: {:?}", resp.get_header().get_error());
     }
     let exp_value = resp.get_responses()[0].get_get().get_value();
     assert_eq!(exp_value, b"v3");

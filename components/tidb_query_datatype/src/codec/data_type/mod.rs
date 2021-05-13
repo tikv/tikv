@@ -182,15 +182,15 @@ pub trait Evaluable: Clone + std::fmt::Debug + Send + Sync + 'static {
     const EVAL_TYPE: EvalType;
 
     /// Borrows this concrete type from a `ScalarValue` in the same type;
-    /// panics if the varient mismatches.
+    /// panics if the variant mismatches.
     fn borrow_scalar_value(v: &ScalarValue) -> Option<&Self>;
 
     /// Borrows this concrete type from a `ScalarValueRef` in the same type;
-    /// panics if the varient mismatches.
+    /// panics if the variant mismatches.
     fn borrow_scalar_value_ref(v: ScalarValueRef<'_>) -> Option<&Self>;
 
     /// Borrows a slice of this concrete type from a `VectorValue` in the same type;
-    /// panics if the varient mismatches.
+    /// panics if the variant mismatches.
     fn borrow_vector_value(v: &VectorValue) -> &ChunkedVecSized<Self>;
 }
 
@@ -198,7 +198,7 @@ pub trait EvaluableRet: Clone + std::fmt::Debug + Send + Sync + 'static {
     const EVAL_TYPE: EvalType;
     type ChunkedType: ChunkedVec<Self>;
     /// Converts a vector of this concrete type into a `VectorValue` in the same type;
-    /// panics if the varient mismatches.
+    /// panics if the variant mismatches.
     fn cast_chunk_into_vector_value(vec: Self::ChunkedType) -> VectorValue;
 }
 
@@ -363,15 +363,15 @@ pub trait EvaluableRef<'a>: Clone + std::fmt::Debug + Send + Sync {
     type EvaluableType: EvaluableRet;
 
     /// Borrows this concrete type from a `ScalarValue` in the same type;
-    /// panics if the varient mismatches.
+    /// panics if the variant mismatches.
     fn borrow_scalar_value(v: &'a ScalarValue) -> Option<Self>;
 
     /// Borrows this concrete type from a `ScalarValueRef` in the same type;
-    /// panics if the varient mismatches.
+    /// panics if the variant mismatches.
     fn borrow_scalar_value_ref(v: ScalarValueRef<'a>) -> Option<Self>;
 
     /// Borrows a slice of this concrete type from a `VectorValue` in the same type;
-    /// panics if the varient mismatches.
+    /// panics if the variant mismatches.
     fn borrow_vector_value(v: &'a VectorValue) -> Self::ChunkedType;
 
     /// Convert this reference to owned type

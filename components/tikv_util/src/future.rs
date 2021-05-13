@@ -76,7 +76,7 @@ pub fn poll_future_notify<F: Future<Output = ()> + Send + 'static>(f: F) {
     waker.wake();
 }
 
-// BatchCommandsWaker is used to make business pool notifiy completion queues directly.
+// BatchCommandsWaker is used to make business pool notify completion queues directly.
 struct BatchCommandsWaker(Mutex<Option<BoxFuture<'static, ()>>>);
 
 impl ArcWake for BatchCommandsWaker {

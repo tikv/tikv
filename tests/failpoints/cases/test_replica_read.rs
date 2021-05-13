@@ -424,7 +424,7 @@ fn test_replica_read_after_transfer_leader() {
 
     cluster.add_send_filter(IsolationFilterFactory::new(3));
 
-    // peer 2 does not know the latest commit index if it cann't receive hearbeat.
+    // peer 2 does not know the latest commit index if it can't receive hearbeat.
     // It's because the mechanism of notifying commit index in raft-rs is lazy.
     let recv_filter_2 = Box::new(
         RegionPacketFilter::new(1, 2)

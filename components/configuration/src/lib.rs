@@ -105,7 +105,7 @@ impl_into!(ConfigChange, Module);
 /// at the output of serializing `Self::Encoder`
 /// 3. `#[config(submodule)]` field, these fields represent the
 /// submodule, and should also derive `Configuration`
-/// 4. normal fields, the type of these fields should be implment
+/// 4. normal fields, the type of these fields should be implement
 /// `Into` and `From` for `ConfigValue`
 pub trait Configuration<'a> {
     type Encoder: serde::Serialize;

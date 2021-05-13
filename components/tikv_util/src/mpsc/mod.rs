@@ -200,7 +200,7 @@ pub fn bounded<T>(cap: usize) -> (Sender<T>, Receiver<T>) {
 
 const CHECK_INTERVAL: usize = 8;
 
-/// A sender of channel that limits the maximun pending messages count loosely.
+/// A sender of channel that limits the maximum pending messages count loosely.
 pub struct LooseBoundedSender<T> {
     sender: Sender<T>,
     tried_cnt: Cell<usize>,

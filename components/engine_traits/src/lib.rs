@@ -139,7 +139,7 @@
 //!
 //! # The porting process
 //!
-//! These are some guidelines that seem to make the porting managable. As the
+//! These are some guidelines that seem to make the porting manageable. As the
 //! process continues new strategies are discovered and written here. This is a
 //! big refactoring and will take many monthse.
 //!
@@ -216,7 +216,7 @@
 //! # Refactoring tips
 //!
 //! - Port modules with the fewest RocksDB dependencies at a time, modifying
-//!   those modules's callers to convert to and from the engine traits as
+//!   those modules' callers to convert to and from the engine traits as
 //!   needed. Move in and out of the engine_traits world with the
 //!   `RocksDB::from_ref` and `RocksDB::as_inner` methods.
 //!

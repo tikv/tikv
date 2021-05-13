@@ -254,7 +254,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     /// #  Fatal errors
     ///
     /// - If `dynamic config` feature is enabled and failed to register config to PD
-    /// - If some critical configs (like data dir) are differrent from last run
+    /// - If some critical configs (like data dir) are different from last run
     /// - If the config can't pass `validate()`
     /// - If the max open file descriptor limit is not high enough to support
     ///   the main database and the raft database.

@@ -382,7 +382,7 @@ impl Default for RaftMetrics {
 }
 
 impl RaftMetrics {
-    /// Flushs all metrics
+    /// Flushes all metrics
     pub fn flush(&mut self) {
         self.ready.flush();
         self.send_message.flush();

@@ -371,7 +371,7 @@ mod tests {
 
         // Create two overlapping SST files then force compaction.
         // Region "a" will share a SST file with region "b", since region "a" is too small.
-        // Region "c" will be splitted into two SSTs, since its size is larger than
+        // Region "c" will be split into two SSTs, since its size is larger than
         // target_file_size_base.
         let value = vec![b'v'; 1024];
         db.put(b"za1", b"").unwrap();

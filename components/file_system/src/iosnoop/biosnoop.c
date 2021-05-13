@@ -33,8 +33,8 @@ BPF_HASH(type_by_pid, u32, io_type *);
 BPF_HASH(stats_by_type, io_type, struct stats_t);
 
 // the latency includes OS queued time
-// When using BPF_ARRAY_OF_MAPS, hist_arrays[idx].increment() is not availble
-// due to bpf API limition. So define separate hists for every io type.
+// When using BPF_ARRAY_OF_MAPS, hist_arrays[idx].increment() is not available
+// due to bpf API limitation. So define separate hists for every io type.
 BPF_HISTOGRAM(other_read_latency, int, 25);
 BPF_HISTOGRAM(foreground_read_read_latency, int, 25);
 BPF_HISTOGRAM(foreground_write_read_latency, int, 25);
@@ -95,7 +95,7 @@ int trace_req_start(struct pt_regs *ctx, struct request *req) {
   return 0;
 }
 
-// trace_req_completion may be called in interrput context. In that case,
+// trace_req_completion may be called in interrupt context. In that case,
 // `bpf_get_current_pid_tgid` and `bpf_probe_read` can not work as expected.
 // So caching type in `trace_pid_start` which wouldn't be called in interrupt
 // context and query the type by req in `info_by_req`.

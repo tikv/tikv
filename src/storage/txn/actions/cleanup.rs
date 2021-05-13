@@ -207,7 +207,7 @@ pub mod tests {
 
         // Try to cleanup another transaction's lock. Does nothing.
         must_succeed(&engine, k, ts(10, 1), ts(120, 0));
-        // If there is no exisiting lock when cleanup, it may be a pessimistic transaction,
+        // If there is no existing lock when cleanup, it may be a pessimistic transaction,
         // so the rollback should be protected.
         must_get_rollback_protected(&engine, k, ts(10, 1), true);
         must_locked(&engine, k, ts(10, 0));

@@ -68,32 +68,32 @@ impl BinaryLiteral {
             ));
         }
 
-        let trimed = if s.starts_with('x') || s.starts_with('X') {
+        let trimmed = if s.starts_with('x') || s.starts_with('X') {
             // format is x'val' or X'val'
-            let trimed = s[1..].trim_start_matches('\'');
-            let trimed = trimed.trim_end_matches('\'');
-            if trimed.len() % 2 != 0 {
+            let trimmed = s[1..].trim_start_matches('\'');
+            let trimmed = trimmed.trim_end_matches('\'');
+            if trimmed.len() % 2 != 0 {
                 return Err(box_err!(
                     "invalid hexadecimal format, must even numbers, but {}",
                     s.len()
                 ));
             }
-            trimed
+            trimmed
         } else if s.starts_with("0x") {
             s.trim_start_matches("0x")
         } else {
             // here means format is not x'val', X'val' or 0xval.
             return Err(box_err!("invalid hexadecimal format: {}", s));
         };
-        if trimed.is_empty() {
+        if trimmed.is_empty() {
             return Ok(BinaryLiteral(vec![]));
         }
-        let v = if trimed.len() % 2 != 0 {
+        let v = if trimmed.len() % 2 != 0 {
             let mut head = vec![b'0'];
-            head.extend(trimed.as_bytes());
+            head.extend(trimmed.as_bytes());
             box_try!(hex::decode(head))
         } else {
-            box_try!(hex::decode(trimed.as_bytes()))
+            box_try!(hex::decode(trimmed.as_bytes()))
         };
         Ok(BinaryLiteral(v))
     }
@@ -105,25 +105,25 @@ impl BinaryLiteral {
         if s.is_empty() {
             return Err(box_err!("invalid empty string for parsing bit type"));
         }
-        let trimed = if s.starts_with('b') || s.starts_with('B') {
+        let trimmed = if s.starts_with('b') || s.starts_with('B') {
             // format is b'val' or B'val'
-            let trimed = s[1..].trim_start_matches('\'');
-            trimed.trim_end_matches('\'')
+            let trimmed = s[1..].trim_start_matches('\'');
+            trimmed.trim_end_matches('\'')
         } else if s.starts_with("0b") {
             s.trim_start_matches("0b")
         } else {
             // here means format is not b'val', B'val' or 0bval.
             return Err(box_err!("invalid hexadecimal format: {}", s));
         };
-        if trimed.is_empty() {
+        if trimmed.is_empty() {
             return Ok(BinaryLiteral(vec![]));
         }
 
         // Align the length to 8
-        let aligned_len = (trimed.len() + 7) & (!7);
+        let aligned_len = (trimmed.len() + 7) & (!7);
         let mut padding_str = "0".repeat(8);
-        padding_str.push_str(trimed);
-        let start = trimed.len() + 8 - aligned_len;
+        padding_str.push_str(trimmed);
+        let start = trimmed.len() + 8 - aligned_len;
         let substr = &padding_str[start..];
         let len = substr.len() >> 3;
         let mut buf = Vec::with_capacity(len);
@@ -147,14 +147,14 @@ impl BinaryLiteral {
             s.push_str(&format!("{:08b}", *b));
         }
         if trim_zero {
-            let trimed = s.trim_start_matches('0');
-            if trimed.is_empty() {
+            let trimmed = s.trim_start_matches('0');
+            if trimmed.is_empty() {
                 s.clear();
                 s.push_str("b'0'");
                 return s;
             }
-            let trimed_len = s.len() - trimed.len();
-            s.drain(0..trimed_len);
+            let trimmed_len = s.len() - trimmed.len();
+            s.drain(0..trimmed_len);
         }
         s.insert_str(0, "b'");
         s.push('\'');
@@ -320,7 +320,7 @@ mod tests {
             ),
             ("x''", vec![], false),
         ];
-        for (input, exptected, err) in cs {
+        for (input, expected, err) in cs {
             if err {
                 assert!(
                     BinaryLiteral::from_hex_str(input).is_err(),
@@ -329,7 +329,7 @@ mod tests {
                 );
             } else {
                 let lit = BinaryLiteral::from_hex_str(input).unwrap();
-                assert_eq!(lit.0, exptected);
+                assert_eq!(lit.0, expected);
             }
         }
     }
@@ -406,13 +406,13 @@ mod tests {
             ),
         ];
 
-        for (input, exptected, err) in cs {
+        for (input, expected, err) in cs {
             if err {
                 let lit = BinaryLiteral::from_bit_str(input);
                 assert!(lit.is_err(), "input: {}, lit: {:?}", input, lit);
             } else {
                 let lit = BinaryLiteral::from_bit_str(input).unwrap();
-                assert_eq!(lit.0, exptected);
+                assert_eq!(lit.0, expected);
             }
         }
     }

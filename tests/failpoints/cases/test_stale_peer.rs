@@ -121,7 +121,7 @@ fn test_stale_learner_restart() {
         thread::sleep(Duration::from_millis(10));
     }
     if state.last_index != last_index {
-        panic!("store 2 has not catched up logs after 5 secs.");
+        panic!("store 2 has not caught up logs after 5 secs.");
     }
     cluster.shutdown();
     must_get_none(&cluster.get_engine(2), b"k2");

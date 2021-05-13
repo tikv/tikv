@@ -224,7 +224,7 @@ impl StoreTick {
 
 #[derive(Debug)]
 pub enum MergeResultKind {
-    /// Its target peer applys `CommitMerge` log.
+    /// Its target peer applies `CommitMerge` log.
     FromTargetLog,
     /// Its target peer receives snapshot.
     /// In step 1, this peer should mark `pending_move` is true and destroy its apply fsm.

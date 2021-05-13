@@ -182,7 +182,7 @@ impl<T: Display + Send + 'static> Worker<T> {
     /// Stops the worker thread.
     pub fn stop(&mut self) -> Option<thread::JoinHandle<()>> {
         // close sender explicitly so the background thread will exit.
-        info!("stoping worker"; "worker" => &self.scheduler.name);
+        info!("stopping worker"; "worker" => &self.scheduler.name);
         let handle = self.handle.take()?;
         if let Err(e) = self.scheduler.sender.unbounded_send(None) {
             warn!("failed to stop worker thread"; "err" => ?e);

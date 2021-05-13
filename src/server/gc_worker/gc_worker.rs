@@ -682,7 +682,7 @@ where
 {
     engine: E,
 
-    /// `raft_store_router` is useful to signal raftstore clean region size informations.
+    /// `raft_store_router` is useful to signal raftstore clean region size information.
     raft_store_router: RR,
 
     config_manager: GcWorkerConfigManager,

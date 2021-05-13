@@ -596,7 +596,7 @@ mod tests {
         start_collecting(&c, 3).unwrap_err();
         get_collected_locks(&c, 3).unwrap_err();
         get_collected_locks(&c, 4).unwrap();
-        // Do not allow stoping observing with a different max_ts.
+        // Do not allow stopping observing with a different max_ts.
         stop_collecting(&c, 3).unwrap_err();
         stop_collecting(&c, 5).unwrap_err();
         stop_collecting(&c, 4).unwrap();

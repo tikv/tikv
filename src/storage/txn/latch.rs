@@ -101,7 +101,7 @@ pub struct Lock {
 }
 
 impl Lock {
-    /// Creates a lock specifing all the required latches for a command.
+    /// Creates a lock specifying all the required latches for a command.
     pub fn new<'a, K, I>(keys: I) -> Lock
     where
         K: Hash + 'a,

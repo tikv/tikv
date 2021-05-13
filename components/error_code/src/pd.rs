@@ -6,7 +6,7 @@ define_error_codes!(
     IO => ("IO", "", ""),
     CLUSTER_BOOTSTRAPPED => ("ClusterBootstraped", "", ""),
     CLUSTER_NOT_BOOTSTRAPPED => ("ClusterNotBootstraped", "", ""),
-    INCOMPATIBLE => ("Imcompatible", "", ""),
+    INCOMPATIBLE => ("Incompatible", "", ""),
     GRPC => ("gRPC", "", ""),
     REGION_NOT_FOUND => ("RegionNotFound", "", ""),
     STORE_TOMBSTONE => ("StoreTombstone", "", ""),

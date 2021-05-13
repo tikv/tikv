@@ -378,7 +378,7 @@ fn test_not_invoke_committed_cb_when_fail_to_commit() {
     cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.must_put(b"k", b"v");
 
-    // Partiton the leader and followers to let the leader fails to commit the proposal.
+    // Partition the leader and followers to let the leader fails to commit the proposal.
     cluster.partition(vec![1], vec![2, 3]);
     let write_req = make_write_req(&mut cluster, b"k1");
     let (cb, cb_receivers) = make_cb(&write_req);

@@ -68,7 +68,7 @@ impl<E: KvEngine> ConsistencyCheckObserver<E> for Mvcc<E> {
                 8,
             );
         }
-        // Skiped all other observers.
+        // Skipped all other observers.
         true
     }
 

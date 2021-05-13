@@ -137,7 +137,7 @@ impl EventBatcher {
                 self.last_size = CDC_MAX_RESP_SIZE;
             }
             CdcEvent::Barrier(_) => {
-                // Barrier requires events must be batched accross the barrier.
+                // Barrier requires events must be batched across the barrier.
                 self.last_size = CDC_MAX_RESP_SIZE;
             }
         }

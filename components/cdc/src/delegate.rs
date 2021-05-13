@@ -71,7 +71,7 @@ pub struct Downstream {
     // TODO: include cdc request.
     /// A unique identifier of the Downstream.
     id: DownstreamID,
-    // The reqeust ID set by CDC to identify events corresponding different requests.
+    // The request ID set by CDC to identify events corresponding different requests.
     req_id: u64,
     conn_id: ConnID,
     // The IP address of downstream.
@@ -408,7 +408,7 @@ impl Delegate {
         old_value_cb: &OldValueCallback,
         old_value_cache: &mut OldValueCache,
     ) -> Result<()> {
-        // Stale CmdBatch, drop it sliently.
+        // Stale CmdBatch, drop it silently.
         if batch.cdc_id != self.handle.id {
             return Ok(());
         }

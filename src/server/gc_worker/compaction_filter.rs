@@ -31,12 +31,12 @@ const DEFAULT_DELETE_BATCH_SIZE: usize = 256 * 1024;
 const DEFAULT_DELETE_BATCH_COUNT: usize = 128;
 
 // The default version that can enable compaction filter for GC. This is necessary because after
-// compaction filter is enabled, it's impossible to fallback to ealier version which modifications
+// compaction filter is enabled, it's impossible to fallback to earlier version which modifications
 // of GC are distributed to other replicas by Raft.
 const COMPACTION_FILTER_GC_FEATURE: Feature = Feature::require(5, 0, 0);
 
 // Global context to create a compaction filter for write CF. It's necessary as these fields are
-// not available when construcing `WriteCompactionFilterFactory`.
+// not available when constructing `WriteCompactionFilterFactory`.
 struct GcContext {
     db: RocksEngine,
     store_id: u64,
@@ -75,7 +75,7 @@ lazy_static! {
     .unwrap();
     static ref GC_COMPACTION_FILTER_PERFORM: IntCounter = register_int_counter!(
         "tikv_gc_compaction_filter_perform",
-        "perfrom GC in compaction filter"
+        "perform GC in compaction filter"
     )
     .unwrap();
 
@@ -928,7 +928,7 @@ pub mod tests {
         gc_and_check(true, b"zkey1");
     }
 
-    // Test if there are not enought garbage in SST files involved by a compaction, no compaction
+    // Test if there are not enough garbage in SST files involved by a compaction, no compaction
     // filter will be created.
     #[test]
     fn test_mvcc_properties() {

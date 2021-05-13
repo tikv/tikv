@@ -323,7 +323,7 @@ where
                 }
                 cmd.mut_header().set_term(header.get_current_term());
                 // Here we shall check whether the file has been ingested before. This operation
-                // must execute after geting a snapshot from raftstore to make sure that the
+                // must execute after getting a snapshot from raftstore to make sure that the
                 // current leader has applied to current term.
                 if !importer.exist(&m) {
                     return Ok(resp);

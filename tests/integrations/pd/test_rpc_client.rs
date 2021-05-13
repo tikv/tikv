@@ -570,7 +570,7 @@ fn test_cluster_version() {
     assert!(feature_gate.can_enable(feature_b));
     assert!(!feature_gate.can_enable(feature_c));
 
-    // After reconnect the version should be still accessable.
+    // After reconnect the version should be still accessible.
     // The GLOBAL_RECONNECT_INTERVAL is 0.1s so sleeps 0.2s here.
     thread::sleep(Duration::from_millis(200));
     client.reconnect().unwrap();

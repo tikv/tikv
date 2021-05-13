@@ -1747,7 +1747,7 @@ where
                     > exist_region.get_region_epoch().get_version()
             {
                 // If snapshot's epoch version is greater than exist region's, the exist region
-                // may has been merged/splitted already.
+                // may has been merged/split already.
                 let _ = self.ctx.router.force_send(
                     exist_region.get_id(),
                     PeerMsg::CasualMessage(CasualMessage::RegionOverlapped),
@@ -2234,7 +2234,7 @@ where
                 continue;
             }
 
-            // Check if this new region should be splitted
+            // Check if this new region should be split
             let new_split_peer = new_split_regions.get(&new_region.get_id()).unwrap();
             if new_split_peer.result.is_some() {
                 if let Err(e) = self
@@ -2538,7 +2538,7 @@ where
                 {
                     Ok(ents) => ents,
                     Err(e) => panic!(
-                        "[region {}] {} failed to get merge entires: {:?}, low:{}, commit: {}",
+                        "[region {}] {} failed to get merge entries: {:?}, low:{}, commit: {}",
                         self.fsm.region_id(),
                         self.fsm.peer_id(),
                         e,
@@ -3762,7 +3762,7 @@ where
             if group_state == GroupState::Idle {
                 self.fsm.peer.ping();
                 if !self.fsm.peer.is_leader() {
-                    // If leader is able to receive messge but can't send out any,
+                    // If leader is able to receive message but can't send out any,
                     // follower should be able to start an election.
                     self.fsm.hibernate_state.reset(GroupState::PreChaos);
                 } else {

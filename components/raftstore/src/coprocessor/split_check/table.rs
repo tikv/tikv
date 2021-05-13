@@ -156,7 +156,7 @@ where
                     split_key = to_encoded_table_prefix(encoded_end_key);
                 }
             }
-            // The region starts from tabel area to non-table area.
+            // The region starts from table area to non-table area.
             (Ordering::Equal, Ordering::Greater) => {
                 // As the comment above, outside needs scan for finding a split key.
                 first_encoded_table_prefix = to_encoded_table_prefix(encoded_start_key);

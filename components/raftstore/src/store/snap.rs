@@ -1917,7 +1917,7 @@ pub mod tests {
             write_batch_size: TEST_WRITE_BATCH_SIZE,
             coprocessor_host: CoprocessorHost::<KvTestEngine>::default(),
         };
-        // Verify thte snapshot applying is ok.
+        // Verify the snapshot applying is ok.
         assert!(s4.apply(options).is_ok());
 
         // Ensure `delete()` works to delete the dest snapshot.

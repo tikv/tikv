@@ -433,7 +433,7 @@ where
     pub approximate_size: u64,
     /// Approximate keys of the region.
     pub approximate_keys: u64,
-    /// Whether this region has calculated region size by split-check thread. If we just splitted
+    /// Whether this region has calculated region size by split-check thread. If we just split
     ///  the region or ingested one file which may be overlapped with the existed data, the
     /// `approximate_size` is not very accurate.
     pub has_calculated_region_size: bool,
@@ -721,7 +721,7 @@ where
         );
         if log_idx < self.raft_group.raft.raft_log.committed {
             // There are maybe some logs not included in CommitMergeRequest's entries, like CompactLog,
-            // so the commit index may exceed the last index of the entires from CommitMergeRequest.
+            // so the commit index may exceed the last index of the entries from CommitMergeRequest.
             // If that, no need to append
             if self.raft_group.raft.raft_log.committed - log_idx > entries.len() as u64 {
                 return None;
@@ -1411,10 +1411,10 @@ where
 
     /// Correctness depends on the order between calling this function and notifying other peers
     /// the new commit index.
-    /// It is due to the interaction between lease and split/merge.(details are decribed below)
+    /// It is due to the interaction between lease and split/merge.(details are described below)
     ///
     /// Note that in addition to the hearbeat/append msg, the read index response also can notify
-    /// other peers the new commit index. There are three place where TiKV handles read index resquest.
+    /// other peers the new commit index. There are three place where TiKV handles read index request.
     /// The first place is in raft-rs, so it's like hearbeat/append msg, call this function and
     /// then send the response. The second place is in `Step`, we should use the commit index
     /// of `PeerStorage` which is the greatest commit index that can be observed outside.

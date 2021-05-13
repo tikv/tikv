@@ -326,7 +326,7 @@ pub fn check_term(req: &RaftCmdRequest, term: u64) -> Result<()> {
     if header.get_term() == 0 || term <= header.get_term() + 1 {
         Ok(())
     } else {
-        // If header's term is 2 verions behind current term,
+        // If header's term is 2 versions behind current term,
         // leadership may have been changed away.
         Err(Error::StaleCommand)
     }
@@ -597,7 +597,7 @@ impl fmt::Debug for RemoteLease {
     }
 }
 
-// Contants used in `timespec_to_u64` and `u64_to_timespec`.
+// Constants used in `timespec_to_u64` and `u64_to_timespec`.
 const NSEC_PER_MSEC: i32 = 1_000_000;
 const TIMESPEC_NSEC_SHIFT: usize = 32 - NSEC_PER_MSEC.leading_zeros() as usize;
 
@@ -1175,7 +1175,7 @@ mod tests {
     fn gen_region(
         voters: &[u64],
         learners: &[u64],
-        incomming_v: &[u64],
+        incoming_v: &[u64],
         demoting_v: &[u64],
     ) -> metapb::Region {
         let mut region = metapb::Region::default();
@@ -1191,7 +1191,7 @@ mod tests {
         }
         push_peer!(voters, metapb::PeerRole::Voter);
         push_peer!(learners, metapb::PeerRole::Learner);
-        push_peer!(incomming_v, metapb::PeerRole::IncomingVoter);
+        push_peer!(incoming_v, metapb::PeerRole::IncomingVoter);
         push_peer!(demoting_v, metapb::PeerRole::DemotingVoter);
         region
     }
@@ -1206,15 +1206,15 @@ mod tests {
             (vec![1], vec![2], vec![3, 4], vec![5, 6]),
         ];
 
-        for (voter, learner, incomming, demoting) in cases {
+        for (voter, learner, incoming, demoting) in cases {
             let region = gen_region(
                 voter.as_slice(),
                 learner.as_slice(),
-                incomming.as_slice(),
+                incoming.as_slice(),
                 demoting.as_slice(),
             );
             let cs = conf_state_from_region(&region);
-            if incomming.is_empty() && demoting.is_empty() {
+            if incoming.is_empty() && demoting.is_empty() {
                 // Not in joint
                 assert!(cs.get_voters_outgoing().is_empty());
                 assert!(cs.get_learners_next().is_empty());
@@ -1226,7 +1226,7 @@ mod tests {
                     |id| cs.get_voters().contains(id) && cs.get_voters_outgoing().contains(id)
                 ));
                 assert!(learner.iter().all(|id| cs.get_learners().contains(id)));
-                assert!(incomming.iter().all(|id| cs.get_voters().contains(id)));
+                assert!(incoming.iter().all(|id| cs.get_voters().contains(id)));
                 assert!(
                     demoting
                         .iter()
@@ -1493,7 +1493,7 @@ mod tests {
         req.mut_header().set_term(7);
         check_term(&req, 7).unwrap();
         check_term(&req, 8).unwrap();
-        // If header's term is 2 verions behind current term,
+        // If header's term is 2 versions behind current term,
         // leadership may have been changed away.
         check_term(&req, 9).unwrap_err();
         check_term(&req, 10).unwrap_err();

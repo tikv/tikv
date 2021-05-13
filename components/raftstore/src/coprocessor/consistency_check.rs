@@ -9,7 +9,7 @@ use crate::coprocessor::{ConsistencyCheckMethod, Coprocessor};
 use crate::Result;
 
 pub trait ConsistencyCheckObserver<E: KvEngine>: Coprocessor {
-    /// Update context. Return `true` if later observers should be skiped.
+    /// Update context. Return `true` if later observers should be skipped.
     fn update_context(&self, context: &mut Vec<u8>) -> bool;
 
     /// Compute hash for `region`. The policy is extracted from `context`.
@@ -36,7 +36,7 @@ impl<E: KvEngine> ConsistencyCheckObserver<E> for Raw<E> {
     fn update_context(&self, context: &mut Vec<u8>) -> bool {
         context.push(ConsistencyCheckMethod::Raw as u8);
         // Raw consistency check is the most heavy and strong one.
-        // So all others can be skiped.
+        // So all others can be skipped.
         true
     }
 

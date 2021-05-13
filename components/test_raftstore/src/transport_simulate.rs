@@ -766,7 +766,7 @@ impl Filter for RandomLatencyFilter {
         let mut to_send = vec![];
         let mut to_delay = vec![];
         let mut delayed_msgs = self.delayed_msgs.lock().unwrap();
-        // check whether to send those messages which are delayed previouly
+        // check whether to send those messages which are delayed previously
         // and check whether to send any newly incoming message if they are not delayed
         for m in delayed_msgs.drain(..).chain(msgs.drain(..)) {
             if self.will_delay(&m) {

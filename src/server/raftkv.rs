@@ -414,7 +414,7 @@ where
                 }
                 Ok(CmdRes::Snap(_)) => write_cb((
                     cb_ctx,
-                    Err(box_err!("unexpect snapshot, should mutate instead.")),
+                    Err(box_err!("unexpected snapshot, should mutate instead.")),
                 )),
                 Err(e) => {
                     let status_kind = get_status_kind_from_engine_error(&e);

@@ -87,7 +87,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         if need_value {
             val = reader.get(&key, for_update_ts)?;
         }
-        // Pervious write is not loaded.
+        // Previous write is not loaded.
         let (prev_write_loaded, prev_write) = (false, None);
         let old_value = load_old_value(
             need_old_value,
@@ -626,7 +626,7 @@ pub mod tests {
         // Prewrite on non-pessimistic key meets write with larger commit_ts than current
         // for_update_ts (non-pessimistic data conflict).
         // Normally non-pessimistic keys in pessimistic transactions are used when we are sure that
-        // there won't be conflicts. So this case is also not checked, and prewrite will succeeed.
+        // there won't be conflicts. So this case is also not checked, and prewrite will succeed.
         must_pessimistic_prewrite_put(&engine, k, v, k, 47, 48, false);
         must_locked(&engine, k, 47);
         must_cleanup(&engine, k, 47, 0);

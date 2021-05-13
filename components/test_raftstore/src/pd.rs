@@ -57,7 +57,7 @@ impl Default for Store {
 enum SchedulePolicy {
     /// Repeat an Operator.
     Repeat(isize),
-    /// Repeat till succcess.
+    /// Repeat till success.
     TillSuccess,
     /// Stop immediately.
     Stop,

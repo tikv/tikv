@@ -1491,7 +1491,7 @@ where
         // For now, it is ensured by
         // 1. After `PrepareMerge` log is committed, the source region leader's lease will be
         //    suspected immediately which makes the local reader not serve read request.
-        // 2. No read request can be responsed in peer fsm during merging.
+        // 2. No read request can be responded in peer fsm during merging.
         // These conditions are used to prevent reading **stale** data in the past.
         // At present, they are also used to prevent reading **corrupt** data.
         for r in &ctx.destroyed_regions {

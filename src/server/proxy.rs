@@ -87,7 +87,7 @@ impl ClientPool {
                     .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
                     .max_receive_message_len(-1)
                     .max_send_message_len(-1)
-                    // Memory should be limited by incomming connections already.
+                    // Memory should be limited by incoming connections already.
                     // And maintaining a shared resource quota doesn't seem easy.
                     .keepalive_time(cfg.grpc_keepalive_time.into())
                     .keepalive_timeout(cfg.grpc_keepalive_timeout.into())
