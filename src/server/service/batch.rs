@@ -68,19 +68,13 @@ impl ReqBatcher {
         if self.gets.len() >= self.batch_size {
             let gets = std::mem::take(&mut self.gets);
             let ids = std::mem::take(&mut self.get_ids);
-            future_batch_get_command(storage, ids, gets, tx.clone(), self.begin_instant.clone());
+            future_batch_get_command(storage, ids, gets, tx.clone(), self.begin_instant);
         }
 
         if self.raw_gets.len() >= self.batch_size {
             let gets = std::mem::take(&mut self.raw_gets);
             let ids = std::mem::take(&mut self.raw_get_ids);
-            future_batch_raw_get_command(
-                storage,
-                ids,
-                gets,
-                tx.clone(),
-                self.begin_instant.clone(),
-            );
+            future_batch_raw_get_command(storage, ids, gets, tx.clone(), self.begin_instant);
         }
     }
 
