@@ -132,18 +132,55 @@ impl<K> Trace<K> {
     }
 }
 
-pub struct LruCache<K, V> {
+pub trait SizeTracer<K, V> {
+    fn current(&self) -> usize;
+    fn on_insert(&mut self, key: &K, value: &V);
+    fn on_remove(&mut self, key: &K, value: &V);
+    fn on_reset(&mut self, val: usize);
+}
+
+pub struct CountTracer(usize);
+
+impl<K, V> SizeTracer<K, V> for CountTracer {
+    fn current(&self) -> usize {
+        self.0
+    }
+
+    fn on_insert(&mut self, _: &K, _: &V) {
+        self.0 += 1;
+    }
+
+    fn on_remove(&mut self, _: &K, _: &V) {
+        self.0 -= 1;
+    }
+
+    fn on_reset(&mut self, val: usize) {
+        self.0 = val;
+    }
+}
+
+impl Default for CountTracer {
+    fn default() -> Self {
+        Self(0)
+    }
+}
+
+pub struct LruCache<K, V, T = CountTracer> {
     map: HashMap<K, ValueEntry<K, V>>,
     trace: Trace<K>,
     capacity: usize,
+    size_tracer: T,
 }
 
-impl<K, V> LruCache<K, V> {
-    pub fn with_capacity(capacity: usize) -> LruCache<K, V> {
-        LruCache::with_capacity_and_sample(capacity, 0)
-    }
-
-    pub fn with_capacity_and_sample(mut capacity: usize, sample_mask: usize) -> LruCache<K, V> {
+impl<K, V, T> LruCache<K, V, T>
+where
+    T: SizeTracer<K, V>,
+{
+    pub fn with_capacity_sample_and_trace(
+        mut capacity: usize,
+        sample_mask: usize,
+        size_tracer: T,
+    ) -> LruCache<K, V, T> {
         if capacity == 0 {
             capacity = 1;
         }
@@ -151,9 +188,17 @@ impl<K, V> LruCache<K, V> {
             map: HashMap::default(),
             trace: Trace::new(sample_mask),
             capacity,
+            size_tracer,
         }
     }
 
+    #[inline]
+    pub fn size(&self) -> usize {
+        self.size_tracer.current()
+    }
+}
+
+impl<K, V, T> LruCache<K, V, T> {
     #[inline]
     pub fn clear(&mut self) {
         self.map.clear();
@@ -170,6 +215,14 @@ impl<K, V> LruCache<K, V>
 where
     K: Eq + Hash + Clone + std::fmt::Debug,
 {
+    pub fn with_capacity(capacity: usize) -> LruCache<K, V> {
+        LruCache::with_capacity_and_sample(capacity, 0)
+    }
+
+    pub fn with_capacity_and_sample(capacity: usize, sample_mask: usize) -> LruCache<K, V> {
+        Self::with_capacity_sample_and_trace(capacity, sample_mask, CountTracer::default())
+    }
+
     #[inline]
     pub fn resize(&mut self, mut new_cap: usize) {
         if new_cap == 0 {
@@ -184,19 +237,27 @@ where
         }
         self.capacity = new_cap;
     }
+}
 
+impl<K, V, T> LruCache<K, V, T>
+where
+    K: Eq + Hash + Clone + std::fmt::Debug,
+    T: SizeTracer<K, V>,
+{
     #[inline]
     pub fn insert(&mut self, key: K, value: V) {
         let mut old_key = None;
-        let map_len = self.map.len();
+        let current_size = SizeTracer::<K, V>::current(&self.size_tracer);
         match self.map.entry(key) {
             HashMapEntry::Occupied(mut e) => {
+                self.size_tracer.on_remove(e.key(), &e.get().value);
+                self.size_tracer.on_insert(e.key(), &value);
                 let mut entry = e.get_mut();
                 self.trace.promote(entry.record);
                 entry.value = value;
             }
             HashMapEntry::Vacant(v) => {
-                let record = if self.capacity == map_len {
+                let record = if self.capacity == current_size {
                     let res = self.trace.reuse_tail(v.key().clone());
                     old_key = Some(res.0);
                     res.1
@@ -204,11 +265,13 @@ where
                     self.trace.create(v.key().clone())
                 };
 
+                self.size_tracer.on_insert(v.key(), &value);
                 v.insert(ValueEntry { value, record });
             }
         }
         if let Some(o) = old_key {
-            self.map.remove(&o);
+            let entry = self.map.remove(&o).unwrap();
+            self.size_tracer.on_remove(&o, &entry.value);
         }
     }
 
@@ -216,6 +279,7 @@ where
     pub fn remove(&mut self, key: &K) -> Option<V> {
         if let Some(v) = self.map.remove(key) {
             self.trace.delete(v.record);
+            self.size_tracer.on_remove(key, &v.value);
             return Some(v.value);
         }
         None
@@ -258,9 +322,9 @@ where
     }
 }
 
-unsafe impl<K: Send, V: Send> Send for LruCache<K, V> {}
+unsafe impl<K: Send, V: Send, T: Send> Send for LruCache<K, V, T> {}
 
-impl<K, V> Drop for LruCache<K, V> {
+impl<K, V, T> Drop for LruCache<K, V, T> {
     fn drop(&mut self) {
         self.clear();
     }
