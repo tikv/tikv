@@ -10,6 +10,7 @@ extern crate test;
 use std::collections::hash_map::Entry;
 use std::collections::vec_deque::{Iter, VecDeque};
 use std::fs::{self, File};
+use std::io::Write;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -62,6 +63,11 @@ pub fn panic_mark_is_on() -> bool {
 }
 
 pub const PANIC_MARK_FILE: &str = "panic_mark_file";
+pub const PANIC_MARK_FILE_CONTENT: &[u8] = b"\
+    The panic mark file is generated once TiKV encounter unrecoverable data corruption. \
+    The TiKV node will not restart. Do NOT delete the panic mark file to force TiKV \
+    restart. It would not fix the data corruption issue and could make the corruption \
+    more widespread. Please replace the TiKV node instead.";
 
 pub fn panic_mark_file_path<P: AsRef<Path>>(data_dir: P) -> PathBuf {
     data_dir.as_ref().join(PANIC_MARK_FILE)
@@ -69,7 +75,10 @@ pub fn panic_mark_file_path<P: AsRef<Path>>(data_dir: P) -> PathBuf {
 
 pub fn create_panic_mark_file<P: AsRef<Path>>(data_dir: P) {
     let file = panic_mark_file_path(data_dir);
-    File::create(&file).unwrap();
+    File::create(&file)
+        .unwrap()
+        .write(PANIC_MARK_FILE_CONTENT)
+        .unwrap();
 }
 
 pub fn remove_panic_mark_file<P: AsRef<Path>>(data_dir: P) {
