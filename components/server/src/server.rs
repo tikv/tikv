@@ -276,7 +276,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         check_system_config(&config);
 
-        tikv_util::set_panic_hook(false, &config.storage.data_dir);
+        tikv_util::set_panic_hook(config.allow_core_dump, &config.storage.data_dir);
 
         info!(
             "using config";
@@ -368,10 +368,18 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         self.lock_files.push(f);
 
         if tikv_util::panic_mark_file_exists(&self.config.storage.data_dir) {
-            fatal!(
-                "panic_mark_file {} exists, there must be something wrong with the db.",
-                tikv_util::panic_mark_file_path(&self.config.storage.data_dir).display()
-            );
+            if self.config.allow_restart_on_data_corruption {
+                warn!(
+                    "panic_mark_file {} exists. delete the file and force restart.",
+                    tikv_util::panic_mark_file_path(&self.config.storage.data_dir).display()
+                );
+                tikv_util::remove_panic_mark_file(&self.config.storage.data_dir);
+            } else {
+                fatal!(
+                    "panic_mark_file {} exists, there must be something wrong with the db.",
+                    tikv_util::panic_mark_file_path(&self.config.storage.data_dir).display()
+                );
+            }
         }
 
         // We truncate a big file to make sure that both raftdb and kvdb of TiKV have enough space

@@ -9,7 +9,7 @@ extern crate test;
 
 use std::collections::hash_map::Entry;
 use std::collections::vec_deque::{Iter, VecDeque};
-use std::fs::File;
+use std::fs::{self, File};
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -70,6 +70,11 @@ pub fn panic_mark_file_path<P: AsRef<Path>>(data_dir: P) -> PathBuf {
 pub fn create_panic_mark_file<P: AsRef<Path>>(data_dir: P) {
     let file = panic_mark_file_path(data_dir);
     File::create(&file).unwrap();
+}
+
+pub fn remove_panic_mark_file<P: AsRef<Path>>(data_dir: P) {
+    let file = panic_mark_file_path(data_dir);
+    fs::remove_file(file).unwrap();
 }
 
 // Copied from file_system to avoid cyclic dependency
