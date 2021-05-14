@@ -3,11 +3,13 @@
 #![feature(box_patterns)]
 #![feature(assert_matches)]
 
+mod channel;
 mod delegate;
 mod endpoint;
 mod errors;
 pub mod metrics;
 mod observer;
+mod old_value;
 mod service;
 
 pub use endpoint::{CdcTxnExtraScheduler, Endpoint, Task, Validate};

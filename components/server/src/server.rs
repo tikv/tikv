@@ -87,6 +87,7 @@ use tikv_util::{
 };
 use tokio::runtime::Builder;
 
+use crate::raft_engine_switch::{check_and_dump_raft_db, check_and_dump_raft_engine};
 use crate::{setup::*, signal_handler};
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
@@ -1026,6 +1027,8 @@ impl TiKVServer<RocksEngine> {
         raft_engine.set_shared_block_cache(shared_block_cache);
         let engines = Engines::new(kv_engine, raft_engine);
 
+        check_and_dump_raft_engine(&self.config, &engines.raft, 8);
+
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
             tikv::config::Module::Rocksdb,
@@ -1060,13 +1063,7 @@ impl TiKVServer<RaftLogEngine> {
         let raft_engine = RaftLogEngine::new(raft_config);
 
         // Try to dump and recover raft data.
-        crate::dump::check_and_dump_raft_db(
-            &self.config.raft_store.raftdb_path,
-            &self.config.raftdb.wal_dir,
-            &raft_engine,
-            env.clone(),
-            8,
-        );
+        check_and_dump_raft_db(&self.config, &raft_engine, &env, 8);
 
         // Create kv engine.
         let mut kv_db_opts = self.config.rocksdb.build_opt();
