@@ -84,7 +84,7 @@ error_code = { path = "../error_code", default-features = false }
 file_system = { path = "../file_system", default-features = false }
 fs2 = "0.4"
 futures = "0.3"
-tokio = { version = "0.2", features = ["rt-threaded"] }
+tokio = { version = "1.5", features = ["rt-multi-thread"] }
 grpcio = { version = "0.8", default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"
 keys = { path = "../keys", default-features = false }

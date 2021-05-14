@@ -92,10 +92,9 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
         // A helper thread (or pool) for transport layer.
         let stats_pool = if cfg.stats_concurrency > 0 {
             Some(
-                RuntimeBuilder::new()
-                    .threaded_scheduler()
+                RuntimeBuilder::new_multi_thread()
                     .thread_name(STATS_THREAD_PREFIX)
-                    .core_threads(cfg.stats_concurrency)
+                    .worker_threads(cfg.stats_concurrency)
                     .build()
                     .unwrap(),
             )

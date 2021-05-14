@@ -259,16 +259,14 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
     ) -> Endpoint<T> {
-        let workers = Builder::new()
-            .threaded_scheduler()
+        let workers = Builder::new_multi_thread()
             .thread_name("cdcwkr")
-            .core_threads(4)
+            .worker_threads(4)
             .build()
             .unwrap();
-        let tso_worker = Builder::new()
-            .threaded_scheduler()
+        let tso_worker = Builder::new_multi_thread()
             .thread_name("tso")
-            .core_threads(1)
+            .worker_threads(1)
             .build()
             .unwrap();
         let old_value_cache = OldValueCache::new(cfg.old_value_cache_size);

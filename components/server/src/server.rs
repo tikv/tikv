@@ -546,10 +546,9 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         // The `DebugService` and `DiagnosticsService` will share the same thread pool
         let debug_thread_pool = Arc::new(
-            Builder::new()
-                .threaded_scheduler()
+            Builder::new_multi_thread()
                 .thread_name(thd_name!("debugger"))
-                .core_threads(1)
+                .worker_threads(1)
                 .on_thread_start(tikv_alloc::add_thread_memory_accessor)
                 .on_thread_stop(tikv_alloc::remove_thread_memory_accessor)
                 .build()

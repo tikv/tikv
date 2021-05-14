@@ -501,7 +501,7 @@ impl<E: Engine> Endpoint<E> {
     ) -> impl futures::stream::Stream<Item = Result<coppb::Response>> {
         try_stream! {
             let _permit = if let Some(semaphore) = semaphore.as_ref() {
-                Some(semaphore.acquire().await)
+                Some(semaphore.acquire().await.expect("the semaphore never be closed"))
             } else {
                 None
             };

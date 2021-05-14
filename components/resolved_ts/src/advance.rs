@@ -57,10 +57,9 @@ impl<T, E: KvEngine> AdvanceTsWorker<T, E> {
         advance_ts_interval: Duration,
         hibernate_regions_compatible: bool,
     ) -> Self {
-        let worker = Builder::new()
-            .threaded_scheduler()
+        let worker = Builder::new_multi_thread()
             .thread_name("advance-ts")
-            .core_threads(1)
+            .worker_threads(1)
             .build()
             .unwrap();
         Self {

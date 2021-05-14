@@ -25,7 +25,7 @@ failpoints = ["fail/failpoints"]
 [dependencies]
 async-trait = "0.1"
 byteorder = "1.2"
-bytes = "0.5"
+bytes = "1.0"
 crossbeam = "0.8"
 configuration = { path = "../configuration" }
 crc32fast = "1.2"
@@ -51,7 +51,7 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 thiserror = "1.0"
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util", default-features = false }
-tokio = { version = "0.2", features = ["time", "rt-core"] }
+tokio = { version = "1.5", features = ["time", "rt"] }
 
 [dev-dependencies]
 matches = "0.1.8"

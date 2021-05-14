@@ -1,7 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use bytes::Bytes;
-use futures::future::{self};
 use futures::stream::{self, Stream};
 use futures_util::io::AsyncRead;
 use http::status::StatusCode;
@@ -16,7 +15,7 @@ use std::{
     task::{Context, Poll},
     time::Duration,
 };
-use tokio::{runtime::Builder, time::delay_for};
+use tokio::{runtime::Builder, time::sleep};
 
 /// Wrapper of an `AsyncRead` instance, exposed as a `Sync` `Stream` of `Bytes`.
 pub struct AsyncReadAsSyncStreamOfBytes<R> {
@@ -74,8 +73,7 @@ pub fn error_stream(e: io::Error) -> impl Stream<Item = io::Result<Bytes>> + Unp
 // FIXME: get rid of this function, so that futures_executor::block_on is sufficient.
 pub fn block_on_external_io<F: Future>(f: F) -> F::Output {
     // we need a Tokio runtime, Tokio futures require Tokio executor.
-    Builder::new()
-        .basic_scheduler()
+    Builder::new_current_thread()
         .enable_io()
         .enable_time()
         .build()
@@ -110,7 +108,7 @@ where
     for _ in 1..MAX_RETRY_TIMES {
         if let Err(e) = &final_result {
             if e.is_retryable() {
-                delay_for(retry_wait_dur + Duration::from_millis(thread_rng().gen_range(0..1000)))
+                sleep(retry_wait_dur + Duration::from_millis(thread_rng().gen_range(0..1000)))
                     .await;
                 retry_wait_dur = MAX_RETRY_DELAY.min(retry_wait_dur * 2);
                 final_result = action().await;
@@ -128,10 +126,9 @@ where
     Fut: Future<Output = Result<T, E>> + std::marker::Unpin,
     E: From<Box<dyn std::error::Error + Send + Sync>>,
 {
-    let timeout = tokio::time::delay_for(timeout_duration);
-    match future::select(fut, timeout).await {
-        future::Either::Left((resp, _)) => resp,
-        future::Either::Right(((), _)) => Err(box_err!(
+    match tokio::time::timeout(timeout_duration, fut).await {
+        Ok(resp) => resp,
+        Err(_) => Err(box_err!(
             "request timeout. duration: {:?}",
             timeout_duration
         )),

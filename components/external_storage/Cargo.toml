@@ -27,8 +27,12 @@ cloud-storage-grpc = [
 failpoints = ["fail/failpoints"]
 
 [dependencies]
+<<<<<<< HEAD
 anyhow = "1.0"
 bytes = "0.5.3"
+=======
+bytes = "1.0"
+>>>>>>> Update tokio to 1.0 ecosystem
 fail = "0.4"
 ffi-support = { optional = true, version = "0.4.2" }
 file_system = { path = "../file_system" }
@@ -43,14 +47,14 @@ libloading = { optional = true, version = "0.7.0" }
 prometheus = { version = "0.12", default-features = false, features = ["nightly", "push"] }
 protobuf = { optional = true, version = "2" }
 rand = "0.8"
-rusoto_core = "0.45.0"
+rusoto_core = "0.46.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 # better to not use slog-global, but pass in the logger
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tame-oauth = "0.4.2"
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util", default-features = false }
-tokio = { version = "0.2.13", features = ["time"] }
+tokio = { version = "1.5", features = ["time"] }
 tokio-util = { optional = true, version = "0.3.1", features = ["compat"] }
 url = "2.0"
 

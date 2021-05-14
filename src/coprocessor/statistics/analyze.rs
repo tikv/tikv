@@ -479,7 +479,7 @@ impl RowSampleCollector {
     }
 
     pub fn sampling(&mut self, data: Vec<Vec<u8>>) {
-        let cur_rng = self.rng.gen_range(0, i64::MAX);
+        let cur_rng = self.rng.gen_range(0..i64::MAX);
         if self.samples.len() < self.max_sample_size {
             self.samples.push(Reverse((cur_rng, data)));
             return;
@@ -798,8 +798,8 @@ impl SampleCollector {
             self.samples.push(data);
             return;
         }
-        if self.rng.gen_range(0, self.count) < self.max_sample_size as u64 {
-            let idx = self.rng.gen_range(0, self.max_sample_size);
+        if self.rng.gen_range(0..self.count) < self.max_sample_size as u64 {
+            let idx = self.rng.gen_range(0..self.max_sample_size);
             // https://github.com/pingcap/tidb/blob/master/statistics/sample.go#L173
             self.samples.remove(idx);
             self.samples.push(data);

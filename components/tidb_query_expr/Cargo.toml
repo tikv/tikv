@@ -26,7 +26,7 @@ prost-codec = [
 rand = "0.8.3"
 safemem = { version = "0.3", default-features = false }
 time = "0.1"
-base64 = "0.12"
+base64 = "0.13"
 bstr = "0.2.8"
 byteorder = "1.2"
 codec = { path = "../codec", default-features = false }

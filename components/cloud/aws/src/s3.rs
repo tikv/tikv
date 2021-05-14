@@ -7,7 +7,7 @@ use rusoto_core::{
 };
 use rusoto_credential::{ProvideAwsCredentials, StaticProvider};
 use rusoto_s3::*;
-use tokio::time::{delay_for, timeout};
+use tokio::time::{sleep, timeout};
 
 use crate::util;
 use cloud::blob::{none_to_empty, BlobConfig, BlobStorage, BucketConf, StringNonEmpty};
@@ -389,7 +389,7 @@ impl<'client> S3Uploader<'client> {
             let delay_duration = Duration::from_millis(0);
 
             if delay_duration > Duration::from_millis(0) {
-                delay_for(delay_duration).await;
+                sleep(delay_duration).await;
             }
 
             self.client

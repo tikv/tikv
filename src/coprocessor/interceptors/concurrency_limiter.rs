@@ -1,11 +1,13 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use pin_project::pin_project;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
+
+use futures::future::FutureExt;
+use pin_project::pin_project;
 use tokio::sync::{Semaphore, SemaphorePermit};
 
 use crate::coprocessor::metrics::*;
@@ -20,7 +22,13 @@ pub fn limit_concurrency<'a, F: Future + 'a>(
     semaphore: &'a Semaphore,
     time_limit_without_permit: Duration,
 ) -> impl Future<Output = F::Output> + 'a {
-    ConcurrencyLimiter::new(semaphore.acquire(), fut, time_limit_without_permit)
+    ConcurrencyLimiter::new(
+        semaphore
+            .acquire()
+            .map(|permit| permit.expect("the semaphore never be closed")),
+        fut,
+        time_limit_without_permit,
+    )
 }
 
 #[pin_project]

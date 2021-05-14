@@ -75,10 +75,8 @@ impl KmsBackend {
     pub fn new(kms_provider: Box<dyn KmsProvider>) -> Result<KmsBackend> {
         // Basic scheduler executes futures in the current thread.
         let runtime = Mutex::new(
-            Builder::new()
-                .basic_scheduler()
+            Builder::new_current_thread()
                 .thread_name("kms-runtime")
-                .core_threads(1)
                 .enable_all()
                 .build()?,
         );
@@ -94,7 +92,7 @@ impl KmsBackend {
     fn encrypt_content(&self, plaintext: &[u8], iv: Iv) -> Result<EncryptedContent> {
         let mut opt_state = self.state.lock().unwrap();
         if opt_state.is_none() {
-            let mut runtime = self.runtime.lock().unwrap();
+            let runtime = self.runtime.lock().unwrap();
             let data_key = runtime.block_on(retry(|| {
                 with_timeout(self.timeout_duration, self.kms_provider.generate_data_key())
             }))?;
@@ -156,7 +154,7 @@ impl KmsBackend {
                 }
             }
             {
-                let mut runtime = self.runtime.lock().unwrap();
+                let runtime = self.runtime.lock().unwrap();
                 let plaintext = runtime.block_on(retry(|| {
                     with_timeout(
                         self.timeout_duration,
