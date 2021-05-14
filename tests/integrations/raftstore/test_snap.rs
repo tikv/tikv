@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fs;
-use std::io::Read;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
@@ -14,9 +13,7 @@ use file_system::{IOOp, IOType, WithIORateLimit};
 use futures::executor::block_on;
 use grpcio::Environment;
 use kvproto::raft_serverpb::*;
-use protobuf::Message as _;
-use raft::eraftpb::{Message, MessageType};
-use raftstore::store::SNAPSHOT_VERSION;
+use raft::eraftpb::{Message, MessageType, Snapshot};
 use raftstore::{store::*, Result};
 use rand::Rng;
 use security::SecurityManager;
@@ -570,7 +567,7 @@ fn test_gen_during_heavy_recv() {
     let snap_apply_state = cluster.apply_state(r2, 2);
     let mut snap_index = snap_apply_state.applied_index;
 
-    do_snapshot(
+    let snap = do_snapshot(
         snap_mgr.clone(),
         &engine,
         engine.snapshot(),
@@ -587,7 +584,6 @@ fn test_gen_during_heavy_recv() {
     let snap_dir = cluster.sim.rl().get_snap_dir(2);
     let th = std::thread::spawn(move || {
         loop {
-            let mut meta_path = String::new();
             for suffix in &[".meta", "_default.sst"] {
                 let f = format!("gen_{}_{}_{}{}", r2, snap_term, snap_index, suffix);
                 let mut src = PathBuf::from(&snap_dir);
@@ -598,16 +594,14 @@ fn test_gen_during_heavy_recv() {
                 dst.push(&f);
 
                 fs::hard_link(&src, &dst).unwrap();
-                if *suffix == ".meta" {
-                    meta_path = src.to_str().unwrap().to_owned();
-                }
             }
 
             let snap_mgr = snap_mgr.clone();
             let sec_mgr = sec_mgr.clone();
-            if let Err(e) = send_a_large_snapshot(
-                snap_mgr, sec_mgr, &s1_addr, r2, snap_index, snap_term, &meta_path,
-            ) {
+            let s = snap.clone();
+            if let Err(e) =
+                send_a_large_snapshot(snap_mgr, sec_mgr, &s1_addr, r2, s, snap_index, snap_term)
+            {
                 info!("send_a_large_snapshot fail: {}", e);
                 break;
             }
@@ -629,38 +623,17 @@ fn send_a_large_snapshot(
     security_mgr: Arc<SecurityManager>,
     addr: &str,
     region_id: u64,
+    mut snap: Snapshot,
     index: u64,
     term: u64,
-    meta_path: &str,
 ) -> std::result::Result<(), String> {
-    // Read a snapshot meta.
-    let mut meta_bytes = Vec::with_capacity(1024);
-    fs::File::open(meta_path)
-        .and_then(|mut f| f.read_to_end(&mut meta_bytes))
-        .unwrap();
-    let mut snap_meta = SnapshotMeta::default();
-    snap_meta.merge_from_bytes(&meta_bytes).unwrap();
-
-    // Construct a snapshot data.
-    let mut snap_data = RaftSnapshotData::default();
-    snap_data.mut_region().id = region_id;
-    snap_data.set_version(SNAPSHOT_VERSION);
-    snap_data.set_meta(snap_meta);
-    snap_data.set_file_size(
-        mgr.get_snapshot_for_sending(&SnapKey::new(region_id, term, index))
-            .unwrap()
-            .total_size()
-            .unwrap(),
-    );
+    snap.mut_metadata().term = term;
+    snap.mut_metadata().index = index;
 
     // Construct a raft message.
     let mut msg = RaftMessage::default();
     msg.region_id = region_id;
-    msg.mut_message().mut_snapshot().mut_metadata().term = term;
-    msg.mut_message().mut_snapshot().mut_metadata().index = index;
-    msg.mut_message()
-        .mut_snapshot()
-        .set_data(snap_data.write_to_bytes().unwrap());
+    msg.mut_message().set_snapshot(snap);
 
     let env = Arc::new(Environment::new(1));
     let cfg = tikv::server::Config::default();
