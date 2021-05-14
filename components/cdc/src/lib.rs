@@ -9,6 +9,7 @@ mod endpoint;
 mod errors;
 pub mod metrics;
 mod observer;
+mod old_value;
 mod service;
 
 pub use channel::MemoryQuota;
