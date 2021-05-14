@@ -71,7 +71,9 @@ impl std::convert::TryFrom<crate::FieldTypeTp> for EvalType {
             | crate::FieldTypeTp::LongBlob
             | crate::FieldTypeTp::Blob
             | crate::FieldTypeTp::VarString
-            | crate::FieldTypeTp::String => EvalType::Bytes,
+            | crate::FieldTypeTp::String
+            | crate::FieldTypeTp::Null => EvalType::Bytes,
+            crate::FieldTypeTp::Enum => EvalType::Enum,
             _ => {
                 // In TiDB, Bit's eval type is Int, but it is not yet supported in TiKV.
                 // TODO: we need to handle FieldTypeTp::{Enum, Set} after we implement encode and decode.
@@ -100,7 +102,7 @@ mod tests {
             (Long, Some(EvalType::Int)),
             (Float, Some(EvalType::Real)),
             (Double, Some(EvalType::Real)),
-            (Null, None),
+            (Null, Some(EvalType::Bytes)),
             (Timestamp, Some(EvalType::DateTime)),
             (LongLong, Some(EvalType::Int)),
             (Int24, Some(EvalType::Int)),
@@ -113,7 +115,7 @@ mod tests {
             (Bit, None),
             (JSON, Some(EvalType::Json)),
             (NewDecimal, Some(EvalType::Decimal)),
-            (Enum, None),
+            (Enum, Some(EvalType::Enum)),
             (Set, None),
             (TinyBlob, Some(EvalType::Bytes)),
             (MediumBlob, Some(EvalType::Bytes)),

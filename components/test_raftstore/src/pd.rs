@@ -294,6 +294,7 @@ struct Cluster {
     base_id: AtomicUsize,
 
     store_stats: HashMap<u64, pdpb::StoreStats>,
+    store_hotspots: HashMap<u64, HashMap<u64, pdpb::PeerStat>>,
     split_count: usize,
 
     // region id -> Operator
@@ -332,6 +333,7 @@ impl Cluster {
             region_last_report_term: HashMap::default(),
             base_id: AtomicUsize::new(1000),
             store_stats: HashMap::default(),
+            store_hotspots: HashMap::default(),
             split_count: 0,
             operators: HashMap::default(),
             enable_peer_count_check: true,
@@ -353,8 +355,10 @@ impl Cluster {
         // TODO: enable this check later.
         // assert_eq!(region.get_peers().len(), 1);
         let store_id = store.get_id();
-        let mut s = Store::default();
-        s.store = store;
+        let mut s = Store {
+            store,
+            ..Default::default()
+        };
 
         s.region_ids.insert(region.get_id());
 
@@ -383,9 +387,13 @@ impl Cluster {
             .get(&store_id)
             .map_or(true, |s| s.store.get_id() != 0)
         {
-            let mut s = Store::default();
-            s.store = store;
-            self.stores.insert(store_id, s);
+            self.stores.insert(
+                store_id,
+                Store {
+                    store,
+                    ..Default::default()
+                },
+            );
         } else {
             self.stores.get_mut(&store_id).unwrap().store = store;
         }
@@ -443,6 +451,10 @@ impl Cluster {
         self.region_last_report_term.get(&region_id).cloned()
     }
 
+    fn get_store_hotspots(&self, store_id: u64) -> Option<HashMap<u64, pdpb::PeerStat>> {
+        self.store_hotspots.get(&store_id).cloned()
+    }
+
     fn get_stores(&self) -> Vec<metapb::Store> {
         self.stores
             .values()
@@ -457,14 +469,16 @@ impl Cluster {
 
     fn add_region(&mut self, region: &metapb::Region) {
         let end_key = enc_end_key(region);
-        assert!(self
-            .regions
-            .insert(end_key.clone(), region.clone())
-            .is_none());
-        assert!(self
-            .region_id_keys
-            .insert(region.get_id(), end_key)
-            .is_none());
+        assert!(
+            self.regions
+                .insert(end_key.clone(), region.clone())
+                .is_none()
+        );
+        assert!(
+            self.region_id_keys
+                .insert(region.get_id(), end_key)
+                .is_none()
+        );
     }
 
     fn remove_region(&mut self, region: &metapb::Region) {
@@ -1179,6 +1193,10 @@ impl TestPdClient {
         self.cluster.rl().get_region_last_report_term(region_id)
     }
 
+    pub fn get_store_hotspots(&self, store_id: u64) -> Option<HashMap<u64, pdpb::PeerStat>> {
+        self.cluster.rl().get_store_hotspots(store_id)
+    }
+
     pub fn set_gc_safe_point(&self, safe_point: u64) {
         self.cluster.wl().set_gc_safe_point(safe_point);
     }
@@ -1464,10 +1482,25 @@ impl PdClient for TestPdClient {
         if let Err(e) = self.check_bootstrap() {
             return Box::pin(err(e));
         }
-
         // Cache it directly now.
         let store_id = stats.get_store_id();
         let mut cluster = self.cluster.wl();
+        let hot_spots = cluster
+            .store_hotspots
+            .entry(store_id)
+            .or_insert_with(HashMap::default);
+        for peer_stat in stats.get_peer_stats() {
+            let region_id = peer_stat.get_region_id();
+            let peer_stat_sum = hot_spots
+                .entry(region_id)
+                .or_insert_with(pdpb::PeerStat::default);
+            let read_keys = peer_stat.get_read_keys() + peer_stat_sum.get_read_keys();
+            let read_bytes = peer_stat.get_read_bytes() + peer_stat_sum.get_read_bytes();
+            peer_stat_sum.set_read_keys(read_keys);
+            peer_stat_sum.set_read_bytes(read_bytes);
+            peer_stat_sum.set_region_id(region_id);
+        }
+
         cluster.store_stats.insert(store_id, stats);
 
         let mut resp = pdpb::StoreHeartbeatResponse::default();

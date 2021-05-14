@@ -2,7 +2,7 @@
 
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::{MvccTxn, Result as MvccResult};
+use crate::storage::mvcc::{MvccTxn, Result as MvccResult, SnapshotReader};
 use crate::storage::txn::commands::{
     Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
     WriteResult,
@@ -39,12 +39,9 @@ impl CommandExt for PessimisticRollback {
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
     /// Delete any pessimistic lock with small for_update_ts belongs to this transaction.
     fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
-        let mut txn = MvccTxn::new(
-            snapshot,
-            self.start_ts,
-            !self.ctx.get_not_fill_cache(),
-            context.concurrency_manager,
-        );
+        let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
+        let mut reader =
+            SnapshotReader::new(self.start_ts, snapshot, !self.ctx.get_not_fill_cache());
 
         let ctx = mem::take(&mut self.ctx);
         let keys = mem::take(&mut self.keys);
@@ -60,7 +57,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
                 ))
                 .into()
             ));
-            let released_lock: MvccResult<_> = if let Some(lock) = txn.reader.load_lock(&key)? {
+            let released_lock: MvccResult<_> = if let Some(lock) = reader.load_lock(&key)? {
                 if lock.lock_type == LockType::Pessimistic
                     && lock.ts == self.start_ts
                     && lock.for_update_ts <= self.for_update_ts
@@ -76,7 +73,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
         }
         released_locks.wake_up(context.lock_mgr);
 
-        context.statistics.add(&txn.take_statistics());
+        context.statistics.add(&reader.take_statistics());
         let write_data = WriteData::from_modifies(txn.into_modifies());
         Ok(WriteResult {
             ctx,

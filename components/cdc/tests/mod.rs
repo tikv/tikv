@@ -55,7 +55,7 @@ pub fn new_event_feed(
         let mut events;
         {
             let mut event_feed = event_feed_wrap_clone.lock().unwrap();
-            events = (*event_feed).take();
+            events = event_feed.take();
         }
         let events_rx = if let Some(events_rx) = events.as_mut() {
             events_rx
@@ -75,7 +75,7 @@ pub fn new_event_feed(
         if !keep_resolved_ts && change_data_event.has_resolved_ts() {
             continue;
         }
-        tikv_util::info!("receive event {:?}", change_data_event);
+        tikv_util::info!("cdc receive event {:?}", change_data_event);
         break change_data_event;
     };
     (
@@ -126,6 +126,10 @@ impl TestSuite {
                 .push(Box::new(move || {
                     create_change_data(cdc::Service::new(scheduler.clone()))
                 }));
+            sim.txn_extra_schedulers.insert(
+                id,
+                Arc::new(cdc::CdcTxnExtraScheduler::new(worker.scheduler().clone())),
+            );
             let scheduler = worker.scheduler();
             let cdc_ob = cdc::CdcObserver::new(scheduler.clone());
             obs.insert(id, cdc_ob.clone());
@@ -156,7 +160,7 @@ impl TestSuite {
                 sim.security_mgr.clone(),
             );
             cdc_endpoint.set_min_ts_interval(Duration::from_millis(100));
-            cdc_endpoint.set_scan_batch_size(2);
+            cdc_endpoint.set_max_scan_batch_size(2);
             concurrency_managers.insert(*id, cm);
             worker.start(cdc_endpoint);
         }
@@ -173,15 +177,17 @@ impl TestSuite {
     }
 
     pub fn stop(mut self) {
-        for (_, mut worker) in self.endpoints {
-            worker.stop();
+        for (_, worker) in self.endpoints.drain() {
+            worker.stop_worker();
         }
         self.cluster.shutdown();
     }
 
     pub fn new_changedata_request(&mut self, region_id: u64) -> ChangeDataRequest {
-        let mut req = ChangeDataRequest::default();
-        req.region_id = region_id;
+        let mut req = ChangeDataRequest {
+            region_id,
+            ..Default::default()
+        };
         req.set_region_epoch(self.get_context(region_id).take_region_epoch());
         // Assume batch resolved ts will be release in v4.0.7
         // For easy of testing (nightly CI), we lower the gate to v4.0.6

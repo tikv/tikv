@@ -9,6 +9,8 @@
 extern crate slog_global;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
+#[macro_use]
+extern crate fail;
 
 use std::io;
 use std::marker::Unpin;
@@ -31,12 +33,8 @@ mod s3;
 pub use s3::S3Storage;
 mod gcs;
 pub use gcs::GCSStorage;
-mod util;
-pub use util::block_on_external_io;
 mod metrics;
 use metrics::*;
-
-pub const READ_BUF_SIZE: usize = 1024 * 1024 * 2;
 
 /// Create a new storage from the given storage backend description.
 pub fn create_storage(backend: &StorageBackend) -> io::Result<Arc<dyn ExternalStorage>> {
@@ -89,6 +87,7 @@ pub fn url_of_backend(backend: &StorageBackend) -> url::Url {
             }
             u.set_path(gcs.get_prefix());
         }
+        Some(Backend::CloudDynamic(_)) => unimplemented!(),
         None => {}
     }
     u
@@ -225,14 +224,16 @@ mod tests {
         let backend = make_noop_backend();
         assert_eq!(url_of_backend(&backend).to_string(), "noop:///");
 
-        let mut backend = StorageBackend::default();
-        backend.backend = Some(Backend::S3(S3 {
-            bucket: "bucket".to_owned(),
-            prefix: "/backup 01/prefix/".to_owned(),
-            endpoint: "http://endpoint.com".to_owned(),
-            // ^ only 'bucket' and 'prefix' should be visible in url_of_backend()
-            ..S3::default()
-        }));
+        let mut backend = StorageBackend {
+            backend: Some(Backend::S3(S3 {
+                bucket: "bucket".to_owned(),
+                prefix: "/backup 01/prefix/".to_owned(),
+                endpoint: "http://endpoint.com".to_owned(),
+                // ^ only 'bucket' and 'prefix' should be visible in url_of_backend()
+                ..S3::default()
+            })),
+            ..Default::default()
+        };
         assert_eq!(
             url_of_backend(&backend).to_string(),
             "s3://bucket/backup%2001/prefix/"

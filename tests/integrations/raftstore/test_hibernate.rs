@@ -149,16 +149,7 @@ fn test_prompt_learner() {
     for i in 0..cluster.cfg.raft_store.raft_log_gc_count_limit * 2 {
         cluster.must_put(format!("k{}", i).as_bytes(), format!("v{}", i).as_bytes());
     }
-    let timer = Instant::now();
-    loop {
-        if cluster.truncated_state(1, 1).get_index() > idx {
-            break;
-        }
-        thread::sleep(Duration::from_millis(10));
-        if timer.elapsed() > Duration::from_secs(3) {
-            panic!("log is not compact after 3 seconds");
-        }
-    }
+    cluster.wait_log_truncated(1, 1, idx + 1);
     // Wait till leader peer goes to sleep again.
     thread::sleep(
         cluster.cfg.raft_store.raft_base_tick_interval.0
@@ -257,16 +248,7 @@ fn test_split_delay() {
     }
     let region = cluster.get_region(b"k1");
     cluster.must_split(&region, b"k3");
-    let timer = Instant::now();
-    loop {
-        if cluster.truncated_state(1, 1).get_index() > idx {
-            break;
-        }
-        thread::sleep(Duration::from_millis(10));
-        if timer.elapsed() > Duration::from_secs(3) {
-            panic!("log is not compact after 3 seconds");
-        }
-    }
+    cluster.wait_log_truncated(1, 1, idx + 1);
     // Wait till leader peer goes to sleep again.
     thread::sleep(
         cluster.cfg.raft_store.raft_base_tick_interval.0
@@ -409,4 +391,90 @@ fn test_hibernate_feature_gate() {
     thread::sleep(cluster.cfg.raft_store.raft_heartbeat_interval() * 2);
     // Leader can go to sleep as version requirement is met.
     assert!(!awakened.load(Ordering::SeqCst));
+}
+
+/// Tests when leader is demoted in a hibernated region, the region can recover automatically.
+#[test]
+fn test_leader_demoted_when_hibernated() {
+    let mut cluster = new_node_cluster(0, 4);
+    configure_for_hibernate(&mut cluster);
+    cluster.pd_client.disable_default_operator();
+    let r = cluster.run_conf_change();
+    cluster.pd_client.must_add_peer(r, new_peer(2, 2));
+    cluster.pd_client.must_add_peer(r, new_peer(3, 3));
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    cluster.must_transfer_leader(r, new_peer(1, 1));
+    // Demote a follower to learner.
+    cluster.pd_client.must_joint_confchange(
+        r,
+        vec![
+            (ConfChangeType::AddLearnerNode, new_learner_peer(3, 3)),
+            (ConfChangeType::AddLearnerNode, new_learner_peer(4, 4)),
+        ],
+    );
+    // So leader will not commit the demote request.
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(r, 1)
+            .msg_type(MessageType::MsgAppendResponse)
+            .direction(Direction::Recv),
+    ));
+
+    // So only peer 3 can become leader.
+    for id in 1..=2 {
+        cluster.add_send_filter(CloneFilterFactory(
+            RegionPacketFilter::new(r, id)
+                .msg_type(MessageType::MsgRequestPreVote)
+                .direction(Direction::Send),
+        ));
+    }
+    // Leave joint.
+    cluster.async_exit_joint(r).unwrap();
+    // Ensure peer 3 can campaign.
+    cluster.wait_last_index(r, 3, 11, Duration::from_secs(5));
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(r, 1)
+            .msg_type(MessageType::MsgHeartbeat)
+            .direction(Direction::Send),
+    ));
+    // Wait some time to ensure the request has been delivered.
+    thread::sleep(Duration::from_millis(100));
+    // Peer 4 should start campaign.
+    let timer = Instant::now();
+    loop {
+        cluster.reset_leader_of_region(r);
+        let cur_leader = cluster.leader_of_region(r);
+        if let Some(ref cur_leader) = cur_leader {
+            if cur_leader.get_id() == 3 && cur_leader.get_store_id() == 3 {
+                break;
+            }
+        }
+        if timer.elapsed() > Duration::from_secs(5) {
+            panic!("peer 4 is still not leader after 5 seconds.");
+        }
+        let region = cluster.get_region(b"k1");
+        let mut request = new_request(
+            region.get_id(),
+            region.get_region_epoch().clone(),
+            vec![new_put_cf_cmd("default", b"k1", b"v1")],
+            false,
+        );
+        request.mut_header().set_peer(new_peer(3, 3));
+        // In case peer 4 is hibernated.
+        let (cb, _rx) = make_cb(&request);
+        cluster
+            .sim
+            .rl()
+            .async_command_on_node(3, request, cb)
+            .unwrap();
+    }
+
+    cluster.clear_send_filters();
+    // If there is no leader in the region, the cluster can't write two kvs successfully.
+    // The first one is possible to succeed if it's committed with the conf change at the
+    // same time, but the second one can't be committed or accepted because conf change
+    // should be applied and the leader should be demoted as learner.
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k2", b"v2");
 }

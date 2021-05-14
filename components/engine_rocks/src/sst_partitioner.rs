@@ -32,7 +32,7 @@ pub struct RocksSstPartitioner<P: engine_traits::SstPartitioner>(P);
 
 impl<P: engine_traits::SstPartitioner> rocksdb::SstPartitioner for RocksSstPartitioner<P> {
     fn should_partition(
-        &self,
+        &mut self,
         request: &rocksdb::SstPartitionerRequest,
     ) -> rocksdb::SstPartitionerResult {
         let req = engine_traits::SstPartitionerRequest {
@@ -50,7 +50,7 @@ impl<P: engine_traits::SstPartitioner> rocksdb::SstPartitioner for RocksSstParti
         }
     }
 
-    fn can_do_trivial_move(&self, smallest_key: &[u8], largest_key: &[u8]) -> bool {
+    fn can_do_trivial_move(&mut self, smallest_key: &[u8], largest_key: &[u8]) -> bool {
         self.0.can_do_trivial_move(smallest_key, largest_key)
     }
 }

@@ -16,7 +16,8 @@ use engine_traits::KvEngine;
 use keys::{data_end_key, data_key};
 use kvproto::metapb::Region;
 use raft::StateRole;
-use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler, Worker};
+use tikv_util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer, Scheduler, Worker};
+use tikv_util::{box_err, debug, info, warn};
 
 /// `RegionInfoAccessor` is used to collect all regions' information on this TiKV into a collection
 /// so that other parts of TiKV can get region information from it. It registers a observer to
@@ -218,10 +219,11 @@ impl RegionCollector {
 
             // Insert new entry to `region_ranges`.
             let end_key = data_end_key(region.get_end_key());
-            assert!(self
-                .region_ranges
-                .insert(end_key, region.get_id())
-                .is_none());
+            assert!(
+                self.region_ranges
+                    .insert(end_key, region.get_id())
+                    .is_none()
+            );
         }
 
         // If the region already exists, update it and keep the original role.
@@ -490,6 +492,12 @@ impl RunnableWithTimer for RegionCollector {
 /// `RegionInfoAccessor` keeps all region information separately from raftstore itself.
 #[derive(Clone)]
 pub struct RegionInfoAccessor {
+    // We use a dedicated worker for region info accessor. If we later want to share a worker with
+    // other tasks, we must make sure the other tasks don't block on flush or compaction, which
+    // may cause a deadlock between the flush or compaction task, and the region info accessor task
+    // fired by compaction guard from the RocksDB compaction thread.
+    // https://github.com/tikv/tikv/issues/9044
+    worker: Worker,
     scheduler: Scheduler<RegionInfoQuery>,
 }
 
@@ -497,16 +505,18 @@ impl RegionInfoAccessor {
     /// Creates a new `RegionInfoAccessor` and register to `host`.
     /// `RegionInfoAccessor` doesn't need, and should not be created more than once. If it's needed
     /// in different places, just clone it, and their contents are shared.
-    pub fn new(host: &mut CoprocessorHost<impl KvEngine>, worker: &Worker) -> Self {
+    pub fn new(host: &mut CoprocessorHost<impl KvEngine>) -> Self {
+        let worker = WorkerBuilder::new("region-collector-worker").create();
         let scheduler = worker.start_with_timer("region-collector-worker", RegionCollector::new());
         register_region_event_listener(host, scheduler.clone());
 
-        Self { scheduler }
+        Self { worker, scheduler }
     }
 
     /// Stops the `RegionInfoAccessor`. It should be stopped after raftstore.
     pub fn stop(&self) {
         self.scheduler.stop();
+        self.worker.stop();
     }
 
     /// Gets all content from the collection. Only used for testing.
@@ -519,7 +529,7 @@ impl RegionInfoAccessor {
     }
 }
 
-pub trait RegionInfoProvider: Send + Clone + 'static {
+pub trait RegionInfoProvider: Send + Sync {
     /// Get a iterator of regions that contains `from` or have keys larger than `from`, and invoke
     /// the callback to process the result.
     fn seek_region(&self, _from: &[u8], _callback: SeekRegionCallback) -> Result<()> {
@@ -737,10 +747,11 @@ mod tests {
         // to `region_id`, it shouldn't be removed since it was used by another region.
         if let Some(old_end_key) = old_end_key {
             if old_end_key.as_slice() != region.get_end_key() {
-                assert!(c
-                    .region_ranges
-                    .get(&data_end_key(&old_end_key))
-                    .map_or(true, |id| *id != region.get_id()));
+                assert!(
+                    c.region_ranges
+                        .get(&data_end_key(&old_end_key))
+                        .map_or(true, |id| *id != region.get_id())
+                );
             }
         }
     }
@@ -755,10 +766,11 @@ mod tests {
         // If the region_id corresponding to the end_key doesn't equals to `id`, it shouldn't be
         // removed since it was used by another region.
         if let Some(end_key) = end_key {
-            assert!(c
-                .region_ranges
-                .get(&data_end_key(&end_key))
-                .map_or(true, |r| *r != id));
+            assert!(
+                c.region_ranges
+                    .get(&data_end_key(&end_key))
+                    .map_or(true, |r| *r != id)
+            );
         }
     }
 

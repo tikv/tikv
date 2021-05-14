@@ -4,10 +4,12 @@
 #[macro_use]
 mod macros;
 pub(crate) mod acquire_pessimistic_lock;
+pub(crate) mod atomic_store;
 pub(crate) mod check_secondary_locks;
 pub(crate) mod check_txn_status;
 pub(crate) mod cleanup;
 pub(crate) mod commit;
+pub(crate) mod compare_and_swap;
 pub(crate) mod mvcc_by_key;
 pub(crate) mod mvcc_by_start_ts;
 pub(crate) mod pause;
@@ -17,46 +19,45 @@ pub(crate) mod resolve_lock;
 pub(crate) mod resolve_lock_lite;
 pub(crate) mod resolve_lock_readphase;
 pub(crate) mod rollback;
-pub(crate) mod scan_lock;
 pub(crate) mod txn_heart_beat;
 
 pub use acquire_pessimistic_lock::AcquirePessimisticLock;
+pub use atomic_store::RawAtomicStore;
 pub use check_secondary_locks::CheckSecondaryLocks;
 pub use check_txn_status::CheckTxnStatus;
 pub use cleanup::Cleanup;
 pub use commit::Commit;
+pub use compare_and_swap::RawCompareAndSwap;
 pub use mvcc_by_key::MvccByKey;
 pub use mvcc_by_start_ts::MvccByStartTs;
 pub use pause::Pause;
 pub use pessimistic_rollback::PessimisticRollback;
-pub use prewrite::{Prewrite, PrewritePessimistic};
+pub use prewrite::{one_pc_commit_ts, Prewrite, PrewritePessimistic};
 pub use resolve_lock::ResolveLock;
 pub use resolve_lock_lite::ResolveLockLite;
 pub use resolve_lock_readphase::ResolveLockReadPhase;
 pub use rollback::Rollback;
-pub use scan_lock::ScanLock;
 pub use txn_heart_beat::TxnHeartBeat;
 
 pub use resolve_lock::RESOLVE_LOCK_BATCH_SIZE;
 
 use std::fmt::{self, Debug, Display, Formatter};
-use std::iter::{self, FromIterator};
+use std::iter;
 use std::marker::PhantomData;
 
 use kvproto::kvrpcpb::*;
-use txn_types::{Key, TimeStamp, Value, Write};
+use txn_types::{Key, OldValues, TimeStamp, Value, Write};
 
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::{self, LockManager, WaitTimeout};
 use crate::storage::mvcc::{Lock as MvccLock, MvccReader, ReleasedLock};
-use crate::storage::txn::latch::{self, Latches};
+use crate::storage::txn::latch;
 use crate::storage::txn::{ProcessResult, Result};
 use crate::storage::types::{
     MvccInfo, PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallbackType,
     TxnStatus,
 };
 use crate::storage::{metrics, Result as StorageResult, Snapshot, Statistics};
-use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 
 /// Store Transaction scheduler commands.
@@ -77,13 +78,14 @@ pub enum Command {
     TxnHeartBeat(TxnHeartBeat),
     CheckTxnStatus(CheckTxnStatus),
     CheckSecondaryLocks(CheckSecondaryLocks),
-    ScanLock(ScanLock),
     ResolveLockReadPhase(ResolveLockReadPhase),
     ResolveLock(ResolveLock),
     ResolveLockLite(ResolveLockLite),
     Pause(Pause),
     MvccByKey(MvccByKey),
     MvccByStartTs(MvccByStartTs),
+    RawCompareAndSwap(RawCompareAndSwap),
+    RawAtomicStore(RawAtomicStore),
 }
 
 /// A `Command` with its return type, reified as the generic parameter `T`.
@@ -200,6 +202,7 @@ impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLock
             WaitTimeout::from_encoded(req.get_wait_timeout()),
             req.get_return_values(),
             req.get_min_commit_ts().into(),
+            OldValues::default(),
             req.take_context(),
         )
     }
@@ -288,23 +291,6 @@ impl From<CheckSecondaryLocksRequest> for TypedCommand<SecondaryLocksStatus> {
     }
 }
 
-impl From<ScanLockRequest> for TypedCommand<Vec<LockInfo>> {
-    fn from(mut req: ScanLockRequest) -> Self {
-        let start_key = if req.get_start_key().is_empty() {
-            None
-        } else {
-            Some(Key::from_raw(req.get_start_key()))
-        };
-
-        ScanLock::new(
-            req.get_max_version().into(),
-            start_key,
-            req.get_limit() as usize,
-            req.take_context(),
-        )
-    }
-}
-
 impl From<ResolveLockRequest> for TypedCommand<()> {
     fn from(mut req: ResolveLockRequest) -> Self {
         let resolve_keys: Vec<Key> = req
@@ -313,16 +299,16 @@ impl From<ResolveLockRequest> for TypedCommand<()> {
             .map(|key| Key::from_raw(key))
             .collect();
         let txn_status = if req.get_start_version() > 0 {
-            HashMap::from_iter(iter::once((
+            iter::once((
                 req.get_start_version().into(),
                 req.get_commit_version().into(),
-            )))
+            ))
+            .collect()
         } else {
-            HashMap::from_iter(
-                req.take_txn_infos()
-                    .into_iter()
-                    .map(|info| (info.txn.into(), info.status.into())),
-            )
+            req.take_txn_infos()
+                .into_iter()
+                .map(|info| (info.txn.into(), info.status.into()))
+                .collect()
         };
 
         if resolve_keys.is_empty() {
@@ -378,10 +364,36 @@ pub struct WriteResult {
     pub to_be_write: WriteData,
     pub rows: usize,
     pub pr: ProcessResult,
-    // (lock, is_first_lock, wait_timeout)
-    pub lock_info: Option<(lock_manager::Lock, bool, Option<WaitTimeout>)>,
+    pub lock_info: Option<WriteResultLockInfo>,
     pub lock_guards: Vec<KeyHandleGuard>,
     pub response_policy: ResponsePolicy,
+}
+
+pub struct WriteResultLockInfo {
+    pub lock: lock_manager::Lock,
+    pub key: Vec<u8>,
+    pub is_first_lock: bool,
+    pub wait_timeout: Option<WaitTimeout>,
+}
+
+impl WriteResultLockInfo {
+    pub fn from_lock_info_pb(
+        lock_info: &LockInfo,
+        is_first_lock: bool,
+        wait_timeout: Option<WaitTimeout>,
+    ) -> Self {
+        let lock = lock_manager::Lock {
+            ts: lock_info.get_lock_version().into(),
+            hash: Key::from_raw(lock_info.get_key()).gen_hash(),
+        };
+        let key = lock_info.get_key().to_owned();
+        Self {
+            lock,
+            key,
+            is_first_lock,
+            wait_timeout,
+        }
+    }
 }
 
 impl ReleasedLocks {
@@ -430,8 +442,11 @@ fn find_mvcc_infos_by_key<S: Snapshot>(
         let opt = reader.seek_write(key, ts)?;
         match opt {
             Some((commit_ts, write)) => {
-                ts = commit_ts.prev();
                 writes.push((commit_ts, write));
+                if commit_ts.is_zero() {
+                    break;
+                }
+                ts = commit_ts.prev();
             }
             None => break,
         };
@@ -469,7 +484,7 @@ pub trait CommandExt: Display {
 
     fn write_bytes(&self) -> usize;
 
-    fn gen_lock(&self, _latches: &Latches) -> latch::Lock;
+    fn gen_lock(&self) -> latch::Lock;
 }
 
 pub struct WriteContext<'a, L: LockManager> {
@@ -495,13 +510,14 @@ impl Command {
             Command::TxnHeartBeat(t) => t,
             Command::CheckTxnStatus(t) => t,
             Command::CheckSecondaryLocks(t) => t,
-            Command::ScanLock(t) => t,
             Command::ResolveLockReadPhase(t) => t,
             Command::ResolveLock(t) => t,
             Command::ResolveLockLite(t) => t,
             Command::Pause(t) => t,
             Command::MvccByKey(t) => t,
             Command::MvccByStartTs(t) => t,
+            Command::RawCompareAndSwap(t) => t,
+            Command::RawAtomicStore(t) => t,
         }
     }
 
@@ -517,13 +533,14 @@ impl Command {
             Command::TxnHeartBeat(t) => t,
             Command::CheckTxnStatus(t) => t,
             Command::CheckSecondaryLocks(t) => t,
-            Command::ScanLock(t) => t,
             Command::ResolveLockReadPhase(t) => t,
             Command::ResolveLock(t) => t,
             Command::ResolveLockLite(t) => t,
             Command::Pause(t) => t,
             Command::MvccByKey(t) => t,
             Command::MvccByStartTs(t) => t,
+            Command::RawCompareAndSwap(t) => t,
+            Command::RawAtomicStore(t) => t,
         }
     }
 
@@ -533,7 +550,6 @@ impl Command {
         statistics: &mut Statistics,
     ) -> Result<ProcessResult> {
         match self {
-            Command::ScanLock(t) => t.process_read(snapshot, statistics),
             Command::ResolveLockReadPhase(t) => t.process_read(snapshot, statistics),
             Command::MvccByKey(t) => t.process_read(snapshot, statistics),
             Command::MvccByStartTs(t) => t.process_read(snapshot, statistics),
@@ -560,6 +576,8 @@ impl Command {
             Command::CheckTxnStatus(t) => t.process_write(snapshot, context),
             Command::CheckSecondaryLocks(t) => t.process_write(snapshot, context),
             Command::Pause(t) => t.process_write(snapshot, context),
+            Command::RawCompareAndSwap(t) => t.process_write(snapshot, context),
+            Command::RawAtomicStore(t) => t.process_write(snapshot, context),
             _ => panic!("unsupported write command"),
         }
     }
@@ -595,8 +613,8 @@ impl Command {
         self.command_ext().write_bytes()
     }
 
-    pub fn gen_lock(&self, latches: &Latches) -> latch::Lock {
-        self.command_ext().gen_lock(latches)
+    pub fn gen_lock(&self) -> latch::Lock {
+        self.command_ext().gen_lock()
     }
 
     pub fn can_be_pipelined(&self) -> bool {
@@ -674,7 +692,9 @@ pub mod test_util {
             _ => unreachable!(),
         };
         let ctx = Context::default();
-        engine.write(&ctx, ret.to_be_write).unwrap();
+        if !ret.to_be_write.modifies.is_empty() {
+            engine.write(&ctx, ret.to_be_write).unwrap();
+        }
         Ok(res)
     }
 
@@ -720,7 +740,7 @@ pub mod test_util {
         prewrite_command(engine, cm, statistics, cmd)
     }
 
-    pub fn pessimsitic_prewrite<E: Engine>(
+    pub fn pessimistic_prewrite<E: Engine>(
         engine: &E,
         statistics: &mut Statistics,
         mutations: Vec<(Mutation, bool)>,
@@ -730,7 +750,7 @@ pub mod test_util {
         one_pc_max_commit_ts: Option<u64>,
     ) -> Result<PrewriteResult> {
         let cm = ConcurrencyManager::new(start_ts.into());
-        pessimsitic_prewrite_with_cm(
+        pessimistic_prewrite_with_cm(
             engine,
             cm,
             statistics,
@@ -742,7 +762,7 @@ pub mod test_util {
         )
     }
 
-    pub fn pessimsitic_prewrite_with_cm<E: Engine>(
+    pub fn pessimistic_prewrite_with_cm<E: Engine>(
         engine: &E,
         cm: ConcurrencyManager,
         statistics: &mut Statistics,

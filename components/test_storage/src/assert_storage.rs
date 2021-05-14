@@ -35,7 +35,7 @@ impl AssertionStorage<SimulateEngine> {
         key: &str,
     ) -> (Cluster<ServerCluster>, Self) {
         let (cluster, store, ctx) = new_raft_storage_with_store_count(count, key);
-        let storage = Self { ctx, store };
+        let storage = Self { store, ctx };
         (cluster, storage)
     }
 
@@ -82,7 +82,7 @@ impl AssertionStorage<SimulateEngine> {
         let ts = ts.into();
         for _ in 0..3 {
             let res = self.store.get(self.ctx.clone(), &Key::from_raw(key), ts);
-            if let Ok((data, _, _)) = res {
+            if let Ok((data, ..)) = res {
                 return data;
             }
             self.expect_not_leader_or_stale_command(res.unwrap_err());
@@ -239,7 +239,7 @@ impl<E: Engine> AssertionStorage<E> {
             .batch_get_command(self.ctx.clone(), &keys, ts)
             .unwrap()
             .into_iter()
-            .map(|(x, _, _)| x)
+            .map(|(x, ..)| x)
             .collect();
         let expect: Vec<Option<Vec<u8>>> = expect
             .into_iter()
@@ -572,15 +572,16 @@ impl<E: Engine> AssertionStorage<E> {
         start_ts: impl Into<TimeStamp>,
         current_ts: impl Into<TimeStamp>,
     ) {
-        assert!(self
-            .store
-            .cleanup(
-                self.ctx.clone(),
-                Key::from_raw(key),
-                start_ts.into(),
-                current_ts.into()
-            )
-            .is_err());
+        assert!(
+            self.store
+                .cleanup(
+                    self.ctx.clone(),
+                    Key::from_raw(key),
+                    start_ts.into(),
+                    current_ts.into()
+                )
+                .is_err()
+        );
     }
 
     pub fn rollback_ok(&self, keys: Vec<&[u8]>, start_ts: impl Into<TimeStamp>) {
@@ -592,16 +593,18 @@ impl<E: Engine> AssertionStorage<E> {
 
     pub fn rollback_err(&self, keys: Vec<&[u8]>, start_ts: impl Into<TimeStamp>) {
         let keys: Vec<Key> = keys.iter().map(|x| Key::from_raw(x)).collect();
-        assert!(self
-            .store
-            .rollback(self.ctx.clone(), keys, start_ts.into())
-            .is_err());
+        assert!(
+            self.store
+                .rollback(self.ctx.clone(), keys, start_ts.into())
+                .is_err()
+        );
     }
 
     pub fn scan_locks_ok(
         &self,
         max_ts: impl Into<TimeStamp>,
         start_key: &[u8],
+        end_key: &[u8],
         limit: usize,
         expect: Vec<LockInfo>,
     ) {
@@ -610,10 +613,15 @@ impl<E: Engine> AssertionStorage<E> {
         } else {
             Some(Key::from_raw(&start_key))
         };
+        let end_key = if end_key.is_empty() {
+            None
+        } else {
+            Some(Key::from_raw(&end_key))
+        };
 
         assert_eq!(
             self.store
-                .scan_locks(self.ctx.clone(), max_ts.into(), start_key, limit)
+                .scan_locks(self.ctx.clone(), max_ts.into(), start_key, end_key, limit)
                 .unwrap(),
             expect
         );

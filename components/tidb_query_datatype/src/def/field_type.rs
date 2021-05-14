@@ -154,6 +154,9 @@ bitflags! {
 
         /// Internal: Used for telling boolean literal from integer.
         const IS_BOOLEAN = 1 << 19;
+
+        /// Internal: Used for inferring enum eval type.
+        const ENUM_SET_AS_INT = 1 << 21;
     }
 }
 
@@ -279,6 +282,16 @@ pub trait FieldTypeAccessor {
     #[inline]
     fn is_bool(&self) -> bool {
         self.flag().contains(FieldTypeFlag::IS_BOOLEAN)
+    }
+
+    #[inline]
+    fn need_restored_data(&self) -> bool {
+        self.is_non_binary_string_like()
+            && (!self
+                .collation()
+                .map(|col| col == Collation::Utf8Mb4Bin)
+                .unwrap_or(false)
+                || self.is_varchar_like())
     }
 }
 

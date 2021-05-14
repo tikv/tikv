@@ -2,13 +2,14 @@
 
 use kvproto::metapb::Region;
 use pd_client::{Feature, FeatureGate};
+use serde_derive::{Deserialize, Serialize};
 
 /// Because negotiation protocol can't be recognized by old version of binaries,
 /// so enabling it directly can cause a lot of connection reset.
 const NEGOTIATION_HIBERNATE: Feature = Feature::require(5, 0, 0);
 
 /// Represents state of the group.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize)]
 pub enum GroupState {
     /// The group is working generally, leader keeps
     /// replicating data to followers.

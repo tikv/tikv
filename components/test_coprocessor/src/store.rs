@@ -52,8 +52,7 @@ impl<'a, E: Engine> Insert<'a, E> {
         let ids: Vec<_> = self.values.keys().cloned().collect();
         let values: Vec<_> = self.values.values().cloned().collect();
         let value = table::encode_row(&mut EvalContext::default(), values, &ids).unwrap();
-        let mut kvs = vec![];
-        kvs.push((key, value));
+        let mut kvs = vec![(key, value)];
         for (&id, idxs) in &self.table.idxs {
             let mut v: Vec<_> = idxs.iter().map(|id| self.values[id].clone()).collect();
             v.push(handle.clone());
@@ -89,8 +88,7 @@ impl<'a, E: Engine> Delete<'a, E> {
             .zip(row)
             .collect();
         let key = table::encode_row_key(self.table.id, id);
-        let mut keys = vec![];
-        keys.push(key);
+        let mut keys = vec![key];
         for (&idx_id, idx_cols) in &self.table.idxs {
             let mut v: Vec<_> = idx_cols.iter().map(|id| values[id].clone()).collect();
             v.push(Datum::I64(id));

@@ -18,12 +18,6 @@
 
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
-#[macro_use]
-extern crate tikv_util;
-#[macro_use]
-extern crate serde_derive;
-#[macro_use(fail_point)]
-extern crate fail;
 
 #[cfg(test)]
 extern crate test;
@@ -60,6 +54,10 @@ mod write_batch;
 pub use crate::write_batch::*;
 pub mod mvcc_properties;
 pub use crate::mvcc_properties::*;
+pub mod perf_context;
+pub use crate::perf_context::*;
+mod perf_context_impl;
+mod perf_context_metrics;
 
 mod engine_iterator;
 pub use crate::engine_iterator::*;
@@ -88,7 +86,13 @@ pub use event_listener::*;
 
 pub mod config;
 pub use config::*;
+
+pub mod ttl_properties;
+pub use ttl_properties::*;
+
 pub mod encryption;
+
+pub mod file_system;
 
 mod raft_engine;
 

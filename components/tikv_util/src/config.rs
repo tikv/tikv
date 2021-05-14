@@ -13,35 +13,24 @@ use std::time::Duration;
 
 use serde::de::{self, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use thiserror::Error;
 
 use super::time::Instant;
 use crate::slow_log;
 use configuration::ConfigValue;
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum ConfigError {
-        Limit(msg: String) {
-            description(msg)
-            display("{}", msg)
-        }
-        Address(msg: String) {
-            description(msg)
-            display("config address error: {}", msg)
-        }
-        StoreLabels(msg: String) {
-            description(msg)
-            display("store label error: {}", msg)
-        }
-        Value(msg: String) {
-            description(msg)
-            display("config value error: {}", msg)
-        }
-        FileSystem(msg: String) {
-            description(msg)
-            display("config fs: {}", msg)
-        }
-    }
+#[derive(Debug, Error)]
+pub enum ConfigError {
+    #[error("{0}")]
+    Limit(String),
+    #[error("config address error: {0}")]
+    Address(String),
+    #[error("store label error: {0}")]
+    StoreLabels(String),
+    #[error("config value error: {0}")]
+    Value(String),
+    #[error("config fs: {0}")]
+    FileSystem(String),
 }
 
 const UNIT: u64 = 1;
@@ -79,12 +68,12 @@ impl From<ReadableSize> for ConfigValue {
     }
 }
 
-impl Into<ReadableSize> for ConfigValue {
-    fn into(self) -> ReadableSize {
-        if let ConfigValue::Size(s) = self {
+impl From<ConfigValue> for ReadableSize {
+    fn from(c: ConfigValue) -> ReadableSize {
+        if let ConfigValue::Size(s) = c {
             ReadableSize(s)
         } else {
-            panic!("expect: ConfigValue::Size, got: {:?}", self);
+            panic!("expect: ConfigValue::Size, got: {:?}", c);
         }
     }
 }
@@ -103,9 +92,9 @@ impl From<Option<ReadableSize>> for OptionReadableSize {
     }
 }
 
-impl Into<Option<ReadableSize>> for OptionReadableSize {
-    fn into(self) -> Option<ReadableSize> {
-        self.0
+impl From<OptionReadableSize> for Option<ReadableSize> {
+    fn from(s: OptionReadableSize) -> Option<ReadableSize> {
+        s.0
     }
 }
 
@@ -115,12 +104,12 @@ impl From<OptionReadableSize> for ConfigValue {
     }
 }
 
-impl Into<OptionReadableSize> for ConfigValue {
-    fn into(self) -> OptionReadableSize {
-        if let ConfigValue::OptionSize(s) = self {
+impl From<ConfigValue> for OptionReadableSize {
+    fn from(s: ConfigValue) -> OptionReadableSize {
+        if let ConfigValue::OptionSize(s) = s {
             OptionReadableSize(s.map(ReadableSize))
         } else {
-            panic!("expect: ConfigValue::OptionSize, got: {:?}", self);
+            panic!("expect: ConfigValue::OptionSize, got: {:?}", s);
         }
     }
 }
@@ -297,12 +286,12 @@ impl From<ReadableDuration> for ConfigValue {
     }
 }
 
-impl Into<ReadableDuration> for ConfigValue {
-    fn into(self) -> ReadableDuration {
-        if let ConfigValue::Duration(d) = self {
+impl From<ConfigValue> for ReadableDuration {
+    fn from(d: ConfigValue) -> ReadableDuration {
+        if let ConfigValue::Duration(d) = d {
             ReadableDuration(Duration::from_millis(d))
         } else {
-            panic!("expect: ConfigValue::Duration, got: {:?}", self);
+            panic!("expect: ConfigValue::Duration, got: {:?}", d);
         }
     }
 }
@@ -468,17 +457,98 @@ impl<'de> Deserialize<'de> for ReadableDuration {
     }
 }
 
+fn canonicalize_fallback<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
+    fn normalize(path: &Path) -> PathBuf {
+        use std::path::Component;
+        let mut components = path.components().peekable();
+        let mut ret = PathBuf::new();
+
+        while let Some(c @ (Component::Prefix(..) | Component::RootDir)) =
+            components.peek().cloned()
+        {
+            components.next();
+            ret.push(c.as_os_str());
+        }
+
+        for component in components {
+            match component {
+                Component::Prefix(..) | Component::RootDir => unreachable!(),
+                Component::CurDir => {}
+                c @ Component::ParentDir => {
+                    if !ret.pop() {
+                        ret.push(c.as_os_str());
+                    }
+                }
+                Component::Normal(c) => ret.push(c),
+            }
+        }
+        ret
+    }
+    fn try_canonicalize_normalized_path(path: &Path) -> std::io::Result<PathBuf> {
+        use std::path::Component;
+        let mut components = path.components().peekable();
+        let mut should_canonicalize = true;
+        let mut ret = if path.is_relative() {
+            Path::new(".").canonicalize()?
+        } else {
+            PathBuf::new()
+        };
+
+        while let Some(c @ (Component::Prefix(..) | Component::RootDir)) =
+            components.peek().cloned()
+        {
+            components.next();
+            ret.push(c.as_os_str());
+        }
+        // normalize() will only preserve leading ParentDir.
+        while let Some(Component::ParentDir) = components.peek().cloned() {
+            components.next();
+            ret.pop();
+        }
+
+        for component in components {
+            match component {
+                Component::Normal(c) => {
+                    ret.push(c);
+                    // We try to canonicalize a longest path based on fs info.
+                    if should_canonicalize {
+                        match ret.as_path().canonicalize() {
+                            Ok(path) => {
+                                ret = path;
+                            }
+                            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                                should_canonicalize = false;
+                            }
+                            other => return other,
+                        }
+                    }
+                }
+                Component::Prefix(..)
+                | Component::RootDir
+                | Component::ParentDir
+                | Component::CurDir => unreachable!(),
+            }
+        }
+        Ok(ret)
+    }
+    try_canonicalize_normalized_path(&normalize(path.as_ref()))
+}
+
+/// Normalizes the path and canonicalizes its longest physically existing sub-path.
+fn canonicalize_imp<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
+    match path.as_ref().canonicalize() {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => canonicalize_fallback(path),
+        other => other,
+    }
+}
+
 pub fn canonicalize_path(path: &str) -> Result<String, Box<dyn Error>> {
     canonicalize_sub_path(path, "")
 }
 
 pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<dyn Error>> {
     let path = Path::new(path);
-    let mut path = match path.canonicalize() {
-        Ok(path) => path,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => PathBuf::from(path),
-        Err(e) => return Err(Box::new(e) as Box<dyn Error>),
-    };
+    let mut path = canonicalize_imp(path)?;
     if !sub_path.is_empty() {
         path = path.join(Path::new(sub_path));
     }
@@ -489,7 +559,7 @@ pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<d
 }
 
 pub fn canonicalize_log_dir(path: &str, filename: &str) -> Result<String, Box<dyn Error>> {
-    let mut path = Path::new(path).canonicalize()?;
+    let mut path = canonicalize_imp(Path::new(path))?;
     if path.is_file() {
         return Ok(format!("{}", path.display()));
     }
@@ -644,6 +714,8 @@ mod check_data_dir {
     use std::fs;
     use std::path::Path;
     use std::sync::Mutex;
+
+    use lazy_static::lazy_static;
 
     use super::{canonicalize_path, ConfigError};
 
@@ -1108,7 +1180,7 @@ impl TomlLine {
 
 /// TomlWriter use to update the config file and only cover the most commom toml
 /// format that used by tikv config file, toml format like: quoted keys, multi-line
-/// value, inline table, etc, are not supported, see https://github.com/toml-lang/toml
+/// value, inline table, etc, are not supported, see <https://github.com/toml-lang/toml>
 /// for more detail.
 pub struct TomlWriter {
     dst: Vec<u8>,
@@ -1362,15 +1434,51 @@ mod tests {
             tmp_dir.canonicalize().unwrap().join("test1.dump")
         );
 
-        let path2 = format!("{}", tmp_dir.to_path_buf().join("test2").display());
-        assert!(canonicalize_path(&path2).is_ok());
-        ensure_dir_exist(&path2).unwrap();
-        let res_path2 = canonicalize_path(&path2).unwrap();
-        assert_eq!(
-            Path::new(&res_path2),
-            Path::new(&path2).canonicalize().unwrap()
-        );
+        let cases = vec![".", "/../../", "./../"];
+        for case in &cases {
+            assert_eq!(
+                Path::new(&canonicalize_fallback(case).unwrap()),
+                Path::new(case).canonicalize().unwrap(),
+            );
+        }
 
+        // canonicalize a path containing symlink and non-existing nodes
+        ensure_dir_exist(&format!("{}", tmp_dir.to_path_buf().join("dir").display())).unwrap();
+        let mut nodes = vec!["non_existing", "dir"];
+        #[cfg(target_os = "linux")]
+        {
+            std::os::unix::fs::symlink(
+                &tmp_dir.to_path_buf().join("dir"),
+                &tmp_dir.to_path_buf().join("symlink"),
+            )
+            .unwrap();
+            nodes.push("symlink");
+        }
+        for first in &nodes {
+            for second in &nodes {
+                let path = format!(
+                    "{}/{}/../{}/non_existing",
+                    tmp_dir.to_str().unwrap(),
+                    first,
+                    second
+                );
+                let res_path = canonicalize_path(&path).unwrap();
+                // resolve to second/non_existing
+                if *second == "non_existing" {
+                    assert_eq!(
+                        Path::new(&res_path),
+                        tmp_dir.to_path_buf().join("non_existing/non_existing")
+                    );
+                } else {
+                    assert_eq!(
+                        Path::new(&res_path),
+                        tmp_dir.to_path_buf().join("dir/non_existing")
+                    );
+                }
+            }
+        }
+
+        // canonicalize a file
         let path2 = format!("{}", tmp_dir.to_path_buf().join("test2.dump").display());
         {
             File::create(&path2).unwrap();

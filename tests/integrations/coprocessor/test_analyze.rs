@@ -73,6 +73,21 @@ fn new_analyze_index_req(
     )
 }
 
+fn new_analyze_sampling_req(table: &Table, sample_size: i64) -> Request {
+    let mut col_req = AnalyzeColumnsReq::default();
+    col_req.set_columns_info(table.columns_info().into());
+    col_req.set_sample_size(sample_size);
+    let mut analy_req = AnalyzeReq::default();
+    analy_req.set_tp(AnalyzeType::TypeColumn);
+    analy_req.set_tp(AnalyzeType::TypeFullSampling);
+    analy_req.set_col_req(col_req);
+    new_analyze_req(
+        analy_req.write_to_bytes().unwrap(),
+        table.get_record_range_all(),
+        next_id() as u64,
+    )
+}
+
 #[test]
 fn test_analyze_column_with_lock() {
     let data = vec![
@@ -222,6 +237,10 @@ fn test_analyze_index() {
     let hist = analyze_resp.get_hist();
     assert_eq!(hist.get_ndv(), 6);
     assert_eq!(hist.get_buckets().len(), 2);
+    assert_eq!(hist.get_buckets()[0].get_count(), 5);
+    assert_eq!(hist.get_buckets()[0].get_ndv(), 3);
+    assert_eq!(hist.get_buckets()[1].get_count(), 9);
+    assert_eq!(hist.get_buckets()[1].get_ndv(), 3);
     let rows = analyze_resp.get_cms().get_rows();
     assert_eq!(rows.len(), 4);
     let sum: u32 = rows.first().unwrap().get_counters().iter().sum();
@@ -233,6 +252,36 @@ fn test_analyze_index() {
         .collect::<Vec<_>>();
     top_n_count.sort_unstable();
     assert_eq!(top_n_count, vec![2, 3]);
+}
+
+#[test]
+fn test_analyze_sampling() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, None, 4),
+        (6, Some("name:1"), 1),
+        (7, Some("name:1"), 1),
+        (8, Some("name:1"), 1),
+        (9, Some("name:2"), 1),
+        (10, Some("name:2"), 1),
+    ];
+
+    let product = ProductTable::new();
+    let (_, endpoint) = init_data_with_commit(&product, &data, true);
+
+    let req = new_analyze_sampling_req(&product, 5);
+    let resp = handle_request(&endpoint, req);
+    assert!(!resp.get_data().is_empty());
+    let mut analyze_resp = AnalyzeColumnsResp::default();
+    analyze_resp.merge_from_bytes(resp.get_data()).unwrap();
+    let collector = analyze_resp.get_row_collector();
+    assert_eq!(collector.get_samples().len(), 5);
+    assert_eq!(collector.get_null_counts(), vec![0, 1, 0]);
+    assert_eq!(collector.get_count(), 9);
+    assert_eq!(collector.get_fm_sketch().len(), 3);
+    assert_eq!(collector.get_total_size(), vec![81, 64, 18]);
 }
 
 #[test]

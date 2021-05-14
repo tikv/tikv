@@ -1,7 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use rusoto_core::request::HttpClient;
+use rusoto_credential::{ProvideAwsCredentials, StaticProvider};
 use std::io;
 use std::marker::PhantomData;
+use std::time::Duration;
 
 use futures_util::{
     future::FutureExt,
@@ -15,36 +18,46 @@ use rusoto_core::{
 };
 use rusoto_s3::{util::AddressingStyle, *};
 use rusoto_util::{new_client, new_http_client};
+use tokio::time::{delay_for, timeout};
 
-use super::{
-    util::{block_on_external_io, error_stream, retry, RetryError},
-    ExternalStorage,
-};
+use super::ExternalStorage;
 use kvproto::backup::S3 as Config;
+use tikv_util::stream::{block_on_external_io, error_stream, retry};
+
+const CONNECTION_TIMEOUT: Duration = Duration::from_secs(900);
 
 /// S3 compatible storage
 #[derive(Clone)]
 pub struct S3Storage {
     config: Config,
     client: S3Client,
-    // The current implementation (rosoto 0.43.0 + hyper 0.13.3) is not `Send`
-    // in practical. See more https://github.com/tikv/tikv/issues/7236.
-    // FIXME: remove it.
+    // This should be safe to remove now that we don't use the global client/dispatcher
+    // See https://github.com/tikv/tikv/issues/7236.
     _not_send: PhantomData<*const ()>,
 }
 
 impl S3Storage {
     /// Create a new S3 storage for the given config.
     pub fn new(config: &Config) -> io::Result<S3Storage> {
-        Self::with_request_dispatcher(config, new_http_client()?)
+        // Need to explicitly create a dispatcher
+        // See https://github.com/tikv/tikv/issues/7236.
+        let dispatcher = HttpClient::new()
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))?;
+        Self::with_request_dispatcher(&config, dispatcher)
     }
 
-    pub fn with_request_dispatcher<D>(config: &Config, dispatcher: D) -> io::Result<S3Storage>
+    fn new_creds_dispatcher<Creds, Dispatcher>(
+        config: &Config,
+        dispatcher: Dispatcher,
+        credentials_provider: Creds,
+    ) -> io::Result<S3Storage>
     where
-        D: DispatchSignedRequest + Send + Sync + 'static,
+        Creds: ProvideAwsCredentials + Send + Sync + 'static,
+        Dispatcher: DispatchSignedRequest + Send + Sync + 'static,
     {
         Self::check_config(config)?;
-        let mut client = new_client!(S3Client, config, dispatcher);
+        let region = rusoto_util::get_region(config.region.as_ref(), config.endpoint.as_ref())?;
+        let mut client = S3Client::new_with(dispatcher, credentials_provider, region);
         if config.force_path_style {
             client.config_mut().addressing_style = AddressingStyle::Path;
         }
@@ -53,6 +66,25 @@ impl S3Storage {
             client,
             _not_send: PhantomData::default(),
         })
+    }
+
+    pub fn with_request_dispatcher<D>(config: &Config, dispatcher: D) -> io::Result<S3Storage>
+    where
+        D: DispatchSignedRequest + Send + Sync + 'static,
+    {
+        Self::check_config(config)?;
+        // TODO: this should not be supported.
+        // It implies static AWS credentials.
+        if !config.access_key.is_empty() && !config.secret_access_key.is_empty() {
+            let cred_provider = StaticProvider::new_minimal(
+                config.access_key.to_owned(),
+                config.secret_access_key.to_owned(),
+            );
+            Self::new_creds_dispatcher(config, dispatcher, cred_provider)
+        } else {
+            let cred_provider = rusoto_util::CredentialsProvider::new()?;
+            Self::new_creds_dispatcher(config, dispatcher, cred_provider)
+        }
     }
 
     fn check_config(config: &Config) -> io::Result<()> {
@@ -70,21 +102,6 @@ impl S3Storage {
             return format!("{}/{}", self.config.prefix, key);
         }
         key.to_owned()
-    }
-}
-
-impl<E> RetryError for RusotoError<E> {
-    fn placeholder() -> Self {
-        Self::Blocking
-    }
-
-    fn is_retryable(&self) -> bool {
-        match self {
-            Self::HttpDispatch(_) => true,
-            Self::Unknown(resp) if resp.status.is_server_error() => true,
-            // FIXME: Retry NOT_READY & THROTTLED (403).
-            _ => false,
-        }
     }
 }
 
@@ -175,50 +192,69 @@ impl<'client> S3Uploader<'client> {
 
     /// Starts a multipart upload process.
     async fn begin(&self) -> Result<String, RusotoError<CreateMultipartUploadError>> {
-        let output = self
-            .client
-            .create_multipart_upload(CreateMultipartUploadRequest {
-                bucket: self.bucket.clone(),
-                key: self.key.clone(),
-                acl: self.acl.clone(),
-                server_side_encryption: self.server_side_encryption.clone(),
-                ssekms_key_id: self.ssekms_key_id.clone(),
-                storage_class: self.storage_class.clone(),
-                ..Default::default()
-            })
-            .await?;
-        output.upload_id.ok_or_else(|| {
-            RusotoError::ParseError("missing upload-id from create_multipart_upload()".to_owned())
-        })
+        match timeout(
+            Self::get_timeout(),
+            self.client
+                .create_multipart_upload(CreateMultipartUploadRequest {
+                    bucket: self.bucket.clone(),
+                    key: self.key.clone(),
+                    acl: self.acl.clone(),
+                    server_side_encryption: self.server_side_encryption.clone(),
+                    ssekms_key_id: self.ssekms_key_id.clone(),
+                    storage_class: self.storage_class.clone(),
+                    ..Default::default()
+                }),
+        )
+        .await
+        {
+            Ok(output) => output?.upload_id.ok_or_else(|| {
+                RusotoError::ParseError(
+                    "missing upload-id from create_multipart_upload()".to_owned(),
+                )
+            }),
+            Err(_) => Err(RusotoError::ParseError("begin timeout".to_owned())),
+        }
     }
 
     /// Completes a multipart upload process, asking S3 to join all parts into a single file.
     async fn complete(&self) -> Result<(), RusotoError<CompleteMultipartUploadError>> {
-        self.client
-            .complete_multipart_upload(CompleteMultipartUploadRequest {
-                bucket: self.bucket.clone(),
-                key: self.key.clone(),
-                upload_id: self.upload_id.clone(),
-                multipart_upload: Some(CompletedMultipartUpload {
-                    parts: Some(self.parts.clone()),
+        match timeout(
+            Self::get_timeout(),
+            self.client
+                .complete_multipart_upload(CompleteMultipartUploadRequest {
+                    bucket: self.bucket.clone(),
+                    key: self.key.clone(),
+                    upload_id: self.upload_id.clone(),
+                    multipart_upload: Some(CompletedMultipartUpload {
+                        parts: Some(self.parts.clone()),
+                    }),
+                    ..Default::default()
                 }),
-                ..Default::default()
-            })
-            .await?;
-        Ok(())
+        )
+        .await
+        {
+            Ok(_) => Ok(()),
+            Err(_) => Err(RusotoError::ParseError("complete timeout".to_owned())),
+        }
     }
 
     /// Aborts the multipart upload process, deletes all uploaded parts.
     async fn abort(&self) -> Result<(), RusotoError<AbortMultipartUploadError>> {
-        self.client
-            .abort_multipart_upload(AbortMultipartUploadRequest {
-                bucket: self.bucket.clone(),
-                key: self.key.clone(),
-                upload_id: self.upload_id.clone(),
-                ..Default::default()
-            })
-            .await?;
-        Ok(())
+        match timeout(
+            Self::get_timeout(),
+            self.client
+                .abort_multipart_upload(AbortMultipartUploadRequest {
+                    bucket: self.bucket.clone(),
+                    key: self.key.clone(),
+                    upload_id: self.upload_id.clone(),
+                    ..Default::default()
+                }),
+        )
+        .await
+        {
+            Ok(_) => Ok(()),
+            Err(_) => Err(RusotoError::ParseError("abort timeout".to_owned())),
+        }
     }
 
     /// Uploads a part of the file.
@@ -229,9 +265,9 @@ impl<'client> S3Uploader<'client> {
         part_number: i64,
         data: &[u8],
     ) -> Result<CompletedPart, RusotoError<UploadPartError>> {
-        let part = self
-            .client
-            .upload_part(UploadPartRequest {
+        match timeout(
+            Self::get_timeout(),
+            self.client.upload_part(UploadPartRequest {
                 bucket: self.bucket.clone(),
                 key: self.key.clone(),
                 upload_id: self.upload_id.clone(),
@@ -239,12 +275,16 @@ impl<'client> S3Uploader<'client> {
                 content_length: Some(data.len() as i64),
                 body: Some(data.to_vec().into()),
                 ..Default::default()
-            })
-            .await?;
-        Ok(CompletedPart {
-            e_tag: part.e_tag,
-            part_number: Some(part_number),
-        })
+            }),
+        )
+        .await
+        {
+            Ok(part) => Ok(CompletedPart {
+                e_tag: part?.e_tag,
+                part_number: Some(part_number),
+            }),
+            Err(_) => Err(RusotoError::ParseError("upload part timeout".to_owned())),
+        }
     }
 
     /// Uploads a file atomically.
@@ -252,20 +292,46 @@ impl<'client> S3Uploader<'client> {
     /// This should be used only when the data is known to be short, and thus relatively cheap to
     /// retry the entire upload.
     async fn upload(&self, data: &[u8]) -> Result<(), RusotoError<PutObjectError>> {
-        self.client
-            .put_object(PutObjectRequest {
-                bucket: self.bucket.clone(),
-                key: self.key.clone(),
-                acl: self.acl.clone(),
-                server_side_encryption: self.server_side_encryption.clone(),
-                ssekms_key_id: self.ssekms_key_id.clone(),
-                storage_class: self.storage_class.clone(),
-                content_length: Some(data.len() as i64),
-                body: Some(data.to_vec().into()),
-                ..Default::default()
-            })
-            .await?;
-        Ok(())
+        match timeout(Self::get_timeout(), async {
+            let mut delay_duration = Duration::from_millis(0);
+            (|| {
+                fail_point!("s3_sleep_injected", |t| {
+                    let t = t.unwrap().parse::<u64>().unwrap();
+                    delay_duration = Duration::from_millis(t);
+                })
+            })();
+
+            if delay_duration > Duration::from_millis(0) {
+                delay_for(delay_duration).await;
+            }
+
+            self.client
+                .put_object(PutObjectRequest {
+                    bucket: self.bucket.clone(),
+                    key: self.key.clone(),
+                    acl: self.acl.clone(),
+                    server_side_encryption: self.server_side_encryption.clone(),
+                    ssekms_key_id: self.ssekms_key_id.clone(),
+                    storage_class: self.storage_class.clone(),
+                    content_length: Some(data.len() as i64),
+                    body: Some(data.to_vec().into()),
+                    ..Default::default()
+                })
+                .await
+        })
+        .await
+        {
+            Ok(_) => Ok(()),
+            Err(_) => Err(RusotoError::ParseError("upload timeout".to_owned())),
+        }
+    }
+
+    fn get_timeout() -> Duration {
+        fail_point!("s3_timeout_injected", |t| -> Duration {
+            let t = t.unwrap().parse::<u64>();
+            Duration::from_millis(t.unwrap())
+        });
+        CONNECTION_TIMEOUT
     }
 }
 
@@ -368,7 +434,9 @@ mod tests {
                 assert_eq!(req.payload.is_some(), req.method() == "PUT");
             },
         );
-        let s = S3Storage::with_request_dispatcher(&config, dispatcher).unwrap();
+        let credentials_provider =
+            StaticProvider::new_minimal("abc".to_string(), "xyz".to_string());
+        let s = S3Storage::new_creds_dispatcher(&config, dispatcher, credentials_provider).unwrap();
         s.write(
             "mykey",
             Box::new(magic_contents.as_bytes()),
@@ -380,6 +448,35 @@ mod tests {
         let ret = block_on_external_io(reader.read_to_end(&mut buf));
         assert!(ret.unwrap() == 0);
         assert!(buf.is_empty());
+
+        // test timeout
+        let s3_timeout_injected_fp = "s3_timeout_injected";
+        let s3_sleep_injected_fp = "s3_sleep_injected";
+
+        // inject 100ms timeout
+        fail::cfg(s3_timeout_injected_fp, "return(100)").unwrap();
+        // inject 200ms delay
+        fail::cfg(s3_sleep_injected_fp, "return(200)").unwrap();
+        let resp = s.write(
+            "mykey2",
+            Box::new(magic_contents.as_bytes()),
+            magic_contents.len() as u64,
+        );
+        fail::remove(s3_sleep_injected_fp);
+        // timeout occur due to delay 200ms
+        assert!(resp.is_err());
+
+        // inject 50ms delay
+        fail::cfg(s3_sleep_injected_fp, "return(50)").unwrap();
+        let resp = s.write(
+            "mykey",
+            Box::new(magic_contents.as_bytes()),
+            magic_contents.len() as u64,
+        );
+        fail::remove(s3_sleep_injected_fp);
+        fail::remove(s3_timeout_injected_fp);
+        // no timeout
+        assert!(resp.is_ok());
     }
 
     #[test]

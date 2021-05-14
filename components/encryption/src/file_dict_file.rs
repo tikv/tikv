@@ -1,16 +1,18 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use byteorder::{BigEndian, ByteOrder};
+use file_system::{rename, File, OpenOptions};
 use kvproto::encryptionpb::{EncryptedContent, FileDictionary, FileInfo};
 use protobuf::Message;
 use rand::{thread_rng, RngCore};
+use tikv_util::{box_err, set_panic_mark, warn};
 
 use crate::encrypted_file::{EncryptedFile, Header, Version, TMP_FILE_SUFFIX};
 use crate::master_key::{Backend, PlaintextBackend};
 use crate::metrics::*;
+use crate::Error;
 use crate::Result;
 
-use std::fs::{rename, File, OpenOptions};
 use std::io::BufRead;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -111,11 +113,16 @@ impl FileDictionaryFile {
         Ok((file_dict_file, file_dict))
     }
 
+    /// Get the file path.
+    pub fn file_path(&self) -> PathBuf {
+        self.base.join(&self.name)
+    }
+
     /// Rewrite the log file to reduce file size and reduce the time of next recovery.
     fn rewrite(&mut self) -> Result<()> {
         let file_dict_bytes = self.file_dict.write_to_bytes()?;
         if self.enable_log {
-            let origin_path = self.base.join(&self.name);
+            let origin_path = self.file_path();
             let mut tmp_path = origin_path.clone();
             tmp_path.set_extension(format!("{}.{}", thread_rng().next_u64(), TMP_FILE_SUFFIX));
             let mut tmp_file = OpenOptions::new()
@@ -133,7 +140,7 @@ impl FileDictionaryFile {
             rename(&tmp_path, &origin_path)?;
             let base_dir = File::open(&self.base)?;
             base_dir.sync_all()?;
-            let file = std::fs::OpenOptions::new().append(true).open(origin_path)?;
+            let file = OpenOptions::new().append(true).open(origin_path)?;
             self.append_file.replace(file);
         } else {
             let file = EncryptedFile::new(&self.base, &self.name);
@@ -146,9 +153,7 @@ impl FileDictionaryFile {
 
     /// Recovery from the log file and return `FileDictionary`.
     pub fn recovery(&mut self) -> Result<FileDictionary> {
-        let mut f = OpenOptions::new()
-            .read(true)
-            .open(self.base.join(&self.name))?;
+        let mut f = OpenOptions::new().read(true).open(self.file_path())?;
         let mut buf = Vec::new();
         f.read_to_end(&mut buf)?;
         let remained = buf.as_slice();
@@ -165,28 +170,46 @@ impl FileDictionaryFile {
             }
             Version::V2 => {
                 file_dict.merge_from_bytes(content)?;
+                let mut last_record_name = String::new();
                 // parse the remained records
                 while !remained.is_empty() {
                     // If the parsing get errors, manual intervention is required to recover.
-                    let (used_size, file_name, mode) = Self::parse_next_record(remained)?;
-                    remained.consume(used_size);
-                    match mode {
-                        LogRecord::INSERT(info) => {
-                            file_dict.files.insert(file_name, info);
-                        }
-                        LogRecord::REMOVE => {
-                            let original = file_dict.files.remove(&file_name);
-                            if original.is_none() {
-                                return Err(box_err!(
-                                    "Try to recovery from log file but remove a null entry, file name: {}",
-                                    file_name
-                                ));
+                    match Self::parse_next_record(remained) {
+                        Ok((used_size, file_name, mode)) => {
+                            remained.consume(used_size);
+                            last_record_name = file_name.clone();
+                            match mode {
+                                LogRecord::INSERT(info) => {
+                                    file_dict.files.insert(file_name, info);
+                                }
+                                LogRecord::REMOVE => {
+                                    let original = file_dict.files.remove(&file_name);
+                                    if original.is_none() {
+                                        return Err(box_err!(
+                                            "Try to recovery from log file but remove a null entry, file name: {}",
+                                            file_name
+                                        ));
+                                    }
+                                }
                             }
+                        }
+                        Err(e @ Error::TailRecordParseIncomplete) => {
+                            warn!(
+                                "{:?} occurred and the last complete filename is {}",
+                                e, last_record_name
+                            );
+                            break;
+                        }
+                        Err(e) => {
+                            // This error is unrecoverable and manual intervention is required.
+                            set_panic_mark();
+                            return Err(e);
                         }
                     }
                 }
             }
         }
+
         self.file_dict = file_dict.clone();
         Ok(file_dict)
     }
@@ -199,6 +222,16 @@ impl FileDictionaryFile {
         if self.enable_log {
             let file = self.append_file.as_mut().unwrap();
             let bytes = Self::convert_record_to_bytes(name, LogRecord::INSERT(info.clone()))?;
+
+            fail::fail_point!("file_dict_log_append_incomplete", |truncate_num| {
+                let mut bytes = bytes.clone();
+                let truncate_num: usize = truncate_num.map_or(0, |c| c.parse().unwrap());
+                bytes.truncate(truncate_num);
+                file.write_all(&bytes)?;
+                file.sync_all()?;
+                Ok(())
+            });
+
             file.write_all(&bytes)?;
             file.sync_all()?;
 
@@ -224,33 +257,6 @@ impl FileDictionaryFile {
 
             self.removed += 1;
             self.file_size += bytes.len();
-            self.check_compact()?;
-        } else {
-            self.rewrite()?;
-        }
-        self.update_metrics();
-        Ok(())
-    }
-
-    /// Replace existed file entry with new file information.
-    ///
-    /// Warning: `self.write(file_dict)` must be called before.
-    pub fn replace(&mut self, src_name: &str, dst_name: &str, info: FileInfo) -> Result<()> {
-        assert_ne!(src_name, dst_name);
-        self.file_dict.files.remove(src_name);
-        self.file_dict
-            .files
-            .insert(dst_name.to_owned(), info.clone());
-        if self.enable_log {
-            let file = self.append_file.as_mut().unwrap();
-            let mut bytes1 = Self::convert_record_to_bytes(dst_name, LogRecord::INSERT(info))?;
-            let bytes2 = Self::convert_record_to_bytes(src_name, LogRecord::REMOVE)?;
-            bytes1.extend_from_slice(&bytes2);
-            file.write_all(&bytes1)?;
-            file.sync_all()?;
-
-            self.removed += 1;
-            self.file_size += bytes1.len();
             self.check_compact()?;
         } else {
             self.rewrite()?;
@@ -302,10 +308,11 @@ impl FileDictionaryFile {
 
     fn parse_next_record(mut remained: &[u8]) -> Result<(usize, String, LogRecord)> {
         if remained.len() < Self::RECORD_HEADER_SIZE {
-            return Err(box_err!(
-                "file corrupted! record header size is too small: {}",
-                remained.len()
-            ));
+            warn!(
+                "file corrupted! record header size is too small, discarded the tail record";
+                "size" => remained.len(),
+            );
+            return Err(Error::TailRecordParseIncomplete);
         }
 
         // parse header
@@ -315,11 +322,13 @@ impl FileDictionaryFile {
         let mode = remained[Self::RECORD_HEADER_SIZE - 1];
         remained.consume(Self::RECORD_HEADER_SIZE);
         if remained.len() < name_len + info_len {
-            return Err(box_err!(
-                "file corrupted! record content size is too small: {}, expect: {}",
-                remained.len(),
-                name_len + info_len
-            ));
+            warn!(
+                "file corrupted! record content size is too small, discarded the tail record";
+                "content size" => remained.len(),
+                "expected name length" => name_len,
+                "expected content length" =>info_len,
+            );
+            return Err(Error::TailRecordParseIncomplete);
         }
 
         // checksum crc32
@@ -327,11 +336,22 @@ impl FileDictionaryFile {
         digest.update(&remained[0..name_len + info_len]);
         let crc32_checksum = digest.finalize();
         if crc32_checksum != crc32 {
-            return Err(box_err!(
-                "file corrupted! crc32 mismatch {} != {}",
-                crc32,
-                crc32_checksum
-            ));
+            remained.consume(name_len + info_len);
+            if remained.is_empty() {
+                // Only when this record is the last one can the panic be skipped.
+                warn!(
+                    "file corrupted! crc32 mismatch, discarded the tail record";
+                    "expected crc32" => crc32,
+                    "checksum crc32" => crc32_checksum,
+                );
+                return Err(Error::TailRecordParseIncomplete);
+            } else {
+                return Err(box_err!(
+                    "file corrupted! crc32 mismatch {} != {}",
+                    crc32,
+                    crc32_checksum
+                ));
+            }
         }
 
         // read file name
@@ -406,9 +426,8 @@ mod tests {
         assert_eq!(*file_dict.files.get("info3").unwrap(), info3);
         assert_eq!(file_dict.files.len(), 2);
 
-        file_dict_file
-            .replace("info3", "info5", info5.clone())
-            .unwrap();
+        file_dict_file.insert("info5", &info5).unwrap();
+        file_dict_file.remove("info3").unwrap();
 
         let file_dict = file_dict_file.recovery().unwrap();
         assert_eq!(file_dict.files.get("info1"), None);
@@ -532,9 +551,10 @@ mod tests {
             file_dict.insert(&"f1".to_owned(), &info1).unwrap();
             file_dict.insert(&"f2".to_owned(), &info2).unwrap();
             file_dict.insert(&"f3".to_owned(), &info3).unwrap();
-            file_dict
-                .replace(&"f3".to_owned(), &"f4".to_owned(), info4.clone())
-                .unwrap();
+
+            file_dict.insert("f4", &info4).unwrap();
+            file_dict.remove("f3").unwrap();
+
             file_dict.remove(&"f2".to_owned()).unwrap();
         }
         // Try open as v1 file. Should fail.
@@ -590,9 +610,10 @@ mod tests {
     }
 
     fn create_file_info(id: u64, method: EncryptionMethod) -> FileInfo {
-        let mut info = FileInfo::default();
-        info.key_id = id;
-        info.method = compat(method);
-        info
+        FileInfo {
+            key_id: id,
+            method: compat(method),
+            ..Default::default()
+        }
     }
 }

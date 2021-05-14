@@ -1,12 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crossbeam::channel;
-use engine_rocks::raw::DB;
 use engine_rocks::Compat;
 use engine_traits::{Peekable, CF_RAFT};
-use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftMessage, RegionLocalState};
+use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use raft::eraftpb::MessageType;
-use std::mem;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -140,7 +138,7 @@ fn test_duplicate_read_index_ctx() {
     let router = cluster.sim.wl().get_router(1).unwrap();
     fail::cfg("pause_on_peer_collect_message", "pause").unwrap();
     cluster.sim.wl().clear_recv_filters(1);
-    for raft_msg in mem::replace(dropped_msgs.lock().unwrap().as_mut(), vec![]) {
+    for raft_msg in std::mem::take(&mut *dropped_msgs.lock().unwrap()) {
         router.send_raft_message(raft_msg).unwrap();
     }
     fail::remove("pause_on_peer_collect_message");
@@ -292,7 +290,7 @@ fn test_read_after_cleanup_range_for_snap() {
     let last_index = cluster.raft_local_state(r1, 1).last_index;
     (0..10).for_each(|_| cluster.must_put(b"k1", b"v1"));
     // Ensure logs are compacted, then node 1 will send a snapshot to node 3 later
-    must_truncated_to(cluster.get_engine(1), r1, last_index + 1);
+    cluster.wait_log_truncated(r1, 1, last_index + 1);
 
     fail::cfg("send_snapshot", "pause").unwrap();
     cluster.run_node(3).unwrap();
@@ -402,22 +400,6 @@ fn test_new_split_learner_can_not_find_leader() {
     assert_eq!(exp_value, b"v2");
 }
 
-fn must_truncated_to(engine: Arc<DB>, region_id: u64, index: u64) {
-    for _ in 1..300 {
-        let apply_state: RaftApplyState = engine
-            .c()
-            .get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))
-            .unwrap()
-            .unwrap();
-        let truncated_index = apply_state.get_truncated_state().get_index();
-        if truncated_index > index {
-            return;
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
-    panic!("raft log is not truncated to {}", index);
-}
-
 /// Test if the read index request can get a correct response when the commit index of leader
 /// if not up-to-date after transferring leader.
 #[test]
@@ -477,7 +459,7 @@ fn test_replica_read_after_transfer_leader() {
     cluster.sim.wl().clear_recv_filters(2);
 
     let router = cluster.sim.wl().get_router(2).unwrap();
-    for raft_msg in mem::replace(dropped_msgs.lock().unwrap().as_mut(), vec![]) {
+    for raft_msg in std::mem::take(&mut *dropped_msgs.lock().unwrap()) {
         router.send_raft_message(raft_msg).unwrap();
     }
 

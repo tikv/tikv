@@ -3,6 +3,7 @@
 use configuration::ConfigValue;
 pub use rocksdb::PerfLevel;
 use rocksdb::{DBCompressionType, DBInfoLogLevel, DBTitanDBBlobRunMode};
+use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -222,9 +223,9 @@ impl From<BlobRunMode> for ConfigValue {
     }
 }
 
-impl Into<BlobRunMode> for ConfigValue {
-    fn into(self) -> BlobRunMode {
-        if let ConfigValue::BlobRunMode(s) = self {
+impl From<ConfigValue> for BlobRunMode {
+    fn from(c: ConfigValue) -> BlobRunMode {
+        if let ConfigValue::BlobRunMode(s) = c {
             match s.as_str() {
                 "kNormal" => BlobRunMode::Normal,
                 "kReadOnly" => BlobRunMode::ReadOnly,
@@ -232,7 +233,7 @@ impl Into<BlobRunMode> for ConfigValue {
                 m => panic!("expect: kNormal, kReadOnly or kFallback, got: {:?}", m),
             }
         } else {
-            panic!("expect: ConfigValue::BlobRunMode, got: {:?}", self);
+            panic!("expect: ConfigValue::BlobRunMode, got: {:?}", c);
         }
     }
 }
@@ -252,9 +253,9 @@ impl FromStr for BlobRunMode {
     }
 }
 
-impl Into<DBTitanDBBlobRunMode> for BlobRunMode {
-    fn into(self) -> DBTitanDBBlobRunMode {
-        match self {
+impl From<BlobRunMode> for DBTitanDBBlobRunMode {
+    fn from(m: BlobRunMode) -> DBTitanDBBlobRunMode {
+        match m {
             BlobRunMode::Normal => DBTitanDBBlobRunMode::Normal,
             BlobRunMode::ReadOnly => DBTitanDBBlobRunMode::ReadOnly,
             BlobRunMode::Fallback => DBTitanDBBlobRunMode::Fallback,
@@ -306,6 +307,7 @@ macro_rules! numeric_enum_mod {
             mod tests {
                 use toml;
                 use rocksdb::$enum;
+                use serde::{Deserialize, Serialize};
 
                 #[test]
                 fn test_serde() {
@@ -408,18 +410,22 @@ mod tests {
 
         // length is wrong.
         assert!(toml::from_str::<CompressionTypeHolder>("tp = [\"no\"]").is_err());
-        assert!(toml::from_str::<CompressionTypeHolder>(
-            r#"tp = [
+        assert!(
+            toml::from_str::<CompressionTypeHolder>(
+                r#"tp = [
             "no", "no", "no", "no", "no", "no", "no", "no"
         ]"#
-        )
-        .is_err());
+            )
+            .is_err()
+        );
         // value is wrong.
-        assert!(toml::from_str::<CompressionTypeHolder>(
-            r#"tp = [
+        assert!(
+            toml::from_str::<CompressionTypeHolder>(
+                r#"tp = [
             "no", "no", "no", "no", "no", "no", "yes"
         ]"#
-        )
-        .is_err());
+            )
+            .is_err()
+        );
     }
 }

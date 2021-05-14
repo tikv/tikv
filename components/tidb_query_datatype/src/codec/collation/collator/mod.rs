@@ -22,12 +22,12 @@ use super::charset::*;
 use super::Collator;
 use crate::codec::Result;
 
-const PADDING_SPACE: char = 0x20 as char;
+pub const PADDING_SPACE: char = 0x20 as char;
 
 #[cfg(test)]
 mod tests {
-    use crate::codec::collation::match_template_collator;
     use crate::codec::collation::Collator;
+    use crate::match_template_collator;
     use crate::Collation;
 
     #[test]
@@ -35,7 +35,6 @@ mod tests {
     fn test_compare() {
         use std::cmp::Ordering;
         use std::collections::hash_map::DefaultHasher;
-        use std::hash::Hasher;
 
         let collations = [
             (Collation::Utf8Mb4Bin, 0),

@@ -5,7 +5,7 @@ use std::io::Read;
 use std::path::PathBuf;
 
 use collections::HashSet;
-use encryption::EncryptionConfig;
+use encryption_export::EncryptionConfig;
 use grpcio::{ChannelCredentials, ChannelCredentialsBuilder};
 use security::SecurityConfig;
 

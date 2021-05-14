@@ -150,11 +150,12 @@ fn test_node_merge_with_slow_learner() {
     let resp = cluster
         .call_command_on_leader(req, Duration::from_secs(3))
         .unwrap();
-    assert!(resp
-        .get_header()
-        .get_error()
-        .get_message()
-        .contains("log gap"));
+    assert!(
+        resp.get_header()
+            .get_error()
+            .get_message()
+            .contains("log gap")
+    );
 
     cluster.clear_send_filters();
     cluster.must_put(b"k11", b"v100");
@@ -178,17 +179,7 @@ fn test_node_merge_with_slow_learner() {
     (0..50).for_each(|i| cluster.must_put(b"k2", format!("v{}", i).as_bytes()));
 
     // Wait to trigger compact raft log
-    let timer = Instant::now();
-    loop {
-        let state2 = cluster.truncated_state(right.get_id(), 1);
-        if state1.get_index() != state2.get_index() {
-            break;
-        }
-        if timer.elapsed() > Duration::from_secs(3) {
-            panic!("log compaction not finish after 3 seconds.");
-        }
-        sleep_ms(10);
-    }
+    cluster.wait_log_truncated(right.get_id(), 1, state1.get_index() + 1);
     cluster.clear_send_filters();
     cluster.must_put(b"k6", b"v6");
     must_get_equal(&cluster.get_engine(2), b"k6", b"v6");
@@ -859,7 +850,7 @@ fn test_request_snapshot_after_propose_merge() {
     let leader = cluster.leader_of_region(region.get_id()).unwrap();
     let followers: Vec<_> = region
         .get_peers()
-        .into_iter()
+        .iter()
         .filter(|p| p.id != leader.id)
         .collect();
 

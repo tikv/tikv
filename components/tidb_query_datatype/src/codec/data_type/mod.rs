@@ -13,6 +13,19 @@ mod vector;
 
 pub use logical_rows::{LogicalRows, BATCH_MAX_SIZE, IDENTICAL_LOGICAL_ROWS};
 
+#[macro_export]
+macro_rules! match_template_evaltype {
+    ($t:tt, $($tail:tt)*) => {{
+        #[allow(unused_imports)]
+        use $crate::codec::data_type::{Int, Real, Decimal, Bytes, DateTime, Duration, Json, Set, Enum};
+
+        match_template::match_template! {
+            $t = [Int, Real, Decimal, Bytes, DateTime, Duration, Json, Set, Enum],
+            $($tail)*
+        }}
+    }
+}
+
 // Concrete eval types without a nullable wrapper.
 pub type Int = i64;
 pub type Real = ordered_float::NotNan<f64>;
@@ -147,13 +160,6 @@ impl<'a> AsMySQLBool for Option<SetRef<'a>> {
     }
 }
 
-pub macro match_template_evaluable($t:tt, $($tail:tt)*) {
-    match_template::match_template! {
-        $t = [Int, Real, Decimal, Bytes, DateTime, Duration, Json, Set, Enum],
-        $($tail)*
-    }
-}
-
 pub trait ChunkRef<'a, T: EvaluableRef<'a>>: Copy + Clone + std::fmt::Debug + Send + Sync {
     fn get_option_ref(self, idx: usize) -> Option<T>;
 
@@ -193,7 +199,7 @@ pub trait EvaluableRet: Clone + std::fmt::Debug + Send + Sync + 'static {
     type ChunkedType: ChunkedVec<Self>;
     /// Converts a vector of this concrete type into a `VectorValue` in the same type;
     /// panics if the varient mismatches.
-    fn into_vector_value(vec: Self::ChunkedType) -> VectorValue;
+    fn cast_chunk_into_vector_value(vec: Self::ChunkedType) -> VectorValue;
 }
 
 /// # Notes
@@ -234,7 +240,11 @@ macro_rules! impl_evaluable_type {
             fn borrow_scalar_value(v: &ScalarValue) -> Option<&Self> {
                 match v {
                     ScalarValue::$ty(x) => x.as_ref(),
-                    _ => unimplemented!(),
+                    other => panic!(
+                        "Cannot cast {} scalar value into {}",
+                        other.eval_type(),
+                        stringify!($ty),
+                    ),
                 }
             }
 
@@ -242,7 +252,11 @@ macro_rules! impl_evaluable_type {
             fn borrow_scalar_value_ref<'a>(v: ScalarValueRef<'a>) -> Option<&'a Self> {
                 match v {
                     ScalarValueRef::$ty(x) => x,
-                    _ => unimplemented!(),
+                    other => panic!(
+                        "Cannot cast {} scalar value into {}",
+                        other.eval_type(),
+                        stringify!($ty),
+                    ),
                 }
             }
 
@@ -250,14 +264,70 @@ macro_rules! impl_evaluable_type {
             fn borrow_vector_value(v: &VectorValue) -> &ChunkedVecSized<$ty> {
                 match v {
                     VectorValue::$ty(x) => x,
-                    _ => unimplemented!(),
+                    other => panic!(
+                        "Cannot cast {} scalar value into {}",
+                        other.eval_type(),
+                        stringify!($ty),
+                    ),
                 }
             }
         }
     };
 }
 
-impl_evaluable_type! { Int }
+unsafe fn retain_lifetime_transmute<T, U>(from: &T) -> &U {
+    // with the help of elided lifetime, we can ensure &T and &U
+    // shares the same lifetime.
+    &*(from as *const T as *const U)
+}
+
+impl Evaluable for Int {
+    const EVAL_TYPE: EvalType = EvalType::Int;
+
+    #[inline]
+    fn borrow_scalar_value(v: &ScalarValue) -> Option<&Self> {
+        match v {
+            ScalarValue::Int(x) => x.as_ref(),
+            ScalarValue::Enum(x) => x
+                .as_ref()
+                .map(|x| unsafe { retain_lifetime_transmute::<u64, i64>(x.value_ref()) }),
+            other => panic!(
+                "Cannot cast {} scalar value into {}",
+                other.eval_type(),
+                stringify!(Int),
+            ),
+        }
+    }
+
+    #[inline]
+    fn borrow_scalar_value_ref(v: ScalarValueRef) -> Option<&Self> {
+        match v {
+            ScalarValueRef::Int(x) => x,
+            ScalarValueRef::Enum(x) => {
+                x.map(|x| unsafe { retain_lifetime_transmute::<u64, i64>(x.value_ref()) })
+            }
+            other => panic!(
+                "Cannot cast {} scalar value into {}",
+                other.eval_type(),
+                stringify!(Int),
+            ),
+        }
+    }
+
+    #[inline]
+    fn borrow_vector_value(v: &VectorValue) -> &ChunkedVecSized<Int> {
+        match v {
+            VectorValue::Int(x) => x,
+            VectorValue::Enum(x) => x.as_vec_int(),
+            other => panic!(
+                "Cannot cast {} scalar value into {}",
+                other.eval_type(),
+                stringify!(Int),
+            ),
+        }
+    }
+}
+
 impl_evaluable_type! { Real }
 impl_evaluable_type! { Decimal }
 impl_evaluable_type! { DateTime }
@@ -270,7 +340,7 @@ macro_rules! impl_evaluable_ret {
             type ChunkedType = $chunk;
 
             #[inline]
-            fn into_vector_value(vec: $chunk) -> VectorValue {
+            fn cast_chunk_into_vector_value(vec: $chunk) -> VectorValue {
                 VectorValue::from(vec)
             }
         }
@@ -305,7 +375,7 @@ pub trait EvaluableRef<'a>: Clone + std::fmt::Debug + Send + Sync {
     fn borrow_vector_value(v: &'a VectorValue) -> Self::ChunkedType;
 
     /// Convert this reference to owned type
-    fn to_owned_value(self) -> Self::EvaluableType;
+    fn into_owned_value(self) -> Self::EvaluableType;
 
     fn from_owned_value(value: &'a Self::EvaluableType) -> Self;
 }
@@ -331,7 +401,7 @@ impl<'a, T: Evaluable + EvaluableRet> EvaluableRef<'a> for &'a T {
     }
 
     #[inline]
-    fn to_owned_value(self) -> Self::EvaluableType {
+    fn into_owned_value(self) -> Self::EvaluableType {
         self.clone()
     }
 
@@ -362,7 +432,12 @@ impl<'a> EvaluableRef<'a> for BytesRef<'a> {
     fn borrow_scalar_value(v: &'a ScalarValue) -> Option<Self> {
         match v {
             ScalarValue::Bytes(x) => x.as_ref().map(|x| x.as_slice()),
-            _ => unimplemented!(),
+            ScalarValue::Enum(x) => x.as_ref().map(|x| x.name()),
+            other => panic!(
+                "Cannot cast {} scalar value into {}",
+                other.eval_type(),
+                stringify!(Bytes),
+            ),
         }
     }
 
@@ -370,7 +445,12 @@ impl<'a> EvaluableRef<'a> for BytesRef<'a> {
     fn borrow_scalar_value_ref(v: ScalarValueRef<'a>) -> Option<Self> {
         match v {
             ScalarValueRef::Bytes(x) => x,
-            _ => unimplemented!(),
+            ScalarValueRef::Enum(x) => x.map(|x| x.name()),
+            other => panic!(
+                "Cannot cast {} scalar value into {}",
+                other.eval_type(),
+                stringify!(Bytes),
+            ),
         }
     }
 
@@ -378,12 +458,17 @@ impl<'a> EvaluableRef<'a> for BytesRef<'a> {
     fn borrow_vector_value(v: &'a VectorValue) -> &'a ChunkedVecBytes {
         match v {
             VectorValue::Bytes(x) => x,
-            _ => unimplemented!(),
+            VectorValue::Enum(x) => x.as_vec_bytes(),
+            other => panic!(
+                "Cannot cast {} scalar value into {}",
+                other.eval_type(),
+                stringify!(Bytes),
+            ),
         }
     }
 
     #[inline]
-    fn to_owned_value(self) -> Self::EvaluableType {
+    fn into_owned_value(self) -> Self::EvaluableType {
         self.to_vec()
     }
 
@@ -426,7 +511,11 @@ impl<'a> EvaluableRef<'a> for JsonRef<'a> {
     fn borrow_scalar_value(v: &'a ScalarValue) -> Option<Self> {
         match v {
             ScalarValue::Json(x) => x.as_ref().map(|x| x.as_ref()),
-            _ => unimplemented!(),
+            other => panic!(
+                "Cannot cast {} scalar value into {}",
+                other.eval_type(),
+                stringify!(Json),
+            ),
         }
     }
 
@@ -434,7 +523,11 @@ impl<'a> EvaluableRef<'a> for JsonRef<'a> {
     fn borrow_scalar_value_ref(v: ScalarValueRef<'a>) -> Option<Self> {
         match v {
             ScalarValueRef::Json(x) => x,
-            _ => unimplemented!(),
+            other => panic!(
+                "Cannot cast {} scalar value into {}",
+                other.eval_type(),
+                stringify!(Json),
+            ),
         }
     }
 
@@ -442,12 +535,16 @@ impl<'a> EvaluableRef<'a> for JsonRef<'a> {
     fn borrow_vector_value(v: &VectorValue) -> &ChunkedVecJson {
         match v {
             VectorValue::Json(x) => x,
-            _ => unimplemented!(),
+            other => panic!(
+                "Cannot cast {} scalar value into {}",
+                other.eval_type(),
+                stringify!(Json),
+            ),
         }
     }
 
     #[inline]
-    fn to_owned_value(self) -> Self::EvaluableType {
+    fn into_owned_value(self) -> Self::EvaluableType {
         self.to_owned()
     }
 
@@ -466,25 +563,37 @@ impl<'a> EvaluableRef<'a> for EnumRef<'a> {
     fn borrow_scalar_value(v: &'a ScalarValue) -> Option<Self> {
         match v {
             ScalarValue::Enum(x) => x.as_ref().map(|x| x.as_ref()),
-            _ => unimplemented!(),
+            other => panic!(
+                "Cannot cast {} scalar value into {}",
+                other.eval_type(),
+                stringify!(Enum),
+            ),
         }
     }
     #[inline]
     fn borrow_scalar_value_ref(v: ScalarValueRef<'a>) -> Option<Self> {
         match v {
             ScalarValueRef::Enum(x) => x,
-            _ => unimplemented!(),
+            other => panic!(
+                "Cannot cast {} scalar value into {}",
+                other.eval_type(),
+                stringify!(Enum),
+            ),
         }
     }
     #[inline]
     fn borrow_vector_value(v: &VectorValue) -> &ChunkedVecEnum {
         match v {
             VectorValue::Enum(x) => x,
-            _ => unimplemented!(),
+            other => panic!(
+                "Cannot cast {} scalar value into {}",
+                other.eval_type(),
+                stringify!(Enum),
+            ),
         }
     }
     #[inline]
-    fn to_owned_value(self) -> Self::EvaluableType {
+    fn into_owned_value(self) -> Self::EvaluableType {
         self.to_owned()
     }
     #[inline]
@@ -501,25 +610,37 @@ impl<'a> EvaluableRef<'a> for SetRef<'a> {
     fn borrow_scalar_value(v: &'a ScalarValue) -> Option<Self> {
         match v {
             ScalarValue::Set(x) => x.as_ref().map(|x| x.as_ref()),
-            _ => unimplemented!(),
+            other => panic!(
+                "Cannot cast {} scalar value into {}",
+                other.eval_type(),
+                stringify!(Set),
+            ),
         }
     }
     #[inline]
     fn borrow_scalar_value_ref(v: ScalarValueRef<'a>) -> Option<Self> {
         match v {
             ScalarValueRef::Set(x) => x,
-            _ => unimplemented!(),
+            other => panic!(
+                "Cannot cast {} scalar value into {}",
+                other.eval_type(),
+                stringify!(Set),
+            ),
         }
     }
     #[inline]
     fn borrow_vector_value(v: &'a VectorValue) -> &ChunkedVecSet {
         match v {
             VectorValue::Set(x) => x,
-            _ => unimplemented!(),
+            other => panic!(
+                "Cannot cast {} scalar value into {}",
+                other.eval_type(),
+                stringify!(Set),
+            ),
         }
     }
     #[inline]
-    fn to_owned_value(self) -> Self::EvaluableType {
+    fn into_owned_value(self) -> Self::EvaluableType {
         self.to_owned()
     }
     #[inline]

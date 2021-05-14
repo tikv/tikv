@@ -4,17 +4,20 @@ use std::i32;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures::compat::Stream01CompatExt;
 use futures::stream::StreamExt;
 use grpcio::{ChannelBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder};
+use grpcio_health::{create_health, HealthService, ServingStatus};
 use kvproto::tikvpb::*;
 use tokio::runtime::{Builder as RuntimeBuilder, Handle as RuntimeHandle, Runtime};
 use tokio_timer::timer::Handle;
 
 use crate::coprocessor::Endpoint;
+use crate::coprocessor_v2;
 use crate::server::gc_worker::GcWorker;
+use crate::server::Proxy;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::{Engine, Storage};
 use engine_rocks::RocksEngine;
@@ -26,12 +29,13 @@ use tikv_util::worker::{LazyWorker, Worker};
 use tikv_util::Either;
 
 use super::load_statistics::*;
+use super::metrics::SERVER_INFO_GAUGE_VEC;
 use super::raft_client::{ConnectionBuilder, RaftClient};
 use super::resolve::StoreAddrResolver;
 use super::service::*;
 use super::snap::{Runner as SnapHandler, Task as SnapTask};
 use super::transport::ServerTransport;
-use super::{Config, Result};
+use super::{Config, Error, Result};
 use crate::read_pool::ReadPool;
 
 const LOAD_STATISTICS_SLOTS: usize = 4;
@@ -52,7 +56,7 @@ pub struct Server<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolve
     builder_or_server: Option<Either<ServerBuilder, GrpcServer>>,
     local_addr: SocketAddr,
     // Transport.
-    trans: ServerTransport<T, S>,
+    trans: ServerTransport<T, S, RocksEngine>,
     raft_router: T,
     // For sending/receiving snapshots.
     snap_mgr: SnapManager,
@@ -64,16 +68,19 @@ pub struct Server<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolve
     yatp_read_pool: Option<ReadPool>,
     readpool_normal_thread_load: Arc<ThreadLoad>,
     debug_thread_pool: Arc<Runtime>,
+    health_service: HealthService,
     timer: Handle,
 }
 
 impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Server<T, S> {
     #[allow(clippy::too_many_arguments)]
     pub fn new<E: Engine, L: LockManager>(
+        store_id: u64,
         cfg: &Arc<Config>,
         security_mgr: &Arc<SecurityManager>,
         storage: Storage<E, L>,
         cop: Endpoint<E>,
+        coprv2: coprocessor_v2::Endpoint,
         raft_router: T,
         resolver: S,
         snap_mgr: SnapManager,
@@ -102,15 +109,19 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
         let snap_worker = Worker::new("snap-handler");
         let lazy_worker = snap_worker.lazy_build("snap-handler");
 
+        let proxy = Proxy::new(security_mgr.clone(), &env, cfg.clone());
         let kv_service = KvService::new(
+            store_id,
             storage,
             gc_worker,
             cop,
+            coprv2,
             raft_router.clone(),
             lazy_worker.scheduler(),
             Arc::clone(&grpc_thread_load),
             Arc::clone(&readpool_normal_thread_load),
             cfg.enable_request_batch,
+            proxy,
         );
 
         let addr = SocketAddr::from_str(&cfg.addr)?;
@@ -127,10 +138,12 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             .keepalive_time(cfg.grpc_keepalive_time.into())
             .keepalive_timeout(cfg.grpc_keepalive_timeout.into())
             .build_args();
+        let health_service = HealthService::default();
         let builder = {
             let mut sb = ServerBuilder::new(Arc::clone(&env))
                 .channel_args(channel_args)
-                .register_service(create_tikv(kv_service));
+                .register_service(create_tikv(kv_service))
+                .register_service(create_health(health_service.clone()));
             sb = security_mgr.bind(sb, &ip, addr.port());
             Either::Left(sb)
         };
@@ -146,6 +159,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
         let raft_client = RaftClient::new(conn_builder);
 
         let trans = ServerTransport::new(raft_client);
+        health_service.set_serving_status("", ServingStatus::NotServing);
 
         let svr = Server {
             env: Arc::clone(&env),
@@ -160,6 +174,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             yatp_read_pool,
             readpool_normal_thread_load,
             debug_thread_pool,
+            health_service,
             timer: GLOBAL_TIMER_HANDLE.clone(),
         };
 
@@ -170,7 +185,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
         self.debug_thread_pool.handle()
     }
 
-    pub fn transport(&self) -> ServerTransport<T, S> {
+    pub fn transport(&self) -> ServerTransport<T, S, RocksEngine> {
         self.trans.clone()
     }
 
@@ -244,6 +259,20 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             });
         };
 
+        let startup_ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| Error::Other(box_err!("Clock may have gone backwards")))?
+            .as_secs();
+
+        SERVER_INFO_GAUGE_VEC
+            .with_label_values(&[
+                &("v".to_owned() + env!("CARGO_PKG_VERSION")),
+                option_env!("TIKV_BUILD_GIT_HASH").unwrap_or("None"),
+            ])
+            .set(startup_ts as i64);
+        self.health_service
+            .set_serving_status("", ServingStatus::Serving);
+
         info!("TiKV is ready to serve");
         Ok(())
     }
@@ -258,6 +287,8 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             let _ = pool.shutdown_background();
         }
         let _ = self.yatp_read_pool.take();
+        self.health_service
+            .set_serving_status("", ServingStatus::NotServing);
         Ok(())
     }
 
@@ -408,10 +439,12 @@ mod tests {
     // if this failed, unset the environmental variables 'http_proxy' and 'https_proxy', and retry.
     #[test]
     fn test_peer_resolve() {
-        let mut cfg = Config::default();
-        cfg.addr = "127.0.0.1:0".to_owned();
+        let cfg = Config {
+            addr: "127.0.0.1:0".to_owned(),
+            ..Default::default()
+        };
 
-        let storage = TestStorageBuilder::new(DummyLockManager {})
+        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
             .build()
             .unwrap();
 
@@ -447,6 +480,7 @@ mod tests {
             storage.get_concurrency_manager(),
             PerfLevel::EnableCount,
         );
+        let coprv2 = coprocessor_v2::Endpoint::new(&coprocessor_v2::Config::default());
         let debug_thread_pool = Arc::new(
             TokioBuilder::new()
                 .threaded_scheduler()
@@ -455,12 +489,15 @@ mod tests {
                 .build()
                 .unwrap(),
         );
+        let mock_store_id = 5;
         let addr = Arc::new(Mutex::new(None));
         let mut server = Server::new(
+            mock_store_id,
             &cfg,
             &security_mgr,
             storage,
             cop,
+            coprv2,
             router.clone(),
             MockResolver {
                 quick_fail: Arc::clone(&quick_fail),

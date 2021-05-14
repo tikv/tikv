@@ -1,3 +1,58 @@
+["KV:Cloud:IO"]
+error = '''
+KV:Cloud:IO
+'''
+
+["KV:Cloud:SSL"]
+error = '''
+KV:Cloud:SSL
+'''
+
+["KV:Cloud:Proto"]
+error = '''
+KV:Cloud:Proto
+'''
+
+["KV:Cloud:Unknown"]
+error = '''
+KV:Cloud:Unknown
+'''
+
+["KV:Cloud:Timeout"]
+error = '''
+KV:Cloud:Timeout
+'''
+
+["KV:Cloud:InvalidInput"]
+error = '''
+KV:Cloud:InvalidInput
+'''
+
+["KV:Cloud:ApiInternal"]
+error = '''
+KV:Cloud:ApiInternal
+'''
+
+["KV:Cloud:ApiNotFound"]
+error = '''
+KV:Cloud:ApiNotFound
+'''
+
+["KV:Cloud:ApiAuthentication"]
+error = '''
+KV:Cloud:ApiAuthentication
+'''
+
+["KV:Cloud:WrongMasterKey"]
+error = '''
+KV:Cloud:WrongMasterKey
+'''
+
+["KV:Cloud:BothMasterKeyFail"]
+error = '''
+KV:Cloud:BothMasterKeyFail
+'''
+
 ["KV:Codec:Io"]
 error = '''
 KV:Codec:Io
@@ -56,6 +111,11 @@ KV:Coprocessor:UnknownSignature
 ["KV:Coprocessor:Eval"]
 error = '''
 KV:Coprocessor:Eval
+'''
+
+["KV:Coprocessor:CorruptedData"]
+error = '''
+KV:Coprocessor:CorruptedData
 '''
 
 ["KV:Coprocessor:StorageError"]
@@ -238,6 +298,16 @@ error = '''
 KV:Raft:ConfChangeError
 '''
 
+["KV:Raftstore:ProposalInMergingMode"]
+error = '''
+KV:Raftstore:ProposalInMergingMode
+'''
+
+["KV:Raftstore:ReadIndexNotReady"]
+error = '''
+KV:Raftstore:ReadIndexNotReady
+'''
+
 ["KV:Raftstore:EntryTooLarge"]
 error = '''
 KV:Raftstore:EntryTooLarge
@@ -401,6 +471,11 @@ KV:SSTImporter:WrongKeyPrefix
 ["KV:SSTImporter:BadFormat"]
 error = '''
 KV:SSTImporter:BadFormat
+'''
+
+["KV:SSTImporter:FileConflict"]
+error = '''
+KV:SSTImporter:FileConflict
 '''
 
 ["KV:Storage:Timeout"]

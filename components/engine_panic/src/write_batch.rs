@@ -31,9 +31,7 @@ impl WriteBatch<PanicEngine> for PanicWriteBatch {
     fn write_opt(&self, _: &WriteOptions) -> Result<()> {
         panic!()
     }
-}
 
-impl Mutable for PanicWriteBatch {
     fn data_size(&self) -> usize {
         panic!()
     }
@@ -59,6 +57,9 @@ impl Mutable for PanicWriteBatch {
     fn rollback_to_save_point(&mut self) -> Result<()> {
         panic!()
     }
+}
+
+impl Mutable for PanicWriteBatch {
     fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
         panic!()
     }
@@ -70,6 +71,9 @@ impl Mutable for PanicWriteBatch {
         panic!()
     }
     fn delete_cf(&mut self, cf: &str, key: &[u8]) -> Result<()> {
+        panic!()
+    }
+    fn delete_range(&mut self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         panic!()
     }
     fn delete_range_cf(&mut self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {

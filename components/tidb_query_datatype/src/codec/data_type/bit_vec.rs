@@ -28,7 +28,7 @@ impl BitVec {
             self.data.push(0);
         }
 
-        let mask = (1 as u64) << (self.length & (BITS - 1));
+        let mask = (1_u64) << (self.length & (BITS - 1));
         self.length += 1;
         if value {
             self.data[idx] |= mask;
@@ -39,7 +39,7 @@ impl BitVec {
 
     pub fn replace(&mut self, idx: usize, value: bool) {
         assert!(idx < self.length);
-        let mask = (1 as u64) << (idx & (BITS - 1));
+        let mask = (1_u64) << (idx & (BITS - 1));
         let pos = idx >> 6;
         if value {
             self.data[pos] |= mask;
@@ -77,7 +77,7 @@ impl BitVec {
     #[inline]
     pub fn get(&self, idx: usize) -> bool {
         assert!(idx < self.length);
-        let mask = (1 as u64) << (idx & (BITS - 1));
+        let mask = (1_u64) << (idx & (BITS - 1));
         let pos = idx >> 6;
         (self.data[pos] & mask) != 0
     }

@@ -1,12 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::{
-    util::{block_on_external_io, error_stream, retry, AsyncReadAsSyncStreamOfBytes, RetryError},
-    ExternalStorage,
-};
-
 use std::{convert::TryInto, fmt::Display, io, sync::Arc};
 
+use super::ExternalStorage;
 use futures_util::{
     future::TryFutureExt,
     io::{AsyncRead, AsyncReadExt, Cursor},
@@ -21,6 +17,9 @@ use tame_gcs::{
     types::{BucketName, ObjectId},
 };
 use tame_oauth::gcp::{ServiceAccountAccess, ServiceAccountInfo, TokenOrRequest};
+use tikv_util::stream::{
+    block_on_external_io, error_stream, retry, AsyncReadAsSyncStreamOfBytes, RetryError,
+};
 
 const HARDCODED_ENDPOINTS: &[&str] = &[
     "https://www.googleapis.com/upload/storage/v1",
@@ -119,10 +118,6 @@ impl From<RequestError> for io::Error {
 }
 
 impl RetryError for RequestError {
-    fn placeholder() -> Self {
-        Self::OAuth(tame_oauth::Error::InvalidKeyFormat)
-    }
-
     fn is_retryable(&self) -> bool {
         match self {
             // FIXME: Inspect the error source?

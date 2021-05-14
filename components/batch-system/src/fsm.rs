@@ -12,6 +12,12 @@ const NOTIFYSTATE_IDLE: usize = 1;
 // The FSM is expected to be dropped.
 const NOTIFYSTATE_DROP: usize = 2;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Priority {
+    Low,
+    Normal,
+}
+
 /// `FsmScheduler` schedules `Fsm` for later handles.
 pub trait FsmScheduler {
     type Fsm: Fsm;
@@ -44,6 +50,10 @@ pub trait Fsm {
     {
         None
     }
+
+    fn get_priority(&self) -> Priority {
+        Priority::Normal
+    }
 }
 
 pub struct FsmState<N> {
@@ -61,10 +71,13 @@ impl<N: Fsm> FsmState<N> {
 
     /// Take the fsm if it's IDLE.
     pub fn take_fsm(&self) -> Option<Box<N>> {
-        let previous_state =
-            self.status
-                .compare_and_swap(NOTIFYSTATE_IDLE, NOTIFYSTATE_NOTIFIED, Ordering::AcqRel);
-        if previous_state != NOTIFYSTATE_IDLE {
+        let res = self.status.compare_exchange(
+            NOTIFYSTATE_IDLE,
+            NOTIFYSTATE_NOTIFIED,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+        if res.is_err() {
             return None;
         }
 
@@ -102,20 +115,21 @@ impl<N: Fsm> FsmState<N> {
         let previous = self.data.swap(Box::into_raw(fsm), Ordering::AcqRel);
         let mut previous_status = NOTIFYSTATE_NOTIFIED;
         if previous.is_null() {
-            previous_status = self.status.compare_and_swap(
+            let res = self.status.compare_exchange(
                 NOTIFYSTATE_NOTIFIED,
                 NOTIFYSTATE_IDLE,
                 Ordering::AcqRel,
+                Ordering::Acquire,
             );
-            match previous_status {
-                NOTIFYSTATE_NOTIFIED => return,
-                NOTIFYSTATE_DROP => {
+            previous_status = match res {
+                Ok(_) => return,
+                Err(NOTIFYSTATE_DROP) => {
                     let ptr = self.data.swap(ptr::null_mut(), Ordering::AcqRel);
                     unsafe { Box::from_raw(ptr) };
                     return;
                 }
-                _ => {}
-            }
+                Err(s) => s,
+            };
         }
         panic!("invalid release state: {:?} {}", previous, previous_status);
     }

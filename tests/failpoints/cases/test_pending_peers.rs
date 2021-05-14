@@ -75,17 +75,7 @@ fn test_pending_snapshot() {
         let k = i.to_string().into_bytes();
         cluster.must_put(&k, &k.clone());
     }
-    for _ in 0..100 {
-        if cluster
-            .get_raft_engine(2)
-            .get(&keys::raft_log_key(1, state2.get_index() + 5 * gc_limit))
-            .unwrap()
-            .is_none()
-        {
-            break;
-        }
-        sleep_ms(50);
-    }
+    cluster.wait_log_truncated(1, 2, state2.get_index() + 5 * gc_limit);
 
     // Make sure peer 1 has applied snapshot.
     cluster.clear_send_filters();

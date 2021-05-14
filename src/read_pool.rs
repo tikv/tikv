@@ -1,18 +1,23 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use self::metrics::*;
-use crate::config::UnifiedReadPoolConfig;
-use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter};
+use std::future::Future;
+use std::sync::{Arc, Mutex};
+
 use futures::channel::oneshot;
 use futures::future::TryFutureExt;
 use kvproto::kvrpcpb::CommandPri;
 use prometheus::IntGauge;
-use std::future::Future;
-use std::sync::{Arc, Mutex};
-use tikv_util::yatp_pool::{self, FuturePool, PoolTicker, YatpPoolBuilder};
+use thiserror::Error;
+use yatp::pool::Remote;
 use yatp::queue::Extras;
 use yatp::task::future::TaskCell;
-use yatp::Remote;
+
+use file_system::{set_io_type, IOType};
+use tikv_util::yatp_pool::{self, FuturePool, PoolTicker, YatpPoolBuilder};
+
+use self::metrics::*;
+use crate::config::UnifiedReadPoolConfig;
+use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter};
 
 pub enum ReadPool {
     FuturePools {
@@ -194,6 +199,7 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
         .after_start(move || {
             let engine = raftkv.lock().unwrap().clone();
             set_tls_engine(engine);
+            set_io_type(IOType::ForegroundRead);
         })
         .before_stop(|| unsafe {
             destroy_tls_engine::<E>();
@@ -223,23 +229,16 @@ impl From<Vec<FuturePool>> for ReadPool {
     }
 }
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum ReadPoolError {
-        FuturePoolFull(err: yatp_pool::Full) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        UnifiedReadPoolFull {
-            display("Unified read pool is full")
-        }
-        Canceled(err: oneshot::Canceled) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-    }
+#[derive(Debug, Error)]
+pub enum ReadPoolError {
+    #[error("{0}")]
+    FuturePoolFull(#[from] yatp_pool::Full),
+
+    #[error("Unified read pool is full")]
+    UnifiedReadPoolFull,
+
+    #[error("{0}")]
+    Canceled(#[from] oneshot::Canceled),
 }
 
 mod metrics {

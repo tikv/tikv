@@ -72,4 +72,8 @@ impl MiscExt for PanicEngine {
     fn get_cf_num_files_at_level(&self, cf: &str, level: usize) -> Result<Option<u64>> {
         panic!()
     }
+
+    fn is_stalled_or_stopped(&self) -> bool {
+        panic!()
+    }
 }

@@ -4,7 +4,7 @@
 
 mod consistency_check;
 pub(super) mod metrics;
-mod reader;
+pub(crate) mod reader;
 pub(super) mod txn;
 
 pub use self::consistency_check::{Mvcc as MvccConsistencyCheckObserver, MvccInfoIterator};
@@ -16,83 +16,137 @@ pub use txn_types::{
     SHORT_VALUE_MAX_LEN,
 };
 
-use error_code::{self, ErrorCode, ErrorCodeExt};
 use std::error;
-use std::fmt;
 use std::io;
+
+use error_code::{self, ErrorCode, ErrorCodeExt};
+use thiserror::Error;
+
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum ErrorInner {
-        Engine(err: crate::storage::kv::Error) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        Io(err: io::Error) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        Codec(err: tikv_util::codec::Error) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        KeyIsLocked(info: kvproto::kvrpcpb::LockInfo) {
-            display("key is locked (backoff or cleanup) {:?}", info)
-        }
-        BadFormat(err: txn_types::Error ) {
-            cause(err)
-            display("{}", err)
-        }
-        Committed { commit_ts: TimeStamp } {
-            display("txn already committed @{}", commit_ts)
-        }
-        PessimisticLockRolledBack { start_ts: TimeStamp, key: Vec<u8> } {
-            display("pessimistic lock already rollbacked, start_ts:{}, key:{}", start_ts, log_wrappers::Value::key(key))
-        }
-        TxnLockNotFound { start_ts: TimeStamp, commit_ts: TimeStamp, key: Vec<u8> } {
-            display("txn lock not found {}-{} key:{}", start_ts, commit_ts, log_wrappers::Value::key(key))
-        }
-        TxnNotFound { start_ts:  TimeStamp, key: Vec<u8> } {
-            display("txn not found {} key: {}", start_ts, log_wrappers::Value::key(key))
-        }
-        LockTypeNotMatch { start_ts: TimeStamp, key: Vec<u8>, pessimistic: bool } {
-            display("lock type not match, start_ts:{}, key:{}, pessimistic:{}", start_ts, log_wrappers::Value::key(key), pessimistic)
-        }
-        WriteConflict { start_ts: TimeStamp, conflict_start_ts: TimeStamp, conflict_commit_ts: TimeStamp, key: Vec<u8>, primary: Vec<u8> } {
-            display("write conflict, start_ts:{}, conflict_start_ts:{}, conflict_commit_ts:{}, key:{}, primary:{}",
-                    start_ts, conflict_start_ts, conflict_commit_ts, log_wrappers::Value::key(key), log_wrappers::Value::key(primary))
-        }
-        Deadlock { start_ts: TimeStamp, lock_ts: TimeStamp, lock_key: Vec<u8>, deadlock_key_hash: u64 } {
-            display("deadlock occurs between txn:{} and txn:{}, lock_key:{}, deadlock_key_hash:{}",
-                    start_ts, lock_ts, log_wrappers::Value::key(lock_key), deadlock_key_hash)
-        }
-        AlreadyExist { key: Vec<u8> } {
-            display("key {} already exists", log_wrappers::Value::key(key))
-        }
-        DefaultNotFound { key: Vec<u8> } {
-            display("default not found: key:{}, maybe read truncated/dropped table data?", log_wrappers::Value::key(key))
-        }
-        CommitTsExpired { start_ts: TimeStamp, commit_ts: TimeStamp, key: Vec<u8>, min_commit_ts: TimeStamp } {
-            display("try to commit key {} with commit_ts {} but min_commit_ts is {}", log_wrappers::Value::key(key), commit_ts, min_commit_ts)
-        }
-        KeyVersion { display("bad format key(version)") }
-        PessimisticLockNotFound { start_ts: TimeStamp, key: Vec<u8> } {
-            display("pessimistic lock not found, start_ts:{}, key:{}", start_ts, log_wrappers::Value::key(key))
-        }
-        CommitTsTooLarge { start_ts: TimeStamp, min_commit_ts: TimeStamp, max_commit_ts: TimeStamp } {
-            display("min_commit_ts {} is larger than max_commit_ts {}, start_ts: {}", min_commit_ts, max_commit_ts, start_ts)
-        }
-        Other(err: Box<dyn error::Error + Sync + Send>) {
-            from()
-            cause(err.as_ref())
-            display("{:?}", err)
-        }
-    }
+#[derive(Debug, Error)]
+pub enum ErrorInner {
+    #[error("{0}")]
+    Engine(#[from] crate::storage::kv::Error),
+
+    #[error("{0}")]
+    Io(#[from] io::Error),
+
+    #[error("{0}")]
+    Codec(#[from] tikv_util::codec::Error),
+
+    #[error("key is locked (backoff or cleanup) {0:?}")]
+    KeyIsLocked(kvproto::kvrpcpb::LockInfo),
+
+    #[error("{0}")]
+    BadFormat(#[source] txn_types::Error),
+
+    #[error(
+        "txn already committed, start_ts: {}, commit_ts: {}, key: {}",
+        .start_ts, .commit_ts, log_wrappers::Value::key(.key)
+    )]
+    Committed {
+        start_ts: TimeStamp,
+        commit_ts: TimeStamp,
+        key: Vec<u8>,
+    },
+
+    #[error(
+        "pessimistic lock already rollbacked, start_ts:{}, key:{}",
+        .start_ts, log_wrappers::Value::key(.key)
+    )]
+    PessimisticLockRolledBack { start_ts: TimeStamp, key: Vec<u8> },
+
+    #[error(
+        "txn lock not found {}-{} key:{}",
+        .start_ts, .commit_ts, log_wrappers::Value::key(.key)
+    )]
+    TxnLockNotFound {
+        start_ts: TimeStamp,
+        commit_ts: TimeStamp,
+        key: Vec<u8>,
+    },
+
+    #[error("txn not found {} key: {}", .start_ts, log_wrappers::Value::key(.key))]
+    TxnNotFound { start_ts: TimeStamp, key: Vec<u8> },
+
+    #[error(
+        "lock type not match, start_ts:{}, key:{}, pessimistic:{}",
+        .start_ts, log_wrappers::Value::key(.key), .pessimistic
+    )]
+    LockTypeNotMatch {
+        start_ts: TimeStamp,
+        key: Vec<u8>,
+        pessimistic: bool,
+    },
+
+    #[error(
+        "write conflict, start_ts:{}, conflict_start_ts:{}, conflict_commit_ts:{}, key:{}, primary:{}",
+        .start_ts, .conflict_start_ts, .conflict_commit_ts,
+        log_wrappers::Value::key(.key), log_wrappers::Value::key(.primary)
+    )]
+    WriteConflict {
+        start_ts: TimeStamp,
+        conflict_start_ts: TimeStamp,
+        conflict_commit_ts: TimeStamp,
+        key: Vec<u8>,
+        primary: Vec<u8>,
+    },
+
+    #[error(
+        "deadlock occurs between txn:{} and txn:{}, lock_key:{}, deadlock_key_hash:{}",
+        .start_ts, .lock_ts, log_wrappers::Value::key(.lock_key), .deadlock_key_hash
+    )]
+    Deadlock {
+        start_ts: TimeStamp,
+        lock_ts: TimeStamp,
+        lock_key: Vec<u8>,
+        deadlock_key_hash: u64,
+        wait_chain: Vec<kvproto::deadlock::WaitForEntry>,
+    },
+
+    #[error("key {} already exists", log_wrappers::Value::key(.key))]
+    AlreadyExist { key: Vec<u8> },
+
+    #[error(
+        "default not found: key:{}, maybe read truncated/dropped table data?",
+        log_wrappers::Value::key(.key)
+    )]
+    DefaultNotFound { key: Vec<u8> },
+
+    #[error(
+        "try to commit key {} with commit_ts {} but min_commit_ts is {}",
+        log_wrappers::Value::key(.key), .commit_ts, .min_commit_ts
+    )]
+    CommitTsExpired {
+        start_ts: TimeStamp,
+        commit_ts: TimeStamp,
+        key: Vec<u8>,
+        min_commit_ts: TimeStamp,
+    },
+
+    #[error("bad format key(version)")]
+    KeyVersion,
+
+    #[error(
+        "pessimistic lock not found, start_ts:{}, key:{}",
+        .start_ts, log_wrappers::Value::key(.key)
+    )]
+    PessimisticLockNotFound { start_ts: TimeStamp, key: Vec<u8> },
+
+    #[error(
+        "min_commit_ts {} is larger than max_commit_ts {}, start_ts: {}",
+        .min_commit_ts, .max_commit_ts, .start_ts
+    )]
+    CommitTsTooLarge {
+        start_ts: TimeStamp,
+        min_commit_ts: TimeStamp,
+        max_commit_ts: TimeStamp,
+    },
+
+    #[error("{0:?}")]
+    Other(#[from] Box<dyn error::Error + Sync + Send>),
 }
 
 impl ErrorInner {
@@ -142,11 +196,13 @@ impl ErrorInner {
                 lock_ts,
                 lock_key,
                 deadlock_key_hash,
+                wait_chain,
             } => Some(ErrorInner::Deadlock {
                 start_ts: *start_ts,
                 lock_ts: *lock_ts,
                 lock_key: lock_key.to_owned(),
                 deadlock_key_hash: *deadlock_key_hash,
+                wait_chain: wait_chain.clone(),
             }),
             ErrorInner::AlreadyExist { key } => Some(ErrorInner::AlreadyExist { key: key.clone() }),
             ErrorInner::DefaultNotFound { key } => Some(ErrorInner::DefaultNotFound {
@@ -164,8 +220,14 @@ impl ErrorInner {
                 min_commit_ts: *min_commit_ts,
             }),
             ErrorInner::KeyVersion => Some(ErrorInner::KeyVersion),
-            ErrorInner::Committed { commit_ts } => Some(ErrorInner::Committed {
+            ErrorInner::Committed {
+                start_ts,
+                commit_ts,
+                key,
+            } => Some(ErrorInner::Committed {
+                start_ts: *start_ts,
                 commit_ts: *commit_ts,
+                key: key.clone(),
             }),
             ErrorInner::PessimisticLockRolledBack { start_ts, key } => {
                 Some(ErrorInner::PessimisticLockRolledBack {
@@ -193,29 +255,13 @@ impl ErrorInner {
     }
 }
 
-pub struct Error(pub Box<ErrorInner>);
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct Error(#[from] pub Box<ErrorInner>);
 
 impl Error {
     pub fn maybe_clone(&self) -> Option<Error> {
         self.0.maybe_clone().map(Error::from)
-    }
-}
-
-impl fmt::Debug for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&self.0, f)
-    }
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        std::error::Error::source(&self.0)
     }
 }
 
@@ -321,7 +367,8 @@ pub mod tests {
     use super::*;
     use crate::storage::kv::{Engine, Modify, ScanMode, SnapContext, Snapshot, WriteData};
     use engine_traits::CF_WRITE;
-    use kvproto::kvrpcpb::{Context, IsolationLevel};
+    use kvproto::kvrpcpb::Context;
+    use std::borrow::Cow;
     use txn_types::Key;
 
     pub fn write<E: Engine>(engine: &E, ctx: &Context, modifies: Vec<Modify>) {
@@ -336,54 +383,70 @@ pub mod tests {
         let ts = ts.into();
         let ctx = SnapContext::default();
         let snapshot = engine.snapshot(ctx).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let mut reader = SnapshotReader::new(ts, snapshot, true);
+        let key = &Key::from_raw(key);
+
+        check_lock(&mut reader, key, ts).unwrap();
+        assert_eq!(reader.get(key, ts).unwrap().unwrap(), expect);
+    }
+
+    pub fn must_get_no_lock_check<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        ts: impl Into<TimeStamp>,
+        expect: &[u8],
+    ) {
+        let ts = ts.into();
+        let ctx = SnapContext::default();
+        let snapshot = engine.snapshot(ctx).unwrap();
+        let mut reader = SnapshotReader::new(ts, snapshot, true);
         assert_eq!(
-            reader
-                .get(&Key::from_raw(key), ts, Some(ts), false)
-                .unwrap()
-                .unwrap(),
+            reader.get(&Key::from_raw(key), ts).unwrap().unwrap(),
             expect
         );
     }
 
-    pub fn must_get_rc<E: Engine>(engine: &E, key: &[u8], ts: impl Into<TimeStamp>, expect: &[u8]) {
-        let ts = ts.into();
-        let ctx = SnapContext::default();
-        let snapshot = engine.snapshot(ctx).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Rc);
-        assert_eq!(
-            reader
-                .get(&Key::from_raw(key), ts, Some(ts), false)
-                .unwrap()
-                .unwrap(),
-            expect
-        );
+    /// Checks if there is a lock which blocks reading the key at the given ts.
+    /// Returns the blocking lock as the `Err` variant.
+    fn check_lock(
+        reader: &mut SnapshotReader<impl Snapshot>,
+        key: &Key,
+        ts: TimeStamp,
+    ) -> Result<()> {
+        if let Some(lock) = reader.load_lock(key)? {
+            if let Err(e) = Lock::check_ts_conflict(Cow::Owned(lock), key, ts, &Default::default())
+            {
+                return Err(e.into());
+            }
+        }
+        Ok(())
     }
 
     pub fn must_get_none<E: Engine>(engine: &E, key: &[u8], ts: impl Into<TimeStamp>) {
         let ts = ts.into();
         let ctx = SnapContext::default();
         let snapshot = engine.snapshot(ctx).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
-        assert!(reader
-            .get(&Key::from_raw(key), ts, Some(ts), false)
-            .unwrap()
-            .is_none());
+        let mut reader = SnapshotReader::new(ts, snapshot, true);
+        let key = &Key::from_raw(key);
+        check_lock(&mut reader, key, ts).unwrap();
+        assert!(reader.get(key, ts).unwrap().is_none());
     }
 
     pub fn must_get_err<E: Engine>(engine: &E, key: &[u8], ts: impl Into<TimeStamp>) {
         let ts = ts.into();
         let ctx = SnapContext::default();
         let snapshot = engine.snapshot(ctx).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
-        assert!(reader
-            .get(&Key::from_raw(key), ts, Some(ts), false)
-            .is_err());
+        let mut reader = SnapshotReader::new(ts, snapshot, true);
+        let key = &Key::from_raw(key);
+        if check_lock(&mut reader, key, ts).is_err() {
+            return;
+        }
+        assert!(reader.get(key, ts).is_err());
     }
 
     pub fn must_locked<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) -> Lock {
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snapshot, None, true);
         let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
         assert_eq!(lock.ts, start_ts.into());
         assert_ne!(lock.lock_type, LockType::Pessimistic);
@@ -397,7 +460,7 @@ pub mod tests {
         ttl: u64,
     ) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snapshot, None, true);
         let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
         assert_eq!(lock.ts, start_ts.into());
         assert_ne!(lock.lock_type, LockType::Pessimistic);
@@ -413,7 +476,7 @@ pub mod tests {
         is_pessimistic: bool,
     ) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snapshot, None, true);
         let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
         assert_eq!(lock.ts, start_ts.into());
         assert_eq!(lock.ttl, ttl);
@@ -427,7 +490,7 @@ pub mod tests {
 
     pub fn must_unlocked<E: Engine>(engine: &E, key: &[u8]) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snapshot, None, true);
         assert!(reader.load_lock(&Key::from_raw(key)).unwrap().is_none());
     }
 
@@ -468,11 +531,13 @@ pub mod tests {
 
     pub fn must_seek_write_none<E: Engine>(engine: &E, key: &[u8], ts: impl Into<TimeStamp>) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
-        assert!(reader
-            .seek_write(&Key::from_raw(key), ts.into())
-            .unwrap()
-            .is_none());
+        let mut reader = MvccReader::new(snapshot, None, true);
+        assert!(
+            reader
+                .seek_write(&Key::from_raw(key), ts.into())
+                .unwrap()
+                .is_none()
+        );
     }
 
     pub fn must_seek_write<E: Engine>(
@@ -484,7 +549,7 @@ pub mod tests {
         write_type: WriteType,
     ) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snapshot, None, true);
         let (t, write) = reader
             .seek_write(&Key::from_raw(key), ts.into())
             .unwrap()
@@ -501,9 +566,9 @@ pub mod tests {
         commit_ts: impl Into<TimeStamp>,
     ) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let mut reader = SnapshotReader::new(start_ts.into(), snapshot, true);
         let (ts, write_type) = reader
-            .get_txn_commit_record(&Key::from_raw(key), start_ts.into())
+            .get_txn_commit_record(&Key::from_raw(key))
             .unwrap()
             .info()
             .unwrap();
@@ -517,9 +582,9 @@ pub mod tests {
         start_ts: impl Into<TimeStamp>,
     ) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let mut reader = SnapshotReader::new(start_ts.into(), snapshot, true);
 
-        let ret = reader.get_txn_commit_record(&Key::from_raw(key), start_ts.into());
+        let ret = reader.get_txn_commit_record(&Key::from_raw(key));
         assert!(ret.is_ok());
         match ret.unwrap().info() {
             None => {}
@@ -530,12 +595,12 @@ pub mod tests {
     }
 
     pub fn must_get_rollback_ts<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) {
-        let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
-
         let start_ts = start_ts.into();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+
         let (ts, write_type) = reader
-            .get_txn_commit_record(&Key::from_raw(key), start_ts)
+            .get_txn_commit_record(&Key::from_raw(key))
             .unwrap()
             .info()
             .unwrap();
@@ -549,10 +614,10 @@ pub mod tests {
         start_ts: impl Into<TimeStamp>,
     ) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let mut reader = SnapshotReader::new(start_ts.into(), snapshot, true);
 
         let ret = reader
-            .get_txn_commit_record(&Key::from_raw(key), start_ts.into())
+            .get_txn_commit_record(&Key::from_raw(key))
             .unwrap()
             .info();
         assert_eq!(ret, None);
@@ -565,7 +630,7 @@ pub mod tests {
         protected: bool,
     ) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snapshot, None, true);
 
         let start_ts = start_ts.into();
         let (ts, write) = reader
@@ -586,7 +651,7 @@ pub mod tests {
         gc_fence: Option<T>,
     ) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snapshot, None, true);
 
         let start_ts = start_ts.into();
         let overlapped_start_ts = overlapped_start_ts.into();
@@ -613,8 +678,7 @@ pub mod tests {
             next_start.map(|x| Key::from_raw(x).append_ts(TimeStamp::zero())),
         );
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader =
-            MvccReader::new(snapshot, Some(ScanMode::Mixed), false, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snapshot, Some(ScanMode::Mixed), false);
         assert_eq!(
             reader.scan_keys(start.map(Key::from_raw), limit).unwrap(),
             expect

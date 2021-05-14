@@ -54,13 +54,13 @@ impl ReqBatcher {
         tx: &Sender<(u64, batch_commands_response::Response)>,
     ) {
         if self.gets.len() > 10 {
-            let gets = std::mem::replace(&mut self.gets, vec![]);
-            let ids = std::mem::replace(&mut self.get_ids, vec![]);
+            let gets = std::mem::take(&mut self.gets);
+            let ids = std::mem::take(&mut self.get_ids);
             future_batch_get_command(storage, ids, gets, tx.clone());
         }
         if self.raw_gets.len() > 16 {
-            let gets = std::mem::replace(&mut self.raw_gets, vec![]);
-            let ids = std::mem::replace(&mut self.raw_get_ids, vec![]);
+            let gets = std::mem::take(&mut self.raw_gets);
+            let ids = std::mem::take(&mut self.raw_get_ids);
             future_batch_raw_get_command(storage, ids, gets, tx.clone());
         }
     }
@@ -71,13 +71,13 @@ impl ReqBatcher {
         tx: &Sender<(u64, batch_commands_response::Response)>,
     ) {
         if !self.gets.is_empty() {
-            let gets = std::mem::replace(&mut self.gets, vec![]);
-            let ids = std::mem::replace(&mut self.get_ids, vec![]);
+            let gets = std::mem::take(&mut self.gets);
+            let ids = std::mem::take(&mut self.get_ids);
             future_batch_get_command(storage, ids, gets, tx.clone());
         }
         if !self.raw_gets.is_empty() {
-            let gets = std::mem::replace(&mut self.raw_gets, vec![]);
-            let ids = std::mem::replace(&mut self.raw_get_ids, vec![]);
+            let gets = std::mem::take(&mut self.raw_gets);
+            let ids = std::mem::take(&mut self.raw_get_ids);
             future_batch_raw_get_command(storage, ids, gets, tx.clone());
         }
     }
@@ -113,8 +113,10 @@ fn future_batch_get_command<E: Engine, L: LockManager>(
                             Err(e) => resp.set_error(extract_key_error(&e)),
                         }
                     }
-                    let mut res = batch_commands_response::Response::default();
-                    res.cmd = Some(batch_commands_response::response::Cmd::Get(resp));
+                    let res = batch_commands_response::Response {
+                        cmd: Some(batch_commands_response::response::Cmd::Get(resp)),
+                        ..Default::default()
+                    };
                     if tx.send_and_notify((req, res)).is_err() {
                         error!("KvService response batch commands fail");
                     }
@@ -127,8 +129,10 @@ fn future_batch_get_command<E: Engine, L: LockManager>(
                 } else if let Err(e) = e {
                     resp.set_error(extract_key_error(&e));
                 }
-                let mut res = batch_commands_response::Response::default();
-                res.cmd = Some(batch_commands_response::response::Cmd::Get(resp));
+                let res = batch_commands_response::Response {
+                    cmd: Some(batch_commands_response::response::Cmd::Get(resp)),
+                    ..Default::default()
+                };
                 for req in requests {
                     if tx.send_and_notify((req, res.clone())).is_err() {
                         error!("KvService response batch commands fail");
@@ -168,8 +172,10 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager>(
                             Err(e) => resp.set_error(format!("{}", e)),
                         }
                     }
-                    let mut res = batch_commands_response::Response::default();
-                    res.cmd = Some(batch_commands_response::response::Cmd::RawGet(resp));
+                    let res = batch_commands_response::Response {
+                        cmd: Some(batch_commands_response::response::Cmd::RawGet(resp)),
+                        ..Default::default()
+                    };
                     if tx.send_and_notify((req, res)).is_err() {
                         error!("KvService response batch commands fail");
                     }
@@ -182,8 +188,10 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager>(
                 } else if let Err(e) = e {
                     resp.set_error(format!("{}", e));
                 }
-                let mut res = batch_commands_response::Response::default();
-                res.cmd = Some(batch_commands_response::response::Cmd::RawGet(resp));
+                let res = batch_commands_response::Response {
+                    cmd: Some(batch_commands_response::response::Cmd::RawGet(resp)),
+                    ..Default::default()
+                };
                 for req in requests {
                     if tx.send_and_notify((req, res.clone())).is_err() {
                         error!("KvService response batch commands fail");

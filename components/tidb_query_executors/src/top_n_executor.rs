@@ -276,7 +276,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
                                     let src: &VectorValue = item.source_data.physical_columns[column_index].decoded();
                                     let src_ref = TT::borrow_vector_value(src);
                                     // TODO: This clone is not necessary.
-                                    dest_column.push(src_ref.get_option_ref(item.source_data.logical_rows[item.logical_row_index]).map(|x| x.to_owned_value()));
+                                    dest_column.push(src_ref.get_option_ref(item.source_data.logical_rows[item.logical_row_index]).map(|x| x.into_owned_value()));
                                 }
                             },
                         }
@@ -495,9 +495,11 @@ mod tests {
 
         let mut exec = BatchTopNExecutor::new_for_test(
             src_exec,
-            vec![RpnExpressionBuilder::new_for_test()
-                .push_constant_for_test(1)
-                .build_for_test()],
+            vec![
+                RpnExpressionBuilder::new_for_test()
+                    .push_constant_for_test(1)
+                    .build_for_test(),
+            ],
             vec![false],
             0,
         );
@@ -531,9 +533,11 @@ mod tests {
 
         let mut exec = BatchTopNExecutor::new_for_test(
             src_exec,
-            vec![RpnExpressionBuilder::new_for_test()
-                .push_column_ref_for_test(0)
-                .build_for_test()],
+            vec![
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(0)
+                    .build_for_test(),
+            ],
             vec![false],
             10,
         );
@@ -650,9 +654,11 @@ mod tests {
 
         let mut exec = BatchTopNExecutor::new_for_test(
             src_exec,
-            vec![RpnExpressionBuilder::new_for_test()
-                .push_column_ref_for_test(2)
-                .build_for_test()],
+            vec![
+                RpnExpressionBuilder::new_for_test()
+                    .push_column_ref_for_test(2)
+                    .build_for_test(),
+            ],
             vec![false],
             100,
         );
@@ -1201,9 +1207,11 @@ mod tests {
             let src_exec = make_src_executor_unsigned();
             let mut exec = BatchTopNExecutor::new_for_test(
                 src_exec,
-                vec![RpnExpressionBuilder::new_for_test()
-                    .push_column_ref_for_test(col_index)
-                    .build_for_test()],
+                vec![
+                    RpnExpressionBuilder::new_for_test()
+                        .push_column_ref_for_test(col_index)
+                        .build_for_test(),
+                ],
                 vec![is_desc],
                 5,
             );

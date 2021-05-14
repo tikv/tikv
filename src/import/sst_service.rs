@@ -1,9 +1,12 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::f64::INFINITY;
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
+use collections::HashSet;
 
 use engine_traits::{name_to_cf, KvEngine, CF_DEFAULT};
+use file_system::{set_io_type, IOType};
 use futures::executor::{ThreadPool, ThreadPoolBuilder};
 use futures::{TryFutureExt, TryStreamExt};
 use grpcio::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
@@ -26,10 +29,9 @@ use tikv_util::future::create_stream_with_buffer;
 use tikv_util::future::paired_future_callback;
 use tikv_util::time::{Instant, Limiter};
 
-use sst_importer::import_mode::*;
 use sst_importer::metrics::*;
 use sst_importer::service::*;
-use sst_importer::{error_inc, Config, Error, SSTImporter};
+use sst_importer::{error_inc, sst_meta_to_path, Config, Error, Result, SSTImporter};
 
 /// ImportSSTService provides tikv-server with the ability to ingest SST files.
 ///
@@ -41,18 +43,18 @@ where
     E: KvEngine,
 {
     cfg: Config,
-    router: Router,
     engine: E,
+    router: Router,
     threads: ThreadPool,
     importer: Arc<SSTImporter>,
-    switcher: ImportModeSwitcher<E>,
     limiter: Limiter,
+    task_slots: Arc<Mutex<HashSet<PathBuf>>>,
 }
 
 impl<E, Router> ImportSSTService<E, Router>
 where
     E: KvEngine,
-    Router: RaftStoreRouter<E>,
+    Router: 'static + RaftStoreRouter<E>,
 {
     pub fn new(
         cfg: Config,
@@ -63,27 +65,41 @@ where
         let threads = ThreadPoolBuilder::new()
             .pool_size(cfg.num_threads)
             .name_prefix("sst-importer")
-            .after_start(move |_| tikv_alloc::add_thread_memory_accessor())
+            .after_start(move |_| {
+                tikv_alloc::add_thread_memory_accessor();
+                set_io_type(IOType::Import);
+            })
             .before_stop(move |_| tikv_alloc::remove_thread_memory_accessor())
             .create()
             .unwrap();
-        let switcher = ImportModeSwitcher::new(&cfg, &threads, engine.clone());
+        importer.start_switch_mode_check(&threads, engine.clone());
         ImportSSTService {
             cfg,
-            router,
             engine,
             threads,
+            router,
             importer,
-            switcher,
-            limiter: Limiter::new(INFINITY),
+            limiter: Limiter::new(f64::INFINITY),
+            task_slots: Arc::new(Mutex::new(HashSet::default())),
         }
+    }
+
+    fn acquire_lock(task_slots: &Arc<Mutex<HashSet<PathBuf>>>, meta: &SstMeta) -> Result<bool> {
+        let mut slots = task_slots.lock().unwrap();
+        let p = sst_meta_to_path(meta)?;
+        Ok(slots.insert(p))
+    }
+    fn release_lock(task_slots: &Arc<Mutex<HashSet<PathBuf>>>, meta: &SstMeta) -> Result<bool> {
+        let mut slots = task_slots.lock().unwrap();
+        let p = sst_meta_to_path(meta)?;
+        Ok(slots.remove(&p))
     }
 }
 
 impl<E, Router> ImportSst for ImportSSTService<E, Router>
 where
     E: KvEngine,
-    Router: RaftStoreRouter<E>,
+    Router: 'static + RaftStoreRouter<E>,
 {
     fn switch_mode(
         &mut self,
@@ -100,13 +116,13 @@ where
             }
 
             match req.get_mode() {
-                SwitchMode::Normal => self.switcher.enter_normal_mode(mf),
-                SwitchMode::Import => self.switcher.enter_import_mode(mf),
+                SwitchMode::Normal => self.importer.enter_normal_mode(self.engine.clone(), mf),
+                SwitchMode::Import => self.importer.enter_import_mode(self.engine.clone(), mf),
             }
         };
         match res {
             Ok(_) => info!("switch mode"; "mode" => ?req.get_mode()),
-            Err(ref e) => error!(%e; "switch mode failed"; "mode" => ?req.get_mode(),),
+            Err(ref e) => error!(%*e; "switch mode failed"; "mode" => ?req.get_mode(),),
         }
 
         let task = async move {
@@ -172,8 +188,14 @@ where
         let importer = Arc::clone(&self.importer);
         let limiter = self.limiter.clone();
         let engine = self.engine.clone();
+        let start = Instant::now();
 
         let handle_task = async move {
+            // Records how long the download task waits to be scheduled.
+            sst_importer::metrics::IMPORTER_DOWNLOAD_DURATION
+                .with_label_values(&["queue"])
+                .observe(start.elapsed().as_secs_f64());
+
             // SST writer must not be opened in gRPC threads, because it may be
             // blocked for a long time due to IO, especially, when encryption at rest
             // is enabled, and it leads to gRPC keepalive timeout.
@@ -224,7 +246,9 @@ where
         let label = "ingest";
         let timer = Instant::now_coarse();
 
-        if self.switcher.get_mode() == SwitchMode::Normal
+        let mut resp = IngestResponse::default();
+        let mut errorpb = errorpb::Error::default();
+        if self.importer.get_mode() == SwitchMode::Normal
             && self
                 .engine
                 .ingest_maybe_slowdown_writes(CF_DEFAULT)
@@ -233,10 +257,8 @@ where
             let err = "too many sst files are ingesting";
             let mut server_is_busy_err = errorpb::ServerIsBusy::default();
             server_is_busy_err.set_reason(err.to_string());
-            let mut errorpb = errorpb::Error::default();
             errorpb.set_message(err.to_string());
             errorpb.set_server_is_busy(server_is_busy_err);
-            let mut resp = IngestResponse::default();
             resp.set_error(errorpb);
             ctx.spawn(
                 sink.success(resp)
@@ -244,23 +266,10 @@ where
             );
             return;
         }
-        // Make ingest command.
-        let mut ingest = Request::default();
-        ingest.set_cmd_type(CmdType::IngestSst);
-        ingest.mut_ingest_sst().set_sst(req.take_sst());
-        let mut context = req.take_context();
-        let mut header = RaftRequestHeader::default();
-        header.set_peer(context.take_peer());
-        header.set_region_id(context.get_region_id());
-        header.set_region_epoch(context.take_region_epoch());
-        let mut cmd = RaftCmdRequest::default();
-        cmd.set_header(header);
-        cmd.mut_requests().push(ingest);
 
-        let (cb, future) = paired_future_callback();
-        if let Err(e) = self.router.send_command(cmd, Callback::write(cb)) {
-            let mut resp = IngestResponse::default();
-            resp.set_error(e.into());
+        if !Self::acquire_lock(&self.task_slots, req.get_sst()).unwrap_or(false) {
+            errorpb.set_message(Error::FileConflict.to_string());
+            resp.set_error(errorpb);
             ctx.spawn(
                 sink.success(resp)
                     .unwrap_or_else(|e| warn!("send rpc failed"; "err" => %e)),
@@ -268,23 +277,77 @@ where
             return;
         }
 
-        let ctx_task = async move {
-            let res = future.await.map_err(Error::from);
-            let res = match res {
-                Ok(mut res) => {
-                    let mut resp = IngestResponse::default();
-                    let mut header = res.response.take_header();
-                    if header.has_error() {
-                        pb_error_inc(label, header.get_error());
-                        resp.set_error(header.take_error());
-                    }
-                    Ok(resp)
+        let meta = req.take_sst();
+        let mut header = RaftRequestHeader::default();
+        let mut context = req.take_context();
+        let region_id = context.get_region_id();
+        header.set_peer(context.take_peer());
+        header.set_region_id(region_id);
+        header.set_region_epoch(context.take_region_epoch());
+        let mut req = Request::default();
+        req.set_cmd_type(CmdType::Snap);
+        let mut cmd = RaftCmdRequest::default();
+        cmd.set_header(header.clone());
+        cmd.set_requests(vec![req].into());
+        let (cb, future) = paired_future_callback();
+
+        let router = self.router.clone();
+        let task_slots = self.task_slots.clone();
+        let importer = self.importer.clone();
+
+        let handle_task = async move {
+            let m = meta.clone();
+            let res = async move {
+                let mut resp = IngestResponse::default();
+                if let Err(e) = router.send_command(cmd, Callback::Read(cb)) {
+                    resp.set_error(e.into());
+                    return Ok(resp);
                 }
-                Err(e) => Err(e),
+
+                // Make ingest command.
+                let mut ingest = Request::default();
+                ingest.set_cmd_type(CmdType::IngestSst);
+                ingest.mut_ingest_sst().set_sst(m.clone());
+
+                let mut cmd = RaftCmdRequest::default();
+                cmd.set_header(header);
+                cmd.mut_requests().push(ingest);
+
+                let mut res = future.await.map_err(Error::from)?;
+                fail_point!("import::sst_service::ingest");
+                let mut header = res.response.take_header();
+                if header.has_error() {
+                    pb_error_inc(label, header.get_error());
+                    resp.set_error(header.take_error());
+                    return Ok(resp);
+                }
+                cmd.mut_header().set_term(header.get_current_term());
+                // Here we shall check whether the file has been ingested before. This operation
+                // must execute after geting a snapshot from raftstore to make sure that the
+                // current leader has applied to current term.
+                if !importer.exist(&m) {
+                    return Ok(resp);
+                }
+
+                let (cb, future) = paired_future_callback();
+                if let Err(e) = router.send_command(cmd, Callback::write(cb)) {
+                    resp.set_error(e.into());
+                    return Ok(resp);
+                }
+
+                let mut res = future.await.map_err(Error::from)?;
+                let mut header = res.response.take_header();
+                if header.has_error() {
+                    pb_error_inc(label, header.get_error());
+                    resp.set_error(header.take_error());
+                }
+                Ok(resp)
             };
+            let res = res.await;
+            Self::release_lock(&task_slots, &meta).unwrap();
             send_rpc_response!(res, sink, label, timer);
         };
-        ctx.spawn(ctx_task);
+        self.threads.spawn_ok(handle_task);
     }
 
     fn compact(
@@ -320,26 +383,11 @@ where
                     "end" => end.map(log_wrappers::Value::key),
                     "output_level" => ?output_level, "takes" => ?timer.elapsed()
                 ),
-                Err(ref e) => error!(%e;
+                Err(ref e) => error!(%*e;
                     "compact files in range failed";
                     "start" => start.map(log_wrappers::Value::key),
                     "end" => end.map(log_wrappers::Value::key),
                     "output_level" => ?output_level,
-                ),
-            }
-            let res = engine.compact_files_in_range(start, end, output_level);
-            match res {
-                Ok(_) => info!(
-                    "compact files in range";
-                    "start" => start.map(log_wrappers::Value::key),
-                    "end" => end.map(log_wrappers::Value::key),
-                    "output_level" => ?output_level, "takes" => ?timer.elapsed()
-                ),
-                Err(ref e) => error!(
-                    "compact files in range failed";
-                    "start" => start.map(log_wrappers::Value::key),
-                    "end" => end.map(log_wrappers::Value::key),
-                    "output_level" => ?output_level, "err" => %e
                 ),
             }
             let res = res
@@ -364,7 +412,7 @@ where
         self.limiter.set_speed_limit(if speed_limit > 0 {
             speed_limit as f64
         } else {
-            INFINITY
+            f64::INFINITY
         });
 
         let ctx_task = async move {
@@ -431,6 +479,15 @@ where
 
         self.threads.spawn_ok(buf_driver);
         self.threads.spawn_ok(handle_task);
+    }
+
+    fn multi_ingest(
+        &mut self,
+        _: RpcContext<'_>,
+        _: MultiIngestRequest,
+        _: UnarySink<kvproto::import_sstpb::IngestResponse>,
+    ) {
+        unimplemented!()
     }
 }
 
