@@ -17,7 +17,6 @@ use rusoto_core::{
     {ByteStream, RusotoError},
 };
 use rusoto_s3::{util::AddressingStyle, *};
-use rusoto_util::{new_client, new_http_client};
 use tokio::time::{delay_for, timeout};
 
 use super::ExternalStorage;
