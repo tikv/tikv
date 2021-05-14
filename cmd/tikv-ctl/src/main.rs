@@ -68,7 +68,8 @@ fn handle_engine_error(err: EngineError) {
     if let EngineError::Engine(msg) = err {
         if msg.starts_with(LOCK_FILE_ERROR) {
             ve1!(
-                "Do NOT delete the LOCK file and force to command to run. \
+                "LOCK file conflict indicates TiKV process is running. \
+                Do NOT delete the LOCK file and force the command to run. \
                 Doing so could cause data corruption.",
             );
         }
