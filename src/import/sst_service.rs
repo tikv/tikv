@@ -166,6 +166,10 @@ where
             // current leader has applied to current term.
             for sst in ssts.iter() {
                 if !importer.exist(&sst) {
+                    warn!(
+                        "sst [{:?}] not exist. we may retry an operation that has already succeeded",
+                        sst
+                    );
                     return Ok(resp);
                 }
             }
