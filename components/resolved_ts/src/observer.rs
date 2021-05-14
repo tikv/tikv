@@ -63,7 +63,6 @@ impl<E: KvEngine> Clone for Observer<E> {
 impl<E: KvEngine> Coprocessor for Observer<E> {}
 
 impl<E: KvEngine> CmdObserver<E> for Observer<E> {
-    #[allow(unused_assignments)]
     fn on_prepare_for_apply(&self, cdc: &ObserveHandle, rts: &ObserveHandle, region_id: u64) {
         // TODO: Should not care about whether `cdc` is observing
         let is_observing = cdc.is_observing() || rts.is_observing();

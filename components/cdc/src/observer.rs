@@ -103,7 +103,6 @@ impl CdcObserver {
 impl Coprocessor for CdcObserver {}
 
 impl<E: KvEngine> CmdObserver<E> for CdcObserver {
-    #[allow(unused_assignments)]
     fn on_prepare_for_apply(&self, cdc: &ObserveHandle, rts: &ObserveHandle, region_id: u64) {
         let is_observing = cdc.is_observing();
         *self.last_batch_observing.borrow_mut() = is_observing;
