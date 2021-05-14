@@ -11,16 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::VecDeque;
 use std::ffi::CString;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use super::metrics::*;
 use super::{Config, Result};
-use futures::sync::mpsc::{self, UnboundedSender};
+use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures::sync::oneshot::{self, Sender};
-use futures::{stream, Future, Sink, Stream};
-use grpc::{ChannelBuilder, Environment, Error as GrpcError, RpcStatus, RpcStatusCode, WriteFlags};
+use futures::{try_ready, Async, AsyncSink, Future, Poll, Sink, Stream};
+use grpc::{
+    ChannelBuilder, ClientCStreamSender, Environment, Error as GrpcError, RpcStatus, RpcStatusCode,
+    WriteFlags,
+};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
 use util::collections::HashMap;
@@ -33,8 +37,11 @@ const PRESERVED_MSG_BUFFER_COUNT: usize = 1024;
 static CONN_ID: AtomicI32 = AtomicI32::new(0);
 
 struct Conn {
-    stream: UnboundedSender<Vec<(RaftMessage, WriteFlags)>>,
-    buffer: Option<Vec<(RaftMessage, WriteFlags)>>,
+    retry_conn_count: usize,
+    stream: Option<UnboundedSender<VecDeque<(RaftMessage, WriteFlags)>>>,
+    stream_receiver: Arc<Mutex<Option<UnboundedReceiver<VecDeque<(RaftMessage, WriteFlags)>>>>>,
+
+    buffer: Option<VecDeque<(RaftMessage, WriteFlags)>>,
     store_id: u64,
     alive: Arc<AtomicBool>,
 
@@ -49,6 +56,11 @@ impl Conn {
         cfg: &Config,
         security_mgr: &SecurityManager,
         store_id: u64,
+        retry_count: usize,
+        reconnect: Option<(
+            UnboundedSender<VecDeque<(RaftMessage, WriteFlags)>>,
+            UnboundedReceiver<VecDeque<(RaftMessage, WriteFlags)>>,
+        )>,
     ) -> Conn {
         info!("server: new connection with tikv endpoint: {}", addr);
 
@@ -68,7 +80,10 @@ impl Conn {
             );
         let channel = security_mgr.connect(cb, addr);
         let client = TikvClient::new(channel);
-        let (tx, rx) = mpsc::unbounded();
+        let (tx, rx) = reconnect.unwrap_or_else(mpsc::unbounded);
+        let rx_holder = Arc::new(Mutex::new(None));
+        let rx_holder_copy = rx_holder.clone();
+
         let (tx_close, rx_close) = oneshot::channel();
         let (sink, receiver) = client.raft().unwrap();
         let addr = addr.to_owned();
@@ -77,36 +92,123 @@ impl Conn {
             rx_close
                 .map_err(|_| ())
                 .select(
-                    sink.send_all(
-                        rx.map(stream::iter_ok)
-                            .flatten()
-                            .map_err(|_: ()| GrpcError::RpcFinished(None)),
-                    ).then(move |sink_r| {
+                    RaftMessageForwarder::new(sink, rx)
+                        .then(move |sink_r| {
+                            let sink_e = sink_r.err().map(|(e, rx)| {
+                                *rx_holder_copy.lock().unwrap() = Some(rx);
+                                e
+                            });
                             alive.store(false, Ordering::SeqCst);
                             receiver.then(move |recv_r| {
-                                check_rpc_result("raft", &addr1, sink_r.err(), recv_r.err())
+                                check_rpc_result("raft", &addr1, sink_e, recv_r.err())
                             })
                         })
-                        .map(|_| ())
                         .map_err(move |e| {
                             let store = store_id.to_string();
                             REPORT_FAILURE_MSG_COUNTER
                                 .with_label_values(&["unreachable", &*store])
                                 .inc();
-                            warn!("send raftmessage to {} failed: {:?}", addr, e);
                         }),
                 )
                 .map(|_| ())
                 .map_err(|_| ()),
         );
         Conn {
-            stream: tx,
-            buffer: Some(Vec::with_capacity(PRESERVED_MSG_BUFFER_COUNT)),
+            retry_conn_count: retry_count,
+            stream: Some(tx),
+            stream_receiver: rx_holder,
+            buffer: Some(VecDeque::with_capacity(PRESERVED_MSG_BUFFER_COUNT)),
             store_id,
             alive: alive1,
 
             _client: client,
             _close: tx_close,
+        }
+    }
+}
+
+struct RaftMessageForwarder {
+    sender: ClientCStreamSender<RaftMessage>,
+    stream: Option<UnboundedReceiver<VecDeque<(RaftMessage, WriteFlags)>>>,
+    buffered: Option<VecDeque<(RaftMessage, WriteFlags)>>,
+}
+
+impl RaftMessageForwarder {
+    fn new(
+        sender: ClientCStreamSender<RaftMessage>,
+        stream: UnboundedReceiver<VecDeque<(RaftMessage, WriteFlags)>>,
+    ) -> RaftMessageForwarder {
+        RaftMessageForwarder {
+            sender,
+            stream: Some(stream),
+            buffered: None,
+        }
+    }
+
+    fn handle_grpc_error(&mut self, e: GrpcError) -> <Self as Future>::Error {
+        (e, self.stream.take().unwrap())
+    }
+
+    fn try_start_send(
+        &mut self,
+        mut queue: VecDeque<(RaftMessage, WriteFlags)>,
+    ) -> Poll<(), <Self as Future>::Error> {
+        debug_assert!(self.buffered.is_none());
+        while let Some(item) = queue.pop_front() {
+            if let AsyncSink::NotReady(item) = self
+                .sender
+                .start_send(item)
+                .map_err(|e| self.handle_grpc_error(e))?
+            {
+                queue.push_front(item);
+                self.buffered = Some(queue);
+                return Ok(Async::NotReady);
+            }
+        }
+        Ok(Async::Ready(()))
+    }
+
+    fn close_sender(&mut self) -> Poll<(), <Self as Future>::Error> {
+        self.sender.close().map_err(|e| self.handle_grpc_error(e))
+    }
+
+    fn poll_sender(&mut self) -> Poll<(), <Self as Future>::Error> {
+        self.sender
+            .poll_complete()
+            .map_err(|e| self.handle_grpc_error(e))
+    }
+}
+
+impl Future for RaftMessageForwarder {
+    type Item = ();
+    type Error = (
+        GrpcError,
+        UnboundedReceiver<VecDeque<(RaftMessage, WriteFlags)>>,
+    );
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        if let Some(item) = self.buffered.take() {
+            try_ready!(self.try_start_send(item))
+        }
+
+        loop {
+            match self
+                .stream
+                .as_mut()
+                .unwrap()
+                .poll()
+                .map_err(|_| unreachable!())?
+            {
+                Async::Ready(Some(queue)) => try_ready!(self.try_start_send(queue)),
+                Async::Ready(None) => {
+                    try_ready!(self.close_sender());
+                    return Ok(Async::Ready(()));
+                }
+                Async::NotReady => {
+                    try_ready!(self.poll_sender());
+                    return Ok(Async::NotReady);
+                }
+            }
         }
     }
 }
@@ -143,7 +245,9 @@ impl RaftClient {
         // TODO: avoid to_owned
         self.conns
             .entry((addr.to_owned(), index))
-            .or_insert_with(|| Conn::new(Arc::clone(env), addr, cfg, security_mgr, store_id))
+            .or_insert_with(|| {
+                Conn::new(Arc::clone(env), addr, cfg, security_mgr, store_id, 0, None)
+            })
     }
 
     pub fn send(&mut self, store_id: u64, addr: &str, msg: RaftMessage) -> Result<()> {
@@ -151,48 +255,60 @@ impl RaftClient {
         conn.buffer
             .as_mut()
             .unwrap()
-            .push((msg, WriteFlags::default().buffer_hint(true)));
+            .push_back((msg, WriteFlags::default().buffer_hint(true)));
         Ok(())
     }
 
     pub fn flush(&mut self) {
         let addrs = &mut self.addrs;
         let mut counter: u64 = 0;
-        self.conns.retain(|&(ref addr, _), conn| {
+        let mut broken_conns = Vec::new();
+        self.conns.retain(|&(ref addr, index), conn| {
             let store_id = conn.store_id;
             if !conn.alive.load(Ordering::SeqCst) {
+                let mut retry_conn = false;
                 if let Some(addr_current) = addrs.remove(&store_id) {
                     if addr_current != *addr {
                         addrs.insert(store_id, addr_current);
+                    } else if conn.retry_conn_count < 10 {
+                        // Only do fast reconnect 10 times.
+                        addrs.insert(store_id, addr_current);
+                        retry_conn = true;
+                    } else {
+                        info!("[{} -> {}] is stale", store_id, addr);
+                    }
+                }
+                if retry_conn {
+                    if let Some(rx) = conn.stream_receiver.lock().unwrap().take() {
+                        // The associated GRPC connection is broken, will reconnect.
+                        let tx = conn.stream.take().unwrap();
+                        let retry = conn.retry_conn_count + 1;
+                        broken_conns.push((store_id, addr.to_owned(), index, retry, tx, rx));
                     }
                 }
                 return false;
             }
 
-            if conn.buffer.as_ref().unwrap().is_empty() {
-                return true;
+            if !conn.buffer.as_ref().unwrap().is_empty() {
+                counter += 1;
+                let mut msgs = conn.buffer.take().unwrap();
+                msgs.back_mut().unwrap().1 = WriteFlags::default();
+                conn.stream.as_mut().unwrap().unbounded_send(msgs).unwrap();
+                conn.buffer = Some(VecDeque::with_capacity(PRESERVED_MSG_BUFFER_COUNT));
             }
-
-            counter += 1;
-            let mut msgs = conn.buffer.take().unwrap();
-            msgs.last_mut().unwrap().1 = WriteFlags::default();
-            if let Err(e) = conn.stream.unbounded_send(msgs) {
-                error!(
-                    "server: drop conn with tikv endpoint {} flush conn error: {:?}",
-                    addr, e
-                );
-
-                if let Some(addr_current) = addrs.remove(&store_id) {
-                    if addr_current != *addr {
-                        addrs.insert(store_id, addr_current);
-                    }
-                }
-                return false;
-            }
-
-            conn.buffer = Some(Vec::with_capacity(PRESERVED_MSG_BUFFER_COUNT));
             true
         });
+
+        // Fast reconnect to some stores without re-resolve it.
+        for (store_id, addr, index, retry, tx, rx) in broken_conns {
+            let env = self.env.clone();
+            let cfg = &self.cfg;
+            let security_mgr = &self.security_mgr;
+            let reconn = Some((tx, rx));
+            let conn = Conn::new(env, &addr, cfg, security_mgr, store_id, retry, reconn);
+            info!("fast reconnect to {}, retry times {}", addr, retry);
+            assert!(self.conns.insert((addr, index), conn).is_none());
+        }
 
         if counter > 0 {
             RAFT_MESSAGE_FLUSH_COUNTER.inc_by(counter as i64);
