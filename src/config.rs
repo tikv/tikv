@@ -2214,22 +2214,29 @@ impl Default for BackupConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct CdcConfig {
     pub min_ts_interval: ReadableDuration,
-    pub old_value_cache_size: usize,
     pub hibernate_regions_compatible: bool,
     pub scan_lock_pool_size: usize,
     pub incremental_scan_speed_limit: ReadableSize,
+    // 10% total memory by default.
+    pub old_value_cache_capacity: OptionReadableSize,
+    // Deprecated! preserved for compatibility check.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    pub old_value_cache_size: usize,
 }
 
 impl Default for CdcConfig {
     fn default() -> Self {
         Self {
             min_ts_interval: ReadableDuration::secs(1),
-            old_value_cache_size: 1024,
             hibernate_regions_compatible: true,
             scan_lock_pool_size: 2,
             // TiCDC requires a SSD, the typical write speed of SSD
             // is more than 500MB/s, so 128MB/s is enough.
             incremental_scan_speed_limit: ReadableSize::mb(128),
+            old_value_cache_capacity: OptionReadableSize(None),
+            // Deprecated! preserved for compatibility check.
+            old_value_cache_size: 0,
         }
     }
 }

@@ -4,7 +4,12 @@ use std::ops::Deref;
 
 use engine_traits::{ReadOptions, CF_DEFAULT, CF_WRITE};
 use tikv::storage::{Cursor, CursorBuilder, ScanMode, Snapshot as EngineSnapshot, Statistics};
-use tikv_util::{lru::LruCache, time::Instant};
+use tikv_util::{
+    config::OptionReadableSize,
+    lru::{LruCache, SizeTracker},
+    sys::sys_quota::SysQuota,
+    time::Instant,
+};
 use txn_types::{Key, MutationType, OldValue, TimeStamp, Value, WriteRef, WriteType};
 
 use crate::metrics::*;
@@ -13,17 +18,51 @@ use crate::Result;
 pub(crate) type OldValueCallback =
     Box<dyn Fn(Key, TimeStamp, &mut OldValueCache) -> (Option<Vec<u8>>, Option<Statistics>) + Send>;
 
+#[derive(Default)]
+pub struct OldValueCacheSizeTracker(usize);
+
+impl SizeTracker<Key, (OldValue, Option<MutationType>)> for OldValueCacheSizeTracker {
+    fn current(&self) -> usize {
+        self.0
+    }
+
+    fn on_insert(&mut self, key: &Key, value: &(OldValue, Option<MutationType>)) {
+        self.0 +=
+            key.as_encoded().len() + value.0.size() + std::mem::size_of::<Option<MutationType>>();
+    }
+
+    fn on_remove(&mut self, key: &Key, value: &(OldValue, Option<MutationType>)) {
+        self.0 -=
+            key.as_encoded().len() + value.0.size() + std::mem::size_of::<Option<MutationType>>();
+    }
+
+    fn on_reset(&mut self, val: usize) {
+        self.0 = val;
+    }
+}
+
 pub struct OldValueCache {
-    pub cache: LruCache<Key, (OldValue, Option<MutationType>)>,
+    pub cache: LruCache<Key, (OldValue, Option<MutationType>), OldValueCacheSizeTracker>,
     pub access_count: usize,
     pub miss_count: usize,
     pub miss_none_count: usize,
 }
 
 impl OldValueCache {
-    pub fn new(size: usize) -> OldValueCache {
+    pub fn new(capacity: OptionReadableSize) -> OldValueCache {
+        let capacity = match capacity.0 {
+            None => {
+                let total_mem = SysQuota::new().memory_limit_in_bytes();
+                ((total_mem as f64) * 0.1) as usize
+            }
+            Some(c) => c.0 as usize,
+        };
         OldValueCache {
-            cache: LruCache::with_capacity(size),
+            cache: LruCache::with_capacity_sample_and_trace(
+                capacity,
+                0,
+                OldValueCacheSizeTracker(0),
+            ),
             access_count: 0,
             miss_count: 0,
             miss_none_count: 0,
