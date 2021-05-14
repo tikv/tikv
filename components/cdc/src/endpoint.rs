@@ -1425,10 +1425,9 @@ mod tests {
         let (receiver_worker, rx) = new_receiver_worker();
         let (sink, drain) = crate::channel::canal(buffer);
 
-        let pool = Builder::new()
-            .threaded_scheduler()
+        let pool = Builder::new_multi_thread()
             .thread_name("test-initializer-worker")
-            .core_threads(4)
+            .worker_threads(4)
             .build()
             .unwrap();
         let downstream_state = Arc::new(AtomicCell::new(DownstreamState::Normal));

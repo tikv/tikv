@@ -128,9 +128,9 @@ mod tests {
     use std::sync::Arc;
     use std::thread;
     use tokio::task::yield_now;
-    use tokio::time::{delay_for, timeout};
+    use tokio::time::{sleep, timeout};
 
-    #[tokio::test(basic_scheduler)]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_limit_concurrency() {
         async fn work(iter: i32) {
             for i in 0..iter {
@@ -163,7 +163,7 @@ mod tests {
             )
             .fuse();
 
-        delay_for(Duration::from_millis(100)).await;
+        sleep(Duration::from_millis(100)).await;
         let smp2 = smp.clone();
         let mut t2 =
             tokio::spawn(
@@ -171,7 +171,8 @@ mod tests {
             )
             .fuse();
 
-        let mut deadline = delay_for(Duration::from_millis(1500)).fuse();
+        let deadline = sleep(Duration::from_millis(1500)).fuse();
+        futures::pin_mut!(deadline);
         let mut t1_finished = false;
         loop {
             futures_util::select! {

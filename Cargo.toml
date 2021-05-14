@@ -177,7 +177,7 @@ protobuf = "2.8"
 raft = { version = "0.6.0-alpha", default-features = false }
 raftstore = { path = "components/raftstore", default-features = false }
 raft_log_engine = { path = "components/raft_log_engine", default-features = false }
-rand = "0.8.3"
+rand = "0.7.3"
 regex = "1.3"
 rev_lines = "0.2.1"
 security = { path = "components/security", default-features = false }

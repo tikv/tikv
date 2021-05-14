@@ -99,10 +99,9 @@ fn test_rpc_client() {
         prev_id = alloc_id;
     }
 
-    let poller = Builder::new()
-        .threaded_scheduler()
+    let poller = Builder::new_multi_thread()
         .thread_name(thd_name!("poller"))
-        .core_threads(1)
+        .worker_threads(1)
         .build()
         .unwrap();
     let (tx, rx) = mpsc::channel();
@@ -443,10 +442,9 @@ fn test_region_heartbeat_on_leader_change() {
     let eps = server.bind_addrs();
 
     let client = new_client(eps, None);
-    let poller = Builder::new()
-        .threaded_scheduler()
+    let poller = Builder::new_multi_thread()
         .thread_name(thd_name!("poller"))
-        .core_threads(1)
+        .worker_threads(1)
         .build()
         .unwrap();
     let (tx, rx) = mpsc::channel();
