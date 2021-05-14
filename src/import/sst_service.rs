@@ -142,6 +142,15 @@ where
                 return Ok(resp);
             }
 
+            let mut res = future.await.map_err(Error::from)?;
+            fail_point!("import::sst_service::ingest");
+            let mut resp_header = res.response.take_header();
+            if resp_header.has_error() {
+                pb_error_inc(label, resp_header.get_error());
+                resp.set_error(resp_header.take_error());
+                return Ok(resp);
+            }
+
             // Make ingest command.
             let mut cmd = RaftCmdRequest::default();
             cmd.set_header(header);
@@ -151,16 +160,8 @@ where
                 ingest.mut_ingest_sst().set_sst(sst.clone());
                 cmd.mut_requests().push(ingest);
             }
+            cmd.mut_header().set_term(resp_header.get_current_term());
 
-            let mut res = future.await.map_err(Error::from)?;
-            fail_point!("import::sst_service::ingest");
-            let mut header = res.response.take_header();
-            if header.has_error() {
-                pb_error_inc(label, header.get_error());
-                resp.set_error(header.take_error());
-                return Ok(resp);
-            }
-            cmd.mut_header().set_term(header.get_current_term());
             // Here we shall check whether the file has been ingested before. This operation
             // must execute after geting a snapshot from raftstore to make sure that the
             // current leader has applied to current term.
