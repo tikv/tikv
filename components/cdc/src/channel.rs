@@ -32,32 +32,31 @@ pub const CDC_EVENT_MAX_BATCH_SIZE: usize = 2;
 
 #[derive(Clone)]
 pub struct MemoryQuota {
-    max_bytes: usize,
-    total_bytes: Arc<AtomicUsize>,
+    capacity: usize,
+    in_use: Arc<AtomicUsize>,
 }
 
 impl MemoryQuota {
-    pub fn new(max_bytes: usize) -> MemoryQuota {
+    pub fn new(capacity: usize) -> MemoryQuota {
         MemoryQuota {
-            max_bytes,
-            total_bytes: Arc::new(AtomicUsize::new(0)),
+            capacity,
+            in_use: Arc::new(AtomicUsize::new(0)),
         }
     }
-    #[allow(clippy::len_without_is_empty)]
-    pub fn len(&self) -> usize {
-        self.total_bytes.load(Ordering::Relaxed)
+    pub fn in_use(&self) -> usize {
+        self.in_use.load(Ordering::Relaxed)
     }
     pub fn cap(&self) -> usize {
-        self.max_bytes
+        self.capacity
     }
     fn alloc(&self, bytes: usize) -> bool {
-        let mut total_bytes = self.total_bytes.load(Ordering::Relaxed);
+        let mut total_bytes = self.in_use.load(Ordering::Relaxed);
         loop {
-            if total_bytes + bytes > self.max_bytes {
+            if total_bytes + bytes > self.capacity {
                 return false;
             }
             let new_total_bytes = total_bytes + bytes;
-            match self.total_bytes.compare_exchange(
+            match self.in_use.compare_exchange(
                 total_bytes,
                 new_total_bytes,
                 Ordering::Acquire,
@@ -69,7 +68,7 @@ impl MemoryQuota {
         }
     }
     fn free(&self, bytes: usize) {
-        self.total_bytes.fetch_sub(bytes, Ordering::Relaxed);
+        self.in_use.fetch_sub(bytes, Ordering::Relaxed);
     }
 }
 
@@ -294,8 +293,8 @@ mod tests {
     use std::time::Duration;
 
     type Send = Box<dyn FnMut(CdcEvent) -> Result<(), SendError>>;
-    fn new_test_cancal(buffer: usize, max_bytes: usize) -> (Send, Drain) {
-        let memory_quota = MemoryQuota::new(max_bytes);
+    fn new_test_cancal(buffer: usize, capacity: usize) -> (Send, Drain) {
+        let memory_quota = MemoryQuota::new(capacity);
         let (mut tx, rx) = canal(buffer, memory_quota);
         let mut flag = true;
         let send = move |event| {

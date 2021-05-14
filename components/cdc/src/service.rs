@@ -488,8 +488,8 @@ mod tests {
         );
     }
 
-    fn new_rpc_suite(max_bytes: usize) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
-        let memory_quota = MemoryQuota::new(max_bytes);
+    fn new_rpc_suite(capacity: usize) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
+        let memory_quota = MemoryQuota::new(capacity);
         let (scheduler, rx) = dummy_scheduler();
         let cdc_service = Service::new(scheduler, memory_quota);
         let env = Arc::new(EnvBuilder::new().build());
@@ -507,8 +507,8 @@ mod tests {
     #[test]
     fn test_flow_control() {
         // Disable CDC sink memory quota.
-        let max_bytes = usize::MAX;
-        let (_server, client, mut task_rx) = new_rpc_suite(max_bytes);
+        let capacity = usize::MAX;
+        let (_server, client, mut task_rx) = new_rpc_suite(capacity);
         // Create a event feed stream.
         let (mut tx, mut rx) = client.event_feed().unwrap();
         let mut req = ChangeDataRequest {

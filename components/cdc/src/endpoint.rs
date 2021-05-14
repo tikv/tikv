@@ -1362,7 +1362,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> RunnableWithTimer for Endpoint<T
         self.old_value_cache.access_count = 0;
         self.old_value_cache.miss_count = 0;
         self.old_value_cache.miss_none_count = 0;
-        CDC_SINK_BYTES.set(self.sink_memory_quota.len() as i64);
+        CDC_SINK_BYTES.set(self.sink_memory_quota.in_use() as i64);
     }
 
     fn get_interval(&self) -> Duration {
