@@ -378,14 +378,13 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                         }
                     }
                     // Do not continue to observe the events of the region.
-                    let oid = self
-                        .observer
-                        .unsubscribe_region(region_id, delegate.handle.id);
+                    let id = delegate.handle.id;
+                    let oid = self.observer.unsubscribe_region(region_id, id);
                     assert!(
                         oid.is_some(),
                         "unsubscribe region {} failed, ObserveID {:?}",
                         region_id,
-                        delegate.handle.id
+                        id
                     );
                 }
             }
@@ -432,14 +431,13 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                                 if delegate.unsubscribe(downstream_id, None) {
                                     let delegate = self.capture_regions.remove(&region_id).unwrap();
                                     // Do not continue to observe the events of the region.
-                                    let oid = self
-                                        .observer
-                                        .unsubscribe_region(region_id, delegate.handle.id);
+                                    let id = delegate.handle.id;
+                                    let oid = self.observer.unsubscribe_region(region_id, id);
                                     assert!(
                                         oid.is_some(),
                                         "unsubscribe region {} failed, ObserveID {:?}",
                                         region_id,
-                                        delegate.handle.id
+                                        id
                                     );
                                 }
                             }
@@ -516,15 +514,14 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         if is_new_delegate {
             // The region has never been registered.
             // Subscribe the change events of the region.
-            let old_id = self
-                .observer
-                .subscribe_region(region_id, delegate.handle.id);
+            let id = delegate.handle.id;
+            let old_id = self.observer.subscribe_region(region_id, id);
             assert!(
                 old_id.is_none(),
                 "region {} must not be observed twice, old ObserveID {:?}, new ObserveID {:?}",
                 region_id,
                 old_id,
-                delegate.handle.id
+                id
             );
         };
         let change_cmd = ChangeObserver::from_cdc(region_id, delegate.handle.clone());

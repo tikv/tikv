@@ -103,9 +103,11 @@ impl CdcObserver {
 impl Coprocessor for CdcObserver {}
 
 impl<E: KvEngine> CmdObserver<E> for CdcObserver {
+    #[allow(unused_assignments)]
     fn on_prepare_for_apply(&self, cdc: &ObserveHandle, rts: &ObserveHandle, region_id: u64) {
-        *self.last_batch_observing.borrow_mut() = cdc.is_observing();
-        if !*self.last_batch_observing.borrow() {
+        let mut last_batch_observing = *self.last_batch_observing.borrow_mut();
+        last_batch_observing = cdc.is_observing();
+        if !last_batch_observing {
             return;
         }
         self.cmd_batches
@@ -333,21 +335,14 @@ mod tests {
         let observe_handle = ObserveHandle::new();
         let engine = TestEngineBuilder::new().build().unwrap().get_rocksdb();
 
-        <CdcObserver as CmdObserver<RocksEngine>>::on_prepare_for_apply(
-            &observer,
-            &observe_handle,
-            &observe_handle,
-            0,
-        );
-        <CdcObserver as CmdObserver<RocksEngine>>::on_apply_cmd(
-            &observer,
+        observer.on_prepare_for_apply(&observe_handle, &observe_handle, 0);
+        observer.on_apply_cmd(
             observe_handle.id,
             observe_handle.id,
             0,
             &Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),
         );
         observer.on_flush_apply(engine.clone());
-
         match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
             Task::MultiBatch { multi, .. } => {
                 assert_eq!(multi.len(), 1);
@@ -358,21 +353,14 @@ mod tests {
 
         // Stop observing cmd
         observe_handle.stop_observing();
-        <CdcObserver as CmdObserver<RocksEngine>>::on_prepare_for_apply(
-            &observer,
-            &observe_handle,
-            &observe_handle,
-            0,
-        );
-        <CdcObserver as CmdObserver<RocksEngine>>::on_apply_cmd(
-            &observer,
+        observer.on_prepare_for_apply(&observe_handle, &observe_handle, 0);
+        observer.on_apply_cmd(
             observe_handle.id,
             observe_handle.id,
             0,
             &Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),
         );
         observer.on_flush_apply(engine);
-
         match rx.recv_timeout(Duration::from_millis(10)) {
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             _ => panic!("unexpected result"),

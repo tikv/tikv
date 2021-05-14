@@ -63,10 +63,12 @@ impl<E: KvEngine> Clone for Observer<E> {
 impl<E: KvEngine> Coprocessor for Observer<E> {}
 
 impl<E: KvEngine> CmdObserver<E> for Observer<E> {
+    #[allow(unused_assignments)]
     fn on_prepare_for_apply(&self, cdc: &ObserveHandle, rts: &ObserveHandle, region_id: u64) {
         // TODO: Should not care about whether `cdc` is observing
-        *self.last_batch_observing.borrow_mut() = cdc.is_observing() || rts.is_observing();
-        if !*self.last_batch_observing.borrow() {
+        let mut last_batch_observing = *self.last_batch_observing.borrow_mut();
+        last_batch_observing = cdc.is_observing() || rts.is_observing();
+        if !last_batch_observing {
             return;
         }
         self.cmd_batches

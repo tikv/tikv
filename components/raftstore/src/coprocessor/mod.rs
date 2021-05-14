@@ -187,6 +187,8 @@ impl ObserveID {
     }
 }
 
+/// ObserveHandle is the status of a term of observing, it contains the `ObserveID`
+/// and the `observing` flag indicate whether the observing is ongoing
 #[derive(Clone, Default, Debug)]
 pub struct ObserveHandle {
     pub id: ObserveID,
