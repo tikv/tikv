@@ -114,7 +114,7 @@ lazy_static! {
     .unwrap();
     pub static ref LOCAL_READ_EXECUTED_CACHE_REQUESTS: IntCounter = register_int_counter!(
         "tikv_raftstore_local_read_cache_requests",
-        "Total number of cache hits by local reader."
+        "Total number of snapshot cache hits by local reader."
     )
     .unwrap();
 }
