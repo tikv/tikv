@@ -43,7 +43,7 @@ impl ChangeLog {
     pub fn encode_change_log(region_id: u64, batch: CmdBatch) -> Vec<ChangeLog> {
         batch
             .into_iter(region_id)
-            .map(|cmd| {
+            .filter_map(|cmd| {
                 let Cmd {
                     index,
                     mut request,
@@ -86,7 +86,6 @@ impl ChangeLog {
                     Some(ChangeLog::Error(err_header))
                 }
             })
-            .flatten()
             .collect()
     }
 

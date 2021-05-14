@@ -14,8 +14,9 @@ use kvproto::metapb::Region;
 use pd_client::PdClient;
 use raft::StateRole;
 use raftstore::coprocessor::CmdBatch;
+use raftstore::coprocessor::{ObserveHandle, ObserveID};
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::fsm::{ObserveID, StoreMeta};
+use raftstore::store::fsm::StoreMeta;
 use raftstore::store::util::{self, RegionReadProgress};
 use raftstore::store::RegionSnapshot;
 use security::SecurityManager;
@@ -57,7 +58,7 @@ enum PendingLock {
 // and command observing.
 struct ObserveRegion {
     meta: Region,
-    observe_id: ObserveID,
+    handle: ObserveHandle,
     // TODO: Get lease from raftstore.
     // lease: Option<RemoteLease>,
     resolver: Resolver,
@@ -69,7 +70,7 @@ impl ObserveRegion {
         ObserveRegion {
             resolver: Resolver::with_read_progress(meta.id, Some(rrp)),
             meta,
-            observe_id: ObserveID::new(),
+            handle: ObserveHandle::new(),
             resolver_status: ResolverStatus::Pending {
                 tracked_index: 0,
                 locks: vec![],
@@ -267,28 +268,29 @@ where
                 return;
             }
         };
-        let observe_id = observe_region.observe_id;
+        let observe_handle = observe_region.handle.clone();
         let cancelled = match observe_region.resolver_status {
             ResolverStatus::Pending { ref cancelled, .. } => cancelled.clone(),
             ResolverStatus::Ready => panic!("resolved ts illeagal created observe region"),
         };
         self.regions.insert(region_id, observe_region);
 
-        let scan_task = self.build_scan_task(region, observe_id, cancelled);
+        let scan_task = self.build_scan_task(region, observe_handle, cancelled);
         self.scanner_pool.spawn_task(scan_task);
     }
 
     fn build_scan_task(
         &self,
         region: Region,
-        observe_id: ObserveID,
+        observe_handle: ObserveHandle,
         cancelled: Arc<AtomicBool>,
     ) -> ScanTask {
         let scheduler = self.scheduler.clone();
         let scheduler_error = self.scheduler.clone();
         let region_id = region.id;
+        let observe_id = observe_handle.id;
         ScanTask {
-            id: observe_id,
+            handle: observe_handle,
             tag: String::new(),
             mode: ScanMode::LockOnly,
             region,
@@ -321,11 +323,19 @@ where
     fn deregister_region(&mut self, region_id: u64) {
         if let Some(observe_region) = self.regions.remove(&region_id) {
             let ObserveRegion {
-                observe_id,
+                handle,
                 resolver_status,
                 ..
             } = observe_region;
-            info!("deregister observe region"; "store_id" => ?self.store_meta.lock().unwrap().store_id, "region_id" => region_id, "observe_id" => ?observe_id);
+            info!(
+                "deregister observe region";
+                "store_id" => ?self.store_meta.lock().unwrap().store_id,
+                "region_id" => region_id,
+                "observe_id" => ?handle.id
+            );
+            // Stop observing data
+            handle.stop_observing();
+            // Stop scanning data
             if let ResolverStatus::Pending { cancelled, .. } = resolver_status {
                 cancelled.store(true, Ordering::Release);
             }
@@ -373,7 +383,7 @@ where
     // Call after the version of region epoch changed.
     fn region_error(&mut self, region_id: u64, observe_id: ObserveID, error: ErrorHeader) {
         if let Some(observe_region) = self.regions.get(&region_id) {
-            if observe_region.observe_id != observe_id {
+            if observe_region.handle.id != observe_id {
                 warn!("resolved ts deregister region failed due to observe_id not match");
                 return;
             }
@@ -426,7 +436,7 @@ where
                     if let Some(observe_region) = self.regions.get_mut(&batch.region_id) {
                         let observe_id = batch.rts_id;
                         let region_id = observe_region.meta.id;
-                        if observe_region.observe_id == observe_id {
+                        if observe_region.handle.id == observe_id {
                             let logs = ChangeLog::encode_change_log(region_id, batch);
                             if let Err(e) = observe_region.track_change_log(&logs) {
                                 drop(observe_region);
@@ -441,7 +451,7 @@ where
                             debug!("resolved ts CmdBatch discarded";
                                 "region_id" => batch.region_id,
                                 "observe_id" => ?batch.rts_id,
-                                "current" => ?observe_region.observe_id,
+                                "current" => ?observe_region.handle.id,
                             );
                         }
                     }
@@ -464,7 +474,7 @@ where
     ) {
         match self.regions.get_mut(&region_id) {
             Some(observe_region) => {
-                if observe_region.observe_id == observe_id {
+                if observe_region.handle.id == observe_id {
                     observe_region.track_scan_locks(entries, apply_index);
                 }
             }

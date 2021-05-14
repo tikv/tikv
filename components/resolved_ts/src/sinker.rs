@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::Snapshot;
-use raftstore::store::fsm::ObserveID;
+use raftstore::coprocessor::ObserveID;
 use raftstore::store::RegionSnapshot;
 use std::marker::PhantomData;
 use txn_types::TimeStamp;
