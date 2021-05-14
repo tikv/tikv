@@ -696,20 +696,20 @@ const METRICS_FLUSH_INTERVAL: u64 = 15_000; // 15s
 
 #[derive(Clone)]
 struct ReadMetrics {
-    local_executed_requests: i64,
-    local_executed_snapshot_cache_hit: i64,
+    local_executed_requests: u64,
+    local_executed_snapshot_cache_hit: u64,
     // TODO: record rejected_by_read_quorum.
-    rejected_by_store_id_mismatch: i64,
-    rejected_by_peer_id_mismatch: i64,
-    rejected_by_term_mismatch: i64,
-    rejected_by_lease_expire: i64,
-    rejected_by_no_region: i64,
-    rejected_by_no_lease: i64,
-    rejected_by_epoch: i64,
-    rejected_by_appiled_term: i64,
-    rejected_by_channel_full: i64,
-    rejected_by_cache_miss: i64,
-    rejected_by_safe_timestamp: i64,
+    rejected_by_store_id_mismatch: u64,
+    rejected_by_peer_id_mismatch: u64,
+    rejected_by_term_mismatch: u64,
+    rejected_by_lease_expire: u64,
+    rejected_by_no_region: u64,
+    rejected_by_no_lease: u64,
+    rejected_by_epoch: u64,
+    rejected_by_appiled_term: u64,
+    rejected_by_channel_full: u64,
+    rejected_by_cache_miss: u64,
+    rejected_by_safe_timestamp: u64,
 
     last_flush_time: Instant,
 }

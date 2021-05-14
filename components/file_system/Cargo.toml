@@ -23,8 +23,8 @@ lazy_static = "1.3"
 libc = "0.2"
 nix = "0.19"
 openssl = "0.10"
-prometheus = { version = "0.10", features = ["nightly"] }
-prometheus-static-metric = "0.4"
+prometheus = { version = "0.12", features = ["nightly"] }
+prometheus-static-metric = "0.5"
 strum = { version = "0.20", features = ["derive"] }
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util", default-features = false }

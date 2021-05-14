@@ -3479,7 +3479,7 @@ where
 
         self.fsm.skip_gc_raft_log_ticks = 0;
         self.register_raft_gc_log_tick();
-        PEER_GC_RAFT_LOG_COUNTER.inc_by(total_gc_logs as i64);
+        PEER_GC_RAFT_LOG_COUNTER.inc_by(total_gc_logs);
     }
 
     fn register_split_region_check_tick(&mut self) {

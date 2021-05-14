@@ -45,7 +45,7 @@ tikv_util = { path = "../tikv_util", default-features = false }
 log_wrappers = { path = "../log_wrappers" }
 collections = { path = "../collections" }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
-yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+yatp = { git = "https://github.com/koushiro/yatp.git", branch = "update" }
 itertools = "0.8"
 
 [dev-dependencies]

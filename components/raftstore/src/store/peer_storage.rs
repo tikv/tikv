@@ -106,8 +106,8 @@ pub const ENTRY_MEM_SIZE: usize = std::mem::size_of::<Entry>();
 
 struct EntryCache {
     cache: VecDeque<Entry>,
-    hit: Cell<i64>,
-    miss: Cell<i64>,
+    hit: Cell<u64>,
+    miss: Cell<u64>,
     mem_size_change: i64,
 }
 
@@ -1136,8 +1136,8 @@ where
         }
         if let Some(stats) = self.engines.raft.flush_stats() {
             RAFT_ENTRIES_CACHES_GAUGE.set(stats.cache_size as i64);
-            RAFT_ENTRY_FETCHES.hit.inc_by(stats.hit as i64);
-            RAFT_ENTRY_FETCHES.miss.inc_by(stats.miss as i64);
+            RAFT_ENTRY_FETCHES.hit.inc_by(stats.hit as u64);
+            RAFT_ENTRY_FETCHES.miss.inc_by(stats.miss as u64);
         }
     }
 

@@ -433,7 +433,7 @@ impl<E: Engine> Endpoint<E> {
 
         let mut resp = match result {
             Ok(resp) => {
-                COPR_RESP_SIZE.inc_by(resp.data.len() as i64);
+                COPR_RESP_SIZE.inc_by(resp.data.len() as u64);
                 resp
             }
             Err(e) => make_error_response(e),
@@ -552,7 +552,7 @@ impl<E: Engine> Endpoint<E> {
                     },
                     Ok((None, _)) => break,
                     Ok((Some(mut resp), finished)) => {
-                        COPR_RESP_SIZE.inc_by(resp.data.len() as i64);
+                        COPR_RESP_SIZE.inc_by(resp.data.len() as u64);
                         resp.set_exec_details(exec_details);
                         resp.set_exec_details_v2(exec_details_v2);
                         yield resp;

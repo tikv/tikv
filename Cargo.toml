@@ -189,8 +189,8 @@ serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 parking_lot = "0.11"
-prometheus = { version = "0.10", features = ["nightly"] }
-prometheus-static-metric = "0.4"
+prometheus = { version = "0.12", features = ["nightly"] }
+prometheus-static-metric = "0.5"
 sst_importer = { path = "components/sst_importer", default-features = false }
 sysinfo = "0.16"
 tempfile = "3.0"
@@ -218,7 +218,7 @@ url = "2"
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 vlog = "0.1.4"
 walkdir = "2"
-yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+yatp = { git = "https://github.com/koushiro/yatp.git", branch = "update" }
 
 [dev-dependencies]
 panic_hook = { path = "components/panic_hook" }

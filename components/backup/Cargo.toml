@@ -81,7 +81,7 @@ kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = f
 lazy_static = "1.3"
 log_wrappers = { path = "../log_wrappers" }
 pd_client = { path = "../pd_client", default-features = false }
-prometheus = { version = "0.10", default-features = false, features = ["nightly"] }
+prometheus = { version = "0.12", default-features = false, features = ["nightly"] }
 raft = { version = "0.6.0-alpha", default-features = false }
 raftstore = { path = "../raftstore", default-features = false }
 security = { path = "../security", default-features = false }
@@ -97,7 +97,7 @@ tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util", default-features = false }
 collections = { path = "../collections" }
 txn_types = { path = "../txn_types", default-features = false }
-yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+yatp = { git = "https://github.com/koushiro/yatp.git", branch = "update" }
 
 [dev-dependencies]
 rand = "0.7"

@@ -553,7 +553,7 @@ impl Delegate {
                         for (tag, count) in cf_details.iter() {
                             CDC_OLD_VALUE_SCAN_DETAILS
                                 .with_label_values(&[*cf, *tag])
-                                .inc_by(*count as i64);
+                                .inc_by(*count as u64);
                         }
                     }
                 }

@@ -49,8 +49,8 @@ engine_traits = { path = "../engine_traits", default-features = false }
 file_system = { path = "../file_system", default-features = false }
 keys = { path = "../keys", default-features = false }
 num_cpus = "1"
-prometheus = { version = "0.10", features = ["nightly"] }
-prometheus-static-metric = "0.4"
+prometheus = { version = "0.12", features = ["nightly"] }
+prometheus-static-metric = "0.5"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tikv_alloc = { path = "../tikv_alloc" }

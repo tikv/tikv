@@ -42,7 +42,7 @@ log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug
 log_wrappers = { path = "../log_wrappers" }
 num_cpus = "1"
 openssl = "0.10"
-prometheus = { version = "0.10", features = ["nightly"] }
+prometheus = { version = "0.12", features = ["nightly"] }
 rand = "0.7"
 rusoto_core = "0.45.0"
 serde = { version = "1.0", features = ["derive"] }
@@ -63,7 +63,7 @@ tokio-timer = "0.2"
 url = "2"
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false, rev="511a3225c29f9272af83d28efed92eba835cd34f" }
 protobuf = "2"
-yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+yatp = { git = "https://github.com/koushiro/yatp.git", branch = "update" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }

@@ -101,7 +101,7 @@ log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug
 log_wrappers = { path = "../../components/log_wrappers" }
 nix = "0.19"
 pd_client = { path = "../../components/pd_client", default-features = false }
-prometheus = { version = "0.10", features = ["nightly"] }
+prometheus = { version = "0.12", features = ["nightly"] }
 promptly = "0.3.0"
 protobuf = "2.8"
 raft = { version = "0.6.0-alpha", default-features = false }
@@ -119,7 +119,7 @@ collections = { path = "../../components/collections" }
 toml = "0.5"
 txn_types = { path = "../../components/txn_types", default-features = false }
 vlog = "0.1.4"
-yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+yatp = { git = "https://github.com/koushiro/yatp.git", branch = "update" }
 
 [build-dependencies]
 time = "0.1"

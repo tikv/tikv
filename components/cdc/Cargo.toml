@@ -76,7 +76,7 @@ concurrency_manager = { path = "../concurrency_manager", default-features = fals
 fail = "0.4"
 lazy_static = "1.3"
 log_wrappers = { path = "../log_wrappers" }
-prometheus = { version = "0.10", default-features = false, features = ["nightly"] }
+prometheus = { version = "0.12", default-features = false, features = ["nightly"] }
 protobuf = "2.8"
 prost = "0.7"
 futures-timer = "3.0"
