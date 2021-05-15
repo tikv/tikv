@@ -100,5 +100,5 @@ txn_types = { path = "../txn_types", default-features = false }
 yatp = { git = "https://github.com/koushiro/yatp.git", branch = "update" }
 
 [dev-dependencies]
-rand = "0.7"
+rand = "0.8"
 tempfile = "3.0"

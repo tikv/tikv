@@ -252,10 +252,16 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .inc_by(value);
         }
         TickerType::GetHitL0 => {
-            STORE_ENGINE_GET_SERVED.get(name_enum).get_hit_l0.inc_by(value);
+            STORE_ENGINE_GET_SERVED
+                .get(name_enum)
+                .get_hit_l0
+                .inc_by(value);
         }
         TickerType::GetHitL1 => {
-            STORE_ENGINE_GET_SERVED.get(name_enum).get_hit_l1.inc_by(value);
+            STORE_ENGINE_GET_SERVED
+                .get(name_enum)
+                .get_hit_l1
+                .inc_by(value);
         }
         TickerType::GetHitL2AndUp => {
             STORE_ENGINE_GET_SERVED
@@ -309,13 +315,22 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
             STORE_ENGINE_FLOW.get(name_enum).bytes_read.inc_by(value);
         }
         TickerType::NumberDbSeek => {
-            STORE_ENGINE_LOCATE.get(name_enum).number_db_seek.inc_by(value);
+            STORE_ENGINE_LOCATE
+                .get(name_enum)
+                .number_db_seek
+                .inc_by(value);
         }
         TickerType::NumberDbNext => {
-            STORE_ENGINE_LOCATE.get(name_enum).number_db_next.inc_by(value);
+            STORE_ENGINE_LOCATE
+                .get(name_enum)
+                .number_db_next
+                .inc_by(value);
         }
         TickerType::NumberDbPrev => {
-            STORE_ENGINE_LOCATE.get(name_enum).number_db_prev.inc_by(value);
+            STORE_ENGINE_LOCATE
+                .get(name_enum)
+                .number_db_prev
+                .inc_by(value);
         }
         TickerType::NumberDbSeekFound => {
             STORE_ENGINE_LOCATE
@@ -336,7 +351,10 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .inc_by(value);
         }
         TickerType::IterBytesRead => {
-            STORE_ENGINE_FLOW.get(name_enum).iter_bytes_read.inc_by(value);
+            STORE_ENGINE_FLOW
+                .get(name_enum)
+                .iter_bytes_read
+                .inc_by(value);
         }
         TickerType::NoFileCloses => {
             STORE_ENGINE_FILE_STATUS
@@ -375,7 +393,10 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
             STORE_ENGINE_WAL_FILE_SYNCED.get(name_enum).inc_by(value);
         }
         TickerType::WalFileBytes => {
-            STORE_ENGINE_FLOW.get(name_enum).wal_file_bytes.inc_by(value);
+            STORE_ENGINE_FLOW
+                .get(name_enum)
+                .wal_file_bytes
+                .inc_by(value);
         }
         TickerType::WriteDoneBySelf => {
             STORE_ENGINE_WRITE_SERVED
@@ -414,7 +435,10 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .inc_by(value);
         }
         TickerType::FlushWriteBytes => {
-            STORE_ENGINE_FLOW.get(name_enum).flush_write_bytes.inc_by(value);
+            STORE_ENGINE_FLOW
+                .get(name_enum)
+                .flush_write_bytes
+                .inc_by(value);
         }
         TickerType::ReadAmpEstimateUsefulBytes => {
             STORE_ENGINE_READ_AMP_FLOW
@@ -453,10 +477,16 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .inc_by(value);
         }
         TickerType::TitanBlobFileNumKeysWritten => {
-            STORE_ENGINE_BLOB_FLOW.get(name_enum).keys_written.inc_by(value);
+            STORE_ENGINE_BLOB_FLOW
+                .get(name_enum)
+                .keys_written
+                .inc_by(value);
         }
         TickerType::TitanBlobFileNumKeysRead => {
-            STORE_ENGINE_BLOB_FLOW.get(name_enum).keys_read.inc_by(value);
+            STORE_ENGINE_BLOB_FLOW
+                .get(name_enum)
+                .keys_read
+                .inc_by(value);
         }
         TickerType::TitanBlobFileBytesWritten => {
             STORE_ENGINE_BLOB_FLOW
@@ -465,9 +495,14 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .inc_by(value);
         }
         TickerType::TitanBlobFileBytesRead => {
-            STORE_ENGINE_BLOB_FLOW.get(name_enum).bytes_read.inc_by(value);
+            STORE_ENGINE_BLOB_FLOW
+                .get(name_enum)
+                .bytes_read
+                .inc_by(value);
         }
-        TickerType::TitanBlobFileSynced => STORE_ENGINE_BLOB_FILE_SYNCED.get(name_enum).inc_by(value),
+        TickerType::TitanBlobFileSynced => {
+            STORE_ENGINE_BLOB_FILE_SYNCED.get(name_enum).inc_by(value)
+        }
         TickerType::TitanGcNumFiles => {
             STORE_ENGINE_BLOB_GC_FILE
                 .get(name_enum)
@@ -529,10 +564,16 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .inc_by(value);
         }
         TickerType::TitanGcNoNeed => {
-            STORE_ENGINE_BLOB_GC_ACTION.get(name_enum).no_need.inc_by(value);
+            STORE_ENGINE_BLOB_GC_ACTION
+                .get(name_enum)
+                .no_need
+                .inc_by(value);
         }
         TickerType::TitanGcRemain => {
-            STORE_ENGINE_BLOB_GC_ACTION.get(name_enum).remain.inc_by(value);
+            STORE_ENGINE_BLOB_GC_ACTION
+                .get(name_enum)
+                .remain
+                .inc_by(value);
         }
         TickerType::TitanGcDiscardable => {
             STORE_ENGINE_BLOB_GC_ACTION
@@ -541,7 +582,10 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .inc_by(value);
         }
         TickerType::TitanGcSample => {
-            STORE_ENGINE_BLOB_GC_ACTION.get(name_enum).sample.inc_by(value);
+            STORE_ENGINE_BLOB_GC_ACTION
+                .get(name_enum)
+                .sample
+                .inc_by(value);
         }
         TickerType::TitanGcSmallFile => {
             STORE_ENGINE_BLOB_GC_ACTION
@@ -550,10 +594,16 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .inc_by(value);
         }
         TickerType::TitanGcFailure => {
-            STORE_ENGINE_BLOB_GC_ACTION.get(name_enum).failure.inc_by(value);
+            STORE_ENGINE_BLOB_GC_ACTION
+                .get(name_enum)
+                .failure
+                .inc_by(value);
         }
         TickerType::TitanGcSuccess => {
-            STORE_ENGINE_BLOB_GC_ACTION.get(name_enum).success.inc_by(value);
+            STORE_ENGINE_BLOB_GC_ACTION
+                .get(name_enum)
+                .success
+                .inc_by(value);
         }
         TickerType::TitanGcTriggerNext => {
             STORE_ENGINE_BLOB_GC_ACTION

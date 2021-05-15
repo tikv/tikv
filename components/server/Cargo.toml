@@ -100,7 +100,7 @@ protobuf = "2.8"
 raft = { version = "0.6.0-alpha", default-features = false }
 raft_log_engine = { path = "../raft_log_engine", default-features = false }
 raftstore = { path = "../raftstore", default-features = false }
-rand = "0.7"
+rand = "0.8"
 resolved_ts = { path = "../../components/resolved_ts", default-features = false }
 security = { path = "../security", default-features = false }
 serde_json = "1.0"

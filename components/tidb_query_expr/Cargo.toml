@@ -23,7 +23,7 @@ prost-codec = [
 ]
 
 [dependencies]
-rand = "0.7.3"
+rand = "0.8.3"
 safemem = { version = "0.3", default-features = false }
 time = "0.1"
 base64 = "0.12"

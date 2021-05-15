@@ -241,7 +241,7 @@ dependencies = [
  "prometheus",
  "raft",
  "raftstore",
- "rand 0.7.3",
+ "rand 0.8.3",
  "security",
  "serde",
  "serde_derive",
@@ -658,7 +658,7 @@ dependencies = [
  "libc 0.2.86",
  "panic_hook",
  "protobuf",
- "rand 0.7.3",
+ "rand 0.8.3",
  "static_assertions",
  "thiserror",
  "tikv_alloc",
@@ -681,7 +681,7 @@ dependencies = [
  "fail",
  "futures 0.3.8",
  "parking_lot 0.11.0",
- "rand 0.7.3",
+ "rand 0.8.3",
  "tikv_alloc",
  "tokio 0.2.24",
  "txn_types",
@@ -1148,7 +1148,7 @@ dependencies = [
  "openssl",
  "prometheus",
  "protobuf",
- "rand 0.7.3",
+ "rand 0.8.3",
  "serde",
  "serde_derive",
  "slog",
@@ -1214,7 +1214,7 @@ dependencies = [
  "prometheus-static-metric",
  "protobuf",
  "raft",
- "rand 0.7.3",
+ "rand 0.8.3",
  "rocksdb",
  "serde",
  "serde_derive",
@@ -1322,7 +1322,7 @@ dependencies = [
  "matches",
  "prometheus",
  "protobuf",
- "rand 0.7.3",
+ "rand 0.8.3",
  "rusoto_core",
  "rust-ini",
  "slog",
@@ -1440,7 +1440,7 @@ dependencies = [
  "openssl",
  "prometheus",
  "prometheus-static-metric",
- "rand 0.7.3",
+ "rand 0.8.3",
  "strum",
  "tempfile",
  "tikv_alloc",
@@ -3663,7 +3663,7 @@ dependencies = [
  "protobuf",
  "raft",
  "raft-proto",
- "rand 0.7.3",
+ "rand 0.8.3",
  "serde",
  "serde_derive",
  "serde_with",
@@ -3796,11 +3796,11 @@ dependencies = [
 
 [[package]]
 name = "rand_isaac"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8df6b0b3dc9991a10b2d91a86d1129314502169a1bf6afa67328945e02498b76"
+checksum = "fac4373cd91b4f55722c553fb0f286edbb81ef3ff6eec7b99d1898a4110a0b28"
 dependencies = [
- "rand_core 0.5.1",
+ "rand_core 0.6.2",
 ]
 
 [[package]]
@@ -3814,11 +3814,11 @@ dependencies = [
 
 [[package]]
 name = "rand_xorshift"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77d416b86801d23dde1aa643023b775c3a462efc0ed96443add11546cdf1dca8"
+checksum = "d25bf25ec5ae4a3f1b92f929810509a2f53d7dca2f50b794ff57e3face536c8f"
 dependencies = [
- "rand_core 0.5.1",
+ "rand_core 0.6.2",
 ]
 
 [[package]]
@@ -4488,7 +4488,7 @@ dependencies = [
  "raft",
  "raft_log_engine",
  "raftstore",
- "rand 0.7.3",
+ "rand 0.8.3",
  "resolved_ts",
  "security",
  "serde_json",
@@ -5011,7 +5011,7 @@ dependencies = [
  "futures-util",
  "grpcio",
  "kvproto",
- "rand 0.7.3",
+ "rand 0.8.3",
  "tempfile",
  "test_raftstore",
  "tidb_query_common",
@@ -5076,7 +5076,7 @@ dependencies = [
  "protobuf",
  "raft",
  "raftstore",
- "rand 0.7.3",
+ "rand 0.8.3",
  "resolved_ts",
  "security",
  "slog",
@@ -5126,7 +5126,7 @@ dependencies = [
  "fail",
  "grpcio",
  "kvproto",
- "rand 0.7.3",
+ "rand 0.8.3",
  "rand_isaac",
  "security",
  "slog",
@@ -5175,7 +5175,7 @@ dependencies = [
  "protobuf",
  "raft",
  "raftstore",
- "rand 0.7.3",
+ "rand 0.8.3",
  "rand_xorshift",
  "security",
  "serde_json",
@@ -5381,7 +5381,7 @@ dependencies = [
  "panic_hook",
  "profiler",
  "protobuf",
- "rand 0.7.3",
+ "rand 0.8.3",
  "regex",
  "safemem",
  "static_assertions",
@@ -5541,7 +5541,7 @@ dependencies = [
  "raft",
  "raft_log_engine",
  "raftstore",
- "rand 0.7.3",
+ "rand 0.8.3",
  "security",
  "serde_json",
  "signal",
@@ -5681,7 +5681,7 @@ dependencies = [
  "procinfo",
  "prometheus",
  "protobuf",
- "rand 0.7.3",
+ "rand 0.8.3",
  "regex",
  "rusoto_core",
  "serde",
@@ -6000,7 +6000,7 @@ dependencies = [
  "kvproto",
  "log_wrappers",
  "panic_hook",
- "rand 0.7.3",
+ "rand 0.8.3",
  "slog",
  "thiserror",
  "tikv_alloc",

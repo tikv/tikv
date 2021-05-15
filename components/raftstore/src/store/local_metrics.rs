@@ -35,9 +35,7 @@ impl RaftReadyMetrics {
             self.append = 0;
         }
         if self.snapshot > 0 {
-            STORE_RAFT_READY_COUNTER
-                .snapshot
-                .inc_by(self.snapshot);
+            STORE_RAFT_READY_COUNTER.snapshot.inc_by(self.snapshot);
             self.snapshot = 0;
         }
         if self.pending_region > 0 {
@@ -220,15 +218,11 @@ impl RaftProposeMetrics {
             self.all = 0;
         }
         if self.local_read > 0 {
-            PEER_PROPOSAL_COUNTER
-                .local_read
-                .inc_by(self.local_read);
+            PEER_PROPOSAL_COUNTER.local_read.inc_by(self.local_read);
             self.local_read = 0;
         }
         if self.read_index > 0 {
-            PEER_PROPOSAL_COUNTER
-                .read_index
-                .inc_by(self.read_index);
+            PEER_PROPOSAL_COUNTER.read_index.inc_by(self.read_index);
             self.read_index = 0;
         }
         if self.unsafe_read_index > 0 {
@@ -248,9 +242,7 @@ impl RaftProposeMetrics {
             self.transfer_leader = 0;
         }
         if self.conf_change > 0 {
-            PEER_PROPOSAL_COUNTER
-                .conf_change
-                .inc_by(self.conf_change);
+            PEER_PROPOSAL_COUNTER.conf_change.inc_by(self.conf_change);
             self.conf_change = 0;
         }
         if self.batch > 0 {

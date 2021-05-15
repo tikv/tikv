@@ -131,7 +131,7 @@ protobuf = "2.8"
 more-asserts = "0.2"
 raft = { version = "0.6.0-alpha", default-features = false }
 raftstore = { path = "../components/raftstore", default-features = false }
-rand = "0.7.3"
+rand = "0.8.3"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tempfile = "3.0"
@@ -157,7 +157,7 @@ time = "0.1"
 criterion = "0.3"
 criterion-cpu-time = "0.1"
 arrow = "0.10"
-rand_xorshift = "0.2"
+rand_xorshift = "0.3"
 engine_rocks = { path = "../components/engine_rocks", default-features = false }
 engine_traits = { path = "../components/engine_traits", default-features = false }
 external_storage_export = { path = "../components/external_storage/export", default-features = false }

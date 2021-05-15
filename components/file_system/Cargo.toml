@@ -30,7 +30,7 @@ tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util", default-features = false }
 
 [dev-dependencies]
-rand = "0.7"
+rand = "0.8"
 tempfile = "3.0"
 maligned = "0.2.1"
 
