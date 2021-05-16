@@ -384,34 +384,40 @@ impl<S: Snapshot> MvccReader<S> {
         &mut self,
         key: &Key,
         start_ts: TimeStamp,
-        prev_write: Write,
+        prev_write_loaded: bool,
+        prev_write: Option<Write>,
     ) -> Result<OldValue> {
-        match prev_write.write_type {
-            WriteType::Put => {
-                // For Put, there must be an old value either in its
-                // short value or in the default CF.
-                Ok(OldValue::Value {
-                    short_value: prev_write.short_value,
-                    start_ts: prev_write.start_ts,
-                })
-            }
-            WriteType::Delete => {
-                // For Delete, no old value.
-                Ok(OldValue::None)
-            }
-            WriteType::Rollback | WriteType::Lock => {
-                // For Rollback and Lock, it's unknown whether there is a more
-                // previous valid write. Call `get_write` to get a valid
-                // previous write.
-                Ok(match self.get_write(key, start_ts)? {
-                    Some(write) => OldValue::Value {
-                        short_value: write.short_value,
-                        start_ts: write.start_ts,
-                    },
-                    None => OldValue::None,
-                })
+        if prev_write_loaded && prev_write.is_none() {
+            return Ok(OldValue::None);
+        }
+        if let Some(prev_write) = prev_write {
+            match prev_write.write_type {
+                WriteType::Put => {
+                    // For Put, there must be an old value either in its
+                    // short value or in the default CF.
+                    return Ok(OldValue::Value {
+                        short_value: prev_write.short_value,
+                        start_ts: prev_write.start_ts,
+                    });
+                }
+                WriteType::Delete => {
+                    // For Delete, no old value.
+                    return Ok(OldValue::None);
+                }
+                WriteType::Rollback | WriteType::Lock => {
+                    // For Rollback and Lock, it's unknown whether there is a more
+                    // previous valid write. Call `get_write` to get a valid
+                    // previous write.
+                }
             }
         }
+        Ok(match self.get_write(key, start_ts)? {
+            Some(write) => OldValue::Value {
+                short_value: write.short_value,
+                start_ts: write.start_ts,
+            },
+            None => OldValue::None,
+        })
     }
 }
 
