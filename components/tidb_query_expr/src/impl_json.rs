@@ -204,9 +204,10 @@ fn quote(bytes: BytesRef) -> Result<Option<Bytes>> {
 
 #[rpn_fn(nullable)]
 #[inline]
-fn json_unquote(arg: Option<JsonRef>) -> Result<Option<Bytes>> {
+fn json_unquote(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     arg.as_ref().map_or(Ok(None), |json_arg| {
-        Ok(Some(Bytes::from(json_arg.unquote()?)))
+        let tmp_str = std::str::from_utf8(json_arg)?;
+        Ok(Some(Bytes::from(json_unquote::unquote_string(tmp_str)?)))
     })
 }
 
@@ -619,27 +620,18 @@ mod tests {
     #[test]
     fn test_json_unquote() {
         let cases = vec![
-            (None, false, None),
-            (Some(r"a"), false, Some("a")),
-            (Some(r#""3""#), false, Some(r#""3""#)),
-            (Some(r#""3""#), true, Some(r#"3"#)),
-            (Some(r#"{"a":  "b"}"#), false, Some(r#"{"a":  "b"}"#)),
-            (Some(r#"{"a":  "b"}"#), true, Some(r#"{"a": "b"}"#)),
-            (
-                Some(r#"hello,\"quoted string\",world"#),
-                false,
-                Some(r#"hello,"quoted string",world"#),
-            ),
+            (None, None),
+            (Some(r"a"), Some("a")),
+            (Some(r#""3""#), Some(r#""3""#)),
+            (Some(r#""3""#), Some(r#"3"#)),
+            (Some(r#"{"a":  "b"}"#), Some(r#"{"a":  "b"}"#)),
+            (Some(r#"{"a":  "b"}"#), Some(r#"{"a": "b"}"#)),
+            (Some(r#"hello,\"quoted string\",world"#),
+             Some(r#"hello,"quoted string",world"#),),
         ];
 
-        for (arg, parse, expect_output) in cases {
-            let arg = arg.map(|input| {
-                if parse {
-                    input.parse().unwrap()
-                } else {
-                    Json::from_string(input.to_string()).unwrap()
-                }
-            });
+        for (arg, expect_output) in cases {
+            let arg = arg.map(Bytes::from);
             let expect_output = expect_output.map(Bytes::from);
 
             let output = RpnFnScalarEvaluator::new()
