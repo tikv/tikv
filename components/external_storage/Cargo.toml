@@ -14,9 +14,11 @@ prost-codec = [
   "kvproto/prost-codec",
   "tikv_util/prost-codec",
 ]
+failpoints = ["fail/failpoints"]
 
 [dependencies]
 bytes = "0.5.3"
+fail = "0.4"
 futures = "0.3"
 futures-executor = "0.3"
 futures-io = "0.3"

@@ -26,6 +26,7 @@ use crate::storage::{
 };
 use raftstore::coprocessor::CoprocessorHost;
 
+use crate::storage::lock_manager::DiagnosticContext;
 use collections::HashSet;
 use crossbeam::utils::CachePadded;
 use engine_traits::KvEngine;
@@ -236,6 +237,7 @@ impl LockManagerTrait for LockManager {
         lock: Lock,
         is_first_lock: bool,
         timeout: Option<WaitTimeout>,
+        diag_ctx: DiagnosticContext,
     ) {
         let timeout = match timeout {
             Some(t) => t,
@@ -249,12 +251,12 @@ impl LockManagerTrait for LockManager {
         // but the waiter_mgr haven't processed it, subsequent WakeUp msgs may be lost.
         self.waiter_count.fetch_add(1, Ordering::SeqCst);
         self.waiter_mgr_scheduler
-            .wait_for(start_ts, cb, pr, lock, timeout);
+            .wait_for(start_ts, cb, pr, lock, timeout, diag_ctx.clone());
 
         // If it is the first lock the transaction tries to lock, it won't cause deadlock.
         if !is_first_lock {
             self.add_to_detected(start_ts);
-            self.detector_scheduler.detect(start_ts, lock);
+            self.detector_scheduler.detect(start_ts, lock, diag_ctx);
         }
     }
 
@@ -337,6 +339,13 @@ mod tests {
         lock_mgr
     }
 
+    fn diag_ctx(key: &[u8], resource_group_tag: &[u8]) -> DiagnosticContext {
+        DiagnosticContext {
+            key: key.to_owned(),
+            resource_group_tag: resource_group_tag.to_owned(),
+        }
+    }
+
     #[test]
     fn test_single_lock_manager() {
         let lock_mgr = start_lock_manager();
@@ -351,6 +360,7 @@ mod tests {
             waiter.lock,
             true,
             Some(WaitTimeout::Default),
+            DiagnosticContext::default(),
         );
         assert!(lock_mgr.has_waiter());
         assert_elapsed(
@@ -376,6 +386,7 @@ mod tests {
             waiter.lock,
             true,
             Some(WaitTimeout::Default),
+            DiagnosticContext::default(),
         );
         assert!(lock_mgr.has_waiter());
         lock_mgr.wake_up(lock.ts, vec![lock.hash], 30.into(), false);
@@ -395,6 +406,7 @@ mod tests {
             waiter1.lock,
             false,
             Some(WaitTimeout::Default),
+            diag_ctx(b"k1", b"tag1"),
         );
         assert!(lock_mgr.has_waiter());
         let (waiter2, lock_info2, f2) = new_test_waiter(20.into(), 10.into(), 10);
@@ -405,10 +417,19 @@ mod tests {
             waiter2.lock,
             false,
             Some(WaitTimeout::Default),
+            diag_ctx(b"k2", b"tag2"),
         );
         assert!(lock_mgr.has_waiter());
         assert_elapsed(
-            || expect_deadlock(block_on(f2).unwrap(), 20.into(), lock_info2, 20),
+            || {
+                expect_deadlock(
+                    block_on(f2).unwrap(),
+                    20.into(),
+                    lock_info2,
+                    20,
+                    &[(10, 20, b"k1", b"tag1"), (20, 10, b"k2", b"tag2")],
+                )
+            },
             0,
             500,
         );
@@ -432,6 +453,7 @@ mod tests {
                 waiter.lock,
                 *is_first_lock,
                 Some(WaitTimeout::Default),
+                DiagnosticContext::default(),
             );
             assert!(lock_mgr.has_waiter());
             assert_eq!(lock_mgr.remove_from_detected(30.into()), !is_first_lock);
@@ -465,6 +487,7 @@ mod tests {
             waiter.lock,
             false,
             None,
+            DiagnosticContext::default(),
         );
         assert_elapsed(
             || expect_key_is_locked(block_on(f).unwrap().unwrap(), lock_info),

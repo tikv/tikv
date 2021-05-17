@@ -3351,6 +3351,26 @@ mod tests {
                 ],
                 Some("Cześć".as_bytes().to_vec()),
             ),
+            (
+                vec![
+                    Some(1).into(),
+                    tidb_query_datatype::codec::data_type::ScalarValue::Enum(Some(Enum::new(
+                        "aaa".as_bytes().to_vec(),
+                        1u64,
+                    ))),
+                ],
+                Some("aaa".as_bytes().to_vec()),
+            ),
+            (
+                vec![
+                    tidb_query_datatype::codec::data_type::ScalarValue::Enum(Some(Enum::new(
+                        "aaa".as_bytes().to_vec(),
+                        1u64,
+                    ))),
+                    Some(b"bbb".to_vec()).into(),
+                ],
+                Some("bbb".as_bytes().to_vec()),
+            ),
         ];
         for (args, expect_output) in test_cases {
             let output = RpnFnScalarEvaluator::new()
