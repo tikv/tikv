@@ -1125,7 +1125,7 @@ where
             self.observe_cmd.cdc_id,
             self.observe_cmd.rts_id,
             self.region_id(),
-            cmd.clone(),
+            &cmd,
         );
 
         apply_ctx.cbs.last_mut().unwrap().push(cmd_cb, cmd);

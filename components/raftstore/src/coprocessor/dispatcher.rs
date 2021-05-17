@@ -503,7 +503,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
     }
 
-    pub fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: Cmd) {
+    pub fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: &Cmd) {
         if self.registry.cmd_observers.is_empty() {
             return;
         }
@@ -522,7 +522,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
             .unwrap()
             .observer
             .inner()
-            .on_apply_cmd(cdc_id, rts_id, region_id, cmd)
+            .on_apply_cmd(cdc_id, rts_id, region_id, cmd.clone())
     }
 
     pub fn on_flush_apply(&self, engine: E) {
