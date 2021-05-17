@@ -163,6 +163,7 @@ struct TiKVServer<ER: RaftEngine> {
     concurrency_manager: ConcurrencyManager,
     env: Arc<Environment>,
     background_worker: Worker,
+    accessor_worker: Worker,
 }
 
 struct TiKVEngines<ER: RaftEngine> {
@@ -244,6 +245,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             concurrency_manager,
             env,
             background_worker,
+            accessor_worker,
         }
     }
 
