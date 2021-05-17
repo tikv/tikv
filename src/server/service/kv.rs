@@ -1078,8 +1078,8 @@ fn response_batch_commands_request<F>(
 {
     let task = async move {
         if let Ok(resp) = resp.await {
-            if tx.send_and_notify((id, resp)).is_err() {
-                error!("KvService response batch commands fail");
+            if let Err(e) = tx.send_and_notify((id, resp)) {
+                error!("KvService response batch commands fail"; "err" => ?e);
             } else {
                 GRPC_MSG_HISTOGRAM_STATIC
                     .get(label_enum)
