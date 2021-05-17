@@ -478,7 +478,6 @@ fn test_gen_snapshot_with_no_committed_entries_ready() {
 #[test]
 fn test_cancel_snapshot_generating() {
     let mut cluster = new_node_cluster(0, 5);
-    cluster.cfg.server.snap_max_write_bytes_per_sec = ReadableSize(10);
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration(Duration::from_secs(100));
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
     cluster.cfg.raft_store.raft_log_gc_count_limit = 10;
