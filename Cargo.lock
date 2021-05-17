@@ -1180,6 +1180,7 @@ dependencies = [
  "slog",
  "slog-global",
  "tempfile",
+ "test_util",
  "thiserror",
  "tikv_alloc",
  "tikv_util",
@@ -1332,6 +1333,7 @@ name = "external_storage"
 version = "0.0.1"
 dependencies = [
  "bytes 0.5.3",
+ "fail",
  "futures 0.3.8",
  "futures-executor",
  "futures-io",
