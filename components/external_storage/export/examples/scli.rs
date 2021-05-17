@@ -4,19 +4,18 @@ use std::{
     fs::{self, File},
     io::{Error, ErrorKind, Result},
     path::Path,
-    sync::Arc,
 };
 
-use external_storage::{
-    create_storage, make_gcs_backend, make_local_backend, make_noop_backend, make_s3_backend,
-    ExternalStorage,
+use external_storage_export::{
+    create_storage, make_cloud_backend, make_gcs_backend, make_local_backend, make_noop_backend,
+    make_s3_backend, ExternalStorage,
 };
-use futures::executor::block_on;
 use futures_util::io::{copy, AllowStdIo};
 use ini::ini::Ini;
-use kvproto::backup::{Gcs, S3};
+use kvproto::backup::{Bucket, CloudDynamic, Gcs, StorageBackend, S3};
 use structopt::clap::arg_enum;
 use structopt::StructOpt;
+use tokio::runtime::Runtime;
 
 arg_enum! {
     #[derive(Debug)]
@@ -25,6 +24,7 @@ arg_enum! {
         Local,
         S3,
         GCS,
+        Cloud,
     }
 }
 
@@ -59,6 +59,8 @@ pub struct Opt {
     /// Remote path prefix
     #[structopt(short = "x", long)]
     prefix: Option<String>,
+    #[structopt(long)]
+    cloud_name: Option<String>,
     #[structopt(subcommand)]
     command: Command,
 }
@@ -72,7 +74,36 @@ enum Command {
     Load,
 }
 
-fn create_s3_storage(opt: &Opt) -> Result<Arc<dyn ExternalStorage>> {
+fn create_cloud_storage(opt: &Opt) -> Result<StorageBackend> {
+    let mut bucket = Bucket::default();
+    if let Some(endpoint) = &opt.endpoint {
+        bucket.endpoint = endpoint.to_string();
+    }
+    if let Some(region) = &opt.region {
+        bucket.region = region.to_string();
+    }
+    if let Some(bucket_name) = &opt.bucket {
+        bucket.bucket = bucket_name.to_string();
+    } else {
+        return Err(Error::new(ErrorKind::Other, "missing bucket"));
+    }
+    if let Some(prefix) = &opt.prefix {
+        bucket.prefix = prefix.to_string();
+    }
+    let mut config = CloudDynamic::default();
+    config.set_bucket(bucket);
+    let mut attrs = std::collections::HashMap::new();
+    if let Some(credential_file) = &opt.credential_file {
+        attrs.insert("credential_file".to_owned(), credential_file.clone());
+    }
+    config.set_attrs(attrs);
+    if let Some(cloud_name) = &opt.cloud_name {
+        config.provider_name = cloud_name.clone();
+    }
+    Ok(make_cloud_backend(config))
+}
+
+fn create_s3_storage(opt: &Opt) -> Result<StorageBackend> {
     let mut config = S3::default();
 
     if let Some(credential_file) = &opt.credential_file {
@@ -111,10 +142,10 @@ fn create_s3_storage(opt: &Opt) -> Result<Arc<dyn ExternalStorage>> {
     if let Some(prefix) = &opt.prefix {
         config.prefix = prefix.to_string();
     }
-    create_storage(&make_s3_backend(config))
+    Ok(make_s3_backend(config))
 }
 
-fn create_gcs_storage(opt: &Opt) -> Result<Arc<dyn ExternalStorage>> {
+fn create_gcs_storage(opt: &Opt) -> Result<StorageBackend> {
     let mut config = Gcs::default();
 
     if let Some(credential_file) = &opt.credential_file {
@@ -131,17 +162,20 @@ fn create_gcs_storage(opt: &Opt) -> Result<Arc<dyn ExternalStorage>> {
     if let Some(prefix) = &opt.prefix {
         config.prefix = prefix.to_string();
     }
-    create_storage(&make_gcs_backend(config))
+    Ok(make_gcs_backend(config))
 }
 
 fn process() -> Result<()> {
     let opt = Opt::from_args();
-    let storage = match opt.storage {
-        StorageType::Noop => create_storage(&make_noop_backend())?,
-        StorageType::Local => create_storage(&make_local_backend(Path::new(&opt.path)))?,
-        StorageType::S3 => create_s3_storage(&opt)?,
-        StorageType::GCS => create_gcs_storage(&opt)?,
-    };
+    let storage: Box<dyn ExternalStorage> = create_storage(
+        &(match opt.storage {
+            StorageType::Noop => make_noop_backend(),
+            StorageType::Local => make_local_backend(Path::new(&opt.path)),
+            StorageType::S3 => create_s3_storage(&opt)?,
+            StorageType::GCS => create_gcs_storage(&opt)?,
+            StorageType::Cloud => create_cloud_storage(&opt)?,
+        }),
+    )?;
 
     match opt.command {
         Command::Save => {
@@ -152,7 +186,9 @@ fn process() -> Result<()> {
         Command::Load => {
             let reader = storage.read(&opt.name);
             let mut file = AllowStdIo::new(File::create(&opt.file)?);
-            block_on(copy(reader, &mut file))?;
+            Runtime::new()
+                .expect("Failed to create Tokio runtime")
+                .block_on(copy(reader, &mut file))?;
         }
     }
 
@@ -165,7 +201,7 @@ fn main() {
             println!("done");
         }
         Err(e) => {
-            println!("error: {}", e);
+            println!("error: {:?}", e);
         }
     }
 }
