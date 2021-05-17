@@ -57,3 +57,4 @@ tokio = { version = "0.2", features = ["time", "rt-core"] }
 matches = "0.1.8"
 tempfile = "3.1"
 toml = "0.5"
+test_util = { path = "../test_util", default-features = false }
