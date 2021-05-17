@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::mem;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use collections::HashMap;
@@ -25,8 +25,7 @@ use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, AdminResponse, CmdType, DeleteRequest, PutRequest, Request,
 };
-use raftstore::coprocessor::{Cmd, CmdBatch};
-use raftstore::store::fsm::ObserveID;
+use raftstore::coprocessor::{Cmd, CmdBatch, ObserveHandle};
 use raftstore::store::util::compare_region_epoch;
 use raftstore::Error as RaftStoreError;
 use resolved_ts::Resolver;
@@ -189,13 +188,12 @@ enum PendingLock {
 /// It converts raft commands into CDC events and broadcast to downstreams.
 /// It also track trancation on the fly in order to compute resolved ts.
 pub struct Delegate {
-    pub id: ObserveID,
+    pub handle: ObserveHandle,
     pub region_id: u64,
     region: Option<Region>,
     pub downstreams: Vec<Downstream>,
     pub resolver: Option<Resolver>,
     pending: Option<Pending>,
-    enabled: Arc<AtomicBool>,
     failed: bool,
     pub txn_extra_op: TxnExtraOp,
 }
@@ -205,22 +203,14 @@ impl Delegate {
     pub fn new(region_id: u64) -> Delegate {
         Delegate {
             region_id,
-            id: ObserveID::new(),
+            handle: ObserveHandle::new(),
             downstreams: Vec::new(),
             resolver: None,
             region: None,
             pending: Some(Pending::default()),
-            enabled: Arc::new(AtomicBool::new(true)),
             failed: false,
             txn_extra_op: TxnExtraOp::default(),
         }
-    }
-
-    /// Returns a shared flag.
-    /// True if there are some active downstreams subscribe the region.
-    /// False if all downstreams has unsubscribed.
-    pub fn enabled(&self) -> Arc<AtomicBool> {
-        self.enabled.clone()
     }
 
     /// Return false if subscribe failed.
@@ -296,7 +286,7 @@ impl Delegate {
         });
         let is_last = downstreams.is_empty();
         if is_last {
-            self.enabled.store(false, Ordering::SeqCst);
+            self.handle.stop_observing();
         }
         is_last
     }
@@ -334,7 +324,7 @@ impl Delegate {
     pub fn stop(&mut self, err: Error) {
         self.mark_failed();
         // Stop observe further events.
-        self.enabled.store(false, Ordering::SeqCst);
+        self.handle.stop_observing();
 
         info!("cdc met region error";
             "region_id" => self.region_id, "error" => ?err);
@@ -419,7 +409,7 @@ impl Delegate {
         old_value_cache: &mut OldValueCache,
     ) -> Result<()> {
         // Stale CmdBatch, drop it sliently.
-        if batch.cdc_id != self.id {
+        if batch.cdc_id != self.handle.id {
             return Ok(());
         }
         for cmd in batch.into_iter(self.region_id) {
@@ -892,8 +882,7 @@ mod tests {
         downstream.set_sink(sink);
         let mut delegate = Delegate::new(region_id);
         delegate.subscribe(downstream);
-        let enabled = delegate.enabled();
-        assert!(enabled.load(Ordering::SeqCst));
+        assert!(delegate.handle.is_observing());
         let resolver = Resolver::new(region_id);
         for downstream in delegate.on_region_ready(resolver, region) {
             delegate.subscribe(downstream);
@@ -926,8 +915,8 @@ mod tests {
         delegate.stop(Error::request(err_header));
         let err = receive_error();
         assert!(err.has_not_leader());
-        // Enable is disabled by any error.
-        assert!(!enabled.load(Ordering::SeqCst));
+        // Observing is disabled by any error.
+        assert!(!delegate.handle.is_observing());
 
         let mut err_header = ErrorHeader::default();
         err_header.set_region_not_found(Default::default());
