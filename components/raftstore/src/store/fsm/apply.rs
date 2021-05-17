@@ -68,7 +68,7 @@ use crate::{Error, Result};
 
 use super::metrics::*;
 
-const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
+const DEFAULT_APPLY_WB_SIZE: usize = 128 * 1024;
 const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
 
