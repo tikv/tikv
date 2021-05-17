@@ -171,6 +171,7 @@ dependencies = [
  "async-trait",
  "bytes 0.5.3",
  "cloud",
+ "fail",
  "futures 0.3.8",
  "futures-util",
  "grpcio",
@@ -603,6 +604,7 @@ dependencies = [
  "async-trait",
  "derive_more",
  "error_code",
+ "fail",
  "futures-io",
  "kvproto",
  "openssl",
@@ -1332,6 +1334,7 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "bytes 0.5.3",
+ "fail",
  "ffi-support",
  "file_system",
  "futures 0.3.8",

@@ -24,10 +24,12 @@ cloud-storage-grpc = [
   "grpcio",
   "tokio-util",
 ]
+failpoints = ["fail/failpoints"]
 
 [dependencies]
 anyhow = "1.0"
 bytes = "0.5.3"
+fail = "0.4"
 ffi-support = { optional = true, version = "0.4.2" }
 file_system = { path = "../file_system" }
 futures = "0.3"

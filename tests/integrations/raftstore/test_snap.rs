@@ -1,18 +1,24 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fs;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use engine_rocks::Compat;
-use engine_traits::Peekable;
+use engine_traits::{KvEngine, Peekable};
 use file_system::{IOOp, IOType, WithIORateLimit};
+use futures::executor::block_on;
+use grpcio::Environment;
 use kvproto::raft_serverpb::*;
-use raft::eraftpb::{Message, MessageType};
+use raft::eraftpb::{Message, MessageType, Snapshot};
 use raftstore::{store::*, Result};
+use rand::Rng;
+use security::SecurityManager;
 use test_raftstore::*;
+use tikv::server::snap::send_snap;
 use tikv_util::{config::*, HandyRwLock};
 
 fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -496,7 +502,7 @@ fn test_inspected_snapshot() {
     cluster.stop_node(3);
     (0..10).for_each(|_| cluster.must_put(b"k2", b"v2"));
     // Sleep for a while to ensure all logs are compacted.
-    std::thread::sleep(Duration::from_millis(100));
+    sleep_ms(100);
 
     assert_eq!(stats.fetch(IOType::Replication, IOOp::Read), 0);
     assert_eq!(stats.fetch(IOType::Replication, IOOp::Write), 0);
@@ -513,4 +519,136 @@ fn test_inspected_snapshot() {
     must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
     assert_ne!(stats.fetch(IOType::LoadBalance, IOOp::Read), 0);
     assert_ne!(stats.fetch(IOType::LoadBalance, IOOp::Write), 0);
+}
+
+// Test snapshot generating and receiving can share one I/O limiter fairly.
+// 1. Bootstrap a 1 Region, 1 replica cluster;
+// 2. Add a peer on store 2 for the Region, so that there is a snapshot received on store 2;
+// 3. Rename the received snapshot on store 2, and then keep sending it back to store 1;
+// 4. Add another peer for the Region, so store 1 will generate a new snapshot;
+// 5. Test the generating can success while the store keeps receiving snapshots from store 2.
+#[test]
+fn test_gen_during_heavy_recv() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.server.snap_max_write_bytes_per_sec = ReadableSize(5 * 1024 * 1024);
+    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration(Duration::from_secs(100));
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let r1 = cluster.run_conf_change();
+
+    // 1M random value to ensure the region snapshot is large enough.
+    cluster.must_put(b"key-0000", b"value");
+    for i in 1..1024 {
+        let key = format!("key-{:04}", i).into_bytes();
+        cluster.must_put(&key, &random_long_vec(1024));
+    }
+    // Another 1M random value because the region will split later.
+    cluster.must_put(b"zzz-0000", b"value");
+    for i in 1..1024 {
+        let key = format!("zzz-{:04}", i).into_bytes();
+        cluster.must_put(&key, &random_long_vec(1024));
+    }
+
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    must_get_equal(&cluster.get_engine(2), b"key-0000", b"value");
+
+    // The new region can be used to keep sending snapshots to store 1.
+    let r2 = {
+        let r = cluster.get_region(b"key");
+        cluster.must_split(&r, b"zzz");
+        cluster.get_region(b"key").get_id()
+    };
+    cluster.must_transfer_leader(r2, new_peer(2, 1002));
+
+    let snap_mgr = cluster.get_snap_mgr(2);
+    let engine = cluster.engines[&2].kv.clone();
+    let snap_term = cluster.raft_local_state(r2, 2).get_hard_state().term;
+    let snap_apply_state = cluster.apply_state(r2, 2);
+    let mut snap_index = snap_apply_state.applied_index;
+
+    let snap = do_snapshot(
+        snap_mgr.clone(),
+        &engine,
+        engine.snapshot(),
+        r2,
+        snap_term,
+        snap_apply_state,
+        true,
+    )
+    .unwrap();
+
+    // Keep sending snapshots to store 1.
+    let s1_addr = cluster.sim.rl().get_addr(1);
+    let sec_mgr = cluster.sim.rl().security_mgr.clone();
+    let snap_dir = cluster.sim.rl().get_snap_dir(2);
+    let th = std::thread::spawn(move || {
+        loop {
+            for suffix in &[".meta", "_default.sst"] {
+                let f = format!("gen_{}_{}_{}{}", r2, snap_term, snap_index, suffix);
+                let mut src = PathBuf::from(&snap_dir);
+                src.push(&f);
+
+                let f = format!("gen_{}_{}_{}{}", r2, snap_term, snap_index + 1, suffix);
+                let mut dst = PathBuf::from(&snap_dir);
+                dst.push(&f);
+
+                fs::hard_link(&src, &dst).unwrap();
+            }
+
+            let snap_mgr = snap_mgr.clone();
+            let sec_mgr = sec_mgr.clone();
+            let s = snap.clone();
+            if let Err(e) =
+                send_a_large_snapshot(snap_mgr, sec_mgr, &s1_addr, r2, s, snap_index, snap_term)
+            {
+                info!("send_a_large_snapshot fail: {}", e);
+                break;
+            }
+            snap_index += 1;
+        }
+    });
+
+    // While store 1 keeps receiving snapshots, it should still can generate a snapshot on time.
+    pd_client.must_add_peer(r1, new_learner_peer(3, 3));
+    sleep_ms(500);
+    must_get_equal(&cluster.get_engine(3), b"zzz-0000", b"value");
+
+    drop(cluster);
+    let _ = th.join();
+}
+
+fn send_a_large_snapshot(
+    mgr: SnapManager,
+    security_mgr: Arc<SecurityManager>,
+    addr: &str,
+    region_id: u64,
+    mut snap: Snapshot,
+    index: u64,
+    term: u64,
+) -> std::result::Result<(), String> {
+    snap.mut_metadata().term = term;
+    snap.mut_metadata().index = index;
+
+    // Construct a raft message.
+    let mut msg = RaftMessage::default();
+    msg.region_id = region_id;
+    msg.mut_message().set_snapshot(snap);
+
+    let env = Arc::new(Environment::new(1));
+    let cfg = tikv::server::Config::default();
+    block_on(async {
+        send_snap(env, mgr, security_mgr, &cfg, addr, msg)
+            .unwrap()
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("{:?}", e))
+    })
+}
+
+fn random_long_vec(length: usize) -> Vec<u8> {
+    let mut rng = rand::thread_rng();
+    let mut value = Vec::with_capacity(1024);
+    (0..length).for_each(|_| value.push(rng.gen::<u8>()));
+    value
 }

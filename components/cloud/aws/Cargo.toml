@@ -16,11 +16,13 @@ prost-codec = [
     "cloud/prost-codec",
     "tikv_util/prost-codec",
 ]
+failpoints = ["fail/failpoints"]
 
 [dependencies]
 async-trait = "0.1"
 bytes = "0.5"
 cloud = { path = "../", default-features = false }
+fail = "0.4"
 futures = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
 # This is only a dependency to vendor openssl for rusoto. It's not clear exactly
@@ -38,6 +40,7 @@ rusoto_sts = "0.45.0"
 rusoto_s3 = "0.45.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 # better to not use slog-global, but pass in the logger
+tokio = { version = "0.2.13", features = ["time"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tikv_util = { path = "../../tikv_util", default-features = false }
 url = "2.0"
@@ -46,4 +49,3 @@ url = "2.0"
 matches = "0.1.8"
 futures = "0.3"
 rusoto_mock = "0.45.0"
-tokio = { version = "0.2" }
