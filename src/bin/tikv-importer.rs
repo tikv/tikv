@@ -12,7 +12,6 @@
 // limitations under the License.
 
 #![feature(slice_patterns)]
-#![feature(proc_macro_non_items)]
 
 extern crate chrono;
 extern crate clap;

@@ -12,5 +12,5 @@ test_raftstore = { path = "../test_raftstore" }
 futures = "0.1"
 
 [dependencies.kvproto]
-git = "https://github.com/pingcap/kvproto.git"
-branch="release-2.1"
+git = "https://github.com/hicqu/kvproto.git"
+branch = "2.1.19-update-grpc"
