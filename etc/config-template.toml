@@ -43,11 +43,6 @@
 ## core dump from filling up disk space, especially when TiKV fall in crash loop.
 # allow-core-dump = false
 
-## Allow TiKV to restart on data corruption. Once TiKV detects an unrecoverable data corruption,
-## it will generate a panic_mark_file under data-dir and panics. Subsequently TiKV will
-## refuse to restart by default, if the panic_mark_file exists.
-# allow-restart-on-data-corruption = false
-
 ## Configurations for the single thread pool serving read requests.
 [readpool.unified]
 ## The minimal working thread count of the thread pool.

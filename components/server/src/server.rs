@@ -368,18 +368,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         self.lock_files.push(f);
 
         if tikv_util::panic_mark_file_exists(&self.config.storage.data_dir) {
-            if self.config.allow_restart_on_data_corruption {
-                warn!(
-                    "panic_mark_file {} exists. delete the file and force restart.",
-                    tikv_util::panic_mark_file_path(&self.config.storage.data_dir).display()
-                );
-                tikv_util::remove_panic_mark_file(&self.config.storage.data_dir);
-            } else {
-                fatal!(
-                    "panic_mark_file {} exists, there must be something wrong with the db.",
-                    tikv_util::panic_mark_file_path(&self.config.storage.data_dir).display()
-                );
-            }
+            fatal!(
+                "panic_mark_file {} exists, there must be something wrong with the db. \
+                     Do not remove the panic_mark_file and force the TiKV node to restart. \
+                     Please contact TiKV maintainers to investigate the issue. \
+                     If needed, use scale in and scale out to replace the TiKV node. \
+                     https://docs.pingcap.com/tidb/stable/scale-tidb-using-tiup",
+                tikv_util::panic_mark_file_path(&self.config.storage.data_dir).display()
+            );
         }
 
         // We truncate a big file to make sure that both raftdb and kvdb of TiKV have enough space

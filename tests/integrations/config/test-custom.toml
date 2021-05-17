@@ -7,7 +7,6 @@ log-rotation-timespan = "1d"
 panic-when-unexpected-key-or-data = true
 enable-io-snoop = false
 allow-core-dump = true
-allow-restart-on-data-corruption = true
 
 [readpool.unified]
 min-thread-count = 5
