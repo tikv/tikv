@@ -377,13 +377,16 @@ impl<'client> S3Uploader<'client> {
     /// retry the entire upload.
     async fn upload(&self, data: &[u8]) -> Result<(), RusotoError<PutObjectError>> {
         match timeout(Self::get_timeout(), async {
-            let delay_duration = Duration::from_millis(0);
-            (|| {
+            #[cfg(feature = "failpoints")]
+            let delay_duration = (|| {
                 fail_point!("s3_sleep_injected", |t| {
                     let t = t.unwrap().parse::<u64>().unwrap();
-                    delay_duration = Duration::from_millis(t);
-                })
+                    Duration::from_millis(t)
+                });
+                Duration::from_millis(0)
             })();
+            #[cfg(not(feature = "failpoints"))]
+            let delay_duration = Duration::from_millis(0);
 
             if delay_duration > Duration::from_millis(0) {
                 delay_for(delay_duration).await;

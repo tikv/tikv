@@ -1181,6 +1181,7 @@ dependencies = [
  "slog",
  "slog-global",
  "tempfile",
+ "test_util",
  "thiserror",
  "tikv_alloc",
  "tikv_util",
