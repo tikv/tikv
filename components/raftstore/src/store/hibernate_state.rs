@@ -23,11 +23,34 @@ pub enum GroupState {
     Idle,
 }
 
+impl GroupState {
+    pub fn to_string(&self) -> String {
+        match self {
+            GroupState::Ordered => "ordered",
+            GroupState::Chaos => "chaos",
+            GroupState::PreChaos => "pre_chaos",
+            GroupState::Idle => "idle",
+        }
+        .to_string()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum LeaderState {
     Awaken,
     Poll(Vec<u64>),
     Hibernated,
+}
+
+impl LeaderState {
+    pub fn to_string(&self) -> String {
+        match self {
+            LeaderState::Awaken => "awaken",
+            LeaderState::Poll(_) => "poll",
+            LeaderState::Hibernated => "hibernated",
+        }
+        .to_string()
+    }
 }
 
 #[derive(Clone, Debug)]

@@ -547,43 +547,52 @@ const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
 
 impl RunnableWithTimer for RegionCollector {
     fn on_timeout(&mut self) {
+        const LEADER: &str = "leader";
+        const NON_LEADER: &str = "non_leader";
         let mut count = 0;
         let mut leader = 0;
+
         let mut hibernate_states: HashMap<String, HashMap<String, usize>> = HashMap::default();
-        let mut hibernate_leader_states: HashMap<String, usize> = HashMap::default();
+        for role in vec![LEADER, NON_LEADER].iter() {
+            hibernate_states.insert(
+                role.to_string(),
+                [
+                    (GroupState::Ordered.to_string(), 0),
+                    (GroupState::Chaos.to_string(), 0),
+                    (GroupState::PreChaos.to_string(), 0),
+                    (GroupState::Idle.to_string(), 0),
+                ]
+                .iter()
+                .cloned()
+                .collect(),
+            );
+        }
+        let mut hibernate_leader_states: HashMap<String, usize> = [
+            (LeaderState::Awaken.to_string(), 0),
+            (LeaderState::Poll(vec![]).to_string(), 0),
+            (LeaderState::Hibernated.to_string(), 0),
+        ]
+        .iter()
+        .cloned()
+        .collect();
         for r in self.regions.values() {
             count += 1;
             if r.role == StateRole::Leader {
                 leader += 1;
                 *(hibernate_leader_states
-                    .entry(
-                        (match r.hibernate_state.leader {
-                            LeaderState::Awaken => "awaken",
-                            LeaderState::Poll(_) => "poll",
-                            LeaderState::Hibernated => "hibernated",
-                        })
-                        .to_string(),
-                    )
+                    .entry(r.hibernate_state.leader.to_string())
                     .or_default()) += 1
             }
             *(hibernate_states
                 .entry(
                     (match r.role {
-                        StateRole::Leader => "leader",
-                        _ => "non_leader",
+                        StateRole::Leader => LEADER,
+                        _ => NON_LEADER,
                     })
                     .to_string(),
                 )
                 .or_default()
-                .entry(
-                    (match r.hibernate_state.group {
-                        GroupState::Ordered => "ordered",
-                        GroupState::Chaos => "chaos",
-                        GroupState::PreChaos => "pre_chaos",
-                        GroupState::Idle => "idle",
-                    })
-                    .to_string(),
-                )
+                .entry(r.hibernate_state.group.to_string())
                 .or_default()) += 1;
         }
         REGION_COUNT_GAUGE_VEC
