@@ -147,7 +147,7 @@
 # grpc-keepalive-timeout = "3s"
 
 ## Set maximum message length in bytes that gRPC can send. `-1` means unlimited.
-# max-grpc_send_msg_len = 10485760
+# max-grpc-send-msg-len = 10485760
 
 ## How many snapshots can be sent concurrently.
 # concurrent-send-snap-limit = 32
