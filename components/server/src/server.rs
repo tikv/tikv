@@ -276,7 +276,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         check_system_config(&config);
 
-        tikv_util::set_panic_hook(config.allow_core_dump, &config.storage.data_dir);
+        tikv_util::set_panic_hook(config.abort_on_panic, &config.storage.data_dir);
 
         info!(
             "using config";

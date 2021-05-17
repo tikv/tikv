@@ -2251,7 +2251,7 @@ pub struct TiKvConfig {
     pub enable_io_snoop: bool,
 
     #[config(skip)]
-    pub allow_core_dump: bool,
+    pub abort_on_panic: bool,
 
     #[config(skip)]
     pub readpool: ReadPoolConfig,
@@ -2322,7 +2322,7 @@ impl Default for TiKvConfig {
             log_rotation_size: ReadableSize::mb(300),
             panic_when_unexpected_key_or_data: false,
             enable_io_snoop: true,
-            allow_core_dump: false,
+            abort_on_panic: false,
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
