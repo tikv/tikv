@@ -404,11 +404,10 @@ impl<S: Snapshot> MvccReader<S> {
                     // For Delete, no old value.
                     return Ok(OldValue::None);
                 }
-                WriteType::Rollback | WriteType::Lock => {
-                    // For Rollback and Lock, it's unknown whether there is a more
-                    // previous valid write. Call `get_write` to get a valid
-                    // previous write.
-                }
+                // For Rollback and Lock, it's unknown whether there is a more
+                // previous valid write. Call `get_write` to get a valid
+                // previous write.
+                WriteType::Rollback | WriteType::Lock => (),
             }
         }
         Ok(match self.get_write(key, start_ts)? {
@@ -1614,10 +1613,15 @@ mod tests {
                 let prev_write = reader
                     .seek_write(&Key::from_raw(b"a"), case.written.last().unwrap().1)
                     .unwrap()
-                    .unwrap()
-                    .1;
+                    .map(|w| w.1);
+                let prev_write_loaded = true;
                 let result = reader
-                    .get_old_value(&Key::from_raw(b"a"), TimeStamp::new(25), prev_write)
+                    .get_old_value(
+                        &Key::from_raw(b"a"),
+                        TimeStamp::new(25),
+                        prev_write_loaded,
+                        prev_write,
+                    )
                     .unwrap();
                 assert_eq!(result, case.expected, "case #{}", i);
             }

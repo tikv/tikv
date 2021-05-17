@@ -465,9 +465,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 // The previous write of an Insert is guaranteed to be None.
                 OldValue::None
             } else {
-                // Pessimistic prewrite doesn't read the previous write, set old value
-                // to `Unspecified` to read it from engine later.
-                // OldValue::Unspecified
+                // Pessimistic prewrite doesn't read the previous write.
                 let prev_write_loaded = false;
                 // The mutation reads and get a previous write.
                 let prev_write = None;
@@ -622,21 +620,17 @@ impl<S: Snapshot> MvccTxn<S> {
             if mutation_type == MutationType::Insert {
                 // The previous write of an Insert is guaranteed to be None.
                 OldValue::None
+            } else if skip_constraint_check {
+                // Caller ensures that there is no previous write for the
+                // mutation, so there is no old value.
+                OldValue::None
             } else {
-                // The mutation does not read previous write if it skips constraint
-                // check.
-                // Pessimistic transaction always skip constraint check in
-                // "prewrite" stage, as it checks constraint in
-                // "acquire pessimistic lock" stage.
-                // OldValue::Unspecified
-                let prev_write_loaded = !skip_constraint_check;
+                // prev_write is loaded when skip_constraint_check is false.
+                let prev_write_loaded = true;
                 // The mutation reads and get a previous write.
                 let prev_write = prev_write.map(|w| w.1);
                 self.reader
                     .get_old_value(&key, self.start_ts, prev_write_loaded, prev_write)?
-                // } else {
-                //     // There is no previous write.
-                //     OldValue::None
             }
         } else {
             OldValue::Unspecified
