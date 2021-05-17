@@ -24,6 +24,7 @@ use crossbeam::utils::CachePadded;
 use parking_lot::{Mutex, MutexGuard};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use std::u64;
 
 use collections::HashMap;
@@ -102,7 +103,7 @@ struct TaskContext {
     // latch_timer: Option<Instant>,
     latch_timer: Instant,
     // Total duration of a command.
-    _cmd_timer: CmdTimer,
+    cmd_timer: CmdTimer,
 }
 
 impl TaskContext {
@@ -127,7 +128,7 @@ impl TaskContext {
             write_bytes,
             tag,
             latch_timer: Instant::now_coarse(),
-            _cmd_timer: CmdTimer {
+            cmd_timer: CmdTimer {
                 tag,
                 begin: Instant::now_coarse(),
             },
@@ -138,6 +139,19 @@ impl TaskContext {
         SCHED_LATCH_HISTOGRAM_VEC
             .get(self.tag)
             .observe(self.latch_timer.elapsed_secs());
+    }
+
+    fn is_expired(&self) -> bool {
+        match self
+            .task
+            .as_ref()
+            .map(|task| task.cmd.ctx().max_execution_duration_ms)
+        {
+            Some(max_execution_duration_ms) if max_execution_duration_ms > 0 => {
+                self.cmd_timer.begin.elapsed() > Duration::from_millis(max_execution_duration_ms)
+            }
+            _ => false,
+        }
     }
 }
 
@@ -230,14 +244,17 @@ impl<L: LockManager> SchedulerInner<L> {
     /// Tries to acquire all the required latches for a command.
     ///
     /// Returns the `Task` if successful; returns `None` otherwise.
-    fn acquire_lock(&self, cid: u64) -> Option<Task> {
+    fn acquire_lock(&self, cid: u64) -> Result<Option<Task>, StorageError> {
         let mut task_slot = self.get_task_slot(cid);
         let tctx = task_slot.get_mut(&cid).unwrap();
+        if tctx.is_expired() {
+            return Err(StorageErrorInner::DeadlineExceeded.into());
+        }
         if self.latches.acquire(&mut tctx.lock, cid) {
             tctx.on_schedule();
-            return tctx.task.take();
+            return Ok(tctx.task.take());
         }
-        None
+        Ok(None)
     }
 }
 
@@ -343,9 +360,15 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// Tries to acquire all the necessary latches. If all the necessary latches are acquired,
     /// the method initiates a get snapshot operation for further processing.
     fn try_to_wake_up(&self, cid: u64) {
-        if let Some(task) = self.inner.acquire_lock(cid) {
-            fail_point!("txn_scheduler_try_to_wake_up");
-            self.execute(task);
+        match self.inner.acquire_lock(cid) {
+            Ok(Some(task)) => {
+                fail_point!("txn_scheduler_try_to_wake_up");
+                self.execute(task);
+            }
+            Ok(None) => {}
+            Err(err) => {
+                self.finish_with_err(cid, err);
+            }
         }
     }
 
@@ -414,7 +437,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 SCHED_STAGE_COUNTER_VEC.get(tag).async_snapshot_err.inc();
 
                 info!("engine async_snapshot failed"; "err" => ?e);
-                self.finish_with_err(cid, e.into());
+                self.finish_with_err(cid, e);
             } else {
                 SCHED_STAGE_COUNTER_VEC.get(tag).snapshot.inc();
             }
@@ -430,7 +453,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     }
 
     /// Calls the callback with an error.
-    fn finish_with_err(&self, cid: u64, err: Error) {
+    fn finish_with_err<ER>(&self, cid: u64, err: ER)
+    where
+        StorageError: From<ER>,
+    {
         debug!("write command finished with error"; "cid" => cid);
         let tctx = self.inner.dequeue_task_context(cid);
 
@@ -780,7 +806,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         SCHED_STAGE_COUNTER_VEC.get(tag).async_write_err.inc();
 
                         info!("engine async_write failed"; "cid" => cid, "err" => ?e);
-                        scheduler.finish_with_err(cid, e.into());
+                        scheduler.finish_with_err(cid, e);
                     }
                 }
             }

@@ -50,6 +50,9 @@ pub enum ErrorInner {
 
     #[error("ttl is not enabled, but get put request with ttl")]
     TTLNotEnabled,
+
+    #[error("deadline exceeded")]
+    DeadlineExceeded,
 }
 
 /// Errors for storage module. Wrapper type of `ErrorInner`.
@@ -85,6 +88,7 @@ impl ErrorCodeExt for Error {
             ErrorInner::KeyTooLarge { .. } => error_code::storage::KEY_TOO_LARGE,
             ErrorInner::InvalidCf(_) => error_code::storage::INVALID_CF,
             ErrorInner::TTLNotEnabled => error_code::storage::TTL_NOT_ENABLED,
+            ErrorInner::DeadlineExceeded => error_code::storage::DEADLINE_EXCEEDED,
         }
     }
 }
@@ -195,6 +199,11 @@ pub fn extract_region_error<T>(res: &Result<T>) -> Option<errorpb::Error> {
             // temporarily, the client should retry the request in other TiKVs.
             let mut err = errorpb::Error::default();
             err.set_message("TiKV is Closing".to_string());
+            Some(err)
+        }
+        Err(Error(box ErrorInner::DeadlineExceeded)) => {
+            let mut err = errorpb::Error::default();
+            err.set_message("Deadline is exceeded".to_string());
             Some(err)
         }
         _ => None,
