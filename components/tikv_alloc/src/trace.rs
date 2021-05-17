@@ -160,6 +160,16 @@ pub struct MemoryTraceSnapshot {
     pub children: Vec<MemoryTraceSnapshot>,
 }
 
+// Define the hierarchy of memory usage for a module.
+// For example there is a module:
+//   root
+//     - mid1
+//       - leaf1
+//       - leaf2
+//     - mid2
+//       - leaf3
+// Its defination could be:
+//   mem_trace!(root, (mid1, [leaf1, leaf2]), (mid2, [leaf3]))
 #[macro_export]
 macro_rules! mem_trace {
     ($name: ident) => {
