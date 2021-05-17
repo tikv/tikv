@@ -213,9 +213,12 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let (resolver, state) =
             resolve::new_resolver(Arc::clone(&pd_client), &background_worker, router.clone());
 
+        let accessor_worker = WorkerBuilder::new("accessor")
+            .thread_count(1)
+            .create();
         let mut coprocessor_host = Some(CoprocessorHost::new(router.clone()));
         let region_info_accessor =
-            RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap(), &background_worker);
+            RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap(), &accessor_worker);
 
         // Initialize concurrency manager
         let latest_ts = block_on(pd_client.get_tso()).expect("failed to get timestamp from PD");
