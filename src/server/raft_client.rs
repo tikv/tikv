@@ -103,7 +103,7 @@ impl Conn {
                                 check_rpc_result("raft", &addr1, sink_e, recv_r.err())
                             })
                         })
-                        .map_err(move |e| {
+                        .map_err(move |_| {
                             let store = store_id.to_string();
                             REPORT_FAILURE_MSG_COUNTER
                                 .with_label_values(&["unreachable", &*store])
