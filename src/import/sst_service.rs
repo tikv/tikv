@@ -171,6 +171,12 @@ where
                         "sst [{:?}] not exist. we may retry an operation that has already succeeded",
                         sst
                     );
+                    let mut errorpb = errorpb::Error::default();
+                    let err = "The file which would be ingested doest not exist.";
+                    let stale_err = errorpb::StaleCommand::default();
+                    errorpb.set_message(err.to_string());
+                    errorpb.set_stale_command(stale_err);
+                    resp.set_error(errorpb);
                     return Ok(resp);
                 }
             }
