@@ -35,6 +35,8 @@ use concurrency_manager::ConcurrencyManager;
 use engine_rocks::PerfLevel;
 use txn_types::Lock;
 
+use super::interceptors::check_deadline;
+
 /// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
 /// which means they don't need a permit from the semaphore before execution.
 const LIGHT_TASK_THRESHOLD: Duration = Duration::from_millis(5);
@@ -416,11 +418,13 @@ impl<E: Engine> Endpoint<E> {
 
         tracker.on_begin_all_items();
 
-        let handle_request_future = track(handler.handle_request(), &mut tracker);
+        let deadline = tracker.req_ctx.deadline;
+        let handle_request_future =
+            check_deadline(track(handler.handle_request(), &mut tracker), deadline);
         let result = if let Some(semaphore) = &semaphore {
-            limit_concurrency(handle_request_future, semaphore, LIGHT_TASK_THRESHOLD).await
+            limit_concurrency(handle_request_future, semaphore, LIGHT_TASK_THRESHOLD).await?
         } else {
-            handle_request_future.await
+            handle_request_future.await?
         };
 
         // There might be errors when handling requests. In this case, we still need its
