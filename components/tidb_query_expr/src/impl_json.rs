@@ -626,8 +626,10 @@ mod tests {
             (Some(r#""3""#), Some(r#"3"#)),
             (Some(r#"{"a":  "b"}"#), Some(r#"{"a":  "b"}"#)),
             (Some(r#"{"a":  "b"}"#), Some(r#"{"a": "b"}"#)),
-            (Some(r#"hello,\"quoted string\",world"#),
-             Some(r#"hello,"quoted string",world"#),),
+            (
+                Some(r#"hello,\"quoted string\",world"#),
+                Some(r#"hello,"quoted string",world"#),
+            ),
         ];
 
         for (arg, expect_output) in cases {
