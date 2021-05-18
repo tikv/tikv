@@ -469,8 +469,10 @@ impl<S: Snapshot> MvccTxn<S> {
                 let prev_write_loaded = false;
                 // The mutation reads and get a previous write.
                 let prev_write = None;
+                // In pessimistic txn, it must use for_update_ts to read
+                // the old value.
                 self.reader
-                    .get_old_value(&key, self.start_ts, prev_write_loaded, prev_write)?
+                    .get_old_value(&key, for_update_ts, prev_write_loaded, prev_write)?
             }
         } else {
             OldValue::Unspecified
