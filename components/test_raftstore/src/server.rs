@@ -146,15 +146,10 @@ impl Simulator for ServerCluster {
 
         // Now we cache the store address, so here we should re-use last
         // listening address for the same store.
-<<<<<<< HEAD
         if let Some(addr) = self.addrs.get(&node_id) {
             cfg.server.addr = addr.clone();
-=======
-        if let Some(addr) = self.addrs.get(node_id) {
-            cfg.server.addr = addr;
         } else {
             cfg.server.addr = format!("127.0.0.1:{}", test_util::alloc_port());
->>>>>>> 4fdc0c64d... tests: allocate port explicitly (#9060)
         }
 
         let local_reader =
