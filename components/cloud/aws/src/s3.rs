@@ -283,21 +283,31 @@ impl<'client> S3Uploader<'client> {
 
     /// Starts a multipart upload process.
     async fn begin(&self) -> Result<String, RusotoError<CreateMultipartUploadError>> {
-        let output = self
-            .client
-            .create_multipart_upload(CreateMultipartUploadRequest {
-                bucket: self.bucket.clone(),
-                key: self.key.clone(),
-                acl: self.acl.as_ref().map(|s| s.to_string()),
-                server_side_encryption: self.server_side_encryption.as_ref().map(|s| s.to_string()),
-                ssekms_key_id: self.sse_kms_key_id.as_ref().map(|s| s.to_string()),
-                storage_class: self.storage_class.as_ref().map(|s| s.to_string()),
-                ..Default::default()
-            })
-            .await?;
-        output.upload_id.ok_or_else(|| {
-            RusotoError::ParseError("missing upload-id from create_multipart_upload()".to_owned())
-        })
+        match timeout(
+            Self::get_timeout(),
+            self.client
+                .create_multipart_upload(CreateMultipartUploadRequest {
+                    bucket: self.bucket.clone(),
+                    key: self.key.clone(),
+                    acl: self.acl.as_ref().map(|s| s.to_string()),
+                    server_side_encryption: self
+                        .server_side_encryption
+                        .as_ref()
+                        .map(|s| s.to_string()),
+                    ssekms_key_id: self.sse_kms_key_id.as_ref().map(|s| s.to_string()),
+                    storage_class: self.storage_class.as_ref().map(|s| s.to_string()),
+                    ..Default::default()
+                }),
+        )
+        .await
+        {
+            Ok(output) => output?.upload_id.ok_or_else(|| {
+                RusotoError::ParseError(
+                    "missing upload-id from create_multipart_upload()".to_owned(),
+                )
+            }),
+            Err(_) => Err(RusotoError::ParseError("begin timeout".to_owned())),
+        }
     }
 
     /// Completes a multipart upload process, asking S3 to join all parts into a single file.
@@ -317,7 +327,10 @@ impl<'client> S3Uploader<'client> {
         )
         .await
         {
-            Ok(_) => Ok(()),
+            Ok(r) => match r {
+                Ok(_) => Ok(()),
+                Err(e) => Err(e),
+            },
             Err(_) => Err(RusotoError::ParseError("complete timeout".to_owned())),
         }
     }
@@ -336,7 +349,10 @@ impl<'client> S3Uploader<'client> {
         )
         .await
         {
-            Ok(_) => Ok(()),
+            Ok(r) => match r {
+                Ok(_) => Ok(()),
+                Err(e) => Err(e),
+            },
             Err(_) => Err(RusotoError::ParseError("abort timeout".to_owned())),
         }
     }
@@ -392,6 +408,10 @@ impl<'client> S3Uploader<'client> {
                 delay_for(delay_duration).await;
             }
 
+            fail_point!("s3_put_obj_err", |_| {
+                return Err(RusotoError::ParseError("failed to put object".to_owned()));
+            });
+
             self.client
                 .put_object(PutObjectRequest {
                     bucket: self.bucket.clone(),
@@ -411,7 +431,10 @@ impl<'client> S3Uploader<'client> {
         })
         .await
         {
-            Ok(_) => Ok(()),
+            Ok(r) => match r {
+                Ok(_) => Ok(()),
+                Err(e) => Err(e),
+            },
             Err(_) => Err(RusotoError::ParseError("upload timeout".to_owned())),
         }
     }
@@ -531,6 +554,17 @@ mod tests {
         let ret = block_on_external_io(reader.read_to_end(&mut buf));
         assert!(ret.unwrap() == 0);
         assert!(buf.is_empty());
+
+        // inject put error
+        let s3_put_obj_err_fp = "s3_put_obj_err";
+        fail::cfg(s3_put_obj_err_fp, "return").unwrap();
+        let resp = s.put(
+            "mykey",
+            Box::new(magic_contents.as_bytes()),
+            magic_contents.len() as u64,
+        );
+        fail::remove(s3_put_obj_err_fp);
+        assert!(resp.is_err());
 
         // test timeout
         let s3_timeout_injected_fp = "s3_timeout_injected";
