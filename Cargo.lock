@@ -5390,7 +5390,6 @@ dependencies = [
  "txn_types",
  "url",
  "uuid",
- "vlog",
  "walkdir",
  "yatp",
  "zipf",

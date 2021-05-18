@@ -61,6 +61,14 @@ fn perror_and_exit<E: Error>(prefix: &str, e: E) -> ! {
     process::exit(-1);
 }
 
+fn init_ctl_logger(level: &str) {
+    let mut cfg = TiKvConfig::default();
+    cfg.log_level = slog::Level::from_str(level).unwrap();
+    cfg.rocksdb.info_log_dir = "./ctl-engine-info-log".to_owned();
+    cfg.raftdb.info_log_dir = "./ctl-engine-info-log".to_owned();
+    initial_logger(&cfg);
+}
+
 fn new_debug_executor(
     cfg: &TiKvConfig,
     data_dir: Option<&str>,
@@ -68,11 +76,6 @@ fn new_debug_executor(
     host: Option<&str>,
     mgr: Arc<SecurityManager>,
 ) -> Box<dyn DebugExecutor> {
-    // For RocksDB, the default level is very noisy, so change to `Error`.
-    let mut cfg = cfg.clone();
-    cfg.rocksdb.info_log_level = engine_rocks::LogLevel::Error;
-    cfg.raftdb.info_log_level = engine_rocks::LogLevel::Error;
-
     if let Some(remote) = host {
         return Box::new(new_debug_client(remote, mgr)) as Box<dyn DebugExecutor>;
     }
@@ -1850,11 +1853,8 @@ fn main() {
 
     let matches = app.clone().get_matches();
 
-    if let Some(level) = matches.value_of("log_level") {
-        let mut cfg = TiKvConfig::default();
-        cfg.log_level = slog::Level::from_str(level).unwrap();
-        initial_logger(&cfg);
-    }
+    // Initialize logger.
+    init_ctl_logger(matches.value_of("log_level").unwrap());
 
     // Initialize configuration and security manager.
     let cfg_path = matches.value_of("config");

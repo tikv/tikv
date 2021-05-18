@@ -216,7 +216,6 @@ toml = "0.5"
 txn_types = { path = "components/txn_types", default-features = false }
 url = "2"
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
-vlog = "0.1.4"
 walkdir = "2"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
