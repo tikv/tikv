@@ -239,7 +239,6 @@ impl<E: Engine> AssertionStorage<E> {
             .batch_get_command(self.ctx.clone(), &keys, ts)
             .unwrap()
             .into_iter()
-            .map(|(x, ..)| x)
             .collect();
         let expect: Vec<Option<Vec<u8>>> = expect
             .into_iter()
