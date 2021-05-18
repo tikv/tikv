@@ -64,7 +64,11 @@ impl<E: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
         assert_eq!(root_expr.get_tp(), E::TP);
         let eval_type =
             EvalType::try_from(exp.ret_field_type(src_schema).as_accessor().tp()).unwrap();
-        let is_unsigned = exp.ret_field_type(src_schema).as_accessor().flag().contains(FieldTypeFlag::UNSIGNED);
+        let is_unsigned = exp
+            .ret_field_type(src_schema)
+            .as_accessor()
+            .flag()
+            .contains(FieldTypeFlag::UNSIGNED);
 
         let out_ft = root_expr.take_field_type();
         let out_et = box_try!(EvalType::try_from(out_ft.as_accessor().tp()));
@@ -456,8 +460,8 @@ where
 #[aggr_function(state = AggFnStateExtremumForInt::<E, IS_UNSIGNED>::new())]
 pub struct AggFnExtremumForInt<E, const IS_UNSIGNED: bool>
 where
-   E: Extremum,
-   VectorValue: VectorValueExt<Int>,
+    E: Extremum,
+    VectorValue: VectorValueExt<Int>,
 {
     _phantom: std::marker::PhantomData<E>,
 }
@@ -500,20 +504,20 @@ where
     pub fn update_concrete(&mut self, _ctx: &mut EvalContext, value: Option<&Int>) -> Result<()> {
         if value.is_some() {
             if self.extremum.is_none() {
-                self.extremum = value.map(|x| *x);
+                self.extremum = value.copied();
+                return Ok(());
+            }
+            if IS_UNSIGNED {
+                let v1 = self.extremum.map(|x| x as u64);
+                let v2 = value.map(|x| *x as u64);
+                if v1.cmp(&v2) == E::ORD {
+                    self.extremum = value.copied()
+                }
             } else {
-                if IS_UNSIGNED {
-                    let v1 = self.extremum.map(|x| x as u64);
-                    let v2 = value.map(|x| *x as u64);
-                    if v1.cmp(&v2) == E::ORD {
-                        self.extremum = value.map(|x| *x);
-                    }
-                } else {
-                    let v1 = self.extremum.map(|x| x as i64);
-                    let v2 = value.map(|x| *x as i64);
-                    if v1.cmp(&v2) == E::ORD {
-                        self.extremum = value.map(|x| *x);
-                    }
+                let v1 = self.extremum.map(|x| x as i64);
+                let v2 = value.map(|x| *x as i64);
+                if v1.cmp(&v2) == E::ORD {
+                    self.extremum = value.copied()
                 }
             }
         }
@@ -521,7 +525,8 @@ where
     }
 }
 
-impl<E, const IS_UNSIGNED: bool> super::ConcreteAggrFunctionState for AggFnStateExtremumForInt<E, IS_UNSIGNED>
+impl<E, const IS_UNSIGNED: bool> super::ConcreteAggrFunctionState
+    for AggFnStateExtremumForInt<E, IS_UNSIGNED>
 where
     E: Extremum,
     VectorValue: VectorValueExt<Int>,
@@ -532,7 +537,7 @@ where
 
     #[inline]
     fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
-        target[0].push(self.extremum.clone());
+        target[0].push(self.extremum);
         Ok(())
     }
 }
@@ -788,14 +793,18 @@ mod tests {
             col
         }]);
         let logical_rows = vec![3, 2, 6, 5, 1, 7];
-        let expected_res = vec![Some(99), Some(-1i64),];
+        let expected_res = vec![Some(99), Some(-1i64)];
         let mut field_type = FieldType::default();
         let fta = field_type.as_mut_accessor();
         fta.set_tp(FieldTypeTp::LongLong);
 
-        test_integration_util(field_type.tp(),
-                              field_type.flag(),
-                              &mut columns, &logical_rows, &expected_res);
+        test_integration_util(
+            field_type.tp(),
+            field_type.flag(),
+            &mut columns,
+            &logical_rows,
+            &expected_res,
+        );
     }
 
     #[test]
@@ -810,14 +819,20 @@ mod tests {
             col
         }]);
         let logical_rows = vec![0, 1, 2, 3];
-        let expected_res = vec![Some(-1), Some(2420174916247255494),];
+        let expected_res = vec![Some(-1), Some(2420174916247255494)];
         let mut field_type = FieldType::default();
         let fta = field_type.as_mut_accessor();
         fta.set_tp(FieldTypeTp::LongLong);
         fta.set_flag(FieldTypeFlag::UNSIGNED);
 
-        test_integration_util(field_type.tp(), field_type.flag(), &mut columns, &logical_rows, &expected_res);
-        
+        test_integration_util(
+            field_type.tp(),
+            field_type.flag(),
+            &mut columns,
+            &logical_rows,
+            &expected_res,
+        );
+
         // test signed bigint
         let mut columns = LazyBatchColumnVec::from(vec![{
             let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(0, EvalType::Int);
@@ -828,25 +843,32 @@ mod tests {
             col
         }]);
         let logical_rows = vec![0, 1, 2, 3];
-        let expected_res = vec![Some(3899490809029152765), Some(-1),];
+        let expected_res = vec![Some(3899490809029152765), Some(-1)];
         let mut field_type = FieldType::default();
         let fta = field_type.as_mut_accessor();
         fta.set_tp(FieldTypeTp::LongLong);
 
-        test_integration_util(field_type.tp(), field_type.flag(), &mut columns, &logical_rows, &expected_res);
+        test_integration_util(
+            field_type.tp(),
+            field_type.flag(),
+            &mut columns,
+            &logical_rows,
+            &expected_res,
+        );
     }
 
-    fn test_integration_util(field_type: FieldTypeTp,
-                             child_flag: FieldTypeFlag,
-                             columns: &mut LazyBatchColumnVec,
-                             logical_rows: &Vec<usize>,
-                             expected_res: &Vec<Option<Int>>) {
+    fn test_integration_util(
+        field_type: FieldTypeTp,
+        child_flag: FieldTypeFlag,
+        columns: &mut LazyBatchColumnVec,
+        logical_rows: &[usize],
+        expected_res: &[Option<Int>],
+    ) {
         let max_parser = AggrFnDefinitionParserExtremum::<Max>::new();
         let min_parser = AggrFnDefinitionParserExtremum::<Min>::new();
 
         let mut child_field_type: FieldType = field_type.into();
-        child_field_type.as_mut_accessor()
-            .set_flag(child_flag);
+        child_field_type.as_mut_accessor().set_flag(child_flag);
 
         let max = ExprDefBuilder::aggr_func(ExprType::Max, field_type)
             .push_child(ExprDefBuilder::column_ref(0, child_field_type.clone()))
@@ -887,7 +909,13 @@ mod tests {
         // max
         {
             let max_result = exp[0]
-                .eval(&mut ctx, &src_schema, columns, &logical_rows, logical_rows.len())
+                .eval(
+                    &mut ctx,
+                    &src_schema,
+                    columns,
+                    &logical_rows,
+                    logical_rows.len(),
+                )
                 .unwrap();
             let max_result = max_result.vector_value().unwrap();
             let max_slice: ChunkedVecSized<Int> = max_result.as_ref().to_int_vec().into();
@@ -898,7 +926,13 @@ mod tests {
         // min
         {
             let min_result = exp[0]
-                .eval(&mut ctx, &src_schema, columns, &logical_rows, logical_rows.len())
+                .eval(
+                    &mut ctx,
+                    &src_schema,
+                    columns,
+                    &logical_rows,
+                    logical_rows.len(),
+                )
                 .unwrap();
             let min_result = min_result.vector_value().unwrap();
             let min_slice: ChunkedVecSized<Int> = min_result.as_ref().to_int_vec().into();
@@ -906,7 +940,7 @@ mod tests {
             min_state.push_result(&mut ctx, &mut aggr_result).unwrap();
         }
 
-        assert_eq!(aggr_result[0].to_int_vec(), expected_res.clone());
+        assert_eq!(aggr_result[0].to_int_vec(), &(*expected_res));
     }
 
     #[test]
