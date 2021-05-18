@@ -3379,7 +3379,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             db.get_db_options().get_rate_bytes_per_sec().unwrap(),
-            ReadableSize::mb(128).0 as i64
+            ReadableSize(128 * 1000 * 1000).0 as i64
         );
 
         // update some configs on default cf
