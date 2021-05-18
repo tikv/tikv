@@ -114,7 +114,7 @@ pub trait V1CompatibleEncoder: DatumFlagAndPayloadEncoder {
                 return Err(Error::InvalidDataType(format!(
                     "Unsupported FieldType {:?}",
                     fp
-                )))
+                )));
             }
         }
         Ok(())

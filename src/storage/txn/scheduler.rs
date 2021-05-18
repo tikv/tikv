@@ -36,13 +36,15 @@ use crate::storage::kv::{
     drop_snapshot_callback, with_tls_engine, Engine, ExtCallback, Result as EngineResult,
     SnapContext, Statistics,
 };
-use crate::storage::lock_manager::{self, LockManager, WaitTimeout};
+use crate::storage::lock_manager::{self, DiagnosticContext, LockManager, WaitTimeout};
 use crate::storage::metrics::{
     self, KV_COMMAND_KEYWRITE_HISTOGRAM_VEC, SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC,
     SCHED_CONTEX_GAUGE, SCHED_HISTOGRAM_VEC_STATIC, SCHED_LATCH_HISTOGRAM_VEC,
     SCHED_STAGE_COUNTER_VEC, SCHED_TOO_BUSY_COUNTER_VEC, SCHED_WRITING_BYTES_GAUGE,
 };
-use crate::storage::txn::commands::{ResponsePolicy, WriteContext, WriteResult};
+use crate::storage::txn::commands::{
+    ResponsePolicy, WriteContext, WriteResult, WriteResultLockInfo,
+};
 use crate::storage::txn::{
     commands::Command,
     latch::{Latches, Lock},
@@ -104,9 +106,9 @@ struct TaskContext {
 }
 
 impl TaskContext {
-    fn new(task: Task, latches: &Latches, cb: StorageCallback) -> TaskContext {
+    fn new(task: Task, cb: StorageCallback) -> TaskContext {
         let tag = task.cmd.tag();
-        let lock = task.cmd.gen_lock(latches);
+        let lock = task.cmd.gen_lock();
         // Write command should acquire write lock.
         if !task.cmd.readonly() && !lock.is_write_lock() {
             panic!("write lock is expected for command {}", task.cmd);
@@ -188,7 +190,7 @@ impl<L: LockManager> SchedulerInner<L> {
     }
 
     fn new_task_context(&self, task: Task, callback: StorageCallback) -> TaskContext {
-        let tctx = TaskContext::new(task, &self.latches, callback);
+        let tctx = TaskContext::new(task, callback);
         let running_write_bytes = self
             .running_write_bytes
             .fetch_add(tctx.write_bytes, Ordering::AcqRel) as i64;
@@ -524,6 +526,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         lock: lock_manager::Lock,
         is_first_lock: bool,
         wait_timeout: Option<WaitTimeout>,
+        diag_ctx: DiagnosticContext,
     ) {
         debug!("command waits for lock released"; "cid" => cid);
         let tctx = self.inner.dequeue_task_context(cid);
@@ -535,6 +538,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             lock,
             is_first_lock,
             wait_timeout,
+            diag_ctx,
         );
         self.release_lock(&tctx.lock, cid);
     }
@@ -636,7 +640,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             // Initiates an async write operation on the storage engine, there'll be a `WriteFinished`
             // message when it finishes.
             Ok(WriteResult {
-                ctx,
+                mut ctx,
                 to_be_write,
                 rows,
                 pr,
@@ -646,8 +650,30 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             }) => {
                 SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
-                if let Some((lock, is_first_lock, wait_timeout)) = lock_info {
-                    scheduler.on_wait_for_lock(cid, ts, pr, lock, is_first_lock, wait_timeout);
+                if let Some(lock_info) = lock_info {
+                    let WriteResultLockInfo {
+                        lock,
+                        key,
+                        is_first_lock,
+                        wait_timeout,
+                    } = lock_info;
+                    // Currently only pessimistic_lock request may wait for other locks, and a
+                    // single request may wait lock at most once in its lifecycle. Take the tag out
+                    // instead of cloning it.
+                    let resource_group_tag = ctx.take_resource_group_tag();
+                    let diag_ctx = DiagnosticContext {
+                        key,
+                        resource_group_tag,
+                    };
+                    scheduler.on_wait_for_lock(
+                        cid,
+                        ts,
+                        pr,
+                        lock,
+                        is_first_lock,
+                        wait_timeout,
+                        diag_ctx,
+                    );
                 } else if to_be_write.modifies.is_empty() {
                     scheduler.on_write_finished(
                         cid,
@@ -784,7 +810,7 @@ mod tests {
     use crate::storage::mvcc::{self, Mutation};
     use crate::storage::txn::{commands, latch::*};
     use kvproto::kvrpcpb::Context;
-    use txn_types::Key;
+    use txn_types::{Key, OldValues};
 
     #[test]
     fn test_command_latches() {
@@ -812,6 +838,7 @@ mod tests {
                 Some(WaitTimeout::Default),
                 false,
                 TimeStamp::default(),
+                OldValues::default(),
                 Context::default(),
             )
             .into(),
@@ -873,14 +900,14 @@ mod tests {
             .into_iter()
             .enumerate()
             .map(|(id, cmd)| {
-                let mut lock = cmd.gen_lock(&latches);
+                let mut lock = cmd.gen_lock();
                 assert_eq!(latches.acquire(&mut lock, id as u64), id == 0);
                 lock
             })
             .collect();
 
         for (id, cmd) in readonly_cmds.iter().enumerate() {
-            let mut lock = cmd.gen_lock(&latches);
+            let mut lock = cmd.gen_lock();
             assert!(latches.acquire(&mut lock, id as u64));
         }
 

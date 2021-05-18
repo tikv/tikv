@@ -1,11 +1,13 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::borrow::Cow;
 use std::fmt;
 use std::time::Instant;
 
+use bitflags::bitflags;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
 use kvproto::import_sstpb::SstMeta;
-use kvproto::kvrpcpb::{ExtraOp as TxnExtraOp, LeaderInfo};
+use kvproto::kvrpcpb::{ExtraOp as TxnExtraOp, KeyRange, LeaderInfo};
 use kvproto::metapb;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
@@ -13,7 +15,6 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::ReplicationStatus;
 use raft::SnapshotStatus;
-use std::borrow::Cow;
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeObserver};
@@ -299,7 +300,7 @@ pub enum CasualMessage<EK: KvEngine> {
         hash: Vec<u8>,
     },
 
-    /// Approximate size of target region.
+    /// Approximate size of target region. This message can only be sent by split-check thread.
     RegionApproximateSize {
         size: u64,
     },
@@ -497,7 +498,11 @@ where
         leaders: Vec<LeaderInfo>,
         cb: Box<dyn FnOnce(Vec<u64>) + Send>,
     },
-
+    // Get the minimal `safe_ts` from regions overlap with the key range [`start_key`, `end_key`)
+    GetStoreSafeTS {
+        key_range: KeyRange,
+        cb: Box<dyn FnOnce(u64) + Send>,
+    },
     /// Message only used for test.
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
@@ -528,6 +533,9 @@ where
             StoreMsg::Tick(tick) => write!(fmt, "StoreTick {:?}", tick),
             StoreMsg::Start { ref store } => write!(fmt, "Start store {:?}", store),
             StoreMsg::CheckLeader { ref leaders, .. } => write!(fmt, "CheckLeader {:?}", leaders),
+            StoreMsg::GetStoreSafeTS { ref key_range, .. } => {
+                write!(fmt, "GetStoreSafeTS {:?}", key_range)
+            }
             #[cfg(any(test, feature = "testexport"))]
             StoreMsg::Validate(_) => write!(fmt, "Validate config"),
             StoreMsg::UpdateReplicationMode(_) => write!(fmt, "UpdateReplicationMode"),

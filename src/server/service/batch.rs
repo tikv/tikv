@@ -54,13 +54,13 @@ impl ReqBatcher {
         tx: &Sender<(u64, batch_commands_response::Response)>,
     ) {
         if self.gets.len() > 10 {
-            let gets = std::mem::replace(&mut self.gets, vec![]);
-            let ids = std::mem::replace(&mut self.get_ids, vec![]);
+            let gets = std::mem::take(&mut self.gets);
+            let ids = std::mem::take(&mut self.get_ids);
             future_batch_get_command(storage, ids, gets, tx.clone());
         }
         if self.raw_gets.len() > 16 {
-            let gets = std::mem::replace(&mut self.raw_gets, vec![]);
-            let ids = std::mem::replace(&mut self.raw_get_ids, vec![]);
+            let gets = std::mem::take(&mut self.raw_gets);
+            let ids = std::mem::take(&mut self.raw_get_ids);
             future_batch_raw_get_command(storage, ids, gets, tx.clone());
         }
     }
@@ -71,13 +71,13 @@ impl ReqBatcher {
         tx: &Sender<(u64, batch_commands_response::Response)>,
     ) {
         if !self.gets.is_empty() {
-            let gets = std::mem::replace(&mut self.gets, vec![]);
-            let ids = std::mem::replace(&mut self.get_ids, vec![]);
+            let gets = std::mem::take(&mut self.gets);
+            let ids = std::mem::take(&mut self.get_ids);
             future_batch_get_command(storage, ids, gets, tx.clone());
         }
         if !self.raw_gets.is_empty() {
-            let gets = std::mem::replace(&mut self.raw_gets, vec![]);
-            let ids = std::mem::replace(&mut self.raw_get_ids, vec![]);
+            let gets = std::mem::take(&mut self.raw_gets);
+            let ids = std::mem::take(&mut self.raw_get_ids);
             future_batch_raw_get_command(storage, ids, gets, tx.clone());
         }
     }

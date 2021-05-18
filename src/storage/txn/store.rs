@@ -180,6 +180,35 @@ impl TxnEntry {
             _ => unreachable!(),
         }
     }
+
+    pub fn size(&self) -> usize {
+        let mut size = 0;
+        match self {
+            TxnEntry::Commit {
+                default,
+                write,
+                old_value,
+            } => {
+                size += default.0.len();
+                size += default.1.len();
+                size += write.0.len();
+                size += write.1.len();
+                size += old_value.as_ref().map_or(0, |v| v.len())
+            }
+            TxnEntry::Prewrite {
+                default,
+                lock,
+                old_value,
+            } => {
+                size += default.0.len();
+                size += default.1.len();
+                size += lock.0.len();
+                size += lock.1.len();
+                size += old_value.as_ref().map_or(0, |v| v.len())
+            }
+        }
+        size
+    }
 }
 
 /// A batch of transaction entries.
@@ -599,7 +628,7 @@ mod tests {
         Engine, Iterator, Result as EngineResult, RocksEngine, RocksSnapshot, SnapContext,
         TestEngineBuilder, WriteData,
     };
-    use crate::storage::mvcc::{Mutation, MvccTxn};
+    use crate::storage::mvcc::{Mutation, MvccTxn, SnapshotReader};
     use crate::storage::txn::{
         commit, prewrite, CommitKind, TransactionKind, TransactionProperties,
     };
@@ -647,11 +676,13 @@ mod tests {
             // do prewrite.
             {
                 let cm = ConcurrencyManager::new(START_TS);
-                let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true, cm);
+                let mut txn = MvccTxn::new(START_TS, cm);
+                let mut reader = SnapshotReader::new(START_TS, self.snapshot.clone(), true);
                 for key in &self.keys {
                     let key = key.as_bytes();
                     prewrite(
                         &mut txn,
+                        &mut reader,
                         &TransactionProperties {
                             start_ts: START_TS,
                             kind: TransactionKind::Optimistic(false),
@@ -675,10 +706,11 @@ mod tests {
             // do commit
             {
                 let cm = ConcurrencyManager::new(START_TS);
-                let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true, cm);
+                let mut txn = MvccTxn::new(START_TS, cm);
+                let mut reader = SnapshotReader::new(START_TS, self.snapshot.clone(), true);
                 for key in &self.keys {
                     let key = key.as_bytes();
-                    commit(&mut txn, Key::from_raw(key), COMMIT_TS).unwrap();
+                    commit(&mut txn, &mut reader, Key::from_raw(key), COMMIT_TS).unwrap();
                 }
                 let write_data = WriteData::from_modifies(txn.into_modifies());
                 self.engine.write(&self.ctx, write_data).unwrap();
@@ -923,36 +955,44 @@ mod tests {
         let bound_c = Key::from_encoded(b"c".to_vec());
         let bound_d = Key::from_encoded(b"d".to_vec());
         assert!(store.scanner(false, false, false, None, None).is_ok());
-        assert!(store
-            .scanner(
-                false,
-                false,
-                false,
-                Some(bound_b.clone()),
-                Some(bound_c.clone())
-            )
-            .is_ok());
-        assert!(store
-            .scanner(
-                false,
-                false,
-                false,
-                Some(bound_a.clone()),
-                Some(bound_c.clone())
-            )
-            .is_err());
-        assert!(store
-            .scanner(
-                false,
-                false,
-                false,
-                Some(bound_b.clone()),
-                Some(bound_d.clone())
-            )
-            .is_err());
-        assert!(store
-            .scanner(false, false, false, Some(bound_a.clone()), Some(bound_d))
-            .is_err());
+        assert!(
+            store
+                .scanner(
+                    false,
+                    false,
+                    false,
+                    Some(bound_b.clone()),
+                    Some(bound_c.clone())
+                )
+                .is_ok()
+        );
+        assert!(
+            store
+                .scanner(
+                    false,
+                    false,
+                    false,
+                    Some(bound_a.clone()),
+                    Some(bound_c.clone())
+                )
+                .is_err()
+        );
+        assert!(
+            store
+                .scanner(
+                    false,
+                    false,
+                    false,
+                    Some(bound_b.clone()),
+                    Some(bound_d.clone())
+                )
+                .is_err()
+        );
+        assert!(
+            store
+                .scanner(false, false, false, Some(bound_a.clone()), Some(bound_d))
+                .is_err()
+        );
 
         // Store with whole range
         let snap2 = MockRangeSnapshot::new(b"".to_vec(), b"".to_vec());
@@ -965,15 +1005,21 @@ mod tests {
             false,
         );
         assert!(store2.scanner(false, false, false, None, None).is_ok());
-        assert!(store2
-            .scanner(false, false, false, Some(bound_a.clone()), None)
-            .is_ok());
-        assert!(store2
-            .scanner(false, false, false, Some(bound_a), Some(bound_b))
-            .is_ok());
-        assert!(store2
-            .scanner(false, false, false, None, Some(bound_c))
-            .is_ok());
+        assert!(
+            store2
+                .scanner(false, false, false, Some(bound_a.clone()), None)
+                .is_ok()
+        );
+        assert!(
+            store2
+                .scanner(false, false, false, Some(bound_a), Some(bound_b))
+                .is_ok()
+        );
+        assert!(
+            store2
+                .scanner(false, false, false, None, Some(bound_c))
+                .is_ok()
+        );
     }
 
     fn gen_fixture_store() -> FixtureStore {
@@ -1269,6 +1315,49 @@ mod tests {
             Some((Key::from_raw(b"abcd"), vec![]))
         );
         assert_eq!(scanner.next().unwrap(), None);
+    }
+
+    #[test]
+    fn test_txn_entry_size() {
+        assert_eq!(
+            TxnEntry::Prewrite {
+                default: (vec![0; 10], vec![0; 10]),
+                lock: (vec![0; 10], vec![0; 10]),
+                old_value: None,
+            }
+            .size(),
+            40
+        );
+
+        assert_eq!(
+            TxnEntry::Prewrite {
+                default: (vec![0; 10], vec![0; 10]),
+                lock: (vec![0; 10], vec![0; 10]),
+                old_value: Some(vec![0; 10]),
+            }
+            .size(),
+            50
+        );
+
+        assert_eq!(
+            TxnEntry::Commit {
+                default: (vec![0; 10], vec![0; 10]),
+                write: (vec![0; 10], vec![0; 10]),
+                old_value: None,
+            }
+            .size(),
+            40
+        );
+
+        assert_eq!(
+            TxnEntry::Commit {
+                default: (vec![0; 10], vec![0; 10]),
+                write: (vec![0; 10], vec![0; 10]),
+                old_value: Some(vec![0; 10]),
+            }
+            .size(),
+            50
+        );
     }
 }
 

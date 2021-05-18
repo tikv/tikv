@@ -534,7 +534,7 @@ fn write_log_fields(
 
     values.serialize(record, &mut serializer)?;
 
-    serializer.finish()?;
+    serializer.finish();
 
     Ok(())
 }
@@ -554,9 +554,7 @@ impl<'a> Serializer<'a> {
         Ok(())
     }
 
-    fn finish(self) -> io::Result<()> {
-        Ok(())
-    }
+    fn finish(self) {}
 }
 
 impl<'a> Drop for Serializer<'a> {

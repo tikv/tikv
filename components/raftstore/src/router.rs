@@ -2,11 +2,12 @@
 
 use std::cell::RefCell;
 
-use crossbeam::{SendError, TrySendError};
+use crossbeam::channel::{SendError, TrySendError};
 use engine_traits::{KvEngine, RaftEngine, Snapshot};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::SnapshotStatus;
+use tikv_util::error;
 use tikv_util::time::ThreadReadId;
 
 use crate::store::fsm::RaftRouter;

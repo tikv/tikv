@@ -8,15 +8,17 @@ default = ["test-runner", "protobuf-codec"]
 test-runner = ["derive_more"]
 protobuf-codec = [
   "tikv_util/protobuf-codec",
+  "file_system/protobuf-codec",
 ]
 prost-codec = [
   "tikv_util/prost-codec",
+  "file_system/prost-codec",
 ]
 
 [dependencies]
-crossbeam = "0.7"
+crossbeam = "0.8"
 tikv_util = { path = "../tikv_util", default-features = false }
-file_system = { path = "../file_system" }
+file_system = { path = "../file_system", default-features = false }
 collections = { path = "../collections" }
 serde = { version = "1.0", features = ["derive"] }
 serde_derive = "1.0"

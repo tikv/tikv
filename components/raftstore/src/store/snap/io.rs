@@ -10,13 +10,14 @@ use encryption::{
 };
 use engine_traits::{
     CfName, EncryptionKeyManager, Error as EngineError, ImportExt, IngestExternalFileOptions,
-    Iterable, KvEngine, Mutable, SstWriter, SstWriterBuilder, WriteBatch,
+    Iterable, KvEngine, Mutable, SstCompressionType, SstWriter, SstWriterBuilder, WriteBatch,
 };
 use kvproto::encryptionpb::EncryptionMethod;
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 use tikv_util::time::Limiter;
+use tikv_util::{box_try, debug};
 
-use super::Error;
+use super::{Error, IO_LIMITER_CHUNK_SIZE};
 
 /// Used to check a procedure is stale or not.
 pub trait StaleDetector {
@@ -43,10 +44,9 @@ pub fn build_plain_cf_file<E>(
 where
     E: KvEngine,
 {
-    let mut file = Some(box_try!(OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)));
+    let mut file = Some(box_try!(
+        OpenOptions::new().write(true).create_new(true).open(path)
+    ));
     let mut encrypted_file: Option<EncrypterWriter<File>> = None;
     let mut should_encrypt = false;
 
@@ -113,9 +113,16 @@ where
 {
     let mut sst_writer = create_sst_file_writer::<E>(engine, cf, path)?;
     let mut stats = BuildStatistics::default();
+    let mut remained_quota = 0;
     box_try!(snap.scan_cf(cf, start_key, end_key, false, |key, value| {
         let entry_len = key.len() + value.len();
-        io_limiter.blocking_consume(entry_len);
+        while entry_len > remained_quota {
+            // It's possible to acquire more than necessary, but let it be.
+            io_limiter.blocking_consume(IO_LIMITER_CHUNK_SIZE);
+            remained_quota += IO_LIMITER_CHUNK_SIZE;
+        }
+        remained_quota -= entry_len;
+
         stats.key_count += 1;
         stats.total_size += entry_len;
         if let Err(e) = sst_writer.put(key, value) {
@@ -205,7 +212,10 @@ fn create_sst_file_writer<E>(engine: &E, cf: CfName, path: &str) -> Result<E::Ss
 where
     E: KvEngine,
 {
-    let builder = E::SstWriterBuilder::new().set_db(&engine).set_cf(cf);
+    let builder = E::SstWriterBuilder::new()
+        .set_db(&engine)
+        .set_cf(cf)
+        .set_compression_type(Some(SstCompressionType::Zstd));
     let writer = box_try!(builder.build(path));
     Ok(writer)
 }

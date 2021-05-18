@@ -442,16 +442,20 @@ mod tests {
     use super::super::test_util::prepare_test_data_for_check_gc_fence;
     use super::super::ScannerBuilder;
     use super::*;
-    use crate::storage::kv::{Engine, TestEngineBuilder};
+    use crate::storage::kv::{Engine, Modify, TestEngineBuilder};
+    use crate::storage::mvcc::tests::write;
     use crate::storage::txn::tests::{
         must_commit, must_gc, must_prewrite_delete, must_prewrite_put, must_rollback,
     };
     use crate::storage::Scanner;
+    use engine_traits::{CF_LOCK, CF_WRITE};
+    use kvproto::kvrpcpb::Context;
 
     #[test]
     fn test_basic() {
         let engine = TestEngineBuilder::new().build().unwrap();
 
+        let ctx = Context::default();
         // Generate REVERSE_SEEK_BOUND / 2 Put for key [10].
         let k = &[10_u8];
         for ts in 0..REVERSE_SEEK_BOUND / 2 {
@@ -473,7 +477,16 @@ mod tests {
             if ts < REVERSE_SEEK_BOUND / 2 {
                 must_commit(&engine, k, ts, ts);
             } else {
-                must_rollback(&engine, k, ts);
+                let modifies = vec![
+                    // ts is rather small, so it is ok to `as u8`
+                    Modify::Put(
+                        CF_WRITE,
+                        Key::from_raw(k).append_ts(TimeStamp::new(ts)),
+                        vec![b'R', ts as u8],
+                    ),
+                    Modify::Delete(CF_LOCK, Key::from_raw(k)),
+                ];
+                write(&engine, &ctx, modifies);
             }
         }
 
@@ -491,7 +504,16 @@ mod tests {
         }
         for ts in REVERSE_SEEK_BOUND / 2 + 1..=REVERSE_SEEK_BOUND {
             must_prewrite_put(&engine, k, &[ts as u8], k, ts);
-            must_rollback(&engine, k, ts);
+            let modifies = vec![
+                // ts is rather small, so it is ok to `as u8`
+                Modify::Put(
+                    CF_WRITE,
+                    Key::from_raw(k).append_ts(TimeStamp::new(ts)),
+                    vec![b'R', ts as u8],
+                ),
+                Modify::Delete(CF_LOCK, Key::from_raw(k)),
+            ];
+            write(&engine, &ctx, modifies);
         }
 
         // Generate 1 PUT for key [6].
@@ -505,7 +527,16 @@ mod tests {
         let k = &[5_u8];
         for ts in 0..=REVERSE_SEEK_BOUND {
             must_prewrite_put(&engine, k, &[ts as u8], k, ts);
-            must_rollback(&engine, k, ts);
+            let modifies = vec![
+                // ts is rather small, so it is ok to `as u8`
+                Modify::Put(
+                    CF_WRITE,
+                    Key::from_raw(k).append_ts(TimeStamp::new(ts)),
+                    vec![b'R', ts as u8],
+                ),
+                Modify::Delete(CF_LOCK, Key::from_raw(k)),
+            ];
+            write(&engine, &ctx, modifies);
         }
 
         // Generate 1 PUT with ts = REVERSE_SEEK_BOUND and 1 PUT
@@ -699,10 +730,19 @@ mod tests {
     #[test]
     fn test_reverse_get_out_of_bound_1() {
         let engine = TestEngineBuilder::new().build().unwrap();
-
+        let ctx = Context::default();
         // Generate N/2 rollback for [b].
         for ts in 0..REVERSE_SEEK_BOUND / 2 {
-            must_rollback(&engine, b"b", ts);
+            let modifies = vec![
+                // ts is rather small, so it is ok to `as u8`
+                Modify::Put(
+                    CF_WRITE,
+                    Key::from_raw(b"b").append_ts(TimeStamp::new(ts)),
+                    vec![b'R', ts as u8],
+                ),
+                Modify::Delete(CF_LOCK, Key::from_raw(b"b")),
+            ];
+            write(&engine, &ctx, modifies);
         }
 
         // Generate 1 put for [c].
@@ -767,12 +807,21 @@ mod tests {
     #[test]
     fn test_reverse_get_out_of_bound_2() {
         let engine = TestEngineBuilder::new().build().unwrap();
-
+        let ctx = Context::default();
         // Generate 1 put and N/2 rollback for [b].
         must_prewrite_put(&engine, b"b", b"value_b", b"b", 0);
         must_commit(&engine, b"b", 0, 0);
         for ts in 1..=REVERSE_SEEK_BOUND / 2 {
-            must_rollback(&engine, b"b", ts);
+            let modifies = vec![
+                // ts is rather small, so it is ok to `as u8`
+                Modify::Put(
+                    CF_WRITE,
+                    Key::from_raw(b"b").append_ts(TimeStamp::new(ts)),
+                    vec![b'R', ts as u8],
+                ),
+                Modify::Delete(CF_LOCK, Key::from_raw(b"b")),
+            ];
+            write(&engine, &ctx, modifies);
         }
 
         // Generate 1 put for [c].
@@ -1176,7 +1225,7 @@ mod tests {
             for y in 0..16 {
                 let pk = &[i as u8, y as u8];
                 must_prewrite_put(&engine, pk, b"", pk, start_ts);
-                must_rollback(&engine, pk, start_ts);
+                must_rollback(&engine, pk, start_ts, false);
                 // Generate 254 RocksDB tombstones between [0,0] and [15,15].
                 if !((i == 0 && y == 0) || (i == 15 && y == 15)) {
                     must_gc(&engine, pk, safe_point);

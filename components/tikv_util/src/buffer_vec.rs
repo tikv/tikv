@@ -230,8 +230,8 @@ impl BufferVec {
             if len > 0 {
                 let mut data_write_offset = 0;
                 let mut offsets_write_offset = 0;
-                for i in 0..len - 1 {
-                    if retain_arr[i] {
+                for (i, retain) in retain_arr.iter().enumerate().take(len - 1) {
+                    if *retain {
                         let write_len = self.offsets[i + 1] - self.offsets[i];
                         std::ptr::copy(
                             self.data.as_ptr().add(self.offsets[i]),
@@ -380,11 +380,7 @@ impl<'a> Iterator for Iter<'a> {
 
     fn last(mut self) -> Option<Self::Item> {
         let l = self.offsets.len();
-        if l == 0 {
-            None
-        } else {
-            self.nth(l - 1)
-        }
+        if l == 0 { None } else { self.nth(l - 1) }
     }
 
     fn nth(&mut self, n: usize) -> Option<Self::Item> {

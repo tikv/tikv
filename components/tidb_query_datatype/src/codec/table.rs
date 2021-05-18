@@ -514,7 +514,7 @@ pub fn generate_index_data_for_test(
     col_val: &Datum,
     unique: bool,
 ) -> (HashMap<i64, Vec<u8>>, Vec<u8>) {
-    let indice = vec![(2, (*col_val).clone()), (3, Datum::Dec(handle.into()))];
+    let indice = vec![(2, col_val.clone()), (3, Datum::Dec(handle.into()))];
     let mut expect_row = HashMap::default();
     let mut v: Vec<_> = indice
         .iter()
@@ -683,9 +683,11 @@ mod tests {
 
         let bs = encode_row(&mut ctx, vec![], &[]).unwrap();
         assert!(!bs.is_empty());
-        assert!(decode_row(&mut bs.as_slice(), &mut ctx, &cols)
-            .unwrap()
-            .is_empty());
+        assert!(
+            decode_row(&mut bs.as_slice(), &mut ctx, &cols)
+                .unwrap()
+                .is_empty()
+        );
         datums = cut_row_as_owned(&bs, &col_id_set);
         assert!(datums.is_empty());
     }

@@ -48,8 +48,8 @@ use tidb_query_datatype::{Collation, FieldTypeAccessor, FieldTypeFlag};
 use tipb::{Expr, FieldType, ScalarFuncSig};
 
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::collation::*;
 use tidb_query_datatype::codec::data_type::*;
+use tidb_query_datatype::match_template_collator;
 
 use self::impl_arithmetic::*;
 use self::impl_cast::*;
@@ -680,6 +680,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::NullTimeDiff => null_time_diff_fn_meta(),
         ScalarFuncSig::AddDatetimeAndDuration => add_datetime_and_duration_fn_meta(),
         ScalarFuncSig::AddDatetimeAndString => add_datetime_and_string_fn_meta(),
+        ScalarFuncSig::AddDateAndString => add_date_and_string_fn_meta(),
         ScalarFuncSig::SubDatetimeAndDuration => sub_datetime_and_duration_fn_meta(),
         ScalarFuncSig::SubDatetimeAndString => sub_datetime_and_string_fn_meta(),
         ScalarFuncSig::FromDays => from_days_fn_meta(),
