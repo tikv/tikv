@@ -63,14 +63,14 @@ fn perror_and_exit<E: Error>(prefix: &str, e: E) -> ! {
     process::exit(-1);
 }
 
-fn handle_engine_error(err: EngineError) {
+fn handle_engine_error(err: EngineError) -> ! {
     ve1!("error while open kvdb: {}", err);
     if let EngineError::Engine(msg) = err {
         if msg.starts_with(LOCK_FILE_ERROR) {
             ve1!(
                 "LOCK file conflict indicates TiKV process is running. \
                 Do NOT delete the LOCK file and force the command to run. \
-                Doing so could cause data corruption.",
+                Doing so could cause data corruption."
             );
         }
     }
@@ -106,10 +106,7 @@ fn new_debug_executor(
             let kv_db =
                 match engine_rocks::raw_util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts) {
                     Ok(db) => db,
-                    Err(e) => {
-                        handle_engine_error(e);
-                        unreachable!();
-                    }
+                    Err(e) => handle_engine_error(e),
                 };
             let mut kv_db = RocksEngine::from_db(Arc::new(kv_db));
             kv_db.set_shared_block_cache(shared_block_cache);
@@ -135,10 +132,7 @@ fn new_debug_executor(
                     raft_db_cf_opts,
                 ) {
                     Ok(db) => db,
-                    Err(e) => {
-                        handle_engine_error(e);
-                        unreachable!();
-                    }
+                    Err(e) => handle_engine_error(e),
                 };
                 let mut raft_db = RocksEngine::from_db(Arc::new(raft_db));
                 raft_db.set_shared_block_cache(shared_block_cache);
