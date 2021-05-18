@@ -306,7 +306,9 @@ impl<'client> S3Uploader<'client> {
                     "missing upload-id from create_multipart_upload()".to_owned(),
                 )
             }),
-            Err(_) => Err(RusotoError::ParseError("begin timeout".to_owned())),
+            Err(_) => Err(RusotoError::ParseError(
+                "timeout after 15mins for begin in s3 storage".to_owned(),
+            )),
         }
     }
 
@@ -331,7 +333,9 @@ impl<'client> S3Uploader<'client> {
                 Ok(_) => Ok(()),
                 Err(e) => Err(e),
             },
-            Err(_) => Err(RusotoError::ParseError("complete timeout".to_owned())),
+            Err(_) => Err(RusotoError::ParseError(
+                "timeout after 15mins for complete in s3 storage".to_owned(),
+            )),
         }
     }
 
@@ -353,7 +357,9 @@ impl<'client> S3Uploader<'client> {
                 Ok(_) => Ok(()),
                 Err(e) => Err(e),
             },
-            Err(_) => Err(RusotoError::ParseError("abort timeout".to_owned())),
+            Err(_) => Err(RusotoError::ParseError(
+                "timeout after 15mins for abort in s3 storage".to_owned(),
+            )),
         }
     }
 
@@ -383,7 +389,9 @@ impl<'client> S3Uploader<'client> {
                 e_tag: part?.e_tag,
                 part_number: Some(part_number),
             }),
-            Err(_) => Err(RusotoError::ParseError("upload part timeout".to_owned())),
+            Err(_) => Err(RusotoError::ParseError(
+                "timeout after 15mins for upload part in s3 storage".to_owned(),
+            )),
         }
     }
 
@@ -408,8 +416,9 @@ impl<'client> S3Uploader<'client> {
                 delay_for(delay_duration).await;
             }
 
+            #[cfg(feature = "failpoints")]
             fail_point!("s3_put_obj_err", |_| {
-                return Err(RusotoError::ParseError("failed to put object".to_owned()));
+                Err(RusotoError::ParseError("failed to put object".to_owned()))
             });
 
             self.client
@@ -435,7 +444,9 @@ impl<'client> S3Uploader<'client> {
                 Ok(_) => Ok(()),
                 Err(e) => Err(e),
             },
-            Err(_) => Err(RusotoError::ParseError("upload timeout".to_owned())),
+            Err(_) => Err(RusotoError::ParseError(
+                "timeout after 15mins for upload in s3 storage".to_owned(),
+            )),
         }
     }
 
@@ -575,7 +586,7 @@ mod tests {
         // inject 200ms delay
         fail::cfg(s3_sleep_injected_fp, "return(200)").unwrap();
         let resp = s.put(
-            "mykey2",
+            "mykey",
             Box::new(magic_contents.as_bytes()),
             magic_contents.len() as u64,
         );
