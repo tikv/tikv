@@ -24,7 +24,9 @@ use crossbeam::utils::CachePadded;
 use parking_lot::{Mutex, MutexGuard};
 use std::f64::INFINITY;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
+use std::thread::{self, Builder, JoinHandle};
 use std::time::Duration;
 use std::u64;
 
@@ -144,6 +146,7 @@ impl TaskContext {
 }
 
 const ADJUST_INTERVAL: u64 = 1000; // 1000ms
+const RATIO_PERCISION: f64 = 10000000.0;
 const EMA_FACTOR: f64 = 0.2;
 const CAP: usize = 10;
 const LIMIT_UP_PERCENT: f64 = 0.01; // 1%
@@ -188,7 +191,7 @@ impl Smoother {
     }
 }
 
-struct FlowController<E: Engine> {
+struct FlowChecker<E: Engine> {
     pending_compaction_bytes_soft_limit: u64,
     pending_compaction_bytes_hard_limit: u64,
     memtables_threshold: u64,
@@ -199,32 +202,30 @@ struct FlowController<E: Engine> {
 
     factor: f64,
 
-    last_adjust_time: Instant,
-    discard_ratio: Option<f64>,
     start_control_time: Instant,
+    discard_ratio: Arc<AtomicU64>,
 
     engine: E,
-    limiter: Limiter,
     recorder: Smoother,
+    limiter: Arc<Limiter>,
 }
 
-impl<E: Engine> FlowController<E> {
-    pub fn new(config: &Config, engine: E) -> Self {
-        Self {
-            pending_compaction_bytes_soft_limit: config.pending_compaction_bytes_soft_limit,
-            pending_compaction_bytes_hard_limit: config.pending_compaction_bytes_hard_limit,
-            memtables_threshold: config.memtables_threshold,
-            l0_files_threshold: config.l0_files_threshold,
-            last_num_memtables: 0,
-            last_num_l0_files: 0,
-            engine,
-            factor: EMA_FACTOR,
-            last_adjust_time: Instant::now_coarse(),
-            discard_ratio: None,
-            start_control_time: Instant::now_coarse(),
-            limiter: Limiter::new(INFINITY),
-            recorder: Smoother::new(),
-        }
+impl<E: Engine> FlowChecker<E> {
+    fn start(self) -> (Sender<bool>, JoinHandle<()>) {
+        let (tx, rx) = mpsc::channel();
+        let h = Builder::new()
+            .name(thd_name!("flow-checker"))
+            .spawn(move || {
+                tikv_alloc::add_thread_memory_accessor();
+                let mut checker = self;
+                while rx.try_recv().is_err() {
+                    thread::sleep(Duration::from_millis(ADJUST_INTERVAL));
+                    checker.adjust();
+                }
+                tikv_alloc::remove_thread_memory_accessor();
+            })
+            .unwrap();
+        (tx, h)
     }
 
     pub fn adjust(&mut self) {
@@ -245,9 +246,8 @@ impl<E: Engine> FlowController<E> {
             );
         }
 
-        self.discard_ratio = if pending_compaction_bytes < self.pending_compaction_bytes_soft_limit
-        {
-            None
+        let ratio = if pending_compaction_bytes < self.pending_compaction_bytes_soft_limit {
+            0
         } else {
             let x = 5.0
                 - 10.0
@@ -255,16 +255,19 @@ impl<E: Engine> FlowController<E> {
                         - self.pending_compaction_bytes_soft_limit) as f64
                     * (pending_compaction_bytes - self.pending_compaction_bytes_soft_limit) as f64;
             let new_ratio = 1.0 / (1.0 + x.exp());
-            Some(if let Some(old_ratio) = self.discard_ratio {
-                self.factor * old_ratio
+            let old_ratio = self.discard_ratio.load(Ordering::Relaxed);
+            (if old_ratio != 0 {
+                self.factor * (old_ratio as f64 / RATIO_PERCISION)
                     + (1.0 - self.factor)
                         * (new_ratio
                             * (1.0 + self.start_control_time.elapsed().as_secs() as f64 / 100.0))
             } else {
                 self.start_control_time = Instant::now_coarse();
                 new_ratio
-            })
+            } * RATIO_PERCISION) as u64
         };
+        SCHED_DISCARD_RATIO_GAUAE.set(ratio as i64);
+        self.discard_ratio.store(ratio, Ordering::Relaxed);
     }
 
     fn adjust_l0_files_and_memtables(&mut self) {
@@ -332,28 +335,73 @@ impl<E: Engine> FlowController<E> {
         SCHED_THROTTLE_FLOW_GAUAE.set(throttle as i64);
         self.limiter.set_speed_limit(throttle)
     }
+}
 
-    pub fn should_drop(&mut self) -> bool {
-        let now = Instant::now_coarse();
-        if self.last_adjust_time - now > Duration::from_millis(ADJUST_INTERVAL) {
-            self.last_adjust_time = now;
-            self.adjust();
+struct FlowController {
+    discard_ratio: Arc<AtomicU64>,
+    limiter: Arc<Limiter>,
+    tx: Sender<bool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for FlowController {
+    fn drop(&mut self) {
+        let h = self.handle.take();
+        if h.is_none() {
+            return;
         }
 
-        if let Some(ratio) = self.discard_ratio {
-            let mut rng = rand::thread_rng();
-            rng.gen::<f64>() < ratio
-        } else {
-            false
+        if let Err(e) = self.tx.send(true) {
+            error!("send quit message for time monitor worker failed"; "err" => ?e);
+            return;
+        }
+
+        if let Err(e) = h.unwrap().join() {
+            error!("join time monitor worker failed"; "err" => ?e);
+            return;
+        }
+    }
+}
+
+impl FlowController {
+    pub fn new<E: Engine>(config: &Config, engine: E) -> Self {
+        let limiter = Arc::new(Limiter::new(INFINITY));
+        let discard_ratio = Arc::new(AtomicU64::new(0));
+        let checker = FlowChecker {
+            pending_compaction_bytes_soft_limit: config.pending_compaction_bytes_soft_limit,
+            pending_compaction_bytes_hard_limit: config.pending_compaction_bytes_hard_limit,
+            memtables_threshold: config.memtables_threshold,
+            l0_files_threshold: config.l0_files_threshold,
+            last_num_memtables: 0,
+            last_num_l0_files: 0,
+            engine,
+            factor: EMA_FACTOR,
+            discard_ratio: discard_ratio.clone(),
+            start_control_time: Instant::now_coarse(),
+            limiter: limiter.clone(),
+            recorder: Smoother::new(),
+        };
+        let (tx, handle) = checker.start();
+        Self {
+            discard_ratio,
+            limiter,
+            tx,
+            handle: Some(handle),
         }
     }
 
-    fn consume(&mut self, bytes: usize) -> Consume {
+    pub fn should_drop(&self) -> bool {
+        let ratio = self.discard_ratio.load(Ordering::Relaxed) as f64 / RATIO_PERCISION;
+        let mut rng = rand::thread_rng();
+        rng.gen::<f64>() < ratio
+    }
+
+    fn consume(&self, bytes: usize) -> Consume {
         self.limiter.consume(bytes)
     }
 }
 
-struct SchedulerInner<E: Engine, L: LockManager> {
+struct SchedulerInner<L: LockManager> {
     // slot_id -> { cid -> `TaskContext` } in the slot.
     task_slots: Vec<CachePadded<Mutex<HashMap<u64, TaskContext>>>>,
 
@@ -374,7 +422,7 @@ struct SchedulerInner<E: Engine, L: LockManager> {
     // used to control write flow
     running_write_bytes: CachePadded<AtomicUsize>,
 
-    flow_controller: Mutex<FlowController<E>>,
+    flow_controller: FlowController,
 
     lock_mgr: L,
 
@@ -390,7 +438,7 @@ fn id_index(cid: u64) -> usize {
     cid as usize % TASKS_SLOTS_NUM
 }
 
-impl<E: Engine, L: LockManager> SchedulerInner<E, L> {
+impl<L: LockManager> SchedulerInner<L> {
     /// Generates the next command ID.
     #[inline]
     fn gen_id(&self) -> u64 {
@@ -439,7 +487,7 @@ impl<E: Engine, L: LockManager> SchedulerInner<E, L> {
     fn too_busy(&self) -> bool {
         fail_point!("txn_scheduler_busy", |_| true);
         self.running_write_bytes.load(Ordering::Acquire) >= self.sched_pending_write_threshold
-            || self.flow_controller.lock().should_drop()
+            || self.flow_controller.should_drop()
     }
 
     /// Tries to acquire all the required latches for a command.
@@ -461,7 +509,7 @@ impl<E: Engine, L: LockManager> SchedulerInner<E, L> {
 pub struct Scheduler<E: Engine, L: LockManager> {
     // `engine` is `None` means currently the program is in scheduler worker threads.
     engine: Option<E>,
-    inner: Arc<SchedulerInner<E, L>>,
+    inner: Arc<SchedulerInner<L>>,
     control_mutex: Arc<tokio::sync::Mutex<bool>>,
 }
 
@@ -503,7 +551,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             concurrency_manager,
             pipelined_pessimistic_lock,
             enable_async_apply_prewrite: config.enable_async_apply_prewrite,
-            flow_controller: Mutex::new(FlowController::new(config, engine.clone())),
+            flow_controller: FlowController::new(config, engine.clone()),
         });
 
         slow_log!(t.elapsed(), "initialized the transaction scheduler");
@@ -786,11 +834,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
                 {
                     let _guard = self.control_mutex.lock().await;
-                    let delay = self
-                        .inner
-                        .flow_controller
-                        .lock()
-                        .consume(task.cmd.write_bytes());
+                    let delay = self.inner.flow_controller.consume(task.cmd.write_bytes());
                     delay.await;
                 }
 

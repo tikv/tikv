@@ -305,6 +305,11 @@ lazy_static! {
         "The speed of throttle flow."
     )
     .unwrap();
+    pub static ref SCHED_DISCARD_RATIO_GAUAE: IntGauge = register_int_gauge!(
+        "tikv_scheduler_discard_ratio",
+        "The discard ratio."
+    )
+    .unwrap();
     pub static ref SCHED_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_scheduler_command_duration_seconds",
         "Bucketed histogram of command execution",
