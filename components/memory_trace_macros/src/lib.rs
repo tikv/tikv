@@ -8,6 +8,10 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{parse_macro_input, Data, DeriveInput, Fields};
 
+// MemoryTraceHelper adds two methods `reset` and `sum` to derived struct.
+// All fields of derived struct should be `usize`.
+// `reset` updates the struct and returns a delta represented by a `TraceEvent`
+// `sum` returns the summary of all field values.
 #[proc_macro_derive(MemoryTraceHelper, attributes(name))]
 pub fn memory_trace_reset_derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
