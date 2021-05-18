@@ -2,6 +2,7 @@
 
 use super::{get_io_rate_limiter, get_io_type, IOOp, IORateLimiter};
 
+use std::fmt::{self, Debug, Formatter};
 use std::fs;
 use std::io::{self, Read, Seek, Write};
 use std::path::Path;
@@ -10,10 +11,15 @@ use std::sync::Arc;
 use fs2::FileExt;
 
 /// A wrapper around `std::fs::File` with capability to track and regulate IO flow.
-#[derive(Debug)]
 pub struct File {
     inner: fs::File,
     limiter: Option<Arc<IORateLimiter>>,
+}
+
+impl Debug for File {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self.inner)
+    }
 }
 
 impl File {

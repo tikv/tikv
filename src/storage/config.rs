@@ -253,37 +253,26 @@ pub struct IORateLimitConfig {
     pub mode: IORateLimitMode,
     #[config(skip)]
     pub strict: bool,
-    #[serde(with = "file_system::io_priority_serde")]
     #[config(skip)]
     pub foreground_read_priority: IOPriority,
-    #[serde(with = "file_system::io_priority_serde")]
     #[config(skip)]
     pub foreground_write_priority: IOPriority,
-    #[serde(with = "file_system::io_priority_serde")]
     #[config(skip)]
     pub flush_priority: IOPriority,
-    #[serde(with = "file_system::io_priority_serde")]
     #[config(skip)]
     pub level_zero_compaction_priority: IOPriority,
-    #[serde(with = "file_system::io_priority_serde")]
     #[config(skip)]
     pub compaction_priority: IOPriority,
-    #[serde(with = "file_system::io_priority_serde")]
     #[config(skip)]
     pub replication_priority: IOPriority,
-    #[serde(with = "file_system::io_priority_serde")]
     #[config(skip)]
     pub load_balance_priority: IOPriority,
-    #[serde(with = "file_system::io_priority_serde")]
     #[config(skip)]
     pub gc_priority: IOPriority,
-    #[serde(with = "file_system::io_priority_serde")]
     #[config(skip)]
     pub import_priority: IOPriority,
-    #[serde(with = "file_system::io_priority_serde")]
     #[config(skip)]
     pub export_priority: IOPriority,
-    #[serde(with = "file_system::io_priority_serde")]
     #[config(skip)]
     pub other_priority: IOPriority,
 }
@@ -297,8 +286,8 @@ impl Default for IORateLimitConfig {
             foreground_read_priority: IOPriority::High,
             foreground_write_priority: IOPriority::High,
             flush_priority: IOPriority::High,
-            level_zero_compaction_priority: IOPriority::High,
-            compaction_priority: IOPriority::Medium,
+            level_zero_compaction_priority: IOPriority::Medium,
+            compaction_priority: IOPriority::Low,
             replication_priority: IOPriority::High,
             load_balance_priority: IOPriority::High,
             gc_priority: IOPriority::High,

@@ -7187,7 +7187,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "IO rate limiter request wait duration.",
+          "description": "The threshold of disk IOs per priority",
           "editable": true,
           "error": false,
           "fill": 1,
@@ -7196,6 +7196,101 @@
             "h": 7,
             "w": 12,
             "x": 0,
+            "y": 14
+          },
+          "id": 5995,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "avg(tikv_rate_limiter_max_bytes_per_sec{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (type)",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "{{type}}",
+              "refId": "A",
+              "step": 4
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "IO threshold",
+          "tooltip": {
+            "msResolution": false,
+            "shared": true,
+            "sort": 0,
+            "value_type": "cumulative"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "decbytes",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "IO rate limiter request wait duration.",
+          "editable": true,
+          "error": false,
+          "fill": 1,
+          "grid": {},
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
             "y": 14
           },
           "id": 7235,
@@ -7297,8 +7392,8 @@
           "gridPos": {
             "h": 7,
             "w": 12,
-            "x": 12,
-            "y": 14
+            "x": 0,
+            "y": 21
           },
           "id": 5596,
           "legend": {
@@ -7392,7 +7487,7 @@
           "gridPos": {
             "h": 7,
             "w": 12,
-            "x": 0,
+            "x": 12,
             "y": 21
           },
           "id": 5593,
@@ -7487,8 +7582,8 @@
           "gridPos": {
             "h": 7,
             "w": 12,
-            "x": 12,
-            "y": 21
+            "x": 0,
+            "y": 28
           },
           "id": 5597,
           "legend": {
@@ -7582,7 +7677,7 @@
           "gridPos": {
             "h": 7,
             "w": 12,
-            "x": 0,
+            "x": 12,
             "y": 28
           },
           "id": 5594,
@@ -7677,8 +7772,8 @@
           "gridPos": {
             "h": 7,
             "w": 12,
-            "x": 12,
-            "y": 28
+            "x": 0,
+            "y": 35
           },
           "id": 5598,
           "legend": {
@@ -7772,7 +7867,7 @@
           "gridPos": {
             "h": 7,
             "w": 12,
-            "x": 0,
+            "x": 12,
             "y": 35
           },
           "id": 5595,

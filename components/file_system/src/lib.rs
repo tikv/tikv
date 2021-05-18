@@ -20,7 +20,7 @@ pub use iosnoop::{get_io_type, init_io_snooper, set_io_type};
 pub use metrics_manager::{BytesFetcher, MetricsManager};
 pub use rate_limiter::{
     get_io_rate_limiter, io_rate_limit_mode_serde, set_io_rate_limiter, IORateLimitMode,
-    IORateLimiter, IORateLimiterStatistics,
+    IORateLimiter, IORateLimiterStatistics, LowPriorityIOAdjustor,
 };
 
 pub use std::fs::{
@@ -31,10 +31,12 @@ pub use std::fs::{
 
 use std::io::{self, ErrorKind, Read, Write};
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use openssl::error::ErrorStack;
 use openssl::hash::{self, Hasher, MessageDigest};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use strum::EnumCount;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -81,7 +83,7 @@ impl IOType {
     }
 }
 
-impl std::str::FromStr for IOType {
+impl FromStr for IOType {
     type Err = String;
     fn from_str(s: &str) -> Result<IOType, String> {
         match s {
@@ -176,31 +178,26 @@ impl std::str::FromStr for IOPriority {
     }
 }
 
-pub mod io_priority_serde {
-    use std::fmt;
-    use std::str::FromStr;
-
-    use serde::de::{Error, Unexpected, Visitor};
-    use serde::{Deserializer, Serializer};
-
-    use super::IOPriority;
-
-    pub fn serialize<S>(t: &IOPriority, serializer: S) -> Result<S::Ok, S::Error>
+impl Serialize for IOPriority {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        serializer.serialize_str(t.as_str())
+        serializer.serialize_str(self.as_str())
     }
+}
 
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<IOPriority, D::Error>
+impl<'de> Deserialize<'de> for IOPriority {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
+        use serde::de::{Error, Unexpected, Visitor};
         struct StrVistor;
         impl<'de> Visitor<'de> for StrVistor {
             type Value = IOPriority;
 
-            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 write!(formatter, "a IO priority")
             }
 
