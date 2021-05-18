@@ -161,29 +161,31 @@ impl ObserveRegion {
                 ScanEntry::None => {
                     // Update the `tracked_index` to the snapshot's `apply_index`
                     self.resolver.update_tracked_index(apply_index);
-                    let status =
-                        std::mem::replace(&mut self.resolver_status, ResolverStatus::Ready);
-                    match status {
-                        ResolverStatus::Pending {
-                            locks,
-                            tracked_index,
-                            ..
-                        } => {
-                            locks.into_iter().for_each(|lock| match lock {
-                                PendingLock::Track { key, start_ts } => self.resolver.track_lock(
-                                    start_ts,
-                                    key.to_raw().unwrap(),
-                                    Some(tracked_index),
-                                ),
-                                PendingLock::Untrack { key, .. } => self
-                                    .resolver
-                                    .untrack_lock(&key.to_raw().unwrap(), Some(tracked_index)),
-                            });
-                        }
-                        ResolverStatus::Ready => {
-                            panic!("region {:?} resolver has ready", self.meta.id)
-                        }
-                    }
+                    let tracked_index =
+                        match std::mem::replace(&mut self.resolver_status, ResolverStatus::Ready) {
+                            ResolverStatus::Pending {
+                                locks,
+                                tracked_index,
+                                ..
+                            } => {
+                                locks.into_iter().for_each(|lock| match lock {
+                                    PendingLock::Track { key, start_ts } => {
+                                        self.resolver.track_lock(
+                                            start_ts,
+                                            key.to_raw().unwrap(),
+                                            Some(tracked_index),
+                                        )
+                                    }
+                                    PendingLock::Untrack { key, .. } => self
+                                        .resolver
+                                        .untrack_lock(&key.to_raw().unwrap(), Some(tracked_index)),
+                                });
+                                tracked_index
+                            }
+                            ResolverStatus::Ready => {
+                                panic!("region {:?} resolver has ready", self.meta.id)
+                            }
+                        };
                     info!(
                         "Resolver initialized";
                         "region" => self.meta.id,
