@@ -34,14 +34,18 @@ pub enum ConfigError {
 }
 
 const UNIT: u64 = 1;
-const DATA_MAGNITUDE: u64 = 1024;
+const DATA_MAGNITUDE: u64 = 1000;
 pub const KB: u64 = UNIT * DATA_MAGNITUDE;
 pub const MB: u64 = KB * DATA_MAGNITUDE;
 pub const GB: u64 = MB * DATA_MAGNITUDE;
-
-// Make sure it will not overflow.
-const TB: u64 = (GB as u64) * (DATA_MAGNITUDE as u64);
-const PB: u64 = (TB as u64) * (DATA_MAGNITUDE as u64);
+pub const TB: u64 = GB * DATA_MAGNITUDE;
+pub const PB: u64 = TB * DATA_MAGNITUDE;
+const BI_DATA_MAGNITUDE: u64 = 1024;
+pub const KI_B: u64 = UNIT * BI_DATA_MAGNITUDE;
+pub const MI_B: u64 = KI_B * BI_DATA_MAGNITUDE;
+pub const GI_B: u64 = MI_B * BI_DATA_MAGNITUDE;
+pub const TI_B: u64 = GI_B * BI_DATA_MAGNITUDE;
+pub const PI_B: u64 = TI_B * BI_DATA_MAGNITUDE;
 
 const TIME_MAGNITUDE_1: u64 = 1000;
 const TIME_MAGNITUDE_2: u64 = 60;
@@ -166,15 +170,15 @@ impl Serialize for ReadableSize {
         if size == 0 {
             write!(buffer, "{}KiB", size).unwrap();
         } else if size % PB == 0 {
-            write!(buffer, "{}PiB", size / PB).unwrap();
+            write!(buffer, "{}PiB", size / PI_B).unwrap();
         } else if size % TB == 0 {
-            write!(buffer, "{}TiB", size / TB).unwrap();
+            write!(buffer, "{}TiB", size / TI_B).unwrap();
         } else if size % GB as u64 == 0 {
-            write!(buffer, "{}GiB", size / GB).unwrap();
+            write!(buffer, "{}GiB", size / GI_B).unwrap();
         } else if size % MB as u64 == 0 {
-            write!(buffer, "{}MiB", size / MB).unwrap();
+            write!(buffer, "{}MiB", size / MI_B).unwrap();
         } else if size % KB as u64 == 0 {
-            write!(buffer, "{}KiB", size / KB).unwrap();
+            write!(buffer, "{}KiB", size / KI_B).unwrap();
         } else {
             return serializer.serialize_u64(size);
         }
@@ -206,11 +210,11 @@ impl FromStr for ReadableSize {
         let (size, unit) = size_str.split_at(size_len);
 
         let unit = match unit.trim() {
-            "K" | "KB" | "KiB" => KB,
-            "M" | "MB" | "MiB" => MB,
-            "G" | "GB" | "GiB" => GB,
-            "T" | "TB" | "TiB" => TB,
-            "P" | "PB" | "PiB" => PB,
+            "K" | "KB" | "KiB" => KI_B,
+            "M" | "MB" | "MiB" => MI_B,
+            "G" | "GB" | "GiB" => GI_B,
+            "T" | "TB" | "TiB" => TI_B,
+            "P" | "PB" | "PiB" => PI_B,
             "B" | "" => UNIT,
             _ => {
                 return Err(format!(
@@ -264,6 +268,114 @@ impl<'de> Deserialize<'de> for ReadableSize {
                 E: de::Error,
             {
                 size_str.parse().map_err(E::custom)
+            }
+        }
+
+        deserializer.deserialize_any(SizeVisitor)
+    }
+}
+
+pub mod readable_size_as_data_rate_serde {
+    use super::*;
+
+    pub fn serialize<S>(t: &ReadableSize, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let size = t.0;
+        let mut buffer = String::new();
+        if size == 0 {
+            write!(buffer, "{}KB", size).unwrap();
+        } else if size % PB == 0 {
+            write!(buffer, "{}PB", size / PB).unwrap();
+        } else if size % TB == 0 {
+            write!(buffer, "{}TB", size / TB).unwrap();
+        } else if size % GB as u64 == 0 {
+            write!(buffer, "{}GB", size / GB).unwrap();
+        } else if size % MB as u64 == 0 {
+            write!(buffer, "{}MB", size / MB).unwrap();
+        } else if size % KB as u64 == 0 {
+            write!(buffer, "{}KB", size / KB).unwrap();
+        } else {
+            return serializer.serialize_u64(size);
+        }
+        serializer.serialize_str(&buffer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<ReadableSize, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct SizeVisitor;
+
+        impl<'de> Visitor<'de> for SizeVisitor {
+            type Value = ReadableSize;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("valid size")
+            }
+
+            fn visit_i64<E>(self, size: i64) -> Result<ReadableSize, E>
+            where
+                E: de::Error,
+            {
+                if size >= 0 {
+                    self.visit_u64(size as u64)
+                } else {
+                    Err(E::invalid_value(Unexpected::Signed(size), &self))
+                }
+            }
+
+            fn visit_u64<E>(self, size: u64) -> Result<ReadableSize, E>
+            where
+                E: de::Error,
+            {
+                Ok(ReadableSize(size))
+            }
+
+            fn visit_str<E>(self, s: &str) -> Result<ReadableSize, E>
+            where
+                E: de::Error,
+            {
+                let size_str = s.trim();
+                if size_str.is_empty() {
+                    return Err(format!("{:?} is not a valid size.", s)).map_err(E::custom);
+                }
+
+                if !size_str.is_ascii() {
+                    return Err(format!("ASCII string is expected, but got {:?}", s))
+                        .map_err(E::custom);
+                }
+
+                // size: digits and '.' as decimal separator
+                let size_len = size_str
+                    .to_string()
+                    .chars()
+                    .take_while(|c| char::is_ascii_digit(c) || *c == '.')
+                    .count();
+
+                // unit: alphabetic characters
+                let (size, unit) = size_str.split_at(size_len);
+
+                let unit = match unit.trim() {
+                    "K" | "KB" | "KiB" => KB,
+                    "M" | "MB" | "MiB" => MB,
+                    "G" | "GB" | "GiB" => GB,
+                    "T" | "TB" | "TiB" => TB,
+                    "P" | "PB" | "PiB" => PB,
+                    "B" | "" => UNIT,
+                    _ => {
+                        return Err(format!(
+                            "only B, KB, KiB, MB, MiB, GB, GiB, TB, TiB, PB, and PiB are supported: {:?}",
+                            s
+                        )).map_err(E::custom);
+                    }
+                };
+
+                match size.parse::<f64>() {
+                    Ok(n) => Ok(ReadableSize((n * unit as f64) as u64)),
+                    Err(_) => Err(format!("invalid size string: {:?}", s)).map_err(E::custom),
+                }
             }
         }
 
