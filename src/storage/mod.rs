@@ -204,11 +204,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             engine.clone(),
             lock_mgr,
             concurrency_manager.clone(),
-            config.scheduler_concurrency,
-            config.scheduler_worker_pool_size,
-            config.scheduler_pending_write_threshold.0 as usize,
+            config,
             pipelined_pessimistic_lock,
-            config.enable_async_apply_prewrite,
         );
 
         info!("Storage started.");

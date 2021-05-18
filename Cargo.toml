@@ -201,7 +201,7 @@ collections = { path = "components/collections" }
 coprocessor_plugin_api = { path = "components/coprocessor_plugin_api" }
 time = "0.1"
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
-tokio = { version = "0.2", features = ["full"] }
+tokio = { version = "0.2", features = ["full", "time"] }
 tokio-timer = "0.2"
 tokio-openssl = "0.4"
 toml = "0.5"

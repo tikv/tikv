@@ -2,6 +2,7 @@
 
 use crate::engine::RocksEngine;
 use crate::import::RocksIngestExternalFileOptions;
+use crate::rocks_metrics_defs::*;
 use crate::sst::RocksSstWriterBuilder;
 use crate::{util, RocksSstWriter};
 use engine_traits::{
@@ -293,7 +294,7 @@ impl MiscExt for RocksEngine {
     fn get_oldest_snapshot_sequence_number(&self) -> Option<u64> {
         match self
             .as_inner()
-            .get_property_int(crate::ROCKSDB_OLDEST_SNAPSHOT_SEQUENCE)
+            .get_property_int(ROCKSDB_OLDEST_SNAPSHOT_SEQUENCE)
         {
             // Some(0) indicates that no snapshot is in use
             Some(0) => None,
@@ -302,7 +303,6 @@ impl MiscExt for RocksEngine {
     }
 
     fn get_total_sst_files_size_cf(&self, cf: &str) -> Result<Option<u64>> {
-        const ROCKSDB_TOTAL_SST_FILES_SIZE: &str = "rocksdb.total-sst-files-size";
         let handle = util::get_cf_handle(self.as_inner(), cf)?;
         Ok(self
             .as_inner()
@@ -327,6 +327,20 @@ impl MiscExt for RocksEngine {
             &handle,
             level,
         ))
+    }
+
+    fn get_cf_pending_compaction_bytes(&self, cf: &str) -> Result<Option<u64>> {
+        let handle = util::get_cf_handle(self.as_inner(), cf)?;
+        Ok(self
+            .as_inner()
+            .get_property_int_cf(handle, ROCKSDB_PENDING_COMPACTION_BYTES))
+    }
+
+    fn get_cf_num_memtables(&self, cf: &str) -> Result<Option<u64>> {
+        let handle = util::get_cf_handle(self.as_inner(), cf)?;
+        Ok(self
+            .as_inner()
+            .get_property_int_cf(handle, ROCKSDB_NUM_IMMUTABLE_MEM_TABLE))
     }
 
     fn is_stalled_or_stopped(&self) -> bool {

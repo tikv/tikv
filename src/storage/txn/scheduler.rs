@@ -22,26 +22,30 @@
 
 use crossbeam::utils::CachePadded;
 use parking_lot::{Mutex, MutexGuard};
+use std::f64::INFINITY;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use std::u64;
 
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
+use engine_traits::{CFNamesExt, MiscExt};
 use kvproto::kvrpcpb::{CommandPri, ExtraOp};
-use tikv_util::{callback::must_call, time::Instant};
+use rand::Rng;
+use tikv_util::{
+    callback::must_call,
+    time::{Consume, Instant, Limiter},
+};
 use txn_types::TimeStamp;
 
+use crate::storage::config::Config;
 use crate::storage::kv::{
     drop_snapshot_callback, with_tls_engine, Engine, ExtCallback, Result as EngineResult,
     SnapContext, Statistics,
 };
 use crate::storage::lock_manager::{self, LockManager, WaitTimeout};
-use crate::storage::metrics::{
-    self, KV_COMMAND_KEYWRITE_HISTOGRAM_VEC, SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC,
-    SCHED_CONTEX_GAUGE, SCHED_HISTOGRAM_VEC_STATIC, SCHED_LATCH_HISTOGRAM_VEC,
-    SCHED_STAGE_COUNTER_VEC, SCHED_TOO_BUSY_COUNTER_VEC, SCHED_WRITING_BYTES_GAUGE,
-};
+use crate::storage::metrics::{self, *};
 use crate::storage::txn::commands::{ResponsePolicy, WriteContext, WriteResult};
 use crate::storage::txn::{
     commands::Command,
@@ -139,7 +143,217 @@ impl TaskContext {
     }
 }
 
-struct SchedulerInner<L: LockManager> {
+const ADJUST_INTERVAL: u64 = 1000; // 1000ms
+const EMA_FACTOR: f64 = 0.2;
+const CAP: usize = 10;
+const LIMIT_UP_PERCENT: f64 = 0.01; // 1%
+const LIMIT_DOWN_STEP: f64 = 1.0 * 1024.0 * 1024.0; // 1MB/s
+
+struct Smoother {
+    records: [Option<u64>; CAP],
+    size: usize,
+    idx: usize,
+    total: u64,
+}
+
+impl Smoother {
+    pub fn new() -> Self {
+        Self {
+            records: [None; CAP],
+            idx: 0,
+            size: 0,
+            total: 0,
+        }
+    }
+
+    pub fn observe(&mut self, record: u64) {
+        if let Some(v) = self.records[self.idx] {
+            self.total -= v;
+        } else {
+            self.size += 1;
+        }
+        self.total += record;
+
+        self.records[self.idx] = Some(record);
+        self.idx = (self.idx + 1) % CAP;
+    }
+
+    // pub fn get_recent(&self) -> u64 {
+    //     let prev = (self.idx - 1) % CAP;
+    //     self.records[prev].unwrap_or(0)
+    // }
+
+    pub fn get_avg(&self) -> f64 {
+        self.total as f64 / self.size as f64
+    }
+}
+
+struct FlowController<E: Engine> {
+    pending_compaction_bytes_soft_limit: u64,
+    pending_compaction_bytes_hard_limit: u64,
+    memtables_threshold: u64,
+    l0_files_threshold: u64,
+
+    last_num_memtables: u64,
+    last_num_l0_files: u64,
+
+    factor: f64,
+
+    last_adjust_time: Instant,
+    discard_ratio: Option<f64>,
+    start_control_time: Instant,
+
+    engine: E,
+    limiter: Limiter,
+    recorder: Smoother,
+}
+
+impl<E: Engine> FlowController<E> {
+    pub fn new(config: &Config, engine: E) -> Self {
+        Self {
+            pending_compaction_bytes_soft_limit: config.pending_compaction_bytes_soft_limit,
+            pending_compaction_bytes_hard_limit: config.pending_compaction_bytes_hard_limit,
+            memtables_threshold: config.memtables_threshold,
+            l0_files_threshold: config.l0_files_threshold,
+            last_num_memtables: 0,
+            last_num_l0_files: 0,
+            engine,
+            factor: EMA_FACTOR,
+            last_adjust_time: Instant::now_coarse(),
+            discard_ratio: None,
+            start_control_time: Instant::now_coarse(),
+            limiter: Limiter::new(INFINITY),
+            recorder: Smoother::new(),
+        }
+    }
+
+    pub fn adjust(&mut self) {
+        self.adjust_pending_compaction_bytes();
+        self.adjust_l0_files_and_memtables();
+    }
+
+    fn adjust_pending_compaction_bytes(&mut self) {
+        let mut pending_compaction_bytes = 0;
+        for cf in self.engine.kv_engine().cf_names() {
+            pending_compaction_bytes = std::cmp::max(
+                pending_compaction_bytes,
+                self.engine
+                    .kv_engine()
+                    .get_cf_pending_compaction_bytes(cf)
+                    .unwrap_or(None)
+                    .unwrap_or(0),
+            );
+        }
+
+        self.discard_ratio = if pending_compaction_bytes < self.pending_compaction_bytes_soft_limit
+        {
+            None
+        } else {
+            let x = 5.0
+                - 10.0
+                    / (self.pending_compaction_bytes_hard_limit
+                        - self.pending_compaction_bytes_soft_limit) as f64
+                    * (pending_compaction_bytes - self.pending_compaction_bytes_soft_limit) as f64;
+            let new_ratio = 1.0 / (1.0 + x.exp());
+            Some(if let Some(old_ratio) = self.discard_ratio {
+                self.factor * old_ratio
+                    + (1.0 - self.factor)
+                        * (new_ratio
+                            * (1.0 + self.start_control_time.elapsed().as_secs() as f64 / 100.0))
+            } else {
+                self.start_control_time = Instant::now_coarse();
+                new_ratio
+            })
+        };
+    }
+
+    fn adjust_l0_files_and_memtables(&mut self) {
+        self.recorder
+            .observe(self.limiter.total_bytes_consumed() as u64);
+        SCHED_WRITE_FLOW_GAUAE.set(self.limiter.total_bytes_consumed() as i64);
+        self.limiter.reset_statistics();
+
+        let mut num_memtables = 0;
+        for cf in self.engine.kv_engine().cf_names() {
+            num_memtables = std::cmp::max(
+                num_memtables,
+                self.engine
+                    .kv_engine()
+                    .get_cf_num_memtables(cf)
+                    .unwrap_or(None)
+                    .unwrap_or(0),
+            );
+        }
+        let mut num_l0_files = 0;
+        for cf in self.engine.kv_engine().cf_names() {
+            num_l0_files = std::cmp::max(
+                num_l0_files,
+                self.engine
+                    .kv_engine()
+                    .get_cf_num_files_at_level(cf, 0)
+                    .unwrap_or(None)
+                    .unwrap_or(0),
+            );
+        }
+
+        let is_throttled = self.limiter.speed_limit() != INFINITY;
+        let should_throttle =
+            num_memtables > self.memtables_threshold || num_l0_files > self.l0_files_threshold;
+
+        assert!(self.recorder.get_avg() * LIMIT_UP_PERCENT > LIMIT_DOWN_STEP);
+
+        let throttle = if !is_throttled && should_throttle {
+            self.recorder.get_avg() - LIMIT_DOWN_STEP
+        } else if is_throttled && should_throttle {
+            if self.last_num_l0_files <= num_l0_files || self.last_num_memtables <= num_memtables {
+                self.recorder.get_avg() - LIMIT_DOWN_STEP
+            } else if self.last_num_l0_files > num_l0_files
+                && self.last_num_memtables > num_memtables
+            {
+                self.recorder.get_avg() * (1.0 + LIMIT_UP_PERCENT)
+            } else {
+                panic!();
+            }
+        } else if is_throttled && !should_throttle {
+            if (num_memtables as f64) < self.memtables_threshold as f64 * 0.7
+                && (num_l0_files as f64) < self.l0_files_threshold as f64 * 0.7
+            {
+                INFINITY
+            } else {
+                self.recorder.get_avg() * (1.0 + LIMIT_UP_PERCENT * 3.0)
+                // do something else
+            }
+        } else {
+            INFINITY
+        };
+
+        self.last_num_l0_files = num_l0_files;
+        self.last_num_memtables = num_memtables;
+        SCHED_THROTTLE_FLOW_GAUAE.set(throttle as i64);
+        self.limiter.set_speed_limit(throttle)
+    }
+
+    pub fn should_drop(&mut self) -> bool {
+        let now = Instant::now_coarse();
+        if self.last_adjust_time - now > Duration::from_millis(ADJUST_INTERVAL) {
+            self.last_adjust_time = now;
+            self.adjust();
+        }
+
+        if let Some(ratio) = self.discard_ratio {
+            let mut rng = rand::thread_rng();
+            rng.gen::<f64>() < ratio
+        } else {
+            false
+        }
+    }
+
+    fn consume(&mut self, bytes: usize) -> Consume {
+        self.limiter.consume(bytes)
+    }
+}
+
+struct SchedulerInner<E: Engine, L: LockManager> {
     // slot_id -> { cid -> `TaskContext` } in the slot.
     task_slots: Vec<CachePadded<Mutex<HashMap<u64, TaskContext>>>>,
 
@@ -160,6 +374,8 @@ struct SchedulerInner<L: LockManager> {
     // used to control write flow
     running_write_bytes: CachePadded<AtomicUsize>,
 
+    flow_controller: Mutex<FlowController<E>>,
+
     lock_mgr: L,
 
     concurrency_manager: ConcurrencyManager,
@@ -174,7 +390,7 @@ fn id_index(cid: u64) -> usize {
     cid as usize % TASKS_SLOTS_NUM
 }
 
-impl<L: LockManager> SchedulerInner<L> {
+impl<E: Engine, L: LockManager> SchedulerInner<E, L> {
     /// Generates the next command ID.
     #[inline]
     fn gen_id(&self) -> u64 {
@@ -223,6 +439,7 @@ impl<L: LockManager> SchedulerInner<L> {
     fn too_busy(&self) -> bool {
         fail_point!("txn_scheduler_busy", |_| true);
         self.running_write_bytes.load(Ordering::Acquire) >= self.sched_pending_write_threshold
+            || self.flow_controller.lock().should_drop()
     }
 
     /// Tries to acquire all the required latches for a command.
@@ -240,10 +457,12 @@ impl<L: LockManager> SchedulerInner<L> {
 }
 
 /// Scheduler which schedules the execution of `storage::Command`s.
+#[derive(Clone)]
 pub struct Scheduler<E: Engine, L: LockManager> {
     // `engine` is `None` means currently the program is in scheduler worker threads.
     engine: Option<E>,
-    inner: Arc<SchedulerInner<L>>,
+    inner: Arc<SchedulerInner<E, L>>,
+    control_mutex: Arc<tokio::sync::Mutex<bool>>,
 }
 
 unsafe impl<E: Engine, L: LockManager> Send for Scheduler<E, L> {}
@@ -255,11 +474,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         lock_mgr: L,
 
         concurrency_manager: ConcurrencyManager,
-        concurrency: usize,
-        worker_pool_size: usize,
-        sched_pending_write_threshold: usize,
+        config: &Config,
         pipelined_pessimistic_lock: Arc<AtomicBool>,
-        enable_async_apply_prewrite: bool,
     ) -> Self {
         let t = Instant::now_coarse();
         let mut task_slots = Vec::with_capacity(TASKS_SLOTS_NUM);
@@ -270,25 +486,31 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let inner = Arc::new(SchedulerInner {
             task_slots,
             id_alloc: AtomicU64::new(0).into(),
-            latches: Latches::new(concurrency),
+            latches: Latches::new(config.scheduler_concurrency),
             running_write_bytes: AtomicUsize::new(0).into(),
-            sched_pending_write_threshold,
-            worker_pool: SchedPool::new(engine.clone(), worker_pool_size, "sched-worker-pool"),
+            sched_pending_write_threshold: config.scheduler_pending_write_threshold.0 as usize,
+            worker_pool: SchedPool::new(
+                engine.clone(),
+                config.scheduler_worker_pool_size,
+                "sched-worker-pool",
+            ),
             high_priority_pool: SchedPool::new(
                 engine.clone(),
-                std::cmp::max(1, worker_pool_size / 2),
+                std::cmp::max(1, config.scheduler_worker_pool_size / 2),
                 "sched-high-pri-pool",
             ),
             lock_mgr,
             concurrency_manager,
             pipelined_pessimistic_lock,
-            enable_async_apply_prewrite,
+            enable_async_apply_prewrite: config.enable_async_apply_prewrite,
+            flow_controller: Mutex::new(FlowController::new(config, engine.clone())),
         });
 
         slow_log!(t.elapsed(), "initialized the transaction scheduler");
         Scheduler {
             engine: Some(engine),
             inner,
+            control_mutex: Arc::new(tokio::sync::Mutex::new(false)),
         }
     }
 
@@ -562,6 +784,15 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             .spawn(async move {
                 fail_point!("scheduler_async_snapshot_finish");
                 SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
+                {
+                    let _guard = self.control_mutex.lock().await;
+                    let delay = self
+                        .inner
+                        .flow_controller
+                        .lock()
+                        .consume(task.cmd.write_bytes());
+                    delay.await;
+                }
 
                 let read_duration = Instant::now_coarse();
 
@@ -765,15 +996,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 debug!("write command failed at prewrite"; "cid" => cid, "err" => ?err);
                 scheduler.finish_with_err(cid, err);
             }
-        }
-    }
-}
-
-impl<E: Engine, L: LockManager> Clone for Scheduler<E, L> {
-    fn clone(&self) -> Self {
-        Scheduler {
-            engine: self.engine.clone(),
-            inner: self.inner.clone(),
         }
     }
 }

@@ -295,6 +295,16 @@ lazy_static! {
         "Total number of pending commands."
     )
     .unwrap();
+    pub static ref SCHED_WRITE_FLOW_GAUAE: IntGauge = register_int_gauge!(
+        "tikv_scheduler_write_flow",
+        "The speed of write flow."
+    )
+    .unwrap();
+    pub static ref SCHED_THROTTLE_FLOW_GAUAE: IntGauge = register_int_gauge!(
+        "tikv_scheduler_throttle_flow",
+        "The speed of throttle flow."
+    )
+    .unwrap();
     pub static ref SCHED_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_scheduler_command_duration_seconds",
         "Bucketed histogram of command execution",
