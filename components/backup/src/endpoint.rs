@@ -12,7 +12,7 @@ use concurrency_manager::ConcurrencyManager;
 use configuration::Configuration;
 use engine_rocks::raw::DB;
 use engine_traits::{name_to_cf, CfName, SstCompressionType};
-use external_storage::*;
+use external_storage_export::{create_storage, ExternalStorage};
 use file_system::{IOType, WithIOType};
 use futures::channel::mpsc::*;
 use kvproto::backup::*;
@@ -684,7 +684,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
 
             let storage = LimitedStorage {
                 limiter: request.limiter,
-                storage: backend,
+                storage: Arc::new(backend),
             };
 
             loop {
@@ -945,7 +945,7 @@ pub mod tests {
     use std::{fs, thread};
 
     use engine_traits::MiscExt;
-    use external_storage::{make_local_backend, make_noop_backend};
+    use external_storage_export::{make_local_backend, make_noop_backend};
     use file_system::{IOOp, WithIORateLimit};
     use futures::executor::block_on;
     use futures::stream::StreamExt;
@@ -1161,7 +1161,7 @@ pub mod tests {
         let test_handle_backup_task_range =
             |start_key: &[u8], end_key: &[u8], expect: Vec<(&[u8], &[u8])>| {
                 let tmp = TempDir::new().unwrap();
-                let backend = external_storage::make_local_backend(tmp.path());
+                let backend = make_local_backend(tmp.path());
                 let (tx, rx) = unbounded();
                 let task = Task {
                     request: Request {
