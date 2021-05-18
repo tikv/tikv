@@ -906,7 +906,7 @@ pub struct DbConfig {
     pub info_log_keep_log_file_num: u64,
     #[config(skip)]
     pub info_log_dir: String,
-    #[serde(with = "tikv_util::config::readable_size_as_data_rate_serde")]
+    #[serde(with = "tikv_util::config::readable_size_in_decimal_base_serde")]
     pub rate_bytes_per_sec: ReadableSize,
     #[config(skip)]
     pub rate_limiter_refill_period: ReadableDuration,

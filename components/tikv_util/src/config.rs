@@ -189,6 +189,7 @@ impl Serialize for ReadableSize {
 impl FromStr for ReadableSize {
     type Err = String;
 
+    // This method parses value in binary base unit.
     fn from_str(s: &str) -> Result<ReadableSize, String> {
         let size_str = s.trim();
         if size_str.is_empty() {
@@ -275,7 +276,7 @@ impl<'de> Deserialize<'de> for ReadableSize {
     }
 }
 
-pub mod readable_size_as_data_rate_serde {
+pub mod readable_size_in_decimal_base_serde {
     use super::*;
 
     pub fn serialize<S>(t: &ReadableSize, serializer: S) -> Result<S::Ok, S::Error>
