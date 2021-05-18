@@ -287,7 +287,7 @@ fn test_update_resoved_ts_before_apply_index() {
     fail::remove(on_step_read_index_msg);
 }
 
-// Testing that the new elected leader should initialize the `resolvet` correctly
+// Testing that the new elected leader should initialize the `resolver` correctly
 #[test]
 fn test_new_leader_init_resolver() {
     let mut cluster = new_server_cluster(0, 3);
