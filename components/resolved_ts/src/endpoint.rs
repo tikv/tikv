@@ -161,7 +161,7 @@ impl ObserveRegion {
                 ScanEntry::None => {
                     // Update the `tracked_index` to the snapshot's `apply_index`
                     self.resolver.update_tracked_index(apply_index);
-                    let tracked_index =
+                    let pending_tracked_index =
                         match std::mem::replace(&mut self.resolver_status, ResolverStatus::Ready) {
                             ResolverStatus::Pending {
                                 locks,
@@ -189,8 +189,9 @@ impl ObserveRegion {
                     info!(
                         "Resolver initialized";
                         "region" => self.meta.id,
-                        "snapshot index" => apply_index,
-                        "pending data index" => tracked_index,
+                        "observe_id" => ?self.handle.id,
+                        "snapshot_index" => apply_index,
+                        "pending_data_index" => pending_tracked_index,
                     );
                 }
                 ScanEntry::TxnEntry(_) => panic!("unexpected entry type"),
