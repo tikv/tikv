@@ -874,7 +874,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                     batch.maybe_commit(&storage, &tx);
                 }
             }
-            if let Some(mut batch) = batcher {
+            if let Some(batch) = batcher {
                 batch.commit(&storage, &tx);
             }
             future::ok(())

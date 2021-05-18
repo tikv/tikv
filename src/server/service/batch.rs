@@ -14,6 +14,7 @@ use crate::storage::{ResponseBatchConsumer, Result};
 use kvproto::kvrpcpb::*;
 use tikv_util::future::poll_future_notify;
 use tikv_util::mpsc::batch::Sender;
+use tikv_util::time::Instant;
 
 pub const MAX_BATCH_GET_REQUEST_COUNT: usize = 10;
 pub const MIN_BATCH_GET_REQUEST_COUNT: usize = 4;
@@ -24,18 +25,20 @@ pub struct ReqBatcher {
     raw_gets: Vec<RawGetRequest>,
     get_ids: Vec<u64>,
     raw_get_ids: Vec<u64>,
-    queue_size: usize,
+    begin_instant: Instant,
+    batch_size: usize,
 }
 
 impl ReqBatcher {
-    pub fn new(mut queue_size: usize) -> ReqBatcher {
-        queue_size = std::cmp::min(queue_size, MAX_BATCH_GET_REQUEST_COUNT);
+    pub fn new(batch_size: usize) -> ReqBatcher {
+        let begin_instant = Instant::now_coarse();
         ReqBatcher {
             gets: vec![],
             raw_gets: vec![],
             get_ids: vec![],
             raw_get_ids: vec![],
-            queue_size,
+            begin_instant,
+            batch_size: std::cmp::min(batch_size, MAX_BATCH_GET_REQUEST_COUNT),
         }
     }
 
@@ -62,33 +65,41 @@ impl ReqBatcher {
         storage: &Storage<E, L>,
         tx: &Sender<(u64, batch_commands_response::Response)>,
     ) {
-        if self.gets.len() >= self.queue_size {
+        if self.gets.len() >= self.batch_size {
             let gets = std::mem::take(&mut self.gets);
             let ids = std::mem::take(&mut self.get_ids);
-            future_batch_get_command(storage, ids, gets, tx.clone());
+            future_batch_get_command(storage, ids, gets, tx.clone(), self.begin_instant);
         }
 
-        if self.raw_gets.len() >= self.queue_size {
+        if self.raw_gets.len() >= self.batch_size {
             let gets = std::mem::take(&mut self.raw_gets);
             let ids = std::mem::take(&mut self.raw_get_ids);
-            future_batch_raw_get_command(storage, ids, gets, tx.clone());
+            future_batch_raw_get_command(storage, ids, gets, tx.clone(), self.begin_instant);
         }
     }
 
     pub fn commit<E: Engine, L: LockManager>(
-        &mut self,
+        self,
         storage: &Storage<E, L>,
         tx: &Sender<(u64, batch_commands_response::Response)>,
     ) {
         if !self.gets.is_empty() {
-            let gets = std::mem::replace(&mut self.gets, vec![]);
-            let ids = std::mem::replace(&mut self.get_ids, vec![]);
-            future_batch_get_command(storage, ids, gets, tx.clone());
+            future_batch_get_command(
+                storage,
+                self.get_ids,
+                self.gets,
+                tx.clone(),
+                self.begin_instant,
+            );
         }
         if !self.raw_gets.is_empty() {
-            let gets = std::mem::replace(&mut self.raw_gets, vec![]);
-            let ids = std::mem::replace(&mut self.raw_get_ids, vec![]);
-            future_batch_raw_get_command(storage, ids, gets, tx.clone());
+            future_batch_raw_get_command(
+                storage,
+                self.raw_get_ids,
+                self.raw_gets,
+                tx.clone(),
+                self.begin_instant,
+            );
         }
     }
 }
@@ -105,19 +116,20 @@ impl BatcherBuilder {
             pool_size,
         }
     }
+
     pub fn build(&self, queue_per_worker: usize, req_batch_size: usize) -> Option<ReqBatcher> {
         if !self.enable_batch {
             return None;
-        }
-        if req_batch_size >= MIN_BATCH_GET_REQUEST_COUNT
-            && queue_per_worker >= MAX_QUEUE_SIZE_PER_WORKER
-        {
-            return Some(ReqBatcher::new(req_batch_size));
         }
         if req_batch_size > self.pool_size * MIN_BATCH_GET_REQUEST_COUNT
             && queue_per_worker >= MIN_BATCH_GET_REQUEST_COUNT
         {
             return Some(ReqBatcher::new(req_batch_size / self.pool_size));
+        }
+        if req_batch_size >= MIN_BATCH_GET_REQUEST_COUNT
+            && queue_per_worker >= MAX_QUEUE_SIZE_PER_WORKER
+        {
+            return Some(ReqBatcher::new(req_batch_size));
         }
         None
     }
@@ -186,12 +198,11 @@ fn future_batch_get_command<E: Engine, L: LockManager>(
     requests: Vec<u64>,
     gets: Vec<GetRequest>,
     tx: Sender<(u64, batch_commands_response::Response)>,
+    begin_instant: tikv_util::time::Instant,
 ) {
-    // let begin_instant = Instant::now_coarse();
     REQUEST_BATCH_SIZE_HISTOGRAM_VEC
-        .point_get
+        .kv_get
         .observe(gets.len() as f64);
-    let begin_instant = tikv_util::time::Instant::now_coarse();
     let ids = requests.clone();
     let res = storage.batch_get_command(
         gets,
@@ -226,9 +237,12 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager>(
     requests: Vec<u64>,
     gets: Vec<RawGetRequest>,
     tx: Sender<(u64, batch_commands_response::Response)>,
+    begin_instant: tikv_util::time::Instant,
 ) {
+    REQUEST_BATCH_SIZE_HISTOGRAM_VEC
+        .raw_get
+        .observe(gets.len() as f64);
     let ids = requests.clone();
-    let begin_instant = tikv_util::time::Instant::now_coarse();
     let res = storage.raw_batch_get_command(
         gets,
         requests,

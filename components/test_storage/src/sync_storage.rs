@@ -11,7 +11,7 @@ use tikv::storage::config::Config;
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::{
-    test_util::GetProcessor, txn::commands, Engine, PerfStatisticsDelta, PrewriteResult, Result,
+    test_util::GetConsumer, txn::commands, Engine, PerfStatisticsDelta, PrewriteResult, Result,
     Statistics, Storage, TestEngineBuilder, TestStorageBuilder, TxnStatus,
 };
 use txn_types::{Key, KvPair, Mutation, TimeStamp, Value};
@@ -141,7 +141,7 @@ impl<E: Engine> SyncTestStorage<E> {
                 req
             })
             .collect();
-        let p = GetProcessor::new();
+        let p = GetConsumer::new();
         block_on(self.store.batch_get_command(requests, ids, p.clone()))?;
         let mut values = vec![];
         for value in p.take_data().into_iter() {

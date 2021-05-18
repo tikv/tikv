@@ -1952,11 +1952,11 @@ pub mod test_util {
     }
 
     #[derive(Clone)]
-    pub struct GetProcessor {
+    pub struct GetConsumer {
         pub data: Arc<Mutex<Vec<GetResult>>>,
     }
 
-    impl GetProcessor {
+    impl GetConsumer {
         pub fn new() -> Self {
             Self {
                 data: Arc::new(Mutex::new(vec![])),
@@ -1971,7 +1971,7 @@ pub mod test_util {
         }
     }
 
-    impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)> for GetProcessor {
+    impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)> for GetConsumer {
         fn consume(
             &self,
             id: u64,
@@ -1984,7 +1984,7 @@ pub mod test_util {
         }
     }
 
-    impl ResponseBatchConsumer<Option<Vec<u8>>> for GetProcessor {
+    impl ResponseBatchConsumer<Option<Vec<u8>>> for GetConsumer {
         fn consume(&self, id: u64, res: Result<Option<Vec<u8>>>) {
             self.data.lock().unwrap().push(GetResult { id, res });
         }
@@ -2195,14 +2195,14 @@ mod tests {
                 1.into(),
             )),
         );
-        let processor = GetProcessor::new();
+        let consumer = GetConsumer::new();
         block_on(storage.batch_get_command(
             vec![create_get_request(b"c", 1), create_get_request(b"d", 1)],
             vec![1, 2],
-            processor.clone(),
+            consumer.clone(),
         ))
         .unwrap();
-        let data = processor.take_data();
+        let data = consumer.take_data();
         for v in data {
             expect_error(
                 |e| match e {
@@ -2877,14 +2877,14 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        let processor = GetProcessor::new();
+        let consumer = GetConsumer::new();
         block_on(storage.batch_get_command(
             vec![create_get_request(b"c", 2), create_get_request(b"d", 2)],
             vec![1, 2],
-            processor.clone(),
+            consumer.clone(),
         ))
         .unwrap();
-        let mut x = processor.take_data();
+        let mut x = consumer.take_data();
         expect_error(
             |e| match e {
                 Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
@@ -2911,7 +2911,7 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        let processor = GetProcessor::new();
+        let consumer = GetConsumer::new();
         block_on(storage.batch_get_command(
             vec![
                 create_get_request(b"c", 5),
@@ -2920,11 +2920,11 @@ mod tests {
                 create_get_request(b"b", 5),
             ],
             vec![1, 2, 3, 4],
-            processor.clone(),
+            consumer.clone(),
         ))
         .unwrap();
 
-        let x: Vec<Option<Vec<u8>>> = processor
+        let x: Vec<Option<Vec<u8>>> = consumer
             .take_data()
             .into_iter()
             .map(|x| x.unwrap())
@@ -3635,9 +3635,9 @@ mod tests {
             })
             .collect();
         let results: Vec<Option<Vec<u8>>> = test_data.into_iter().map(|(_, v)| Some(v)).collect();
-        let processor = GetProcessor::new();
-        block_on(storage.raw_batch_get_command(cmds, ids, processor.clone())).unwrap();
-        let x: Vec<Option<Vec<u8>>> = processor
+        let consumer = GetConsumer::new();
+        block_on(storage.raw_batch_get_command(cmds, ids, consumer.clone())).unwrap();
+        let x: Vec<Option<Vec<u8>>> = consumer
             .take_data()
             .into_iter()
             .map(|x| x.unwrap())
@@ -6112,10 +6112,10 @@ mod tests {
         req2.set_context(ctx);
         req2.set_key(b"key".to_vec());
         req2.set_version(100);
-        let processor = GetProcessor::new();
-        block_on(storage.batch_get_command(vec![req1, req2], vec![1, 2], processor.clone()))
+        let consumer = GetConsumer::new();
+        block_on(storage.batch_get_command(vec![req1, req2], vec![1, 2], consumer.clone()))
             .unwrap();
-        let res = processor.take_data();
+        let res = consumer.take_data();
         assert!(res[0].is_ok());
         let key_error = extract_key_error(&res[1].as_ref().unwrap_err());
         assert_eq!(key_error.get_locked().get_key(), b"key");
