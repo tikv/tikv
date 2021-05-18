@@ -15,8 +15,16 @@ sse = ["tikv/sse"]
 mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
 bcc-iosnoop = ["tikv/bcc-iosnoop"]
-cloud-aws = [ "encryption_export/cloud-aws" ]
-cloud-gcp = [ "encryption_export/cloud-gcp" ]
+cloud-aws = [
+   "encryption_export/cloud-aws",
+   "backup/cloud-aws",
+]
+cloud-gcp = [
+  "encryption_export/cloud-gcp",
+  "backup/cloud-gcp",
+]
+cloud-storage-grpc = [ "backup/cloud-storage-grpc" ]
+cloud-storage-dylib = [ "backup/cloud-storage-dylib" ]
 protobuf-codec = [
   "backup/protobuf-codec",
   "cdc/protobuf-codec",
@@ -87,7 +95,7 @@ tokio = { version = "0.2", features = ["rt-threaded", "time"] }
 grpcio = { version = "0.8",  default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"
 keys = { path = "../../components/keys", default-features = false }
-kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false, rev="511a3225c29f9272af83d28efed92eba835cd34f" }
 libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { path = "../../components/log_wrappers" }

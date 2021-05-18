@@ -726,8 +726,8 @@ mod tests {
     use engine_traits::EncryptionMethod as DBEncryptionMethod;
     use file_system::{remove_file, File};
     use matches::assert_matches;
-    use std::io::Write;
     use tempfile::TempDir;
+    use test_util::create_test_key_file;
 
     lazy_static::lazy_static! {
         static ref LOCK_FOR_GAUGE: Mutex<i32> = Mutex::new(1);
@@ -802,13 +802,10 @@ mod tests {
         }
     }
 
-    // TODO(yiwu): use the similar method in test_util crate instead.
     fn create_key_file(name: &str) -> (PathBuf, TempDir) {
         let tmp_dir = TempDir::new().unwrap();
         let path = tmp_dir.path().join(name);
-        let mut file = File::create(path.clone()).unwrap();
-        file.write_all(b"603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4\n")
-            .unwrap();
+        create_test_key_file(path.to_str().unwrap());
         (path, tmp_dir)
     }
 

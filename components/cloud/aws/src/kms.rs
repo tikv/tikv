@@ -15,8 +15,7 @@ use cloud::error::{Error, KmsError, Result};
 use cloud::kms::{Config, DataKeyPair, EncryptedKey, KeyId, KmsProvider, PlainKey};
 
 const AWS_KMS_DATA_KEY_SPEC: &str = "AES_256";
-const AWS_KMS_VENDOR_NAME: &[u8] = b"AWS";
-pub const AWS_VENDOR_NAME: &str = "aws";
+pub const ENCRYPTION_VENDOR_NAME_AWS_KMS: &str = "AWS";
 
 pub struct AwsKms {
     client: KmsClient,
@@ -77,8 +76,8 @@ impl AwsKms {
 
 #[async_trait]
 impl KmsProvider for AwsKms {
-    fn name(&self) -> &[u8] {
-        AWS_KMS_VENDOR_NAME
+    fn name(&self) -> &str {
+        ENCRYPTION_VENDOR_NAME_AWS_KMS
     }
 
     // On decrypt failure, the rule is to return WrongMasterKey error in case it is possible that
@@ -124,6 +123,24 @@ impl KmsProvider for AwsKms {
     }
 }
 
+// Rusoto errors Display implementation just gives the cause message and discards the type.
+// This is really bad when the cause message is empty!
+// Use Debug instead: this will show both
+pub struct FixRusotoErrorDisplay<E: std::fmt::Debug + std::error::Error + Send + Sync + 'static>(
+    RusotoError<E>,
+);
+impl<E: std::error::Error + Send + Sync + 'static> std::fmt::Debug for FixRusotoErrorDisplay<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.0)
+    }
+}
+impl<E: std::error::Error + Send + Sync + 'static> std::fmt::Display for FixRusotoErrorDisplay<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.0)
+    }
+}
+impl<E: std::error::Error + Send + Sync + 'static> std::error::Error for FixRusotoErrorDisplay<E> {}
+
 fn classify_generate_data_key_error(err: RusotoError<GenerateDataKeyError>) -> Error {
     if let RusotoError::Service(e) = &err {
         match &e {
@@ -133,7 +150,7 @@ fn classify_generate_data_key_error(err: RusotoError<GenerateDataKeyError>) -> E
             }
             GenerateDataKeyError::DependencyTimeout(_) => Error::ApiTimeout(err.into()),
             GenerateDataKeyError::KMSInternal(_) => Error::ApiInternal(err.into()),
-            _ => Error::KmsError(KmsError::Other(err.into())),
+            _ => Error::KmsError(KmsError::Other(FixRusotoErrorDisplay(err).into())),
         }
     } else {
         classify_error(err)
@@ -148,7 +165,7 @@ fn classify_decrypt_error(err: RusotoError<DecryptError>) -> Error {
             }
             DecryptError::DependencyTimeout(_) => Error::ApiTimeout(err.into()),
             DecryptError::KMSInternal(_) => Error::ApiInternal(err.into()),
-            _ => Error::KmsError(KmsError::Other(err.into())),
+            _ => Error::KmsError(KmsError::Other(FixRusotoErrorDisplay(err).into())),
         }
     } else {
         classify_error(err)
@@ -160,7 +177,7 @@ fn classify_error<E: std::error::Error + Send + Sync + 'static>(err: RusotoError
         RusotoError::HttpDispatch(_) => Error::ApiTimeout(err.into()),
         RusotoError::Credentials(_) => Error::ApiAuthentication(err.into()),
         e if e.is_retryable() => Error::ApiInternal(err.into()),
-        _ => Error::Other(err.into()),
+        _ => Error::KmsError(KmsError::Other(FixRusotoErrorDisplay(err).into())),
     }
 }
 
