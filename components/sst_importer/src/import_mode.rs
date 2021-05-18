@@ -122,7 +122,11 @@ impl<E: KvEngine> ImportModeSwitcher<E> {
         self.inner.lock().unwrap().enter_normal_mode(mf)
     }
 
+<<<<<<< HEAD
     pub fn enter_import_mode(&mut self, mf: RocksDBMetricsFn) -> Result<()> {
+=======
+    pub fn enter_import_mode<E: KvEngine>(&self, db: &E, mf: RocksDBMetricsFn) -> Result<bool> {
+>>>>>>> d5614928d... Support ingest multiple files in one raft command (#10107)
         let mut inner = self.inner.lock().unwrap();
         inner.enter_import_mode(mf)?;
         inner.next_check = Instant::now() + inner.timeout;
