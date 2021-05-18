@@ -1251,6 +1251,8 @@ dependencies = [
  "tempfile",
  "tikv_alloc",
  "tikv_util",
+ "tokio",
+ "tokio-util",
  "url",
 ]
 
@@ -1265,7 +1267,7 @@ dependencies = [
  "external_storage",
  "ffi-support",
  "file_system",
- "futures 0.3.8",
+ "futures 0.3.15",
  "futures-executor",
  "futures-io",
  "futures-util",
@@ -1288,7 +1290,7 @@ dependencies = [
  "tempfile",
  "tikv_util",
  "tokio",
- "tokio-util 0.3.1",
+ "tokio-util",
  "url",
 ]
 
@@ -1651,8 +1653,8 @@ dependencies = [
  "cloud",
  "futures-util",
  "http",
- "hyper 0.13.10",
- "hyper-tls 0.4.1",
+ "hyper",
+ "hyper-tls",
  "kvproto",
  "matches",
  "slog",
@@ -1660,7 +1662,7 @@ dependencies = [
  "tame-gcs",
  "tame-oauth",
  "tikv_util",
- "tokio 0.2.24",
+ "tokio",
  "url",
 ]
 
@@ -2397,9 +2399,9 @@ dependencies = [
 
 [[package]]
 name = "mio"
-version = "0.6.22"
+version = "0.6.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fce347092656428bc8eaf6201042cb551b8d67855af7374542a92a0fbfcac430"
+checksum = "4afd66f5b91bf2a3bc13fad0e21caedac168ca4c707504e75585648ae80e4cc4"
 dependencies = [
  "cfg-if 0.1.10",
  "fuchsia-zircon",
@@ -2435,7 +2437,7 @@ checksum = "52403fe290012ce777c4626790c8951324a2b9e3316b3143779c72b029742f19"
 dependencies = [
  "lazycell",
  "log",
- "mio 0.6.22",
+ "mio 0.6.23",
  "slab",
 ]
 
@@ -2601,7 +2603,7 @@ dependencies = [
  "fsevent-sys",
  "inotify",
  "libc 0.2.86",
- "mio 0.6.22",
+ "mio 0.6.23",
  "mio-extras",
  "walkdir",
  "winapi 0.3.9",
@@ -2803,7 +2805,7 @@ dependencies = [
  "cfg-if 1.0.0",
  "instant",
  "libc 0.2.86",
- "redox_syscall 0.2.5",
+ "redox_syscall 0.2.6",
  "smallvec",
  "winapi 0.3.9",
 ]
@@ -3632,7 +3634,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "528532f3d801c87aec9def2add9ca802fe569e44a544afe633765267840abe64"
 dependencies = [
  "getrandom 0.2.2",
- "redox_syscall 0.2.5",
+ "redox_syscall 0.2.6",
 ]
 
 [[package]]
@@ -3907,18 +3909,6 @@ dependencies = [
  "rusoto_core",
  "serde_urlencoded 0.6.1",
  "xml-rs",
-]
-
-[[package]]
-name = "rust-argon2"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2bc8af4bda8e1ff4932523b94d3dd20ee30a87232323eda55903ffd71d2fb017"
-dependencies = [
- "base64 0.11.0",
- "blake2b_simd",
- "constant_time_eq",
- "crossbeam-utils 0.7.2",
 ]
 
 [[package]]
@@ -4609,6 +4599,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "synstructure"
+version = "0.12.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b834f2d66f734cb897113e34aaff2f1ab4719ca946f9a7358dba8f8064148701"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+ "unicode-xid",
+]
+
+[[package]]
 name = "sysinfo"
 version = "0.16.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4702,7 +4704,7 @@ dependencies = [
  "cfg-if 1.0.0",
  "libc 0.2.86",
  "rand 0.8.3",
- "redox_syscall 0.2.5",
+ "redox_syscall 0.2.6",
  "remove_dir_all",
  "winapi 0.3.9",
 ]
@@ -5575,27 +5577,13 @@ dependencies = [
 
 [[package]]
 name = "tokio-util"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be8242891f2b6cbef26a2d7e8605133c2c554cd35b3e4948ea892d6d68436499"
-dependencies = [
- "bytes 0.5.3",
- "futures-core",
- "futures-io",
- "futures-sink",
- "log",
- "pin-project-lite 0.1.4",
- "tokio 0.2.24",
-]
-
-[[package]]
-name = "tokio-util"
 version = "0.6.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "940a12c99365c31ea8dd9ba04ec1be183ffe4920102bb7122c2f515437601e8e"
 dependencies = [
  "bytes 1.0.1",
  "futures-core",
+ "futures-io",
  "futures-sink",
  "log",
  "pin-project-lite",
