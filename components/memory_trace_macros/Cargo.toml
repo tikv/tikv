@@ -9,4 +9,4 @@ proc-macro = true
 [dependencies]
 quote = "1"
 syn = { version = "1", features = ["full", "extra-traits"] }
-tikv_alloc = { path = "../tikv_alloc", default-features = false }
+tikv_alloc = { path = "../tikv_alloc" }

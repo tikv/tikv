@@ -3,6 +3,8 @@
 //! Procedural macros used for memory trace.
 
 extern crate proc_macro;
+#[allow(unused_extern_crates)]
+extern crate tikv_alloc;
 
 use proc_macro::TokenStream;
 use quote::quote;
