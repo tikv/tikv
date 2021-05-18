@@ -611,6 +611,7 @@ impl<S: Snapshot> MvccTxn<S> {
             return Ok(());
         }
 
+        #[allow(clippy::if_same_then_else)]
         let old_value = if self.extra_op == ExtraOp::ReadOldValue
             && matches!(
                 mutation_type,

@@ -1626,5 +1626,21 @@ mod tests {
                 assert_eq!(result, case.expected, "case #{}", i);
             }
         }
+
+        // Must return Oldvalue::None when prev_write_loaded is true and prev_write is None.
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let prev_write_loaded = true;
+        let prev_write = None;
+        let result = reader
+            .get_old_value(
+                &Key::from_raw(b"a"),
+                TimeStamp::new(25),
+                prev_write_loaded,
+                prev_write,
+            )
+            .unwrap();
+        assert_eq!(result, OldValue::None);
     }
 }
