@@ -52,6 +52,7 @@ pub use self::snap::{
     SnapManagerBuilder, Snapshot, SnapshotStatistics,
 };
 pub use self::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
+pub use self::util::RegionReadProgress;
 pub use self::worker::{
     AutoSplitController, FlowStatistics, FlowStatsReporter, PdTask, ReadDelegate, ReadStats,
     SplitConfig, SplitConfigManager,
