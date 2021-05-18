@@ -129,6 +129,7 @@ pub struct NodeCluster {
     trans: ChannelTransport,
     pd_client: Arc<TestPdClient>,
     nodes: HashMap<u64, Node<TestPdClient, RocksEngine>>,
+    snap_mgrs: HashMap<u64, SnapManager>,
     simulate_trans: HashMap<u64, SimulateChannelTransport>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
     #[allow(clippy::type_complexity)]
@@ -141,6 +142,7 @@ impl NodeCluster {
             trans: ChannelTransport::new(),
             pd_client,
             nodes: HashMap::default(),
+            snap_mgrs: HashMap::default(),
             simulate_trans: HashMap::default(),
             concurrency_managers: HashMap::default(),
             post_create_coprocessor_host: None,
@@ -222,6 +224,8 @@ impl Simulator for NodeCluster {
         {
             let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
             let snap_mgr = SnapManagerBuilder::default()
+                .max_write_bytes_per_sec(cfg.server.snap_max_write_bytes_per_sec.0 as i64)
+                .max_total_size(cfg.server.snap_max_total_size.0)
                 .encryption_key_manager(key_manager)
                 .build(tmp.path().to_str().unwrap());
             (snap_mgr, Some(tmp))
@@ -230,6 +234,8 @@ impl Simulator for NodeCluster {
             let &(ref snap_mgr, _) = &trans.snap_paths[&node_id];
             (snap_mgr.clone(), None)
         };
+
+        self.snap_mgrs.insert(node_id, snap_mgr.clone());
 
         // Create coprocessor.
         let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
@@ -325,6 +331,10 @@ impl Simulator for NodeCluster {
             .to_str()
             .unwrap()
             .to_owned()
+    }
+
+    fn get_snap_mgr(&self, node_id: u64) -> &SnapManager {
+        self.snap_mgrs.get(&node_id).unwrap()
     }
 
     fn stop_node(&mut self, node_id: u64) {

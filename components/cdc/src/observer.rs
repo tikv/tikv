@@ -10,7 +10,6 @@ use fail::fail_point;
 use kvproto::metapb::{Peer, Region};
 use raft::StateRole;
 use raftstore::coprocessor::*;
-use raftstore::store::fsm::ObserveID;
 use raftstore::store::RegionSnapshot;
 use raftstore::Error as RaftStoreError;
 use tikv_util::worker::Scheduler;
@@ -32,6 +31,7 @@ pub struct CdcObserver {
     // TODO: it may become a bottleneck, find a better way to manage the registry.
     observe_regions: Arc<RwLock<HashMap<u64, ObserveID>>>,
     cmd_batches: RefCell<Vec<CmdBatch>>,
+    last_batch_observing: RefCell<bool>,
 }
 
 impl CdcObserver {
@@ -44,6 +44,7 @@ impl CdcObserver {
             sched,
             observe_regions: Arc::default(),
             cmd_batches: RefCell::default(),
+            last_batch_observing: RefCell::from(false),
         }
     }
 
@@ -98,18 +99,26 @@ impl CdcObserver {
 impl Coprocessor for CdcObserver {}
 
 impl<E: KvEngine> CmdObserver<E> for CdcObserver {
-    fn on_prepare_for_apply(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64) {
+    fn on_prepare_for_apply(&self, cdc: &ObserveHandle, rts: &ObserveHandle, region_id: u64) {
+        let is_observing = cdc.is_observing();
+        *self.last_batch_observing.borrow_mut() = is_observing;
+        if !is_observing {
+            return;
+        }
         self.cmd_batches
             .borrow_mut()
-            .push(CmdBatch::new(cdc_id, rts_id, region_id));
+            .push(CmdBatch::new(cdc.id, rts.id, region_id));
     }
 
-    fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: Cmd) {
+    fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: &Cmd) {
+        if !*self.last_batch_observing.borrow() {
+            return;
+        }
         self.cmd_batches
             .borrow_mut()
             .last_mut()
             .expect("should exist some cmd batch")
-            .push(cdc_id, rts_id, region_id, cmd);
+            .push(cdc_id, rts_id, region_id, cmd.clone());
     }
 
     fn on_flush_apply(&self, engine: E) {
@@ -194,27 +203,50 @@ mod tests {
     fn test_register_and_deregister() {
         let (scheduler, mut rx) = tikv_util::worker::dummy_scheduler();
         let observer = CdcObserver::new(scheduler);
-        let observe_id = ObserveID::new();
+        let observe_handle = ObserveHandle::new();
         let engine = TestEngineBuilder::new().build().unwrap().get_rocksdb();
 
         <CdcObserver as CmdObserver<RocksEngine>>::on_prepare_for_apply(
-            &observer, observe_id, observe_id, 0,
+            &observer,
+            &observe_handle,
+            &observe_handle,
+            0,
         );
         <CdcObserver as CmdObserver<RocksEngine>>::on_apply_cmd(
             &observer,
-            observe_id,
-            observe_id,
+            observe_handle.id,
+            observe_handle.id,
             0,
-            Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),
+            &Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),
         );
-        observer.on_flush_apply(engine);
-
+        <CdcObserver as CmdObserver<RocksEngine>>::on_flush_apply(&observer, engine.clone());
         match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
             Task::MultiBatch { multi, .. } => {
                 assert_eq!(multi.len(), 1);
                 assert_eq!(multi[0].len(), 1);
             }
             _ => panic!("unexpected task"),
+        };
+
+        // Stop observing cmd
+        observe_handle.stop_observing();
+        <CdcObserver as CmdObserver<RocksEngine>>::on_prepare_for_apply(
+            &observer,
+            &observe_handle,
+            &observe_handle,
+            0,
+        );
+        <CdcObserver as CmdObserver<RocksEngine>>::on_apply_cmd(
+            &observer,
+            observe_handle.id,
+            observe_handle.id,
+            0,
+            &Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),
+        );
+        <CdcObserver as CmdObserver<RocksEngine>>::on_flush_apply(&observer, engine);
+        match rx.recv_timeout(Duration::from_millis(10)) {
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            _ => panic!("unexpected result"),
         };
 
         // Does not send unsubscribed region events.
