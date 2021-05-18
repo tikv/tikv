@@ -1733,9 +1733,10 @@ where
             if !self.is_leader() {
                 fail_point!("raft_before_follower_send");
             }
-            for vec_msg in ready.take_messages() {
-                self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.send_message);
-            }
+            let msgs = ready.take_persisted_messages();
+            self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.send_message);
+            let msgs = ready.take_messages();
+            self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.send_message);
         }
 
         self.apply_reads(ctx, &ready);
@@ -1938,9 +1939,8 @@ where
             if !self.is_leader() {
                 fail_point!("raft_before_follower_send");
             }
-            for vec_msg in light_rd.take_messages() {
-                self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.send_message);
-            }
+            let msgs = light_rd.take_messages();
+            self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.send_message);
         }
 
         if !light_rd.committed_entries().is_empty() {
