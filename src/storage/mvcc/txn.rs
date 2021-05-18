@@ -465,9 +465,14 @@ impl<S: Snapshot> MvccTxn<S> {
                 // The previous write of an Insert is guaranteed to be None.
                 OldValue::None
             } else {
-                // Pessimistic prewrite doesn't read the previous write, set old value
-                // to `Unspecified` to read it from engine later.
-                OldValue::Unspecified
+                // Pessimistic prewrite doesn't read the previous write.
+                let prev_write_loaded = false;
+                // The mutation reads and get a previous write.
+                let prev_write = None;
+                // In pessimistic txn, it must use for_update_ts to read
+                // the old value.
+                self.reader
+                    .get_old_value(&key, for_update_ts, prev_write_loaded, prev_write)?
             }
         } else {
             OldValue::Unspecified
@@ -608,6 +613,7 @@ impl<S: Snapshot> MvccTxn<S> {
             return Ok(());
         }
 
+        #[allow(clippy::if_same_then_else)]
         let old_value = if self.extra_op == ExtraOp::ReadOldValue
             && matches!(
                 mutation_type,
@@ -618,18 +624,16 @@ impl<S: Snapshot> MvccTxn<S> {
                 // The previous write of an Insert is guaranteed to be None.
                 OldValue::None
             } else if skip_constraint_check {
-                // The mutation does not read previous write if it skips constraint
-                // check.
-                // Pessimistic transaction always skip constraint check in
-                // "prewrite" stage, as it checks constraint in
-                // "acquire pessimistic lock" stage.
-                OldValue::Unspecified
-            } else if let Some(w) = prev_write {
-                // The mutation reads and get a previous write.
-                self.reader.get_old_value(&key, self.start_ts, w.1)?
-            } else {
-                // There is no previous write.
+                // Caller ensures that there is no previous write for the
+                // mutation, so there is no old value.
                 OldValue::None
+            } else {
+                // prev_write is loaded when skip_constraint_check is false.
+                let prev_write_loaded = true;
+                // The mutation reads and get a previous write.
+                let prev_write = prev_write.map(|w| w.1);
+                self.reader
+                    .get_old_value(&key, self.start_ts, prev_write_loaded, prev_write)?
             }
         } else {
             OldValue::Unspecified
