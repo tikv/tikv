@@ -66,7 +66,6 @@ pub struct Server<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolve
     stats_pool: Option<Runtime>,
     grpc_thread_load: Arc<ThreadLoad>,
     yatp_read_pool: Option<ReadPool>,
-    readpool_normal_thread_load: Arc<ThreadLoad>,
     debug_thread_pool: Arc<Runtime>,
     health_service: HealthService,
     timer: Handle,
@@ -102,8 +101,6 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             None
         };
         let grpc_thread_load = Arc::new(ThreadLoad::with_threshold(cfg.heavy_load_threshold));
-        let readpool_normal_thread_load =
-            Arc::new(ThreadLoad::with_threshold(cfg.heavy_load_threshold));
 
         let snap_worker = Worker::new("snap-handler");
         let lazy_worker = snap_worker.lazy_build("snap-handler");
@@ -118,7 +115,6 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             raft_router.clone(),
             lazy_worker.scheduler(),
             Arc::clone(&grpc_thread_load),
-            Arc::clone(&readpool_normal_thread_load),
             cfg.enable_request_batch,
             proxy,
         );
@@ -171,7 +167,6 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             stats_pool,
             grpc_thread_load,
             yatp_read_pool,
-            readpool_normal_thread_load,
             debug_thread_pool,
             health_service,
             timer: GLOBAL_TIMER_HANDLE.clone(),
@@ -241,10 +236,6 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             let tl = Arc::clone(&self.grpc_thread_load);
             ThreadLoadStatistics::new(LOAD_STATISTICS_SLOTS, GRPC_THREAD_PREFIX, tl)
         };
-        let mut readpool_normal_load_stats = {
-            let tl = Arc::clone(&self.readpool_normal_thread_load);
-            ThreadLoadStatistics::new(LOAD_STATISTICS_SLOTS, READPOOL_NORMAL_THREAD_PREFIX, tl)
-        };
         let mut delay = self
             .timer
             .interval(Instant::now(), LOAD_STATISTICS_INTERVAL)
@@ -253,7 +244,6 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             p.spawn(async move {
                 while let Some(Ok(i)) = delay.next().await {
                     grpc_load_stats.record(i);
-                    readpool_normal_load_stats.record(i);
                 }
             });
         };
