@@ -4008,6 +4008,20 @@
               "intervalFactor": 2,
               "legendFormat": "avg response",
               "refId": "D"
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_server_request_batch_size_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "99% kv get batch",
+              "refId": "E"
+            },
+            {
+              "expr": "sum(rate(tikv_server_request_batch_size_sum{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) / sum(rate(tikv_server_request_batch_size_count{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "avg kv batch",
+              "refId": "F"
             }
           ],
           "thresholds": [],
