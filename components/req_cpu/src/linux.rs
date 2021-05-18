@@ -185,8 +185,8 @@ impl ReqCpuCollector {
     }
 
     pub fn may_gc(&mut self) -> bool {
-        const THREAD_STAT_LEN_THRESHOLD: usize = 1 << 10;
-        const RECORD_LEN_THRESHOLD: usize = 1 << 20;
+        const THREAD_STAT_LEN_THRESHOLD: usize = 500;
+        const RECORD_LEN_THRESHOLD: usize = 20_000;
 
         let duration = self.last_gc_instant.elapsed().as_millis();
         let need_gc = duration > self.config.gc_interval_ms as _;
@@ -269,7 +269,9 @@ pub fn build(config: ReqCpuConfig) -> Arc<Mutex<RequestCpuReporter>> {
                 c.may_gc();
                 c.handle_registration();
 
-                std::thread::sleep(Duration::from_millis(c.config.record_interval_ms));
+                std::thread::sleep(Duration::from_micros(
+                    (c.config.record_interval_ms * 1_000.0) as _,
+                ));
             }
         })
         .expect("Create req-cpu-collector thread failed.");

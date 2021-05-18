@@ -29,7 +29,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use collections::HashMap;
 
 pub struct ReqCpuConfig {
-    record_interval_ms: u64,
+    record_interval_ms: f64,
     window_size_ms: u64,
     gc_interval_ms: u64,
     buffer_size: usize,
@@ -38,10 +38,10 @@ pub struct ReqCpuConfig {
 impl Default for ReqCpuConfig {
     fn default() -> Self {
         Self {
-            record_interval_ms: 10,
+            record_interval_ms: 10.1,
             window_size_ms: 1_000,
-            gc_interval_ms: 15 * 1_000,
-            buffer_size: 10 * 60,
+            gc_interval_ms: 10 * 60 * 1_000,
+            buffer_size: 60,
         }
     }
 }
