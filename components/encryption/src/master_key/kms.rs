@@ -18,7 +18,7 @@ use tikv_util::{box_err, error};
 pub trait KmsProvider: Sync + Send + 'static + std::fmt::Debug {
     async fn generate_data_key(&self) -> Result<DataKeyPair>;
     async fn decrypt_data_key(&self, data_key: &EncryptedKey) -> Result<Vec<u8>>;
-    fn name(&self) -> &[u8];
+    fn name(&self) -> &str;
 }
 
 // EncryptedKey is a newtype used to mark data as an encrypted key
@@ -110,7 +110,7 @@ impl KmsBackend {
         // Set extra metadata for KmsBackend.
         content.metadata.insert(
             MetadataKey::KmsVendor.as_str().to_owned(),
-            self.kms_provider.name().to_vec(),
+            self.kms_provider.name().as_bytes().to_vec(),
         );
         content.metadata.insert(
             MetadataKey::KmsCiphertextKey.as_str().to_owned(),
@@ -125,7 +125,7 @@ impl KmsBackend {
     fn decrypt_content(&self, content: &EncryptedContent) -> Result<Vec<u8>> {
         let vendor_name = self.kms_provider.name();
         match content.metadata.get(MetadataKey::KmsVendor.as_str()) {
-            Some(val) if val.as_slice() == vendor_name => (),
+            Some(val) if val.as_slice() == vendor_name.as_bytes() => (),
             None => {
                 return Err(
                     // If vender is missing in metadata, it could be the encrypted content is invalid
@@ -194,7 +194,7 @@ impl Backend for KmsBackend {
 mod fake {
     use super::*;
 
-    const FAKE_VENDOR_NAME: &[u8] = b"FAKE";
+    const FAKE_VENDOR_NAME: &str = "FAKE";
     const FAKE_DATA_KEY_ENCRYPTED: &[u8] = b"encrypted                       ";
 
     #[derive(Debug)]
@@ -223,7 +223,7 @@ mod fake {
             Ok(vec![1u8, 32])
         }
 
-        fn name(&self) -> &[u8] {
+        fn name(&self) -> &str {
             FAKE_VENDOR_NAME
         }
     }

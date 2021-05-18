@@ -171,6 +171,7 @@ dependencies = [
  "async-trait",
  "bytes 0.5.3",
  "cloud",
+ "fail",
  "futures 0.3.8",
  "futures-util",
  "grpcio",
@@ -225,7 +226,8 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "error_code",
- "external_storage",
+ "external_storage_export",
+ "failure",
  "file_system",
  "futures 0.3.8",
  "futures-util",
@@ -602,13 +604,12 @@ dependencies = [
  "async-trait",
  "derive_more",
  "error_code",
+ "fail",
  "futures-io",
  "kvproto",
  "openssl",
  "protobuf",
  "rusoto_core",
- "slog",
- "slog-global",
  "thiserror",
  "tikv_util",
  "url",
@@ -1180,6 +1181,7 @@ dependencies = [
  "slog",
  "slog-global",
  "tempfile",
+ "test_util",
  "thiserror",
  "tikv_alloc",
  "tikv_util",
@@ -1331,35 +1333,72 @@ dependencies = [
 name = "external_storage"
 version = "0.0.1"
 dependencies = [
+ "anyhow",
  "bytes 0.5.3",
+ "fail",
+ "ffi-support",
+ "file_system",
  "futures 0.3.8",
  "futures-executor",
  "futures-io",
  "futures-util",
  "grpcio",
- "http",
- "hyper",
- "hyper-tls",
  "kvproto",
  "lazy_static",
+ "libloading",
  "matches",
  "prometheus",
+ "protobuf",
  "rand 0.7.3",
  "rusoto_core",
- "rusoto_credential",
- "rusoto_mock",
- "rusoto_s3",
- "rusoto_util",
  "rust-ini",
  "slog",
  "slog-global",
  "structopt",
- "tame-gcs",
  "tame-oauth",
  "tempfile",
  "tikv_alloc",
  "tikv_util",
  "tokio",
+ "tokio-util 0.3.1",
+ "url",
+]
+
+[[package]]
+name = "external_storage_export"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "aws",
+ "cloud",
+ "encryption",
+ "external_storage",
+ "ffi-support",
+ "file_system",
+ "futures 0.3.8",
+ "futures-executor",
+ "futures-io",
+ "futures-util",
+ "gcp",
+ "grpcio",
+ "kvproto",
+ "lazy_static",
+ "libc 0.2.86",
+ "libloading",
+ "matches",
+ "nix 0.11.1",
+ "once_cell",
+ "protobuf",
+ "rust-ini",
+ "signal",
+ "slog",
+ "slog-global",
+ "slog-term",
+ "structopt",
+ "tempfile",
+ "tikv_util",
+ "tokio",
+ "tokio-util 0.3.1",
  "url",
 ]
 
@@ -1375,10 +1414,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "failure"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d32e9bd16cc02eae7db7ef620b392808b89f6a5e16bb3497d159c6b92a0f4f86"
+dependencies = [
+ "backtrace",
+ "failure_derive",
+]
+
+[[package]]
+name = "failure_derive"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa4da3c766cd7a0db8242e326e9e4e081edd567072893ed320008189715366a4"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+ "synstructure",
+]
+
+[[package]]
 name = "farmhash"
 version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f35ce9c8fb9891c75ceadbc330752951a4e369b50af10775955aeb9af3eee34b"
+
+[[package]]
+name = "ffi-support"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f85d4d1be103c0b2d86968f0b0690dc09ac0ba205b90adb0389b552869e5000e"
+dependencies = [
+ "lazy_static",
+ "log",
+]
 
 [[package]]
 name = "file_system"
@@ -1411,7 +1482,7 @@ checksum = "1d34cfa13a63ae058bfa601fe9e313bbdb3746427c1459185464ce0fcf62e1e8"
 dependencies = [
  "cfg-if 1.0.0",
  "libc 0.2.86",
- "redox_syscall 0.2.5",
+ "redox_syscall 0.2.6",
  "winapi 0.3.8",
 ]
 
@@ -1672,6 +1743,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "gcp"
+version = "0.0.1"
+dependencies = [
+ "cloud",
+ "futures-util",
+ "http",
+ "hyper",
+ "hyper-tls",
+ "kvproto",
+ "matches",
+ "slog",
+ "slog-global",
+ "tame-gcs",
+ "tame-oauth",
+ "tikv_util",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1796,7 +1887,7 @@ dependencies = [
  "log",
  "slab",
  "tokio",
- "tokio-util",
+ "tokio-util 0.2.0",
 ]
 
 [[package]]
@@ -2125,7 +2216,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#8f2b3a06beef20b178cf653baf520ef4a1476626"
+source = "git+https://github.com/pingcap/kvproto.git?rev=511a3225c29f9272af83d28efed92eba835cd34f#511a3225c29f9272af83d28efed92eba835cd34f"
 dependencies = [
  "futures 0.3.8",
  "grpcio",
@@ -2650,9 +2741,9 @@ dependencies = [
 
 [[package]]
 name = "notify"
-version = "4.0.15"
+version = "4.0.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80ae4a7688d1fab81c5bf19c64fc8db920be8d519ce6336ed4e7efe024724dbd"
+checksum = "2599080e87c9bd051ddb11b10074f4da7b1223298df65d4c2ec5bcf309af1533"
 dependencies = [
  "bitflags",
  "filetime",
@@ -2771,9 +2862,9 @@ dependencies = [
 
 [[package]]
 name = "once_cell"
-version = "1.3.1"
+version = "1.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1c601810575c99596d4afc46f78a678c80105117c379eb3650cf99b8a21ce5b"
+checksum = "af8b08b04175473088b46763e51ee54da5f9a164bc162f615b91bc179dbf15a3"
 
 [[package]]
 name = "oorandom"
@@ -3690,9 +3781,9 @@ checksum = "2439c63f3f6139d1b57529d16bc3b8bb855230c8efcc5d3a896c8bea7c3b1e84"
 
 [[package]]
 name = "redox_syscall"
-version = "0.2.5"
+version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94341e4e44e24f6b591b59e47a8a027df12e008d73fd5672dbea9cc22f4507d9"
+checksum = "8270314b5ccceb518e7e578952f0b72b88222d02e8f77f5ecf7abbb673539041"
 dependencies = [
  "bitflags",
 ]
@@ -3987,16 +4078,6 @@ dependencies = [
  "serde_urlencoded",
  "tempfile",
  "xml-rs",
-]
-
-[[package]]
-name = "rusoto_util"
-version = "0.0.1"
-dependencies = [
- "async-trait",
- "rusoto_core",
- "rusoto_credential",
- "rusoto_sts",
 ]
 
 [[package]]
@@ -4484,7 +4565,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "error_code",
- "external_storage",
+ "external_storage_export",
  "file_system",
  "futures 0.3.8",
  "futures-util",
@@ -4690,6 +4771,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "synstructure"
+version = "0.12.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b834f2d66f734cb897113e34aaff2f1ab4719ca946f9a7358dba8f8064148701"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+ "unicode-xid",
+]
+
+[[package]]
 name = "sysinfo"
 version = "0.16.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4807,7 +4900,7 @@ dependencies = [
  "concurrency_manager",
  "crc64fast",
  "engine_traits",
- "external_storage",
+ "external_storage_export",
  "file_system",
  "futures 0.3.8",
  "futures-executor",
@@ -4959,7 +5052,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "error_code",
- "external_storage",
+ "external_storage_export",
  "fail",
  "file_system",
  "futures 0.3.8",
@@ -5674,6 +5767,21 @@ checksum = "571da51182ec208780505a32528fc5512a8fe1443ab960b3f2f3ef093cd16930"
 dependencies = [
  "bytes 0.5.3",
  "futures-core",
+ "futures-sink",
+ "log",
+ "pin-project-lite 0.1.4",
+ "tokio",
+]
+
+[[package]]
+name = "tokio-util"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be8242891f2b6cbef26a2d7e8605133c2c554cd35b3e4948ea892d6d68436499"
+dependencies = [
+ "bytes 0.5.3",
+ "futures-core",
+ "futures-io",
  "futures-sink",
  "log",
  "pin-project-lite 0.1.4",
