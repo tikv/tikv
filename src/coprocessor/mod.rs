@@ -33,7 +33,6 @@ mod tracker;
 pub use self::endpoint::Endpoint;
 pub use self::error::{Error, Result};
 pub use checksum::checksum_crc64_xor;
-use tidb_query_common::execute_stats::ExecSummary;
 
 use crate::storage::mvcc::TimeStamp;
 use crate::storage::Statistics;
@@ -67,10 +66,6 @@ pub trait RequestHandler: Send {
 
     /// Collects scan statistics generated in this request handler so far.
     fn collect_scan_statistics(&mut self, _dest: &mut Statistics) {
-        // Do nothing by default
-    }
-
-    fn collect_scan_stats(&mut self, _dest: &mut ExecSummary) {
         // Do nothing by default
     }
 

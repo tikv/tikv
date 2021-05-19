@@ -67,7 +67,6 @@ pub struct Tracker {
     total_perf_stats: PerfStatisticsDelta, // Accumulated perf statistics
     slow_log_threshold: Duration,
 
-    read_used_time: u64,
     // Request info, used to print slow log.
     pub req_ctx: ReqContext,
 }
@@ -91,7 +90,6 @@ impl Tracker {
             total_suspend_time: Duration::default(),
             total_process_time: Duration::default(),
             total_storage_stats: Statistics::default(),
-            read_used_time: u64::default(),
             total_perf_stats: PerfStatisticsDelta::default(),
             slow_log_threshold,
             req_ctx,
@@ -165,10 +163,6 @@ impl Tracker {
         self.total_storage_stats.add(&storage_stats);
     }
 
-    pub fn collect_scan_stats(&mut self, exec_summary: ExecSummary) {
-        self.read_used_time = exec_summary.time_processed_ns as u64;
-    }
-
     /// Get current item's ExecDetail according to previous collected metrics.
     /// TiDB asks for ExecDetail to be printed in its log.
     /// WARN: TRY BEST NOT TO USE THIS FUNCTION.
@@ -198,7 +192,7 @@ impl Tracker {
         let mut td = kvrpcpb::TimeDetail::default();
         td.set_process_wall_time_ms(time::duration_to_ms(measure) as i64);
         td.set_wait_wall_time_ms(time::duration_to_ms(self.wait_time) as i64);
-        td.set_kv_read_wall_time_ms(self.read_used_time as i64);
+        td.set_kv_read_wall_time_ms(self.total_storage_stats.wall_time.as_millis() as i64);
         exec_details.set_time_detail(td.clone());
 
         let detail = self.total_storage_stats.scan_detail();

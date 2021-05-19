@@ -20,7 +20,7 @@ use tikv::storage::{self, test_util::*, *};
 use tikv_util::future::paired_future_callback;
 use tikv_util::HandyRwLock;
 use txn_types::Key;
-use txn_types::{Mutation, TimeStamp};
+use txn_types::{Mutation, OldValues, TimeStamp};
 
 #[test]
 fn test_scheduler_leader_change_twice() {
@@ -522,6 +522,7 @@ fn test_async_apply_prewrite_impl<E: Engine>(
                     None,
                     false,
                     0.into(),
+                    OldValues::default(),
                     ctx.clone(),
                 ),
                 Box::new(move |r| tx.send(r).unwrap()),
@@ -858,6 +859,7 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine>(
                     None,
                     false,
                     0.into(),
+                    OldValues::default(),
                     ctx.clone(),
                 ),
                 Box::new(move |r| tx.send(r).unwrap()),

@@ -1,5 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::time::Instant;
+
 use crate::storage::kv::{Cursor, CursorBuilder, ScanMode, Snapshot as EngineSnapshot, Statistics};
 use crate::storage::mvcc::{
     default_not_found_error,
@@ -52,6 +54,11 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
     #[inline(always)]
     pub fn get(&mut self, key: &Key, ts: TimeStamp) -> Result<Option<Value>> {
         self.reader.get(key, ts, Some(self.start_ts))
+    }
+
+    #[inline(always)]
+    pub fn get_write(&mut self, key: &Key, ts: TimeStamp) -> Result<Option<Write>> {
+        self.reader.get_write(key, ts, Some(self.start_ts))
     }
 
     #[inline(always)]
@@ -399,28 +406,34 @@ impl<S: EngineSnapshot> MvccReader<S> {
         mut start: Option<Key>,
         limit: usize,
     ) -> Result<(Vec<Key>, Option<Key>)> {
-        let mut cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
-            .fill_cache(self.fill_cache)
-            .scan_mode(self.get_scan_mode(false))
-            .build()?;
-        let mut keys = vec![];
-        loop {
-            let ok = match start {
-                Some(ref x) => cursor.near_seek(x, &mut self.statistics.write)?,
-                None => cursor.seek_to_first(&mut self.statistics.write),
-            };
-            if !ok {
-                return Ok((keys, None));
+        let f = || {
+            let mut cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
+                .fill_cache(self.fill_cache)
+                .scan_mode(self.get_scan_mode(false))
+                .build()?;
+            let mut keys = vec![];
+            loop {
+                let ok = match start {
+                    Some(ref x) => cursor.near_seek(x, &mut self.statistics.write)?,
+                    None => cursor.seek_to_first(&mut self.statistics.write),
+                };
+                if !ok {
+                    return Ok((keys, None));
+                }
+                if keys.len() >= limit {
+                    self.statistics.write.processed_keys += keys.len();
+                    return Ok((keys, start));
+                }
+                let key = Key::from_encoded(cursor.key(&mut self.statistics.write).to_vec())
+                    .truncate_ts()?;
+                start = Some(key.clone().append_ts(TimeStamp::zero()));
+                keys.push(key);
             }
-            if keys.len() >= limit {
-                self.statistics.write.processed_keys += keys.len();
-                return Ok((keys, start));
-            }
-            let key =
-                Key::from_encoded(cursor.key(&mut self.statistics.write).to_vec()).truncate_ts()?;
-            start = Some(key.clone().append_ts(TimeStamp::zero()));
-            keys.push(key);
-        }
+        };
+        let timer = Instant::now();
+        let result = f();
+        self.statistics.wall_time += timer.elapsed();
+        result
     }
 
     // Get all Value of the given key in CF_DEFAULT
@@ -464,9 +477,11 @@ impl<S: EngineSnapshot> MvccReader<S> {
             WriteType::Put => {
                 // For Put, there must be an old value either in its
                 // short value or in the default CF.
-                Ok(OldValue::Value {
-                    short_value: prev_write.short_value,
-                    start_ts: prev_write.start_ts,
+                Ok(match prev_write.short_value {
+                    Some(value) => OldValue::Value { value },
+                    None => OldValue::ValueTimeStamp {
+                        start_ts: prev_write.start_ts,
+                    },
                 })
             }
             WriteType::Delete => {
@@ -478,9 +493,11 @@ impl<S: EngineSnapshot> MvccReader<S> {
                 // previous valid write. Call `get_write` to get a valid
                 // previous write.
                 Ok(match self.get_write(key, start_ts, Some(start_ts))? {
-                    Some(write) => OldValue::Value {
-                        short_value: write.short_value,
-                        start_ts: write.start_ts,
+                    Some(write) => match write.short_value {
+                        Some(value) => OldValue::Value { value },
+                        None => OldValue::ValueTimeStamp {
+                            start_ts: write.start_ts,
+                        },
                     },
                     None => OldValue::None,
                 })
@@ -658,6 +675,7 @@ pub mod tests {
                 for_update_ts,
                 false,
                 TimeStamp::zero(),
+                true,
             )
             .unwrap();
             self.write(txn.into_modifies());
@@ -1661,8 +1679,7 @@ pub mod tests {
             },
             // prev_write is Rollback, and there exists a more previous valid write
             Case {
-                expected: OldValue::Value {
-                    short_value: None,
+                expected: OldValue::ValueTimeStamp {
                     start_ts: TimeStamp::new(4),
                 },
 
@@ -1679,8 +1696,7 @@ pub mod tests {
             },
             Case {
                 expected: OldValue::Value {
-                    short_value: Some(b"v".to_vec()),
-                    start_ts: TimeStamp::new(4),
+                    value: b"v".to_vec(),
                 },
 
                 written: vec![
@@ -1704,8 +1720,7 @@ pub mod tests {
             },
             // prev_write is Lock, and there exists a more previous valid write
             Case {
-                expected: OldValue::Value {
-                    short_value: None,
+                expected: OldValue::ValueTimeStamp {
                     start_ts: TimeStamp::new(3),
                 },
 
@@ -1730,8 +1745,7 @@ pub mod tests {
             },
             // prev_write is not Rollback or Lock, check_gc_fence_as_latest_version is true
             Case {
-                expected: OldValue::Value {
-                    short_value: None,
+                expected: OldValue::ValueTimeStamp {
                     start_ts: TimeStamp::new(7),
                 },
                 written: vec![(
