@@ -25,7 +25,7 @@ bitflags = "1.0.1"
 farmhash = "1.1.5"
 error_code = { path = "../error_code", default-features = false }
 codec = { path = "../codec", default-features = false }
-kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false, rev="511a3225c29f9272af83d28efed92eba835cd34f" }
 slog = "2.3"
 thiserror = "1.0"
 tikv_alloc = { path = "../tikv_alloc" }

@@ -23,7 +23,7 @@ arg_enum! {
 }
 
 #[derive(StructOpt)]
-#[structopt(rename_all = "kebab-case", name = "scli", version = "0.1")]
+#[structopt(rename_all = "kebab-case", name = "ecli", version = "0.1")]
 /// An example using encryption crate to encrypt and decrypt file.
 pub struct Opt {
     /// encrypt or decrypt.

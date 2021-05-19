@@ -58,16 +58,20 @@ impl Resolver {
         self.read_progress.take();
     }
 
+    pub fn update_tracked_index(&mut self, index: u64) {
+        assert!(
+            self.tracked_index <= index,
+            "region {}, tracked_index: {}, incoming index: {}",
+            self.region_id,
+            self.tracked_index,
+            index
+        );
+        self.tracked_index = index;
+    }
+
     pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>, index: Option<u64>) {
         if let Some(index) = index {
-            assert!(
-                self.tracked_index <= index,
-                "region {}, tracked_index: {}, incoming index: {}",
-                self.region_id,
-                self.tracked_index,
-                index
-            );
-            self.tracked_index = index;
+            self.update_tracked_index(index);
         }
         debug!(
             "track lock {}@{}, region {}",
@@ -82,14 +86,7 @@ impl Resolver {
 
     pub fn untrack_lock(&mut self, key: &[u8], index: Option<u64>) {
         if let Some(index) = index {
-            assert!(
-                self.tracked_index <= index,
-                "region {}, tracked_index: {}, incoming index: {}",
-                self.region_id,
-                self.tracked_index,
-                index
-            );
-            self.tracked_index = index;
+            self.update_tracked_index(index);
         }
         let start_ts = if let Some(start_ts) = self.locks_by_key.remove(key) {
             start_ts

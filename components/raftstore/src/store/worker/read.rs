@@ -139,21 +139,21 @@ pub trait ReadExecutor<E: KvEngine> {
 /// A read only delegate of `Peer`.
 #[derive(Clone, Debug)]
 pub struct ReadDelegate {
-    region: Arc<metapb::Region>,
-    peer_id: u64,
-    term: u64,
-    applied_index_term: u64,
-    leader_lease: Option<RemoteLease>,
-    last_valid_ts: Timespec,
+    pub region: Arc<metapb::Region>,
+    pub peer_id: u64,
+    pub term: u64,
+    pub applied_index_term: u64,
+    pub leader_lease: Option<RemoteLease>,
+    pub last_valid_ts: Timespec,
 
-    tag: String,
+    pub tag: String,
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
-    max_ts_sync_status: Arc<AtomicU64>,
-    read_progress: Arc<RegionReadProgress>,
+    pub max_ts_sync_status: Arc<AtomicU64>,
+    pub read_progress: Arc<RegionReadProgress>,
 
     // `track_ver` used to keep the local `ReadDelegate` in `LocalReader`
     // up-to-date with the global `ReadDelegate` stored at `StoreMeta`
-    track_ver: TrackVer,
+    pub track_ver: TrackVer,
 }
 
 impl Drop for ReadDelegate {
@@ -164,7 +164,7 @@ impl Drop for ReadDelegate {
 }
 
 #[derive(Debug)]
-struct TrackVer {
+pub struct TrackVer {
     version: Arc<AtomicU64>,
     local_ver: u64,
     // source set to `true` means the `TrackVer` is created by `TrackVer::new` instead
@@ -175,7 +175,7 @@ struct TrackVer {
 }
 
 impl TrackVer {
-    fn new() -> TrackVer {
+    pub fn new() -> TrackVer {
         TrackVer {
             version: Arc::new(AtomicU64::from(0)),
             local_ver: 0,

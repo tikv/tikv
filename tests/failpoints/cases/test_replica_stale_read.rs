@@ -287,6 +287,61 @@ fn test_update_resoved_ts_before_apply_index() {
     fail::remove(on_step_read_index_msg);
 }
 
+// Testing that the new elected leader should initialize the `resolver` correctly
+#[test]
+fn test_new_leader_init_resolver() {
+    let mut cluster = new_server_cluster(0, 3);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+    cluster.sim.wl().start_resolved_ts_worker();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    let mut peer_client1 = PeerClient::new(&cluster, 1, new_peer(1, 1));
+    let mut peer_client2 = PeerClient::new(&cluster, 1, new_peer(2, 2));
+    peer_client1.ctx.set_stale_read(true);
+    peer_client2.ctx.set_stale_read(true);
+
+    // There should be no read index message while handling stale read request
+    let on_step_read_index_msg = "on_step_read_index_msg";
+    fail::cfg(on_step_read_index_msg, "panic").unwrap();
+
+    // Write `(key1, value1)`
+    let commit_ts1 = peer_client1.must_kv_write(
+        &pd_client,
+        vec![new_mutation(Op::Put, &b"key1"[..], &b"value1"[..])],
+        b"key1".to_vec(),
+    );
+
+    // There are no lock in the region, the `safe_ts` should keep updating by the new leader,
+    // so we can read `key1` with the newest ts
+    cluster.must_transfer_leader(1, new_peer(2, 2));
+    peer_client1.must_kv_read_equal(
+        b"key1".to_vec(),
+        b"value1".to_vec(),
+        block_on(pd_client.get_tso()).unwrap().into_inner(),
+    );
+
+    // Prewrite on `key2` but not commit yet
+    peer_client2.must_kv_prewrite(
+        vec![new_mutation(Op::Put, &b"key2"[..], &b"value1"[..])],
+        b"key2".to_vec(),
+        block_on(pd_client.get_tso()).unwrap().into_inner(),
+    );
+
+    // There are locks in the region, the `safe_ts` can't be updated, so we can't read
+    // `key1` with the newest ts
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    let resp = peer_client2.kv_read(
+        b"key1".to_vec(),
+        block_on(pd_client.get_tso()).unwrap().into_inner(),
+    );
+    assert!(resp.get_region_error().has_data_is_not_ready());
+    // But we can read `key1` with `commit_ts1`
+    peer_client2.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), commit_ts1);
+}
+
 // Testing that after region merged the region's `safe_ts` should reset to
 // min(`target_safe_ts`, `source_safe_ts`)
 #[test]
