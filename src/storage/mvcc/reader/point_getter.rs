@@ -223,102 +223,93 @@ impl<S: Snapshot> PointGetter<S> {
     /// First, a correct version info in the Write CF will be sought. Then, value will be loaded
     /// from Default CF if necessary.
     fn load_data(&mut self, user_key: &Key) -> Result<Option<Value>> {
-        let mut f = || {
-            let mut use_near_seek = false;
-            let mut seek_key = user_key.clone();
+        let mut use_near_seek = false;
+        let mut seek_key = user_key.clone();
 
-            if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
-                seek_key = seek_key.append_ts(TimeStamp::max());
-                if !self
-                    .write_cursor
-                    .seek(&seek_key, &mut self.statistics.write)?
-                {
-                    return Ok(None);
-                }
-                seek_key = seek_key.truncate_ts()?;
-                use_near_seek = true;
+        if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
+            seek_key = seek_key.append_ts(TimeStamp::max());
+            if !self
+                .write_cursor
+                .seek(&seek_key, &mut self.statistics.write)?
+            {
+                return Ok(None);
+            }
+            seek_key = seek_key.truncate_ts()?;
+            use_near_seek = true;
 
+            let cursor_key = self.write_cursor.key(&mut self.statistics.write);
+            if !Key::is_user_key_eq(cursor_key, user_key.as_encoded().as_slice()) {
+                return Ok(None);
+            }
+            if Key::decode_ts_from(cursor_key)? > self.ts {
+                self.met_newer_ts_data = NewerTsCheckState::Met;
+            }
+        }
+        seek_key = seek_key.append_ts(self.ts);
+        let data_found = if use_near_seek {
+            if self.write_cursor.key(&mut self.statistics.write) >= seek_key.as_encoded().as_slice()
+            {
+                // we call near_seek with ScanMode::Mixed set, if the key() > seek_key,
+                // it will call prev() several times, whereas we just want to seek forward here
+                // so cmp them in advance
+                true
+            } else {
+                self.write_cursor
+                    .near_seek(&seek_key, &mut self.statistics.write)?
+            }
+        } else {
+            self.write_cursor
+                .seek(&seek_key, &mut self.statistics.write)?
+        };
+        if !data_found {
+            return Ok(None);
+        }
+
+        loop {
+            // We may seek to another key. In this case, it means we cannot find the specified key.
+            {
                 let cursor_key = self.write_cursor.key(&mut self.statistics.write);
                 if !Key::is_user_key_eq(cursor_key, user_key.as_encoded().as_slice()) {
                     return Ok(None);
                 }
-                if Key::decode_ts_from(cursor_key)? > self.ts {
-                    self.met_newer_ts_data = NewerTsCheckState::Met;
-                }
             }
-            seek_key = seek_key.append_ts(self.ts);
-            let data_found = if use_near_seek {
-                if self.write_cursor.key(&mut self.statistics.write)
-                    >= seek_key.as_encoded().as_slice()
-                {
-                    // we call near_seek with ScanMode::Mixed set, if the key() > seek_key,
-                    // it will call prev() several times, whereas we just want to seek forward here
-                    // so cmp them in advance
-                    true
-                } else {
-                    self.write_cursor
-                        .near_seek(&seek_key, &mut self.statistics.write)?
-                }
-            } else {
-                self.write_cursor
-                    .seek(&seek_key, &mut self.statistics.write)?
-            };
-            if !data_found {
+
+            let write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
+
+            if !write.check_gc_fence_as_latest_version(self.ts) {
                 return Ok(None);
             }
 
-            loop {
-                // We may seek to another key. In this case, it means we cannot find the specified key.
-                {
-                    let cursor_key = self.write_cursor.key(&mut self.statistics.write);
-                    if !Key::is_user_key_eq(cursor_key, user_key.as_encoded().as_slice()) {
-                        return Ok(None);
+            match write.write_type {
+                WriteType::Put => {
+                    self.statistics.write.processed_keys += 1;
+
+                    if self.omit_value {
+                        return Ok(Some(vec![]));
                     }
-                }
-
-                let write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
-
-                if !write.check_gc_fence_as_latest_version(self.ts) {
-                    return Ok(None);
-                }
-
-                match write.write_type {
-                    WriteType::Put => {
-                        self.statistics.write.processed_keys += 1;
-
-                        if self.omit_value {
-                            return Ok(Some(vec![]));
+                    match write.short_value {
+                        Some(value) => {
+                            // Value is carried in `write`.
+                            return Ok(Some(value.to_vec()));
                         }
-                        match write.short_value {
-                            Some(value) => {
-                                // Value is carried in `write`.
-                                return Ok(Some(value.to_vec()));
-                            }
-                            None => {
-                                let start_ts = write.start_ts;
-                                return Ok(Some(
-                                    self.load_data_from_default_cf(start_ts, user_key)?,
-                                ));
-                            }
+                        None => {
+                            let start_ts = write.start_ts;
+                            return Ok(Some(self.load_data_from_default_cf(start_ts, user_key)?));
                         }
                     }
-                    WriteType::Delete => {
-                        return Ok(None);
-                    }
-                    WriteType::Lock | WriteType::Rollback => {
-                        // Continue iterate next `write`.
-                    }
                 }
-
-                if !self.write_cursor.next(&mut self.statistics.write) {
+                WriteType::Delete => {
                     return Ok(None);
+                }
+                WriteType::Lock | WriteType::Rollback => {
+                    // Continue iterate next `write`.
                 }
             }
-        };
-        let timer = Instant::now();
-        let result = f();
-        self.statistics.wall_time += timer.elapsed();
-        result
+
+            if !self.write_cursor.next(&mut self.statistics.write) {
+                return Ok(None);
+            }
+        }
     }
 
     /// Load the value from default CF.

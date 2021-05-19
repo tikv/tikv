@@ -1,7 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::Instant;
-
 use crate::storage::kv::{Cursor, CursorBuilder, ScanMode, Snapshot as EngineSnapshot, Statistics};
 use crate::storage::mvcc::{
     default_not_found_error,
@@ -406,34 +404,28 @@ impl<S: EngineSnapshot> MvccReader<S> {
         mut start: Option<Key>,
         limit: usize,
     ) -> Result<(Vec<Key>, Option<Key>)> {
-        let f = || {
-            let mut cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
-                .fill_cache(self.fill_cache)
-                .scan_mode(self.get_scan_mode(false))
-                .build()?;
-            let mut keys = vec![];
-            loop {
-                let ok = match start {
-                    Some(ref x) => cursor.near_seek(x, &mut self.statistics.write)?,
-                    None => cursor.seek_to_first(&mut self.statistics.write),
-                };
-                if !ok {
-                    return Ok((keys, None));
-                }
-                if keys.len() >= limit {
-                    self.statistics.write.processed_keys += keys.len();
-                    return Ok((keys, start));
-                }
-                let key = Key::from_encoded(cursor.key(&mut self.statistics.write).to_vec())
-                    .truncate_ts()?;
-                start = Some(key.clone().append_ts(TimeStamp::zero()));
-                keys.push(key);
+        let mut cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
+            .fill_cache(self.fill_cache)
+            .scan_mode(self.get_scan_mode(false))
+            .build()?;
+        let mut keys = vec![];
+        loop {
+            let ok = match start {
+                Some(ref x) => cursor.near_seek(x, &mut self.statistics.write)?,
+                None => cursor.seek_to_first(&mut self.statistics.write),
+            };
+            if !ok {
+                return Ok((keys, None));
             }
-        };
-        let timer = Instant::now();
-        let result = f();
-        self.statistics.wall_time += timer.elapsed();
-        result
+            if keys.len() >= limit {
+                self.statistics.write.processed_keys += keys.len();
+                return Ok((keys, start));
+            }
+            let key =
+                Key::from_encoded(cursor.key(&mut self.statistics.write).to_vec()).truncate_ts()?;
+            start = Some(key.clone().append_ts(TimeStamp::zero()));
+            keys.push(key);
+        }
     }
 
     // Get all Value of the given key in CF_DEFAULT
