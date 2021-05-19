@@ -1,5 +1,21 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! This module provides some utilities to define the tree hierarchy to trace memory.
+//!
+//! A memory trace is a tree that records how much memory its children and itself
+//! uses, It doesn't need to match any function stacktrace, instead it should
+//! have logically meaningful layout.
+//!
+//! For example, memory usage should be divided into several components under the
+//! root scope: TiDB EndPoint, Transaction, Raft, gRPC etc. TiDB EndPoint can divide
+//! its children by queries, while Raft can divide memory by store and apply. Name
+//! are defined as number for better performance. In practice, it can be mapped to
+//! enumerates instead.
+//!
+//! To define a memory trace tree, we can use the `mem_trace` macro. The `mem_trace`
+//! macro constructs every node as a `MemoryTraceNode` which implements `MemoryTrace` trait.
+//! We can also define a specified tree node by implementing `MemoryTrace` trait.
+
 use std::num::NonZeroU64;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
@@ -160,16 +176,16 @@ pub struct MemoryTraceSnapshot {
     pub children: Vec<MemoryTraceSnapshot>,
 }
 
-// Define the hierarchy of memory usage for a module.
-// For example there is a module:
-//   root
-//     - mid1
-//       - leaf1
-//       - leaf2
-//     - mid2
-//       - leaf3
-// Its defination could be:
-//   mem_trace!(root, (mid1, [leaf1, leaf2]), (mid2, [leaf3]))
+/// Define the tree hierarchy of memory usage for a module.
+/// For example there is a module:
+///   root
+///     - mid1
+///       - leaf1
+///       - leaf2
+///     - mid2
+///       - leaf3
+/// Its defination could be:
+///   mem_trace!(root, (mid1, [leaf1, leaf2]), (mid2, [leaf3]))
 #[macro_export]
 macro_rules! mem_trace {
     ($name: ident) => {
