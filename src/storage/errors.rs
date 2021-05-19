@@ -9,6 +9,7 @@ use kvproto::{errorpb, kvrpcpb};
 use thiserror::Error;
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
+use tikv_util::deadline::DeadlineError;
 use txn_types::{KvPair, TimeStamp};
 
 use crate::storage::{
@@ -53,6 +54,12 @@ pub enum ErrorInner {
 
     #[error("deadline exceeded")]
     DeadlineExceeded,
+}
+
+impl From<DeadlineError> for ErrorInner {
+    fn from(_: DeadlineError) -> Self {
+        ErrorInner::DeadlineExceeded
+    }
 }
 
 /// Errors for storage module. Wrapper type of `ErrorInner`.

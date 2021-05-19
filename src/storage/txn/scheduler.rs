@@ -30,7 +30,7 @@ use std::u64;
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use kvproto::kvrpcpb::{CommandPri, ExtraOp};
-use tikv_util::{callback::must_call, time::Instant};
+use tikv_util::{callback::must_call, deadline::Deadline, time::Instant};
 use txn_types::TimeStamp;
 
 use crate::storage::kv::{
@@ -59,20 +59,33 @@ use crate::storage::{
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
 
+// The default limit is set to be very large. Then, requests without `max_exectuion_duration`
+// will not be aborted unexpectedly.
+const DEFAULT_EXECUTION_DURATION_LIMIT: Duration = Duration::from_secs(24 * 60 * 60);
+
 /// Task is a running command.
 pub(super) struct Task {
     pub(super) cid: u64,
     pub(super) cmd: Command,
     pub(super) extra_op: ExtraOp,
+    pub(super) deadline: Deadline,
 }
 
 impl Task {
     /// Creates a task for a running command.
     pub(super) fn new(cid: u64, cmd: Command) -> Task {
+        let max_execution_duration_ms = cmd.ctx().max_execution_duration_ms;
+        let execution_duration_limit = if max_execution_duration_ms == 0 {
+            DEFAULT_EXECUTION_DURATION_LIMIT
+        } else {
+            Duration::from_millis(max_execution_duration_ms)
+        };
+        let deadline = Deadline::from_now(execution_duration_limit);
         Task {
             cid,
             cmd,
             extra_op: ExtraOp::Noop,
+            deadline,
         }
     }
 }
@@ -103,7 +116,7 @@ struct TaskContext {
     // latch_timer: Option<Instant>,
     latch_timer: Instant,
     // Total duration of a command.
-    cmd_timer: CmdTimer,
+    _cmd_timer: CmdTimer,
 }
 
 impl TaskContext {
@@ -128,7 +141,7 @@ impl TaskContext {
             write_bytes,
             tag,
             latch_timer: Instant::now_coarse(),
-            cmd_timer: CmdTimer {
+            _cmd_timer: CmdTimer {
                 tag,
                 begin: Instant::now_coarse(),
             },
@@ -139,19 +152,6 @@ impl TaskContext {
         SCHED_LATCH_HISTOGRAM_VEC
             .get(self.tag)
             .observe(self.latch_timer.elapsed_secs());
-    }
-
-    fn is_expired(&self) -> bool {
-        match self
-            .task
-            .as_ref()
-            .map(|task| task.cmd.ctx().max_execution_duration_ms)
-        {
-            Some(max_execution_duration_ms) if max_execution_duration_ms > 0 => {
-                self.cmd_timer.begin.elapsed() > Duration::from_millis(max_execution_duration_ms)
-            }
-            _ => false,
-        }
     }
 }
 
@@ -247,9 +247,9 @@ impl<L: LockManager> SchedulerInner<L> {
     fn acquire_lock(&self, cid: u64) -> Result<Option<Task>, StorageError> {
         let mut task_slot = self.get_task_slot(cid);
         let tctx = task_slot.get_mut(&cid).unwrap();
-        if tctx.is_expired() {
-            return Err(StorageErrorInner::DeadlineExceeded.into());
-        }
+        // Check deadline early during acquiring latches to avoid expired requests blocking
+        // other requests.
+        tctx.task.as_ref().unwrap().deadline.check()?;
         if self.latches.acquire(&mut tctx.lock, cid) {
             tctx.on_schedule();
             return Ok(tctx.task.take());
@@ -584,14 +584,21 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
     /// Delivers a command to a worker thread for processing.
     fn process_by_worker(self, snapshot: E::Snap, task: Task) {
-        let tag = task.cmd.tag();
+        if self.check_task_deadline(&task) {
+            return;
+        }
 
+        let tag = task.cmd.tag();
         self.get_sched_pool(task.cmd.priority())
             .clone()
             .pool
             .spawn(async move {
                 fail_point!("scheduler_async_snapshot_finish");
                 SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
+
+                if self.check_task_deadline(&task) {
+                    return;
+                }
 
                 let read_duration = Instant::now_coarse();
 
@@ -662,7 +669,16 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             async_apply_prewrite: self.inner.enable_async_apply_prewrite,
         };
 
-        match task.cmd.process_write(snapshot, context) {
+        let deadline = task.deadline;
+        let write_result = task
+            .cmd
+            .process_write(snapshot, context)
+            .map_err(StorageError::from);
+        match deadline
+            .check()
+            .map_err(StorageError::from)
+            .and_then(|_| write_result)
+        {
             // Initiates an async write operation on the storage engine, there'll be a `WriteFinished`
             // message when it finishes.
             Ok(WriteResult {
@@ -817,6 +833,17 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 debug!("write command failed at prewrite"; "cid" => cid, "err" => ?err);
                 scheduler.finish_with_err(cid, err);
             }
+        }
+    }
+
+    /// Returns `true` if the task has expired and needs to be dropped.
+    #[inline]
+    fn check_task_deadline(&self, task: &Task) -> bool {
+        if let Err(e) = task.deadline.check() {
+            self.finish_with_err(task.cid, e);
+            true
+        } else {
+            false
         }
     }
 }
