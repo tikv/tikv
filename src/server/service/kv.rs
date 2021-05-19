@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
-use tikv_util::time::{duration_to_sec, Instant};
+use tikv_util::time::{duration_to_ms, duration_to_sec, Instant};
 
 use super::batch::{BatcherBuilder, ReqBatcher};
 use crate::coprocessor::Endpoint;
@@ -1204,6 +1204,7 @@ fn future_get<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: GetRequest,
 ) -> impl Future<Output = ServerResult<GetResponse>> {
+    let start = Instant::now();
     let v = storage.get(
         req.take_context(),
         Key::from_raw(req.get_key()),
@@ -1211,6 +1212,7 @@ fn future_get<E: Engine, L: LockManager>(
     );
     async move {
         let v = v.await;
+        let used_time = duration_to_ms(start.elapsed());
         let mut resp = GetResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
@@ -1220,8 +1222,14 @@ fn future_get<E: Engine, L: LockManager>(
                     let exec_detail_v2 = resp.mut_exec_details_v2();
                     exec_detail_v2
                         .mut_time_detail()
-                        .set_kv_read_wall_time_ms(statistics.wall_time.as_millis() as i64);
+                        .set_kv_read_wall_time_ms(used_time as i64);
                     let scan_detail_v2 = exec_detail_v2.mut_scan_detail_v2();
+                    let read_bytes: usize = statistics
+                        .cf_stats()
+                        .iter()
+                        .map(|&stat| stat.flow_stats.read_bytes)
+                        .sum();
+                    scan_detail_v2.set_read_bytes(read_bytes as u64);
                     statistics.write_scan_detail(scan_detail_v2);
                     perf_statistics_delta.write_scan_detail(scan_detail_v2);
                     match val {
@@ -1281,10 +1289,12 @@ fn future_batch_get<E: Engine, L: LockManager>(
     mut req: BatchGetRequest,
 ) -> impl Future<Output = ServerResult<BatchGetResponse>> {
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
+    let start = Instant::now();
     let v = storage.batch_get(req.take_context(), keys, req.get_version().into());
 
     async move {
         let v = v.await;
+        let used_time = duration_to_ms(start.elapsed());
         let mut resp = BatchGetResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
@@ -1295,8 +1305,14 @@ fn future_batch_get<E: Engine, L: LockManager>(
                     let exec_detail_v2 = resp.mut_exec_details_v2();
                     exec_detail_v2
                         .mut_time_detail()
-                        .set_kv_read_wall_time_ms(statistics.wall_time.as_millis() as i64);
+                        .set_kv_read_wall_time_ms(used_time as i64);
                     let scan_detail_v2 = exec_detail_v2.mut_scan_detail_v2();
+                    let read_bytes: usize = statistics
+                        .cf_stats()
+                        .iter()
+                        .map(|&stat| stat.flow_stats.read_bytes)
+                        .sum();
+                    scan_detail_v2.set_read_bytes(read_bytes as u64);
                     statistics.write_scan_detail(scan_detail_v2);
                     perf_statistics_delta.write_scan_detail(scan_detail_v2);
                     resp.set_pairs(pairs.into());

@@ -1,7 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::RefCell;
-use std::time::Duration;
 
 use super::metrics::{GcKeysCF, GcKeysDetail};
 use engine_rocks::PerfContext;
@@ -177,7 +176,6 @@ pub struct Statistics {
     pub lock: CfStatistics,
     pub write: CfStatistics,
     pub data: CfStatistics,
-    pub wall_time: Duration,
 }
 
 impl Statistics {
@@ -201,7 +199,6 @@ impl Statistics {
         self.lock.add(&other.lock);
         self.write.add(&other.write);
         self.data.add(&other.data);
-        self.wall_time += other.wall_time;
     }
 
     pub fn cf_stats(&self) -> [&CfStatistics; 3] {
