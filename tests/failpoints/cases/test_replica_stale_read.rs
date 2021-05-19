@@ -286,3 +286,76 @@ fn test_update_resoved_ts_before_apply_index() {
 
     fail::remove(on_step_read_index_msg);
 }
+
+// Testing that after region merged the region's `safe_ts` should reset to
+// min(`target_safe_ts`, `source_safe_ts`)
+#[test]
+fn test_stale_read_while_region_merge() {
+    let mut cluster = new_server_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+    cluster.sim.wl().start_resolved_ts_worker();
+
+    // There should be no read index message while handling stale read request
+    let on_step_read_index_msg = "on_step_read_index_msg";
+    fail::cfg(on_step_read_index_msg, "panic").unwrap();
+
+    cluster.must_split(&cluster.get_region(&[]), b"key3");
+    let source = pd_client.get_region(b"key1").unwrap();
+    let target = pd_client.get_region(b"key5").unwrap();
+
+    cluster.must_transfer_leader(target.get_id(), new_peer(1, 1));
+    let target_leader = PeerClient::new(&cluster, target.get_id(), new_peer(1, 1));
+    // Write `(key5, value1)`
+    target_leader.must_kv_write(
+        &pd_client,
+        vec![new_mutation(Op::Put, &b"key5"[..], &b"value1"[..])],
+        b"key5".to_vec(),
+    );
+
+    let source_leader = cluster.leader_of_region(source.get_id()).unwrap();
+    let source_leader = PeerClient::new(&cluster, source.get_id(), source_leader);
+    // Prewrite on `key1` but not commit yet
+    let k1_prewrite_ts = block_on(pd_client.get_tso()).unwrap().into_inner();
+    source_leader.must_kv_prewrite(
+        vec![new_mutation(Op::Put, &b"key1"[..], &b"value1"[..])],
+        b"key1".to_vec(),
+        k1_prewrite_ts,
+    );
+
+    // Write `(key5, value2)`
+    let k5_commit_ts = target_leader.must_kv_write(
+        &pd_client,
+        vec![new_mutation(Op::Put, &b"key5"[..], &b"value2"[..])],
+        b"key5".to_vec(),
+    );
+
+    // Merge source region into target region, the lock on source region should also merge
+    // into the target region and cause the target region's `safe_ts` decrease
+    pd_client.must_merge(source.get_id(), target.get_id());
+
+    let mut follower_client2 = PeerClient::new(&cluster, target.get_id(), new_peer(2, 2));
+    follower_client2.ctx.set_stale_read(true);
+    // Can't read `key5` with `k5_commit_ts` because `k1_prewrite_ts` is smaller than `k5_commit_ts`
+    let resp = follower_client2.kv_read(b"key5".to_vec(), k5_commit_ts);
+    assert!(resp.get_region_error().has_data_is_not_ready());
+    // We can read `(key5, value1)` with `k1_prewrite_ts`
+    follower_client2.must_kv_read_equal(b"key5".to_vec(), b"value1".to_vec(), k1_prewrite_ts);
+
+    let target_leader = PeerClient::new(&cluster, target.get_id(), new_peer(1, 1));
+    // Commit on `key1`
+    target_leader.must_kv_commit(
+        vec![b"key1".to_vec()],
+        k1_prewrite_ts,
+        block_on(pd_client.get_tso()).unwrap().into_inner(),
+    );
+    // We can read `(key5, value2)` now
+    follower_client2.must_kv_read_equal(
+        b"key5".to_vec(),
+        b"value2".to_vec(),
+        block_on(pd_client.get_tso()).unwrap().into_inner(),
+    );
+}
