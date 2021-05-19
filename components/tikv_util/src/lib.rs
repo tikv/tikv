@@ -456,8 +456,6 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
             "location" => loc.unwrap_or_else(|| "<unknown>".to_owned()),
             "backtrace" => format_args!("{:?}", bt),
         );
-        // This may be needed to allow the above log statements to flush
-        thread::sleep(Duration::from_millis(2));
 
         // There might be remaining logs in the async logger.
         // To collect remaining logs and also collect future logs, replace the old one with a
@@ -487,6 +485,7 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
                 // static variables of RocksDB, which may cause other threads encounter
                 // pure virtual method call. So calling libc::_exit() instead to skip the
                 // cleanup process.
+                libc::fflush(std::ptr::null_mut());
                 libc::_exit(1);
             }
         }
