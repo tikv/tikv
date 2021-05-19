@@ -97,7 +97,7 @@ tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util", default-features = false }
 collections = { path = "../collections" }
 txn_types = { path = "../txn_types", default-features = false }
-yatp = { git = "https://github.com/koushiro/yatp.git", branch = "update" }
+yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [dev-dependencies]
 rand = "0.8"

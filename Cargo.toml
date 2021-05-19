@@ -218,7 +218,7 @@ url = "2"
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 vlog = "0.1.4"
 walkdir = "2"
-yatp = { git = "https://github.com/koushiro/yatp.git", branch = "update" }
+yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [dev-dependencies]
 panic_hook = { path = "components/panic_hook" }
