@@ -2253,21 +2253,21 @@ fn from_hex(key: &str) -> Result<Vec<u8>, hex::FromHexError> {
 }
 
 fn convert_gbmb(mut bytes: u64) -> String {
-    const GB: u64 = 1024 * 1024 * 1024;
-    const MB: u64 = 1024 * 1024;
-    if bytes < MB {
+    const GIB: u64 = 1024 * 1024 * 1024;
+    const MIB: u64 = 1024 * 1024;
+    if bytes < MIB {
         return format!("{} B", bytes);
     }
-    let mb = if bytes % GB == 0 {
+    let mb = if bytes % GIB == 0 {
         String::from("")
     } else {
-        format!("{:.3} MB", (bytes % GB) as f64 / MB as f64)
+        format!("{:.3} MiB", (bytes % GIB) as f64 / MIB as f64)
     };
-    bytes /= GB;
+    bytes /= GIB;
     let gb = if bytes == 0 {
         String::from("")
     } else {
-        format!("{} GB ", bytes)
+        format!("{} GiB ", bytes)
     };
     format!("{}{}", gb, mb)
 }
