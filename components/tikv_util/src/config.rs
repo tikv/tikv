@@ -189,7 +189,7 @@ impl Serialize for ReadableSize {
 impl FromStr for ReadableSize {
     type Err = String;
 
-    // This method parses value in binary base unit.
+    // This method parses value in binary unit.
     fn from_str(s: &str) -> Result<ReadableSize, String> {
         let size_str = s.trim();
         if size_str.is_empty() {
@@ -296,16 +296,16 @@ impl From<ConfigValue> for ReadableRate {
 }
 
 impl ReadableRate {
-    pub const fn kbps(count: u64) -> ReadableRate {
-        ReadableRate(count * KB)
+    pub const fn kbps(v: u64) -> ReadableRate {
+        ReadableRate(v * KB)
     }
 
-    pub const fn mbps(count: u64) -> ReadableRate {
-        ReadableRate(count * MB)
+    pub const fn mbps(v: u64) -> ReadableRate {
+        ReadableRate(v * MB)
     }
 
-    pub const fn gbps(count: u64) -> ReadableRate {
-        ReadableRate(count * GB)
+    pub const fn gbps(v: u64) -> ReadableRate {
+        ReadableRate(v * GB)
     }
 
     pub const fn as_mbps(self) -> u64 {
@@ -342,22 +342,22 @@ impl Serialize for ReadableRate {
     where
         S: Serializer,
     {
-        let size = self.0;
+        let rate = self.0;
         let mut buffer = String::new();
-        if size == 0 {
-            write!(buffer, "{}KBps", size).unwrap();
-        } else if size % PB == 0 {
-            write!(buffer, "{}PBps", size / PB).unwrap();
-        } else if size % TB == 0 {
-            write!(buffer, "{}TBps", size / TB).unwrap();
-        } else if size % GB as u64 == 0 {
-            write!(buffer, "{}GBps", size / GB).unwrap();
-        } else if size % MB as u64 == 0 {
-            write!(buffer, "{}MBps", size / MB).unwrap();
-        } else if size % KB as u64 == 0 {
-            write!(buffer, "{}KBps", size / KB).unwrap();
+        if rate == 0 {
+            write!(buffer, "{}KBps", rate).unwrap();
+        } else if rate % PB == 0 {
+            write!(buffer, "{}PBps", rate / PB).unwrap();
+        } else if rate % TB == 0 {
+            write!(buffer, "{}TBps", rate / TB).unwrap();
+        } else if rate % GB as u64 == 0 {
+            write!(buffer, "{}GBps", rate / GB).unwrap();
+        } else if rate % MB as u64 == 0 {
+            write!(buffer, "{}MBps", rate / MB).unwrap();
+        } else if rate % KB as u64 == 0 {
+            write!(buffer, "{}KBps", rate / KB).unwrap();
         } else {
-            return serializer.serialize_u64(size);
+            return serializer.serialize_u64(rate);
         }
         serializer.serialize_str(&buffer)
     }
@@ -366,7 +366,7 @@ impl Serialize for ReadableRate {
 impl FromStr for ReadableRate {
     type Err = String;
 
-    // This method parses value in binary base unit.
+    // This method parses value in decimal unit.
     fn from_str(s: &str) -> Result<ReadableRate, String> {
         let rate_str = s.trim();
         if rate_str.is_empty() {
@@ -385,7 +385,7 @@ impl FromStr for ReadableRate {
             .count();
 
         // unit: alphabetic characters
-        let (size, unit) = rate_str.split_at(rate_len);
+        let (rate, unit) = rate_str.split_at(rate_len);
 
         let unit = match unit.trim() {
             "KBps" => KB,
@@ -402,7 +402,7 @@ impl FromStr for ReadableRate {
             }
         };
 
-        match size.parse::<f64>() {
+        match rate.parse::<f64>() {
             Ok(n) => Ok(ReadableRate((n * unit as f64) as u64)),
             Err(_) => Err(format!("invalid rate string: {:?}", s)),
         }
@@ -414,42 +414,42 @@ impl<'de> Deserialize<'de> for ReadableRate {
     where
         D: Deserializer<'de>,
     {
-        struct SizeVisitor;
+        struct RateVisitor;
 
-        impl<'de> Visitor<'de> for SizeVisitor {
+        impl<'de> Visitor<'de> for RateVisitor {
             type Value = ReadableRate;
 
             fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter.write_str("valid rate")
             }
 
-            fn visit_i64<E>(self, size: i64) -> Result<ReadableRate, E>
+            fn visit_i64<E>(self, rate: i64) -> Result<ReadableRate, E>
             where
                 E: de::Error,
             {
-                if size >= 0 {
-                    self.visit_u64(size as u64)
+                if rate >= 0 {
+                    self.visit_u64(rate as u64)
                 } else {
-                    Err(E::invalid_value(Unexpected::Signed(size), &self))
+                    Err(E::invalid_value(Unexpected::Signed(rate), &self))
                 }
             }
 
-            fn visit_u64<E>(self, size: u64) -> Result<ReadableRate, E>
+            fn visit_u64<E>(self, rate: u64) -> Result<ReadableRate, E>
             where
                 E: de::Error,
             {
-                Ok(ReadableRate(size))
+                Ok(ReadableRate(rate))
             }
 
-            fn visit_str<E>(self, size_str: &str) -> Result<ReadableRate, E>
+            fn visit_str<E>(self, rate_str: &str) -> Result<ReadableRate, E>
             where
                 E: de::Error,
             {
-                size_str.parse().map_err(E::custom)
+                rate_str.parse().map_err(E::custom)
             }
         }
 
-        deserializer.deserialize_any(SizeVisitor)
+        deserializer.deserialize_any(RateVisitor)
     }
 }
 
