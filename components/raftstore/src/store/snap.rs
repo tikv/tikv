@@ -1,11 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-<<<<<<< HEAD
-use std::cmp::{Ordering as CmpOrdering, Reverse};
-=======
 use std::borrow::Cow;
 use std::cmp::{self, Ordering as CmpOrdering, Reverse};
->>>>>>> origin/master
 use std::fmt::{self, Display, Formatter};
 use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::{self, ErrorKind, Read, Write};

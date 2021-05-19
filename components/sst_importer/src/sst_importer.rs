@@ -9,10 +9,6 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use futures::executor::ThreadPool;
-<<<<<<< HEAD
-use futures_util::io::{AsyncRead, AsyncReadExt};
-=======
->>>>>>> origin/master
 use kvproto::backup::StorageBackend;
 #[cfg(feature = "prost-codec")]
 use kvproto::import_sstpb::pair::Op as PairOp;
@@ -159,54 +155,6 @@ impl SSTImporter {
     pub fn enter_normal_mode<E: KvEngine>(&self, db: E, mf: RocksDBMetricsFn) -> Result<bool> {
         self.switcher.enter_normal_mode(&db, mf)
     }
-<<<<<<< HEAD
-
-    pub fn enter_import_mode<E: KvEngine>(&self, db: E, mf: RocksDBMetricsFn) -> Result<bool> {
-        self.switcher.enter_import_mode(&db, mf)
-    }
-
-    pub fn get_mode(&self) -> SwitchMode {
-        self.switcher.get_mode()
-    }
-
-    async fn read_external_storage_into_file(
-        input: &mut (dyn AsyncRead + Unpin),
-        output: &mut dyn Write,
-        speed_limiter: &Limiter,
-        expected_length: u64,
-        min_read_speed: usize,
-    ) -> io::Result<()> {
-        let dur = Duration::from_secs((READ_BUF_SIZE / min_read_speed) as u64);
-
-        // do the I/O copy from external_storage to the local file.
-        let mut buffer = vec![0u8; READ_BUF_SIZE];
-        let mut file_length = 0;
-
-        loop {
-            // separate the speed limiting from actual reading so it won't
-            // affect the timeout calculation.
-            let bytes_read = timeout(dur, input.read(&mut buffer))
-                .await
-                .map_err(|_| io::ErrorKind::TimedOut)??;
-            if bytes_read == 0 {
-                break;
-            }
-            speed_limiter.consume(bytes_read).await;
-            output.write_all(&buffer[..bytes_read])?;
-            file_length += bytes_read as u64;
-        }
-
-        if expected_length != 0 && expected_length != file_length {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "downloaded size {}, expected {}",
-                    file_length, expected_length
-                ),
-            ));
-        }
-=======
->>>>>>> origin/master
 
     pub fn enter_import_mode<E: KvEngine>(&self, db: E, mf: RocksDBMetricsFn) -> Result<bool> {
         self.switcher.enter_import_mode(&db, mf)
@@ -231,35 +179,6 @@ impl SSTImporter {
             let start_read = Instant::now();
 
             // prepare to download the file from the external_storage
-<<<<<<< HEAD
-            let ext_storage = create_storage(backend)?;
-            let mut ext_reader = ext_storage.read(name);
-
-            let mut plain_file;
-            let mut encrypted_file;
-            let file_writer: &mut dyn Write = if let Some(key_manager) = &self.key_manager {
-                encrypted_file = key_manager.create_file(&path.temp)?;
-                &mut encrypted_file
-            } else {
-                plain_file = File::create(&path.temp)?;
-                &mut plain_file
-            };
-
-            // the minimum speed of reading data, in bytes/second.
-            // if reading speed is slower than this rate, we will stop with
-            // a "TimedOut" error.
-            // (at 8 KB/s for a 2 MB buffer, this means we timeout after 4m16s.)
-            const MINIMUM_READ_SPEED: usize = 8192;
-
-            block_on_external_io(Self::read_external_storage_into_file(
-                &mut ext_reader,
-                file_writer,
-                &speed_limiter,
-                meta.length,
-                MINIMUM_READ_SPEED,
-            ))
-            .map_err(|e| Error::CannotReadExternalStorage {
-=======
             let ext_storage = external_storage_export::create_storage(backend)?;
             let url = ext_storage.url()?.to_string();
 
@@ -277,7 +196,6 @@ impl SSTImporter {
                 ext_storage.restore(name, path.temp.to_owned(), meta.length, &speed_limiter);
             IMPORTER_DOWNLOAD_BYTES.observe(meta.length as _);
             result.map_err(|e| Error::CannotReadExternalStorage {
->>>>>>> origin/master
                 url: url.to_string(),
                 name: name.to_owned(),
                 local_path: path.temp.to_owned(),

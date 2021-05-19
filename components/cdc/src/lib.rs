@@ -9,10 +9,7 @@ mod endpoint;
 mod errors;
 pub mod metrics;
 mod observer;
-<<<<<<< HEAD
-=======
 mod old_value;
->>>>>>> origin/master
 mod service;
 
 pub use endpoint::{CdcTxnExtraScheduler, Endpoint, Task, Validate};

@@ -38,11 +38,6 @@ use tikv::storage::kv::Snapshot;
 use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
 use tikv::storage::txn::TxnEntry;
 use tikv::storage::txn::TxnEntryScanner;
-<<<<<<< HEAD
-use tikv::storage::Statistics;
-use tikv_util::lru::LruCache;
-=======
->>>>>>> origin/master
 use tikv_util::time::{Instant, Limiter};
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
@@ -111,29 +106,6 @@ impl fmt::Debug for Deregister {
 }
 
 type InitCallback = Box<dyn FnOnce() + Send>;
-<<<<<<< HEAD
-pub(crate) type OldValueCallback =
-    Box<dyn Fn(Key, TimeStamp, &mut OldValueCache) -> (Option<Vec<u8>>, Option<Statistics>) + Send>;
-
-pub struct OldValueCache {
-    pub cache: LruCache<Key, (OldValue, Option<MutationType>)>,
-    pub access_count: usize,
-    pub miss_count: usize,
-    pub miss_none_count: usize,
-}
-
-impl OldValueCache {
-    pub fn new(size: usize) -> OldValueCache {
-        OldValueCache {
-            cache: LruCache::with_capacity(size),
-            access_count: 0,
-            miss_count: 0,
-            miss_none_count: 0,
-        }
-    }
-}
-=======
->>>>>>> origin/master
 
 pub enum Validate {
     Region(u64, Box<dyn FnOnce(Option<&Delegate>) + Send>),
@@ -537,11 +509,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 reader.txn_extra_op.store(txn_extra_op);
             }
         }
-<<<<<<< HEAD
-        let observe_id = delegate.id;
-=======
         let observe_id = delegate.handle.id;
->>>>>>> origin/master
         let mut init = Initializer {
             sched,
             region_id,
@@ -729,11 +697,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             Some(downstream_id) => downstream_id,
             // No such region registers in the connection.
             None => {
-<<<<<<< HEAD
-                info!("cdc send resolved ts failed, no region downstream id found";
-=======
                 debug!("cdc send resolved ts failed, no region downstream id found";
->>>>>>> origin/master
                     "region_id" => region_id);
                 return;
             }

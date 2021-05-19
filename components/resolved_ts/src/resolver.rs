@@ -1,11 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use collections::{HashMap, HashSet};
-<<<<<<< HEAD
-use raftstore::store::util::RegionReadProgress;
-=======
 use raftstore::store::RegionReadProgress;
->>>>>>> origin/master
 use std::cmp;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -21,15 +17,10 @@ pub struct Resolver {
     lock_ts_heap: BTreeMap<TimeStamp, HashSet<Arc<[u8]>>>,
     // The timestamps that guarantees no more commit will happen before.
     resolved_ts: TimeStamp,
-<<<<<<< HEAD
-    // The region read progress is used to utilize `resolved_ts` to serve stale read request
-    read_progress: Arc<RegionReadProgress>,
-=======
     // The highest index `Resolver` had been tracked
     tracked_index: u64,
     // The region read progress used to utilize `resolved_ts` to serve stale read request
     read_progress: Option<Arc<RegionReadProgress>>,
->>>>>>> origin/master
     // The timestamps that advance the resolved_ts when there is no more write.
     min_ts: TimeStamp,
 }
@@ -39,13 +30,6 @@ impl Resolver {
         Resolver::with_read_progress(region_id, None)
     }
 
-<<<<<<< HEAD
-    pub fn from_shared(region_id: u64, read_progress: Arc<RegionReadProgress>) -> Resolver {
-        Resolver {
-            region_id,
-            resolved_ts: TimeStamp::zero(),
-            read_progress,
-=======
     pub fn with_read_progress(
         region_id: u64,
         read_progress: Option<Arc<RegionReadProgress>>,
@@ -53,7 +37,6 @@ impl Resolver {
         Resolver {
             region_id,
             resolved_ts: TimeStamp::zero(),
->>>>>>> origin/master
             locks_by_key: HashMap::default(),
             lock_ts_heap: BTreeMap::new(),
             read_progress,
@@ -138,18 +121,10 @@ impl Resolver {
         // Resolved ts never decrease.
         self.resolved_ts = cmp::max(self.resolved_ts, new_resolved_ts);
 
-<<<<<<< HEAD
-        // Update region read progress
-        // TODO: should use `RegionReadProgress::update_safe_ts` to avoid direct
-        // write to `safe_ts`
-        self.read_progress
-            .fetch_max_safe_ts(self.resolved_ts.into_inner());
-=======
         // Publish an `(apply index, safe ts)` item into the region read progress
         if let Some(rrp) = &self.read_progress {
             rrp.update_safe_ts(self.tracked_index, self.resolved_ts.into_inner());
         }
->>>>>>> origin/master
 
         let new_min_ts = if has_lock {
             // If there are some lock, the min_ts must be smaller than

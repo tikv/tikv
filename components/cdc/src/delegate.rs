@@ -1,11 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::mem;
-<<<<<<< HEAD
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-=======
 use std::sync::atomic::{AtomicUsize, Ordering};
->>>>>>> origin/master
 use std::sync::Arc;
 
 use collections::HashMap;
@@ -39,13 +35,8 @@ use tikv_util::{debug, info, warn};
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
 
 use crate::channel::{SendError, Sink};
-<<<<<<< HEAD
-use crate::endpoint::{OldValueCache, OldValueCallback};
-use crate::metrics::*;
-=======
 use crate::metrics::*;
 use crate::old_value::{OldValueCache, OldValueCallback};
->>>>>>> origin/master
 use crate::service::{CdcEvent, ConnID};
 use crate::{Error, Result};
 

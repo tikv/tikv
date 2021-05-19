@@ -1,10 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-<<<<<<< HEAD
-=======
 use std::future::Future;
->>>>>>> origin/master
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use collections::HashSet;
@@ -352,22 +348,7 @@ where
         let timer = Instant::now_coarse();
 
         let mut resp = IngestResponse::default();
-<<<<<<< HEAD
-        let mut errorpb = errorpb::Error::default();
-        if self.importer.get_mode() == SwitchMode::Normal
-            && self
-                .engine
-                .ingest_maybe_slowdown_writes(CF_DEFAULT)
-                .expect("cf")
-        {
-            let err = "too many sst files are ingesting";
-            let mut server_is_busy_err = errorpb::ServerIsBusy::default();
-            server_is_busy_err.set_reason(err.to_string());
-            errorpb.set_message(err.to_string());
-            errorpb.set_server_is_busy(server_is_busy_err);
-=======
         if let Some(errorpb) = self.check_write_stall() {
->>>>>>> origin/master
             resp.set_error(errorpb);
             ctx.spawn(
                 sink.success(resp)
@@ -391,31 +372,12 @@ where
         let meta = req.take_sst();
         let f = self.ingest_files(req.take_context(), label, vec![meta.clone()]);
         let handle_task = async move {
-<<<<<<< HEAD
-            let m = meta.clone();
-            let res = async move {
-                let mut resp = IngestResponse::default();
-                if let Err(e) = router.send_command(cmd, Callback::Read(cb)) {
-                    resp.set_error(e.into());
-                    return Ok(resp);
-                }
-
-                // Make ingest command.
-                let mut ingest = Request::default();
-                ingest.set_cmd_type(CmdType::IngestSst);
-                ingest.mut_ingest_sst().set_sst(m.clone());
-
-                let mut cmd = RaftCmdRequest::default();
-                cmd.set_header(header);
-                cmd.mut_requests().push(ingest);
-=======
             let res = f.await;
             Self::release_lock(&task_slots, &meta).unwrap();
             send_rpc_response!(res, sink, label, timer);
         };
         self.threads.spawn_ok(handle_task);
     }
->>>>>>> origin/master
 
     /// Ingest multiple files by sending a raft command to raftstore.
     ///
@@ -428,13 +390,6 @@ where
         let label = "multi-ingest";
         let timer = Instant::now_coarse();
 
-<<<<<<< HEAD
-                let (cb, future) = paired_future_callback();
-                if let Err(e) = router.send_command(cmd, Callback::write(cb)) {
-                    resp.set_error(e.into());
-                    return Ok(resp);
-                }
-=======
         let mut resp = IngestResponse::default();
         if let Some(errorpb) = self.check_write_stall() {
             resp.set_error(errorpb);
@@ -444,7 +399,6 @@ where
             );
             return;
         }
->>>>>>> origin/master
 
         let mut errorpb = errorpb::Error::default();
         let mut metas = vec![];

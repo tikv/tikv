@@ -10,12 +10,6 @@ use std::time::{Duration, Instant};
 use engine_rocks::Compat;
 use engine_traits::{KvEngine, Peekable};
 use file_system::{IOOp, IOType, WithIORateLimit};
-<<<<<<< HEAD
-use kvproto::raft_serverpb::*;
-use raft::eraftpb::{Message, MessageType};
-use raftstore::{store::*, Result};
-use test_raftstore::*;
-=======
 use futures::executor::block_on;
 use grpcio::Environment;
 use kvproto::raft_serverpb::*;
@@ -25,7 +19,6 @@ use rand::Rng;
 use security::SecurityManager;
 use test_raftstore::*;
 use tikv::server::snap::send_snap;
->>>>>>> origin/master
 use tikv_util::{config::*, HandyRwLock};
 
 fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {

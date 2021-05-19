@@ -16,11 +16,7 @@ use raft::StateRole;
 use raftstore::coprocessor::CmdBatch;
 use raftstore::coprocessor::{ObserveHandle, ObserveID};
 use raftstore::router::RaftStoreRouter;
-<<<<<<< HEAD
-use raftstore::store::fsm::{ObserveID, StoreMeta};
-=======
 use raftstore::store::fsm::StoreMeta;
->>>>>>> origin/master
 use raftstore::store::util::{self, RegionReadProgress};
 use raftstore::store::RegionSnapshot;
 use security::SecurityManager;
@@ -70,11 +66,7 @@ struct ObserveRegion {
 }
 
 impl ObserveRegion {
-<<<<<<< HEAD
-    fn new(meta: Region, resolved_ts: Arc<RegionReadProgress>) -> Self {
-=======
     fn new(meta: Region, rrp: Arc<RegionReadProgress>) -> Self {
->>>>>>> origin/master
         ObserveRegion {
             resolver: Resolver::with_read_progress(meta.id, Some(rrp)),
             meta,
@@ -464,11 +456,7 @@ where
                             debug!("resolved ts CmdBatch discarded";
                                 "region_id" => batch.region_id,
                                 "observe_id" => ?batch.rts_id,
-<<<<<<< HEAD
-                                "current" => ?observe_region.observe_id,
-=======
                                 "current" => ?observe_region.handle.id,
->>>>>>> origin/master
                             );
                         }
                     }

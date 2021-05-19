@@ -133,59 +133,7 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
                 RegionSnapshot::from_snapshot(Arc::new(engine.snapshot()), Arc::new(region));
             let reader = OldValueReader::new(snapshot);
             let get_old_value = move |key, query_ts, old_value_cache: &mut OldValueCache| {
-<<<<<<< HEAD
-                old_value_cache.access_count += 1;
-                if let Some((old_value, mutation_type)) = old_value_cache.cache.remove(&key) {
-                    return match mutation_type {
-                        // Old value of an Insert is guaranteed to be None.
-                        Some(MutationType::Insert) => {
-                            assert_eq!(old_value, OldValue::None);
-                            (None, None)
-                        }
-                        // For Put, Delete or a mutation type we do not know,
-                        // we read old value from the cache.
-                        Some(MutationType::Put) | Some(MutationType::Delete) | None => {
-                            match old_value {
-                                OldValue::None => (None, None),
-                                OldValue::Value { value } => (Some(value), None),
-                                OldValue::ValueTimeStamp { start_ts } => {
-                                    let mut statistics = Statistics::default();
-                                    let prev_key = key.truncate_ts().unwrap().append_ts(start_ts);
-                                    let start = Instant::now();
-                                    let mut opts = ReadOptions::new();
-                                    opts.set_fill_cache(false);
-                                    let value =
-                                        reader.get_value_default(&prev_key, &mut statistics);
-                                    CDC_OLD_VALUE_DURATION_HISTOGRAM
-                                        .with_label_values(&["get"])
-                                        .observe(start.elapsed().as_secs_f64());
-                                    (value, Some(statistics))
-                                }
-                                // Unspecified should not be added into cache.
-                                OldValue::Unspecified => unreachable!(),
-                            }
-                        }
-                        _ => unreachable!(),
-                    };
-                }
-                // Cannot get old value from cache, seek for it in engine.
-                old_value_cache.miss_count += 1;
-                let mut statistics = Statistics::default();
-                let start = Instant::now();
-                let key = key.truncate_ts().unwrap().append_ts(query_ts);
-                let value = reader
-                    .near_seek_old_value(&key, &mut statistics)
-                    .unwrap_or_default();
-                CDC_OLD_VALUE_DURATION_HISTOGRAM
-                    .with_label_values(&["seek"])
-                    .observe(start.elapsed().as_secs_f64());
-                if value.is_none() {
-                    old_value_cache.miss_none_count += 1;
-                }
-                (value, Some(statistics))
-=======
                 old_value::get_old_value(&reader, key, query_ts, old_value_cache)
->>>>>>> origin/master
             };
             if let Err(e) = self.sched.schedule(Task::MultiBatch {
                 multi: batches,

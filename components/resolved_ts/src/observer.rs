@@ -16,10 +16,7 @@ pub struct Observer<E: KvEngine> {
     cmd_batches: RefCell<Vec<CmdBatch>>,
     scheduler: Scheduler<Task<E::Snapshot>>,
     need_old_value: bool,
-<<<<<<< HEAD
-=======
     last_batch_observing: RefCell<bool>,
->>>>>>> origin/master
 }
 
 impl<E: KvEngine> Observer<E> {
@@ -28,10 +25,7 @@ impl<E: KvEngine> Observer<E> {
             cmd_batches: RefCell::default(),
             scheduler,
             need_old_value: true,
-<<<<<<< HEAD
-=======
             last_batch_observing: RefCell::from(false),
->>>>>>> origin/master
         }
     }
 
@@ -61,10 +55,7 @@ impl<E: KvEngine> Clone for Observer<E> {
             cmd_batches: self.cmd_batches.clone(),
             scheduler: self.scheduler.clone(),
             need_old_value: self.need_old_value,
-<<<<<<< HEAD
-=======
             last_batch_observing: self.last_batch_observing.clone(),
->>>>>>> origin/master
         }
     }
 }

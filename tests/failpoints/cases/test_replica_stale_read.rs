@@ -218,8 +218,6 @@ fn test_stale_read_basic_flow_lock() {
     );
     fail::remove(on_step_read_index_msg);
 }
-<<<<<<< HEAD
-=======
 
 // Testing that if `resolved_ts` updated before `apply_index` update, the `safe_ts`
 // won't be updated, hence the leader won't broadcast a wrong `(apply_index, safe_ts)`
@@ -343,4 +341,3 @@ fn test_new_leader_init_resolver() {
     // But we can read `key1` with `commit_ts1`
     peer_client2.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), commit_ts1);
 }
->>>>>>> origin/master

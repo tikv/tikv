@@ -7,15 +7,9 @@ use std::path::Path;
 use tikv_util::stream::RetryError;
 use tikv_util::{error, info};
 
-<<<<<<< HEAD
-#[cfg(feature = "aws")]
-use aws::{AwsKms, AWS_VENDOR_NAME};
-#[cfg(feature = "aws")]
-=======
 #[cfg(feature = "cloud-aws")]
 use aws::{AwsKms, STORAGE_VENDOR_NAME_AWS};
 #[cfg(feature = "cloud-aws")]
->>>>>>> origin/master
 use cloud::kms::Config as CloudConfig;
 use cloud::kms::{EncryptedKey as CloudEncryptedKey, KmsProvider as CloudKmsProvider};
 use cloud::Error as CloudError;
@@ -59,14 +53,6 @@ fn cloud_convert_error(msg: String) -> Box<dyn FnOnce(CloudError) -> CloudConver
 }
 
 pub fn create_cloud_backend(config: &KmsConfig) -> Result<Box<dyn Backend>> {
-<<<<<<< HEAD
-    match config.vendor.as_str() {
-        #[cfg(feature = "aws")]
-        AWS_VENDOR_NAME | "" => {
-            let conf =
-                CloudConfig::from_proto(config.clone().into_proto()).map_err(CloudConvertError)?;
-            let kms_provider = CloudKms(Box::new(AwsKms::new(conf).map_err(CloudConvertError)?));
-=======
     info!("Encryption init cloud backend";
         "region" => &config.region,
         "endpoint" => &config.endpoint,
@@ -81,7 +67,6 @@ pub fn create_cloud_backend(config: &KmsConfig) -> Result<Box<dyn Backend>> {
             let kms_provider = CloudKms(Box::new(
                 AwsKms::new(conf).map_err(cloud_convert_error("new AWS KMS".to_owned()))?,
             ));
->>>>>>> origin/master
             Ok(Box::new(KmsBackend::new(Box::new(kms_provider))?) as Box<dyn Backend>)
         }
         provider => Err(Error::Other(box_err!("provider not found {}", provider))),
