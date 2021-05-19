@@ -920,7 +920,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                 .map_err(Error::from)
                 .for_each(move |msg| {
                     RAFT_MESSAGE_RECV_COUNTER.inc();
-                    future::result(ch.send_raft_msg(msg)).map_err(Error::from)
+                    ch.send_raft_msg(msg).map_err(Error::from)
                 })
                 .map_err(|e| error!("send raft msg to raft store fail: {}", e))
                 .then(|res| {
