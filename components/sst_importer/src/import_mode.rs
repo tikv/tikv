@@ -126,9 +126,12 @@ impl ImportModeSwitcher {
     }
 
     pub fn enter_import_mode<E: KvEngine>(&self, db: &E, mf: RocksDBMetricsFn) -> Result<bool> {
+<<<<<<< HEAD
         if self.is_import.load(Ordering::Acquire) {
             return Ok(false);
         }
+=======
+>>>>>>> origin/master
         let mut inner = self.inner.lock().unwrap();
         let ret = inner.enter_import_mode(db, mf)?;
         inner.next_check = Instant::now() + inner.timeout;

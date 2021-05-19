@@ -902,11 +902,14 @@ impl RegionReadProgress {
     pub fn safe_ts(&self) -> u64 {
         self.safe_ts.load(AtomicOrdering::Acquire)
     }
+<<<<<<< HEAD
 
     pub fn fetch_max_safe_ts(&self, incoming_safe_ts: u64) {
         self.safe_ts
             .fetch_max(incoming_safe_ts, AtomicOrdering::SeqCst);
     }
+=======
+>>>>>>> origin/master
 }
 
 #[derive(Default, Debug)]

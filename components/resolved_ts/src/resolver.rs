@@ -1,7 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use collections::{HashMap, HashSet};
+<<<<<<< HEAD
 use raftstore::store::util::RegionReadProgress;
+=======
+use raftstore::store::RegionReadProgress;
+>>>>>>> origin/master
 use std::cmp;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -17,24 +21,43 @@ pub struct Resolver {
     lock_ts_heap: BTreeMap<TimeStamp, HashSet<Arc<[u8]>>>,
     // The timestamps that guarantees no more commit will happen before.
     resolved_ts: TimeStamp,
+<<<<<<< HEAD
     // The region read progress is used to utilize `resolved_ts` to serve stale read request
     read_progress: Arc<RegionReadProgress>,
+=======
+    // The highest index `Resolver` had been tracked
+    tracked_index: u64,
+    // The region read progress used to utilize `resolved_ts` to serve stale read request
+    read_progress: Option<Arc<RegionReadProgress>>,
+>>>>>>> origin/master
     // The timestamps that advance the resolved_ts when there is no more write.
     min_ts: TimeStamp,
 }
 
 impl Resolver {
     pub fn new(region_id: u64) -> Resolver {
-        Resolver::from_shared(region_id, Arc::default())
+        Resolver::with_read_progress(region_id, None)
     }
 
+<<<<<<< HEAD
     pub fn from_shared(region_id: u64, read_progress: Arc<RegionReadProgress>) -> Resolver {
         Resolver {
             region_id,
             resolved_ts: TimeStamp::zero(),
             read_progress,
+=======
+    pub fn with_read_progress(
+        region_id: u64,
+        read_progress: Option<Arc<RegionReadProgress>>,
+    ) -> Resolver {
+        Resolver {
+            region_id,
+            resolved_ts: TimeStamp::zero(),
+>>>>>>> origin/master
             locks_by_key: HashMap::default(),
             lock_ts_heap: BTreeMap::new(),
+            read_progress,
+            tracked_index: 0,
             min_ts: TimeStamp::zero(),
         }
     }
@@ -47,7 +70,21 @@ impl Resolver {
         &self.lock_ts_heap
     }
 
-    pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>) {
+    pub fn update_tracked_index(&mut self, index: u64) {
+        assert!(
+            self.tracked_index <= index,
+            "region {}, tracked_index: {}, incoming index: {}",
+            self.region_id,
+            self.tracked_index,
+            index
+        );
+        self.tracked_index = index;
+    }
+
+    pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>, index: Option<u64>) {
+        if let Some(index) = index {
+            self.update_tracked_index(index);
+        }
         debug!(
             "track lock {}@{}, region {}",
             &log_wrappers::Value::key(&key),
@@ -59,7 +96,10 @@ impl Resolver {
         self.lock_ts_heap.entry(start_ts).or_default().insert(key);
     }
 
-    pub fn untrack_lock(&mut self, key: &[u8]) {
+    pub fn untrack_lock(&mut self, key: &[u8], index: Option<u64>) {
+        if let Some(index) = index {
+            self.update_tracked_index(index);
+        }
         let start_ts = if let Some(start_ts) = self.locks_by_key.remove(key) {
             start_ts
         } else {
@@ -98,11 +138,18 @@ impl Resolver {
         // Resolved ts never decrease.
         self.resolved_ts = cmp::max(self.resolved_ts, new_resolved_ts);
 
+<<<<<<< HEAD
         // Update region read progress
         // TODO: should use `RegionReadProgress::update_safe_ts` to avoid direct
         // write to `safe_ts`
         self.read_progress
             .fetch_max_safe_ts(self.resolved_ts.into_inner());
+=======
+        // Publish an `(apply index, safe ts)` item into the region read progress
+        if let Some(rrp) = &self.read_progress {
+            rrp.update_safe_ts(self.tracked_index, self.resolved_ts.into_inner());
+        }
+>>>>>>> origin/master
 
         let new_min_ts = if has_lock {
             // If there are some lock, the min_ts must be smaller than
@@ -190,9 +237,9 @@ mod tests {
             for e in case.clone() {
                 match e {
                     Event::Lock(start_ts, key) => {
-                        resolver.track_lock(start_ts.into(), key.into_raw().unwrap())
+                        resolver.track_lock(start_ts.into(), key.into_raw().unwrap(), None)
                     }
-                    Event::Unlock(key) => resolver.untrack_lock(&key.into_raw().unwrap()),
+                    Event::Unlock(key) => resolver.untrack_lock(&key.into_raw().unwrap(), None),
                     Event::Resolve(min_ts, expect) => {
                         assert_eq!(resolver.resolve(min_ts.into()), expect.into(), "case {}", i)
                     }

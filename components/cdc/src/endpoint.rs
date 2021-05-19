@@ -27,8 +27,9 @@ use kvproto::metapb::{PeerRole, Region};
 use kvproto::tikvpb::TikvClient;
 use pd_client::{Feature, PdClient};
 use raftstore::coprocessor::CmdBatch;
+use raftstore::coprocessor::ObserveID;
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::fsm::{ChangeObserver, ObserveID, StoreMeta};
+use raftstore::store::fsm::{ChangeObserver, StoreMeta};
 use raftstore::store::msg::{Callback, ReadResponse, SignificantMsg};
 use resolved_ts::Resolver;
 use security::SecurityManager;
@@ -37,20 +38,22 @@ use tikv::storage::kv::Snapshot;
 use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
 use tikv::storage::txn::TxnEntry;
 use tikv::storage::txn::TxnEntryScanner;
+<<<<<<< HEAD
 use tikv::storage::Statistics;
 use tikv_util::lru::LruCache;
+=======
+>>>>>>> origin/master
 use tikv_util::time::{Instant, Limiter};
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
 use tikv_util::{box_err, box_try, debug, error, impl_display_as_debug, info, warn};
 use tokio::runtime::{Builder, Runtime};
-use txn_types::{
-    Key, Lock, LockType, MutationType, OldValue, TimeStamp, TxnExtra, TxnExtraScheduler,
-};
+use txn_types::{Key, Lock, LockType, TimeStamp, TxnExtra, TxnExtraScheduler};
 
 use crate::channel::SendError;
 use crate::delegate::{Delegate, Downstream, DownstreamID, DownstreamState};
 use crate::metrics::*;
+use crate::old_value::{OldValueCache, OldValueCallback};
 use crate::service::{CdcEvent, Conn, ConnID, FeatureGate};
 use crate::{CdcObserver, Error, Result};
 
@@ -108,6 +111,7 @@ impl fmt::Debug for Deregister {
 }
 
 type InitCallback = Box<dyn FnOnce() + Send>;
+<<<<<<< HEAD
 pub(crate) type OldValueCallback =
     Box<dyn Fn(Key, TimeStamp, &mut OldValueCache) -> (Option<Vec<u8>>, Option<Statistics>) + Send>;
 
@@ -128,6 +132,8 @@ impl OldValueCache {
         }
     }
 }
+=======
+>>>>>>> origin/master
 
 pub enum Validate {
     Region(u64, Box<dyn FnOnce(Option<&Delegate>) + Send>),
@@ -377,12 +383,13 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                         }
                     }
                     // Do not continue to observe the events of the region.
-                    let oid = self.observer.unsubscribe_region(region_id, delegate.id);
+                    let id = delegate.handle.id;
+                    let oid = self.observer.unsubscribe_region(region_id, id);
                     assert!(
                         oid.is_some(),
                         "unsubscribe region {} failed, ObserveID {:?}",
                         region_id,
-                        delegate.id
+                        id
                     );
                 }
             }
@@ -397,7 +404,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 let need_remove = self
                     .capture_regions
                     .get(&region_id)
-                    .map_or(false, |d| d.id == observe_id);
+                    .map_or(false, |d| d.handle.id == observe_id);
                 if need_remove {
                     if let Some(mut delegate) = self.capture_regions.remove(&region_id) {
                         delegate.stop(err);
@@ -429,13 +436,13 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                                 if delegate.unsubscribe(downstream_id, None) {
                                     let delegate = self.capture_regions.remove(&region_id).unwrap();
                                     // Do not continue to observe the events of the region.
-                                    let oid =
-                                        self.observer.unsubscribe_region(region_id, delegate.id);
+                                    let id = delegate.handle.id;
+                                    let oid = self.observer.unsubscribe_region(region_id, id);
                                     assert!(
                                         oid.is_some(),
                                         "unsubscribe region {} failed, ObserveID {:?}",
                                         region_id,
-                                        delegate.id
+                                        id
                                     );
                                 }
                             }
@@ -512,16 +519,17 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         if is_new_delegate {
             // The region has never been registered.
             // Subscribe the change events of the region.
-            let old_id = self.observer.subscribe_region(region_id, delegate.id);
+            let id = delegate.handle.id;
+            let old_id = self.observer.subscribe_region(region_id, id);
             assert!(
                 old_id.is_none(),
                 "region {} must not be observed twice, old ObserveID {:?}, new ObserveID {:?}",
                 region_id,
                 old_id,
-                delegate.id
+                id
             );
         };
-        let change_cmd = ChangeObserver::from_cdc(region_id, delegate.id);
+        let change_cmd = ChangeObserver::from_cdc(region_id, delegate.handle.clone());
         let txn_extra_op = request.get_extra_op();
         if txn_extra_op != TxnExtraOp::Noop {
             delegate.txn_extra_op = request.get_extra_op();
@@ -529,7 +537,11 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 reader.txn_extra_op.store(txn_extra_op);
             }
         }
+<<<<<<< HEAD
         let observe_id = delegate.id;
+=======
+        let observe_id = delegate.handle.id;
+>>>>>>> origin/master
         let mut init = Initializer {
             sched,
             region_id,
@@ -617,7 +629,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                     // Delegate has error, deregister the corresponding region.
                     deregister = Some(Deregister::Region {
                         region_id,
-                        observe_id: delegate.id,
+                        observe_id: delegate.handle.id,
                         err: e,
                     });
                 }
@@ -631,7 +643,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
     fn on_region_ready(&mut self, observe_id: ObserveID, resolver: Resolver, region: Region) {
         let region_id = region.get_id();
         if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
-            if delegate.id == observe_id {
+            if delegate.handle.id == observe_id {
                 for downstream in delegate.on_region_ready(resolver, region) {
                     let conn_id = downstream.get_conn_id();
                     if !delegate.subscribe(downstream) {
@@ -643,7 +655,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 debug!("cdc stale region ready";
                     "region_id" => region.get_id(),
                     "observe_id" => ?observe_id,
-                    "current_id" => ?delegate.id);
+                    "current_id" => ?delegate.handle.id);
             }
         } else {
             debug!("cdc region not found on region ready (finish building resolver)";
@@ -717,7 +729,11 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             Some(downstream_id) => downstream_id,
             // No such region registers in the connection.
             None => {
+<<<<<<< HEAD
                 info!("cdc send resolved ts failed, no region downstream id found";
+=======
+                debug!("cdc send resolved ts failed, no region downstream id found";
+>>>>>>> origin/master
                     "region_id" => region_id);
                 return;
             }
@@ -758,7 +774,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         let regions: Vec<(u64, ObserveID)> = self
             .capture_regions
             .iter()
-            .map(|(region_id, delegate)| (*region_id, delegate.id))
+            .map(|(region_id, delegate)| (*region_id, delegate.handle.id))
             .collect();
         let cm: ConcurrencyManager = self.concurrency_manager.clone();
         let env = self.env.clone();
@@ -1197,7 +1213,7 @@ impl Initializer {
                     let key = Key::from_encoded_slice(encoded_key).into_raw().unwrap();
                     let lock = Lock::parse(value)?;
                     match lock.lock_type {
-                        LockType::Put | LockType::Delete => resolver.track_lock(lock.ts, key),
+                        LockType::Put | LockType::Delete => resolver.track_lock(lock.ts, key, None),
                         _ => (),
                     };
                 }
@@ -1848,7 +1864,7 @@ mod tests {
             version: semver::Version::new(4, 0, 6),
         });
         let resolver = Resolver::new(1);
-        let observe_id = ep.capture_regions[&1].id;
+        let observe_id = ep.capture_regions[&1].handle.id;
         ep.on_region_ready(observe_id, resolver, region.clone());
         ep.run(Task::MinTS {
             regions: vec![1],
@@ -1875,7 +1891,7 @@ mod tests {
         });
         let resolver = Resolver::new(2);
         region.set_id(2);
-        let observe_id = ep.capture_regions[&2].id;
+        let observe_id = ep.capture_regions[&2].handle.id;
         ep.on_region_ready(observe_id, resolver, region);
         ep.run(Task::MinTS {
             regions: vec![1, 2],
@@ -1910,7 +1926,7 @@ mod tests {
         });
         let resolver = Resolver::new(3);
         region.set_id(3);
-        let observe_id = ep.capture_regions[&3].id;
+        let observe_id = ep.capture_regions[&3].handle.id;
         ep.on_region_ready(observe_id, resolver, region);
         ep.run(Task::MinTS {
             regions: vec![1, 2, 3],

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use tikv_util::time::{duration_to_sec, Instant};
 
-use super::batch::ReqBatcher;
+use super::batch::{BatcherBuilder, ReqBatcher};
 use crate::coprocessor::Endpoint;
 use crate::coprocessor_v2;
 use crate::server::gc_worker::GcWorker;
@@ -71,8 +71,6 @@ pub struct Service<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: Lock
 
     grpc_thread_load: Arc<ThreadLoad>,
 
-    readpool_normal_thread_load: Arc<ThreadLoad>,
-
     proxy: Proxy,
 }
 
@@ -90,7 +88,6 @@ impl<T: RaftStoreRouter<RocksEngine> + Clone + 'static, E: Engine + Clone, L: Lo
             snap_scheduler: self.snap_scheduler.clone(),
             enable_req_batch: self.enable_req_batch,
             grpc_thread_load: self.grpc_thread_load.clone(),
-            readpool_normal_thread_load: self.readpool_normal_thread_load.clone(),
             proxy: self.proxy.clone(),
         }
     }
@@ -107,7 +104,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
         grpc_thread_load: Arc<ThreadLoad>,
-        readpool_normal_thread_load: Arc<ThreadLoad>,
         enable_req_batch: bool,
         proxy: Proxy,
     ) -> Self {
@@ -121,7 +117,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
             snap_scheduler,
             enable_req_batch,
             grpc_thread_load,
-            readpool_normal_thread_load,
             proxy,
         }
     }
@@ -905,15 +900,13 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let storage = self.storage.clone();
         let cop = self.cop.clone();
         let coprv2 = self.coprv2.clone();
-        let enable_req_batch = self.enable_req_batch;
+        let pool_size = storage.get_normal_pool_size();
+        let batch_builder = BatcherBuilder::new(self.enable_req_batch, pool_size);
         let request_handler = stream.try_for_each(move |mut req| {
             let request_ids = req.take_request_ids();
             let requests: Vec<_> = req.take_requests().into();
-            let mut batcher = if enable_req_batch && requests.len() > 2 {
-                Some(ReqBatcher::new())
-            } else {
-                None
-            };
+            let queue = storage.get_readpool_queue_per_worker();
+            let mut batcher = batch_builder.build(queue, request_ids.len());
             GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
             for (id, req) in request_ids.into_iter().zip(requests) {
                 handle_batch_commands_request(
@@ -926,10 +919,12 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                     req,
                     &tx,
                 );
+                if let Some(batch) = batcher.as_mut() {
+                    batch.maybe_commit(&storage, &tx);
+                }
             }
-            if let Some(mut batch) = batcher {
+            if let Some(batch) = batcher {
                 batch.commit(&storage, &tx);
-                storage.release_snapshot();
             }
             future::ok(())
         });
@@ -1078,8 +1073,8 @@ fn response_batch_commands_request<F>(
 {
     let task = async move {
         if let Ok(resp) = resp.await {
-            if tx.send_and_notify((id, resp)).is_err() {
-                error!("KvService response batch commands fail");
+            if let Err(e) = tx.send_and_notify((id, resp)) {
+                error!("KvService response batch commands fail"; "err" => ?e);
             } else {
                 GRPC_MSG_HISTOGRAM_STATIC
                     .get(label_enum)
@@ -1121,7 +1116,6 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
                 },
                 Some(batch_commands_request::request::Cmd::Get(req)) => {
                     if batcher.as_mut().map_or(false, |req_batch| {
-                        req_batch.maybe_commit(storage, tx);
                         req_batch.can_batch_get(&req)
                     }) {
                         batcher.as_mut().unwrap().add_get_request(req, id);
@@ -1135,7 +1129,6 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
                 },
                 Some(batch_commands_request::request::Cmd::RawGet(req)) => {
                     if batcher.as_mut().map_or(false, |req_batch| {
-                        req_batch.maybe_commit(storage, tx);
                         req_batch.can_batch_raw_get(&req)
                     }) {
                         batcher.as_mut().unwrap().add_raw_get_request(req, id);

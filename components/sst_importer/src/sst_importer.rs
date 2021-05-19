@@ -3,21 +3,22 @@
 use std::borrow::Cow;
 use std::fmt;
 use std::io::{self, Write};
-use std::marker::Unpin;
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use futures::executor::ThreadPool;
+<<<<<<< HEAD
 use futures_util::io::{AsyncRead, AsyncReadExt};
+=======
+>>>>>>> origin/master
 use kvproto::backup::StorageBackend;
 #[cfg(feature = "prost-codec")]
 use kvproto::import_sstpb::pair::Op as PairOp;
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::import_sstpb::PairOp;
 use kvproto::import_sstpb::*;
-use tokio::time::timeout;
 use uuid::{Builder as UuidBuilder, Uuid};
 
 use encryption::{DataKeyManager, EncrypterWriter};
@@ -29,9 +30,7 @@ use engine_traits::{
     EncryptionKeyManager, IngestExternalFileOptions, Iterator, KvEngine, SSTMetaInfo, SeekKey,
     SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 };
-use external_storage::{create_storage, url_of_backend};
 use file_system::{sync_dir, File, OpenOptions};
-use tikv_util::stream::{block_on_external_io, READ_BUF_SIZE};
 use tikv_util::time::Limiter;
 use txn_types::{is_short_value, Key, TimeStamp, Write as KvWrite, WriteRef, WriteType};
 
@@ -160,6 +159,7 @@ impl SSTImporter {
     pub fn enter_normal_mode<E: KvEngine>(&self, db: E, mf: RocksDBMetricsFn) -> Result<bool> {
         self.switcher.enter_normal_mode(&db, mf)
     }
+<<<<<<< HEAD
 
     pub fn enter_import_mode<E: KvEngine>(&self, db: E, mf: RocksDBMetricsFn) -> Result<bool> {
         self.switcher.enter_import_mode(&db, mf)
@@ -205,10 +205,15 @@ impl SSTImporter {
                 ),
             ));
         }
+=======
+>>>>>>> origin/master
 
-        IMPORTER_DOWNLOAD_BYTES.observe(file_length as _);
+    pub fn enter_import_mode<E: KvEngine>(&self, db: E, mf: RocksDBMetricsFn) -> Result<bool> {
+        self.switcher.enter_import_mode(&db, mf)
+    }
 
-        Ok(())
+    pub fn get_mode(&self) -> SwitchMode {
+        self.switcher.get_mode()
     }
 
     fn do_download<E: KvEngine>(
@@ -221,12 +226,12 @@ impl SSTImporter {
         mut sst_writer: E::SstWriter,
     ) -> Result<Option<Range>> {
         let path = self.dir.join(meta)?;
-        let url = url_of_backend(backend);
 
-        {
+        let url = {
             let start_read = Instant::now();
 
             // prepare to download the file from the external_storage
+<<<<<<< HEAD
             let ext_storage = create_storage(backend)?;
             let mut ext_reader = ext_storage.read(name);
 
@@ -254,6 +259,25 @@ impl SSTImporter {
                 MINIMUM_READ_SPEED,
             ))
             .map_err(|e| Error::CannotReadExternalStorage {
+=======
+            let ext_storage = external_storage_export::create_storage(backend)?;
+            let url = ext_storage.url()?.to_string();
+
+            let ext_storage: Box<dyn external_storage_export::ExternalStorage> =
+                if let Some(key_manager) = &self.key_manager {
+                    Box::new(external_storage_export::EncryptedExternalStorage {
+                        key_manager: (*key_manager).clone(),
+                        storage: ext_storage,
+                    }) as _
+                } else {
+                    ext_storage as _
+                };
+
+            let result =
+                ext_storage.restore(name, path.temp.to_owned(), meta.length, &speed_limiter);
+            IMPORTER_DOWNLOAD_BYTES.observe(meta.length as _);
+            result.map_err(|e| Error::CannotReadExternalStorage {
+>>>>>>> origin/master
                 url: url.to_string(),
                 name: name.to_owned(),
                 local_path: path.temp.to_owned(),
@@ -268,7 +292,9 @@ impl SSTImporter {
             IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["read"])
                 .observe(start_read.elapsed().as_secs_f64());
-        }
+
+            url
+        };
 
         // now validate the SST file.
         let path_str = path.temp.to_str().unwrap();
@@ -953,6 +979,7 @@ mod tests {
     use test_sst_importer::*;
 
     use std::f64::INFINITY;
+    use tikv_util::stream::block_on_external_io;
 
     use engine_traits::{
         collect, name_to_cf, EncryptionMethod, Iterable, Iterator, SeekKey, CF_DEFAULT, DATA_CFS,
@@ -1169,7 +1196,7 @@ mod tests {
         meta.mut_region_epoch().set_conf_ver(5);
         meta.mut_region_epoch().set_version(6);
 
-        let backend = external_storage::make_local_backend(ext_sst_dir.path());
+        let backend = external_storage_export::make_local_backend(ext_sst_dir.path());
         Ok((ext_sst_dir, backend, meta))
     }
 
@@ -1249,7 +1276,7 @@ mod tests {
         meta.mut_region_epoch().set_conf_ver(5);
         meta.mut_region_epoch().set_version(6);
 
-        let backend = external_storage::make_local_backend(ext_sst_dir.path());
+        let backend = external_storage_export::make_local_backend(ext_sst_dir.path());
         Ok((ext_sst_dir, backend, meta))
     }
 
@@ -1295,7 +1322,7 @@ mod tests {
         meta.mut_region_epoch().set_conf_ver(5);
         meta.mut_region_epoch().set_version(6);
 
-        let backend = external_storage::make_local_backend(ext_sst_dir.path());
+        let backend = external_storage_export::make_local_backend(ext_sst_dir.path());
         Ok((ext_sst_dir, backend, meta))
     }
 
@@ -1332,7 +1359,7 @@ mod tests {
         let mut input = data;
         let mut output = Vec::new();
         let input_len = input.len() as u64;
-        block_on_external_io(SSTImporter::read_external_storage_into_file(
+        block_on_external_io(external_storage_export::read_external_storage_into_file(
             &mut input,
             &mut output,
             &Limiter::new(INFINITY),
@@ -1349,7 +1376,7 @@ mod tests {
 
         let mut input = pending::<io::Result<&[u8]>>().into_async_read();
         let mut output = Vec::new();
-        let err = block_on_external_io(SSTImporter::read_external_storage_into_file(
+        let err = block_on_external_io(external_storage_export::read_external_storage_into_file(
             &mut input,
             &mut output,
             &Limiter::new(INFINITY),
@@ -1731,7 +1758,7 @@ mod tests {
         let cfg = Config::default();
         let importer = SSTImporter::new(&cfg, &importer_dir, None).unwrap();
         let sst_writer = create_sst_writer_with_db(&importer, &meta).unwrap();
-        let backend = external_storage::make_local_backend(ext_sst_dir.path());
+        let backend = external_storage_export::make_local_backend(ext_sst_dir.path());
 
         let result = importer.download::<TestEngine>(
             &meta,
