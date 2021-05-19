@@ -1444,18 +1444,18 @@ mod tests {
 
         // canonicalize a path containing symlink and non-existing nodes
         ensure_dir_exist(&format!("{}", tmp_dir.to_path_buf().join("dir").display())).unwrap();
-        let mut nodes = vec!["non_existing", "dir"];
-        #[cfg(target_os = "linux")]
-        {
+        let nodes: &[&str] = if cfg!(target_os = "linux") {
             std::os::unix::fs::symlink(
                 &tmp_dir.to_path_buf().join("dir"),
                 &tmp_dir.to_path_buf().join("symlink"),
             )
             .unwrap();
-            nodes.push("symlink");
-        }
-        for first in &nodes {
-            for second in &nodes {
+            &["non_existing", "dir", "symlink"]
+        } else {
+            &["non_existing", "dir"]
+        };
+        for first in nodes {
+            for second in nodes {
                 let path = format!(
                     "{}/{}/../{}/non_existing",
                     tmp_dir.to_str().unwrap(),
