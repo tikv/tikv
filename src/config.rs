@@ -2526,6 +2526,38 @@ impl TiKvConfig {
         self.backup.validate()?;
         self.pessimistic_txn.validate()?;
         self.gc.validate()?;
+
+        if self.storage.disable_write_stall {
+            self.raftdb.defaultcf.soft_pending_compaction_bytes_limit = ReadableSize::gb(10000);
+            self.raftdb.defaultcf.hard_pending_compaction_bytes_limit = ReadableSize::gb(10000);
+            self.raftdb.defaultcf.level0_slowdown_writes_trigger = 1000000;
+            self.raftdb.defaultcf.level0_stop_writes_trigger = 100000;
+            self.raftdb.defaultcf.max_write_buffer_number = 100000;
+
+            self.rocksdb.defaultcf.soft_pending_compaction_bytes_limit = ReadableSize::gb(10000);
+            self.rocksdb.defaultcf.hard_pending_compaction_bytes_limit = ReadableSize::gb(10000);
+            self.rocksdb.defaultcf.level0_slowdown_writes_trigger = 1000000;
+            self.rocksdb.defaultcf.level0_stop_writes_trigger = 100000;
+            self.rocksdb.defaultcf.max_write_buffer_number = 100000;
+
+            self.rocksdb.writecf.soft_pending_compaction_bytes_limit = ReadableSize::gb(10000);
+            self.rocksdb.writecf.hard_pending_compaction_bytes_limit = ReadableSize::gb(10000);
+            self.rocksdb.writecf.level0_slowdown_writes_trigger = 1000000;
+            self.rocksdb.writecf.level0_stop_writes_trigger = 100000;
+            self.rocksdb.writecf.max_write_buffer_number = 100000;
+
+            self.rocksdb.lockcf.soft_pending_compaction_bytes_limit = ReadableSize::gb(10000);
+            self.rocksdb.lockcf.hard_pending_compaction_bytes_limit = ReadableSize::gb(10000);
+            self.rocksdb.lockcf.level0_slowdown_writes_trigger = 1000000;
+            self.rocksdb.lockcf.level0_stop_writes_trigger = 100000;
+            self.rocksdb.lockcf.max_write_buffer_number = 100000;
+
+            self.rocksdb.raftcf.soft_pending_compaction_bytes_limit = ReadableSize::gb(10000);
+            self.rocksdb.raftcf.hard_pending_compaction_bytes_limit = ReadableSize::gb(10000);
+            self.rocksdb.raftcf.level0_slowdown_writes_trigger = 1000000;
+            self.rocksdb.raftcf.level0_stop_writes_trigger = 100000;
+            self.rocksdb.raftcf.max_write_buffer_number = 100000;
+        }
         Ok(())
     }
 

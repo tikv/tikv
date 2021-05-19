@@ -149,8 +149,8 @@ const ADJUST_INTERVAL: u64 = 1000; // 1000ms
 const RATIO_PERCISION: f64 = 10000000.0;
 const EMA_FACTOR: f64 = 0.2;
 const CAP: usize = 10;
-const LIMIT_UP_PERCENT: f64 = 0.01; // 1%
-const LIMIT_DOWN_STEP: f64 = 1.0 * 1024.0 * 1024.0; // 1MB/s
+const LIMIT_UP_PERCENT: f64 = 0.03; // 3%
+const LIMIT_DOWN_PERCENT: f64 = 0.01; // 1%
 
 struct Smoother {
     records: [Option<u64>; CAP],
@@ -187,6 +187,9 @@ impl Smoother {
     // }
 
     pub fn get_avg(&self) -> f64 {
+        if self.size == 0 {
+            return 0.0;
+        }
         self.total as f64 / self.size as f64
     }
 }
@@ -303,13 +306,11 @@ impl<E: Engine> FlowChecker<E> {
         let should_throttle =
             num_memtables > self.memtables_threshold || num_l0_files > self.l0_files_threshold;
 
-        assert!(self.recorder.get_avg() * LIMIT_UP_PERCENT > LIMIT_DOWN_STEP);
-
         let throttle = if !is_throttled && should_throttle {
-            self.recorder.get_avg() - LIMIT_DOWN_STEP
+            self.recorder.get_avg() * (1.0 - LIMIT_DOWN_PERCENT)
         } else if is_throttled && should_throttle {
             if self.last_num_l0_files <= num_l0_files || self.last_num_memtables <= num_memtables {
-                self.recorder.get_avg() - LIMIT_DOWN_STEP
+                self.recorder.get_avg() * (1.0 - LIMIT_DOWN_PERCENT)
             } else if self.last_num_l0_files > num_l0_files
                 && self.last_num_memtables > num_memtables
             {
@@ -332,7 +333,12 @@ impl<E: Engine> FlowChecker<E> {
 
         self.last_num_l0_files = num_l0_files;
         self.last_num_memtables = num_memtables;
-        SCHED_THROTTLE_FLOW_GAUAE.set(throttle as i64);
+
+        SCHED_THROTTLE_FLOW_GAUAE.set(if throttle == INFINITY {
+            0
+        } else {
+            throttle as i64
+        });
         self.limiter.set_speed_limit(throttle)
     }
 }

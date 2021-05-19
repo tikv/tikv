@@ -54,13 +54,15 @@ pub struct Config {
     pub enable_ttl: bool,
     /// Interval to check TTL for all SSTs,
     pub ttl_check_poll_interval: ReadableDuration,
-    #[config(submodule)]
-    pub block_cache: BlockCacheConfig,
 
+    pub disable_write_stall: bool,
     pub pending_compaction_bytes_soft_limit: u64,
     pub pending_compaction_bytes_hard_limit: u64,
     pub memtables_threshold: u64,
     pub l0_files_threshold: u64,
+
+    #[config(submodule)]
+    pub block_cache: BlockCacheConfig,
 }
 
 impl Default for Config {
@@ -78,6 +80,7 @@ impl Default for Config {
             enable_ttl: false,
             ttl_check_poll_interval: ReadableDuration::hours(12),
             block_cache: BlockCacheConfig::default(),
+            disable_write_stall: true,
             pending_compaction_bytes_soft_limit: ReadableSize::gb(64).0,
             pending_compaction_bytes_hard_limit: ReadableSize::gb(1000).0,
             memtables_threshold: 10,
