@@ -797,7 +797,8 @@ fn test_old_value_basic() {
     m6.value = b"v6".to_vec();
     suite.must_kv_prewrite(1, vec![m6], k1.clone(), 10.into());
     suite.must_kv_commit(1, vec![k1.clone()], 10.into(), 11.into());
-    // Delete value
+    // Delete value in pessimistic txn.
+    // In pessimistic txn, CDC must use for_update_ts to read the old value.
     let mut m7 = Mutation::default();
     m7.set_op(Op::PessimisticLock);
     m7.key = k1.clone();

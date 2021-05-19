@@ -342,15 +342,7 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
                 if is_last {
                     let delegate = self.capture_regions.remove(&region_id).unwrap();
                     if let Some(reader) = self.store_meta.lock().unwrap().readers.get(&region_id) {
-                        if let Err(e) = reader
-                            .txn_extra_op
-                            .compare_exchange(TxnExtraOp::ReadOldValue, TxnExtraOp::Noop)
-                        {
-                            panic!(
-                                "unexpect txn extra op {:?}, region_id: {:?}, downstream_id: {:?}, conn_id: {:?}",
-                                e, region_id, downstream_id, conn_id
-                            );
-                        }
+                        reader.txn_extra_op.store(TxnExtraOp::Noop);
                     }
                     // Do not continue to observe the events of the region.
                     let oid = self.observer.unsubscribe_region(region_id, delegate.id);
@@ -707,7 +699,7 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
             Some(downstream_id) => downstream_id,
             // No such region registers in the connection.
             None => {
-                info!("cdc send resolved ts failed, no region downstream id found";
+                debug!("cdc send resolved ts failed, no region downstream id found";
                     "region_id" => region_id);
                 return;
             }
@@ -1148,8 +1140,10 @@ mod tests {
     use kvproto::kvrpcpb::Context;
     use raftstore::errors::Error as RaftStoreError;
     use raftstore::store::msg::CasualMessage;
+    use raftstore::store::ReadDelegate;
     use std::collections::BTreeMap;
     use std::fmt::Display;
+    use std::sync::atomic::AtomicBool;
     use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
     use tempfile::TempDir;
     use test_raftstore::MockRaftStoreRouter;
@@ -1160,6 +1154,7 @@ mod tests {
     use tikv_util::collections::HashSet;
     use tikv_util::config::ReadableDuration;
     use tikv_util::worker::{dummy_scheduler, Builder as WorkerBuilder, Worker};
+    use time::Timespec;
 
     use super::*;
     use crate::channel;
@@ -1671,6 +1666,21 @@ mod tests {
         let (task_sched, _task_rx) = dummy_scheduler();
         let raft_router = MockRaftStoreRouter::new();
         let _raft_rx = raft_router.add_region(1 /* region id */, 100 /* cap */);
+        let mut region = Region::default();
+        region.set_id(1);
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
+        let read_delegate = ReadDelegate {
+            tag: String::new(),
+            region: region.clone(),
+            peer_id: 2,
+            term: 1,
+            applied_index_term: 1,
+            leader_lease: None,
+            last_valid_ts: RefCell::new(Timespec::new(0, 0)),
+            invalid: Arc::new(AtomicBool::new(false)),
+            txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
+        };
+        store_meta.lock().unwrap().readers.insert(1, read_delegate);
         let observer = CdcObserver::new(task_sched.clone());
         let pd_client = Arc::new(TestPdClient::new(0, true));
         let mut ep = Endpoint::new(
@@ -1679,7 +1689,7 @@ mod tests {
             task_sched,
             raft_router,
             observer,
-            Arc::new(Mutex::new(StoreMeta::new(0))),
+            store_meta,
         );
         let (tx, rx) = channel::canal(1);
         let mut rx = rx.drain();

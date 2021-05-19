@@ -384,34 +384,39 @@ impl<S: Snapshot> MvccReader<S> {
         &mut self,
         key: &Key,
         start_ts: TimeStamp,
-        prev_write: Write,
+        prev_write_loaded: bool,
+        prev_write: Option<Write>,
     ) -> Result<OldValue> {
-        match prev_write.write_type {
-            WriteType::Put => {
-                // For Put, there must be an old value either in its
-                // short value or in the default CF.
-                Ok(OldValue::Value {
-                    short_value: prev_write.short_value,
-                    start_ts: prev_write.start_ts,
-                })
-            }
-            WriteType::Delete => {
-                // For Delete, no old value.
-                Ok(OldValue::None)
-            }
-            WriteType::Rollback | WriteType::Lock => {
+        if prev_write_loaded && prev_write.is_none() {
+            return Ok(OldValue::None);
+        }
+        if let Some(prev_write) = prev_write {
+            match prev_write.write_type {
+                WriteType::Put => {
+                    // For Put, there must be an old value either in its
+                    // short value or in the default CF.
+                    return Ok(OldValue::Value {
+                        short_value: prev_write.short_value,
+                        start_ts: prev_write.start_ts,
+                    });
+                }
+                WriteType::Delete => {
+                    // For Delete, no old value.
+                    return Ok(OldValue::None);
+                }
                 // For Rollback and Lock, it's unknown whether there is a more
                 // previous valid write. Call `get_write` to get a valid
                 // previous write.
-                Ok(match self.get_write(key, start_ts)? {
-                    Some(write) => OldValue::Value {
-                        short_value: write.short_value,
-                        start_ts: write.start_ts,
-                    },
-                    None => OldValue::None,
-                })
+                WriteType::Rollback | WriteType::Lock => (),
             }
         }
+        Ok(match self.get_write(key, start_ts)? {
+            Some(write) => OldValue::Value {
+                short_value: write.short_value,
+                start_ts: write.start_ts,
+            },
+            None => OldValue::None,
+        })
     }
 }
 
@@ -1608,13 +1613,34 @@ mod tests {
                 let prev_write = reader
                     .seek_write(&Key::from_raw(b"a"), case.written.last().unwrap().1)
                     .unwrap()
-                    .unwrap()
-                    .1;
+                    .map(|w| w.1);
+                let prev_write_loaded = true;
                 let result = reader
-                    .get_old_value(&Key::from_raw(b"a"), TimeStamp::new(25), prev_write)
+                    .get_old_value(
+                        &Key::from_raw(b"a"),
+                        TimeStamp::new(25),
+                        prev_write_loaded,
+                        prev_write,
+                    )
                     .unwrap();
                 assert_eq!(result, case.expected, "case #{}", i);
             }
         }
+
+        // Must return Oldvalue::None when prev_write_loaded is true and prev_write is None.
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let prev_write_loaded = true;
+        let prev_write = None;
+        let result = reader
+            .get_old_value(
+                &Key::from_raw(b"a"),
+                TimeStamp::new(25),
+                prev_write_loaded,
+                prev_write,
+            )
+            .unwrap();
+        assert_eq!(result, OldValue::None);
     }
 }
