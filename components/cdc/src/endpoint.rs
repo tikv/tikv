@@ -720,7 +720,15 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         let downstream_id = match conn.downstream_id(region_id) {
             Some(downstream_id) => downstream_id,
             // No such region registers in the connection.
+<<<<<<< HEAD
             None => return,
+=======
+            None => {
+                debug!("cdc send resolved ts failed, no region downstream id found";
+                    "region_id" => region_id);
+                return;
+            }
+>>>>>>> 97fd3272b... cdc: deprecate verbose log (#10200)
         };
         let delegate = match self.capture_regions.get(&region_id) {
             Some(delegate) => delegate,
