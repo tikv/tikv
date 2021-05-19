@@ -314,7 +314,7 @@ impl<'client> S3Uploader<'client> {
 
     /// Completes a multipart upload process, asking S3 to join all parts into a single file.
     async fn complete(&self) -> Result<(), RusotoError<CompleteMultipartUploadError>> {
-        match timeout(
+        let res = timeout(
             Self::get_timeout(),
             self.client
                 .complete_multipart_upload(CompleteMultipartUploadRequest {
@@ -328,20 +328,15 @@ impl<'client> S3Uploader<'client> {
                 }),
         )
         .await
-        {
-            Ok(r) => match r {
-                Ok(_) => Ok(()),
-                Err(e) => Err(e),
-            },
-            Err(_) => Err(RusotoError::ParseError(
-                "timeout after 15mins for complete in s3 storage".to_owned(),
-            )),
-        }
+        .map_err(|_| {
+            RusotoError::ParseError("timeout after 15mins for complete in s3 storage".to_owned())
+        })?;
+        res.map(|_| ())
     }
 
     /// Aborts the multipart upload process, deletes all uploaded parts.
     async fn abort(&self) -> Result<(), RusotoError<AbortMultipartUploadError>> {
-        match timeout(
+        let res = timeout(
             Self::get_timeout(),
             self.client
                 .abort_multipart_upload(AbortMultipartUploadRequest {
@@ -352,15 +347,10 @@ impl<'client> S3Uploader<'client> {
                 }),
         )
         .await
-        {
-            Ok(r) => match r {
-                Ok(_) => Ok(()),
-                Err(e) => Err(e),
-            },
-            Err(_) => Err(RusotoError::ParseError(
-                "timeout after 15mins for abort in s3 storage".to_owned(),
-            )),
-        }
+        .map_err(|_| {
+            RusotoError::ParseError("timeout after 15mins for abort in s3 storage".to_owned())
+        })?;
+        res.map(|_| ())
     }
 
     /// Uploads a part of the file.
@@ -400,7 +390,7 @@ impl<'client> S3Uploader<'client> {
     /// This should be used only when the data is known to be short, and thus relatively cheap to
     /// retry the entire upload.
     async fn upload(&self, data: &[u8]) -> Result<(), RusotoError<PutObjectError>> {
-        match timeout(Self::get_timeout(), async {
+        let res = timeout(Self::get_timeout(), async {
             #[cfg(feature = "failpoints")]
             let delay_duration = (|| {
                 fail_point!("s3_sleep_injected", |t| {
@@ -439,15 +429,10 @@ impl<'client> S3Uploader<'client> {
                 .await
         })
         .await
-        {
-            Ok(r) => match r {
-                Ok(_) => Ok(()),
-                Err(e) => Err(e),
-            },
-            Err(_) => Err(RusotoError::ParseError(
-                "timeout after 15mins for upload in s3 storage".to_owned(),
-            )),
-        }
+        .map_err(|_| {
+            RusotoError::ParseError("timeout after 15mins for upload in s3 storage".to_owned())
+        })?;
+        res.map(|_| ())
     }
 
     fn get_timeout() -> Duration {
