@@ -677,7 +677,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         match deadline
             .check()
             .map_err(StorageError::from)
-            .and_then(|_| write_result)
+            .and(write_result)
         {
             // Initiates an async write operation on the storage engine, there'll be a `WriteFinished`
             // message when it finishes.
@@ -859,10 +859,21 @@ impl<E: Engine, L: LockManager> Clone for Scheduler<E, L> {
 
 #[cfg(test)]
 mod tests {
+    use std::thread;
+
     use super::*;
-    use crate::storage::mvcc::{self, Mutation};
-    use crate::storage::txn::{commands, latch::*};
-    use kvproto::kvrpcpb::Context;
+    use crate::storage::{
+        lock_manager::DummyLockManager,
+        mvcc::{self, Mutation},
+        txn::commands::TypedCommand,
+    };
+    use crate::storage::{
+        txn::{commands, latch::*},
+        TestEngineBuilder,
+    };
+    use futures_executor::block_on;
+    use kvproto::kvrpcpb::{BatchRollbackRequest, Context};
+    use tikv_util::future::paired_future_callback;
     use txn_types::{Key, OldValues};
 
     #[test]
@@ -978,5 +989,78 @@ mod tests {
                 assert_eq!(unlocked, vec![id + 1]);
             }
         }
+    }
+
+    #[test]
+    fn test_acquire_latch_deadline() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let scheduler = Scheduler::new(
+            engine,
+            DummyLockManager,
+            ConcurrencyManager::new(1.into()),
+            1024,
+            1,
+            100 * 1024 * 1024,
+            Arc::new(AtomicBool::new(true)),
+            false,
+        );
+
+        let mut lock = Lock::new(&[Key::from_raw(b"b")]);
+        let cid = scheduler.inner.gen_id();
+        assert!(scheduler.inner.latches.acquire(&mut lock, cid));
+
+        let mut req = BatchRollbackRequest::default();
+        req.mut_context().max_execution_duration_ms = 100;
+        req.set_keys(vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()].into());
+
+        let cmd: TypedCommand<()> = req.into();
+        let (cb, f) = paired_future_callback();
+        scheduler.run_cmd(cmd.cmd, StorageCallback::Boolean(cb));
+
+        // The task waits for 200ms until it acquires the latch, but the execution
+        // time limit is 100ms.
+        thread::sleep(Duration::from_millis(200));
+        scheduler.release_lock(&lock, cid);
+        assert!(matches!(
+            block_on(f).unwrap(),
+            Err(StorageError(box StorageErrorInner::DeadlineExceeded))
+        ));
+    }
+
+    #[test]
+    fn test_pool_available_deadline() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let scheduler = Scheduler::new(
+            engine,
+            DummyLockManager,
+            ConcurrencyManager::new(1.into()),
+            1024,
+            1,
+            100 * 1024 * 1024,
+            Arc::new(AtomicBool::new(true)),
+            false,
+        );
+
+        // Spawn a task that sleeps for 500ms to occupy the pool. The next request
+        // cannot run within 500ms.
+        scheduler
+            .get_sched_pool(CommandPri::Normal)
+            .pool
+            .spawn(async { thread::sleep(Duration::from_millis(500)) })
+            .unwrap();
+
+        let mut req = BatchRollbackRequest::default();
+        req.mut_context().max_execution_duration_ms = 100;
+        req.set_keys(vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()].into());
+
+        let cmd: TypedCommand<()> = req.into();
+        let (cb, f) = paired_future_callback();
+        scheduler.run_cmd(cmd.cmd, StorageCallback::Boolean(cb));
+
+        // But the max execution duration is 100ms, so the deadline is exceeded.
+        assert!(matches!(
+            block_on(f).unwrap(),
+            Err(StorageError(box StorageErrorInner::DeadlineExceeded))
+        ));
     }
 }
