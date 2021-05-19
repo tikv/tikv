@@ -169,9 +169,6 @@ struct PriorityBasedIORateLimiterProtected {
     next_refill_time: Instant,
     // Bytes that can't be fulfilled in current epoch
     pending_bytes: [usize; IOPriority::COUNT],
-    // Used to smoothly update IO budgets
-    history_epoch_count_mul_16: usize,
-    history_bytes: [usize; IOPriority::COUNT],
     // Adjust low priority IO flow based on system backlog
     adjustor: Option<Arc<dyn LowPriorityIOAdjustor>>,
 }
@@ -181,8 +178,6 @@ impl PriorityBasedIORateLimiterProtected {
         PriorityBasedIORateLimiterProtected {
             next_refill_time: Instant::now_coarse() + DEFAULT_REFILL_PERIOD,
             pending_bytes: [0; IOPriority::COUNT],
-            history_epoch_count_mul_16: 10_000, // a large value to avoid cold start
-            history_bytes: [0; IOPriority::COUNT],
             adjustor: None,
         }
     }
@@ -332,8 +327,6 @@ impl PriorityBasedIORateLimiter {
     ///    total IO flow could exceed global threshold.
     /// 3) Highest priority IO alone must not exceed global threshold.
     fn refill(&self, locked: &mut PriorityBasedIORateLimiterProtected, now: Instant) {
-        const UPDATE_BUDGETS_EVERY_N_EPOCHS: usize = 15;
-
         let mut total_budgets =
             self.bytes_per_epoch[IOPriority::High as usize].load(Ordering::Relaxed);
         if total_budgets == 0 {
@@ -344,10 +337,6 @@ impl PriorityBasedIORateLimiter {
         let skipped_epochs_mul_16 = ((now - locked.next_refill_time).as_secs_f32() * 16.0
             / DEFAULT_REFILL_PERIOD.as_secs_f32()) as usize;
         locked.next_refill_time = now + DEFAULT_REFILL_PERIOD;
-        locked.history_epoch_count_mul_16 += skipped_epochs_mul_16 + 16;
-        if locked.history_epoch_count_mul_16 >= (UPDATE_BUDGETS_EVERY_N_EPOCHS << 4) {
-            locked.history_epoch_count_mul_16 = 0;
-        }
 
         debug_assert!(
             IOPriority::High as usize == IOPriority::Medium as usize + 1
@@ -372,40 +361,28 @@ impl PriorityBasedIORateLimiter {
                 self.bytes_through[p].swap(to_serve_pending_bytes, Ordering::Relaxed),
                 remaining_budgets,
             );
-            let bytes_through_per_epoch = ((served_by_first_epoch + served_by_skipped_epochs) * 16)
+            used_budgets += ((served_by_first_epoch + served_by_skipped_epochs) * 16)
                 / (skipped_epochs_mul_16 + 16);
-            locked.history_bytes[p] =
-                std::cmp::max(locked.history_bytes[p], bytes_through_per_epoch);
-            if locked.history_epoch_count_mul_16 == 0 {
-                // Raw IO flow could be too spiky to converge. Use max over
-                // `UPDATE_BUDGETS_EVERY_N_EPOCHS` to re-allocate budgets.
-                used_budgets += std::mem::replace(&mut locked.history_bytes[p], 0);
-                if p == IOPriority::High as usize {
-                    remaining_budgets = if total_budgets > used_budgets {
-                        total_budgets - used_budgets
-                    } else {
-                        1 // A small positive value so not to disable flow control.
-                    };
-                    RATE_LIMITER_MAX_BYTES_PER_SEC
-                        .medium
-                        .set((remaining_budgets * DEFAULT_REFILLS_PER_SEC) as i64);
-                } else {
-                    if let Some(adjustor) = &locked.adjustor {
-                        total_budgets = adjustor.adjust(total_budgets);
-                    }
-                    remaining_budgets = if total_budgets > used_budgets {
-                        total_budgets - used_budgets
-                    } else {
-                        1 // A small positive value so not to disable flow control.
-                    };
-                    RATE_LIMITER_MAX_BYTES_PER_SEC
-                        .low
-                        .set((remaining_budgets * DEFAULT_REFILLS_PER_SEC) as i64);
+            if !self.strict && *pri == IOPriority::Medium {
+                if let Some(adjustor) = &locked.adjustor {
+                    total_budgets = adjustor.adjust(total_budgets);
                 }
-                self.bytes_per_epoch[p - 1].store(remaining_budgets, Ordering::Relaxed);
-            } else {
-                remaining_budgets = self.bytes_per_epoch[p - 1].load(Ordering::Relaxed);
             }
+            remaining_budgets = if total_budgets > used_budgets {
+                total_budgets - used_budgets
+            } else {
+                1 // A small positive value so not to disable flow control.
+            };
+            if *pri == IOPriority::High {
+                RATE_LIMITER_MAX_BYTES_PER_SEC
+                    .medium
+                    .set((remaining_budgets * DEFAULT_REFILLS_PER_SEC) as i64);
+            } else {
+                RATE_LIMITER_MAX_BYTES_PER_SEC
+                    .low
+                    .set((remaining_budgets * DEFAULT_REFILLS_PER_SEC) as i64);
+            }
+            self.bytes_per_epoch[p - 1].store(remaining_budgets, Ordering::Relaxed);
         }
         let p = IOPriority::Low as usize;
         let to_serve_pending_bytes = std::cmp::min(locked.pending_bytes[p], remaining_budgets);

@@ -99,8 +99,9 @@ impl FromStr for IOType {
             "import" => Ok(IOType::Import),
             "export" => Ok(IOType::Export),
             s => Err(format!(
-                "expect in the list: [other, foreground_read, foreground_write, flush\
-                , compaction, replication, load_balance, gc, import, export], got: {:?}",
+                "expect in the list: [other, foreground_read, foreground_write, flush, \
+                level_zero_compaction, compaction, replication, load_balance, gc, import\
+                , export], got: {:?}",
                 s
             )),
         }
