@@ -20,7 +20,8 @@ use tikv_util::stream::{
     block_on_external_io, error_stream, retry, AsyncReadAsSyncStreamOfBytes, RetryError,
 };
 
-const GOOGLEAPI_HOST: &str = "https://www.googleapis.com";
+const GOOGLE_APIS: &str = "https://www.googleapis.com";
+const HARDCODED_ENDPOINTS_SUFFIX: &[&str] = &["upload/storage/v1/", "storage/v1/"];
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -346,8 +347,16 @@ impl GCSStorage {
 }
 
 fn change_host(host: &StringNonEmpty, url: &str) -> Option<String> {
-    if let Some(res) = url.strip_prefix(GOOGLEAPI_HOST) {
-        return Some([host.trim_end_matches('/'), res].concat());
+    let new_host = (|| {
+        for hardcoded in HARDCODED_ENDPOINTS_SUFFIX {
+            if let Some(res) = host.strip_suffix(hardcoded) {
+                return StringNonEmpty::opt(res.to_owned()).unwrap();
+            }
+        }
+        host.to_owned()
+    })();
+    if let Some(res) = url.strip_prefix(GOOGLE_APIS) {
+        return Some([new_host.trim_end_matches('/'), res].concat());
     }
     None
 }
@@ -490,7 +499,7 @@ mod tests {
     fn test_change_host() {
         let host = StringNonEmpty::static_str("http://localhost:4443");
         assert_eq!(
-            &change_host(&host, &format!("{}/storage/v1/foo", GOOGLEAPI_HOST)).unwrap(),
+            &change_host(&host, &format!("{}/storage/v1/foo", GOOGLE_APIS)).unwrap(),
             "http://localhost:4443/storage/v1/foo"
         );
 
@@ -511,6 +520,19 @@ mod tests {
             "http://example.com/storage/v1/foo"
         );
         assert_matches!(&change_host(&endpoint, "foo"), None);
+
+        // if we get the endpoint with suffix "/storage/v1/"
+        let endpoint = StringNonEmpty::static_str("http://example.com/storage/v1/");
+        assert_eq!(
+            &change_host(&endpoint, &format!("{}/foo", h2)).unwrap(),
+            "http://example.com/storage/v1/foo"
+        );
+
+        let endpoint = StringNonEmpty::static_str("http://example.com/upload/storage/v1/");
+        assert_eq!(
+            &change_host(&endpoint, &format!("{}/foo", h2)).unwrap(),
+            "http://example.com/storage/v1/foo"
+        );
     }
 
     #[test]
