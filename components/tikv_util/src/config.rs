@@ -34,18 +34,18 @@ pub enum ConfigError {
 }
 
 const UNIT: u64 = 1;
-const DATA_MAGNITUDE: u64 = 1000;
-pub const KB: u64 = UNIT * DATA_MAGNITUDE;
-pub const MB: u64 = KB * DATA_MAGNITUDE;
-pub const GB: u64 = MB * DATA_MAGNITUDE;
-pub const TB: u64 = GB * DATA_MAGNITUDE;
-pub const PB: u64 = TB * DATA_MAGNITUDE;
-const BI_DATA_MAGNITUDE: u64 = 1024;
-pub const KI_B: u64 = UNIT * BI_DATA_MAGNITUDE;
-pub const MI_B: u64 = KI_B * BI_DATA_MAGNITUDE;
-pub const GI_B: u64 = MI_B * BI_DATA_MAGNITUDE;
-pub const TI_B: u64 = GI_B * BI_DATA_MAGNITUDE;
-pub const PI_B: u64 = TI_B * BI_DATA_MAGNITUDE;
+const DECIMAL_DATA_MAGNITUDE: u64 = 1000;
+pub const KB: u64 = UNIT * DECIMAL_DATA_MAGNITUDE;
+pub const MB: u64 = KB * DECIMAL_DATA_MAGNITUDE;
+pub const GB: u64 = MB * DECIMAL_DATA_MAGNITUDE;
+pub const TB: u64 = GB * DECIMAL_DATA_MAGNITUDE;
+pub const PB: u64 = TB * DECIMAL_DATA_MAGNITUDE;
+const BINARY_DATA_MAGNITUDE: u64 = 1024;
+pub const KIB: u64 = UNIT * BINARY_DATA_MAGNITUDE;
+pub const MIB: u64 = KIB * BINARY_DATA_MAGNITUDE;
+pub const GIB: u64 = MIB * BINARY_DATA_MAGNITUDE;
+pub const TIB: u64 = GIB * BINARY_DATA_MAGNITUDE;
+pub const PIB: u64 = TIB * BINARY_DATA_MAGNITUDE;
 
 const TIME_MAGNITUDE_1: u64 = 1000;
 const TIME_MAGNITUDE_2: u64 = 60;
@@ -120,19 +120,19 @@ impl From<ConfigValue> for OptionReadableSize {
 
 impl ReadableSize {
     pub const fn kb(count: u64) -> ReadableSize {
-        ReadableSize(count * KB)
+        ReadableSize(count * KIB)
     }
 
     pub const fn mb(count: u64) -> ReadableSize {
-        ReadableSize(count * MB)
+        ReadableSize(count * MIB)
     }
 
     pub const fn gb(count: u64) -> ReadableSize {
-        ReadableSize(count * GB)
+        ReadableSize(count * GIB)
     }
 
     pub const fn as_mb(self) -> u64 {
-        self.0 / MB
+        self.0 / MIB
     }
 }
 
@@ -169,16 +169,16 @@ impl Serialize for ReadableSize {
         let mut buffer = String::new();
         if size == 0 {
             write!(buffer, "{}KiB", size).unwrap();
-        } else if size % PB == 0 {
-            write!(buffer, "{}PiB", size / PI_B).unwrap();
-        } else if size % TB == 0 {
-            write!(buffer, "{}TiB", size / TI_B).unwrap();
-        } else if size % GB as u64 == 0 {
-            write!(buffer, "{}GiB", size / GI_B).unwrap();
-        } else if size % MB as u64 == 0 {
-            write!(buffer, "{}MiB", size / MI_B).unwrap();
-        } else if size % KB as u64 == 0 {
-            write!(buffer, "{}KiB", size / KI_B).unwrap();
+        } else if size % PIB == 0 {
+            write!(buffer, "{}PiB", size / PIB).unwrap();
+        } else if size % TIB == 0 {
+            write!(buffer, "{}TiB", size / TIB).unwrap();
+        } else if size % GIB as u64 == 0 {
+            write!(buffer, "{}GiB", size / GIB).unwrap();
+        } else if size % MIB as u64 == 0 {
+            write!(buffer, "{}MiB", size / MIB).unwrap();
+        } else if size % KIB as u64 == 0 {
+            write!(buffer, "{}KiB", size / KIB).unwrap();
         } else {
             return serializer.serialize_u64(size);
         }
@@ -211,11 +211,11 @@ impl FromStr for ReadableSize {
         let (size, unit) = size_str.split_at(size_len);
 
         let unit = match unit.trim() {
-            "K" | "KB" | "KiB" => KI_B,
-            "M" | "MB" | "MiB" => MI_B,
-            "G" | "GB" | "GiB" => GI_B,
-            "T" | "TB" | "TiB" => TI_B,
-            "P" | "PB" | "PiB" => PI_B,
+            "K" | "KB" | "KiB" => KIB,
+            "M" | "MB" | "MiB" => MIB,
+            "G" | "GB" | "GiB" => GIB,
+            "T" | "TB" | "TiB" => TIB,
+            "P" | "PB" | "PiB" => PIB,
             "B" | "" => UNIT,
             _ => {
                 return Err(format!(
@@ -276,47 +276,154 @@ impl<'de> Deserialize<'de> for ReadableSize {
     }
 }
 
-pub mod readable_size_in_decimal_base_serde {
-    use super::*;
+#[derive(Clone, Debug, Copy, PartialEq)]
+pub struct ReadableRate(pub u64);
 
-    pub fn serialize<S>(t: &ReadableSize, serializer: S) -> Result<S::Ok, S::Error>
+impl From<ReadableRate> for ConfigValue {
+    fn from(rate: ReadableRate) -> ConfigValue {
+        ConfigValue::Rate(rate.0)
+    }
+}
+
+impl From<ConfigValue> for ReadableRate {
+    fn from(c: ConfigValue) -> ReadableRate {
+        if let ConfigValue::Rate(r) = c {
+            ReadableRate(r)
+        } else {
+            panic!("expect: ConfigValue::Rate, got: {:?}", c);
+        }
+    }
+}
+
+impl ReadableRate {
+    pub const fn kbps(count: u64) -> ReadableRate {
+        ReadableRate(count * KB)
+    }
+
+    pub const fn mbps(count: u64) -> ReadableRate {
+        ReadableRate(count * MB)
+    }
+
+    pub const fn gbps(count: u64) -> ReadableRate {
+        ReadableRate(count * GB)
+    }
+
+    pub const fn as_mbps(self) -> u64 {
+        self.0 / MB
+    }
+}
+
+impl Div<u64> for ReadableRate {
+    type Output = ReadableRate;
+
+    fn div(self, rhs: u64) -> ReadableRate {
+        ReadableRate(self.0 / rhs)
+    }
+}
+
+impl Div<ReadableRate> for ReadableRate {
+    type Output = u64;
+
+    fn div(self, rhs: ReadableRate) -> u64 {
+        self.0 / rhs.0
+    }
+}
+
+impl Mul<u64> for ReadableRate {
+    type Output = ReadableRate;
+
+    fn mul(self, rhs: u64) -> ReadableRate {
+        ReadableRate(self.0 * rhs)
+    }
+}
+
+impl Serialize for ReadableRate {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        let size = t.0;
+        let size = self.0;
         let mut buffer = String::new();
         if size == 0 {
-            write!(buffer, "{}KB", size).unwrap();
+            write!(buffer, "{}KBps", size).unwrap();
         } else if size % PB == 0 {
-            write!(buffer, "{}PB", size / PB).unwrap();
+            write!(buffer, "{}PBps", size / PB).unwrap();
         } else if size % TB == 0 {
-            write!(buffer, "{}TB", size / TB).unwrap();
+            write!(buffer, "{}TBps", size / TB).unwrap();
         } else if size % GB as u64 == 0 {
-            write!(buffer, "{}GB", size / GB).unwrap();
+            write!(buffer, "{}GBps", size / GB).unwrap();
         } else if size % MB as u64 == 0 {
-            write!(buffer, "{}MB", size / MB).unwrap();
+            write!(buffer, "{}MBps", size / MB).unwrap();
         } else if size % KB as u64 == 0 {
-            write!(buffer, "{}KB", size / KB).unwrap();
+            write!(buffer, "{}KBps", size / KB).unwrap();
         } else {
             return serializer.serialize_u64(size);
         }
         serializer.serialize_str(&buffer)
     }
+}
 
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<ReadableSize, D::Error>
+impl FromStr for ReadableRate {
+    type Err = String;
+
+    // This method parses value in binary base unit.
+    fn from_str(s: &str) -> Result<ReadableRate, String> {
+        let rate_str = s.trim();
+        if rate_str.is_empty() {
+            return Err(format!("{:?} is not a valid rate.", s));
+        }
+
+        if !rate_str.is_ascii() {
+            return Err(format!("ASCII string is expected, but got {:?}", s));
+        }
+
+        // size: digits and '.' as decimal separator
+        let rate_len = rate_str
+            .to_string()
+            .chars()
+            .take_while(|c| char::is_ascii_digit(c) || *c == '.')
+            .count();
+
+        // unit: alphabetic characters
+        let (size, unit) = rate_str.split_at(rate_len);
+
+        let unit = match unit.trim() {
+            "KBps" => KB,
+            "MBps" => MB,
+            "GBps" => GB,
+            "TBps" => TB,
+            "PBps" => PB,
+            "Bps" | "" => UNIT,
+            _ => {
+                return Err(format!(
+                    "only Bps, KBps, MBps, GBps, TBps, and PBps are supported: {:?}",
+                    s
+                ));
+            }
+        };
+
+        match size.parse::<f64>() {
+            Ok(n) => Ok(ReadableRate((n * unit as f64) as u64)),
+            Err(_) => Err(format!("invalid rate string: {:?}", s)),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ReadableRate {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
         struct SizeVisitor;
 
         impl<'de> Visitor<'de> for SizeVisitor {
-            type Value = ReadableSize;
+            type Value = ReadableRate;
 
             fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter.write_str("valid size")
+                formatter.write_str("valid rate")
             }
 
-            fn visit_i64<E>(self, size: i64) -> Result<ReadableSize, E>
+            fn visit_i64<E>(self, size: i64) -> Result<ReadableRate, E>
             where
                 E: de::Error,
             {
@@ -327,56 +434,18 @@ pub mod readable_size_in_decimal_base_serde {
                 }
             }
 
-            fn visit_u64<E>(self, size: u64) -> Result<ReadableSize, E>
+            fn visit_u64<E>(self, size: u64) -> Result<ReadableRate, E>
             where
                 E: de::Error,
             {
-                Ok(ReadableSize(size))
+                Ok(ReadableRate(size))
             }
 
-            fn visit_str<E>(self, s: &str) -> Result<ReadableSize, E>
+            fn visit_str<E>(self, size_str: &str) -> Result<ReadableRate, E>
             where
                 E: de::Error,
             {
-                let size_str = s.trim();
-                if size_str.is_empty() {
-                    return Err(format!("{:?} is not a valid size.", s)).map_err(E::custom);
-                }
-
-                if !size_str.is_ascii() {
-                    return Err(format!("ASCII string is expected, but got {:?}", s))
-                        .map_err(E::custom);
-                }
-
-                // size: digits and '.' as decimal separator
-                let size_len = size_str
-                    .to_string()
-                    .chars()
-                    .take_while(|c| char::is_ascii_digit(c) || *c == '.')
-                    .count();
-
-                // unit: alphabetic characters
-                let (size, unit) = size_str.split_at(size_len);
-
-                let unit = match unit.trim() {
-                    "K" | "KB" | "KiB" => KB,
-                    "M" | "MB" | "MiB" => MB,
-                    "G" | "GB" | "GiB" => GB,
-                    "T" | "TB" | "TiB" => TB,
-                    "P" | "PB" | "PiB" => PB,
-                    "B" | "" => UNIT,
-                    _ => {
-                        return Err(format!(
-                            "only B, KB, KiB, MB, MiB, GB, GiB, TB, TiB, PB, and PiB are supported: {:?}",
-                            s
-                        )).map_err(E::custom);
-                    }
-                };
-
-                match size.parse::<f64>() {
-                    Ok(n) => Ok(ReadableSize((n * unit as f64) as u64)),
-                    Err(_) => Err(format!("invalid size string: {:?}", s)).map_err(E::custom),
-                }
+                size_str.parse().map_err(E::custom)
             }
         }
 
@@ -1385,8 +1454,8 @@ mod tests {
         assert_eq!(s.0, 2 * 1024 * 1024 * 1024);
         assert_eq!(s.as_mb(), 2048);
 
-        assert_eq!((ReadableSize::mb(2) / 2).0, MB);
-        assert_eq!((ReadableSize::mb(1) / 2).0, 512 * KB);
+        assert_eq!((ReadableSize::mb(2) / 2).0, MIB);
+        assert_eq!((ReadableSize::mb(1) / 2).0, 512 * KIB);
         assert_eq!(ReadableSize::mb(2) / ReadableSize::kb(1), 2048);
     }
 
@@ -1399,11 +1468,11 @@ mod tests {
 
         let legal_cases = vec![
             (0, "0KiB"),
-            (2 * KB, "2KiB"),
-            (4 * MB, "4MiB"),
-            (5 * GB, "5GiB"),
-            (7 * TB, "7TiB"),
-            (11 * PB, "11PiB"),
+            (2 * KIB, "2KiB"),
+            (4 * MIB, "4MiB"),
+            (5 * GIB, "5GiB"),
+            (7 * TIB, "7TiB"),
+            (11 * PIB, "11PiB"),
         ];
         for (size, exp) in legal_cases {
             let c = SizeHolder {
@@ -1425,30 +1494,30 @@ mod tests {
         assert_eq!(res_size.s.0, c.s.0);
 
         let decode_cases = vec![
-            (" 0.5 PB", PB / 2),
-            ("0.5 TB", TB / 2),
-            ("0.5GB ", GB / 2),
-            ("0.5MB", MB / 2),
-            ("0.5KB", KB / 2),
-            ("0.5P", PB / 2),
-            ("0.5T", TB / 2),
-            ("0.5G", GB / 2),
-            ("0.5M", MB / 2),
-            ("0.5K", KB / 2),
+            (" 0.5 PB", PIB / 2),
+            ("0.5 TB", TIB / 2),
+            ("0.5GB ", GIB / 2),
+            ("0.5MB", MIB / 2),
+            ("0.5KB", KIB / 2),
+            ("0.5P", PIB / 2),
+            ("0.5T", TIB / 2),
+            ("0.5G", GIB / 2),
+            ("0.5M", MIB / 2),
+            ("0.5K", KIB / 2),
             ("23", 23),
             ("1", 1),
-            ("1024B", KB),
+            ("1024B", KIB),
             // units with binary prefixes
-            (" 0.5 PiB", PB / 2),
-            ("1PiB", PB),
-            ("0.5 TiB", TB / 2),
-            ("2 TiB", TB * 2),
-            ("0.5GiB ", GB / 2),
-            ("787GiB ", GB * 787),
-            ("0.5MiB", MB / 2),
-            ("3MiB", MB * 3),
-            ("0.5KiB", KB / 2),
-            ("1 KiB", KB),
+            (" 0.5 PiB", PIB / 2),
+            ("1PiB", PIB),
+            ("0.5 TiB", TIB / 2),
+            ("2 TiB", TIB * 2),
+            ("0.5GiB ", GIB / 2),
+            ("787GiB ", GIB * 787),
+            ("0.5MiB", MIB / 2),
+            ("3MiB", MIB * 3),
+            ("0.5KiB", KIB / 2),
+            ("1 KiB", KIB),
         ];
         for (src, exp) in decode_cases {
             let src = format!("s = {:?}", src);
@@ -1463,6 +1532,83 @@ mod tests {
         for src in illegal_cases {
             let src_str = format!("s = {:?}", src);
             assert!(toml::from_str::<SizeHolder>(&src_str).is_err(), "{}", src);
+        }
+    }
+
+    #[test]
+    fn test_readable_rate() {
+        let r = ReadableRate::kbps(2);
+        assert_eq!(r.0, 2000);
+        assert_eq!(r.as_mbps(), 0);
+        let r = ReadableRate::mbps(2);
+        assert_eq!(r.0, 2 * 1000 * 1000);
+        assert_eq!(r.as_mbps(), 2);
+        let r = ReadableRate::gbps(2);
+        assert_eq!(r.0, 2 * 1000 * 1000 * 1000);
+        assert_eq!(r.as_mbps(), 2 * 1000);
+
+        assert_eq!((ReadableRate::mbps(2) / 2).0, MB);
+        assert_eq!((ReadableRate::mbps(1) / 2).0, 500 * KB);
+        assert_eq!(ReadableRate::mbps(2) / ReadableRate::kbps(1), 2000);
+    }
+
+    #[test]
+    fn test_parse_readable_rate() {
+        #[derive(Serialize, Deserialize)]
+        struct RateHolder {
+            r: ReadableRate,
+        }
+
+        let legal_cases = vec![
+            (0, "0KBps"),
+            (2 * KB, "2KBps"),
+            (4 * MB, "4MBps"),
+            (5 * GB, "5GBps"),
+            (7 * TB, "7TBps"),
+            (11 * PB, "11PBps"),
+        ];
+        for (rate, exp) in legal_cases {
+            let c = RateHolder {
+                r: ReadableRate(rate),
+            };
+            let res_str = toml::to_string(&c).unwrap();
+            let exp_str = format!("r = {:?}\n", exp);
+            assert_eq!(res_str, exp_str);
+            let res_rate: RateHolder = toml::from_str(&exp_str).unwrap();
+            assert_eq!(res_rate.r.0, rate);
+        }
+
+        let c = RateHolder {
+            r: ReadableRate(512),
+        };
+        let res_str = toml::to_string(&c).unwrap();
+        assert_eq!(res_str, "r = 512\n");
+        let res_rate: RateHolder = toml::from_str(&res_str).unwrap();
+        assert_eq!(res_rate.r.0, c.r.0);
+
+        let decode_cases = vec![
+            (" 0.5 PBps", PB / 2),
+            ("0.5 TBps", TB / 2),
+            ("0.5GBps", GB / 2),
+            ("0.5MBps", MB / 2),
+            ("0.5KBps", KB / 2),
+            ("23", 23),
+            ("1", 1),
+            ("1000Bps", KB),
+        ];
+        for (src, exp) in decode_cases {
+            let src = format!("r = {:?}", src);
+            let res: RateHolder = toml::from_str(&src).unwrap();
+            assert_eq!(res.r.0, exp);
+        }
+
+        let illegal_cases = vec![
+            "0.5kbps", "0.5kBps", "0.5Kbps", "0.5kps", "0.5Kps", "0.5gps", "bps", "gbps", "1bps",
+            "Bps", "1K24Bps", "5_KBps", "4B7ps", "5M_ps", "1KiBps", "1MiBps",
+        ];
+        for src in illegal_cases {
+            let src_str = format!("r = {:?}", src);
+            assert!(toml::from_str::<RateHolder>(&src_str).is_err(), "{}", src);
         }
     }
 
