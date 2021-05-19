@@ -180,7 +180,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
         // The general idea is to simultaneously step write cursor and lock cursor.
 
         // TODO: We don't need to seek lock CF if isolation level is RC.
-        
+
         loop {
             // `current_user_key` is `min(user_key(write_cursor), lock_cursor)`, indicating
             // the encoded user key we are currently dealing with. It may not have a write, or
