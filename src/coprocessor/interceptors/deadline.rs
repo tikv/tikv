@@ -2,35 +2,29 @@
 
 use pin_project::pin_project;
 use std::future::Future;
-use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tikv_util::deadline::{Deadline, DeadlineError};
 
 /// Checks the deadline before every poll of the future. If the deadline is exceeded,
 /// `DeadlineError` is returned.
-pub fn check_deadline<'a, F: Future + 'a>(
+pub fn check_deadline<F: Future>(
     fut: F,
     deadline: Deadline,
-) -> impl Future<Output = Result<F::Output, DeadlineError>> + 'a {
-    DeadlineChecker {
-        fut,
-        deadline,
-        _phantom: PhantomData,
-    }
+) -> impl Future<Output = Result<F::Output, DeadlineError>> {
+    DeadlineChecker { fut, deadline }
 }
 
 #[pin_project]
-struct DeadlineChecker<'a, F: Future + 'a> {
+struct DeadlineChecker<F: Future> {
     #[pin]
     fut: F,
     deadline: Deadline,
-    _phantom: PhantomData<&'a ()>,
 }
 
-impl<'a, F> Future for DeadlineChecker<'a, F>
+impl<F> Future for DeadlineChecker<F>
 where
-    F: Future + 'a,
+    F: Future,
 {
     type Output = Result<F::Output, DeadlineError>;
 
