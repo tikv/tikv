@@ -5,7 +5,7 @@ use std::fmt::Display;
 use std::option::Option;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
-use std::{fmt, u64};
+use std::{cmp, fmt, u64};
 
 use kvproto::kvrpcpb::KeyRange;
 use kvproto::metapb::{self, PeerRole};
@@ -16,7 +16,7 @@ use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
 use raft::INVALID_INDEX;
 use raft_proto::ConfChangeI;
 use tikv_util::time::monotonic_raw_now;
-use tikv_util::{box_err, debug};
+use tikv_util::{box_err, debug, info};
 use time::{Duration, Timespec};
 
 use super::peer_storage;
@@ -863,9 +863,9 @@ pub struct RegionReadProgress {
 }
 
 impl RegionReadProgress {
-    pub fn new(applied_index: u64, cap: usize) -> RegionReadProgress {
+    pub fn new(applied_index: u64, cap: usize, tag: String) -> RegionReadProgress {
         RegionReadProgress {
-            core: Mutex::new(RegionReadProgressCore::new(applied_index, cap)),
+            core: Mutex::new(RegionReadProgressCore::new(applied_index, cap, tag)),
             applied_index: AtomicU64::from(applied_index),
             safe_ts: AtomicU64::from(0),
         }
@@ -889,6 +889,13 @@ impl RegionReadProgress {
         }
     }
 
+    pub fn merge_safe_ts(&self, source_safe_ts: u64, merge_index: u64) {
+        let mut core = self.core.lock().unwrap();
+        if let Some(ts) = core.merge_safe_ts(source_safe_ts, merge_index) {
+            self.safe_ts.store(ts, AtomicOrdering::Release);
+        }
+    }
+
     pub fn clear(&self) {
         let mut core = self.core.lock().unwrap();
         core.clear();
@@ -906,20 +913,48 @@ impl RegionReadProgress {
 
 #[derive(Default, Debug)]
 struct RegionReadProgressCore {
+    tag: String,
     applied_index: u64,
-    // TODO: after region merged, the region's key range is extended and this
-    // region wide `safe_ts` should reset to `min(source_safe_ts, target_safe_ts)`
     safe_ts: u64,
     // `pending_items` is a *sorted* list of `(apply index, safe ts)` item
     pending_items: VecDeque<(u64, u64)>,
+    // After the region commit merged, the region's key range is extended and the region's `safe_ts`
+    // should reset to `min(source_safe_ts, target_safe_ts)`, and start reject stale `read_state` item
+    // with index smaller than `last_merge_index` to avoid `safe_ts` undo the decrease
+    last_merge_index: u64,
 }
 
 impl RegionReadProgressCore {
-    fn new(applied_index: u64, cap: usize) -> RegionReadProgressCore {
+    fn new(applied_index: u64, cap: usize, tag: String) -> RegionReadProgressCore {
         RegionReadProgressCore {
+            tag,
             applied_index,
             safe_ts: 0,
             pending_items: VecDeque::with_capacity(cap),
+            last_merge_index: 0,
+        }
+    }
+
+    // Reset `safe_ts` to min(`source_safe_ts`, `safe_ts`)
+    fn merge_safe_ts(&mut self, source_safe_ts: u64, merge_index: u64) -> Option<u64> {
+        // Consume all pending items before `merge_index`
+        self.update_applied(merge_index);
+        // Update `last_merge_index`
+        self.last_merge_index = merge_index;
+        // Reset target region's `safe_ts`
+        let target_safe_ts = self.safe_ts;
+        self.safe_ts = cmp::min(source_safe_ts, target_safe_ts);
+        info!(
+            "reset safe_ts due to merge";
+            "tag" => &self.tag,
+            "source_safe_ts" => source_safe_ts,
+            "target_safe_ts" => target_safe_ts,
+            "safe_ts" => self.safe_ts,
+        );
+        if self.safe_ts != target_safe_ts {
+            Some(self.safe_ts)
+        } else {
+            None
         }
     }
 
@@ -949,6 +984,10 @@ impl RegionReadProgressCore {
 
     // Return the `safe_ts` if it is updated
     fn update_safe_ts(&mut self, apply_index: u64, ts: u64) -> Option<u64> {
+        // Discard stale item with `apply_index` before `last_merge_index`
+        if apply_index <= self.last_merge_index {
+            return None;
+        }
         // The peer has enough data, try update `safe_ts` directly
         if self.applied_index >= apply_index {
             let mut updated_ts = None;
@@ -1622,7 +1661,7 @@ mod tests {
         }
 
         let cap = 10;
-        let rrp = RegionReadProgress::new(10, cap);
+        let rrp = RegionReadProgress::new(10, cap, "".to_owned());
         for i in 1..=20 {
             rrp.update_safe_ts(i, i);
         }

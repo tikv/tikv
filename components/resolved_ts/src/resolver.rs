@@ -53,6 +53,11 @@ impl Resolver {
         &self.lock_ts_heap
     }
 
+    pub fn stop_tracking_read_progress(&mut self) {
+        // TODO: maybe should also stop update `tracked_index`
+        self.read_progress.take();
+    }
+
     pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>, index: Option<u64>) {
         if let Some(index) = index {
             assert!(

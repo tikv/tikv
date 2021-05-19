@@ -9,7 +9,6 @@ use std::sync::{Arc, Mutex};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{KvEngine, Snapshot};
 use grpcio::Environment;
-use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::metapb::Region;
 use pd_client::PdClient;
 use raft::StateRole;
@@ -26,10 +25,10 @@ use txn_types::{Key, TimeStamp};
 
 use crate::advance::AdvanceTsWorker;
 use crate::cmd::{ChangeLog, ChangeRow};
-use crate::errors::{Error, Result};
 use crate::resolver::Resolver;
 use crate::scanner::{ScanEntry, ScanMode, ScanTask, ScannerPool};
 use crate::sinker::{CmdSinker, SinkCmd};
+use kvproto::raft_cmdpb::AdminCmdType;
 
 enum ResolverStatus {
     Pending {
@@ -79,7 +78,7 @@ impl ObserveRegion {
         }
     }
 
-    fn track_change_log(&mut self, change_logs: &[ChangeLog]) -> Result<()> {
+    fn track_change_log(&mut self, change_logs: &[ChangeLog]) -> std::result::Result<(), String> {
         match &mut self.resolver_status {
             ResolverStatus::Pending {
                 locks,
@@ -88,8 +87,22 @@ impl ObserveRegion {
             } => {
                 for log in change_logs {
                     match log {
-                        // TODO: not need to return `Err` for region error
-                        ChangeLog::Error(e) => return Err(Error::request(e.clone())),
+                        ChangeLog::Error(e) => {
+                            debug!(
+                                "skip change log error";
+                                "region" => self.meta.id,
+                                "error" => ?e,
+                            );
+                            continue;
+                        }
+                        ChangeLog::Admin(req_type) => {
+                            // TODO: for admin cmd that won't change the region meta like peer list and key range
+                            // (i.e. `CompactLog`, `ComputeHash`) we may not need to return error
+                            return Err(format!(
+                                "region met admin command {:?} while initializing resolver",
+                                req_type
+                            ));
+                        }
                         ChangeLog::Rows { rows, index } => {
                             rows.iter().for_each(|row| match row {
                                 ChangeRow::Prewrite { key, start_ts, .. } => {
@@ -126,7 +139,37 @@ impl ObserveRegion {
             ResolverStatus::Ready => {
                 for log in change_logs {
                     match log {
-                        ChangeLog::Error(e) => return Err(Error::request(e.clone())),
+                        ChangeLog::Error(e) => {
+                            debug!(
+                                "skip change log error";
+                                "region" => self.meta.id,
+                                "error" => ?e,
+                            );
+                            continue;
+                        }
+                        ChangeLog::Admin(req_type) => match req_type {
+                            AdminCmdType::Split
+                            | AdminCmdType::BatchSplit
+                            | AdminCmdType::PrepareMerge
+                            | AdminCmdType::RollbackMerge
+                            | AdminCmdType::CommitMerge => {
+                                info!(
+                                    "region met split/merge command, stop tracking since key range changed, wait for re-register";
+                                    "req_type" => ?req_type,
+                                );
+                                // Stop tracking read progress so that `tracked_index` larger than the split/merge command index
+                                // won't be published untill `RegionUpdate` event trigger the region re-register and re-scan the
+                                // new key range
+                                self.resolver.stop_tracking_read_progress();
+                            }
+                            _ => {
+                                debug!(
+                                    "skip change log admin";
+                                    "region" => self.meta.id,
+                                    "req_type" => ?req_type,
+                                );
+                            }
+                        },
                         ChangeLog::Rows { rows, index } => {
                             rows.iter().for_each(|row| match row {
                                 ChangeRow::Prewrite { key, start_ts, .. } => self
@@ -308,12 +351,11 @@ where
             }),
             before_start: None,
             on_error: Some(Box::new(move |observe_id, _region, e| {
-                let error = e.extract_error_header();
                 scheduler_error
-                    .schedule(Task::RegionError {
+                    .schedule(Task::ReRegisterRegion {
                         region_id,
                         observe_id,
-                        error,
+                        cause: format!("met error while handle scan task {:?}", e),
                     })
                     .unwrap();
             })),
@@ -341,6 +383,22 @@ where
             }
         } else {
             warn!("deregister unregister region"; "region_id" => region_id);
+        }
+    }
+
+    fn region_updated(&mut self, incoming_region: Region) {
+        let region_id = incoming_region.get_id();
+        if let Some(obs_region) = self.regions.get_mut(&region_id) {
+            if obs_region.meta.get_region_epoch() == incoming_region.get_region_epoch() {
+                // only peer list change, no need to re-register region
+                obs_region.meta = incoming_region;
+                return;
+            }
+            // TODO: may not need to re-register region for some cases:
+            // - `Split/BatchSplit`, which can be handled by remove out-of-range locks from the `Resolver`'s lock heap
+            // - `PrepareMerge` and `RollbackMerge`, the key range is unchanged
+            self.deregister_region(region_id);
+            self.register_region(incoming_region);
         }
     }
 
@@ -380,14 +438,18 @@ where
     }
 
     // Deregister current observed region and try to register it again.
-    // Call after the version of region epoch changed.
-    fn region_error(&mut self, region_id: u64, observe_id: ObserveID, error: ErrorHeader) {
+    fn re_register_region(&mut self, region_id: u64, observe_id: ObserveID, cause: String) {
         if let Some(observe_region) = self.regions.get(&region_id) {
             if observe_region.handle.id != observe_id {
                 warn!("resolved ts deregister region failed due to observe_id not match");
                 return;
             }
-            info!("region met error, try to register again"; "region_id" => region_id, "error" => ?error);
+            info!(
+                "register region again";
+                "region_id" => region_id,
+                "observe_id" => ?observe_id,
+                "cause" => cause
+            );
             self.deregister_region(region_id);
             let region;
             {
@@ -440,7 +502,7 @@ where
                             let logs = ChangeLog::encode_change_log(region_id, batch);
                             if let Err(e) = observe_region.track_change_log(&logs) {
                                 drop(observe_region);
-                                self.region_error(region_id, observe_id, e.extract_error_header())
+                                self.re_register_region(region_id, observe_id, e)
                             }
                             return Some(SinkCmd {
                                 region_id,
@@ -491,15 +553,16 @@ where
 }
 
 pub enum Task<S: Snapshot> {
+    RegionUpdated(Region),
     RegionDestroyed(Region),
     RegionRoleChanged {
         region: Region,
         role: StateRole,
     },
-    RegionError {
+    ReRegisterRegion {
         region_id: u64,
         observe_id: ObserveID,
-        error: ErrorHeader,
+        cause: String,
     },
     RegisterAdvanceEvent,
     AdvanceResolvedTs {
@@ -526,6 +589,10 @@ impl<S: Snapshot> fmt::Debug for Task<S> {
                 .field("name", &"region_destroyed")
                 .field("region", &region)
                 .finish(),
+            Task::RegionUpdated(ref region) => de
+                .field("name", &"region_updated")
+                .field("region", &region)
+                .finish(),
             Task::RegionRoleChanged {
                 ref region,
                 ref role,
@@ -534,15 +601,15 @@ impl<S: Snapshot> fmt::Debug for Task<S> {
                 .field("region", &region)
                 .field("role", &role)
                 .finish(),
-            Task::RegionError {
+            Task::ReRegisterRegion {
                 ref region_id,
                 ref observe_id,
-                ref error,
+                ref cause,
             } => de
-                .field("name", &"region_error")
+                .field("name", &"re_register_region")
                 .field("region_id", &region_id)
                 .field("observe_id", &observe_id)
-                .field("error", &error)
+                .field("cause", &cause)
                 .finish(),
             Task::AdvanceResolvedTs {
                 ref regions,
@@ -587,12 +654,13 @@ where
         debug!("run resolved-ts task"; "task" => ?task);
         match task {
             Task::RegionDestroyed(region) => self.region_destroyed(region),
+            Task::RegionUpdated(region) => self.region_updated(region),
             Task::RegionRoleChanged { region, role } => self.region_role_changed(region, role),
-            Task::RegionError {
+            Task::ReRegisterRegion {
                 region_id,
                 observe_id,
-                error,
-            } => self.region_error(region_id, observe_id, error),
+                cause,
+            } => self.re_register_region(region_id, observe_id, cause),
             Task::AdvanceResolvedTs { regions, ts } => self.advance_resolved_ts(regions, ts),
             Task::ChangeLog {
                 cmd_batch,

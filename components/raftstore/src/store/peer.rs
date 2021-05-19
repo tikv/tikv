@@ -576,7 +576,7 @@ where
             last_proposed_prepare_merge_idx: 0,
             last_committed_prepare_merge_idx: 0,
             leader_missing_time: Some(Instant::now()),
-            tag,
+            tag: tag.clone(),
             last_applying_idx: applied_index,
             last_compacted_idx: 0,
             last_urgent_proposal_idx: u64::MAX,
@@ -605,6 +605,7 @@ where
             read_progress: Arc::new(RegionReadProgress::new(
                 applied_index,
                 REGION_READ_PROGRESS_CAP,
+                tag,
             )),
         };
 
