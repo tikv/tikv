@@ -248,7 +248,6 @@ impl BlockCacheConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct IORateLimitConfig {
     pub max_bytes_per_sec: OptionReadableSize,
-    #[serde(with = "file_system::io_rate_limit_mode_serde")]
     #[config(skip)]
     pub mode: IORateLimitMode,
     #[config(skip)]

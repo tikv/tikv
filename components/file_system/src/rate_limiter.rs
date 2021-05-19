@@ -3,6 +3,7 @@
 use super::metrics::{tls_collect_rate_limiter_request_wait, RATE_LIMITER_MAX_BYTES_PER_SEC};
 use super::{IOOp, IOPriority, IOType};
 
+use std::str::FromStr;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
@@ -11,6 +12,7 @@ use std::time::Duration;
 
 use crossbeam_utils::CachePadded;
 use parking_lot::Mutex;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use strum::EnumCount;
 use tikv_util::time::Instant;
 
@@ -44,7 +46,7 @@ impl IORateLimitMode {
     }
 }
 
-impl std::str::FromStr for IORateLimitMode {
+impl FromStr for IORateLimitMode {
     type Err = String;
     fn from_str(s: &str) -> Result<IORateLimitMode, String> {
         match s {
@@ -59,31 +61,26 @@ impl std::str::FromStr for IORateLimitMode {
     }
 }
 
-pub mod io_rate_limit_mode_serde {
-    use std::fmt;
-    use std::str::FromStr;
-
-    use serde::de::{Error, Unexpected, Visitor};
-    use serde::{Deserializer, Serializer};
-
-    use super::IORateLimitMode;
-
-    pub fn serialize<S>(t: &IORateLimitMode, serializer: S) -> Result<S::Ok, S::Error>
+impl Serialize for IORateLimitMode {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        serializer.serialize_str(t.as_str())
+        serializer.serialize_str(self.as_str())
     }
+}
 
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<IORateLimitMode, D::Error>
+impl<'de> Deserialize<'de> for IORateLimitMode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
+        use serde::de::{Error, Unexpected, Visitor};
         struct StrVistor;
         impl<'de> Visitor<'de> for StrVistor {
             type Value = IORateLimitMode;
 
-            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 write!(formatter, "a IO rate limit mode")
             }
 
