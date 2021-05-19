@@ -911,11 +911,15 @@ struct RegionReadProgressCore {
     applied_index: u64,
     // TODO: after region merged, the region's key range is extended and this
     // region wide `safe_ts` should reset to `min(source_safe_ts, target_safe_ts)`
+    //
+    // A wraper of `(apply_index, safe_ts)` item, where the `read_state.ts` is the peer's current `safe_ts`
+    // and the `read_state.idx` is the smallest `apply_index` required for that `safe_ts`
     read_state: ReadState,
-    // `pending_items` is a *sorted* list of `(apply index, safe ts)` item
+    // `pending_items` is a *sorted* list of `(apply_index, safe_ts)` item
     pending_items: VecDeque<ReadState>,
 }
 
+// A helpful wraper of `(apply_index, safe_ts)` item
 #[derive(Clone, Debug, Default)]
 pub struct ReadState {
     pub idx: u64,
