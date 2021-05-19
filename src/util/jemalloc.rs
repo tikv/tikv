@@ -38,11 +38,12 @@ mod jemalloc {
     pub fn dump_stats() -> String {
         let mut buf = Vec::with_capacity(1024);
         unsafe {
-            malloc_stats_print(
-                write_cb,
-                &mut buf as *mut Vec<u8> as *mut c_void,
-                ptr::null(),
-            )
+            // Can't find the symbol.
+            // malloc_stats_print(
+            //     write_cb,
+            //     &mut buf as *mut Vec<u8> as *mut c_void,
+            //     ptr::null(),
+            // )
         }
         String::from_utf8_lossy(&buf).into_owned()
     }

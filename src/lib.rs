@@ -22,12 +22,8 @@
 #![feature(duration_as_u128)]
 #![feature(duration_float)]
 #![feature(entry_or_default)]
-#![feature(proc_macro_non_items)]
-#![feature(proc_macro_gen)]
 #![feature(proc_macro_hygiene)]
 #![feature(specialization)]
-#![feature(ascii_ctype)]
-#![feature(const_int_ops)]
 #![feature(use_extern_macros)]
 #![recursion_limit = "200"]
 // Currently this raises some false positives, so we allow it:
