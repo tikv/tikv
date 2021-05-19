@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::future::Future;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use collections::HashSet;

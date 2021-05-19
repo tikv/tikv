@@ -3,7 +3,7 @@
 use kvproto::kvrpcpb::IsolationLevel;
 
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use std::{borrow::Cow, time::Instant};
+use std::{borrow::Cow};
 use txn_types::{Key, Lock, TimeStamp, TsSet, Value, WriteRef, WriteType};
 
 use crate::storage::kv::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics};
@@ -245,6 +245,7 @@ impl<S: Snapshot> PointGetter<S> {
                 self.met_newer_ts_data = NewerTsCheckState::Met;
             }
         }
+        
         seek_key = seek_key.append_ts(self.ts);
         let data_found = if use_near_seek {
             if self.write_cursor.key(&mut self.statistics.write) >= seek_key.as_encoded().as_slice()

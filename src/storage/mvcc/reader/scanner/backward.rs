@@ -96,6 +96,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
 
         // Similar to forward scanner, the general idea is to simultaneously step write
         // cursor and lock cursor. Please refer to `ForwardKvScanner` for details.
+        
         loop {
             let (current_user_key, has_write, has_lock) = {
                 let w_key = if self.write_cursor.valid()? {
