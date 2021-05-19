@@ -26,16 +26,13 @@ use crate::storage::{self, need_check_locks_in_replica_read, Engine, Snapshot, S
 use crate::{read_pool::ReadPoolHandle, storage::kv::SnapContext};
 
 use crate::coprocessor::cache::CachedRequestHandler;
-use crate::coprocessor::interceptors::limit_concurrency;
-use crate::coprocessor::interceptors::track;
+use crate::coprocessor::interceptors::*;
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::PerfLevel;
 use txn_types::Lock;
-
-use super::interceptors::check_deadline;
 
 /// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
 /// which means they don't need a permit from the semaphore before execution.
