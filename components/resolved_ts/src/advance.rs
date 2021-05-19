@@ -221,6 +221,12 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
                         if leader_store_id.unwrap() != meta.store_id.unwrap() {
                             continue;
                         }
+                        let mut read_state = ReadState::default();
+                        if let Some(rrp) = meta.region_read_progress.get(&region_id) {
+                            let rs = rrp.read_state();
+                            read_state.set_applied_index(rs.idx);
+                            read_state.set_safe_ts(rs.ts);
+                        }
                         for peer in region.get_peers() {
                             if peer.store_id == store_id && peer.id == *leader_id {
                                 resp_map.entry(region_id).or_default().push(store_id);
@@ -229,18 +235,12 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
                             if peer.get_role() == PeerRole::Learner {
                                 continue;
                             }
-                            let mut read_state = ReadState::default();
-                            if let Some(rrp) = meta.region_read_progress.get(&region_id) {
-                                let rs = rrp.read_state();
-                                read_state.set_applied_index(rs.idx);
-                                read_state.set_safe_ts(rs.ts);
-                            }
                             let mut leader_info = LeaderInfo::default();
                             leader_info.set_peer_id(*leader_id);
                             leader_info.set_term(*term);
                             leader_info.set_region_id(region_id);
                             leader_info.set_region_epoch(region.get_region_epoch().clone());
-                            leader_info.set_read_state(read_state);
+                            leader_info.set_read_state(read_state.clone());
                             store_map
                                 .entry(peer.store_id)
                                 .or_default()

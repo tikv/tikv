@@ -972,11 +972,11 @@ impl RegionReadProgressCore {
         }
         // The peer doesn't has enough data, keep the item for future use
         if let Some(prev_item) = self.pending_items.back_mut() {
-            // Discord the item if it has a smaller `safe_ts`
+            // Discard the item if it has a smaller `safe_ts`
             if prev_item.ts >= ts {
                 return None;
             }
-            // Discord the item if it has a smaller `apply_index`
+            // Discard the item if it has a smaller `apply_index`
             if prev_item.idx >= idx {
                 // Instead of dropping the incoming item, try use it to update
                 // the last one, update the last item's `safe_ts` if the incoming
