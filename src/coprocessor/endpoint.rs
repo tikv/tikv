@@ -26,8 +26,7 @@ use crate::storage::{self, need_check_locks_in_replica_read, Engine, Snapshot, S
 use crate::{read_pool::ReadPoolHandle, storage::kv::SnapContext};
 
 use crate::coprocessor::cache::CachedRequestHandler;
-use crate::coprocessor::interceptors::limit_concurrency;
-use crate::coprocessor::interceptors::track;
+use crate::coprocessor::interceptors::*;
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
@@ -416,12 +415,15 @@ impl<E: Engine> Endpoint<E> {
 
         tracker.on_begin_all_items();
 
-        let handle_request_future = track(handler.handle_request(), &mut tracker);
-        let result = if let Some(semaphore) = &semaphore {
+        let deadline = tracker.req_ctx.deadline;
+        let handle_request_future =
+            check_deadline(track(handler.handle_request(), &mut tracker), deadline);
+        let deadline_res = if let Some(semaphore) = &semaphore {
             limit_concurrency(handle_request_future, semaphore, LIGHT_TASK_THRESHOLD).await
         } else {
             handle_request_future.await
         };
+        let result = deadline_res.map_err(Error::from).and_then(|res| res);
 
         // There might be errors when handling requests. In this case, we still need its
         // execution metrics.

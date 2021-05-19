@@ -24,8 +24,14 @@ failpoints = [
   "raftstore/failpoints",
   "engine_rocks/failpoints"
 ]
-cloud-aws = [ "encryption_export/cloud-aws" ]
-cloud-gcp = [ "encryption_export/cloud-gcp" ]
+cloud-aws = [
+  "encryption_export/cloud-aws",
+  "sst_importer/cloud-aws",
+]
+cloud-gcp = [
+  "encryption_export/cloud-gcp",
+  "sst_importer/cloud-gcp",
+]
 protobuf-codec = [
   "batch-system/protobuf-codec",
   "codec/protobuf-codec",
@@ -102,6 +108,8 @@ test-engines-panic = [
 bcc-iosnoop = [
   "file_system/bcc-iosnoop",
 ]
+cloud-storage-grpc = ["sst_importer/cloud-storage-grpc"]
+cloud-storage-dylib = ["sst_importer/cloud-storage-dylib"]
 
 # for testing configure propegate to other crates
 # https://stackoverflow.com/questions/41700543/can-we-share-test-utilites-between-crates
@@ -148,7 +156,7 @@ hyper-openssl = "0.8"
 http = "0"
 into_other = { path = "components/into_other", default-features = false }
 keys = { path = "components/keys", default-features = false }
-kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+kvproto = { rev = "511a3225c29f9272af83d28efed92eba835cd34f", git = "https://github.com/pingcap/kvproto.git", default-features = false }
 lazy_static = "1.3"
 libc = "0.2"
 libloading = "0.7"
@@ -277,8 +285,10 @@ members = [
   "components/tidb_query_executors",
   "components/pd_client",
   "components/external_storage",
+  "components/external_storage/export",
   "components/cloud",
   "components/cloud/aws",
+  "components/cloud/gcp",
   "components/backup",
   "components/keys",
   "components/sst_importer",
@@ -289,6 +299,7 @@ members = [
   "components/raftstore",
   "components/into_other",
   "components/encryption",
+  "components/encryption/export",
   "components/error_code",
   "components/concurrency_manager",
   "components/server",
