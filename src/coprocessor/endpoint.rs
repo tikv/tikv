@@ -421,11 +421,12 @@ impl<E: Engine> Endpoint<E> {
         let deadline = tracker.req_ctx.deadline;
         let handle_request_future =
             check_deadline(track(handler.handle_request(), &mut tracker), deadline);
-        let result = if let Some(semaphore) = &semaphore {
-            limit_concurrency(handle_request_future, semaphore, LIGHT_TASK_THRESHOLD).await?
+        let deadline_res = if let Some(semaphore) = &semaphore {
+            limit_concurrency(handle_request_future, semaphore, LIGHT_TASK_THRESHOLD).await
         } else {
-            handle_request_future.await?
+            handle_request_future.await
         };
+        let result = deadline_res.map_err(Error::from).and_then(|res| res);
 
         // There might be errors when handling requests. In this case, we still need its
         // execution metrics.
