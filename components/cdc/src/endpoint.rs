@@ -689,7 +689,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             Some(downstream_id) => downstream_id,
             // No such region registers in the connection.
             None => {
-                info!("cdc send resolved ts failed, no region downstream id found";
+                debug!("cdc send resolved ts failed, no region downstream id found";
                     "region_id" => region_id);
                 return;
             }
