@@ -11,7 +11,6 @@ pub type ConfigChange = HashMap<String, ConfigValue>;
 pub enum ConfigValue {
     Duration(u64),
     Size(u64),
-    Rate(u64),
     U64(u64),
     F64(f64),
     I32(i32),
@@ -21,6 +20,7 @@ pub enum ConfigValue {
     String(String),
     BlobRunMode(String),
     OptionSize(Option<u64>),
+    Rate(u64),
     Module(ConfigChange),
     Skip,
 }
@@ -30,9 +30,9 @@ impl Display for ConfigValue {
         match self {
             ConfigValue::Duration(v) => write!(f, "{}ms", v),
             ConfigValue::Size(v) => write!(f, "{}b", v),
-            ConfigValue::Rate(v) => write!(f, "{}bps", v),
             ConfigValue::OptionSize(Some(v)) => write!(f, "{}b", v),
             ConfigValue::OptionSize(None) => write!(f, ""),
+            ConfigValue::Rate(v) => write!(f, "{}bps", v),
             ConfigValue::U64(v) => write!(f, "{}", v),
             ConfigValue::F64(v) => write!(f, "{}", v),
             ConfigValue::I32(v) => write!(f, "{}", v),

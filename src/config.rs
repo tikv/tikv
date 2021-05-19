@@ -44,7 +44,8 @@ use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::{CompactionGuardGeneratorFactory, SplitConfig};
 use security::SecurityConfig;
 use tikv_util::config::{
-    self, LogFormat, OptionReadableSize, ReadableDuration, ReadableSize, TomlWriter, GB, MB,
+    self, LogFormat, OptionReadableSize, ReadableDuration, ReadableRate, ReadableSize, TomlWriter,
+    GB, MB,
 };
 use tikv_util::sys::sys_quota::SysQuota;
 use tikv_util::time::duration_to_sec;
@@ -2838,6 +2839,7 @@ fn to_change_value(v: &str, typed: &ConfigValue) -> CfgResult<ConfigValue> {
         ConfigValue::OptionSize(_) => {
             ConfigValue::from(OptionReadableSize(Some(v.parse::<ReadableSize>()?)))
         }
+        ConfigValue::Rate(_) => ConfigValue::from(v.parse::<ReadableRate>()?),
         ConfigValue::U64(_) => ConfigValue::from(v.parse::<u64>()?),
         ConfigValue::F64(_) => ConfigValue::from(v.parse::<f64>()?),
         ConfigValue::U32(_) => ConfigValue::from(v.parse::<u32>()?),
@@ -2872,6 +2874,7 @@ fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, 
                         ConfigValue::Duration(_)
                         | ConfigValue::Size(_)
                         | ConfigValue::OptionSize(_)
+                        | ConfigValue::Rate(_)
                         | ConfigValue::String(_)
                         | ConfigValue::BlobRunMode(_) => Ok(true),
                         _ => Ok(false),
@@ -3378,7 +3381,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             db.get_db_options().get_rate_bytes_per_sec().unwrap(),
-            ReadableSize(128 * 1000 * 1000).0 as i64
+            ReadableSize::mb(128).0 as i64
         );
 
         // update some configs on default cf
