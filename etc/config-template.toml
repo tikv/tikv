@@ -45,6 +45,12 @@
 ## being filled up.
 # abort-on-panic = false
 
+## Memory usage limit for the TiKV instance. If it's not set, the total of system memory
+# is avaiable to TiKV. Must be less than the total.
+# memory-usage-limit = "128GB"
+## TiKV can oppress itself if memory usage ratio reaches `memory-usage-high-water`.
+# memory-usage-high-water = 0.8
+
 ## Configurations for the single thread pool serving read requests.
 [readpool.unified]
 ## The minimal working thread count of the thread pool.
