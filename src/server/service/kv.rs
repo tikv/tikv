@@ -23,7 +23,6 @@ use crate::storage::{
     SecondaryLocksStatus, Storage, TxnStatus,
 };
 use crate::{forward_duplex, forward_unary};
-use engine_rocks::RocksEngine;
 use futures::compat::Future01CompatExt;
 use futures::future::{self, Future, FutureExt, TryFutureExt};
 use futures::sink::SinkExt;
@@ -52,7 +51,7 @@ const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
 /// Service handles the RPC messages for the `Tikv` service.
-pub struct Service<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> {
+pub struct Service<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> {
     store_id: u64,
     /// Used to handle requests related to GC.
     gc_worker: GcWorker<E, T>,
@@ -76,7 +75,7 @@ pub struct Service<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: Lock
     proxy: Proxy,
 }
 
-impl<T: RaftStoreRouter<RocksEngine> + Clone + 'static, E: Engine + Clone, L: LockManager + Clone>
+impl<T: RaftStoreRouter<E::Local> + Clone + 'static, E: Engine + Clone, L: LockManager + Clone>
     Clone for Service<T, E, L>
 {
     fn clone(&self) -> Self {
@@ -96,7 +95,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Clone + 'static, E: Engine + Clone, L: Lo
     }
 }
 
-impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Service<T, E, L> {
+impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Service<T, E, L> {
     /// Constructs a new `Service` which provides the `Tikv` service.
     pub fn new(
         store_id: u64,
@@ -156,7 +155,7 @@ macro_rules! handle_request {
     }
 }
 
-impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
+impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv
     for Service<T, E, L>
 {
     handle_request!(kv_get, future_get, GetRequest, GetResponse);

@@ -10,7 +10,7 @@ use std::time::Instant;
 use std::vec::IntoIter;
 
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::{RocksEngine, RocksWriteBatch};
+use engine_rocks::{RocksWriteBatch};
 use engine_traits::{
     DeleteStrategy, MiscExt, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
@@ -165,7 +165,7 @@ impl Display for GcTask {
 struct GcRunner<E, RR>
 where
     E: Engine,
-    RR: RaftStoreRouter<RocksEngine>,
+    RR: RaftStoreRouter<E::Local>,
 {
     engine: E,
 
@@ -183,7 +183,7 @@ where
 impl<E, RR> GcRunner<E, RR>
 where
     E: Engine,
-    RR: RaftStoreRouter<RocksEngine>,
+    RR: RaftStoreRouter<E::Local>,
 {
     pub fn new(
         engine: E,
@@ -513,7 +513,7 @@ where
 impl<E, RR> FutureRunnable<GcTask> for GcRunner<E, RR>
 where
     E: Engine,
-    RR: RaftStoreRouter<RocksEngine>,
+    RR: RaftStoreRouter<E::Local>,
 {
     #[inline]
     fn run(&mut self, task: GcTask) {
@@ -678,7 +678,7 @@ pub fn sync_gc(
 pub struct GcWorker<E, RR>
 where
     E: Engine,
-    RR: RaftStoreRouter<RocksEngine> + 'static,
+    RR: RaftStoreRouter<E::Local> + 'static,
 {
     engine: E,
 
@@ -705,7 +705,7 @@ where
 impl<E, RR> Clone for GcWorker<E, RR>
 where
     E: Engine,
-    RR: RaftStoreRouter<RocksEngine>,
+    RR: RaftStoreRouter<E::Local>,
 {
     #[inline]
     fn clone(&self) -> Self {
@@ -729,7 +729,7 @@ where
 impl<E, RR> Drop for GcWorker<E, RR>
 where
     E: Engine,
-    RR: RaftStoreRouter<RocksEngine> + 'static,
+    RR: RaftStoreRouter<E::Local> + 'static,
 {
     #[inline]
     fn drop(&mut self) {
@@ -749,7 +749,7 @@ where
 impl<E, RR> GcWorker<E, RR>
 where
     E: Engine,
-    RR: RaftStoreRouter<RocksEngine>,
+    RR: RaftStoreRouter<E::Local>,
 {
     pub fn new(
         engine: E,
@@ -823,7 +823,7 @@ where
 
     pub fn start_observe_lock_apply(
         &mut self,
-        coprocessor_host: &mut CoprocessorHost<RocksEngine>,
+        coprocessor_host: &mut CoprocessorHost<E::Local>,
         concurrency_manager: ConcurrencyManager,
     ) -> Result<()> {
         assert!(self.applied_lock_collector.is_none());
@@ -985,7 +985,7 @@ mod tests {
     use crate::storage::mvcc::tests::must_get_none;
     use crate::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
     use crate::storage::{txn::commands, Engine, Storage, TestStorageBuilder};
-    use engine_rocks::{util::get_cf_handle, RocksSnapshot};
+    use engine_rocks::{util::get_cf_handle, RocksSnapshot, RocksEngine};
     use engine_traits::KvEngine;
     use futures::executor::block_on;
     use kvproto::kvrpcpb::Op;
