@@ -615,8 +615,8 @@ mod tests {
                 assert_eq!(req.payload.is_some(), req.method() == "PUT");
             },
         );
-        let s = S3Storage::with_request_dispatcher(&config, dispatcher).unwrap();
-        s.write(
+        let s = S3Storage::with_request_dispatcher(config, dispatcher).unwrap();
+        s.put(
             "key2",
             Box::new(magic_contents.as_bytes()),
             magic_contents.len() as u64,
