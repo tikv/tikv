@@ -29,7 +29,6 @@ pub use std::fs::{
 
 use std::io::{self, ErrorKind, Read, Write};
 use std::path::Path;
-use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use openssl::error::ErrorStack;
@@ -60,49 +59,6 @@ pub enum IOType {
     Gc = 8,
     Import = 9,
     Export = 10,
-}
-
-impl IOType {
-    pub fn as_str(&self) -> &str {
-        match *self {
-            IOType::Other => "other",
-            IOType::ForegroundRead => "foreground_read",
-            IOType::ForegroundWrite => "foreground_write",
-            IOType::Flush => "flush",
-            IOType::LevelZeroCompaction => "level_zero_compaction",
-            IOType::Compaction => "compaction",
-            IOType::Replication => "replication",
-            IOType::LoadBalance => "load_balance",
-            IOType::Gc => "gc",
-            IOType::Import => "import",
-            IOType::Export => "export",
-        }
-    }
-}
-
-impl FromStr for IOType {
-    type Err = String;
-    fn from_str(s: &str) -> Result<IOType, String> {
-        match s {
-            "other" => Ok(IOType::Other),
-            "foreground_read" => Ok(IOType::ForegroundRead),
-            "foreground_write" => Ok(IOType::ForegroundWrite),
-            "flush" => Ok(IOType::Flush),
-            "level_zero_compaction" => Ok(IOType::LevelZeroCompaction),
-            "compaction" => Ok(IOType::Compaction),
-            "replication" => Ok(IOType::Replication),
-            "load_balance" => Ok(IOType::LoadBalance),
-            "gc" => Ok(IOType::Gc),
-            "import" => Ok(IOType::Import),
-            "export" => Ok(IOType::Export),
-            s => Err(format!(
-                "expect in the list: [other, foreground_read, foreground_write, flush, \
-                level_zero_compaction, compaction, replication, load_balance, gc, import\
-                , export], got: {:?}",
-                s
-            )),
-        }
-    }
 }
 
 pub struct WithIOType {
