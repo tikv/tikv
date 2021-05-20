@@ -33,7 +33,7 @@ use engine_traits::{
 };
 use error_code::ErrorCodeExt;
 use file_system::{
-    set_io_rate_limiter, BytesFetcher, IORateLimiter, LowPriorityIOAdjustor,
+    set_io_rate_limiter, BytesFetcher, IOBudgetAdjustor, IORateLimiter,
     MetricsManager as IOMetricsManager,
 };
 use fs2::FileExt;
@@ -122,7 +122,7 @@ pub fn run_tikv(config: TiKvConfig) {
             tikv.init_encryption();
             let (limiter, fetcher) = tikv.init_io_utility();
             let (engines, engines_info) = tikv.init_raw_engines(Some(limiter.clone()));
-            limiter.set_low_priority_io_adjustor(Some(engines_info.clone()));
+            limiter.set_low_priority_io_adjustor_if_needed(Some(engines_info.clone()));
             tikv.init_engines(engines);
             let server_config = tikv.init_servers();
             tikv.register_services();
@@ -1362,7 +1362,7 @@ impl EnginesResourceInfo {
     }
 }
 
-impl LowPriorityIOAdjustor for EnginesResourceInfo {
+impl IOBudgetAdjustor for EnginesResourceInfo {
     fn adjust(&self, total_budgets: usize) -> usize {
         (total_budgets as f32 * (0.5 + self.normalized_pending_bytes().powi(2) / 2.0)) as usize
     }

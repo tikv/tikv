@@ -149,7 +149,10 @@ impl IORateLimiterStatistics {
     }
 }
 
-pub trait LowPriorityIOAdjustor: Send + Sync {
+/// Used to dynamically adjust the proportion of total budgets allocated for rate limited
+/// IO. This is needed when global IOs are only partially rate limited, e.g. when mode is
+/// IORateLimitMode::WriteOnly.
+pub trait IOBudgetAdjustor: Send + Sync {
     fn adjust(&self, threshold: usize) -> usize;
 }
 
@@ -170,7 +173,7 @@ struct PriorityBasedIORateLimiterProtected {
     // Bytes that can't be fulfilled in current epoch
     pending_bytes: [usize; IOPriority::COUNT],
     // Adjust low priority IO flow based on system backlog
-    adjustor: Option<Arc<dyn LowPriorityIOAdjustor>>,
+    adjustor: Option<Arc<dyn IOBudgetAdjustor>>,
 }
 
 impl PriorityBasedIORateLimiterProtected {
@@ -301,7 +304,7 @@ impl PriorityBasedIORateLimiter {
         }
     }
 
-    fn set_low_priority_io_adjustor(&self, adjustor: Option<Arc<dyn LowPriorityIOAdjustor>>) {
+    fn set_low_priority_io_adjustor(&self, adjustor: Option<Arc<dyn IOBudgetAdjustor>>) {
         let mut locked = self.protected.lock();
         locked.adjustor = adjustor;
     }
@@ -363,6 +366,7 @@ impl PriorityBasedIORateLimiter {
             );
             used_budgets += ((served_by_first_epoch + served_by_skipped_epochs) * 16)
                 / (skipped_epochs_mul_16 + 16);
+            // Only apply rate limit adjustments on low-priority IOs.
             if !self.strict && *pri == IOPriority::Medium {
                 if let Some(adjustor) = &locked.adjustor {
                     total_budgets = adjustor.adjust(total_budgets);
@@ -450,9 +454,14 @@ impl IORateLimiter {
         self.throughput_limiter.set_bytes_per_sec(rate);
     }
 
-    pub fn set_low_priority_io_adjustor(&self, adjustor: Option<Arc<dyn LowPriorityIOAdjustor>>) {
-        self.throughput_limiter
-            .set_low_priority_io_adjustor(adjustor);
+    pub fn set_low_priority_io_adjustor_if_needed(
+        &self,
+        adjustor: Option<Arc<dyn IOBudgetAdjustor>>,
+    ) {
+        if self.mode != IORateLimitMode::AllIo {
+            self.throughput_limiter
+                .set_low_priority_io_adjustor(adjustor);
+        }
     }
 
     /// Requests for token for bytes and potentially update statistics. If this
