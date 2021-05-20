@@ -10,7 +10,12 @@ use batch_system::Config as BatchSystemConfig;
 use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration};
 use engine_traits::config as engine_config;
 use engine_traits::PerfLevel;
+use lazy_static::lazy_static;
+use prometheus::register_gauge_vec;
+use serde::{Deserialize, Serialize};
+use serde_with::with_prefix;
 use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
+use tikv_util::{box_err, info, warn};
 
 lazy_static! {
     pub static ref CONFIG_RAFTSTORE_GAUGE: prometheus::GaugeVec = register_gauge_vec!(
@@ -411,6 +416,10 @@ impl Config {
         }
         if self.store_batch_system.pool_size == 0 {
             return Err(box_err!("store-pool-size should be greater than 0"));
+        }
+        if self.store_batch_system.low_priority_pool_size > 0 {
+            // The store thread pool doesn't need a low-priority thread currently.
+            self.store_batch_system.low_priority_pool_size = 0;
         }
         if let Some(size) = self.store_batch_system.max_batch_size {
             if size == 0 {

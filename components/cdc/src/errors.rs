@@ -11,6 +11,8 @@ use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 use txn_types::Error as TxnTypesError;
 
+use crate::channel::SendError;
+
 /// The error type for cdc.
 #[derive(Debug, Error)]
 pub enum Error {
@@ -27,9 +29,17 @@ pub enum Error {
     #[error("Mvcc error {0}")]
     Mvcc(#[from] MvccError),
     #[error("Request error {0:?}")]
-    Request(ErrorHeader),
+    Request(Box<ErrorHeader>),
     #[error("Engine traits error {0}")]
     EngineTraits(#[from] EngineTraitsError),
+    #[error("Sink send error {0:?}")]
+    Sink(#[from] SendError),
+}
+
+impl Error {
+    pub fn request(err: ErrorHeader) -> Error {
+        Error::Request(Box::new(err))
+    }
 }
 
 macro_rules! impl_from {
@@ -61,7 +71,7 @@ impl Error {
             | Error::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
                 box MvccErrorInner::Engine(EngineError(box EngineErrorInner::Request(e))),
             ))))
-            | Error::Request(e) => e,
+            | Error::Request(box e) => e,
             other => {
                 let mut e = ErrorHeader::default();
                 e.set_message(format!("{:?}", other));

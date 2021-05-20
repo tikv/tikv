@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use collections::{HashMap, HashSet};
+use raftstore::store::RegionReadProgress;
 use std::cmp;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -15,28 +16,36 @@ pub struct Resolver {
     // start_ts -> locked keys.
     lock_ts_heap: BTreeMap<TimeStamp, HashSet<Arc<[u8]>>>,
     // The timestamps that guarantees no more commit will happen before.
-    // None if the resolver is not initialized.
-    resolved_ts: Option<TimeStamp>,
+    resolved_ts: TimeStamp,
+    // The highest index `Resolver` had been tracked
+    tracked_index: u64,
+    // The region read progress used to utilize `resolved_ts` to serve stale read request
+    read_progress: Option<Arc<RegionReadProgress>>,
     // The timestamps that advance the resolved_ts when there is no more write.
     min_ts: TimeStamp,
 }
 
 impl Resolver {
     pub fn new(region_id: u64) -> Resolver {
+        Resolver::with_read_progress(region_id, None)
+    }
+
+    pub fn with_read_progress(
+        region_id: u64,
+        read_progress: Option<Arc<RegionReadProgress>>,
+    ) -> Resolver {
         Resolver {
             region_id,
+            resolved_ts: TimeStamp::zero(),
             locks_by_key: HashMap::default(),
             lock_ts_heap: BTreeMap::new(),
-            resolved_ts: None,
+            read_progress,
+            tracked_index: 0,
             min_ts: TimeStamp::zero(),
         }
     }
 
-    pub fn init(&mut self) {
-        self.resolved_ts = Some(TimeStamp::zero());
-    }
-
-    pub fn resolved_ts(&self) -> Option<TimeStamp> {
+    pub fn resolved_ts(&self) -> TimeStamp {
         self.resolved_ts
     }
 
@@ -44,7 +53,21 @@ impl Resolver {
         &self.lock_ts_heap
     }
 
-    pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>) {
+    pub fn update_tracked_index(&mut self, index: u64) {
+        assert!(
+            self.tracked_index <= index,
+            "region {}, tracked_index: {}, incoming index: {}",
+            self.region_id,
+            self.tracked_index,
+            index
+        );
+        self.tracked_index = index;
+    }
+
+    pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>, index: Option<u64>) {
+        if let Some(index) = index {
+            self.update_tracked_index(index);
+        }
         debug!(
             "track lock {}@{}, region {}",
             &log_wrappers::Value::key(&key),
@@ -56,7 +79,10 @@ impl Resolver {
         self.lock_ts_heap.entry(start_ts).or_default().insert(key);
     }
 
-    pub fn untrack_lock(&mut self, key: &[u8]) {
+    pub fn untrack_lock(&mut self, key: &[u8], index: Option<u64>) {
+        if let Some(index) = index {
+            self.update_tracked_index(index);
+        }
         let start_ts = if let Some(start_ts) = self.locks_by_key.remove(key) {
             start_ts
         } else {
@@ -83,9 +109,7 @@ impl Resolver {
     ///
     /// `min_ts` advances the resolver even if there is no write.
     /// Return None means the resolver is not initialized.
-    pub fn resolve(&mut self, min_ts: TimeStamp) -> Option<TimeStamp> {
-        let old_resolved_ts = self.resolved_ts?;
-
+    pub fn resolve(&mut self, min_ts: TimeStamp) -> TimeStamp {
         // Find the min start ts.
         let min_lock = self.lock_ts_heap.keys().next().cloned();
         let has_lock = min_lock.is_some();
@@ -93,8 +117,14 @@ impl Resolver {
 
         // No more commit happens before the ts.
         let new_resolved_ts = cmp::min(min_start_ts, min_ts);
+
         // Resolved ts never decrease.
-        self.resolved_ts = Some(cmp::max(old_resolved_ts, new_resolved_ts));
+        self.resolved_ts = cmp::max(self.resolved_ts, new_resolved_ts);
+
+        // Publish an `(apply index, safe ts)` item into the region read progress
+        if let Some(rrp) = &self.read_progress {
+            rrp.update_safe_ts(self.tracked_index, self.resolved_ts.into_inner());
+        }
 
         let new_min_ts = if has_lock {
             // If there are some lock, the min_ts must be smaller than
@@ -179,31 +209,14 @@ mod tests {
 
         for (i, case) in cases.into_iter().enumerate() {
             let mut resolver = Resolver::new(1);
-            resolver.init();
             for e in case.clone() {
                 match e {
                     Event::Lock(start_ts, key) => {
-                        resolver.track_lock(start_ts.into(), key.into_raw().unwrap())
+                        resolver.track_lock(start_ts.into(), key.into_raw().unwrap(), None)
                     }
-                    Event::Unlock(key) => resolver.untrack_lock(&key.into_raw().unwrap()),
-                    Event::Resolve(min_ts, expect) => assert_eq!(
-                        resolver.resolve(min_ts.into()).unwrap(),
-                        expect.into(),
-                        "case {}",
-                        i
-                    ),
-                }
-            }
-
-            let mut resolver = Resolver::new(1);
-            for e in case {
-                match e {
-                    Event::Lock(start_ts, key) => {
-                        resolver.track_lock(start_ts.into(), key.into_raw().unwrap())
-                    }
-                    Event::Unlock(key) => resolver.untrack_lock(&key.into_raw().unwrap()),
-                    Event::Resolve(min_ts, _) => {
-                        assert_eq!(resolver.resolve(min_ts.into()), None, "case {}", i)
+                    Event::Unlock(key) => resolver.untrack_lock(&key.into_raw().unwrap(), None),
+                    Event::Resolve(min_ts, expect) => {
+                        assert_eq!(resolver.resolve(min_ts.into()), expect.into(), "case {}", i)
                     }
                 }
             }

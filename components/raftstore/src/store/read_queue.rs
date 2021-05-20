@@ -16,6 +16,7 @@ use protobuf::Message;
 use tikv_util::codec::number::{NumberEncoder, MAX_VAR_U64_LEN};
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::MustConsumeVec;
+use tikv_util::{box_err, debug};
 use time::Timespec;
 use uuid::Uuid;
 
@@ -27,7 +28,7 @@ where
 {
     pub id: Uuid,
     pub cmds: MustConsumeVec<(RaftCmdRequest, Callback<S>, Option<u64>)>,
-    pub renew_lease_time: Timespec,
+    pub propose_time: Timespec,
     pub read_index: Option<u64>,
     pub addition_request: Option<Box<raft_cmdpb::ReadIndexRequest>>,
     pub locked: Option<Box<LockInfo>>,
@@ -48,7 +49,7 @@ where
         id: Uuid,
         req: RaftCmdRequest,
         cb: Callback<S>,
-        renew_lease_time: Timespec,
+        propose_time: Timespec,
     ) -> Self {
         RAFT_READ_INDEX_PENDING_COUNT.inc();
         let mut cmds = MustConsumeVec::with_capacity("callback of index read", 1);
@@ -56,7 +57,7 @@ where
         ReadIndexRequest {
             id,
             cmds,
-            renew_lease_time,
+            propose_time,
             read_index: None,
             addition_request: None,
             locked: None,
@@ -70,9 +71,7 @@ where
     S: Snapshot,
 {
     fn drop(&mut self) {
-        let dur = (monotonic_raw_now() - self.renew_lease_time)
-            .to_std()
-            .unwrap();
+        let dur = (monotonic_raw_now() - self.propose_time).to_std().unwrap();
         RAFT_READ_INDEX_PENDING_DURATION.observe(duration_to_sec(dur));
     }
 }

@@ -373,11 +373,7 @@ mod tests {
             chunked_vec.to_vec(),
             test_bytes
                 .iter()
-                .map(|x| if let Some(x) = x {
-                    Some(repeat(x.to_vec(), 3))
-                } else {
-                    None
-                })
+                .map(|x| x.as_ref().map(|x| repeat(x.to_vec(), 3)))
                 .collect::<Vec<Option<Bytes>>>()
         );
     }

@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::{Ordering as CmpOrdering, Reverse};
-use std::f64::INFINITY;
+use std::borrow::Cow;
+use std::cmp::{self, Ordering as CmpOrdering, Reverse};
 use std::fmt::{self, Display, Formatter};
 use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::{self, ErrorKind, Read, Write};
@@ -10,31 +10,32 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
-use std::{error, result, str, thread, time, u64};
+use std::{error::Error as StdError, result, str, thread, time, u64};
 
+use fail::fail_point;
+use kvproto::encryptionpb::EncryptionMethod;
+use kvproto::metapb::Region;
+use kvproto::raft_serverpb::RaftSnapshotData;
+use kvproto::raft_serverpb::{SnapshotCfFile, SnapshotMeta};
+use openssl::symm::{Cipher, Crypter, Mode};
+use protobuf::Message;
+use raft::eraftpb::Snapshot as RaftSnapshot;
+use thiserror::Error;
+
+use collections::{HashMap, HashMapEntry as Entry};
 use encryption::{
     create_aes_ctr_crypter, encryption_method_from_db_encryption_method, DataKeyManager, Iv,
 };
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use engine_traits::{EncryptionKeyManager, KvEngine};
-use futures::executor::block_on;
-use futures_util::io::{AllowStdIo, AsyncWriteExt};
-use kvproto::encryptionpb::EncryptionMethod;
-use kvproto::metapb::Region;
-use kvproto::raft_serverpb::RaftSnapshotData;
-use kvproto::raft_serverpb::{SnapshotCfFile, SnapshotMeta};
-use protobuf::Message;
-use raft::eraftpb::Snapshot as RaftSnapshot;
-
-use collections::{HashMap, HashMapEntry as Entry};
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use file_system::{
     calc_crc32, calc_crc32_and_size, delete_file_if_exist, file_exists, get_file_size, sync_dir,
 };
 use keys::{enc_end_key, enc_start_key};
-use openssl::symm::{Cipher, Crypter, Mode};
 use tikv_util::time::{duration_to_sec, Limiter};
 use tikv_util::HandyRwLock;
+use tikv_util::{box_err, box_try, debug, error, info, map, warn};
 
 use crate::coprocessor::CoprocessorHost;
 use crate::store::metrics::{
@@ -55,6 +56,7 @@ pub const SNAPSHOT_CFS_ENUM_PAIR: &[(CfNames, CfName)] = &[
     (CfNames::write, CF_WRITE),
 ];
 pub const SNAPSHOT_VERSION: u64 = 2;
+pub const IO_LIMITER_CHUNK_SIZE: usize = 4 * 1024;
 
 /// Name prefix for the self-generated snapshot file.
 const SNAP_GEN_PREFIX: &str = "gen";
@@ -70,21 +72,16 @@ const META_FILE_SUFFIX: &str = ".meta";
 const DELETE_RETRY_MAX_TIMES: u32 = 6;
 const DELETE_RETRY_TIME_MILLIS: u64 = 500;
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        Abort {
-            display("abort")
-        }
-        TooManySnapshots {
-            display("too many snapshots")
-        }
-        Other(err: Box<dyn error::Error + Sync + Send>) {
-            from()
-            cause(err.as_ref())
-            display("snap failed {:?}", err)
-        }
-    }
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("abort")]
+    Abort,
+
+    #[error("too many snapshots")]
+    TooManySnapshots,
+
+    #[error("snap failed {0:?}")]
+    Other(#[from] Box<dyn StdError + Sync + Send>),
 }
 
 impl From<io::Error> for Error {
@@ -243,7 +240,7 @@ fn retry_delete_snapshot(mgr: &SnapManagerCore, key: &SnapKey, snap: &dyn Generi
 fn gen_snapshot_meta(cf_files: &[CfFile]) -> RaftStoreResult<SnapshotMeta> {
     let mut meta = Vec::with_capacity(cf_files.len());
     for cf_file in cf_files {
-        if SNAPSHOT_CFS.iter().find(|&cf| cf_file.cf == *cf).is_none() {
+        if !SNAPSHOT_CFS.iter().any(|cf| cf_file.cf == *cf) {
             return Err(box_err!(
                 "failed to encode invalid snapshot cf {}",
                 cf_file.cf
@@ -465,7 +462,7 @@ impl Snap {
         mgr: &SnapManagerCore,
     ) -> RaftStoreResult<Self> {
         let mut s = Self::new(dir, key, true, CheckPolicy::ErrNotAllowed, mgr)?;
-        s.mgr.limiter = Limiter::new(INFINITY);
+        s.mgr.limiter = Limiter::new(f64::INFINITY);
 
         if !s.exists() {
             // Skip the initialization below if it doesn't exists.
@@ -542,7 +539,7 @@ impl Snap {
         mgr: &SnapManagerCore,
     ) -> RaftStoreResult<Self> {
         let mut s = Self::new(dir, key, false, CheckPolicy::ErrNotAllowed, mgr)?;
-        s.mgr.limiter = Limiter::new(INFINITY);
+        s.mgr.limiter = Limiter::new(f64::INFINITY);
         Ok(s)
     }
 
@@ -1033,10 +1030,9 @@ impl Write for Snap {
             file_for_recving.written_size += write_len as u64;
             written_bytes += write_len;
 
-            let file = AllowStdIo::new(&mut file_for_recving.file);
-            let mut file = self.mgr.limiter.clone().limit(file);
-            if file_for_recving.encrypter.is_none() {
-                block_on(file.write_all(&next_buf[0..write_len]))?;
+            let file = &mut file_for_recving.file;
+            let encrypt_buffer = if file_for_recving.encrypter.is_none() {
+                Cow::Borrowed(&next_buf[0..write_len])
             } else {
                 let (cipher, crypter) = file_for_recving.encrypter.as_mut().unwrap();
                 let mut encrypt_buffer = vec![0; write_len + cipher.block_size()];
@@ -1045,7 +1041,19 @@ impl Write for Snap {
                     bytes += crypter.finalize(&mut encrypt_buffer)?;
                 }
                 encrypt_buffer.truncate(bytes);
-                block_on(file.write_all(&encrypt_buffer))?;
+                Cow::Owned(encrypt_buffer)
+            };
+            let encrypt_len = encrypt_buffer.len();
+
+            let mut start = 0;
+            loop {
+                let acquire = cmp::min(IO_LIMITER_CHUNK_SIZE, encrypt_len - start);
+                self.mgr.limiter.blocking_consume(acquire);
+                file.write_all(&encrypt_buffer[start..start + acquire])?;
+                if start + acquire == encrypt_len {
+                    break;
+                }
+                start += acquire;
             }
 
             if switch {
@@ -1545,7 +1553,7 @@ impl SnapManagerBuilder {
         let limiter = Limiter::new(if self.max_write_bytes_per_sec > 0 {
             self.max_write_bytes_per_sec as f64
         } else {
-            INFINITY
+            f64::INFINITY
         });
         let max_total_size = if self.max_total_size > 0 {
             self.max_total_size
@@ -1568,7 +1576,6 @@ impl SnapManagerBuilder {
 #[cfg(test)]
 pub mod tests {
     use std::cmp;
-    use std::f64::INFINITY;
     use std::fs::{self, File, OpenOptions};
     use std::io::{self, Read, Seek, SeekFrom, Write};
     use std::path::{Path, PathBuf};
@@ -1591,6 +1598,7 @@ pub mod tests {
 
     use protobuf::Message;
     use tempfile::{Builder, TempDir};
+    use tikv_util::map;
     use tikv_util::time::Limiter;
 
     use super::{
@@ -1738,7 +1746,7 @@ pub mod tests {
         SnapManagerCore {
             base: path.to_owned(),
             registry: Arc::new(RwLock::new(map![])),
-            limiter: Limiter::new(INFINITY),
+            limiter: Limiter::new(f64::INFINITY),
             temp_sst_id: Arc::new(AtomicU64::new(0)),
             encryption_key_manager: None,
         }
@@ -2496,7 +2504,7 @@ pub mod tests {
                 .unwrap();
 
             // TODO: this size may change in different RocksDB version.
-            let snap_size = 1658;
+            let snap_size = 1660;
             let max_snap_count = (max_total_size + snap_size - 1) / snap_size;
             // The first snap_size is for region 100.
             // That snapshot won't be deleted because it's not for generating.

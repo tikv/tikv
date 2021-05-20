@@ -27,9 +27,6 @@ const MAX_SCHED_CONCURRENCY: usize = 2 * 1024 * 1024;
 const DEFAULT_SCHED_PENDING_WRITE_MB: u64 = 100;
 
 const DEFAULT_RESERVED_SPACE_GB: u64 = 5;
-// 20GB for reserved space is enough because size of one compaction is limited,
-// generally less than 2GB.
-pub const MAX_RESERVED_SPACE_GB: u64 = 20;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
 #[serde(default)]
@@ -86,17 +83,12 @@ impl Config {
             self.data_dir = config::canonicalize_path(&self.data_dir)?
         }
         if self.scheduler_concurrency > MAX_SCHED_CONCURRENCY {
-            warn!("TiKV has optimized latch since v4.0, so it is not necessary to set large schedule \
-                concurrency. To save memory, change it from {:?} to {:?}",
-                  self.scheduler_concurrency, MAX_SCHED_CONCURRENCY);
-            self.scheduler_concurrency = MAX_SCHED_CONCURRENCY;
-        }
-        if self.reserve_space.0 > ReadableSize::gb(MAX_RESERVED_SPACE_GB).0 {
-            self.reserve_space = ReadableSize::gb(MAX_RESERVED_SPACE_GB);
             warn!(
-                "reserve-space is too large, sanitized to {:?}",
-                self.reserve_space
+                "TiKV has optimized latch since v4.0, so it is not necessary to set large schedule \
+                concurrency. To save memory, change it from {:?} to {:?}",
+                self.scheduler_concurrency, MAX_SCHED_CONCURRENCY
             );
+            self.scheduler_concurrency = MAX_SCHED_CONCURRENCY;
         }
         Ok(())
     }
@@ -215,7 +207,10 @@ impl BlockCacheConfig {
                         return Some(allocator);
                     }
                     Err(e) => {
-                        warn!("Create jemalloc nodump allocator for block cache failed: {}, continue with default allocator", e);
+                        warn!(
+                            "Create jemalloc nodump allocator for block cache failed: {}, continue with default allocator",
+                            e
+                        );
                     }
                 },
                 "" => {}

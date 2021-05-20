@@ -426,6 +426,7 @@ fn assert_near_seek<I: Iterator>(cursor: &mut Cursor<I>, key: &[u8], pair: (&[u8
         cursor
             .near_seek(&Key::from_raw(key), &mut statistics)
             .unwrap(),
+        "{}",
         log_wrappers::hex_encode_upper(key)
     );
     assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
@@ -438,6 +439,7 @@ fn assert_near_reverse_seek<I: Iterator>(cursor: &mut Cursor<I>, key: &[u8], pai
         cursor
             .near_reverse_seek(&Key::from_raw(key), &mut statistics)
             .unwrap(),
+        "{}",
         log_wrappers::hex_encode_upper(key)
     );
     assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
@@ -492,9 +494,11 @@ fn seek<E: Engine>(ctx: SnapContext<'_>, engine: &E) {
         false,
     );
     let mut statistics = CfStatistics::default();
-    assert!(!iter
-        .seek(&Key::from_raw(b"z\x00"), &mut statistics)
-        .unwrap());
+    assert!(
+        !iter
+            .seek(&Key::from_raw(b"z\x00"), &mut statistics)
+            .unwrap()
+    );
     must_delete(ctx.pb_ctx, engine, b"x");
     must_delete(ctx.pb_ctx, engine, b"z");
 }
@@ -515,9 +519,11 @@ fn near_seek<E: Engine>(ctx: SnapContext<'_>, engine: &E) {
     assert_near_seek(&mut cursor, b"y", (b"z", b"2"));
     assert_near_seek(&mut cursor, b"x\x00", (b"z", b"2"));
     let mut statistics = CfStatistics::default();
-    assert!(!cursor
-        .near_seek(&Key::from_raw(b"z\x00"), &mut statistics)
-        .unwrap());
+    assert!(
+        !cursor
+            .near_seek(&Key::from_raw(b"z\x00"), &mut statistics)
+            .unwrap()
+    );
     must_delete(ctx.pb_ctx, engine, b"x");
     must_delete(ctx.pb_ctx, engine, b"z");
 }

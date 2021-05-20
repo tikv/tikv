@@ -56,7 +56,7 @@ pub struct Server<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolve
     builder_or_server: Option<Either<ServerBuilder, GrpcServer>>,
     local_addr: SocketAddr,
     // Transport.
-    trans: ServerTransport<T, S>,
+    trans: ServerTransport<T, S, RocksEngine>,
     raft_router: T,
     // For sending/receiving snapshots.
     snap_mgr: SnapManager,
@@ -66,7 +66,6 @@ pub struct Server<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolve
     stats_pool: Option<Runtime>,
     grpc_thread_load: Arc<ThreadLoad>,
     yatp_read_pool: Option<ReadPool>,
-    readpool_normal_thread_load: Arc<ThreadLoad>,
     debug_thread_pool: Arc<Runtime>,
     health_service: HealthService,
     timer: Handle,
@@ -75,11 +74,12 @@ pub struct Server<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolve
 impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Server<T, S> {
     #[allow(clippy::too_many_arguments)]
     pub fn new<E: Engine, L: LockManager>(
+        store_id: u64,
         cfg: &Arc<Config>,
         security_mgr: &Arc<SecurityManager>,
         storage: Storage<E, L>,
         cop: Endpoint<E>,
-        coprv2: coprocessor_v2::Endpoint<E>,
+        coprv2: coprocessor_v2::Endpoint,
         raft_router: T,
         resolver: S,
         snap_mgr: SnapManager,
@@ -102,14 +102,13 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             None
         };
         let grpc_thread_load = Arc::new(ThreadLoad::with_threshold(cfg.heavy_load_threshold));
-        let readpool_normal_thread_load =
-            Arc::new(ThreadLoad::with_threshold(cfg.heavy_load_threshold));
 
         let snap_worker = Worker::new("snap-handler");
         let lazy_worker = snap_worker.lazy_build("snap-handler");
 
         let proxy = Proxy::new(security_mgr.clone(), &env, cfg.clone());
         let kv_service = KvService::new(
+            store_id,
             storage,
             gc_worker,
             cop,
@@ -117,7 +116,6 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             raft_router.clone(),
             lazy_worker.scheduler(),
             Arc::clone(&grpc_thread_load),
-            Arc::clone(&readpool_normal_thread_load),
             cfg.enable_request_batch,
             proxy,
         );
@@ -170,7 +168,6 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             stats_pool,
             grpc_thread_load,
             yatp_read_pool,
-            readpool_normal_thread_load,
             debug_thread_pool,
             health_service,
             timer: GLOBAL_TIMER_HANDLE.clone(),
@@ -183,7 +180,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
         self.debug_thread_pool.handle()
     }
 
-    pub fn transport(&self) -> ServerTransport<T, S> {
+    pub fn transport(&self) -> ServerTransport<T, S, RocksEngine> {
         self.trans.clone()
     }
 
@@ -240,10 +237,6 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             let tl = Arc::clone(&self.grpc_thread_load);
             ThreadLoadStatistics::new(LOAD_STATISTICS_SLOTS, GRPC_THREAD_PREFIX, tl)
         };
-        let mut readpool_normal_load_stats = {
-            let tl = Arc::clone(&self.readpool_normal_thread_load);
-            ThreadLoadStatistics::new(LOAD_STATISTICS_SLOTS, READPOOL_NORMAL_THREAD_PREFIX, tl)
-        };
         let mut delay = self
             .timer
             .interval(Instant::now(), LOAD_STATISTICS_INTERVAL)
@@ -252,7 +245,6 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             p.spawn(async move {
                 while let Some(Ok(i)) = delay.next().await {
                     grpc_load_stats.record(i);
-                    readpool_normal_load_stats.record(i);
                 }
             });
         };
@@ -478,7 +470,7 @@ mod tests {
             storage.get_concurrency_manager(),
             PerfLevel::EnableCount,
         );
-        let coprv2 = coprocessor_v2::Endpoint::new();
+        let coprv2 = coprocessor_v2::Endpoint::new(&coprocessor_v2::Config::default());
         let debug_thread_pool = Arc::new(
             TokioBuilder::new()
                 .threaded_scheduler()
@@ -487,8 +479,10 @@ mod tests {
                 .build()
                 .unwrap(),
         );
+        let mock_store_id = 5;
         let addr = Arc::new(Mutex::new(None));
         let mut server = Server::new(
+            mock_store_id,
             &cfg,
             &security_mgr,
             storage,

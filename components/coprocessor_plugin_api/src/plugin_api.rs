@@ -9,15 +9,23 @@ pub type RawRequest = [u8];
 pub type RawResponse = Vec<u8>;
 
 /// Error returned by a plugin.
+///
+/// [`PluginError`] is currently only used to encapsulate errors that occurred in TiKV and are not
+/// handled by the coprocessor plugin itself. If a plugin wants to return a custom error, e.g. an
+/// error in the business logic, the plugin should return an appropriately encoded error in
+/// [`RawResponse`]; in other words, plugins are responsible for their error handling by themselves.
 #[derive(Debug)]
 pub enum PluginError {
     StorageError(StorageError),
-    Other(Box<dyn std::error::Error>),
 }
 
 impl fmt::Display for PluginError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Error while executing a coprocessor plugin")
+        match self {
+            PluginError::StorageError(err) => {
+                write!(f, "Error while executing a coprocessor plugin: {:?}", err)
+            }
+        }
     }
 }
 
@@ -37,10 +45,6 @@ impl From<StorageError> for PluginError {
 /// Plugins can run setup code in their constructor and teardown code by implementing
 /// [`std::ops::Drop`].
 pub trait CoprocessorPlugin: Send + Sync {
-    /// Returns the name of the plugin.
-    /// Requests that are sent to TiKV coprocessor must have a matching `copr_name` field.
-    fn name(&self) -> &'static str;
-
     /// Handles a request to the coprocessor.
     ///
     /// The data in the `request` parameter is exactly the same data that was passed with the

@@ -3,6 +3,7 @@
 use collections::{HashMap, HashMapEntry};
 use kvproto::metapb;
 use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus};
+use tikv_util::info;
 
 /// A registry that maps store to a group.
 ///

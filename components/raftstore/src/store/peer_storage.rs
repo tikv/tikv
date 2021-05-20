@@ -1,8 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use fail::fail_point;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::Arc;
 use std::time::Instant;
@@ -26,6 +27,7 @@ use crate::{Error, Result};
 use engine_traits::{RaftEngine, RaftLogBatch};
 use into_other::into_other;
 use tikv_util::worker::Scheduler;
+use tikv_util::{box_err, box_try, debug, defer, error, info, warn};
 
 use super::metrics::*;
 use super::worker::RegionTask;
@@ -60,14 +62,18 @@ pub enum CheckApplyingSnapStatus {
     Success,
     /// A snapshot is being applied.
     Applying,
-    /// No snapshot is being applied at all or the snapshot is cancelled
+    /// No snapshot is being applied at all or the snapshot is canceled
     Idle,
 }
 
 #[derive(Debug)]
 pub enum SnapState {
     Relax,
-    Generating(Receiver<Snapshot>),
+    Generating {
+        canceled: Arc<AtomicBool>,
+        index: Arc<AtomicU64>,
+        receiver: Receiver<Snapshot>,
+    },
     Applying(Arc<AtomicUsize>),
     ApplyAborted,
 }
@@ -77,7 +83,7 @@ impl PartialEq for SnapState {
         match (self, other) {
             (&SnapState::Relax, &SnapState::Relax)
             | (&SnapState::ApplyAborted, &SnapState::ApplyAborted)
-            | (&SnapState::Generating(_), &SnapState::Generating(_)) => true,
+            | (&SnapState::Generating { .. }, &SnapState::Generating { .. }) => true,
             (&SnapState::Applying(ref b1), &SnapState::Applying(ref b2)) => {
                 b1.load(Ordering::Relaxed) == b2.load(Ordering::Relaxed)
             }
@@ -936,17 +942,22 @@ where
         let mut snap_state = self.snap_state.borrow_mut();
         let mut tried_cnt = self.snap_tried_cnt.borrow_mut();
 
-        let (mut tried, mut snap) = (false, None);
-        if let SnapState::Generating(ref recv) = *snap_state {
+        let (mut tried, mut last_canceled, mut snap) = (false, false, None);
+        if let SnapState::Generating {
+            ref canceled,
+            ref receiver,
+            ..
+        } = *snap_state
+        {
             tried = true;
-            match recv.try_recv() {
-                Err(TryRecvError::Disconnected) => {}
+            last_canceled = canceled.load(Ordering::SeqCst);
+            match receiver.try_recv() {
                 Err(TryRecvError::Empty) => {
-                    return Err(raft::Error::Store(
-                        raft::StorageError::SnapshotTemporarilyUnavailable,
-                    ));
+                    let e = raft::StorageError::SnapshotTemporarilyUnavailable;
+                    return Err(raft::Error::Store(e));
                 }
-                Ok(s) => snap = Some(s),
+                Ok(s) if !last_canceled => snap = Some(s),
+                Err(TryRecvError::Disconnected) | Ok(_) => {}
             }
         }
 
@@ -989,11 +1000,21 @@ where
             "peer_id" => self.peer_id,
             "request_index" => request_index,
         );
-        *tried_cnt += 1;
-        let (tx, rx) = mpsc::sync_channel(1);
-        *snap_state = SnapState::Generating(rx);
 
-        let task = GenSnapTask::new(self.region.get_id(), tx);
+        if !tried || !last_canceled {
+            *tried_cnt += 1;
+        }
+
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let canceled = Arc::new(AtomicBool::new(false));
+        let index = Arc::new(AtomicU64::new(0));
+        *snap_state = SnapState::Generating {
+            canceled: canceled.clone(),
+            index: index.clone(),
+            receiver,
+        };
+
+        let task = GenSnapTask::new(self.region.get_id(), index, canceled, sender);
         let mut gen_snap_task = self.gen_snap_task.borrow_mut();
         assert!(gen_snap_task.is_none());
         *gen_snap_task = Some(task);
@@ -1072,6 +1093,8 @@ where
             let rid = self.get_region_id();
             self.engines.raft.gc_entry_cache(rid, idx);
         }
+
+        self.cancel_generating_snap(Some(idx));
     }
 
     #[inline]
@@ -1201,9 +1224,10 @@ where
     pub fn clear_data(&self) -> Result<()> {
         let (start_key, end_key) = (enc_start_key(self.region()), enc_end_key(self.region()));
         let region_id = self.get_region_id();
-        box_try!(self
-            .region_sched
-            .schedule(RegionTask::destroy(region_id, start_key, end_key)));
+        box_try!(
+            self.region_sched
+                .schedule(RegionTask::destroy(region_id, start_key, end_key))
+        );
         Ok(())
     }
 
@@ -1255,7 +1279,7 @@ where
     #[inline]
     pub fn is_generating_snapshot(&self) -> bool {
         fail_point!("is_generating_snapshot", |_| { true });
-        matches!(*self.snap_state.borrow(), SnapState::Generating(_))
+        matches!(*self.snap_state.borrow(), SnapState::Generating { .. })
     }
 
     /// Check if the storage is applying a snapshot.
@@ -1283,19 +1307,9 @@ where
         res
     }
 
-    #[inline]
-    pub fn is_canceling_snap(&self) -> bool {
-        match *self.snap_state.borrow() {
-            SnapState::Applying(ref status) => {
-                status.load(Ordering::Relaxed) == JOB_STATUS_CANCELLING
-            }
-            _ => false,
-        }
-    }
-
     /// Cancel applying snapshot, return true if the job can be considered not be run again.
     pub fn cancel_applying_snap(&mut self) -> bool {
-        let is_cancelled = match *self.snap_state.borrow() {
+        let is_canceled = match *self.snap_state.borrow() {
             SnapState::Applying(ref status) => {
                 if status
                     .compare_exchange(
@@ -1323,13 +1337,34 @@ where
             }
             _ => return false,
         };
-        if is_cancelled {
+        if is_canceled {
             *self.snap_state.borrow_mut() = SnapState::ApplyAborted;
             return true;
         }
         // now status can only be JOB_STATUS_CANCELLING, JOB_STATUS_CANCELLED,
         // JOB_STATUS_FAILED and JOB_STATUS_FINISHED.
         self.check_applying_snap() != CheckApplyingSnapStatus::Applying
+    }
+
+    /// Cancel generating snapshot.
+    pub fn cancel_generating_snap(&mut self, compact_to: Option<u64>) {
+        let snap_state = self.snap_state.borrow();
+        if let SnapState::Generating {
+            ref canceled,
+            ref index,
+            ..
+        } = *snap_state
+        {
+            if !canceled.load(Ordering::SeqCst) {
+                if let Some(idx) = compact_to {
+                    let snap_index = index.load(Ordering::SeqCst);
+                    if snap_index == 0 || idx <= snap_index + 1 {
+                        return;
+                    }
+                }
+                canceled.store(true, Ordering::SeqCst);
+            }
+        }
     }
 
     #[inline]
@@ -2043,7 +2078,9 @@ mod tests {
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
         generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap();
         let snap = match *s.snap_state.borrow() {
-            SnapState::Generating(ref rx) => rx.recv_timeout(Duration::from_secs(3)).unwrap(),
+            SnapState::Generating { ref receiver, .. } => {
+                receiver.recv_timeout(Duration::from_secs(3)).unwrap()
+            }
             ref s => panic!("unexpected state: {:?}", s),
         };
         assert_eq!(snap.get_metadata().get_index(), 5);
@@ -2056,7 +2093,7 @@ mod tests {
         assert_eq!(data.get_region().get_peers().len(), 1);
 
         let (tx, rx) = channel();
-        s.set_snap_state(SnapState::Generating(rx));
+        s.set_snap_state(gen_snap_for_test(rx));
         // Empty channel should cause snapshot call to wait.
         assert_eq!(s.snapshot(0).unwrap_err(), unavailable);
         assert_eq!(*s.snap_tried_cnt.borrow(), 1);
@@ -2067,7 +2104,7 @@ mod tests {
 
         let (tx, rx) = channel();
         tx.send(snap.clone()).unwrap();
-        s.set_snap_state(SnapState::Generating(rx));
+        s.set_snap_state(gen_snap_for_test(rx));
         // stale snapshot should be abandoned, snapshot index < request index.
         assert_eq!(
             s.snapshot(snap.get_metadata().get_index() + 1).unwrap_err(),
@@ -2108,7 +2145,7 @@ mod tests {
 
         let (tx, rx) = channel();
         tx.send(snap).unwrap();
-        s.set_snap_state(SnapState::Generating(rx));
+        s.set_snap_state(gen_snap_for_test(rx));
         *s.snap_tried_cnt.borrow_mut() = 1;
         // stale snapshot should be abandoned, snapshot index < truncated index.
         assert_eq!(s.snapshot(0).unwrap_err(), unavailable);
@@ -2117,10 +2154,10 @@ mod tests {
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
         generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap();
         match *s.snap_state.borrow() {
-            SnapState::Generating(ref rx) => {
-                rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            SnapState::Generating { ref receiver, .. } => {
+                receiver.recv_timeout(Duration::from_secs(3)).unwrap();
                 worker.stop();
-                match rx.recv_timeout(Duration::from_secs(3)) {
+                match receiver.recv_timeout(Duration::from_secs(3)) {
                     Err(RecvTimeoutError::Disconnected) => {}
                     res => panic!("unexpected result: {:?}", res),
                 }
@@ -2133,12 +2170,19 @@ mod tests {
         generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap_err();
         assert_eq!(*s.snap_tried_cnt.borrow(), 2);
 
-        for cnt in 2..super::MAX_SNAP_TRY_CNT {
+        for cnt in 2..super::MAX_SNAP_TRY_CNT + 10 {
+            if cnt < 12 {
+                // Canceled generating won't be counted in `snap_tried_cnt`.
+                s.cancel_generating_snap(None);
+                assert_eq!(*s.snap_tried_cnt.borrow(), 2);
+            } else {
+                assert_eq!(*s.snap_tried_cnt.borrow(), cnt - 10);
+            }
+
             // Scheduled job failed should trigger .
             assert_eq!(s.snapshot(0).unwrap_err(), unavailable);
             let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
             generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap_err();
-            assert_eq!(*s.snap_tried_cnt.borrow(), cnt + 1);
         }
 
         // When retry too many times, it should report a different error.
@@ -2357,7 +2401,9 @@ mod tests {
         generate_and_schedule_snapshot(gen_task, &s1.engines, &sched).unwrap();
 
         let snap1 = match *s1.snap_state.borrow() {
-            SnapState::Generating(ref rx) => rx.recv_timeout(Duration::from_secs(3)).unwrap(),
+            SnapState::Generating { ref receiver, .. } => {
+                receiver.recv_timeout(Duration::from_secs(3)).unwrap()
+            }
             ref s => panic!("unexpected state: {:?}", s),
         };
         assert_eq!(s1.truncated_index(), 3);
@@ -2400,7 +2446,7 @@ mod tests {
     }
 
     #[test]
-    fn test_canceling_snapshot() {
+    fn test_canceling_apply_snapshot() {
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let worker = LazyWorker::new("snap-manager");
         let sched = worker.scheduler();
@@ -2636,5 +2682,13 @@ mod tests {
             .unwrap();
         engines.raft.put_msg(&raft_state_key, &raft_state).unwrap();
         assert!(build_storage().is_err());
+    }
+
+    fn gen_snap_for_test(rx: Receiver<Snapshot>) -> SnapState {
+        SnapState::Generating {
+            canceled: Arc::new(AtomicBool::new(false)),
+            index: Arc::new(AtomicU64::new(0)),
+            receiver: rx,
+        }
     }
 }

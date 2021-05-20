@@ -4,10 +4,20 @@ use std::iter::FromIterator;
 use std::path::Path;
 use std::sync::Arc;
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
-use std::{error, result};
+use std::{error::Error as StdError, result};
 
+use kvproto::debugpb::{self, Db as DBType};
+use kvproto::metapb::Region;
+use kvproto::raft_serverpb::*;
+use protobuf::Message;
+use raft::eraftpb::Entry;
+use raft::{self, RawNode};
+use thiserror::Error;
+
+use collections::HashSet;
 use engine_rocks::raw::{CompactOptions, DBBottommostLevelCompaction, DB};
 use engine_rocks::util::get_cf_handle;
+use engine_rocks::RocksMvccProperties;
 use engine_rocks::{Compat, RocksEngine, RocksEngineIterator, RocksWriteBatch};
 use engine_traits::{
     Engines, IterOptions, Iterable, Iterator as EngineIterator, Mutable, Peekable, RaftEngine,
@@ -15,17 +25,6 @@ use engine_traits::{
     WriteBatch, WriteOptions,
 };
 use engine_traits::{MvccProperties, Range, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use kvproto::debugpb::{self, Db as DBType};
-use kvproto::metapb::Region;
-use kvproto::raft_serverpb::*;
-use protobuf::Message;
-use raft::eraftpb::Entry;
-use raft::{self, RawNode};
-
-use crate::config::ConfigController;
-use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
-use collections::HashSet;
-use engine_rocks::RocksMvccProperties;
 use raftstore::coprocessor::get_region_approximate_middle;
 use raftstore::store::util as raftstore_util;
 use raftstore::store::PeerStorage;
@@ -36,25 +35,23 @@ use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Worker;
 use txn_types::Key;
 
+use crate::config::ConfigController;
+use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
+
 pub use crate::storage::mvcc::MvccInfoIterator;
 
 pub type Result<T> = result::Result<T, Error>;
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        InvalidArgument(msg: String) {
-            display("Invalid Argument {:?}", msg)
-        }
-        NotFound(msg: String) {
-            display("Not Found {:?}", msg)
-        }
-        Other(err: Box<dyn error::Error + Sync + Send>) {
-            from()
-            cause(err.as_ref())
-            display("{:?}", err)
-        }
-    }
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("Invalid Argument {0:?}")]
+    InvalidArgument(String),
+
+    #[error("Not Found {0:?}")]
+    NotFound(String),
+
+    #[error("{0:?}")]
+    Other(#[from] Box<dyn StdError + Sync + Send>),
 }
 
 /// Describes the meta information of a Region.
@@ -193,16 +190,18 @@ impl<ER: RaftEngine> Debugger<ER> {
         let raft_state = box_try!(self.engines.raft.get_raft_state(region_id));
 
         let apply_state_key = keys::apply_state_key(region_id);
-        let apply_state = box_try!(self
-            .engines
-            .kv
-            .get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key));
+        let apply_state = box_try!(
+            self.engines
+                .kv
+                .get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key)
+        );
 
         let region_state_key = keys::region_state_key(region_id);
-        let region_state = box_try!(self
-            .engines
-            .kv
-            .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key));
+        let region_state = box_try!(
+            self.engines
+                .kv
+                .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
+        );
 
         match (raft_state, apply_state, region_state) {
             (None, None, None) => Err(Error::NotFound(format!("info for region {}", region_id))),
@@ -729,10 +728,11 @@ impl<ER: RaftEngine> Debugger<ER> {
 
     fn get_region_state(&self, region_id: u64) -> Result<RegionLocalState> {
         let region_state_key = keys::region_state_key(region_id);
-        let region_state = box_try!(self
-            .engines
-            .kv
-            .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key));
+        let region_state = box_try!(
+            self.engines
+                .kv
+                .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
+        );
         match region_state {
             Some(v) => Ok(v),
             None => Err(Error::NotFound(format!("region {}", region_id))),
@@ -808,7 +808,7 @@ fn dump_mvcc_properties(db: &Arc<DB>, start: &[u8], end: &[u8]) -> Result<Vec<(S
         ("mvcc.max_row_versions", mvcc_properties.max_row_versions),
     ]
     .iter()
-    .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+    .map(|(k, v)| ((*k).to_string(), v.to_string()))
     .collect();
 
     // Entries and delete marks of RocksDB.
@@ -1210,9 +1210,8 @@ fn divide_db(db: &Arc<DB>, parts: usize) -> raftstore::Result<Vec<Vec<u8>>> {
     let start = keys::data_key(b"");
     let end = keys::data_end_key(b"");
     let range = Range::new(&start, &end);
-    let region_id = 0;
     Ok(box_try!(
-        RocksEngine::from_db(db.clone()).divide_range(range, region_id, parts)
+        RocksEngine::from_db(db.clone()).get_range_approximate_split_keys(range, parts - 1)
     ))
 }
 

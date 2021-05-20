@@ -6,8 +6,9 @@ use std::sync::Arc;
 use engine_traits::KvEngine;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::Region;
+use raftstore::coprocessor::{ObserveHandle, ObserveID};
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::fsm::{ChangeObserver, ObserveID};
+use raftstore::store::fsm::ChangeObserver;
 use raftstore::store::msg::{Callback, SignificantMsg};
 use raftstore::store::RegionSnapshot;
 use tikv::storage::kv::{ScanMode as MvccScanMode, Snapshot};
@@ -22,7 +23,7 @@ const DEFAULT_SCAN_BATCH_SIZE: usize = 1024;
 
 pub type BeforeStartCallback = Box<dyn Fn() + Send>;
 pub type OnErrorCallback = Box<dyn Fn(ObserveID, Region, Error) + Send>;
-pub type OnEntriesCallback = Box<dyn Fn(Vec<ScanEntry>) + Send>;
+pub type OnEntriesCallback = Box<dyn Fn(Vec<ScanEntry>, u64) + Send>;
 pub type IsCancelledCallback = Box<dyn Fn() -> bool + Send>;
 
 pub enum ScanMode {
@@ -32,7 +33,7 @@ pub enum ScanMode {
 }
 
 pub struct ScanTask {
-    pub id: ObserveID,
+    pub handle: ObserveHandle,
     pub tag: String,
     pub mode: ScanMode,
     pub region: Region,
@@ -84,15 +85,16 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                     let ScanTask {
                         on_error,
                         region,
-                        id,
+                        handle,
                         ..
                     } = task;
                     if let Some(on_error) = on_error {
-                        on_error(id, region, e);
+                        on_error(handle.id, region, e);
                     }
                     return;
                 }
             };
+            let apply_index = snap.get_apply_index().unwrap();
             let mut entries = vec![];
             match task.mode {
                 ScanMode::All | ScanMode::AllWithOldValue => {
@@ -114,11 +116,11 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                                 let ScanTask {
                                     on_error,
                                     region,
-                                    id,
+                                    handle,
                                     ..
                                 } = task;
                                 if let Some(on_error) = on_error {
-                                    on_error(id, region, e);
+                                    on_error(handle.id, region, e);
                                 }
                                 return;
                             }
@@ -141,11 +143,11 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                                     let ScanTask {
                                         on_error,
                                         region,
-                                        id,
+                                        handle,
                                         ..
                                     } = task;
                                     if let Some(on_error) = on_error {
-                                        on_error(id, region, e);
+                                        on_error(handle.id, region, e);
                                     }
                                     return;
                                 }
@@ -159,7 +161,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                 }
             }
             entries.push(ScanEntry::None);
-            (task.send_entries)(entries);
+            (task.send_entries)(entries, apply_index);
         };
         self.workers.spawn(fut);
     }
@@ -170,10 +172,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
     ) -> Result<RegionSnapshot<E::Snapshot>> {
         let (cb, fut) = tikv_util::future::paired_future_callback();
         let before_start = task.before_start.take();
-        let change_cmd = ChangeObserver {
-            observe_id: task.id,
-            region_id: task.region.id,
-        };
+        let change_cmd = ChangeObserver::from_rts(task.region.id, task.handle.clone());
         raft_router.significant_send(
             task.region.id,
             SignificantMsg::CaptureChange {
@@ -189,7 +188,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
         )?;
         let mut resp = box_try!(fut.await);
         if resp.response.get_header().has_error() {
-            return Err(Error::Request(resp.response.take_header().take_error()));
+            return Err(Error::request(resp.response.take_header().take_error()));
         }
         Ok(resp.snapshot.unwrap())
     }

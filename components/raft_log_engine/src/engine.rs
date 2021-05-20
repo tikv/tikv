@@ -35,6 +35,18 @@ impl RaftLogEngine {
         }
         fs::read_dir(&path).unwrap().next().is_some()
     }
+
+    pub fn raft_groups(&self) -> Vec<u64> {
+        self.0.raft_groups()
+    }
+
+    pub fn first_index(&self, raft_id: u64) -> Option<u64> {
+        self.0.first_index(raft_id)
+    }
+
+    pub fn last_index(&self, raft_id: u64) -> Option<u64> {
+        self.0.last_index(raft_id)
+    }
 }
 
 #[derive(Default)]
@@ -53,9 +65,10 @@ impl RaftLogBatchTrait for RaftLogBatch {
     }
 
     fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
-        box_try!(self
-            .0
-            .put_msg(raft_group_id, RAFT_LOG_STATE_KEY.to_vec(), state));
+        box_try!(
+            self.0
+                .put_msg(raft_group_id, RAFT_LOG_STATE_KEY.to_vec(), state)
+        );
         Ok(())
     }
 
