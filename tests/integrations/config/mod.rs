@@ -602,7 +602,7 @@ fn test_serde_custom_tikv_config() {
             memory_allocator: Some(String::from("nodump")),
         },
         io_rate_limit: IORateLimitConfig {
-            max_bytes_per_sec: OptionReadableSize(Some(ReadableSize::mb(1000))),
+            max_bytes_per_sec: ReadableSize::mb(1000),
             mode: IORateLimitMode::AllIo,
             strict: true,
             foreground_read_priority: IOPriority::Low,
