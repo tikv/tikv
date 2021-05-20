@@ -39,17 +39,13 @@
 ## It won't take effect when compiling without BCC_IOSNOOP=1. 
 # enable-io-snoop = true
 
-<<<<<<< HEAD
-# Configurations for the single thread pool serving read requests.
-=======
 ## Use abort when TiKV panic. By default TiKV will use _exit() on panic, in that case
 ## core dump file will not be generated, regardless of system settings.
 ## If this config is enabled, core dump files needs to be cleanup to avoid disk space
 ## being filled up.
 # abort-on-panic = false
 
-## Configurations for the single thread pool serving read requests.
->>>>>>> 421e6e068... *: Add `abort-on-panic` config (#10164)
+# Configurations for the single thread pool serving read requests.
 [readpool.unified]
 ## The minimal working thread count of the thread pool.
 # min-thread-count = 1
