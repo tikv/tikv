@@ -172,7 +172,7 @@ fn create_backend_inner(backend: &Backend) -> io::Result<Box<dyn ExternalStorage
             }
         },
         #[cfg(not(any(feature = "cloud-gcp", feature = "cloud-aws")))]
-        _ => Err(bad_backend(backend.clone())),
+        _ => return Err(bad_backend(backend.clone())),
     };
     record_storage_create(start, &*storage);
     Ok(storage)
