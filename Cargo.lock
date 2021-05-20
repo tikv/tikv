@@ -1460,7 +1460,6 @@ dependencies = [
  "crc32fast",
  "crossbeam-utils 0.8.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "fs2",
- "futures 0.3.8",
  "lazy_static",
  "libc 0.2.86",
  "maligned",
@@ -1475,7 +1474,6 @@ dependencies = [
  "tempfile",
  "tikv_alloc",
  "tikv_util",
- "time 0.1.42",
  "tokio",
 ]
 

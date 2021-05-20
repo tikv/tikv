@@ -60,7 +60,9 @@ impl rocksdb::EventListener for RocksEventListener {
                 &info.compaction_reason().to_string(),
             ])
             .inc();
-        if get_io_type() == IOType::Compaction || get_io_type() == IOType::LevelZeroCompaction {
+        if info.base_input_level() == 0 && get_io_type() == IOType::LevelZeroCompaction
+            || info.base_input_level() != 0 && get_io_type() == IOType::Compaction
+        {
             set_io_type(IOType::Other);
         }
     }
@@ -73,8 +75,10 @@ impl rocksdb::EventListener for RocksEventListener {
         }
     }
 
-    fn on_subcompaction_completed(&self, _info: &SubcompactionJobInfo) {
-        if get_io_type() == IOType::Compaction || get_io_type() == IOType::LevelZeroCompaction {
+    fn on_subcompaction_completed(&self, info: &SubcompactionJobInfo) {
+        if info.base_input_level() == 0 && get_io_type() == IOType::LevelZeroCompaction
+            || info.base_input_level() != 0 && get_io_type() == IOType::Compaction
+        {
             set_io_type(IOType::Other);
         }
     }
