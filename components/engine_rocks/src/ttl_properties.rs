@@ -6,7 +6,7 @@ use crate::{RocksEngine, UserProperties};
 use engine_traits::util::get_expire_ts;
 use engine_traits::{
     DecodeProperties, Range, Result, TableProperties, TablePropertiesCollection,
-    TablePropertiesExt, TtlProperties, TtlPropertiesExt,
+    TtlProperties, TtlPropertiesExt,
 };
 use rocksdb::{DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory};
 use tikv_util::error;

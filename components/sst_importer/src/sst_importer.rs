@@ -920,7 +920,7 @@ mod tests {
     use engine_traits::{
         collect, name_to_cf, EncryptionMethod, Iterable, Iterator, SeekKey, CF_DEFAULT, DATA_CFS,
     };
-    use engine_traits::{Error as TraitError, SstWriterBuilder, TablePropertiesExt};
+    use engine_traits::{Error as TraitError, SstWriterBuilder};
     use engine_traits::{
         ExternalSstFileInfo, SstExt, TableProperties, TablePropertiesCollection,
         UserCollectedProperties,
