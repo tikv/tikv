@@ -210,6 +210,10 @@ impl Statistics {
         detail
     }
 
+    pub fn cf_stats(&self) -> [&CfStatistics; 3] {
+        [&self.data, &self.write, &self.lock]
+    }
+
     pub fn mut_cf_statistics(&mut self, cf: &str) -> &mut CfStatistics {
         if cf.is_empty() {
             return &mut self.data;
@@ -225,6 +229,12 @@ impl Statistics {
     pub fn write_scan_detail(&self, detail_v2: &mut ScanDetailV2) {
         detail_v2.set_processed_versions(self.write.processed_keys as u64);
         detail_v2.set_total_versions(self.write.total_op_count() as u64);
+        let read_bytes: usize = self
+            .cf_stats()
+            .iter()
+            .map(|&stat| stat.flow_stats.read_bytes)
+            .sum();
+        detail_v2.set_read_bytes(read_bytes as u64);
     }
 }
 
