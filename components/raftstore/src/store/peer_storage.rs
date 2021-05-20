@@ -3,12 +3,10 @@
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::mpsc::{self, Sender, Receiver, TryRecvError};
 use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, error, u64};
-
-use crossbeam::channel::{SendError, Sender};
 
 use engine_traits::CF_RAFT;
 use engine_traits::{Engines, KvEngine, Mutable, Peekable};
@@ -22,17 +20,15 @@ use protobuf::Message;
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 
-use crate::store::fsm::store::AsyncWriteMsgBatch;
 use crate::store::fsm::GenSnapTask;
 use crate::store::util;
 use crate::store::ProposalContext;
 use crate::{Error, Result};
 use engine_traits::{RaftEngine, RaftLogBatch};
 use into_other::into_other;
-use tikv_util::time::{duration_to_sec, Instant as UtilInstant};
+use tikv_util::time::duration_to_sec;
 use tikv_util::worker::Scheduler;
 
-use super::local_metrics::StoreIOLockMetrics;
 use super::metrics::*;
 use super::worker::RegionTask;
 use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
@@ -309,7 +305,7 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    fn async_write_batch(&mut self, id: usize) -> &mut AsyncWriteMsgBatch<EK, ER>;
+    fn async_write_sender(&self, id: usize) -> &Sender<AsyncWriteMsg<EK, ER>>;
     fn sync_log(&self) -> bool;
     fn set_sync_log(&mut self, sync: bool);
 }
@@ -1057,10 +1053,6 @@ where
             cache.append(&self.tag, &entries);
         }
 
-        task.size += entries
-            .iter()
-            .map(|e| e.compute_size() as usize)
-            .sum::<usize>();
         task.entries = entries;
         task.cut_logs = Some((last_index + 1, prev_last_index));
 
@@ -1403,7 +1395,6 @@ where
         destroy_regions: Vec<metapb::Region>,
         async_writer_id: usize,
         msgs: Vec<RaftMessage>,
-        msg_seq_id: usize,
         proposal_times: Vec<Instant>,
     ) -> Result<InvokeContext> {
         let region_id = self.get_region_id();
@@ -1438,7 +1429,6 @@ where
         // Save raft state if it has changed or there is a snapshot.
         if ctx.raft_state != self.raft_state || !ready.snapshot().is_empty() {
             write_task.raft_state = Some(ctx.raft_state.clone());
-            write_task.size += std::mem::size_of::<RaftLocalState>();
         }
 
         if ready.must_sync() {
@@ -1450,15 +1440,12 @@ where
         }
         write_task.proposal_times = proposal_times;
         write_task.messages = msgs;
-        write_task.msg_seq_id = msg_seq_id;
 
         if !write_task.is_empty() {
-            let batch = ready_ctx.async_write_batch(async_writer_id);
-            if batch.msgs.is_empty() {
-                batch.begin = Some(Instant::now());
+            let sender = ready_ctx.async_write_sender(async_writer_id);
+            if let Err(e) = sender.send(AsyncWriteMsg::WriteTask(write_task)) {
+                panic!("{} failed to send write msg, err: {:?}", self.tag, e);
             }
-            batch.size += write_task.size;
-            batch.msgs.push(AsyncWriteMsg::WriteTask(write_task));
         }
 
         Ok(ctx)

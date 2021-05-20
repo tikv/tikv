@@ -14,6 +14,7 @@ use grpcio::{
     ChannelBuilder, ClientCStreamReceiver, ClientCStreamSender, Environment, RpcStatus,
     RpcStatusCode, WriteFlags,
 };
+use seahash::SeaHasher;
 use kvproto::raft_serverpb::{Done, RaftMessage};
 use kvproto::tikvpb::{BatchRaftMessage, TikvClient};
 use raft::SnapshotStatus;
@@ -28,10 +29,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use std::{cmp, mem, result};
 use std::{collections::VecDeque, time::Duration};
-
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
-use rand::Rng;
+use std::hash::Hasher;
+
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::lru::LruCache;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -778,6 +779,7 @@ pub struct RaftClient<S, R> {
     flush_heap: BinaryHeap<Reverse<(Instant, u64, usize)>>,
     future_pool: Arc<ThreadPool<TaskCell>>,
     builder: ConnectionBuilder<S, R>,
+    hash: (u64, u64),
     delay_flush: Duration,
 }
 
@@ -799,6 +801,7 @@ where
             flush_heap: BinaryHeap::new(),
             future_pool,
             builder,
+            hash: (0, 0),
             delay_flush,
         }
     }
@@ -858,13 +861,15 @@ where
     /// If the message fails to be sent, false is returned. Returning true means the message is
     /// enqueued to buffer. Caller is expected to call `flush` to ensure all buffered messages
     /// are sent out.
-    pub fn send(&mut self, seq_id: Option<usize>, msg: RaftMessage) -> result::Result<(), DiscardReason> {
+    pub fn send(&mut self, msg: RaftMessage) -> result::Result<(), DiscardReason> {
         let store_id = msg.get_to_peer().store_id;
-        let conn_id = if let Some(id) = seq_id {
-            id % self.builder.cfg.grpc_raft_conn_num
-        } else {
-            rand::thread_rng().gen_range(0, self.builder.cfg.grpc_raft_conn_num)
+        if self.hash.0 == 0 || msg.region_id != self.hash.0 {
+            let mut hasher = SeaHasher::new();
+            hasher.write_u64(msg.region_id);
+            let h = hasher.finish();
+            self.hash = (msg.region_id, h % self.builder.cfg.grpc_raft_conn_num as u64);
         };
+        let conn_id = self.hash.1 as usize;
         #[allow(unused_mut)]
         let mut transport_on_send_store_fp = || {
             fail_point!(
@@ -969,6 +974,7 @@ where
             flush_heap: BinaryHeap::default(),
             future_pool: self.future_pool.clone(),
             builder: self.builder.clone(),
+            hash: (0, 0),
             delay_flush: self.delay_flush.clone(),
         }
     }

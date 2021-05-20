@@ -9,15 +9,6 @@ pub struct Config {
     pub max_batch_size: usize,
     pub reschedule_duration: ReadableDuration,
     pub pool_size: usize,
-    pub batch_wait_us: usize,
-    pub io_pool_size: usize,
-    pub io_max_wait_us: u64,
-    pub io_adaptive_size: bool,
-    pub io_queue_size: usize,
-    pub io_queue_init_bytes: usize,
-    pub io_queue_bytes_step: f64,
-    pub io_queue_sample_quantile: f64,
-    pub io_queue_adaptive_gain: usize,
 }
 
 impl Default for Config {
@@ -26,15 +17,6 @@ impl Default for Config {
             max_batch_size: 256,
             reschedule_duration: ReadableDuration::secs(5),
             pool_size: 2,
-            batch_wait_us: 0,
-            io_pool_size: 1,
-            io_max_wait_us: 0,
-            io_adaptive_size: true,
-            io_queue_size: 64,
-            io_queue_init_bytes: 256 * 1024,
-            io_queue_bytes_step: 1.414213562373095,
-            io_queue_adaptive_gain: 1,
-            io_queue_sample_quantile: 0.99,
         }
     }
 }

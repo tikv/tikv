@@ -67,8 +67,8 @@ impl RaftLogBatchTrait for RaftLogBatch {
         self.0.items.is_empty()
     }
 
-    fn merge(&mut self, src: &mut Self) {
-        panic!("not implemented yet");
+    fn merge(&mut self, _src: &mut Self) {
+        panic!("merge not implemented in raft engine yet");
     }
 }
 
