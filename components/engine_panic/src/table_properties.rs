@@ -3,25 +3,9 @@
 use crate::engine::PanicEngine;
 use engine_traits::{
     DecodeProperties, Range, Result, TableProperties, TablePropertiesCollection,
-    TablePropertiesCollectionIter, TablePropertiesExt, TablePropertiesKey, UserCollectedProperties,
+    TablePropertiesCollectionIter, TablePropertiesKey, UserCollectedProperties,
 };
 use std::ops::Deref;
-
-impl TablePropertiesExt for PanicEngine {
-    type TablePropertiesCollection = PanicTablePropertiesCollection;
-    type TablePropertiesCollectionIter = PanicTablePropertiesCollectionIter;
-    type TablePropertiesKey = PanicTablePropertiesKey;
-    type TableProperties = PanicTableProperties;
-    type UserCollectedProperties = PanicUserCollectedProperties;
-
-    fn get_properties_of_tables_in_range(
-        &self,
-        cf: &str,
-        ranges: &[Range],
-    ) -> Result<Self::TablePropertiesCollection> {
-        panic!()
-    }
-}
 
 pub struct PanicTablePropertiesCollection;
 

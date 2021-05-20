@@ -924,7 +924,7 @@ mod tests {
     use engine_traits::{
         collect, EncryptionMethod, Iterable, Iterator, SeekKey, CF_DEFAULT, DATA_CFS,
     };
-    use engine_traits::{Error as TraitError, TablePropertiesExt};
+    use engine_traits::{Error as TraitError};
     use engine_traits::{
         ExternalSstFileInfo, TableProperties, TablePropertiesCollection, UserCollectedProperties,
     };
