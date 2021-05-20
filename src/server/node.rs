@@ -13,7 +13,7 @@ use crate::server::Config as ServerConfig;
 use crate::storage::{config::Config as StorageConfig, Storage};
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
-use engine_traits::{Engines, Peekable, RaftEngine};
+use engine_traits::{Engines, Peekable, RaftEngine, KvEngine};
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::replication_modepb::ReplicationStatus;
@@ -33,16 +33,17 @@ const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 
 /// Creates a new storage engine which is backed by the Raft consensus
 /// protocol.
-pub fn create_raft_storage<S>(
-    engine: RaftKv<RocksEngine, S>,
+pub fn create_raft_storage<S, EK>(
+    engine: RaftKv<EK, S>,
     cfg: &StorageConfig,
     read_pool: ReadPoolHandle,
     lock_mgr: LockManager,
     concurrency_manager: ConcurrencyManager,
     pipelined_pessimistic_lock: Arc<AtomicBool>,
-) -> Result<Storage<RaftKv<RocksEngine, S>, LockManager>>
+) -> Result<Storage<RaftKv<EK, S>, LockManager>>
 where
-    S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
+    S: RaftStoreRouter<EK> + LocalReadRouter<EK> + 'static,
+    EK: KvEngine
 {
     let store = Storage::from_engine(
         engine,
