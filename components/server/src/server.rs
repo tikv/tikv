@@ -195,7 +195,7 @@ struct TiKVEngines<ER: RaftEngine> {
 
 struct Servers<ER: RaftEngine> {
     lock_mgr: LockManager,
-    server: Server<RaftRouter<RocksEngine, ER>, resolve::PdStoreAddrResolver>,
+    server: Server<RaftRouter<RocksEngine, ER>, resolve::PdStoreAddrResolver, RaftKv<RocksEngine, ServerRaftStoreRouter<RocksEngine, ER>>>,
     node: Node<RpcClient, ER>,
     importer: Arc<SSTImporter>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
