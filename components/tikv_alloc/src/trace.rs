@@ -39,7 +39,7 @@ impl Id {
     pub fn readable_name(&self) -> String {
         match self {
             Id::Name(s) => {
-                let mut s = s.to_string();
+                let mut s = s.replace('_', "");
                 s.make_ascii_lowercase();
                 let mut res = String::with_capacity(s.len());
                 for p in s.split('_') {
