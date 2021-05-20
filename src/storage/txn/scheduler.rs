@@ -683,7 +683,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             // message when it finishes.
             Ok(WriteResult {
                 mut ctx,
-                to_be_write,
+                mut to_be_write,
                 rows,
                 pr,
                 lock_info,
@@ -812,6 +812,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                             .unwrap()
                     });
 
+                    to_be_write.deadline = Some(deadline);
                     if let Err(e) = engine.async_write_ext(
                         &ctx,
                         to_be_write,

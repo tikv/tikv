@@ -21,7 +21,7 @@ use crate::store::fsm::apply::{CatchUpLogs, ChangeObserver};
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::KeysInfoFormatter;
 use crate::store::SnapKey;
-use tikv_util::escape;
+use tikv_util::{deadline::Deadline, escape};
 
 use super::{AbstractPeer, RegionSnapshot};
 
@@ -404,15 +404,25 @@ pub struct RaftCommand<S: Snapshot> {
     pub send_time: Instant,
     pub request: RaftCmdRequest,
     pub callback: Callback<S>,
+    pub deadline: Option<Deadline>,
 }
 
 impl<S: Snapshot> RaftCommand<S> {
     #[inline]
     pub fn new(request: RaftCmdRequest, callback: Callback<S>) -> RaftCommand<S> {
+        Self::with_deadline(request, callback, None)
+    }
+
+    pub fn with_deadline(
+        request: RaftCmdRequest,
+        callback: Callback<S>,
+        deadline: Option<Deadline>,
+    ) -> RaftCommand<S> {
         RaftCommand {
             request,
             callback,
             send_time: Instant::now(),
+            deadline,
         }
     }
 }

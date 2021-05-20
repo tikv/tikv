@@ -7,8 +7,8 @@ use engine_traits::{KvEngine, RaftEngine, Snapshot};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::SnapshotStatus;
-use tikv_util::error;
 use tikv_util::time::ThreadReadId;
+use tikv_util::{deadline::Deadline, error};
 
 use crate::store::fsm::RaftRouter;
 use crate::store::transport::{CasualRouter, ProposalRouter, StoreRouter};
@@ -48,8 +48,17 @@ where
 
     /// Sends RaftCmdRequest to local store.
     fn send_command(&self, req: RaftCmdRequest, cb: Callback<EK::Snapshot>) -> RaftStoreResult<()> {
+        self.send_command_with_deadline(req, cb, None)
+    }
+
+    fn send_command_with_deadline(
+        &self,
+        req: RaftCmdRequest,
+        cb: Callback<EK::Snapshot>,
+        deadline: Option<Deadline>,
+    ) -> RaftStoreResult<()> {
         let region_id = req.get_header().get_region_id();
-        let cmd = RaftCommand::new(req, cb);
+        let cmd = RaftCommand::with_deadline(req, cb, deadline);
         <Self as ProposalRouter<EK::Snapshot>>::send(self, cmd)
             .map_err(|e| handle_send_error(region_id, e))
     }
