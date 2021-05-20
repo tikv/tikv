@@ -19,7 +19,6 @@ pub use iosnoop::{get_io_type, init_io_snooper, set_io_type};
 pub use metrics_manager::{BytesFetcher, MetricsManager};
 pub use rate_limiter::{
     get_io_rate_limiter, set_io_rate_limiter, IORateLimiter, IORateLimiterStatistics,
-    WithIORateLimit,
 };
 
 pub use std::fs::{
@@ -30,13 +29,14 @@ pub use std::fs::{
 
 use std::io::{self, ErrorKind, Read, Write};
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use openssl::error::ErrorStack;
 use openssl::hash::{self, Hasher, MessageDigest};
 use strum::EnumCount;
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IOOp {
     Read,
     Write,
@@ -45,20 +45,64 @@ pub enum IOOp {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumCount)]
 pub enum IOType {
-    Other,
+    Other = 0,
     // Including coprocessor and storage read.
-    ForegroundRead,
+    ForegroundRead = 1,
     // Including scheduler worker, raftstore and apply. Scheduler worker only
     // does read related works, but it's on the path of foreground write, so
     // account it as foreground-write instead of foreground-read.
-    ForegroundWrite,
-    Flush,
-    Compaction,
-    Replication,
-    LoadBalance,
-    Gc,
-    Import,
-    Export,
+    ForegroundWrite = 2,
+    Flush = 3,
+    LevelZeroCompaction = 4,
+    Compaction = 5,
+    Replication = 6,
+    LoadBalance = 7,
+    Gc = 8,
+    Import = 9,
+    Export = 10,
+}
+
+impl IOType {
+    pub fn as_str(&self) -> &str {
+        match *self {
+            IOType::Other => "other",
+            IOType::ForegroundRead => "foreground_read",
+            IOType::ForegroundWrite => "foreground_write",
+            IOType::Flush => "flush",
+            IOType::LevelZeroCompaction => "level_zero_compaction",
+            IOType::Compaction => "compaction",
+            IOType::Replication => "replication",
+            IOType::LoadBalance => "load_balance",
+            IOType::Gc => "gc",
+            IOType::Import => "import",
+            IOType::Export => "export",
+        }
+    }
+}
+
+impl FromStr for IOType {
+    type Err = String;
+    fn from_str(s: &str) -> Result<IOType, String> {
+        match s {
+            "other" => Ok(IOType::Other),
+            "foreground_read" => Ok(IOType::ForegroundRead),
+            "foreground_write" => Ok(IOType::ForegroundWrite),
+            "flush" => Ok(IOType::Flush),
+            "level_zero_compaction" => Ok(IOType::LevelZeroCompaction),
+            "compaction" => Ok(IOType::Compaction),
+            "replication" => Ok(IOType::Replication),
+            "load_balance" => Ok(IOType::LoadBalance),
+            "gc" => Ok(IOType::Gc),
+            "import" => Ok(IOType::Import),
+            "export" => Ok(IOType::Export),
+            s => Err(format!(
+                "expect in the list: [other, foreground_read, foreground_write, flush, \
+                level_zero_compaction, compaction, replication, load_balance, gc, import\
+                , export], got: {:?}",
+                s
+            )),
+        }
+    }
 }
 
 pub struct WithIOType {

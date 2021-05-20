@@ -33,9 +33,7 @@ use file_system::{
     set_io_rate_limiter, BytesFetcher, IORateLimiter, MetricsManager as IOMetricsManager,
 };
 use fs2::FileExt;
-use futures::compat::Stream01CompatExt;
 use futures::executor::block_on;
-use futures::stream::StreamExt;
 use grpcio::{EnvBuilder, Environment};
 use kvproto::{
     backup::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
@@ -82,7 +80,6 @@ use tikv_util::{
     config::{ensure_dir_exist, VersionTrack},
     sys::sys_quota::SysQuota,
     time::Monitor,
-    timer::GLOBAL_TIMER_HANDLE,
     worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker, Worker},
 };
 use tokio::runtime::Builder;
@@ -114,12 +111,12 @@ pub fn run_tikv(config: TiKvConfig) {
     macro_rules! run_impl {
         ($ER: ty) => {{
             let mut tikv = TiKVServer::<$ER>::init(config);
-            let fetcher = tikv.init_io_utility();
             tikv.check_conflict_addr();
             tikv.init_fs();
             tikv.init_yatp();
             tikv.init_encryption();
-            let engines = tikv.init_raw_engines();
+            let (limiter, fetcher) = tikv.init_io_utility();
+            let engines = tikv.init_raw_engines(Some(limiter.clone()));
             tikv.init_engines(engines);
             let server_config = tikv.init_servers();
             tikv.register_services();
@@ -894,36 +891,39 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
     }
 
-    fn init_io_utility(&mut self) -> BytesFetcher {
+    fn init_io_utility(&mut self) -> (Arc<IORateLimiter>, BytesFetcher) {
         let io_snooper_on = self.config.enable_io_snoop
             && file_system::init_io_snooper()
                 .map_err(|e| error_unknown!(%e; "failed to init io snooper"))
                 .is_ok();
-        let (fetcher, limiter) = if io_snooper_on {
-            (BytesFetcher::FromIOSnooper(), IORateLimiter::new(0, false))
+        let limiter = Arc::new(IORateLimiter::new(
+            0,
+            !io_snooper_on, /*enable_statistics*/
+        ));
+        let fetcher = if io_snooper_on {
+            BytesFetcher::FromIOSnooper()
         } else {
-            let limiter = IORateLimiter::new(0, true);
-            (BytesFetcher::FromRateLimiter(limiter.statistics()), limiter)
+            BytesFetcher::FromRateLimiter(limiter.statistics().unwrap())
         };
-        set_io_rate_limiter(Some(Arc::new(limiter)));
-        fetcher
+        // Set up IO limiter even when rate limit is disabled, so that rate limits can be
+        // dynamically applied later on.
+        set_io_rate_limiter(Some(limiter.clone()));
+        (limiter, fetcher)
     }
 
     fn init_metrics_flusher(&mut self, fetcher: BytesFetcher) {
-        let handle = self.background_worker.clone_raw_handle();
-        let mut interval = GLOBAL_TIMER_HANDLE
-            .interval(Instant::now(), DEFAULT_METRICS_FLUSH_INTERVAL)
-            .compat();
         let mut engine_metrics =
             EngineMetricsManager::new(self.engines.as_ref().unwrap().engines.clone());
         let mut io_metrics = IOMetricsManager::new(fetcher);
-        handle.spawn(async move {
-            while let Some(Ok(_)) = interval.next().await {
+        let mut last_call = Instant::now();
+        self.background_worker
+            .spawn_interval_task(DEFAULT_METRICS_FLUSH_INTERVAL, move || {
                 let now = Instant::now();
-                engine_metrics.flush(now);
-                io_metrics.flush(now);
-            }
-        });
+                let duration = now - last_call;
+                last_call = now;
+                engine_metrics.flush(duration);
+                io_metrics.flush(duration);
+            });
     }
 
     fn run_server(&mut self, server_config: Arc<ServerConfig>) {
@@ -984,10 +984,13 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 }
 
 impl TiKVServer<RocksEngine> {
-    fn init_raw_engines(&mut self) -> Engines<RocksEngine, RocksEngine> {
+    fn init_raw_engines(
+        &mut self,
+        limiter: Option<Arc<IORateLimiter>>,
+    ) -> Engines<RocksEngine, RocksEngine> {
         let env =
             get_encrypted_env(self.encryption_key_manager.clone(), None /*base_env*/).unwrap();
-        let env = get_inspected_env(Some(env)).unwrap();
+        let env = get_inspected_env(Some(env), limiter).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         // Create raft engine.
@@ -1052,10 +1055,13 @@ impl TiKVServer<RocksEngine> {
 }
 
 impl TiKVServer<RaftLogEngine> {
-    fn init_raw_engines(&mut self) -> Engines<RocksEngine, RaftLogEngine> {
+    fn init_raw_engines(
+        &mut self,
+        limiter: Option<Arc<IORateLimiter>>,
+    ) -> Engines<RocksEngine, RaftLogEngine> {
         let env =
             get_encrypted_env(self.encryption_key_manager.clone(), None /*base_env*/).unwrap();
-        let env = get_inspected_env(Some(env)).unwrap();
+        let env = get_inspected_env(Some(env), limiter).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         // Create raft engine.
@@ -1223,24 +1229,19 @@ const DEFAULT_ENGINE_METRICS_RESET_INTERVAL: Duration = Duration::from_millis(60
 
 pub struct EngineMetricsManager<R: RaftEngine> {
     engines: Engines<RocksEngine, R>,
-    last_reset: Instant,
 }
 
 impl<R: RaftEngine> EngineMetricsManager<R> {
     pub fn new(engines: Engines<RocksEngine, R>) -> Self {
-        EngineMetricsManager {
-            engines,
-            last_reset: Instant::now(),
-        }
+        EngineMetricsManager { engines }
     }
 
-    pub fn flush(&mut self, now: Instant) {
+    pub fn flush(&mut self, duration: Duration) {
         self.engines.kv.flush_metrics("kv");
         self.engines.raft.flush_metrics("raft");
-        if now.duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
+        if duration >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
             self.engines.kv.reset_statistics();
             self.engines.raft.reset_statistics();
-            self.last_reset = now;
         }
     }
 }
