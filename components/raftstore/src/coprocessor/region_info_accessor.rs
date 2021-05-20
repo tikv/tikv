@@ -352,6 +352,9 @@ impl RegionCollector {
         let region_id = region.get_id();
 
         if let Some(r) = self.regions.get_mut(&region_id) {
+            if r.role != role {
+                warn!("hibernate state change on region but role does not match.");
+            }
             r.hibernate_state = new_state;
             return;
         }
@@ -775,21 +778,27 @@ mod tests {
         region
     }
 
-    fn check_collection(c: &RegionCollector, regions: &[(Region, StateRole)]) {
+    fn check_collection(c: &RegionCollector, regions: &[(Region, StateRole, HibernateState)]) {
         let region_ranges: Vec<_> = regions
             .iter()
-            .map(|(r, _)| (data_end_key(r.get_end_key()), r.get_id()))
+            .map(|(r, ..)| (data_end_key(r.get_end_key()), r.get_id()))
             .collect();
 
         let mut is_regions_equal = c.regions.len() == regions.len();
 
         if is_regions_equal {
-            for (expect_region, expect_role) in regions {
+            for (expect_region, expect_role, expect_hibernate_state) in regions {
                 is_regions_equal = is_regions_equal
                     && c.regions.get(&expect_region.get_id()).map_or(
                         false,
-                        |RegionInfo { region, role }| {
-                            expect_region == region && expect_role == role
+                        |RegionInfo {
+                             region,
+                             role,
+                             hibernate_state,
+                         }| {
+                            expect_region == region
+                                && expect_role == role
+                                && expect_hibernate_state == hibernate_state
                         },
                     );
 
@@ -828,7 +837,7 @@ mod tests {
 
         let expected_regions: Vec<_> = regions
             .iter()
-            .map(|r| (r.clone(), StateRole::Follower))
+            .map(|r| (r.clone(), StateRole::Follower, HibernateState::ordered()))
             .collect();
         check_collection(&c, &expected_regions);
     }
@@ -912,6 +921,22 @@ mod tests {
 
         if let Some(r) = c.regions.get(&region.get_id()) {
             assert_eq!(r.role, role);
+        }
+    }
+
+    fn must_change_hibernate_state(
+        c: &mut RegionCollector,
+        region: &Region,
+        role: StateRole,
+        hibernate_state: HibernateState,
+    ) {
+        c.handle_raftstore_event(RaftStoreEvent::HibernateStateChange {
+            region: region.clone(),
+            role,
+            hibernate_state: hibernate_state.clone(),
+        });
+        if let Some(r) = c.regions.get(&region.get_id()) {
+            assert_eq!(r.hibernate_state, hibernate_state);
         }
     }
 
@@ -1013,7 +1038,13 @@ mod tests {
         must_load_regions(&mut c, &init_regions);
         let mut regions: Vec<_> = init_regions
             .iter()
-            .map(|region| (region.clone(), StateRole::Follower))
+            .map(|region| {
+                (
+                    region.clone(),
+                    StateRole::Follower,
+                    HibernateState::ordered(),
+                )
+            })
             .collect();
 
         c.check_region_range(&new_region(7, b"k2", b"k3", 2), true);
@@ -1047,14 +1078,33 @@ mod tests {
         check_collection(
             &c,
             &[
-                (init_regions[0].clone(), StateRole::Follower),
-                (init_regions[2].clone(), StateRole::Follower),
-                (init_regions[5].clone(), StateRole::Follower),
+                (
+                    init_regions[0].clone(),
+                    StateRole::Follower,
+                    HibernateState::ordered(),
+                ),
+                (
+                    init_regions[2].clone(),
+                    StateRole::Follower,
+                    HibernateState::ordered(),
+                ),
+                (
+                    init_regions[5].clone(),
+                    StateRole::Follower,
+                    HibernateState::ordered(),
+                ),
             ],
         );
 
         c.check_region_range(&new_region(1, b"", b"", 2), true);
-        check_collection(&c, &[(init_regions[0].clone(), StateRole::Follower)]);
+        check_collection(
+            &c,
+            &[(
+                init_regions[0].clone(),
+                StateRole::Follower,
+                HibernateState::ordered(),
+            )],
+        );
     }
 
     #[test]
@@ -1081,9 +1131,21 @@ mod tests {
         check_collection(
             &c,
             &[
-                (new_region(1, b"k0", b"k1", 2), StateRole::Follower),
-                (new_region(2, b"k2", b"k8", 2), StateRole::Follower),
-                (new_region(3, b"k9", b"k99", 2), StateRole::Follower),
+                (
+                    new_region(1, b"k0", b"k1", 2),
+                    StateRole::Follower,
+                    HibernateState::ordered(),
+                ),
+                (
+                    new_region(2, b"k2", b"k8", 2),
+                    StateRole::Follower,
+                    HibernateState::ordered(),
+                ),
+                (
+                    new_region(3, b"k9", b"k99", 2),
+                    StateRole::Follower,
+                    HibernateState::ordered(),
+                ),
             ],
         );
 
@@ -1099,11 +1161,70 @@ mod tests {
         check_collection(
             &c,
             &[
-                (new_region(1, b"k0", b"k1", 2), StateRole::Candidate),
-                (new_region(4, b"k1", b"k3", 3), StateRole::Follower),
-                (new_region(2, b"k3", b"k7", 3), StateRole::Leader),
-                (new_region(3, b"k9", b"k99", 2), StateRole::Follower),
-                (new_region(5, b"k99", b"", 2), StateRole::Follower),
+                (
+                    new_region(1, b"k0", b"k1", 2),
+                    StateRole::Candidate,
+                    HibernateState::ordered(),
+                ),
+                (
+                    new_region(4, b"k1", b"k3", 3),
+                    StateRole::Follower,
+                    HibernateState::ordered(),
+                ),
+                (
+                    new_region(2, b"k3", b"k7", 3),
+                    StateRole::Leader,
+                    HibernateState::ordered(),
+                ),
+                (
+                    new_region(3, b"k9", b"k99", 2),
+                    StateRole::Follower,
+                    HibernateState::ordered(),
+                ),
+                (
+                    new_region(5, b"k99", b"", 2),
+                    StateRole::Follower,
+                    HibernateState::ordered(),
+                ),
+            ],
+        );
+
+        let mut hibernate_state = HibernateState::ordered();
+        hibernate_state.reset(GroupState::Idle);
+        must_change_hibernate_state(
+            &mut c,
+            &new_region(5, b"k99", b"", 2),
+            StateRole::Follower,
+            hibernate_state.clone(),
+        );
+        check_collection(
+            &c,
+            &[
+                (
+                    new_region(1, b"k0", b"k1", 2),
+                    StateRole::Candidate,
+                    HibernateState::ordered(),
+                ),
+                (
+                    new_region(4, b"k1", b"k3", 3),
+                    StateRole::Follower,
+                    HibernateState::ordered(),
+                ),
+                (
+                    new_region(2, b"k3", b"k7", 3),
+                    StateRole::Leader,
+                    HibernateState::ordered(),
+                ),
+                (
+                    new_region(3, b"k9", b"k99", 2),
+                    StateRole::Follower,
+                    HibernateState::ordered(),
+                ),
+                (
+                    new_region(5, b"k99", b"", 2),
+                    StateRole::Follower,
+                    hibernate_state.clone(),
+                ),
             ],
         );
 
@@ -1112,9 +1233,21 @@ mod tests {
         check_collection(
             &c,
             &[
-                (new_region(1, b"k0", b"k1", 2), StateRole::Candidate),
-                (new_region(2, b"k3", b"k7", 3), StateRole::Leader),
-                (new_region(5, b"k99", b"", 2), StateRole::Follower),
+                (
+                    new_region(1, b"k0", b"k1", 2),
+                    StateRole::Candidate,
+                    HibernateState::ordered(),
+                ),
+                (
+                    new_region(2, b"k3", b"k7", 3),
+                    StateRole::Leader,
+                    HibernateState::ordered(),
+                ),
+                (
+                    new_region(5, b"k99", b"", 2),
+                    StateRole::Follower,
+                    hibernate_state,
+                ),
             ],
         );
     }
@@ -1152,7 +1285,7 @@ mod tests {
 
         let final_regions = final_regions
             .into_iter()
-            .map(|r| (r, StateRole::Follower))
+            .map(|r| (r, StateRole::Follower, HibernateState::ordered()))
             .collect::<Vec<_>>();
         check_collection(&c, &final_regions);
     }
@@ -1204,9 +1337,21 @@ mod tests {
         }
 
         let final_regions = &[
-            (region_with_conf(1, b"", b"k1", 1, 1), StateRole::Follower),
-            (updating_region, StateRole::Follower),
-            (region_with_conf(4, b"k3", b"", 1, 100), StateRole::Follower),
+            (
+                region_with_conf(1, b"", b"k1", 1, 1),
+                StateRole::Follower,
+                HibernateState::ordered(),
+            ),
+            (
+                updating_region,
+                StateRole::Follower,
+                HibernateState::ordered(),
+            ),
+            (
+                region_with_conf(4, b"k3", b"", 1, 100),
+                StateRole::Follower,
+                HibernateState::ordered(),
+            ),
         ];
         check_collection(&c, final_regions);
     }
@@ -1241,10 +1386,26 @@ mod tests {
         check_collection(
             &c,
             &[
-                (new_region(1, b"", b"k1", 1), StateRole::Follower),
-                (new_region(2, b"k1", b"k5", 2), StateRole::Leader),
-                (new_region(4, b"k5", b"k9", 2), StateRole::Follower),
-                (new_region(3, b"k9", b"", 1), StateRole::Follower),
+                (
+                    new_region(1, b"", b"k1", 1),
+                    StateRole::Follower,
+                    HibernateState::ordered(),
+                ),
+                (
+                    new_region(2, b"k1", b"k5", 2),
+                    StateRole::Leader,
+                    HibernateState::ordered(),
+                ),
+                (
+                    new_region(4, b"k5", b"k9", 2),
+                    StateRole::Follower,
+                    HibernateState::ordered(),
+                ),
+                (
+                    new_region(3, b"k9", b"", 1),
+                    StateRole::Follower,
+                    HibernateState::ordered(),
+                ),
             ],
         );
 
@@ -1257,9 +1418,21 @@ mod tests {
         check_collection(
             &c,
             &[
-                (new_region(1, b"", b"k1", 1), StateRole::Follower),
-                (new_region(2, b"k1", b"k9", 3), StateRole::Leader),
-                (new_region(3, b"k9", b"", 1), StateRole::Follower),
+                (
+                    new_region(1, b"", b"k1", 1),
+                    StateRole::Follower,
+                    HibernateState::ordered(),
+                ),
+                (
+                    new_region(2, b"k1", b"k9", 3),
+                    StateRole::Leader,
+                    HibernateState::ordered(),
+                ),
+                (
+                    new_region(3, b"k9", b"", 1),
+                    StateRole::Follower,
+                    HibernateState::ordered(),
+                ),
             ],
         );
     }

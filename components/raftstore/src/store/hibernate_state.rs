@@ -53,7 +53,7 @@ impl LeaderState {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct HibernateState {
     pub group: GroupState,
     pub leader: LeaderState,
