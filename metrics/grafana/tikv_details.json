@@ -3557,7 +3557,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 33
+            "y": 51
           },
           "id": 3730,
           "legend": {
@@ -3593,7 +3593,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(tikv_raftstore_hibernate_state_count{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"leader\"}) by (instance, role, state)",
+              "expr": "sum(tikv_raftstore_hibernate_state_count{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (instance, role, state)",
               "format": "time_series",
               "hide": false,
               "intervalFactor": 2,
@@ -3659,8 +3659,8 @@
           "gridPos": {
             "h": 8,
             "w": 12,
-            "x": 0,
-            "y": 33
+            "x": 12,
+            "y": 51
           },
           "id": 3731,
           "legend": {
@@ -3696,7 +3696,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(tikv_raftstore_hibernate_leader_state_count{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"leader\"}) by (instance, state)",
+              "expr": "sum(tikv_raftstore_hibernate_leader_state_count{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (instance, state)",
               "format": "time_series",
               "hide": false,
               "intervalFactor": 2,
