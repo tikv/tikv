@@ -1630,6 +1630,9 @@ where
                     );
                 }
                 self.post_pending_read_index_on_replica(ctx);
+                // Resume `read_progress`
+                self.read_progress.resume();
+                // Update apply index to `last_applying_idx`
                 self.read_progress.update_applied(self.last_applying_idx);
             }
             CheckApplyingSnapStatus::Idle => {}
@@ -1777,6 +1780,8 @@ where
         if invoke_ctx.has_snapshot() {
             // When apply snapshot, there is no log applied and not compacted yet.
             self.raft_log_size_hint = 0;
+            // Stop `read_progress` to prevent serving stale read while applying snapshot
+            self.read_progress.stop();
         }
 
         let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
