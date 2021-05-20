@@ -247,7 +247,7 @@ impl BlockCacheConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct IORateLimitConfig {
-    pub max_bytes_per_sec: OptionReadableSize,
+    pub max_bytes_per_sec: ReadableSize,
     #[config(skip)]
     pub mode: IORateLimitMode,
     #[config(skip)]
@@ -279,7 +279,7 @@ pub struct IORateLimitConfig {
 impl Default for IORateLimitConfig {
     fn default() -> IORateLimitConfig {
         IORateLimitConfig {
-            max_bytes_per_sec: OptionReadableSize(None),
+            max_bytes_per_sec: ReadableSize::mb(0),
             mode: IORateLimitMode::WriteOnly,
             strict: false,
             foreground_read_priority: IOPriority::High,
@@ -300,9 +300,7 @@ impl Default for IORateLimitConfig {
 impl IORateLimitConfig {
     pub fn build(&self, enable_statistics: bool) -> IORateLimiter {
         let mut limiter = IORateLimiter::new(self.mode, self.strict, enable_statistics);
-        if let Some(limit) = self.max_bytes_per_sec.0 {
-            limiter.set_io_rate_limit(limit.0 as usize);
-        }
+        limiter.set_io_rate_limit(self.max_bytes_per_sec.0 as usize);
         limiter.set_io_priority(IOType::ForegroundRead, self.foreground_read_priority);
         limiter.set_io_priority(IOType::ForegroundWrite, self.foreground_write_priority);
         limiter.set_io_priority(IOType::Flush, self.flush_priority);
