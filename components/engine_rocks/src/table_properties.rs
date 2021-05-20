@@ -8,22 +8,16 @@ use engine_traits::{Error, Result};
 use engine_traits::{
     TableProperties, TablePropertiesCollectionIter, TablePropertiesKey, UserCollectedProperties,
 };
-use engine_traits::{TablePropertiesCollection, TablePropertiesExt};
+use engine_traits::{TablePropertiesCollection};
 use rocksdb::table_properties_rc as rc;
 use std::ops::Deref;
 
-impl TablePropertiesExt for RocksEngine {
-    type TablePropertiesCollection = RocksTablePropertiesCollection;
-    type TablePropertiesCollectionIter = RocksTablePropertiesCollectionIter;
-    type TablePropertiesKey = RocksTablePropertiesKey;
-    type TableProperties = RocksTableProperties;
-    type UserCollectedProperties = RocksUserCollectedProperties;
-
-    fn get_properties_of_tables_in_range(
+impl RocksEngine {
+    pub(crate) fn get_properties_of_tables_in_range(
         &self,
         cf: &str,
         ranges: &[Range],
-    ) -> Result<Self::TablePropertiesCollection> {
+    ) -> Result<RocksTablePropertiesCollection> {
         let cf = util::get_cf_handle(self.as_inner(), cf)?;
         // FIXME: extra allocation
         let ranges: Vec<_> = ranges.iter().map(util::range_to_rocks_range).collect();
@@ -32,6 +26,16 @@ impl TablePropertiesExt for RocksEngine {
             .get_properties_of_tables_in_range_rc(cf, &ranges);
         let raw = raw.map_err(Error::Engine)?;
         Ok(RocksTablePropertiesCollection::from_raw(raw))
+    }
+
+    pub fn get_range_properties_cf(
+        &self,
+        cfname: &str,
+        start_key: &[u8],
+        end_key: &[u8],
+    ) -> Result<RocksTablePropertiesCollection> {
+        let range = Range::new(start_key, end_key);
+        self.get_properties_of_tables_in_range(cfname, &[range])
     }
 }
 
