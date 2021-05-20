@@ -306,7 +306,7 @@ impl<E: Engine> FlowChecker<E> {
         let should_throttle =
             num_memtables > self.memtables_threshold || num_l0_files > self.l0_files_threshold;
 
-        let throttle = if !is_throttled && should_throttle {
+        let mut throttle = if !is_throttled && should_throttle {
             self.recorder.get_avg() * (1.0 - LIMIT_DOWN_PERCENT)
         } else if is_throttled && should_throttle {
             if self.last_num_l0_files <= num_l0_files || self.last_num_memtables <= num_memtables {
@@ -339,6 +339,9 @@ impl<E: Engine> FlowChecker<E> {
         } else {
             throttle as i64
         });
+        if throttle < 16.0 * 1024.0 * 1024.0 {
+            throttle = 16.0 * 1024.0 * 1024.0;
+        }
         self.limiter.set_speed_limit(throttle)
     }
 }
