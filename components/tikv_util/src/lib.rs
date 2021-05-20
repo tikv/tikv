@@ -596,7 +596,7 @@ mod tests {
             .unwrap();
 
             let _ = std::thread::spawn(|| {
-                // let the global logger is held by a other thread, so the
+                // let the global logger is held by the other thread, so the
                 // drop() of the async drain is not called in time.
                 let _guard = slog_global::borrow_global();
                 std::thread::sleep(Duration::from_secs(1));
