@@ -87,6 +87,7 @@ use tikv_util::{
 };
 use tokio::runtime::Builder;
 
+use crate::raft_engine_switch::{check_and_dump_raft_db, check_and_dump_raft_engine};
 use crate::{setup::*, signal_handler};
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
@@ -258,13 +259,21 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     /// - If the max open file descriptor limit is not high enough to support
     ///   the main database and the raft database.
     fn init_config(mut config: TiKvConfig) -> ConfigController {
+        validate_and_persist_config(&mut config, true);
+
         ensure_dir_exist(&config.storage.data_dir).unwrap();
+        if !config.rocksdb.wal_dir.is_empty() {
+            ensure_dir_exist(&config.rocksdb.wal_dir).unwrap();
+        }
         if config.raft_engine.enable {
             ensure_dir_exist(&config.raft_engine.config().dir).unwrap();
         } else {
             ensure_dir_exist(&config.raft_store.raftdb_path).unwrap();
+            if !config.raftdb.wal_dir.is_empty() {
+                ensure_dir_exist(&config.raftdb.wal_dir).unwrap();
+            }
         }
-        validate_and_persist_config(&mut config, true);
+
         check_system_config(&config);
 
         tikv_util::set_panic_hook(false, &config.storage.data_dir);
@@ -641,7 +650,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 self.concurrency_manager.clone(),
                 engine_rocks::raw_util::to_raw_perf_level(self.config.coprocessor.perf_level),
             ),
-            coprocessor_v2::Endpoint::new(),
+            coprocessor_v2::Endpoint::new(&self.config.coprocessor_v2),
             self.router.clone(),
             self.resolver.clone(),
             snap_mgr.clone(),
@@ -653,8 +662,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
 
         let import_path = self.store_path.join("import");
-        let importer =
-            Arc::new(SSTImporter::new(import_path, self.encryption_key_manager.clone()).unwrap());
+        let importer = Arc::new(
+            SSTImporter::new(
+                &self.config.import,
+                import_path,
+                self.encryption_key_manager.clone(),
+            )
+            .unwrap(),
+        );
 
         let split_check_runner = SplitCheckRunner::new(
             engines.engines.kv.clone(),
@@ -1012,6 +1027,8 @@ impl TiKVServer<RocksEngine> {
         raft_engine.set_shared_block_cache(shared_block_cache);
         let engines = Engines::new(kv_engine, raft_engine);
 
+        check_and_dump_raft_engine(&self.config, &engines.raft, 8);
+
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
             tikv::config::Module::Rocksdb,
@@ -1046,12 +1063,7 @@ impl TiKVServer<RaftLogEngine> {
         let raft_engine = RaftLogEngine::new(raft_config);
 
         // Try to dump and recover raft data.
-        crate::dump::check_and_dump_raft_db(
-            &self.config.raft_store.raftdb_path,
-            &raft_engine,
-            env.clone(),
-            8,
-        );
+        check_and_dump_raft_db(&self.config, &raft_engine, &env, 8);
 
         // Create kv engine.
         let mut kv_db_opts = self.config.rocksdb.build_opt();

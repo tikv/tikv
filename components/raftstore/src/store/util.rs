@@ -313,7 +313,10 @@ pub fn check_store_id(req: &RaftCmdRequest, store_id: u64) -> Result<()> {
     if peer.get_store_id() == store_id {
         Ok(())
     } else {
-        Err(Error::StoreNotMatch(peer.get_store_id(), store_id))
+        Err(Error::StoreNotMatch {
+            to_store_id: peer.get_store_id(),
+            my_store_id: store_id,
+        })
     }
 }
 
@@ -848,7 +851,7 @@ impl Display for MsgType<'_> {
 /// For the followers, the item is sync periodically from the leader through the `CheckLeader` rpc.
 ///
 /// The intend is to make the item's `safe ts` larger (more up to date) and `apply index` smaller (require less data)
-#[derive(Debug)]
+#[derive(Default, Debug)]
 pub struct RegionReadProgress {
     // `core` used to keep track and update `safe_ts`, it should
     // not be accessed outside to avoid dead lock
@@ -901,7 +904,7 @@ impl RegionReadProgress {
     }
 }
 
-#[derive(Debug)]
+#[derive(Default, Debug)]
 struct RegionReadProgressCore {
     applied_index: u64,
     // TODO: after region merged, the region's key range is extended and this

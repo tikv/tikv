@@ -340,7 +340,7 @@ impl<'a> ScalarValueRef<'a> {
         field_type: &FieldType,
     ) -> crate::codec::Result<Ordering> {
         Ok(match_template! {
-            TT = [Real, Decimal, DateTime, Duration, Json],
+            TT = [Real, Decimal, DateTime, Duration, Json, Enum],
             match (self, other) {
                 (ScalarValueRef::TT(v1), ScalarValueRef::TT(v2)) => v1.cmp(v2),
                 (ScalarValueRef::Int(v1), ScalarValueRef::Int(v2)) => compare_int(&v1.cloned(), &v2.cloned(), &field_type),
@@ -378,28 +378,14 @@ macro_rules! impl_as_ref {
         impl ScalarValue {
             #[inline]
             pub fn $name(&self) -> Option<&$ty> {
-                match self {
-                    ScalarValue::$ty(v) => v.as_ref(),
-                    other => panic!(
-                        "Cannot cast {} scalar value into {}",
-                        other.eval_type(),
-                        stringify!($ty),
-                    ),
-                }
+                Evaluable::borrow_scalar_value(self)
             }
         }
 
         impl<'a> ScalarValueRef<'a> {
             #[inline]
             pub fn $name(&'a self) -> Option<&'a $ty> {
-                match self {
-                    ScalarValueRef::$ty(v) => v.clone(),
-                    other => panic!(
-                        "Cannot cast {} scalar value into {}",
-                        other.eval_type(),
-                        stringify!($ty),
-                    ),
-                }
+                Evaluable::borrow_scalar_value_ref(*self)
             }
         }
     };
@@ -414,56 +400,28 @@ impl_as_ref! { Duration, as_duration }
 impl ScalarValue {
     #[inline]
     pub fn as_json(&self) -> Option<JsonRef> {
-        match self {
-            ScalarValue::Json(v) => v.as_ref().map(|x| x.as_ref()),
-            other => panic!(
-                "Cannot cast {} scalar value into {}",
-                other.eval_type(),
-                stringify!(Json),
-            ),
-        }
+        EvaluableRef::borrow_scalar_value(self)
     }
 }
 
 impl<'a> ScalarValueRef<'a> {
     #[inline]
     pub fn as_json(&'a self) -> Option<JsonRef<'a>> {
-        match self {
-            ScalarValueRef::Json(v) => *v,
-            other => panic!(
-                "Cannot cast {} scalar value into {}",
-                other.eval_type(),
-                stringify!(Json),
-            ),
-        }
+        EvaluableRef::borrow_scalar_value_ref(*self)
     }
 }
 
 impl ScalarValue {
     #[inline]
     pub fn as_bytes(&self) -> Option<BytesRef> {
-        match self {
-            ScalarValue::Bytes(v) => v.as_ref().map(|x| x.as_slice()),
-            other => panic!(
-                "Cannot cast {} scalar value into {}",
-                other.eval_type(),
-                stringify!(Bytes),
-            ),
-        }
+        EvaluableRef::borrow_scalar_value(self)
     }
 }
 
 impl<'a> ScalarValueRef<'a> {
     #[inline]
     pub fn as_bytes(&'a self) -> Option<BytesRef<'a>> {
-        match self {
-            ScalarValueRef::Bytes(v) => *v,
-            other => panic!(
-                "Cannot cast {} scalar value into {}",
-                other.eval_type(),
-                stringify!(Bytes),
-            ),
-        }
+        EvaluableRef::borrow_scalar_value_ref(*self)
     }
 }
 

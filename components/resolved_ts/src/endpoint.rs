@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use concurrency_manager::ConcurrencyManager;
@@ -14,9 +14,10 @@ use kvproto::metapb::Region;
 use pd_client::PdClient;
 use raft::StateRole;
 use raftstore::coprocessor::CmdBatch;
+use raftstore::coprocessor::{ObserveHandle, ObserveID};
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::fsm::{ObserveID, StoreMeta};
-use raftstore::store::util;
+use raftstore::store::fsm::StoreMeta;
+use raftstore::store::util::{self, RegionReadProgress};
 use raftstore::store::RegionSnapshot;
 use security::SecurityManager;
 use tikv::config::CdcConfig;
@@ -32,6 +33,7 @@ use crate::sinker::{CmdSinker, SinkCmd};
 
 enum ResolverStatus {
     Pending {
+        tracked_index: u64,
         locks: Vec<PendingLock>,
         cancelled: Arc<AtomicBool>,
     },
@@ -56,7 +58,7 @@ enum PendingLock {
 // and command observing.
 struct ObserveRegion {
     meta: Region,
-    observe_id: ObserveID,
+    handle: ObserveHandle,
     // TODO: Get lease from raftstore.
     // lease: Option<RemoteLease>,
     resolver: Resolver,
@@ -64,12 +66,13 @@ struct ObserveRegion {
 }
 
 impl ObserveRegion {
-    fn new(meta: Region, resolved_ts: Arc<AtomicU64>) -> Self {
+    fn new(meta: Region, rrp: Arc<RegionReadProgress>) -> Self {
         ObserveRegion {
-            resolver: Resolver::from_shared(meta.id, resolved_ts),
+            resolver: Resolver::with_read_progress(meta.id, Some(rrp)),
             meta,
-            observe_id: ObserveID::new(),
+            handle: ObserveHandle::new(),
             resolver_status: ResolverStatus::Pending {
+                tracked_index: 0,
                 locks: vec![],
                 cancelled: Arc::new(AtomicBool::new(false)),
             },
@@ -77,31 +80,46 @@ impl ObserveRegion {
     }
 
     fn track_change_log(&mut self, change_logs: &[ChangeLog]) -> Result<()> {
-        match self.resolver_status {
-            ResolverStatus::Pending { ref mut locks, .. } => {
+        match &mut self.resolver_status {
+            ResolverStatus::Pending {
+                locks,
+                tracked_index,
+                ..
+            } => {
                 for log in change_logs {
                     match log {
+                        // TODO: not need to return `Err` for region error
                         ChangeLog::Error(e) => return Err(Error::request(e.clone())),
-                        ChangeLog::Rows { rows, .. } => rows.iter().for_each(|row| match row {
-                            ChangeRow::Prewrite { key, start_ts, .. } => {
-                                locks.push(PendingLock::Track {
+                        ChangeLog::Rows { rows, index } => {
+                            rows.iter().for_each(|row| match row {
+                                ChangeRow::Prewrite { key, start_ts, .. } => {
+                                    locks.push(PendingLock::Track {
+                                        key: key.clone(),
+                                        start_ts: *start_ts,
+                                    })
+                                }
+                                ChangeRow::Commit {
+                                    key,
+                                    start_ts,
+                                    commit_ts,
+                                    ..
+                                } => locks.push(PendingLock::Untrack {
                                     key: key.clone(),
                                     start_ts: *start_ts,
-                                })
-                            }
-                            ChangeRow::Commit {
-                                key,
-                                start_ts,
-                                commit_ts,
-                                ..
-                            } => locks.push(PendingLock::Untrack {
-                                key: key.clone(),
-                                start_ts: *start_ts,
-                                commit_ts: *commit_ts,
-                            }),
-                            // One pc command do not contains any lock, so just skip it
-                            ChangeRow::OnePc { .. } => {}
-                        }),
+                                    commit_ts: *commit_ts,
+                                }),
+                                // One pc command do not contains any lock, so just skip it
+                                ChangeRow::OnePc { .. } => {}
+                            });
+                            assert!(
+                                *tracked_index < *index,
+                                "region {}, tracked_index: {}, incoming index: {}",
+                                self.meta.id,
+                                *tracked_index,
+                                *index
+                            );
+                            *tracked_index = *index;
+                        }
                     }
                 }
             }
@@ -109,16 +127,18 @@ impl ObserveRegion {
                 for log in change_logs {
                     match log {
                         ChangeLog::Error(e) => return Err(Error::request(e.clone())),
-                        ChangeLog::Rows { rows, .. } => rows.iter().for_each(|row| match row {
-                            ChangeRow::Prewrite { key, start_ts, .. } => {
-                                self.resolver.track_lock(*start_ts, key.to_raw().unwrap())
-                            }
-                            ChangeRow::Commit { key, .. } => {
-                                self.resolver.untrack_lock(&key.to_raw().unwrap())
-                            }
-                            // One pc command do not contains any lock, so just skip it
-                            ChangeRow::OnePc { .. } => {}
-                        }),
+                        ChangeLog::Rows { rows, index } => {
+                            rows.iter().for_each(|row| match row {
+                                ChangeRow::Prewrite { key, start_ts, .. } => self
+                                    .resolver
+                                    .track_lock(*start_ts, key.to_raw().unwrap(), Some(*index)),
+                                ChangeRow::Commit { key, .. } => self
+                                    .resolver
+                                    .untrack_lock(&key.to_raw().unwrap(), Some(*index)),
+                                // One pc command do not contains any lock, so just skip it
+                                ChangeRow::OnePc { .. } => {}
+                            });
+                        }
                     }
                 }
             }
@@ -126,7 +146,7 @@ impl ObserveRegion {
         Ok(())
     }
 
-    fn track_scan_locks(&mut self, entries: Vec<ScanEntry>) {
+    fn track_scan_locks(&mut self, entries: Vec<ScanEntry>, apply_index: u64) {
         for es in entries {
             match es {
                 ScanEntry::Lock(locks) => {
@@ -134,27 +154,45 @@ impl ObserveRegion {
                         panic!("region {:?} resolver has ready", self.meta.id)
                     }
                     for (key, lock) in locks {
-                        self.resolver.track_lock(lock.ts, key.to_raw().unwrap());
+                        self.resolver
+                            .track_lock(lock.ts, key.to_raw().unwrap(), Some(apply_index));
                     }
                 }
                 ScanEntry::None => {
-                    let status =
-                        std::mem::replace(&mut self.resolver_status, ResolverStatus::Ready);
-                    match status {
-                        ResolverStatus::Pending { locks, .. } => {
-                            locks.into_iter().for_each(|lock| match lock {
-                                PendingLock::Track { key, start_ts } => {
-                                    self.resolver.track_lock(start_ts, key.to_raw().unwrap())
-                                }
-                                PendingLock::Untrack { key, .. } => {
-                                    self.resolver.untrack_lock(&key.to_raw().unwrap())
-                                }
-                            })
-                        }
-                        ResolverStatus::Ready => {
-                            panic!("region {:?} resolver has ready", self.meta.id)
-                        }
-                    }
+                    // Update the `tracked_index` to the snapshot's `apply_index`
+                    self.resolver.update_tracked_index(apply_index);
+                    let pending_tracked_index =
+                        match std::mem::replace(&mut self.resolver_status, ResolverStatus::Ready) {
+                            ResolverStatus::Pending {
+                                locks,
+                                tracked_index,
+                                ..
+                            } => {
+                                locks.into_iter().for_each(|lock| match lock {
+                                    PendingLock::Track { key, start_ts } => {
+                                        self.resolver.track_lock(
+                                            start_ts,
+                                            key.to_raw().unwrap(),
+                                            Some(tracked_index),
+                                        )
+                                    }
+                                    PendingLock::Untrack { key, .. } => self
+                                        .resolver
+                                        .untrack_lock(&key.to_raw().unwrap(), Some(tracked_index)),
+                                });
+                                tracked_index
+                            }
+                            ResolverStatus::Ready => {
+                                panic!("region {:?} resolver has ready", self.meta.id)
+                            }
+                        };
+                    info!(
+                        "Resolver initialized";
+                        "region" => self.meta.id,
+                        "observe_id" => ?self.handle.id,
+                        "snapshot_index" => apply_index,
+                        "pending_data_index" => pending_tracked_index,
+                    );
                 }
                 ScanEntry::TxnEntry(_) => panic!("unexpected entry type"),
             }
@@ -219,15 +257,13 @@ where
         assert!(self.regions.get(&region_id).is_none());
         let observe_region = {
             let store_meta = self.store_meta.lock().unwrap();
-            if let Some(_read_progress) = store_meta.region_read_progress.get(&region_id) {
+            if let Some(read_progress) = store_meta.region_read_progress.get(&region_id) {
                 info!(
                     "register observe region";
                     "store id" => ?store_meta.store_id.clone(),
                     "region" => ?region
                 );
-                // FIXME: should use `read_progress` to initialize the `ObserveRegion::resolver`
-                // hence the resolver can update the `safe_ts`
-                ObserveRegion::new(region.clone(), Arc::default())
+                ObserveRegion::new(region.clone(), Arc::clone(read_progress))
             } else {
                 warn!(
                     "try register unexit region";
@@ -237,39 +273,41 @@ where
                 return;
             }
         };
-        let observe_id = observe_region.observe_id;
+        let observe_handle = observe_region.handle.clone();
         let cancelled = match observe_region.resolver_status {
             ResolverStatus::Pending { ref cancelled, .. } => cancelled.clone(),
             ResolverStatus::Ready => panic!("resolved ts illeagal created observe region"),
         };
         self.regions.insert(region_id, observe_region);
 
-        let scan_task = self.build_scan_task(region, observe_id, cancelled);
+        let scan_task = self.build_scan_task(region, observe_handle, cancelled);
         self.scanner_pool.spawn_task(scan_task);
     }
 
     fn build_scan_task(
         &self,
         region: Region,
-        observe_id: ObserveID,
+        observe_handle: ObserveHandle,
         cancelled: Arc<AtomicBool>,
     ) -> ScanTask {
         let scheduler = self.scheduler.clone();
         let scheduler_error = self.scheduler.clone();
         let region_id = region.id;
+        let observe_id = observe_handle.id;
         ScanTask {
-            id: observe_id,
+            handle: observe_handle,
             tag: String::new(),
             mode: ScanMode::LockOnly,
             region,
             checkpoint_ts: TimeStamp::zero(),
             is_cancelled: Box::new(move || cancelled.load(Ordering::Acquire)),
-            send_entries: Box::new(move |entries| {
+            send_entries: Box::new(move |entries, apply_index| {
                 scheduler
                     .schedule(Task::ScanLocks {
                         region_id,
                         observe_id,
                         entries,
+                        apply_index,
                     })
                     .unwrap_or_else(|e| debug!("schedule resolved ts task failed"; "err" => ?e));
             }),
@@ -290,11 +328,19 @@ where
     fn deregister_region(&mut self, region_id: u64) {
         if let Some(observe_region) = self.regions.remove(&region_id) {
             let ObserveRegion {
-                observe_id,
+                handle,
                 resolver_status,
                 ..
             } = observe_region;
-            info!("deregister observe region"; "store_id" => ?self.store_meta.lock().unwrap().store_id, "region_id" => region_id, "observe_id" => ?observe_id);
+            info!(
+                "deregister observe region";
+                "store_id" => ?self.store_meta.lock().unwrap().store_id,
+                "region_id" => region_id,
+                "observe_id" => ?handle.id
+            );
+            // Stop observing data
+            handle.stop_observing();
+            // Stop scanning data
             if let ResolverStatus::Pending { cancelled, .. } = resolver_status {
                 cancelled.store(true, Ordering::Release);
             }
@@ -342,7 +388,7 @@ where
     // Call after the version of region epoch changed.
     fn region_error(&mut self, region_id: u64, observe_id: ObserveID, error: ErrorHeader) {
         if let Some(observe_region) = self.regions.get(&region_id) {
-            if observe_region.observe_id != observe_id {
+            if observe_region.handle.id != observe_id {
                 warn!("resolved ts deregister region failed due to observe_id not match");
                 return;
             }
@@ -386,16 +432,16 @@ where
     fn handle_change_log(
         &mut self,
         cmd_batch: Vec<CmdBatch>,
-        snapshot: RegionSnapshot<E::Snapshot>,
+        snapshot: Option<RegionSnapshot<E::Snapshot>>,
     ) {
         let logs = cmd_batch
             .into_iter()
             .filter_map(|batch| {
                 if !batch.is_empty() {
                     if let Some(observe_region) = self.regions.get_mut(&batch.region_id) {
-                        let observe_id = batch.cdc_id;
+                        let observe_id = batch.rts_id;
                         let region_id = observe_region.meta.id;
-                        if observe_region.observe_id == observe_id {
+                        if observe_region.handle.id == observe_id {
                             let logs = ChangeLog::encode_change_log(region_id, batch);
                             if let Err(e) = observe_region.track_change_log(&logs) {
                                 drop(observe_region);
@@ -409,8 +455,8 @@ where
                         } else {
                             debug!("resolved ts CmdBatch discarded";
                                 "region_id" => batch.region_id,
-                                "observe_id" => ?batch.cdc_id,
-                                "current" => ?observe_region.observe_id,
+                                "observe_id" => ?batch.rts_id,
+                                "current" => ?observe_region.handle.id,
                             );
                         }
                     }
@@ -418,7 +464,10 @@ where
                 None
             })
             .collect();
-        self.sinker.sink_cmd(logs, snapshot);
+        match snapshot {
+            Some(snap) => self.sinker.sink_cmd_with_old_value(logs, snap),
+            None => self.sinker.sink_cmd(logs),
+        }
     }
 
     fn handle_scan_locks(
@@ -426,11 +475,12 @@ where
         region_id: u64,
         observe_id: ObserveID,
         entries: Vec<ScanEntry>,
+        apply_index: u64,
     ) {
         match self.regions.get_mut(&region_id) {
             Some(observe_region) => {
-                if observe_region.observe_id == observe_id {
-                    observe_region.track_scan_locks(entries);
+                if observe_region.handle.id == observe_id {
+                    observe_region.track_scan_locks(entries, apply_index);
                 }
             }
             None => {
@@ -463,12 +513,13 @@ pub enum Task<S: Snapshot> {
     },
     ChangeLog {
         cmd_batch: Vec<CmdBatch>,
-        snapshot: RegionSnapshot<S>,
+        snapshot: Option<RegionSnapshot<S>>,
     },
     ScanLocks {
         region_id: u64,
         observe_id: ObserveID,
         entries: Vec<ScanEntry>,
+        apply_index: u64,
     },
 }
 
@@ -510,11 +561,13 @@ impl<S: Snapshot> fmt::Debug for Task<S> {
             Task::ScanLocks {
                 ref region_id,
                 ref observe_id,
+                ref apply_index,
                 ..
             } => de
                 .field("name", &"scan_locks")
                 .field("region_id", &region_id)
                 .field("observe_id", &observe_id)
+                .field("apply_index", &apply_index)
                 .finish(),
             Task::RegisterAdvanceEvent => de.field("name", &"register_advance_event").finish(),
         }
@@ -554,7 +607,8 @@ where
                 region_id,
                 observe_id,
                 entries,
-            } => self.handle_scan_locks(region_id, observe_id, entries),
+                apply_index,
+            } => self.handle_scan_locks(region_id, observe_id, entries, apply_index),
             Task::RegisterAdvanceEvent => self.register_advance_event(),
         }
     }

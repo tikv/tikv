@@ -6,10 +6,6 @@ use coprocessor_plugin_api::*;
 struct ExamplePlugin;
 
 impl CoprocessorPlugin for ExamplePlugin {
-    fn name(&self) -> &'static str {
-        "example-plugin"
-    }
-
     fn on_raw_coprocessor_request(
         &self,
         _region: &Region,
