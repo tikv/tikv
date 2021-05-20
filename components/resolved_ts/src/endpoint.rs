@@ -157,10 +157,9 @@ impl ObserveRegion {
                                     "region met split/merge command, stop tracking since key range changed, wait for re-register";
                                     "req_type" => ?req_type,
                                 );
-                                // Stop tracking read progress so that `tracked_index` larger than the split/merge command index
-                                // won't be published untill `RegionUpdate` event trigger the region re-register and re-scan the
-                                // new key range
-                                self.resolver.stop_tracking_read_progress();
+                                // Stop tracking so that `tracked_index` larger than the split/merge command index won't be published
+                                // untill `RegionUpdate` event trigger the region re-register and re-scan the new key range
+                                self.resolver.stop_tracking();
                             }
                             _ => {
                                 debug!(
