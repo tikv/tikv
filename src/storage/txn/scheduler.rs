@@ -584,7 +584,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
     /// Delivers a command to a worker thread for processing.
     fn process_by_worker(self, snapshot: E::Snap, task: Task) {
-        if self.check_task_deadline(&task) {
+        if self.check_task_deadline_exceeded(&task) {
             return;
         }
 
@@ -596,7 +596,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 fail_point!("scheduler_async_snapshot_finish");
                 SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
 
-                if self.check_task_deadline(&task) {
+                if self.check_task_deadline_exceeded(&task) {
                     return;
                 }
 
@@ -836,9 +836,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
     }
 
-    /// Returns `true` if the task has expired and needs to be dropped.
+    /// If the task has expired, return `true` and call the callback of
+    /// the task with a `DeadlineExceeded` error.
     #[inline]
-    fn check_task_deadline(&self, task: &Task) -> bool {
+    fn check_task_deadline_exceeded(&self, task: &Task) -> bool {
         if let Err(e) = task.deadline.check() {
             self.finish_with_err(task.cid, e);
             true
