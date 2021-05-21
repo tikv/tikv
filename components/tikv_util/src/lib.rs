@@ -460,6 +460,8 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
         // There might be remaining logs in the async logger.
         // To collect remaining logs and also collect future logs, replace the old one with a
         // terminal logger.
+        // When the old global async logger is replaced, the old async guard will be taken and dropped.
+        // In the drop() the async guard, it waits for the finish of the remaining logs in the async logger.
         if let Some(level) = ::log::max_level().to_level() {
             let drainer = logger::text_format(logger::term_writer());
             let _ = logger::init_log(
@@ -537,50 +539,56 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::*;
 
-    use gag::BufferRedirect;
-    use nix::sys::wait::{wait, WaitStatus};
-    use nix::unistd::{fork, ForkResult};
-    use slog::{self, Drain, OwnedKVList, Record};
     use tempfile::Builder;
 
-    struct DelayDrain<D>(D);
-
-    impl<D> Drain for DelayDrain<D>
-    where
-        D: Drain,
-        <D as Drain>::Err: std::fmt::Display,
-    {
-        type Ok = <D as Drain>::Ok;
-        type Err = <D as Drain>::Err;
-
-        fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
-            std::thread::sleep(Duration::from_millis(100));
-            self.0.log(record, values)
-        }
-    }
-
-    fn run_and_wait_child_process(child: impl Fn()) -> Result<i32, String> {
-        match fork() {
-            Ok(ForkResult::Parent { .. }) => match wait().unwrap() {
-                WaitStatus::Exited(_, status) => {
-                    return Ok(status);
-                }
-                v @ _ => {
-                    return Err(format!("{:?}", v));
-                }
-            },
-            Ok(ForkResult::Child) => {
-                child();
-                std::process::exit(0);
-            }
-            Err(e) => {
-                return Err(format!("Fork failed: {}", e));
-            }
-        }
-    }
-
     #[test]
+    #[cfg(unix)]
     fn test_panic_hook() {
+        use gag::BufferRedirect;
+        use nix::sys::wait::{wait, WaitStatus};
+        use nix::unistd::{fork, ForkResult};
+        use slog::{self, Drain, OwnedKVList, Record};
+
+        struct DelayDrain<D>(D);
+
+        impl<D> Drain for DelayDrain<D>
+        where
+            D: Drain,
+            <D as Drain>::Err: std::fmt::Display,
+        {
+            type Ok = <D as Drain>::Ok;
+            type Err = <D as Drain>::Err;
+
+            fn log(
+                &self,
+                record: &Record<'_>,
+                values: &OwnedKVList,
+            ) -> Result<Self::Ok, Self::Err> {
+                std::thread::sleep(Duration::from_millis(100));
+                self.0.log(record, values)
+            }
+        }
+
+        fn run_and_wait_child_process(child: impl Fn()) -> Result<i32, String> {
+            match fork() {
+                Ok(ForkResult::Parent { .. }) => match wait().unwrap() {
+                    WaitStatus::Exited(_, status) => {
+                        return Ok(status);
+                    }
+                    v @ _ => {
+                        return Err(format!("{:?}", v));
+                    }
+                },
+                Ok(ForkResult::Child) => {
+                    child();
+                    std::process::exit(0);
+                }
+                Err(e) => {
+                    return Err(format!("Fork failed: {}", e));
+                }
+            }
+        }
+
         let mut stderr = BufferRedirect::stderr().unwrap();
         let status = run_and_wait_child_process(|| {
             set_panic_hook(false, "./");
