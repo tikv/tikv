@@ -53,8 +53,6 @@ pub enum GrpcCompressionType {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    pub raft_client_queue_size: usize,
-    pub raft_msg_flush_delay_us: u64,
     #[serde(skip)]
     pub cluster_id: u64,
 
@@ -75,6 +73,10 @@ pub struct Config {
     pub status_thread_pool_size: usize,
 
     pub max_grpc_send_msg_len: i32,
+
+    pub raft_client_queue_size: usize,
+
+    pub raft_msg_flush_delay_us: u64,
 
     // TODO: use CompressionAlgorithms instead once it supports traits like Clone etc.
     pub grpc_compression_type: GrpcCompressionType,
@@ -135,8 +137,6 @@ impl Default for Config {
         let cpu_num = SysQuota::new().cpu_cores_quota();
         let background_thread_count = if cpu_num > 16.0 { 3 } else { 2 };
         Config {
-            raft_client_queue_size: 4096,
-            raft_msg_flush_delay_us: 100,
             cluster_id: DEFAULT_CLUSTER_ID,
             addr: DEFAULT_LISTENING_ADDR.to_owned(),
             labels: HashMap::default(),
@@ -145,6 +145,8 @@ impl Default for Config {
             advertise_status_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
             status_thread_pool_size: 1,
             max_grpc_send_msg_len: DEFAULT_MAX_GRPC_SEND_MSG_LEN,
+            raft_client_queue_size: 4096,
+            raft_msg_flush_delay_us: 500,
             grpc_compression_type: GrpcCompressionType::None,
             grpc_concurrency: DEFAULT_GRPC_CONCURRENCY,
             grpc_concurrent_stream: DEFAULT_GRPC_CONCURRENT_STREAM,

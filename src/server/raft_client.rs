@@ -35,6 +35,7 @@ use std::hash::Hasher;
 
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::lru::LruCache;
+use tikv_util::time::Instant as UtilInstant;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Scheduler;
 use yatp::task::future::TaskCell;
@@ -42,7 +43,6 @@ use yatp::ThreadPool;
 
 // When merge raft messages into a batch message, leave a buffer.
 const GRPC_SEND_MSG_BUF: usize = 64 * 1024;
-const QUEUE_CAPACITY: usize = 4096;
 
 const RAFT_MSG_MAX_BATCH_SIZE: usize = 128;
 
@@ -776,11 +776,11 @@ struct CachedQueue {
 pub struct RaftClient<S, R> {
     pool: Arc<Mutex<ConnectionPool>>,
     cache: LruCache<(u64, usize), CachedQueue>,
-    flush_heap: BinaryHeap<Reverse<(Instant, u64, usize)>>,
+    need_flush: VecDeque<(UtilInstant, u64, usize)>,
     future_pool: Arc<ThreadPool<TaskCell>>,
     builder: ConnectionBuilder<S, R>,
-    hash: (u64, u64),
-    delay_flush: Duration,
+    last_hash: (u64, u64),
+    delay_time: Duration,
 }
 
 impl<S, R> RaftClient<S, R>
@@ -794,15 +794,15 @@ where
                 .max_thread_count(1)
                 .build_future_pool(),
         );
-        let delay_flush = Duration::from_micros(builder.cfg.raft_msg_flush_delay_us);
+        let delay_time = Duration::from_micros(builder.cfg.raft_msg_flush_delay_us);
         RaftClient {
             pool: Arc::default(),
             cache: LruCache::with_capacity_and_sample(0, 7),
-            flush_heap: BinaryHeap::new(),
+            need_flush: VecDeque::new(),
             future_pool,
             builder,
-            hash: (0, 0),
-            delay_flush,
+            last_hash: (0, 0),
+            delay_time,
         }
     }
 
@@ -863,13 +863,20 @@ where
     /// are sent out.
     pub fn send(&mut self, msg: RaftMessage) -> result::Result<(), DiscardReason> {
         let store_id = msg.get_to_peer().store_id;
-        if self.hash.0 == 0 || msg.region_id != self.hash.0 {
-            let mut hasher = SeaHasher::new();
-            hasher.write_u64(msg.region_id);
-            let h = hasher.finish();
-            self.hash = (msg.region_id, h % self.builder.cfg.grpc_raft_conn_num as u64);
+        let conn_id = if self.builder.cfg.grpc_raft_conn_num == 1 {
+            0
+        } else {
+            if self.last_hash.0 == 0 || msg.region_id != self.last_hash.0 {
+                let mut hasher = SeaHasher::new();
+                hasher.write_u64(msg.region_id);
+                let h = hasher.finish();
+                self.last_hash = (
+                    msg.region_id,
+                    h % self.builder.cfg.grpc_raft_conn_num as u64,
+                );
+            };
+            self.last_hash.1 as usize
         };
-        let conn_id = self.hash.1 as usize;
         #[allow(unused_mut)]
         let mut transport_on_send_store_fp = || {
             fail_point!(
@@ -897,8 +904,11 @@ where
                     Ok(_) => {
                         if !s.dirty {
                             s.dirty = true;
-                            let now = Instant::now();
-                            self.flush_heap.push(Reverse((now, store_id, conn_id)));
+                            self.need_flush.push_back((
+                                UtilInstant::now_coarse(),
+                                store_id,
+                                conn_id,
+                            ));
                         }
                         return Ok(());
                     }
@@ -921,7 +931,7 @@ where
     }
 
     pub fn need_flush(&self) -> bool {
-        !self.flush_heap.is_empty()
+        !self.need_flush.is_empty()
     }
 
     pub fn try_flush(&mut self) {
@@ -934,30 +944,29 @@ where
     }
 
     fn flush(&mut self, force: bool) {
-        if self.flush_heap.is_empty() {
+        if self.need_flush.is_empty() {
             return;
         }
-        let now = Instant::now();
-        while !self.flush_heap.is_empty() {
-            let top = self.flush_heap.peek().unwrap();
-            if !force && now - top.0.0 < self.delay_flush {
+        let now = UtilInstant::now_coarse();
+        while !self.need_flush.is_empty() {
+            let val = self.need_flush.pop_front().unwrap();
+            if !force && now - val.0 < self.delay_time {
                 break;
             }
-            let val = self.flush_heap.pop().unwrap().0;
             if let Some(s) = self.cache.get_mut(&(val.1, val.2)) {
                 if s.dirty {
                     s.dirty = false;
                     s.queue.notify();
                 }
-            } else {
-                let l = self.pool.lock().unwrap();
-                if let Some(q) = l.connections.get(&(val.1, val.2)) {
-                    q.notify();
-                }
+                continue;
+            }
+            let l = self.pool.lock().unwrap();
+            if let Some(q) = l.connections.get(&(val.1, val.2)) {
+                q.notify();
             }
         }
-        if self.flush_heap.len() < 256 && self.flush_heap.capacity() > 2048 {
-            self.flush_heap.shrink_to(256);
+        if self.need_flush.len() < 512 && self.need_flush.capacity() > 2048 {
+            self.need_flush.shrink_to(512);
         }
     }
 }
@@ -971,11 +980,11 @@ where
         RaftClient {
             pool: self.pool.clone(),
             cache: LruCache::with_capacity_and_sample(0, 7),
-            flush_heap: BinaryHeap::default(),
+            need_flush: VecDeque::new(),
             future_pool: self.future_pool.clone(),
             builder: self.builder.clone(),
-            hash: (0, 0),
-            delay_flush: self.delay_flush.clone(),
+            last_hash: (0, 0),
+            delay_time: self.delay_time.clone(),
         }
     }
 }

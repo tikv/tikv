@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::marker::PhantomData;
+use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
@@ -95,14 +95,17 @@ where
     }
 
     pub fn is_empty(&self) -> bool {
-        self.messages.is_empty() 
+        self.messages.is_empty()
             && self.entries.is_empty()
             && self.raft_state.is_none()
             && self.cut_logs.is_none()
             && self.unsynced_ready.is_none()
             && self.proposal_times.is_empty()
             && self.kv_wb.as_ref().map_or_else(|| true, |wb| wb.is_empty())
-            && self.raft_wb.as_ref().map_or_else(|| true, |wb| wb.is_empty())
+            && self
+                .raft_wb
+                .as_ref()
+                .map_or_else(|| true, |wb| wb.is_empty())
     }
 }
 
@@ -162,7 +165,11 @@ where
             self.unsynced_readies.insert(task.region_id, ready);
         }
         if let Some(raft_state) = task.raft_state.take() {
-            if self.raft_states.insert(task.region_id, raft_state).is_none() {
+            if self
+                .raft_states
+                .insert(task.region_id, raft_state)
+                .is_none()
+            {
                 self.state_size += RAFT_LOCAL_STATE_SIZE;
             }
         }
@@ -230,6 +237,7 @@ where
     router: RaftRouter<EK, ER>,
     receiver: Receiver<AsyncWriteMsg<EK, ER>>,
     wb: AsyncWriteBatch<EK, ER>,
+    trigger_write_size: usize,
     trans: T,
     perf_context_statistics: PerfContextStatistics,
 }
@@ -250,10 +258,7 @@ where
         trans: T,
         config: &Config,
     ) -> Self {
-        let wb = AsyncWriteBatch::new(
-            kv_engine.write_batch(),
-            raft_engine.log_batch(4 * 1024),
-        );
+        let wb = AsyncWriteBatch::new(kv_engine.write_batch(), raft_engine.log_batch(4 * 1024));
         Self {
             store_id,
             tag,
@@ -262,6 +267,7 @@ where
             router,
             receiver,
             wb,
+            trigger_write_size: config.trigger_write_size.0 as usize,
             trans,
             perf_context_statistics: PerfContextStatistics::new(config.perf_level),
         }
@@ -273,12 +279,13 @@ where
             let mut handle_begin = loop_begin;
 
             let mut first_time = true;
-            loop {
+            while self.wb.get_raft_size() < self.trigger_write_size {
                 let msg = if first_time {
                     match self.receiver.recv() {
                         Ok(msg) => {
                             first_time = false;
-                            STORE_WRITE_TASK_GEN_DURATION_HISTOGRAM.observe(duration_to_sec(loop_begin.elapsed()));
+                            STORE_WRITE_TASK_GEN_DURATION_HISTOGRAM
+                                .observe(duration_to_sec(loop_begin.elapsed()));
                             handle_begin = UtilInstant::now();
                             msg
                         }
@@ -297,12 +304,10 @@ where
                         self.wb.add_write_task(task);
                     }
                 }
-                if self.wb.get_raft_size() >= 1024*1024 {
-                    break;
-                }
             }
 
-            STORE_WRITE_HANDLE_MSG_DURATION_HISTOGRAM.observe(duration_to_sec(handle_begin.elapsed()));
+            STORE_WRITE_HANDLE_MSG_DURATION_HISTOGRAM
+                .observe(duration_to_sec(handle_begin.elapsed()));
 
             STORE_WRITE_TIME_TRIGGER_SIZE_HISTOGRAM.observe(self.wb.get_raft_size() as f64);
 
@@ -369,6 +374,7 @@ where
                         "err" => ?e,
                         "error_code" => %e.error_code(),
                     );
+
                     // TODO: send msg to this region
                 }
             }
@@ -388,7 +394,7 @@ where
     }
 }
 
-pub struct AsyncWriters<EK, ER> 
+pub struct AsyncWriters<EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,
@@ -397,7 +403,7 @@ where
     handlers: Vec<JoinHandle<()>>,
 }
 
-impl<EK, ER> AsyncWriters<EK, ER> 
+impl<EK, ER> AsyncWriters<EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,

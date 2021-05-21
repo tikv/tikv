@@ -3,7 +3,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Sender, Receiver, TryRecvError};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, error, u64};
@@ -300,7 +300,7 @@ impl Drop for EntryCache {
     }
 }
 
-pub trait HandleRaftReadyContext<EK, ER> 
+pub trait HandleRaftReadyContext<EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,

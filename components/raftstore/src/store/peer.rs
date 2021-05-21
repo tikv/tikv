@@ -2,12 +2,12 @@
 
 use seahash::SeaHasher;
 use std::collections::VecDeque;
+use std::hash::Hasher;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{cell::RefCell, ops::Sub};
 use std::{cmp, mem, u64, usize};
-use std::hash::Hasher;
 
 use crossbeam::atomic::AtomicCell;
 use engine_traits::{Engines, KvEngine, Peekable, RaftEngine, Snapshot, WriteOptions, CF_RAFT};
