@@ -360,11 +360,9 @@ where
             self.snap_mgr.set_speed_limit(limit);
             let max_total_size = incoming.snap_max_total_size.0;
             self.snap_mgr.set_max_total_snap_size(max_total_size);
-            info!(
-             "refresh snapshot manager config";
-             "speed_limit"=> limit,
-             "max_total_snap_size"=> max_total_size,
-            );
+            info!("refresh snapshot manager config"; 
+            "speed_limit"=> limit, 
+            "max_total_snap_size"=> max_total_size);
             self.cfg = incoming.clone();
         }
     }

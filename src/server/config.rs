@@ -355,10 +355,7 @@ impl ConfigManager for ServerConfigManager {
                 error!("server configuration manager schedule refresh snapshot work task failed"; "err"=> ?e);
             }
         }
-        info!(
-        "server configuration changed";
-        "change" => ?c,
-        );
+        info!("server configuration changed"; "change" => ?c);
         Ok(())
     }
 }
