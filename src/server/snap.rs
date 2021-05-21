@@ -356,9 +356,17 @@ where
 
     fn refresh_cfg(&mut self) {
         if let Some(incoming) = self.cfg_tracker.any_new() {
-            let limit = incoming.snap_max_write_bytes_per_sec.0;
+            let limit = if incoming.snap_max_write_bytes_per_sec.0 > 0 {
+                incoming.snap_max_write_bytes_per_sec.0 as f64
+            } else {
+                f64::INFINITY
+            };
+            let max_total_size = if incoming.snap_max_total_size.0 > 0 {
+                incoming.snap_max_total_size.0
+            } else {
+                u64::MAX
+            };
             self.snap_mgr.set_speed_limit(limit);
-            let max_total_size = incoming.snap_max_total_size.0;
             self.snap_mgr.set_max_total_snap_size(max_total_size);
             info!("refresh snapshot manager config"; 
             "speed_limit"=> limit, 

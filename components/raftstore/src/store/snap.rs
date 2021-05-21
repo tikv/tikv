@@ -1375,8 +1375,8 @@ impl SnapManager {
         self.max_total_size.store(max_total_size, Ordering::Release);
     }
 
-    pub fn set_speed_limit(&self, bytes_per_sec: u64) {
-        self.core.limiter.set_speed_limit(bytes_per_sec as f64);
+    pub fn set_speed_limit(&self, bytes_per_sec: f64) {
+        self.core.limiter.set_speed_limit(bytes_per_sec);
     }
 
     pub fn get_speed_limit(&self) -> f64 {
