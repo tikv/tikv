@@ -2,8 +2,6 @@
 ##  Human-readable big numbers:
 ##   File size(based on byte, binary units): KB, MB, GB, TB, PB
 ##    e.g.: 1_048_576 = "1MB"
-##   I/O rate (based on byte, decimal units): KBps, MBps, GBps, TBps, PBps
-##    e.g.: 1_000_000 = "1MBps"
 ##   Time(based on ms): ms, s, m, h
 ##    e.g.: 78_000 = "1.3m"
 
