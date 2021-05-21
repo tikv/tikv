@@ -615,7 +615,9 @@ mod tests {
                 assert_eq!(req.payload.is_some(), req.method() == "PUT");
             },
         );
-        let s = S3Storage::with_request_dispatcher(config, dispatcher).unwrap();
+        let credentials_provider =
+            StaticProvider::new_minimal("abc".to_string(), "xyz".to_string());
+        let s = S3Storage::new_creds_dispatcher(config, dispatcher, credentials_provider).unwrap();
         s.put(
             "key2",
             Box::new(magic_contents.as_bytes()),
