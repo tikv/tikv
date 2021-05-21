@@ -71,7 +71,7 @@ impl Conn {
         let client = TikvClient::new(channel);
         let (tx, rx) = mpsc::unbounded();
         let (tx_close, rx_close) = oneshot::channel();
-        let (sink, _) = client.raft().unwrap();
+        let (sink, receiver) = client.raft().unwrap();
         let addr = addr.to_owned();
         client.spawn(
             rx_close
@@ -80,6 +80,7 @@ impl Conn {
                     sink.sink_map_err(Error::from)
                         .send_all(rx.map(stream::iter_ok).flatten().map_err(|()| Error::Sink))
                         .then(move |r| {
+                            drop(receiver);
                             alive.store(false, Ordering::SeqCst);
                             r
                         })
