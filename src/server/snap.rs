@@ -25,6 +25,7 @@ use file_system::{IOType, WithIOType};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{GenericSnapshot, SnapEntry, SnapKey, SnapManager};
 use security::SecurityManager;
+use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::worker::Runnable;
 use tikv_util::DeferContext;
 
@@ -46,6 +47,8 @@ pub enum Task {
         msg: RaftMessage,
         cb: Callback,
     },
+    RefreshConfigEvent,
+    Validate(Box<dyn FnOnce(&Config) + Send>),
 }
 
 impl Display for Task {
@@ -55,6 +58,8 @@ impl Display for Task {
             Task::Send {
                 ref addr, ref msg, ..
             } => write!(f, "Send Snap[to: {}, snap: {:?}]", addr, msg),
+            Task::RefreshConfigEvent => write!(f, "Refresh configuration"),
+            Task::Validate(_) => write!(f, "Validate snap worker config"),
         }
     }
 }
@@ -307,7 +312,8 @@ where
     pool: Runtime,
     raft_router: R,
     security_mgr: Arc<SecurityManager>,
-    cfg: Arc<Config>,
+    cfg_tracker: Tracker<Config>,
+    cfg: Config,
     sending_count: Arc<AtomicUsize>,
     recving_count: Arc<AtomicUsize>,
     engine: PhantomData<E>,
@@ -323,9 +329,10 @@ where
         snap_mgr: SnapManager,
         r: R,
         security_mgr: Arc<SecurityManager>,
-        cfg: Arc<Config>,
+        cfg: Arc<VersionTrack<Config>>,
     ) -> Runner<E, R> {
-        Runner {
+        let cfg_tracker = cfg.clone().tracker("snap-sender".to_owned());
+        let snap_worker = Runner {
             env,
             snap_mgr,
             pool: RuntimeBuilder::new()
@@ -338,10 +345,27 @@ where
                 .unwrap(),
             raft_router: r,
             security_mgr,
-            cfg,
+            cfg_tracker,
+            cfg: cfg.value().clone(),
             sending_count: Arc::new(AtomicUsize::new(0)),
             recving_count: Arc::new(AtomicUsize::new(0)),
             engine: PhantomData,
+        };
+        snap_worker
+    }
+
+    fn refresh_cfg(&mut self) {
+        if let Some(incoming) = self.cfg_tracker.any_new() {
+            let limit = incoming.snap_max_write_bytes_per_sec.0;
+            self.snap_mgr.set_speed_limit(limit);
+            let max_total_size = incoming.snap_max_total_size.0;
+            self.snap_mgr.set_max_total_snap_size(max_total_size);
+            info!(
+             "refresh snapshot manager config";
+             "speed_limit"=> limit,
+             "max_total_snap_size"=> max_total_size,
+            );
+            self.cfg = incoming.clone();
         }
     }
 }
@@ -403,7 +427,7 @@ where
                 let sending_count = Arc::clone(&self.sending_count);
                 sending_count.fetch_add(1, Ordering::SeqCst);
 
-                let send_task = send_snap(env, mgr, security_mgr, &self.cfg, &addr, msg);
+                let send_task = send_snap(env, mgr, security_mgr, &self.cfg.clone(), &addr, msg);
                 let task = async move {
                     let res = match send_task {
                         Err(e) => Err(e),
@@ -429,6 +453,12 @@ where
                 };
 
                 self.pool.spawn(task);
+            }
+            Task::RefreshConfigEvent => {
+                self.refresh_cfg();
+            }
+            Task::Validate(f) => {
+                f(&self.cfg);
             }
         }
     }

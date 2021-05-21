@@ -1123,14 +1123,14 @@ struct SnapManagerCore {
 /// `SnapManagerCore` trace all current processing snapshots.
 pub struct SnapManager {
     core: SnapManagerCore,
-    max_total_size: u64,
+    max_total_size: AtomicU64,
 }
 
 impl Clone for SnapManager {
     fn clone(&self) -> Self {
         SnapManager {
             core: self.core.clone(),
-            max_total_size: self.max_total_size,
+            max_total_size: AtomicU64::new(self.max_total_size.load(Ordering::Acquire)),
         }
     }
 }
@@ -1368,7 +1368,19 @@ impl SnapManager {
     }
 
     pub fn max_total_snap_size(&self) -> u64 {
-        self.max_total_size
+        self.max_total_size.load(Ordering::Acquire)
+    }
+
+    pub fn set_max_total_snap_size(&self, max_total_size: u64) {
+        self.max_total_size.store(max_total_size, Ordering::Release);
+    }
+
+    pub fn set_speed_limit(&self, bytes_per_sec: u64) {
+        self.core.limiter.set_speed_limit(bytes_per_sec as f64);
+    }
+
+    pub fn get_speed_limit(&self) -> f64 {
+        self.core.limiter.speed_limit()
     }
 
     pub fn register(&self, key: SnapKey, entry: SnapEntry) {
@@ -1568,7 +1580,7 @@ impl SnapManagerBuilder {
                 temp_sst_id: Arc::new(AtomicU64::new(0)),
                 encryption_key_manager: self.key_manager,
             },
-            max_total_size,
+            max_total_size: AtomicU64::new(max_total_size),
         }
     }
 }
