@@ -2,6 +2,8 @@
 
 #[macro_use]
 extern crate clap;
+#[macro_use]
+extern crate log;
 
 use clap::{crate_authors, App, AppSettings, Arg, ArgMatches, SubCommand};
 use encryption_export::{
@@ -12,7 +14,8 @@ use engine_rocks::encryption::get_env;
 use engine_rocks::raw_util::new_engine_opt;
 use engine_rocks::RocksEngine;
 use engine_traits::{
-    EncryptionKeyManager, Engines, RaftEngine, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    EncryptionKeyManager, Engines, Error as EngineError, RaftEngine, ALL_CFS, CF_DEFAULT, CF_LOCK,
+    CF_WRITE,
 };
 use file_system::calc_crc32;
 use futures::{executor::block_on, future, stream, Stream, StreamExt, TryStreamExt};
@@ -54,6 +57,8 @@ const METRICS_ROCKSDB_KV: &str = "rocksdb_kv";
 const METRICS_ROCKSDB_RAFT: &str = "rocksdb_raft";
 const METRICS_JEMALLOC: &str = "jemalloc";
 
+const LOCK_FILE_ERROR: &str = "IO error: While lock file";
+
 type MvccInfoStream = Pin<Box<dyn Stream<Item = Result<(Vec<u8>, MvccInfo), String>>>>;
 
 fn perror_and_exit<E: Error>(prefix: &str, e: E) -> ! {
@@ -67,6 +72,20 @@ fn init_ctl_logger(level: &str) {
     cfg.rocksdb.info_log_dir = "./ctl-engine-info-log".to_owned();
     cfg.raftdb.info_log_dir = "./ctl-engine-info-log".to_owned();
     initial_logger(&cfg);
+}
+
+fn handle_engine_error(err: EngineError) -> ! {
+    error!("error while open kvdb: {}", err);
+    if let EngineError::Engine(msg) = err {
+        if msg.starts_with(LOCK_FILE_ERROR) {
+            error!(
+                "LOCK file conflict indicates TiKV process is running. \
+                Do NOT delete the LOCK file and force the command to run. \
+                Doing so could cause data corruption."
+            );
+        }
+    }
+    process::exit(-1);
 }
 
 fn new_debug_executor(
@@ -99,7 +118,10 @@ fn new_debug_executor(
         .build_cf_opts(&cache, None, cfg.storage.enable_ttl);
     let kv_path = PathBuf::from(kv_path).canonicalize().unwrap();
     let kv_path = kv_path.to_str().unwrap();
-    let kv_db = new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
+    let kv_db = match new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts) {
+        Ok(db) => db,
+        Err(e) => handle_engine_error(e),
+    };
     let mut kv_db = RocksEngine::from_db(Arc::new(kv_db));
     kv_db.set_shared_block_cache(shared_block_cache);
 
@@ -109,7 +131,10 @@ fn new_debug_executor(
         raft_db_opts.set_env(env);
         let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
         let raft_path = canonicalize_sub_path(data_dir, &cfg.raft_store.raftdb_path).unwrap();
-        let raft_db = new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts).unwrap();
+        let raft_db = match new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts) {
+            Ok(db) => db,
+            Err(e) => handle_engine_error(e),
+        };
         let mut raft_db = RocksEngine::from_db(Arc::new(raft_db));
         raft_db.set_shared_block_cache(shared_block_cache);
         let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
