@@ -92,6 +92,10 @@ fn prepare_for_stale_read_before_run(
     (cluster, pd_client, leader_client)
 }
 
+fn get_tso(pd_client: &TestPdClient) -> u64 {
+    block_on(pd_client.get_tso()).unwrap().into_inner()
+}
+
 // Testing how data replication could effect stale read service
 #[test]
 fn test_stale_read_basic_flow_replicate() {
@@ -108,11 +112,7 @@ fn test_stale_read_basic_flow_replicate() {
     );
 
     // Can read `value1` with the newest ts
-    follower_client2.must_kv_read_equal(
-        b"key1".to_vec(),
-        b"value1".to_vec(),
-        block_on(pd_client.get_tso()).unwrap().into_inner(),
-    );
+    follower_client2.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), get_tso(&pd_client));
 
     // Stop replicate data to follower 2
     cluster.add_send_filter(CloneFilterFactory(
@@ -135,21 +135,13 @@ fn test_stale_read_basic_flow_replicate() {
     assert!(resp1.get_region_error().has_data_is_not_ready());
 
     // Leader have up to date data so it can read `value2`
-    leader_client.must_kv_read_equal(
-        b"key1".to_vec(),
-        b"value2".to_vec(),
-        block_on(pd_client.get_tso()).unwrap().into_inner(),
-    );
+    leader_client.must_kv_read_equal(b"key1".to_vec(), b"value2".to_vec(), get_tso(&pd_client));
 
     // clear the `MsgAppend` filter
     cluster.clear_send_filters();
 
     // Now we can read `value2` with the newest ts
-    follower_client2.must_kv_read_equal(
-        b"key1".to_vec(),
-        b"value2".to_vec(),
-        block_on(pd_client.get_tso()).unwrap().into_inner(),
-    );
+    follower_client2.must_kv_read_equal(b"key1".to_vec(), b"value2".to_vec(), get_tso(&pd_client));
 }
 
 // Testing how mvcc locks could effect stale read service
@@ -167,7 +159,7 @@ fn test_stale_read_basic_flow_lock() {
     );
 
     // Prewrite on `key2` but not commit yet
-    let k2_prewrite_ts = block_on(pd_client.get_tso()).unwrap().into_inner();
+    let k2_prewrite_ts = get_tso(&pd_client);
     leader_client.must_kv_prewrite(
         vec![new_mutation(Op::Put, &b"key2"[..], &b"value1"[..])],
         b"key2".to_vec(),
@@ -187,14 +179,14 @@ fn test_stale_read_basic_flow_lock() {
     follower_client2.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), commit_ts1);
 
     // Prewrite on `key3` but not commit yet
-    let k3_prewrite_ts = block_on(pd_client.get_tso()).unwrap().into_inner();
+    let k3_prewrite_ts = get_tso(&pd_client);
     leader_client.must_kv_prewrite(
         vec![new_mutation(Op::Put, &b"key3"[..], &b"value1"[..])],
         b"key3".to_vec(),
         k3_prewrite_ts,
     );
     // Commit on `key2`
-    let k2_commit_ts = block_on(pd_client.get_tso()).unwrap().into_inner();
+    let k2_commit_ts = get_tso(&pd_client);
     leader_client.must_kv_commit(vec![b"key2".to_vec()], k2_prewrite_ts, k2_commit_ts);
 
     // Although there is still lock on the region, but the min lock is refreshed
@@ -204,21 +196,13 @@ fn test_stale_read_basic_flow_lock() {
     assert!(resp.get_region_error().has_data_is_not_ready());
 
     // Commit on `key3`
-    let k3_commit_ts = block_on(pd_client.get_tso()).unwrap().into_inner();
+    let k3_commit_ts = get_tso(&pd_client);
     leader_client.must_kv_commit(vec![b"key3".to_vec()], k3_prewrite_ts, k3_commit_ts);
 
     // Now there is not lock on the region, we can read any
     // up to date data
-    follower_client2.must_kv_read_equal(
-        b"key2".to_vec(),
-        b"value1".to_vec(),
-        block_on(pd_client.get_tso()).unwrap().into_inner(),
-    );
-    follower_client2.must_kv_read_equal(
-        b"key3".to_vec(),
-        b"value1".to_vec(),
-        block_on(pd_client.get_tso()).unwrap().into_inner(),
-    );
+    follower_client2.must_kv_read_equal(b"key2".to_vec(), b"value1".to_vec(), get_tso(&pd_client));
+    follower_client2.must_kv_read_equal(b"key3".to_vec(), b"value1".to_vec(), get_tso(&pd_client));
 }
 
 // Testing that even leader's `apply_index` updated before sync the `(apply_index, safe_ts)`
@@ -247,7 +231,7 @@ fn test_update_apply_index_before_sync_read_state() {
     leader_client.must_kv_prewrite(
         vec![new_mutation(Op::Put, &b"key2"[..], &b"value2"[..])],
         b"key2".to_vec(),
-        block_on(pd_client.get_tso()).unwrap().into_inner(),
+        get_tso(&pd_client),
     );
 
     cluster.run_node(3).unwrap();
@@ -275,22 +259,10 @@ fn test_update_apply_index_before_sync_read_state() {
 // item to other replicas
 #[test]
 fn test_update_resoved_ts_before_apply_index() {
-    let mut cluster = new_server_cluster(0, 3);
-    let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_operator();
-
-    cluster.run();
-    cluster.sim.wl().start_resolved_ts_worker();
-
-    cluster.must_transfer_leader(1, new_peer(1, 1));
-    let mut leader_client = PeerClient::new(&cluster, 1, new_peer(1, 1));
+    let (mut cluster, pd_client, mut leader_client) = prepare_for_stale_read(new_peer(1, 1));
     let mut follower_client2 = PeerClient::new(&cluster, 1, new_peer(2, 2));
     leader_client.ctx.set_stale_read(true);
     follower_client2.ctx.set_stale_read(true);
-
-    // There should be no read index message while handling stale read request
-    let on_step_read_index_msg = "on_step_read_index_msg";
-    fail::cfg(on_step_read_index_msg, "panic").unwrap();
 
     // Write `(key1, value1)`
     let commit_ts1 = leader_client.must_kv_write(
@@ -334,29 +306,15 @@ fn test_update_resoved_ts_before_apply_index() {
 
     leader_client.must_kv_read_equal(b"key1".to_vec(), b"value2".to_vec(), commit_ts2);
     follower_client2.must_kv_read_equal(b"key1".to_vec(), b"value2".to_vec(), commit_ts2);
-
-    fail::remove(on_step_read_index_msg);
 }
 
 // Testing that the new elected leader should initialize the `resolver` correctly
 #[test]
 fn test_new_leader_init_resolver() {
-    let mut cluster = new_server_cluster(0, 3);
-    let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_operator();
-
-    cluster.run();
-    cluster.sim.wl().start_resolved_ts_worker();
-
-    cluster.must_transfer_leader(1, new_peer(1, 1));
-    let mut peer_client1 = PeerClient::new(&cluster, 1, new_peer(1, 1));
+    let (mut cluster, pd_client, mut peer_client1) = prepare_for_stale_read(new_peer(1, 1));
     let mut peer_client2 = PeerClient::new(&cluster, 1, new_peer(2, 2));
     peer_client1.ctx.set_stale_read(true);
     peer_client2.ctx.set_stale_read(true);
-
-    // There should be no read index message while handling stale read request
-    let on_step_read_index_msg = "on_step_read_index_msg";
-    fail::cfg(on_step_read_index_msg, "panic").unwrap();
 
     // Write `(key1, value1)`
     let commit_ts1 = peer_client1.must_kv_write(
@@ -368,26 +326,19 @@ fn test_new_leader_init_resolver() {
     // There are no lock in the region, the `safe_ts` should keep updating by the new leader,
     // so we can read `key1` with the newest ts
     cluster.must_transfer_leader(1, new_peer(2, 2));
-    peer_client1.must_kv_read_equal(
-        b"key1".to_vec(),
-        b"value1".to_vec(),
-        block_on(pd_client.get_tso()).unwrap().into_inner(),
-    );
+    peer_client1.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), get_tso(&pd_client));
 
     // Prewrite on `key2` but not commit yet
     peer_client2.must_kv_prewrite(
         vec![new_mutation(Op::Put, &b"key2"[..], &b"value1"[..])],
         b"key2".to_vec(),
-        block_on(pd_client.get_tso()).unwrap().into_inner(),
+        get_tso(&pd_client),
     );
 
     // There are locks in the region, the `safe_ts` can't be updated, so we can't read
     // `key1` with the newest ts
     cluster.must_transfer_leader(1, new_peer(1, 1));
-    let resp = peer_client2.kv_read(
-        b"key1".to_vec(),
-        block_on(pd_client.get_tso()).unwrap().into_inner(),
-    );
+    let resp = peer_client2.kv_read(b"key1".to_vec(), get_tso(&pd_client));
     assert!(resp.get_region_error().has_data_is_not_ready());
     // But we can read `key1` with `commit_ts1`
     peer_client2.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), commit_ts1);
@@ -417,7 +368,7 @@ fn test_stale_read_while_applying_snapshot() {
     ));
 
     // Prewrite on `key3` but not commit yet
-    let k2_prewrite_ts = block_on(pd_client.get_tso()).unwrap().into_inner();
+    let k2_prewrite_ts = get_tso(&pd_client);
     leader_client.must_kv_prewrite(
         vec![new_mutation(Op::Put, &b"key2"[..], &b"value1"[..])],
         b"key2".to_vec(),
@@ -461,22 +412,11 @@ fn test_stale_read_while_applying_snapshot() {
     // We can read `key1` after applied snapshot
     follower_client2.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), k1_commit_ts);
     // There is still lock on the region, we can't read `key1` with the newest ts
-    let resp = follower_client2.kv_read(
-        b"key1".to_vec(),
-        block_on(pd_client.get_tso()).unwrap().into_inner(),
-    );
+    let resp = follower_client2.kv_read(b"key1".to_vec(), get_tso(&pd_client));
     assert!(resp.get_region_error().has_data_is_not_ready());
 
     // Commit `key2`
-    leader_client.must_kv_commit(
-        vec![b"key2".to_vec()],
-        k2_prewrite_ts,
-        block_on(pd_client.get_tso()).unwrap().into_inner(),
-    );
+    leader_client.must_kv_commit(vec![b"key2".to_vec()], k2_prewrite_ts, get_tso(&pd_client));
     // We can read `key1` with the newest ts now
-    follower_client2.must_kv_read_equal(
-        b"key2".to_vec(),
-        b"value1".to_vec(),
-        block_on(pd_client.get_tso()).unwrap().into_inner(),
-    );
+    follower_client2.must_kv_read_equal(b"key2".to_vec(), b"value1".to_vec(), get_tso(&pd_client));
 }
