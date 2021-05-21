@@ -1225,12 +1225,6 @@ fn future_get<E: Engine, L: LockManager>(
                         .mut_time_detail()
                         .set_kv_read_wall_time_ms(used_time as i64);
                     let scan_detail_v2 = resp.mut_exec_details_v2().mut_scan_detail_v2();
-                    let read_bytes: usize = statistics
-                        .cf_stats()
-                        .iter()
-                        .map(|&stat| stat.flow_stats.read_bytes)
-                        .sum();
-                    scan_detail_v2.set_read_bytes(read_bytes as u64);
                     statistics.write_scan_detail(scan_detail_v2);
                     perf_statistics_delta.write_scan_detail(scan_detail_v2);
                     match val {
@@ -1308,12 +1302,6 @@ fn future_batch_get<E: Engine, L: LockManager>(
                         .mut_time_detail()
                         .set_kv_read_wall_time_ms(used_time as i64);
                     let scan_detail_v2 = resp.mut_exec_details_v2().mut_scan_detail_v2();
-                    let read_bytes: usize = statistics
-                        .cf_stats()
-                        .iter()
-                        .map(|&stat| stat.flow_stats.read_bytes)
-                        .sum();
-                    scan_detail_v2.set_read_bytes(read_bytes as u64);
                     statistics.write_scan_detail(scan_detail_v2);
                     perf_statistics_delta.write_scan_detail(scan_detail_v2);
                     resp.set_pairs(pairs.into());

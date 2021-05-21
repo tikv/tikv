@@ -460,9 +460,6 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 sel_resp.set_warnings(warnings.warnings.into());
                 sel_resp.set_warning_count(warnings.warning_cnt as i64);
 
-                // In case of this function is called multiple times.
-                self.exec_stats.clear();
-
                 return Ok(sel_resp);
             }
 
@@ -519,6 +516,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         if let Some(exec_stat) = result.first() {
             dest.clone_from(exec_stat);
         }
+        self.exec_stats.clear();
     }
 
     pub fn can_be_cached(&self) -> bool {
