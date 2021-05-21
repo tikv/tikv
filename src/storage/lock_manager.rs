@@ -18,7 +18,7 @@ pub struct DiagnosticContext {
     /// the key we care about
     pub key: Vec<u8>,
     /// this tag is used for keep related keys together
-    /// if the client is TiDB, this is usually the SQL statement which affect the key
+    /// if the client is TiDB, this is usually the encoded SQL digest which affect the key
     pub resource_group_tag: Vec<u8>,
 }
 
