@@ -20,7 +20,6 @@ pub enum ConfigValue {
     String(String),
     BlobRunMode(String),
     OptionSize(Option<u64>),
-    Rate(u64),
     Module(ConfigChange),
     Skip,
 }
@@ -32,7 +31,6 @@ impl Display for ConfigValue {
             ConfigValue::Size(v) => write!(f, "{}b", v),
             ConfigValue::OptionSize(Some(v)) => write!(f, "{}b", v),
             ConfigValue::OptionSize(None) => write!(f, ""),
-            ConfigValue::Rate(v) => write!(f, "{}bps", v),
             ConfigValue::U64(v) => write!(f, "{}", v),
             ConfigValue::F64(v) => write!(f, "{}", v),
             ConfigValue::I32(v) => write!(f, "{}", v),

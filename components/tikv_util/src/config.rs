@@ -204,7 +204,7 @@ impl FromStr for ReadableSize {
         let size_len = size_str
             .to_string()
             .chars()
-            .take_while(|c| char::is_ascii_digit(c) || *c == '.')
+            .take_while(|c| char::is_ascii_digit(c) || ['.', 'e', 'E', '-', '+'].contains(c))
             .count();
 
         // unit: alphabetic characters
@@ -273,183 +273,6 @@ impl<'de> Deserialize<'de> for ReadableSize {
         }
 
         deserializer.deserialize_any(SizeVisitor)
-    }
-}
-
-#[derive(Clone, Debug, Copy, PartialEq)]
-pub struct ReadableRate(pub u64);
-
-impl From<ReadableRate> for ConfigValue {
-    fn from(rate: ReadableRate) -> ConfigValue {
-        ConfigValue::Rate(rate.0)
-    }
-}
-
-impl From<ConfigValue> for ReadableRate {
-    fn from(c: ConfigValue) -> ReadableRate {
-        if let ConfigValue::Rate(r) = c {
-            ReadableRate(r)
-        } else {
-            panic!("expect: ConfigValue::Rate, got: {:?}", c);
-        }
-    }
-}
-
-impl ReadableRate {
-    pub const fn kbps(v: u64) -> ReadableRate {
-        ReadableRate(v * KB)
-    }
-
-    pub const fn mbps(v: u64) -> ReadableRate {
-        ReadableRate(v * MB)
-    }
-
-    pub const fn gbps(v: u64) -> ReadableRate {
-        ReadableRate(v * GB)
-    }
-
-    pub const fn as_mbps(self) -> u64 {
-        self.0 / MB
-    }
-}
-
-impl Div<u64> for ReadableRate {
-    type Output = ReadableRate;
-
-    fn div(self, rhs: u64) -> ReadableRate {
-        ReadableRate(self.0 / rhs)
-    }
-}
-
-impl Div<ReadableRate> for ReadableRate {
-    type Output = u64;
-
-    fn div(self, rhs: ReadableRate) -> u64 {
-        self.0 / rhs.0
-    }
-}
-
-impl Mul<u64> for ReadableRate {
-    type Output = ReadableRate;
-
-    fn mul(self, rhs: u64) -> ReadableRate {
-        ReadableRate(self.0 * rhs)
-    }
-}
-
-impl Serialize for ReadableRate {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let rate = self.0;
-        let mut buffer = String::new();
-        if rate == 0 {
-            write!(buffer, "{}KBps", rate).unwrap();
-        } else if rate % PB == 0 {
-            write!(buffer, "{}PBps", rate / PB).unwrap();
-        } else if rate % TB == 0 {
-            write!(buffer, "{}TBps", rate / TB).unwrap();
-        } else if rate % GB as u64 == 0 {
-            write!(buffer, "{}GBps", rate / GB).unwrap();
-        } else if rate % MB as u64 == 0 {
-            write!(buffer, "{}MBps", rate / MB).unwrap();
-        } else if rate % KB as u64 == 0 {
-            write!(buffer, "{}KBps", rate / KB).unwrap();
-        } else {
-            return serializer.serialize_u64(rate);
-        }
-        serializer.serialize_str(&buffer)
-    }
-}
-
-impl FromStr for ReadableRate {
-    type Err = String;
-
-    // This method parses value in decimal unit.
-    fn from_str(s: &str) -> Result<ReadableRate, String> {
-        let rate_str = s.trim();
-        if rate_str.is_empty() {
-            return Err(format!("{:?} is not a valid rate.", s));
-        }
-
-        if !rate_str.is_ascii() {
-            return Err(format!("ASCII string is expected, but got {:?}", s));
-        }
-
-        // size: digits and '.' as decimal separator
-        let rate_len = rate_str
-            .to_string()
-            .chars()
-            .take_while(|c| char::is_ascii_digit(c) || *c == '.')
-            .count();
-
-        // unit: alphabetic characters
-        let (rate, unit) = rate_str.split_at(rate_len);
-
-        let unit = match unit.trim() {
-            "KBps" => KB,
-            "MBps" => MB,
-            "GBps" => GB,
-            "TBps" => TB,
-            "PBps" => PB,
-            "Bps" | "" => UNIT,
-            _ => {
-                return Err(format!(
-                    "only Bps, KBps, MBps, GBps, TBps, and PBps are supported: {:?}",
-                    s
-                ));
-            }
-        };
-
-        match rate.parse::<f64>() {
-            Ok(n) => Ok(ReadableRate((n * unit as f64) as u64)),
-            Err(_) => Err(format!("invalid rate string: {:?}", s)),
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for ReadableRate {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct RateVisitor;
-
-        impl<'de> Visitor<'de> for RateVisitor {
-            type Value = ReadableRate;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter.write_str("valid rate")
-            }
-
-            fn visit_i64<E>(self, rate: i64) -> Result<ReadableRate, E>
-            where
-                E: de::Error,
-            {
-                if rate >= 0 {
-                    self.visit_u64(rate as u64)
-                } else {
-                    Err(E::invalid_value(Unexpected::Signed(rate), &self))
-                }
-            }
-
-            fn visit_u64<E>(self, rate: u64) -> Result<ReadableRate, E>
-            where
-                E: de::Error,
-            {
-                Ok(ReadableRate(rate))
-            }
-
-            fn visit_str<E>(self, rate_str: &str) -> Result<ReadableRate, E>
-            where
-                E: de::Error,
-            {
-                rate_str.parse().map_err(E::custom)
-            }
-        }
-
-        deserializer.deserialize_any(RateVisitor)
     }
 }
 
@@ -1518,6 +1341,15 @@ mod tests {
             ("3MiB", MIB * 3),
             ("0.5KiB", KIB / 2),
             ("1 KiB", KIB),
+            // scientific notation
+            ("0.5e6 B", MB / 2),
+            ("0.5E6 B", MB / 2),
+            ("1e6B", MB),
+            ("8E6B", MB * 8),
+            ("8e7", MB * 80),
+            ("1e-1MB", MIB / 10),
+            ("1e+1MB", MIB * 10),
+            ("0e+10MB", 0),
         ];
         for (src, exp) in decode_cases {
             let src = format!("s = {:?}", src);
@@ -1532,83 +1364,6 @@ mod tests {
         for src in illegal_cases {
             let src_str = format!("s = {:?}", src);
             assert!(toml::from_str::<SizeHolder>(&src_str).is_err(), "{}", src);
-        }
-    }
-
-    #[test]
-    fn test_readable_rate() {
-        let r = ReadableRate::kbps(2);
-        assert_eq!(r.0, 2000);
-        assert_eq!(r.as_mbps(), 0);
-        let r = ReadableRate::mbps(2);
-        assert_eq!(r.0, 2 * 1000 * 1000);
-        assert_eq!(r.as_mbps(), 2);
-        let r = ReadableRate::gbps(2);
-        assert_eq!(r.0, 2 * 1000 * 1000 * 1000);
-        assert_eq!(r.as_mbps(), 2 * 1000);
-
-        assert_eq!((ReadableRate::mbps(2) / 2).0, MB);
-        assert_eq!((ReadableRate::mbps(1) / 2).0, 500 * KB);
-        assert_eq!(ReadableRate::mbps(2) / ReadableRate::kbps(1), 2000);
-    }
-
-    #[test]
-    fn test_parse_readable_rate() {
-        #[derive(Serialize, Deserialize)]
-        struct RateHolder {
-            r: ReadableRate,
-        }
-
-        let legal_cases = vec![
-            (0, "0KBps"),
-            (2 * KB, "2KBps"),
-            (4 * MB, "4MBps"),
-            (5 * GB, "5GBps"),
-            (7 * TB, "7TBps"),
-            (11 * PB, "11PBps"),
-        ];
-        for (rate, exp) in legal_cases {
-            let c = RateHolder {
-                r: ReadableRate(rate),
-            };
-            let res_str = toml::to_string(&c).unwrap();
-            let exp_str = format!("r = {:?}\n", exp);
-            assert_eq!(res_str, exp_str);
-            let res_rate: RateHolder = toml::from_str(&exp_str).unwrap();
-            assert_eq!(res_rate.r.0, rate);
-        }
-
-        let c = RateHolder {
-            r: ReadableRate(512),
-        };
-        let res_str = toml::to_string(&c).unwrap();
-        assert_eq!(res_str, "r = 512\n");
-        let res_rate: RateHolder = toml::from_str(&res_str).unwrap();
-        assert_eq!(res_rate.r.0, c.r.0);
-
-        let decode_cases = vec![
-            (" 0.5 PBps", PB / 2),
-            ("0.5 TBps", TB / 2),
-            ("0.5GBps", GB / 2),
-            ("0.5MBps", MB / 2),
-            ("0.5KBps", KB / 2),
-            ("23", 23),
-            ("1", 1),
-            ("1000Bps", KB),
-        ];
-        for (src, exp) in decode_cases {
-            let src = format!("r = {:?}", src);
-            let res: RateHolder = toml::from_str(&src).unwrap();
-            assert_eq!(res.r.0, exp);
-        }
-
-        let illegal_cases = vec![
-            "0.5kbps", "0.5kBps", "0.5Kbps", "0.5kps", "0.5Kps", "0.5gps", "bps", "gbps", "1bps",
-            "Bps", "1K24Bps", "5_KBps", "4B7ps", "5M_ps", "1KiBps", "1MiBps",
-        ];
-        for src in illegal_cases {
-            let src_str = format!("r = {:?}", src);
-            assert!(toml::from_str::<RateHolder>(&src_str).is_err(), "{}", src);
         }
     }
 
