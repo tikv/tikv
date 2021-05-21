@@ -24,7 +24,7 @@ use crossbeam::utils::CachePadded;
 use parking_lot::{Mutex, MutexGuard};
 use std::f64::INFINITY;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc::{self, Sender, Receiver};
 use std::sync::Arc;
 use std::thread::{self, Builder, JoinHandle};
 use std::time::Duration;
@@ -149,8 +149,9 @@ const ADJUST_INTERVAL: u64 = 1000; // 1000ms
 const RATIO_PERCISION: f64 = 10000000.0;
 const EMA_FACTOR: f64 = 0.2;
 const CAP: usize = 10;
-const LIMIT_UP_PERCENT: f64 = 0.03; // 3%
-const LIMIT_DOWN_PERCENT: f64 = 0.01; // 1%
+const LIMIT_UP_PERCENT: f64 = 0.10; // 10%
+const LIMIT_DOWN_PERCENT: f64 = 0.05; // 5%
+const MIN_THROTTLE_SPEED: f64 = 16.0 * 1024.0 * 1024.0; // 16MB
 
 struct Smoother {
     records: [Option<u64>; CAP],
@@ -214,9 +215,8 @@ struct FlowChecker<E: Engine> {
 }
 
 impl<E: Engine> FlowChecker<E> {
-    fn start(self) -> (Sender<bool>, JoinHandle<()>) {
-        let (tx, rx) = mpsc::channel();
-        let h = Builder::new()
+    fn start(self, rx: Receiver<bool>) -> JoinHandle<()> {
+        Builder::new()
             .name(thd_name!("flow-checker"))
             .spawn(move || {
                 tikv_alloc::add_thread_memory_accessor();
@@ -227,8 +227,7 @@ impl<E: Engine> FlowChecker<E> {
                 }
                 tikv_alloc::remove_thread_memory_accessor();
             })
-            .unwrap();
-        (tx, h)
+            .unwrap()
     }
 
     pub fn adjust(&mut self) {
@@ -262,8 +261,8 @@ impl<E: Engine> FlowChecker<E> {
             (if old_ratio != 0 {
                 self.factor * (old_ratio as f64 / RATIO_PERCISION)
                     + (1.0 - self.factor)
-                        * (new_ratio
-                            * (1.0 + self.start_control_time.elapsed().as_secs() as f64 / 100.0))
+                        * new_ratio
+                            // * (1.0 + self.start_control_time.elapsed().as_secs() as f64 / 100.0))
             } else {
                 self.start_control_time = Instant::now_coarse();
                 new_ratio
@@ -339,8 +338,8 @@ impl<E: Engine> FlowChecker<E> {
         } else {
             throttle as i64
         });
-        if throttle < 16.0 * 1024.0 * 1024.0 {
-            throttle = 16.0 * 1024.0 * 1024.0;
+        if throttle < MIN_THROTTLE_SPEED {
+            throttle = MIN_THROTTLE_SPEED;
         }
         self.limiter.set_speed_limit(throttle)
     }
@@ -390,12 +389,17 @@ impl FlowController {
             limiter: limiter.clone(),
             recorder: Smoother::new(),
         };
-        let (tx, handle) = checker.start();
+        let (tx, rx) = mpsc::channel();
+        let handle = if config.disable_write_stall {
+            Some(checker.start(rx))
+        } else {
+            None
+        };
         Self {
             discard_ratio,
             limiter,
             tx,
-            handle: Some(handle),
+            handle,
         }
     }
 
