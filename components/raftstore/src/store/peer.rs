@@ -1618,6 +1618,7 @@ where
                 return None;
             }
             CheckApplyingSnapStatus::Success => {
+                fail_point!("raft_before_applying_snap_finished");
                 // 0 means snapshot is scheduled after being restarted.
                 if self.last_unpersisted_number != 0 {
                     // Because we only handle raft ready when not applying snapshot, so following

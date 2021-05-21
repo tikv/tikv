@@ -1005,12 +1005,6 @@ impl RegionReadProgressCore {
         None
     }
 
-    fn clear(&mut self) {
-        self.pending_items.clear();
-        self.read_state.ts = 0;
-        self.read_state.idx = 0;
-    }
-
     fn push_back(&mut self, item: ReadState) {
         if self.pending_items.len() >= self.pending_items.capacity() {
             // Stepping by one to evently remove pending items, so the follower can keep

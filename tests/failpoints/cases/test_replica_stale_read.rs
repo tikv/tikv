@@ -65,10 +65,20 @@ impl PeerClient {
 }
 
 fn prepare_for_stale_read(leader: Peer) -> (Cluster<ServerCluster>, Arc<TestPdClient>, PeerClient) {
+    prepare_for_stale_read_before_run(leader, None)
+}
+
+fn prepare_for_stale_read_before_run(
+    leader: Peer,
+    before_run: Option<Box<dyn Fn(&mut Cluster<ServerCluster>)>>,
+) -> (Cluster<ServerCluster>, Arc<TestPdClient>, PeerClient) {
     let mut cluster = new_server_cluster(0, 3);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
+    if let Some(f) = before_run {
+        f(&mut cluster);
+    };
     cluster.run();
     cluster.sim.wl().start_resolved_ts_worker();
 
@@ -381,4 +391,92 @@ fn test_new_leader_init_resolver() {
     assert!(resp.get_region_error().has_data_is_not_ready());
     // But we can read `key1` with `commit_ts1`
     peer_client2.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), commit_ts1);
+}
+
+// Testing that while applying snapshot the follower should reset its `safe_ts` to 0 and
+// reject incoming stale read request, then resume the `safe_ts` after applying snapshot
+#[test]
+fn test_stale_read_while_applying_snapshot() {
+    let (mut cluster, pd_client, leader_client) =
+        prepare_for_stale_read_before_run(new_peer(1, 1), Some(Box::new(configure_for_snapshot)));
+    let mut follower_client2 = PeerClient::new(&cluster, 1, new_peer(2, 2));
+    follower_client2.ctx.set_stale_read(true);
+
+    let k1_commit_ts = leader_client.must_kv_write(
+        &pd_client,
+        vec![new_mutation(Op::Put, &b"key1"[..], &b"value1"[..])],
+        b"key1".to_vec(),
+    );
+    follower_client2.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), k1_commit_ts);
+
+    // Stop replicate data to follower 2
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(1, 2)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend),
+    ));
+
+    // Prewrite on `key3` but not commit yet
+    let k2_prewrite_ts = block_on(pd_client.get_tso()).unwrap().into_inner();
+    leader_client.must_kv_prewrite(
+        vec![new_mutation(Op::Put, &b"key2"[..], &b"value1"[..])],
+        b"key2".to_vec(),
+        k2_prewrite_ts,
+    );
+
+    // Compact logs to force requesting snapshot after clearing send filters.
+    let gc_limit = cluster.cfg.raft_store.raft_log_gc_count_limit;
+    let state = cluster.truncated_state(1, 1);
+    for i in 1..gc_limit * 10 {
+        let (k, v) = (
+            format!("k{}", i).into_bytes(),
+            format!("v{}", i).into_bytes(),
+        );
+        leader_client.must_kv_write(&pd_client, vec![new_mutation(Op::Put, &k, &v)], k);
+    }
+    cluster.wait_log_truncated(1, 1, state.get_index() + 5 * gc_limit);
+
+    // Pasuse before applying snapshot is finish
+    let raft_before_applying_snap_finished = "raft_before_applying_snap_finished";
+    fail::cfg(raft_before_applying_snap_finished, "pause").unwrap();
+    cluster.clear_send_filters();
+
+    // Wait follower 2 start applying snapshot
+    cluster.wait_log_truncated(1, 2, state.get_index() + 5 * gc_limit);
+    sleep_ms(100);
+
+    // We can't read while applying snapshot and the `safe_ts` should reset to 0
+    let resp = follower_client2.kv_read(b"key1".to_vec(), k1_commit_ts);
+    assert!(resp.get_region_error().has_data_is_not_ready());
+    assert_eq!(
+        0,
+        resp.get_region_error()
+            .get_data_is_not_ready()
+            .get_safe_ts()
+    );
+
+    // Resume applying snapshot
+    fail::remove(raft_before_applying_snap_finished);
+
+    // We can read `key1` after applied snapshot
+    follower_client2.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), k1_commit_ts);
+    // There is still lock on the region, we can't read `key1` with the newest ts
+    let resp = follower_client2.kv_read(
+        b"key1".to_vec(),
+        block_on(pd_client.get_tso()).unwrap().into_inner(),
+    );
+    assert!(resp.get_region_error().has_data_is_not_ready());
+
+    // Commit `key2`
+    leader_client.must_kv_commit(
+        vec![b"key2".to_vec()],
+        k2_prewrite_ts,
+        block_on(pd_client.get_tso()).unwrap().into_inner(),
+    );
+    // We can read `key1` with the newest ts now
+    follower_client2.must_kv_read_equal(
+        b"key2".to_vec(),
+        b"value1".to_vec(),
+        block_on(pd_client.get_tso()).unwrap().into_inner(),
+    );
 }
