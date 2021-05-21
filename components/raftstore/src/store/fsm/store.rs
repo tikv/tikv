@@ -681,6 +681,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
                 PeerFsmDelegate::new(&mut peers[ready.batch_offset], &mut self.poll_ctx)
                     .post_raft_ready_append(ready);
             }
+            self.poll_ctx.trans.try_flush();
         }
         let dur = self.timer.elapsed();
         if !self.poll_ctx.store_stat.is_busy {
@@ -837,6 +838,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         let mut delegate = PeerFsmDelegate::new(peer, &mut self.poll_ctx);
         delegate.handle_msgs(&mut self.peer_msg_buf);
         delegate.collect_ready();
+        self.poll_ctx.trans.try_flush();
         self.poll_ctx.processed_fsm_count += 1;
         expected_msg_count
     }

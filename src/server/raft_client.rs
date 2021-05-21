@@ -19,17 +19,20 @@ use kvproto::tikvpb::{BatchRaftMessage, TikvClient};
 use raft::SnapshotStatus;
 use raftstore::errors::DiscardReason;
 use raftstore::router::RaftStoreRouter;
+use seahash::SeaHasher;
 use security::SecurityManager;
 use std::collections::VecDeque;
 use std::ffi::CString;
+use std::hash::Hasher;
 use std::marker::PhantomData;
 use std::marker::Unpin;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use std::{cmp, mem, result};
 use tikv_util::lru::LruCache;
+use tikv_util::time::Instant as UtilInstant;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Scheduler;
 use yatp::task::future::TaskCell;
@@ -37,7 +40,6 @@ use yatp::ThreadPool;
 
 // When merge raft messages into a batch message, leave a buffer.
 const GRPC_SEND_MSG_BUF: usize = 64 * 1024;
-const QUEUE_CAPACITY: usize = 4096;
 
 const RAFT_MSG_MAX_BATCH_SIZE: usize = 128;
 
@@ -764,11 +766,13 @@ struct CachedQueue {
 pub struct RaftClient<S, R, E> {
     pool: Arc<Mutex<ConnectionPool>>,
     cache: LruCache<(u64, usize), CachedQueue>,
-    need_flush: Vec<(u64, usize)>,
+    need_flush: VecDeque<(UtilInstant, u64, usize)>,
     full_stores: Vec<(u64, usize)>,
     future_pool: Arc<ThreadPool<TaskCell>>,
     builder: ConnectionBuilder<S, R>,
     engine: PhantomData<E>,
+    last_hash: (u64, u64),
+    delay_time: Duration,
 }
 
 impl<S, R, E> RaftClient<S, R, E>
@@ -783,14 +787,17 @@ where
                 .max_thread_count(1)
                 .build_future_pool(),
         );
+        let delay_time = Duration::from_micros(builder.cfg.raft_msg_flush_delay_us);
         RaftClient {
             pool: Arc::default(),
             cache: LruCache::with_capacity_and_sample(0, 7),
-            need_flush: vec![],
+            need_flush: VecDeque::new(),
             full_stores: vec![],
             future_pool,
             builder,
             engine: PhantomData::<E>,
+            last_hash: (0, 0),
+            delay_time,
         }
     }
 
@@ -811,7 +818,9 @@ where
                 .connections
                 .entry((store_id, conn_id))
                 .or_insert_with(|| {
-                    let queue = Arc::new(Queue::with_capacity(QUEUE_CAPACITY));
+                    let queue = Arc::new(Queue::with_capacity(
+                        self.builder.cfg.raft_client_queue_size,
+                    ));
                     let back_end = StreamBackEnd {
                         store_id,
                         queue: queue.clone(),
@@ -844,7 +853,16 @@ where
     /// are sent out.
     pub fn send(&mut self, msg: RaftMessage) -> result::Result<(), DiscardReason> {
         let store_id = msg.get_to_peer().store_id;
-        let conn_id = (msg.region_id % self.builder.cfg.grpc_raft_conn_num as u64) as usize;
+        if self.last_hash.0 == 0 || msg.region_id != self.last_hash.0 {
+            let mut hasher = SeaHasher::new();
+            hasher.write_u64(msg.region_id);
+            let h = hasher.finish();
+            self.last_hash = (
+                msg.region_id,
+                h % self.builder.cfg.grpc_raft_conn_num as u64,
+            );
+        };
+        let conn_id = self.last_hash.1 as usize;
         #[allow(unused_mut)]
         let mut transport_on_send_store_fp = || {
             fail_point!(
@@ -872,7 +890,11 @@ where
                     Ok(_) => {
                         if !s.dirty {
                             s.dirty = true;
-                            self.need_flush.push((store_id, conn_id));
+                            self.need_flush.push_back((
+                                UtilInstant::now_coarse(),
+                                store_id,
+                                conn_id,
+                            ));
                         }
                         return Ok(());
                     }
@@ -901,6 +923,16 @@ where
         !self.need_flush.is_empty() || !self.full_stores.is_empty()
     }
 
+    /// Tries to flush messages if it is time
+    pub fn try_flush(&mut self) {
+        self.flush(false);
+    }
+
+    /// Flushes all buffered messages.
+    pub fn force_flush(&mut self) {
+        self.flush(true);
+    }
+
     fn flush_full_metrics(&mut self) {
         if self.full_stores.is_empty() {
             return;
@@ -920,14 +952,20 @@ where
         }
     }
 
-    /// Flushes all buffered messages.
-    pub fn flush(&mut self) {
-        self.flush_full_metrics();
+    fn flush(&mut self, force: bool) {
+        if force {
+            self.flush_full_metrics();
+        }
         if self.need_flush.is_empty() {
             return;
         }
-        for id in &self.need_flush {
-            if let Some(s) = self.cache.get_mut(id) {
+        let now = UtilInstant::now_coarse();
+        while !self.need_flush.is_empty() {
+            let val = self.need_flush.pop_front().unwrap();
+            if !force && now - val.0 < self.delay_time {
+                break;
+            }
+            if let Some(s) = self.cache.get_mut(&(val.1, val.2)) {
                 if s.dirty {
                     s.dirty = false;
                     s.queue.notify();
@@ -935,12 +973,11 @@ where
                 continue;
             }
             let l = self.pool.lock().unwrap();
-            if let Some(q) = l.connections.get(id) {
+            if let Some(q) = l.connections.get(&(val.1, val.2)) {
                 q.notify();
             }
         }
-        self.need_flush.clear();
-        if self.need_flush.capacity() > 2048 {
+        if self.need_flush.len() < 512 && self.need_flush.capacity() > 2048 {
             self.need_flush.shrink_to(512);
         }
     }
@@ -955,11 +992,13 @@ where
         RaftClient {
             pool: self.pool.clone(),
             cache: LruCache::with_capacity_and_sample(0, 7),
-            need_flush: vec![],
+            need_flush: VecDeque::new(),
             full_stores: vec![],
             future_pool: self.future_pool.clone(),
             builder: self.builder.clone(),
             engine: PhantomData::<E>,
+            last_hash: (0, 0),
+            delay_time: self.delay_time.clone(),
         }
     }
 }

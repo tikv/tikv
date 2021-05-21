@@ -75,6 +75,10 @@ pub struct Config {
 
     pub max_grpc_send_msg_len: i32,
 
+    pub raft_client_queue_size: usize,
+
+    pub raft_msg_flush_delay_us: u64,
+
     // TODO: use CompressionAlgorithms instead once it supports traits like Clone etc.
     pub grpc_compression_type: GrpcCompressionType,
     pub grpc_concurrency: usize,
@@ -144,6 +148,8 @@ impl Default for Config {
             advertise_status_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
             status_thread_pool_size: 1,
             max_grpc_send_msg_len: DEFAULT_MAX_GRPC_SEND_MSG_LEN,
+            raft_client_queue_size: 4096,
+            raft_msg_flush_delay_us: 500,
             grpc_compression_type: GrpcCompressionType::None,
             grpc_concurrency: DEFAULT_GRPC_CONCURRENCY,
             grpc_concurrent_stream: DEFAULT_GRPC_CONCURRENT_STREAM,
