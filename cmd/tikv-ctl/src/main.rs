@@ -313,7 +313,7 @@ trait DebugExecutor {
                             }
                         }
                     }
-                    println!("");
+                    println!();
                     future::ok::<(), String>(())
                 });
         if let Err(e) = block_on(scan_future) {
@@ -1904,7 +1904,7 @@ fn main() {
 
     if matches.args.is_empty() {
         let _ = app.print_help();
-        println!("");
+        println!();
         return;
     }
 
