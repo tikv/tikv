@@ -206,7 +206,7 @@ impl Simulator for NodeCluster {
         let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
         let mut node = Node::new(
             system,
-            Arc::new(VersionTrack::new(cfg.server.clone())),
+            &cfg.server,
             Arc::new(VersionTrack::new(raft_store)),
             Arc::clone(&self.pd_client),
             Arc::default(),

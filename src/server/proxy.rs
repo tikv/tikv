@@ -13,7 +13,6 @@ use collections::HashMap;
 use grpcio::{CallOption, Channel, ChannelBuilder, Environment, MetadataBuilder, RpcContext};
 use kvproto::tikvpb::TikvClient;
 use security::SecurityManager;
-use tikv_util::config::VersionTrack;
 
 use std::ffi::CString;
 use std::future::Future;
@@ -118,17 +117,13 @@ impl ClientPool {
 pub struct Proxy {
     mgr: Arc<SecurityManager>,
     env: Weak<Environment>,
-    cfg: Arc<VersionTrack<Config>>,
+    cfg: Arc<Config>,
     // todo: Release client if it's not used anymore. For example, become tombstone.
     pool: HashMap<String, ClientPool>,
 }
 
 impl Proxy {
-    pub fn new(
-        mgr: Arc<SecurityManager>,
-        env: &Arc<Environment>,
-        cfg: Arc<VersionTrack<Config>>,
-    ) -> Proxy {
+    pub fn new(mgr: Arc<SecurityManager>, env: &Arc<Environment>, cfg: Arc<Config>) -> Proxy {
         Proxy {
             mgr,
             env: Arc::downgrade(env),
@@ -143,17 +138,14 @@ impl Proxy {
         C: FnOnce(&TikvClient) + Send + 'static,
     {
         let client = match self.pool.get_mut(addr) {
-            Some(p) => p.get_connection(&self.env, &self.mgr, &self.cfg.value(), addr),
+            Some(p) => p.get_connection(&self.env, &self.mgr, &self.cfg, addr),
             None => {
-                let p =
-                    ClientPool::with_capacity(self.cfg.value().forward_max_connections_per_address);
+                let p = ClientPool::with_capacity(self.cfg.forward_max_connections_per_address);
                 self.pool.insert(addr.to_string(), p);
-                self.pool.get_mut(addr).unwrap().get_connection(
-                    &self.env,
-                    &self.mgr,
-                    &self.cfg.value(),
-                    addr,
-                )
+                self.pool
+                    .get_mut(addr)
+                    .unwrap()
+                    .get_connection(&self.env, &self.mgr, &self.cfg, addr)
             }
         };
 

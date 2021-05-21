@@ -395,7 +395,7 @@ impl Simulator for ServerCluster {
         raft_store.validate().unwrap();
         let mut node = Node::new(
             system,
-            server_cfg.clone(),
+            &server_cfg.value().clone(),
             Arc::new(VersionTrack::new(raft_store)),
             Arc::clone(&self.pd_client),
             state,

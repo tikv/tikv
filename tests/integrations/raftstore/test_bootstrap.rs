@@ -60,7 +60,7 @@ fn test_node_bootstrap_with_prepared_data() {
     let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
     let mut node = Node::new(
         system,
-        Arc::new(VersionTrack::new(cfg.server.clone())),
+        &cfg.server,
         Arc::new(VersionTrack::new(cfg.raft_store.clone())),
         Arc::clone(&pd_client),
         Arc::default(),

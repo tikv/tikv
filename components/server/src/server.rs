@@ -634,7 +634,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let raft_store = Arc::new(VersionTrack::new(self.config.raft_store.clone()));
         let mut node = Node::new(
             self.system.take().unwrap(),
-            server_config.clone(),
+            &server_config.value().clone(),
             raft_store.clone(),
             self.pd_client.clone(),
             self.state.clone(),

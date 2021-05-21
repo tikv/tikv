@@ -77,7 +77,7 @@ where
     /// Creates a new Node.
     pub fn new(
         system: RaftBatchSystem<RocksEngine, ER>,
-        server_cfg: Arc<VersionTrack<ServerConfig>>,
+        cfg: &ServerConfig,
         store_cfg: Arc<VersionTrack<StoreConfig>>,
         pd_client: Arc<C>,
         state: Arc<Mutex<GlobalReplicationState>>,
@@ -85,7 +85,6 @@ where
     ) -> Node<C, ER> {
         let mut store = metapb::Store::default();
         store.set_id(INVALID_ID);
-        let cfg = server_cfg.value().clone();
         if cfg.advertise_addr.is_empty() {
             store.set_address(cfg.addr.clone());
         } else {
