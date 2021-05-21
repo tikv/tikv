@@ -148,7 +148,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
 
         let conn_builder = ConnectionBuilder::new(
             env.clone(),
-            cfg.clone(),
+            Arc::new(cfg.value().clone()),
             security_mgr.clone(),
             resolver,
             raft_router.clone(),

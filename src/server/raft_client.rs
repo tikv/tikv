@@ -29,7 +29,6 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use std::{cmp, mem, result};
-use tikv_util::config::VersionTrack;
 use tikv_util::lru::LruCache;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Scheduler;
@@ -154,11 +153,11 @@ struct BatchMessageBuffer {
     batch: BatchRaftMessage,
     overflowing: Option<RaftMessage>,
     size: usize,
-    cfg: Arc<VersionTrack<Config>>,
+    cfg: Arc<Config>,
 }
 
 impl BatchMessageBuffer {
-    fn new(cfg: Arc<VersionTrack<Config>>) -> BatchMessageBuffer {
+    fn new(cfg: Arc<Config>) -> BatchMessageBuffer {
         BatchMessageBuffer {
             batch: BatchRaftMessage::default(),
             overflowing: None,
@@ -186,7 +185,7 @@ impl Buffer for BatchMessageBuffer {
         // is estimated, `GRPC_SEND_MSG_BUF` is reserved for errors.
         if self.size > 0
             && (self.size + msg_size + GRPC_SEND_MSG_BUF
-                >= self.cfg.value().max_grpc_send_msg_len as usize
+                >= self.cfg.max_grpc_send_msg_len as usize
                 || self.batch.get_msgs().len() >= RAFT_MSG_MAX_BATCH_SIZE)
         {
             self.overflowing = Some(msg);
@@ -485,7 +484,7 @@ where
 #[derive(Clone)]
 pub struct ConnectionBuilder<S, R> {
     env: Arc<Environment>,
-    cfg: Arc<VersionTrack<Config>>,
+    cfg: Arc<Config>,
     security_mgr: Arc<SecurityManager>,
     resolver: S,
     router: R,
@@ -495,7 +494,7 @@ pub struct ConnectionBuilder<S, R> {
 impl<S, R> ConnectionBuilder<S, R> {
     pub fn new(
         env: Arc<Environment>,
-        cfg: Arc<VersionTrack<Config>>,
+        cfg: Arc<Config>,
         security_mgr: Arc<SecurityManager>,
         resolver: S,
         router: R,
@@ -577,11 +576,11 @@ where
         info!("server: new connection with tikv endpoint"; "addr" => addr, "store_id" => self.store_id);
 
         let cb = ChannelBuilder::new(self.builder.env.clone())
-            .stream_initial_window_size(self.builder.cfg.value().grpc_stream_initial_window_size.0 as i32)
-            .max_send_message_len(self.builder.cfg.value().max_grpc_send_msg_len)
-            .keepalive_time(self.builder.cfg.value().grpc_keepalive_time.0)
-            .keepalive_timeout(self.builder.cfg.value().grpc_keepalive_timeout.0)
-            .default_compression_algorithm(self.builder.cfg.value().grpc_compression_algorithm())
+            .stream_initial_window_size(self.builder.cfg.grpc_stream_initial_window_size.0 as i32)
+            .max_send_message_len(self.builder.cfg.max_grpc_send_msg_len)
+            .keepalive_time(self.builder.cfg.grpc_keepalive_time.0)
+            .keepalive_timeout(self.builder.cfg.grpc_keepalive_timeout.0)
+            .default_compression_algorithm(self.builder.cfg.grpc_compression_algorithm())
             // hack: so it's different args, grpc will always create a new connection.
             .raw_cfg_int(
                 CString::new("random id").unwrap(),
@@ -670,9 +669,8 @@ async fn start<S, R, E>(
 {
     let mut last_wake_time = Instant::now();
     let mut retry_times = 0;
-    let cfg = back_end.builder.cfg.value().clone();
     loop {
-        maybe_backoff(&cfg, &mut last_wake_time, &mut retry_times).await;
+        maybe_backoff(&back_end.builder.cfg, &mut last_wake_time, &mut retry_times).await;
         retry_times += 1;
         let f = back_end.resolve();
         let addr = match f.await {
@@ -847,7 +845,7 @@ where
     /// are sent out.
     pub fn send(&mut self, msg: RaftMessage) -> result::Result<(), DiscardReason> {
         let store_id = msg.get_to_peer().store_id;
-        let conn_id = (msg.region_id % self.builder.cfg.value().grpc_raft_conn_num as u64) as usize;
+        let conn_id = (msg.region_id % self.builder.cfg.grpc_raft_conn_num as u64) as usize;
         #[allow(unused_mut)]
         let mut transport_on_send_store_fp = || {
             fail_point!(
