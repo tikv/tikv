@@ -853,16 +853,20 @@ where
     /// are sent out.
     pub fn send(&mut self, msg: RaftMessage) -> result::Result<(), DiscardReason> {
         let store_id = msg.get_to_peer().store_id;
-        if self.last_hash.0 == 0 || msg.region_id != self.last_hash.0 {
-            let mut hasher = SeaHasher::new();
-            hasher.write_u64(msg.region_id);
-            let h = hasher.finish();
-            self.last_hash = (
-                msg.region_id,
-                h % self.builder.cfg.grpc_raft_conn_num as u64,
-            );
+        let conn_id = if self.builder.cfg.grpc_raft_conn_num == 1 {
+            0
+        } else {
+            if self.last_hash.0 == 0 || msg.region_id != self.last_hash.0 {
+                let mut hasher = SeaHasher::new();
+                hasher.write_u64(msg.region_id);
+                let h = hasher.finish();
+                self.last_hash = (
+                    msg.region_id,
+                    h % self.builder.cfg.grpc_raft_conn_num as u64,
+                );
+            };
+            self.last_hash.1 as usize
         };
-        let conn_id = self.last_hash.1 as usize;
         #[allow(unused_mut)]
         let mut transport_on_send_store_fp = || {
             fail_point!(
