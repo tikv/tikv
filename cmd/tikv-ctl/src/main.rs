@@ -28,7 +28,7 @@ use encryption_export::{
 };
 use engine_rocks::encryption::get_env;
 use engine_rocks::RocksEngine;
-use engine_traits::{EncryptionKeyManager, Engines, RaftEngine};
+use engine_traits::{EncryptionKeyManager, Engines, Error as EngineError, RaftEngine};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use file_system::calc_crc32;
 use kvproto::debugpb::{Db as DBType, *};
@@ -54,10 +54,26 @@ const METRICS_ROCKSDB_KV: &str = "rocksdb_kv";
 const METRICS_ROCKSDB_RAFT: &str = "rocksdb_raft";
 const METRICS_JEMALLOC: &str = "jemalloc";
 
+const LOCK_FILE_ERROR: &str = "IO error: While lock file";
+
 type MvccInfoStream = Pin<Box<dyn Stream<Item = Result<(Vec<u8>, MvccInfo), String>>>>;
 
 fn perror_and_exit<E: Error>(prefix: &str, e: E) -> ! {
     ve1!("{}: {}", prefix, e);
+    process::exit(-1);
+}
+
+fn handle_engine_error(err: EngineError) -> ! {
+    ve1!("error while open kvdb: {}", err);
+    if let EngineError::Engine(msg) = err {
+        if msg.starts_with(LOCK_FILE_ERROR) {
+            ve1!(
+                "LOCK file conflict indicates TiKV process is running. \
+                Do NOT delete the LOCK file and force the command to run. \
+                Doing so could cause data corruption."
+            );
+        }
+    }
     process::exit(-1);
 }
 
@@ -88,7 +104,10 @@ fn new_debug_executor(
             let kv_path = PathBuf::from(kv_path).canonicalize().unwrap();
             let kv_path = kv_path.to_str().unwrap();
             let kv_db =
-                engine_rocks::raw_util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
+                match engine_rocks::raw_util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts) {
+                    Ok(db) => db,
+                    Err(e) => handle_engine_error(e),
+                };
             let mut kv_db = RocksEngine::from_db(Arc::new(kv_db));
             kv_db.set_shared_block_cache(shared_block_cache);
 
@@ -107,12 +126,14 @@ fn new_debug_executor(
                 let mut raft_db_opts = cfg.raftdb.build_opt();
                 raft_db_opts.set_env(env);
                 let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
-                let raft_db = engine_rocks::raw_util::new_engine_opt(
+                let raft_db = match engine_rocks::raw_util::new_engine_opt(
                     &raft_path,
                     raft_db_opts,
                     raft_db_cf_opts,
-                )
-                .unwrap();
+                ) {
+                    Ok(db) => db,
+                    Err(e) => handle_engine_error(e),
+                };
                 let mut raft_db = RocksEngine::from_db(Arc::new(raft_db));
                 raft_db.set_shared_block_cache(shared_block_cache);
                 let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
