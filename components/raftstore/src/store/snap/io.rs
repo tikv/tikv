@@ -17,7 +17,7 @@ use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 use tikv_util::time::Limiter;
 use tikv_util::{box_try, debug};
 
-use super::Error;
+use super::{Error, IO_LIMITER_CHUNK_SIZE};
 
 /// Used to check a procedure is stale or not.
 pub trait StaleDetector {
@@ -113,9 +113,16 @@ where
 {
     let mut sst_writer = create_sst_file_writer::<E>(engine, cf, path)?;
     let mut stats = BuildStatistics::default();
+    let mut remained_quota = 0;
     box_try!(snap.scan_cf(cf, start_key, end_key, false, |key, value| {
         let entry_len = key.len() + value.len();
-        io_limiter.blocking_consume(entry_len);
+        while entry_len > remained_quota {
+            // It's possible to acquire more than necessary, but let it be.
+            io_limiter.blocking_consume(IO_LIMITER_CHUNK_SIZE);
+            remained_quota += IO_LIMITER_CHUNK_SIZE;
+        }
+        remained_quota -= entry_len;
+
         stats.key_count += 1;
         stats.total_size += entry_len;
         if let Err(e) = sst_writer.put(key, value) {
