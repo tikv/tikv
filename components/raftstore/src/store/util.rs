@@ -856,17 +856,15 @@ pub struct RegionReadProgress {
     // `core` used to keep track and update `safe_ts`, it should
     // not be accessed outside to avoid dead lock
     core: Mutex<RegionReadProgressCore>,
-    // The fast path to read `safe_ts` and `applied_index` without
-    // acquiring the mutex on `core`
+    // The fast path to read `safe_ts` without acquiring the mutex
+    // on `core`
     safe_ts: AtomicU64,
-    applied_index: AtomicU64,
 }
 
 impl RegionReadProgress {
     pub fn new(applied_index: u64, cap: usize) -> RegionReadProgress {
         RegionReadProgress {
             core: Mutex::new(RegionReadProgressCore::new(applied_index, cap)),
-            applied_index: AtomicU64::from(applied_index),
             safe_ts: AtomicU64::from(0),
         }
     }
@@ -876,7 +874,6 @@ impl RegionReadProgress {
         if let Some(ts) = core.update_applied(applied) {
             self.safe_ts.store(ts, AtomicOrdering::Release);
         }
-        self.applied_index.store(applied, AtomicOrdering::Release);
     }
 
     pub fn update_safe_ts(&self, apply_index: u64, ts: u64) {
@@ -895,8 +892,13 @@ impl RegionReadProgress {
         self.safe_ts.store(0, AtomicOrdering::Release);
     }
 
-    pub fn applied_index(&self) -> u64 {
-        self.applied_index.load(AtomicOrdering::Acquire)
+    // Get the latest `read_state`
+    pub fn read_state(&self) -> ReadState {
+        let core = self.core.lock().unwrap();
+        core.pending_items
+            .back()
+            .unwrap_or(&core.read_state)
+            .clone()
     }
 
     pub fn safe_ts(&self) -> u64 {
@@ -909,16 +911,26 @@ struct RegionReadProgressCore {
     applied_index: u64,
     // TODO: after region merged, the region's key range is extended and this
     // region wide `safe_ts` should reset to `min(source_safe_ts, target_safe_ts)`
-    safe_ts: u64,
-    // `pending_items` is a *sorted* list of `(apply index, safe ts)` item
-    pending_items: VecDeque<(u64, u64)>,
+    //
+    // A wraper of `(apply_index, safe_ts)` item, where the `read_state.ts` is the peer's current `safe_ts`
+    // and the `read_state.idx` is the smallest `apply_index` required for that `safe_ts`
+    read_state: ReadState,
+    // `pending_items` is a *sorted* list of `(apply_index, safe_ts)` item
+    pending_items: VecDeque<ReadState>,
+}
+
+// A helpful wraper of `(apply_index, safe_ts)` item
+#[derive(Clone, Debug, Default)]
+pub struct ReadState {
+    pub idx: u64,
+    pub ts: u64,
 }
 
 impl RegionReadProgressCore {
     fn new(applied_index: u64, cap: usize) -> RegionReadProgressCore {
         RegionReadProgressCore {
             applied_index,
-            safe_ts: 0,
+            read_state: ReadState::default(),
             pending_items: VecDeque::with_capacity(cap),
         }
     }
@@ -929,62 +941,63 @@ impl RegionReadProgressCore {
         assert!(applied >= self.applied_index);
         self.applied_index = applied;
         // Consume pending items with `apply_index` less or equal to `self.applied_index`
-        let mut ts_to_update = self.safe_ts;
-        while let Some((idx, ts)) = self.pending_items.pop_front() {
-            if self.applied_index < idx {
-                self.pending_items.push_front((idx, ts));
+        let mut to_update = self.read_state.clone();
+        while let Some(item) = self.pending_items.pop_front() {
+            if self.applied_index < item.idx {
+                self.pending_items.push_front(item);
                 break;
             }
-            if ts_to_update < ts {
-                ts_to_update = ts;
+            if to_update.ts < item.ts {
+                to_update = item;
             }
         }
-        if self.safe_ts < ts_to_update {
-            self.safe_ts = ts_to_update;
-            Some(ts_to_update)
+        if self.read_state.ts < to_update.ts {
+            self.read_state = to_update;
+            Some(self.read_state.ts)
         } else {
             None
         }
     }
 
     // Return the `safe_ts` if it is updated
-    fn update_safe_ts(&mut self, apply_index: u64, ts: u64) -> Option<u64> {
+    fn update_safe_ts(&mut self, idx: u64, ts: u64) -> Option<u64> {
         // The peer has enough data, try update `safe_ts` directly
-        if self.applied_index >= apply_index {
+        if self.applied_index >= idx {
             let mut updated_ts = None;
-            if self.safe_ts < ts {
-                self.safe_ts = ts;
+            if self.read_state.ts < ts {
+                self.read_state = ReadState { idx, ts };
                 updated_ts = Some(ts);
             }
             return updated_ts;
         }
         // The peer doesn't has enough data, keep the item for future use
-        if let Some(item) = self.pending_items.back_mut() {
-            // Discord the item if it has a smaller `safe_ts`
-            if item.1 >= ts {
+        if let Some(prev_item) = self.pending_items.back_mut() {
+            // Discard the item if it has a smaller `safe_ts`
+            if prev_item.ts >= ts {
                 return None;
             }
-            // Discord the item if it has a smaller `apply_index`
-            if item.0 >= apply_index {
-                // Instead of adding a new item, try update the last one,
-                // update the last item's `safe_ts` if the incoming item
-                // require a less or equal `apply_index` with a larger `safe_ts`
-                item.1 = ts;
+            // Discard the item if it has a smaller `apply_index`
+            if prev_item.idx >= idx {
+                // Instead of dropping the incoming item, try use it to update
+                // the last one, update the last item's `safe_ts` if the incoming
+                // item require a less or equal `apply_index` with a larger `safe_ts`
+                prev_item.ts = ts;
                 return None;
             }
         }
-        self.push_back((apply_index, ts));
+        self.push_back(ReadState { idx, ts });
         None
     }
 
     fn clear(&mut self) {
         self.pending_items.clear();
-        self.safe_ts = 0;
+        self.read_state.ts = 0;
+        self.read_state.idx = 0;
     }
 
-    fn push_back(&mut self, item: (u64, u64)) {
+    fn push_back(&mut self, item: ReadState) {
         if self.pending_items.len() >= self.pending_items.capacity() {
-            // Stepping by one to evently remove the items, so the follower can keep
+            // Stepping by one to evently remove pending items, so the follower can keep
             // the old items and use them to update the `safe_ts` even when the follower
             // not catch up new enough data
             let mut keep = false;
