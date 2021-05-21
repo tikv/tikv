@@ -35,7 +35,7 @@ impl AssertionStorage<SimulateEngine> {
         key: &str,
     ) -> (Cluster<ServerCluster>, Self) {
         let (cluster, store, ctx) = new_raft_storage_with_store_count(count, key);
-        let storage = Self { ctx, store };
+        let storage = Self { store, ctx };
         (cluster, storage)
     }
 
@@ -239,7 +239,6 @@ impl<E: Engine> AssertionStorage<E> {
             .batch_get_command(self.ctx.clone(), &keys, ts)
             .unwrap()
             .into_iter()
-            .map(|(x, ..)| x)
             .collect();
         let expect: Vec<Option<Vec<u8>>> = expect
             .into_iter()

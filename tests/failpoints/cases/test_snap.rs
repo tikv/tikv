@@ -3,10 +3,9 @@
 use std::sync::atomic::Ordering;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::*;
-use std::{fs, io, mem, thread};
+use std::{fs, io, thread};
 
 use raft::eraftpb::MessageType;
-
 use raftstore::store::*;
 use test_raftstore::*;
 use tikv_util::config::*;
@@ -394,13 +393,13 @@ fn test_receive_old_snapshot() {
         drop(guard);
         sleep_ms(10);
     }
-    let msgs = {
+    let msgs: Vec<_> = {
         let mut guard = dropped_msgs.lock().unwrap();
         if guard.is_empty() {
             drop(guard);
             panic!("do not receive snapshot msg in 200ms");
         }
-        mem::replace(guard.as_mut(), vec![])
+        std::mem::take(guard.as_mut())
     };
 
     cluster.sim.wl().clear_recv_filters(2);
@@ -469,4 +468,62 @@ fn test_gen_snapshot_with_no_committed_entries_ready() {
     // Snapshot should be generated and sent after leader 1 receives the heartbeat
     // response from peer 3.
     must_get_equal(&cluster.get_engine(3), b"k9", b"v1");
+}
+
+// Test snapshot generating can be canceled by Raft log GC correctly. It does
+// 1. pause snapshot generating with a failpoint, and then add a new peer;
+// 2. append more Raft logs to the region to trigger raft log compactions;
+// 3. disable the failpoint to continue snapshot generating;
+// 4. the generated snapshot should have a larger index than the latest `truncated_idx`.
+#[test]
+fn test_cancel_snapshot_generating() {
+    let mut cluster = new_node_cluster(0, 5);
+    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration(Duration::from_secs(100));
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 10;
+    cluster.cfg.raft_store.merge_max_log_gap = 5;
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let rid = cluster.run_conf_change();
+    let snap_dir = cluster.get_snap_dir(1);
+
+    pd_client.must_add_peer(rid, new_peer(2, 2));
+    cluster.must_put(b"k0", b"v0");
+    must_get_equal(&cluster.get_engine(2), b"k0", b"v0");
+    pd_client.must_add_peer(rid, new_peer(3, 3));
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    // Remove snapshot files generated for initial configuration changes.
+    for entry in fs::read_dir(&snap_dir).unwrap() {
+        let entry = entry.unwrap();
+        fs::remove_file(entry.path()).unwrap();
+    }
+
+    fail::cfg("before_region_gen_snap", "pause").unwrap();
+    pd_client.must_add_peer(rid, new_learner_peer(4, 4));
+
+    // Snapshot generatings will be canceled by raft log GC.
+    let mut truncated_idx = cluster.truncated_state(rid, 1).get_index();
+    truncated_idx += 20;
+    (0..20).for_each(|_| cluster.must_put(b"kk", b"vv"));
+    cluster.wait_log_truncated(rid, 1, truncated_idx);
+
+    fail::cfg("before_region_gen_snap", "off").unwrap();
+    // Wait for all snapshot generating tasks are consumed.
+    thread::sleep(Duration::from_millis(100));
+
+    // New generated snapshot files should have a larger index than truncated index.
+    for entry in fs::read_dir(&snap_dir).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        let file_name = path.file_name().unwrap().to_str().unwrap();
+        if !file_name.ends_with(".meta") {
+            continue;
+        }
+        let parts: Vec<_> = file_name[0..file_name.len() - 5].split('_').collect();
+        let snap_index = parts[3].parse::<u64>().unwrap();
+        assert!(snap_index > truncated_idx);
+    }
 }

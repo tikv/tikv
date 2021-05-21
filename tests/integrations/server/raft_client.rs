@@ -44,7 +44,7 @@ impl StoreAddrResolver for StaticResolver {
     }
 }
 
-fn get_raft_client<R, T>(router: R, resolver: T) -> RaftClient<T, R>
+fn get_raft_client<R, T>(router: R, resolver: T) -> RaftClient<T, R, RocksEngine>
 where
     R: RaftStoreRouter<RocksEngine> + Unpin + 'static,
     T: StoreAddrResolver + 'static,
@@ -58,7 +58,9 @@ where
     RaftClient::new(builder)
 }
 
-fn get_raft_client_by_port(port: u16) -> RaftClient<StaticResolver, RaftStoreBlackHole> {
+fn get_raft_client_by_port(
+    port: u16,
+) -> RaftClient<StaticResolver, RaftStoreBlackHole, RocksEngine> {
     get_raft_client(RaftStoreBlackHole, StaticResolver::new(port))
 }
 
@@ -270,7 +272,8 @@ fn test_tombstone_block_list() {
     let bg_worker = WorkerBuilder::new(thd_name!("background"))
         .thread_count(2)
         .create();
-    let resolver = resolve::new_resolver(pd_client, &bg_worker, RaftStoreBlackHole).0;
+    let resolver =
+        resolve::new_resolver::<_, _, RocksEngine>(pd_client, &bg_worker, RaftStoreBlackHole).0;
 
     let msg_count = Arc::new(AtomicUsize::new(0));
     let batch_msg_count = Arc::new(AtomicUsize::new(0));

@@ -87,6 +87,7 @@ use tikv_util::{
 };
 use tokio::runtime::Builder;
 
+use crate::raft_engine_switch::{check_and_dump_raft_db, check_and_dump_raft_engine};
 use crate::{setup::*, signal_handler};
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
@@ -168,7 +169,7 @@ struct TiKVServer<ER: RaftEngine> {
 struct TiKVEngines<ER: RaftEngine> {
     engines: Engines<RocksEngine, ER>,
     store_meta: Arc<Mutex<StoreMeta>>,
-    engine: RaftKv<ServerRaftStoreRouter<RocksEngine, ER>>,
+    engine: RaftKv<RocksEngine, ServerRaftStoreRouter<RocksEngine, ER>>,
 }
 
 struct Servers<ER: RaftEngine> {
@@ -258,16 +259,24 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     /// - If the max open file descriptor limit is not high enough to support
     ///   the main database and the raft database.
     fn init_config(mut config: TiKvConfig) -> ConfigController {
+        validate_and_persist_config(&mut config, true);
+
         ensure_dir_exist(&config.storage.data_dir).unwrap();
+        if !config.rocksdb.wal_dir.is_empty() {
+            ensure_dir_exist(&config.rocksdb.wal_dir).unwrap();
+        }
         if config.raft_engine.enable {
             ensure_dir_exist(&config.raft_engine.config().dir).unwrap();
         } else {
             ensure_dir_exist(&config.raft_store.raftdb_path).unwrap();
+            if !config.raftdb.wal_dir.is_empty() {
+                ensure_dir_exist(&config.raftdb.wal_dir).unwrap();
+            }
         }
-        validate_and_persist_config(&mut config, true);
+
         check_system_config(&config);
 
-        tikv_util::set_panic_hook(false, &config.storage.data_dir);
+        tikv_util::set_panic_hook(config.abort_on_panic, &config.storage.data_dir);
 
         info!(
             "using config";
@@ -323,21 +332,19 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         std::fs::create_dir_all(&search_base)
             .unwrap_or_else(|_| panic!("create {} failed", search_base.display()));
 
-        for result in fs::read_dir(&search_base).unwrap() {
-            if let Ok(entry) = result {
-                if !entry.file_type().unwrap().is_file() {
-                    continue;
-                }
-                let file_path = entry.path();
-                let file_name = file_path.file_name().unwrap().to_str().unwrap();
-                if let Ok(addr) = file_name.replace('_', ":").parse::<SocketAddr>() {
-                    let ip = addr.ip();
-                    let port = addr.port();
-                    if cur_port == port
-                        && (cur_ip == ip || cur_ip.is_unspecified() || ip.is_unspecified())
-                    {
-                        let _ = try_lock_conflict_addr(file_path);
-                    }
+        for entry in fs::read_dir(&search_base).unwrap().flatten() {
+            if !entry.file_type().unwrap().is_file() {
+                continue;
+            }
+            let file_path = entry.path();
+            let file_name = file_path.file_name().unwrap().to_str().unwrap();
+            if let Ok(addr) = file_name.replace('_', ":").parse::<SocketAddr>() {
+                let ip = addr.ip();
+                let port = addr.port();
+                if cur_port == port
+                    && (cur_ip == ip || cur_ip.is_unspecified() || ip.is_unspecified())
+                {
+                    let _ = try_lock_conflict_addr(file_path);
                 }
             }
         }
@@ -362,7 +369,11 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         if tikv_util::panic_mark_file_exists(&self.config.storage.data_dir) {
             fatal!(
-                "panic_mark_file {} exists, there must be something wrong with the db.",
+                "panic_mark_file {} exists, there must be something wrong with the db. \
+                     Do not remove the panic_mark_file and force the TiKV node to restart. \
+                     Please contact TiKV maintainers to investigate the issue. \
+                     If needed, use scale in and scale out to replace the TiKV node. \
+                     https://docs.pingcap.com/tidb/stable/scale-tidb-using-tiup",
                 tikv_util::panic_mark_file_path(&self.config.storage.data_dir).display()
             );
         }
@@ -459,7 +470,10 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
     fn init_gc_worker(
         &mut self,
-    ) -> GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine, ER>>, RaftRouter<RocksEngine, ER>> {
+    ) -> GcWorker<
+        RaftKv<RocksEngine, ServerRaftStoreRouter<RocksEngine, ER>>,
+        RaftRouter<RocksEngine, ER>,
+    > {
         let engines = self.engines.as_ref().unwrap();
         let mut gc_worker = GcWorker::new(
             engines.engine.clone(),
@@ -599,14 +613,38 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             cop_read_pools.handle()
         };
 
+        // Create resolved ts worker
+        let mut rts_worker = Box::new(LazyWorker::new("resolved-ts"));
+        let rts_scheduler = rts_worker.scheduler();
+
         // Register cdc
         let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
         cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+        // Register resolved ts
+        let resolved_ts_ob = resolved_ts::Observer::new(rts_scheduler.clone());
+        resolved_ts_ob.register_to(self.coprocessor_host.as_mut().unwrap());
 
         let server_config = Arc::new(self.config.server.clone());
 
+        self.config
+            .raft_store
+            .validate()
+            .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
+        let raft_store = Arc::new(VersionTrack::new(self.config.raft_store.clone()));
+        let mut node = Node::new(
+            self.system.take().unwrap(),
+            &server_config,
+            raft_store.clone(),
+            self.pd_client.clone(),
+            self.state.clone(),
+            self.background_worker.clone(),
+        );
+        node.try_bootstrap_store(engines.engines.clone())
+            .unwrap_or_else(|e| fatal!("failed to bootstrap node id: {}", e));
+
         // Create server
         let server = Server::new(
+            node.id(),
             &server_config,
             &self.security_mgr,
             storage,
@@ -616,7 +654,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 self.concurrency_manager.clone(),
                 engine_rocks::raw_util::to_raw_perf_level(self.config.coprocessor.perf_level),
             ),
-            coprocessor_v2::Endpoint::new(),
+            coprocessor_v2::Endpoint::new(&self.config.coprocessor_v2),
             self.router.clone(),
             self.resolver.clone(),
             snap_mgr.clone(),
@@ -628,8 +666,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
 
         let import_path = self.store_path.join("import");
-        let importer =
-            Arc::new(SSTImporter::new(import_path, self.encryption_key_manager.clone()).unwrap());
+        let importer = Arc::new(
+            SSTImporter::new(
+                &self.config.import,
+                import_path,
+                self.encryption_key_manager.clone(),
+            )
+            .unwrap(),
+        );
 
         let split_check_runner = SplitCheckRunner::new(
             engines.engines.kv.clone(),
@@ -644,14 +688,9 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             Box::new(SplitCheckConfigManager(split_check_scheduler.clone())),
         );
 
-        self.config
-            .raft_store
-            .validate()
-            .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
-        let raft_store = Arc::new(VersionTrack::new(self.config.raft_store.clone()));
         cfg_controller.register(
             tikv::config::Module::Raftstore,
-            Box::new(RaftstoreConfigManager(raft_store.clone())),
+            Box::new(RaftstoreConfigManager(raft_store)),
         );
 
         let split_config_manager =
@@ -678,15 +717,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             .unwrap()
             .registry
             .register_consistency_check_observer(100, observer);
-
-        let mut node = Node::new(
-            self.system.take().unwrap(),
-            &server_config,
-            raft_store,
-            self.pd_client.clone(),
-            self.state.clone(),
-            self.background_worker.clone(),
-        );
 
         node.start(
             engines.engines.clone(),
@@ -737,6 +767,21 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         );
         cdc_worker.start_with_timer(cdc_endpoint);
         self.to_stop.push(cdc_worker);
+        // Start resolved ts
+        let rts_endpoint = resolved_ts::Endpoint::new(
+            &self.config.cdc,
+            rts_scheduler,
+            self.router.clone(),
+            engines.store_meta.clone(),
+            self.pd_client.clone(),
+            self.concurrency_manager.clone(),
+            server.env(),
+            self.security_mgr.clone(),
+            // TODO: replace to the cdc sinker
+            resolved_ts::DummySinker::new(),
+        );
+        rts_worker.start(rts_endpoint);
+        self.to_stop.push(rts_worker);
 
         self.servers = Some(Servers {
             lock_mgr,
@@ -986,6 +1031,8 @@ impl TiKVServer<RocksEngine> {
         raft_engine.set_shared_block_cache(shared_block_cache);
         let engines = Engines::new(kv_engine, raft_engine);
 
+        check_and_dump_raft_engine(&self.config, &engines.raft, 8);
+
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
             tikv::config::Module::Rocksdb,
@@ -1020,12 +1067,7 @@ impl TiKVServer<RaftLogEngine> {
         let raft_engine = RaftLogEngine::new(raft_config);
 
         // Try to dump and recover raft data.
-        crate::dump::check_and_dump_raft_db(
-            &self.config.raft_store.raftdb_path,
-            &raft_engine,
-            env.clone(),
-            8,
-        );
+        check_and_dump_raft_db(&self.config, &raft_engine, &env, 8);
 
         // Create kv engine.
         let mut kv_db_opts = self.config.rocksdb.build_opt();

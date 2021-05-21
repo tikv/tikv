@@ -853,7 +853,7 @@ struct Oracle {
 impl Oracle {
     fn new() -> Oracle {
         Oracle {
-            ts: AtomicUsize::new(1 as usize),
+            ts: AtomicUsize::new(1_usize),
         }
     }
 

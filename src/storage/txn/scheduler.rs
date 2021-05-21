@@ -24,25 +24,28 @@ use crossbeam::utils::CachePadded;
 use parking_lot::{Mutex, MutexGuard};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use std::u64;
 
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use kvproto::kvrpcpb::{CommandPri, ExtraOp};
-use tikv_util::{callback::must_call, time::Instant};
+use tikv_util::{callback::must_call, deadline::Deadline, time::Instant};
 use txn_types::TimeStamp;
 
 use crate::storage::kv::{
     drop_snapshot_callback, with_tls_engine, Engine, ExtCallback, Result as EngineResult,
     SnapContext, Statistics,
 };
-use crate::storage::lock_manager::{self, LockManager, WaitTimeout};
+use crate::storage::lock_manager::{self, DiagnosticContext, LockManager, WaitTimeout};
 use crate::storage::metrics::{
     self, KV_COMMAND_KEYWRITE_HISTOGRAM_VEC, SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC,
     SCHED_CONTEX_GAUGE, SCHED_HISTOGRAM_VEC_STATIC, SCHED_LATCH_HISTOGRAM_VEC,
     SCHED_STAGE_COUNTER_VEC, SCHED_TOO_BUSY_COUNTER_VEC, SCHED_WRITING_BYTES_GAUGE,
 };
-use crate::storage::txn::commands::{ResponsePolicy, WriteContext, WriteResult};
+use crate::storage::txn::commands::{
+    ResponsePolicy, WriteContext, WriteResult, WriteResultLockInfo,
+};
 use crate::storage::txn::{
     commands::Command,
     latch::{Latches, Lock},
@@ -56,20 +59,33 @@ use crate::storage::{
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
 
+// The default limit is set to be very large. Then, requests without `max_exectuion_duration`
+// will not be aborted unexpectedly.
+const DEFAULT_EXECUTION_DURATION_LIMIT: Duration = Duration::from_secs(24 * 60 * 60);
+
 /// Task is a running command.
 pub(super) struct Task {
     pub(super) cid: u64,
     pub(super) cmd: Command,
     pub(super) extra_op: ExtraOp,
+    pub(super) deadline: Deadline,
 }
 
 impl Task {
     /// Creates a task for a running command.
     pub(super) fn new(cid: u64, cmd: Command) -> Task {
+        let max_execution_duration_ms = cmd.ctx().max_execution_duration_ms;
+        let execution_duration_limit = if max_execution_duration_ms == 0 {
+            DEFAULT_EXECUTION_DURATION_LIMIT
+        } else {
+            Duration::from_millis(max_execution_duration_ms)
+        };
+        let deadline = Deadline::from_now(execution_duration_limit);
         Task {
             cid,
             cmd,
             extra_op: ExtraOp::Noop,
+            deadline,
         }
     }
 }
@@ -104,9 +120,9 @@ struct TaskContext {
 }
 
 impl TaskContext {
-    fn new(task: Task, latches: &Latches, cb: StorageCallback) -> TaskContext {
+    fn new(task: Task, cb: StorageCallback) -> TaskContext {
         let tag = task.cmd.tag();
-        let lock = task.cmd.gen_lock(latches);
+        let lock = task.cmd.gen_lock();
         // Write command should acquire write lock.
         if !task.cmd.readonly() && !lock.is_write_lock() {
             panic!("write lock is expected for command {}", task.cmd);
@@ -188,7 +204,7 @@ impl<L: LockManager> SchedulerInner<L> {
     }
 
     fn new_task_context(&self, task: Task, callback: StorageCallback) -> TaskContext {
-        let tctx = TaskContext::new(task, &self.latches, callback);
+        let tctx = TaskContext::new(task, callback);
         let running_write_bytes = self
             .running_write_bytes
             .fetch_add(tctx.write_bytes, Ordering::AcqRel) as i64;
@@ -228,14 +244,17 @@ impl<L: LockManager> SchedulerInner<L> {
     /// Tries to acquire all the required latches for a command.
     ///
     /// Returns the `Task` if successful; returns `None` otherwise.
-    fn acquire_lock(&self, cid: u64) -> Option<Task> {
+    fn acquire_lock(&self, cid: u64) -> Result<Option<Task>, StorageError> {
         let mut task_slot = self.get_task_slot(cid);
         let tctx = task_slot.get_mut(&cid).unwrap();
+        // Check deadline early during acquiring latches to avoid expired requests blocking
+        // other requests.
+        tctx.task.as_ref().unwrap().deadline.check()?;
         if self.latches.acquire(&mut tctx.lock, cid) {
             tctx.on_schedule();
-            return tctx.task.take();
+            return Ok(tctx.task.take());
         }
-        None
+        Ok(None)
     }
 }
 
@@ -341,9 +360,15 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// Tries to acquire all the necessary latches. If all the necessary latches are acquired,
     /// the method initiates a get snapshot operation for further processing.
     fn try_to_wake_up(&self, cid: u64) {
-        if let Some(task) = self.inner.acquire_lock(cid) {
-            fail_point!("txn_scheduler_try_to_wake_up");
-            self.execute(task);
+        match self.inner.acquire_lock(cid) {
+            Ok(Some(task)) => {
+                fail_point!("txn_scheduler_try_to_wake_up");
+                self.execute(task);
+            }
+            Ok(None) => {}
+            Err(err) => {
+                self.finish_with_err(cid, err);
+            }
         }
     }
 
@@ -412,7 +437,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 SCHED_STAGE_COUNTER_VEC.get(tag).async_snapshot_err.inc();
 
                 info!("engine async_snapshot failed"; "err" => ?e);
-                self.finish_with_err(cid, e.into());
+                self.finish_with_err(cid, e);
             } else {
                 SCHED_STAGE_COUNTER_VEC.get(tag).snapshot.inc();
             }
@@ -428,7 +453,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     }
 
     /// Calls the callback with an error.
-    fn finish_with_err(&self, cid: u64, err: Error) {
+    fn finish_with_err<ER>(&self, cid: u64, err: ER)
+    where
+        StorageError: From<ER>,
+    {
         debug!("write command finished with error"; "cid" => cid);
         let tctx = self.inner.dequeue_task_context(cid);
 
@@ -524,6 +552,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         lock: lock_manager::Lock,
         is_first_lock: bool,
         wait_timeout: Option<WaitTimeout>,
+        diag_ctx: DiagnosticContext,
     ) {
         debug!("command waits for lock released"; "cid" => cid);
         let tctx = self.inner.dequeue_task_context(cid);
@@ -535,6 +564,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             lock,
             is_first_lock,
             wait_timeout,
+            diag_ctx,
         );
         self.release_lock(&tctx.lock, cid);
     }
@@ -554,14 +584,21 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
     /// Delivers a command to a worker thread for processing.
     fn process_by_worker(self, snapshot: E::Snap, task: Task) {
-        let tag = task.cmd.tag();
+        if self.check_task_deadline_exceeded(&task) {
+            return;
+        }
 
+        let tag = task.cmd.tag();
         self.get_sched_pool(task.cmd.priority())
             .clone()
             .pool
             .spawn(async move {
                 fail_point!("scheduler_async_snapshot_finish");
                 SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
+
+                if self.check_task_deadline_exceeded(&task) {
+                    return;
+                }
 
                 let read_duration = Instant::now_coarse();
 
@@ -632,11 +669,20 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             async_apply_prewrite: self.inner.enable_async_apply_prewrite,
         };
 
-        match task.cmd.process_write(snapshot, context) {
+        let deadline = task.deadline;
+        let write_result = task
+            .cmd
+            .process_write(snapshot, context)
+            .map_err(StorageError::from);
+        match deadline
+            .check()
+            .map_err(StorageError::from)
+            .and(write_result)
+        {
             // Initiates an async write operation on the storage engine, there'll be a `WriteFinished`
             // message when it finishes.
             Ok(WriteResult {
-                ctx,
+                mut ctx,
                 to_be_write,
                 rows,
                 pr,
@@ -646,8 +692,30 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             }) => {
                 SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
-                if let Some((lock, is_first_lock, wait_timeout)) = lock_info {
-                    scheduler.on_wait_for_lock(cid, ts, pr, lock, is_first_lock, wait_timeout);
+                if let Some(lock_info) = lock_info {
+                    let WriteResultLockInfo {
+                        lock,
+                        key,
+                        is_first_lock,
+                        wait_timeout,
+                    } = lock_info;
+                    // Currently only pessimistic_lock request may wait for other locks, and a
+                    // single request may wait lock at most once in its lifecycle. Take the tag out
+                    // instead of cloning it.
+                    let resource_group_tag = ctx.take_resource_group_tag();
+                    let diag_ctx = DiagnosticContext {
+                        key,
+                        resource_group_tag,
+                    };
+                    scheduler.on_wait_for_lock(
+                        cid,
+                        ts,
+                        pr,
+                        lock,
+                        is_first_lock,
+                        wait_timeout,
+                        diag_ctx,
+                    );
                 } else if to_be_write.modifies.is_empty() {
                     scheduler.on_write_finished(
                         cid,
@@ -754,7 +822,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         SCHED_STAGE_COUNTER_VEC.get(tag).async_write_err.inc();
 
                         info!("engine async_write failed"; "cid" => cid, "err" => ?e);
-                        scheduler.finish_with_err(cid, e.into());
+                        scheduler.finish_with_err(cid, e);
                     }
                 }
             }
@@ -765,6 +833,18 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 debug!("write command failed at prewrite"; "cid" => cid, "err" => ?err);
                 scheduler.finish_with_err(cid, err);
             }
+        }
+    }
+
+    /// If the task has expired, return `true` and call the callback of
+    /// the task with a `DeadlineExceeded` error.
+    #[inline]
+    fn check_task_deadline_exceeded(&self, task: &Task) -> bool {
+        if let Err(e) = task.deadline.check() {
+            self.finish_with_err(task.cid, e);
+            true
+        } else {
+            false
         }
     }
 }
@@ -780,11 +860,22 @@ impl<E: Engine, L: LockManager> Clone for Scheduler<E, L> {
 
 #[cfg(test)]
 mod tests {
+    use std::thread;
+
     use super::*;
-    use crate::storage::mvcc::{self, Mutation};
-    use crate::storage::txn::{commands, latch::*};
-    use kvproto::kvrpcpb::Context;
-    use txn_types::Key;
+    use crate::storage::{
+        lock_manager::DummyLockManager,
+        mvcc::{self, Mutation},
+        txn::commands::TypedCommand,
+    };
+    use crate::storage::{
+        txn::{commands, latch::*},
+        TestEngineBuilder,
+    };
+    use futures_executor::block_on;
+    use kvproto::kvrpcpb::{BatchRollbackRequest, Context};
+    use tikv_util::future::paired_future_callback;
+    use txn_types::{Key, OldValues};
 
     #[test]
     fn test_command_latches() {
@@ -812,6 +903,7 @@ mod tests {
                 Some(WaitTimeout::Default),
                 false,
                 TimeStamp::default(),
+                OldValues::default(),
                 Context::default(),
             )
             .into(),
@@ -873,14 +965,14 @@ mod tests {
             .into_iter()
             .enumerate()
             .map(|(id, cmd)| {
-                let mut lock = cmd.gen_lock(&latches);
+                let mut lock = cmd.gen_lock();
                 assert_eq!(latches.acquire(&mut lock, id as u64), id == 0);
                 lock
             })
             .collect();
 
         for (id, cmd) in readonly_cmds.iter().enumerate() {
-            let mut lock = cmd.gen_lock(&latches);
+            let mut lock = cmd.gen_lock();
             assert!(latches.acquire(&mut lock, id as u64));
         }
 
@@ -898,5 +990,78 @@ mod tests {
                 assert_eq!(unlocked, vec![id + 1]);
             }
         }
+    }
+
+    #[test]
+    fn test_acquire_latch_deadline() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let scheduler = Scheduler::new(
+            engine,
+            DummyLockManager,
+            ConcurrencyManager::new(1.into()),
+            1024,
+            1,
+            100 * 1024 * 1024,
+            Arc::new(AtomicBool::new(true)),
+            false,
+        );
+
+        let mut lock = Lock::new(&[Key::from_raw(b"b")]);
+        let cid = scheduler.inner.gen_id();
+        assert!(scheduler.inner.latches.acquire(&mut lock, cid));
+
+        let mut req = BatchRollbackRequest::default();
+        req.mut_context().max_execution_duration_ms = 100;
+        req.set_keys(vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()].into());
+
+        let cmd: TypedCommand<()> = req.into();
+        let (cb, f) = paired_future_callback();
+        scheduler.run_cmd(cmd.cmd, StorageCallback::Boolean(cb));
+
+        // The task waits for 200ms until it acquires the latch, but the execution
+        // time limit is 100ms.
+        thread::sleep(Duration::from_millis(200));
+        scheduler.release_lock(&lock, cid);
+        assert!(matches!(
+            block_on(f).unwrap(),
+            Err(StorageError(box StorageErrorInner::DeadlineExceeded))
+        ));
+    }
+
+    #[test]
+    fn test_pool_available_deadline() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let scheduler = Scheduler::new(
+            engine,
+            DummyLockManager,
+            ConcurrencyManager::new(1.into()),
+            1024,
+            1,
+            100 * 1024 * 1024,
+            Arc::new(AtomicBool::new(true)),
+            false,
+        );
+
+        // Spawn a task that sleeps for 500ms to occupy the pool. The next request
+        // cannot run within 500ms.
+        scheduler
+            .get_sched_pool(CommandPri::Normal)
+            .pool
+            .spawn(async { thread::sleep(Duration::from_millis(500)) })
+            .unwrap();
+
+        let mut req = BatchRollbackRequest::default();
+        req.mut_context().max_execution_duration_ms = 100;
+        req.set_keys(vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()].into());
+
+        let cmd: TypedCommand<()> = req.into();
+        let (cb, f) = paired_future_callback();
+        scheduler.run_cmd(cmd.cmd, StorageCallback::Boolean(cb));
+
+        // But the max execution duration is 100ms, so the deadline is exceeded.
+        assert!(matches!(
+            block_on(f).unwrap(),
+            Err(StorageError(box StorageErrorInner::DeadlineExceeded))
+        ));
     }
 }

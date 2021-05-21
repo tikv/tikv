@@ -10,8 +10,9 @@ use super::super::function::RpnFnMeta;
 use super::expr::{RpnExpression, RpnExpressionNode};
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::codec::mysql::{JsonDecoder, MAX_FSP};
+use tidb_query_datatype::codec::mysql::{EnumDecoder, JsonDecoder, MAX_FSP};
 use tidb_query_datatype::expr::EvalContext;
+use tidb_query_datatype::match_template_evaltype;
 
 /// Helper to build an `RpnExpression`.
 #[derive(Debug)]
@@ -353,6 +354,9 @@ fn handle_node_constant(
         ExprType::MysqlJson if eval_type == EvalType::Json => {
             extract_scalar_value_json(tree_node.take_val())?
         }
+        ExprType::MysqlEnum if eval_type == EvalType::Enum => {
+            extract_scalar_value_enum(tree_node.take_val(), tree_node.get_field_type())?
+        }
         expr_type => {
             return Err(other_err!(
                 "Unexpected ExprType {:?} and EvalType {:?}",
@@ -370,7 +374,7 @@ fn handle_node_constant(
 
 #[inline]
 fn get_scalar_value_null(eval_type: EvalType) -> ScalarValue {
-    match_template_evaluable! {
+    match_template_evaltype! {
         TT, match eval_type {
             EvalType::TT => ScalarValue::TT(None),
         }
@@ -453,6 +457,15 @@ fn extract_scalar_value_json(val: Vec<u8>) -> Result<ScalarValue> {
         .read_json()
         .map_err(|_| other_err!("Unable to decode json from the request"))?;
     Ok(ScalarValue::Json(Some(value)))
+}
+
+#[inline]
+fn extract_scalar_value_enum(val: Vec<u8>, field_type: &FieldType) -> Result<ScalarValue> {
+    let value = val
+        .as_slice()
+        .read_enum_uint(field_type)
+        .map_err(|_| other_err!("Unable to decode enum from the request"))?;
+    Ok(ScalarValue::Enum(Some(value)))
 }
 
 #[cfg(test)]

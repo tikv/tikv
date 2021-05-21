@@ -3,7 +3,6 @@
 #![cfg_attr(test, feature(test))]
 #![feature(thread_id_value)]
 #![feature(box_patterns)]
-#![feature(str_split_once)]
 
 #[cfg(test)]
 extern crate test;
@@ -39,7 +38,6 @@ pub mod stream;
 pub mod sys;
 pub mod time;
 pub mod timer;
-pub mod trace;
 pub mod worker;
 pub mod yatp_pool;
 
