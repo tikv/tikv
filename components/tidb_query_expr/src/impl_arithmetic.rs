@@ -280,7 +280,7 @@ impl ArithmeticOp for RealMod {
     type T = Real;
 
     fn calc(lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
-        if (*rhs).into_inner() == 0f64 {
+        if rhs.into_inner() == 0f64 {
             return Ok(None);
         }
         Ok(Some(*lhs % *rhs))
@@ -1215,11 +1215,13 @@ mod tests {
 
         let overflow = vec![(std::f64::MAX, 0.0001)];
         for (lhs, rhs) in overflow {
-            assert!(RpnFnScalarEvaluator::new()
-                .push_param(lhs)
-                .push_param(rhs)
-                .evaluate::<Real>(ScalarFuncSig::DivideReal)
-                .is_err())
+            assert!(
+                RpnFnScalarEvaluator::new()
+                    .push_param(lhs)
+                    .push_param(rhs)
+                    .evaluate::<Real>(ScalarFuncSig::DivideReal)
+                    .is_err()
+            )
         }
     }
 

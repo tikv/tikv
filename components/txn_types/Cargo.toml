@@ -5,17 +5,34 @@ edition = "2018"
 publish = false
 
 [features]
-protobuf-codec = ["kvproto/protobuf-codec"]
-prost-codec = ["kvproto/prost-codec"]
+default = ["protobuf-codec"]
+protobuf-codec = [
+  "codec/protobuf-codec",
+  "error_code/protobuf-codec",
+  "kvproto/protobuf-codec",
+  "tikv_util/protobuf-codec",
+]
+prost-codec = [
+  "codec/prost-codec",
+  "error_code/prost-codec",
+  "kvproto/prost-codec",
+  "tikv_util/prost-codec",
+]
 
 [dependencies]
 byteorder = "1.2"
+bitflags = "1.0.1"
 farmhash = "1.1.5"
-hex = "0.4"
-error_code = { path = "../error_code" }
-codec = { path = "../codec" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+error_code = { path = "../error_code", default-features = false }
+codec = { path = "../codec", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false, rev="511a3225c29f9272af83d28efed92eba835cd34f" }
 slog = "2.3"
-quick-error = "1.2.3"
+thiserror = "1.0"
 tikv_alloc = { path = "../tikv_alloc" }
-tikv_util = { path = "../tikv_util" }
+tikv_util = { path = "../tikv_util", default-features = false }
+collections = { path = "../collections" }
+log_wrappers = { path = "../log_wrappers" }
+
+[dev-dependencies]
+rand = "0.7"
+panic_hook = { path = "../panic_hook" }

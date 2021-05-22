@@ -18,6 +18,8 @@ pub trait DBOptions {
     fn get_max_background_jobs(&self) -> i32;
     fn get_rate_bytes_per_sec(&self) -> Option<i64>;
     fn set_rate_bytes_per_sec(&mut self, rate_bytes_per_sec: i64) -> Result<()>;
+    fn get_rate_limiter_auto_tuned(&self) -> Option<bool>;
+    fn set_rate_limiter_auto_tuned(&mut self, rate_limiter_auto_tuned: bool) -> Result<()>;
     fn set_titandb_options(&mut self, opts: &Self::TitanDBOptions);
 }
 

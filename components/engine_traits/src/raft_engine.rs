@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use crate::*;
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::Entry;
@@ -37,7 +39,12 @@ pub trait RaftEngine: Clone + Sync + Send + 'static {
         shrink_to: usize,
     ) -> Result<usize>;
 
-    fn clean(&self, raft_group_id: u64, last_index: u64, batch: &mut Self::LogBatch) -> Result<()>;
+    fn clean(
+        &self,
+        raft_group_id: u64,
+        state: &RaftLocalState,
+        batch: &mut Self::LogBatch,
+    ) -> Result<()>;
 
     /// Append some log entries and return written bytes.
     ///
@@ -86,7 +93,7 @@ pub trait RaftLogBatch: Send {
 
     fn is_empty(&self) -> bool;
 
-    fn merge(&mut self, _: &mut Self);
+    fn merge(&mut self, _: &Self);
 }
 
 #[derive(Clone, Copy, Default)]

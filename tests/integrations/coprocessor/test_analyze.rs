@@ -53,18 +53,37 @@ fn new_analyze_index_req(
     idx: i64,
     cm_sketch_depth: i32,
     cm_sketch_width: i32,
+    top_n_size: i32,
+    stats_ver: i32,
 ) -> Request {
     let mut idx_req = AnalyzeIndexReq::default();
     idx_req.set_num_columns(2);
     idx_req.set_bucket_size(bucket_size);
     idx_req.set_cmsketch_depth(cm_sketch_depth);
     idx_req.set_cmsketch_width(cm_sketch_width);
+    idx_req.set_top_n_size(top_n_size);
+    idx_req.set_version(stats_ver);
     let mut analy_req = AnalyzeReq::default();
     analy_req.set_tp(AnalyzeType::TypeIndex);
     analy_req.set_idx_req(idx_req);
     new_analyze_req(
         analy_req.write_to_bytes().unwrap(),
         table.get_index_range_all(idx),
+        next_id() as u64,
+    )
+}
+
+fn new_analyze_sampling_req(table: &Table, sample_size: i64) -> Request {
+    let mut col_req = AnalyzeColumnsReq::default();
+    col_req.set_columns_info(table.columns_info().into());
+    col_req.set_sample_size(sample_size);
+    let mut analy_req = AnalyzeReq::default();
+    analy_req.set_tp(AnalyzeType::TypeColumn);
+    analy_req.set_tp(AnalyzeType::TypeFullSampling);
+    analy_req.set_col_req(col_req);
+    new_analyze_req(
+        analy_req.write_to_bytes().unwrap(),
+        table.get_record_range_all(),
         next_id() as u64,
     )
 }
@@ -171,7 +190,7 @@ fn test_analyze_index_with_lock() {
     for &iso_level in &[IsolationLevel::Si, IsolationLevel::Rc] {
         let (_, endpoint) = init_data_with_commit(&product, &data, false);
 
-        let mut req = new_analyze_index_req(&product, 3, product["name"].index, 4, 32);
+        let mut req = new_analyze_index_req(&product, 3, product["name"].index, 4, 32, 0, 1);
         let mut ctx = Context::default();
         ctx.set_isolation_level(iso_level);
         req.set_context(ctx);
@@ -200,23 +219,69 @@ fn test_analyze_index() {
         (2, Some("name:4"), 3),
         (4, Some("name:3"), 1),
         (5, None, 4),
+        (6, Some("name:1"), 1),
+        (7, Some("name:1"), 1),
+        (8, Some("name:1"), 1),
+        (9, Some("name:2"), 1),
+        (10, Some("name:2"), 1),
     ];
 
     let product = ProductTable::new();
     let (_, endpoint) = init_data_with_commit(&product, &data, true);
 
-    let req = new_analyze_index_req(&product, 3, product["name"].index, 4, 32);
+    let req = new_analyze_index_req(&product, 3, product["name"].index, 4, 32, 2, 2);
     let resp = handle_request(&endpoint, req);
     assert!(!resp.get_data().is_empty());
     let mut analyze_resp = AnalyzeIndexResp::default();
     analyze_resp.merge_from_bytes(resp.get_data()).unwrap();
     let hist = analyze_resp.get_hist();
-    assert_eq!(hist.get_ndv(), 4);
+    assert_eq!(hist.get_ndv(), 6);
     assert_eq!(hist.get_buckets().len(), 2);
+    assert_eq!(hist.get_buckets()[0].get_count(), 5);
+    assert_eq!(hist.get_buckets()[0].get_ndv(), 3);
+    assert_eq!(hist.get_buckets()[1].get_count(), 9);
+    assert_eq!(hist.get_buckets()[1].get_ndv(), 3);
     let rows = analyze_resp.get_cms().get_rows();
     assert_eq!(rows.len(), 4);
     let sum: u32 = rows.first().unwrap().get_counters().iter().sum();
-    assert_eq!(sum, 8);
+    assert_eq!(sum, 13);
+    let top_n = analyze_resp.get_cms().get_top_n();
+    let mut top_n_count = top_n
+        .iter()
+        .map(|data| data.get_count())
+        .collect::<Vec<_>>();
+    top_n_count.sort_unstable();
+    assert_eq!(top_n_count, vec![2, 3]);
+}
+
+#[test]
+fn test_analyze_sampling() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, None, 4),
+        (6, Some("name:1"), 1),
+        (7, Some("name:1"), 1),
+        (8, Some("name:1"), 1),
+        (9, Some("name:2"), 1),
+        (10, Some("name:2"), 1),
+    ];
+
+    let product = ProductTable::new();
+    let (_, endpoint) = init_data_with_commit(&product, &data, true);
+
+    let req = new_analyze_sampling_req(&product, 5);
+    let resp = handle_request(&endpoint, req);
+    assert!(!resp.get_data().is_empty());
+    let mut analyze_resp = AnalyzeColumnsResp::default();
+    analyze_resp.merge_from_bytes(resp.get_data()).unwrap();
+    let collector = analyze_resp.get_row_collector();
+    assert_eq!(collector.get_samples().len(), 5);
+    assert_eq!(collector.get_null_counts(), vec![0, 1, 0]);
+    assert_eq!(collector.get_count(), 9);
+    assert_eq!(collector.get_fm_sketch().len(), 3);
+    assert_eq!(collector.get_total_size(), vec![81, 64, 18]);
 }
 
 #[test]
@@ -230,7 +295,7 @@ fn test_invalid_range() {
 
     let product = ProductTable::new();
     let (_, endpoint) = init_data_with_commit(&product, &data, true);
-    let mut req = new_analyze_index_req(&product, 3, product["name"].index, 4, 32);
+    let mut req = new_analyze_index_req(&product, 3, product["name"].index, 4, 32, 0, 1);
     let mut key_range = KeyRange::default();
     key_range.set_start(b"xxx".to_vec());
     key_range.set_end(b"zzz".to_vec());

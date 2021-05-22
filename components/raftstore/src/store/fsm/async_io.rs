@@ -7,21 +7,22 @@ use std::time::Instant;
 
 use crate::store::config::Config;
 use crate::store::fsm::RaftRouter;
+use crate::store::local_metrics::RaftSendMessageMetrics;
 use crate::store::metrics::*;
 use crate::store::transport::Transport;
-use crate::store::util::PerfContextStatistics;
-use crate::store::PeerMsg;
-use crate::{observe_perf_context_type, report_perf_context, Result};
+use crate::store::{PeerMsg, SignificantMsg};
+use crate::Result;
 
-use engine_rocks::{PerfContext, PerfLevel};
-use engine_traits::{KvEngine, Mutable, RaftEngine, RaftLogBatch, WriteBatch, WriteOptions};
+use collections::{HashMap, HashSet};
+use engine_traits::{
+    KvEngine, PerfContext, PerfContextKind, RaftEngine, RaftLogBatch, WriteBatch, WriteOptions,
+};
 use error_code::ErrorCodeExt;
+use fail::fail_point;
 use kvproto::raft_serverpb::{RaftLocalState, RaftMessage};
-use raft::eraftpb::Entry;
-
-use std::time::Duration;
-use tikv_util::collections::HashMap;
+use raft::eraftpb::{Entry, MessageType};
 use tikv_util::time::{duration_to_micros, duration_to_sec, Instant as UtilInstant};
+use tikv_util::{debug, thd_name, warn};
 
 const KV_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const RAFT_WB_SHRINK_SIZE: usize = 10 * 1024 * 1024;
@@ -48,7 +49,7 @@ impl UnsyncedReady {
             region_id,
             PeerMsg::Persisted((self.peer_id, self.number, Instant::now())),
         ) {
-            error!(
+            warn!(
                 "failed to send noop to trigger persisted ready";
                 "region_id" => region_id,
                 "peer_id" => self.peer_id,
@@ -65,6 +66,7 @@ where
     ER: RaftEngine,
 {
     region_id: u64,
+    peer_id: u64,
     pub kv_wb: Option<EK::WriteBatch>,
     pub raft_wb: Option<ER::LogBatch>,
     pub entries: Vec<Entry>,
@@ -80,9 +82,10 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    pub fn new(region_id: u64) -> Self {
+    pub fn new(region_id: u64, peer_id: u64) -> Self {
         Self {
             region_id,
+            peer_id,
             kv_wb: None,
             raft_wb: None,
             entries: vec![],
@@ -151,7 +154,7 @@ where
 
     fn add_write_task(&mut self, mut task: AsyncWriteTask<EK, ER>) {
         if let Some(mut kv_wb) = task.kv_wb.take() {
-            self.kv_wb.append(&mut kv_wb);
+            self.kv_wb.merge(&mut kv_wb);
         }
         if let Some(mut raft_wb) = task.raft_wb.take() {
             self.raft_wb.merge(&mut raft_wb);
@@ -239,7 +242,8 @@ where
     wb: AsyncWriteBatch<EK, ER>,
     trigger_write_size: usize,
     trans: T,
-    perf_context_statistics: PerfContextStatistics,
+    message_metrics: RaftSendMessageMetrics,
+    perf_context: EK::PerfContext,
 }
 
 impl<EK, ER, T> AsyncWriteWorker<EK, ER, T>
@@ -258,7 +262,9 @@ where
         trans: T,
         config: &Config,
     ) -> Self {
-        let wb = AsyncWriteBatch::new(kv_engine.write_batch(), raft_engine.log_batch(4 * 1024));
+        let wb = AsyncWriteBatch::new(kv_engine.write_batch(), raft_engine.log_batch(16 * 1024));
+        let perf_context =
+            kv_engine.get_perf_context(config.perf_level, PerfContextKind::RaftstoreStore);
         Self {
             store_id,
             tag,
@@ -269,7 +275,8 @@ where
             wb,
             trigger_write_size: config.trigger_write_size.0 as usize,
             trans,
-            perf_context_statistics: PerfContextStatistics::new(config.perf_level),
+            message_metrics: Default::default(),
+            perf_context,
         }
     }
 
@@ -321,17 +328,14 @@ where
     fn sync_write(&mut self) {
         self.wb.before_write_to_db();
 
-        self.perf_context_statistics.start();
         fail_point!("raft_before_save");
         if !self.wb.kv_wb.is_empty() {
             let now = UtilInstant::now();
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
-            self.kv_engine
-                .write_opt(&self.wb.kv_wb, &write_opts)
-                .unwrap_or_else(|e| {
-                    panic!("{} failed to write to kv engine: {:?}", self.tag, e);
-                });
+            self.wb.kv_wb.write_opt(&write_opts).unwrap_or_else(|e| {
+                panic!("{} failed to write to kv engine: {:?}", self.tag, e);
+            });
             if self.wb.kv_wb.data_size() > KV_WB_SHRINK_SIZE {
                 self.wb.kv_wb = self.kv_engine.write_batch_with_cap(4 * 1024);
             }
@@ -342,44 +346,70 @@ where
         fail_point!("raft_between_save");
         if !self.wb.raft_wb.is_empty() {
             fail_point!("raft_before_save_on_store_1", self.store_id == 1, |_| {});
+
+            self.perf_context.start_observe();
             let now = UtilInstant::now();
             self.raft_engine
-                .consume_and_shrink(&mut self.wb.raft_wb, true, RAFT_WB_SHRINK_SIZE, 4 * 1024)
+                .consume_and_shrink(&mut self.wb.raft_wb, true, RAFT_WB_SHRINK_SIZE, 16 * 1024)
                 .unwrap_or_else(|e| {
                     panic!("{} failed to write to raft engine: {:?}", self.tag, e);
                 });
+            self.perf_context.report_metrics();
 
             STORE_WRITE_RAFTDB_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()) as f64);
         }
-        report_perf_context!(
-            self.perf_context_statistics,
-            STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
-        );
+
         self.wb.after_write_to_db();
 
+        fail_point!("raft_before_follower_send");
         let send_begin = UtilInstant::now();
+        let mut unreachable_peers = HashSet::default();
         for task in &mut self.wb.tasks {
             for msg in task.messages.drain(..) {
-                let region_id = msg.get_region_id();
-                let from_peer_id = msg.get_from_peer().get_id();
+                let msg_type = msg.get_message().get_msg_type();
                 let to_peer_id = msg.get_to_peer().get_id();
                 let to_store_id = msg.get_to_peer().get_store_id();
                 if let Err(e) = self.trans.send(msg) {
-                    warn!(
+                    // We use metrics to observe failure on production.
+                    debug!(
                         "failed to send msg to other peer in async-writer";
-                        "region_id" => region_id,
-                        "peer_id" => from_peer_id,
+                        "region_id" => task.region_id,
+                        "peer_id" => task.peer_id,
                         "target_peer_id" => to_peer_id,
                         "target_store_id" => to_store_id,
                         "err" => ?e,
                         "error_code" => %e.error_code(),
                     );
-
-                    // TODO: send msg to this region
+                    self.message_metrics.add(msg_type, false);
+                    // Send unreachable to this peer.
+                    // If this msg is snapshot, it is unnecessary to send snapshot
+                    // status to this peer because it has already become follower.
+                    // (otherwise the snapshot msg should be sent in store thread other than here)
+                    unreachable_peers.insert((task.region_id, to_peer_id));
+                } else {
+                    self.message_metrics.add(msg_type, true);
                 }
             }
         }
         self.trans.flush();
+        self.message_metrics.flush();
+        for (region_id, to_peer_id) in unreachable_peers {
+            let msg = SignificantMsg::Unreachable {
+                region_id,
+                to_peer_id,
+            };
+            if let Err(e) = self
+                .router
+                .force_send(region_id, PeerMsg::SignificantMsg(msg))
+            {
+                warn!(
+                    "failed to send unreachable";
+                    "region_id" => region_id,
+                    "unreachable_peer_id" => to_peer_id,
+                    "error" => ?e,
+                );
+            }
+        }
         STORE_WRITE_SEND_DURATION_HISTOGRAM.observe(duration_to_sec(send_begin.elapsed()));
 
         let callback_begin = UtilInstant::now();

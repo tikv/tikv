@@ -35,6 +35,18 @@ impl RaftLogEngine {
         }
         fs::read_dir(&path).unwrap().next().is_some()
     }
+
+    pub fn raft_groups(&self) -> Vec<u64> {
+        self.0.raft_groups()
+    }
+
+    pub fn first_index(&self, raft_id: u64) -> Option<u64> {
+        self.0.first_index(raft_id)
+    }
+
+    pub fn last_index(&self, raft_id: u64) -> Option<u64> {
+        self.0.last_index(raft_id)
+    }
 }
 
 #[derive(Default)]
@@ -53,9 +65,10 @@ impl RaftLogBatchTrait for RaftLogBatch {
     }
 
     fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
-        box_try!(self
-            .0
-            .put_msg(raft_group_id, RAFT_LOG_STATE_KEY.to_vec(), state));
+        box_try!(
+            self.0
+                .put_msg(raft_group_id, RAFT_LOG_STATE_KEY.to_vec(), state)
+        );
         Ok(())
     }
 
@@ -67,8 +80,8 @@ impl RaftLogBatchTrait for RaftLogBatch {
         self.0.items.is_empty()
     }
 
-    fn merge(&mut self, _src: &mut Self) {
-        panic!("merge not implemented in raft engine yet");
+    fn merge(&mut self, _src: &Self) {
+        panic!("merge is not implemented in raft engine yet");
     }
 }
 
@@ -124,7 +137,12 @@ impl RaftEngine for RaftLogEngine {
         Ok(ret)
     }
 
-    fn clean(&self, raft_group_id: u64, _last_index: u64, batch: &mut RaftLogBatch) -> Result<()> {
+    fn clean(
+        &self,
+        raft_group_id: u64,
+        _: &RaftLocalState,
+        batch: &mut RaftLogBatch,
+    ) -> Result<()> {
         batch.0.clean_region(raft_group_id);
         Ok(())
     }

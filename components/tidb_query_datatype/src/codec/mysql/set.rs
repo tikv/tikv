@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
+use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use tikv_util::buffer_vec::BufferVec;
@@ -40,9 +41,9 @@ impl Set {
     }
 }
 
-impl ToString for Set {
-    fn to_string(&self) -> String {
-        self.as_ref().to_string()
+impl Display for Set {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.as_ref().fmt(f)
     }
 }
 
@@ -68,10 +69,7 @@ impl PartialOrd for Set {
 
 impl crate::codec::data_type::AsMySQLBool for Set {
     #[inline]
-    fn as_mysql_bool(
-        &self,
-        _context: &mut crate::expr::EvalContext,
-    ) -> tidb_query_common::error::Result<bool> {
+    fn as_mysql_bool(&self, _context: &mut crate::expr::EvalContext) -> crate::codec::Result<bool> {
         Ok(self.value > 0)
     }
 }
@@ -103,8 +101,8 @@ impl<'a> SetRef<'a> {
     }
 }
 
-impl<'a> ToString for SetRef<'a> {
-    fn to_string(&self) -> String {
+impl<'a> Display for SetRef<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut buf: Vec<u8> = Vec::new();
         if self.value > 0 {
             for idx in 0..self.data.len() {
@@ -120,7 +118,7 @@ impl<'a> ToString for SetRef<'a> {
         }
 
         // TODO: Check the requirements and intentions of to_string usage.
-        String::from_utf8_lossy(buf.as_slice()).to_string()
+        write!(f, "{}", String::from_utf8_lossy(buf.as_slice()))
     }
 }
 

@@ -10,10 +10,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use engine_traits::Result;
+use engine_traits::CF_DEFAULT;
 use rocksdb::load_latest_options;
 use rocksdb::{CColumnFamilyDescriptor, ColumnFamilyOptions, DBOptions, Env, DB};
-
-use engine_traits::CF_DEFAULT;
+use tikv_util::warn;
 
 pub struct CFOptions<'a> {
     cf: &'a str,
@@ -157,7 +157,7 @@ pub fn new_engine_opt(
         }
     }
     let cfds = cfs_v.into_iter().zip(cfs_opts_v).collect();
-    let mut db = DB::open_cf(db_opt, path, cfds).unwrap();
+    let mut db = DB::open_cf(db_opt, path, cfds)?;
 
     // Drops discarded column families.
     //    for cf in existed.iter().filter(|x| needed.iter().find(|y| y == x).is_none()) {
@@ -202,9 +202,41 @@ pub(crate) fn db_exist(path: &str) -> bool {
 /// Returns a Vec of cf which is in `a' but not in `b'.
 fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
     a.iter()
-        .filter(|x| b.iter().find(|y| y == x).is_none())
+        .filter(|x| !b.iter().any(|y| *x == y))
         .cloned()
         .collect()
+}
+
+pub fn to_raw_perf_level(level: engine_traits::PerfLevel) -> rocksdb::PerfLevel {
+    match level {
+        engine_traits::PerfLevel::Uninitialized => rocksdb::PerfLevel::Uninitialized,
+        engine_traits::PerfLevel::Disable => rocksdb::PerfLevel::Disable,
+        engine_traits::PerfLevel::EnableCount => rocksdb::PerfLevel::EnableCount,
+        engine_traits::PerfLevel::EnableTimeExceptForMutex => {
+            rocksdb::PerfLevel::EnableTimeExceptForMutex
+        }
+        engine_traits::PerfLevel::EnableTimeAndCPUTimeExceptForMutex => {
+            rocksdb::PerfLevel::EnableTimeAndCPUTimeExceptForMutex
+        }
+        engine_traits::PerfLevel::EnableTime => rocksdb::PerfLevel::EnableTime,
+        engine_traits::PerfLevel::OutOfBounds => rocksdb::PerfLevel::OutOfBounds,
+    }
+}
+
+pub fn from_raw_perf_level(level: rocksdb::PerfLevel) -> engine_traits::PerfLevel {
+    match level {
+        rocksdb::PerfLevel::Uninitialized => engine_traits::PerfLevel::Uninitialized,
+        rocksdb::PerfLevel::Disable => engine_traits::PerfLevel::Disable,
+        rocksdb::PerfLevel::EnableCount => engine_traits::PerfLevel::EnableCount,
+        rocksdb::PerfLevel::EnableTimeExceptForMutex => {
+            engine_traits::PerfLevel::EnableTimeExceptForMutex
+        }
+        rocksdb::PerfLevel::EnableTimeAndCPUTimeExceptForMutex => {
+            engine_traits::PerfLevel::EnableTimeAndCPUTimeExceptForMutex
+        }
+        rocksdb::PerfLevel::EnableTime => engine_traits::PerfLevel::EnableTime,
+        rocksdb::PerfLevel::OutOfBounds => engine_traits::PerfLevel::OutOfBounds,
+    }
 }
 
 #[cfg(test)]

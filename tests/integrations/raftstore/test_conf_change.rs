@@ -172,11 +172,13 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let peer2 = new_conf_change_peer(&stores[1], &pd_client);
     let engine_2 = cluster.get_engine(peer2.get_store_id());
-    assert!(engine_2
-        .c()
-        .get_value(&keys::data_key(b"k1"))
-        .unwrap()
-        .is_none());
+    assert!(
+        engine_2
+            .c()
+            .get_value(&keys::data_key(b"k1"))
+            .unwrap()
+            .is_none()
+    );
     // add new peer to first region.
     pd_client.must_add_peer(region_id, peer2.clone());
 
@@ -259,7 +261,7 @@ fn wait_till_reach_count(pd_client: Arc<TestPdClient>, region_id: u64, c: usize)
             None => continue,
         };
         replica_count = region.get_peers().len();
-        if replica_count == c {
+        if replica_count >= c {
             return;
         }
         thread::sleep(Duration::from_millis(10));

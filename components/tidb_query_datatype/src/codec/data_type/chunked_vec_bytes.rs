@@ -190,9 +190,9 @@ impl<'a> ChunkRef<'a, BytesRef<'a>> for &'a ChunkedVecBytes {
     }
 }
 
-impl Into<ChunkedVecBytes> for Vec<Option<Bytes>> {
-    fn into(self) -> ChunkedVecBytes {
-        ChunkedVecBytes::from_vec(self)
+impl From<Vec<Option<Bytes>>> for ChunkedVecBytes {
+    fn from(v: Vec<Option<Bytes>>) -> ChunkedVecBytes {
+        ChunkedVecBytes::from_vec(v)
     }
 }
 
@@ -373,11 +373,7 @@ mod tests {
             chunked_vec.to_vec(),
             test_bytes
                 .iter()
-                .map(|x| if let Some(x) = x {
-                    Some(repeat(x.to_vec(), 3))
-                } else {
-                    None
-                })
+                .map(|x| x.as_ref().map(|x| repeat(x.to_vec(), 3)))
                 .collect::<Vec<Option<Bytes>>>()
         );
     }

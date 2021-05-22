@@ -1,14 +1,18 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::error;
+use std::error::Error as StdError;
 use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::Sender;
 
-use crate::store::{CasualMessage, CasualRouter};
+use thiserror::Error;
 
 use engine_traits::{Engines, KvEngine, RaftEngine};
+use file_system::{IOType, WithIOType};
 use tikv_util::time::Duration;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
+use tikv_util::{box_try, debug, error, warn};
+
+use crate::store::{CasualMessage, CasualRouter};
 
 const MAX_GC_REGION_BATCH: usize = 128;
 const COMPACT_LOG_INTERVAL: Duration = Duration::from_secs(60);
@@ -49,15 +53,10 @@ impl Display for Task {
     }
 }
 
-quick_error! {
-    #[derive(Debug)]
-    enum Error {
-        Other(err: Box<dyn error::Error + Sync + Send>) {
-            from()
-            cause(err.as_ref())
-            display("raftlog gc failed {:?}", err)
-        }
-    }
+#[derive(Debug, Error)]
+enum Error {
+    #[error("raftlog gc failed {0:?}")]
+    Other(#[from] Box<dyn StdError + Sync + Send>),
 }
 
 pub struct Runner<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> {
@@ -99,7 +98,7 @@ impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
         self.engines.kv.sync().unwrap_or_else(|e| {
             panic!("failed to sync kv_engine in raft_log_gc: {:?}", e);
         });
-        let tasks = std::mem::replace(&mut self.tasks, vec![]);
+        let tasks = std::mem::take(&mut self.tasks);
         for t in tasks {
             match t {
                 Task::Gc {
@@ -145,6 +144,7 @@ where
     type Task = Task;
 
     fn run(&mut self, task: Task) {
+        let _io_type_guard = WithIOType::new(IOType::ForegroundWrite);
         self.tasks.push(task);
         if self.tasks.len() < MAX_GC_REGION_BATCH {
             return;
@@ -175,7 +175,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use engine_traits::{KvEngine, Mutable, WriteBatchExt, ALL_CFS, CF_DEFAULT};
+    use engine_traits::{KvEngine, Mutable, WriteBatch, WriteBatchExt, ALL_CFS, CF_DEFAULT};
     use std::sync::mpsc;
     use std::time::Duration;
     use tempfile::Builder;
@@ -208,7 +208,7 @@ mod tests {
             let k = keys::raft_log_key(region_id, i);
             raft_wb.put(&k, b"entry").unwrap();
         }
-        raft_db.write(&raft_wb).unwrap();
+        raft_wb.write().unwrap();
 
         let tbls = vec![
             (Task::gc(region_id, 0, 10), 10, (0, 10), (10, 100)),

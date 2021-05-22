@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::collections::{HashMap, HashMapEntry};
+use collections::{HashMap, HashMapEntry};
 use std::hash::Hash;
 use std::mem::MaybeUninit;
 use std::ptr::{self, NonNull};
@@ -247,6 +247,14 @@ where
         Iter {
             base: self.map.iter(),
         }
+    }
+
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
     }
 }
 

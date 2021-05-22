@@ -6,9 +6,11 @@ use crate::sst::RocksSstWriterBuilder;
 use crate::{util, RocksSstWriter};
 use engine_traits::{
     CFNamesExt, DeleteStrategy, ImportExt, IngestExternalFileOptions, IterOptions, Iterable,
-    Iterator, MiscExt, Mutable, Range, Result, SstWriter, SstWriterBuilder, WriteBatchExt, ALL_CFS,
+    Iterator, MiscExt, Mutable, Range, Result, SstWriter, SstWriterBuilder, WriteBatch,
+    WriteBatchExt, ALL_CFS,
 };
 use rocksdb::Range as RocksRange;
+use tikv_util::box_try;
 use tikv_util::keybuilder::KeyBuilder;
 
 pub const MAX_DELETE_COUNT_BY_KEY: usize = 2048;
@@ -88,12 +90,12 @@ impl RocksEngine {
             for key in data.iter() {
                 wb.delete_cf(cf, key)?;
                 if wb.count() >= Self::WRITE_BATCH_MAX_KEYS {
-                    self.write(&wb)?;
+                    wb.write()?;
                     wb.clear();
                 }
             }
             if wb.count() > 0 {
-                self.write(&wb)?;
+                wb.write()?;
             }
         }
         Ok(())
@@ -114,13 +116,13 @@ impl RocksEngine {
         while it_valid {
             wb.delete_cf(cf, it.key())?;
             if wb.count() >= Self::WRITE_BATCH_MAX_KEYS {
-                self.write(&wb)?;
+                wb.write()?;
                 wb.clear();
             }
             it_valid = it.next()?;
         }
         if wb.count() > 0 {
-            self.write(&wb)?;
+            wb.write()?;
         }
         self.sync_wal()?;
         Ok(())
@@ -177,7 +179,7 @@ impl MiscExt for RocksEngine {
                 for r in ranges.iter() {
                     wb.delete_range_cf(cf, r.start_key, r.end_key)?;
                 }
-                self.write(&wb)?;
+                wb.write()?;
             }
             DeleteStrategy::DeleteByKey => {
                 for r in ranges {
@@ -326,6 +328,20 @@ impl MiscExt for RocksEngine {
             level,
         ))
     }
+
+    fn is_stalled_or_stopped(&self) -> bool {
+        const ROCKSDB_IS_WRITE_STALLED: &str = "rocksdb.is-write-stalled";
+        const ROCKSDB_IS_WRITE_STOPPED: &str = "rocksdb.is-write-stopped";
+        self.as_inner()
+            .get_property_int(ROCKSDB_IS_WRITE_STALLED)
+            .unwrap_or_default()
+            != 0
+            || self
+                .as_inner()
+                .get_property_int(ROCKSDB_IS_WRITE_STOPPED)
+                .unwrap_or_default()
+                != 0
+    }
 }
 
 #[cfg(test)]
@@ -394,7 +410,7 @@ mod tests {
                 wb.put_cf(cf, k, v).unwrap();
             }
         }
-        db.write(&wb).unwrap();
+        wb.write().unwrap();
         check_data(&db, ALL_CFS, kvs.as_slice());
 
         // Delete all in ranges.
@@ -568,7 +584,7 @@ mod tests {
             )
             .unwrap_or_else(|err| panic!("{:?}", err));
         // Create prefix bloom filter for memtable.
-        cf_opts.set_memtable_prefix_bloom_size_ratio(0.1 as f64);
+        cf_opts.set_memtable_prefix_bloom_size_ratio(0.1_f64);
         let cf = "default";
         let db = DB::open_cf(opts, path_str, vec![(cf, cf_opts)]).unwrap();
         let db = Arc::new(db);
@@ -585,7 +601,7 @@ mod tests {
         for &(k, v) in kvs.as_slice() {
             wb.put_cf(cf, k, v).unwrap();
         }
-        db.write(&wb).unwrap();
+        wb.write().unwrap();
         check_data(&db, &[cf], kvs.as_slice());
 
         // Delete all in ["k2", "k4").

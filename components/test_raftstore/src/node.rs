@@ -12,8 +12,9 @@ use raft::eraftpb::MessageType;
 use raft::SnapshotStatus;
 
 use super::*;
+use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
-use encryption::DataKeyManager;
+use encryption_export::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{Engines, MiscExt, Peekable};
 use raftstore::coprocessor::config::SplitCheckConfigManager;
@@ -28,9 +29,9 @@ use raftstore::store::*;
 use raftstore::Result;
 use tikv::config::{ConfigController, Module, TiKvConfig};
 use tikv::import::SSTImporter;
+use tikv::server::raftkv::ReplicaReadLockChecker;
 use tikv::server::Node;
 use tikv::server::Result as ServerResult;
-use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::VersionTrack;
 use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{Builder as WorkerBuilder, FutureWorker};
@@ -128,7 +129,9 @@ pub struct NodeCluster {
     trans: ChannelTransport,
     pd_client: Arc<TestPdClient>,
     nodes: HashMap<u64, Node<TestPdClient, RocksEngine>>,
+    snap_mgrs: HashMap<u64, SnapManager>,
     simulate_trans: HashMap<u64, SimulateChannelTransport>,
+    concurrency_managers: HashMap<u64, ConcurrencyManager>,
     #[allow(clippy::type_complexity)]
     post_create_coprocessor_host: Option<Box<dyn Fn(u64, &mut CoprocessorHost<RocksEngine>)>>,
 }
@@ -139,7 +142,9 @@ impl NodeCluster {
             trans: ChannelTransport::new(),
             pd_client,
             nodes: HashMap::default(),
+            snap_mgrs: HashMap::default(),
             simulate_trans: HashMap::default(),
+            concurrency_managers: HashMap::default(),
             post_create_coprocessor_host: None,
         }
     }
@@ -175,6 +180,10 @@ impl NodeCluster {
     pub fn get_node(&mut self, node_id: u64) -> Option<&mut Node<TestPdClient, RocksEngine>> {
         self.nodes.get_mut(&node_id)
     }
+
+    pub fn get_concurrency_manager(&self, node_id: u64) -> ConcurrencyManager {
+        self.concurrency_managers.get(&node_id).unwrap().clone()
+    }
 }
 
 impl Simulator for NodeCluster {
@@ -201,7 +210,7 @@ impl Simulator for NodeCluster {
             Arc::new(VersionTrack::new(raft_store)),
             Arc::clone(&self.pd_client),
             Arc::default(),
-            Some(bg_worker.clone()),
+            bg_worker.clone(),
         );
 
         let (snap_mgr, snap_mgr_path) = if node_id == 0
@@ -215,6 +224,8 @@ impl Simulator for NodeCluster {
         {
             let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
             let snap_mgr = SnapManagerBuilder::default()
+                .max_write_bytes_per_sec(cfg.server.snap_max_write_bytes_per_sec.0 as i64)
+                .max_total_size(cfg.server.snap_max_total_size.0)
                 .encryption_key_manager(key_manager)
                 .build(tmp.path().to_str().unwrap());
             (snap_mgr, Some(tmp))
@@ -224,27 +235,29 @@ impl Simulator for NodeCluster {
             (snap_mgr.clone(), None)
         };
 
+        self.snap_mgrs.insert(node_id, snap_mgr.clone());
+
         // Create coprocessor.
-        let mut coprocessor_host = CoprocessorHost::new(router.clone());
+        let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
 
         if let Some(f) = self.post_create_coprocessor_host.as_ref() {
             f(node_id, &mut coprocessor_host);
         }
 
+        let cm = ConcurrencyManager::new(1.into());
+        self.concurrency_managers.insert(node_id, cm.clone());
+        ReplicaReadLockChecker::new(cm.clone()).register(&mut coprocessor_host);
+
         let importer = {
             let dir = Path::new(engines.kv.path()).join("import-sst");
-            Arc::new(SSTImporter::new(dir, None).unwrap())
+            Arc::new(SSTImporter::new(&cfg.import, dir, None).unwrap())
         };
 
         let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
         let cfg_controller = ConfigController::new(cfg.clone());
 
-        let split_check_runner = SplitCheckRunner::new(
-            engines.kv.clone(),
-            router.clone(),
-            coprocessor_host.clone(),
-            cfg.coprocessor.clone(),
-        );
+        let split_check_runner =
+            SplitCheckRunner::new(engines.kv.clone(), router.clone(), coprocessor_host.clone());
         let split_scheduler = bg_worker.start("test-split-check", split_check_runner);
         cfg_controller.register(
             Module::Coprocessor,
@@ -259,6 +272,7 @@ impl Simulator for NodeCluster {
             Box::new(RaftstoreConfigManager(raft_store)),
         );
 
+        node.try_bootstrap_store(engines.clone())?;
         node.start(
             engines.clone(),
             simulate_trans.clone(),
@@ -269,13 +283,15 @@ impl Simulator for NodeCluster {
             importer,
             split_scheduler,
             AutoSplitController::default(),
-            ConcurrencyManager::new(1.into()),
+            cm,
         )?;
-        assert!(engines
-            .kv
-            .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
-            .unwrap()
-            .is_none());
+        assert!(
+            engines
+                .kv
+                .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
+                .unwrap()
+                .is_none()
+        );
         assert!(node_id == 0 || node_id == node.id());
 
         let node_id = node.id();
@@ -315,6 +331,10 @@ impl Simulator for NodeCluster {
             .to_str()
             .unwrap()
             .to_owned()
+    }
+
+    fn get_snap_mgr(&self, node_id: u64) -> &SnapManager {
+        self.snap_mgrs.get(&node_id).unwrap()
     }
 
     fn stop_node(&mut self, node_id: u64) {

@@ -12,6 +12,7 @@
 //! module.
 
 #![feature(proc_macro_diagnostic)]
+#![feature(iter_order_by)]
 #![recursion_limit = "256"]
 
 extern crate proc_macro;

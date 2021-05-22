@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use lazy_static::lazy_static;
 use prometheus::*;
 use prometheus_static_metric::*;
 
@@ -43,6 +44,7 @@ make_static_metric! {
         epoch,
         appiled_term,
         channel_full,
+        safe_ts,
     }
 
     pub struct ReadRejectCounter : IntCounter {

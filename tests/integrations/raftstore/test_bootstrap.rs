@@ -18,7 +18,7 @@ use test_raftstore::*;
 use tikv::import::SSTImporter;
 use tikv::server::Node;
 use tikv_util::config::VersionTrack;
-use tikv_util::worker::{dummy_scheduler, FutureWorker};
+use tikv_util::worker::{dummy_scheduler, Builder as WorkerBuilder, FutureWorker};
 
 fn test_bootstrap_idempotent<T: Simulator>(cluster: &mut Cluster<T>) {
     // assume that there is a node  bootstrap the cluster and add region in pd successfully
@@ -57,14 +57,14 @@ fn test_node_bootstrap_with_prepared_data() {
         RocksEngine::from_db(Arc::clone(&raft_engine)),
     );
     let tmp_mgr = Builder::new().prefix("test_cluster").tempdir().unwrap();
-
+    let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
     let mut node = Node::new(
         system,
         &cfg.server,
         Arc::new(VersionTrack::new(cfg.raft_store.clone())),
         Arc::clone(&pd_client),
         Arc::default(),
-        None,
+        bg_worker,
     );
     let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap());
     let pd_worker = FutureWorker::new("test-pd-worker");
@@ -76,27 +76,32 @@ fn test_node_bootstrap_with_prepared_data() {
     // now rocksDB must have some prepare data
     bootstrap_store(&engines, 0, 1).unwrap();
     let region = node.prepare_bootstrap_cluster(&engines, 1).unwrap();
-    assert!(engine
-        .c()
-        .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
-        .unwrap()
-        .is_some());
+    assert!(
+        engine
+            .c()
+            .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
+            .unwrap()
+            .is_some()
+    );
     let region_state_key = keys::region_state_key(region.get_id());
-    assert!(engine
-        .c()
-        .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
-        .unwrap()
-        .is_some());
+    assert!(
+        engine
+            .c()
+            .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
+            .unwrap()
+            .is_some()
+    );
 
     // Create coprocessor.
-    let coprocessor_host = CoprocessorHost::new(node.get_router());
+    let coprocessor_host = CoprocessorHost::new(node.get_router(), cfg.coprocessor);
 
     let importer = {
         let dir = tmp_path.path().join("import-sst");
-        Arc::new(SSTImporter::new(dir, None).unwrap())
+        Arc::new(SSTImporter::new(&cfg.import, dir, None).unwrap())
     };
     let (split_check_scheduler, _) = dummy_scheduler();
 
+    node.try_bootstrap_store(engines.clone()).unwrap();
     // try to restart this node, will clear the prepare data
     node.start(
         engines,
@@ -111,16 +116,20 @@ fn test_node_bootstrap_with_prepared_data() {
         ConcurrencyManager::new(1.into()),
     )
     .unwrap();
-    assert!(Arc::clone(&engine)
-        .c()
-        .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
-        .unwrap()
-        .is_none());
-    assert!(engine
-        .c()
-        .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
-        .unwrap()
-        .is_none());
+    assert!(
+        Arc::clone(&engine)
+            .c()
+            .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        engine
+            .c()
+            .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(pd_client.get_regions_number() as u32, 1);
     node.stop();
 }

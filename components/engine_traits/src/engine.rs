@@ -24,11 +24,14 @@ pub trait KvEngine:
     + CompactExt
     + RangePropertiesExt
     + MvccPropertiesExt
+    + TtlPropertiesExt
+    + PerfContextExt
     + MiscExt
     + Send
     + Sync
     + Clone
     + Debug
+    + Unpin
     + 'static
 {
     /// A consistent read-only snapshot of the database

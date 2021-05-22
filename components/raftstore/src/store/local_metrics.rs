@@ -1,9 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use prometheus::local::LocalHistogram;
 use std::sync::{Arc, Mutex};
 
-use tikv_util::collections::HashSet;
+use prometheus::local::LocalHistogram;
+use raft::eraftpb::MessageType;
+
+use collections::HashSet;
 
 use super::metrics::*;
 
@@ -55,113 +57,89 @@ impl RaftReadyMetrics {
     }
 }
 
-/// The buffered metrics counters for raft message.
-#[derive(Debug, Default, Clone)]
-pub struct RaftMessageMetrics {
-    pub append: u64,
-    pub append_resp: u64,
-    pub prevote: u64,
-    pub prevote_resp: u64,
-    pub vote: u64,
-    pub vote_resp: u64,
-    pub snapshot: u64,
-    pub request_snapshot: u64,
-    pub heartbeat: u64,
-    pub heartbeat_resp: u64,
-    pub transfer_leader: u64,
-    pub timeout_now: u64,
-    pub read_index: u64,
-    pub read_index_resp: u64,
+pub type SendStatus = [u64; 2];
+
+macro_rules! flush_send_status {
+    ($metrics:ident, $self:ident) => {{
+        if $self.$metrics[0] > 0 {
+            STORE_RAFT_SENT_MESSAGE_COUNTER
+                .$metrics
+                .drop
+                .inc_by($self.$metrics[0] as i64);
+            $self.$metrics[0] = 0;
+        }
+        if $self.$metrics[1] > 0 {
+            STORE_RAFT_SENT_MESSAGE_COUNTER
+                .$metrics
+                .accept
+                .inc_by($self.$metrics[1] as i64);
+            $self.$metrics[1] = 0;
+        }
+    }};
 }
 
-impl RaftMessageMetrics {
+/// The buffered metrics counters for raft message.
+#[derive(Debug, Default, Clone)]
+pub struct RaftSendMessageMetrics {
+    pub append: SendStatus,
+    pub append_resp: SendStatus,
+    pub prevote: SendStatus,
+    pub prevote_resp: SendStatus,
+    pub vote: SendStatus,
+    pub vote_resp: SendStatus,
+    pub snapshot: SendStatus,
+    pub heartbeat: SendStatus,
+    pub heartbeat_resp: SendStatus,
+    pub transfer_leader: SendStatus,
+    pub timeout_now: SendStatus,
+    pub read_index: SendStatus,
+    pub read_index_resp: SendStatus,
+}
+
+impl RaftSendMessageMetrics {
+    pub fn add(&mut self, msg_type: MessageType, success: bool) {
+        let i = success as usize;
+        match msg_type {
+            MessageType::MsgAppend => self.append[i] += 1,
+            MessageType::MsgAppendResponse => self.append_resp[i] += 1,
+            MessageType::MsgRequestPreVote => self.prevote[i] += 1,
+            MessageType::MsgRequestPreVoteResponse => self.prevote_resp[i] += 1,
+            MessageType::MsgRequestVote => self.vote[i] += 1,
+            MessageType::MsgRequestVoteResponse => self.vote_resp[i] += 1,
+            MessageType::MsgSnapshot => self.snapshot[i] += 1,
+            MessageType::MsgHeartbeat => self.heartbeat[i] += 1,
+            MessageType::MsgHeartbeatResponse => self.heartbeat_resp[i] += 1,
+            MessageType::MsgTransferLeader => self.transfer_leader[i] += 1,
+            MessageType::MsgReadIndex => self.read_index[i] += 1,
+            MessageType::MsgReadIndexResp => self.read_index_resp[i] += 1,
+            MessageType::MsgTimeoutNow => self.timeout_now[i] += 1,
+            // We do not care about these message types for metrics.
+            // Explicitly declare them so when we add new message types we are forced to
+            // decide.
+            MessageType::MsgHup
+            | MessageType::MsgBeat
+            | MessageType::MsgPropose
+            | MessageType::MsgUnreachable
+            | MessageType::MsgSnapStatus
+            | MessageType::MsgCheckQuorum => {}
+        }
+    }
     /// Flushes all metrics
-    fn flush(&mut self) {
+    pub fn flush(&mut self) {
         // reset all buffered metrics once they have been added
-        if self.append > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER
-                .append
-                .inc_by(self.append as i64);
-            self.append = 0;
-        }
-        if self.append_resp > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER
-                .append_resp
-                .inc_by(self.append_resp as i64);
-            self.append_resp = 0;
-        }
-        if self.prevote > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER
-                .prevote
-                .inc_by(self.prevote as i64);
-            self.prevote = 0;
-        }
-        if self.prevote_resp > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER
-                .prevote_resp
-                .inc_by(self.prevote_resp as i64);
-            self.prevote_resp = 0;
-        }
-        if self.vote > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER
-                .vote
-                .inc_by(self.vote as i64);
-            self.vote = 0;
-        }
-        if self.vote_resp > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER
-                .vote_resp
-                .inc_by(self.vote_resp as i64);
-            self.vote_resp = 0;
-        }
-        if self.snapshot > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER
-                .snapshot
-                .inc_by(self.snapshot as i64);
-            self.snapshot = 0;
-        }
-        if self.request_snapshot > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER
-                .request_snapshot
-                .inc_by(self.request_snapshot as i64);
-            self.request_snapshot = 0;
-        }
-        if self.heartbeat > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER
-                .heartbeat
-                .inc_by(self.heartbeat as i64);
-            self.heartbeat = 0;
-        }
-        if self.heartbeat_resp > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER
-                .heartbeat_resp
-                .inc_by(self.heartbeat_resp as i64);
-            self.heartbeat_resp = 0;
-        }
-        if self.transfer_leader > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER
-                .transfer_leader
-                .inc_by(self.transfer_leader as i64);
-            self.transfer_leader = 0;
-        }
-        if self.timeout_now > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER
-                .timeout_now
-                .inc_by(self.timeout_now as i64);
-            self.timeout_now = 0;
-        }
-        if self.read_index > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER
-                .read_index
-                .inc_by(self.read_index as i64);
-            self.read_index = 0;
-        }
-        if self.read_index_resp > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER
-                .read_index_resp
-                .inc_by(self.read_index_resp as i64);
-            self.read_index_resp = 0;
-        }
+        flush_send_status!(append, self);
+        flush_send_status!(append_resp, self);
+        flush_send_status!(prevote, self);
+        flush_send_status!(prevote_resp, self);
+        flush_send_status!(vote, self);
+        flush_send_status!(vote_resp, self);
+        flush_send_status!(snapshot, self);
+        flush_send_status!(heartbeat, self);
+        flush_send_status!(heartbeat_resp, self);
+        flush_send_status!(transfer_leader, self);
+        flush_send_status!(timeout_now, self);
+        flush_send_status!(read_index, self);
+        flush_send_status!(read_index_resp, self);
     }
 }
 
@@ -410,7 +388,7 @@ impl RaftInvalidProposeMetrics {
 #[derive(Clone)]
 pub struct RaftMetrics {
     pub ready: RaftReadyMetrics,
-    pub message: RaftMessageMetrics,
+    pub send_message: RaftSendMessageMetrics,
     pub message_dropped: RaftMessageDropMetrics,
     pub propose: RaftProposeMetrics,
     pub process_ready: LocalHistogram,
@@ -424,7 +402,7 @@ impl Default for RaftMetrics {
     fn default() -> RaftMetrics {
         RaftMetrics {
             ready: Default::default(),
-            message: Default::default(),
+            send_message: Default::default(),
             message_dropped: Default::default(),
             propose: Default::default(),
             process_ready: PEER_RAFT_PROCESS_DURATION
@@ -442,7 +420,7 @@ impl RaftMetrics {
     /// Flushs all metrics
     pub fn flush(&mut self) {
         self.ready.flush();
-        self.message.flush();
+        self.send_message.flush();
         self.propose.flush();
         self.process_ready.flush();
         self.append_log.flush();

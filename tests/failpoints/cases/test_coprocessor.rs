@@ -47,8 +47,10 @@ fn test_deadline_3() {
     let product = ProductTable::new();
     let (_, endpoint) = {
         let engine = tikv::storage::TestEngineBuilder::new().build().unwrap();
-        let mut cfg = tikv::server::Config::default();
-        cfg.end_point_request_max_handle_duration = tikv_util::config::ReadableDuration::secs(1);
+        let cfg = tikv::server::Config {
+            end_point_request_max_handle_duration: tikv_util::config::ReadableDuration::secs(1),
+            ..Default::default()
+        };
         init_data_with_details(Context::default(), engine, &product, &data, true, &cfg)
     };
     let req = DAGSelect::from(&product).build();
@@ -56,14 +58,17 @@ fn test_deadline_3() {
     fail::cfg("kv_cursor_seek", "sleep(2000)").unwrap();
     fail::cfg("copr_batch_initial_size", "return(1)").unwrap();
     let cop_resp = handle_request(&endpoint, req);
+    println!("{:?}", cop_resp);
     let mut resp = SelectResponse::default();
     resp.merge_from_bytes(cop_resp.get_data()).unwrap();
 
-    // Errors during evaluation becomes an eval error.
-    assert!(resp
-        .get_error()
-        .get_msg()
-        .contains("exceeding the deadline"));
+    assert!(
+        cop_resp.other_error.contains("exceeding the deadline")
+            || resp
+                .get_error()
+                .get_msg()
+                .contains("exceeding the deadline")
+    );
 }
 
 #[test]
@@ -162,8 +167,9 @@ fn test_region_error_in_scan() {
     let req = DAGSelect::from(&product).build_with(ctx, &[0]);
     let resp = handle_request(&endpoint, req);
 
-    assert!(resp
-        .get_region_error()
-        .get_message()
-        .contains("region seek error"));
+    assert!(
+        resp.get_region_error()
+            .get_message()
+            .contains("region seek error")
+    );
 }

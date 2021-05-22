@@ -18,6 +18,7 @@ mod impl_count;
 mod impl_first;
 mod impl_max_min;
 mod impl_sum;
+mod impl_variance;
 mod parser;
 mod summable;
 mod util;
@@ -409,18 +410,22 @@ mod tests {
         let mut s = AggrFnStateFoo::new();
 
         // Update using `Int` should success.
-        assert!(update!(
-            &mut s as &mut dyn AggrFunctionStateUpdatePartial<_>,
-            &mut ctx,
-            Some(&1)
-        )
-        .is_ok());
-        assert!(update!(
-            &mut s as &mut dyn AggrFunctionStateUpdatePartial<_>,
-            &mut ctx,
-            Some(&3)
-        )
-        .is_ok());
+        assert!(
+            update!(
+                &mut s as &mut dyn AggrFunctionStateUpdatePartial<_>,
+                &mut ctx,
+                Some(&1)
+            )
+            .is_ok()
+        );
+        assert!(
+            update!(
+                &mut s as &mut dyn AggrFunctionStateUpdatePartial<_>,
+                &mut ctx,
+                Some(&3)
+            )
+            .is_ok()
+        );
 
         // Update using other data type should panic.
         let result = panic_hook::recover_safe(|| {
@@ -446,21 +451,27 @@ mod tests {
         // Push result to Real VectorValue should success.
         let mut target = vec![VectorValue::with_capacity(0, EvalType::Real)];
 
-        assert!((&mut s as &mut dyn AggrFunctionState)
-            .push_result(&mut ctx, &mut target)
-            .is_ok());
+        assert!(
+            (&mut s as &mut dyn AggrFunctionState)
+                .push_result(&mut ctx, &mut target)
+                .is_ok()
+        );
         assert_eq!(target[0].to_real_vec(), &[Real::new(4.0).ok()]);
 
         // Calling push result multiple times should also success.
-        assert!(update!(
-            &mut s as &mut dyn AggrFunctionStateUpdatePartial<_>,
-            &mut ctx,
-            Some(&1)
-        )
-        .is_ok());
-        assert!((&mut s as &mut dyn AggrFunctionState)
-            .push_result(&mut ctx, &mut target)
-            .is_ok());
+        assert!(
+            update!(
+                &mut s as &mut dyn AggrFunctionStateUpdatePartial<_>,
+                &mut ctx,
+                Some(&1)
+            )
+            .is_ok()
+        );
+        assert!(
+            (&mut s as &mut dyn AggrFunctionState)
+                .push_result(&mut ctx, &mut target)
+                .is_ok()
+        );
         assert_eq!(
             target[0].to_real_vec(),
             &[Real::new(4.0).ok(), Real::new(5.0).ok()]

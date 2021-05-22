@@ -1,11 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use collections::HashSet;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb::TikvClient;
 use std::sync::Arc;
 use test_raftstore::new_server_cluster;
-use tikv_util::collections::HashSet;
 use tikv_util::HandyRwLock;
 
 #[test]

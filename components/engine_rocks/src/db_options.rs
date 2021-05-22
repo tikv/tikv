@@ -7,6 +7,7 @@ use engine_traits::Result;
 use engine_traits::TitanDBOptions;
 use rocksdb::DBOptions as RawDBOptions;
 use rocksdb::TitanDBOptions as RawTitanDBOptions;
+use tikv_util::box_err;
 
 impl DBOptionsExt for RocksEngine {
     type DBOptions = RocksDBOptions;
@@ -55,6 +56,16 @@ impl DBOptions for RocksDBOptions {
     fn set_rate_bytes_per_sec(&mut self, rate_bytes_per_sec: i64) -> Result<()> {
         self.0
             .set_rate_bytes_per_sec(rate_bytes_per_sec)
+            .map_err(|e| box_err!(e))
+    }
+
+    fn get_rate_limiter_auto_tuned(&self) -> Option<bool> {
+        self.0.get_auto_tuned()
+    }
+
+    fn set_rate_limiter_auto_tuned(&mut self, rate_limiter_auto_tuned: bool) -> Result<()> {
+        self.0
+            .set_auto_tuned(rate_limiter_auto_tuned)
             .map_err(|e| box_err!(e))
     }
 

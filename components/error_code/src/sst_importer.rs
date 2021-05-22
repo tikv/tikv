@@ -16,5 +16,6 @@ define_error_codes!(
     ENGINE => ("Engine", "", ""),
     CANNOT_READ_EXTERNAL_STORAGE => ("CannotReadExternalStorage", "", ""),
     WRONG_KEY_PREFIX => ("WrongKeyPrefix", "", ""),
-    BAD_FORMAT => ("BadFormat", "", "")
+    BAD_FORMAT => ("BadFormat", "", ""),
+    FILE_CONFLICT => ("FileConflict", "", "")
 );

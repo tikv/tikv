@@ -1,12 +1,16 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use txn_types::{Key, TimeStamp};
+use kvproto::kvrpcpb::{ExtraOp, LockInfo};
+use txn_types::{Key, OldValues, TimeStamp, TxnExtra};
 
 use crate::storage::kv::WriteData;
-use crate::storage::lock_manager::{Lock, LockManager, WaitTimeout};
-use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn};
+use crate::storage::lock_manager::{LockManager, WaitTimeout};
+use crate::storage::mvcc::{
+    Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader,
+};
 use crate::storage::txn::commands::{
     Command, CommandExt, ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
+    WriteResultLockInfo,
 };
 use crate::storage::txn::{acquire_pessimistic_lock, Error, ErrorInner, Result};
 use crate::storage::{
@@ -37,6 +41,7 @@ command! {
             /// later read in the same transaction.
             return_values: bool,
             min_commit_ts: TimeStamp,
+            old_values: OldValues,
         }
 }
 
@@ -56,47 +61,50 @@ impl CommandExt for AcquirePessimisticLock {
     gen_lock!(keys: multiple(|x| &x.0));
 }
 
-fn extract_lock_from_result<T>(res: &StorageResult<T>) -> Lock {
+fn extract_lock_info_from_result<T>(res: &StorageResult<T>) -> &LockInfo {
     match res {
         Err(StorageError(box StorageErrorInner::Txn(Error(box ErrorInner::Mvcc(MvccError(
             box MvccErrorInner::KeyIsLocked(info),
-        )))))) => Lock {
-            ts: info.get_lock_version().into(),
-            hash: Key::from_raw(info.get_key()).gen_hash(),
-        },
+        )))))) => info,
         _ => panic!("unexpected mvcc error"),
     }
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock {
-    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+    fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let (start_ts, ctx, keys) = (self.start_ts, self.ctx, self.keys);
-        let mut txn = MvccTxn::new(
-            snapshot,
-            start_ts,
-            !ctx.get_not_fill_cache(),
-            context.concurrency_manager,
-        );
+        let mut txn = MvccTxn::new(start_ts, context.concurrency_manager);
+        let mut reader = SnapshotReader::new(start_ts, snapshot, !ctx.get_not_fill_cache());
+
         let rows = keys.len();
         let mut res = if self.return_values {
             Ok(PessimisticLockRes::Values(vec![]))
         } else {
             Ok(PessimisticLockRes::Empty)
         };
+        let need_old_value = context.extra_op == ExtraOp::ReadOldValue;
         for (k, should_not_exist) in keys {
             match acquire_pessimistic_lock(
                 &mut txn,
-                k,
+                &mut reader,
+                k.clone(),
                 &self.primary,
                 should_not_exist,
                 self.lock_ttl,
                 self.for_update_ts,
                 self.return_values,
                 self.min_commit_ts,
+                need_old_value,
             ) {
-                Ok(val) => {
+                Ok((val, old_value)) => {
                     if self.return_values {
                         res.as_mut().unwrap().push(val);
+                    }
+                    if old_value.valid() {
+                        let key = k.append_ts(txn.start_ts);
+                        // MutationType is unknown in AcquirePessimisticLock stage.
+                        let mutation_type = None;
+                        self.old_values.insert(key, (old_value, mutation_type));
                     }
                 }
                 Err(e @ MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
@@ -114,18 +122,27 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
             }
         }
 
-        context.statistics.add(&txn.take_statistics());
+        context.statistics.add(&reader.take_statistics());
         // no conflict
         let (pr, to_be_write, rows, ctx, lock_info) = if res.is_ok() {
             let pr = ProcessResult::PessimisticLockRes { res };
-            let write_data = WriteData::from_modifies(txn.into_modifies());
+            let extra = TxnExtra {
+                old_values: self.old_values,
+                // One pc status is unkown AcquirePessimisticLock stage.
+                one_pc: false,
+            };
+            let write_data = WriteData::new(txn.into_modifies(), extra);
             (pr, write_data, rows, ctx, None)
         } else {
-            let lock = extract_lock_from_result(&res);
+            let lock_info_pb = extract_lock_info_from_result(&res);
+            let lock_info = WriteResultLockInfo::from_lock_info_pb(
+                lock_info_pb,
+                self.is_first_lock,
+                self.wait_timeout,
+            );
             let pr = ProcessResult::PessimisticLockRes { res };
-            let lock_info = Some((lock, self.is_first_lock, self.wait_timeout));
             // Wait for lock released
-            (pr, WriteData::default(), 0, ctx, lock_info)
+            (pr, WriteData::default(), 0, ctx, Some(lock_info))
         };
         Ok(WriteResult {
             ctx,
@@ -139,21 +156,34 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
     }
 }
 
-#[test]
-fn test_extract_lock_from_result() {
-    use crate::storage::txn::LockInfo;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    let raw_key = b"key".to_vec();
-    let key = Key::from_raw(&raw_key);
-    let ts = 100;
-    let mut info = LockInfo::default();
-    info.set_key(raw_key);
-    info.set_lock_version(ts);
-    info.set_lock_ttl(100);
-    let case = StorageError::from(StorageErrorInner::Txn(Error::from(ErrorInner::Mvcc(
-        MvccError::from(MvccErrorInner::KeyIsLocked(info)),
-    ))));
-    let lock = extract_lock_from_result::<()>(&Err(case));
-    assert_eq!(lock.ts, ts.into());
-    assert_eq!(lock.hash, key.gen_hash());
+    #[test]
+    fn test_gen_lock_info_from_result() {
+        let raw_key = b"key".to_vec();
+        let key = Key::from_raw(&raw_key);
+        let ts = 100;
+        let is_first_lock = true;
+        let wait_timeout = WaitTimeout::from_encoded(200);
+
+        let mut info = LockInfo::default();
+        info.set_key(raw_key.clone());
+        info.set_lock_version(ts);
+        info.set_lock_ttl(100);
+        let case = StorageError::from(StorageErrorInner::Txn(Error::from(ErrorInner::Mvcc(
+            MvccError::from(MvccErrorInner::KeyIsLocked(info)),
+        ))));
+        let lock_info = WriteResultLockInfo::from_lock_info_pb(
+            extract_lock_info_from_result::<()>(&Err(case)),
+            is_first_lock,
+            wait_timeout,
+        );
+        assert_eq!(lock_info.lock.ts, ts.into());
+        assert_eq!(lock_info.lock.hash, key.gen_hash());
+        assert_eq!(lock_info.key, raw_key);
+        assert_eq!(lock_info.is_first_lock, is_first_lock);
+        assert_eq!(lock_info.wait_timeout, wait_timeout);
+    }
 }

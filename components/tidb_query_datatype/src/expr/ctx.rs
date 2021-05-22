@@ -315,7 +315,7 @@ impl EvalContext {
     /// Indicates whether values less than 0 should be clipped to 0 for unsigned
     /// integer types. This is the case for `insert`, `update`, `alter table` and
     /// `load data infile` statements, when not in strict SQL mode.
-    /// see https://dev.mysql.com/doc/refman/5.7/en/out-of-range-and-overflow.html
+    /// see <https://dev.mysql.com/doc/refman/5.7/en/out-of-range-and-overflow.html>
     pub fn should_clip_to_zero(&self) -> bool {
         self.cfg.flag.contains(Flag::IN_INSERT_STMT)
             || self.cfg.flag.contains(Flag::IN_LOAD_DATA_STMT)

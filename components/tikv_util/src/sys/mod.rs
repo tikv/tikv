@@ -8,6 +8,8 @@ mod cgroup;
 // re-export some traits for ease of use
 pub use sysinfo::{DiskExt, NetworkExt, ProcessExt, ProcessorExt, SystemExt};
 
+use crate::config::ReadableSize;
+use lazy_static::lazy_static;
 use std::sync::Mutex;
 
 lazy_static! {
@@ -202,4 +204,28 @@ pub mod thread {
     pub fn get_priority() -> Result<i32, Error> {
         Ok(0)
     }
+}
+
+fn read_size_in_cache(level: usize, field: &str) -> Option<u64> {
+    std::fs::read_to_string(format!(
+        "/sys/devices/system/cpu/cpu0/cache/index{}/{}",
+        level, field
+    ))
+    .ok()
+    .and_then(|s| s.parse::<ReadableSize>().ok())
+    .map(|s| s.0)
+}
+
+/// Gets the size of given level cache.
+///
+/// It will only return `Some` on Linux.
+pub fn cache_size(level: usize) -> Option<u64> {
+    read_size_in_cache(level, "size")
+}
+
+/// Gets the size of given level cache line.
+///
+/// It will only return `Some` on Linux.
+pub fn cache_line_size(level: usize) -> Option<u64> {
+    read_size_in_cache(level, "coherency_line_size")
 }

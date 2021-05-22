@@ -2,13 +2,14 @@
 
 use crate::fsm::{Fsm, FsmScheduler};
 use crate::mailbox::{BasicMailbox, Mailbox};
+use collections::HashMap;
 use crossbeam::channel::{SendError, TrySendError};
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use tikv_util::collections::HashMap;
 use tikv_util::lru::LruCache;
 use tikv_util::Either;
+use tikv_util::{debug, info};
 
 enum CheckDoResult<T> {
     NotExist,
@@ -220,7 +221,13 @@ where
                     .unwrap()
                     .force_send(m, &self.normal_scheduler)
             }
-            Err(TrySendError::Disconnected(m)) => Err(SendError(m)),
+            Err(TrySendError::Disconnected(m)) => {
+                if self.is_shutdown() {
+                    Ok(())
+                } else {
+                    Err(SendError(m))
+                }
+            }
         }
     }
 
@@ -268,6 +275,10 @@ where
         if let Some(mb) = mailboxes.remove(&addr) {
             mb.close();
         }
+    }
+
+    pub fn clear_cache(&self) {
+        unsafe { &mut *self.caches.as_ptr() }.clear();
     }
 }
 

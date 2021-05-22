@@ -6,27 +6,8 @@
 #![feature(div_duration)]
 #![feature(min_specialization)]
 #![feature(box_patterns)]
-#![feature(duration_saturating_ops)]
-#![feature(duration_zero)]
 #![feature(vecdeque_binary_search)]
-#![recursion_limit = "512"]
-
-#[macro_use]
-extern crate bitflags;
-#[macro_use(fail_point)]
-extern crate fail;
-#[macro_use]
-extern crate lazy_static;
-#[macro_use]
-extern crate prometheus;
-#[macro_use]
-extern crate quick_error;
-#[macro_use]
-extern crate serde_derive;
-#[macro_use]
-extern crate serde_with;
-#[macro_use]
-extern crate tikv_util;
+#![recursion_limit = "256"]
 
 #[cfg(test)]
 extern crate test;

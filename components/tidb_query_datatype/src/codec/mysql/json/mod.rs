@@ -97,7 +97,7 @@ use constants::{JSON_LITERAL_FALSE, JSON_LITERAL_NIL, JSON_LITERAL_TRUE};
 
 const ERR_CONVERT_FAILED: &str = "Can not covert from ";
 
-/// The types of `Json` which follows https://tools.ietf.org/html/rfc7159#section-3
+/// The types of `Json` which follows <https://tools.ietf.org/html/rfc7159#section-3>
 #[derive(Eq, PartialEq, FromPrimitive, Clone, Debug, Copy)]
 pub enum JsonType {
     Object = 0x01,
@@ -203,11 +203,25 @@ impl<'a> JsonRef<'a> {
     pub(crate) fn get_str(&self) -> Result<&'a str> {
         Ok(str::from_utf8(self.get_str_bytes()?)?)
     }
+
+    // Return whether the value is zero.
+    // https://dev.mysql.com/doc/refman/8.0/en/json.html#Converting%20between%20JSON%20and%20non-JSON%20values
+    pub(crate) fn is_zero(&self) -> bool {
+        match self.get_type() {
+            JsonType::Object => false,
+            JsonType::Array => false,
+            JsonType::Literal => false,
+            JsonType::I64 => self.get_i64() == 0,
+            JsonType::U64 => self.get_u64() == 0,
+            JsonType::Double => self.get_double() == 0f64,
+            JsonType::String => false,
+        }
+    }
 }
 
 /// Json implements type json used in tikv by Binary Json.
 /// The Binary Json format from `MySQL` 5.7 is in the following link:
-/// (https://github.com/mysql/mysql-server/blob/5.7/sql/json_binary.h#L52)
+/// (<https://github.com/mysql/mysql-server/blob/5.7/sql/json_binary.h#L52>)
 /// The only difference is that we use large `object` or large `array` for
 /// the small corresponding ones. That means in our implementation there
 /// is no difference between small `object` and big `object`, so does `array`.
@@ -332,8 +346,8 @@ impl Json {
     }
 }
 
-/// Create JSON arrayy by given elements
-/// https://dev.mysql.com/doc/refman/5.7/en/json-creation-functions.html#function_json-array
+/// Create JSON array by given elements
+/// <https://dev.mysql.com/doc/refman/5.7/en/json-creation-functions.html#function_json-array>
 pub fn json_array(elems: Vec<Datum>) -> Result<Json> {
     let mut a = Vec::with_capacity(elems.len());
     for elem in elems {
@@ -343,7 +357,7 @@ pub fn json_array(elems: Vec<Datum>) -> Result<Json> {
 }
 
 /// Create JSON object by given key-value pairs
-/// https://dev.mysql.com/doc/refman/5.7/en/json-creation-functions.html#function_json-object
+/// <https://dev.mysql.com/doc/refman/5.7/en/json-creation-functions.html#function_json-object>
 pub fn json_object(kvs: Vec<Datum>) -> Result<Json> {
     let len = kvs.len();
     if !is_even(len) {
@@ -385,7 +399,9 @@ impl<'a> ConvertTo<f64> for JsonRef<'a> {
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
         let d = match self.get_type() {
-            JsonType::Array | JsonType::Object => 0f64,
+            JsonType::Array | JsonType::Object => ctx
+                .handle_truncate_err(Error::truncated_wrong_val("Float", self.to_string()))
+                .map(|_| 0f64)?,
             JsonType::U64 => self.get_u64() as f64,
             JsonType::I64 => self.get_i64() as f64,
             JsonType::Double => self.get_double(),
@@ -468,10 +484,7 @@ impl ConvertTo<Json> for Duration {
 
 impl crate::codec::data_type::AsMySQLBool for Json {
     #[inline]
-    fn as_mysql_bool(
-        &self,
-        _context: &mut crate::expr::EvalContext,
-    ) -> tidb_query_common::error::Result<bool> {
+    fn as_mysql_bool(&self, _context: &mut crate::expr::EvalContext) -> crate::codec::Result<bool> {
         // TODO: This logic is not correct. See pingcap/tidb#9593
         Ok(false)
     }
@@ -483,6 +496,7 @@ mod tests {
 
     use std::sync::Arc;
 
+    use crate::codec::error::ERR_TRUNCATE_WRONG_VALUE;
     use crate::expr::{EvalConfig, EvalContext};
 
     #[test]
@@ -560,6 +574,28 @@ mod tests {
                 (get - exp).abs() < std::f64::EPSILON,
                 "json.as_f64 get: {}, exp: {}",
                 get,
+                exp
+            );
+        }
+    }
+
+    #[test]
+    fn test_cast_err_when_json_array_or_object_to_real() {
+        let test_cases = vec![
+            ("{}", ERR_TRUNCATE_WRONG_VALUE),
+            ("[]", ERR_TRUNCATE_WRONG_VALUE),
+        ];
+        // avoid to use EvalConfig::default_for_test() that set Flag::IGNORE_TRUNCATE as true
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new()));
+        for (jstr, exp) in test_cases {
+            let json: Json = jstr.parse().unwrap();
+            let result: Result<f64> = json.convert(&mut ctx);
+            let err = result.unwrap_err();
+            assert_eq!(
+                err.code(),
+                exp,
+                "json.as_f64 get: {}, exp: {}",
+                err.code(),
                 exp
             );
         }

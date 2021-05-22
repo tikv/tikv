@@ -99,9 +99,9 @@ impl<'a, T: Evaluable + EvaluableRet> ChunkRef<'a, &'a T> for &'a ChunkedVecSize
     }
 }
 
-impl<T: Clone> Into<ChunkedVecSized<T>> for Vec<Option<T>> {
-    fn into(self) -> ChunkedVecSized<T> {
-        ChunkedVecSized::from_vec(self)
+impl<T: Clone> From<Vec<Option<T>>> for ChunkedVecSized<T> {
+    fn from(v: Vec<Option<T>>) -> ChunkedVecSized<T> {
+        ChunkedVecSized::from_vec(v)
     }
 }
 
@@ -152,10 +152,10 @@ mod tests {
         );
         let mut ctx = EvalContext::default();
         let test_duration: &[Option<Duration>] = &[
-            Duration::parse(&mut ctx, b"17:51:04.78", 2).ok(),
-            Duration::parse(&mut ctx, b"-17:51:04.78", 2).ok(),
-            Duration::parse(&mut ctx, b"17:51:04.78", 0).ok(),
-            Duration::parse(&mut ctx, b"-17:51:04.78", 0).ok(),
+            Duration::parse(&mut ctx, "17:51:04.78", 2).ok(),
+            Duration::parse(&mut ctx, "-17:51:04.78", 2).ok(),
+            Duration::parse(&mut ctx, "17:51:04.78", 0).ok(),
+            Duration::parse(&mut ctx, "-17:51:04.78", 0).ok(),
             None,
         ];
         assert_eq!(

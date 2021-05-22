@@ -5,6 +5,7 @@
 use crate::config::StorageReadPoolConfig;
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter};
 use crate::storage::metrics;
+use file_system::{set_io_type, IOType};
 use std::sync::{Arc, Mutex};
 use tikv_util::yatp_pool::{Config, DefaultTicker, FuturePool, PoolTicker, YatpPoolBuilder};
 
@@ -38,7 +39,10 @@ pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
             YatpPoolBuilder::new(FuturePoolTicker { reporter })
                 .name_prefix(name)
                 .config(config)
-                .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
+                .after_start(move || {
+                    set_tls_engine(engine.lock().unwrap().clone());
+                    set_io_type(IOType::ForegroundRead);
+                })
                 .before_stop(move || unsafe {
                     // Safety: we call `set_` and `destroy_` with the same engine type.
                     destroy_tls_engine::<E>();
@@ -65,7 +69,10 @@ pub fn build_read_pool_for_test<E: Engine>(
             YatpPoolBuilder::new(DefaultTicker::default())
                 .config(config)
                 .name_prefix(name)
-                .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
+                .after_start(move || {
+                    set_tls_engine(engine.lock().unwrap().clone());
+                    set_io_type(IOType::ForegroundRead);
+                })
                 // Safety: we call `set_` and `destroy_` with the same engine type.
                 .before_stop(|| unsafe { destroy_tls_engine::<E>() })
                 .build_future_pool()

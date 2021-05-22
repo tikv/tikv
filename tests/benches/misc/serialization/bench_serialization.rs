@@ -7,7 +7,7 @@ use protobuf::{self, Message};
 use rand::{thread_rng, RngCore};
 use test::Bencher;
 
-use tikv_util::collections::HashMap;
+use collections::HashMap;
 
 #[inline]
 fn gen_rand_str(len: usize) -> Vec<u8> {

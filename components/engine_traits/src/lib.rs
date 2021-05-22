@@ -126,8 +126,8 @@
 //!   for this is that associated types cannot contain lifetimes. That requires
 //!   "generic associated types". See
 //!
-//!   - [https://github.com/rust-lang/rfcs/pull/1598](https://github.com/rust-lang/rfcs/pull/1598)
-//!   - [https://github.com/rust-lang/rust/issues/44265](https://github.com/rust-lang/rust/issues/44265)
+//!   - <https://github.com/rust-lang/rfcs/pull/1598>
+//!   - <https://github.com/rust-lang/rust/issues/44265>
 //!
 //! - Traits can't have mutually-recursive associated types. That is, if
 //!   `KvEngine` has a `Snapshot` associated type, `Snapshot` can't then have a
@@ -252,13 +252,12 @@
 //!   `engine_traits` and reexported from `engine` to ease the transition.
 //!   Likewise `engine_rocks` can temporarily call code from inside `engine`.
 #![feature(min_specialization)]
-#![recursion_limit = "200"]
 
-#[macro_use]
-extern crate quick_error;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
+#[cfg(test)]
 #[macro_use]
+extern crate serde_derive;
 extern crate slog_global;
 
 // These modules contain traits that need to be implemented by engines, either
@@ -279,6 +278,8 @@ mod db_vector;
 pub use crate::db_vector::*;
 mod engine;
 pub use crate::engine::*;
+mod file_system;
+pub use crate::file_system::*;
 mod import;
 pub use import::*;
 mod misc;
@@ -301,6 +302,10 @@ pub use crate::sst_partitioner::*;
 mod range_properties;
 pub use crate::mvcc_properties::*;
 pub use crate::range_properties::*;
+mod ttl_properties;
+pub use crate::ttl_properties::*;
+mod perf_context;
+pub use crate::perf_context::*;
 
 // These modules contain more general traits, some of which may be implemented
 // by multiple types.
@@ -330,11 +335,11 @@ pub use raft_engine::{CacheStats, RaftEngine, RaftLogBatch};
 
 // These modules need further scrutiny
 
-pub mod metrics_flusher;
-pub use crate::metrics_flusher::*;
 pub mod compaction_job;
 pub mod util;
 pub use compaction_job::*;
+
+pub mod config;
 
 // FIXME: This should live somewhere else
 pub const DATA_KEY_PREFIX_LEN: usize = 1;

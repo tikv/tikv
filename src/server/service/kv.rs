@@ -3,13 +3,15 @@
 use std::sync::Arc;
 use tikv_util::time::{duration_to_sec, Instant};
 
-use super::batch::ReqBatcher;
+use super::batch::{BatcherBuilder, ReqBatcher};
 use crate::coprocessor::Endpoint;
+use crate::coprocessor_v2;
 use crate::server::gc_worker::GcWorker;
 use crate::server::load_statistics::ThreadLoad;
 use crate::server::metrics::*;
 use crate::server::snap::Task as SnapTask;
 use crate::server::Error;
+use crate::server::Proxy;
 use crate::server::Result as ServerResult;
 use crate::storage::{
     errors::{
@@ -20,6 +22,7 @@ use crate::storage::{
     lock_manager::LockManager,
     SecondaryLocksStatus, Storage, TxnStatus,
 };
+use crate::{forward_duplex, forward_unary};
 use engine_rocks::RocksEngine;
 use futures::compat::Future01CompatExt;
 use futures::future::{self, Future, FutureExt, TryFutureExt};
@@ -30,6 +33,7 @@ use grpcio::{
     RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
 };
 use kvproto::coprocessor::*;
+use kvproto::coprocessor_v2::*;
 use kvproto::errorpb::{Error as RegionError, *};
 use kvproto::kvrpcpb::*;
 use kvproto::mpp::*;
@@ -39,7 +43,6 @@ use kvproto::tikvpb::*;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback, CasualMessage, StoreMsg};
 use raftstore::{DiscardReason, Error as RaftStoreError};
-use security::{check_common_name, SecurityManager};
 use tikv_util::future::{paired_future_callback, poll_future_notify};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
 use tikv_util::worker::Scheduler;
@@ -50,12 +53,15 @@ const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
 /// Service handles the RPC messages for the `Tikv` service.
 pub struct Service<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> {
+    store_id: u64,
     /// Used to handle requests related to GC.
     gc_worker: GcWorker<E, T>,
     // For handling KV requests.
     storage: Storage<E, L>,
     // For handling coprocessor requests.
     cop: Endpoint<E>,
+    // For handling corprocessor v2 requests.
+    coprv2: coprocessor_v2::Endpoint,
     // For handling raft messages.
     ch: T,
     // For handling snapshot.
@@ -65,28 +71,24 @@ pub struct Service<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: Lock
 
     grpc_thread_load: Arc<ThreadLoad>,
 
-    readpool_normal_thread_load: Arc<ThreadLoad>,
-
-    security_mgr: Arc<SecurityManager>,
+    proxy: Proxy,
 }
 
-impl<
-        T: RaftStoreRouter<RocksEngine> + Clone + 'static,
-        E: Engine + Clone,
-        L: LockManager + Clone,
-    > Clone for Service<T, E, L>
+impl<T: RaftStoreRouter<RocksEngine> + Clone + 'static, E: Engine + Clone, L: LockManager + Clone>
+    Clone for Service<T, E, L>
 {
     fn clone(&self) -> Self {
         Service {
+            store_id: self.store_id,
             gc_worker: self.gc_worker.clone(),
             storage: self.storage.clone(),
             cop: self.cop.clone(),
+            coprv2: self.coprv2.clone(),
             ch: self.ch.clone(),
             snap_scheduler: self.snap_scheduler.clone(),
             enable_req_batch: self.enable_req_batch,
             grpc_thread_load: self.grpc_thread_load.clone(),
-            readpool_normal_thread_load: self.readpool_normal_thread_load.clone(),
-            security_mgr: self.security_mgr.clone(),
+            proxy: self.proxy.clone(),
         }
     }
 }
@@ -94,26 +96,28 @@ impl<
 impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Service<T, E, L> {
     /// Constructs a new `Service` which provides the `Tikv` service.
     pub fn new(
+        store_id: u64,
         storage: Storage<E, L>,
         gc_worker: GcWorker<E, T>,
         cop: Endpoint<E>,
+        coprv2: coprocessor_v2::Endpoint,
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
         grpc_thread_load: Arc<ThreadLoad>,
-        readpool_normal_thread_load: Arc<ThreadLoad>,
         enable_req_batch: bool,
-        security_mgr: Arc<SecurityManager>,
+        proxy: Proxy,
     ) -> Self {
         Service {
+            store_id,
             gc_worker,
             storage,
             cop,
+            coprv2,
             ch,
             snap_scheduler,
-            grpc_thread_load,
-            readpool_normal_thread_load,
             enable_req_batch,
-            security_mgr,
+            grpc_thread_load,
+            proxy,
         }
     }
 }
@@ -121,9 +125,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
 macro_rules! handle_request {
     ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident) => {
         fn $fn_name(&mut self, ctx: RpcContext<'_>, req: $req_ty, sink: UnarySink<$resp_ty>) {
-            if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-                return;
-            }
+            forward_unary!(self.proxy, $fn_name, ctx, req, sink);
             let begin_instant = Instant::now_coarse();
 
             let resp = $future_name(&self.storage, req);
@@ -273,6 +275,19 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         RawDeleteRangeRequest,
         RawDeleteRangeResponse
     );
+    handle_request!(
+        raw_get_key_ttl,
+        future_raw_get_key_ttl,
+        RawGetKeyTtlRequest,
+        RawGetKeyTtlResponse
+    );
+
+    handle_request!(
+        raw_compare_and_swap,
+        future_raw_compare_and_swap,
+        RawCasRequest,
+        RawCasResponse
+    );
 
     fn kv_import(&mut self, _: RpcContext<'_>, _: ImportRequest, _: UnarySink<ImportResponse>) {
         unimplemented!();
@@ -287,9 +302,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
     }
 
     fn coprocessor(&mut self, ctx: RpcContext<'_>, req: Request, sink: UnarySink<Response>) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
+        forward_unary!(self.proxy, coprocessor, ctx, req, sink);
         let begin_instant = Instant::now_coarse();
         let future = future_cop(&self.cop, Some(ctx.peer()), req);
         let task = async move {
@@ -312,15 +325,40 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         ctx.spawn(task);
     }
 
+    fn coprocessor_v2(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: RawCoprocessorRequest,
+        sink: UnarySink<RawCoprocessorResponse>,
+    ) {
+        let begin_instant = Instant::now_coarse();
+        let future = future_coprv2(&self.coprv2, &self.storage, req);
+        let task = async move {
+            let resp = future.await?;
+            sink.success(resp).await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .coprocessor_v2
+                .observe(duration_to_sec(begin_instant.elapsed()));
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            debug!("kv rpc failed";
+                "request" => "coprocessor_v2",
+                "err" => ?e
+            );
+            GRPC_MSG_FAIL_COUNTER.coprocessor_v2.inc();
+        })
+        .map(|_| ());
+
+        ctx.spawn(task);
+    }
+
     fn register_lock_observer(
         &mut self,
         ctx: RpcContext<'_>,
         req: RegisterLockObserverRequest,
         sink: UnarySink<RegisterLockObserverResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let begin_instant = Instant::now_coarse();
 
         let (cb, f) = paired_future_callback();
@@ -361,9 +399,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         req: CheckLockObserverRequest,
         sink: UnarySink<CheckLockObserverResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let begin_instant = Instant::now_coarse();
 
         let (cb, f) = paired_future_callback();
@@ -408,9 +443,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         req: RemoveLockObserverRequest,
         sink: UnarySink<RemoveLockObserverResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let begin_instant = Instant::now_coarse();
 
         let (cb, f) = paired_future_callback();
@@ -449,9 +481,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         mut req: PhysicalScanLockRequest,
         sink: UnarySink<PhysicalScanLockResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let begin_instant = Instant::now_coarse();
 
         let (cb, f) = paired_future_callback();
@@ -497,9 +526,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         mut req: UnsafeDestroyRangeRequest,
         sink: UnarySink<UnsafeDestroyRangeResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let begin_instant = Instant::now_coarse();
 
         // DestroyRange is a very dangerous operation. We don't allow passing MIN_KEY as start, or
@@ -549,9 +575,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         req: Request,
         mut sink: ServerStreamingSink<Response>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let begin_instant = Instant::now_coarse();
 
         let mut stream = self
@@ -590,15 +613,21 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         stream: RequestStream<RaftMessage>,
         sink: ClientStreamingSink<Done>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
+        let store_id = self.store_id;
         let ch = self.ch.clone();
         ctx.spawn(async move {
             let res = stream.map_err(Error::from).try_for_each(move |msg| {
                 RAFT_MESSAGE_RECV_COUNTER.inc();
-                let ret = ch.send_raft_msg(msg).map_err(Error::from);
-                future::ready(ret)
+                let to_store_id = msg.get_to_peer().get_store_id();
+                if to_store_id != store_id {
+                    future::err(Error::from(RaftStoreError::StoreNotMatch {
+                        to_store_id,
+                        my_store_id: store_id,
+                    }))
+                } else {
+                    let ret = ch.send_raft_msg(msg).map_err(Error::from);
+                    future::ready(ret)
+                }
             });
             let status = match res.await {
                 Err(e) => {
@@ -621,10 +650,8 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         stream: RequestStream<BatchRaftMessage>,
         sink: ClientStreamingSink<Done>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         info!("batch_raft RPC is called, new gRPC stream established");
+        let store_id = self.store_id;
         let ch = self.ch.clone();
         ctx.spawn(async move {
             let res = stream.map_err(Error::from).try_for_each(move |mut msgs| {
@@ -632,6 +659,13 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 RAFT_MESSAGE_RECV_COUNTER.inc_by(len as i64);
                 RAFT_MESSAGE_BATCH_SIZE.observe(len as f64);
                 for msg in msgs.take_msgs().into_iter() {
+                    let to_store_id = msg.get_to_peer().get_store_id();
+                    if to_store_id != store_id {
+                        return future::err(Error::from(RaftStoreError::StoreNotMatch {
+                            to_store_id,
+                            my_store_id: store_id,
+                        }));
+                    }
                     if let Err(e) = ch.send_raft_msg(msg) {
                         return future::err(Error::from(e));
                     }
@@ -659,9 +693,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         stream: RequestStream<SnapshotChunk>,
         sink: ClientStreamingSink<Done>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let task = SnapTask::Recv { stream, sink };
         if let Err(e) = self.snap_scheduler.schedule(task) {
             let err_msg = format!("{}", e);
@@ -680,9 +711,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         mut req: SplitRegionRequest,
         sink: UnarySink<SplitRegionResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
+        forward_unary!(self.proxy, split_region, ctx, req, sink);
         let begin_instant = Instant::now_coarse();
 
         let region_id = req.get_context().get_region_id();
@@ -768,9 +797,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         req: ReadIndexRequest,
         sink: UnarySink<ReadIndexResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
+        forward_unary!(self.proxy, read_index, ctx, req, sink);
         let begin_instant = Instant::now_coarse();
 
         let region_id = req.get_context().get_region_id();
@@ -865,31 +892,39 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         stream: RequestStream<BatchCommandsRequest>,
         mut sink: DuplexSink<BatchCommandsResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
+        forward_duplex!(self.proxy, batch_commands, ctx, stream, sink);
         let (tx, rx) = unbounded(GRPC_MSG_NOTIFY_SIZE);
 
         let ctx = Arc::new(ctx);
         let peer = ctx.peer();
         let storage = self.storage.clone();
         let cop = self.cop.clone();
-        let enable_req_batch = self.enable_req_batch;
+        let coprv2 = self.coprv2.clone();
+        let pool_size = storage.get_normal_pool_size();
+        let batch_builder = BatcherBuilder::new(self.enable_req_batch, pool_size);
         let request_handler = stream.try_for_each(move |mut req| {
             let request_ids = req.take_request_ids();
             let requests: Vec<_> = req.take_requests().into();
-            let mut batcher = if enable_req_batch && requests.len() > 2 {
-                Some(ReqBatcher::new())
-            } else {
-                None
-            };
+            let queue = storage.get_readpool_queue_per_worker();
+            let mut batcher = batch_builder.build(queue, request_ids.len());
             GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
             for (id, req) in request_ids.into_iter().zip(requests) {
-                handle_batch_commands_request(&mut batcher, &storage, &cop, &peer, id, req, &tx);
+                handle_batch_commands_request(
+                    &mut batcher,
+                    &storage,
+                    &cop,
+                    &coprv2,
+                    &peer,
+                    id,
+                    req,
+                    &tx,
+                );
+                if let Some(batch) = batcher.as_mut() {
+                    batch.maybe_commit(&storage, &tx);
+                }
             }
-            if let Some(mut batch) = batcher {
+            if let Some(batch) = batcher {
                 batch.commit(&storage, &tx);
-                storage.release_snapshot();
             }
             future::ok(())
         });
@@ -927,60 +962,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         .map(|_| ());
 
         ctx.spawn(send_task);
-    }
-
-    fn ver_get(
-        &mut self,
-        _ctx: RpcContext<'_>,
-        _req: VerGetRequest,
-        _sink: UnarySink<VerGetResponse>,
-    ) {
-        unimplemented!()
-    }
-
-    fn ver_batch_get(
-        &mut self,
-        _ctx: RpcContext<'_>,
-        _req: VerBatchGetRequest,
-        _sink: UnarySink<VerBatchGetResponse>,
-    ) {
-        unimplemented!()
-    }
-
-    fn ver_mut(
-        &mut self,
-        _ctx: RpcContext<'_>,
-        _req: VerMutRequest,
-        _sink: UnarySink<VerMutResponse>,
-    ) {
-        unimplemented!()
-    }
-
-    fn ver_batch_mut(
-        &mut self,
-        _ctx: RpcContext<'_>,
-        _req: VerBatchMutRequest,
-        _sink: UnarySink<VerBatchMutResponse>,
-    ) {
-        unimplemented!()
-    }
-
-    fn ver_scan(
-        &mut self,
-        _ctx: RpcContext<'_>,
-        _req: VerScanRequest,
-        _sink: UnarySink<VerScanResponse>,
-    ) {
-        unimplemented!()
-    }
-
-    fn ver_delete_range(
-        &mut self,
-        _ctx: RpcContext<'_>,
-        _req: VerDeleteRangeRequest,
-        _sink: UnarySink<VerDeleteRangeResponse>,
-    ) {
-        unimplemented!()
     }
 
     fn batch_coprocessor(
@@ -1045,6 +1026,40 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
 
         ctx.spawn(task);
     }
+
+    fn get_store_safe_ts(
+        &mut self,
+        ctx: RpcContext<'_>,
+        mut request: StoreSafeTsRequest,
+        sink: UnarySink<StoreSafeTsResponse>,
+    ) {
+        let key_range = request.take_key_range();
+        let (cb, resp) = paired_future_callback();
+        let ch = self.ch.clone();
+        let task = async move {
+            ch.send_store_msg(StoreMsg::GetStoreSafeTS { key_range, cb })?;
+            let store_safe_ts = resp.await?;
+            let mut resp = StoreSafeTsResponse::default();
+            resp.set_safe_ts(store_safe_ts);
+            sink.success(resp).await?;
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            warn!("call GetStoreSafeTS failed"; "err" => ?e);
+        })
+        .map(|_| ());
+
+        ctx.spawn(task);
+    }
+
+    fn get_lock_wait_info(
+        &mut self,
+        _: RpcContext<'_>,
+        _: GetLockWaitInfoRequest,
+        _: UnarySink<GetLockWaitInfoResponse>,
+    ) {
+        unimplemented!()
+    }
 }
 
 fn response_batch_commands_request<F>(
@@ -1058,8 +1073,8 @@ fn response_batch_commands_request<F>(
 {
     let task = async move {
         if let Ok(resp) = resp.await {
-            if tx.send_and_notify((id, resp)).is_err() {
-                error!("KvService response batch commands fail");
+            if let Err(e) = tx.send_and_notify((id, resp)) {
+                error!("KvService response batch commands fail"; "err" => ?e);
             } else {
                 GRPC_MSG_HISTOGRAM_STATIC
                     .get(label_enum)
@@ -1074,6 +1089,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
     batcher: &mut Option<ReqBatcher>,
     storage: &Storage<E, L>,
     cop: &Endpoint<E>,
+    coprv2: &coprocessor_v2::Endpoint,
     peer: &str,
     id: u64,
     req: batch_commands_request::Request,
@@ -1082,10 +1098,9 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
     // To simplify code and make the logic more clear.
     macro_rules! oneof {
         ($p:path) => {
-            |resp| {
-                let mut res = batch_commands_response::Response::default();
-                res.cmd = Some($p(resp));
-                res
+            |resp| batch_commands_response::Response {
+                cmd: Some($p(resp)),
+                ..Default::default()
             }
         };
     }
@@ -1101,7 +1116,6 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
                 },
                 Some(batch_commands_request::request::Cmd::Get(req)) => {
                     if batcher.as_mut().map_or(false, |req_batch| {
-                        req_batch.maybe_commit(storage, tx);
                         req_batch.can_batch_get(&req)
                     }) {
                         batcher.as_mut().unwrap().add_get_request(req, id);
@@ -1115,7 +1129,6 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
                 },
                 Some(batch_commands_request::request::Cmd::RawGet(req)) => {
                     if batcher.as_mut().map_or(false, |req_batch| {
-                        req_batch.maybe_commit(storage, tx);
                         req_batch.can_batch_raw_get(&req)
                     }) {
                         batcher.as_mut().unwrap().add_raw_get_request(req, id);
@@ -1161,13 +1174,8 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
         RawScan, future_raw_scan(storage), raw_scan;
         RawDeleteRange, future_raw_delete_range(storage), raw_delete_range;
         RawBatchScan, future_raw_batch_scan(storage), raw_batch_scan;
-        VerGet, future_ver_get(storage), ver_get;
-        VerBatchGet, future_ver_batch_get(storage), ver_batch_get;
-        VerMut, future_ver_mut(storage), ver_mut;
-        VerBatchMut, future_ver_batch_mut(storage), ver_batch_mut;
-        VerScan, future_ver_scan(storage), ver_scan;
-        VerDeleteRange, future_ver_delete_range(storage), ver_delete_range;
         Coprocessor, future_cop(cop, Some(peer.to_string())), coprocessor;
+        CoprocessorV2, future_coprv2(coprv2, storage), coprocessor;
         PessimisticLock, future_acquire_pessimistic_lock(storage), kv_pessimistic_lock;
         PessimisticRollback, future_pessimistic_rollback(storage), kv_pessimistic_rollback;
         Empty, future_handle_empty(), invalid;
@@ -1181,17 +1189,15 @@ async fn future_handle_empty(
     res.set_test_id(req.get_test_id());
     // `BatchCommandsWaker` processes futures in notify. If delay_time is too small, notify
     // can be called immediately, so the future is polled recursively and lead to deadlock.
-    if req.get_delay_time() < 10 {
-        Ok(res)
-    } else {
+    if req.get_delay_time() >= 10 {
         let _ = tikv_util::timer::GLOBAL_TIMER_HANDLE
             .delay(
                 std::time::Instant::now() + std::time::Duration::from_millis(req.get_delay_time()),
             )
             .compat()
             .await;
-        Ok(res)
     }
+    Ok(res)
 }
 
 fn future_get<E: Engine, L: LockManager>(
@@ -1302,6 +1308,36 @@ fn future_batch_get<E: Engine, L: LockManager>(
     }
 }
 
+fn future_scan_lock<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
+    mut req: ScanLockRequest,
+) -> impl Future<Output = ServerResult<ScanLockResponse>> {
+    let start_key = Key::from_raw_maybe_unbounded(req.get_start_key());
+    let end_key = Key::from_raw_maybe_unbounded(req.get_end_key());
+
+    let v = storage.scan_lock(
+        req.take_context(),
+        req.get_max_version().into(),
+        start_key,
+        end_key,
+        req.get_limit() as usize,
+    );
+
+    async move {
+        let v = v.await;
+        let mut resp = ScanLockResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            match v {
+                Ok(locks) => resp.set_locks(locks.into()),
+                Err(e) => resp.set_error(extract_key_error(&e)),
+            }
+        }
+        Ok(resp)
+    }
+}
+
 async fn future_gc(_: GcRequest) -> ServerResult<GcResponse> {
     Err(Error::Grpc(GrpcError::RpcFailure(RpcStatus::new(
         RpcStatusCode::UNIMPLEMENTED,
@@ -1383,13 +1419,25 @@ fn future_raw_put<E: Engine, L: LockManager>(
     mut req: RawPutRequest,
 ) -> impl Future<Output = ServerResult<RawPutResponse>> {
     let (cb, f) = paired_future_callback();
-    let res = storage.raw_put(
-        req.take_context(),
-        req.take_cf(),
-        req.take_key(),
-        req.take_value(),
-        cb,
-    );
+    let for_atomic = req.get_for_cas();
+    let res = if for_atomic {
+        storage.raw_batch_put_atomic(
+            req.take_context(),
+            req.take_cf(),
+            vec![(req.take_key(), req.take_value())],
+            req.get_ttl(),
+            cb,
+        )
+    } else {
+        storage.raw_put(
+            req.take_context(),
+            req.take_cf(),
+            req.take_key(),
+            req.take_value(),
+            req.get_ttl(),
+            cb,
+        )
+    };
 
     async move {
         let v = match res {
@@ -1418,7 +1466,12 @@ fn future_raw_batch_put<E: Engine, L: LockManager>(
         .collect();
 
     let (cb, f) = paired_future_callback();
-    let res = storage.raw_batch_put(req.take_context(), cf, pairs, cb);
+    let for_atomic = req.get_for_cas();
+    let res = if for_atomic {
+        storage.raw_batch_put_atomic(req.take_context(), cf, pairs, req.get_ttl(), cb)
+    } else {
+        storage.raw_batch_put(req.take_context(), cf, pairs, req.get_ttl(), cb)
+    };
 
     async move {
         let v = match res {
@@ -1440,7 +1493,12 @@ fn future_raw_delete<E: Engine, L: LockManager>(
     mut req: RawDeleteRequest,
 ) -> impl Future<Output = ServerResult<RawDeleteResponse>> {
     let (cb, f) = paired_future_callback();
-    let res = storage.raw_delete(req.take_context(), req.take_cf(), req.take_key(), cb);
+    let for_atomic = req.get_for_cas();
+    let res = if for_atomic {
+        storage.raw_batch_delete_atomic(req.take_context(), req.take_cf(), vec![req.take_key()], cb)
+    } else {
+        storage.raw_delete(req.take_context(), req.take_cf(), req.take_key(), cb)
+    };
 
     async move {
         let v = match res {
@@ -1464,7 +1522,12 @@ fn future_raw_batch_delete<E: Engine, L: LockManager>(
     let cf = req.take_cf();
     let keys = req.take_keys().into();
     let (cb, f) = paired_future_callback();
-    let res = storage.raw_batch_delete(req.take_context(), cf, keys, cb);
+    let for_atomic = req.get_for_cas();
+    let res = if for_atomic {
+        storage.raw_batch_delete_atomic(req.take_context(), cf, keys, cb)
+    } else {
+        storage.raw_batch_delete(req.take_context(), cf, keys, cb)
+    };
 
     async move {
         let v = match res {
@@ -1565,58 +1628,70 @@ fn future_raw_delete_range<E: Engine, L: LockManager>(
     }
 }
 
-// unimplemented
-fn future_ver_get<E: Engine, L: LockManager>(
-    _storage: &Storage<E, L>,
-    mut _req: VerGetRequest,
-) -> impl Future<Output = ServerResult<VerGetResponse>> {
-    let resp = VerGetResponse::default();
-    future::ok(resp)
+fn future_raw_get_key_ttl<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
+    mut req: RawGetKeyTtlRequest,
+) -> impl Future<Output = ServerResult<RawGetKeyTtlResponse>> {
+    let v = storage.raw_get_key_ttl(req.take_context(), req.take_cf(), req.take_key());
+
+    async move {
+        let v = v.await;
+        let mut resp = RawGetKeyTtlResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            match v {
+                Ok(Some(ttl)) => resp.set_ttl(ttl),
+                Ok(None) => resp.set_not_found(true),
+                Err(e) => resp.set_error(format!("{}", e)),
+            }
+        }
+        Ok(resp)
+    }
 }
 
-// unimplemented
-fn future_ver_batch_get<E: Engine, L: LockManager>(
-    _storage: &Storage<E, L>,
-    mut _req: VerBatchGetRequest,
-) -> impl Future<Output = ServerResult<VerBatchGetResponse>> {
-    let resp = VerBatchGetResponse::default();
-    future::ok(resp)
-}
-
-// unimplemented
-fn future_ver_mut<E: Engine, L: LockManager>(
-    _storage: &Storage<E, L>,
-    mut _req: VerMutRequest,
-) -> impl Future<Output = ServerResult<VerMutResponse>> {
-    let resp = VerMutResponse::default();
-    future::ok(resp)
-}
-
-// unimplemented
-fn future_ver_batch_mut<E: Engine, L: LockManager>(
-    _storage: &Storage<E, L>,
-    mut _req: VerBatchMutRequest,
-) -> impl Future<Output = ServerResult<VerBatchMutResponse>> {
-    let resp = VerBatchMutResponse::default();
-    future::ok(resp)
-}
-
-// unimplemented
-fn future_ver_scan<E: Engine, L: LockManager>(
-    _storage: &Storage<E, L>,
-    mut _req: VerScanRequest,
-) -> impl Future<Output = ServerResult<VerScanResponse>> {
-    let resp = VerScanResponse::default();
-    future::ok(resp)
-}
-
-// unimplemented
-fn future_ver_delete_range<E: Engine, L: LockManager>(
-    _storage: &Storage<E, L>,
-    mut _req: VerDeleteRangeRequest,
-) -> impl Future<Output = ServerResult<VerDeleteRangeResponse>> {
-    let resp = VerDeleteRangeResponse::default();
-    future::ok(resp)
+fn future_raw_compare_and_swap<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
+    mut req: RawCasRequest,
+) -> impl Future<Output = ServerResult<RawCasResponse>> {
+    let (cb, f) = paired_future_callback();
+    let previous_value = if req.get_previous_not_exist() {
+        None
+    } else {
+        Some(req.take_previous_value())
+    };
+    let res = storage.raw_compare_and_swap_atomic(
+        req.take_context(),
+        req.take_cf(),
+        req.take_key(),
+        previous_value,
+        req.take_value(),
+        req.get_ttl(),
+        cb,
+    );
+    async move {
+        let v = match res {
+            Ok(()) => f.await?,
+            Err(e) => Err(e),
+        };
+        let mut resp = RawCasResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            match v {
+                Ok((val, succeed)) => {
+                    if let Some(val) = val {
+                        resp.set_previous_value(val);
+                    } else {
+                        resp.set_previous_not_exist(true);
+                    }
+                    resp.set_succeed(succeed);
+                }
+                Err(e) => resp.set_error(format!("{}", e)),
+            }
+        }
+        Ok(resp)
+    }
 }
 
 fn future_cop<E: Engine>(
@@ -1625,6 +1700,15 @@ fn future_cop<E: Engine>(
     req: Request,
 ) -> impl Future<Output = ServerResult<Response>> {
     let ret = cop.parse_and_handle_unary_request(req, peer);
+    async move { Ok(ret.await) }
+}
+
+fn future_coprv2<E: Engine, L: LockManager>(
+    coprv2: &coprocessor_v2::Endpoint,
+    storage: &Storage<E, L>,
+    req: RawCoprocessorRequest,
+) -> impl Future<Output = ServerResult<RawCoprocessorResponse>> {
+    let ret = coprv2.handle_request(storage, req);
     async move { Ok(ret.await) }
 }
 
@@ -1667,7 +1751,11 @@ txn_command_future!(future_prewrite, PrewriteRequest, PrewriteResponse, (v, resp
 }});
 txn_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, PessimisticLockResponse, (v, resp) {
     match v {
-        Ok(Ok(res)) => resp.set_values(res.into_vec().into()),
+        Ok(Ok(res)) => {
+            let (values, not_founds) = res.into_values_and_not_founds();
+            resp.set_values(values.into());
+            resp.set_not_founds(not_founds);
+        },
         Err(e) | Ok(Err(e)) => resp.set_errors(vec![extract_key_error(&e)].into()),
     }
 });
@@ -1732,6 +1820,8 @@ txn_command_future!(future_check_txn_status, CheckTxnStatusRequest, CheckTxnStat
                     let primary = lock.primary.clone();
                     resp.set_lock_info(lock.into_lock_info(primary));
                 }
+                TxnStatus::PessimisticRollBack => resp.set_action(Action::TtlExpirePessimisticRollback),
+                TxnStatus::LockNotExistDoNothing => resp.set_action(Action::LockNotExistDoNothing),
             },
             Err(e) => resp.set_error(extract_key_error(&e)),
         }
@@ -1745,12 +1835,6 @@ txn_command_future!(future_check_secondary_locks, CheckSecondaryLocksRequest, Ch
             resp.set_commit_ts(ts.into_inner());
         },
         Ok(SecondaryLocksStatus::RolledBack) => {},
-        Err(e) => resp.set_error(extract_key_error(&e)),
-    }
-});
-txn_command_future!(future_scan_lock, ScanLockRequest, ScanLockResponse, (v, resp) {
-    match v {
-        Ok(locks) => resp.set_locks(locks.into()),
         Err(e) => resp.set_error(extract_key_error(&e)),
     }
 });
@@ -1815,8 +1899,10 @@ fn raftstore_error_to_region_error(e: RaftStoreError, region_id: u64) -> RegionE
     if let RaftStoreError::Transport(DiscardReason::Disconnected) = e {
         // `From::from(RaftStoreError) -> RegionError` treats `Disconnected` as `Other`.
         let mut region_error = RegionError::default();
-        let mut region_not_found = RegionNotFound::default();
-        region_not_found.region_id = region_id;
+        let region_not_found = RegionNotFound {
+            region_id,
+            ..Default::default()
+        };
         region_error.set_region_not_found(region_not_found);
         return region_error;
     }

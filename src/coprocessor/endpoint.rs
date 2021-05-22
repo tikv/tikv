@@ -3,6 +3,7 @@
 use std::future::Future;
 use std::marker::PhantomData;
 use std::sync::Arc;
+use std::time::Instant;
 use std::{borrow::Cow, time::Duration};
 
 use async_stream::try_stream;
@@ -25,14 +26,12 @@ use crate::storage::{self, need_check_locks_in_replica_read, Engine, Snapshot, S
 use crate::{read_pool::ReadPoolHandle, storage::kv::SnapContext};
 
 use crate::coprocessor::cache::CachedRequestHandler;
-use crate::coprocessor::interceptors::limit_concurrency;
-use crate::coprocessor::interceptors::track;
+use crate::coprocessor::interceptors::*;
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::PerfLevel;
-use minitrace::prelude::*;
 use txn_types::Lock;
 
 /// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
@@ -40,6 +39,7 @@ use txn_types::Lock;
 const LIGHT_TASK_THRESHOLD: Duration = Duration::from_millis(5);
 
 /// A pool to build and run Coprocessor request handlers.
+#[derive(Clone)]
 pub struct Endpoint<E: Engine> {
     /// The thread pool to run Coprocessor requests.
     read_pool: ReadPoolHandle,
@@ -67,17 +67,6 @@ pub struct Endpoint<E: Engine> {
     slow_log_threshold: Duration,
 
     _phantom: PhantomData<E>,
-}
-
-impl<E: Engine> Clone for Endpoint<E> {
-    fn clone(&self) -> Self {
-        Self {
-            read_pool: self.read_pool.clone(),
-            semaphore: self.semaphore.clone(),
-            concurrency_manager: self.concurrency_manager.clone(),
-            ..*self
-        }
-    }
 }
 
 impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
@@ -117,6 +106,7 @@ impl<E: Engine> Endpoint<E> {
         let start_ts = req_ctx.txn_start_ts;
         self.concurrency_manager.update_max_ts(start_ts);
         if req_ctx.context.get_isolation_level() == IsolationLevel::Si {
+            let begin_instant = Instant::now();
             for range in &req_ctx.ranges {
                 let start_key = txn_types::Key::from_raw_maybe_unbounded(range.get_start());
                 let end_key = txn_types::Key::from_raw_maybe_unbounded(range.get_end());
@@ -129,8 +119,16 @@ impl<E: Engine> Endpoint<E> {
                             &req_ctx.bypass_locks,
                         )
                     })
-                    .map_err(MvccError::from)?;
+                    .map_err(|e| {
+                        MEM_LOCK_CHECK_HISTOGRAM_VEC_STATIC
+                            .locked
+                            .observe(begin_instant.elapsed().as_secs_f64());
+                        MvccError::from(e)
+                    })?;
             }
+            MEM_LOCK_CHECK_HISTOGRAM_VEC_STATIC
+                .unlocked
+                .observe(begin_instant.elapsed().as_secs_f64());
         }
         Ok(())
     }
@@ -365,11 +363,11 @@ impl<E: Engine> Endpoint<E> {
     ) -> impl std::future::Future<Output = Result<E::Snap>> {
         let mut snap_ctx = SnapContext {
             pb_ctx: &ctx.context,
+            start_ts: ctx.txn_start_ts,
             ..Default::default()
         };
         // need to pass start_ts and ranges to check memory locks for replica read
         if need_check_locks_in_replica_read(&ctx.context) {
-            snap_ctx.start_ts = ctx.txn_start_ts;
             for r in &ctx.ranges {
                 let start_key = txn_types::Key::from_raw(r.get_start());
                 let end_key = txn_types::Key::from_raw(r.get_end());
@@ -401,7 +399,6 @@ impl<E: Engine> Endpoint<E> {
         // exists.
         let snapshot =
             unsafe { with_tls_engine(|engine| Self::async_snapshot(engine, &tracker.req_ctx)) }
-                .trace_async(tipb::Event::TiKvCoprGetSnapshot as u32)
                 .await?;
         // When snapshot is retrieved, deadline may exceed.
         tracker.on_snapshot_finished();
@@ -418,17 +415,15 @@ impl<E: Engine> Endpoint<E> {
 
         tracker.on_begin_all_items();
 
-        let handle_request_future = track(
-            handler
-                .handle_request()
-                .trace_async(tipb::Event::TiKvCoprHandleRequest as u32),
-            &mut tracker,
-        );
-        let result = if let Some(semaphore) = &semaphore {
+        let deadline = tracker.req_ctx.deadline;
+        let handle_request_future =
+            check_deadline(track(handler.handle_request(), &mut tracker), deadline);
+        let deadline_res = if let Some(semaphore) = &semaphore {
             limit_concurrency(handle_request_future, semaphore, LIGHT_TASK_THRESHOLD).await
         } else {
             handle_request_future.await
         };
+        let result = deadline_res.map_err(Error::from).and_then(|res| res);
 
         // There might be errors when handling requests. In this case, we still need its
         // execution metrics.
@@ -467,8 +462,7 @@ impl<E: Engine> Endpoint<E> {
         let res = self
             .read_pool
             .spawn_handle(
-                Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder)
-                    .trace_task(tipb::Event::TiKvCoprScheduleTask as u32),
+                Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder),
                 priority,
                 task_id,
             )
@@ -485,25 +479,15 @@ impl<E: Engine> Endpoint<E> {
         req: coppb::Request,
         peer: Option<String>,
     ) -> impl Future<Output = coppb::Response> {
-        let (_guard, collector) = minitrace::trace_may_enable(
-            req.is_trace_enabled,
-            tipb::Event::TiKvCoprGetRequest as u32,
-        );
-
         let result_of_future = self
             .parse_request_and_check_memory_locks(req, peer, false)
             .map(|(handler_builder, req_ctx)| self.handle_unary_request(req_ctx, handler_builder));
 
         async move {
-            let mut resp = match result_of_future {
+            match result_of_future {
                 Err(e) => make_error_response(e),
                 Ok(handle_fut) => handle_fut.await.unwrap_or_else(make_error_response),
-            };
-            if let Some(collector) = collector {
-                let span_sets = collector.collect();
-                resp.set_spans(tikv_util::trace::encode_spans(span_sets).collect())
             }
-            resp
         }
     }
 
@@ -1299,9 +1283,12 @@ mod tests {
             engine,
         ));
 
-        let mut config = Config::default();
-        config.end_point_request_max_handle_duration =
-            ReadableDuration::millis((PAYLOAD_SMALL + PAYLOAD_LARGE) as u64 * 2);
+        let config = Config {
+            end_point_request_max_handle_duration: ReadableDuration::millis(
+                (PAYLOAD_SMALL + PAYLOAD_LARGE) as u64 * 2,
+            ),
+            ..Default::default()
+        };
 
         let cm = ConcurrencyManager::new(1.into());
         let cop =
@@ -1434,6 +1421,12 @@ mod tests {
             thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
 
             // Response 1
+            //
+            // Note: `process_wall_time_ms` includes `total_process_time` and `total_suspend_time`.
+            // Someday it will be separated, but for now, let's just consider the combination.
+            //
+            // In the worst case, `total_suspend_time` could be totally req2 payload. So here:
+            // req1 payload <= process time <= (req1 payload + req2 payload)
             let resp = &rx.recv().unwrap()[0];
             assert!(resp.get_other_error().is_empty());
             assert_ge!(
@@ -1446,10 +1439,16 @@ mod tests {
                 resp.get_exec_details()
                     .get_time_detail()
                     .get_process_wall_time_ms(),
-                PAYLOAD_SMALL + HANDLE_ERROR_MS + COARSE_ERROR_MS
+                PAYLOAD_SMALL + PAYLOAD_LARGE + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
 
             // Response 2
+            //
+            // Note: `process_wall_time_ms` includes `total_process_time` and `total_suspend_time`.
+            // Someday it will be separated, but for now, let's just consider the combination.
+            //
+            // In the worst case, `total_suspend_time` could be totally req1 payload. So here:
+            // req2 payload <= process time <= (req1 payload + req2 payload)
             let resp = &rx.recv().unwrap()[0];
             assert!(!resp.get_other_error().is_empty());
             assert_ge!(
@@ -1462,7 +1461,7 @@ mod tests {
                 resp.get_exec_details()
                     .get_time_detail()
                     .get_process_wall_time_ms(),
-                PAYLOAD_LARGE + HANDLE_ERROR_MS + COARSE_ERROR_MS
+                PAYLOAD_SMALL + PAYLOAD_LARGE + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
         }
 

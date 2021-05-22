@@ -1,5 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::vec::IntoIter;
 
 use engine_traits::CfName;
@@ -30,12 +32,10 @@ pub use self::region_info_accessor::{
     RegionInfoProvider, SeekRegionCallback,
 };
 pub use self::split_check::{
-    get_region_approximate_keys, get_region_approximate_keys_cf, get_region_approximate_middle,
-    get_region_approximate_size, get_region_approximate_size_cf, HalfCheckObserver,
-    Host as SplitCheckerHost, KeysCheckObserver, SizeCheckObserver, TableCheckObserver,
+    get_region_approximate_keys, get_region_approximate_middle, get_region_approximate_size,
+    HalfCheckObserver, Host as SplitCheckerHost, KeysCheckObserver, SizeCheckObserver,
+    TableCheckObserver,
 };
-
-use crate::store::fsm::ObserveID;
 pub use crate::store::KeyEntry;
 
 /// Coprocessor is used to provide a convenient way to inject code to
@@ -175,25 +175,72 @@ impl Cmd {
     }
 }
 
+static OBSERVE_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
+
+/// A unique identifier for checking stale observed commands.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct ObserveID(usize);
+
+impl ObserveID {
+    pub fn new() -> ObserveID {
+        ObserveID(OBSERVE_ID_ALLOC.fetch_add(1, Ordering::SeqCst))
+    }
+}
+
+/// ObserveHandle is the status of a term of observing, it contains the `ObserveID`
+/// and the `observing` flag indicate whether the observing is ongoing
+#[derive(Clone, Default, Debug)]
+pub struct ObserveHandle {
+    pub id: ObserveID,
+    observing: Arc<AtomicBool>,
+}
+
+impl ObserveHandle {
+    pub fn new() -> ObserveHandle {
+        ObserveHandle {
+            id: ObserveID::new(),
+            observing: Arc::new(AtomicBool::new(true)),
+        }
+    }
+
+    pub fn with_id(id: usize) -> ObserveHandle {
+        ObserveHandle {
+            id: ObserveID(id),
+            observing: Arc::new(AtomicBool::new(true)),
+        }
+    }
+
+    pub fn is_observing(&self) -> bool {
+        self.observing.load(Ordering::Acquire)
+    }
+
+    pub fn stop_observing(&self) {
+        self.observing.store(false, Ordering::Release)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct CmdBatch {
-    pub observe_id: ObserveID,
+    pub cdc_id: ObserveID,
+    pub rts_id: ObserveID,
     pub region_id: u64,
     pub cmds: Vec<Cmd>,
 }
 
 impl CmdBatch {
-    pub fn new(observe_id: ObserveID, region_id: u64) -> CmdBatch {
+    pub fn new(cdc_id: ObserveID, rts_id: ObserveID, region_id: u64) -> CmdBatch {
         CmdBatch {
-            observe_id,
+            cdc_id,
+            rts_id,
             region_id,
             cmds: Vec::new(),
         }
     }
 
-    pub fn push(&mut self, observe_id: ObserveID, region_id: u64, cmd: Cmd) {
+    pub fn push(&mut self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: Cmd) {
         assert_eq!(region_id, self.region_id);
-        assert_eq!(observe_id, self.observe_id);
+        assert_eq!(cdc_id, self.cdc_id);
+        assert_eq!(rts_id, self.rts_id);
         self.cmds.push(cmd)
     }
 
@@ -232,9 +279,9 @@ impl CmdBatch {
 
 pub trait CmdObserver<E>: Coprocessor {
     /// Hook to call after preparing for applying write requests.
-    fn on_prepare_for_apply(&self, observe_id: ObserveID, region_id: u64);
+    fn on_prepare_for_apply(&self, cdc_id: &ObserveHandle, rts_id: &ObserveHandle, region_id: u64);
     /// Hook to call after applying a write request.
-    fn on_apply_cmd(&self, observe_id: ObserveID, region_id: u64, cmd: Cmd);
+    fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: &Cmd);
     /// Hook to call after flushing writes to db.
     fn on_flush_apply(&self, engine: E);
 }

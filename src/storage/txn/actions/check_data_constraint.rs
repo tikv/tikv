@@ -1,24 +1,31 @@
-use crate::storage::mvcc::{ErrorInner, MvccTxn, Result as MvccResult};
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
+use crate::storage::mvcc::{ErrorInner, Result as MvccResult, SnapshotReader};
 use crate::storage::Snapshot;
 use txn_types::{Key, TimeStamp, Write, WriteType};
 
 /// Checks the existence of the key according to `should_not_exist`.
 /// If not, returns an `AlreadyExist` error.
+/// The caller must guarantee that the given `write` is the latest version of the key.
 pub(crate) fn check_data_constraint<S: Snapshot>(
-    txn: &mut MvccTxn<S>,
+    reader: &mut SnapshotReader<S>,
     should_not_exist: bool,
     write: &Write,
     write_commit_ts: TimeStamp,
     key: &Key,
 ) -> MvccResult<()> {
-    if !should_not_exist || write.write_type == WriteType::Delete {
+    // Here we assume `write` is the latest version of the key. So it should not contain a
+    // GC fence ts. Otherwise, it must be an already-deleted version.
+    let write_is_invalid = matches!(write.gc_fence, Some(gc_fence_ts) if !gc_fence_ts.is_zero());
+
+    if !should_not_exist || write.write_type == WriteType::Delete || write_is_invalid {
         return Ok(());
     }
 
     // The current key exists under any of the following conditions:
     // 1.The current write type is `PUT`
     // 2.The current write type is `Rollback` or `Lock`, and the key have an older version.
-    if write.write_type == WriteType::Put || txn.key_exist(&key, write_commit_ts.prev())? {
+    if write.write_type == WriteType::Put || reader.key_exist(&key, write_commit_ts.prev())? {
         return Err(ErrorInner::AlreadyExist { key: key.to_raw()? }.into());
     }
     Ok(())
@@ -26,20 +33,18 @@ pub(crate) fn check_data_constraint<S: Snapshot>(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::storage::mvcc::tests::write;
-    use crate::storage::mvcc::{ErrorInner, MvccTxn, Result as MvccResult};
-    use crate::storage::txn::actions::check_data_constraint::check_data_constraint;
+    use crate::storage::mvcc::MvccTxn;
     use crate::storage::{Engine, TestEngineBuilder};
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
-    use txn_types::{Key, TimeStamp, Write, WriteType};
 
     #[test]
     fn test_check_data_constraint() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let cm = ConcurrencyManager::new(42.into());
-        let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, cm.clone());
+        let mut txn = MvccTxn::new(TimeStamp::new(2), cm);
         txn.put_write(
             Key::from_raw(b"a"),
             TimeStamp::new(5),
@@ -49,7 +54,7 @@ mod tests {
         );
         write(&engine, &Context::default(), txn.into_modifies());
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut txn = MvccTxn::new(snapshot, TimeStamp::new(3), true, cm);
+        let mut reader = SnapshotReader::new(TimeStamp::new(3), snapshot, true);
 
         struct Case {
             expected: MvccResult<()>,
@@ -113,7 +118,7 @@ mod tests {
         } in cases
         {
             let result =
-                check_data_constraint(&mut txn, should_not_exist, &write, write_commit_ts, &key);
+                check_data_constraint(&mut reader, should_not_exist, &write, write_commit_ts, &key);
             assert_eq!(format!("{:?}", expected), format!("{:?}", result));
         }
     }

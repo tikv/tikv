@@ -111,7 +111,7 @@ impl<T: BitOp> AggrFnStateBitOp<T> {
         match value {
             None => Ok(()),
             Some(value) => {
-                T::op(&mut self.c, value.to_owned_value() as u64);
+                T::op(&mut self.c, value.into_owned_value() as u64);
                 Ok(())
             }
         }

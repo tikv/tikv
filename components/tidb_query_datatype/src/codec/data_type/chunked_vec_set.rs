@@ -135,9 +135,9 @@ impl<'a> ChunkRef<'a, SetRef<'a>> for &'a ChunkedVecSet {
     }
 }
 
-impl Into<ChunkedVecSet> for Vec<Option<Set>> {
-    fn into(self) -> ChunkedVecSet {
-        ChunkedVecSet::from_vec(self)
+impl From<Vec<Option<Set>>> for ChunkedVecSet {
+    fn from(v: Vec<Option<Set>>) -> ChunkedVecSet {
+        ChunkedVecSet::from_vec(v)
     }
 }
 

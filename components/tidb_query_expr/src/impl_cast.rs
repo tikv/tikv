@@ -16,6 +16,7 @@ use tidb_query_common::Result;
 use tidb_query_datatype::codec::convert::*;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE};
+use tidb_query_datatype::codec::mysql::time::{MAX_YEAR, MIN_YEAR};
 use tidb_query_datatype::codec::mysql::{binary_literal, Time};
 use tidb_query_datatype::codec::Error;
 use tidb_query_datatype::expr::EvalContext;
@@ -37,10 +38,10 @@ fn get_cast_fn_rpn_meta(
             }
         }
         (EvalType::Real, EvalType::Int) => {
-            if !to_field_type.is_unsigned() {
-                cast_any_as_any_fn_meta::<Real, Int>()
-            } else {
+            if to_field_type.is_unsigned() {
                 cast_real_as_uint_fn_meta()
+            } else {
+                cast_any_as_any_fn_meta::<Real, Int>()
             }
         }
         (EvalType::Bytes, EvalType::Int) => {
@@ -51,21 +52,22 @@ fn get_cast_fn_rpn_meta(
             }
         }
         (EvalType::Decimal, EvalType::Int) => {
-            if !to_field_type.is_unsigned() {
-                cast_any_as_any_fn_meta::<Decimal, Int>()
-            } else {
+            if to_field_type.is_unsigned() {
                 cast_decimal_as_uint_fn_meta()
+            } else {
+                cast_any_as_any_fn_meta::<Decimal, Int>()
             }
         }
         (EvalType::DateTime, EvalType::Int) => cast_any_as_any_fn_meta::<DateTime, Int>(),
         (EvalType::Duration, EvalType::Int) => cast_any_as_any_fn_meta::<Duration, Int>(),
         (EvalType::Json, EvalType::Int) => {
-            if !to_field_type.is_unsigned() {
-                cast_json_as_any_fn_meta::<Int>()
-            } else {
+            if to_field_type.is_unsigned() {
                 cast_json_as_uint_fn_meta()
+            } else {
+                cast_json_as_any_fn_meta::<Int>()
             }
         }
+        (EvalType::Enum, EvalType::Int) => cast_enum_as_int_fn_meta(),
 
         //  any as real
         (EvalType::Int, EvalType::Real) => {
@@ -78,7 +80,7 @@ fn get_cast_fn_rpn_meta(
             }
         }
         (EvalType::Real, EvalType::Real) => {
-            if !to_field_type.is_unsigned() {
+            if to_field_type.is_unsigned() {
                 cast_real_as_signed_real_fn_meta()
             } else {
                 cast_real_as_unsigned_real_fn_meta()
@@ -96,26 +98,29 @@ fn get_cast_fn_rpn_meta(
             }
         }
         (EvalType::Decimal, EvalType::Real) => {
-            if !to_field_type.is_unsigned() {
-                cast_any_as_any_fn_meta::<Decimal, Real>()
-            } else {
+            if to_field_type.is_unsigned() {
                 cast_decimal_as_unsigned_real_fn_meta()
+            } else {
+                cast_any_as_any_fn_meta::<Decimal, Real>()
             }
         }
         (EvalType::DateTime, EvalType::Real) => cast_any_as_any_fn_meta::<DateTime, Real>(),
         (EvalType::Duration, EvalType::Real) => cast_any_as_any_fn_meta::<Duration, Real>(),
         (EvalType::Json, EvalType::Real) => cast_json_as_any_fn_meta::<Real>(),
+        (EvalType::Enum, EvalType::Real) => cast_enum_as_real_fn_meta(),
 
         // any as string
         (EvalType::Int, EvalType::Bytes) => {
-            if !from_field_type.is_unsigned() {
-                cast_any_as_string_fn_meta::<Int>()
-            } else {
+            if FieldTypeAccessor::tp(from_field_type) == FieldTypeTp::Year {
+                cast_year_as_string_fn_meta()
+            } else if from_field_type.is_unsigned() {
                 cast_uint_as_string_fn_meta()
+            } else {
+                cast_any_as_string_fn_meta::<Int>()
             }
         }
         (EvalType::Real, EvalType::Bytes) => {
-            if from_field_type.as_accessor().tp() == FieldTypeTp::Float {
+            if FieldTypeAccessor::tp(from_field_type) == FieldTypeTp::Float {
                 cast_float_real_as_string_fn_meta()
             } else {
                 cast_any_as_string_fn_meta::<Real>()
@@ -126,6 +131,7 @@ fn get_cast_fn_rpn_meta(
         (EvalType::DateTime, EvalType::Bytes) => cast_any_as_string_fn_meta::<DateTime>(),
         (EvalType::Duration, EvalType::Bytes) => cast_any_as_string_fn_meta::<Duration>(),
         (EvalType::Json, EvalType::Bytes) => cast_json_as_bytes_fn_meta(),
+        (EvalType::Enum, EvalType::Bytes) => cast_enum_as_bytes_fn_meta(),
 
         // any as decimal
         (EvalType::Int, EvalType::Decimal) => {
@@ -139,22 +145,23 @@ fn get_cast_fn_rpn_meta(
         }
         (EvalType::Real, EvalType::Decimal) => cast_real_as_decimal_fn_meta(),
         (EvalType::Bytes, EvalType::Decimal) => {
-            if !to_field_type.is_unsigned() {
-                cast_bytes_as_decimal_fn_meta()
-            } else {
+            if to_field_type.is_unsigned() {
                 cast_string_as_unsigned_decimal_fn_meta()
+            } else {
+                cast_bytes_as_decimal_fn_meta()
             }
         }
         (EvalType::Decimal, EvalType::Decimal) => {
-            if !to_field_type.is_unsigned() {
-                cast_decimal_as_signed_decimal_fn_meta()
-            } else {
+            if to_field_type.is_unsigned() {
                 cast_decimal_as_unsigned_decimal_fn_meta()
+            } else {
+                cast_decimal_as_signed_decimal_fn_meta()
             }
         }
         (EvalType::DateTime, EvalType::Decimal) => cast_any_as_decimal_fn_meta::<DateTime>(),
         (EvalType::Duration, EvalType::Decimal) => cast_any_as_decimal_fn_meta::<Duration>(),
         (EvalType::Json, EvalType::Decimal) => cast_json_as_decimal_fn_meta(),
+        (EvalType::Enum, EvalType::Decimal) => cast_enum_as_decimal_fn_meta(),
 
         // any as duration
         (EvalType::Int, EvalType::Duration) => cast_int_as_duration_fn_meta(),
@@ -164,26 +171,30 @@ fn get_cast_fn_rpn_meta(
         (EvalType::DateTime, EvalType::Duration) => cast_time_as_duration_fn_meta(),
         (EvalType::Duration, EvalType::Duration) => cast_duration_as_duration_fn_meta(),
         (EvalType::Json, EvalType::Duration) => cast_json_as_duration_fn_meta(),
+        (EvalType::Enum, EvalType::Duration) => cast_enum_as_duration_fn_meta(),
 
-        (EvalType::Int, EvalType::DateTime) => cast_int_as_time_fn_meta(),
+        (EvalType::Int, EvalType::DateTime) => {
+            if FieldTypeAccessor::tp(from_field_type) == FieldTypeTp::Year {
+                cast_year_as_time_fn_meta()
+            } else {
+                cast_int_as_time_fn_meta()
+            }
+        }
         (EvalType::Real, EvalType::DateTime) => cast_real_as_time_fn_meta(),
         (EvalType::Bytes, EvalType::DateTime) => cast_string_as_time_fn_meta(),
         (EvalType::Decimal, EvalType::DateTime) => cast_decimal_as_time_fn_meta(),
         (EvalType::DateTime, EvalType::DateTime) => cast_time_as_time_fn_meta(),
         (EvalType::Duration, EvalType::DateTime) => cast_duration_as_time_fn_meta(),
+        (EvalType::Enum, EvalType::DateTime) => cast_enum_as_time_fn_meta(),
 
         // any as json
         (EvalType::Int, EvalType::Json) => {
-            if from_field_type
-                .as_accessor()
-                .flag()
-                .contains(FieldTypeFlag::IS_BOOLEAN)
-            {
+            if from_field_type.is_bool() {
                 cast_bool_as_json_fn_meta()
-            } else if !from_field_type.is_unsigned() {
-                cast_any_as_json_fn_meta::<Int>()
-            } else {
+            } else if from_field_type.is_unsigned() {
                 cast_uint_as_json_fn_meta()
+            } else {
+                cast_any_as_json_fn_meta::<Int>()
             }
         }
         (EvalType::Real, EvalType::Json) => cast_any_as_json_fn_meta::<Real>(),
@@ -192,6 +203,7 @@ fn get_cast_fn_rpn_meta(
         (EvalType::DateTime, EvalType::Json) => cast_any_as_json_fn_meta::<DateTime>(),
         (EvalType::Duration, EvalType::Json) => cast_any_as_json_fn_meta::<Duration>(),
         (EvalType::Json, EvalType::Json) => cast_json_as_json_fn_meta(),
+        (EvalType::Enum, EvalType::Json) => cast_enum_as_json_fn_meta(),
 
         _ => return Err(other_err!("Unsupported cast from {} to {}", from, to)),
     };
@@ -349,7 +361,7 @@ fn cast_string_as_int(
                         Ok(Some(x as i64))
                     }
                     Err(err) => match *err.kind() {
-                        IntErrorKind::Overflow | IntErrorKind::Underflow => {
+                        IntErrorKind::PosOverflow | IntErrorKind::NegOverflow => {
                             let err = if is_str_neg {
                                 Error::overflow("BIGINT UNSIGNED", valid_int_prefix)
                             } else {
@@ -381,6 +393,12 @@ fn cast_binary_string_as_int(ctx: &mut EvalContext, val: Option<BytesRef>) -> Re
             Ok(Some(r))
         }
     }
+}
+
+#[rpn_fn]
+#[inline]
+fn cast_set_as_int(val: SetRef) -> Result<Option<Int>> {
+    Ok(Some(val.value() as Int))
 }
 
 #[rpn_fn(nullable, capture = [ctx, metadata], metadata_type = tipb::InUnionMetadata)]
@@ -497,7 +515,12 @@ fn cast_string_as_signed_real(
     match val {
         None => Ok(None),
         Some(val) => {
-            let r: f64 = val.convert(ctx)?;
+            let r: f64;
+            if val.is_empty() {
+                r = 0.0;
+            } else {
+                r = val.convert(ctx)?;
+            }
             let r = produce_float_with_specified_tp(ctx, extra.ret_field_type, r)?;
             Ok(Real::new(r).ok())
         }
@@ -602,6 +625,21 @@ fn cast_any_as_string<T: ConvertTo<Bytes> + Evaluable + EvaluableRet>(
             cast_as_string_helper(ctx, extra, val)
         }
     }
+}
+
+#[rpn_fn(capture = [ctx, extra])]
+#[inline]
+fn cast_year_as_string(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: &Int,
+) -> Result<Option<Bytes>> {
+    let cast = if *val == 0 {
+        b"0000".to_vec()
+    } else {
+        val.to_string().into_bytes()
+    };
+    cast_as_string_helper(ctx, extra, cast)
 }
 
 #[rpn_fn(nullable, capture = [ctx, extra])]
@@ -903,6 +941,9 @@ fn cast_int_as_duration(
                 if err.is_overflow() {
                     ctx.handle_overflow_err(err)?;
                     Ok(None)
+                } else if err.is_truncated() {
+                    ctx.handle_truncate_err(err)?;
+                    Ok(None)
                 } else {
                     Err(err.into())
                 }
@@ -954,8 +995,15 @@ fn cast_bytes_like_as_duration(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
     val: &[u8],
+    overflow_as_null: bool,
 ) -> Result<Option<Duration>> {
-    let result = Duration::parse(ctx, val, extra.ret_field_type.get_decimal() as i8);
+    let val = std::str::from_utf8(val).map_err(Error::Encoding)?;
+    let result = Duration::parse_consider_overflow(
+        ctx,
+        val,
+        extra.ret_field_type.get_decimal() as i8,
+        overflow_as_null,
+    );
     match result {
         Ok(dur) => Ok(Some(dur)),
         Err(e) => match e.code() {
@@ -980,7 +1028,7 @@ pub fn cast_real_as_duration(
     val: Option<&Real>,
 ) -> Result<Option<Duration>> {
     let v = skip_none!(val).into_inner().to_string();
-    cast_bytes_like_as_duration(ctx, extra, v.as_bytes())
+    cast_bytes_like_as_duration(ctx, extra, v.as_bytes(), true)
 }
 
 #[rpn_fn(nullable, capture = [ctx, extra])]
@@ -991,7 +1039,7 @@ pub fn cast_bytes_as_duration(
     val: Option<BytesRef>,
 ) -> Result<Option<Duration>> {
     let v = skip_none!(val);
-    cast_bytes_like_as_duration(ctx, extra, v)
+    cast_bytes_like_as_duration(ctx, extra, v, false)
 }
 
 #[rpn_fn(nullable, capture = [ctx, extra])]
@@ -1002,7 +1050,7 @@ pub fn cast_decimal_as_duration(
     val: Option<&Decimal>,
 ) -> Result<Option<Duration>> {
     let v = skip_none!(val).to_string();
-    cast_bytes_like_as_duration(ctx, extra, v.as_bytes())
+    cast_bytes_like_as_duration(ctx, extra, v.as_bytes(), true)
 }
 
 #[rpn_fn(nullable, capture = [ctx, extra])]
@@ -1013,7 +1061,7 @@ pub fn cast_json_as_duration(
     val: Option<JsonRef>,
 ) -> Result<Option<Duration>> {
     let v = skip_none!(val).unquote()?;
-    cast_bytes_like_as_duration(ctx, extra, v.as_bytes())
+    cast_bytes_like_as_duration(ctx, extra, v.as_bytes(), false)
 }
 
 #[rpn_fn(nullable, capture = [ctx, extra])]
@@ -1039,6 +1087,24 @@ fn cast_int_as_time(
     } else {
         Ok(None)
     }
+}
+
+#[rpn_fn(capture = [ctx, extra])]
+fn cast_year_as_time(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    year: &Int,
+) -> Result<Option<Time>> {
+    let year = *year;
+    if year != 0 && (year < MIN_YEAR.into() || year > MAX_YEAR.into()) {
+        ctx.handle_truncate_err(Error::truncated_wrong_val("YEAR", year))?;
+        return Ok(None);
+    }
+    let time_type = FieldTypeAccessor::tp(extra.ret_field_type).try_into()?;
+    let fsp = extra.ret_field_type.decimal() as i8;
+    let time = Time::from_year(ctx, year as u32, fsp, time_type)?;
+
+    Ok(Some(time))
 }
 
 // NOTE: in MySQL, casting `Real` to `Time` should cast `Real` to `Int` first,
@@ -1082,9 +1148,10 @@ fn cast_string_as_time(
 ) -> Result<Option<Time>> {
     if let Some(val) = val {
         // Convert `val` to a string first and then parse it as a float string.
+        let val = String::from_utf8_lossy(val);
         Time::parse(
             ctx,
-            unsafe { std::str::from_utf8_unchecked(val) },
+            &*val,
             extra.ret_field_type.as_accessor().tp().try_into()?,
             extra.ret_field_type.get_decimal() as i8,
             // Enable round
@@ -1289,6 +1356,87 @@ fn cast_json_as_bytes(ctx: &mut EvalContext, val: Option<JsonRef>) -> Result<Opt
     }
 }
 
+#[rpn_fn(nullable, capture = [ctx])]
+#[inline]
+fn cast_enum_as_int(ctx: &mut EvalContext, val: Option<EnumRef>) -> Result<Option<Int>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let val: Int = val.convert(ctx)?;
+            Ok(Some(val))
+        }
+    }
+}
+
+#[rpn_fn(nullable, capture = [ctx])]
+#[inline]
+fn cast_enum_as_real(ctx: &mut EvalContext, val: Option<EnumRef>) -> Result<Option<Real>> {
+    let val = cast_enum_as_int(ctx, val)?;
+    cast_signed_int_as_signed_real(val.as_ref())
+}
+
+#[rpn_fn(nullable, capture = [ctx, extra])]
+#[inline]
+fn cast_enum_as_bytes(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: Option<EnumRef>,
+) -> Result<Option<Bytes>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let val = val.convert(ctx)?;
+            cast_as_string_helper(ctx, extra, val)
+        }
+    }
+}
+
+#[rpn_fn(nullable, capture = [ctx, extra])]
+#[inline]
+fn cast_enum_as_decimal(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: Option<EnumRef>,
+) -> Result<Option<Decimal>> {
+    let val = cast_enum_as_int(ctx, val)?;
+    cast_any_as_decimal(ctx, extra, val.as_ref())
+}
+
+#[rpn_fn(nullable, capture = [ctx, extra])]
+#[inline]
+fn cast_enum_as_duration(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: Option<EnumRef>,
+) -> Result<Option<Duration>> {
+    match val {
+        None => Ok(None),
+        Some(val) => cast_bytes_as_duration(ctx, extra, Some(val.name())),
+    }
+}
+
+#[rpn_fn(nullable, capture = [ctx, extra])]
+#[inline]
+fn cast_enum_as_time(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: Option<EnumRef>,
+) -> Result<Option<DateTime>> {
+    match val {
+        None => Ok(None),
+        Some(val) => cast_string_as_time(ctx, extra, Some(val.name())),
+    }
+}
+
+#[rpn_fn(nullable, capture = [extra])]
+#[inline]
+fn cast_enum_as_json(extra: &RpnFnCallExtra, val: Option<EnumRef>) -> Result<Option<Json>> {
+    match val {
+        None => Ok(None),
+        Some(val) => cast_string_as_json(extra, Some(val.name())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::Result;
@@ -1311,10 +1459,10 @@ mod tests {
     use tidb_query_datatype::codec::mysql::{
         Decimal, Duration, Json, RoundMode, Time, TimeType, MAX_FSP, MIN_FSP,
     };
-    use tidb_query_datatype::codec::Error;
     use tidb_query_datatype::expr::Flag;
     use tidb_query_datatype::expr::{EvalConfig, EvalContext};
     use tidb_query_datatype::{Collation, FieldTypeFlag, FieldTypeTp, UNSPECIFIED_LENGTH};
+    use tikv_util::buffer_vec::BufferVec;
     use tipb::ScalarFuncSig;
 
     fn test_none_with_ctx_and_extra<F, Input, Ret>(func: F)
@@ -1507,19 +1655,13 @@ mod tests {
 
     fn check_overflow(ctx: &EvalContext, overflow: bool, log: &str) {
         if overflow {
-            assert_eq!(
-                ctx.warnings.warning_cnt, 1,
-                "{}, {:?}",
-                log, ctx.warnings.warnings
-            );
-            assert_eq!(
-                ctx.warnings.warnings[0].get_code(),
-                ERR_DATA_OUT_OF_RANGE,
-                "{}",
-                log
-            );
-        } else {
-            assert_eq!(ctx.warnings.warning_cnt, 0, "{}", log);
+            check_warning(ctx, Some(ERR_DATA_OUT_OF_RANGE), log)
+        }
+    }
+
+    fn check_truncate(ctx: &EvalContext, truncate: bool, log: &str) {
+        if truncate {
+            check_warning(ctx, Some(ERR_TRUNCATE_WRONG_VALUE), log)
         }
     }
 
@@ -1618,6 +1760,338 @@ mod tests {
             let log = make_log(&input, &result, &r);
             check_result(Some(&result), &r, log.as_str());
             check_overflow(&ctx, overflow, log.as_str());
+        }
+    }
+
+    #[test]
+    fn test_enum_as_int() {
+        test_none_with_ctx(cast_enum_as_int);
+
+        let cs = vec![
+            // (input, expect)
+            (EnumRef::new("enum".as_bytes(), &0), 0),
+            (EnumRef::new("int".as_bytes(), &1), 1),
+            (EnumRef::new("real".as_bytes(), &2), 2),
+            (EnumRef::new("string".as_bytes(), &3), 3),
+        ];
+
+        for (input, expect) in cs {
+            let mut ctx = EvalContext::default();
+            let r = cast_enum_as_int(&mut ctx, Some(input));
+            let r = r.map(|x| x.map(|x| x as u64));
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
+        }
+    }
+
+    #[test]
+    fn test_enum_as_real() {
+        test_none_with_ctx(cast_enum_as_real);
+
+        let cs = vec![
+            // (input, expect)
+            (EnumRef::new("enum".as_bytes(), &0), Real::from(0.)),
+            (EnumRef::new("int".as_bytes(), &1), Real::from(1.)),
+            (EnumRef::new("real".as_bytes(), &2), Real::from(2.)),
+            (EnumRef::new("string".as_bytes(), &3), Real::from(3.)),
+        ];
+
+        for (input, expect) in cs {
+            let mut ctx = EvalContext::default();
+            let r = cast_enum_as_real(&mut ctx, Some(input));
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
+        }
+    }
+
+    #[test]
+    fn test_enum_as_bytes() {
+        test_none_with_ctx_and_extra(cast_enum_as_bytes);
+
+        let cs = vec![
+            // (input, expect)
+            (
+                EnumRef::new("enum".as_bytes(), &0),
+                Bytes::from(""),
+                String::from(""),
+            ),
+            (
+                EnumRef::new("int".as_bytes(), &1),
+                Bytes::from("int"),
+                String::from("int"),
+            ),
+            (
+                EnumRef::new("real".as_bytes(), &2),
+                Bytes::from("real"),
+                String::from("real"),
+            ),
+            (
+                EnumRef::new("string".as_bytes(), &3),
+                Bytes::from("string"),
+                String::from("string"),
+            ),
+        ];
+
+        test_as_string_helper(cs, cast_enum_as_bytes, "cast_enum_as_bytes");
+    }
+
+    #[test]
+    fn test_cast_enum_as_decimal() {
+        test_none_with_ctx_and_extra(cast_enum_as_decimal);
+
+        let cs = vec![
+            (
+                EnumRef::new("enum0".as_bytes(), &0),
+                false,
+                false,
+                Decimal::from(0),
+            ),
+            (
+                EnumRef::new("enum1".as_bytes(), &1),
+                false,
+                false,
+                Decimal::from(1),
+            ),
+            (
+                EnumRef::new("enum2".as_bytes(), &2),
+                false,
+                false,
+                Decimal::from(2),
+            ),
+            (
+                EnumRef::new("enum3".as_bytes(), &3),
+                false,
+                false,
+                Decimal::from(3),
+            ),
+        ];
+        test_as_decimal_helper(
+            cs,
+            |ctx, extra, _, val| {
+                let val = val.map(|x| EnumRef::new(x.name(), x.value_ref()));
+                cast_enum_as_decimal(ctx, extra, val)
+            },
+            |x| x.to_string(),
+            "cast_real_as_decimal",
+        );
+    }
+
+    #[test]
+    fn test_cast_enum_as_duration() {
+        test_none_with_ctx_and_extra(cast_enum_as_duration);
+        let cs: Vec<EnumRef> = vec![
+            EnumRef::new("17:51:04.78".as_bytes(), &0),
+            EnumRef::new("17:51:04.78".as_bytes(), &1),
+            EnumRef::new("-17:51:04.78".as_bytes(), &2),
+            EnumRef::new("20000:20:20".as_bytes(), &3),
+            EnumRef::new("-20000:20:20".as_bytes(), &4),
+            EnumRef::new("abcdefg".as_bytes(), &5),
+        ];
+        test_as_duration_helper(
+            cs,
+            |x| String::from_utf8_lossy(x.name()).to_string(),
+            |x| String::from_utf8_lossy(x.name()).to_string(),
+            cast_enum_as_duration,
+            "cast_enum_as_duration",
+        );
+    }
+
+    #[test]
+    fn test_cast_enum_as_time() {
+        test_none_with_ctx_and_extra(cast_enum_as_time);
+        let mut ctx = EvalContext::default();
+        let cs = vec![
+            // (input, expect, fsp)
+            (
+                EnumRef::new("20190916101112".as_bytes(), &1),
+                Time::parse(
+                    &mut ctx,
+                    "2019-09-16 10:11:12",
+                    TimeType::DateTime,
+                    0,
+                    false,
+                )
+                .unwrap(),
+                0,
+            ),
+            (
+                EnumRef::new("190916101112.111".as_bytes(), &2),
+                Time::parse(
+                    &mut ctx,
+                    "2019-09-16 10:11:12.111",
+                    TimeType::DateTime,
+                    3,
+                    false,
+                )
+                .unwrap(),
+                3,
+            ),
+            (
+                EnumRef::new("20190916101112.111".as_bytes(), &3),
+                Time::parse(
+                    &mut ctx,
+                    "2019-09-16 10:11:12.111",
+                    TimeType::DateTime,
+                    3,
+                    false,
+                )
+                .unwrap(),
+                3,
+            ),
+            (
+                EnumRef::new("2019-12-31 23:59:59.99".as_bytes(), &3),
+                Time::parse(
+                    &mut ctx,
+                    "2020-01-01 00:00:00.0",
+                    TimeType::DateTime,
+                    1,
+                    false,
+                )
+                .unwrap(),
+                1,
+            ),
+        ];
+        for (input, expect, fsp) in cs {
+            let rft = FieldTypeConfig {
+                decimal: fsp as isize,
+                ..FieldTypeConfig::default()
+            }
+            .into();
+            let extra = make_extra(&rft);
+            let r = cast_enum_as_time(&mut ctx, &extra, Some(input));
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
+        }
+
+        let cs = vec![
+            EnumRef::new("2019-12-31 23:59:59.99".as_bytes(), &0),
+            EnumRef::new("abcdefg".as_bytes(), &0),
+            EnumRef::new("20199999-12-31 23:59:59.99".as_bytes(), &0),
+        ];
+        for input in cs {
+            let rft = FieldTypeConfig::default().into();
+            let extra = make_extra(&rft);
+            let r = cast_enum_as_time(&mut ctx, &extra, Some(input));
+            assert_eq!(r.unwrap().is_none(), true)
+        }
+    }
+
+    #[test]
+    fn test_enum_as_json() {
+        test_none_with_extra(cast_enum_as_json);
+
+        let mut jo1: BTreeMap<String, Json> = BTreeMap::new();
+        jo1.insert(
+            String::from("a"),
+            Json::from_string(String::from("b")).unwrap(),
+        );
+        // HasParseToJSONFlag
+
+        let cs = vec![
+            (
+                EnumRef::new("{\"a\": \"b\"}".as_bytes(), &1),
+                Json::from_object(jo1).unwrap(),
+                true,
+            ),
+            (
+                EnumRef::new("{}".as_bytes(), &1),
+                Json::from_object(BTreeMap::new()).unwrap(),
+                true,
+            ),
+            (
+                EnumRef::new("[1, 2, 3]".as_bytes(), &1),
+                Json::from_array(vec![
+                    Json::from_i64(1).unwrap(),
+                    Json::from_i64(2).unwrap(),
+                    Json::from_i64(3).unwrap(),
+                ])
+                .unwrap(),
+                true,
+            ),
+            (
+                EnumRef::new("[]".as_bytes(), &1),
+                Json::from_array(Vec::new()).unwrap(),
+                true,
+            ),
+            (
+                EnumRef::new("9223372036854775807".as_bytes(), &1),
+                Json::from_i64(9223372036854775807).unwrap(),
+                true,
+            ),
+            (
+                EnumRef::new("-9223372036854775808".as_bytes(), &1),
+                Json::from_i64(-9223372036854775808).unwrap(),
+                true,
+            ),
+            (
+                EnumRef::new("18446744073709551615".as_bytes(), &1),
+                Json::from_f64(18446744073709552000.0).unwrap(),
+                true,
+            ),
+            // FIXME: f64::MAX.to_string() to json should success
+            // (f64::MAX.to_string(), Json::from_f64(f64::MAX), true),
+            (
+                EnumRef::new("0.0".as_bytes(), &1),
+                Json::from_f64(0.0).unwrap(),
+                true,
+            ),
+            (
+                EnumRef::new("\"abcde\"".as_bytes(), &1),
+                Json::from_string("abcde".to_string()).unwrap(),
+                true,
+            ),
+            (
+                EnumRef::new("\"\"".as_bytes(), &1),
+                Json::from_string("".to_string()).unwrap(),
+                true,
+            ),
+            (
+                EnumRef::new("true".as_bytes(), &1),
+                Json::from_bool(true).unwrap(),
+                true,
+            ),
+            (
+                EnumRef::new("false".as_bytes(), &1),
+                Json::from_bool(false).unwrap(),
+                true,
+            ),
+        ];
+        for (input, expect, parse_to_json) in cs {
+            let mut rft = FieldType::default();
+            if parse_to_json {
+                let fta = rft.as_mut_accessor();
+                fta.set_flag(FieldTypeFlag::PARSE_TO_JSON);
+            }
+            let extra = make_extra(&rft);
+            let result = cast_enum_as_json(&extra, Some(input));
+            let result_str = result.as_ref().map(|x| x.as_ref().map(|x| x.to_string()));
+            let log = format!(
+                "input: {}, parse_to_json: {}, expect: {:?}, result: {:?}",
+                input, parse_to_json, expect, result_str
+            );
+            check_result(Some(&expect), &result, log.as_str());
+        }
+    }
+
+    #[test]
+    fn test_set_as_int() {
+        // TODO: we need to test None case here.
+
+        let mut buf = BufferVec::new();
+        buf.push("我好强啊");
+        buf.push("我太强啦");
+
+        let cs = vec![
+            // (input, expect)
+            (SetRef::new(&buf, 0b01), 1),
+            (SetRef::new(&buf, 0b11), 3),
+        ];
+
+        for (input, expect) in cs {
+            let r = cast_set_as_int(input);
+            let r = r.map(|x| x.map(|x| x as u64));
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
         }
     }
 
@@ -1872,8 +2346,8 @@ mod tests {
 
         // binary literal
         let cases = vec![
-            (vec![0x01, 0x02, 0x03], Some(0x010203 as i64)),
-            (vec![0x01, 0x02, 0x03, 0x4], Some(0x01020304 as i64)),
+            (vec![0x01, 0x02, 0x03], Some(0x010203_i64)),
+            (vec![0x01, 0x02, 0x03, 0x4], Some(0x01020304_i64)),
             (
                 vec![0x01, 0x02, 0x03, 0x4, 0x05, 0x06, 0x06, 0x06, 0x06],
                 None,
@@ -2094,12 +2568,64 @@ mod tests {
             assert_eq!(actual.to_string(), expected);
         }
 
-        let should_fail = vec![-11111, 1, 100, 700_100, 100_000_000, 100_000_101_000_000];
+        let should_fail = vec![
+            -11111,
+            1,
+            100,
+            700_100,
+            100_000_000,
+            100_000_101_000_000,
+            73,
+        ];
 
         for case in should_fail {
             let actual = RpnFnScalarEvaluator::new()
                 .push_param(case)
                 .return_field_type(FieldTypeBuilder::new().tp(FieldTypeTp::Date).build())
+                .evaluate::<Time>(ScalarFuncSig::CastIntAsTime)
+                .unwrap();
+            assert!(actual.is_none());
+        }
+    }
+
+    #[test]
+    fn test_cast_year_as_time() {
+        let normal_cases = vec![
+            ("2020-00-00 00:00:00", 2020),
+            ("2000-00-00 00:00:00", 2000),
+            ("1999-00-00 00:00:00", 1999),
+            ("2077-00-00 00:00:00", 2077),
+            ("1901-00-00 00:00:00", 1901),
+            ("2155-00-00 00:00:00", 2155),
+            ("0000-00-00 00:00:00", 0),
+        ];
+
+        for (expected, input) in normal_cases {
+            let actual = RpnFnScalarEvaluator::new()
+                .push_param_with_field_type(input, FieldTypeTp::Year)
+                .return_field_type(FieldTypeBuilder::new().tp(FieldTypeTp::DateTime).build())
+                .evaluate::<Time>(ScalarFuncSig::CastIntAsTime)
+                .unwrap()
+                .unwrap();
+            assert_eq!(actual.to_string(), expected);
+        }
+
+        let null_cases = vec![
+            None,
+            Some(10086),
+            Some(1900),
+            Some(2156),
+            Some(i64::MAX),
+            Some(i64::MIN),
+        ];
+
+        for input in null_cases {
+            let actual = RpnFnScalarEvaluator::new()
+                .push_param_with_field_type(input, FieldTypeTp::Year)
+                .return_field_type(FieldTypeBuilder::new().tp(FieldTypeTp::DateTime).build())
+                .context(EvalContext::new(Arc::new(EvalConfig::from_flag(
+                    Flag::TRUNCATE_AS_WARNING,
+                ))))
                 .evaluate::<Time>(ScalarFuncSig::CastIntAsTime)
                 .unwrap();
             assert!(actual.is_none());
@@ -2174,6 +2700,20 @@ mod tests {
                 .unwrap();
             assert_eq!(actual.to_string(), expected);
         }
+
+        // If the input is invalid UTF-8 bytes, it should return error.
+        let (res, ctx) = RpnFnScalarEvaluator::new()
+            .push_param(vec![0, 159, 146, 150])
+            .evaluate_raw(
+                FieldTypeBuilder::new().tp(FieldTypeTp::DateTime).build(),
+                ScalarFuncSig::CastStringAsTime,
+            );
+        assert!(matches!(res.unwrap(), ScalarValue::DateTime(None)));
+        check_warning(
+            &ctx,
+            Some(ERR_TRUNCATE_WRONG_VALUE),
+            "should have warning when casting invalid utf-8 to time",
+        );
     }
 
     #[test]
@@ -2215,7 +2755,7 @@ mod tests {
         for case in cases {
             let mut ctx = EvalContext::default();
 
-            let duration = Duration::parse(&mut ctx, case.as_bytes(), MAX_FSP).unwrap();
+            let duration = Duration::parse(&mut ctx, case, MAX_FSP).unwrap();
             let now = RpnFnScalarEvaluator::new()
                 .push_param(duration)
                 .return_field_type(
@@ -2309,20 +2849,14 @@ mod tests {
         let mut ctx = EvalContext::default();
         // TODO: add more test case
         let cs: Vec<(Duration, i64)> = vec![
+            (Duration::parse(&mut ctx, "17:51:04.78", 2).unwrap(), 175105),
             (
-                Duration::parse(&mut ctx, b"17:51:04.78", 2).unwrap(),
-                175105,
-            ),
-            (
-                Duration::parse(&mut ctx, b"-17:51:04.78", 2).unwrap(),
+                Duration::parse(&mut ctx, "-17:51:04.78", 2).unwrap(),
                 -175105,
             ),
+            (Duration::parse(&mut ctx, "17:51:04.78", 0).unwrap(), 175105),
             (
-                Duration::parse(&mut ctx, b"17:51:04.78", 0).unwrap(),
-                175105,
-            ),
-            (
-                Duration::parse(&mut ctx, b"-17:51:04.78", 0).unwrap(),
+                Duration::parse(&mut ctx, "-17:51:04.78", 0).unwrap(),
                 -175105,
             ),
         ];
@@ -2345,53 +2879,79 @@ mod tests {
 
         // no overflow
         let cs = vec![
-            // (origin, expect, overflow)
-            (Json::from_object(BTreeMap::default()).unwrap(), 0, false),
-            (Json::from_array(vec![]).unwrap(), 0, false),
-            (Json::from_i64(10).unwrap(), 10i64, false),
-            (Json::from_i64(i64::MAX).unwrap(), i64::MAX, false),
-            (Json::from_i64(i64::MIN).unwrap(), i64::MIN, false),
-            (Json::from_u64(0).unwrap(), 0, false),
-            (Json::from_u64(u64::MAX).unwrap(), u64::MAX as i64, false),
+            // (origin, expect, overflow, truncate)
+            (
+                Json::from_object(BTreeMap::default()).unwrap(),
+                0,
+                false,
+                true,
+            ),
+            (Json::from_array(vec![]).unwrap(), 0, false, true),
+            (Json::from_i64(10).unwrap(), 10i64, false, false),
+            (Json::from_i64(i64::MAX).unwrap(), i64::MAX, false, false),
+            (Json::from_i64(i64::MIN).unwrap(), i64::MIN, false, false),
+            (Json::from_u64(0).unwrap(), 0, false, false),
+            (
+                Json::from_u64(u64::MAX).unwrap(),
+                u64::MAX as i64,
+                false,
+                false,
+            ),
             (
                 Json::from_f64(i64::MIN as u64 as f64).unwrap(),
                 i64::MAX,
+                false,
                 false,
             ),
             (
                 Json::from_f64(i64::MAX as u64 as f64).unwrap(),
                 i64::MAX,
                 false,
+                false,
             ),
             (
                 Json::from_f64(i64::MIN as u64 as f64).unwrap(),
                 i64::MAX,
                 false,
+                false,
             ),
-            (Json::from_f64(i64::MIN as f64).unwrap(), i64::MIN, false),
-            (Json::from_f64(10.5).unwrap(), 11, false),
-            (Json::from_f64(10.4).unwrap(), 10, false),
-            (Json::from_f64(-10.4).unwrap(), -10, false),
-            (Json::from_f64(-10.5).unwrap(), -11, false),
-            (Json::from_string(String::from("10.0")).unwrap(), 10, false),
-            (Json::from_bool(true).unwrap(), 1, false),
-            (Json::from_bool(false).unwrap(), 0, false),
-            (Json::none().unwrap(), 0, false),
+            (
+                Json::from_f64(i64::MIN as f64).unwrap(),
+                i64::MIN,
+                false,
+                false,
+            ),
+            (Json::from_f64(10.5).unwrap(), 11, false, false),
+            (Json::from_f64(10.4).unwrap(), 10, false, false),
+            (Json::from_f64(-10.4).unwrap(), -10, false, false),
+            (Json::from_f64(-10.5).unwrap(), -11, false, false),
+            (
+                Json::from_string(String::from("10.0")).unwrap(),
+                10,
+                false,
+                false,
+            ),
+            (Json::from_bool(true).unwrap(), 1, false, false),
+            (Json::from_bool(false).unwrap(), 0, false, false),
+            (Json::none().unwrap(), 0, false, false),
             (
                 Json::from_f64(((1u64 << 63) + (1u64 << 62)) as u64 as f64).unwrap(),
                 i64::MAX,
                 true,
+                false,
             ),
             (
                 Json::from_f64(-((1u64 << 63) as f64 + (1u64 << 62) as f64)).unwrap(),
                 i64::MIN,
                 true,
+                false,
             ),
         ];
 
-        for (input, expect, overflow) in cs {
+        for (input, expect, overflow, truncate) in cs {
             let mut ctx = CtxConfig {
                 overflow_as_warning: true,
+                truncate_as_warning: true,
                 ..CtxConfig::default()
             }
             .into();
@@ -2399,6 +2959,7 @@ mod tests {
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
             check_overflow(&ctx, overflow, log.as_str());
+            check_truncate(&ctx, truncate, log.as_str())
         }
     }
 
@@ -2657,6 +3218,7 @@ mod tests {
             (String::from("99999999"), 999999.99, 8, 2, false, true),
             (String::from("1234abc"), 0.9f64, 1, 1, true, true),
             (String::from("-1234abc"), -0.9f64, 1, 1, true, true),
+            (String::from(""), 0f64, 1, 0, false, false),
         ];
 
         for (input, expected, flen, decimal, truncated, overflow) in cs {
@@ -2864,7 +3426,13 @@ mod tests {
             assert!(
                 (output.unwrap().into_inner() - expected).abs() < std::f64::EPSILON,
                 "input:{:?}, expected:{:?}, flen:{:?}, decimal:{:?}, truncated:{:?}, overflow:{:?}, in_union:{:?}",
-                input, expected, flen, decimal, truncated, overflow, in_union
+                input,
+                expected,
+                flen,
+                decimal,
+                truncated,
+                overflow,
+                in_union
             );
             let (warning_cnt, warnings) = match (truncated, overflow) {
                 (true, true) => (2, vec![ERR_TRUNCATE_WRONG_VALUE, ERR_DATA_OUT_OF_RANGE]),
@@ -2882,7 +3450,7 @@ mod tests {
             assert_eq!(
                 ctx.warnings.warning_cnt, warning_cnt,
                 "input:{:?}, expected:{:?}, flen:{:?}, decimal:{:?}, truncated:{:?}, overflow:{:?}, in_union:{:?}, warnings:{:?}",
-                input, expected, flen, decimal, truncated, overflow, in_union,got_warnings,
+                input, expected, flen, decimal, truncated, overflow, in_union, got_warnings,
             );
             assert_eq!(got_warnings, warnings);
         }
@@ -3171,19 +3739,19 @@ mod tests {
         let cs = vec![
             // (input, expect)
             (
-                Duration::parse(&mut ctx, b"17:51:04.78", 2).unwrap(),
+                Duration::parse(&mut ctx, "17:51:04.78", 2).unwrap(),
                 175104.78,
             ),
             (
-                Duration::parse(&mut ctx, b"-17:51:04.78", 2).unwrap(),
+                Duration::parse(&mut ctx, "-17:51:04.78", 2).unwrap(),
                 -175104.78,
             ),
             (
-                Duration::parse(&mut ctx, b"17:51:04.78", 0).unwrap(),
+                Duration::parse(&mut ctx, "17:51:04.78", 0).unwrap(),
                 175105.0,
             ),
             (
-                Duration::parse(&mut ctx, b"-17:51:04.78", 0).unwrap(),
+                Duration::parse(&mut ctx, "-17:51:04.78", 0).unwrap(),
                 -175105.0,
             ),
         ];
@@ -3577,6 +4145,25 @@ mod tests {
     }
 
     #[test]
+    fn test_year_as_string() {
+        let cs: Vec<(i64, Vec<u8>, String)> = vec![
+            (0, b"0000".to_vec(), "0000".to_string()),
+            (2000, b"2000".to_vec(), "2000".to_string()),
+        ];
+
+        let ref_cs = helper_get_cs_ref(&cs);
+
+        test_as_string_helper(
+            ref_cs,
+            |ctx, extra, val| {
+                let val = val.map(|x| *x as i64);
+                cast_year_as_string(ctx, extra, &val.unwrap())
+            },
+            "cast_year_as_string",
+        );
+    }
+
+    #[test]
     fn test_float_real_as_string() {
         test_none_with_ctx_and_extra(cast_float_real_as_string);
 
@@ -3785,22 +4372,22 @@ mod tests {
         let mut ctx = EvalContext::default();
         let cs = vec![
             (
-                Duration::parse(&mut ctx, b"17:51:04.78", 2).unwrap(),
+                Duration::parse(&mut ctx, "17:51:04.78", 2).unwrap(),
                 "17:51:04.78".to_string().into_bytes(),
                 "17:51:04.78".to_string(),
             ),
             (
-                Duration::parse(&mut ctx, b"-17:51:04.78", 2).unwrap(),
+                Duration::parse(&mut ctx, "-17:51:04.78", 2).unwrap(),
                 "-17:51:04.78".to_string().into_bytes(),
                 "-17:51:04.78".to_string(),
             ),
             (
-                Duration::parse(&mut ctx, b"17:51:04.78", 0).unwrap(),
+                Duration::parse(&mut ctx, "17:51:04.78", 0).unwrap(),
                 "17:51:05".to_string().into_bytes(),
                 "17:51:05".to_string(),
             ),
             (
-                Duration::parse(&mut ctx, b"-17:51:04.78", 0).unwrap(),
+                Duration::parse(&mut ctx, "-17:51:04.78", 0).unwrap(),
                 "-17:51:05".to_string().into_bytes(),
                 "-17:51:05".to_string(),
             ),
@@ -4182,9 +4769,7 @@ mod tests {
                         }
                         // TODO: if add test case for Decimal::round failure,
                         //  then should check whether this setting is right.
-                        let res = base_res
-                            .clone()
-                            .round((origin_decimal - 1) as i8, RoundMode::HalfEven);
+                        let res = base_res.round((origin_decimal - 1) as i8, RoundMode::HalfEven);
                         if res.is_zero() {
                             truncate_as_warning = false;
                             overflow_as_warning = false;
@@ -4203,7 +4788,6 @@ mod tests {
                     }
                     ResType::Round => {
                         let r = base_res
-                            .clone()
                             .round(res_decimal as i8, RoundMode::HalfEven)
                             .unwrap();
                         if r == base_res {
@@ -4255,7 +4839,7 @@ mod tests {
                         .map(|x| x.as_ref().map(|x| x.to_string()));
                     let pd_res_log = pd_res.as_ref().map(|x| x.to_string());
                     let log = format!(
-                            "test_func_name: {}, \
+                        "test_func_name: {}, \
                          input: {}, base_res: {}, \
                          origin_flen: {}, origin_decimal: {}, \
                          res_flen: {}, res_decimal: {}, \
@@ -4263,14 +4847,27 @@ mod tests {
                          cond: {:?}, sign: {:?}, res_type: {:?}, \
                          overflow_as_warning: {}, truncate_as_warning: {}, expect_warning_err_code: {:?} \
                          expect: {}, expect_from_produce_dec_with_specified_tp(this is just for debug): {:?}, result: {:?}",
-                            func_name, input_as_debug_str_func(&input), base_res,
-                            origin_flen, origin_decimal,
-                            res_flen, res_decimal,
-                            in_union, is_unsigned, in_dml, in_dml_flag,
-                            cond, sign, res_type,
-                            overflow_as_warning, truncate_as_warning, warning_err_code,
-                            expect.to_string(), pd_res_log, cast_func_res_log
-                        );
+                        func_name,
+                        input_as_debug_str_func(&input),
+                        base_res,
+                        origin_flen,
+                        origin_decimal,
+                        res_flen,
+                        res_decimal,
+                        in_union,
+                        is_unsigned,
+                        in_dml,
+                        in_dml_flag,
+                        cond,
+                        sign,
+                        res_type,
+                        overflow_as_warning,
+                        truncate_as_warning,
+                        warning_err_code,
+                        expect.to_string(),
+                        pd_res_log,
+                        cast_func_res_log
+                    );
 
                     check_result(Some(&expect), &cast_func_res, log.as_str());
                     check_warning(&ctx, warning_err_code, log.as_str());
@@ -4666,7 +5263,7 @@ mod tests {
                 let val = val.map(|x| x.as_bytes());
                 cast_bytes_as_decimal(ctx, extra, val)
             },
-            |x| (*x).to_string(),
+            |x| x.to_string(),
             "cast_string_as_signed_decimal",
         )
     }
@@ -4873,7 +5470,7 @@ mod tests {
                 let val = val.map(|x| x.as_bytes());
                 cast_string_as_unsigned_decimal(ctx, extra, metadata, val)
             },
-            |x| (*x).to_string(),
+            |x| x.to_string(),
             "cast_string_as_unsigned_decimal",
         );
     }
@@ -5044,25 +5641,25 @@ mod tests {
         let cs: Vec<(Duration, bool, bool, Decimal)> = vec![
             // (input, in_union, is_res_unsigned, base_result)
             (
-                Duration::parse(&mut ctx, b"17:51:04.78", 2).unwrap(),
+                Duration::parse(&mut ctx, "17:51:04.78", 2).unwrap(),
                 false,
                 false,
                 Decimal::from_f64(175104.78).unwrap(),
             ),
             (
-                Duration::parse(&mut ctx, b"-17:51:04.78", 2).unwrap(),
+                Duration::parse(&mut ctx, "-17:51:04.78", 2).unwrap(),
                 false,
                 false,
                 Decimal::from_f64(-175104.78).unwrap(),
             ),
             (
-                Duration::parse(&mut ctx, b"17:51:04.78", 0).unwrap(),
+                Duration::parse(&mut ctx, "17:51:04.78", 0).unwrap(),
                 false,
                 false,
                 Decimal::from(175105),
             ),
             (
-                Duration::parse(&mut ctx, b"-17:51:04.78", 0).unwrap(),
+                Duration::parse(&mut ctx, "-17:51:04.78", 0).unwrap(),
                 false,
                 false,
                 Decimal::from(-175105),
@@ -5082,19 +5679,6 @@ mod tests {
 
         // TODO: add test case that make Decimal::from_str failed
         let cs: Vec<(Json, bool, bool, Decimal)> = vec![
-            // (cast_func_input, in_union, is_res_unsigned, base_result)
-            (
-                Json::from_object(BTreeMap::default()).unwrap(),
-                false,
-                false,
-                Decimal::zero(),
-            ),
-            (
-                Json::from_array(vec![]).unwrap(),
-                false,
-                false,
-                Decimal::zero(),
-            ),
             (
                 Json::from_i64(10).unwrap(),
                 false,
@@ -5196,6 +5780,41 @@ mod tests {
     }
 
     #[test]
+    fn test_truncate_when_cast_json_object_or_array_as_decimal() {
+        test_none_with_ctx(cast_any_as_any::<Real, Int>);
+
+        let cs = vec![
+            // (origin, result, errcode)
+            (
+                Json::from_object(BTreeMap::default()).unwrap(),
+                Decimal::zero(),
+                ERR_TRUNCATE_WRONG_VALUE,
+            ),
+            (
+                Json::from_array(vec![]).unwrap(),
+                Decimal::zero(),
+                ERR_TRUNCATE_WRONG_VALUE,
+            ),
+        ];
+
+        for (input, result, errcode) in cs {
+            let mut ctx = CtxConfig {
+                truncate_as_warning: true,
+                ..CtxConfig::default()
+            }
+            .into();
+
+            let rft = FieldTypeConfig::default().into();
+            let extra = make_extra(&rft);
+            let r = cast_json_as_decimal(&mut ctx, &extra, Some(input.as_ref()));
+
+            let log = make_log(&input, &result, &r);
+            check_result(Some(&result), &r, log.as_str());
+            check_warning(&ctx, Some(errcode), log.as_str());
+        }
+    }
+
+    #[test]
     fn test_int_as_duration() {
         // None
         {
@@ -5208,103 +5827,105 @@ mod tests {
 
         let mut ctx = EvalContext::default();
 
-        // This case copy from Duration.rs::tests::test_from_i64
-        let cs: Vec<(
+        struct TestCase(
             i64,
             isize,
             tidb_query_datatype::codec::Result<Option<Duration>>,
             bool,
-        )> = vec![
-            // (input, fsp, expect, overflow)
-            (
+            bool,
+        );
+        // This case copy from Duration.rs::tests::test_from_i64
+        let cs: Vec<TestCase> = vec![
+            // (input, fsp, expect, overflow, truncated)
+            TestCase(
                 101010,
                 0,
-                Ok(Some(Duration::parse(&mut ctx, b"10:10:10", 0).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, "10:10:10", 0).unwrap())),
+                false,
                 false,
             ),
-            (
+            TestCase(
                 101010,
                 5,
-                Ok(Some(Duration::parse(&mut ctx, b"10:10:10", 5).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, "10:10:10", 5).unwrap())),
+                false,
                 false,
             ),
-            (
+            TestCase(
                 8385959,
                 0,
-                Ok(Some(Duration::parse(&mut ctx, b"838:59:59", 0).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, "838:59:59", 0).unwrap())),
+                false,
                 false,
             ),
-            (
+            TestCase(
                 8385959,
                 6,
-                Ok(Some(Duration::parse(&mut ctx, b"838:59:59", 6).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, "838:59:59", 6).unwrap())),
+                false,
                 false,
             ),
-            (
+            TestCase(
                 -101010,
                 0,
-                Ok(Some(Duration::parse(&mut ctx, b"-10:10:10", 0).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, "-10:10:10", 0).unwrap())),
+                false,
                 false,
             ),
-            (
+            TestCase(
                 -101010,
                 5,
-                Ok(Some(Duration::parse(&mut ctx, b"-10:10:10", 5).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, "-10:10:10", 5).unwrap())),
+                false,
                 false,
             ),
-            (
+            TestCase(
                 -8385959,
                 0,
-                Ok(Some(Duration::parse(&mut ctx, b"-838:59:59", 0).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, "-838:59:59", 0).unwrap())),
+                false,
                 false,
             ),
-            (
+            TestCase(
                 -8385959,
                 6,
-                Ok(Some(Duration::parse(&mut ctx, b"-838:59:59", 6).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, "-838:59:59", 6).unwrap())),
+                false,
                 false,
             ),
             // overflow as warning
-            (
-                8385960,
-                0,
-                Ok(Some(Duration::parse(&mut ctx, b"838:59:59", 0).unwrap())),
-                true,
-            ),
-            (
-                -8385960,
-                0,
-                Ok(Some(Duration::parse(&mut ctx, b"-838:59:59", 0).unwrap())),
-                true,
-            ),
+            TestCase(8385960, 0, Ok(None), true, false),
+            TestCase(-8385960, 0, Ok(None), true, false),
             // will truncated
-            (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
-            (8375960, 0, Err(Error::truncated_wrong_val("", "")), false),
-            (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
-            (
+            TestCase(8376049, 0, Ok(None), false, true),
+            TestCase(8375960, 0, Ok(None), false, true),
+            TestCase(-8376049, 0, Ok(None), false, true),
+            TestCase(2002073, 0, Ok(None), false, true),
+            TestCase(2007320, 0, Ok(None), false, true),
+            TestCase(-2002073, 0, Ok(None), false, true),
+            TestCase(-2007320, 0, Ok(None), false, true),
+            TestCase(
                 10000000000,
                 0,
-                Ok(Some(Duration::parse(&mut ctx, b"0:0:0", 0).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, "0:0:0", 0).unwrap())),
+                false,
                 false,
             ),
-            (
+            TestCase(
                 10000235959,
                 0,
-                Ok(Some(Duration::parse(&mut ctx, b"23:59:59", 0).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, "23:59:59", 0).unwrap())),
+                false,
                 false,
             ),
-            (
-                -10000235959,
-                0,
-                Ok(Some(Duration::parse(&mut ctx, b"-838:59:59", 0).unwrap())),
-                false,
-            ),
+            TestCase(-10000235959, 0, Ok(None), true, false),
         ];
 
-        for (input, fsp, expected, overflow) in cs {
+        for TestCase(input, fsp, expected, overflow, truncated) in cs {
             let (result, ctx) = RpnFnScalarEvaluator::new()
                 .context(CtxConfig {
                     overflow_as_warning: true,
+                    truncate_as_warning: true,
                     ..CtxConfig::default()
                 })
                 .push_param(input)
@@ -5338,6 +5959,13 @@ mod tests {
             if overflow {
                 assert_eq!(ctx.warnings.warning_cnt, 1);
                 assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_DATA_OUT_OF_RANGE);
+            }
+            if truncated {
+                assert_eq!(ctx.warnings.warning_cnt, 1);
+                assert_eq!(
+                    ctx.warnings.warnings[0].get_code(),
+                    ERR_TRUNCATE_WRONG_VALUE
+                );
             }
         }
     }
@@ -5373,7 +6001,7 @@ mod tests {
                 let result = func_cast(&mut ctx, &extra, Some(val.clone()));
 
                 let val_str = func_to_cast_str(val.clone());
-                let base_expect = Duration::parse(&mut ctx, val_str.as_bytes(), fsp);
+                let base_expect = Duration::parse(&mut ctx, &val_str, fsp);
 
                 // make log
                 let result_str = result.as_ref().map(|x| x.map(|x| x.to_string()));
@@ -5383,7 +6011,12 @@ mod tests {
                         ERR_DATA_OUT_OF_RANGE => {
                             let log = format!(
                                 "func_name:{}, input: {}, fsp: {}, output: {:?}, expect: {}, expect_warn: {}",
-                                func_name, func_to_debug_str(val.clone()), fsp, result_str, Duration::zero(), ERR_DATA_OUT_OF_RANGE
+                                func_name,
+                                func_to_debug_str(val.clone()),
+                                fsp,
+                                result_str,
+                                Duration::zero(),
+                                ERR_DATA_OUT_OF_RANGE
                             );
                             check_overflow(&ctx, true, log.as_str());
                             check_result(None, &result, log.as_str());
@@ -5391,7 +6024,13 @@ mod tests {
                         ERR_TRUNCATE_WRONG_VALUE => {
                             let log = format!(
                                 "func_name:{}, input: {}, fsp: {}, output: {:?}, output_warn: {:?}, expect: {}, expect_warn: {}",
-                                func_name, func_to_debug_str(val.clone()), fsp, result_str, ctx.warnings.warnings, Duration::zero(), WARN_DATA_TRUNCATED
+                                func_name,
+                                func_to_debug_str(val.clone()),
+                                fsp,
+                                result_str,
+                                ctx.warnings.warnings,
+                                Duration::zero(),
+                                WARN_DATA_TRUNCATED
                             );
                             check_warning(&ctx, Some(ERR_TRUNCATE_WRONG_VALUE), log.as_str());
                             check_result(None, &result, log.as_str());
@@ -5400,7 +6039,12 @@ mod tests {
                             let expect_err: tidb_query_common::error::Error = e.into();
                             let log = format!(
                                 "func_name:{}, input: {}, fsp: {}, output: {:?}, output_warn: {:?}, expect: {:?}",
-                                func_name, func_to_debug_str(val.clone()), fsp, result_str, ctx.warnings.warnings, expect_err
+                                func_name,
+                                func_to_debug_str(val.clone()),
+                                fsp,
+                                result_str,
+                                ctx.warnings.warnings,
+                                expect_err
                             );
                             assert!(result.is_err(), "log: {}", log)
                         }
@@ -5408,9 +6052,106 @@ mod tests {
                     Ok(v) => {
                         let log = format!(
                             "func_name:{}, input: {}, fsp: {}, output: {:?}, output_warn: {:?}, expect: {:?}",
-                            func_name, func_to_debug_str(val.clone()), fsp, result_str, ctx.warnings.warnings, v
+                            func_name,
+                            func_to_debug_str(val.clone()),
+                            fsp,
+                            result_str,
+                            ctx.warnings.warnings,
+                            v
                         );
                         check_result(Some(&v), &result, log.as_str())
+                    }
+                }
+            }
+        }
+    }
+
+    fn test_as_duration_overflow_helper<T: Clone, FnCast>(
+        func_name: &str,
+        values: Vec<T>,
+        func_val_cast: impl Fn(T) -> String,
+        func_cast: FnCast,
+        expect_max: bool,
+    ) where
+        FnCast: Fn(&mut EvalContext, &RpnFnCallExtra, Option<T>) -> Result<Option<Duration>>,
+    {
+        for val in values {
+            for fsp in MIN_FSP..=MAX_FSP {
+                let mut ctx = CtxConfig {
+                    overflow_as_warning: true,
+                    truncate_as_warning: true,
+                    ..CtxConfig::default()
+                }
+                .into();
+                let rft = FieldTypeConfig {
+                    decimal: fsp as isize,
+                    ..FieldTypeConfig::default()
+                }
+                .into();
+                let extra = make_extra(&rft);
+
+                let result = func_cast(&mut ctx, &extra, Some(val.clone()));
+                let result_str = result.as_ref().map(|x| x.map(|x| x.to_string()));
+                match result {
+                    Ok(v) => match v {
+                        Some(dur) => {
+                            if expect_max {
+                                let max_val_str: &str;
+                                if dur.is_neg() {
+                                    max_val_str = "-838:59:59";
+                                } else {
+                                    max_val_str = "838:59:59";
+                                }
+                                let max_expect = Duration::parse(&mut ctx, &max_val_str, fsp);
+                                let log = format!(
+                                    "func_name: {}, input: {}, output: {:?}, output_warn: {:?}, expect: {:?}",
+                                    func_name,
+                                    func_val_cast(val.clone()),
+                                    result_str,
+                                    ctx.warnings.warnings,
+                                    max_expect,
+                                );
+                                check_result(
+                                    Some(max_expect.as_ref().unwrap()),
+                                    &result,
+                                    log.as_str(),
+                                );
+                            } else {
+                                let log = format!(
+                                    "func_name: {}, input: {}, output: {:?}, output_warn: {:?}, expect: {:?}",
+                                    func_name,
+                                    func_val_cast(val),
+                                    result_str,
+                                    ctx.warnings.warnings,
+                                    "None",
+                                );
+                                panic!("{}", log.as_str());
+                            }
+                        }
+                        None => {
+                            if expect_max {
+                                let log = format!(
+                                    "func_name: {}, input: {}, output: {:?}, output_warn: {:?}, expect: {:?}",
+                                    func_name,
+                                    func_val_cast(val),
+                                    result_str,
+                                    ctx.warnings.warnings,
+                                    "838:59:59 or -838:59:59",
+                                );
+                                panic!("{}", log.as_str());
+                            }
+                        }
+                    },
+                    _ => {
+                        let log = format!(
+                            "func_name: {}, input: {}, output: {:?}, output_warn: {:?}, expect: {}",
+                            func_name,
+                            func_val_cast(val),
+                            result_str,
+                            ctx.warnings.warnings,
+                            "Not Error",
+                        );
+                        panic!("{}", log);
                     }
                 }
             }
@@ -5441,6 +6182,19 @@ mod tests {
                 cast_real_as_duration(ctx, extra, val.as_ref())
             },
             "cast_real_as_duration",
+        );
+
+        let values: Vec<f64> = vec![99999999.0, 9995959.0, -9995959.0];
+
+        test_as_duration_overflow_helper(
+            "cast_real_as_duration",
+            values,
+            |x| x.to_string(),
+            |ctx, extra, val| {
+                let val = val.map(|x| Real::new(x).unwrap());
+                cast_real_as_duration(ctx, extra, val.as_ref())
+            },
+            false,
         )
     }
 
@@ -5462,6 +6216,16 @@ mod tests {
             cast_bytes_as_duration,
             "cast_bytes_as_duration",
         );
+
+        let values: Vec<BytesRef> = vec![b"999:59:59.67", b"-999:59:59.67"];
+
+        test_as_duration_overflow_helper(
+            "cast_bytes_as_duration",
+            values,
+            |x| String::from_utf8_lossy(x).to_string(),
+            cast_bytes_as_duration,
+            true,
+        )
     }
 
     #[test]
@@ -5520,6 +6284,19 @@ mod tests {
             cast_decimal_as_duration,
             "cast_decimal_as_duration",
         );
+
+        let values = vec![
+            Decimal::from_bytes(b"9995959").unwrap().unwrap(),
+            Decimal::from_bytes(b"-9995959").unwrap().unwrap(),
+        ];
+        let values_ref: Vec<&Decimal> = values.iter().collect();
+        test_as_duration_overflow_helper(
+            "cast_decimal_as_duration",
+            values_ref,
+            |x| x.to_string(),
+            cast_decimal_as_duration,
+            false,
+        )
     }
 
     #[test]
@@ -5569,8 +6346,7 @@ mod tests {
             let extra = make_extra(&rft);
 
             let input_time = Time::parse_datetime(&mut ctx, s, fsp, true).unwrap();
-            let expect_time =
-                Duration::parse(&mut ctx, expect.as_bytes(), expect_fsp as i8).unwrap();
+            let expect_time = Duration::parse(&mut ctx, expect, expect_fsp as i8).unwrap();
             let result = cast_time_as_duration(&mut ctx, &extra, Some(&input_time));
             let result_str = result.as_ref().map(|x| x.as_ref().map(|x| x.to_string()));
             let log = format!(
@@ -5604,8 +6380,8 @@ mod tests {
             let extra = make_extra(&rft);
 
             let mut ctx = EvalContext::default();
-            let dur = Duration::parse(&mut ctx, input.as_bytes(), input_fsp).unwrap();
-            let expect = Duration::parse(&mut ctx, expect.as_bytes(), output_fsp).unwrap();
+            let dur = Duration::parse(&mut ctx, input, input_fsp).unwrap();
+            let expect = Duration::parse(&mut ctx, expect, output_fsp).unwrap();
             let r = cast_duration_as_duration(&extra, Some(&dur));
 
             let result_str = r.as_ref().map(|x| x.map(|x| x.to_string()));
@@ -5935,7 +6711,7 @@ mod tests {
                 Json::from_string("00:00:00.000000".to_string()).unwrap(),
             ),
             (
-                Duration::parse(&mut EvalContext::default(), b"10:10:10", 0).unwrap(),
+                Duration::parse(&mut EvalContext::default(), "10:10:10", 0).unwrap(),
                 Json::from_string("10:10:10.000000".to_string()).unwrap(),
             ),
         ];

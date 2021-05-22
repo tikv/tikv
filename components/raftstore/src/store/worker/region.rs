@@ -3,16 +3,18 @@
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{self, Display, Formatter};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::u64;
 
 use engine_traits::{DeleteStrategy, Range, CF_LOCK, CF_RAFT};
-use engine_traits::{KvEngine, Mutable};
+use engine_traits::{KvEngine, Mutable, WriteBatch};
+use fail::fail_point;
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
+use tikv_util::{box_err, box_try, defer, error, info, thd_name, warn};
 
 use crate::coprocessor::CoprocessorHost;
 use crate::store::peer_storage::{
@@ -27,6 +29,7 @@ use crate::store::{
 use yatp::pool::{Builder, ThreadPool};
 use yatp::task::future::TaskCell;
 
+use file_system::{IOType, WithIOType};
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 
 use super::metrics::*;
@@ -54,7 +57,9 @@ pub enum Task<S> {
         last_applied_index_term: u64,
         last_applied_state: RaftApplyState,
         kv_snap: S,
+        canceled: Arc<AtomicBool>,
         notifier: SyncSender<RaftSnapshot>,
+        for_balance: bool,
     },
     Apply {
         region_id: u64,
@@ -163,7 +168,7 @@ impl PendingDeleteRanges {
     ) -> Vec<(u64, Vec<u8>, Vec<u8>, u64)> {
         let ranges = self.find_overlap_ranges(start_key, end_key);
 
-        for &(_, ref s_key, _, _) in &ranges {
+        for &(_, ref s_key, ..) in &ranges {
             self.ranges.remove(s_key).unwrap();
         }
         ranges
@@ -242,6 +247,7 @@ where
         last_applied_state: RaftApplyState,
         kv_snap: EK::Snapshot,
         notifier: SyncSender<RaftSnapshot>,
+        for_balance: bool,
     ) -> Result<()> {
         // do we need to check leader here?
         let snap = box_try!(store::do_snapshot::<EK>(
@@ -251,6 +257,7 @@ where
             region_id,
             last_applied_index_term,
             last_applied_state,
+            for_balance,
         ));
         // Only enable the fail point when the region id is equal to 1, which is
         // the id of bootstrapped region in tests.
@@ -276,10 +283,23 @@ where
         last_applied_index_term: u64,
         last_applied_state: RaftApplyState,
         kv_snap: EK::Snapshot,
+        canceled: Arc<AtomicBool>,
         notifier: SyncSender<RaftSnapshot>,
+        for_balance: bool,
     ) {
+        fail_point!("before_region_gen_snap", |_| ());
         SNAP_COUNTER.generate.all.inc();
+        if canceled.load(Ordering::Relaxed) {
+            info!("generate snap is canceled"; "region_id" => region_id);
+            return;
+        }
+
         let start = tikv_util::time::Instant::now();
+        let _io_type_guard = WithIOType::new(if for_balance {
+            IOType::LoadBalance
+        } else {
+            IOType::Replication
+        });
 
         if let Err(e) = self.generate_snap(
             region_id,
@@ -287,6 +307,7 @@ where
             last_applied_state,
             kv_snap,
             notifier,
+            for_balance,
         ) {
             error!(%e; "failed to generate snap!!!"; "region_id" => region_id,);
             return;
@@ -360,7 +381,7 @@ where
         region_state.set_state(PeerState::Normal);
         box_try!(wb.put_msg_cf(CF_RAFT, &region_key, &region_state));
         box_try!(wb.delete_cf(CF_RAFT, &keys::snapshot_raft_state_key(region_id)));
-        self.engine.write(&wb).unwrap_or_else(|e| {
+        wb.write().unwrap_or_else(|e| {
             panic!("{} failed to save apply_snap result: {:?}", region_id, e);
         });
         info!(
@@ -373,7 +394,12 @@ where
 
     /// Tries to apply the snapshot of the specified Region. It calls `apply_snap` to do the actual work.
     fn handle_apply(&mut self, region_id: u64, status: Arc<AtomicUsize>) {
-        status.compare_and_swap(JOB_STATUS_PENDING, JOB_STATUS_RUNNING, Ordering::SeqCst);
+        let _ = status.compare_exchange(
+            JOB_STATUS_PENDING,
+            JOB_STATUS_RUNNING,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
         SNAP_COUNTER.apply.all.inc();
         // let apply_histogram = SNAP_HISTOGRAM.with_label_values(&["apply"]);
         // let timer = apply_histogram.start_coarse_timer();
@@ -625,7 +651,9 @@ where
                 last_applied_index_term,
                 last_applied_state,
                 kv_snap,
+                canceled,
                 notifier,
+                for_balance,
             } => {
                 // It is safe for now to handle generating and applying snapshot concurrently,
                 // but it may not when merge is implemented.
@@ -638,7 +666,9 @@ where
                         last_applied_index_term,
                         last_applied_state,
                         kv_snap,
+                        canceled,
                         notifier,
+                        for_balance,
                     );
                     tikv_alloc::remove_thread_memory_accessor();
                 });
@@ -714,7 +744,7 @@ mod tests {
     use engine_test::kv::{KvTestEngine, KvTestSnapshot};
     use engine_traits::KvEngine;
     use engine_traits::{
-        CFNamesExt, CompactExt, MiscExt, Mutable, Peekable, SyncMutable, WriteBatchExt,
+        CFNamesExt, CompactExt, MiscExt, Mutable, Peekable, SyncMutable, WriteBatch, WriteBatchExt,
     };
     use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
@@ -722,8 +752,7 @@ mod tests {
     use tempfile::Builder;
     use tikv_util::worker::{LazyWorker, Worker};
 
-    use super::PendingDeleteRanges;
-    use super::Task;
+    use super::*;
 
     fn insert_range(
         pending_delete_ranges: &mut PendingDeleteRanges,
@@ -944,7 +973,9 @@ mod tests {
                     kv_snap: engine.kv.snapshot(),
                     last_applied_index_term: entry.get_term(),
                     last_applied_state: apply_state,
+                    canceled: Arc::new(AtomicBool::new(false)),
                     notifier: tx,
+                    for_balance: false,
                 })
                 .unwrap();
             let s1 = rx.recv().unwrap();
@@ -958,7 +989,7 @@ mod tests {
             let key = SnapKey::from_snap(&s1).unwrap();
             let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
             let mut s2 = mgr.get_snapshot_for_sending(&key).unwrap();
-            let mut s3 = mgr.get_snapshot_for_receiving(&key, &data[..]).unwrap();
+            let mut s3 = mgr.get_snapshot_for_receiving(&key, data).unwrap();
             io::copy(&mut s2, &mut s3).unwrap();
             s3.save().unwrap();
 
@@ -972,7 +1003,7 @@ mod tests {
                 .unwrap();
             region_state.set_state(PeerState::Applying);
             wb.put_msg_cf(CF_RAFT, &region_key, &region_state).unwrap();
-            engine.kv.write(&wb).unwrap();
+            wb.write().unwrap();
 
             // apply snapshot
             let status = Arc::new(AtomicUsize::new(JOB_STATUS_PENDING));

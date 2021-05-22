@@ -2,4 +2,5 @@
 # This script runs the arguments given in the environment setup by the Makefile
 
 set -euo pipefail
-COMMAND="$*" exec make run
+
+COMMAND="$*" exec make -f "$(dirname "$0")/../Makefile" run

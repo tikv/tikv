@@ -1,9 +1,13 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::f64::INFINITY;
-use std::sync::Arc;
+use std::future::Future;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
-use engine_traits::{name_to_cf, KvEngine, CF_DEFAULT};
+use collections::HashSet;
+
+use engine_traits::{name_to_cf, KvEngine, CF_WRITE};
+use file_system::{set_io_type, IOType};
 use futures::executor::{ThreadPool, ThreadPoolBuilder};
 use futures::{TryFutureExt, TryStreamExt};
 use grpcio::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
@@ -15,22 +19,21 @@ use kvproto::import_sstpb::write_request::*;
 use kvproto::import_sstpb::WriteRequest_oneof_chunk as Chunk;
 use kvproto::import_sstpb::*;
 
+use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::*;
 
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use engine_traits::{SstExt, SstWriterBuilder};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::Callback;
-use security::{check_common_name, SecurityManager};
 use sst_importer::send_rpc_response;
 use tikv_util::future::create_stream_with_buffer;
 use tikv_util::future::paired_future_callback;
 use tikv_util::time::{Instant, Limiter};
 
-use sst_importer::import_mode::*;
 use sst_importer::metrics::*;
 use sst_importer::service::*;
-use sst_importer::{error_inc, Config, Error, SSTImporter};
+use sst_importer::{error_inc, sst_meta_to_path, Config, Error, Result, SSTImporter};
 
 /// ImportSSTService provides tikv-server with the ability to ingest SST files.
 ///
@@ -42,44 +45,155 @@ where
     E: KvEngine,
 {
     cfg: Config,
-    router: Router,
     engine: E,
+    router: Router,
     threads: ThreadPool,
     importer: Arc<SSTImporter>,
-    switcher: ImportModeSwitcher<E>,
     limiter: Limiter,
-    security_mgr: Arc<SecurityManager>,
+    task_slots: Arc<Mutex<HashSet<PathBuf>>>,
 }
 
 impl<E, Router> ImportSSTService<E, Router>
 where
     E: KvEngine,
-    Router: RaftStoreRouter<E>,
+    Router: 'static + RaftStoreRouter<E>,
 {
     pub fn new(
         cfg: Config,
         router: Router,
         engine: E,
         importer: Arc<SSTImporter>,
-        security_mgr: Arc<SecurityManager>,
     ) -> ImportSSTService<E, Router> {
         let threads = ThreadPoolBuilder::new()
             .pool_size(cfg.num_threads)
             .name_prefix("sst-importer")
-            .after_start(move |_| tikv_alloc::add_thread_memory_accessor())
+            .after_start(move |_| {
+                tikv_alloc::add_thread_memory_accessor();
+                set_io_type(IOType::Import);
+            })
             .before_stop(move |_| tikv_alloc::remove_thread_memory_accessor())
             .create()
             .unwrap();
-        let switcher = ImportModeSwitcher::new(&cfg, &threads, engine.clone());
+        importer.start_switch_mode_check(&threads, engine.clone());
         ImportSSTService {
             cfg,
-            router,
             engine,
             threads,
+            router,
             importer,
-            switcher,
-            limiter: Limiter::new(INFINITY),
-            security_mgr,
+            limiter: Limiter::new(f64::INFINITY),
+            task_slots: Arc::new(Mutex::new(HashSet::default())),
+        }
+    }
+
+    fn acquire_lock(task_slots: &Arc<Mutex<HashSet<PathBuf>>>, meta: &SstMeta) -> Result<bool> {
+        let mut slots = task_slots.lock().unwrap();
+        let p = sst_meta_to_path(meta)?;
+        Ok(slots.insert(p))
+    }
+    fn release_lock(task_slots: &Arc<Mutex<HashSet<PathBuf>>>, meta: &SstMeta) -> Result<bool> {
+        let mut slots = task_slots.lock().unwrap();
+        let p = sst_meta_to_path(meta)?;
+        Ok(slots.remove(&p))
+    }
+
+    fn check_write_stall(&self) -> Option<errorpb::Error> {
+        if self.importer.get_mode() == SwitchMode::Normal
+            && self
+                .engine
+                .ingest_maybe_slowdown_writes(CF_WRITE)
+                .expect("cf")
+        {
+            let mut errorpb = errorpb::Error::default();
+            let err = "too many sst files are ingesting";
+            let mut server_is_busy_err = errorpb::ServerIsBusy::default();
+            server_is_busy_err.set_reason(err.to_string());
+            errorpb.set_message(err.to_string());
+            errorpb.set_server_is_busy(server_is_busy_err);
+            return Some(errorpb);
+        }
+        None
+    }
+
+    fn ingest_files(
+        &self,
+        mut context: Context,
+        label: &'static str,
+        ssts: Vec<SstMeta>,
+    ) -> impl Future<Output = Result<IngestResponse>> {
+        let mut header = RaftRequestHeader::default();
+        let region_id = context.get_region_id();
+        header.set_peer(context.take_peer());
+        header.set_region_id(region_id);
+        header.set_region_epoch(context.take_region_epoch());
+        let mut req = Request::default();
+        req.set_cmd_type(CmdType::Snap);
+        let mut cmd = RaftCmdRequest::default();
+        cmd.set_header(header.clone());
+        cmd.set_requests(vec![req].into());
+        let (cb, future) = paired_future_callback();
+
+        let router = self.router.clone();
+        let importer = self.importer.clone();
+        async move {
+            let mut resp = IngestResponse::default();
+            if let Err(e) = router.send_command(cmd, Callback::Read(cb)) {
+                resp.set_error(e.into());
+                return Ok(resp);
+            }
+
+            let mut res = future.await.map_err(Error::from)?;
+            fail_point!("import::sst_service::ingest");
+            let mut resp_header = res.response.take_header();
+            if resp_header.has_error() {
+                pb_error_inc(label, resp_header.get_error());
+                resp.set_error(resp_header.take_error());
+                return Ok(resp);
+            }
+
+            // Make ingest command.
+            let mut cmd = RaftCmdRequest::default();
+            cmd.set_header(header);
+            for sst in ssts.iter() {
+                let mut ingest = Request::default();
+                ingest.set_cmd_type(CmdType::IngestSst);
+                ingest.mut_ingest_sst().set_sst(sst.clone());
+                cmd.mut_requests().push(ingest);
+            }
+            cmd.mut_header().set_term(resp_header.get_current_term());
+
+            // Here we shall check whether the file has been ingested before. This operation
+            // must execute after geting a snapshot from raftstore to make sure that the
+            // current leader has applied to current term.
+            for sst in ssts.iter() {
+                if !importer.exist(&sst) {
+                    warn!(
+                        "sst [{:?}] not exist. we may retry an operation that has already succeeded",
+                        sst
+                    );
+                    let mut errorpb = errorpb::Error::default();
+                    let err = "The file which would be ingested doest not exist.";
+                    let stale_err = errorpb::StaleCommand::default();
+                    errorpb.set_message(err.to_string());
+                    errorpb.set_stale_command(stale_err);
+                    resp.set_error(errorpb);
+                    return Ok(resp);
+                }
+            }
+
+            let (cb, future) = paired_future_callback();
+            if let Err(e) = router.send_command(cmd, Callback::write(cb)) {
+                resp.set_error(e.into());
+                return Ok(resp);
+            }
+
+            let mut res = future.await.map_err(Error::from)?;
+            let mut header = res.response.take_header();
+            if header.has_error() {
+                pb_error_inc(label, header.get_error());
+                resp.set_error(header.take_error());
+            }
+            Ok(resp)
         }
     }
 }
@@ -87,7 +201,7 @@ where
 impl<E, Router> ImportSst for ImportSSTService<E, Router>
 where
     E: KvEngine,
-    Router: RaftStoreRouter<E>,
+    Router: 'static + RaftStoreRouter<E>,
 {
     fn switch_mode(
         &mut self,
@@ -95,9 +209,6 @@ where
         req: SwitchModeRequest,
         sink: UnarySink<SwitchModeResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let label = "switch_mode";
         let timer = Instant::now_coarse();
 
@@ -107,13 +218,13 @@ where
             }
 
             match req.get_mode() {
-                SwitchMode::Normal => self.switcher.enter_normal_mode(mf),
-                SwitchMode::Import => self.switcher.enter_import_mode(mf),
+                SwitchMode::Normal => self.importer.enter_normal_mode(self.engine.clone(), mf),
+                SwitchMode::Import => self.importer.enter_import_mode(self.engine.clone(), mf),
             }
         };
         match res {
             Ok(_) => info!("switch mode"; "mode" => ?req.get_mode()),
-            Err(ref e) => error!(%e; "switch mode failed"; "mode" => ?req.get_mode(),),
+            Err(ref e) => error!(%*e; "switch mode failed"; "mode" => ?req.get_mode(),),
         }
 
         let task = async move {
@@ -126,13 +237,10 @@ where
     /// Receive SST from client and save the file for later ingesting.
     fn upload(
         &mut self,
-        ctx: RpcContext<'_>,
+        _ctx: RpcContext<'_>,
         stream: RequestStream<UploadRequest>,
         sink: ClientStreamingSink<UploadResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let label = "upload";
         let timer = Instant::now_coarse();
         let import = self.importer.clone();
@@ -173,20 +281,23 @@ where
     /// Downloads the file and performs key-rewrite for later ingesting.
     fn download(
         &mut self,
-        ctx: RpcContext<'_>,
+        _ctx: RpcContext<'_>,
         req: DownloadRequest,
         sink: UnarySink<DownloadResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let label = "download";
         let timer = Instant::now_coarse();
         let importer = Arc::clone(&self.importer);
         let limiter = self.limiter.clone();
         let engine = self.engine.clone();
+        let start = Instant::now();
 
         let handle_task = async move {
+            // Records how long the download task waits to be scheduled.
+            sst_importer::metrics::IMPORTER_DOWNLOAD_DURATION
+                .with_label_values(&["queue"])
+                .observe(start.elapsed().as_secs_f64());
+
             // SST writer must not be opened in gRPC threads, because it may be
             // blocked for a long time due to IO, especially, when encryption at rest
             // is enabled, and it leads to gRPC keepalive timeout.
@@ -234,25 +345,11 @@ where
         mut req: IngestRequest,
         sink: UnarySink<IngestResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let label = "ingest";
         let timer = Instant::now_coarse();
 
-        if self.switcher.get_mode() == SwitchMode::Normal
-            && self
-                .engine
-                .ingest_maybe_slowdown_writes(CF_DEFAULT)
-                .expect("cf")
-        {
-            let err = "too many sst files are ingesting";
-            let mut server_is_busy_err = errorpb::ServerIsBusy::default();
-            server_is_busy_err.set_reason(err.to_string());
-            let mut errorpb = errorpb::Error::default();
-            errorpb.set_message(err.to_string());
-            errorpb.set_server_is_busy(server_is_busy_err);
-            let mut resp = IngestResponse::default();
+        let mut resp = IngestResponse::default();
+        if let Some(errorpb) = self.check_write_stall() {
             resp.set_error(errorpb);
             ctx.spawn(
                 sink.success(resp)
@@ -260,23 +357,11 @@ where
             );
             return;
         }
-        // Make ingest command.
-        let mut ingest = Request::default();
-        ingest.set_cmd_type(CmdType::IngestSst);
-        ingest.mut_ingest_sst().set_sst(req.take_sst());
-        let mut context = req.take_context();
-        let mut header = RaftRequestHeader::default();
-        header.set_peer(context.take_peer());
-        header.set_region_id(context.get_region_id());
-        header.set_region_epoch(context.take_region_epoch());
-        let mut cmd = RaftCmdRequest::default();
-        cmd.set_header(header);
-        cmd.mut_requests().push(ingest);
 
-        let (cb, future) = paired_future_callback();
-        if let Err(e) = self.router.send_command(cmd, Callback::write(cb)) {
-            let mut resp = IngestResponse::default();
-            resp.set_error(e.into());
+        let mut errorpb = errorpb::Error::default();
+        if !Self::acquire_lock(&self.task_slots, req.get_sst()).unwrap_or(false) {
+            errorpb.set_message(Error::FileConflict.to_string());
+            resp.set_error(errorpb);
             ctx.spawn(
                 sink.success(resp)
                     .unwrap_or_else(|e| warn!("send rpc failed"; "err" => %e)),
@@ -284,34 +369,75 @@ where
             return;
         }
 
-        let ctx_task = async move {
-            let res = future.await.map_err(Error::from);
-            let res = match res {
-                Ok(mut res) => {
-                    let mut resp = IngestResponse::default();
-                    let mut header = res.response.take_header();
-                    if header.has_error() {
-                        pb_error_inc(label, header.get_error());
-                        resp.set_error(header.take_error());
-                    }
-                    Ok(resp)
-                }
-                Err(e) => Err(e),
-            };
+        let task_slots = self.task_slots.clone();
+        let meta = req.take_sst();
+        let f = self.ingest_files(req.take_context(), label, vec![meta.clone()]);
+        let handle_task = async move {
+            let res = f.await;
+            Self::release_lock(&task_slots, &meta).unwrap();
             send_rpc_response!(res, sink, label, timer);
         };
-        ctx.spawn(ctx_task);
+        self.threads.spawn_ok(handle_task);
+    }
+
+    /// Ingest multiple files by sending a raft command to raftstore.
+    ///
+    fn multi_ingest(
+        &mut self,
+        ctx: RpcContext<'_>,
+        mut req: MultiIngestRequest,
+        sink: UnarySink<IngestResponse>,
+    ) {
+        let label = "multi-ingest";
+        let timer = Instant::now_coarse();
+
+        let mut resp = IngestResponse::default();
+        if let Some(errorpb) = self.check_write_stall() {
+            resp.set_error(errorpb);
+            ctx.spawn(
+                sink.success(resp)
+                    .unwrap_or_else(|e| warn!("send rpc failed"; "err" => %e)),
+            );
+            return;
+        }
+
+        let mut errorpb = errorpb::Error::default();
+        let mut metas = vec![];
+        for sst in req.get_ssts() {
+            if Self::acquire_lock(&self.task_slots, sst).unwrap_or(false) {
+                metas.push(sst.clone());
+            }
+        }
+        if metas.len() < req.get_ssts().len() {
+            for m in metas {
+                Self::release_lock(&self.task_slots, &m).unwrap();
+            }
+            errorpb.set_message(Error::FileConflict.to_string());
+            resp.set_error(errorpb);
+            ctx.spawn(
+                sink.success(resp)
+                    .unwrap_or_else(|e| warn!("send rpc failed"; "err" => %e)),
+            );
+            return;
+        }
+        let task_slots = self.task_slots.clone();
+        let f = self.ingest_files(req.take_context(), label, req.take_ssts().into());
+        let handle_task = async move {
+            let res = f.await;
+            for m in metas {
+                Self::release_lock(&task_slots, &m).unwrap();
+            }
+            send_rpc_response!(res, sink, label, timer);
+        };
+        self.threads.spawn_ok(handle_task);
     }
 
     fn compact(
         &mut self,
-        ctx: RpcContext<'_>,
+        _ctx: RpcContext<'_>,
         req: CompactRequest,
         sink: UnarySink<CompactResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let label = "compact";
         let timer = Instant::now_coarse();
         let engine = self.engine.clone();
@@ -339,26 +465,11 @@ where
                     "end" => end.map(log_wrappers::Value::key),
                     "output_level" => ?output_level, "takes" => ?timer.elapsed()
                 ),
-                Err(ref e) => error!(%e;
+                Err(ref e) => error!(%*e;
                     "compact files in range failed";
                     "start" => start.map(log_wrappers::Value::key),
                     "end" => end.map(log_wrappers::Value::key),
                     "output_level" => ?output_level,
-                ),
-            }
-            let res = engine.compact_files_in_range(start, end, output_level);
-            match res {
-                Ok(_) => info!(
-                    "compact files in range";
-                    "start" => start.map(log_wrappers::Value::key),
-                    "end" => end.map(log_wrappers::Value::key),
-                    "output_level" => ?output_level, "takes" => ?timer.elapsed()
-                ),
-                Err(ref e) => error!(
-                    "compact files in range failed";
-                    "start" => start.map(log_wrappers::Value::key),
-                    "end" => end.map(log_wrappers::Value::key),
-                    "output_level" => ?output_level, "err" => %e
                 ),
             }
             let res = res
@@ -376,9 +487,6 @@ where
         req: SetDownloadSpeedLimitRequest,
         sink: UnarySink<SetDownloadSpeedLimitResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let label = "set_download_speed_limit";
         let timer = Instant::now_coarse();
 
@@ -386,7 +494,7 @@ where
         self.limiter.set_speed_limit(if speed_limit > 0 {
             speed_limit as f64
         } else {
-            INFINITY
+            f64::INFINITY
         });
 
         let ctx_task = async move {
@@ -399,13 +507,10 @@ where
 
     fn write(
         &mut self,
-        ctx: RpcContext<'_>,
+        _ctx: RpcContext<'_>,
         stream: RequestStream<WriteRequest>,
         sink: ClientStreamingSink<WriteResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let label = "write";
         let timer = Instant::now_coarse();
         let import = self.importer.clone();

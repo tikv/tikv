@@ -11,6 +11,16 @@ macro_rules! ctx {
     };
 }
 
+/// Generate the struct definition and Debug, Display methods for a passed-in
+/// storage command.
+/// Parameters:
+/// cmd -> Used as the type name for the generated struct. A variant of the
+/// enum `storage::txns::commands::Command` must exist whose name matches the
+/// value of `cmd` and which accepts one parameter whose type name matches
+/// the value of `cmd`.
+/// cmd_ty -> The type of the result of executing this command.
+/// display -> Information needed to implement the `Display` trait for the command.
+/// content -> The fields of the struct definition for the command.
 macro_rules! command {
     (
         $(#[$outer_doc: meta])*
@@ -28,6 +38,7 @@ macro_rules! command {
         }
 
         impl $cmd {
+            /// Return a `TypedCommand` that encapsulates the result of executing this command.
             pub fn new(
                 $($arg: $arg_ty,)*
                 ctx: crate::storage::Context,
@@ -96,37 +107,25 @@ macro_rules! write_bytes {
 
 macro_rules! gen_lock {
     (empty) => {
-        fn gen_lock(
-            &self,
-            _latches: &crate::storage::txn::latch::Latches,
-        ) -> crate::storage::txn::latch::Lock {
-            crate::storage::txn::latch::Lock::new(vec![])
+        fn gen_lock(&self) -> crate::storage::txn::latch::Lock {
+            crate::storage::txn::latch::Lock::new::<(), _>(vec![])
         }
     };
     ($field: ident) => {
-        fn gen_lock(
-            &self,
-            latches: &crate::storage::txn::latch::Latches,
-        ) -> crate::storage::txn::latch::Lock {
-            latches.gen_lock(std::iter::once(&self.$field))
+        fn gen_lock(&self) -> crate::storage::txn::latch::Lock {
+            crate::storage::txn::latch::Lock::new(std::iter::once(&self.$field))
         }
     };
     ($field: ident: multiple) => {
-        fn gen_lock(
-            &self,
-            latches: &crate::storage::txn::latch::Latches,
-        ) -> crate::storage::txn::latch::Lock {
-            latches.gen_lock(&self.$field)
+        fn gen_lock(&self) -> crate::storage::txn::latch::Lock {
+            crate::storage::txn::latch::Lock::new(&self.$field)
         }
     };
     ($field: ident: multiple$transform: tt) => {
-        fn gen_lock(
-            &self,
-            latches: &crate::storage::txn::latch::Latches,
-        ) -> crate::storage::txn::latch::Lock {
+        fn gen_lock(&self) -> crate::storage::txn::latch::Lock {
             #![allow(unused_parens)]
             let keys = self.$field.iter().map($transform);
-            latches.gen_lock(keys)
+            crate::storage::txn::latch::Lock::new(keys)
         }
     };
 }

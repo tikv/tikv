@@ -18,11 +18,9 @@ pub fn get_env(
 ) -> encryption::Result<Arc<Env>> {
     let base_env = base_env.unwrap_or_else(|| Arc::new(Env::default()));
     if let Some(manager) = key_manager {
-        // TODO(yiwu): To avoid nested Arc here, need to refactor rust-rocksdb API to accept a
-        // Box<DBEncryptionKeyManager> instead.
         Ok(Arc::new(Env::new_key_managed_encrypted_env(
             base_env,
-            Arc::new(WrappedEncryptionKeyManager { manager }),
+            WrappedEncryptionKeyManager { manager },
         )?))
     } else {
         Ok(base_env)
@@ -49,9 +47,6 @@ impl<T: EncryptionKeyManager> DBEncryptionKeyManager for WrappedEncryptionKeyMan
     }
     fn link_file(&self, src_fname: &str, dst_fname: &str) -> Result<()> {
         self.manager.link_file(src_fname, dst_fname)
-    }
-    fn rename_file(&self, src_fname: &str, dst_fname: &str) -> Result<()> {
-        self.manager.rename_file(src_fname, dst_fname)
     }
 }
 

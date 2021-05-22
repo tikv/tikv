@@ -2,6 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
+use collections::HashMap;
 use crossbeam::channel::TrySendError;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use kvproto::raft_serverpb::RaftMessage;
@@ -9,7 +10,6 @@ use raftstore::errors::{Error as RaftStoreError, Result as RaftStoreResult};
 use raftstore::router::{handle_send_error, RaftStoreRouter};
 use raftstore::store::msg::{CasualMessage, PeerMsg, SignificantMsg};
 use raftstore::store::{CasualRouter, ProposalRouter, RaftCommand, StoreMsg, StoreRouter};
-use tikv_util::collections::HashMap;
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 
 #[derive(Clone)]

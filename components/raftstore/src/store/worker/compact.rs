@@ -1,13 +1,17 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::VecDeque;
-use std::error;
+use std::error::Error as StdError;
 use std::fmt::{self, Display, Formatter};
 use std::time::Instant;
+
+use fail::fail_point;
+use thiserror::Error;
 
 use engine_traits::KvEngine;
 use engine_traits::CF_WRITE;
 use tikv_util::worker::Runnable;
+use tikv_util::{box_try, error, info, warn};
 
 use super::metrics::COMPACT_RANGE_CF;
 
@@ -72,15 +76,10 @@ impl Display for Task {
     }
 }
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        Other(err: Box<dyn error::Error + Sync + Send>) {
-            from()
-            cause(err.as_ref())
-            display("compact failed {:?}", err)
-        }
-    }
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("compact failed {0:?}")]
+    Other(#[from] Box<dyn StdError + Sync + Send>),
 }
 
 pub struct Runner<E> {
@@ -106,9 +105,10 @@ where
         let compact_range_timer = COMPACT_RANGE_CF
             .with_label_values(&[cf_name])
             .start_coarse_timer();
-        box_try!(self
-            .engine
-            .compact_range(cf_name, start_key, end_key, false, 1 /* threads */,));
+        box_try!(
+            self.engine
+                .compact_range(cf_name, start_key, end_key, false, 1 /* threads */,)
+        );
         compact_range_timer.observe_duration();
         info!(
             "compact range finished";
@@ -252,7 +252,7 @@ mod tests {
     use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions};
     use engine_test::kv::KvTestEngine;
     use engine_test::kv::{new_engine, new_engine_opt};
-    use engine_traits::{MiscExt, Mutable, SyncMutable, WriteBatchExt};
+    use engine_traits::{MiscExt, Mutable, SyncMutable, WriteBatch, WriteBatchExt};
     use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use tempfile::Builder;
 
@@ -278,7 +278,7 @@ mod tests {
             wb.put_cf(CF_DEFAULT, k.as_bytes(), b"whatever content")
                 .unwrap();
         }
-        db.write(&wb).unwrap();
+        wb.write().unwrap();
         db.flush_cf(CF_DEFAULT, true).unwrap();
 
         // Generate another SST file has the same content with first SST file.
@@ -288,7 +288,7 @@ mod tests {
             wb.put_cf(CF_DEFAULT, k.as_bytes(), b"whatever content")
                 .unwrap();
         }
-        db.write(&wb).unwrap();
+        wb.write().unwrap();
         db.flush_cf(CF_DEFAULT, true).unwrap();
 
         // Get the total SST files size.

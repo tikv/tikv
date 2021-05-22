@@ -11,6 +11,7 @@ use tidb_query_common::storage::IntervalRange;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
+use tidb_query_datatype::match_template_evaltype;
 use tidb_query_expr::RpnStackNode;
 use tidb_query_expr::{RpnExpression, RpnExpressionBuilder};
 
@@ -95,7 +96,7 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
                 }
                 RpnStackNode::Vector { value, .. } => {
                     let eval_result_logical_rows = value.logical_rows_struct();
-                    match_template_evaluable! {
+                    match_template_evaltype! {
                         TT, match value.as_ref() {
                             VectorValue::TT(eval_result) => {
                                 update_logical_rows_by_vector_value(
@@ -155,7 +156,7 @@ where
         {
             Err(e) => {
                 if err_result.is_ok() {
-                    err_result = Err(e);
+                    err_result = Err(e.into());
                 }
                 false
             }
@@ -260,9 +261,11 @@ mod tests {
 
         let mut exec = BatchSelectionExecutor::new_for_test(
             src_exec,
-            vec![RpnExpressionBuilder::new_for_test()
-                .push_fn_call_for_test(foo_fn_meta(), 0, FieldTypeTp::LongLong)
-                .build_for_test()],
+            vec![
+                RpnExpressionBuilder::new_for_test()
+                    .push_fn_call_for_test(foo_fn_meta(), 0, FieldTypeTp::LongLong)
+                    .build_for_test(),
+            ],
         );
 
         // When source executor returns empty rows, selection executor should process correctly.

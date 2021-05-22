@@ -10,7 +10,7 @@ use std::{cmp, thread};
 use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures::compat::Future01CompatExt;
 use futures::executor::block_on;
-use futures::future::{err, ok, FutureExt};
+use futures::future::{err, ok, ready, BoxFuture, FutureExt};
 use futures::{stream, stream::StreamExt};
 use tokio_timer::timer::Handle;
 
@@ -21,12 +21,12 @@ use kvproto::replication_modepb::{
 };
 use raft::eraftpb::ConfChangeType;
 
+use collections::{HashMap, HashMapEntry, HashSet};
 use fail::fail_point;
 use keys::{self, data_key, enc_end_key, enc_start_key};
-use pd_client::{Error, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result};
+use pd_client::{Error, FeatureGate, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result};
 use raftstore::store::util::{check_key_in_region, find_peer, is_learner};
 use raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
-use tikv_util::collections::{HashMap, HashMapEntry, HashSet};
 use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{Either, HandyRwLock};
@@ -294,6 +294,7 @@ struct Cluster {
     base_id: AtomicUsize,
 
     store_stats: HashMap<u64, pdpb::StoreStats>,
+    store_hotspots: HashMap<u64, HashMap<u64, pdpb::PeerStat>>,
     split_count: usize,
 
     // region id -> Operator
@@ -332,6 +333,7 @@ impl Cluster {
             region_last_report_term: HashMap::default(),
             base_id: AtomicUsize::new(1000),
             store_stats: HashMap::default(),
+            store_hotspots: HashMap::default(),
             split_count: 0,
             operators: HashMap::default(),
             enable_peer_count_check: true,
@@ -353,8 +355,10 @@ impl Cluster {
         // TODO: enable this check later.
         // assert_eq!(region.get_peers().len(), 1);
         let store_id = store.get_id();
-        let mut s = Store::default();
-        s.store = store;
+        let mut s = Store {
+            store,
+            ..Default::default()
+        };
 
         s.region_ids.insert(region.get_id());
 
@@ -383,9 +387,13 @@ impl Cluster {
             .get(&store_id)
             .map_or(true, |s| s.store.get_id() != 0)
         {
-            let mut s = Store::default();
-            s.store = store;
-            self.stores.insert(store_id, s);
+            self.stores.insert(
+                store_id,
+                Store {
+                    store,
+                    ..Default::default()
+                },
+            );
         } else {
             self.stores.get_mut(&store_id).unwrap().store = store;
         }
@@ -443,6 +451,10 @@ impl Cluster {
         self.region_last_report_term.get(&region_id).cloned()
     }
 
+    fn get_store_hotspots(&self, store_id: u64) -> Option<HashMap<u64, pdpb::PeerStat>> {
+        self.store_hotspots.get(&store_id).cloned()
+    }
+
     fn get_stores(&self) -> Vec<metapb::Store> {
         self.stores
             .values()
@@ -457,14 +469,16 @@ impl Cluster {
 
     fn add_region(&mut self, region: &metapb::Region) {
         let end_key = enc_end_key(region);
-        assert!(self
-            .regions
-            .insert(end_key.clone(), region.clone())
-            .is_none());
-        assert!(self
-            .region_id_keys
-            .insert(region.get_id(), end_key)
-            .is_none());
+        assert!(
+            self.regions
+                .insert(end_key.clone(), region.clone())
+                .is_none()
+        );
+        assert!(
+            self.region_id_keys
+                .insert(region.get_id(), end_key)
+                .is_none()
+        );
     }
 
     fn remove_region(&mut self, region: &metapb::Region) {
@@ -715,10 +729,14 @@ pub struct TestPdClient {
     is_incompatible: bool,
     tso: AtomicU64,
     trigger_tso_failure: AtomicBool,
+    feature_gate: FeatureGate,
 }
 
 impl TestPdClient {
     pub fn new(cluster_id: u64, is_incompatible: bool) -> TestPdClient {
+        let feature_gate = FeatureGate::default();
+        // For easy testing, most cases don't test upgrading.
+        feature_gate.set_version("999.0.0").unwrap();
         TestPdClient {
             cluster_id,
             cluster: Arc::new(RwLock::new(Cluster::new(cluster_id))),
@@ -726,6 +744,7 @@ impl TestPdClient {
             is_incompatible,
             tso: AtomicU64::new(1),
             trigger_tso_failure: AtomicBool::new(false),
+            feature_gate,
         }
     }
 
@@ -1174,6 +1193,10 @@ impl TestPdClient {
         self.cluster.rl().get_region_last_report_term(region_id)
     }
 
+    pub fn get_store_hotspots(&self, store_id: u64) -> Option<HashMap<u64, pdpb::PeerStat>> {
+        self.cluster.rl().get_store_hotspots(store_id)
+    }
+
     pub fn set_gc_safe_point(&self, safe_point: u64) {
         self.cluster.wl().set_gc_safe_point(safe_point);
     }
@@ -1207,6 +1230,10 @@ impl TestPdClient {
                 old, ts
             );
         }
+    }
+
+    pub fn reset_version(&self, version: &str) {
+        unsafe { self.feature_gate.reset_version(version).unwrap() }
     }
 }
 
@@ -1275,7 +1302,7 @@ impl PdClient for TestPdClient {
 
         Err(box_err!(
             "no region contains key {}",
-            hex::encode_upper(key)
+            log_wrappers::hex_encode_upper(key)
         ))
     }
 
@@ -1455,10 +1482,25 @@ impl PdClient for TestPdClient {
         if let Err(e) = self.check_bootstrap() {
             return Box::pin(err(e));
         }
-
         // Cache it directly now.
         let store_id = stats.get_store_id();
         let mut cluster = self.cluster.wl();
+        let hot_spots = cluster
+            .store_hotspots
+            .entry(store_id)
+            .or_insert_with(HashMap::default);
+        for peer_stat in stats.get_peer_stats() {
+            let region_id = peer_stat.get_region_id();
+            let peer_stat_sum = hot_spots
+                .entry(region_id)
+                .or_insert_with(pdpb::PeerStat::default);
+            let read_keys = peer_stat.get_read_keys() + peer_stat_sum.get_read_keys();
+            let read_bytes = peer_stat.get_read_bytes() + peer_stat_sum.get_read_bytes();
+            peer_stat_sum.set_read_keys(read_keys);
+            peer_stat_sum.set_read_bytes(read_bytes);
+            peer_stat_sum.set_region_id(region_id);
+        }
+
         cluster.store_stats.insert(store_id, stats);
 
         let mut resp = pdpb::StoreHeartbeatResponse::default();
@@ -1486,13 +1528,14 @@ impl PdClient for TestPdClient {
         Box::pin(ok(safe_point))
     }
 
-    fn get_store_stats(&self, store_id: u64) -> Result<pdpb::StoreStats> {
+    fn get_store_stats_async(&self, store_id: u64) -> BoxFuture<'_, Result<pdpb::StoreStats>> {
         let cluster = self.cluster.rl();
         let stats = cluster.store_stats.get(&store_id);
-        match stats {
+        ready(match stats {
             Some(s) => Ok(s.clone()),
             None => Err(Error::StoreTombstone(format!("store_id:{}", store_id))),
-        }
+        })
+        .boxed()
     }
 
     fn get_operator(&self, region_id: u64) -> Result<pdpb::GetOperatorResponse> {
@@ -1525,5 +1568,9 @@ impl PdClient for TestPdClient {
         }
         let tso = self.tso.fetch_add(1, Ordering::SeqCst);
         Box::pin(ok(TimeStamp::new(tso)))
+    }
+
+    fn feature_gate(&self) -> &FeatureGate {
+        &self.feature_gate
     }
 }
