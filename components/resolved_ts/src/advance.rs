@@ -195,6 +195,9 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
         cdc_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
         min_ts: TimeStamp,
     ) -> Vec<u64> {
+        #[cfg(feature = "failpoint")]
+        (|| fail_point!("before_sync_replica_read_state", |_| regions))();
+
         // store_id -> leaders info, record the request to each stores
         let mut store_map: HashMap<u64, Vec<LeaderInfo>> = HashMap::default();
         // region_id -> region, cache the information of regions
@@ -217,6 +220,12 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
                         if leader_store_id.unwrap() != meta.store_id.unwrap() {
                             continue;
                         }
+                        let mut read_state = ReadState::default();
+                        if let Some(rrp) = meta.region_read_progress.get(&region_id) {
+                            let rs = rrp.read_state();
+                            read_state.set_applied_index(rs.idx);
+                            read_state.set_safe_ts(rs.ts);
+                        }
                         for peer in region.get_peers() {
                             if peer.store_id == store_id && peer.id == *leader_id {
                                 resp_map.entry(region_id).or_default().push(store_id);
@@ -225,17 +234,12 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
                             if peer.get_role() == PeerRole::Learner {
                                 continue;
                             }
-                            let mut read_state = ReadState::default();
-                            if let Some(rp) = meta.region_read_progress.get(&region_id) {
-                                read_state.set_applied_index(rp.applied_index());
-                                read_state.set_safe_ts(rp.safe_ts());
-                            }
                             let mut leader_info = LeaderInfo::default();
                             leader_info.set_peer_id(*leader_id);
                             leader_info.set_term(*term);
                             leader_info.set_region_id(region_id);
                             leader_info.set_region_epoch(region.get_region_epoch().clone());
-                            leader_info.set_read_state(read_state);
+                            leader_info.set_read_state(read_state.clone());
                             store_map
                                 .entry(peer.store_id)
                                 .or_default()

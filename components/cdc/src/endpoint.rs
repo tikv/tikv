@@ -342,15 +342,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 if is_last {
                     let delegate = self.capture_regions.remove(&region_id).unwrap();
                     if let Some(reader) = self.store_meta.lock().unwrap().readers.get(&region_id) {
-                        if let Err(e) = reader
-                            .txn_extra_op
-                            .compare_exchange(TxnExtraOp::ReadOldValue, TxnExtraOp::Noop)
-                        {
-                            panic!(
-                                "unexpect txn extra op {:?}, region_id: {:?}, downstream_id: {:?}, conn_id: {:?}",
-                                e, region_id, downstream_id, conn_id
-                            );
-                        }
+                        reader.txn_extra_op.store(TxnExtraOp::Noop);
                     }
                     // Do not continue to observe the events of the region.
                     let id = delegate.handle.id;
@@ -1377,8 +1369,11 @@ mod tests {
     use kvproto::errorpb::Error as ErrorHeader;
     use raftstore::errors::Error as RaftStoreError;
     use raftstore::store::msg::CasualMessage;
+    use raftstore::store::util::RegionReadProgress;
+    use raftstore::store::{ReadDelegate, TrackVer};
     use std::collections::BTreeMap;
     use std::fmt::Display;
+    use std::sync::atomic::AtomicU64;
     use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
     use tempfile::TempDir;
     use test_raftstore::MockRaftStoreRouter;
@@ -1388,6 +1383,7 @@ mod tests {
     use tikv::storage::TestEngineBuilder;
     use tikv_util::config::ReadableDuration;
     use tikv_util::worker::{dummy_scheduler, LazyWorker, ReceiverWrapper};
+    use time::Timespec;
 
     use super::*;
     use crate::channel;
@@ -1459,6 +1455,23 @@ mod tests {
         MockRaftStoreRouter,
         ReceiverWrapper<Task>,
     ) {
+        let mut region = Region::default();
+        region.set_id(1);
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
+        let read_delegate = ReadDelegate {
+            tag: String::new(),
+            region: Arc::new(region),
+            peer_id: 2,
+            term: 1,
+            applied_index_term: 1,
+            leader_lease: None,
+            last_valid_ts: Timespec::new(0, 0),
+            txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
+            max_ts_sync_status: Arc::new(AtomicU64::new(0)),
+            track_ver: TrackVer::new(),
+            read_progress: Arc::new(RegionReadProgress::new(0, 0)),
+        };
+        store_meta.lock().unwrap().readers.insert(1, read_delegate);
         let (task_sched, task_rx) = dummy_scheduler();
         let raft_router = MockRaftStoreRouter::new();
         let observer = CdcObserver::new(task_sched.clone());
@@ -1471,7 +1484,7 @@ mod tests {
             task_sched,
             raft_router.clone(),
             observer,
-            Arc::new(Mutex::new(StoreMeta::new(0))),
+            store_meta,
             ConcurrencyManager::new(1.into()),
             env,
             security_mgr,
