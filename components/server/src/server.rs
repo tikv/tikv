@@ -643,22 +643,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         node.try_bootstrap_store(engines.engines.clone())
             .unwrap_or_else(|e| fatal!("failed to bootstrap node id: {}", e));
 
-        self.config
-            .raft_store
-            .validate()
-            .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
-        let raft_store = Arc::new(VersionTrack::new(self.config.raft_store.clone()));
-        let mut node = Node::new(
-            self.system.take().unwrap(),
-            &server_config.value().clone(),
-            raft_store.clone(),
-            self.pd_client.clone(),
-            self.state.clone(),
-            self.background_worker.clone(),
-        );
-        node.try_bootstrap_store(engines.engines.clone())
-            .unwrap_or_else(|e| fatal!("failed to bootstrap node id: {}", e));
-
         // Create server
         let server = Server::new(
             node.id(),

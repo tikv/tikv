@@ -29,14 +29,6 @@ pub fn duration_to_sec(d: Duration) -> f64 {
     d.as_secs() as f64 + (nanos / 1_000_000_000.0)
 }
 
-/// Converts Duration to microseconds.
-#[inline]
-pub fn duration_to_micros(d: Duration) -> u64 {
-    let nanos = u64::from(d.subsec_nanos());
-    // Most of case, we can't have so large Duration, so here just panic if overflow now.
-    d.as_secs() * 1_000_000 + (nanos / 1_000)
-}
-
 /// Converts Duration to nanoseconds.
 #[inline]
 pub fn duration_to_nanos(d: Duration) -> u64 {
@@ -189,10 +181,8 @@ pub use self::inner::monotonic_now;
 pub use self::inner::monotonic_raw_now;
 
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
-const MACROSECONDS_PER_SECOND: i64 = 1_000_000;
 const MILLISECONDS_PER_SECOND: i64 = 1_000;
 
-const NANOSECONDS_PER_MACROSECOND: i64 = 1_000;
 const NANOSECONDS_PER_MILLISECOND: i64 = 1_000_000;
 
 #[cfg(not(target_os = "linux"))]
@@ -351,14 +341,6 @@ impl Instant {
             );
             Duration::from_millis(0)
         }
-    }
-
-    pub fn to_microsec(&self) -> i64 {
-        let ts = match *self {
-            Instant::Monotonic(ts) => ts,
-            Instant::MonotonicCoarse(ts) => ts,
-        };
-        ts.sec * MACROSECONDS_PER_SECOND + i64::from(ts.nsec) / NANOSECONDS_PER_MACROSECOND
     }
 }
 

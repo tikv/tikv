@@ -1,12 +1,12 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use seahash::SeaHasher;
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::hash::Hasher;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use std::cell::RefCell;
 use std::{cmp, mem, u64, usize};
 
 use bitflags::bitflags;
@@ -521,11 +521,6 @@ where
     /// Check whether this proposal can be proposed based on its epoch.
     cmd_epoch_checker: CmdEpochChecker<EK::Snapshot>,
 
-    /// The number of pending pd heartbeat tasks. Pd heartbeat task may be blocked by
-    /// reading rocksdb. To avoid unnecessary io operations, we always let the later
-    /// task run when there are more than 1 pending tasks.
-    pub pending_pd_heartbeat_tasks: Arc<AtomicU64>,
-
     /// The number of unpersisted readies: (ready number, the max number of following ready
     /// whose must-sync is false)
     unpersisted_numbers: VecDeque<(u64, u64)>,
@@ -633,7 +628,6 @@ where
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
             max_ts_sync_status: Arc::new(AtomicU64::new(0)),
             cmd_epoch_checker: Default::default(),
-            pending_pd_heartbeat_tasks: Arc::new(AtomicU64::new(0)),
             unpersisted_numbers: VecDeque::default(),
             snapshot_ready_status: (0, false),
             persisted_number: 0,
@@ -784,7 +778,6 @@ where
             );
             return None;
         }
-
         {
             let meta = ctx.store_meta.lock().unwrap();
             if meta.atomic_snap_regions.contains_key(&self.region_id) {
@@ -1074,6 +1067,7 @@ where
         metrics.commit += light_ready.committed_entries().len() as u64;
     }
 
+    #[inline]
     pub fn in_joint_state(&self) -> bool {
         self.region().get_peers().iter().any(|p| {
             p.get_role() == PeerRole::IncomingVoter || p.get_role() == PeerRole::DemotingVoter
@@ -1097,8 +1091,8 @@ where
                 // to suspect.
                 self.leader_lease.suspect(monotonic_raw_now());
             }
-            let send_msg = if let Some(msg) = self.fill_raft_message(msg) {
-                msg
+            let send_msg = if let Some(m) = self.fill_raft_message(msg) {
+                m
             } else {
                 continue;
             };
@@ -1813,9 +1807,6 @@ where
                 ctx.apply_router
                     .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
             }
-        }
-
-        if !self.raft_group.has_ready() {
             return None;
         }
 

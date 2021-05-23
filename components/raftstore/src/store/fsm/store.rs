@@ -14,9 +14,7 @@ use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler, Priority,
 };
 use crossbeam::channel::{TryRecvError, TrySendError};
-use engine_traits::{
-    Engines, KvEngine, Mutable, PerfContextKind, WriteBatch, WriteBatchExt,
-};
+use engine_traits::{Engines, KvEngine, Mutable, PerfContextKind, WriteBatch, WriteBatchExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use fail::fail_point;
 use futures::compat::Future01CompatExt;
@@ -303,8 +301,6 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    /// The count of processed normal Fsm.
-    pub processed_fsm_count: usize,
     pub cfg: Config,
     pub store: metapb::Store,
     pub pd_scheduler: FutureScheduler<PdTask<EK>>,
@@ -342,7 +338,6 @@ where
     pub ready_count: usize,
     pub sync_log: bool,
     pub has_ready: bool,
-    pub ready_res: Vec<CollectedReady>,
     pub current_time: Option<Timespec>,
     pub perf_context: EK::PerfContext,
     pub tick_batch: Vec<PeerTickBatch>,
@@ -678,14 +673,13 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
 {
     fn begin(&mut self, _batch_size: usize) {
         self.previous_metrics = self.poll_ctx.raft_metrics.clone();
-        self.poll_ctx.processed_fsm_count = 0;
         self.poll_ctx.pending_count = 0;
         self.poll_ctx.ready_count = 0;
         self.poll_ctx.sync_log = false;
         self.poll_ctx.has_ready = false;
-        self.timer = TiInstant::now();
+        self.timer = TiInstant::now_coarse();
         STORE_LOOP_DURATION_HISTOGRAM.observe(duration_to_sec(self.loop_timer.elapsed()) as f64);
-        self.loop_timer = TiInstant::now();
+        self.loop_timer = TiInstant::now_coarse();
         // update config
         if let Some(incoming) = self.cfg_tracker.any_new() {
             match Ord::cmp(
@@ -780,7 +774,6 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         delegate.handle_msgs(&mut self.peer_msg_buf);
         delegate.collect_ready();
         self.poll_ctx.trans.try_flush();
-        self.poll_ctx.processed_fsm_count += 1;
         expected_msg_count
     }
 
@@ -801,7 +794,9 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
     }
 
     fn pause(&mut self) {
-        self.poll_ctx.trans.flush();
+        if self.poll_ctx.trans.need_flush() {
+            self.poll_ctx.trans.flush();
+        }
     }
 }
 
@@ -1007,7 +1002,6 @@ where
 
     fn build(&mut self, _: Priority) -> RaftPoller<EK, ER, T> {
         let mut ctx = PollContext {
-            processed_fsm_count: 0,
             cfg: self.cfg.value().clone(),
             store: self.store.clone(),
             pd_scheduler: self.pd_scheduler.clone(),
@@ -1034,7 +1028,6 @@ where
             ready_count: 0,
             sync_log: false,
             has_ready: false,
-            ready_res: Vec::new(),
             current_time: None,
             perf_context: self
                 .engines
@@ -1052,8 +1045,8 @@ where
             store_msg_buf: Vec::with_capacity(ctx.cfg.messages_per_tick),
             peer_msg_buf: Vec::with_capacity(ctx.cfg.messages_per_tick),
             previous_metrics: ctx.raft_metrics.clone(),
-            timer: TiInstant::now(),
-            loop_timer: TiInstant::now(),
+            timer: TiInstant::now_coarse(),
+            loop_timer: TiInstant::now_coarse(),
             messages_per_tick: ctx.cfg.messages_per_tick,
             poll_ctx: ctx,
             cfg_tracker: self.cfg.clone().tracker(tag),

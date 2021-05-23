@@ -32,10 +32,6 @@ with_prefix!(prefix_store "store-");
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    #[config(skip)]
-    pub trigger_write_size: ReadableSize,
-    #[config(skip)]
-    pub cmd_batch: bool,
     // minimizes disruption when a partitioned node rejoins the cluster by using a two phase election.
     #[config(skip)]
     pub prevote: bool,
@@ -179,6 +175,12 @@ pub struct Config {
     #[config(hidden)]
     pub apply_yield_duration: ReadableDuration,
 
+    #[config(skip)]
+    pub cmd_batch: bool,
+
+    #[config(skip)]
+    pub trigger_write_size: ReadableSize,
+
     // Deprecated! These configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
     #[doc(hidden)]
@@ -203,8 +205,6 @@ impl Default for Config {
     fn default() -> Config {
         let split_size = ReadableSize::mb(coprocessor::config::SPLIT_SIZE_MB);
         Config {
-            trigger_write_size: ReadableSize::mb(1),
-            cmd_batch: true,
             prevote: true,
             raftdb_path: String::new(),
             capacity: ReadableSize(0),
@@ -264,6 +264,8 @@ impl Default for Config {
             hibernate_regions: tikv_util::build_on_master_branch(),
             dev_assert: false,
             apply_yield_duration: ReadableDuration::millis(500),
+            cmd_batch: true,
+            trigger_write_size: ReadableSize::mb(1),
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
@@ -448,9 +450,6 @@ impl Config {
 
     pub fn write_into_metrics(&self) {
         CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["cmd_batch"])
-            .set((self.cmd_batch as i32).into());
-        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["prevote"])
             .set((self.prevote as i32).into());
 
@@ -625,6 +624,12 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["hibernate_regions"])
             .set((self.hibernate_regions as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["cmd_batch"])
+            .set((self.cmd_batch as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["trigger_write_size"])
+            .set((self.trigger_write_size.0 as f64).into());
     }
 
     fn write_change_into_metrics(change: ConfigChange) {

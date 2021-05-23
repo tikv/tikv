@@ -76,19 +76,13 @@ pub struct DestroyPeerJob {
 }
 
 pub struct CollectedReady {
-    /// The offset of source peer in the batch system.
-    pub batch_offset: usize,
     pub ctx: InvokeContext,
     pub ready: Ready,
 }
 
 impl CollectedReady {
     pub fn new(ctx: InvokeContext, ready: Ready) -> CollectedReady {
-        CollectedReady {
-            batch_offset: 0,
-            ctx,
-            ready,
-        }
+        CollectedReady { ctx, ready }
     }
 }
 
@@ -546,7 +540,7 @@ where
                 PeerMsg::Persisted((peer_id, number, ts)) => {
                     if peer_id != self.fsm.peer_id() {
                         error!(
-                            "peer id is not match";
+                            "peer id not match";
                             "region_id" => self.fsm.region_id(),
                             "peer_id" => self.fsm.peer_id(),
                             "persisted_peer_id" => peer_id,
@@ -956,9 +950,6 @@ where
         self.ctx.has_ready = true;
         let res = self.fsm.peer.handle_raft_ready_append(self.ctx);
         if let Some(mut r) = res {
-            // This bases on an assumption that fsm array passed in `end` method will have
-            // the same order of processing.
-            r.batch_offset = self.ctx.processed_fsm_count;
             self.on_role_changed(&r.ready);
             if r.ctx.has_new_entries {
                 self.register_raft_gc_log_tick();
