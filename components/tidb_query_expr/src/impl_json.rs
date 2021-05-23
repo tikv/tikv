@@ -621,13 +621,12 @@ mod tests {
     fn test_json_unquote() {
         let cases = vec![
             (None, None),
+            (Some(r#"""#), Some(r#"""#)),
             (Some(r"a"), Some("a")),
-            (Some(r#""3""#), Some(r#""3""#)),
-            (Some(r#""3""#), Some(r#"3"#)),
+            (Some(r#""3"#), Some(r#""3"#)),
             (Some(r#"{"a":  "b"}"#), Some(r#"{"a":  "b"}"#)),
-            (Some(r#"{"a":  "b"}"#), Some(r#"{"a": "b"}"#)),
             (
-                Some(r#"hello,\"quoted string\",world"#),
+                Some(r#""hello,\"quoted string\",world""#),
                 Some(r#"hello,"quoted string",world"#),
             ),
         ];

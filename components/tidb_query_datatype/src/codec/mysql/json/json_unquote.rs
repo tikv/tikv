@@ -31,6 +31,16 @@ impl<'a> JsonRef<'a> {
 }
 
 pub fn unquote_string(s: &str) -> Result<String> {
+    let first_char = s.chars().next();
+    let last_char = s.chars().nth(s.len() - 1);
+    if s.len() >= 2 && first_char == Some('"') && last_char == Some('"') {
+        unquote(&s[1..s.len() - 1])
+    } else {
+        Ok(String::from(s))
+    }
+}
+
+fn unquote(s: &str) -> Result<String> {
     let mut ret = String::with_capacity(s.len());
     let mut chars = s.chars();
     while let Some(ch) = chars.next() {
