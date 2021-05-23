@@ -8,14 +8,14 @@ use std::sync::atomic::Ordering;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use std::{mem, u64};
+use std::u64;
 
 use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler, Priority,
 };
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::{
-    Engines, KvEngine, Mutable, PerfContext, PerfContextKind, WriteBatch, WriteBatchExt,
+    Engines, KvEngine, Mutable, PerfContextKind, WriteBatch, WriteBatchExt,
 };
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use fail::fail_point;
@@ -825,8 +825,8 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     global_stat: GlobalStoreStat,
     pub engines: Engines<EK, ER>,
     global_replication_state: Arc<Mutex<GlobalReplicationState>>,
-    async_write_senders: Vec<Sender<AsyncWriteMsg<EK, ER>>>,
     feature_gate: FeatureGate,
+    async_write_senders: Vec<Sender<AsyncWriteMsg<EK, ER>>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
@@ -1042,8 +1042,8 @@ where
                 .get_perf_context(self.cfg.value().perf_level, PerfContextKind::RaftstoreStore),
             tick_batch: vec![PeerTickBatch::default(); 256],
             node_start_time: Some(TiInstant::now_coarse()),
-            async_write_senders: self.async_write_senders.clone(),
             feature_gate: self.feature_gate.clone(),
+            async_write_senders: self.async_write_senders.clone(),
         };
         ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());
@@ -1189,8 +1189,8 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             global_stat: GlobalStoreStat::default(),
             store_meta,
             pending_create_peers: Arc::new(Mutex::new(HashMap::default())),
-            async_write_senders: self.async_writers.senders().clone(),
             feature_gate: pd_client.feature_gate().clone(),
+            async_write_senders: self.async_writers.senders().clone(),
         };
         let region_peers = builder.init()?;
         let engine = builder.engines.kv.clone();

@@ -800,8 +800,6 @@ where
             delay_time,
         }
     }
-
-    /// Loads connection from pool.
     ///
     /// Creates it if it doesn't exist. `false` is returned if such connection
     /// can't be established.

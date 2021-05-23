@@ -20,8 +20,8 @@ use engine_traits::{
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use kvproto::raft_serverpb::{RaftLocalState, RaftMessage};
-use raft::eraftpb::{Entry, MessageType};
-use tikv_util::time::{duration_to_micros, duration_to_sec, Instant as UtilInstant};
+use raft::eraftpb::Entry;
+use tikv_util::time::{duration_to_sec, Instant as UtilInstant};
 use tikv_util::{debug, thd_name, warn};
 
 const KV_WB_SHRINK_SIZE: usize = 1024 * 1024;
