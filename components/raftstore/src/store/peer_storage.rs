@@ -23,7 +23,7 @@ use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 use crate::store::fsm::GenSnapTask;
 use crate::store::util;
 use crate::store::ProposalContext;
-use crate::{Error, Result};
+use crate::{bytes_capacity, Error, Result};
 use engine_traits::{RaftEngine, RaftLogBatch};
 use into_other::into_other;
 use tikv_util::worker::Scheduler;
@@ -176,7 +176,7 @@ impl EntryCache {
                         .cache
                         .iter()
                         .skip(left)
-                        .map(|e| (e.data.capacity() + e.context.capacity()) as i64)
+                        .map(|e| (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64)
                         .sum::<i64>();
                     self.cache.truncate(left);
                 }
@@ -202,7 +202,8 @@ impl EntryCache {
             if len < self.cache.len() {
                 let mut drained_cache_entries_size = 0;
                 self.cache.drain(..len).for_each(|e| {
-                    drained_cache_entries_size += (e.data.capacity() + e.context.capacity()) as i64
+                    drained_cache_entries_size +=
+                        (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64
                 });
                 self.mem_size_change -= drained_cache_entries_size;
             } else {
@@ -215,7 +216,7 @@ impl EntryCache {
         let mut entries_mem_size = 0;
         for e in &entries[start_idx..] {
             self.cache.push_back(e.to_owned());
-            entries_mem_size += (e.data.capacity() + e.context.capacity()) as i64;
+            entries_mem_size += (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64;
         }
         self.mem_size_change += self
             .get_cache_vec_mem_size_change(self.cache.capacity() as i64, old_capacity as i64)
@@ -234,7 +235,8 @@ impl EntryCache {
         self.cache
             .drain(..(cmp::min(cache_last_idx + 1, idx) - cache_first_idx) as usize)
             .for_each(|e| {
-                drained_cache_entries_size += (e.data.capacity() + e.context.capacity()) as i64
+                drained_cache_entries_size +=
+                    (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64
             });
         self.mem_size_change -= drained_cache_entries_size;
         if self.cache.len() < SHRINK_CACHE_CAPACITY && self.cache.capacity() > SHRINK_CACHE_CAPACITY
@@ -252,7 +254,7 @@ impl EntryCache {
         self.mem_size_change -= self
             .cache
             .iter()
-            .map(|e| (e.data.capacity() + e.context.capacity()) as i64)
+            .map(|e| (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64)
             .sum::<i64>();
     }
 
@@ -264,7 +266,7 @@ impl EntryCache {
         let data_size: usize = self
             .cache
             .iter()
-            .map(|e| e.data.capacity() + e.context.capacity())
+            .map(|e| bytes_capacity(&e.data) + bytes_capacity(&e.context))
             .sum();
         (ENTRY_MEM_SIZE * self.cache.capacity() + data_size) as i64
     }
@@ -1638,7 +1640,7 @@ where
     )?;
     snap_data.mut_meta().set_for_balance(for_balance);
     let v = snap_data.write_to_bytes()?;
-    snapshot.set_data(v);
+    snapshot.set_data(v.into());
 
     SNAPSHOT_KV_COUNT_HISTOGRAM.observe(stat.kv_count as f64);
     SNAPSHOT_SIZE_HISTOGRAM.observe(stat.size as f64);

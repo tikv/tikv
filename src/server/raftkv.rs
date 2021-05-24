@@ -567,7 +567,7 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                         .observe(begin_instant.elapsed().as_secs_f64());
                 }
             }
-            msg.mut_entries()[0].set_data(rctx.to_bytes());
+            msg.mut_entries()[0].set_data(rctx.to_bytes().into());
         }
     }
 }

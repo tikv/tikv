@@ -17,3 +17,8 @@ pub mod router;
 pub mod store;
 pub use self::coprocessor::{RegionInfo, RegionInfoAccessor, SeekRegionCallback};
 pub use self::errors::{DiscardReason, Error, Result};
+
+fn bytes_capacity(b: &bytes::Bytes) -> usize {
+    let range = b.as_ptr_range();
+    range.end as usize - range.start as usize
+}
