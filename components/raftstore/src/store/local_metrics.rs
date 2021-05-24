@@ -396,11 +396,17 @@ pub struct RaftMetrics {
     pub commit_log: LocalHistogram,
     pub leader_missing: Arc<Mutex<HashSet<u64>>>,
     pub invalid_proposal: RaftInvalidProposeMetrics,
+    pub persisted_msg: LocalHistogram,
+    pub waterfall_metrics: bool,
+    pub to_write_queue: LocalHistogram,
+    pub know_persist: LocalHistogram,
+    pub know_commit: LocalHistogram,
+    pub know_commit_not_persist: LocalHistogram,
 }
 
-impl Default for RaftMetrics {
-    fn default() -> RaftMetrics {
-        RaftMetrics {
+impl RaftMetrics {
+    pub fn new(waterfall_metrics: bool) -> Self {
+        Self {
             ready: Default::default(),
             send_message: Default::default(),
             message_dropped: Default::default(),
@@ -412,11 +418,14 @@ impl Default for RaftMetrics {
             commit_log: PEER_COMMIT_LOG_HISTOGRAM.local(),
             leader_missing: Arc::default(),
             invalid_proposal: Default::default(),
+            persisted_msg: STORE_PERSISTED_MSG_DURATION_HISTOGRAM.local(),
+            waterfall_metrics,
+            to_write_queue: STORE_TO_WRITE_QUEUE_DURATION_HISTOGRAM.local(),
+            know_persist: STORE_KNOW_PERSIST_DURATION_HISTOGRAM.local(),
+            know_commit: STORE_KNOW_COMMIT_DURATION_HISTOGRAM.local(),
+            know_commit_not_persist: STORE_KNOW_COMMIT_NOT_PERSIST_DURATION_HISTOGRAM.local(),
         }
     }
-}
-
-impl RaftMetrics {
     /// Flushs all metrics
     pub fn flush(&mut self) {
         self.ready.flush();
@@ -427,6 +436,13 @@ impl RaftMetrics {
         self.commit_log.flush();
         self.message_dropped.flush();
         self.invalid_proposal.flush();
+        self.persisted_msg.flush();
+        if self.waterfall_metrics {
+            self.to_write_queue.flush();
+            self.know_persist.flush();
+            self.know_commit.flush();
+            self.know_commit_not_persist.flush();
+        }
         let mut missing = self.leader_missing.lock().unwrap();
         LEADER_MISSING.set(missing.len() as i64);
         missing.clear();

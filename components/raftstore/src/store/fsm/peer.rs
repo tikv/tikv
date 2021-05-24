@@ -545,9 +545,15 @@ where
                             "persisted_number" => number,
                         );
                     } else {
-                        STORE_PERSISTED_MSG_DURATION_HISTOGRAM
+                        self.ctx
+                            .raft_metrics
+                            .persisted_msg
                             .observe(duration_to_sec(ts.elapsed()));
-                        if self.fsm.peer.check_new_persisted(number) {
+                        if self
+                            .fsm
+                            .peer
+                            .check_new_persisted(number, &mut self.ctx.raft_metrics)
+                        {
                             self.fsm.has_ready = true;
                             if let Some(mbt) = self.fsm.delayed_destroy {
                                 if !self.fsm.peer.has_unpersisted_ready() {

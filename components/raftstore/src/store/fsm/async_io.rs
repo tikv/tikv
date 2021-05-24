@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use crate::store::config::Config;
 use crate::store::fsm::RaftRouter;
-use crate::store::local_metrics::{RaftSendMessageMetrics, AsyncWriteMetrics};
+use crate::store::local_metrics::{AsyncWriteMetrics, RaftSendMessageMetrics};
 use crate::store::metrics::*;
 use crate::store::transport::Transport;
 use crate::store::{PeerMsg, SignificantMsg};
@@ -134,6 +134,7 @@ where
     pub state_size: usize,
     pub tasks: Vec<AsyncWriteTask<EK, ER>>,
     metrics: AsyncWriteMetrics,
+    waterfall_metrics: bool,
     _phantom: PhantomData<EK>,
 }
 
@@ -142,7 +143,7 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    fn new(kv_wb: EK::WriteBatch, raft_wb: ER::LogBatch) -> Self {
+    fn new(kv_wb: EK::WriteBatch, raft_wb: ER::LogBatch, waterfall_metrics: bool) -> Self {
         Self {
             kv_wb,
             raft_wb,
@@ -151,6 +152,7 @@ where
             tasks: vec![],
             state_size: 0,
             metrics: Default::default(),
+            waterfall_metrics,
             _phantom: PhantomData,
         }
     }
@@ -191,6 +193,7 @@ where
         self.state_size = 0;
     }
 
+    #[inline]
     fn get_raft_size(&self) -> usize {
         self.state_size + self.raft_wb.persist_size()
     }
@@ -201,31 +204,40 @@ where
             self.raft_wb.put_raft_state(region_id, &state).unwrap();
         }
         self.state_size = 0;
-        for task in &self.tasks {
-            for ts in &task.proposal_times {
-                self.metrics.to_write.observe(duration_to_sec(now - *ts));
+        if self.waterfall_metrics {
+            for task in &self.tasks {
+                for ts in &task.proposal_times {
+                    self.metrics.to_write.observe(duration_to_sec(now - *ts));
+                }
             }
         }
     }
 
     fn after_write_to_kv_db(&mut self, now: Instant) {
-        for task in &self.tasks {
-            for ts in &task.proposal_times {
-                self.metrics.kvdb_end.observe(duration_to_sec(now - *ts));
+        if self.waterfall_metrics {
+            for task in &self.tasks {
+                for ts in &task.proposal_times {
+                    self.metrics.kvdb_end.observe(duration_to_sec(now - *ts));
+                }
             }
         }
     }
 
     fn after_write_to_db(&mut self, now: Instant) {
-        for task in &self.tasks {
-            for ts in &task.proposal_times {
-                self.metrics.write_end.observe(duration_to_sec(now - *ts))
+        if self.waterfall_metrics {
+            for task in &self.tasks {
+                for ts in &task.proposal_times {
+                    self.metrics.write_end.observe(duration_to_sec(now - *ts))
+                }
             }
         }
     }
 
+    #[inline]
     fn flush_metrics(&mut self) {
-        self.metrics.flush()
+        if self.waterfall_metrics {
+            self.metrics.flush();
+        }
     }
 }
 
@@ -241,9 +253,9 @@ where
     raft_engine: ER,
     router: RaftRouter<EK, ER>,
     receiver: Receiver<AsyncWriteMsg<EK, ER>>,
+    trans: T,
     wb: AsyncWriteBatch<EK, ER>,
     trigger_write_size: usize,
-    trans: T,
     message_metrics: RaftSendMessageMetrics,
     perf_context: EK::PerfContext,
 }
@@ -264,7 +276,11 @@ where
         trans: T,
         config: &Config,
     ) -> Self {
-        let wb = AsyncWriteBatch::new(kv_engine.write_batch(), raft_engine.log_batch(16 * 1024));
+        let wb = AsyncWriteBatch::new(
+            kv_engine.write_batch(),
+            raft_engine.log_batch(16 * 1024),
+            config.store_waterfall_metrics,
+        );
         let perf_context =
             kv_engine.get_perf_context(config.perf_level, PerfContextKind::RaftstoreStore);
         Self {
@@ -274,9 +290,9 @@ where
             raft_engine,
             router,
             receiver,
+            trans,
             wb,
             trigger_write_size: config.trigger_write_size.0 as usize,
-            trans,
             message_metrics: Default::default(),
             perf_context,
         }

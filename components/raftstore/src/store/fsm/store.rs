@@ -1001,7 +1001,7 @@ where
             importer: self.importer.clone(),
             store_meta: self.store_meta.clone(),
             pending_create_peers: self.pending_create_peers.clone(),
-            raft_metrics: RaftMetrics::default(),
+            raft_metrics: RaftMetrics::new(self.cfg.value().store_waterfall_metrics),
             snap_mgr: self.snap_mgr.clone(),
             applying_snap_count: self.applying_snap_count.clone(),
             coprocessor_host: self.coprocessor_host.clone(),

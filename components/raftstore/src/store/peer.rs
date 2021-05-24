@@ -44,6 +44,7 @@ use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, CollectedReady, Proposal};
 use crate::store::hibernate_state::GroupState;
+use crate::store::local_metrics::RaftMetrics;
 use crate::store::msg::RaftCommand;
 use crate::store::worker::{HeartbeatTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
 use crate::store::{
@@ -1182,7 +1183,7 @@ where
         let has_snap_task = self.get_store().has_gen_snap_task();
         let pre_commit_index = self.raft_group.raft.raft_log.committed;
         self.raft_group.step(m)?;
-        self.report_know_commit_duration(pre_commit_index);
+        self.report_know_commit_duration(pre_commit_index, &mut ctx.raft_metrics);
 
         let mut for_balance = false;
         if !has_snap_task && self.get_store().has_gen_snap_task() {
@@ -1204,7 +1205,11 @@ where
         Ok(())
     }
 
-    fn report_know_persist_duration(&self, pre_persist_index: u64) {
+    fn report_know_persist_duration(&self, pre_persist_index: u64, metrics: &mut RaftMetrics) {
+        if !metrics.waterfall_metrics {
+            return;
+        }
+        let mut now = None;
         for index in pre_persist_index + 1..=self.raft_group.raft.raft_log.persisted {
             if let Some((term, scheduled_ts)) = self.proposals.find_scheduled_ts(index) {
                 if self
@@ -1213,14 +1218,22 @@ where
                     .map(|t| t == term)
                     .unwrap_or(false)
                 {
-                    STORE_KNOW_PERSIST_DURATION_HISTOGRAM
-                        .observe(duration_to_sec(scheduled_ts.elapsed()));
+                    if now.is_none() {
+                        now = Some(Instant::now());
+                    }
+                    metrics
+                        .know_persist
+                        .observe(duration_to_sec(now.unwrap() - scheduled_ts));
                 }
             }
         }
     }
 
-    fn report_know_commit_duration(&self, pre_commit_index: u64) {
+    fn report_know_commit_duration(&self, pre_commit_index: u64, metrics: &mut RaftMetrics) {
+        if !metrics.waterfall_metrics {
+            return;
+        }
+        let mut now = None;
         for index in pre_commit_index + 1..=self.raft_group.raft.raft_log.committed {
             if let Some((term, scheduled_ts)) = self.proposals.find_scheduled_ts(index) {
                 if self
@@ -1229,12 +1242,17 @@ where
                     .map(|t| t == term)
                     .unwrap_or(false)
                 {
+                    if now.is_none() {
+                        now = Some(Instant::now());
+                    }
                     if index <= self.raft_group.raft.raft_log.persisted {
-                        STORE_KNOW_COMMIT_DURATION_HISTOGRAM
-                            .observe(duration_to_sec(scheduled_ts.elapsed()));
+                        metrics
+                            .know_commit
+                            .observe(duration_to_sec(now.unwrap() - scheduled_ts));
                     } else {
-                        STORE_KNOW_COMMIT_NOT_PERSIST_DURATION_HISTOGRAM
-                            .observe(duration_to_sec(scheduled_ts.elapsed()));
+                        metrics
+                            .know_commit_not_persist
+                            .observe(duration_to_sec(now.unwrap() - scheduled_ts));
                     }
                 }
             }
@@ -1808,14 +1826,25 @@ where
             "peer_id" => self.peer.get_id(),
         );
 
+        let mut ready = self.raft_group.ready();
+
         let mut proposal_times = vec![];
 
-        let mut ready = self.raft_group.ready();
-        for entry in ready.entries() {
-            if let Some((term, scheduled_ts)) = self.proposals.find_scheduled_ts(entry.get_index())
-            {
-                if entry.term == term {
-                    proposal_times.push(scheduled_ts);
+        if ctx.raft_metrics.waterfall_metrics {
+            let mut now = None;
+            for entry in ready.entries() {
+                if let Some((term, scheduled_ts)) =
+                    self.proposals.find_scheduled_ts(entry.get_index())
+                {
+                    if entry.term == term {
+                        proposal_times.push(scheduled_ts);
+                        if now.is_none() {
+                            now = Some(Instant::now());
+                        }
+                        ctx.raft_metrics
+                            .to_write_queue
+                            .observe(duration_to_sec(now.unwrap() - scheduled_ts));
+                    }
                 }
             }
         }
@@ -2097,7 +2126,7 @@ where
     }
 
     /// Returns if there are new persisted readies.
-    pub fn check_new_persisted(&mut self, number: u64) -> bool {
+    pub fn check_new_persisted(&mut self, number: u64, metrics: &mut RaftMetrics) -> bool {
         if self.unpersisted_numbers.is_empty() {
             return false;
         }
@@ -2139,8 +2168,8 @@ where
         let pre_persist_index = self.raft_group.raft.raft_log.persisted;
         let pre_commit_index = self.raft_group.raft.raft_log.committed;
         self.raft_group.on_persist_ready(persisted_number);
-        self.report_know_persist_duration(pre_persist_index);
-        self.report_know_commit_duration(pre_commit_index);
+        self.report_know_persist_duration(pre_persist_index, metrics);
+        self.report_know_commit_duration(pre_commit_index, metrics);
 
         if self.snapshot_ready_status.0 != 0 && self.unpersisted_numbers.is_empty() {
             // Since the snapshot must belong to the last ready, if `unpersisted_numbers`

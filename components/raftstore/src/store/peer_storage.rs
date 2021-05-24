@@ -26,7 +26,6 @@ use crate::store::ProposalContext;
 use crate::{bytes_capacity, Error, Result};
 use engine_traits::{RaftEngine, RaftLogBatch};
 use into_other::into_other;
-use tikv_util::time::duration_to_sec;
 use tikv_util::worker::Scheduler;
 
 use super::metrics::*;
@@ -1444,13 +1443,6 @@ where
             write_task.unsynced_ready = Some(UnsyncedReady::new(self.peer_id, ready.number()));
         }
 
-        let mut now = None;
-        for ts in &proposal_times {
-            if now.is_none() {
-                now = Some(Instant::now());
-            }
-            STORE_TO_WRITE_QUEUE_DURATION_HISTOGRAM.observe(duration_to_sec(now.unwrap() - *ts));
-        }
         write_task.proposal_times = proposal_times;
         write_task.messages = msgs;
 

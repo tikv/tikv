@@ -279,7 +279,7 @@ lazy_static! {
             "TODO",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
-    
+
     pub static ref STORE_BATCH_WAIT_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_batch_wait_duration_seconds",
