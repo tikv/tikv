@@ -295,17 +295,40 @@ lazy_static! {
         "Total number of pending commands."
     )
     .unwrap();
-    pub static ref SCHED_WRITE_FLOW_GAUAE: IntGauge = register_int_gauge!(
+    pub static ref SCHED_WRITE_FLOW_GAUGE: IntGauge = register_int_gauge!(
         "tikv_scheduler_write_flow",
         "The speed of write flow."
     )
     .unwrap();
-    pub static ref SCHED_THROTTLE_FLOW_GAUAE: IntGauge = register_int_gauge!(
+    pub static ref SCHED_THROTTLE_FLOW_GAUGE: IntGauge = register_int_gauge!(
         "tikv_scheduler_throttle_flow",
         "The speed of throttle flow."
     )
     .unwrap();
-    pub static ref SCHED_DISCARD_RATIO_GAUAE: IntGauge = register_int_gauge!(
+    pub static ref SCHED_MEMTABLE_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_scheduler_memtable",
+        "The speed of throttle flow."
+    )
+    .unwrap();
+    pub static ref SCHED_L0_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_scheduler_l0",
+        "The speed of throttle flow."
+    )
+    .unwrap();
+    pub static ref SCHED_L0_AVG_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_scheduler_l0_avg",
+        "The speed of throttle flow."
+    )
+    .unwrap();
+    pub static ref SCHED_THROTTLE_ACTION_COUNTER: IntCounterVec = {
+        register_int_counter_vec!(
+            "tikv_scheduler_throttle_action_total",
+            "Total number of commands on each stage.",
+            &["type"]
+        )
+        .unwrap()
+    };
+    pub static ref SCHED_DISCARD_RATIO_GAUGE: IntGauge = register_int_gauge!(
         "tikv_scheduler_discard_ratio",
         "The discard ratio."
     )

@@ -147,20 +147,19 @@ impl TaskContext {
 
 const ADJUST_INTERVAL: u64 = 1000; // 1000ms
 const RATIO_PERCISION: f64 = 10000000.0;
-const EMA_FACTOR: f64 = 0.2;
-const CAP: usize = 10;
-const LIMIT_UP_PERCENT: f64 = 0.10; // 10%
-const LIMIT_DOWN_PERCENT: f64 = 0.05; // 5%
-const MIN_THROTTLE_SPEED: f64 = 16.0 * 1024.0 * 1024.0; // 16MB
+const EMA_FACTOR: f64 = 0.1;
+const LIMIT_UP_PERCENT: f64 = 0.04; // 10%
+const LIMIT_DOWN_PERCENT: f64 = 0.02; // 5%
+const MIN_THROTTLE_SPEED: f64 = 16.0 * 1024.0; // 16MB
 
-struct Smoother {
+struct Smoother<const CAP: usize> {
     records: [Option<u64>; CAP],
     size: usize,
     idx: usize,
     total: u64,
 }
 
-impl Smoother {
+impl<const CAP: usize> Smoother<CAP> {
     pub fn new() -> Self {
         Self {
             records: [None; CAP],
@@ -182,10 +181,10 @@ impl Smoother {
         self.idx = (self.idx + 1) % CAP;
     }
 
-    // pub fn get_recent(&self) -> u64 {
-    //     let prev = (self.idx - 1) % CAP;
-    //     self.records[prev].unwrap_or(0)
-    // }
+    pub fn get_recent(&self) -> u64 {
+        let prev = (self.idx - 1) % CAP;
+        self.records[prev].unwrap_or(0)
+    }
 
     pub fn get_avg(&self) -> f64 {
         if self.size == 0 {
@@ -201,8 +200,8 @@ struct FlowChecker<E: Engine> {
     memtables_threshold: u64,
     l0_files_threshold: u64,
 
-    last_num_memtables: u64,
-    last_num_l0_files: u64,
+    last_num_memtables: Smoother<10>,
+    last_num_l0_files: Smoother<600>,
 
     factor: f64,
 
@@ -210,7 +209,7 @@ struct FlowChecker<E: Engine> {
     discard_ratio: Arc<AtomicU64>,
 
     engine: E,
-    recorder: Smoother,
+    recorder: Smoother<10>,
     limiter: Arc<Limiter>,
 }
 
@@ -268,14 +267,14 @@ impl<E: Engine> FlowChecker<E> {
                 new_ratio
             } * RATIO_PERCISION) as u64
         };
-        SCHED_DISCARD_RATIO_GAUAE.set(ratio as i64);
+        SCHED_DISCARD_RATIO_GAUGE.set(ratio as i64);
         self.discard_ratio.store(ratio, Ordering::Relaxed);
     }
 
     fn adjust_l0_files_and_memtables(&mut self) {
         self.recorder
             .observe(self.limiter.total_bytes_consumed() as u64);
-        SCHED_WRITE_FLOW_GAUAE.set(self.limiter.total_bytes_consumed() as i64);
+        SCHED_WRITE_FLOW_GAUGE.set(self.limiter.total_bytes_consumed() as i64);
         self.limiter.reset_statistics();
 
         let mut num_memtables = 0;
@@ -302,27 +301,30 @@ impl<E: Engine> FlowChecker<E> {
         }
 
         let is_throttled = self.limiter.speed_limit() != INFINITY;
-        let should_throttle =
-            num_memtables > self.memtables_threshold || num_l0_files > self.l0_files_threshold;
+        let should_throttle = self.last_num_l0_files.get_avg() > self.l0_files_threshold as f64;
 
         let mut throttle = if !is_throttled && should_throttle {
+            SCHED_THROTTLE_ACTION_COUNTER.with_label_values(&["init"]).inc();
             self.recorder.get_avg() * (1.0 - LIMIT_DOWN_PERCENT)
         } else if is_throttled && should_throttle {
-            if self.last_num_l0_files <= num_l0_files || self.last_num_memtables <= num_memtables {
+            if self.last_num_l0_files.get_recent() < num_l0_files {
+                SCHED_THROTTLE_ACTION_COUNTER.with_label_values(&["down"]).inc();
                 self.recorder.get_avg() * (1.0 - LIMIT_DOWN_PERCENT)
-            } else if self.last_num_l0_files > num_l0_files
-                && self.last_num_memtables > num_memtables
-            {
+            } else if self.last_num_l0_files.get_recent() == num_l0_files {
+                SCHED_THROTTLE_ACTION_COUNTER.with_label_values(&["keep"]).inc();
+                self.limiter.speed_limit()
+            } else if self.last_num_l0_files.get_recent() > num_l0_files {
+                SCHED_THROTTLE_ACTION_COUNTER.with_label_values(&["up"]).inc();
                 self.recorder.get_avg() * (1.0 + LIMIT_UP_PERCENT)
             } else {
                 panic!();
             }
         } else if is_throttled && !should_throttle {
-            if (num_memtables as f64) < self.memtables_threshold as f64 * 0.7
-                && (num_l0_files as f64) < self.l0_files_threshold as f64 * 0.7
-            {
+            if (num_l0_files as f64) < self.l0_files_threshold as f64 * 0.7 {
+                SCHED_THROTTLE_ACTION_COUNTER.with_label_values(&["reset"]).inc();
                 INFINITY
             } else {
+                SCHED_THROTTLE_ACTION_COUNTER.with_label_values(&["back"]).inc();
                 self.recorder.get_avg() * (1.0 + LIMIT_UP_PERCENT * 3.0)
                 // do something else
             }
@@ -330,10 +332,13 @@ impl<E: Engine> FlowChecker<E> {
             INFINITY
         };
 
-        self.last_num_l0_files = num_l0_files;
-        self.last_num_memtables = num_memtables;
+        self.last_num_l0_files.observe(num_l0_files);
+        self.last_num_memtables.observe(num_memtables);
 
-        SCHED_THROTTLE_FLOW_GAUAE.set(if throttle == INFINITY {
+        SCHED_MEMTABLE_GAUGE.set(num_memtables as i64);
+        SCHED_L0_GAUGE.set(num_l0_files as i64);
+        SCHED_L0_AVG_GAUGE.set(self.last_num_l0_files.get_avg() as i64);
+        SCHED_THROTTLE_FLOW_GAUGE.set(if throttle == INFINITY {
             0
         } else {
             throttle as i64
@@ -380,8 +385,8 @@ impl FlowController {
             pending_compaction_bytes_hard_limit: config.pending_compaction_bytes_hard_limit,
             memtables_threshold: config.memtables_threshold,
             l0_files_threshold: config.l0_files_threshold,
-            last_num_memtables: 0,
-            last_num_l0_files: 0,
+            last_num_memtables: Smoother::new(),
+            last_num_l0_files: Smoother::new(),
             engine,
             factor: EMA_FACTOR,
             discard_ratio: discard_ratio.clone(),
