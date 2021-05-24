@@ -2,6 +2,7 @@
 
 use super::{get_io_rate_limiter, get_io_type, IOOp, IORateLimiter};
 
+use std::fmt::{self, Debug, Formatter};
 use std::fs;
 use std::io::{self, Read, Seek, Write};
 use std::path::Path;
@@ -10,10 +11,15 @@ use std::sync::Arc;
 use fs2::FileExt;
 
 /// A wrapper around `std::fs::File` with capability to track and regulate IO flow.
-#[derive(Debug)]
 pub struct File {
     inner: fs::File,
     limiter: Option<Arc<IORateLimiter>>,
+}
+
+impl Debug for File {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self.inner)
+    }
 }
 
 impl File {
@@ -25,12 +31,30 @@ impl File {
         })
     }
 
+    #[cfg(test)]
+    pub fn open_with_limiter<P: AsRef<Path>>(
+        path: P,
+        limiter: Option<Arc<IORateLimiter>>,
+    ) -> io::Result<File> {
+        let inner = fs::File::open(path)?;
+        Ok(File { inner, limiter })
+    }
+
     pub fn create<P: AsRef<Path>>(path: P) -> io::Result<File> {
         let inner = fs::File::create(path)?;
         Ok(File {
             inner,
             limiter: get_io_rate_limiter(),
         })
+    }
+
+    #[cfg(test)]
+    pub fn create_with_limiter<P: AsRef<Path>>(
+        path: P,
+        limiter: Option<Arc<IORateLimiter>>,
+    ) -> io::Result<File> {
+        let inner = fs::File::create(path)?;
+        Ok(File { inner, limiter })
     }
 
     pub fn from_raw_file(file: fs::File) -> io::Result<File> {
@@ -210,14 +234,16 @@ mod tests {
 
     #[test]
     fn test_instrumented_file() {
-        let (_guard, stats) = WithIORateLimit::new(1);
+        // make sure read at most one bytes at a time
+        let limiter = Arc::new(IORateLimiter::new(1, true /*enable_statistics*/));
+        let stats = limiter.statistics().unwrap();
 
         let tmp_dir = TempDir::new().unwrap();
         let tmp_file = tmp_dir.path().join("instrumented.txt");
-        let content = String::from("magic words");
+        let content = String::from("drink full and descend");
         {
             let _guard = WithIOType::new(IOType::ForegroundWrite);
-            let mut f = File::create(&tmp_file).unwrap();
+            let mut f = File::create_with_limiter(&tmp_file, Some(limiter.clone())).unwrap();
             f.write_all(content.as_bytes()).unwrap();
             f.sync_all().unwrap();
             assert_eq!(
@@ -226,17 +252,14 @@ mod tests {
             );
         }
         {
-            let _guard = WithIOType::new(IOType::ForegroundRead);
+            let _guard = WithIOType::new(IOType::Export);
             let mut buffer = String::new();
-            let mut f = File::open(&tmp_file).unwrap();
+            let mut f = File::open_with_limiter(&tmp_file, Some(limiter)).unwrap();
             assert_eq!(f.read_to_string(&mut buffer).unwrap(), content.len());
             assert_eq!(buffer, content);
             // read_to_string only exit when file.read() returns zero, which means
             // it requires two EOF reads to finish the call.
-            assert_eq!(
-                stats.fetch(IOType::ForegroundRead, IOOp::Read),
-                content.len() + 2
-            );
+            assert_eq!(stats.fetch(IOType::Export, IOOp::Read), content.len() + 2);
         }
     }
 }
