@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use crate::store::config::Config;
 use crate::store::fsm::RaftRouter;
-use crate::store::local_metrics::RaftSendMessageMetrics;
+use crate::store::local_metrics::{RaftSendMessageMetrics, AsyncWriteMetrics};
 use crate::store::metrics::*;
 use crate::store::transport::Transport;
 use crate::store::{PeerMsg, SignificantMsg};
@@ -133,6 +133,7 @@ where
     pub raft_states: HashMap<u64, RaftLocalState>,
     pub state_size: usize,
     pub tasks: Vec<AsyncWriteTask<EK, ER>>,
+    metrics: AsyncWriteMetrics,
     _phantom: PhantomData<EK>,
 }
 
@@ -149,6 +150,7 @@ where
             raft_states: HashMap::default(),
             tasks: vec![],
             state_size: 0,
+            metrics: Default::default(),
             _phantom: PhantomData,
         }
     }
@@ -194,32 +196,36 @@ where
     }
 
     fn before_write_to_db(&mut self, now: Instant) {
-        for task in &self.tasks {
-            for ts in &task.proposal_times {
-                STORE_TO_WRITE_DURATION_HISTOGRAM.observe(duration_to_sec(now - *ts));
-            }
-        }
         let raft_states = std::mem::take(&mut self.raft_states);
         for (region_id, state) in raft_states {
             self.raft_wb.put_raft_state(region_id, &state).unwrap();
         }
         self.state_size = 0;
-    }
-
-    fn after_write_to_kv_db(&self, now: Instant) {
         for task in &self.tasks {
             for ts in &task.proposal_times {
-                STORE_WRITE_KVDB_END_DURATION_HISTOGRAM.observe(duration_to_sec(now - *ts));
+                self.metrics.to_write.observe(duration_to_sec(now - *ts));
             }
         }
     }
 
-    fn after_write_to_db(&self, now: Instant) {
+    fn after_write_to_kv_db(&mut self, now: Instant) {
         for task in &self.tasks {
             for ts in &task.proposal_times {
-                STORE_WRITE_END_DURATION_HISTOGRAM.observe(duration_to_sec(now - *ts))
+                self.metrics.kvdb_end.observe(duration_to_sec(now - *ts));
             }
         }
+    }
+
+    fn after_write_to_db(&mut self, now: Instant) {
+        for task in &self.tasks {
+            for ts in &task.proposal_times {
+                self.metrics.write_end.observe(duration_to_sec(now - *ts))
+            }
+        }
+    }
+
+    fn flush_metrics(&mut self) {
+        self.metrics.flush()
     }
 }
 
@@ -312,7 +318,7 @@ where
             STORE_WRITE_HANDLE_MSG_DURATION_HISTOGRAM
                 .observe(duration_to_sec(handle_begin.elapsed()));
 
-            STORE_WRITE_TIME_TRIGGER_SIZE_HISTOGRAM.observe(self.wb.get_raft_size() as f64);
+            STORE_WRITE_TRIGGER_SIZE_HISTOGRAM.observe(self.wb.get_raft_size() as f64);
 
             self.sync_write();
 
@@ -422,6 +428,7 @@ where
         }
         STORE_WRITE_CALLBACK_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()));
 
+        self.wb.flush_metrics();
         self.wb.clear();
 
         fail_point!("raft_after_save");

@@ -1411,18 +1411,6 @@ where
 
         let mut write_task = AsyncWriteTask::new(region_id, self.peer_id);
 
-        if !ready.entries().is_empty() {
-            self.append(&mut ctx, ready.take_entries(), &mut write_task);
-        }
-
-        // Last index is 0 means the peer is created from raft message
-        // and has not applied snapshot yet, so skip persistent hard state.
-        if ctx.raft_state.get_last_index() > 0 {
-            if let Some(hs) = ready.hs() {
-                ctx.raft_state.set_hard_state(hs.clone());
-            }
-        }
-
         if !ready.snapshot().is_empty() {
             fail_point!("raft_before_apply_snap");
             self.apply_snapshot(
@@ -1435,6 +1423,18 @@ where
             ctx.destroyed_regions = destroy_regions;
         };
 
+        if !ready.entries().is_empty() {
+            self.append(&mut ctx, ready.take_entries(), &mut write_task);
+        }
+
+        // Last index is 0 means the peer is created from raft message
+        // and has not applied snapshot yet, so skip persistent hard state.
+        if ctx.raft_state.get_last_index() > 0 {
+            if let Some(hs) = ready.hs() {
+                ctx.raft_state.set_hard_state(hs.clone());
+            }
+        }
+
         // Save raft state if it has changed or there is a snapshot.
         if ctx.raft_state != self.raft_state || !ready.snapshot().is_empty() {
             write_task.raft_state = Some(ctx.raft_state.clone());
@@ -1444,8 +1444,12 @@ where
             write_task.unsynced_ready = Some(UnsyncedReady::new(self.peer_id, ready.number()));
         }
 
+        let mut now = None;
         for ts in &proposal_times {
-            STORE_TO_WRITE_QUEUE_DURATION_HISTOGRAM.observe(duration_to_sec(ts.elapsed()));
+            if now.is_none() {
+                now = Some(Instant::now());
+            }
+            STORE_TO_WRITE_QUEUE_DURATION_HISTOGRAM.observe(duration_to_sec(now.unwrap() - *ts));
         }
         write_task.proposal_times = proposal_times;
         write_task.messages = msgs;

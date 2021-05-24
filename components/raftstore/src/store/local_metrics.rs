@@ -432,3 +432,27 @@ impl RaftMetrics {
         missing.clear();
     }
 }
+
+pub struct AsyncWriteMetrics {
+    pub to_write: LocalHistogram,
+    pub kvdb_end: LocalHistogram,
+    pub write_end: LocalHistogram,
+}
+
+impl Default for AsyncWriteMetrics {
+    fn default() -> AsyncWriteMetrics {
+        AsyncWriteMetrics {
+            to_write: STORE_TO_WRITE_DURATION_HISTOGRAM.local(),
+            kvdb_end: STORE_WRITE_KVDB_END_DURATION_HISTOGRAM.local(),
+            write_end: STORE_WRITE_END_DURATION_HISTOGRAM.local(),
+        }
+    }
+}
+
+impl AsyncWriteMetrics {
+    pub fn flush(&mut self) {
+        self.to_write.flush();
+        self.kvdb_end.flush();
+        self.write_end.flush();
+    }
+}
