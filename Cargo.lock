@@ -1466,6 +1466,7 @@ dependencies = [
  "maligned",
  "nix 0.19.0",
  "openssl",
+ "parking_lot 0.11.0",
  "prometheus",
  "prometheus-static-metric",
  "rand 0.7.3",
@@ -2306,7 +2307,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#46b7a1da47e626ae35158a51a3c90babafbd8ff2"
+source = "git+https://github.com/tikv/rust-rocksdb.git#41d7180df72cf5aae97fbae9a18aec52ad29dfcc"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2325,7 +2326,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#46b7a1da47e626ae35158a51a3c90babafbd8ff2"
+source = "git+https://github.com/tikv/rust-rocksdb.git#41d7180df72cf5aae97fbae9a18aec52ad29dfcc"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -5005,6 +5006,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "fail",
+ "file_system",
  "futures 0.3.8",
  "grpcio",
  "keys",
@@ -5567,6 +5569,7 @@ dependencies = [
  "engine_traits",
  "error_code",
  "fail",
+ "file_system",
  "futures 0.3.8",
  "into_other",
  "keys",
