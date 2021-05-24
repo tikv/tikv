@@ -692,7 +692,7 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                         .observe(begin_instant.elapsed().as_secs_f64());
                 }
             }
-            msg.mut_entries()[0].set_data(rctx.to_bytes());
+            msg.mut_entries()[0].set_data(rctx.to_bytes().into());
         }
     }
 }
@@ -760,7 +760,7 @@ mod tests {
         m.set_msg_type(MessageType::MsgReadIndex);
         let uuid = Uuid::new_v4();
         let mut e = eraftpb::Entry::default();
-        e.set_data(uuid.as_bytes().to_vec());
+        e.set_data(uuid.as_bytes().to_vec().into());
         m.mut_entries().push(e);
 
         checker.on_step(&mut m);

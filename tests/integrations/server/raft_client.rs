@@ -203,7 +203,7 @@ fn test_batch_size_limit() {
         let mut raft_m = RaftMessage::default();
         for _ in 0..(5 * 1024) {
             let mut e = Entry::default();
-            e.set_data(vec![b'a'; 1024]);
+            e.set_data(vec![b'a'; 1024].into());
             raft_m.mut_message().mut_entries().push(e);
         }
         raft_client.send(raft_m).unwrap();
@@ -291,7 +291,7 @@ fn test_tombstone_block_list() {
         raft_m.mut_to_peer().set_store_id(1);
         for _ in 0..(5 * 1024) {
             let mut e = Entry::default();
-            e.set_data(vec![b'a'; 1024]);
+            e.set_data(vec![b'a'; 1024].into());
             raft_m.mut_message().mut_entries().push(e);
         }
         raft_client.send(raft_m).unwrap();

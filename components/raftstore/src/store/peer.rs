@@ -1843,17 +1843,18 @@ where
             }
         }
 
-        let msgs = if !ready.messages().is_empty() {
-            if self.is_leader() {
-                self.send(
-                    &mut ctx.trans,
-                    ready.take_messages(),
-                    &mut ctx.raft_metrics.send_message,
-                );
-                Vec::new()
-            } else {
-                self.switch_to_raft_msg(ready.take_messages())
-            }
+        if !ready.messages().is_empty() {
+            assert!(self.is_leader());
+            self.send(
+                &mut ctx.trans,
+                ready.take_messages(),
+                &mut ctx.raft_metrics.send_message,
+            );
+        }
+
+        let persisted_msgs = if !ready.persisted_messages().is_empty() {
+            assert!(!self.is_leader());
+            self.switch_to_raft_msg(ready.take_persisted_messages())
         } else {
             Vec::new()
         };
@@ -1880,7 +1881,7 @@ where
             &mut ready,
             destroy_regions,
             async_writer_id,
-            msgs,
+            persisted_msgs,
             proposal_times,
         ) {
             Ok(r) => r,
