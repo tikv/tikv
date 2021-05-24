@@ -2555,7 +2555,7 @@ mod tests {
         // Sync if context is marked sync.
         let context = ProposalContext::SYNC_LOG.to_vec();
         let mut e = Entry::default();
-        e.set_context(context);
+        e.set_context(context.into());
         tbl.push((e.clone(), true));
 
         // Sync if sync_log is set and context is marked sync_log.
