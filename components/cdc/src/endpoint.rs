@@ -577,7 +577,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
     pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>, old_value_cb: OldValueCallback) {
         fail_point!("cdc_before_handle_multi_batch", |_| {});
         for batch in multi {
-            let region_id = batch.region_id;
+            let region_id = batch.region.get_id();
             let mut deregister = None;
             if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
                 if delegate.has_failed() {

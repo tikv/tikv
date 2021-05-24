@@ -386,7 +386,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
     }
 
-    pub fn post_apply(&self, region: &Region, cmd: &mut Cmd) {
+    pub fn post_apply(&self, region: &Region, cmd: &Cmd) {
         if !cmd.response.has_admin_response() {
             loop_ob!(
                 region,
@@ -395,7 +395,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
                 cmd,
             );
         } else {
-            let admin = cmd.response.mut_admin_response();
+            let admin = cmd.response.get_admin_response();
             loop_ob!(
                 region,
                 &self.registry.admin_observers,
@@ -494,31 +494,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
         );
     }
 
-    pub fn prepare_for_apply(
-        &self,
-        cdc_id: &ObserveHandle,
-        rts_id: &ObserveHandle,
-        region_id: u64,
-    ) {
-        for cmd_ob in &self.registry.cmd_observers {
-            cmd_ob
-                .observer
-                .inner()
-                .on_prepare_for_apply(cdc_id, rts_id, region_id);
-        }
-    }
-
-    pub fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: &Cmd) {
-        if self.registry.cmd_observers.is_empty() {
-            return;
-        }
-        for observer in &self.registry.cmd_observers {
-            let observer = observer.observer.inner();
-            observer.on_apply_cmd(cdc_id, rts_id, region_id, cmd)
-        }
-    }
-
-    pub fn on_flush_apply(&self, engine: E) {
+    pub fn on_flush_apply(&self, cmd_batches: Vec<CmdBatch>, engine: E) {
         if self.registry.cmd_observers.is_empty() {
             return;
         }
@@ -530,7 +506,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
                 .unwrap()
                 .observer
                 .inner()
-                .on_flush_apply(engine.clone())
+                .on_flush_apply(cmd_batches.clone(), engine.clone())
         }
         self.registry
             .cmd_observers
@@ -538,7 +514,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
             .unwrap()
             .observer
             .inner()
-            .on_flush_apply(engine)
+            .on_flush_apply(cmd_batches, engine)
     }
 
     pub fn on_step_read_index(&self, msg: &mut eraftpb::Message) {
@@ -603,7 +579,7 @@ mod tests {
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
 
-        fn post_apply_admin(&self, ctx: &mut ObserverContext<'_>, _: &mut AdminResponse) {
+        fn post_apply_admin(&self, ctx: &mut ObserverContext<'_>, _: &AdminResponse) {
             self.called.fetch_add(3, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
@@ -628,7 +604,7 @@ mod tests {
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
 
-        fn post_apply_query(&self, ctx: &mut ObserverContext<'_>, _: &mut Cmd) {
+        fn post_apply_query(&self, ctx: &mut ObserverContext<'_>, _: &Cmd) {
             self.called.fetch_add(6, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
@@ -671,13 +647,7 @@ mod tests {
     }
 
     impl CmdObserver<PanicEngine> for TestCoprocessor {
-        fn on_prepare_for_apply(&self, _: &ObserveHandle, _: &ObserveHandle, _: u64) {
-            self.called.fetch_add(11, Ordering::SeqCst);
-        }
-        fn on_apply_cmd(&self, _: ObserveID, _: ObserveID, _: u64, _: &Cmd) {
-            self.called.fetch_add(12, Ordering::SeqCst);
-        }
-        fn on_flush_apply(&self, _: PanicEngine) {
+        fn on_flush_apply(&self, _: Vec<CmdBatch>, _: PanicEngine) {
             self.called.fetch_add(13, Ordering::SeqCst);
         }
     }
@@ -723,7 +693,7 @@ mod tests {
         assert_all!(&[&ob.called], &[3]);
         let mut admin_resp = RaftCmdResponse::default();
         admin_resp.set_admin_response(AdminResponse::default());
-        host.post_apply(&region, &mut Cmd::new(0, admin_req, admin_resp));
+        host.post_apply(&region, &Cmd::new(0, admin_req, admin_resp));
         assert_all!(&[&ob.called], &[6]);
 
         let mut query_req = RaftCmdRequest::default();
@@ -733,7 +703,7 @@ mod tests {
         host.pre_apply(&region, &query_req);
         assert_all!(&[&ob.called], &[15]);
         let query_resp = RaftCmdResponse::default();
-        host.post_apply(&region, &mut Cmd::new(0, query_req, query_resp));
+        host.post_apply(&region, &Cmd::new(0, query_req, query_resp));
         assert_all!(&[&ob.called], &[21]);
 
         host.on_role_change(&region, StateRole::Leader);
@@ -746,18 +716,11 @@ mod tests {
         assert_all!(&[&ob.called], &[45]);
         host.post_apply_sst_from_snapshot(&region, "default", "");
         assert_all!(&[&ob.called], &[55]);
-        let observe_id = ObserveHandle::new();
-        host.prepare_for_apply(&observe_id, &observe_id, 0);
-        assert_all!(&[&ob.called], &[66]);
-        host.on_apply_cmd(
-            observe_id.id,
-            observe_id.id,
-            0,
-            &Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),
-        );
-        assert_all!(&[&ob.called], &[78]);
-        host.on_flush_apply(PanicEngine);
-        assert_all!(&[&ob.called], &[91]);
+        let observe_handle = ObserveHandle::new();
+        let mut cb = CmdBatch::new(&observe_handle, &observe_handle, Region::default());
+        cb.push(observe_handle.id, observe_handle.id, 0, Cmd::default());
+        host.on_flush_apply(vec![cb], PanicEngine);
+        assert_all!(&[&ob.called], &[68]);
     }
 
     #[test]
@@ -798,7 +761,7 @@ mod tests {
             host.pre_apply(&region, &req);
             assert_all!(&[&ob1.called, &ob2.called], &[0, base_score * 2 + 3]);
 
-            host.post_apply(&region, &mut Cmd::new(0, req.clone(), resp.clone()));
+            host.post_apply(&region, &Cmd::new(0, req.clone(), resp.clone()));
             assert_all!(&[&ob1.called, &ob2.called], &[0, base_score * 3 + 6]);
 
             set_all!(&[&ob2.bypass], false);

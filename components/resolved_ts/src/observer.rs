@@ -1,6 +1,5 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cell::RefCell;
 use std::sync::Arc;
 
 use engine_traits::KvEngine;
@@ -13,19 +12,15 @@ use tikv_util::worker::Scheduler;
 use crate::endpoint::Task;
 
 pub struct Observer<E: KvEngine> {
-    cmd_batches: RefCell<Vec<CmdBatch>>,
     scheduler: Scheduler<Task<E::Snapshot>>,
     need_old_value: bool,
-    last_batch_observing: RefCell<bool>,
 }
 
 impl<E: KvEngine> Observer<E> {
     pub fn new(scheduler: Scheduler<Task<E::Snapshot>>) -> Self {
         Observer {
-            cmd_batches: RefCell::default(),
             scheduler,
             need_old_value: true,
-            last_batch_observing: RefCell::from(false),
         }
     }
 
@@ -52,10 +47,8 @@ impl<E: KvEngine> Observer<E> {
 impl<E: KvEngine> Clone for Observer<E> {
     fn clone(&self) -> Self {
         Self {
-            cmd_batches: self.cmd_batches.clone(),
             scheduler: self.scheduler.clone(),
             need_old_value: self.need_old_value,
-            last_batch_observing: self.last_batch_observing.clone(),
         }
     }
 }
@@ -63,33 +56,9 @@ impl<E: KvEngine> Clone for Observer<E> {
 impl<E: KvEngine> Coprocessor for Observer<E> {}
 
 impl<E: KvEngine> CmdObserver<E> for Observer<E> {
-    fn on_prepare_for_apply(&self, cdc: &ObserveHandle, rts: &ObserveHandle, region_id: u64) {
-        // TODO: Should not care about whether `cdc` is observing
-        let is_observing = cdc.is_observing() || rts.is_observing();
-        *self.last_batch_observing.borrow_mut() = is_observing;
-        if !is_observing {
-            return;
-        }
-        self.cmd_batches
-            .borrow_mut()
-            .push(CmdBatch::new(cdc.id, rts.id, region_id));
-    }
-
-    fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: &Cmd) {
-        if !*self.last_batch_observing.borrow() {
-            return;
-        }
-        self.cmd_batches
-            .borrow_mut()
-            .last_mut()
-            .unwrap_or_else(|| panic!("region {} should exist some cmd batch", region_id))
-            .push(cdc_id, rts_id, region_id, cmd.clone());
-    }
-
-    fn on_flush_apply(&self, engine: E) {
-        self.cmd_batches.borrow_mut().retain(|b| !b.is_empty());
-        if !self.cmd_batches.borrow().is_empty() {
-            let batches = self.cmd_batches.replace(Vec::default());
+    fn on_flush_apply(&self, mut cmd_batches: Vec<CmdBatch>, engine: E) {
+        cmd_batches.retain(|b| !b.is_empty());
+        if cmd_batches.is_empty() {
             let mut region = Region::default();
             region.mut_peers().push(Peer::default());
             // Create a snapshot here for preventing the old value was GC-ed.
@@ -103,7 +72,7 @@ impl<E: KvEngine> CmdObserver<E> for Observer<E> {
                 None
             };
             if let Err(e) = self.scheduler.schedule(Task::ChangeLog {
-                cmd_batch: batches,
+                cmd_batch: cmd_batches,
                 snapshot,
             }) {
                 info!("failed to schedule change log event"; "err" => ?e);
@@ -200,27 +169,27 @@ mod test {
 
         // Both cdc and resolved-ts worker are observing
         let (cdc_handle, rts_handle) = (ObserveHandle::new(), ObserveHandle::new());
-        observer.on_prepare_for_apply(&cdc_handle, &rts_handle, 0);
-        observer.on_apply_cmd(cdc_handle.id, rts_handle.id, 0, &cmd);
-        observer.on_flush_apply(engine.clone());
+        let mut cb = CmdBatch::new(&cdc_handle, &rts_handle, Region::default());
+        cb.push(cdc_handle.id, rts_handle.id, 0, cmd.clone());
+        observer.on_flush_apply(vec![cb], engine.clone());
         // Observe all data
         expect_recv(&mut rx, data.clone());
 
         // Only cdc is observing
         let (cdc_handle, rts_handle) = (ObserveHandle::new(), ObserveHandle::new());
         rts_handle.stop_observing();
-        observer.on_prepare_for_apply(&cdc_handle, &rts_handle, 0);
-        observer.on_apply_cmd(cdc_handle.id, rts_handle.id, 0, &cmd);
-        observer.on_flush_apply(engine.clone());
+        let mut cb = CmdBatch::new(&cdc_handle, &rts_handle, Region::default());
+        cb.push(cdc_handle.id, rts_handle.id, 0, cmd.clone());
+        observer.on_flush_apply(vec![cb], engine.clone());
         // Still observe all data
         expect_recv(&mut rx, data.clone());
 
         // Only resolved-ts worker is observing
         let (cdc_handle, rts_handle) = (ObserveHandle::new(), ObserveHandle::new());
         cdc_handle.stop_observing();
-        observer.on_prepare_for_apply(&cdc_handle, &rts_handle, 0);
-        observer.on_apply_cmd(cdc_handle.id, rts_handle.id, 0, &cmd);
-        observer.on_flush_apply(engine.clone());
+        let mut cb = CmdBatch::new(&cdc_handle, &rts_handle, Region::default());
+        cb.push(cdc_handle.id, rts_handle.id, 0, cmd.clone());
+        observer.on_flush_apply(vec![cb], engine.clone());
         // Still observe all data
         expect_recv(&mut rx, data);
 
@@ -228,9 +197,9 @@ mod test {
         let (cdc_handle, rts_handle) = (ObserveHandle::new(), ObserveHandle::new());
         cdc_handle.stop_observing();
         rts_handle.stop_observing();
-        observer.on_prepare_for_apply(&cdc_handle, &rts_handle, 0);
-        observer.on_apply_cmd(cdc_handle.id, rts_handle.id, 0, &cmd);
-        observer.on_flush_apply(engine);
+        let mut cb = CmdBatch::new(&cdc_handle, &rts_handle, Region::default());
+        cb.push(cdc_handle.id, rts_handle.id, 0, cmd);
+        observer.on_flush_apply(vec![cb], engine);
         // Observe no data
         expect_recv(&mut rx, vec![]);
     }

@@ -75,7 +75,7 @@ pub trait AdminObserver: Coprocessor {
     fn pre_apply_admin(&self, _: &mut ObserverContext<'_>, _: &AdminRequest) {}
 
     /// Hook to call after applying admin request.
-    fn post_apply_admin(&self, _: &mut ObserverContext<'_>, _: &mut AdminResponse) {}
+    fn post_apply_admin(&self, _: &mut ObserverContext<'_>, _: &AdminResponse) {}
 }
 
 pub trait QueryObserver: Coprocessor {
@@ -90,7 +90,7 @@ pub trait QueryObserver: Coprocessor {
     fn pre_apply_query(&self, _: &mut ObserverContext<'_>, _: &[Request]) {}
 
     /// Hook to call after applying write request.
-    fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &mut Cmd) {}
+    fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &Cmd) {}
 }
 
 pub trait ApplySnapshotObserver: Coprocessor {
@@ -158,7 +158,7 @@ pub trait RegionChangeObserver: Coprocessor {
     fn on_region_changed(&self, _: &mut ObserverContext<'_>, _: RegionChangeEvent, _: StateRole) {}
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Cmd {
     pub index: u64,
     pub request: RaftCmdRequest,
@@ -219,33 +219,59 @@ impl ObserveHandle {
     }
 }
 
+// `ObserveLevel` describe what data the observer want to observe
+#[derive(Clone, Debug)]
+pub enum ObserveLevel {
+    // Don't observe any data
+    None,
+    // Only observe lock related data (i.e `lock_cf`, `write_cf`)
+    LockRelated,
+    // Observe all data
+    All,
+}
+
+impl ObserveLevel {
+    fn from(cdc: &ObserveHandle, rts: &ObserveHandle) -> ObserveLevel {
+        match (cdc.is_observing(), rts.is_observing()) {
+            // Observe all data if `cdc` worker is observing
+            (true, _) => ObserveLevel::All,
+            // Observe lock related data if only `resolved-ts` worker is observing
+            (false, true) => ObserveLevel::LockRelated,
+            // No observer
+            (false, false) => ObserveLevel::None,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct CmdBatch {
+    pub level: ObserveLevel,
     pub cdc_id: ObserveID,
     pub rts_id: ObserveID,
-    pub region_id: u64,
+    pub region: Region,
     pub cmds: Vec<Cmd>,
 }
 
 impl CmdBatch {
-    pub fn new(cdc_id: ObserveID, rts_id: ObserveID, region_id: u64) -> CmdBatch {
+    pub fn new(cdc: &ObserveHandle, rts: &ObserveHandle, region: Region) -> CmdBatch {
         CmdBatch {
-            cdc_id,
-            rts_id,
-            region_id,
+            level: ObserveLevel::from(cdc, rts),
+            cdc_id: cdc.id,
+            rts_id: rts.id,
+            region,
             cmds: Vec::new(),
         }
     }
 
     pub fn push(&mut self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: Cmd) {
-        assert_eq!(region_id, self.region_id);
+        assert_eq!(region_id, self.region.get_id());
         assert_eq!(cdc_id, self.cdc_id);
         assert_eq!(rts_id, self.rts_id);
         self.cmds.push(cmd)
     }
 
     pub fn into_iter(self, region_id: u64) -> IntoIter<Cmd> {
-        assert_eq!(self.region_id, region_id);
+        assert_eq!(self.region.get_id(), region_id);
         self.cmds.into_iter()
     }
 
@@ -278,12 +304,8 @@ impl CmdBatch {
 }
 
 pub trait CmdObserver<E>: Coprocessor {
-    /// Hook to call after preparing for applying write requests.
-    fn on_prepare_for_apply(&self, cdc_id: &ObserveHandle, rts_id: &ObserveHandle, region_id: u64);
-    /// Hook to call after applying a write request.
-    fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: &Cmd);
     /// Hook to call after flushing writes to db.
-    fn on_flush_apply(&self, engine: E);
+    fn on_flush_apply(&self, cmd_batches: Vec<CmdBatch>, engine: E);
 }
 
 pub trait ReadIndexObserver: Coprocessor {
