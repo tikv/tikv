@@ -229,11 +229,3 @@ pub fn cache_size(level: usize) -> Option<u64> {
 pub fn cache_line_size(level: usize) -> Option<u64> {
     read_size_in_cache(level, "coherency_line_size")
 }
-
-pub fn self_memory_usage_mb() -> u64 {
-    let pid = std::process::id() as i32;
-    let mut sys_info = SYS_INFO.lock().unwrap();
-    sys_info.refresh_memory();
-    let process = sys_info.get_process(pid).unwrap();
-    process.memory() / 1024
-}
