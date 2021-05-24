@@ -614,11 +614,15 @@ fn notify_stale_command(
         "index" => cmd.index,
         "term" => cmd.term
     );
-    notify_stale_req(term, cmd.cb.take().unwrap());
+    notify_stale_req(term, cmd.cb.take().unwrap(), 1);
 }
 
-pub fn notify_stale_req(term: u64, cb: Callback<impl Snapshot>) {
+pub fn notify_stale_req(term: u64, cb: Callback<impl Snapshot>, pos: u32) {
     let resp = cmd_resp::err_resp(Error::StaleCommand, term);
+    info!(
+        "stale command, skip";
+        "pos" => pos,
+    );
     cb.invoke_with_response(resp);
 }
 
@@ -3354,14 +3358,14 @@ where
 
         if let Some(ObserveHandle { id, .. }) = cdc_id {
             if self.delegate.observe_info.cdc_id.id > id {
-                notify_stale_req(self.delegate.term, cb);
+                notify_stale_req(self.delegate.term, cb, 2);
                 return;
             }
         }
 
         if let Some(ObserveHandle { id, .. }) = rts_id {
             if self.delegate.observe_info.rts_id.id > id {
-                notify_stale_req(self.delegate.term, cb);
+                notify_stale_req(self.delegate.term, cb, 3);
                 return;
             }
         }

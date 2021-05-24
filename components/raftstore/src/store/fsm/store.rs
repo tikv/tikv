@@ -55,8 +55,7 @@ use crate::store::fsm::peer::{
 use crate::store::fsm::ApplyNotifier;
 use crate::store::fsm::ApplyTaskRes;
 use crate::store::fsm::{
-    create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRes, ApplyRouter,
-    CollectedReady,
+    create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRes, ApplyRouter
 };
 use crate::store::local_metrics::RaftMetrics;
 use crate::store::metrics::*;
