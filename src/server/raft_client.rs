@@ -947,11 +947,11 @@ where
             return;
         }
         let now = UtilInstant::now_coarse();
-        while !self.need_flush.is_empty() {
-            let val = self.need_flush.pop_front().unwrap();
+        while let Some(val) = self.need_flush.front() {
             if !force && now - val.0 < self.delay_time {
                 break;
             }
+            let val = self.need_flush.pop_front().unwrap();
             if let Some(s) = self.cache.get_mut(&(val.1, val.2)) {
                 if s.dirty {
                     s.dirty = false;
