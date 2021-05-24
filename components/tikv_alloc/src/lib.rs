@@ -34,7 +34,7 @@
 //! - tcmalloc - compiles tcmalloc
 //!
 //! - mimalloc - compiles mimalloc
-//! 
+//!
 //! - snmalloc - compiles snmalloc
 //!
 //! cfg `fuzzing` is defined by `run_libfuzzer` in `fuzz/cli.rs` and
@@ -113,7 +113,12 @@ mod imp;
 #[cfg(not(all(
     unix,
     not(fuzzing),
-    any(feature = "jemalloc", feature = "tcmalloc", feature = "mimalloc", feature = "snmalloc")
+    any(
+        feature = "jemalloc",
+        feature = "tcmalloc",
+        feature = "mimalloc",
+        feature = "snmalloc"
+    )
 )))]
 #[path = "system.rs"]
 mod imp;
