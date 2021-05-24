@@ -51,8 +51,19 @@ pub struct RequestTags {
     pub store_id: u64,
     pub region_id: u64,
     pub peer_id: u64,
-    pub request_id: u64,
     pub extra_attachment: Vec<u8>,
+}
+
+impl RequestTags {
+    pub fn from_rpc_context(context: &kvproto::kvrpcpb::Context) -> Self {
+        let peer = context.get_peer();
+        Self {
+            store_id: peer.get_store_id(),
+            peer_id: peer.get_id(),
+            region_id: context.get_region_id(),
+            extra_attachment: Vec::from(context.get_resource_group_tag()),
+        }
+    }
 }
 
 #[derive(Debug)]

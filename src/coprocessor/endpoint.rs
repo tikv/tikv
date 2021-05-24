@@ -457,13 +457,7 @@ impl<E: Engine> Endpoint<E> {
     ) -> impl Future<Output = Result<coppb::Response>> {
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx.build_task_id();
-        let req_tags = Arc::new(RequestTags {
-            store_id: req_ctx.context.get_peer().get_store_id(),
-            region_id: req_ctx.context.get_region_id(),
-            peer_id: req_ctx.context.get_peer().get_id(),
-            request_id: task_id,
-            extra_attachment: vec![],
-        });
+        let req_tags = Arc::new(RequestTags::from_rpc_context(&req_ctx.context));
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
 

@@ -3908,6 +3908,7 @@ version = "0.0.1"
 dependencies = [
  "collections",
  "crossbeam",
+ "kvproto",
  "lazy_static",
  "libc 0.2.86",
  "pin-project 1.0.1",

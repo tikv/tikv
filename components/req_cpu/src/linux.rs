@@ -302,7 +302,6 @@ mod tests {
                         store_id: tid,
                         region_id: tid,
                         peer_id: tid,
-                        request_id: tid,
                         extra_attachment: vec![],
                     });
 
