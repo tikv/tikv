@@ -3,7 +3,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, error, u64};
@@ -13,7 +13,8 @@ use engine_traits::{Engines, KvEngine, Mutable, Peekable};
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
-    MergeState, PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData, RegionLocalState,
+    MergeState, PeerState, RaftApplyState, RaftLocalState, RaftMessage, RaftSnapshotData,
+    RegionLocalState,
 };
 use protobuf::Message;
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
@@ -25,11 +26,14 @@ use crate::store::ProposalContext;
 use crate::{Error, Result};
 use engine_traits::{RaftEngine, RaftLogBatch};
 use into_other::into_other;
+use tikv_util::time::duration_to_sec;
 use tikv_util::worker::Scheduler;
 
 use super::metrics::*;
 use super::worker::RegionTask;
 use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
+
+use crate::store::fsm::async_io::{AsyncWriteMsg, AsyncWriteTask, UnsyncedReady};
 
 // When we create a region peer, we should initialize its log term/index > 0,
 // so that we can force the follower peer to sync the snapshot first.
@@ -43,7 +47,6 @@ pub const INIT_EPOCH_VER: u64 = 1;
 pub const INIT_EPOCH_CONF_VER: u64 = 1;
 
 // One extra slot for VecDeque internal usage.
-const MAX_CACHE_CAPACITY: usize = 1024 - 1;
 const SHRINK_CACHE_CAPACITY: usize = 64;
 
 pub const JOB_STATUS_PENDING: usize = 0;
@@ -191,29 +194,22 @@ impl EntryCache {
                 );
             }
         }
-        let mut start_idx = 0;
-        if let Some(len) = (self.cache.len() + entries.len()).checked_sub(MAX_CACHE_CAPACITY) {
-            if len < self.cache.len() {
-                let mut drained_cache_entries_size = 0;
-                self.cache.drain(..len).for_each(|e| {
-                    drained_cache_entries_size += (e.data.capacity() + e.context.capacity()) as i64
-                });
-                self.mem_size_change -= drained_cache_entries_size;
-            } else {
-                start_idx = len - self.cache.len();
-                self.update_mem_size_change_before_clear();
-                self.cache.clear();
-            }
-        }
+
         let old_capacity = self.cache.capacity();
         let mut entries_mem_size = 0;
-        for e in &entries[start_idx..] {
+        for e in entries {
             self.cache.push_back(e.to_owned());
             entries_mem_size += (e.data.capacity() + e.context.capacity()) as i64;
         }
         self.mem_size_change += self
             .get_cache_vec_mem_size_change(self.cache.capacity() as i64, old_capacity as i64)
             + entries_mem_size;
+    }
+
+    pub fn term(&self, idx: u64) -> u64 {
+        let cache_low = self.cache.front().unwrap().get_index();
+        let start_idx = idx.checked_sub(cache_low).unwrap() as usize;
+        self.cache[start_idx].get_term()
     }
 
     pub fn compact_to(&mut self, idx: u64) {
@@ -304,15 +300,12 @@ impl Drop for EntryCache {
     }
 }
 
-pub trait HandleRaftReadyContext<WK, WR>
+pub trait HandleRaftReadyContext<EK, ER>
 where
-    WK: Mutable,
-    WR: RaftLogBatch,
+    EK: KvEngine,
+    ER: RaftEngine,
 {
-    /// Returns the mutable references of WriteBatch for both KvDB and RaftDB in one interface.
-    fn wb_mut(&mut self) -> (&mut WK, &mut WR);
-    fn kv_wb_mut(&mut self) -> &mut WK;
-    fn raft_wb_mut(&mut self) -> &mut WR;
+    fn async_write_sender(&self, id: usize) -> &Sender<AsyncWriteMsg<EK, ER>>;
     fn sync_log(&self) -> bool;
     fn set_sync_log(&mut self, sync: bool);
 }
@@ -680,11 +673,11 @@ where
         let last_term = init_last_term(&engines, region, &raft_state, &apply_state)?;
         let applied_index_term = init_applied_index_term(&engines, region, &apply_state)?;
 
-        let cache = if engines.raft.has_builtin_entry_cache() {
+        /*let cache = if engines.raft.has_builtin_entry_cache() {
             None
         } else {
             Some(EntryCache::default())
-        };
+        };*/
 
         Ok(PeerStorage {
             engines,
@@ -699,7 +692,7 @@ where
             tag,
             applied_index_term,
             last_term,
-            cache,
+            cache: Some(EntryCache::default()),
         })
     }
 
@@ -804,8 +797,25 @@ where
         if self.truncated_term() == self.last_term || idx == self.last_index() {
             return Ok(self.last_term);
         }
-        let entries = self.entries(idx, idx + 1, raft::NO_LIMIT)?;
-        Ok(entries[0].get_term())
+        let cache_low = self
+            .cache
+            .as_ref()
+            .unwrap()
+            .first_index()
+            .unwrap_or(u64::MAX);
+        if idx >= cache_low {
+            Ok(self.cache.as_ref().unwrap().term(idx))
+        } else {
+            let mut entries = vec![];
+            self.engines.raft.fetch_entries_to(
+                self.get_region_id(),
+                idx,
+                idx + 1,
+                None,
+                &mut entries,
+            )?;
+            Ok(entries[0].get_term())
+        }
     }
 
     #[inline]
@@ -1019,12 +1029,15 @@ where
     // to the return one.
     // WARNING: If this function returns error, the caller must panic otherwise the entry cache may
     // be wrong and break correctness.
-    pub fn append<H: HandleRaftReadyContext<EK::WriteBatch, ER::LogBatch>>(
+    pub fn append(
         &mut self,
         invoke_ctx: &mut InvokeContext,
         entries: Vec<Entry>,
-        ready_ctx: &mut H,
-    ) -> Result<u64> {
+        task: &mut AsyncWriteTask<EK, ER>,
+    ) {
+        if entries.is_empty() {
+            return;
+        }
         let region_id = self.get_region_id();
         debug!(
             "append entries";
@@ -1033,9 +1046,6 @@ where
             "count" => entries.len(),
         );
         let prev_last_index = invoke_ctx.raft_state.get_last_index();
-        if entries.is_empty() {
-            return Ok(prev_last_index);
-        }
 
         invoke_ctx.has_new_entries = true;
 
@@ -1051,18 +1061,14 @@ where
             cache.append(&self.tag, &entries);
         }
 
-        ready_ctx.raft_wb_mut().append(region_id, entries)?;
+        task.entries = entries;
+        task.cut_logs = Some((last_index + 1, prev_last_index));
 
         // Delete any previously appended log entries which never committed.
         // TODO: Wrap it as an engine::Error.
-        ready_ctx
-            .raft_wb_mut()
-            .cut_logs(region_id, last_index + 1, prev_last_index);
 
         invoke_ctx.raft_state.set_last_index(last_index);
         invoke_ctx.last_term = last_term;
-
-        Ok(last_index)
     }
 
     pub fn compact_to(&mut self, idx: u64) {
@@ -1080,11 +1086,11 @@ where
     }
 
     pub fn maybe_gc_cache(&mut self, replicated_idx: u64, apply_idx: u64) {
-        if self.engines.raft.has_builtin_entry_cache() {
+        /*if self.engines.raft.has_builtin_entry_cache() {
             let rid = self.get_region_id();
             self.engines.raft.gc_entry_cache(rid, apply_idx + 1);
             return;
-        }
+        }*/
 
         let cache = self.cache.as_mut().unwrap();
         if replicated_idx == apply_idx {
@@ -1123,8 +1129,7 @@ where
         &mut self,
         ctx: &mut InvokeContext,
         snap: &Snapshot,
-        kv_wb: &mut EK::WriteBatch,
-        raft_wb: &mut ER::LogBatch,
+        task: &mut AsyncWriteTask<EK, ER>,
         destroy_regions: &[metapb::Region],
     ) -> Result<()> {
         info!(
@@ -1146,6 +1151,15 @@ where
                 region.get_id()
             ));
         }
+
+        if task.raft_wb.is_none() {
+            task.raft_wb = Some(self.engines.raft.log_batch(64));
+        }
+        if task.kv_wb.is_none() {
+            task.kv_wb = Some(self.engines.kv.write_batch());
+        }
+        let raft_wb = task.raft_wb.as_mut().unwrap();
+        let kv_wb = task.kv_wb.as_mut().unwrap();
 
         if self.is_initialized() {
             // we can only delete the old data when the peer is initialized.
@@ -1170,6 +1184,13 @@ where
             .mut_truncated_state()
             .set_term(snap.get_metadata().get_term());
 
+        // in case of restart happen when we just write region state to Applying,
+        // but not write raft_local_state to raft rocksdb in time.
+        // we write raft state to default rocksdb, with last index set to snap index,
+        // in case of recv raft log after snapshot.
+        ctx.save_snapshot_raft_state_to(last_index, kv_wb)?;
+        ctx.save_apply_state_to(kv_wb)?;
+
         info!(
             "apply snapshot with state ok";
             "region_id" => self.region.get_id(),
@@ -1190,9 +1211,10 @@ where
     ) -> Result<()> {
         let region_id = self.get_region_id();
         clear_meta(&self.engines, kv_wb, raft_wb, region_id, &self.raft_state)?;
-        if !self.engines.raft.has_builtin_entry_cache() {
+        /*if !self.engines.raft.has_builtin_entry_cache() {
             self.cache = Some(EntryCache::default());
-        }
+        }*/
+        self.cache = Some(EntryCache::default());
         Ok(())
     }
 
@@ -1374,28 +1396,22 @@ where
     /// it explicitly to disk. If it's flushed to disk successfully, `post_ready` should be called
     /// to update the memory states properly.
     /// WARNING: If this function returns error, the caller must panic(details in `append` function).
-    pub fn handle_raft_ready<H: HandleRaftReadyContext<EK::WriteBatch, ER::LogBatch>>(
+    pub fn handle_raft_ready<H: HandleRaftReadyContext<EK, ER>>(
         &mut self,
         ready_ctx: &mut H,
         ready: &mut Ready,
         destroy_regions: Vec<metapb::Region>,
+        async_writer_id: usize,
+        msgs: Vec<RaftMessage>,
+        proposal_times: Vec<Instant>,
     ) -> Result<InvokeContext> {
+        let region_id = self.get_region_id();
         let mut ctx = InvokeContext::new(self);
-        let snapshot_index = if ready.snapshot().is_empty() {
-            0
-        } else {
-            fail_point!("raft_before_apply_snap");
-            let (kv_wb, raft_wb) = ready_ctx.wb_mut();
-            self.apply_snapshot(&mut ctx, ready.snapshot(), kv_wb, raft_wb, &destroy_regions)?;
-            fail_point!("raft_after_apply_snap");
 
-            ctx.destroyed_regions = destroy_regions;
-
-            last_index(&ctx.raft_state)
-        };
+        let mut write_task = AsyncWriteTask::new(region_id, self.peer_id);
 
         if !ready.entries().is_empty() {
-            self.append(&mut ctx, ready.take_entries(), ready_ctx)?;
+            self.append(&mut ctx, ready.take_entries(), &mut write_task);
         }
 
         // Last index is 0 means the peer is created from raft message
@@ -1406,21 +1422,38 @@ where
             }
         }
 
+        if !ready.snapshot().is_empty() {
+            fail_point!("raft_before_apply_snap");
+            self.apply_snapshot(
+                &mut ctx,
+                ready.snapshot(),
+                &mut write_task,
+                &destroy_regions,
+            )?;
+            fail_point!("raft_after_apply_snap");
+            ctx.destroyed_regions = destroy_regions;
+        };
+
         // Save raft state if it has changed or there is a snapshot.
-        if ctx.raft_state != self.raft_state || snapshot_index > 0 {
-            ctx.save_raft_state_to(ready_ctx.raft_wb_mut())?;
-            if snapshot_index > 0 {
-                // in case of restart happen when we just write region state to Applying,
-                // but not write raft_local_state to raft rocksdb in time.
-                // we write raft state to default rocksdb, with last index set to snap index,
-                // in case of recv raft log after snapshot.
-                ctx.save_snapshot_raft_state_to(snapshot_index, ready_ctx.kv_wb_mut())?;
-            }
+        if ctx.raft_state != self.raft_state || !ready.snapshot().is_empty() {
+            write_task.raft_state = Some(ctx.raft_state.clone());
         }
 
-        // only when apply snapshot
-        if snapshot_index > 0 {
-            ctx.save_apply_state_to(ready_ctx.kv_wb_mut())?;
+        if ready.must_sync() {
+            write_task.unsynced_ready = Some(UnsyncedReady::new(self.peer_id, ready.number()));
+        }
+
+        for ts in &proposal_times {
+            STORE_TO_WRITE_QUEUE_DURATION_HISTOGRAM.observe(duration_to_sec(ts.elapsed()));
+        }
+        write_task.proposal_times = proposal_times;
+        write_task.messages = msgs;
+
+        if !write_task.is_empty() {
+            let sender = ready_ctx.async_write_sender(async_writer_id);
+            if let Err(e) = sender.send(AsyncWriteMsg::WriteTask(write_task)) {
+                panic!("{} failed to send write msg, err: {:?}", self.tag, e);
+            }
         }
 
         Ok(ctx)
@@ -1468,7 +1501,6 @@ where
             }
         }
 
-        self.schedule_applying_snapshot();
         let prev_region = self.region().clone();
         self.set_region(snap_region);
 
@@ -1724,14 +1756,14 @@ mod tests {
     }
 
     impl HandleRaftReadyContext<KvTestWriteBatch, RaftTestWriteBatch> for ReadyContext {
-        fn wb_mut(&mut self) -> (&mut KvTestWriteBatch, &mut RaftTestWriteBatch) {
-            (&mut self.kv_wb, &mut self.raft_wb)
-        }
+        //fn wb_mut(&mut self) -> (&mut KvTestWriteBatch, &mut RaftTestWriteBatch) {
+        //    (&mut self.kv_wb, &mut self.raft_wb)
+        //}
         fn kv_wb_mut(&mut self) -> &mut KvTestWriteBatch {
             &mut self.kv_wb
         }
-        fn raft_wb_mut(&mut self) -> &mut RaftTestWriteBatch {
-            &mut self.raft_wb
+        fn raft_wb_pool(&mut self) -> &mut RaftTestWriteBatch {
+            &mut self.raft_wbs
         }
         fn sync_log(&self) -> bool {
             self.sync_log
@@ -2282,6 +2314,7 @@ mod tests {
         exp_res.push(new_entry(7, 8));
         validate_cache(&store, &exp_res);
 
+        let MAX_CACHE_CAPACITY: usize = 1024 - 1;
         let cap = MAX_CACHE_CAPACITY as u64;
 
         // result overflow

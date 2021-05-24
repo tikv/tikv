@@ -68,7 +68,7 @@ pub enum Callback<S: Snapshot> {
     Read(ReadCallback<S>),
     /// Write callback.
     Write {
-        cb: WriteCallback,
+        cb: (WriteCallback, Instant),
         /// `proposed_cb` is called after a request is proposed to the raft group successfully.
         /// It's used to notify the caller to move on early because it's very likely the request
         /// will be applied to the raftstore.
@@ -93,15 +93,25 @@ where
         committed_cb: Option<ExtCallback>,
     ) -> Self {
         Callback::Write {
-            cb,
+            cb: (cb, Instant::now()),
             proposed_cb,
             committed_cb,
         }
     }
 
-    pub fn invoke_with_response(self, resp: RaftCmdResponse) {
+    pub fn get_scheduled_ts(&self) -> Option<Instant> {
         match self {
-            Callback::None => (),
+            Callback::Write {
+                cb: (_cb, scheduled_ts),
+                ..
+            } => Some(scheduled_ts.clone()),
+            _ => None,
+        }
+    }
+
+    pub fn invoke_with_response(self, resp: RaftCmdResponse) -> Option<Instant> {
+        match self {
+            Callback::None => None,
             Callback::Read(read) => {
                 let resp = ReadResponse {
                     response: resp,
@@ -109,10 +119,15 @@ where
                     txn_extra_op: TxnExtraOp::Noop,
                 };
                 read(resp);
+                None
             }
-            Callback::Write { cb, .. } => {
+            Callback::Write {
+                cb: (cb, scheduled_ts),
+                ..
+            } => {
                 let resp = WriteResponse { response: resp };
                 cb(resp);
+                Some(scheduled_ts)
             }
         }
     }
@@ -150,10 +165,10 @@ where
     S: Snapshot,
 {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
+        match self {
             Callback::None => write!(fmt, "Callback::None"),
             Callback::Read(_) => write!(fmt, "Callback::Read(..)"),
-            Callback::Write { .. } => write!(fmt, "Callback::Write(..)"),
+            Callback::Write { cb, .. } => write!(fmt, "Callback::Write({:?})", cb.1),
         }
     }
 }
@@ -430,7 +445,9 @@ pub enum PeerMsg<EK: KvEngine> {
     /// that the raft node will not work anymore.
     Tick(PeerTicks),
     /// Result of applying committed entries. The message can't be lost.
-    ApplyRes { res: ApplyTaskRes<EK::Snapshot> },
+    ApplyRes {
+        res: ApplyTaskRes<EK::Snapshot>,
+    },
     /// Message that can't be lost but rarely created. If they are lost, real bad
     /// things happen like some peers will be considered dead in the group.
     SignificantMsg(SignificantMsg<EK::Snapshot>),
@@ -438,6 +455,7 @@ pub enum PeerMsg<EK: KvEngine> {
     Start,
     /// A message only used to notify a peer.
     Noop,
+    Persisted((u64, u64, Instant)),
     /// Message that is not important and can be dropped occasionally.
     CasualMessage(CasualMessage<EK>),
     /// Ask region to report a heartbeat to PD.
@@ -460,6 +478,7 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
             PeerMsg::ApplyRes { res } => write!(fmt, "ApplyRes {:?}", res),
             PeerMsg::Start => write!(fmt, "Startup"),
             PeerMsg::Noop => write!(fmt, "Noop"),
+            PeerMsg::Persisted(ts) => write!(fmt, "Persisted {:?}", ts),
             PeerMsg::CasualMessage(msg) => write!(fmt, "CasualMessage {:?}", msg),
             PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
             PeerMsg::UpdateReplicationMode => write!(fmt, "UpdateReplicationMode"),

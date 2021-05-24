@@ -129,4 +129,7 @@ pub trait WriteBatch<E: WriteBatchExt + Sized>: Mutable {
     fn write(&self) -> Result<()> {
         self.write_opt(&WriteOptions::default())
     }
+
+    /// Merge another WriteBatch to self
+    fn merge(&mut self, src: &Self);
 }

@@ -64,6 +64,10 @@ impl RocksWriteBatch {
     pub fn get_db(&self) -> &DB {
         self.db.as_ref()
     }
+
+    pub fn merge(&mut self, src: &Self) {
+        self.wb.append(src.wb.data());
+    }
 }
 
 impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatch {
@@ -76,6 +80,10 @@ impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatch {
         self.get_db()
             .write_opt(self.as_inner(), &opt.into_raw())
             .map_err(Error::Engine)
+    }
+
+    fn merge(&mut self, src: &Self) {
+        self.merge(src);
     }
 }
 
@@ -214,6 +222,10 @@ impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatchVec {
                 .write_opt(&self.wbs[0], &opt.into_raw())
                 .map_err(Error::Engine)
         }
+    }
+
+    fn merge(&mut self, _: &Self) {
+        panic!("merge is not implemented in RocksWriteBatchVec");
     }
 }
 

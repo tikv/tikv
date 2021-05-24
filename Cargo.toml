@@ -206,6 +206,7 @@ vlog = "0.1.4"
 walkdir = "2"
 minitrace = { git = "https://github.com/pingcap-incubator/minitrace-rust.git", branch = "master" }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+seahash = "4.1.0"
 
 [dev-dependencies]
 panic_hook = { path = "components/panic_hook" }
@@ -216,8 +217,8 @@ zipf = "6.1.0"
 
 [patch.crates-io]
 # TODO: remove this when new raft-rs is published.
-raft = { git = "https://github.com/tikv/raft-rs", branch = "master", default-features = false }
-raft-proto = { git = "https://github.com/tikv/raft-rs", branch = "master", default-features = false }
+raft = { git = "https://github.com/gengliqi/raft-rs", branch = "get-msg-early", default-features = false }
+raft-proto = { git = "https://github.com/gengliqi/raft-rs", branch = "get-msg-early", default-features = false }
 protobuf = { git = "https://github.com/pingcap/rust-protobuf", rev = "65e9df20fbcbcf2409d5ee86a2332ecd04c534f8" }
 protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "65e9df20fbcbcf2409d5ee86a2332ecd04c534f8" }
 openssl-src = { git = "https://github.com/busyjay/openssl-src-rs", branch = "patch-for-m1" }

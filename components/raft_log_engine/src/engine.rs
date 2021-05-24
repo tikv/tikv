@@ -59,8 +59,16 @@ impl RaftLogBatchTrait for RaftLogBatch {
         Ok(())
     }
 
+    fn persist_size(&self) -> usize {
+        panic!("persist_size is not implemented for raft engine yet");
+    }
+
     fn is_empty(&self) -> bool {
         self.0.items.is_empty()
+    }
+
+    fn merge(&mut self, _src: &Self) {
+        panic!("merge is not implemented for raft engine yet");
     }
 }
 

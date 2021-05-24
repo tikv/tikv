@@ -31,6 +31,10 @@ impl WriteBatch<PanicEngine> for PanicWriteBatch {
     fn write_opt(&self, _: &WriteOptions) -> Result<()> {
         panic!()
     }
+
+    fn merge(&mut self, _: &Self) {
+        panic!()
+    }
 }
 
 impl Mutable for PanicWriteBatch {
