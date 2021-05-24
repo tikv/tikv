@@ -16,14 +16,11 @@
 //! macro constructs every node as a `MemoryTraceNode` which implements `MemoryTrace` trait.
 //! We can also define a specified tree node by implementing `MemoryTrace` trait.
 
+use std::fmt::{self, Display};
 use std::num::NonZeroU64;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
-    Arc, Weak,
-};
-use std::{
-    cmp,
-    fmt::{self, Display},
+    Arc,
 };
 
 type HashMap<K, V> =
@@ -95,11 +92,11 @@ pub trait MemoryTrace {
     fn snapshot(&self, parent: &mut MemoryTraceSnapshot);
     fn sub_trace(&self, id: Id) -> Arc<dyn MemoryTrace + Send + Sync>;
     fn add_sub_trace(&mut self, id: Id, trace: Arc<dyn MemoryTrace + Send + Sync>);
+    fn sum(&self) -> usize;
 }
 
 pub struct MemoryTraceNode {
     pub id: Id,
-    parent: Option<Weak<dyn MemoryTrace + Send + Sync>>,
     trace: AtomicUsize,
     children: HashMap<Id, Arc<dyn MemoryTrace + Send + Sync>>,
 }
@@ -108,22 +105,9 @@ impl MemoryTraceNode {
     pub fn new(id: impl Into<Id>) -> MemoryTraceNode {
         MemoryTraceNode {
             id: id.into(),
-            parent: None,
             trace: std::sync::atomic::AtomicUsize::default(),
             children: HashMap::default(),
         }
-    }
-
-    fn parent_trace(&self, event: TraceEvent) {
-        if let Some(parent) = self.parent.as_ref() {
-            if let Some(p) = parent.upgrade() {
-                p.trace(event);
-            }
-        }
-    }
-
-    pub fn set_parent(&mut self, parent: &Arc<dyn MemoryTrace + Send + Sync>) {
-        self.parent = Some(Arc::downgrade(parent));
     }
 }
 
@@ -132,19 +116,12 @@ impl MemoryTrace for MemoryTraceNode {
         match event {
             TraceEvent::Add(val) => {
                 self.trace.fetch_add(val, Ordering::Relaxed);
-                self.parent_trace(event);
             }
             TraceEvent::Sub(val) => {
                 self.trace.fetch_sub(val, Ordering::Relaxed);
-                self.parent_trace(event);
             }
             TraceEvent::Reset(val) => {
-                let prev = self.trace.swap(val, Ordering::Relaxed);
-                match prev.cmp(&val) {
-                    cmp::Ordering::Greater => self.parent_trace(TraceEvent::Sub(prev - val)),
-                    cmp::Ordering::Less => self.parent_trace(TraceEvent::Add(val - prev)),
-                    cmp::Ordering::Equal => (),
-                }
+                self.trace.swap(val, Ordering::Relaxed);
             }
         }
     }
@@ -168,6 +145,11 @@ impl MemoryTrace for MemoryTraceNode {
     fn add_sub_trace(&mut self, id: Id, trace: Arc<dyn MemoryTrace + Send + Sync>) {
         self.children.insert(id, trace);
     }
+
+    fn sum(&self) -> usize {
+        let sum: usize = self.children.values().map(|c| c.sum()).sum();
+        sum + self.trace.load(Ordering::Relaxed)
+    }
 }
 
 pub struct MemoryTraceSnapshot {
@@ -178,14 +160,15 @@ pub struct MemoryTraceSnapshot {
 
 /// Define the tree hierarchy of memory usage for a module.
 /// For example there is a module:
-///   root
+///   - root
 ///     - mid1
-///       - leaf1
-///       - leaf2
+///        - leaf1
+///        - leaf2
 ///     - mid2
-///       - leaf3
+///        - leaf3
+///
 /// Its defination could be:
-///   mem_trace!(root, (mid1, [leaf1, leaf2]), (mid2, [leaf3]))
+///   mem_trace!(root, [(mid1, [leaf1, leaf2]), (mid2, [leaf3])])
 #[macro_export]
 macro_rules! mem_trace {
     ($name: ident) => {
@@ -201,16 +184,37 @@ macro_rules! mem_trace {
 
             let mut node = mem_trace!($name);
             $(
-                let mut child = mem_trace!($child);
-                unsafe {
-                    std::sync::Arc::get_mut_unchecked(&mut child).set_parent(&(node.clone() as Arc<dyn MemoryTrace + Send + Sync>));
-                    std::sync::Arc::get_mut_unchecked(&mut node).add_sub_trace(child.id, child);
-                }
+                let child = mem_trace!($child);
+                std::sync::Arc::get_mut(&mut node).unwrap().add_sub_trace(child.id, child);
             )*
             node
         }
     };
     (($name: ident, [$($child:tt),+])) => {
         mem_trace!($name, [$($child),*])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        self as tikv_alloc,
+        trace::{Id, MemoryTrace, TraceEvent},
+    };
+    #[test]
+    fn test_mem_trace_macro() {
+        let trace = mem_trace!(root, [(mid1, [leaf1, leaf2]), (mid2, [leaf3])]);
+        trace
+            .sub_trace(Id::Name("mid1"))
+            .sub_trace(Id::Name("leaf2"))
+            .trace(TraceEvent::Add(1));
+        trace
+            .sub_trace(Id::Name("mid2"))
+            .sub_trace(Id::Name("leaf3"))
+            .trace(TraceEvent::Add(10));
+        trace
+            .sub_trace(Id::Name("mid2"))
+            .trace(TraceEvent::Add(100));
+        assert_eq!(111, trace.sum());
     }
 }
