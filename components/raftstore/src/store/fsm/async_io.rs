@@ -22,7 +22,7 @@ use error_code::ErrorCodeExt;
 use fail::fail_point;
 use kvproto::raft_serverpb::{RaftLocalState, RaftMessage};
 use raft::eraftpb::Entry;
-use tikv_util::time::{duration_to_sec, Instant as UtilInstant};
+use tikv_util::time::duration_to_sec;
 use tikv_util::{debug, thd_name, warn};
 
 const KV_WB_SHRINK_SIZE: usize = 1024 * 1024;
@@ -41,14 +41,14 @@ impl UnsyncedReady {
         Self { peer_id, number }
     }
 
-    fn flush<EK, ER>(&self, region_id: u64, router: &RaftRouter<EK, ER>)
+    fn flush<EK, ER>(&self, region_id: u64, router: &RaftRouter<EK, ER>, now: Instant)
     where
         EK: KvEngine,
         ER: RaftEngine,
     {
         if let Err(e) = router.force_send(
             region_id,
-            PeerMsg::Persisted((self.peer_id, self.number, Instant::now())),
+            PeerMsg::Persisted((self.peer_id, self.number, now)),
         ) {
             warn!(
                 "failed to send noop to trigger persisted ready";
@@ -193,10 +193,10 @@ where
         self.state_size + self.raft_wb.persist_size()
     }
 
-    fn before_write_to_db(&mut self) {
+    fn before_write_to_db(&mut self, now: Instant) {
         for task in &self.tasks {
             for ts in &task.proposal_times {
-                STORE_TO_WRITE_DURATION_HISTOGRAM.observe(duration_to_sec(ts.elapsed()));
+                STORE_TO_WRITE_DURATION_HISTOGRAM.observe(duration_to_sec(now - *ts));
             }
         }
         let raft_states = std::mem::take(&mut self.raft_states);
@@ -204,25 +204,20 @@ where
             self.raft_wb.put_raft_state(region_id, &state).unwrap();
         }
         self.state_size = 0;
+    }
+
+    fn after_write_to_kv_db(&self, now: Instant) {
         for task in &self.tasks {
             for ts in &task.proposal_times {
-                STORE_FILL_WB_DURATION_HISTOGRAM.observe(duration_to_sec(ts.elapsed()));
+                STORE_WRITE_KVDB_END_DURATION_HISTOGRAM.observe(duration_to_sec(now - *ts));
             }
         }
     }
 
-    fn after_write_to_kv_db(&self) {
+    fn after_write_to_db(&self, now: Instant) {
         for task in &self.tasks {
             for ts in &task.proposal_times {
-                STORE_WRITE_KVDB_END_DURATION_HISTOGRAM.observe(duration_to_sec(ts.elapsed()));
-            }
-        }
-    }
-
-    fn after_write_to_db(&self) {
-        for task in &self.tasks {
-            for ts in &task.proposal_times {
-                STORE_WRITE_END_DURATION_HISTOGRAM.observe(duration_to_sec(ts.elapsed()));
+                STORE_WRITE_END_DURATION_HISTOGRAM.observe(duration_to_sec(now - *ts))
             }
         }
     }
@@ -283,7 +278,7 @@ where
 
     fn run(&mut self) {
         loop {
-            let loop_begin = UtilInstant::now();
+            let loop_begin = Instant::now();
             let mut handle_begin = loop_begin;
 
             let mut first_time = true;
@@ -294,7 +289,7 @@ where
                             first_time = false;
                             STORE_WRITE_TASK_GEN_DURATION_HISTOGRAM
                                 .observe(duration_to_sec(loop_begin.elapsed()));
-                            handle_begin = UtilInstant::now();
+                            handle_begin = Instant::now();
                             msg
                         }
                         Err(_) => return,
@@ -327,11 +322,13 @@ where
     }
 
     fn sync_write(&mut self) {
-        self.wb.before_write_to_db();
+        let mut now = Instant::now();
+        self.wb.before_write_to_db(now);
 
         fail_point!("raft_before_save");
+
         if !self.wb.kv_wb.is_empty() {
-            let now = UtilInstant::now();
+            let now = Instant::now();
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
             self.wb.kv_wb.write_opt(&write_opts).unwrap_or_else(|e| {
@@ -343,13 +340,17 @@ where
 
             STORE_WRITE_KVDB_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()) as f64);
         }
-        self.wb.after_write_to_kv_db();
+
+        now = Instant::now();
+        self.wb.after_write_to_kv_db(now);
+
         fail_point!("raft_between_save");
+
         if !self.wb.raft_wb.is_empty() {
             fail_point!("raft_before_save_on_store_1", self.store_id == 1, |_| {});
 
             self.perf_context.start_observe();
-            let now = UtilInstant::now();
+            let now = Instant::now();
             self.raft_engine
                 .consume_and_shrink(&mut self.wb.raft_wb, true, RAFT_WB_SHRINK_SIZE, 16 * 1024)
                 .unwrap_or_else(|e| {
@@ -360,10 +361,12 @@ where
             STORE_WRITE_RAFTDB_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()) as f64);
         }
 
-        self.wb.after_write_to_db();
+        now = Instant::now();
+        self.wb.after_write_to_db(now);
 
         fail_point!("raft_before_follower_send");
-        let send_begin = UtilInstant::now();
+
+        now = Instant::now();
         let mut unreachable_peers = HashSet::default();
         for task in &mut self.wb.tasks {
             for msg in task.messages.drain(..) {
@@ -411,13 +414,13 @@ where
                 );
             }
         }
-        STORE_WRITE_SEND_DURATION_HISTOGRAM.observe(duration_to_sec(send_begin.elapsed()));
+        STORE_WRITE_SEND_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()));
 
-        let callback_begin = UtilInstant::now();
+        let now = Instant::now();
         for (region_id, r) in &self.wb.unsynced_readies {
-            r.flush(*region_id, &self.router);
+            r.flush(*region_id, &self.router, now);
         }
-        STORE_WRITE_CALLBACK_DURATION_HISTOGRAM.observe(duration_to_sec(callback_begin.elapsed()));
+        STORE_WRITE_CALLBACK_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()));
 
         self.wb.clear();
 
