@@ -106,6 +106,9 @@ impl PluginRegistry {
     ) -> notify::Result<()> {
         let plugin_directory = plugin_directory.into();
 
+        // Create plugin directory if it doesn't exist.
+        std::fs::create_dir_all(&plugin_directory)?;
+
         // If this is the first call to `start_hot_reloading()`, create a new file system watcher
         // and background thread for loading plugins. For later invocations, the same watcher and
         // thread will be used.
@@ -537,10 +540,9 @@ mod tests {
         let library_path_2 = coprocessor_dir.join(pkgname_to_libname("example-plugin-2"));
         let plugin_name = "example_plugin";
 
-        // Make sure we have an existing, but empty coprocessor directory.
+        // Make the coprocessor directory is empty.
         std::fs::create_dir_all(&coprocessor_dir).unwrap();
         std::fs::remove_dir_all(&coprocessor_dir).unwrap();
-        std::fs::create_dir_all(&coprocessor_dir).unwrap();
 
         let mut registry = PluginRegistry::new();
         registry.start_hot_reloading(&coprocessor_dir).unwrap();

@@ -86,7 +86,7 @@ impl ImportModeSwitcher {
         ImportModeSwitcher { inner, is_import }
     }
 
-    pub fn start<E: KvEngine>(&self, executor: &ThreadPool, db: E, cb: Box<dyn Fn() + Send>) {
+    pub fn start<E: KvEngine>(&self, executor: &ThreadPool, db: E) {
         // spawn a background future to put TiKV back into normal mode after timeout
         let inner = self.inner.clone();
         let switcher = Arc::downgrade(&inner);
@@ -99,15 +99,8 @@ impl ImportModeSwitcher {
                     if now >= switcher.next_check {
                         if switcher.is_import.load(Ordering::Acquire) {
                             let mf = switcher.metrics_fn;
-                            match switcher.enter_normal_mode(&db, mf) {
-                                Err(e) => {
-                                    error!(?e; "failed to put TiKV back into normal mode");
-                                }
-                                Ok(success) => {
-                                    if success {
-                                        cb();
-                                    }
-                                }
+                            if let Err(e) = switcher.enter_normal_mode(&db, mf) {
+                                error!(?e; "failed to put TiKV back into normal mode");
                             }
                         }
                         switcher.next_check = now + switcher.timeout
@@ -133,9 +126,6 @@ impl ImportModeSwitcher {
     }
 
     pub fn enter_import_mode<E: KvEngine>(&self, db: &E, mf: RocksDBMetricsFn) -> Result<bool> {
-        if self.is_import.load(Ordering::Acquire) {
-            return Ok(false);
-        }
         let mut inner = self.inner.lock().unwrap();
         let ret = inner.enter_import_mode(db, mf)?;
         inner.next_check = Instant::now() + inner.timeout;
@@ -320,7 +310,7 @@ mod tests {
             .unwrap();
 
         let switcher = ImportModeSwitcher::new(&cfg);
-        switcher.start(&threads, db.clone(), Box::new(|| {}));
+        switcher.start(&threads, db.clone());
         check_import_options(&db, &normal_db_options, &normal_cf_options);
         assert!(switcher.enter_import_mode(&db, mf).unwrap());
         check_import_options(&db, &import_db_options, &import_cf_options);
@@ -358,13 +348,7 @@ mod tests {
             .unwrap();
 
         let switcher = ImportModeSwitcher::new(&cfg);
-        let finished = Arc::new(AtomicBool::new(false));
-        let notify = finished.clone();
-        switcher.start(
-            &threads,
-            db.clone(),
-            Box::new(move || notify.store(true, Ordering::Release)),
-        );
+        switcher.start(&threads, db.clone());
         check_import_options(&db, &normal_db_options, &normal_cf_options);
         switcher.enter_import_mode(&db, mf).unwrap();
         check_import_options(&db, &import_db_options, &import_cf_options);
@@ -372,7 +356,6 @@ mod tests {
         thread::sleep(Duration::from_secs(1));
 
         check_import_options(&db, &normal_db_options, &normal_cf_options);
-        assert_eq!(true, finished.load(Ordering::Acquire));
     }
 
     #[test]

@@ -39,6 +39,12 @@
 ## It won't take effect when compiling without BCC_IOSNOOP=1. 
 # enable-io-snoop = true
 
+## Use abort when TiKV panic. By default TiKV will use _exit() on panic, in that case
+## core dump file will not be generated, regardless of system settings.
+## If this config is enabled, core dump files needs to be cleanup to avoid disk space
+## being filled up.
+# abort-on-panic = false
+
 ## Configurations for the single thread pool serving read requests.
 [readpool.unified]
 ## The minimal working thread count of the thread pool.
@@ -145,6 +151,9 @@
 
 ## Time to wait before closing the connection without receiving KeepAlive ping Ack.
 # grpc-keepalive-timeout = "3s"
+
+## Set maximum message length in bytes that gRPC can send. `-1` means unlimited.
+# max-grpc-send-msg-len = 10485760
 
 ## How many snapshots can be sent concurrently.
 # concurrent-send-snap-limit = 32
@@ -367,6 +376,13 @@
 
 ## Set to "mvcc" to do consistency check for MVCC data, or "raw" for raw data.
 # consistency-check-method = "mvcc"
+
+[coprocessor-v2]
+## Path to the directory where compiled coprocessor plugins are located.
+## Plugins in this directory will be automatically loaded by TiKV.
+## If a coprocessor plugin file is deleted, it will be automatically unloaded.
+## If the config value is not set, hot-reloading will be disabled.
+# coprocessor-plugin-directory = "./coprocessors"
 
 [rocksdb]
 ## Maximum number of threads of RocksDB background jobs.

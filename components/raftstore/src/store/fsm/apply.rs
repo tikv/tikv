@@ -51,7 +51,7 @@ use tikv_util::{Either, MustConsumeVec};
 use time::Timespec;
 use uuid::Builder as UuidBuilder;
 
-use crate::coprocessor::{Cmd, CoprocessorHost};
+use crate::coprocessor::{Cmd, CoprocessorHost, ObserveHandle};
 use crate::store::fsm::RaftPollerBuilder;
 use crate::store::metrics::*;
 use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
@@ -438,10 +438,9 @@ where
     pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate<EK>) {
         self.cbs.push(ApplyCallback::new(delegate.region.clone()));
 
-        // TODO: skip this step when we do not need to observe cmds.
         self.host.prepare_for_apply(
-            delegate.observe_cmd.cdc_id,
-            delegate.observe_cmd.rts_id,
+            &delegate.observe_info.cdc_id,
+            &delegate.observe_info.rts_id,
             delegate.region_id(),
         );
     }
@@ -811,7 +810,7 @@ where
     last_sync_apply_index: u64,
 
     /// Info about cmd observer.
-    observe_cmd: ObserveCmd,
+    observe_info: CmdObserveInfo,
 
     /// The local metrics, and it will be flushed periodically.
     metrics: ApplyMetrics,
@@ -845,7 +844,7 @@ where
             metrics: Default::default(),
             last_merge_version: 0,
             pending_request_snapshot_count: reg.pending_request_snapshot_count,
-            observe_cmd: ObserveCmd::default(),
+            observe_info: CmdObserveInfo::default(),
             priority: Priority::Normal,
         }
     }
@@ -1122,10 +1121,10 @@ where
         let cmd_cb = self.find_pending(index, term, is_conf_change_cmd(&cmd));
         let cmd = Cmd::new(index, cmd, resp);
         apply_ctx.host.on_apply_cmd(
-            self.observe_cmd.cdc_id,
-            self.observe_cmd.rts_id,
+            self.observe_info.cdc_id.id,
+            self.observe_info.rts_id.id,
             self.region_id(),
-            cmd.clone(),
+            &cmd,
         );
 
         apply_ctx.cbs.last_mut().unwrap().push(cmd_cb, cmd);
@@ -2894,51 +2893,30 @@ impl Debug for GenSnapTask {
     }
 }
 
-static OBSERVE_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
-
-/// A unique identifier for checking stale observed commands.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct ObserveID(usize);
-
-impl ObserveID {
-    pub fn new() -> ObserveID {
-        ObserveID(OBSERVE_ID_ALLOC.fetch_add(1, Ordering::SeqCst))
-    }
+#[derive(Default)]
+struct CmdObserveInfo {
+    cdc_id: ObserveHandle,
+    rts_id: ObserveHandle,
 }
 
-struct ObserveCmd {
-    // TODO: Add flags to disable observing.
-    cdc_id: ObserveID,
-    rts_id: ObserveID,
-}
-
-impl Debug for ObserveCmd {
+impl Debug for CmdObserveInfo {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ObserveCmd")
-            .field("cdc_id", &self.cdc_id)
-            .field("rts_id", &self.rts_id)
+        f.debug_struct("CmdObserveInfo")
+            .field("cdc_id", &self.cdc_id.id)
+            .field("rts_id", &self.rts_id.id)
             .finish()
-    }
-}
-
-impl Default for ObserveCmd {
-    fn default() -> Self {
-        Self {
-            cdc_id: ObserveID(0),
-            rts_id: ObserveID(0),
-        }
     }
 }
 
 #[derive(Debug)]
 pub struct ChangeObserver {
-    cdc_id: Option<ObserveID>,
-    rts_id: Option<ObserveID>,
+    cdc_id: Option<ObserveHandle>,
+    rts_id: Option<ObserveHandle>,
     region_id: u64,
 }
 
 impl ChangeObserver {
-    pub fn from_cdc(region_id: u64, id: ObserveID) -> Self {
+    pub fn from_cdc(region_id: u64, id: ObserveHandle) -> Self {
         Self {
             cdc_id: Some(id),
             rts_id: None,
@@ -2946,7 +2924,7 @@ impl ChangeObserver {
         }
     }
 
-    pub fn from_rts(region_id: u64, id: ObserveID) -> Self {
+    pub fn from_rts(region_id: u64, id: ObserveHandle) -> Self {
         Self {
             cdc_id: None,
             rts_id: Some(id),
@@ -3364,15 +3342,15 @@ where
             region_id,
         } = cmd;
 
-        if let Some(id) = cdc_id {
-            if self.delegate.observe_cmd.cdc_id > id {
+        if let Some(ObserveHandle { id, .. }) = cdc_id {
+            if self.delegate.observe_info.cdc_id.id > id {
                 notify_stale_req(self.delegate.term, cb);
                 return;
             }
         }
 
-        if let Some(id) = rts_id {
-            if self.delegate.observe_cmd.rts_id > id {
+        if let Some(ObserveHandle { id, .. }) = rts_id {
+            if self.delegate.observe_info.rts_id.id > id {
                 notify_stale_req(self.delegate.term, cb);
                 return;
             }
@@ -3412,10 +3390,10 @@ where
         };
 
         if let Some(id) = cdc_id {
-            self.delegate.observe_cmd.cdc_id = id;
+            self.delegate.observe_info.cdc_id = id;
         }
         if let Some(id) = rts_id {
-            self.delegate.observe_cmd.rts_id = id;
+            self.delegate.observe_info.rts_id = id;
         }
 
         cb.invoke_read(resp);
@@ -4380,18 +4358,18 @@ mod tests {
     where
         E: KvEngine,
     {
-        fn on_prepare_for_apply(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64) {
+        fn on_prepare_for_apply(&self, cdc: &ObserveHandle, rts: &ObserveHandle, region_id: u64) {
             self.cmd_batches
                 .borrow_mut()
-                .push(CmdBatch::new(cdc_id, rts_id, region_id));
+                .push(CmdBatch::new(cdc.id, rts.id, region_id));
         }
 
-        fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: Cmd) {
+        fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: &Cmd) {
             self.cmd_batches
                 .borrow_mut()
                 .last_mut()
                 .expect("should exist some cmd batch")
-                .push(cdc_id, rts_id, region_id, cmd);
+                .push(cdc_id, rts_id, region_id, cmd.clone());
         }
 
         fn on_flush_apply(&self, _: E) {
@@ -4931,15 +4909,14 @@ mod tests {
             .build();
         router.schedule_task(1, Msg::apply(apply(peer_id, 1, 2, vec![put_entry], vec![])));
         // Register cmd observer to region 1.
-        let enabled = Arc::new(AtomicBool::new(true));
-        let observe_id = ObserveID::new();
+        let observe_handle = ObserveHandle::with_id(1);
         router.schedule_task(
             1,
             Msg::Change {
                 region_epoch: region_epoch.clone(),
                 cmd: ChangeObserver {
-                    cdc_id: Some(observe_id),
-                    rts_id: Some(observe_id),
+                    cdc_id: Some(observe_handle.clone()),
+                    rts_id: Some(observe_handle.clone()),
                     region_id: 1,
                 },
                 cb: Callback::Read(Box::new(|resp: ReadResponse<KvTestSnapshot>| {
@@ -4953,6 +4930,10 @@ mod tests {
         // Unblock the apply worker
         block_tx.send(()).unwrap();
         fetch_apply_res(&rx);
+        let cmd_batch = cmdbatch_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert_eq!(cmd_batch.cdc_id, ObserveHandle::with_id(0).id);
+        assert_eq!(cmd_batch.rts_id, ObserveHandle::with_id(0).id);
+
         let (capture_tx, capture_rx) = mpsc::channel();
         let put_entry = EntryBuilder::new(3, 2)
             .put_cf(CF_LOCK, b"k1", b"v1")
@@ -4973,6 +4954,8 @@ mod tests {
         assert!(!resp.get_header().has_error(), "{:?}", resp);
         assert_eq!(resp.get_responses().len(), 1);
         let cmd_batch = cmdbatch_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert_eq!(cmd_batch.cdc_id, observe_handle.id);
+        assert_eq!(cmd_batch.rts_id, observe_handle.id);
         assert_eq!(resp, cmd_batch.into_iter(1).next().unwrap().response);
 
         let put_entry1 = EntryBuilder::new(4, 2)
@@ -4988,10 +4971,12 @@ mod tests {
             Msg::apply(apply(peer_id, 1, 2, vec![put_entry1, put_entry2], vec![])),
         );
         let cmd_batch = cmdbatch_rx.recv_timeout(Duration::from_secs(3)).unwrap();
-        assert_eq!(1, cmd_batch.len());
+        assert_eq!(2, cmd_batch.len());
 
         // Stop observer regoin 1.
-        enabled.store(false, Ordering::SeqCst);
+        observe_handle.stop_observing();
+
+        let observe_handle = ObserveHandle::new();
         let put_entry = EntryBuilder::new(6, 2)
             .put(b"k2", b"v2")
             .epoch(1, 3)
@@ -5004,8 +4989,8 @@ mod tests {
             Msg::Change {
                 region_epoch,
                 cmd: ChangeObserver {
-                    cdc_id: Some(observe_id),
-                    rts_id: Some(observe_id),
+                    cdc_id: Some(observe_handle.clone()),
+                    rts_id: Some(observe_handle),
                     region_id: 2,
                 },
                 cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
@@ -5175,15 +5160,14 @@ mod tests {
         system.spawn("test-split".to_owned(), builder);
 
         router.schedule_task(1, Msg::Registration(reg.clone()));
-        let enabled = Arc::new(AtomicBool::new(true));
-        let observe_id = ObserveID::new();
+        let observe_handle = ObserveHandle::new();
         router.schedule_task(
             1,
             Msg::Change {
                 region_epoch: region_epoch.clone(),
                 cmd: ChangeObserver {
-                    cdc_id: Some(observe_id),
-                    rts_id: Some(observe_id),
+                    cdc_id: Some(observe_handle.clone()),
+                    rts_id: Some(observe_handle.clone()),
                     region_id: 1,
                 },
                 cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
@@ -5335,14 +5319,14 @@ mod tests {
         checker.check(b"k32", b"k4", 28, &[29, 30, 31], true);
 
         let (tx, rx) = mpsc::channel();
-        enabled.store(false, Ordering::SeqCst);
+        observe_handle.stop_observing();
         router.schedule_task(
             1,
             Msg::Change {
                 region_epoch,
                 cmd: ChangeObserver {
-                    cdc_id: Some(observe_id),
-                    rts_id: Some(observe_id),
+                    cdc_id: Some(observe_handle.clone()),
+                    rts_id: Some(observe_handle),
                     region_id: 1,
                 },
                 cb: Callback::Read(Box::new(move |resp: ReadResponse<_>| {

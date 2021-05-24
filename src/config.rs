@@ -50,6 +50,7 @@ use tikv_util::sys::sys_quota::SysQuota;
 use tikv_util::time::duration_to_sec;
 use tikv_util::yatp_pool;
 
+use crate::coprocessor_v2::Config as CoprocessorV2Config;
 use crate::import::Config as ImportConfig;
 use crate::server::gc_worker::GcConfig;
 use crate::server::gc_worker::WriteCompactionFilterFactory;
@@ -2250,9 +2251,12 @@ pub struct TiKvConfig {
     pub enable_io_snoop: bool,
 
     #[config(skip)]
-    pub readpool: ReadPoolConfig,
+    pub abort_on_panic: bool,
 
     #[config(skip)]
+    pub readpool: ReadPoolConfig,
+
+    #[config(submodule)]
     pub server: ServerConfig,
 
     #[config(submodule)]
@@ -2270,6 +2274,9 @@ pub struct TiKvConfig {
 
     #[config(submodule)]
     pub coprocessor: CopConfig,
+
+    #[config(skip)]
+    pub coprocessor_v2: CoprocessorV2Config,
 
     #[config(submodule)]
     pub rocksdb: DbConfig,
@@ -2315,11 +2322,13 @@ impl Default for TiKvConfig {
             log_rotation_size: ReadableSize::mb(300),
             panic_when_unexpected_key_or_data: false,
             enable_io_snoop: true,
+            abort_on_panic: false,
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
             raft_store: RaftstoreConfig::default(),
             coprocessor: CopConfig::default(),
+            coprocessor_v2: CoprocessorV2Config::default(),
             pd: PdConfig::default(),
             rocksdb: DbConfig::default(),
             raftdb: RaftDbConfig::default(),
@@ -2363,13 +2372,17 @@ impl TiKvConfig {
         } else {
             self.raft_engine.config.dir = config::canonicalize_path(&self.raft_engine.config.dir)?;
         }
+        if self.raft_engine.config.dir == self.raft_store.raftdb_path {
+            return Err("raft_engine.config.dir can't be same as raft_store.raftdb_path".into());
+        }
 
         let kv_db_path =
             config::canonicalize_sub_path(&self.storage.data_dir, DEFAULT_ROCKSDB_SUB_DIR)?;
 
         if kv_db_path == self.raft_store.raftdb_path {
-            return Err("raft_store.raftdb_path can not same with storage.data_dir/db".into());
+            return Err("raft_store.raftdb_path can't be same as storage.data_dir/db".into());
         }
+
         let kv_db_wal_path = if self.rocksdb.wal_dir.is_empty() {
             config::canonicalize_path(&kv_db_path)?
         } else {
@@ -2381,31 +2394,20 @@ impl TiKvConfig {
             config::canonicalize_path(&self.raftdb.wal_dir)?
         };
         if kv_db_wal_path == raft_db_wal_path {
-            return Err("raftdb.wal_dir can not same with rocksdb.wal_dir".into());
+            return Err("raftdb.wal_dir can't be same as rocksdb.wal_dir".into());
         }
-        if !self.raft_engine.enable {
-            if RocksEngine::exists(&kv_db_path)
-                && !RocksEngine::exists(&self.raft_store.raftdb_path)
-            {
-                return Err("default rocksdb exist, but raftdb not exist".into());
-            }
-            if !RocksEngine::exists(&kv_db_path)
-                && RocksEngine::exists(&self.raft_store.raftdb_path)
-            {
-                return Err("default rocksdb not exist, but raftdb exist".into());
-            }
-        } else {
-            if RocksEngine::exists(&kv_db_path)
-                && !RaftLogEngine::exists(&self.raft_engine.config.dir)
-                && !RocksEngine::exists(&self.raft_store.raftdb_path)
-            {
-                return Err("default rocksdb exist, but raftdb and raft engine not exist".into());
-            }
-            if !RocksEngine::exists(&kv_db_path)
-                && RaftLogEngine::exists(&self.raft_engine.config.dir)
-            {
-                return Err("default rocksdb not exist, but raft engine exist".into());
-            }
+
+        if RocksEngine::exists(&kv_db_path)
+            && !RocksEngine::exists(&self.raft_store.raftdb_path)
+            && !RaftLogEngine::exists(&self.raft_engine.config.dir)
+        {
+            return Err("default rocksdb exists, but raftdb and raft engine doesn't exist".into());
+        }
+        if !RocksEngine::exists(&kv_db_path)
+            && (RocksEngine::exists(&self.raft_store.raftdb_path)
+                || RaftLogEngine::exists(&self.raft_engine.config.dir))
+        {
+            return Err("default rocksdb doesn't exist, but raftdb or raft engine exists".into());
         }
 
         // Check blob file dir is empty when titan is disabled
@@ -2607,25 +2609,30 @@ impl TiKvConfig {
             }
         }
 
-        if last_cfg.raft_store.raftdb_path != self.raft_store.raftdb_path {
+        if last_cfg.raft_store.raftdb_path != self.raft_store.raftdb_path
+            && !last_cfg.raft_engine.enable
+        {
             return Err(format!(
-                "raft dir have been changed, former raft dir is '{}', \
-                 current raft dir is '{}', please check if it is expected.",
+                "raft db dir have been changed, former is '{}', \
+                 current is '{}', please check if it is expected.",
                 last_cfg.raft_store.raftdb_path, self.raft_store.raftdb_path
             ));
         }
-        if last_cfg.raft_engine.enable
-            && self.raft_engine.enable
-            && last_cfg.raft_engine.config.dir != self.raft_engine.config.dir
+        if last_cfg.raftdb.wal_dir != self.raftdb.wal_dir && !last_cfg.raft_engine.enable {
+            return Err(format!(
+                "raft db wal dir have been changed, former is '{}', \
+                 current is '{}', please check if it is expected.",
+                last_cfg.raftdb.wal_dir, self.raftdb.wal_dir
+            ));
+        }
+        if last_cfg.raft_engine.config.dir != self.raft_engine.config.dir
+            && last_cfg.raft_engine.enable
         {
             return Err(format!(
                 "raft engine dir have been changed, former is '{}', \
                  current is '{}', please check if it is expected.",
                 last_cfg.raft_engine.config.dir, self.raft_engine.config.dir
             ));
-        }
-        if last_cfg.raft_engine.enable && !self.raft_engine.enable {
-            return Err("raft engine can't be disabled after switched on.".to_owned());
         }
         if last_cfg.storage.enable_ttl && !self.storage.enable_ttl {
             return Err("can't disable ttl on a ttl instance".to_owned());
@@ -3856,6 +3863,7 @@ mod tests {
         // Other special cases.
         cfg.pd.retry_max_count = default_cfg.pd.retry_max_count; // Both -1 and isize::MAX are the same.
         cfg.storage.block_cache.capacity = OptionReadableSize(None); // Either `None` and a value is computed or `Some(_)` fixed value.
+        cfg.coprocessor_v2.coprocessor_plugin_directory = None; // Default is `None`, which is represented by not setting the key.
 
         assert_eq!(cfg, default_cfg);
     }

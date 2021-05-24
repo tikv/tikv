@@ -9,11 +9,12 @@ use kvproto::{errorpb, kvrpcpb};
 use thiserror::Error;
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
+use tikv_util::deadline::DeadlineError;
 use txn_types::{KvPair, TimeStamp};
 
 use crate::storage::{
     kv::{self, Error as EngineError, ErrorInner as EngineErrorInner},
-    mvcc::{self, Error as MvccError, ErrorInner as MvccErrorInner},
+    mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
     txn::{self, Error as TxnError, ErrorInner as TxnErrorInner},
     Result,
 };
@@ -27,9 +28,6 @@ pub enum ErrorInner {
 
     #[error("{0}")]
     Txn(#[from] txn::Error),
-
-    #[error("{0}")]
-    Mvcc(#[from] mvcc::Error),
 
     #[error("storage is closed.")]
     Closed,
@@ -53,6 +51,15 @@ pub enum ErrorInner {
 
     #[error("ttl is not enabled, but get put request with ttl")]
     TTLNotEnabled,
+
+    #[error("deadline exceeded")]
+    DeadlineExceeded,
+}
+
+impl From<DeadlineError> for ErrorInner {
+    fn from(_: DeadlineError) -> Self {
+        ErrorInner::DeadlineExceeded
+    }
 }
 
 /// Errors for storage module. Wrapper type of `ErrorInner`.
@@ -80,7 +87,6 @@ impl ErrorCodeExt for Error {
         match self.0.as_ref() {
             ErrorInner::Engine(e) => e.error_code(),
             ErrorInner::Txn(e) => e.error_code(),
-            ErrorInner::Mvcc(e) => e.error_code(),
             ErrorInner::Closed => error_code::storage::CLOSED,
             ErrorInner::Other(_) => error_code::storage::UNKNOWN,
             ErrorInner::Io(_) => error_code::storage::IO,
@@ -89,6 +95,7 @@ impl ErrorCodeExt for Error {
             ErrorInner::KeyTooLarge { .. } => error_code::storage::KEY_TOO_LARGE,
             ErrorInner::InvalidCf(_) => error_code::storage::INVALID_CF,
             ErrorInner::TTLNotEnabled => error_code::storage::TTL_NOT_ENABLED,
+            ErrorInner::DeadlineExceeded => error_code::storage::DEADLINE_EXCEEDED,
         }
     }
 }
@@ -201,6 +208,11 @@ pub fn extract_region_error<T>(res: &Result<T>) -> Option<errorpb::Error> {
             err.set_message("TiKV is Closing".to_string());
             Some(err)
         }
+        Err(Error(box ErrorInner::DeadlineExceeded)) => {
+            let mut err = errorpb::Error::default();
+            err.set_message("Deadline is exceeded".to_string());
+            Some(err)
+        }
         _ => None,
     }
 }
@@ -223,7 +235,6 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
         | Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Engine(EngineError(
             box EngineErrorInner::KeyIsLocked(info),
         )))))
-        | Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(info))))
         | Error(box ErrorInner::Engine(EngineError(box EngineErrorInner::KeyIsLocked(info)))) => {
             key_error.set_locked(info.clone());
         }

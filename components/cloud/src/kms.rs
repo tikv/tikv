@@ -97,5 +97,5 @@ pub struct DataKeyPair {
 pub trait KmsProvider: Sync + Send + 'static + std::fmt::Debug {
     async fn generate_data_key(&self) -> Result<DataKeyPair>;
     async fn decrypt_data_key(&self, data_key: &EncryptedKey) -> Result<Vec<u8>>;
-    fn name(&self) -> &[u8];
+    fn name(&self) -> &str;
 }
