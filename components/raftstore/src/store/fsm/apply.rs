@@ -647,6 +647,17 @@ fn should_write_to_engine(cmd: &RaftCmdRequest) -> bool {
             _ => {}
         }
     }
+
+    // Some commands may modify keys covered by the current write batch, so we
+    // must write the current write batch to the engine first.
+    for req in cmd.get_requests() {
+        if req.has_delete_range() {
+            return true;
+        }
+        if req.has_ingest_sst() {
+            return true;
+        }
+    }
     false
 }
 
@@ -963,15 +974,12 @@ where
         if !data.is_empty() {
             let cmd = util::parse_data_at(data, index, &self.tag);
 
-            let mut need_sync =
-                should_write_to_engine(&cmd) || apply_ctx.kv_wb().should_write_to_engine();
-            if has_high_latency_operation(&cmd) {
-                need_sync |= self.last_sync_apply_index != self.apply_state.get_applied_index();
-                if apply_ctx.yield_high_latency_operation {
-                    self.priority = Priority::Low;
-                }
+            if has_high_latency_operation(&cmd) && apply_ctx.yield_high_latency_operation {
+                self.priority = Priority::Low;
             }
-            if need_sync {
+            let need_sync = should_write_to_engine(&cmd)
+                && self.last_sync_apply_index != self.apply_state.get_applied_index();
+            if need_sync || apply_ctx.kv_wb().should_write_to_engine() {
                 apply_ctx.commit(self);
                 if let Some(start) = self.handle_start.as_ref() {
                     if start.elapsed() >= apply_ctx.yield_duration {
@@ -979,7 +987,7 @@ where
                     }
                 }
             }
-            if self.priority == Priority::Low && apply_ctx.priority != Priority::Low {
+            if self.priority != apply_ctx.priority {
                 return ApplyResult::Yield;
             }
 
@@ -3916,6 +3924,7 @@ mod tests {
         req.set_ingest_sst(IngestSstRequest::default());
         let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
+        assert_eq!(should_write_to_engine(&cmd), true);
         assert_eq!(should_sync_log(&cmd), true);
 
         // Normal command
@@ -3930,6 +3939,14 @@ mod tests {
         req.mut_admin_request()
             .set_cmd_type(AdminCmdType::ComputeHash);
         assert_eq!(should_write_to_engine(&req), true);
+
+        // IngestSst command
+        let mut req = Request::default();
+        req.set_cmd_type(CmdType::IngestSst);
+        req.set_ingest_sst(IngestSstRequest::default());
+        let mut cmd = RaftCmdRequest::default();
+        cmd.mut_requests().push(req);
+        assert_eq!(should_write_to_engine(&cmd), true);
     }
 
     #[test]
@@ -4605,11 +4622,15 @@ mod tests {
         assert!(engine.get_value(&dk_k1).unwrap().is_none());
         assert!(engine.get_value(&dk_k2).unwrap().is_none());
         assert!(engine.get_value(&dk_k3).unwrap().is_none());
-        // The region will be rescheduled from normal-priority handler to
-        // low-priority, so the first apple_res.exec_res should be empty.
+
+        // The region was rescheduled from normal-priority handler to
+        // low-priority handler, so the first apple_res.exec_res should be empty.
         let apply_res = fetch_apply_res(&rx);
         assert!(apply_res.exec_res.is_empty());
-        fetch_apply_res(&rx);
+        // The entry should be applied now.
+        let apply_res = fetch_apply_res(&rx);
+        assert_eq!(apply_res.applied_index_term, 3);
+        assert_eq!(apply_res.apply_state.get_applied_index(), 8);
 
         // UploadSST
         let sst_path = import_dir.path().join("test.sst");
@@ -4677,10 +4698,21 @@ mod tests {
         check_db_range(&engine, sst_range);
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(resp.get_header().has_error());
+
+        // The region was rescheduled to normal-priority handler because of
+        // nomral put command, so the first apple_res.exec_res should be empty.
+        let apply_res = fetch_apply_res(&rx);
+        assert!(apply_res.exec_res.is_empty());
+        // The region was rescheduled low-priority becasuee of ingest command,
+        // only put entry has been applied;
+        let apply_res = fetch_apply_res(&rx);
+        assert_eq!(apply_res.applied_index_term, 3);
+        assert_eq!(apply_res.apply_state.get_applied_index(), 9);
+        // The region will yield after timeout.
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.applied_index_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 10);
-        // The region will yield after timeout.
+        // The third entry should be applied now.
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.applied_index_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 11);
@@ -4702,6 +4734,8 @@ mod tests {
             capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         }
         let index = write_batch_max_keys + 11;
+        // The region was rescheduled to normal-priority handler. Discard the first apply_res.
+        fetch_apply_res(&rx);
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.apply_state.get_applied_index(), index as u64);
         assert_eq!(obs.pre_query_count.load(Ordering::SeqCst), index);
