@@ -215,7 +215,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             resolve::new_resolver(Arc::clone(&pd_client), &background_worker, router.clone());
 
         let accessor_worker = WorkerBuilder::new("accessor")
-            .thread_count(1)
+            .thread_count(2)
             .create();
         let mut coprocessor_host = Some(CoprocessorHost::new(router.clone()));
         let region_info_accessor =
