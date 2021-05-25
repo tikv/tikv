@@ -3453,7 +3453,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.6.0-alpha"
-source = "git+https://github.com/gengliqi/raft-rs?branch=add-entries-size#9ccaf34038543ef018e36df9a29259bc0fa70486"
+source = "git+https://github.com/gengliqi/raft-rs?branch=add-entries-size#320b09aa5ce1ef8d23f74b6f65b0eb9e3ea2a5cd"
 dependencies = [
  "bytes 1.0.1",
  "fxhash",
@@ -3486,7 +3486,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
-source = "git+https://github.com/gengliqi/raft-rs?branch=add-entries-size#9ccaf34038543ef018e36df9a29259bc0fa70486"
+source = "git+https://github.com/gengliqi/raft-rs?branch=add-entries-size#320b09aa5ce1ef8d23f74b6f65b0eb9e3ea2a5cd"
 dependencies = [
  "bytes 1.0.1",
  "lazy_static",
