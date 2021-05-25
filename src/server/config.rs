@@ -101,6 +101,7 @@ pub struct Config {
     pub heavy_load_wait_duration: ReadableDuration,
     pub enable_request_batch: bool,
     pub background_thread_count: usize,
+    pub accessor_thread_count: usize,
     // If handle time is larger than the threshold, it will print slow log in end point.
     pub end_point_slow_log_threshold: ReadableDuration,
 
@@ -132,6 +133,7 @@ impl Default for Config {
     fn default() -> Config {
         let cpu_num = SysQuota::new().cpu_cores_quota();
         let background_thread_count = if cpu_num > 16.0 { 3 } else { 2 };
+        let accessor_thread_count = if cpu_num > 16.0 { 3 } else { 2 };
         Config {
             cluster_id: DEFAULT_CLUSTER_ID,
             addr: DEFAULT_LISTENING_ADDR.to_owned(),
@@ -176,6 +178,7 @@ impl Default for Config {
             enable_request_batch: true,
             raft_client_backoff_step: ReadableDuration::secs(1),
             background_thread_count,
+            accessor_thread_count,
             end_point_slow_log_threshold: ReadableDuration::secs(1),
         }
     }
