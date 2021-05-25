@@ -26,7 +26,7 @@ use engine_traits::{
     EncryptionKeyManager, IngestExternalFileOptions, Iterator, KvEngine, SSTMetaInfo, SeekKey,
     SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 };
-use file_system::{sync_dir, File, OpenOptions};
+use file_system::{get_io_rate_limiter, sync_dir, File, OpenOptions};
 use tikv_util::time::Limiter;
 use txn_types::{is_short_value, Key, TimeStamp, Write as KvWrite, WriteRef, WriteType};
 
@@ -217,7 +217,7 @@ impl SSTImporter {
         // now validate the SST file.
         let path_str = path.temp.to_str().unwrap();
         let env = get_encrypted_env(self.key_manager.clone(), None /*base_env*/)?;
-        let env = get_inspected_env(Some(env))?;
+        let env = get_inspected_env(Some(env), get_io_rate_limiter())?;
         // Use abstracted SstReader after Env is abstracted.
         let sst_reader = RocksSstReader::open_with_env(path_str, Some(env))?;
         sst_reader.verify_checksum()?;
@@ -635,7 +635,7 @@ impl ImportDir {
         // now validate the SST file.
         let path_str = path.save.to_str().unwrap();
         let env = get_encrypted_env(key_manager.clone(), None /*base_env*/)?;
-        let env = get_inspected_env(Some(env))?;
+        let env = get_inspected_env(Some(env), get_io_rate_limiter())?;
 
         let sst_reader = RocksSstReader::open_with_env(&path_str, Some(env))?;
         sst_reader.verify_checksum()?;
