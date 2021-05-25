@@ -8,6 +8,7 @@ use futures::stream::{StreamExt, TryStreamExt};
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, WriteFlags};
 use kvproto::deadlock::*;
 use security::SecurityManager;
+use std::ffi::CString;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -39,7 +40,8 @@ impl Client {
     pub fn new(env: Arc<Environment>, security_mgr: Arc<SecurityManager>, addr: &str) -> Self {
         let cb = ChannelBuilder::new(env)
             .keepalive_time(Duration::from_secs(10))
-            .keepalive_timeout(Duration::from_secs(3));
+            .keepalive_timeout(Duration::from_secs(3))
+            .raw_cfg_int(CString::new("dns_ares_query_timeout").unwrap(), 2_000);
         let channel = security_mgr.connect(cb, addr);
         let client = DeadlockClient::new(channel);
         Self {

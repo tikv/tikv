@@ -104,6 +104,8 @@ pub struct Config {
     pub grpc_keepalive_time: ReadableDuration,
     #[config(skip)]
     pub grpc_keepalive_timeout: ReadableDuration,
+    #[config(skip)]
+    pub dns_ares_query_timeout: ReadableDuration,
     /// How many snapshots can be sent concurrently.
     pub concurrent_send_snap_limit: usize,
     /// How many snapshots can be recv concurrently.
@@ -193,6 +195,7 @@ impl Default for Config {
             // than 10 senconds.
             grpc_keepalive_time: ReadableDuration::secs(10),
             grpc_keepalive_timeout: ReadableDuration::secs(3),
+            dns_ares_query_timeout: ReadableDuration::secs(2),
             concurrent_send_snap_limit: 32,
             concurrent_recv_snap_limit: 32,
             end_point_concurrency: None, // deprecated

@@ -1,5 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::convert::TryInto;
+use std::ffi::CString;
 use std::i32;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
@@ -135,6 +137,9 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.
             .keepalive_time(cfg.value().grpc_keepalive_time.into())
             .keepalive_timeout(cfg.value().grpc_keepalive_timeout.into())
+            .raw_cfg_int(
+                CString::new("dns_ares_query_timeout").unwrap(),
+                cfg.value().dns_ares_query_timeout.as_millis().try_into().unwrap())
             .build_args();
         let health_service = HealthService::default();
         let builder = {

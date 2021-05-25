@@ -14,6 +14,7 @@ use grpcio::{CallOption, Channel, ChannelBuilder, Environment, MetadataBuilder, 
 use kvproto::tikvpb::TikvClient;
 use security::SecurityManager;
 
+use std::convert::TryInto;
 use std::ffi::CString;
 use std::future::Future;
 use std::str;
@@ -92,6 +93,9 @@ impl ClientPool {
                     // And maintaining a shared resource quota doesn't seem easy.
                     .keepalive_time(cfg.grpc_keepalive_time.into())
                     .keepalive_timeout(cfg.grpc_keepalive_timeout.into())
+                    .raw_cfg_int(
+                        CString::new("dns_ares_query_timeout").unwrap(),
+                        cfg.dns_ares_query_timeout.as_millis().try_into().unwrap())
                     .raw_cfg_int(CString::new("connection id").unwrap(), self.last_pos as i32);
                 let ch = mgr.connect(cb, addr);
                 let client = Client {
