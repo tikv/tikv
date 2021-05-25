@@ -93,6 +93,9 @@ pub fn prewrite<S: Snapshot>(
             } else {
                 // In optimistic transaction, caller ensures that there is no
                 // previous write for the mutation, so there is no old value.
+                //
+                // FIXME: This may not hold when prewrite request set
+                // skip_constraint_check explicitly. For now, no one sets it.
                 OldValue::None
             }
         } else {
