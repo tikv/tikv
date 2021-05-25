@@ -44,6 +44,7 @@ engine_rocks = { path = "../engine_rocks", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 error_code = { path = "../error_code", default-features = false }
 fail = "0.4"
+file_system = { path = "../file_system" }
 futures = { version = "0.3", features = ["thread-pool", "compat"] }
 into_other = { path = "../into_other", default-features = false }
 kvproto = { rev = "f11c6fb6b3a53b214ee94d54651b01eb99239334", git = "https://github.com/pingcap/kvproto.git", default-features = false }
