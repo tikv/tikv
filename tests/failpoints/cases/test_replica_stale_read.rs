@@ -64,9 +64,7 @@ impl PeerClient {
     }
 }
 
-// Testing how data replication could effect stale read service
-#[test]
-fn test_stale_read_basic_flow_replicate() {
+fn prepare_for_stale_read(leader: Peer) -> (Cluster<ServerCluster>, Arc<TestPdClient>, PeerClient) {
     let mut cluster = new_server_cluster(0, 3);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -74,16 +72,24 @@ fn test_stale_read_basic_flow_replicate() {
     cluster.run();
     cluster.sim.wl().start_resolved_ts_worker();
 
-    cluster.must_transfer_leader(1, new_peer(1, 1));
-    let mut leader_client = PeerClient::new(&cluster, 1, new_peer(1, 1));
-    let mut follower_client2 = PeerClient::new(&cluster, 1, new_peer(2, 2));
-    // Set the `stale_read` flag
-    leader_client.ctx.set_stale_read(true);
-    follower_client2.ctx.set_stale_read(true);
+    cluster.must_transfer_leader(1, leader.clone());
+    let leader_client = PeerClient::new(&cluster, 1, leader);
 
     // There should be no read index message while handling stale read request
     let on_step_read_index_msg = "on_step_read_index_msg";
     fail::cfg(on_step_read_index_msg, "panic").unwrap();
+
+    (cluster, pd_client, leader_client)
+}
+
+// Testing how data replication could effect stale read service
+#[test]
+fn test_stale_read_basic_flow_replicate() {
+    let (mut cluster, pd_client, mut leader_client) = prepare_for_stale_read(new_peer(1, 1));
+    let mut follower_client2 = PeerClient::new(&cluster, 1, new_peer(2, 2));
+    // Set the `stale_read` flag
+    leader_client.ctx.set_stale_read(true);
+    follower_client2.ctx.set_stale_read(true);
 
     let commit_ts1 = leader_client.must_kv_write(
         &pd_client,
@@ -134,27 +140,14 @@ fn test_stale_read_basic_flow_replicate() {
         b"value2".to_vec(),
         block_on(pd_client.get_tso()).unwrap().into_inner(),
     );
-    fail::remove(on_step_read_index_msg);
 }
 
 // Testing how mvcc locks could effect stale read service
 #[test]
 fn test_stale_read_basic_flow_lock() {
-    let mut cluster = new_server_cluster(0, 3);
-    let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_operator();
-
-    cluster.run();
-    cluster.sim.wl().start_resolved_ts_worker();
-
-    cluster.must_transfer_leader(1, new_peer(1, 1));
-    let leader_client = PeerClient::new(&cluster, 1, new_peer(1, 1));
+    let (cluster, pd_client, leader_client) = prepare_for_stale_read(new_peer(1, 1));
     let mut follower_client2 = PeerClient::new(&cluster, 1, new_peer(2, 2));
     follower_client2.ctx.set_stale_read(true);
-
-    // There should be no read index message while handling stale read request
-    let on_step_read_index_msg = "on_step_read_index_msg";
-    fail::cfg(on_step_read_index_msg, "panic").unwrap();
 
     // Write `(key1, value1)`
     let commit_ts1 = leader_client.must_kv_write(
@@ -216,7 +209,55 @@ fn test_stale_read_basic_flow_lock() {
         b"value1".to_vec(),
         block_on(pd_client.get_tso()).unwrap().into_inner(),
     );
-    fail::remove(on_step_read_index_msg);
+}
+
+// Testing that even leader's `apply_index` updated before sync the `(apply_index, safe_ts)`
+// item to other replica, the `apply_index` in the `(apply_index, safe_ts)` item should not
+// be updated
+#[test]
+fn test_update_apply_index_before_sync_read_state() {
+    let (mut cluster, pd_client, leader_client) = prepare_for_stale_read(new_peer(1, 1));
+    let mut follower_client2 = PeerClient::new(&cluster, 1, new_peer(2, 2));
+    follower_client2.ctx.set_stale_read(true);
+
+    // Stop node 3 to ensure data must replicated to follower 2 before write return
+    cluster.stop_node(3);
+
+    // Stop sync `(apply_index, safe_ts)` item to the replica
+    let before_sync_replica_read_state = "before_sync_replica_read_state";
+    fail::cfg(before_sync_replica_read_state, "return()").unwrap();
+
+    // Write `(key1, value1)`
+    let commit_ts1 = leader_client.must_kv_write(
+        &pd_client,
+        vec![new_mutation(Op::Put, &b"key1"[..], &b"value1"[..])],
+        b"key1".to_vec(),
+    );
+    // Leave a lock on `key2` so the item's `safe_ts` won't be updated
+    leader_client.must_kv_prewrite(
+        vec![new_mutation(Op::Put, &b"key2"[..], &b"value2"[..])],
+        b"key2".to_vec(),
+        block_on(pd_client.get_tso()).unwrap().into_inner(),
+    );
+
+    cluster.run_node(3).unwrap();
+    // Stop replicate data to follower 2
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(1, 2)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend),
+    ));
+
+    // Write `(key3, value3)` to update the leader `apply_index`
+    leader_client.must_kv_write(
+        &pd_client,
+        vec![new_mutation(Op::Put, &b"key3"[..], &b"value3"[..])],
+        b"key3".to_vec(),
+    );
+
+    // Sync `(apply_index, safe_ts)` item to the replica
+    fail::remove(before_sync_replica_read_state);
+    follower_client2.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), commit_ts1);
 }
 
 // Testing that if `resolved_ts` updated before `apply_index` update, the `safe_ts`
@@ -285,4 +326,59 @@ fn test_update_resoved_ts_before_apply_index() {
     follower_client2.must_kv_read_equal(b"key1".to_vec(), b"value2".to_vec(), commit_ts2);
 
     fail::remove(on_step_read_index_msg);
+}
+
+// Testing that the new elected leader should initialize the `resolver` correctly
+#[test]
+fn test_new_leader_init_resolver() {
+    let mut cluster = new_server_cluster(0, 3);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+    cluster.sim.wl().start_resolved_ts_worker();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    let mut peer_client1 = PeerClient::new(&cluster, 1, new_peer(1, 1));
+    let mut peer_client2 = PeerClient::new(&cluster, 1, new_peer(2, 2));
+    peer_client1.ctx.set_stale_read(true);
+    peer_client2.ctx.set_stale_read(true);
+
+    // There should be no read index message while handling stale read request
+    let on_step_read_index_msg = "on_step_read_index_msg";
+    fail::cfg(on_step_read_index_msg, "panic").unwrap();
+
+    // Write `(key1, value1)`
+    let commit_ts1 = peer_client1.must_kv_write(
+        &pd_client,
+        vec![new_mutation(Op::Put, &b"key1"[..], &b"value1"[..])],
+        b"key1".to_vec(),
+    );
+
+    // There are no lock in the region, the `safe_ts` should keep updating by the new leader,
+    // so we can read `key1` with the newest ts
+    cluster.must_transfer_leader(1, new_peer(2, 2));
+    peer_client1.must_kv_read_equal(
+        b"key1".to_vec(),
+        b"value1".to_vec(),
+        block_on(pd_client.get_tso()).unwrap().into_inner(),
+    );
+
+    // Prewrite on `key2` but not commit yet
+    peer_client2.must_kv_prewrite(
+        vec![new_mutation(Op::Put, &b"key2"[..], &b"value1"[..])],
+        b"key2".to_vec(),
+        block_on(pd_client.get_tso()).unwrap().into_inner(),
+    );
+
+    // There are locks in the region, the `safe_ts` can't be updated, so we can't read
+    // `key1` with the newest ts
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    let resp = peer_client2.kv_read(
+        b"key1".to_vec(),
+        block_on(pd_client.get_tso()).unwrap().into_inner(),
+    );
+    assert!(resp.get_region_error().has_data_is_not_ready());
+    // But we can read `key1` with `commit_ts1`
+    peer_client2.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), commit_ts1);
 }
