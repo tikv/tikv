@@ -13,6 +13,7 @@ use engine_traits::CfName;
 use engine_traits::{
     Engines, IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions, SeekKey,
 };
+use file_system::IORateLimiter;
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
 use txn_types::{Key, Value};
@@ -90,6 +91,7 @@ impl RocksEngine {
         cfs: &[CfName],
         cfs_opts: Option<Vec<CFOptions<'_>>>,
         shared_block_cache: bool,
+        io_rate_limiter: Option<Arc<IORateLimiter>>,
     ) -> Result<RocksEngine> {
         info!("RocksEngine: creating for path"; "path" => path);
         let (path, temp_dir) = match path {
@@ -101,7 +103,7 @@ impl RocksEngine {
         };
         let worker = Worker::new("engine-rocksdb");
         let mut db_opts = DBOptions::new();
-        let env = get_inspected_env(None).unwrap();
+        let env = get_inspected_env(None, io_rate_limiter).unwrap();
         db_opts.set_env(env);
         let db = Arc::new(engine_rocks::raw_util::new_engine(
             &path,
