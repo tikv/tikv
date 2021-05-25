@@ -2256,7 +2256,7 @@ pub struct TiKvConfig {
     #[config(skip)]
     pub readpool: ReadPoolConfig,
 
-    #[config(skip)]
+    #[config(submodule)]
     pub server: ServerConfig,
 
     #[config(submodule)]
