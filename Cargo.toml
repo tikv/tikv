@@ -162,6 +162,7 @@ libc = "0.2"
 libloading = "0.7"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { path = "components/log_wrappers" }
+memory_trace_macros = { path = "components/memory_trace_macros" }
 mime = "0.3.13"
 more-asserts = "0.2"
 murmur3 = "0.5.1"
