@@ -240,7 +240,7 @@ lazy_static! {
         register_histogram!(
             "tikv_raftstore_store_write_trigger_wb_bytes",
             "TODO",
-            exponential_buckets(0.5, 2.0, 20).unwrap()
+            exponential_buckets(0.5, 2.0, 28).unwrap()
         ).unwrap();
     pub static ref STORE_WRITE_KVDB_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
@@ -435,8 +435,7 @@ lazy_static! {
         register_histogram!(
             "tikv_raftstore_propose_log_size",
             "Bucketed histogram of peer proposing log size.",
-            vec![256.0, 512.0, 1024.0, 4096.0, 65536.0, 262144.0, 524288.0, 1048576.0,
-                    2097152.0, 4194304.0, 8388608.0, 16777216.0]
+            exponential_buckets(0.5, 2.0, 26).unwrap()
         ).unwrap();
 
     pub static ref REGION_HASH_COUNTER_VEC: IntCounterVec =
