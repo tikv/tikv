@@ -570,20 +570,14 @@ mod tests {
         fn run_and_wait_child_process(child: impl Fn()) -> Result<i32, String> {
             match fork() {
                 Ok(ForkResult::Parent { .. }) => match wait().unwrap() {
-                    WaitStatus::Exited(_, status) => {
-                        return Ok(status);
-                    }
-                    v @ _ => {
-                        return Err(format!("{:?}", v));
-                    }
+                    WaitStatus::Exited(_, status) => Ok(status),
+                    v => Err(format!("{:?}", v)),
                 },
                 Ok(ForkResult::Child) => {
                     child();
                     std::process::exit(0);
                 }
-                Err(e) => {
-                    return Err(format!("Fork failed: {}", e));
-                }
+                Err(e) => Err(format!("Fork failed: {}", e)),
             }
         }
 
