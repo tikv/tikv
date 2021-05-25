@@ -2277,18 +2277,18 @@ fn convert_gbmb(mut bytes: u64) -> String {
     const GIB: u64 = 1024 * 1024 * 1024;
     const MIB: u64 = 1024 * 1024;
     if bytes < MIB {
-        return format!("{} B", bytes);
+        return format!("{}B", bytes);
     }
     let mb = if bytes % GIB == 0 {
         String::from("")
     } else {
-        format!("{:.3} MiB", (bytes % GIB) as f64 / MIB as f64)
+        format!("{:.3}MiB", (bytes % GIB) as f64 / MIB as f64)
     };
     bytes /= GIB;
     let gb = if bytes == 0 {
         String::from("")
     } else {
-        format!("{} GiB ", bytes)
+        format!("{}GiB ", bytes)
     };
     format!("{}{}", gb, mb)
 }

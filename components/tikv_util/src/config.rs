@@ -34,13 +34,9 @@ pub enum ConfigError {
 }
 
 const UNIT: u64 = 1;
-const DECIMAL_DATA_MAGNITUDE: u64 = 1000;
-pub const KB: u64 = UNIT * DECIMAL_DATA_MAGNITUDE;
-pub const MB: u64 = KB * DECIMAL_DATA_MAGNITUDE;
-pub const GB: u64 = MB * DECIMAL_DATA_MAGNITUDE;
-pub const TB: u64 = GB * DECIMAL_DATA_MAGNITUDE;
-pub const PB: u64 = TB * DECIMAL_DATA_MAGNITUDE;
+
 const BINARY_DATA_MAGNITUDE: u64 = 1024;
+pub const B: u64 = UNIT;
 pub const KIB: u64 = UNIT * BINARY_DATA_MAGNITUDE;
 pub const MIB: u64 = KIB * BINARY_DATA_MAGNITUDE;
 pub const GIB: u64 = MIB * BINARY_DATA_MAGNITUDE;
@@ -1342,11 +1338,11 @@ mod tests {
             ("0.5KiB", KIB / 2),
             ("1 KiB", KIB),
             // scientific notation
-            ("0.5e6 B", MB / 2),
-            ("0.5E6 B", MB / 2),
-            ("1e6B", MB),
-            ("8E6B", MB * 8),
-            ("8e7", MB * 80),
+            ("0.5e6 B", B * 500000),
+            ("0.5E6 B", B * 500000),
+            ("1e6B", B * 1000000),
+            ("8E6B", B * 8000000),
+            ("8e7", B * 80000000),
             ("1e-1MB", MIB / 10),
             ("1e+1MB", MIB * 10),
             ("0e+10MB", 0),
