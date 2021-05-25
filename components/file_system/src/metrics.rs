@@ -10,6 +10,7 @@ make_static_metric! {
         foreground_write,
         flush,
         compaction,
+        level_zero_compaction,
         replication,
         load_balance,
         gc,
