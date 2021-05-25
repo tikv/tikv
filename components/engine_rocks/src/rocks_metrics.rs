@@ -980,7 +980,7 @@ pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool
 
         // Pending compaction bytes
         if let Some(pending_compaction_bytes) =
-            engine.get_property_int_cf(handle, ROCKSDB_PENDING_COMPACTION_BYTES)
+            crate::util::get_cf_compaction_pending_bytes(engine, handle)
         {
             STORE_ENGINE_PENDING_COMPACTION_BYTES_VEC
                 .with_label_values(&[name, cf])
@@ -1014,7 +1014,7 @@ pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool
         }
 
         // Num immutable mem-table
-        if let Some(v) = crate::util::get_num_immutable_mem_table(engine, handle) {
+        if let Some(v) = crate::util::get_cf_num_immutable_mem_table(engine, handle) {
             STORE_ENGINE_NUM_IMMUTABLE_MEM_TABLE_VEC
                 .with_label_values(&[name, cf])
                 .set(v as i64);

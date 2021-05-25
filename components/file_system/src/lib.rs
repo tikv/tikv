@@ -19,7 +19,6 @@ pub use iosnoop::{get_io_type, init_io_snooper, set_io_type};
 pub use metrics_manager::{BytesFetcher, MetricsManager};
 pub use rate_limiter::{
     get_io_rate_limiter, set_io_rate_limiter, IORateLimiter, IORateLimiterStatistics,
-    WithIORateLimit,
 };
 
 pub use std::fs::{
@@ -36,7 +35,7 @@ use openssl::error::ErrorStack;
 use openssl::hash::{self, Hasher, MessageDigest};
 use strum::EnumCount;
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IOOp {
     Read,
     Write,
@@ -45,20 +44,21 @@ pub enum IOOp {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumCount)]
 pub enum IOType {
-    Other,
+    Other = 0,
     // Including coprocessor and storage read.
-    ForegroundRead,
+    ForegroundRead = 1,
     // Including scheduler worker, raftstore and apply. Scheduler worker only
     // does read related works, but it's on the path of foreground write, so
     // account it as foreground-write instead of foreground-read.
-    ForegroundWrite,
-    Flush,
-    Compaction,
-    Replication,
-    LoadBalance,
-    Gc,
-    Import,
-    Export,
+    ForegroundWrite = 2,
+    Flush = 3,
+    LevelZeroCompaction = 4,
+    Compaction = 5,
+    Replication = 6,
+    LoadBalance = 7,
+    Gc = 8,
+    Import = 9,
+    Export = 10,
 }
 
 pub struct WithIOType {
