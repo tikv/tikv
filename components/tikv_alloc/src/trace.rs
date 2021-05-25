@@ -36,14 +36,9 @@ impl Id {
     pub fn readable_name(&self) -> String {
         match self {
             Id::Name(s) => {
-                let mut s = s.replace('_', "");
+                let mut s = s.replace('_', " ");
                 s.make_ascii_lowercase();
-                let mut res = String::with_capacity(s.len());
-                for p in s.split('_') {
-                    res.push_str(p);
-                    res.push(' ');
-                }
-                res
+                s
             }
             Id::Number(n) => n.to_string(),
         }
@@ -89,7 +84,7 @@ pub enum TraceEvent {
 
 pub trait MemoryTrace {
     fn trace(&self, event: TraceEvent);
-    fn snapshot(&self, parent: &mut MemoryTraceSnapshot);
+    fn snapshot(&self, parent: Option<&mut MemoryTraceSnapshot>);
     fn sub_trace(&self, id: Id) -> Arc<dyn MemoryTrace + Send + Sync>;
     fn add_sub_trace(&mut self, id: Id, trace: Arc<dyn MemoryTrace + Send + Sync>);
     fn sum(&self) -> usize;
@@ -126,16 +121,18 @@ impl MemoryTrace for MemoryTraceNode {
         }
     }
 
-    fn snapshot(&self, parent: &mut MemoryTraceSnapshot) {
+    fn snapshot(&self, parent: Option<&mut MemoryTraceSnapshot>) {
         let mut snap = MemoryTraceSnapshot {
             id: self.id,
             trace: self.trace.load(Ordering::Relaxed),
             children: vec![],
         };
         for child in self.children.values() {
-            child.snapshot(&mut snap);
+            child.snapshot(Some(&mut snap));
         }
-        parent.children.push(snap);
+        if let Some(parent) = parent {
+            parent.children.push(snap);
+        }
     }
 
     fn sub_trace(&self, id: Id) -> Arc<dyn MemoryTrace + Send + Sync> {
@@ -201,6 +198,15 @@ mod tests {
         self as tikv_alloc,
         trace::{Id, MemoryTrace, TraceEvent},
     };
+
+    #[test]
+    fn test_id_readable_name() {
+        let id = Id::Name("test_id");
+        assert_eq!(id.readable_name(), "test id");
+        let id = Id::Number(100);
+        assert_eq!(id.readable_name(), "100");
+    }
+
     #[test]
     fn test_mem_trace_macro() {
         let trace = mem_trace!(root, [(mid1, [leaf1, leaf2]), (mid2, [leaf3])]);
