@@ -137,6 +137,7 @@ impl MemoryTrace for MemoryTraceNode {
         self.children.insert(id, trace);
     }
 
+    // TODO: Maybe need a cache to reduce read cost.
     fn sum(&self) -> usize {
         let sum: usize = self.children.values().map(|c| c.sum()).sum();
         sum + self.trace.load(Ordering::Relaxed)
