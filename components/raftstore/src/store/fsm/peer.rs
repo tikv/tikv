@@ -1900,7 +1900,7 @@ where
         // Remove `read_progress` and call `clear` to set the `safe_ts` to zero to reject
         // incoming stale read request
         meta.region_read_progress.remove(&region_id);
-        self.fsm.peer.read_progress.clear();
+        self.fsm.peer.read_progress.stop(true);
 
         // Destroy read delegates.
         meta.readers.remove(&region_id);

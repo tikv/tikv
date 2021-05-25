@@ -893,10 +893,12 @@ impl RegionReadProgress {
         }
     }
 
-    pub fn clear(&self) {
+    pub fn stop(&self, reset_ts: bool) {
         let mut core = self.core.lock().unwrap();
-        core.clear();
-        self.safe_ts.store(0, AtomicOrdering::Release);
+        core.stop();
+        if reset_ts {
+            self.safe_ts.store(0, AtomicOrdering::Release);
+        }
     }
 
     // Get the latest `read_state`
@@ -926,6 +928,8 @@ struct RegionReadProgressCore {
     // should reset to `min(source_safe_ts, target_safe_ts)`, and start reject stale `read_state` item
     // with index smaller than `last_merge_index` to avoid `safe_ts` undo the decrease
     last_merge_index: u64,
+    // Stop accepting incoming `(idx, ts)`
+    stopped: bool,
 }
 
 // A helpful wraper of `(apply_index, safe_ts)` item
@@ -943,10 +947,11 @@ impl RegionReadProgressCore {
             read_state: ReadState::default(),
             pending_items: VecDeque::with_capacity(cap),
             last_merge_index: 0,
+            stopped: false,
         }
     }
 
-    // Reset `safe_ts` to min(`source_safe_ts`, `safe_ts`)
+    // Reset target region's `safe_ts` to min(`source_safe_ts`, `safe_ts`)
     fn merge_safe_ts(&mut self, source_safe_ts: u64, merge_index: u64) -> Option<u64> {
         // Consume all pending items before `merge_index`
         self.update_applied(merge_index);
@@ -996,7 +1001,7 @@ impl RegionReadProgressCore {
     // Return the `safe_ts` if it is updated
     fn update_safe_ts(&mut self, idx: u64, ts: u64) -> Option<u64> {
         // Discard stale item with `apply_index` before `last_merge_index`
-        if idx <= self.last_merge_index {
+        if idx <= self.last_merge_index || self.stopped {
             return None;
         }
         // The peer has enough data, try update `safe_ts` directly
@@ -1027,10 +1032,12 @@ impl RegionReadProgressCore {
         None
     }
 
-    fn clear(&mut self) {
+    // Stop updating `safe_ts`
+    fn stop(&mut self) {
         self.pending_items.clear();
         self.read_state.ts = 0;
         self.read_state.idx = 0;
+        self.stopped = true;
     }
 
     fn push_back(&mut self, item: ReadState) {
