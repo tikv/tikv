@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
-use tidb_query_datatype::{Collation, EvalType, FieldTypeAccessor};
+use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tipb::ColumnInfo;
 use tipb::FieldType;
 use tipb::IndexScan;
@@ -463,7 +463,7 @@ impl IndexScanExecutorImpl {
             }
             let is_bin_collation = field_type
                 .collation()
-                .map(|col| col == Collation::Utf8Mb4Bin)
+                .map(|col| col.is_bin_collation())
                 .unwrap_or(false);
 
             assert!(!column.is_empty());
@@ -808,7 +808,7 @@ mod tests {
 
     use codec::prelude::NumberEncoder;
     use kvproto::coprocessor::KeyRange;
-    use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
+    use tidb_query_datatype::{Collation, FieldTypeAccessor, FieldTypeTp};
     use tipb::ColumnInfo;
 
     use tidb_query_common::storage::test_fixture::FixtureStorage;
@@ -3031,6 +3031,48 @@ mod tests {
         assert_eq!(
             columns[9].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A ".as_bytes().to_vec())
+        );
+    }
+
+    #[test]
+    fn test_common_handle_index_latin1_bin() {
+        use tidb_query_datatype::builder::FieldTypeBuilder;
+
+        // create table t(c1 varchar(200) CHARACTER SET latin1 COLLATE latin1_bin, c2 int, primary key(c1) clustered, key kk(c2));
+        // idx_exec for index kk(c2), its columns will be <c2, c1>
+        let mut idx_exe = IndexScanExecutorImpl {
+            context: Default::default(),
+            schema: vec![
+                FieldTypeTp::Long.into(),
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::String)
+                    .collation(Collation::Latin1Bin)
+                    .into(),
+            ],
+            columns_id_without_handle: vec![2],
+            columns_id_for_common_handle: vec![1],
+            decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
+            pid_column_cnt: 0,
+            index_version: -1,
+        };
+        let mut columns = idx_exe.build_column_vec(1);
+        idx_exe
+            .process_kv_pair(
+                &[
+                    0x74, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x37, 0x5f, 0x69, 0x80, 0x0, 0x0,
+                    0x0, 0x0, 0x0, 0x0, 0x2, 0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x1,
+                    0x6a, 0x6f, 0x76, 0x69, 0x61, 0x6c, 0x65, 0x64, 0xff, 0x69, 0x73, 0x6f, 0x6e,
+                    0x0, 0x0, 0x0, 0x0, 0xfb,
+                ],
+                &[
+                    0x0, 0x7d, 0x1, 0x80, 0x0, 0x1, 0x0, 0x0, 0x0, 0x1, 0x1, 0x0, 0x0,
+                ],
+                &mut columns,
+            )
+            .unwrap();
+        assert_eq!(
+            columns[1].raw().last().unwrap().read_datum().unwrap(),
+            Datum::Bytes("jovialedison".as_bytes().to_vec())
         );
     }
 
