@@ -199,6 +199,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         lock_mgr: L,
         concurrency_manager: ConcurrencyManager,
         pipelined_pessimistic_lock: Arc<atomic::AtomicBool>,
+        l0_completed_receiver: Option<std::sync::mpsc::Receiver<()>>,
     ) -> Result<Self> {
         let sched = TxnScheduler::new(
             engine.clone(),
@@ -206,6 +207,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             concurrency_manager.clone(),
             config,
             pipelined_pessimistic_lock,
+            l0_completed_receiver,
         );
 
         info!("Storage started.");
@@ -1773,6 +1775,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             self.lock_mgr,
             ConcurrencyManager::new(1.into()),
             self.pipelined_pessimistic_lock,
+            None,
         )
     }
 }

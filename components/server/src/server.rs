@@ -17,7 +17,7 @@ use std::{
     fs::{self, File},
     net::SocketAddr,
     path::{Path, PathBuf},
-    sync::{atomic::AtomicU64, Arc, Mutex},
+    sync::{atomic::AtomicU64, Arc, Mutex, mpsc},
     time::{Duration, Instant},
 };
 
@@ -149,6 +149,7 @@ struct TiKVServer<ER: RaftEngine> {
     security_mgr: Arc<SecurityManager>,
     pd_client: Arc<RpcClient>,
     router: RaftRouter<RocksEngine, ER>,
+    l0_completed_receiver: Option<mpsc::Receiver<()>>,
     system: Option<RaftBatchSystem<RocksEngine, ER>>,
     resolver: resolve::PdStoreAddrResolver,
     state: Arc<Mutex<GlobalReplicationState>>,
@@ -243,6 +244,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             concurrency_manager,
             env,
             background_worker,
+            l0_completed_receiver: None,
         }
     }
 
@@ -412,7 +414,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         .map(Arc::new);
     }
 
-    fn create_raftstore_compaction_listener(&self) -> engine_rocks::CompactionListener {
+    fn create_raftstore_compaction_listener(&mut self) -> engine_rocks::CompactionListener {
         fn size_change_filter(info: &engine_rocks::RocksCompactionJobInfo) -> bool {
             // When calculating region size, we only consider write and default
             // column families.
@@ -437,7 +439,10 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                     error_unknown!(?e; "send compaction finished event to raftstore failed");
                 }
             });
-        engine_rocks::CompactionListener::new(compacted_handler, Some(size_change_filter))
+
+        let (tx, rx) = mpsc::channel();
+        self.l0_completed_receiver = Some(rx);
+        engine_rocks::CompactionListener::new(compacted_handler, Some(size_change_filter), tx)
     }
 
     fn init_engines(&mut self, engines: Engines<RocksEngine, ER>) {
@@ -564,6 +569,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             lock_mgr.clone(),
             self.concurrency_manager.clone(),
             lock_mgr.get_pipelined(),
+            self.l0_completed_receiver.take(),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 

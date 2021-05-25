@@ -145,7 +145,8 @@ impl TaskContext {
     }
 }
 
-const ADJUST_INTERVAL: u64 = 1000; // 1000ms
+const CHECK_TICK_INTERVAL: u64 = 100; // 100ms
+const ADJUST_TICKS: u64 = 10; // 1000ms
 const RATIO_PERCISION: f64 = 10000000.0;
 const EMA_FACTOR: f64 = 0.1;
 const LIMIT_UP_PERCENT: f64 = 0.04; // 10%
@@ -157,6 +158,7 @@ struct Smoother<const CAP: usize> {
     size: usize,
     idx: usize,
     total: u64,
+    square_total: u64,
 }
 
 impl<const CAP: usize> Smoother<CAP> {
@@ -166,16 +168,19 @@ impl<const CAP: usize> Smoother<CAP> {
             idx: 0,
             size: 0,
             total: 0,
+            square_total: 0,
         }
     }
 
     pub fn observe(&mut self, record: u64) {
         if let Some(v) = self.records[self.idx] {
             self.total -= v;
+            self.square_total -= v * v;
         } else {
             self.size += 1;
         }
         self.total += record;
+        self.square_total += record * record;
 
         self.records[self.idx] = Some(record);
         self.idx = (self.idx + 1) % CAP;
@@ -192,6 +197,14 @@ impl<const CAP: usize> Smoother<CAP> {
         }
         self.total as f64 / self.size as f64
     }
+
+    pub fn get_variance(&self) -> f64 {
+        if self.size == 0 {
+            return 0.0;
+        }
+        
+        (self.square_total as f64 / self.size as f64 - self.get_avg().powi(2)).sqrt()
+    }
 }
 
 struct FlowChecker<E: Engine> {
@@ -201,7 +214,7 @@ struct FlowChecker<E: Engine> {
     l0_files_threshold: u64,
 
     last_num_memtables: Smoother<10>,
-    last_num_l0_files: Smoother<600>,
+    last_num_l0_files: Smoother<20>,
 
     factor: f64,
 
@@ -214,26 +227,37 @@ struct FlowChecker<E: Engine> {
 }
 
 impl<E: Engine> FlowChecker<E> {
-    fn start(self, rx: Receiver<bool>) -> JoinHandle<()> {
+    fn start(self, rx: Receiver<bool>, l0_completed_receiver: Receiver<()>) -> JoinHandle<()> {
         Builder::new()
             .name(thd_name!("flow-checker"))
             .spawn(move || {
                 tikv_alloc::add_thread_memory_accessor();
                 let mut checker = self;
+                let mut ticks = 0;
                 while rx.try_recv().is_err() {
-                    thread::sleep(Duration::from_millis(ADJUST_INTERVAL));
-                    checker.adjust();
+                    thread::sleep(Duration::from_millis(CHECK_TICK_INTERVAL));
+                    if l0_completed_receiver.try_recv().is_ok() {
+                        checker.adjust_l0_files();
+                    }
+                    ticks += 1;
+                    if ticks == ADJUST_TICKS {
+                        ticks = 0;
+                        checker.update_statistics();
+                        checker.adjust_memtables();
+                        checker.adjust_pending_compaction_bytes();
+                    }
                 }
                 tikv_alloc::remove_thread_memory_accessor();
             })
             .unwrap()
     }
 
-    pub fn adjust(&mut self) {
-        self.adjust_pending_compaction_bytes();
-        self.adjust_l0_files_and_memtables();
+    fn update_statistics(&mut self) {
+        self.recorder
+            .observe(self.limiter.total_bytes_consumed() as u64);
+        SCHED_WRITE_FLOW_GAUGE.set(self.limiter.total_bytes_consumed() as i64);
+        self.limiter.reset_statistics();
     }
-
     fn adjust_pending_compaction_bytes(&mut self) {
         let mut pending_compaction_bytes = 0;
         for cf in self.engine.kv_engine().cf_names() {
@@ -271,12 +295,7 @@ impl<E: Engine> FlowChecker<E> {
         self.discard_ratio.store(ratio, Ordering::Relaxed);
     }
 
-    fn adjust_l0_files_and_memtables(&mut self) {
-        self.recorder
-            .observe(self.limiter.total_bytes_consumed() as u64);
-        SCHED_WRITE_FLOW_GAUGE.set(self.limiter.total_bytes_consumed() as i64);
-        self.limiter.reset_statistics();
-
+    fn adjust_memtables(&mut self) {
         let mut num_memtables = 0;
         for cf in self.engine.kv_engine().cf_names() {
             num_memtables = std::cmp::max(
@@ -288,6 +307,14 @@ impl<E: Engine> FlowChecker<E> {
                     .unwrap_or(0),
             );
         }
+        let is_throttled = self.limiter.speed_limit() != INFINITY;
+        let should_throttle = self.last_num_memtables.get_avg() > self.memtables_threshold as f64;
+
+        SCHED_MEMTABLE_GAUGE.set(num_memtables as i64);
+        self.last_num_memtables.observe(num_memtables);
+    }
+    
+    fn adjust_l0_files(&mut self) {
         let mut num_l0_files = 0;
         for cf in self.engine.kv_engine().cf_names() {
             num_l0_files = std::cmp::max(
@@ -333,19 +360,18 @@ impl<E: Engine> FlowChecker<E> {
         };
 
         self.last_num_l0_files.observe(num_l0_files);
-        self.last_num_memtables.observe(num_memtables);
 
-        SCHED_MEMTABLE_GAUGE.set(num_memtables as i64);
         SCHED_L0_GAUGE.set(num_l0_files as i64);
         SCHED_L0_AVG_GAUGE.set(self.last_num_l0_files.get_avg() as i64);
+
+        if throttle < MIN_THROTTLE_SPEED {
+            throttle = MIN_THROTTLE_SPEED;
+        }
         SCHED_THROTTLE_FLOW_GAUGE.set(if throttle == INFINITY {
             0
         } else {
             throttle as i64
         });
-        if throttle < MIN_THROTTLE_SPEED {
-            throttle = MIN_THROTTLE_SPEED;
-        }
         self.limiter.set_speed_limit(throttle)
     }
 }
@@ -377,7 +403,7 @@ impl Drop for FlowController {
 }
 
 impl FlowController {
-    pub fn new<E: Engine>(config: &Config, engine: E) -> Self {
+    pub fn new<E: Engine>(config: &Config, engine: E, l0_completed_receiver: Option<Receiver<()>>) -> Self {
         let limiter = Arc::new(Limiter::new(INFINITY));
         let discard_ratio = Arc::new(AtomicU64::new(0));
         let checker = FlowChecker {
@@ -396,7 +422,7 @@ impl FlowController {
         };
         let (tx, rx) = mpsc::channel();
         let handle = if config.disable_write_stall {
-            Some(checker.start(rx))
+            Some(checker.start(rx, l0_completed_receiver.unwrap()))
         } else {
             None
         };
@@ -542,6 +568,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         concurrency_manager: ConcurrencyManager,
         config: &Config,
         pipelined_pessimistic_lock: Arc<AtomicBool>,
+        l0_completed_receiver: Option<Receiver<()>>,
     ) -> Self {
         let t = Instant::now_coarse();
         let mut task_slots = Vec::with_capacity(TASKS_SLOTS_NUM);
@@ -569,7 +596,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             concurrency_manager,
             pipelined_pessimistic_lock,
             enable_async_apply_prewrite: config.enable_async_apply_prewrite,
-            flow_controller: FlowController::new(config, engine.clone()),
+            flow_controller: FlowController::new(config, engine.clone(), l0_completed_receiver),
         });
 
         slow_log!(t.elapsed(), "initialized the transaction scheduler");

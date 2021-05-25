@@ -55,6 +55,10 @@ impl CompactionJobInfo for RocksCompactionJobInfo<'_> {
         self.0.output_file_at(pos)
     }
 
+    fn base_input_level(&self) -> i32 {
+        self.0.base_input_level()
+    }
+
     fn table_properties(&self) -> &Self::TablePropertiesCollectionView {
         self.0.table_properties()
     }
@@ -191,17 +195,22 @@ impl CompactedEvent for RocksCompactedEvent {
 
 pub type Filter = fn(&RocksCompactionJobInfo) -> bool;
 
+use std::sync::mpsc::Sender;
+use std::sync::Mutex;
+
 pub struct CompactionListener {
     ch: Box<dyn Fn(RocksCompactedEvent) + Send + Sync>,
     filter: Option<Filter>,
+    l0_completed_sender: Mutex<Sender<()>>,
 }
 
 impl CompactionListener {
     pub fn new(
         ch: Box<dyn Fn(RocksCompactedEvent) + Send + Sync>,
         filter: Option<Filter>,
+        l0_completed_sender: Sender<()>,
     ) -> CompactionListener {
-        CompactionListener { ch, filter }
+        CompactionListener { ch, filter, l0_completed_sender: Mutex::new(l0_completed_sender) }
     }
 }
 
@@ -212,6 +221,9 @@ impl EventListener for CompactionListener {
             return;
         }
 
+        if info.base_input_level() == 0 {
+                let _ = self.l0_completed_sender.lock().unwrap().send(());
+        }
         if let Some(ref f) = self.filter {
             if !f(info) {
                 return;

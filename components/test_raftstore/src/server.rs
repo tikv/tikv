@@ -276,6 +276,7 @@ impl Simulator for ServerCluster {
             lock_mgr.clone(),
             concurrency_manager.clone(),
             lock_mgr.get_pipelined(),
+            None,
         )?;
         self.storages.insert(node_id, raft_engine);
 
