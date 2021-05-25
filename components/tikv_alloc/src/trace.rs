@@ -84,7 +84,7 @@ pub enum TraceEvent {
 
 pub trait MemoryTrace {
     fn trace(&self, event: TraceEvent);
-    fn snapshot(&self, parent: Option<&mut MemoryTraceSnapshot>);
+    fn snapshot(&self) -> MemoryTraceSnapshot;
     fn sub_trace(&self, id: Id) -> Arc<dyn MemoryTrace + Send + Sync>;
     fn add_sub_trace(&mut self, id: Id, trace: Arc<dyn MemoryTrace + Send + Sync>);
     fn sum(&self) -> usize;
@@ -121,17 +121,11 @@ impl MemoryTrace for MemoryTraceNode {
         }
     }
 
-    fn snapshot(&self, parent: Option<&mut MemoryTraceSnapshot>) {
-        let mut snap = MemoryTraceSnapshot {
+    fn snapshot(&self) -> MemoryTraceSnapshot {
+        MemoryTraceSnapshot {
             id: self.id,
             trace: self.trace.load(Ordering::Relaxed),
-            children: vec![],
-        };
-        for child in self.children.values() {
-            child.snapshot(Some(&mut snap));
-        }
-        if let Some(parent) = parent {
-            parent.children.push(snap);
+            children: self.children.values().map(|c| c.snapshot()).collect(),
         }
     }
 
