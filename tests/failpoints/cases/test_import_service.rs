@@ -236,5 +236,9 @@ fn test_ingest_file_twice_and_conflict() {
 
     fail::remove(latch_fp);
     let resp = import.ingest(&ingest).unwrap();
-    assert!(!resp.has_error());
+    assert!(resp.has_error());
+    assert_eq!(
+        "The file which would be ingested doest not exist.",
+        resp.get_error().get_message()
+    );
 }

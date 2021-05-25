@@ -21,7 +21,7 @@ pub use self::pd::{
     FlowStatistics, FlowStatsReporter, HeartbeatTask, Runner as PdRunner, Task as PdTask,
 };
 pub use self::raftlog_gc::{Runner as RaftlogGcRunner, Task as RaftlogGcTask};
-pub use self::read::{LocalReader, Progress as ReadProgress, ReadDelegate, ReadExecutor};
+pub use self::read::{LocalReader, Progress as ReadProgress, ReadDelegate, ReadExecutor, TrackVer};
 pub use self::region::{Runner as RegionRunner, Task as RegionTask};
 pub use self::split_check::{KeyEntry, Runner as SplitCheckRunner, Task as SplitCheckTask};
 pub use self::split_config::{SplitConfig, SplitConfigManager};

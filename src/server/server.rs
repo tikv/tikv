@@ -24,8 +24,9 @@ use engine_rocks::RocksEngine;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::SnapManager;
 use security::SecurityManager;
+use tikv_util::config::VersionTrack;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-use tikv_util::worker::{LazyWorker, Worker};
+use tikv_util::worker::{LazyWorker, Scheduler, Worker};
 use tikv_util::Either;
 
 use super::load_statistics::*;
@@ -75,7 +76,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
     #[allow(clippy::too_many_arguments)]
     pub fn new<E: Engine, L: LockManager>(
         store_id: u64,
-        cfg: &Arc<Config>,
+        cfg: &Arc<VersionTrack<Config>>,
         security_mgr: &Arc<SecurityManager>,
         storage: Storage<E, L>,
         cop: Endpoint<E>,
@@ -89,24 +90,25 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
         debug_thread_pool: Arc<Runtime>,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
-        let stats_pool = if cfg.stats_concurrency > 0 {
+        let stats_pool = if cfg.value().stats_concurrency > 0 {
             Some(
                 RuntimeBuilder::new()
                     .threaded_scheduler()
                     .thread_name(STATS_THREAD_PREFIX)
-                    .core_threads(cfg.stats_concurrency)
+                    .core_threads(cfg.value().stats_concurrency)
                     .build()
                     .unwrap(),
             )
         } else {
             None
         };
-        let grpc_thread_load = Arc::new(ThreadLoad::with_threshold(cfg.heavy_load_threshold));
+        let grpc_thread_load =
+            Arc::new(ThreadLoad::with_threshold(cfg.value().heavy_load_threshold));
 
         let snap_worker = Worker::new("snap-handler");
         let lazy_worker = snap_worker.lazy_build("snap-handler");
 
-        let proxy = Proxy::new(security_mgr.clone(), &env, cfg.clone());
+        let proxy = Proxy::new(security_mgr.clone(), &env, Arc::new(cfg.value().clone()));
         let kv_service = KvService::new(
             store_id,
             storage,
@@ -116,23 +118,23 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             raft_router.clone(),
             lazy_worker.scheduler(),
             Arc::clone(&grpc_thread_load),
-            cfg.enable_request_batch,
+            cfg.value().enable_request_batch,
             proxy,
         );
 
-        let addr = SocketAddr::from_str(&cfg.addr)?;
+        let addr = SocketAddr::from_str(&cfg.value().addr)?;
         let ip = format!("{}", addr.ip());
         let mem_quota = ResourceQuota::new(Some("ServerMemQuota"))
-            .resize_memory(cfg.grpc_memory_pool_quota.0 as usize);
+            .resize_memory(cfg.value().grpc_memory_pool_quota.0 as usize);
         let channel_args = ChannelBuilder::new(Arc::clone(&env))
-            .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
-            .max_concurrent_stream(cfg.grpc_concurrent_stream)
+            .stream_initial_window_size(cfg.value().grpc_stream_initial_window_size.0 as i32)
+            .max_concurrent_stream(cfg.value().grpc_concurrent_stream)
             .max_receive_message_len(-1)
             .set_resource_quota(mem_quota)
             .max_send_message_len(-1)
             .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.
-            .keepalive_time(cfg.grpc_keepalive_time.into())
-            .keepalive_timeout(cfg.grpc_keepalive_timeout.into())
+            .keepalive_time(cfg.value().grpc_keepalive_time.into())
+            .keepalive_timeout(cfg.value().grpc_keepalive_timeout.into())
             .build_args();
         let health_service = HealthService::default();
         let builder = {
@@ -146,7 +148,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
 
         let conn_builder = ConnectionBuilder::new(
             env.clone(),
-            cfg.clone(),
+            Arc::new(cfg.value().clone()),
             security_mgr.clone(),
             resolver,
             raft_router.clone(),
@@ -178,6 +180,10 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
 
     pub fn get_debug_thread_pool(&self) -> &RuntimeHandle {
         self.debug_thread_pool.handle()
+    }
+
+    pub fn get_snap_worker_scheduler(&self) -> Scheduler<SnapTask> {
+        self.snap_worker.scheduler()
     }
 
     pub fn transport(&self) -> ServerTransport<T, S, RocksEngine> {
@@ -218,7 +224,11 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
 
     /// Starts the TiKV server.
     /// Notice: Make sure call `build_and_bind` first.
-    pub fn start(&mut self, cfg: Arc<Config>, security_mgr: Arc<SecurityManager>) -> Result<()> {
+    pub fn start(
+        &mut self,
+        cfg: Arc<VersionTrack<Config>>,
+        security_mgr: Arc<SecurityManager>,
+    ) -> Result<()> {
         let snap_runner = SnapHandler::new(
             Arc::clone(&self.env),
             self.snap_mgr.clone(),
@@ -457,7 +467,7 @@ mod tests {
         gc_worker.start().unwrap();
 
         let quick_fail = Arc::new(AtomicBool::new(false));
-        let cfg = Arc::new(cfg);
+        let cfg = Arc::new(VersionTrack::new(cfg));
         let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
 
         let cop_read_pool = ReadPool::from(readpool_impl::build_read_pool_for_test(
@@ -465,7 +475,7 @@ mod tests {
             storage.get_engine(),
         ));
         let cop = coprocessor::Endpoint::new(
-            &cfg,
+            &cfg.value().clone(),
             cop_read_pool.handle(),
             storage.get_concurrency_manager(),
             PerfLevel::EnableCount,

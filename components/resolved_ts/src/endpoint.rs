@@ -159,35 +159,40 @@ impl ObserveRegion {
                     }
                 }
                 ScanEntry::None => {
-                    let status =
-                        std::mem::replace(&mut self.resolver_status, ResolverStatus::Ready);
-                    match status {
-                        ResolverStatus::Pending {
-                            locks,
-                            tracked_index,
-                            ..
-                        } => {
-                            locks.into_iter().for_each(|lock| match lock {
-                                PendingLock::Track { key, start_ts } => self.resolver.track_lock(
-                                    start_ts,
-                                    key.to_raw().unwrap(),
-                                    Some(tracked_index),
-                                ),
-                                PendingLock::Untrack { key, .. } => self
-                                    .resolver
-                                    .untrack_lock(&key.to_raw().unwrap(), Some(tracked_index)),
-                            });
-                            debug!(
-                                "Resolver initialized";
-                                "region" => self.meta.id,
-                                "snapshot index" => apply_index,
-                                "pending data index" => tracked_index,
-                            );
-                        }
-                        ResolverStatus::Ready => {
-                            panic!("region {:?} resolver has ready", self.meta.id)
-                        }
-                    }
+                    // Update the `tracked_index` to the snapshot's `apply_index`
+                    self.resolver.update_tracked_index(apply_index);
+                    let pending_tracked_index =
+                        match std::mem::replace(&mut self.resolver_status, ResolverStatus::Ready) {
+                            ResolverStatus::Pending {
+                                locks,
+                                tracked_index,
+                                ..
+                            } => {
+                                locks.into_iter().for_each(|lock| match lock {
+                                    PendingLock::Track { key, start_ts } => {
+                                        self.resolver.track_lock(
+                                            start_ts,
+                                            key.to_raw().unwrap(),
+                                            Some(tracked_index),
+                                        )
+                                    }
+                                    PendingLock::Untrack { key, .. } => self
+                                        .resolver
+                                        .untrack_lock(&key.to_raw().unwrap(), Some(tracked_index)),
+                                });
+                                tracked_index
+                            }
+                            ResolverStatus::Ready => {
+                                panic!("region {:?} resolver has ready", self.meta.id)
+                            }
+                        };
+                    info!(
+                        "Resolver initialized";
+                        "region" => self.meta.id,
+                        "observe_id" => ?self.handle.id,
+                        "snapshot_index" => apply_index,
+                        "pending_data_index" => pending_tracked_index,
+                    );
                 }
                 ScanEntry::TxnEntry(_) => panic!("unexpected entry type"),
             }
