@@ -117,6 +117,7 @@ where
     /// Destroy is delayed because of some unpersisted readies in Peer.
     /// Should call `destroy_peer` again after persisting all readies.
     delayed_destroy: Option<bool>,
+    trigger_ready_size: usize,
 }
 
 pub struct BatchRaftCmdRequestBuilder<E>
@@ -204,6 +205,7 @@ where
                     cfg.raft_entry_max_size.0 as f64,
                 ),
                 delayed_destroy: None,
+                trigger_ready_size: cfg.trigger_ready_size.0 as usize,
             }),
         ))
     }
@@ -247,6 +249,7 @@ where
                     cfg.raft_entry_max_size.0 as f64,
                 ),
                 delayed_destroy: None,
+                trigger_ready_size: cfg.trigger_ready_size.0 as usize,
             }),
         ))
     }
@@ -291,6 +294,10 @@ where
             batch_req_size: 0,
             callbacks: vec![],
         }
+    }
+
+    fn get_batch_size(&self) -> u32 {
+        self.batch_req_size
     }
 
     fn can_batch(&self, req: &RaftCmdRequest, req_size: u32) -> bool {
@@ -350,15 +357,8 @@ where
         false
     }
 
-    fn build(
-        &mut self,
-        metric: &mut RaftProposeMetrics,
-        is_end: bool,
-    ) -> Option<RaftCommand<E::Snapshot>> {
+    fn build(&mut self, metric: &mut RaftProposeMetrics) -> Option<RaftCommand<E::Snapshot>> {
         if let Some(req) = self.request.take() {
-            if is_end {
-                metric.end_batch += 1;
-            }
             self.batch_req_size = 0;
             if self.callbacks.len() == 1 {
                 let (mut cb, _, send_time) = self.callbacks.pop().unwrap();
@@ -515,10 +515,10 @@ where
                     {
                         self.fsm.batch_req_builder.add(cmd, req_size);
                         if self.fsm.batch_req_builder.should_finish() {
-                            self.propose_batch_raft_command(false);
+                            self.propose_batch_raft_command();
                         }
                     } else {
-                        self.propose_batch_raft_command(false);
+                        self.propose_batch_raft_command();
                         self.propose_raft_command(cmd.request, cmd.callback);
                     }
                 }
@@ -565,16 +565,24 @@ where
                 }
                 PeerMsg::UpdateReplicationMode => self.on_update_replication_mode(),
             }
+            if self.fsm.batch_req_builder.get_batch_size() as usize
+                + self.fsm.peer.raft_group.raft.raft_log.unstable.entries_size
+                >= self.fsm.trigger_ready_size
+            {
+                self.propose_batch_raft_command();
+                self.collect_ready();
+            }
         }
         // Propose batch request which may be still waiting for more raft-command
-        self.propose_batch_raft_command(true);
+        self.propose_batch_raft_command();
+        self.collect_ready();
     }
 
-    fn propose_batch_raft_command(&mut self, is_end: bool) {
+    fn propose_batch_raft_command(&mut self) {
         if let Some(cmd) = self
             .fsm
             .batch_req_builder
-            .build(&mut self.ctx.raft_metrics.propose, is_end)
+            .build(&mut self.ctx.raft_metrics.propose)
         {
             self.propose_raft_command(cmd.request, cmd.callback);
         }
@@ -947,6 +955,7 @@ where
         let has_ready = self.fsm.has_ready;
         self.fsm.has_ready = false;
         if !has_ready || self.fsm.stopped {
+            self.ctx.trans.try_flush();
             return;
         }
         self.ctx.pending_count += 1;
@@ -963,6 +972,7 @@ where
 
             self.post_raft_ready_append(r);
         }
+        self.ctx.trans.try_flush();
     }
 
     pub fn post_raft_ready_append(&mut self, ready: CollectedReady) {

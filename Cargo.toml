@@ -218,8 +218,8 @@ zipf = "6.1.0"
 
 [patch.crates-io]
 # TODO: remove this when new raft-rs is published.
-raft = { git = "https://github.com/tikv/raft-rs", branch = "master", default-features = false }
-raft-proto = { git = "https://github.com/tikv/raft-rs", branch = "master", default-features = false }
+raft = { git = "https://github.com/gengliqi/raft-rs", branch = "add-entries-size", default-features = false }
+raft-proto = { git = "https://github.com/gengliqi/raft-rs", branch = "add-entries-size", default-features = false }
 protobuf = { git = "https://github.com/hicqu/rust-protobuf", rev = "b56f6501a019d93a61407efd7822ae4c7257d94e" }
 protobuf-codegen = { git = "https://github.com/hicqu/rust-protobuf", rev = "b56f6501a019d93a61407efd7822ae4c7257d94e" }
 openssl-src = { git = "https://github.com/busyjay/openssl-src-rs", branch = "patch-for-m1" }

@@ -177,6 +177,9 @@ pub struct Config {
     pub trigger_write_size: ReadableSize,
 
     #[config(skip)]
+    pub trigger_ready_size: ReadableSize,
+
+    #[config(skip)]
     pub store_waterfall_metrics: bool,
 
     // Deprecated! These configuration has been moved to Coprocessor.
@@ -264,6 +267,8 @@ impl Default for Config {
             apply_yield_duration: ReadableDuration::millis(500),
             cmd_batch: true,
             trigger_write_size: ReadableSize::mb(1),
+            trigger_ready_size: ReadableSize::kb(256),
+
             store_waterfall_metrics: false,
 
             // They are preserved for compatibility check.
@@ -625,6 +630,9 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["trigger_write_size"])
             .set((self.trigger_write_size.0 as f64).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["trigger_ready_size"])
+            .set((self.trigger_ready_size.0 as f64).into());
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_waterfall_metrics"])
             .set((self.store_waterfall_metrics as i32).into());
