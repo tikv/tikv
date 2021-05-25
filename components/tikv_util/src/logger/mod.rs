@@ -10,8 +10,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use log::{self, SetLoggerError};
+<<<<<<< HEAD
 use slog::{self, Drain, FnValue, Key, OwnedKVList, PushFnValue, Record, KV};
 use slog_async::{Async, OverflowStrategy};
+=======
+use slog::{self, slog_o, Drain, FnValue, Key, OwnedKVList, PushFnValue, Record, KV};
+use slog_async::{Async, AsyncGuard, OverflowStrategy};
+>>>>>>> 8f8e351d0... log: ensure panic output is flushed to the log (#10213)
 use slog_term::{Decorator, PlainDecorator, RecordDecorator};
 
 use self::file_log::{RotateBySize, RotateByTime, RotatingFileLogger, RotatingFileLoggerBuilder};
@@ -68,20 +73,20 @@ where
         }
     };
 
-    let logger = if use_async {
-        let drain = Async::new(LogAndFuse(drain))
+    let (logger, guard) = if use_async {
+        let (async_log, guard) = Async::new(LogAndFuse(drain))
             .chan_size(SLOG_CHANNEL_SIZE)
             .overflow_strategy(SLOG_CHANNEL_OVERFLOW_STRATEGY)
             .thread_name(thd_name!("slogger"))
-            .build()
-            .filter_level(level)
-            .fuse();
+            .build_with_guard();
+        let drain = async_log.filter_level(level).fuse();
         let drain = SlowLogFilter {
             threshold: slow_threshold,
             inner: drain,
         };
         let filtered = drain.filter(filter).fuse();
-        slog::Logger::root(filtered, slog_o!())
+
+        (slog::Logger::root(filtered, slog_o!()), Some(guard))
     } else {
         let drain = LogAndFuse(Mutex::new(drain).filter_level(level));
         let drain = SlowLogFilter {
@@ -89,22 +94,36 @@ where
             inner: drain,
         };
         let filtered = drain.filter(filter).fuse();
-        slog::Logger::root(filtered, slog_o!())
+        (slog::Logger::root(filtered, slog_o!()), None)
     };
 
-    set_global_logger(level, init_stdlog, logger)
+    set_global_logger(level, init_stdlog, logger, guard)
+}
+
+// All Drains are reference-counted by every Logger that uses them. Async drain
+// runs a worker thread and sends a termination (and flushing) message only when
+// being dropped. Because of that it's actually quite easy to have a left-over
+// reference to a Async drain, when terminating: especially on panics or similar
+// unwinding event. Typically it's caused be a leftover reference like Logger in
+// thread-local variable, global variable, or a thread that is not being joined
+// on. So use AsyncGuard to send a flush and termination message to a Async
+// worker thread, and wait for it to finish on the guard's own drop.
+lazy_static::lazy_static! {
+    pub static ref ASYNC_LOGGER_GUARD: Mutex<Option<AsyncGuard>> = Mutex::new(None);
 }
 
 pub fn set_global_logger(
     level: Level,
     init_stdlog: bool,
     logger: slog::Logger,
+    guard: Option<AsyncGuard>,
 ) -> Result<(), SetLoggerError> {
     slog_global::set_global(logger);
     if init_stdlog {
         slog_global::redirect_std_log(Some(level))?;
         grpcio::redirect_log();
     }
+    *ASYNC_LOGGER_GUARD.lock().unwrap() = guard;
 
     Ok(())
 }
