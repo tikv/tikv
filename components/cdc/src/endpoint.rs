@@ -1369,7 +1369,6 @@ mod tests {
     use kvproto::errorpb::Error as ErrorHeader;
     use raftstore::errors::Error as RaftStoreError;
     use raftstore::store::msg::CasualMessage;
-    use raftstore::store::util::RegionReadProgress;
     use raftstore::store::{ReadDelegate, TrackVer};
     use std::collections::BTreeMap;
     use std::fmt::Display;
@@ -1458,7 +1457,6 @@ mod tests {
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
             max_ts_sync_status: Arc::new(AtomicU64::new(0)),
             track_ver: TrackVer::new(),
-            read_progress: Arc::new(RegionReadProgress::new(0, 0)),
         };
         store_meta.lock().unwrap().readers.insert(1, read_delegate);
         let (task_sched, task_rx) = dummy_scheduler();
