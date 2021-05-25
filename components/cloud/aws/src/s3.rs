@@ -605,7 +605,7 @@ mod tests {
         bucket.region = StringNonEmpty::opt("ap-southeast-1".to_string());
         bucket.prefix = StringNonEmpty::opt("prefix2".to_string());
         let mut config = Config::default(bucket);
-        config.force_path_style = true;
+        config.force_path_style = false;
         let dispatcher = MockRequestDispatcher::with_status(200).with_request_checker(
             move |req: &SignedRequest| {
                 assert_eq!(req.region.name(), "ap-southeast-1");
