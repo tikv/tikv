@@ -285,20 +285,20 @@ where
             }
         }
 
-        self.router
-            .send_command_with_deadline(
-                cmd,
-                StoreCallback::write_ext(
-                    Box::new(move |resp| {
-                        let (cb_ctx, res) = on_write_result(resp, len);
-                        write_cb((cb_ctx, res.map_err(Error::into)));
-                    }),
-                    proposed_cb,
-                    committed_cb,
-                ),
-                batch.deadline,
-            )
-            .map_err(From::from)
+        let cb = StoreCallback::write_ext(
+            Box::new(move |resp| {
+                let (cb_ctx, res) = on_write_result(resp, len);
+                write_cb((cb_ctx, res.map_err(Error::into)));
+            }),
+            proposed_cb,
+            committed_cb,
+        );
+        if let Some(deadline) = batch.deadline {
+            self.router.send_command_with_deadline(cmd, cb, deadline)?;
+        } else {
+            self.router.send_command(cmd, cb)?;
+        }
+        Ok(())
     }
 }
 

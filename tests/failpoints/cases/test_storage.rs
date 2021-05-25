@@ -1110,14 +1110,7 @@ fn test_before_propose_deadline() {
     let mut cluster = new_server_cluster(0, 1);
     cluster.run();
 
-    let engine = cluster
-        .sim
-        .read()
-        .unwrap()
-        .storages
-        .get(&1)
-        .unwrap()
-        .clone();
+    let engine = cluster.sim.read().unwrap().storages[&1].clone();
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},

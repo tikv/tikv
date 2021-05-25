@@ -410,19 +410,11 @@ pub struct RaftCommand<S: Snapshot> {
 impl<S: Snapshot> RaftCommand<S> {
     #[inline]
     pub fn new(request: RaftCmdRequest, callback: Callback<S>) -> RaftCommand<S> {
-        Self::with_deadline(request, callback, None)
-    }
-
-    pub fn with_deadline(
-        request: RaftCmdRequest,
-        callback: Callback<S>,
-        deadline: Option<Deadline>,
-    ) -> RaftCommand<S> {
         RaftCommand {
             request,
             callback,
             send_time: Instant::now(),
-            deadline,
+            deadline: None,
         }
     }
 }

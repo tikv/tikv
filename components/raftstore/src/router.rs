@@ -48,19 +48,16 @@ where
 
     /// Sends RaftCmdRequest to local store.
     fn send_command(&self, req: RaftCmdRequest, cb: Callback<EK::Snapshot>) -> RaftStoreResult<()> {
-        self.send_command_with_deadline(req, cb, None)
+        send_command_impl::<EK, _>(self, req, cb, None)
     }
 
     fn send_command_with_deadline(
         &self,
         req: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
-        deadline: Option<Deadline>,
+        deadline: Deadline,
     ) -> RaftStoreResult<()> {
-        let region_id = req.get_header().get_region_id();
-        let cmd = RaftCommand::with_deadline(req, cb, deadline);
-        <Self as ProposalRouter<EK::Snapshot>>::send(self, cmd)
-            .map_err(|e| handle_send_error(region_id, e))
+        send_command_impl::<EK, _>(self, req, cb, Some(deadline))
     }
 
     /// Reports the peer being unreachable to the Region.
@@ -98,6 +95,24 @@ where
             PeerMsg::SignificantMsg(SignificantMsg::StoreResolved { store_id, group_id })
         })
     }
+}
+
+fn send_command_impl<EK, PR>(
+    router: &PR,
+    req: RaftCmdRequest,
+    cb: Callback<EK::Snapshot>,
+    deadline: Option<Deadline>,
+) -> RaftStoreResult<()>
+where
+    EK: KvEngine,
+    PR: ProposalRouter<EK::Snapshot>,
+{
+    let region_id = req.get_header().get_region_id();
+    let mut cmd = RaftCommand::new(req, cb);
+    cmd.deadline = deadline;
+    router
+        .send(cmd)
+        .map_err(|e| handle_send_error(region_id, e))
 }
 
 pub trait LocalReadRouter<EK>: Send + Clone
