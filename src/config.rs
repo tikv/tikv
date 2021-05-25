@@ -2350,7 +2350,7 @@ impl Default for TiKvConfig {
             panic_when_unexpected_key_or_data: false,
             enable_io_snoop: true,
             abort_on_panic: false,
-            memory_usage_limit: Self::default_memory_usage_limit(),
+            memory_usage_limit: ReadableSize(0),
             memory_usage_high_water: 0.8,
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
@@ -2491,6 +2491,10 @@ impl TiKvConfig {
         self.gc.validate()?;
 
         let default_memory_usage_limit = Self::default_memory_usage_limit();
+        if self.memory_usage_limit.0 == 0 {
+            self.memory_usage_limit = default_memory_usage_limit;
+            return Ok(());
+        }
         match self.memory_usage_limit.0.cmp(&default_memory_usage_limit.0) {
             cmp::Ordering::Less => {
                 self.rocksdb
