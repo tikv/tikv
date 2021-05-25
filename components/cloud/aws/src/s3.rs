@@ -104,7 +104,7 @@ impl Config {
             bucket: StringNonEmpty::required_field(input.bucket, "bucket")?,
             prefix: StringNonEmpty::opt(input.prefix),
             storage_class: storage_class.clone(),
-            region: None,
+            region: StringNonEmpty::opt(input.region),
         };
         let access_key_pair = match StringNonEmpty::opt(input.access_key) {
             None => None,
