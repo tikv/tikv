@@ -619,6 +619,7 @@ mod tests {
     use raftstore::coprocessor::Result as CopResult;
     use raftstore::coprocessor::{RegionInfo, SeekRegionCallback};
     use raftstore::store::util::new_peer;
+    use raftstore::store::HibernateState;
     use std::collections::BTreeMap;
     use std::mem;
     use std::sync::mpsc::{channel, Receiver, Sender};
@@ -756,7 +757,7 @@ mod tests {
                 r.set_start_key(start_key.clone());
                 r.set_end_key(end_key);
                 r.mut_peers().push(new_peer(1, 1));
-                let info = RegionInfo::new(r, StateRole::Leader);
+                let info = RegionInfo::new(r, StateRole::Leader, HibernateState::ordered());
                 (start_key, info)
             })
             .collect();

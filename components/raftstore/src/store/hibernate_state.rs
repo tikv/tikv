@@ -1,5 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::fmt;
+
 use kvproto::metapb::Region;
 use pd_client::{Feature, FeatureGate};
 use serde_derive::{Deserialize, Serialize};
@@ -23,15 +25,14 @@ pub enum GroupState {
     Idle,
 }
 
-impl GroupState {
-    pub fn to_string(&self) -> String {
+impl fmt::Display for GroupState {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            GroupState::Ordered => "ordered",
-            GroupState::Chaos => "chaos",
-            GroupState::PreChaos => "pre_chaos",
-            GroupState::Idle => "idle",
+            GroupState::Ordered => write!(f, "ordered"),
+            GroupState::Chaos => write!(f, "chaos"),
+            GroupState::PreChaos => write!(f, "pre_chaos"),
+            GroupState::Idle => write!(f, "idle"),
         }
-        .to_string()
     }
 }
 
@@ -42,14 +43,13 @@ pub enum LeaderState {
     Hibernated,
 }
 
-impl LeaderState {
-    pub fn to_string(&self) -> String {
+impl fmt::Display for LeaderState {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            LeaderState::Awaken => "awaken",
-            LeaderState::Poll(_) => "poll",
-            LeaderState::Hibernated => "hibernated",
+            LeaderState::Awaken => write!(f, "awaken"),
+            LeaderState::Poll(_) => write!(f, "poll"),
+            LeaderState::Hibernated => write!(f, "hibernated"),
         }
-        .to_string()
     }
 }
 
