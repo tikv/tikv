@@ -21,8 +21,10 @@ pub use self::errors::{DiscardReason, Error, Result};
 // With feature protobuf-codec, `bytes::Bytes` is generated for `bytes` in protobuf.
 #[cfg(feature = "protobuf-codec")]
 fn bytes_capacity(b: &bytes::Bytes) -> usize {
-    // NOTE: it's correct because in raftstore all `bytes::Bytes`s are immutable,
-    // which means `clear` or similar others will never be called for them.
+    // NOTE: For deserialized raft messages, `len` equals capacity.
+    // This is used to report memory usage to metrics. It's possible that the reported value is
+    // higher than exact, because some bytes can be shared in entry cache and apply threads. We
+    // should handle this case later.
     b.len()
 }
 
