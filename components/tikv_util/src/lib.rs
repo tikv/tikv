@@ -575,7 +575,7 @@ mod tests {
                 },
                 Ok(ForkResult::Child) => {
                     child();
-                    std::process::exit(0);
+                    std::process::exit(0)
                 }
                 Err(e) => Err(format!("Fork failed: {}", e)),
             }
