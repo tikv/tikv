@@ -77,7 +77,6 @@
 //! jemalloc is configured for profiling if you pass
 //! `--features=mem-profiling` to cargo for eather `tikv_alloc` or
 //! `tikv`.
-#![feature(get_mut_unchecked)]
 
 #[cfg(feature = "mem-profiling")]
 #[macro_use]
