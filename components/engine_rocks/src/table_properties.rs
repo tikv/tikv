@@ -8,7 +8,6 @@ use engine_traits::{Error, Result};
 use engine_traits::{
     TableProperties, TablePropertiesCollectionIter, TablePropertiesKey, UserCollectedProperties,
 };
-use engine_traits::{TablePropertiesCollection};
 use rocksdb::table_properties_rc as rc;
 use std::ops::Deref;
 
@@ -45,22 +44,17 @@ impl RocksTablePropertiesCollection {
     fn from_raw(raw: rc::TablePropertiesCollection) -> RocksTablePropertiesCollection {
         RocksTablePropertiesCollection(raw)
     }
-}
 
-impl
-    TablePropertiesCollection<
-        RocksTablePropertiesCollectionIter,
-        RocksTablePropertiesKey,
-        RocksTableProperties,
-        RocksUserCollectedProperties,
-    > for RocksTablePropertiesCollection
-{
-    fn iter(&self) -> RocksTablePropertiesCollectionIter {
+    pub fn iter(&self) -> RocksTablePropertiesCollectionIter {
         RocksTablePropertiesCollectionIter(self.0.iter())
     }
 
-    fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 

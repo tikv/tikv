@@ -3,7 +3,6 @@
 use crate::{RocksEngine, UserProperties};
 use engine_traits::{
     DecodeProperties, MvccProperties, MvccPropertiesExt, Result, TableProperties,
-    TablePropertiesCollection,
 };
 use txn_types::TimeStamp;
 

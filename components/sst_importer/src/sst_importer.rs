@@ -922,7 +922,7 @@ mod tests {
     };
     use engine_traits::{Error as TraitError, SstWriterBuilder};
     use engine_traits::{
-        ExternalSstFileInfo, SstExt, TableProperties, TablePropertiesCollection,
+        ExternalSstFileInfo, SstExt, TableProperties,
         UserCollectedProperties,
     };
     use tempfile::Builder;
