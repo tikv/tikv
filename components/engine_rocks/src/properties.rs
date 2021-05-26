@@ -8,7 +8,6 @@ use std::u64;
 
 use engine_traits::{
     DecodeProperties, IndexHandle, IndexHandles, MvccProperties, Range, TableProperties,
-    TablePropertiesCollection,
 };
 use rocksdb::{
     DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,

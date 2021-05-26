@@ -3,22 +3,6 @@
 use crate::properties::DecodeProperties;
 use std::ops::Deref;
 
-pub trait TablePropertiesCollection<I, PKey, P, UCP>
-where
-    I: TablePropertiesCollectionIter<PKey, P, UCP>,
-    PKey: TablePropertiesKey,
-    P: TableProperties<UCP>,
-    UCP: UserCollectedProperties,
-{
-    fn iter(&self) -> I;
-
-    fn len(&self) -> usize;
-
-    fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
 pub trait TablePropertiesCollectionIter<PKey, P, UCP>: Iterator<Item = (PKey, P)>
 where
     PKey: TablePropertiesKey,

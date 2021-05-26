@@ -926,7 +926,7 @@ mod tests {
     };
     use engine_traits::{Error as TraitError};
     use engine_traits::{
-        ExternalSstFileInfo, TableProperties, TablePropertiesCollection, UserCollectedProperties,
+        ExternalSstFileInfo, TableProperties, UserCollectedProperties,
     };
     use tempfile::Builder;
     use test_sst_importer::{
