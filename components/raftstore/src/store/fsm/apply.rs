@@ -1238,15 +1238,6 @@ where
     fn destroy<W: WriteBatch<EK>>(&mut self, apply_ctx: &mut ApplyContext<EK, W>) {
         self.stopped = true;
         apply_ctx.router.close(self.region_id());
-        let router_trace = apply_ctx.router.trace();
-        RAFTSTORE_MEM_TRACE
-            .sub_trace(Id::Name("apply_router"))
-            .sub_trace(Id::Name("alive"))
-            .trace(TraceEvent::Reset(router_trace.alive));
-        RAFTSTORE_MEM_TRACE
-            .sub_trace(Id::Name("apply_router"))
-            .sub_trace(Id::Name("leak"))
-            .trace(TraceEvent::Reset(router_trace.leak));
 
         for cmd in self.pending_cmds.normals.drain(..) {
             notify_region_removed(self.region.get_id(), self.id, cmd);
@@ -3798,20 +3789,20 @@ where
 
     pub fn register(&self, region_id: u64, mailbox: BasicMailbox<ApplyFsm<EK>>) {
         self.router.register(region_id, mailbox);
-        self.update_router_trace();
+        self.update_trace();
     }
 
     pub fn register_all(&self, mailboxes: Vec<(u64, BasicMailbox<ApplyFsm<EK>>)>) {
         self.router.register_all(mailboxes);
-        self.update_router_trace();
+        self.update_trace();
     }
 
     pub fn close(&self, region_id: u64) {
         self.router.close(region_id);
-        self.update_router_trace();
+        self.update_trace();
     }
 
-    fn update_router_trace(&self) {
+    fn update_trace(&self) {
         let router_trace = self.router.trace();
         RAFTSTORE_MEM_TRACE
             .sub_trace(Id::Name("apply_router"))

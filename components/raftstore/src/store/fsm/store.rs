@@ -302,20 +302,20 @@ where
 
     pub fn register(&self, region_id: u64, mailbox: BasicMailbox<PeerFsm<EK, ER>>) {
         self.router.register(region_id, mailbox);
-        self.update_router_trace();
+        self.update_trace();
     }
 
     pub fn register_all(&self, mailboxes: Vec<(u64, BasicMailbox<PeerFsm<EK, ER>>)>) {
         self.router.register_all(mailboxes);
-        self.update_router_trace();
+        self.update_trace();
     }
 
     pub fn close(&self, region_id: u64) {
         self.router.close(region_id);
-        self.update_router_trace();
+        self.update_trace();
     }
 
-    fn update_router_trace(&self) {
+    fn update_trace(&self) {
         let router_trace = self.router.trace();
         RAFTSTORE_MEM_TRACE
             .sub_trace(Id::Name("raft_router"))
