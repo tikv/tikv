@@ -2171,7 +2171,6 @@ where
         let region_id = derived.get_id();
         // Roughly estimate the size and keys for new regions.
         let new_region_count = regions.len() as u64;
-
         let estimated_size = self.fsm.peer.approximate_size / new_region_count;
         let estimated_keys = self.fsm.peer.approximate_keys / new_region_count;
         let mut meta = self.ctx.store_meta.lock().unwrap();
@@ -2182,38 +2181,9 @@ where
         self.fsm.peer.has_calculated_region_size = false;
 
         let is_leader = self.fsm.peer.is_leader();
-        let mut no_tick = false;
         if is_leader {
             self.fsm.peer.approximate_size = estimated_size;
             self.fsm.peer.approximate_keys = estimated_keys;
-
-            if let Some(estimated_size) = self.fsm.peer.approximate_size {
-                if estimated_size > self.ctx.coprocessor_host.cfg.region_max_size.0 {
-                    info!(
-                        "trigger split check immediately";
-                        "region_id" => self.fsm.region_id(),
-                        "peer_id" => self.fsm.peer_id(),
-                        "size" => estimated_size,
-                    );
-                    self.fsm.peer.approximate_size = None;
-                    // trigger a split check immediately when size is still large
-                    self.ctx
-                        .router
-                        .force_send(region_id, PeerMsg::Tick(PeerTicks::SPLIT_REGION_CHECK))
-                        .unwrap();
-                    no_tick = true;
-                }
-            }
-        }
-        if !no_tick {
-            self.register_split_region_check_tick();
-        }
-
-        let mut meta = self.ctx.store_meta.lock().unwrap();
-        meta.set_region(&self.ctx.coprocessor_host, derived, &mut self.fsm.peer);
-        self.fsm.peer.post_split();
-
-        if is_leader {
             self.fsm.peer.heartbeat_pd(self.ctx);
             // Notify pd immediately to let it update the region meta.
             info!(

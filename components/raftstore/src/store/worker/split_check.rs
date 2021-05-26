@@ -330,7 +330,7 @@ where
             } => self.check_split(&region, auto_split, policy),
             Task::ChangeConfig(c) => self.change_cfg(c),
             #[cfg(any(test, feature = "testexport"))]
-            Task::Validate(f) => f(&self.cfg),
+            Task::Validate(f) => f(&self.coprocessor.cfg),
         }
     }
 }
