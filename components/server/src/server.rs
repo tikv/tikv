@@ -58,8 +58,9 @@ use raftstore::{
 use security::SecurityManager;
 use tikv::{
     config::{ConfigController, DBConfigManger, DBType, TiKvConfig, DEFAULT_ROCKSDB_SUB_DIR},
-    coprocessor, coprocessor_v2,
+    coprocessor,
     import::{ImportSSTService, SSTImporter},
+    coprocessor_v2,
     read_pool::{build_yatp_read_pool, ReadPool},
     server::raftkv::ReplicaReadLockChecker,
     server::{

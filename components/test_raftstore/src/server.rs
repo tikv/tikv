@@ -39,8 +39,8 @@ use raftstore::store::{
 use raftstore::Result;
 use security::SecurityManager;
 use tikv::coprocessor;
-use tikv::coprocessor_v2;
 use tikv::import::{ImportSSTService, SSTImporter};
+use tikv::coprocessor_v2;
 use tikv::read_pool::ReadPool;
 use tikv::server::gc_worker::GcWorker;
 use tikv::server::lock_manager::LockManager;

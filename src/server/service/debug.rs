@@ -24,11 +24,11 @@ use tikv_util::metrics;
 
 fn error_to_status(e: Error) -> RpcStatus {
     let (code, msg) = match e {
-        Error::NotFound(msg) => (RpcStatusCode::NOT_FOUND, Some(msg)),
-        Error::InvalidArgument(msg) => (RpcStatusCode::INVALID_ARGUMENT, Some(msg)),
-        Error::Other(e) => (RpcStatusCode::UNKNOWN, Some(format!("{:?}", e))),
+        Error::NotFound(msg) => (RpcStatusCode::NOT_FOUND, msg),
+        Error::InvalidArgument(msg) => (RpcStatusCode::INVALID_ARGUMENT, msg),
+        Error::Other(e) => (RpcStatusCode::UNKNOWN, format!("{:?}", e)),
     };
-    RpcStatus::new(code, msg)
+    RpcStatus::with_message(code, msg)
 }
 
 fn on_grpc_error(tag: &'static str, e: &GrpcError) {
