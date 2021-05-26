@@ -502,7 +502,7 @@ mod tests {
 
     use engine_traits::{
         collect, EncryptionMethod, Error as TraitError, ExternalSstFileInfo, Iterable, Iterator,
-        SeekKey, SstReader, SstWriter, TableProperties, TablePropertiesCollection,
+        SeekKey, SstReader, SstWriter, TableProperties,
         UserCollectedProperties, CF_DEFAULT, DATA_CFS,
     };
     use file_system::File;
