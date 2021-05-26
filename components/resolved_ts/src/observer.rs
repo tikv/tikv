@@ -31,7 +31,7 @@ impl<E: KvEngine> Observer<E> {
     }
 
     pub fn register_to(&self, coprocessor_host: &mut CoprocessorHost<E>) {
-        // 100 is the priority of the observer. CDC should have a high priority.
+        // 100 is the priority of the observer. `resolved-ts` worker should have a high priority.
         coprocessor_host
             .registry
             .register_cmd_observer(100, BoxCmdObserver::new(self.clone()));
@@ -56,28 +56,40 @@ impl<E: KvEngine> Clone for Observer<E> {
 impl<E: KvEngine> Coprocessor for Observer<E> {}
 
 impl<E: KvEngine> CmdObserver<E> for Observer<E> {
-    fn on_flush_apply(&self, mut cmd_batches: Vec<CmdBatch>, engine: E) {
-        cmd_batches.retain(|b| !b.is_empty());
+    fn on_flush_applied_cmd_batch(&self, cmd_batches: Vec<CmdBatch>, engine: E) {
+        let cmd_batches: Vec<_> = cmd_batches
+            .into_iter()
+            .filter(|cb| !cb.is_empty())
+            .filter_map(CmdBatch::filter)
+            .collect();
         if cmd_batches.is_empty() {
-            let mut region = Region::default();
-            region.mut_peers().push(Peer::default());
-            // Create a snapshot here for preventing the old value was GC-ed.
-            // TODO: only need it after enabling old value, may add a flag to indicate whether to get it.
-            let snapshot = if self.need_old_value {
-                Some(RegionSnapshot::from_snapshot(
-                    Arc::new(engine.snapshot()),
-                    Arc::new(region),
-                ))
-            } else {
-                None
-            };
-            if let Err(e) = self.scheduler.schedule(Task::ChangeLog {
-                cmd_batch: cmd_batches,
-                snapshot,
-            }) {
-                info!("failed to schedule change log event"; "err" => ?e);
-            }
+            return;
         }
+        let region = {
+            let mut r = Region::default();
+            r.mut_peers().push(Peer::default());
+            r
+        };
+        // Create a snapshot here for preventing the old value was GC-ed.
+        // TODO: only need it after enabling old value, may add a flag to indicate whether to get it.
+        let snapshot = if self.need_old_value {
+            Some(RegionSnapshot::from_snapshot(
+                Arc::new(engine.snapshot()),
+                Arc::new(region),
+            ))
+        } else {
+            None
+        };
+        if let Err(e) = self.scheduler.schedule(Task::ChangeLog {
+            cmd_batch: cmd_batches,
+            snapshot,
+        }) {
+            info!("failed to schedule change log event"; "err" => ?e);
+        }
+    }
+
+    fn on_flush_applied_cmd_batch_ref(&self, _: &[CmdBatch], _: E) {
+        unreachable!();
     }
 }
 
@@ -171,7 +183,7 @@ mod test {
         let (cdc_handle, rts_handle) = (ObserveHandle::new(), ObserveHandle::new());
         let mut cb = CmdBatch::new(&cdc_handle, &rts_handle, Region::default());
         cb.push(cdc_handle.id, rts_handle.id, 0, cmd.clone());
-        observer.on_flush_apply(vec![cb], engine.clone());
+        observer.on_flush_applied_cmd_batch(vec![cb], engine.clone());
         // Observe all data
         expect_recv(&mut rx, data.clone());
 
@@ -180,7 +192,7 @@ mod test {
         rts_handle.stop_observing();
         let mut cb = CmdBatch::new(&cdc_handle, &rts_handle, Region::default());
         cb.push(cdc_handle.id, rts_handle.id, 0, cmd.clone());
-        observer.on_flush_apply(vec![cb], engine.clone());
+        observer.on_flush_applied_cmd_batch(vec![cb], engine.clone());
         // Still observe all data
         expect_recv(&mut rx, data.clone());
 
@@ -189,7 +201,7 @@ mod test {
         cdc_handle.stop_observing();
         let mut cb = CmdBatch::new(&cdc_handle, &rts_handle, Region::default());
         cb.push(cdc_handle.id, rts_handle.id, 0, cmd.clone());
-        observer.on_flush_apply(vec![cb], engine.clone());
+        observer.on_flush_applied_cmd_batch(vec![cb], engine.clone());
         // Still observe all data
         expect_recv(&mut rx, data);
 
@@ -199,7 +211,7 @@ mod test {
         rts_handle.stop_observing();
         let mut cb = CmdBatch::new(&cdc_handle, &rts_handle, Region::default());
         cb.push(cdc_handle.id, rts_handle.id, 0, cmd);
-        observer.on_flush_apply(vec![cb], engine);
+        observer.on_flush_applied_cmd_batch(vec![cb], engine);
         // Observe no data
         expect_recv(&mut rx, vec![]);
     }

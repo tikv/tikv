@@ -47,7 +47,7 @@ impl CdcObserver {
         // 100 is the priority of the observer. CDC should have a high priority.
         coprocessor_host
             .registry
-            .register_cmd_observer(100, BoxCmdObserver::new(self.clone()));
+            .register_cmd_ref_observer(100, BoxCmdObserver::new(self.clone()));
         coprocessor_host
             .registry
             .register_role_observer(100, BoxRoleObserver::new(self.clone()));
@@ -94,25 +94,33 @@ impl CdcObserver {
 impl Coprocessor for CdcObserver {}
 
 impl<E: KvEngine> CmdObserver<E> for CdcObserver {
-    fn on_flush_apply(&self, mut cmd_batches: Vec<CmdBatch>, engine: E) {
+    fn on_flush_applied_cmd_batch(&self, cmd_batches: Vec<CmdBatch>, engine: E) {
+        self.on_flush_applied_cmd_batch_ref(cmd_batches.as_slice(), engine)
+    }
+
+    fn on_flush_applied_cmd_batch_ref(&self, cmd_batches: &[CmdBatch], engine: E) {
         fail_point!("before_cdc_flush_apply");
-        cmd_batches.retain(|b| !b.is_empty());
-        if !cmd_batches.is_empty() {
-            let mut region = Region::default();
-            region.mut_peers().push(Peer::default());
-            // Create a snapshot here for preventing the old value was GC-ed.
-            let snapshot =
-                RegionSnapshot::from_snapshot(Arc::new(engine.snapshot()), Arc::new(region));
-            let reader = OldValueReader::new(snapshot);
-            let get_old_value = move |key, query_ts, old_value_cache: &mut OldValueCache| {
-                old_value::get_old_value(&reader, key, query_ts, old_value_cache)
-            };
-            if let Err(e) = self.sched.schedule(Task::MultiBatch {
-                multi: cmd_batches,
-                old_value_cb: Box::new(get_old_value),
-            }) {
-                warn!("cdc schedule task failed"; "error" => ?e);
-            }
+        let cmd_batches: Vec<_> = cmd_batches
+            .iter()
+            .filter(|cb| cb.level == ObserveLevel::All && !cb.is_empty())
+            .cloned()
+            .collect();
+        if cmd_batches.is_empty() {
+            return;
+        }
+        let mut region = Region::default();
+        region.mut_peers().push(Peer::default());
+        // Create a snapshot here for preventing the old value was GC-ed.
+        let snapshot = RegionSnapshot::from_snapshot(Arc::new(engine.snapshot()), Arc::new(region));
+        let reader = OldValueReader::new(snapshot);
+        let get_old_value = move |key, query_ts, old_value_cache: &mut OldValueCache| {
+            old_value::get_old_value(&reader, key, query_ts, old_value_cache)
+        };
+        if let Err(e) = self.sched.schedule(Task::MultiBatch {
+            multi: cmd_batches,
+            old_value_cb: Box::new(get_old_value),
+        }) {
+            warn!("cdc schedule task failed"; "error" => ?e);
         }
     }
 }
@@ -179,7 +187,7 @@ mod tests {
 
         let mut cb = CmdBatch::new(&observe_handle, &observe_handle, Region::default());
         cb.push(observe_handle.id, observe_handle.id, 0, Cmd::default());
-        <CdcObserver as CmdObserver<RocksEngine>>::on_flush_apply(
+        <CdcObserver as CmdObserver<RocksEngine>>::on_flush_applied_cmd_batch(
             &observer,
             vec![cb],
             engine.clone(),
@@ -196,7 +204,11 @@ mod tests {
         observe_handle.stop_observing();
         let mut cb = CmdBatch::new(&observe_handle, &observe_handle, Region::default());
         cb.push(observe_handle.id, observe_handle.id, 0, Cmd::default());
-        <CdcObserver as CmdObserver<RocksEngine>>::on_flush_apply(&observer, vec![cb], engine);
+        <CdcObserver as CmdObserver<RocksEngine>>::on_flush_applied_cmd_batch(
+            &observer,
+            vec![cb],
+            engine,
+        );
         match rx.recv_timeout(Duration::from_millis(10)) {
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             _ => panic!("unexpected result"),

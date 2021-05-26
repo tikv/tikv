@@ -4,10 +4,12 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::vec::IntoIter;
 
-use engine_traits::CfName;
+use engine_traits::{CfName, CF_LOCK, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
-use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request};
+use kvproto::raft_cmdpb::{
+    AdminRequest, AdminResponse, CmdType, RaftCmdRequest, RaftCmdResponse, Request,
+};
 use raft::{eraftpb, StateRole};
 
 pub mod config;
@@ -220,7 +222,7 @@ impl ObserveHandle {
 }
 
 // `ObserveLevel` describe what data the observer want to observe
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ObserveLevel {
     // Don't observe any data
     None,
@@ -301,11 +303,42 @@ impl CmdBatch {
         }
         cmd_bytes
     }
+
+    pub fn filter(mut self) -> Option<CmdBatch> {
+        match self.level {
+            ObserveLevel::None => None,
+            ObserveLevel::All => Some(self),
+            ObserveLevel::LockRelated => {
+                for cmd in &mut self.cmds {
+                    cmd.request.mut_requests().iter_mut().for_each(|req| {
+                        match req.get_cmd_type() {
+                            CmdType::Put => {
+                                let cf = req.get_put().cf.as_str();
+                                if cf != CF_LOCK && cf != CF_WRITE {
+                                    req.take_put();
+                                }
+                            }
+                            CmdType::Delete => {
+                                let cf = req.get_delete().cf.as_str();
+                                if cf != CF_LOCK && cf != CF_WRITE {
+                                    req.take_delete();
+                                }
+                            }
+                            _ => {}
+                        }
+                    });
+                }
+                Some(self)
+            }
+        }
+    }
 }
 
 pub trait CmdObserver<E>: Coprocessor {
     /// Hook to call after flushing writes to db.
-    fn on_flush_apply(&self, cmd_batches: Vec<CmdBatch>, engine: E);
+    fn on_flush_applied_cmd_batch(&self, cmd_batches: Vec<CmdBatch>, engine: E);
+    /// `ref` version of `on_flush_applied_cmd_batch`
+    fn on_flush_applied_cmd_batch_ref(&self, cmd_batches: &[CmdBatch], engine: E);
 }
 
 pub trait ReadIndexObserver: Coprocessor {

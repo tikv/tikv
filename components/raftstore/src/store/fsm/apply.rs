@@ -366,7 +366,7 @@ where
     router: ApplyRouter<EK>,
     notifier: Box<dyn Notifier<EK>>,
     engine: EK,
-    cbs: ApplyCallbackBatch<EK::Snapshot>,
+    applied_batch: ApplyCallbackBatch<EK::Snapshot>,
     apply_res: Vec<ApplyRes<EK::Snapshot>>,
     exec_ctx: Option<ExecContext>,
 
@@ -437,7 +437,7 @@ where
             router,
             notifier,
             kv_wb,
-            cbs: ApplyCallbackBatch::new(),
+            applied_batch: ApplyCallbackBatch::new(),
             apply_res: vec![],
             kv_wb_last_bytes: 0,
             kv_wb_last_keys: 0,
@@ -463,7 +463,7 @@ where
     /// After all delegates are handled, `write_to_db` method should be called.
     pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate<EK>) {
         self.last_applied_index = delegate.apply_state.get_applied_index();
-        self.cbs.push_batch(
+        self.applied_batch.push_batch(
             &delegate.observe_info.cdc_id,
             &delegate.observe_info.rts_id,
             delegate.region.clone(),
@@ -526,15 +526,10 @@ where
             }
         }
         // Take the applied commands and their callback
-        let (mut cb_batch, cmd_batch) = self.cbs.take();
-        // Observe applied commands
-        for batch in &cmd_batch {
-            for cmd in &batch.cmds {
-                self.host.post_apply(&batch.region, &cmd);
-            }
-        }
+        let (mut cb_batch, cmd_batch) = self.applied_batch.take();
         // Call it before invoking callback for preventing Commit is executed before Prewrite is observed.
-        self.host.on_flush_apply(cmd_batch, self.engine.clone());
+        self.host
+            .on_flush_applied_cmd_batch(cmd_batch, self.engine.clone());
         // Invoke callbacks
         for (cb, resp) in cb_batch.drain(..) {
             cb.invoke_with_response(resp)
@@ -1023,7 +1018,7 @@ where
         while let Some(mut cmd) = self.pending_cmds.pop_normal(std::u64::MAX, term - 1) {
             if let Some(cb) = cmd.cb.take() {
                 apply_ctx
-                    .cbs
+                    .applied_batch
                     .push_cb(cb, cmd_resp::err_resp(Error::StaleCommand, term));
             }
         }
@@ -1142,7 +1137,7 @@ where
         cmd_resp::bind_term(&mut resp, self.term);
         let cmd_cb = self.find_pending(index, term, is_conf_change_cmd(&cmd));
         let cmd = Cmd::new(index, cmd, resp);
-        apply_ctx.cbs.push(
+        apply_ctx.applied_batch.push(
             cmd_cb,
             cmd,
             self.observe_info.cdc_id.id,
@@ -4365,7 +4360,7 @@ mod tests {
     where
         E: KvEngine,
     {
-        fn on_flush_apply(&self, cmd_batches: Vec<CmdBatch>, _: E) {
+        fn on_flush_applied_cmd_batch(&self, cmd_batches: Vec<CmdBatch>, _: E) {
             for b in cmd_batches {
                 if b.is_empty() {
                     continue;
@@ -4375,6 +4370,7 @@ mod tests {
                 }
             }
         }
+        fn on_flush_applied_cmd_batch_ref(&self, _: &[CmdBatch], _: E) {}
     }
 
     #[test]
