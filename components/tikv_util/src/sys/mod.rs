@@ -18,7 +18,7 @@ lazy_static! {
 
 #[cfg(target_os = "linux")]
 pub mod sys_quota {
-    use super::super::config::KB;
+    use super::super::config::KIB;
     use super::{cgroup::CGroupSys, SystemExt, SYS_INFO};
 
     pub struct SysQuota {
@@ -52,7 +52,7 @@ pub mod sys_quota {
             let total_mem = {
                 let mut system = SYS_INFO.lock().unwrap();
                 system.refresh_memory();
-                system.get_total_memory() * KB
+                system.get_total_memory() * KIB
             };
             let cgroup_memory_limits = self.cgroup.memory_limit_in_bytes();
             if cgroup_memory_limits <= 0 {
@@ -74,7 +74,7 @@ pub mod sys_quota {
 
 #[cfg(not(target_os = "linux"))]
 pub mod sys_quota {
-    use super::super::config::KB;
+    use super::super::config::KIB;
     use super::{SystemExt, SYS_INFO};
 
     pub struct SysQuota {}
@@ -92,7 +92,7 @@ pub mod sys_quota {
         pub fn memory_limit_in_bytes(&self) -> u64 {
             let mut system = SYS_INFO.lock().unwrap();
             system.refresh_memory();
-            system.get_total_memory() * KB
+            system.get_total_memory() * KIB
         }
 
         pub fn log_quota(&self) {
