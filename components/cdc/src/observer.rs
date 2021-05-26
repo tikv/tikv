@@ -143,6 +143,8 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
             }
         }
     }
+
+    fn on_applied_current_term(&self, _: StateRole, _: &Region) {}
 }
 
 impl RoleObserver for CdcObserver {

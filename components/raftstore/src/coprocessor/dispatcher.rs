@@ -541,6 +541,16 @@ impl<E: KvEngine> CoprocessorHost<E> {
             .on_flush_apply(engine)
     }
 
+    pub fn on_applied_current_term(&self, role: StateRole, region: &Region) {
+        if self.registry.cmd_observers.is_empty() {
+            return;
+        }
+        for observer in &self.registry.cmd_observers {
+            let observer = observer.observer.inner();
+            observer.on_applied_current_term(role, region);
+        }
+    }
+
     pub fn on_step_read_index(&self, msg: &mut eraftpb::Message) {
         for step_ob in &self.registry.read_index_observers {
             step_ob.observer.inner().on_step(msg);

@@ -345,7 +345,7 @@ where
                 cancelled.store(true, Ordering::Release);
             }
         } else {
-            warn!("deregister unregister region"; "region_id" => region_id);
+            debug!("deregister unregister region"; "region_id" => region_id);
         }
     }
 

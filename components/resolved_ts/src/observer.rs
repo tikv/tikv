@@ -110,10 +110,28 @@ impl<E: KvEngine> CmdObserver<E> for Observer<E> {
             }
         }
     }
+
+    fn on_applied_current_term(&self, role: StateRole, region: &Region) {
+        if role != StateRole::Leader {
+            return;
+        }
+        if let Err(e) = self.scheduler.schedule(Task::RegionRoleChanged {
+            role,
+            region: region.clone(),
+        }) {
+            info!("failed to schedule region role changed event"; "err" => ?e);
+        }
+    }
 }
 
 impl<E: KvEngine> RoleObserver for Observer<E> {
     fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role: StateRole) {
+        // Delay the leader's `RegionRoleChanged` event util the leader has applied on its term
+        // so that registering observe region won't be failed because the leader not apply on its
+        // term
+        if role == StateRole::Leader {
+            return;
+        }
         if let Err(e) = self.scheduler.schedule(Task::RegionRoleChanged {
             role,
             region: ctx.region().clone(),
