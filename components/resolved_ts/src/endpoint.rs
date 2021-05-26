@@ -311,7 +311,6 @@ where
                     })
                     .unwrap_or_else(|e| debug!("schedule resolved ts task failed"; "err" => ?e));
             }),
-            before_start: None,
             on_error: Some(Box::new(move |observe_id, _region, e| {
                 let error = e.extract_error_header();
                 scheduler_error

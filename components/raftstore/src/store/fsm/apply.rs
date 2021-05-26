@@ -620,6 +620,12 @@ pub fn notify_stale_req(term: u64, cb: Callback<impl Snapshot>) {
     cb.invoke_with_response(resp);
 }
 
+pub fn notify_stale_req_with_msg(term: u64, msg: String, cb: Callback<impl Snapshot>) {
+    let mut resp = cmd_resp::err_resp(Error::StaleCommand, term);
+    resp.mut_header().mut_error().set_message(msg);
+    cb.invoke_with_response(resp);
+}
+
 /// Checks if a write is needed to be issued before handling the command.
 fn should_write_to_engine(cmd: &RaftCmdRequest) -> bool {
     if cmd.has_admin_request() {
@@ -3339,14 +3345,28 @@ where
 
         if let Some(ObserveHandle { id, .. }) = cdc_id {
             if self.delegate.observe_info.cdc_id.id > id {
-                notify_stale_req(self.delegate.term, cb);
+                notify_stale_req_with_msg(
+                    self.delegate.term,
+                    format!(
+                        "satle observe id {:?}, current id: {:?}",
+                        id, self.delegate.observe_info.cdc_id.id
+                    ),
+                    cb,
+                );
                 return;
             }
         }
 
         if let Some(ObserveHandle { id, .. }) = rts_id {
             if self.delegate.observe_info.rts_id.id > id {
-                notify_stale_req(self.delegate.term, cb);
+                notify_stale_req_with_msg(
+                    self.delegate.term,
+                    format!(
+                        "satle observe id {:?}, current id: {:?}",
+                        id, self.delegate.observe_info.rts_id.id
+                    ),
+                    cb,
+                );
                 return;
             }
         }
@@ -4364,6 +4384,8 @@ mod tests {
                 }
             }
         }
+
+        fn on_applied_current_term(&self, _: raft::StateRole, _: &Region) {}
     }
 
     #[test]

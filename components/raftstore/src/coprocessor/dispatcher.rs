@@ -690,6 +690,7 @@ mod tests {
         fn on_flush_apply(&self, _: PanicEngine) {
             self.called.fetch_add(13, Ordering::SeqCst);
         }
+        fn on_applied_current_term(&self, _: StateRole, _: &Region) {}
     }
 
     macro_rules! assert_all {
