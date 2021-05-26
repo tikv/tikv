@@ -6,7 +6,7 @@ use engine_traits::DecodeProperties;
 use engine_traits::Range;
 use engine_traits::{Error, Result};
 use engine_traits::{
-    TableProperties, TablePropertiesCollectionIter, TablePropertiesKey, UserCollectedProperties,
+    TableProperties, TablePropertiesKey, UserCollectedProperties,
 };
 use rocksdb::table_properties_rc as rc;
 use std::ops::Deref;
@@ -59,15 +59,6 @@ impl RocksTablePropertiesCollection {
 }
 
 pub struct RocksTablePropertiesCollectionIter(rc::TablePropertiesCollectionIter);
-
-impl
-    TablePropertiesCollectionIter<
-        RocksTablePropertiesKey,
-        RocksTableProperties,
-        RocksUserCollectedProperties,
-    > for RocksTablePropertiesCollectionIter
-{
-}
 
 impl Iterator for RocksTablePropertiesCollectionIter {
     type Item = (RocksTablePropertiesKey, RocksTableProperties);
