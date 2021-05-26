@@ -2741,7 +2741,7 @@ impl TiKvConfig {
 
     fn default_memory_usage_limit() -> ReadableSize {
         // TODO: is it necessary to reserve some space?
-        let total = SysQuota::new().memory_limit_in_bytes();
+        let total = SysQuota::memory_limit_in_bytes();
         ReadableSize(total)
     }
 }
