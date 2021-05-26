@@ -18,6 +18,7 @@ use engine_rocks::{
 use engine_traits::{
     KvEngine, MiscExt, Mutable, MvccProperties, WriteBatch, WriteBatchExt, WriteOptions,
 };
+use file_system::{IOType, WithIOType};
 use pd_client::{Feature, FeatureGate};
 use prometheus::{local::*, *};
 use raftstore::coprocessor::RegionInfoProvider;
@@ -417,6 +418,7 @@ impl WriteCompactionFilter {
             wb: &RocksWriteBatch,
             wopts: &WriteOptions,
         ) -> Result<(), engine_traits::Error> {
+            let _io_type_guard = WithIOType::new(IOType::Gc);
             fail_point!("write_compaction_filter_flush_write_batch", true, |_| {
                 Err(engine_traits::Error::Engine(
                     "Ingested fail point".to_string(),
