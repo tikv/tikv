@@ -413,6 +413,8 @@ where
     /// 1. when merging, its data in storeMeta will be removed early by the target peer.
     /// 2. all read requests must be rejected.
     pub pending_remove: bool,
+    /// If a snapshot is being applied asynchronously, messages should not be sent.
+    pending_messages: Vec<eraftpb::Message>,
 
     /// Record the instants of peers being added into the configuration.
     /// Remove them after they are not pending any more.
@@ -589,6 +591,7 @@ where
             },
             raft_log_size_hint: 0,
             leader_lease: Lease::new(cfg.raft_store_max_leader_lease()),
+            pending_messages: vec![],
             peer_stat: PeerStat::default(),
             catch_up_logs: None,
             bcast_wake_up_time: None,
@@ -1631,6 +1634,10 @@ where
                 }
                 self.post_pending_read_index_on_replica(ctx);
                 self.read_progress.update_applied(self.last_applying_idx);
+                if !self.pending_messages.is_empty() {
+                    let msgs = mem::take(&mut self.pending_messages);
+                    self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.send_message);
+                }
             }
             CheckApplyingSnapStatus::Idle => {}
         }
@@ -1733,8 +1740,8 @@ where
             if !self.is_leader() {
                 fail_point!("raft_before_follower_send");
             }
-            let vec_msg = ready.take_messages();
-            self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.send_message);
+            let msg = ready.take_messages();
+            self.send(&mut ctx.trans, msg, &mut ctx.raft_metrics.send_message);
         }
 
         self.apply_reads(ctx, &ready);
@@ -1772,6 +1779,7 @@ where
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         invoke_ctx: InvokeContext,
+        ready: &mut Ready,
     ) -> Option<ApplySnapResult> {
         if invoke_ctx.has_snapshot() {
             // When apply snapshot, there is no log applied and not compacted yet.
@@ -1798,6 +1806,15 @@ where
                 );
                 self.peer = peer;
             };
+        }
+
+        if !self.is_leader() {
+            let msgs = ready.take_persisted_messages();
+            if self.is_applying_snapshot() {
+                self.pending_messages = msgs;
+            } else {
+                self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.send_message);
+            }
         }
 
         if apply_snap_result.is_some() {
