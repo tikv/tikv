@@ -38,9 +38,9 @@ use yatp::task::future::TaskCell;
 use yatp::ThreadPool;
 
 // When merge raft messages into a batch message, leave a buffer.
-const GRPC_SEND_MSG_BUF: usize = 256 * 1024;
+const GRPC_SEND_MSG_BUF: usize = 64 * 1024;
 
-const RAFT_MSG_MAX_BATCH_SIZE: usize = 256;
+const RAFT_MSG_MAX_BATCH_SIZE: usize = 128;
 
 static CONN_ID: AtomicI32 = AtomicI32::new(0);
 
