@@ -46,7 +46,7 @@
 # abort-on-panic = false
 
 ## Memory usage limit for the TiKV instance. Set it to 0 means the total of system memory
-## is avaiable to TiKV.
+## is available to TiKV.
 # memory-usage-limit = "0B"
 ## TiKV can oppress itself if memory usage ratio reaches `memory-usage-high-water`.
 # memory-usage-high-water = 0.8

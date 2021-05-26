@@ -84,7 +84,7 @@ fn memory_limit_for_cf(is_raft_db: bool, cf: &str, total_mem: u64) -> ReadableSi
     } else if size > max {
         size = max;
     }
-    ReadableSize::mb(size as u64 / MB)
+    ReadableSize::mb(size as u64 / MIB)
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
@@ -2503,11 +2503,11 @@ impl TiKvConfig {
                     .adjust_memory_usage_limit(self.memory_usage_limit);
             }
             cmp::Ordering::Greater => {
-                let msg = format!(
-                    "memory_usage_limit {:?} is greater than total {:?}",
+                warn!(
+                    "memory_usage_limit {:?} is greater than total {:?}, fallback to total",
                     self.memory_usage_limit, default_memory_usage_limit
                 );
-                return Err(msg.into());
+                self.memory_usage_limit = default_memory_usage_limit;
             }
             _ => {}
         }
@@ -2741,9 +2741,8 @@ impl TiKvConfig {
 
     fn default_memory_usage_limit() -> ReadableSize {
         // TODO: is it necessary to reserve some space?
-        let reserve = 0;
         let total = SysQuota::new().memory_limit_in_bytes();
-        ReadableSize(total.checked_sub(reserve).unwrap_or_default())
+        ReadableSize(total)
     }
 }
 
@@ -3106,7 +3105,7 @@ mod tests {
     use slog::Level;
     use std::sync::Arc;
     use std::time::Duration;
-    use tikv_util::config::MB;
+    use tikv_util::config::MIB;
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
 
     #[test]
@@ -3735,9 +3734,13 @@ mod tests {
             default_region_split_check_diff + 1
         );
 
-        // Test validating memory_usage_limit.
+        // Test validating memory_usage_limit when it's greater than max.
         cfg.memory_usage_limit.0 *= 2;
-        assert!(cfg.validate().is_err());
+        assert!(cfg.validate().is_ok());
+        assert_eq!(
+            cfg.memory_usage_limit,
+            TiKvConfig::default_memory_usage_limit()
+        );
 
         let get_cf_cache_size = |cfg: &TiKvConfig| {
             (
@@ -3749,14 +3752,14 @@ mod tests {
             )
         };
         let (c1, c2, c3, c4, c5) = get_cf_cache_size(&cfg);
-        cfg.memory_usage_limit.0 /= 4;
+        cfg.memory_usage_limit.0 /= 2;
         assert!(cfg.validate().is_ok());
         let (c6, c7, c8, c9, ca) = get_cf_cache_size(&cfg);
-        assert_le!(c1.checked_sub(c6 * 2).unwrap_or_default(), MB);
-        assert_le!(c2.checked_sub(c7 * 2).unwrap_or_default(), MB);
-        assert_le!(c3.checked_sub(c8 * 2).unwrap_or_default(), MB);
-        assert_le!(c4.checked_sub(c9 * 2).unwrap_or_default(), MB);
-        assert_le!(c5.checked_sub(ca * 2).unwrap_or_default(), MB);
+        assert_le!(c1.checked_sub(c6 * 2).unwrap_or_default(), MIB);
+        assert_le!(c2.checked_sub(c7 * 2).unwrap_or_default(), MIB);
+        assert_le!(c3.checked_sub(c8 * 2).unwrap_or_default(), MIB);
+        assert_le!(c4.checked_sub(c9 * 2).unwrap_or_default(), MIB);
+        assert_le!(c5.checked_sub(ca * 2).unwrap_or_default(), MIB);
     }
 
     #[test]
