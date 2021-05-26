@@ -25,6 +25,7 @@ use raftstore::router::RaftStoreRouter;
 use raftstore::store::SnapManager;
 use security::SecurityManager;
 use tikv_util::config::VersionTrack;
+use tikv_util::sys::record_global_memory_usage;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::{LazyWorker, Scheduler, Worker};
 use tikv_util::Either;
@@ -41,6 +42,7 @@ use crate::read_pool::ReadPool;
 
 const LOAD_STATISTICS_SLOTS: usize = 4;
 const LOAD_STATISTICS_INTERVAL: Duration = Duration::from_millis(100);
+const MEMORY_USAGE_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 pub const GRPC_THREAD_PREFIX: &str = "grpc-server";
 pub const READPOOL_NORMAL_THREAD_PREFIX: &str = "store-read-norm";
 pub const STATS_THREAD_PREFIX: &str = "transport-stats";
@@ -247,14 +249,23 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             let tl = Arc::clone(&self.grpc_thread_load);
             ThreadLoadStatistics::new(LOAD_STATISTICS_SLOTS, GRPC_THREAD_PREFIX, tl)
         };
-        let mut delay = self
-            .timer
-            .interval(Instant::now(), LOAD_STATISTICS_INTERVAL)
-            .compat();
         if let Some(ref p) = self.stats_pool {
+            let mut delay = self
+                .timer
+                .interval(Instant::now(), LOAD_STATISTICS_INTERVAL)
+                .compat();
             p.spawn(async move {
                 while let Some(Ok(i)) = delay.next().await {
                     grpc_load_stats.record(i);
+                }
+            });
+            let mut delay = self
+                .timer
+                .interval(Instant::now(), MEMORY_USAGE_REFRESH_INTERVAL)
+                .compat();
+            p.spawn(async move {
+                while let Some(Ok(_)) = delay.next().await {
+                    record_global_memory_usage();
                 }
             });
         };
