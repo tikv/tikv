@@ -1730,13 +1730,12 @@ where
         }
 
         if !ready.messages().is_empty() {
-            if !self.is_leader() {
+            let vec_msg = if !self.is_leader() {
                 fail_point!("raft_before_follower_send");
-            }
-            // TODO: fix it are async raftstore is introduced.
-            let vec_msg = ready.take_messages();
-            self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.send_message);
-            let vec_msg = ready.take_persisted_messages();
+                ready.take_persisted_messages()
+            } else {
+                ready.take_messages()
+            };
             self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.send_message);
         }
 
