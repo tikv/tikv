@@ -311,6 +311,9 @@ impl CmdBatch {
             ObserveLevel::LockRelated => {
                 for cmd in &mut self.cmds {
                     cmd.request.mut_requests().iter_mut().for_each(|req| {
+                        // TODO: this may not help reduce the menory of `CmdBatch` if the written value is
+                        // small (less than 255 bytes), the value will store in the `short_value` field of
+                        // `lock_cf` and `write_cf`
                         match req.get_cmd_type() {
                             CmdType::Put => {
                                 let cf = req.get_put().cf.as_str();
