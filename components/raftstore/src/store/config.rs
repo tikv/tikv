@@ -267,7 +267,7 @@ impl Default for Config {
             apply_yield_duration: ReadableDuration::millis(500),
             cmd_batch: true,
             trigger_write_size: ReadableSize::mb(1),
-            trigger_ready_size: ReadableSize::kb(256),
+            trigger_ready_size: ReadableSize::mb(1),
 
             store_waterfall_metrics: false,
 

@@ -38,9 +38,9 @@ use yatp::task::future::TaskCell;
 use yatp::ThreadPool;
 
 // When merge raft messages into a batch message, leave a buffer.
-const GRPC_SEND_MSG_BUF: usize = 64 * 1024;
+const GRPC_SEND_MSG_BUF: usize = 256 * 1024;
 
-const RAFT_MSG_MAX_BATCH_SIZE: usize = 128;
+const RAFT_MSG_MAX_BATCH_SIZE: usize = 256;
 
 static CONN_ID: AtomicI32 = AtomicI32::new(0);
 
@@ -188,8 +188,8 @@ impl Buffer for BatchMessageBuffer {
         // To avoid building too large batch, we limit each batch's size. Since `msg_size`
         // is estimated, `GRPC_SEND_MSG_BUF` is reserved for errors.
         if self.size > 0
-            && (self.size + msg_size + GRPC_SEND_MSG_BUF >= self.cfg.max_grpc_send_msg_len as usize
-                || self.batch.get_msgs().len() >= RAFT_MSG_MAX_BATCH_SIZE)
+            && (self.size + msg_size + self.cfg.raft_client_grpc_send_msg_buffer >= self.cfg.max_grpc_send_msg_len as usize
+                || self.batch.get_msgs().len() >= self.cfg.raft_msg_max_batch_size)
         {
             self.overflowing = Some(msg);
             return;
