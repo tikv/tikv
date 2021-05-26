@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use crate::server::Error;
@@ -11,22 +12,24 @@ use grpcio::{
     Result as GrpcResult, RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink,
     WriteFlags,
 };
-use kvproto::diagnosticspb::{
-    Diagnostics, SearchLogRequest, SearchLogResponse, ServerInfoRequest, ServerInfoResponse,
-    ServerInfoType,
-};
-use tokio::runtime::Handle;
-
 #[cfg(feature = "prost-codec")]
 use kvproto::diagnosticspb::search_log_request::Target as SearchLogRequestTarget;
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::diagnosticspb::SearchLogRequestTarget;
-
+use kvproto::diagnosticspb::{
+    Diagnostics, SearchLogRequest, SearchLogResponse, ServerInfoRequest, ServerInfoResponse,
+    ServerInfoType,
+};
 use tikv_util::{sys::SystemExt, timer::GLOBAL_TIMER_HANDLE};
+use tokio::runtime::Handle;
 
 mod ioload;
 mod log;
 mod sys;
+
+lazy_static! {
+    pub static ref SYS_INFO: Mutex<sysinfo::System> = Mutex::new(sysinfo::System::new());
+}
 
 /// Service handles the RPC messages for the `Diagnostics` service.
 #[derive(Clone)]
@@ -106,7 +109,7 @@ impl Diagnostics for Service {
         let collect = async move {
             let (load, when) = match tp {
                 ServerInfoType::LoadInfo | ServerInfoType::All => {
-                    let mut system = sysinfo::System::new();
+                    let mut system = SYS_INFO.lock().unwrap();
                     system.refresh_networks_list();
                     system.refresh_all();
                     let load = (
