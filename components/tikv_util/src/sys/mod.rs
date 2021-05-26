@@ -44,7 +44,7 @@ impl SysQuota {
     #[cfg(not(target_os = "linux"))]
     pub fn cpu_cores_quota() -> f64 {
         let cpu_num = num_cpus::get() as f64;
-        super::limit_cpu_cores_quota_by_env_var(cpu_num)
+        limit_cpu_cores_quota_by_env_var(cpu_num)
     }
 
     #[cfg(target_os = "linux")]
