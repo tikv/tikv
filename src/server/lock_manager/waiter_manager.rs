@@ -371,6 +371,9 @@ impl WaitTable {
                     wait_for_entry.set_txn(waiter.start_ts.into_inner());
                     wait_for_entry.set_wait_for_txn(waiter.lock.ts.into_inner());
                     wait_for_entry.set_key_hash(waiter.lock.hash);
+                    wait_for_entry.set_key(waiter.diag_ctx.key.clone());
+                    wait_for_entry
+                        .set_resource_group_tag(waiter.diag_ctx.resource_group_tag.clone());
                     wait_for_entry
                 })
             })
