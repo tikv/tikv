@@ -211,7 +211,10 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let (resolver, state) =
             resolve::new_resolver(Arc::clone(&pd_client), &background_worker, router.clone());
 
-        let mut coprocessor_host = Some(CoprocessorHost::new(router.clone()));
+        let mut coprocessor_host = Some(CoprocessorHost::new(
+            router.clone(),
+            config.coprocessor.clone(),
+        ));
         let region_info_accessor = RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap());
 
         // Initialize concurrency manager
@@ -622,14 +625,19 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
 
         let import_path = self.store_path.join("import");
-        let importer =
-            Arc::new(SSTImporter::new(import_path, self.encryption_key_manager.clone()).unwrap());
+        let importer = Arc::new(
+            SSTImporter::new(
+                &self.config.import,
+                import_path,
+                self.encryption_key_manager.clone(),
+            )
+            .unwrap(),
+        );
 
         let split_check_runner = SplitCheckRunner::new(
             engines.engines.kv.clone(),
             self.router.clone(),
             self.coprocessor_host.clone().unwrap(),
-            self.config.coprocessor.clone(),
         );
         let split_check_scheduler = self
             .background_worker

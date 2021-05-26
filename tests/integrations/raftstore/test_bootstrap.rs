@@ -89,11 +89,11 @@ fn test_node_bootstrap_with_prepared_data() {
         .is_some());
 
     // Create coprocessor.
-    let coprocessor_host = CoprocessorHost::new(node.get_router());
+    let coprocessor_host = CoprocessorHost::new(node.get_router(), cfg.coprocessor.clone());
 
     let importer = {
         let dir = tmp_path.path().join("import-sst");
-        Arc::new(SSTImporter::new(dir, None).unwrap())
+        Arc::new(SSTImporter::new(&cfg.import, dir, None).unwrap())
     };
     let (split_check_scheduler, _) = dummy_scheduler();
 
