@@ -15,10 +15,10 @@ pub struct Lock {
 /// DiagnosticContext is for diagnosing problems about locks
 #[derive(Clone, Default)]
 pub struct DiagnosticContext {
-    /// the key we care about
+    /// The key we care about
     pub key: Vec<u8>,
-    /// this tag is used for keep related keys together
-    /// if the client is TiDB, this is usually the encoded SQL digest which affect the key
+    /// This tag is used for aggregate related kv requests (eg. generated from same statement)
+    /// Currently it is the encoded SQL digest if the client is TiDB
     pub resource_group_tag: Vec<u8>,
 }
 
