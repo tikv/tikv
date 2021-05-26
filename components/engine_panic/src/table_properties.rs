@@ -3,21 +3,9 @@
 use crate::engine::PanicEngine;
 use engine_traits::{
     DecodeProperties, Range, Result, TableProperties,
-    TablePropertiesKey, UserCollectedProperties,
+    UserCollectedProperties,
 };
 use std::ops::Deref;
-
-pub struct PanicTablePropertiesKey;
-
-impl TablePropertiesKey for PanicTablePropertiesKey {}
-
-impl Deref for PanicTablePropertiesKey {
-    type Target = str;
-
-    fn deref(&self) -> &str {
-        panic!()
-    }
-}
 
 pub struct PanicTableProperties;
 
