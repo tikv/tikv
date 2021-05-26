@@ -16,6 +16,7 @@ typedef enum {
   ForegroundWrite,
   Flush,
   Compaction,
+  LevelZeroCompaction,
   Replication,
   LoadBalance,
   Gc,
@@ -40,6 +41,7 @@ BPF_HISTOGRAM(foreground_read_read_latency, int, 25);
 BPF_HISTOGRAM(foreground_write_read_latency, int, 25);
 BPF_HISTOGRAM(flush_read_latency, int, 25);
 BPF_HISTOGRAM(compaction_read_latency, int, 25);
+BPF_HISTOGRAM(level_zero_compaction_read_latency, int, 25);
 BPF_HISTOGRAM(replication_read_latency, int, 25);
 BPF_HISTOGRAM(load_balance_read_latency, int, 25);
 BPF_HISTOGRAM(gc_read_latency, int, 25);
@@ -51,6 +53,7 @@ BPF_HISTOGRAM(foreground_read_write_latency, int, 25);
 BPF_HISTOGRAM(foreground_write_write_latency, int, 25);
 BPF_HISTOGRAM(flush_write_latency, int, 25);
 BPF_HISTOGRAM(compaction_write_latency, int, 25);
+BPF_HISTOGRAM(level_zero_compaction_write_latency, int, 25);
 BPF_HISTOGRAM(replication_write_latency, int, 25);
 BPF_HISTOGRAM(load_balance_write_latency, int, 25);
 BPF_HISTOGRAM(gc_write_latency, int, 25);
@@ -162,6 +165,13 @@ int trace_req_completion(struct pt_regs *ctx, struct request *req) {
       compaction_write_latency.increment(bpf_log2l(delta));
     } else {
       compaction_read_latency.increment(bpf_log2l(delta));
+    }
+    break;
+  case LevelZeroCompaction:
+    if (rwflag == 1) {
+      level_zero_replication_write_latency.increment(bpf_log2l(delta));
+    } else {
+      level_zero_compaction_read_latency.increment(bpf_log2l(delta));
     }
     break;
   case Replication:

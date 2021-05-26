@@ -15,6 +15,7 @@ pub trait ColumnFamilyOptions {
     type TitanDBOptions: TitanDBOptions;
 
     fn new() -> Self;
+    fn get_max_write_buffer_number(&self) -> u32;
     fn get_level_zero_slowdown_writes_trigger(&self) -> u32;
     fn get_level_zero_stop_writes_trigger(&self) -> u32;
     fn set_level_zero_file_num_compaction_trigger(&mut self, v: i32);
