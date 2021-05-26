@@ -70,8 +70,7 @@ const LAST_CONFIG_FILE: &str = "last_tikv.toml";
 const TMP_CONFIG_FILE: &str = "tmp_tikv.toml";
 const MAX_BLOCK_SIZE: usize = 32 * MIB as usize;
 
-fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
-    let total_mem = SysQuota::new().memory_limit_in_bytes();
+fn memory_limit_for_cf(is_raft_db: bool, cf: &str, total_mem: u64) -> ReadableSize {
     let (ratio, min, max) = match (is_raft_db, cf) {
         (true, CF_DEFAULT) => (0.02, RAFT_MIN_MEM, RAFT_MAX_MEM),
         (false, CF_DEFAULT) => (0.25, 0, usize::MAX),
@@ -85,7 +84,7 @@ fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
     } else if size > max {
         size = max;
     }
-    size / MIB as usize
+    ReadableSize::mb(size as u64 / MIB)
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
@@ -510,9 +509,11 @@ cf_config!(DefaultCfConfig);
 
 impl Default for DefaultCfConfig {
     fn default() -> DefaultCfConfig {
+        let total_mem = TiKvConfig::default_memory_usage_limit().0;
+
         DefaultCfConfig {
             block_size: ReadableSize::kb(64),
-            block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_DEFAULT) as u64),
+            block_cache_size: memory_limit_for_cf(false, CF_DEFAULT, total_mem),
             disable_block_cache: false,
             cache_index_and_filter_blocks: true,
             pin_l0_filter_and_index_blocks: true,
@@ -597,14 +598,17 @@ cf_config!(WriteCfConfig);
 
 impl Default for WriteCfConfig {
     fn default() -> WriteCfConfig {
+        let total_mem = TiKvConfig::default_memory_usage_limit().0;
+
         // Setting blob_run_mode=read_only effectively disable Titan.
         let titan = TitanCfConfig {
             blob_run_mode: BlobRunMode::ReadOnly,
             ..Default::default()
         };
+
         WriteCfConfig {
             block_size: ReadableSize::kb(64),
-            block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_WRITE) as u64),
+            block_cache_size: memory_limit_for_cf(false, CF_WRITE, total_mem),
             disable_block_cache: false,
             cache_index_and_filter_blocks: true,
             pin_l0_filter_and_index_blocks: true,
@@ -692,14 +696,17 @@ cf_config!(LockCfConfig);
 
 impl Default for LockCfConfig {
     fn default() -> LockCfConfig {
+        let total_mem = TiKvConfig::default_memory_usage_limit().0;
+
         // Setting blob_run_mode=read_only effectively disable Titan.
         let titan = TitanCfConfig {
             blob_run_mode: BlobRunMode::ReadOnly,
             ..Default::default()
         };
+
         LockCfConfig {
             block_size: ReadableSize::kb(16),
-            block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_LOCK) as u64),
+            block_cache_size: memory_limit_for_cf(false, CF_LOCK, total_mem),
             disable_block_cache: false,
             cache_index_and_filter_blocks: true,
             pin_l0_filter_and_index_blocks: true,
@@ -1093,6 +1100,13 @@ impl DbConfig {
         Ok(())
     }
 
+    fn adjust_memory_usage_limit(&mut self, limit: ReadableSize) {
+        assert!(limit.0 > 0);
+        self.defaultcf.block_cache_size = memory_limit_for_cf(false, CF_DEFAULT, limit.0);
+        self.writecf.block_cache_size = memory_limit_for_cf(false, CF_WRITE, limit.0);
+        self.lockcf.block_cache_size = memory_limit_for_cf(false, CF_LOCK, limit.0);
+    }
+
     fn write_into_metrics(&self) {
         write_into_metrics!(self.defaultcf, CF_DEFAULT, CONFIG_ROCKSDB_GAUGE);
         write_into_metrics!(self.lockcf, CF_LOCK, CONFIG_ROCKSDB_GAUGE);
@@ -1105,9 +1119,11 @@ cf_config!(RaftDefaultCfConfig);
 
 impl Default for RaftDefaultCfConfig {
     fn default() -> RaftDefaultCfConfig {
+        let total_mem = TiKvConfig::default_memory_usage_limit().0;
+
         RaftDefaultCfConfig {
             block_size: ReadableSize::kb(64),
-            block_cache_size: ReadableSize::mb(memory_mb_for_cf(true, CF_DEFAULT) as u64),
+            block_cache_size: memory_limit_for_cf(true, CF_DEFAULT, total_mem),
             disable_block_cache: false,
             cache_index_and_filter_blocks: true,
             pin_l0_filter_and_index_blocks: true,
@@ -1330,6 +1346,11 @@ impl RaftDbConfig {
             }
         }
         Ok(())
+    }
+
+    pub fn adjust_memory_usage_limit(&mut self, limit: ReadableSize) {
+        assert!(limit.0 > 0);
+        self.defaultcf.block_cache_size = memory_limit_for_cf(true, CF_DEFAULT, limit.0);
     }
 }
 
@@ -2254,6 +2275,12 @@ pub struct TiKvConfig {
     pub abort_on_panic: bool,
 
     #[config(skip)]
+    pub memory_usage_limit: ReadableSize,
+
+    #[config(skip)]
+    pub memory_usage_high_water: f64,
+
+    #[config(skip)]
     pub readpool: ReadPoolConfig,
 
     #[config(submodule)]
@@ -2323,6 +2350,8 @@ impl Default for TiKvConfig {
             panic_when_unexpected_key_or_data: false,
             enable_io_snoop: true,
             abort_on_panic: false,
+            memory_usage_limit: ReadableSize(0),
+            memory_usage_high_water: 0.8,
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
@@ -2460,6 +2489,29 @@ impl TiKvConfig {
         self.backup.validate()?;
         self.pessimistic_txn.validate()?;
         self.gc.validate()?;
+
+        let default_memory_usage_limit = Self::default_memory_usage_limit();
+        if self.memory_usage_limit.0 == 0 {
+            self.memory_usage_limit = default_memory_usage_limit;
+            return Ok(());
+        }
+        match self.memory_usage_limit.0.cmp(&default_memory_usage_limit.0) {
+            cmp::Ordering::Less => {
+                self.rocksdb
+                    .adjust_memory_usage_limit(self.memory_usage_limit);
+                self.raftdb
+                    .adjust_memory_usage_limit(self.memory_usage_limit);
+            }
+            cmp::Ordering::Greater => {
+                warn!(
+                    "memory_usage_limit {:?} is greater than total {:?}, fallback to total",
+                    self.memory_usage_limit, default_memory_usage_limit
+                );
+                self.memory_usage_limit = default_memory_usage_limit;
+            }
+            _ => {}
+        }
+
         Ok(())
     }
 
@@ -2685,6 +2737,12 @@ impl TiKvConfig {
         cfg.storage.data_dir = tmp.path().display().to_string();
         cfg.cfg_path = tmp.path().join(LAST_CONFIG_FILE).display().to_string();
         Ok((cfg, tmp))
+    }
+
+    fn default_memory_usage_limit() -> ReadableSize {
+        // TODO: is it necessary to reserve some space?
+        let total = SysQuota::new().memory_limit_in_bytes();
+        ReadableSize(total)
     }
 }
 
@@ -3047,6 +3105,7 @@ mod tests {
     use slog::Level;
     use std::sync::Arc;
     use std::time::Duration;
+    use tikv_util::config::MIB;
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
 
     #[test]
@@ -3674,6 +3733,33 @@ mod tests {
             cfg.raft_store.region_split_check_diff.0,
             default_region_split_check_diff + 1
         );
+
+        // Test validating memory_usage_limit when it's greater than max.
+        cfg.memory_usage_limit.0 *= 2;
+        assert!(cfg.validate().is_ok());
+        assert_eq!(
+            cfg.memory_usage_limit,
+            TiKvConfig::default_memory_usage_limit()
+        );
+
+        let get_cf_cache_size = |cfg: &TiKvConfig| {
+            (
+                cfg.rocksdb.defaultcf.block_cache_size.0,
+                cfg.rocksdb.writecf.block_cache_size.0,
+                cfg.rocksdb.lockcf.block_cache_size.0,
+                cfg.rocksdb.raftcf.block_cache_size.0,
+                cfg.raftdb.defaultcf.block_cache_size.0,
+            )
+        };
+        let (c1, c2, c3, c4, c5) = get_cf_cache_size(&cfg);
+        cfg.memory_usage_limit.0 /= 2;
+        assert!(cfg.validate().is_ok());
+        let (c6, c7, c8, c9, ca) = get_cf_cache_size(&cfg);
+        assert_le!(c1.checked_sub(c6 * 2).unwrap_or_default(), MIB);
+        assert_le!(c2.checked_sub(c7 * 2).unwrap_or_default(), MIB);
+        assert_le!(c3.checked_sub(c8 * 2).unwrap_or_default(), MIB);
+        assert_le!(c4.checked_sub(c9 * 2).unwrap_or_default(), MIB);
+        assert_le!(c5.checked_sub(ca * 2).unwrap_or_default(), MIB);
     }
 
     #[test]
