@@ -6,7 +6,7 @@ pub mod cpu_time;
 mod cgroup;
 
 // re-export some traits for ease of use
-use crate::config::{ReadableSize, KB};
+use crate::config::{ReadableSize, KIB};
 use lazy_static::lazy_static;
 use std::sync::atomic::{AtomicU64, Ordering};
 use sysinfo::RefreshKind;
@@ -73,7 +73,7 @@ impl SysQuota {
 
     fn sysinfo_memory_limit_in_bytes() -> u64 {
         let system = sysinfo::System::new_with_specifics(RefreshKind::new().with_memory());
-        system.get_total_memory() * KB
+        system.get_total_memory() * KIB
     }
 }
 
@@ -84,7 +84,7 @@ pub fn get_global_memory_usage() -> u64 {
 pub fn record_global_memory_usage() {
     let mut system = sysinfo::System::new();
     system.refresh_memory();
-    let usage = system.get_used_memory() * KB;
+    let usage = system.get_used_memory() * KIB;
     GLOBAL_MEMORY_USAGE.store(usage, Ordering::Release);
 }
 
