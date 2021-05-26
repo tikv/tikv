@@ -46,7 +46,7 @@ use security::SecurityConfig;
 use tikv_util::config::{
     self, LogFormat, OptionReadableSize, ReadableDuration, ReadableSize, TomlWriter, GIB, MIB,
 };
-use tikv_util::sys::sys_quota::SysQuota;
+use tikv_util::sys::SysQuota;
 use tikv_util::time::duration_to_sec;
 use tikv_util::yatp_pool;
 
@@ -213,7 +213,7 @@ fn get_background_job_limits_impl(
 }
 
 fn get_background_job_limits(defaults: &BackgroundJobLimits) -> BackgroundJobLimits {
-    let cpu_num = cmp::max(SysQuota::new().cpu_cores_quota() as u32, 1);
+    let cpu_num = cmp::max(SysQuota::cpu_cores_quota() as u32, 1);
     get_background_job_limits_impl(cpu_num, defaults)
 }
 
@@ -1697,7 +1697,7 @@ const UNIFIED_READPOOL_MIN_CONCURRENCY: usize = 4;
 // FIXME: Use macros to generate it if yatp is used elsewhere besides readpool.
 impl Default for UnifiedReadPoolConfig {
     fn default() -> UnifiedReadPoolConfig {
-        let cpu_num = SysQuota::new().cpu_cores_quota();
+        let cpu_num = SysQuota::cpu_cores_quota();
         let mut concurrency = (cpu_num * 0.8) as usize;
         concurrency = cmp::max(UNIFIED_READPOOL_MIN_CONCURRENCY, concurrency);
         Self {
@@ -1953,7 +1953,7 @@ readpool_config!(StorageReadPoolConfig, storage_read_pool_test, "storage");
 
 impl Default for StorageReadPoolConfig {
     fn default() -> Self {
-        let cpu_num = SysQuota::new().cpu_cores_quota();
+        let cpu_num = SysQuota::cpu_cores_quota();
         let mut concurrency = (cpu_num * 0.5) as usize;
         concurrency = cmp::max(DEFAULT_STORAGE_READPOOL_MIN_CONCURRENCY, concurrency);
         concurrency = cmp::min(DEFAULT_STORAGE_READPOOL_MAX_CONCURRENCY, concurrency);
@@ -1980,7 +1980,7 @@ readpool_config!(
 
 impl Default for CoprReadPoolConfig {
     fn default() -> Self {
-        let cpu_num = SysQuota::new().cpu_cores_quota();
+        let cpu_num = SysQuota::cpu_cores_quota();
         let mut concurrency = (cpu_num * 0.8) as usize;
         concurrency = cmp::max(DEFAULT_COPROCESSOR_READPOOL_MIN_CONCURRENCY, concurrency);
         Self {
@@ -2197,7 +2197,7 @@ impl BackupConfig {
 impl Default for BackupConfig {
     fn default() -> Self {
         let default_coprocessor = CopConfig::default();
-        let cpu_num = SysQuota::new().cpu_cores_quota();
+        let cpu_num = SysQuota::cpu_cores_quota();
         Self {
             // use at most 75% of vCPU by default
             num_threads: (cpu_num * 0.75).clamp(1.0, 32.0) as usize,
@@ -2741,7 +2741,7 @@ impl TiKvConfig {
 
     fn default_memory_usage_limit() -> ReadableSize {
         // TODO: is it necessary to reserve some space?
-        let total = SysQuota::new().memory_limit_in_bytes();
+        let total = SysQuota::memory_limit_in_bytes();
         ReadableSize(total)
     }
 }
