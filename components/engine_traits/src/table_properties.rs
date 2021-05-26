@@ -1,9 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::properties::DecodeProperties;
-use std::ops::Deref;
-
-pub trait TablePropertiesKey: Deref<Target = str> {}
 
 pub trait TableProperties<UCP>
 where
