@@ -128,8 +128,14 @@ impl<E: KvEngine> RegionChangeObserver for Observer<E> {
         &self,
         ctx: &mut ObserverContext<'_>,
         event: RegionChangeEvent,
-        _: StateRole,
+        role: StateRole,
     ) {
+        // If the peer is not leader, it must has not registered the observe region or it is deregistering
+        // the observe region, so don't need to send `RegionUpdated`/`RegionDestroyed` to update the observe
+        // region
+        if role != StateRole::Leader {
+            return;
+        }
         match event {
             RegionChangeEvent::Create => {}
             RegionChangeEvent::Update => {
