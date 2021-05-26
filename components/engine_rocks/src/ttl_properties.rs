@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use crate::{RocksEngine, UserProperties};
 use engine_traits::util::get_expire_ts;
 use engine_traits::{
-    DecodeProperties, Range, Result, TableProperties,
+    DecodeProperties, Range, Result,
     TtlProperties, TtlPropertiesExt,
 };
 use rocksdb::{DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory};

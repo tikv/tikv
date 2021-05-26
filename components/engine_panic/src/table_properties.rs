@@ -2,22 +2,10 @@
 
 use crate::engine::PanicEngine;
 use engine_traits::{
-    DecodeProperties, Range, Result, TableProperties,
+    DecodeProperties, Range, Result,
     UserCollectedProperties,
 };
 use std::ops::Deref;
-
-pub struct PanicTableProperties;
-
-impl TableProperties<PanicUserCollectedProperties> for PanicTableProperties {
-    fn num_entries(&self) -> u64 {
-        panic!()
-    }
-
-    fn user_collected_properties(&self) -> PanicUserCollectedProperties {
-        panic!()
-    }
-}
 
 pub struct PanicUserCollectedProperties;
 
