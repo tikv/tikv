@@ -284,8 +284,6 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
         self.health_service
             .set_serving_status("", ServingStatus::Serving);
 
-        let _ = req_cpu::build(req_cpu::ReqCpuConfig::default());
-
         info!("TiKV is ready to serve");
         Ok(())
     }

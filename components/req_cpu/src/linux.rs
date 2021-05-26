@@ -1,13 +1,14 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::{ReqCpuConfig, RequestCpuRecords, RequestCpuReporter, RequestTags};
+use crate::collector::Collector;
+use crate::{Builder, ReqCpuConfig, RequestCpuRecords, RequestTags};
 
 use std::cell::Cell;
 use std::fs::read_dir;
 use std::marker::PhantomData;
 use std::sync::atomic::AtomicPtr;
 use std::sync::atomic::Ordering::{AcqRel, Acquire};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use collections::{HashMap, HashSet};
@@ -23,7 +24,6 @@ thread_local! {
         let shared_ptr = SharedReqTagsPtr::default();
         CHANNEL.0.send(RegisterMsg {
             thread_id,
-            thread_name: std::thread::current().name().unwrap_or("<unknown>").to_owned(),
             shared_ptr: shared_ptr.clone(),
         }).ok();
 
@@ -89,7 +89,6 @@ impl Drop for Guard {
 
 struct RegisterMsg {
     thread_id: pid_t,
-    thread_name: String,
     shared_ptr: SharedReqTagsPtr,
 }
 
@@ -99,7 +98,7 @@ lazy_static! {
     static ref CHANNEL: (Sender<RegisterMsg>, Receiver<RegisterMsg>) = unbounded();
 }
 
-struct ReqCpuCollector {
+struct ReqCpuRecorder {
     config: ReqCpuConfig,
 
     thread_stats: HashMap<pid_t, ThreadStat>,
@@ -108,35 +107,34 @@ struct ReqCpuCollector {
     last_collect_instant: Instant,
     last_gc_instant: Instant,
 
-    reporter: Arc<Mutex<RequestCpuReporter>>,
+    collectors: Vec<Box<dyn Collector>>,
 }
 
 struct ThreadStat {
     prev_stat: pid::Stat,
-    thread_name: String,
     shared_ptr: SharedReqTagsPtr,
 }
 
-impl ReqCpuCollector {
-    pub fn new(reporter: Arc<Mutex<RequestCpuReporter>>, config: ReqCpuConfig) -> Self {
+impl ReqCpuRecorder {
+    pub fn new(config: ReqCpuConfig, collectors: Vec<Box<dyn Collector>>) -> Self {
         let now = Instant::now();
 
         Self {
             config,
-            reporter,
 
             last_collect_instant: now,
             last_gc_instant: now,
 
             thread_stats: HashMap::default(),
             current_window_records: RequestCpuRecords::default(),
+
+            collectors,
         }
     }
 
     pub fn handle_registration(&mut self) {
         while let Ok(RegisterMsg {
             thread_id,
-            thread_name,
             shared_ptr,
         }) = CHANNEL.1.try_recv()
         {
@@ -145,7 +143,6 @@ impl ReqCpuCollector {
                     thread_id,
                     ThreadStat {
                         prev_stat: stat,
-                        thread_name,
                         shared_ptr,
                     },
                 );
@@ -156,29 +153,32 @@ impl ReqCpuCollector {
     pub fn record(&mut self) {
         for (tid, thread_stat) in &mut self.thread_stats {
             if let Some(req_tags) = thread_stat.shared_ptr.take() {
+                // Own the tag extracted from the shared pointer.
+
                 if !self.current_window_records.records.contains_key(&req_tags) {
                     self.current_window_records
                         .records
                         .insert(req_tags.clone(), 0);
                 }
-                let ms = self
+                let recorded_ms = self
                     .current_window_records
                     .records
                     .get_mut(&req_tags)
                     .unwrap();
-                let prev = thread_stat.shared_ptr.swap(req_tags);
-                assert!(prev.is_none());
+
+                // Put it back as quickly as possible.
+                assert!(thread_stat.shared_ptr.swap(req_tags).is_none());
 
                 STAT_TASK_COUNT.inc();
                 if let Ok(stat) = procinfo::pid::stat_task(*PID, *tid) {
-                    let prev_cpu_clock = (thread_stat.prev_stat.utime as u64)
+                    let prev_cpu_ticks = (thread_stat.prev_stat.utime as u64)
                         .wrapping_add(thread_stat.prev_stat.stime as u64);
-                    let current_cpu_clock = (stat.utime as u64).wrapping_add(stat.stime as u64);
+                    let current_cpu_ticks = (stat.utime as u64).wrapping_add(stat.stime as u64);
                     thread_stat.prev_stat = stat;
 
                     let delta_ms =
-                        current_cpu_clock.wrapping_sub(prev_cpu_clock) * 1_000 / (*CLK_TCK as u64);
-                    *ms += delta_ms;
+                        current_cpu_ticks.wrapping_sub(prev_cpu_ticks) * 1_000 / (*CLK_TCK as u64);
+                    *recorded_ms += delta_ms;
                 }
             }
         }
@@ -195,11 +195,7 @@ impl ReqCpuCollector {
             if let Some(thread_ids) = Self::get_thread_ids() {
                 self.thread_stats.retain(|k, v| {
                     let retain = thread_ids.contains(k);
-
-                    if !retain {
-                        assert!(v.shared_ptr.take().is_none());
-                    }
-
+                    assert!(retain || v.shared_ptr.take().is_none());
                     retain
                 });
             }
@@ -224,15 +220,16 @@ impl ReqCpuCollector {
 
     pub fn may_advance_window(&mut self) -> bool {
         let duration = self.last_collect_instant.elapsed().as_millis();
-        let need_advance = duration >= self.config.window_size_ms as _;
+        let need_advance = duration >= self.config.collect_interval_ms as _;
 
         if need_advance {
             let mut records = std::mem::take(&mut self.current_window_records);
             records.duration_ms = duration as _;
 
             if !records.records.is_empty() {
-                let mut r = self.reporter.lock().unwrap();
-                r.push(records);
+                for collector in &self.collectors {
+                    collector.collect(&records);
+                }
             }
 
             self.last_collect_instant = Instant::now();
@@ -252,31 +249,30 @@ impl ReqCpuCollector {
     }
 }
 
-pub fn build(config: ReqCpuConfig) -> Arc<Mutex<RequestCpuReporter>> {
-    let reporter = Arc::new(Mutex::new(RequestCpuReporter::with_capacity(
-        config.buffer_size,
-    )));
+impl Builder {
+    pub fn build(self) {
+        if self.collectors.is_empty() {
+            return;
+        }
 
-    let r = reporter.clone();
-    std::thread::Builder::new()
-        .name("req-cpu-collector".to_owned())
-        .spawn(move || {
-            let mut c = ReqCpuCollector::new(r, config);
+        std::thread::Builder::new()
+            .name("req-cpu-collector".to_owned())
+            .spawn(move || {
+                let mut recorder = ReqCpuRecorder::new(self.config, self.collectors);
 
-            loop {
-                c.record();
-                c.may_advance_window();
-                c.may_gc();
-                c.handle_registration();
+                loop {
+                    recorder.record();
+                    recorder.may_advance_window();
+                    recorder.may_gc();
+                    recorder.handle_registration();
 
-                std::thread::sleep(Duration::from_micros(
-                    (c.config.record_interval_ms * 1_000.0) as _,
-                ));
-            }
-        })
-        .expect("Create req-cpu-collector thread failed.");
-
-    reporter
+                    std::thread::sleep(Duration::from_micros(
+                        (recorder.config.record_interval_ms * 1_000.0) as _,
+                    ));
+                }
+            })
+            .expect("Create req-cpu-collector thread failed.");
+    }
 }
 
 #[cfg(test)]
@@ -285,13 +281,26 @@ mod tests {
 
     use std::sync::atomic::AtomicU64;
     use std::sync::atomic::Ordering::Relaxed;
+    use std::sync::Mutex;
 
     #[test]
     fn one_context_per_thread() {
-        let r = build(ReqCpuConfig::default());
+        #[derive(Default, Clone)]
+        struct DummyCollector {
+            records: Arc<Mutex<Vec<RequestCpuRecords>>>,
+        }
+
+        impl Collector for DummyCollector {
+            fn collect(&self, records: &RequestCpuRecords) {
+                let mut r = self.records.lock().unwrap();
+                r.push(records.clone());
+            }
+        }
+
+        let collector = DummyCollector::default();
+        Builder::new().register_collector(collector.clone()).build();
 
         let num = Arc::new(AtomicU64::new(0));
-
         [100000, 500000, 2000000, 1000000]
             .iter()
             .map(|i| {
@@ -324,8 +333,8 @@ mod tests {
             .into_iter()
             .for_each(|handle| handle.join().unwrap());
 
-        let r = r.lock().unwrap();
-        assert!(r.records.iter().next().is_some());
+        let r = collector.records.lock().unwrap();
+        assert!(!r.is_empty());
     }
 }
 

@@ -2,7 +2,7 @@
 
 #![feature(shrink_to)]
 
-pub(crate) mod util;
+pub mod collector;
 
 mod future_ext;
 pub use future_ext::FutureExt;
@@ -10,38 +10,31 @@ pub use future_ext::FutureExt;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
-pub use linux::build;
-#[cfg(target_os = "linux")]
 pub use linux::Guard;
 
 #[cfg(not(target_os = "linux"))]
 mod dummy;
 #[cfg(not(target_os = "linux"))]
-pub use dummy::build;
-#[cfg(not(target_os = "linux"))]
 pub use dummy::Guard;
-
-use crate::util::wrapping_deque::WrappingDeque;
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::collector::Collector;
 use collections::HashMap;
 
 pub struct ReqCpuConfig {
     record_interval_ms: f64,
-    window_size_ms: u64,
+    collect_interval_ms: u64,
     gc_interval_ms: u64,
-    buffer_size: usize,
 }
 
 impl Default for ReqCpuConfig {
     fn default() -> Self {
         Self {
             record_interval_ms: 10.1,
-            window_size_ms: 1_000,
+            collect_interval_ms: 1_000,
             gc_interval_ms: 10 * 60 * 1_000,
-            buffer_size: 60,
         }
     }
 }
@@ -66,8 +59,8 @@ impl RequestTags {
     }
 }
 
-#[derive(Debug)]
-struct RequestCpuRecords {
+#[derive(Debug, Clone)]
+pub struct RequestCpuRecords {
     begin_unix_time_ms: u64,
     duration_ms: u64,
     records: HashMap<Arc<RequestTags>, u64>,
@@ -86,19 +79,36 @@ impl Default for RequestCpuRecords {
     }
 }
 
-#[derive(Debug)]
-pub struct RequestCpuReporter {
-    records: WrappingDeque<RequestCpuRecords>,
+pub struct Builder {
+    config: ReqCpuConfig,
+    collectors: Vec<Box<dyn Collector>>,
 }
 
-impl RequestCpuReporter {
-    fn with_capacity(capacity: usize) -> Self {
+impl Builder {
+    pub fn new() -> Self {
         Self {
-            records: WrappingDeque::with_capacity(capacity),
+            config: ReqCpuConfig::default(),
+            collectors: Vec::default(),
         }
     }
 
-    fn push(&mut self, record: RequestCpuRecords) {
-        self.records.push(record);
+    pub fn record_interval_ms(mut self, value: f64) -> Self {
+        self.config.record_interval_ms = value;
+        self
+    }
+
+    pub fn collect_interval_ms(mut self, value: u64) -> Self {
+        self.config.collect_interval_ms = value;
+        self
+    }
+
+    pub fn gc_interval_ms(mut self, value: u64) -> Self {
+        self.config.gc_interval_ms = value;
+        self
+    }
+
+    pub fn register_collector<T: Collector + 'static>(mut self, c: T) -> Self {
+        self.collectors.push(Box::new(c));
+        self
     }
 }
