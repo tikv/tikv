@@ -44,7 +44,7 @@ use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::{CompactionGuardGeneratorFactory, SplitConfig};
 use security::SecurityConfig;
 use tikv_util::config::{
-    self, LogFormat, OptionReadableSize, ReadableDuration, ReadableSize, TomlWriter, GB, MB,
+    self, LogFormat, OptionReadableSize, ReadableDuration, ReadableSize, TomlWriter, GIB, MIB,
 };
 use tikv_util::sys::sys_quota::SysQuota;
 use tikv_util::time::duration_to_sec;
@@ -62,13 +62,13 @@ use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR};
 
 pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
 
-const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
-const LOCKCF_MAX_MEM: usize = GB as usize;
-const RAFT_MIN_MEM: usize = 256 * MB as usize;
-const RAFT_MAX_MEM: usize = 2 * GB as usize;
+const LOCKCF_MIN_MEM: usize = 256 * MIB as usize;
+const LOCKCF_MAX_MEM: usize = GIB as usize;
+const RAFT_MIN_MEM: usize = 256 * MIB as usize;
+const RAFT_MAX_MEM: usize = 2 * GIB as usize;
 const LAST_CONFIG_FILE: &str = "last_tikv.toml";
 const TMP_CONFIG_FILE: &str = "tmp_tikv.toml";
-const MAX_BLOCK_SIZE: usize = 32 * MB as usize;
+const MAX_BLOCK_SIZE: usize = 32 * MIB as usize;
 
 fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
     let total_mem = SysQuota::new().memory_limit_in_bytes();
@@ -85,7 +85,7 @@ fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
     } else if size > max {
         size = max;
     }
-    size / MB as usize
+    size / MIB as usize
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
@@ -2256,7 +2256,7 @@ pub struct TiKvConfig {
     #[config(skip)]
     pub readpool: ReadPoolConfig,
 
-    #[config(skip)]
+    #[config(submodule)]
     pub server: ServerConfig,
 
     #[config(submodule)]

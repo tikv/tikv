@@ -1,6 +1,6 @@
 ## TiKV config template
 ##  Human-readable big numbers:
-##   File size(based on byte): KB, MB, GB, TB, PB
+##   File size(based on byte, binary units): KB, MB, GB, TB, PB
 ##    e.g.: 1_048_576 = "1MB"
 ##   Time(based on ms): ms, s, m, h
 ##    e.g.: 78_000 = "1.3m"
@@ -151,6 +151,9 @@
 
 ## Time to wait before closing the connection without receiving KeepAlive ping Ack.
 # grpc-keepalive-timeout = "3s"
+
+## Set maximum message length in bytes that gRPC can send. `-1` means unlimited.
+# max-grpc-send-msg-len = 10485760
 
 ## How many snapshots can be sent concurrently.
 # concurrent-send-snap-limit = 32
