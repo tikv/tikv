@@ -21,7 +21,7 @@ pub struct RouterTrace {
 
 struct NormalMailMap<N: Fsm> {
     map: HashMap<u64, BasicMailbox<N>>,
-    /// Count of Mailbox that is stored in `map`.
+    // Count of Mailboxes that is stored in `map`.
     alive_cnt: Arc<AtomicUsize>,
 }
 
@@ -52,7 +52,8 @@ pub struct Router<N: Fsm, C: Fsm, Ns, Cs> {
     pub(crate) normal_scheduler: Ns,
     control_scheduler: Cs,
 
-    /// Count of Mailbox that is not destroyed.
+    // Count of Mailboxes that is not destroyed.
+    // Added when a Mailbox created, and subtracted it when a Mailbox destroyed.
     state_cnt: Arc<AtomicUsize>,
     // Indicates the router is shutdown down or not.
     shutdown: Arc<AtomicBool>,
@@ -330,12 +331,16 @@ where
         };
         let mailbox_unit = mem::size_of::<(u64, BasicMailbox<N>)>();
         let state_unit = mem::size_of::<FsmState<N>>();
-        let message_unit = mem::size_of::<N::Message>();
+        // Every message in crossbeam sender needs 8 bytes to store state.
+        let message_unit = mem::size_of::<N::Message>() + 8;
+        // crossbeam unbounded channel sender has a list of blocks. Every block has 31 unit
+        // and every sender has at least one sender.
+        let sender_block_unit = 31;
         RouterTrace {
-            alive: alive * mailbox_unit * 8 / 7
+            alive: alive * mailbox_unit * 8 / 7 // hashmap uses 7/8 of allocated memory.
                 + state_unit * alive
-                + (message_unit + 8) * 31 * alive,
-            leak: state_unit * leak + (message_unit + 8) * 31 * leak,
+                + message_unit * sender_block_unit * alive,
+            leak: state_unit * leak + message_unit * sender_block_unit * leak,
         }
     }
 }
