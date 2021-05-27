@@ -230,7 +230,7 @@ impl Simulator for ServerCluster {
         let raft_engine = RaftKv::new(sim_router.clone(), engines.kv.clone());
 
         // Create coprocessor.
-        let mut coprocessor_host = CoprocessorHost::new(router.clone());
+        let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
 
         let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
 
@@ -283,7 +283,7 @@ impl Simulator for ServerCluster {
         // Create import service.
         let importer = {
             let dir = Path::new(engines.kv.path()).join("import-sst");
-            Arc::new(SSTImporter::new(dir, key_manager.clone()).unwrap())
+            Arc::new(SSTImporter::new(&cfg.import, dir, key_manager.clone()).unwrap())
         };
         let import_service = ImportSSTService::new(
             cfg.import.clone(),
@@ -391,14 +391,10 @@ impl Simulator for ServerCluster {
         // Register the role change observer of the lock manager.
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
 
-        let pessimistic_txn_cfg = cfg.pessimistic_txn.clone();
+        let pessimistic_txn_cfg = cfg.pessimistic_txn;
 
-        let split_check_runner = SplitCheckRunner::new(
-            engines.kv.clone(),
-            router.clone(),
-            coprocessor_host.clone(),
-            cfg.coprocessor,
-        );
+        let split_check_runner =
+            SplitCheckRunner::new(engines.kv.clone(), router.clone(), coprocessor_host.clone());
         let split_check_scheduler = bg_worker.start("split-check", split_check_runner);
 
         node.start(

@@ -29,6 +29,7 @@ use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::{fsm::store::StoreMeta, AutoSplitController, SnapManager};
 use test_raftstore::*;
 use tikv::coprocessor::REQ_TYPE_DAG;
+use tikv::import::Config as ImportConfig;
 use tikv::import::SSTImporter;
 use tikv::server;
 use tikv::server::gc_worker::sync_gc;
@@ -930,10 +931,10 @@ fn test_double_run_node() {
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
     let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap());
-    let coprocessor_host = CoprocessorHost::new(router);
+    let coprocessor_host = CoprocessorHost::new(router, raftstore::coprocessor::Config::default());
     let importer = {
         let dir = Path::new(engines.kv.path()).join("import-sst");
-        Arc::new(SSTImporter::new(dir, None).unwrap())
+        Arc::new(SSTImporter::new(&ImportConfig::default(), dir, None).unwrap())
     };
     let (split_check_scheduler, _) = dummy_scheduler();
 
