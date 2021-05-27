@@ -42,7 +42,7 @@ use raft::eraftpb::{
 };
 use raft_proto::ConfChangeI;
 use sst_importer::SSTImporter;
-use tikv_alloc::trace::{Id, MemoryTrace, TraceEvent};
+use tikv_alloc::trace::TraceEvent;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant};
@@ -54,7 +54,7 @@ use uuid::Builder as UuidBuilder;
 
 use crate::coprocessor::{Cmd, CoprocessorHost, ObserveHandle};
 use crate::store::fsm::RaftPollerBuilder;
-use crate::store::memory::RAFTSTORE_MEM_TRACE;
+use crate::store::memory::*;
 use crate::store::metrics::*;
 use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
 use crate::store::peer::Peer;
@@ -3684,14 +3684,8 @@ where
     EK: KvEngine,
 {
     fn drop(&mut self) {
-        RAFTSTORE_MEM_TRACE
-            .sub_trace(Id::Name("apply_router"))
-            .sub_trace(Id::Name("alive"))
-            .trace(TraceEvent::Reset(0));
-        RAFTSTORE_MEM_TRACE
-            .sub_trace(Id::Name("apply_router"))
-            .sub_trace(Id::Name("leak"))
-            .trace(TraceEvent::Reset(0));
+        MEMTRACE_APPLY_ROUTER_ALIVE.trace(TraceEvent::Reset(0));
+        MEMTRACE_APPLY_ROUTER_LEAK.trace(TraceEvent::Reset(0));
     }
 }
 
@@ -3804,14 +3798,8 @@ where
 
     fn update_trace(&self) {
         let router_trace = self.router.trace();
-        RAFTSTORE_MEM_TRACE
-            .sub_trace(Id::Name("apply_router"))
-            .sub_trace(Id::Name("alive"))
-            .trace(TraceEvent::Reset(router_trace.alive));
-        RAFTSTORE_MEM_TRACE
-            .sub_trace(Id::Name("apply_router"))
-            .sub_trace(Id::Name("leak"))
-            .trace(TraceEvent::Reset(router_trace.leak));
+        MEMTRACE_APPLY_ROUTER_ALIVE.trace(TraceEvent::Reset(router_trace.alive));
+        MEMTRACE_APPLY_ROUTER_LEAK.trace(TraceEvent::Reset(router_trace.leak));
     }
 }
 

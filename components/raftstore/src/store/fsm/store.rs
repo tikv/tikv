@@ -38,7 +38,7 @@ use engine_traits::{RaftEngine, RaftLogBatch};
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use pd_client::{FeatureGate, PdClient};
 use sst_importer::SSTImporter;
-use tikv_alloc::trace::{Id, MemoryTrace, TraceEvent};
+use tikv_alloc::trace::TraceEvent;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant as TiInstant};
@@ -61,7 +61,7 @@ use crate::store::fsm::{
     CollectedReady,
 };
 use crate::store::local_metrics::RaftMetrics;
-use crate::store::memory::RAFTSTORE_MEM_TRACE;
+use crate::store::memory::*;
 use crate::store::metrics::*;
 use crate::store::peer_storage::{self, HandleRaftReadyContext};
 use crate::store::transport::Transport;
@@ -177,14 +177,8 @@ where
     ER: RaftEngine,
 {
     fn drop(&mut self) {
-        RAFTSTORE_MEM_TRACE
-            .sub_trace(Id::Name("raft_router"))
-            .sub_trace(Id::Name("alive"))
-            .trace(TraceEvent::Reset(0));
-        RAFTSTORE_MEM_TRACE
-            .sub_trace(Id::Name("raft_router"))
-            .sub_trace(Id::Name("leak"))
-            .trace(TraceEvent::Reset(0));
+        MEMTRACE_RAFT_ROUTER_ALIVE.trace(TraceEvent::Reset(0));
+        MEMTRACE_RAFT_ROUTER_LEAK.trace(TraceEvent::Reset(0));
     }
 }
 
@@ -317,14 +311,8 @@ where
 
     fn update_trace(&self) {
         let router_trace = self.router.trace();
-        RAFTSTORE_MEM_TRACE
-            .sub_trace(Id::Name("raft_router"))
-            .sub_trace(Id::Name("alive"))
-            .trace(TraceEvent::Reset(router_trace.alive));
-        RAFTSTORE_MEM_TRACE
-            .sub_trace(Id::Name("raft_router"))
-            .sub_trace(Id::Name("leak"))
-            .trace(TraceEvent::Reset(router_trace.leak));
+        MEMTRACE_RAFT_ROUTER_ALIVE.trace(TraceEvent::Reset(router_trace.alive));
+        MEMTRACE_RAFT_ROUTER_LEAK.trace(TraceEvent::Reset(router_trace.leak));
     }
 }
 
