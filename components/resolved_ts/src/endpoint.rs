@@ -20,7 +20,7 @@ use raftstore::store::fsm::StoreMeta;
 use raftstore::store::util::{self, RegionReadProgress};
 use raftstore::store::RegionSnapshot;
 use security::SecurityManager;
-use tikv::config::CdcConfig;
+use tikv::config::ResolvedTsConfig;
 use tikv_util::worker::{Runnable, Scheduler};
 use txn_types::{Key, TimeStamp};
 
@@ -217,7 +217,7 @@ where
     C: CmdSinker<E::Snapshot>,
 {
     pub fn new(
-        cfg: &CdcConfig,
+        cfg: &ResolvedTsConfig,
         scheduler: Scheduler<Task<E::Snapshot>>,
         raft_router: T,
         store_meta: Arc<Mutex<StoreMeta>>,
@@ -235,8 +235,7 @@ where
             concurrency_manager,
             env,
             security_mgr,
-            cfg.min_ts_interval.0,
-            cfg.hibernate_regions_compatible,
+            cfg.advance_ts_interval.0,
         );
         let scanner_pool = ScannerPool::new(cfg.scan_lock_pool_size, raft_router);
         let ep = Self {

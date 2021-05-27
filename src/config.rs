@@ -2216,7 +2216,6 @@ pub struct CdcConfig {
     pub min_ts_interval: ReadableDuration,
     pub old_value_cache_size: usize,
     pub hibernate_regions_compatible: bool,
-    pub scan_lock_pool_size: usize,
     pub incremental_scan_speed_limit: ReadableSize,
 }
 
@@ -2226,10 +2225,28 @@ impl Default for CdcConfig {
             min_ts_interval: ReadableDuration::secs(1),
             old_value_cache_size: 1024,
             hibernate_regions_compatible: true,
-            scan_lock_pool_size: 2,
             // TiCDC requires a SSD, the typical write speed of SSD
             // is more than 500MB/s, so 128MB/s is enough.
             incremental_scan_speed_limit: ReadableSize::mb(128),
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct ResolvedTsConfig {
+    pub enable: bool,
+    pub advance_ts_interval: ReadableDuration,
+    pub scan_lock_pool_size: usize,
+}
+
+impl Default for ResolvedTsConfig {
+    fn default() -> Self {
+        Self {
+            enable: true,
+            advance_ts_interval: ReadableDuration::secs(1),
+            scan_lock_pool_size: 2,
         }
     }
 }
@@ -2334,6 +2351,9 @@ pub struct TiKvConfig {
 
     #[config(submodule)]
     pub cdc: CdcConfig,
+
+    #[config(skip)]
+    pub resolved_ts: ResolvedTsConfig,
 }
 
 impl Default for TiKvConfig {
@@ -2370,6 +2390,7 @@ impl Default for TiKvConfig {
             gc: GcConfig::default(),
             split: SplitConfig::default(),
             cdc: CdcConfig::default(),
+            resolved_ts: ResolvedTsConfig::default(),
         }
     }
 }

@@ -69,8 +69,8 @@ fn prepare_for_stale_read(leader: Peer) -> (Cluster<ServerCluster>, Arc<TestPdCl
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
+    cluster.cfg.resolved_ts.enable = true;
     cluster.run();
-    cluster.sim.wl().start_resolved_ts_worker();
 
     cluster.must_transfer_leader(1, leader.clone());
     let leader_client = PeerClient::new(&cluster, 1, leader);
@@ -269,8 +269,8 @@ fn test_update_resoved_ts_before_apply_index() {
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
+    cluster.cfg.resolved_ts.enable = true;
     cluster.run();
-    cluster.sim.wl().start_resolved_ts_worker();
 
     cluster.must_transfer_leader(1, new_peer(1, 1));
     let mut leader_client = PeerClient::new(&cluster, 1, new_peer(1, 1));
@@ -335,8 +335,8 @@ fn test_new_leader_init_resolver() {
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
+    cluster.cfg.resolved_ts.enable = true;
     cluster.run();
-    cluster.sim.wl().start_resolved_ts_worker();
 
     cluster.must_transfer_leader(1, new_peer(1, 1));
     let mut peer_client1 = PeerClient::new(&cluster, 1, new_peer(1, 1));

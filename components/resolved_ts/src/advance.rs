@@ -38,7 +38,6 @@ pub struct AdvanceTsWorker<T, E: KvEngine> {
     /// The concurrency manager for transactions. It's needed for CDC to check locks when
     /// calculating resolved_ts.
     concurrency_manager: ConcurrencyManager,
-    hibernate_regions_compatible: bool,
     // store_id -> client
     tikv_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
     env: Arc<Environment>,
@@ -55,7 +54,6 @@ impl<T, E: KvEngine> AdvanceTsWorker<T, E> {
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
         advance_ts_interval: Duration,
-        hibernate_regions_compatible: bool,
     ) -> Self {
         let worker = Builder::new()
             .threaded_scheduler()
@@ -74,7 +72,6 @@ impl<T, E: KvEngine> AdvanceTsWorker<T, E> {
             store_meta,
             concurrency_manager,
             advance_ts_interval,
-            hibernate_regions_compatible,
             tikv_clients: Arc::new(Mutex::new(HashMap::default())),
         }
     }
@@ -91,11 +88,10 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
         let security_mgr = self.security_mgr.clone();
         let store_meta = self.store_meta.clone();
         let tikv_clients = self.tikv_clients.clone();
-        let hibernate_regions_compatible = self.hibernate_regions_compatible;
 
         let fut = async move {
             let _ = timeout.compat().await;
-            // Ignore get tso errors since we will retry every `min_ts_interval`.
+            // Ignore get tso errors since we will retry every `advance_ts_interval`.
             let mut min_ts = pd_client.get_tso().await.unwrap_or_default();
 
             // Sync with concurrency manager so that it can work correctly when optimizations
@@ -115,23 +111,22 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
 
             let gate = pd_client.feature_gate();
 
-            let regions =
-                if hibernate_regions_compatible && gate.can_enable(FEATURE_RESOLVED_TS_STORE) {
-                    RESOLVED_TS_ADVANCE_METHOD.set(1);
-                    Self::region_resolved_ts_store(
-                        regions,
-                        store_meta,
-                        pd_client,
-                        security_mgr,
-                        env,
-                        tikv_clients,
-                        min_ts,
-                    )
-                    .await
-                } else {
-                    RESOLVED_TS_ADVANCE_METHOD.set(0);
-                    Self::region_resolved_ts_raft(regions, raft_router, min_ts).await
-                };
+            let regions = if gate.can_enable(FEATURE_RESOLVED_TS_STORE) {
+                RESOLVED_TS_ADVANCE_METHOD.set(1);
+                Self::region_resolved_ts_store(
+                    regions,
+                    store_meta,
+                    pd_client,
+                    security_mgr,
+                    env,
+                    tikv_clients,
+                    min_ts,
+                )
+                .await
+            } else {
+                RESOLVED_TS_ADVANCE_METHOD.set(0);
+                Self::region_resolved_ts_raft(regions, raft_router, min_ts).await
+            };
 
             if !regions.is_empty() {
                 if let Err(e) = scheduler.schedule(Task::AdvanceResolvedTs {
@@ -300,7 +295,12 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
                 if region_has_quorum(&region_map[&region_id], &stores) {
                     Some(region_id)
                 } else {
-                    debug!("resolved-ts cannot get quorum for resolved ts"; "region_id" => region_id, "stores" => ?stores, "region" => ?&region_map[&region_id]);
+                    debug!(
+                        "resolved-ts cannot get quorum for resolved ts";
+                        "region_id" => region_id,
+                        "stores" => ?stores,
+                        "region" => ?&region_map[&region_id]
+                    );
                     None
                 }
             })
