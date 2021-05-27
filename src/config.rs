@@ -2207,9 +2207,7 @@ impl Default for BackupConfig {
     }
 }
 
-// TODO: `CdcConfig` is used by both `cdc` worker and `resolved ts` worker
-// should separate it into two configs
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct CdcConfig {
@@ -2232,13 +2230,27 @@ impl Default for CdcConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct ResolvedTsConfig {
+    #[config(skip)]
     pub enable: bool,
     pub advance_ts_interval: ReadableDuration,
+    #[config(skip)]
     pub scan_lock_pool_size: usize,
+}
+
+impl ResolvedTsConfig {
+    fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.advance_ts_interval.is_zero() {
+            return Err("resolved-ts.advance-ts-interval can't be zero".into());
+        }
+        if self.scan_lock_pool_size == 0 {
+            return Err("resolved-ts.scan-lock-pool-size can't be zero".into());
+        }
+        Ok(())
+    }
 }
 
 impl Default for ResolvedTsConfig {
@@ -2349,10 +2361,10 @@ pub struct TiKvConfig {
     #[config(submodule)]
     pub split: SplitConfig,
 
-    #[config(submodule)]
+    #[config(skip)]
     pub cdc: CdcConfig,
 
-    #[config(skip)]
+    #[config(submodule)]
     pub resolved_ts: ResolvedTsConfig,
 }
 
@@ -2510,6 +2522,7 @@ impl TiKvConfig {
         self.backup.validate()?;
         self.pessimistic_txn.validate()?;
         self.gc.validate()?;
+        self.resolved_ts.validate()?;
 
         let default_memory_usage_limit = Self::default_memory_usage_limit();
         if self.memory_usage_limit.0 == 0 {
@@ -2997,6 +3010,8 @@ pub enum Module {
     PessimisticTxn,
     Gc,
     Split,
+    CDC,
+    ResolvedTs,
     Unknown(String),
 }
 
@@ -3019,6 +3034,8 @@ impl From<&str> for Module {
             "backup" => Module::Backup,
             "pessimistic_txn" => Module::PessimisticTxn,
             "gc" => Module::Gc,
+            "cdc" => Module::CDC,
+            "resolved_ts" => Module::ResolvedTs,
             n => Module::Unknown(n.to_owned()),
         }
     }
@@ -3419,6 +3436,79 @@ mod tests {
             Box::new(StorageConfigManger::new(engine.clone(), shared, scheduler)),
         );
         (engine, cfg_controller, receiver)
+    }
+
+    #[test]
+    fn test_change_resolved_ts_config() {
+        use crossbeam::channel;
+
+        pub struct TestConfigManager(channel::Sender<ConfigChange>);
+        impl ConfigManager for TestConfigManager {
+            fn dispatch(&mut self, change: ConfigChange) -> configuration::Result<()> {
+                self.0.send(change).unwrap();
+                Ok(())
+            }
+        }
+
+        let (cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        let cfg_controller = ConfigController::new(cfg);
+        let (tx, rx) = channel::unbounded();
+        cfg_controller.register(Module::ResolvedTs, Box::new(TestConfigManager(tx)));
+
+        // Return error if try to update not support config or unknow config
+        assert!(
+            cfg_controller
+                .update_config("resolved-ts.enable", "false")
+                .is_err()
+        );
+        assert!(
+            cfg_controller
+                .update_config("resolved-ts.scan-lock-pool-size", "10")
+                .is_err()
+        );
+        assert!(
+            cfg_controller
+                .update_config("resolved-ts.xxx", "false")
+                .is_err()
+        );
+
+        let mut resolved_ts_cfg = cfg_controller.get_current().resolved_ts;
+        // Default value
+        assert_eq!(
+            resolved_ts_cfg.advance_ts_interval,
+            ReadableDuration::secs(1)
+        );
+
+        // Update `advance-ts-interval` to 100ms
+        cfg_controller
+            .update_config("resolved-ts.advance-ts-interval", "100ms")
+            .unwrap();
+        resolved_ts_cfg.update(rx.recv().unwrap());
+        assert_eq!(
+            resolved_ts_cfg.advance_ts_interval,
+            ReadableDuration::millis(100)
+        );
+
+        // Return error if try to update `advance-ts-interval` to an invalid value
+        assert!(
+            cfg_controller
+                .update_config("resolved-ts.advance-ts-interval", "0m")
+                .is_err()
+        );
+        assert_eq!(
+            resolved_ts_cfg.advance_ts_interval,
+            ReadableDuration::millis(100)
+        );
+
+        // Update `advance-ts-interval` to 3s
+        cfg_controller
+            .update_config("resolved-ts.advance-ts-interval", "3s")
+            .unwrap();
+        resolved_ts_cfg.update(rx.recv().unwrap());
+        assert_eq!(
+            resolved_ts_cfg.advance_ts_interval,
+            ReadableDuration::secs(3)
+        );
     }
 
     #[test]

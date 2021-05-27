@@ -42,6 +42,7 @@ test-engines-panic = ["tikv/test-engines-panic"]
 collections = { path = "../collections" }
 crossbeam = "0.8"
 concurrency_manager = { path = "../concurrency_manager", default-features = false }
+configuration = { path = "../configuration" }
 engine_traits = { path = "../engine_traits", default-features = false }
 fail = "0.4"
 futures = "0.3"

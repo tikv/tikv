@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use concurrency_manager::ConcurrencyManager;
+use configuration::{self, ConfigChange, ConfigManager, Configuration};
 use engine_traits::{KvEngine, Snapshot};
 use grpcio::Environment;
 use kvproto::errorpb::Error as ErrorHeader;
@@ -201,6 +202,7 @@ impl ObserveRegion {
 }
 
 pub struct Endpoint<T, E: KvEngine, C> {
+    cfg: ResolvedTsConfig,
     store_meta: Arc<Mutex<StoreMeta>>,
     regions: HashMap<u64, ObserveRegion>,
     scanner_pool: ScannerPool<T, E>,
@@ -234,10 +236,10 @@ where
             concurrency_manager,
             env,
             security_mgr,
-            cfg.advance_ts_interval.0,
         );
         let scanner_pool = ScannerPool::new(cfg.scan_lock_pool_size, raft_router);
         let ep = Self {
+            cfg,
             scheduler,
             store_meta,
             advance_worker,
@@ -489,7 +491,8 @@ where
 
     fn register_advance_event(&self) {
         let regions = self.regions.keys().into_iter().copied().collect();
-        self.advance_worker.register_advance_event(regions);
+        self.advance_worker
+            .register_advance_event(self.cfg.advance_ts_interval.0, regions);
     }
 }
 
@@ -518,6 +521,9 @@ pub enum Task<S: Snapshot> {
         observe_id: ObserveID,
         entries: Vec<ScanEntry>,
         apply_index: u64,
+    },
+    ChangeConfig {
+        change: ConfigChange,
     },
 }
 
@@ -568,6 +574,10 @@ impl<S: Snapshot> fmt::Debug for Task<S> {
                 .field("apply_index", &apply_index)
                 .finish(),
             Task::RegisterAdvanceEvent => de.field("name", &"register_advance_event").finish(),
+            Task::ChangeConfig { ref change } => de
+                .field("name", &"change_config")
+                .field("change", &change)
+                .finish(),
         }
     }
 }
@@ -608,6 +618,32 @@ where
                 apply_index,
             } => self.handle_scan_locks(region_id, observe_id, entries, apply_index),
             Task::RegisterAdvanceEvent => self.register_advance_event(),
+            Task::ChangeConfig { change } => {
+                let prev = format!("{:?}", self.cfg);
+                self.cfg.update(change);
+                info!(
+                    "resolved-ts config changed";
+                    "prev" => prev,
+                    "current" => ?self.cfg,
+                );
+            }
         }
+    }
+}
+
+pub struct ResolvedTsConfigManager<S: Snapshot>(Scheduler<Task<S>>);
+
+impl<S: Snapshot> ResolvedTsConfigManager<S> {
+    pub fn new(scheduler: Scheduler<Task<S>>) -> ResolvedTsConfigManager<S> {
+        ResolvedTsConfigManager(scheduler)
+    }
+}
+
+impl<S: Snapshot> ConfigManager for ResolvedTsConfigManager<S> {
+    fn dispatch(&mut self, change: ConfigChange) -> configuration::Result<()> {
+        if let Err(e) = self.0.schedule(Task::ChangeConfig { change }) {
+            error!("failed to schedule ChangeConfig task"; "err" => ?e);
+        }
+        Ok(())
     }
 }

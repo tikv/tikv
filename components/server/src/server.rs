@@ -621,6 +621,15 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             // Register the resolved ts observer
             let resolved_ts_ob = resolved_ts::Observer::new(worker.scheduler());
             resolved_ts_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+
+            // Register config manager for resolved ts worker
+            cfg_controller.register(
+                tikv::config::Module::ResolvedTs,
+                Box::new(resolved_ts::ResolvedTsConfigManager::new(
+                    worker.scheduler(),
+                )),
+            );
+
             Some(worker)
         } else {
             None

@@ -27,7 +27,6 @@ pub struct AdvanceTsWorker<E: KvEngine> {
     pd_client: Arc<dyn PdClient>,
     timer: SteadyTimer,
     worker: Runtime,
-    advance_ts_interval: Duration,
     scheduler: Scheduler<Task<E::Snapshot>>,
     /// The concurrency manager for transactions. It's needed for CDC to check locks when
     /// calculating resolved_ts.
@@ -46,7 +45,6 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
         concurrency_manager: ConcurrencyManager,
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
-        advance_ts_interval: Duration,
     ) -> Self {
         let worker = Builder::new()
             .threaded_scheduler()
@@ -63,15 +61,14 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
             timer: SteadyTimer::default(),
             store_meta,
             concurrency_manager,
-            advance_ts_interval,
             tikv_clients: Arc::new(Mutex::new(HashMap::default())),
         }
     }
 }
 
 impl<E: KvEngine> AdvanceTsWorker<E> {
-    pub fn register_advance_event(&self, regions: Vec<u64>) {
-        let timeout = self.timer.delay(self.advance_ts_interval);
+    pub fn register_advance_event(&self, advance_ts_interval: Duration, regions: Vec<u64>) {
+        let timeout = self.timer.delay(advance_ts_interval);
         let pd_client = self.pd_client.clone();
         let scheduler = self.scheduler.clone();
         let cm: ConcurrencyManager = self.concurrency_manager.clone();
