@@ -923,7 +923,6 @@ mod tests {
     use engine_traits::{Error as TraitError, SstWriterBuilder};
     use engine_traits::{
         ExternalSstFileInfo, SstExt,
-        UserCollectedProperties,
     };
     use tempfile::Builder;
     use test_sst_importer::{
