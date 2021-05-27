@@ -337,10 +337,10 @@ where
         // and every sender has at least one sender.
         let sender_block_unit = 31;
         RouterTrace {
-            alive: alive * mailbox_unit * 8 / 7 // hashmap uses 7/8 of allocated memory.
-                + state_unit * alive
-                + message_unit * sender_block_unit * alive,
-            leak: state_unit * leak + message_unit * sender_block_unit * leak,
+            alive: (mailbox_unit * 8 / 7 // hashmap uses 7/8 of allocated memory.
+                + state_unit + message_unit * sender_block_unit)
+                * alive,
+            leak: (state_unit + message_unit * sender_block_unit) * leak,
         }
     }
 }
