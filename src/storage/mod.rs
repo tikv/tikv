@@ -199,7 +199,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         lock_mgr: L,
         concurrency_manager: ConcurrencyManager,
         pipelined_pessimistic_lock: Arc<atomic::AtomicBool>,
-        l0_completed_receiver: Option<std::sync::mpsc::Receiver<()>>,
+        l0_completed_receiver: Option<std::sync::mpsc::Receiver<String>>,
     ) -> Result<Self> {
         let sched = TxnScheduler::new(
             engine.clone(),

@@ -24,7 +24,7 @@ use crossbeam::utils::CachePadded;
 use parking_lot::{Mutex, MutexGuard};
 use std::f64::INFINITY;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Sender, Receiver};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread::{self, Builder, JoinHandle};
 use std::time::Duration;
@@ -149,12 +149,18 @@ const CHECK_TICK_INTERVAL: u64 = 100; // 100ms
 const ADJUST_TICKS: u64 = 10; // 1000ms
 const RATIO_PERCISION: f64 = 10000000.0;
 const EMA_FACTOR: f64 = 0.1;
-const LIMIT_UP_PERCENT: f64 = 0.04; // 10%
-const LIMIT_DOWN_PERCENT: f64 = 0.02; // 5%
-const MIN_THROTTLE_SPEED: f64 = 16.0 * 1024.0; // 16MB
+const LIMIT_UP_PERCENT: f64 = 0.04; // 4%
+const LIMIT_DOWN_PERCENT: f64 = 0.02; // 2%
+const MIN_THROTTLE_SPEED: f64 = 16.0 * 1024.0; // 16KB
+
+enum Trend {
+    Increasing,
+    Decreasing,
+    NoTrend,
+}
 
 struct Smoother<const CAP: usize> {
-    records: [Option<u64>; CAP],
+    records: [u64; CAP],
     size: usize,
     idx: usize,
     total: u64,
@@ -164,7 +170,7 @@ struct Smoother<const CAP: usize> {
 impl<const CAP: usize> Smoother<CAP> {
     pub fn new() -> Self {
         Self {
-            records: [None; CAP],
+            records: [0; CAP],
             idx: 0,
             size: 0,
             total: 0,
@@ -173,22 +179,27 @@ impl<const CAP: usize> Smoother<CAP> {
     }
 
     pub fn observe(&mut self, record: u64) {
-        if let Some(v) = self.records[self.idx] {
+        if self.size < CAP {
+            self.size += 1;
+        } else {
+            let v = self.records[self.idx];
             self.total -= v;
             self.square_total -= v * v;
-        } else {
-            self.size += 1;
         }
+
         self.total += record;
         self.square_total += record * record;
 
-        self.records[self.idx] = Some(record);
+        self.records[self.idx] = record;
         self.idx = (self.idx + 1) % CAP;
     }
 
     pub fn get_recent(&self) -> u64 {
+        if self.size == 0 {
+            return 0;
+        }
         let prev = (self.idx - 1) % CAP;
-        self.records[prev].unwrap_or(0)
+        self.records[prev]
     }
 
     pub fn get_avg(&self) -> f64 {
@@ -198,12 +209,83 @@ impl<const CAP: usize> Smoother<CAP> {
         self.total as f64 / self.size as f64
     }
 
+    pub fn get_max(&self) -> u64 {
+        let mut max = 0;
+        for i in 0..self.size {
+            max = std::cmp::max(max, self.records[i]);
+        }
+        max
+    }
+
+    pub fn get_percentile_95(&self) -> u64 {
+        let mut v = self.records[..self.size].to_owned();
+        v.sort();
+        v[(self.size as f64 * 0.95) as usize]
+    }
+
     pub fn get_variance(&self) -> f64 {
         if self.size == 0 {
             return 0.0;
         }
-        
+
         (self.square_total as f64 / self.size as f64 - self.get_avg().powi(2)).sqrt()
+    }
+
+    fn factorial(&self, n: u64) -> u64 {
+        let mut res = 1;
+        for i in 1..=n {
+            res *= i;
+        }
+        res
+    }
+
+    fn binom_fact(&self, n: u64, k: u64) -> u64 {
+        self.factorial(n) / self.factorial(k) / self.factorial(n - k)
+    }
+
+    fn binom_cdf(&self, x: u64, n: u64, p: f64) -> f64 {
+        let mut cd = 0.0;
+        for i in 0..=x {
+            cd += self.binom_fact(n, i) as f64 * p.powi(i as i32) * (1.0 - p).powi((n - i) as i32);
+        }
+        cd
+    }
+
+    pub fn trend(&self) -> Trend {
+        if self.size == 0 {
+            return Trend::NoTrend;
+        }
+
+        // follow the way of Cox-Stuart
+        let half = if self.size % 2 == 0 {
+            self.size / 2
+        } else {
+            (self.size - 1) / 2
+        };
+
+        use std::cmp::Ordering;
+        let mut num_pos = 0;
+        let mut num_neg = 0;
+        for i in 0..half {
+            match self.records[(self.idx + i + half) % CAP].cmp(&self.records[(self.idx + i) % CAP])
+            {
+                Ordering::Greater => num_pos += 1,
+                Ordering::Less => num_neg += 1,
+                Ordering::Equal => {}
+            }
+        }
+
+        let num = num_neg + num_pos;
+        let k = std::cmp::min(num_neg, num_pos);
+        let p_value = 2.0 * self.binom_cdf(k, num, 0.5);
+
+        if num_pos > num_neg && p_value < 0.05 {
+            Trend::Increasing
+        } else if num_pos < num_neg && p_value < 0.05 {
+            Trend::Decreasing
+        } else {
+            Trend::NoTrend
+        }
     }
 }
 
@@ -214,7 +296,9 @@ struct FlowChecker<E: Engine> {
     l0_files_threshold: u64,
 
     last_num_memtables: Smoother<10>,
-    last_num_l0_files: Smoother<20>,
+    long_term_num_l0_files: Smoother<600>,
+    short_term_avg_l0_files: Smoother<60>,
+    long_term_pending_bytes: Smoother<600>,
 
     factor: f64,
 
@@ -222,12 +306,12 @@ struct FlowChecker<E: Engine> {
     discard_ratio: Arc<AtomicU64>,
 
     engine: E,
-    recorder: Smoother<10>,
+    recorder: Smoother<60>,
     limiter: Arc<Limiter>,
 }
 
 impl<E: Engine> FlowChecker<E> {
-    fn start(self, rx: Receiver<bool>, l0_completed_receiver: Receiver<()>) -> JoinHandle<()> {
+    fn start(self, rx: Receiver<bool>, l0_completed_receiver: Receiver<String>) -> JoinHandle<()> {
         Builder::new()
             .name(thd_name!("flow-checker"))
             .spawn(move || {
@@ -236,8 +320,8 @@ impl<E: Engine> FlowChecker<E> {
                 let mut ticks = 0;
                 while rx.try_recv().is_err() {
                     thread::sleep(Duration::from_millis(CHECK_TICK_INTERVAL));
-                    if l0_completed_receiver.try_recv().is_ok() {
-                        checker.adjust_l0_files();
+                    if let Ok(cf) = l0_completed_receiver.try_recv() {
+                        checker.adjust_l0_files(cf);
                     }
                     ticks += 1;
                     if ticks == ADJUST_TICKS {
@@ -253,11 +337,14 @@ impl<E: Engine> FlowChecker<E> {
     }
 
     fn update_statistics(&mut self) {
-        self.recorder
-            .observe(self.limiter.total_bytes_consumed() as u64);
-        SCHED_WRITE_FLOW_GAUGE.set(self.limiter.total_bytes_consumed() as i64);
+        let bytes = self.limiter.total_bytes_consumed() as u64;
+        if bytes != 0 {
+            self.recorder.observe(bytes);
+        }
+        SCHED_WRITE_FLOW_GAUGE.set(bytes as i64);
         self.limiter.reset_statistics();
     }
+
     fn adjust_pending_compaction_bytes(&mut self) {
         let mut pending_compaction_bytes = 0;
         for cf in self.engine.kv_engine().cf_names() {
@@ -270,22 +357,23 @@ impl<E: Engine> FlowChecker<E> {
                     .unwrap_or(0),
             );
         }
+        self.long_term_pending_bytes
+            .observe(pending_compaction_bytes);
+        let pending_compaction_bytes = self.long_term_pending_bytes.get_avg();
 
-        let ratio = if pending_compaction_bytes < self.pending_compaction_bytes_soft_limit {
+        let ratio = if pending_compaction_bytes < self.pending_compaction_bytes_soft_limit as f64 {
             0
         } else {
             let x = 5.0
                 - 10.0
                     / (self.pending_compaction_bytes_hard_limit
                         - self.pending_compaction_bytes_soft_limit) as f64
-                    * (pending_compaction_bytes - self.pending_compaction_bytes_soft_limit) as f64;
+                    * (pending_compaction_bytes - self.pending_compaction_bytes_soft_limit as f64);
             let new_ratio = 1.0 / (1.0 + x.exp());
             let old_ratio = self.discard_ratio.load(Ordering::Relaxed);
             (if old_ratio != 0 {
-                self.factor * (old_ratio as f64 / RATIO_PERCISION)
-                    + (1.0 - self.factor)
-                        * new_ratio
-                            // * (1.0 + self.start_control_time.elapsed().as_secs() as f64 / 100.0))
+                self.factor * (old_ratio as f64 / RATIO_PERCISION) + (1.0 - self.factor) * new_ratio
+                // * (1.0 + self.start_control_time.elapsed().as_secs() as f64 / 100.0))
             } else {
                 self.start_control_time = Instant::now_coarse();
                 new_ratio
@@ -313,56 +401,100 @@ impl<E: Engine> FlowChecker<E> {
         SCHED_MEMTABLE_GAUGE.set(num_memtables as i64);
         self.last_num_memtables.observe(num_memtables);
     }
-    
-    fn adjust_l0_files(&mut self) {
+
+    fn adjust_l0_files(&mut self, cf: String) {
         let mut num_l0_files = 0;
+        let mut cf_name = None;
         for cf in self.engine.kv_engine().cf_names() {
-            num_l0_files = std::cmp::max(
-                num_l0_files,
-                self.engine
-                    .kv_engine()
-                    .get_cf_num_files_at_level(cf, 0)
-                    .unwrap_or(None)
-                    .unwrap_or(0),
-            );
+            let num = self
+                .engine
+                .kv_engine()
+                .get_cf_num_files_at_level(cf, 0)
+                .unwrap_or(None)
+                .unwrap_or(0);
+            if num_l0_files < num {
+                num_l0_files = num;
+                cf_name = Some(cf.to_owned());
+            }
+        }
+        if cf_name.unwrap() != cf {
+            return;
         }
 
+        self.long_term_num_l0_files.observe(num_l0_files);
+
         let is_throttled = self.limiter.speed_limit() != INFINITY;
-        let should_throttle = self.last_num_l0_files.get_avg() > self.l0_files_threshold as f64;
+        let should_throttle =
+            self.long_term_num_l0_files.get_avg() > self.l0_files_threshold as f64;
+
+        self.short_term_avg_l0_files
+            .observe(self.long_term_num_l0_files.get_avg() as u64);
 
         let mut throttle = if !is_throttled && should_throttle {
-            SCHED_THROTTLE_ACTION_COUNTER.with_label_values(&["init"]).inc();
-            self.recorder.get_avg() * (1.0 - LIMIT_DOWN_PERCENT)
+            SCHED_THROTTLE_ACTION_COUNTER
+                .with_label_values(&["init"])
+                .inc();
+            self.recorder.get_percentile_95() as f64
         } else if is_throttled && should_throttle {
-            if self.last_num_l0_files.get_recent() < num_l0_files {
-                SCHED_THROTTLE_ACTION_COUNTER.with_label_values(&["down"]).inc();
-                self.recorder.get_avg() * (1.0 - LIMIT_DOWN_PERCENT)
-            } else if self.last_num_l0_files.get_recent() == num_l0_files {
-                SCHED_THROTTLE_ACTION_COUNTER.with_label_values(&["keep"]).inc();
-                self.limiter.speed_limit()
-            } else if self.last_num_l0_files.get_recent() > num_l0_files {
-                SCHED_THROTTLE_ACTION_COUNTER.with_label_values(&["up"]).inc();
-                self.recorder.get_avg() * (1.0 + LIMIT_UP_PERCENT)
-            } else {
-                panic!();
+            match self.short_term_avg_l0_files.trend() {
+                Trend::Increasing => {
+                    if self.long_term_num_l0_files.get_recent() < self.l0_files_threshold {
+                        SCHED_THROTTLE_ACTION_COUNTER
+                            .with_label_values(&["keep3"])
+                            .inc();
+                        self.limiter.speed_limit()
+                    } else {
+                        SCHED_THROTTLE_ACTION_COUNTER
+                            .with_label_values(&["down"])
+                            .inc();
+                        self.recorder.get_percentile_95() as f64 * (1.0 - LIMIT_DOWN_PERCENT)
+                    }
+                }
+                Trend::Decreasing => {
+                    if self.long_term_num_l0_files.get_recent() < self.l0_files_threshold {
+                        // now the number of l0 files is already below the threshold,
+                        // so we'd better limit up the throttle fast
+                        SCHED_THROTTLE_ACTION_COUNTER
+                            .with_label_values(&["up2"])
+                            .inc();
+                        self.recorder.get_percentile_95() as f64 * (1.0 + LIMIT_UP_PERCENT * 3.0)
+                    } else {
+                        SCHED_THROTTLE_ACTION_COUNTER
+                            .with_label_values(&["up"])
+                            .inc();
+                        self.recorder.get_percentile_95() as f64 * (1.0 + LIMIT_UP_PERCENT)
+                    }
+                }
+                Trend::NoTrend => {
+                    SCHED_THROTTLE_ACTION_COUNTER
+                        .with_label_values(&["keep"])
+                        .inc();
+                    self.limiter.speed_limit()
+                }
             }
         } else if is_throttled && !should_throttle {
-            if (num_l0_files as f64) < self.l0_files_threshold as f64 * 0.7 {
-                SCHED_THROTTLE_ACTION_COUNTER.with_label_values(&["reset"]).inc();
-                INFINITY
-            } else {
-                SCHED_THROTTLE_ACTION_COUNTER.with_label_values(&["back"]).inc();
+            if (num_l0_files as f64) > self.l0_files_threshold as f64 * 0.8 {
+                SCHED_THROTTLE_ACTION_COUNTER
+                    .with_label_values(&["keep3"])
+                    .inc();
+                self.limiter.speed_limit()
+            } else if (num_l0_files as f64) > self.l0_files_threshold as f64 * 0.5 {
+                SCHED_THROTTLE_ACTION_COUNTER
+                    .with_label_values(&["back"])
+                    .inc();
                 self.recorder.get_avg() * (1.0 + LIMIT_UP_PERCENT * 3.0)
-                // do something else
+            } else {
+                SCHED_THROTTLE_ACTION_COUNTER
+                    .with_label_values(&["reset"])
+                    .inc();
+                INFINITY
             }
         } else {
             INFINITY
         };
 
-        self.last_num_l0_files.observe(num_l0_files);
-
         SCHED_L0_GAUGE.set(num_l0_files as i64);
-        SCHED_L0_AVG_GAUGE.set(self.last_num_l0_files.get_avg() as i64);
+        SCHED_L0_AVG_GAUGE.set(self.long_term_num_l0_files.get_avg() as i64);
 
         if throttle < MIN_THROTTLE_SPEED {
             throttle = MIN_THROTTLE_SPEED;
@@ -403,7 +535,11 @@ impl Drop for FlowController {
 }
 
 impl FlowController {
-    pub fn new<E: Engine>(config: &Config, engine: E, l0_completed_receiver: Option<Receiver<()>>) -> Self {
+    pub fn new<E: Engine>(
+        config: &Config,
+        engine: E,
+        l0_completed_receiver: Option<Receiver<String>>,
+    ) -> Self {
         let limiter = Arc::new(Limiter::new(INFINITY));
         let discard_ratio = Arc::new(AtomicU64::new(0));
         let checker = FlowChecker {
@@ -412,7 +548,9 @@ impl FlowController {
             memtables_threshold: config.memtables_threshold,
             l0_files_threshold: config.l0_files_threshold,
             last_num_memtables: Smoother::new(),
-            last_num_l0_files: Smoother::new(),
+            long_term_num_l0_files: Smoother::new(),
+            short_term_avg_l0_files: Smoother::new(),
+            long_term_pending_bytes: Smoother::new(),
             engine,
             factor: EMA_FACTOR,
             discard_ratio: discard_ratio.clone(),
@@ -568,7 +706,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         concurrency_manager: ConcurrencyManager,
         config: &Config,
         pipelined_pessimistic_lock: Arc<AtomicBool>,
-        l0_completed_receiver: Option<Receiver<()>>,
+        l0_completed_receiver: Option<Receiver<String>>,
     ) -> Self {
         let t = Instant::now_coarse();
         let mut task_slots = Vec::with_capacity(TASKS_SLOTS_NUM);

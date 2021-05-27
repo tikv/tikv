@@ -201,16 +201,20 @@ use std::sync::Mutex;
 pub struct CompactionListener {
     ch: Box<dyn Fn(RocksCompactedEvent) + Send + Sync>,
     filter: Option<Filter>,
-    l0_completed_sender: Mutex<Sender<()>>,
+    l0_completed_sender: Mutex<Sender<String>>,
 }
 
 impl CompactionListener {
     pub fn new(
         ch: Box<dyn Fn(RocksCompactedEvent) + Send + Sync>,
         filter: Option<Filter>,
-        l0_completed_sender: Sender<()>,
+        l0_completed_sender: Sender<String>,
     ) -> CompactionListener {
-        CompactionListener { ch, filter, l0_completed_sender: Mutex::new(l0_completed_sender) }
+        CompactionListener {
+            ch,
+            filter,
+            l0_completed_sender: Mutex::new(l0_completed_sender),
+        }
     }
 }
 
@@ -222,7 +226,11 @@ impl EventListener for CompactionListener {
         }
 
         if info.base_input_level() == 0 {
-                let _ = self.l0_completed_sender.lock().unwrap().send(());
+            let _ = self
+                .l0_completed_sender
+                .lock()
+                .unwrap()
+                .send(info.cf_name().to_owned());
         }
         if let Some(ref f) = self.filter {
             if !f(info) {

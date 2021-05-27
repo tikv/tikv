@@ -17,7 +17,7 @@ use std::{
     fs::{self, File},
     net::SocketAddr,
     path::{Path, PathBuf},
-    sync::{atomic::AtomicU64, Arc, Mutex, mpsc},
+    sync::{atomic::AtomicU64, mpsc, Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -149,7 +149,7 @@ struct TiKVServer<ER: RaftEngine> {
     security_mgr: Arc<SecurityManager>,
     pd_client: Arc<RpcClient>,
     router: RaftRouter<RocksEngine, ER>,
-    l0_completed_receiver: Option<mpsc::Receiver<()>>,
+    l0_completed_receiver: Option<mpsc::Receiver<String>>,
     system: Option<RaftBatchSystem<RocksEngine, ER>>,
     resolver: resolve::PdStoreAddrResolver,
     state: Arc<Mutex<GlobalReplicationState>>,

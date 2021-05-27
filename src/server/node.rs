@@ -40,7 +40,7 @@ pub fn create_raft_storage<S>(
     lock_mgr: LockManager,
     concurrency_manager: ConcurrencyManager,
     pipelined_pessimistic_lock: Arc<AtomicBool>,
-    l0_completed_receiver: Option<std::sync::mpsc::Receiver<()>>,
+    l0_completed_receiver: Option<std::sync::mpsc::Receiver<String>>,
 ) -> Result<Storage<RaftKv<S>, LockManager>>
 where
     S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
