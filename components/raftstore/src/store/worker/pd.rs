@@ -1,5 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cmp::Ordering as CmpOrdering;
+use std::collections::BinaryHeap;
 use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{
@@ -202,6 +204,40 @@ pub struct PeerStat {
     pub last_store_report_read_keys: u64,
     pub approximate_keys: u64,
     pub approximate_size: u64,
+}
+
+#[derive(Default)]
+pub struct PeerReportReadStat {
+    pub region_id: u64,
+    pub report_read_bytes: u64,
+    pub report_read_keys: u64,
+}
+
+impl Ord for PeerReportReadStat {
+    fn cmp(&self, other: &Self) -> CmpOrdering {
+        match self.report_read_bytes.cmp(&other.report_read_bytes) {
+            CmpOrdering::Equal => self.report_read_keys.cmp(&other.report_read_keys),
+            x => x,
+        }
+    }
+}
+
+impl Eq for PeerReportReadStat {}
+
+impl PartialEq for PeerReportReadStat {
+    fn eq(&self, other: &Self) -> bool {
+        self.report_read_bytes == other.report_read_bytes
+            && self.report_read_keys == other.report_read_keys
+    }
+}
+
+impl PartialOrd for PeerReportReadStat {
+    fn partial_cmp(&self, other: &Self) -> Option<CmpOrdering> {
+        match self.report_read_bytes.cmp(&other.report_read_bytes) {
+            CmpOrdering::Equal => Some(self.report_read_keys.cmp(&other.report_read_keys)),
+            x => Some(x),
+        }
+    }
 }
 
 impl<E> Display for Task<E>
@@ -427,6 +463,7 @@ where
 
 const HOTSPOT_KEY_RATE_THRESHOLD: u64 = 128;
 const HOTSPOT_BYTE_RATE_THRESHOLD: u64 = 8 * 1024;
+const HOTSPOT_REPORT_CAPACITY: usize = 1000;
 
 // TODO: support dyamic configure threshold in future
 fn hotspot_key_report_threshold() -> u64 {
@@ -441,6 +478,13 @@ fn hotspot_byte_report_threshold() -> u64 {
     fail_point!("mock_hotspot_threshold", |_| { 0 });
 
     HOTSPOT_BYTE_RATE_THRESHOLD * 10
+}
+
+fn hotspot_report_capacity() -> usize {
+    #[cfg(feature = "failpoints")]
+    fail_point!("mock_hotspot_capacity", |_| { 0 });
+
+    HOTSPOT_REPORT_CAPACITY
 }
 
 pub struct Runner<EK, ER, T>
@@ -681,21 +725,30 @@ where
             Ok(stats) => stats,
         };
 
+        let mut topn_report = BinaryHeap::with_capacity(hotspot_report_capacity());
+
         for (region_id, region_peer) in &mut self.region_peers {
             let read_bytes = region_peer.read_bytes - region_peer.last_store_report_read_bytes;
             let read_keys = region_peer.read_keys - region_peer.last_store_report_read_keys;
             region_peer.last_store_report_read_bytes = region_peer.read_bytes;
             region_peer.last_store_report_read_keys = region_peer.read_keys;
-            // TODO: select hotspot peer by binaray heap in future
             if read_bytes < hotspot_byte_report_threshold()
                 && read_keys < hotspot_key_report_threshold()
             {
                 continue;
             }
+            let mut read_stat = PeerReportReadStat::default();
+            read_stat.region_id = *region_id;
+            read_stat.report_read_bytes = read_bytes;
+            read_stat.report_read_keys = read_keys;
+            topn_report.push(read_stat);
+        }
+
+        for item in topn_report.into_vec() {
             let mut peer_stat = pdpb::PeerStat::default();
-            peer_stat.set_region_id(*region_id);
-            peer_stat.set_read_bytes(read_bytes);
-            peer_stat.set_read_keys(read_keys);
+            peer_stat.set_region_id(item.region_id);
+            peer_stat.set_read_bytes(item.report_read_bytes);
+            peer_stat.set_read_keys(item.report_read_keys);
             stats.peer_stats.push(peer_stat);
         }
 
