@@ -3593,7 +3593,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(tikv_raftstore_hibernate_state_count{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (instance, state)",
+              "expr": "sum(tikv_raftstore_hibernated_peer_state{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (instance, state)",
               "format": "time_series",
               "hide": false,
               "intervalFactor": 2,
