@@ -32,6 +32,7 @@ command! {
             primary: Vec<u8>,
             /// The transaction timestamp.
             start_ts: TimeStamp,
+            /// The Time To Live of the lock, in milliseconds
             lock_ttl: u64,
             is_first_lock: bool,
             for_update_ts: TimeStamp,

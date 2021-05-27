@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::Duration;
 
 use strum::EnumCount;
 
@@ -53,7 +53,7 @@ impl MetricsManager {
         }
     }
 
-    pub fn flush(&mut self, _now: Instant) {
+    pub fn flush(&mut self, _duration: Duration) {
         flush_io_latency_metrics();
         flush_io_bytes!(
             self.fetcher,
@@ -84,6 +84,12 @@ impl MetricsManager {
             compaction,
             IOType::Compaction,
             self.last_fetch[IOType::Compaction as usize]
+        );
+        flush_io_bytes!(
+            self.fetcher,
+            level_zero_compaction,
+            IOType::LevelZeroCompaction,
+            self.last_fetch[IOType::LevelZeroCompaction as usize]
         );
         flush_io_bytes!(
             self.fetcher,
