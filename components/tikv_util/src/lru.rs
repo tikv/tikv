@@ -250,6 +250,7 @@ where
         let current_size = SizeTracker::<K, V>::current(&self.size_tracker);
         match self.map.entry(key) {
             HashMapEntry::Occupied(mut e) => {
+                // TODO: evict entries if size exceeds capacity.
                 self.size_tracker.on_remove(e.key(), &e.get().value);
                 self.size_tracker.on_insert(e.key(), &value);
                 let mut entry = e.get_mut();
@@ -258,6 +259,7 @@ where
             }
             HashMapEntry::Vacant(v) => {
                 let record = if self.capacity <= current_size {
+                    // TODO: evict not only one entry to fit capacity.
                     let res = self.trace.reuse_tail(v.key().clone());
                     old_key = Some(res.0);
                     res.1
