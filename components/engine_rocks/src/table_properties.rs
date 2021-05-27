@@ -2,7 +2,7 @@
 
 use crate::engine::RocksEngine;
 use crate::util;
-use engine_traits::DecodeProperties;
+use crate::properties_types::DecodeProperties;
 use engine_traits::Range;
 use engine_traits::{Error, Result};
 use rocksdb::table_properties_rc as rc;
