@@ -1,5 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::ffi::CString;
 use std::pin::Pin;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
@@ -538,7 +539,8 @@ impl PdConnector {
         let channel = {
             let cb = ChannelBuilder::new(self.env.clone())
                 .keepalive_time(Duration::from_secs(10))
-                .keepalive_timeout(Duration::from_secs(3));
+                .keepalive_timeout(Duration::from_secs(3))
+                .raw_cfg_int(CString::new("dns_ares_query_timeout").unwrap(), 2_000);
             self.security_mgr.connect(cb, addr_trim)
         };
         let client = PdClientStub::new(channel);

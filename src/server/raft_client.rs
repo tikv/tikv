@@ -21,6 +21,7 @@ use raftstore::errors::DiscardReason;
 use raftstore::router::RaftStoreRouter;
 use security::SecurityManager;
 use std::collections::VecDeque;
+use std::convert::TryInto;
 use std::ffi::CString;
 use std::marker::PhantomData;
 use std::marker::Unpin;
@@ -579,6 +580,9 @@ where
             .max_send_message_len(self.builder.cfg.max_grpc_send_msg_len)
             .keepalive_time(self.builder.cfg.grpc_keepalive_time.0)
             .keepalive_timeout(self.builder.cfg.grpc_keepalive_timeout.0)
+            .raw_cfg_int(
+                CString::new("dns_ares_query_timeout").unwrap(),
+                self.builder.cfg.dns_ares_query_timeout.as_millis().try_into().unwrap())
             .default_compression_algorithm(self.builder.cfg.grpc_compression_algorithm())
             // hack: so it's different args, grpc will always create a new connection.
             .raw_cfg_int(

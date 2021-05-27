@@ -8,6 +8,7 @@ extern crate vlog;
 use std::borrow::ToOwned;
 use std::cmp::Ordering;
 use std::error::Error;
+use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -156,7 +157,8 @@ fn new_debug_client(host: &str, mgr: Arc<SecurityManager>) -> DebugClient {
         .max_receive_message_len(1 << 30) // 1G.
         .max_send_message_len(1 << 30)
         .keepalive_time(Duration::from_secs(10))
-        .keepalive_timeout(Duration::from_secs(3));
+        .keepalive_timeout(Duration::from_secs(3))
+        .raw_cfg_int(CString::new("dns_ares_query_timeout").unwrap(), 2_000);
 
     let channel = mgr.connect(cb, host);
     DebugClient::new(channel)
