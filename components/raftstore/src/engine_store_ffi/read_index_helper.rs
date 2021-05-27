@@ -53,19 +53,29 @@ impl<ER: RaftEngine> ReadIndex for ReadIndexClient<ER> {
 
             let (cb, f) = paired_future_callback();
 
-            let _ = self
+            if let Err(_) = self
                 .router
                 .lock()
                 .unwrap()
-                .send_command(cmd, Callback::Read(cb));
-            router_cb_vec.push((f, region_id));
+                .send_command(cmd, Callback::Read(cb))
+            {
+                router_cb_vec.push((None, region_id));
+            } else {
+                router_cb_vec.push((Some(f), region_id));
+            }
         }
 
         let mut read_index_res = Vec::with_capacity(req_vec.len());
         for (cb, region_id) in router_cb_vec {
             let mut resp = ReadIndexResponse::default();
-            let res = block_on(cb);
-            if res.is_err() {
+            let res = match cb {
+                None => None,
+                Some(cb) => match block_on(cb) {
+                    Err(_) => None,
+                    Ok(e) => Some(e),
+                },
+            };
+            if res.is_none() {
                 resp.set_region_error(Default::default());
                 read_index_res.push((resp, region_id));
                 continue;
