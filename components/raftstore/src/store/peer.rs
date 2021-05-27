@@ -1639,7 +1639,11 @@ where
                     self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.send_message);
                 }
             }
-            CheckApplyingSnapStatus::Idle => {}
+            CheckApplyingSnapStatus::Idle => {
+                // It's possible that the snapshot applying task is canceled. However it only
+                // happens when shutting down the instance or destroying the peer. So it's ok
+                // to skip further operations for the peer.
+            }
         }
 
         let mut destroy_regions = vec![];
@@ -1740,8 +1744,8 @@ where
             if !self.is_leader() {
                 fail_point!("raft_before_follower_send");
             }
-            let msg = ready.take_messages();
-            self.send(&mut ctx.trans, msg, &mut ctx.raft_metrics.send_message);
+            let msgs = ready.take_messages();
+            self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.send_message);
         }
 
         self.apply_reads(ctx, &ready);
@@ -1787,7 +1791,11 @@ where
         }
 
         let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
+        let msgs = ready.take_persisted_messages();
+
         if apply_snap_result.is_some() {
+            self.pending_messages = msgs;
+
             // The peer may change from learner to voter after snapshot applied.
             let peer = self
                 .region()
@@ -1806,22 +1814,13 @@ where
                 );
                 self.peer = peer;
             };
-        }
 
-        if !self.is_leader() {
-            let msgs = ready.take_persisted_messages();
-            if self.is_applying_snapshot() {
-                self.pending_messages = msgs;
-            } else {
-                self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.send_message);
-            }
-        }
-
-        if apply_snap_result.is_some() {
             self.activate(ctx);
             let mut meta = ctx.store_meta.lock().unwrap();
             meta.readers
                 .insert(self.region_id, ReadDelegate::from_peer(self));
+        } else {
+            self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.send_message);
         }
 
         apply_snap_result
@@ -1954,8 +1953,8 @@ where
             if !self.is_leader() {
                 fail_point!("raft_before_follower_send");
             }
-            let vec_msg = light_rd.take_messages();
-            self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.send_message);
+            let msgs = light_rd.take_messages();
+            self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.send_message);
         }
 
         if !light_rd.committed_entries().is_empty() {

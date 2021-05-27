@@ -3479,7 +3479,7 @@ dependencies = [
 [[package]]
 name = "protobuf"
 version = "2.8.0"
-source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#82b49fea7e696fd647b5aca0a6c6ec944eab3189"
+source = "git+https://github.com/pingcap/rust-protobuf?rev=82b49fea7e696fd647b5aca0a6c6ec944eab3189#82b49fea7e696fd647b5aca0a6c6ec944eab3189"
 dependencies = [
  "bytes 1.0.1",
  "heck",
@@ -3506,7 +3506,7 @@ dependencies = [
 [[package]]
 name = "protobuf-codegen"
 version = "2.8.0"
-source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#82b49fea7e696fd647b5aca0a6c6ec944eab3189"
+source = "git+https://github.com/pingcap/rust-protobuf?rev=82b49fea7e696fd647b5aca0a6c6ec944eab3189#82b49fea7e696fd647b5aca0a6c6ec944eab3189"
 dependencies = [
  "heck",
  "protobuf",
@@ -3533,7 +3533,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.6.0-alpha"
-source = "git+https://github.com/tikv/raft-rs?branch=master#5357ffc10fed1d548e9955b1b4337e6ca9f21b6d"
+source = "git+https://github.com/tikv/raft-rs?branch=master#438c671bad856e19de6ff1cad453e2642f956604"
 dependencies = [
  "bytes 1.0.1",
  "fxhash",
@@ -3567,7 +3567,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
-source = "git+https://github.com/tikv/raft-rs?branch=master#5357ffc10fed1d548e9955b1b4337e6ca9f21b6d"
+source = "git+https://github.com/tikv/raft-rs?branch=master#438c671bad856e19de6ff1cad453e2642f956604"
 dependencies = [
  "bytes 1.0.1",
  "lazy_static",
