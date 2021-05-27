@@ -13,7 +13,7 @@ use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::vec::Drain;
-use std::{cmp, usize};
+use std::{cmp, mem, usize};
 
 use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler, Priority,
@@ -44,6 +44,7 @@ use raft_proto::ConfChangeI;
 use sst_importer::SSTImporter;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::config::{Tracker, VersionTrack};
+use tikv_util::memory::HeapSize;
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant};
 use tikv_util::worker::Scheduler;
@@ -175,6 +176,16 @@ where
     // TODO: seems we don't need to separate conf change from normal entries.
     fn set_conf_change(&mut self, cmd: PendingCmd<S>) {
         self.conf_change = Some(cmd);
+    }
+}
+
+impl<S> HeapSize for PendingCmdQueue<S>
+where
+    S: Snapshot,
+{
+    #[inline]
+    fn heap_size(&self) -> usize {
+        self.normals.capacity() * mem::size_of::<PendingCmd<S>>()
     }
 }
 
@@ -377,6 +388,8 @@ where
     priority: Priority,
     /// Whether to yield high-latency operation to low-priority handler.
     yield_high_latency_operation: bool,
+
+    trace: ApplyContextTrace,
 }
 
 impl<EK, W> ApplyContext<EK, W>
@@ -427,6 +440,7 @@ where
             pending_create_peers,
             priority,
             yield_high_latency_operation: cfg.apply_batch_system.low_priority_pool_size > 0,
+            trace: ApplyContextTrace::default(),
         }
     }
 
@@ -713,6 +727,8 @@ where
     /// the source peer has applied its logs and pending entries
     /// are all handled.
     pending_msgs: Vec<Msg<EK>>,
+
+    approximate_size: usize,
 }
 
 impl<EK> Debug for YieldState<EK>
@@ -732,6 +748,23 @@ impl Debug for WaitSourceMergeState {
         f.debug_struct("WaitSourceMergeState")
             .field("logs_up_to_date", &self.logs_up_to_date)
             .finish()
+    }
+}
+
+impl<EK> HeapSize for YieldState<EK>
+where
+    EK: KvEngine,
+{
+    fn heap_size(&self) -> usize {
+        let mut size = self.pending_entries.capacity() * mem::size_of::<Entry>()
+            + self.pending_msgs.capacity() * mem::size_of::<Msg<EK>>();
+        for e in &self.pending_entries {
+            size += e.get_data().len() + e.get_context().len();
+        }
+        for m in &self.pending_msgs {
+            size += m.heap_size();
+        }
+        size
     }
 }
 
@@ -815,6 +848,8 @@ where
     /// Priority in batch system. When applying some commands which have high latency,
     /// we decrease the priority of current fsm to reduce the impact on other normal commands.
     priority: Priority,
+
+    trace: ApplyMemoryTrace,
 }
 
 impl<EK> ApplyDelegate<EK>
@@ -843,6 +878,7 @@ where
             pending_request_snapshot_count: reg.pending_request_snapshot_count,
             observe_info: CmdObserveInfo::default(),
             priority: Priority::Normal,
+            trace: ApplyMemoryTrace::default(),
         }
     }
 
@@ -910,6 +946,7 @@ where
                     self.yield_state = Some(YieldState {
                         pending_entries,
                         pending_msgs: Vec::default(),
+                        approximate_size: 0,
                     });
                     if let ApplyResult::WaitMergeSource(logs_up_to_date) = res {
                         self.wait_merge_state = Some(WaitSourceMergeState { logs_up_to_date });
@@ -1238,6 +1275,7 @@ where
     fn destroy<W: WriteBatch<EK>>(&mut self, apply_ctx: &mut ApplyContext<EK, W>) {
         self.stopped = true;
         apply_ctx.router.close(self.region_id());
+        MEMTRACE_APPLYS.trace(TraceEvent::Sub(self.trace.sum()));
         for cmd in self.pending_cmds.normals.drain(..) {
             notify_region_removed(self.region.get_id(), self.id, cmd);
         }
@@ -2822,6 +2860,16 @@ pub struct CatchUpLogs {
     pub logs_up_to_date: Arc<AtomicU64>,
 }
 
+impl HeapSize for CatchUpLogs {
+    fn heap_size(&self) -> usize {
+        let mut size: usize = mem::size_of::<Region>() + 8;
+        for e in &self.merge.entries {
+            size += e.context.len() + e.data.len() + mem::size_of::<Entry>();
+        }
+        size
+    }
+}
+
 pub struct GenSnapTask {
     pub(crate) region_id: u64,
     // Fill it after the RocksDB snapshot is taken.
@@ -2998,6 +3046,23 @@ where
             } => write!(f, "[region {}] change cmd", region_id),
             #[cfg(any(test, feature = "testexport"))]
             Msg::Validate(region_id, _) => write!(f, "[region {}] validate", region_id),
+        }
+    }
+}
+
+impl<EK> HeapSize for Msg<EK>
+where
+    EK: KvEngine,
+{
+    #[inline]
+    fn heap_size(&self) -> usize {
+        match self {
+            Msg::Apply { apply, .. } => apply.entries_mem_size as usize,
+            Msg::Registration(r) => r.region.heap_size(),
+            Msg::LogsUpToDate(l) => l.heap_size(),
+            Msg::Snapshot(_) | Msg::Destroy(_) | Msg::Noop | Msg::Change { .. } => 0,
+            #[cfg(any(test, feature = "testexport"))]
+            Msg::Validate(..) => 0,
         }
     }
 }
@@ -3434,6 +3499,19 @@ where
                 None => break,
             }
         }
+        let s = self.delegate.yield_state.as_mut().map_or(0, |s| {
+            if s.approximate_size == 0 {
+                s.approximate_size = s.heap_size();
+            }
+            s.approximate_size
+        });
+        let trace = ApplyMemoryTrace {
+            pending_cmds: self.delegate.pending_cmds.heap_size(),
+            rest: s + mem::size_of::<Self>(),
+        };
+        if let Some(event) = self.delegate.trace.reset(trace) {
+            MEMTRACE_APPLYS.trace(event);
+        }
     }
 }
 
@@ -3598,6 +3676,30 @@ where
 
     fn get_priority(&self) -> Priority {
         self.apply_ctx.priority
+    }
+
+    fn pause(&mut self) {
+        let mut size = self.apply_ctx.apply_res.heap_size();
+        size += self.msg_buf.heap_size();
+        size += mem::size_of::<Self>();
+        let trace = ApplyContextTrace {
+            cbs_size: self.apply_ctx.cbs.heap_size(),
+            write_batch: self.apply_ctx.kv_wb.data_size(),
+            rest: size,
+        };
+        if let Some(event) = self.apply_ctx.trace.reset(trace) {
+            MEMTRACE_APPLY_CONTEXT.trace(event);
+        }
+    }
+}
+
+impl<EK, W> Drop for ApplyPoller<EK, W>
+where
+    EK: KvEngine,
+    W: WriteBatch<EK>,
+{
+    fn drop(&mut self) {
+        MEMTRACE_APPLY_CONTEXT.trace(TraceEvent::Sub(self.apply_ctx.trace.sum()));
     }
 }
 

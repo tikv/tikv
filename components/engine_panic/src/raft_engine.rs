@@ -108,4 +108,8 @@ impl RaftLogBatch for PanicWriteBatch {
     fn is_empty(&self) -> bool {
         panic!()
     }
+
+    fn data_size(&self) -> usize {
+        panic!()
+    }
 }

@@ -40,6 +40,7 @@ use pd_client::{FeatureGate, PdClient};
 use sst_importer::SSTImporter;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::config::{Tracker, VersionTrack};
+use tikv_util::memory::HeapSize;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::timer::SteadyTimer;
@@ -386,6 +387,7 @@ where
     pub perf_context: EK::PerfContext,
     pub tick_batch: Vec<PeerTickBatch>,
     pub node_start_time: Option<TiInstant>,
+    pub trace: RaftContextTrace,
 }
 
 impl<EK, ER, T> HandleRaftReadyContext<EK::WriteBatch, ER::LogBatch> for PollContext<EK, ER, T>
@@ -721,6 +723,12 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
                     .post_raft_ready_append(ready);
             }
         }
+        // TODO: update memory trace by one event?
+        for peer in peers {
+            if let Some(event) = peer.update_memory_trace(&self.poll_ctx.cfg) {
+                MEMTRACE_PEERS.trace(event);
+            }
+        }
         let dur = self.timer.elapsed();
         if !self.poll_ctx.store_stat.is_busy {
             let election_timeout = Duration::from_millis(
@@ -898,6 +906,23 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         if self.poll_ctx.trans.need_flush() {
             self.poll_ctx.trans.flush();
         }
+        let mut size = self.poll_ctx.ready_res.heap_size();
+        size += self.store_msg_buf.heap_size();
+        size += self.peer_msg_buf.heap_size();
+        size += mem::size_of::<Self>();
+        let trace = RaftContextTrace {
+            write_batch: self.poll_ctx.kv_wb.data_size() + self.poll_ctx.raft_wb.data_size(),
+            rest: size,
+        };
+        if let Some(event) = self.poll_ctx.trace.reset(trace) {
+            MEMTRACE_RAFT_CONTEXT.trace(event);
+        }
+    }
+}
+
+impl<EK: KvEngine, ER: RaftEngine, T> Drop for RaftPoller<EK, ER, T> {
+    fn drop(&mut self) {
+        MEMTRACE_RAFT_CONTEXT.trace(TraceEvent::Sub(self.poll_ctx.trace.sum()));
     }
 }
 
@@ -1139,6 +1164,7 @@ where
             tick_batch: vec![PeerTickBatch::default(); 256],
             node_start_time: Some(TiInstant::now_coarse()),
             feature_gate: self.feature_gate.clone(),
+            trace: RaftContextTrace::default(),
         };
         ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());

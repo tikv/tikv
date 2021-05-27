@@ -111,7 +111,7 @@ impl RaftEngine for RocksEngine {
     }
 
     fn consume(&self, batch: &mut Self::LogBatch, sync_log: bool) -> Result<usize> {
-        let bytes = batch.data_size();
+        let bytes = WriteBatch::data_size(batch);
         let mut opts = WriteOptions::default();
         opts.set_sync(sync_log);
         batch.write_opt(&opts)?;
@@ -244,6 +244,10 @@ impl RaftLogBatch for RocksWriteBatch {
 
     fn is_empty(&self) -> bool {
         WriteBatch::is_empty(self)
+    }
+
+    fn data_size(&self) -> usize {
+        WriteBatch::data_size(self)
     }
 }
 

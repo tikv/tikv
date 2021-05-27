@@ -35,6 +35,7 @@ use raft::{
 };
 use raft_proto::ConfChangeI;
 use smallvec::SmallVec;
+use tikv_util::memory::HeapSize;
 use time::Timespec;
 use uuid::Uuid;
 
@@ -1018,6 +1019,21 @@ where
     #[inline]
     pub fn get_pending_snapshot(&self) -> Option<&eraftpb::Snapshot> {
         self.raft_group.snap()
+    }
+
+    #[inline]
+    pub fn proposal_size(&self) -> usize {
+        self.proposals.queue.heap_size() + self.pending_reads.heap_size()
+    }
+
+    #[inline]
+    pub fn rest_size(&self) -> usize {
+        self.peer_cache.borrow().heap_size()
+            + self.peer_heartbeats.heap_size()
+            + self.peers_start_pending_time.heap_size()
+            + self.down_peer_ids.heap_size()
+            + self.check_stale_peers.heap_size()
+            + self.want_rollback_merge_peers.heap_size()
     }
 
     fn add_ready_metric(&self, ready: &Ready, metrics: &mut RaftReadyMetrics) {
