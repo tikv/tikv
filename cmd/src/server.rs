@@ -211,7 +211,10 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let (resolver, state) =
             resolve::new_resolver(Arc::clone(&pd_client), &background_worker, router.clone());
 
-        let mut coprocessor_host = Some(CoprocessorHost::new(router.clone()));
+        let mut coprocessor_host = Some(CoprocessorHost::new(
+            router.clone(),
+            config.coprocessor.clone(),
+        ));
         let region_info_accessor = RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap());
 
         // Initialize concurrency manager
@@ -262,7 +265,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         validate_and_persist_config(&mut config, true);
         check_system_config(&config);
 
-        tikv_util::set_panic_hook(false, &config.storage.data_dir);
+        tikv_util::set_panic_hook(config.abort_on_panic, &config.storage.data_dir);
 
         info!(
             "using config";
@@ -357,7 +360,11 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         if tikv_util::panic_mark_file_exists(&self.config.storage.data_dir) {
             fatal!(
-                "panic_mark_file {} exists, there must be something wrong with the db.",
+                "panic_mark_file {} exists, there must be something wrong with the db. \
+                     Do not remove the panic_mark_file and force the TiKV node to restart. \
+                     Please contact TiKV maintainers to investigate the issue. \
+                     If needed, use scale in and scale out to replace the TiKV node. \
+                     https://docs.pingcap.com/tidb/stable/scale-tidb-using-tiup",
                 tikv_util::panic_mark_file_path(&self.config.storage.data_dir).display()
             );
         }
@@ -622,14 +629,19 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
 
         let import_path = self.store_path.join("import");
-        let importer =
-            Arc::new(SSTImporter::new(import_path, self.encryption_key_manager.clone()).unwrap());
+        let importer = Arc::new(
+            SSTImporter::new(
+                &self.config.import,
+                import_path,
+                self.encryption_key_manager.clone(),
+            )
+            .unwrap(),
+        );
 
         let split_check_runner = SplitCheckRunner::new(
             engines.engines.kv.clone(),
             self.router.clone(),
             self.coprocessor_host.clone().unwrap(),
-            self.config.coprocessor.clone(),
         );
         let split_check_scheduler = self
             .background_worker

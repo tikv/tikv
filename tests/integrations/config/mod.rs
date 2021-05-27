@@ -59,6 +59,7 @@ fn test_serde_custom_tikv_config() {
     value.log_format = LogFormat::Json;
     value.slow_log_file = "slow_foo".to_owned();
     value.slow_log_threshold = ReadableDuration::secs(1);
+    value.abort_on_panic = true;
     value.server = ServerConfig {
         cluster_id: 0, // KEEP IT ZERO, it is skipped by serde.
         addr: "example.com:443".to_owned(),
