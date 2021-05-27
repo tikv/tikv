@@ -5,9 +5,6 @@ use crate::util;
 use engine_traits::DecodeProperties;
 use engine_traits::Range;
 use engine_traits::{Error, Result};
-use engine_traits::{
-    UserCollectedProperties,
-};
 use rocksdb::table_properties_rc as rc;
 use std::ops::Deref;
 
@@ -95,13 +92,17 @@ impl RocksTableProperties {
 #[repr(transparent)]
 pub struct RocksUserCollectedProperties(rc::UserCollectedProperties);
 
-impl UserCollectedProperties for RocksUserCollectedProperties {
-    fn get(&self, index: &[u8]) -> Option<&[u8]> {
+impl RocksUserCollectedProperties {
+    pub fn get(&self, index: &[u8]) -> Option<&[u8]> {
         self.0.get(index)
     }
 
-    fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 
