@@ -104,17 +104,19 @@ pub(crate) type OldValueCallback =
     Box<dyn Fn(Key, TimeStamp, &mut OldValueCache) -> (Option<Vec<u8>>, Option<Statistics>) + Send>;
 
 pub struct OldValueCache {
-    pub cache: LruCache<Key, (OldValue, MutationType)>,
-    pub miss_count: usize,
+    pub cache: LruCache<Key, (OldValue, Option<MutationType>)>,
     pub access_count: usize,
+    pub miss_count: usize,
+    pub miss_none_count: usize,
 }
 
 impl OldValueCache {
     pub fn new(size: usize) -> OldValueCache {
         OldValueCache {
             cache: LruCache::with_capacity(size),
-            miss_count: 0,
             access_count: 0,
+            miss_count: 0,
+            miss_none_count: 0,
         }
     }
 }
@@ -1335,9 +1337,11 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> RunnableWithTimer for Endpoint<T
         CDC_OLD_VALUE_CACHE_BYTES.set(cache_size as i64);
         CDC_OLD_VALUE_CACHE_ACCESS.add(self.old_value_cache.access_count as i64);
         CDC_OLD_VALUE_CACHE_MISS.add(self.old_value_cache.miss_count as i64);
+        CDC_OLD_VALUE_CACHE_MISS_NONE.add(self.old_value_cache.miss_none_count as i64);
         CDC_OLD_VALUE_CACHE_LEN.set(self.old_value_cache.cache.len() as i64);
         self.old_value_cache.access_count = 0;
         self.old_value_cache.miss_count = 0;
+        self.old_value_cache.miss_none_count = 0;
     }
 
     fn get_interval(&self) -> Duration {

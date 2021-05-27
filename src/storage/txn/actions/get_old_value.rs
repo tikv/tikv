@@ -24,9 +24,11 @@ pub fn get_old_value<S: Snapshot>(
         WriteType::Put => {
             // For Put, there must be an old value either in its
             // short value or in the default CF.
-            Ok(OldValue::Value {
-                short_value: prev_write.short_value,
-                start_ts: prev_write.start_ts,
+            Ok(match prev_write.short_value {
+                Some(value) => OldValue::Value { value },
+                None => OldValue::ValueTimeStamp {
+                    start_ts: prev_write.start_ts,
+                },
             })
         }
         WriteType::Delete => {
@@ -38,9 +40,11 @@ pub fn get_old_value<S: Snapshot>(
             // previous valid write. Call `get_write` to get a valid
             // previous write.
             Ok(match reader.get_write(key, start_ts, Some(start_ts))? {
-                Some(write) => OldValue::Value {
-                    short_value: write.short_value,
-                    start_ts: write.start_ts,
+                Some(write) => match write.short_value {
+                    Some(value) => OldValue::Value { value },
+                    None => OldValue::ValueTimeStamp {
+                        start_ts: write.start_ts,
+                    },
                 },
                 None => OldValue::None,
             })
@@ -76,8 +80,7 @@ mod tests {
             },
             // prev_write is Rollback, and there exists a more previous valid write
             Case {
-                expected: OldValue::Value {
-                    short_value: None,
+                expected: OldValue::ValueTimeStamp {
                     start_ts: TimeStamp::new(4),
                 },
 
@@ -94,8 +97,7 @@ mod tests {
             },
             Case {
                 expected: OldValue::Value {
-                    short_value: Some(b"v".to_vec()),
-                    start_ts: TimeStamp::new(4),
+                    value: b"v".to_vec(),
                 },
 
                 written: vec![
@@ -119,8 +121,7 @@ mod tests {
             },
             // prev_write is Lock, and there exists a more previous valid write
             Case {
-                expected: OldValue::Value {
-                    short_value: None,
+                expected: OldValue::ValueTimeStamp {
                     start_ts: TimeStamp::new(3),
                 },
 
@@ -145,8 +146,7 @@ mod tests {
             },
             // prev_write is not Rollback or Lock, check_gc_fence_as_latest_version is true
             Case {
-                expected: OldValue::Value {
-                    short_value: None,
+                expected: OldValue::ValueTimeStamp {
                     start_ts: TimeStamp::new(7),
                 },
                 written: vec![(
@@ -194,7 +194,7 @@ mod tests {
                 ],
             },
         ];
-        for case in cases {
+        for (i, case) in cases.into_iter().enumerate() {
             let engine = TestEngineBuilder::new().build().unwrap();
             let cm = ConcurrencyManager::new(42.into());
             let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -217,7 +217,7 @@ mod tests {
                     .unwrap()
                     .1;
                 let result = get_old_value(&mut txn, &Key::from_raw(b"a"), prev_write).unwrap();
-                assert_eq!(result, case.expected);
+                assert_eq!(result, case.expected, "case #{}", i);
             }
         }
     }
