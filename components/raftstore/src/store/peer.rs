@@ -1640,9 +1640,11 @@ where
                 }
             }
             CheckApplyingSnapStatus::Idle => {
-                // It's possible that the snapshot applying task is canceled. However it only
-                // happens when shutting down the instance or destroying the peer. So it's ok
-                // to skip further operations for the peer.
+                // FIXME: It's possible that the snapshot applying task is canceled.
+                // Although it only happens when shutting down the store or destroying
+                // the peer, it's still dengerous if continue to handle ready for the
+                // peer. So it's better to revoke `JOB_STATUS_CANCELLING` to ensure all
+                // started tasks can get finished correctly.
             }
         }
 
@@ -1791,10 +1793,10 @@ where
         }
 
         let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
-        let msgs = ready.take_persisted_messages();
+        let has_msg = !ready.persisted_messages().is_empty();
 
         if apply_snap_result.is_some() {
-            self.pending_messages = msgs;
+            self.pending_messages = ready.take_persisted_messages();
 
             // The peer may change from learner to voter after snapshot applied.
             let peer = self
@@ -1819,7 +1821,8 @@ where
             let mut meta = ctx.store_meta.lock().unwrap();
             meta.readers
                 .insert(self.region_id, ReadDelegate::from_peer(self));
-        } else {
+        } else if has_msg {
+            let msgs = ready.take_persisted_messages();
             self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.send_message);
         }
 
