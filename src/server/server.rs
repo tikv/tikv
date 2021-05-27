@@ -50,7 +50,8 @@ pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 ///
 /// It hosts various internal components, including gRPC, the raftstore router
 /// and a snapshot worker.
-pub struct Server<T: RaftStoreRouter<E::Local> + 'static, S: StoreAddrResolver + 'static, E: Engine> {
+pub struct Server<T: RaftStoreRouter<E::Local> + 'static, S: StoreAddrResolver + 'static, E: Engine>
+{
     env: Arc<Environment>,
     /// A GrpcServer builder or a GrpcServer.
     ///
@@ -73,7 +74,9 @@ pub struct Server<T: RaftStoreRouter<E::Local> + 'static, S: StoreAddrResolver +
     timer: Handle,
 }
 
-impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: Engine> Server<T, S, E> {
+impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: Engine>
+    Server<T, S, E>
+{
     #[allow(clippy::too_many_arguments)]
     pub fn new<L: LockManager>(
         store_id: u64,

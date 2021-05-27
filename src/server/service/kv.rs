@@ -155,9 +155,7 @@ macro_rules! handle_request {
     }
 }
 
-impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv
-    for Service<T, E, L>
-{
+impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for Service<T, E, L> {
     handle_request!(kv_get, future_get, GetRequest, GetResponse);
     handle_request!(kv_scan, future_scan, ScanRequest, ScanResponse);
     handle_request!(

@@ -11,8 +11,8 @@ use std::vec::IntoIter;
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{
-    KvEngine,
-    DeleteStrategy, MiscExt, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    DeleteStrategy, KvEngine, MiscExt, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK,
+    CF_WRITE,
 };
 use file_system::{IOType, WithIOType};
 use futures::executor::block_on;
@@ -68,7 +68,10 @@ impl<T: PdClient + 'static> GcSafePointProvider for Arc<T> {
     }
 }
 
-pub enum GcTask<E> where E: KvEngine {
+pub enum GcTask<E>
+where
+    E: KvEngine,
+{
     Gc {
         region_id: u64,
         start_key: Vec<u8>,
@@ -110,7 +113,10 @@ pub enum GcTask<E> where E: KvEngine {
     Validate(Box<dyn FnOnce(&GcConfig, &Limiter) + Send>),
 }
 
-impl<E> GcTask<E> where E: KvEngine {
+impl<E> GcTask<E>
+where
+    E: KvEngine,
+{
     pub fn get_enum_label(&self) -> GcCommandKind {
         match self {
             GcTask::Gc { .. } => GcCommandKind::gc,
@@ -124,7 +130,10 @@ impl<E> GcTask<E> where E: KvEngine {
     }
 }
 
-impl<E> Display for GcTask<E> where E: KvEngine {
+impl<E> Display for GcTask<E>
+where
+    E: KvEngine,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             GcTask::Gc {
@@ -985,7 +994,7 @@ mod tests {
     use crate::storage::mvcc::tests::must_get_none;
     use crate::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
     use crate::storage::{txn::commands, Engine, Storage, TestStorageBuilder};
-    use engine_rocks::{util::get_cf_handle, RocksSnapshot, RocksEngine};
+    use engine_rocks::{util::get_cf_handle, RocksEngine, RocksSnapshot};
     use engine_traits::KvEngine;
     use futures::executor::block_on;
     use kvproto::kvrpcpb::Op;

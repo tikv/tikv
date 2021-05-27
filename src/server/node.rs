@@ -13,7 +13,7 @@ use crate::server::Config as ServerConfig;
 use crate::storage::{config::Config as StorageConfig, Storage};
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
-use engine_traits::{Engines, Peekable, RaftEngine, KvEngine};
+use engine_traits::{Engines, KvEngine, Peekable, RaftEngine};
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::replication_modepb::ReplicationStatus;
@@ -43,7 +43,7 @@ pub fn create_raft_storage<S, EK>(
 ) -> Result<Storage<RaftKv<EK, S>, LockManager>>
 where
     S: RaftStoreRouter<EK> + LocalReadRouter<EK> + 'static,
-    EK: KvEngine
+    EK: KvEngine,
 {
     let store = Storage::from_engine(
         engine,

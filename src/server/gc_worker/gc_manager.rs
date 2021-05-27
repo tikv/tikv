@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use engine_traits::KvEngine;
 use pd_client::FeatureGate;
 use std::cmp::Ordering;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
@@ -8,7 +9,6 @@ use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::time::{Duration, Instant};
 use tikv_util::worker::FutureScheduler;
 use txn_types::{Key, TimeStamp};
-use engine_traits::KvEngine;
 
 use crate::server::metrics::*;
 use raftstore::coprocessor::RegionInfoProvider;
@@ -617,6 +617,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
 mod tests {
     use super::*;
     use crate::storage::Callback;
+    use engine_rocks::RocksEngine;
     use kvproto::metapb;
     use raft::StateRole;
     use raftstore::coprocessor::Result as CopResult;
@@ -626,7 +627,6 @@ mod tests {
     use std::mem;
     use std::sync::mpsc::{channel, Receiver, Sender};
     use tikv_util::worker::{FutureRunnable, FutureWorker};
-    use engine_rocks::RocksEngine;
 
     fn take_callback(t: &mut GcTask<RocksEngine>) -> Callback<()> {
         let callback = match t {

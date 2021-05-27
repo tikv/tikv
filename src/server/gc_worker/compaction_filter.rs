@@ -95,7 +95,10 @@ lazy_static! {
     ).unwrap();
 }
 
-pub trait CompactionFilterInitializer<EK> where EK: KvEngine {
+pub trait CompactionFilterInitializer<EK>
+where
+    EK: KvEngine,
+{
     fn init_compaction_filter(
         &self,
         store_id: u64,
