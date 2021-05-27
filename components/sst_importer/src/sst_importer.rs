@@ -503,7 +503,7 @@ mod tests {
     use engine_traits::{
         collect, EncryptionMethod, Error as TraitError, ExternalSstFileInfo, Iterable, Iterator,
         SeekKey, SstReader, SstWriter,
-        UserCollectedProperties, CF_DEFAULT, DATA_CFS,
+        CF_DEFAULT, DATA_CFS,
     };
     use file_system::File;
     use tempfile::Builder;

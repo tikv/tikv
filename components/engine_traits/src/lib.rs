@@ -290,8 +290,6 @@ mod snapshot;
 pub use crate::snapshot::*;
 mod sst;
 pub use crate::sst::*;
-mod table_properties;
-pub use crate::table_properties::*;
 mod write_batch;
 pub use crate::write_batch::*;
 mod encryption;
