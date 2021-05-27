@@ -88,18 +88,28 @@ pub fn prewrite<S: Snapshot>(
             // The previous write of an Insert is guaranteed to be None.
             OldValue::None
         } else if mutation.skip_constraint_check() {
-            // The mutation does not read previous write if it skips constraint
-            // check.
-            // Pessimistic transaction always skip constraint check in
-            // "prewrite" stage, as it checks constraint in
-            // "acquire pessimistic lock" stage.
-            OldValue::Unspecified
-        } else if let Some(w) = prev_write {
-            // The mutation reads and get a previous write.
-            get_old_value(txn, &mutation.key, w)?
+            if mutation.txn_props.is_pessimistic() {
+                // Pessimistic transaction always skip constraint check in
+                // "prewrite" stage, as it checks constraint in
+                // "acquire pessimistic lock" stage.
+                OldValue::Unspecified
+            } else {
+                // In optimistic transaction, caller ensures that there is no
+                // previous write for the mutation, so there is no old value.
+                //
+                // FIXME: This may not hold when prewrite request set
+                // skip_constraint_check explicitly. For now, no one sets it.
+                OldValue::None
+            }
         } else {
-            // There is no previous write.
-            OldValue::None
+            // prev_write is loaded when skip_constraint_check is false.
+            let prev_write_loaded = true;
+            // The mutation reads and get a previous write.
+            let ts = match txn_props.kind {
+                TransactionKind::Optimistic(_) => txn_props.start_ts,
+                TransactionKind::Pessimistic(for_update_ts) => for_update_ts,
+            };
+            get_old_value(txn, &mutation.key, ts, prev_write_loaded, prev_write)?
         }
     } else {
         OldValue::Unspecified
