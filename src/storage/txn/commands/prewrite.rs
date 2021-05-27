@@ -450,7 +450,8 @@ impl<K: PrewriteKind> Prewriter<K> {
                     }
                     if old_value.valid() {
                         let key = key.append_ts(txn.start_ts);
-                        self.old_values.insert(key, (old_value, mutation_type));
+                        self.old_values
+                            .insert(key, (old_value, Some(mutation_type)));
                     }
                 }
                 Err(MvccError(box MvccErrorInner::CommitTsTooLarge { .. })) | Ok((_, _)) => {
