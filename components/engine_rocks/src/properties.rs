@@ -7,7 +7,10 @@ use std::ops::{Deref, DerefMut};
 use std::u64;
 
 use engine_traits::{
-    DecodeProperties, IndexHandle, IndexHandles, MvccProperties, Range,
+    MvccProperties, Range,
+};
+use crate::properties_types::{
+    DecodeProperties, IndexHandle, IndexHandles,
 };
 use rocksdb::{
     DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,

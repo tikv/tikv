@@ -294,8 +294,6 @@ mod write_batch;
 pub use crate::write_batch::*;
 mod encryption;
 pub use crate::encryption::*;
-mod properties;
-pub use crate::properties::*;
 mod mvcc_properties;
 mod sst_partitioner;
 pub use crate::sst_partitioner::*;
