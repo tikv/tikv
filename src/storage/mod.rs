@@ -89,7 +89,7 @@ use std::{
     sync::{atomic, Arc},
 };
 use tikv_util::time::{Instant, ThreadReadId};
-use txn_types::{Key, KvPair, Lock, Mutation, TimeStamp, TsSet, Value};
+use txn_types::{Key, KvPair, Lock, Mutation, OldValues, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
@@ -1893,6 +1893,7 @@ pub mod test_util {
             None,
             return_values,
             for_update_ts.next(),
+            OldValues::default(),
             Context::default(),
         )
     }
@@ -5584,6 +5585,7 @@ mod tests {
                     Some(WaitTimeout::Millis(100)),
                     false,
                     21.into(),
+                    OldValues::default(),
                     Context::default(),
                 ),
                 expect_ok_callback(tx, 0),
@@ -6147,6 +6149,7 @@ mod tests {
                     None,
                     false,
                     0.into(),
+                    OldValues::default(),
                     Default::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -6167,6 +6170,7 @@ mod tests {
                     None,
                     false,
                     0.into(),
+                    OldValues::default(),
                     Default::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -6381,6 +6385,7 @@ mod tests {
                 None,
                 false,
                 TimeStamp::new(12),
+                OldValues::default(),
                 Context::default(),
             ),
             pipelined_pessimistic_lock: true,
@@ -6404,6 +6409,7 @@ mod tests {
                 None,
                 false,
                 TimeStamp::new(12),
+                OldValues::default(),
                 Context::default(),
             ),
             pipelined_pessimistic_lock: false,

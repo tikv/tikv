@@ -519,6 +519,7 @@ dependencies = [
  "test_util",
  "tikv",
  "tikv_util",
+ "time 0.1.42",
  "tokio",
  "txn_types",
 ]
