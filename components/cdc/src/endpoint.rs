@@ -111,17 +111,19 @@ pub(crate) type OldValueCallback =
     Box<dyn Fn(Key, TimeStamp, &mut OldValueCache) -> (Option<Vec<u8>>, Option<Statistics>) + Send>;
 
 pub struct OldValueCache {
-    pub cache: LruCache<Key, (OldValue, MutationType)>,
-    pub miss_count: usize,
+    pub cache: LruCache<Key, (OldValue, Option<MutationType>)>,
     pub access_count: usize,
+    pub miss_count: usize,
+    pub miss_none_count: usize,
 }
 
 impl OldValueCache {
     pub fn new(size: usize) -> OldValueCache {
         OldValueCache {
             cache: LruCache::with_capacity(size),
-            miss_count: 0,
             access_count: 0,
+            miss_count: 0,
+            miss_none_count: 0,
         }
     }
 }
@@ -296,7 +298,10 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             INFINITY
         });
         // For scan efficiency, the scan batch bytes should be around 1MB.
-        let max_scan_batch_bytes = 1024 * 1024;
+        // TODO: To avoid consume too much memory when there are many concurrent
+        //       scan tasks (peak memory = 1MB * N tasks), we reduce the size
+        //       to 16KB as a workaround.
+        let max_scan_batch_bytes = 16 * 1024;
         // Assume 1KB per entry.
         let max_scan_batch_size = 1024;
         CDC_OLD_VALUE_CACHE_CAP.set(cfg.old_value_cache_size as i64);
@@ -364,15 +369,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 if is_last {
                     let delegate = self.capture_regions.remove(&region_id).unwrap();
                     if let Some(reader) = self.store_meta.lock().unwrap().readers.get(&region_id) {
-                        if let Err(e) = reader
-                            .txn_extra_op
-                            .compare_exchange(TxnExtraOp::ReadOldValue, TxnExtraOp::Noop)
-                        {
-                            panic!(
-                                "unexpect txn extra op {:?}, region_id: {:?}, downstream_id: {:?}, conn_id: {:?}",
-                                e, region_id, downstream_id, conn_id
-                            );
-                        }
+                        reader.txn_extra_op.store(TxnExtraOp::Noop);
                     }
                     // Do not continue to observe the events of the region.
                     let oid = self.observer.unsubscribe_region(region_id, delegate.id);
@@ -1362,9 +1359,11 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> RunnableWithTimer for Endpoint<T
         CDC_OLD_VALUE_CACHE_BYTES.set(cache_size as i64);
         CDC_OLD_VALUE_CACHE_ACCESS.add(self.old_value_cache.access_count as i64);
         CDC_OLD_VALUE_CACHE_MISS.add(self.old_value_cache.miss_count as i64);
+        CDC_OLD_VALUE_CACHE_MISS_NONE.add(self.old_value_cache.miss_none_count as i64);
         CDC_OLD_VALUE_CACHE_LEN.set(self.old_value_cache.cache.len() as i64);
         self.old_value_cache.access_count = 0;
         self.old_value_cache.miss_count = 0;
+        self.old_value_cache.miss_none_count = 0;
     }
 
     fn get_interval(&self) -> Duration {
@@ -1402,8 +1401,10 @@ mod tests {
     use kvproto::errorpb::Error as ErrorHeader;
     use raftstore::errors::Error as RaftStoreError;
     use raftstore::store::msg::CasualMessage;
+    use raftstore::store::{ReadDelegate, TrackVer};
     use std::collections::BTreeMap;
     use std::fmt::Display;
+    use std::sync::atomic::AtomicU64;
     use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
     use tempfile::TempDir;
     use test_raftstore::MockRaftStoreRouter;
@@ -1413,6 +1414,7 @@ mod tests {
     use tikv::storage::TestEngineBuilder;
     use tikv_util::config::ReadableDuration;
     use tikv_util::worker::{dummy_scheduler, LazyWorker, ReceiverWrapper};
+    use time::Timespec;
 
     use super::*;
     use crate::channel;
@@ -1485,6 +1487,22 @@ mod tests {
         MockRaftStoreRouter,
         ReceiverWrapper<Task>,
     ) {
+        let mut region = Region::default();
+        region.set_id(1);
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
+        let read_delegate = ReadDelegate {
+            tag: String::new(),
+            region: Arc::new(region),
+            peer_id: 2,
+            term: 1,
+            applied_index_term: 1,
+            leader_lease: None,
+            last_valid_ts: Timespec::new(0, 0),
+            txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
+            max_ts_sync_status: Arc::new(AtomicU64::new(0)),
+            track_ver: TrackVer::new(),
+        };
+        store_meta.lock().unwrap().readers.insert(1, read_delegate);
         let (task_sched, task_rx) = dummy_scheduler();
         let raft_router = MockRaftStoreRouter::new();
         let observer = CdcObserver::new(task_sched.clone());
@@ -1497,7 +1515,7 @@ mod tests {
             task_sched,
             raft_router.clone(),
             observer,
-            Arc::new(Mutex::new(StoreMeta::new(0))),
+            store_meta,
             ConcurrencyManager::new(1.into()),
             env,
             security_mgr,
