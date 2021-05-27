@@ -9,6 +9,7 @@ use raftstore::coprocessor::*;
 use raftstore::store::RegionSnapshot;
 use tikv_util::worker::Scheduler;
 
+use crate::cmd::lock_only_filter;
 use crate::endpoint::Task;
 
 pub struct Observer<E: KvEngine> {
@@ -59,8 +60,7 @@ impl<E: KvEngine> CmdObserver<E> for Observer<E> {
     fn on_flush_applied_cmd_batch(&self, cmd_batches: Vec<CmdBatch>, engine: E) {
         let cmd_batches: Vec<_> = cmd_batches
             .into_iter()
-            .filter(|cb| !cb.is_empty())
-            .filter_map(CmdBatch::filter)
+            .filter_map(lock_only_filter)
             .collect();
         if cmd_batches.is_empty() {
             return;
@@ -164,7 +164,7 @@ mod test {
         let (scheduler, mut rx) = dummy_scheduler();
         let observer = Observer::new(scheduler);
         let engine = TestEngineBuilder::new().build().unwrap().get_rocksdb();
-        let data = vec![
+        let mut data = vec![
             put_cf(CF_LOCK, b"k1", b"v"),
             put_cf(CF_DEFAULT, b"k2", b"v"),
             put_cf(CF_LOCK, b"k3", b"v"),
@@ -202,7 +202,8 @@ mod test {
         let mut cb = CmdBatch::new(&cdc_handle, &rts_handle, Region::default());
         cb.push(cdc_handle.id, rts_handle.id, 0, cmd.clone());
         observer.on_flush_applied_cmd_batch(vec![cb], engine.clone());
-        // Still observe all data
+        // Only observe lock related data
+        data.retain(|p| p.get_put().cf != CF_DEFAULT);
         expect_recv(&mut rx, data);
 
         // Both cdc and resolved-ts worker are not observing

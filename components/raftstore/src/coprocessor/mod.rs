@@ -4,12 +4,10 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::vec::IntoIter;
 
-use engine_traits::{CfName, CF_LOCK, CF_WRITE};
+use engine_traits::CfName;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
-use kvproto::raft_cmdpb::{
-    AdminRequest, AdminResponse, CmdType, RaftCmdRequest, RaftCmdResponse, Request,
-};
+use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request};
 use raft::{eraftpb, StateRole};
 
 pub mod config;
@@ -302,38 +300,6 @@ impl CmdBatch {
             }
         }
         cmd_bytes
-    }
-
-    pub fn filter(mut self) -> Option<CmdBatch> {
-        match self.level {
-            ObserveLevel::None => None,
-            ObserveLevel::All => Some(self),
-            ObserveLevel::LockRelated => {
-                for cmd in &mut self.cmds {
-                    cmd.request.mut_requests().iter_mut().for_each(|req| {
-                        // TODO: this may not help reduce the menory of `CmdBatch` if the written value is
-                        // small (less than 255 bytes), the value will store in the `short_value` field of
-                        // `lock_cf` and `write_cf`
-                        match req.get_cmd_type() {
-                            CmdType::Put => {
-                                let cf = req.get_put().cf.as_str();
-                                if cf != CF_LOCK && cf != CF_WRITE {
-                                    req.take_put();
-                                }
-                            }
-                            CmdType::Delete => {
-                                let cf = req.get_delete().cf.as_str();
-                                if cf != CF_LOCK && cf != CF_WRITE {
-                                    req.take_delete();
-                                }
-                            }
-                            _ => {}
-                        }
-                    });
-                }
-                Some(self)
-            }
-        }
     }
 }
 
