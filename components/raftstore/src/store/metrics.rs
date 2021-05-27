@@ -531,7 +531,7 @@ lazy_static! {
 
     pub static ref HIBERNATED_PEER_STATE_GAUGE: HibernatedPeerStateGauge = register_static_int_gauge_vec!(
         HibernatedPeerStateGauge,
-        "tikv_raftstoe_hibernated_peer_state",
+        "tikv_raftstore_hibernated_peer_state",
         "Number of peers in hibernated state.",
         &["state"],
     ).unwrap();
