@@ -437,8 +437,8 @@ where
             }
         }
         STORE_WRITE_SEND_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()));
-
-        let now = Instant::now();
+        // The order between send msg and send ready callback is useful for snapshot process
+        // TODO: add more comments
         for (region_id, r) in &self.wb.unsynced_readies {
             r.flush(*region_id, &self.router, now);
         }

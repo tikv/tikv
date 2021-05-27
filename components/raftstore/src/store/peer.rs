@@ -518,6 +518,7 @@ where
     unpersisted_numbers: VecDeque<(u64, u64)>,
     /// (The number of ready which has a snapshot, Whether this snapshot is scheduled)
     snapshot_ready_status: (u64, bool),
+    snapshot_messages: Vec<RaftMessage>,
     persisted_number: u64,
     /// The choose id of async writer thread
     async_writer_id: usize,
@@ -624,6 +625,7 @@ where
             cmd_epoch_checker: Default::default(),
             unpersisted_numbers: VecDeque::default(),
             snapshot_ready_status: (0, false),
+            snapshot_messages: vec![],
             persisted_number: 0,
             async_writer_id,
             pending_pd_heartbeat_tasks: Arc::new(AtomicU64::new(0)),
@@ -1066,13 +1068,16 @@ where
     }
 
     #[inline]
-    fn send<T, I>(&mut self, trans: &mut T, msgs: I, metrics: &mut RaftSendMessageMetrics)
-    where
+    fn send_raft_msg<T>(
+        &mut self,
+        trans: &mut T,
+        msgs: Vec<RaftMessage>,
+        metrics: &mut RaftSendMessageMetrics,
+    ) where
         T: Transport,
-        I: IntoIterator<Item = eraftpb::Message>,
     {
         for msg in msgs {
-            let msg_type = msg.get_msg_type();
+            let msg_type = msg.get_message().get_msg_type();
             if msg_type == MessageType::MsgTimeoutNow && self.is_leader() {
                 // After a leader transfer procedure is triggered, the lease for
                 // the old leader may be expired earlier than usual, since a new leader
@@ -1082,14 +1087,10 @@ where
                 // to suspect.
                 self.leader_lease.suspect(monotonic_raw_now());
             }
-            let send_msg = if let Some(m) = self.fill_raft_message(msg) {
-                m
-            } else {
-                continue;
-            };
-            let to_peer_id = send_msg.get_to_peer().get_id();
-            let to_store_id = send_msg.get_to_peer().get_store_id();
-            if let Err(e) = trans.send(send_msg) {
+
+            let to_peer_id = msg.get_to_peer().get_id();
+            let to_store_id = msg.get_to_peer().get_store_id();
+            if let Err(e) = trans.send(msg) {
                 // We use metrics to observe failure on production.
                 debug!(
                     "failed to send msg to other peer";
@@ -1726,6 +1727,12 @@ where
                         self.term(),
                         self.raft_group.store().region(),
                     );
+                    let raft_msgs = mem::take(&mut self.snapshot_messages);
+                    self.send_raft_msg(
+                        &mut ctx.trans,
+                        raft_msgs,
+                        &mut ctx.raft_metrics.send_message,
+                    );
                 }
                 // If `snapshot_ready_status.0` is 0, it means this snapshot does not
                 // come from the ready but comes from the unfinished snapshot task
@@ -1734,6 +1741,7 @@ where
             CheckApplyingSnapStatus::Idle => {}
         }
         assert_eq!(self.snapshot_ready_status, (0, false));
+        assert!(self.snapshot_messages.is_empty());
         true
     }
 
@@ -1874,16 +1882,23 @@ where
 
         if !ready.messages().is_empty() {
             assert!(self.is_leader());
-            self.send(
+            let raft_msgs = self.switch_to_raft_msg(ready.take_messages());
+            self.send_raft_msg(
                 &mut ctx.trans,
-                ready.take_messages(),
+                raft_msgs,
                 &mut ctx.raft_metrics.send_message,
             );
         }
 
         let persisted_msgs = if !ready.persisted_messages().is_empty() {
             assert!(!self.is_leader());
-            self.switch_to_raft_msg(ready.take_persisted_messages())
+            if !ready.snapshot().is_empty() {
+                assert!(self.snapshot_messages.is_empty());
+                self.snapshot_messages = self.switch_to_raft_msg(ready.take_persisted_messages());
+                Vec::new()
+            } else {
+                self.switch_to_raft_msg(ready.take_persisted_messages())
+            }
         } else {
             Vec::new()
         };
@@ -2112,9 +2127,10 @@ where
             if !light_rd.messages().is_empty() {
                 assert!(self.is_leader());
 
-                self.send(
+                let raft_msgs = self.switch_to_raft_msg(light_rd.take_messages());
+                self.send_raft_msg(
                     &mut ctx.trans,
-                    light_rd.take_messages(),
+                    raft_msgs,
                     &mut ctx.raft_metrics.send_message,
                 );
             }
