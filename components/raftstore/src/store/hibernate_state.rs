@@ -2,6 +2,8 @@
 
 use std::fmt;
 
+use crate::store::metrics::*;
+
 use kvproto::metapb::Region;
 use pd_client::{Feature, FeatureGate};
 use serde_derive::{Deserialize, Serialize};
@@ -59,10 +61,14 @@ pub struct HibernateState {
     pub leader: LeaderState,
 }
 
-#[derive(Debug)]
-pub struct HibernateResult {
-    pub hibernated: bool,
-    pub state_changed: bool,
+macro_rules! update_metric {
+    ($state:expr, $op:ident) => {
+        let gauge = match $state {
+            GroupState::Idle => &HIBERNATED_PEER_STATE_GAUGE.hibernated,
+            _ => &HIBERNATED_PEER_STATE_GAUGE.awaken,
+        };
+        gauge.$op();
+    };
 }
 
 impl HibernateState {
@@ -78,6 +84,11 @@ impl HibernateState {
     }
 
     pub fn reset(&mut self, group_state: GroupState) {
+        if group_state == self.group {
+            return;
+        }
+        update_metric!(self.group, dec);
+        update_metric!(group_state, inc);
         self.group = group_state;
         if group_state != GroupState::Idle {
             self.leader = LeaderState::Awaken;
@@ -96,45 +107,28 @@ impl HibernateState {
         gate.can_enable(NEGOTIATION_HIBERNATE)
     }
 
-    pub fn maybe_hibernate(&mut self, my_id: u64, region: &Region) -> HibernateResult {
+    pub fn maybe_hibernate(&mut self, my_id: u64, region: &Region) -> bool {
         let peers = region.get_peers();
         let v = match &mut self.leader {
             LeaderState::Awaken => {
                 self.leader = LeaderState::Poll(Vec::with_capacity(peers.len()));
-                return HibernateResult {
-                    hibernated: false,
-                    state_changed: true,
-                };
+                return false;
             }
             LeaderState::Poll(v) => v,
-            LeaderState::Hibernated => {
-                return HibernateResult {
-                    hibernated: true,
-                    state_changed: false,
-                };
-            }
+            LeaderState::Hibernated => return true,
         };
         // 1 is for leader itself, which is not counted into votes.
         if v.len() + 1 < peers.len() {
-            return HibernateResult {
-                hibernated: false,
-                state_changed: false,
-            };
+            return false;
         }
         if peers
             .iter()
             .all(|p| p.get_id() == my_id || v.contains(&p.get_id()))
         {
             self.leader = LeaderState::Hibernated;
-            HibernateResult {
-                hibernated: true,
-                state_changed: true,
-            }
+            true
         } else {
-            HibernateResult {
-                hibernated: false,
-                state_changed: false,
-            }
+            false
         }
     }
 }

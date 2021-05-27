@@ -155,6 +155,11 @@ where
             resp.mut_header().set_error(err);
             callback.invoke_with_response(resp);
         }
+        (match self.hibernate_state.group_state() {
+            GroupState::Idle => &HIBERNATED_PEER_STATE_GAUGE.hibernated,
+            _ => &HIBERNATED_PEER_STATE_GAUGE.awaken,
+        })
+        .dec();
     }
 }
 
@@ -191,6 +196,7 @@ where
             "region_id" => region.get_id(),
             "peer_id" => meta_peer.get_id(),
         );
+        HIBERNATED_PEER_STATE_GAUGE.awaken.inc();
         let (tx, rx) = mpsc::loose_bounded(cfg.notify_capacity);
         Ok((
             tx,
@@ -288,25 +294,11 @@ where
         coprocessor_host: &CoprocessorHost<EK>,
     ) {
         self.hibernate_state.reset(state);
-        coprocessor_host.on_hibernate_state_changed(
-            self.peer.region(),
-            self.peer.get_role(),
-            self.hibernate_state.clone(),
-        );
     }
 
     pub fn maybe_hibernate(&mut self, coprocessor_host: &CoprocessorHost<EK>) -> bool {
-        let result = self
-            .hibernate_state
-            .maybe_hibernate(self.peer.peer_id(), self.peer.region());
-        if result.state_changed {
-            coprocessor_host.on_hibernate_state_changed(
-                self.peer.region(),
-                self.peer.get_role(),
-                self.hibernate_state.clone(),
-            );
-        }
-        result.hibernated
+        self.hibernate_state
+            .maybe_hibernate(self.peer.peer_id(), self.peer.region())
     }
 }
 
