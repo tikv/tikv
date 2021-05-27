@@ -206,7 +206,7 @@ pub struct Endpoint<T, E: KvEngine, C> {
     scanner_pool: ScannerPool<T, E>,
     scheduler: Scheduler<Task<E::Snapshot>>,
     sinker: C,
-    advance_worker: AdvanceTsWorker<T, E>,
+    advance_worker: AdvanceTsWorker<E>,
     _phantom: PhantomData<(T, E)>,
 }
 
@@ -230,7 +230,6 @@ where
         let advance_worker = AdvanceTsWorker::new(
             pd_client,
             scheduler.clone(),
-            raft_router.clone(),
             store_meta.clone(),
             concurrency_manager,
             env,
