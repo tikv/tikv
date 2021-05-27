@@ -1054,11 +1054,24 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
 
     fn get_lock_wait_info(
         &mut self,
-        _: RpcContext<'_>,
-        _: GetLockWaitInfoRequest,
-        _: UnarySink<GetLockWaitInfoResponse>,
+        ctx: RpcContext<'_>,
+        _request: GetLockWaitInfoRequest,
+        sink: UnarySink<GetLockWaitInfoResponse>,
     ) {
-        unimplemented!()
+        let (cb, f) = paired_future_callback();
+        self.storage.dump_wait_for_entries(cb);
+        let task = async move {
+            let res = f.await?;
+            let mut response = GetLockWaitInfoResponse::default();
+            response.set_entries(RepeatedField::from_vec(res));
+            sink.success(response).await?;
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            warn!("call dump_wait_for_entries failed"; "err" => ?e);
+        })
+        .map(|_| ());
+        ctx.spawn(task);
     }
 }
 
@@ -1879,6 +1892,7 @@ pub mod batch_commands_request {
 pub use kvproto::tikvpb::batch_commands_request;
 #[cfg(feature = "prost-codec")]
 pub use kvproto::tikvpb::batch_commands_response;
+use protobuf::RepeatedField;
 
 struct BatchRespCollector;
 impl BatchCollector<BatchCommandsResponse, (u64, batch_commands_response::Response)>
