@@ -1,7 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt;
-
 use crate::store::metrics::*;
 
 use kvproto::metapb::Region;
@@ -27,17 +25,6 @@ pub enum GroupState {
     Idle,
 }
 
-impl fmt::Display for GroupState {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            GroupState::Ordered => write!(f, "ordered"),
-            GroupState::Chaos => write!(f, "chaos"),
-            GroupState::PreChaos => write!(f, "pre_chaos"),
-            GroupState::Idle => write!(f, "idle"),
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub enum LeaderState {
     Awaken,
@@ -45,20 +32,10 @@ pub enum LeaderState {
     Hibernated,
 }
 
-impl fmt::Display for LeaderState {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            LeaderState::Awaken => write!(f, "awaken"),
-            LeaderState::Poll(_) => write!(f, "poll"),
-            LeaderState::Hibernated => write!(f, "hibernated"),
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct HibernateState {
-    pub group: GroupState,
-    pub leader: LeaderState,
+    group: GroupState,
+    leader: LeaderState,
 }
 
 macro_rules! update_metric {

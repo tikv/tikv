@@ -148,11 +148,6 @@ impl_box_observer!(
     WrappedRegionChangeObserver
 );
 impl_box_observer!(
-    BoxHibernateStateChangeObserver,
-    HibernateStateChangeObserver,
-    WrappedHibernateRegionChangeObserver
-);
-impl_box_observer!(
     BoxReadIndexObserver,
     ReadIndexObserver,
     WrappedReadIndexObserver
@@ -177,7 +172,6 @@ where
     consistency_check_observers: Vec<Entry<BoxConsistencyCheckObserver<E>>>,
     role_observers: Vec<Entry<BoxRoleObserver>>,
     region_change_observers: Vec<Entry<BoxRegionChangeObserver>>,
-    hibernate_state_change_observers: Vec<Entry<BoxHibernateStateChangeObserver>>,
     cmd_observers: Vec<Entry<BoxCmdObserver<E>>>,
     read_index_observers: Vec<Entry<BoxReadIndexObserver>>,
     // TODO: add endpoint
@@ -193,7 +187,6 @@ impl<E: KvEngine> Default for Registry<E> {
             consistency_check_observers: Default::default(),
             role_observers: Default::default(),
             region_change_observers: Default::default(),
-            hibernate_state_change_observers: Default::default(),
             cmd_observers: Default::default(),
             read_index_observers: Default::default(),
         }
@@ -248,14 +241,6 @@ impl<E: KvEngine> Registry<E> {
 
     pub fn register_region_change_observer(&mut self, priority: u32, rlo: BoxRegionChangeObserver) {
         push!(priority, rlo, self.region_change_observers);
-    }
-
-    pub fn register_hibernate_state_change_observer(
-        &mut self,
-        priority: u32,
-        observer: BoxHibernateStateChangeObserver,
-    ) {
-        push!(priority, observer, self.hibernate_state_change_observers);
     }
 
     pub fn register_cmd_observer(&mut self, priority: u32, rlo: BoxCmdObserver<E>) {
@@ -509,21 +494,6 @@ impl<E: KvEngine> CoprocessorHost<E> {
         );
     }
 
-    pub fn on_hibernate_state_changed(
-        &self,
-        region: &Region,
-        role: StateRole,
-        hibernate_state: HibernateState,
-    ) {
-        loop_ob!(
-            region,
-            &self.registry.hibernate_state_change_observers,
-            on_hibernate_state_changed,
-            role,
-            hibernate_state.clone()
-        );
-    }
-
     pub fn prepare_for_apply(
         &self,
         cdc_id: &ObserveHandle,
@@ -683,18 +653,6 @@ mod tests {
         }
     }
 
-    impl HibernateStateChangeObserver for TestCoprocessor {
-        fn on_hibernate_state_changed(
-            &self,
-            ctx: &mut ObserverContext<'_>,
-            _role: StateRole,
-            _hibernate_state: HibernateState,
-        ) {
-            self.called.fetch_add(9, Ordering::SeqCst);
-            ctx.bypass = self.bypass.load(Ordering::SeqCst);
-        }
-    }
-
     impl ApplySnapshotObserver for TestCoprocessor {
         fn apply_plain_kvs(
             &self,
@@ -702,25 +660,25 @@ mod tests {
             _: CfName,
             _: &[(Vec<u8>, Vec<u8>)],
         ) {
-            self.called.fetch_add(10, Ordering::SeqCst);
+            self.called.fetch_add(9, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
 
         fn apply_sst(&self, ctx: &mut ObserverContext<'_>, _: CfName, _: &str) {
-            self.called.fetch_add(11, Ordering::SeqCst);
+            self.called.fetch_add(10, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
     }
 
     impl CmdObserver<PanicEngine> for TestCoprocessor {
         fn on_prepare_for_apply(&self, _: &ObserveHandle, _: &ObserveHandle, _: u64) {
-            self.called.fetch_add(12, Ordering::SeqCst);
+            self.called.fetch_add(11, Ordering::SeqCst);
         }
         fn on_apply_cmd(&self, _: ObserveID, _: ObserveID, _: u64, _: &Cmd) {
-            self.called.fetch_add(13, Ordering::SeqCst);
+            self.called.fetch_add(12, Ordering::SeqCst);
         }
         fn on_flush_apply(&self, _: PanicEngine) {
-            self.called.fetch_add(14, Ordering::SeqCst);
+            self.called.fetch_add(13, Ordering::SeqCst);
         }
     }
 
@@ -754,10 +712,6 @@ mod tests {
             .register_role_observer(1, BoxRoleObserver::new(ob.clone()));
         host.registry
             .register_region_change_observer(1, BoxRegionChangeObserver::new(ob.clone()));
-        host.registry.register_hibernate_state_change_observer(
-            1,
-            BoxHibernateStateChangeObserver::new(ob.clone()),
-        );
         host.registry
             .register_cmd_observer(1, BoxCmdObserver::new(ob.clone()));
         let region = Region::default();
@@ -788,25 +742,22 @@ mod tests {
         host.on_region_changed(&region, RegionChangeEvent::Create, StateRole::Follower);
         assert_all!(&[&ob.called], &[36]);
 
-        host.on_hibernate_state_changed(&region, StateRole::Follower, HibernateState::ordered());
-        assert_all!(&[&ob.called], &[45]);
-
         host.post_apply_plain_kvs_from_snapshot(&region, "default", &[]);
-        assert_all!(&[&ob.called], &[55]);
+        assert_all!(&[&ob.called], &[45]);
         host.post_apply_sst_from_snapshot(&region, "default", "");
-        assert_all!(&[&ob.called], &[66]);
+        assert_all!(&[&ob.called], &[55]);
         let observe_id = ObserveHandle::new();
         host.prepare_for_apply(&observe_id, &observe_id, 0);
-        assert_all!(&[&ob.called], &[78]);
+        assert_all!(&[&ob.called], &[66]);
         host.on_apply_cmd(
             observe_id.id,
             observe_id.id,
             0,
             &Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),
         );
-        assert_all!(&[&ob.called], &[91]);
+        assert_all!(&[&ob.called], &[78]);
         host.on_flush_apply(PanicEngine);
-        assert_all!(&[&ob.called], &[105]);
+        assert_all!(&[&ob.called], &[91]);
     }
 
     #[test]

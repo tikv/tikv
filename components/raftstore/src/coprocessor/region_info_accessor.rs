@@ -8,11 +8,9 @@ use std::time::Duration;
 
 use super::metrics::*;
 use super::{
-    BoxHibernateStateChangeObserver, BoxRegionChangeObserver, BoxRoleObserver, Coprocessor,
-    CoprocessorHost, HibernateStateChangeObserver, ObserverContext, RegionChangeEvent,
-    RegionChangeObserver, Result, RoleObserver,
+    BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
+    RegionChangeEvent, RegionChangeObserver, Result, RoleObserver,
 };
-use crate::store::{GroupState, HibernateState, LeaderState};
 use collections::HashMap;
 use engine_traits::KvEngine;
 use keys::{data_end_key, data_key};
@@ -39,26 +37,10 @@ use tikv_util::{box_err, debug, info, warn};
 /// `RaftStoreEvent` Represents events dispatched from raftstore coprocessor.
 #[derive(Debug)]
 pub enum RaftStoreEvent {
-    CreateRegion {
-        region: Region,
-        role: StateRole,
-    },
-    UpdateRegion {
-        region: Region,
-        role: StateRole,
-    },
-    DestroyRegion {
-        region: Region,
-    },
-    RoleChange {
-        region: Region,
-        role: StateRole,
-    },
-    HibernateStateChange {
-        region: Region,
-        role: StateRole,
-        hibernate_state: HibernateState,
-    },
+    CreateRegion { region: Region, role: StateRole },
+    UpdateRegion { region: Region, role: StateRole },
+    DestroyRegion { region: Region },
+    RoleChange { region: Region, role: StateRole },
 }
 
 impl RaftStoreEvent {
@@ -67,8 +49,7 @@ impl RaftStoreEvent {
             RaftStoreEvent::CreateRegion { region, .. }
             | RaftStoreEvent::UpdateRegion { region, .. }
             | RaftStoreEvent::DestroyRegion { region, .. }
-            | RaftStoreEvent::RoleChange { region, .. }
-            | RaftStoreEvent::HibernateStateChange { region, .. } => region,
+            | RaftStoreEvent::RoleChange { region, .. } => region,
         }
     }
 }
@@ -77,16 +58,11 @@ impl RaftStoreEvent {
 pub struct RegionInfo {
     pub region: Region,
     pub role: StateRole,
-    pub hibernate_state: HibernateState,
 }
 
 impl RegionInfo {
-    pub fn new(region: Region, role: StateRole, hibernate_state: HibernateState) -> Self {
-        Self {
-            region,
-            role,
-            hibernate_state,
-        }
+    pub fn new(region: Region, role: StateRole) -> Self {
+        Self { region, role }
     }
 }
 
@@ -178,25 +154,6 @@ impl RoleObserver for RegionEventListener {
     }
 }
 
-impl HibernateStateChangeObserver for RegionEventListener {
-    fn on_hibernate_state_changed(
-        &self,
-        context: &mut ObserverContext<'_>,
-        role: StateRole,
-        hibernate_state: HibernateState,
-    ) {
-        let region = context.region().clone();
-        let event = RaftStoreEvent::HibernateStateChange {
-            region,
-            role,
-            hibernate_state,
-        };
-        self.scheduler
-            .schedule(RegionInfoQuery::RaftStoreEvent(event))
-            .unwrap();
-    }
-}
-
 /// Creates an `RegionEventListener` and register it to given coprocessor host.
 fn register_region_event_listener(
     host: &mut CoprocessorHost<impl KvEngine>,
@@ -207,11 +164,7 @@ fn register_region_event_listener(
     host.registry
         .register_role_observer(1, BoxRoleObserver::new(listener.clone()));
     host.registry
-        .register_region_change_observer(1, BoxRegionChangeObserver::new(listener.clone()));
-    host.registry.register_hibernate_state_change_observer(
-        1,
-        BoxHibernateStateChangeObserver::new(listener),
-    );
+        .register_region_change_observer(1, BoxRegionChangeObserver::new(listener));
 }
 
 /// `RegionCollector` is the place where we hold all region information we collected, and the
@@ -232,12 +185,7 @@ impl RegionCollector {
         }
     }
 
-    pub fn create_region(
-        &mut self,
-        region: Region,
-        role: StateRole,
-        hibernate_state: HibernateState,
-    ) {
+    pub fn create_region(&mut self, region: Region, role: StateRole) {
         let end_key = data_end_key(region.get_end_key());
         let region_id = region.get_id();
 
@@ -247,7 +195,7 @@ impl RegionCollector {
         // TODO: Should we set it follower?
         assert!(
             self.regions
-                .insert(region_id, RegionInfo::new(region, role, hibernate_state))
+                .insert(region_id, RegionInfo::new(region, role))
                 .is_none(),
             "trying to create new region {} but it already exists.",
             region_id
@@ -293,7 +241,7 @@ impl RegionCollector {
             );
             self.update_region(region);
         } else {
-            self.create_region(region, role, HibernateState::ordered());
+            self.create_region(region, role);
         }
     }
 
@@ -305,7 +253,7 @@ impl RegionCollector {
                 "trying to update region but it doesn't exist, try to create it";
                 "region_id" => region.get_id(),
             );
-            self.create_region(region, role, HibernateState::ordered());
+            self.create_region(region, role);
         }
     }
 
@@ -340,30 +288,7 @@ impl RegionCollector {
             "role change on region but the region doesn't exist. create it.";
             "region_id" => region_id,
         );
-        self.create_region(region, new_role, HibernateState::ordered());
-    }
-
-    fn handle_hibernate_state_change(
-        &mut self,
-        region: Region,
-        role: StateRole,
-        new_state: HibernateState,
-    ) {
-        let region_id = region.get_id();
-
-        if let Some(r) = self.regions.get_mut(&region_id) {
-            if r.role != role {
-                warn!("hibernate state change on region but role does not match.");
-            }
-            r.hibernate_state = new_state;
-            return;
-        }
-
-        warn!(
-            "hibernate state change on region but the region doesn't exist. create it.";
-            "region_id" => region_id,
-        );
-        self.create_region(region, role, new_state);
+        self.create_region(region, new_role);
     }
 
     /// Determines whether `region_to_check`'s epoch is stale compared to `current`'s epoch
@@ -438,6 +363,7 @@ impl RegionCollector {
     }
 
     pub fn handle_seek_region(&self, from_key: Vec<u8>, callback: SeekRegionCallback) {
+        let from_key = data_key(&from_key);
         let mut iter = self
             .region_ranges
             .range((Excluded(from_key), Unbounded))
@@ -503,13 +429,6 @@ impl RegionCollector {
             RaftStoreEvent::RoleChange { region, role } => {
                 self.handle_role_change(region, role);
             }
-            RaftStoreEvent::HibernateStateChange {
-                region,
-                role,
-                hibernate_state,
-            } => {
-                self.handle_hibernate_state_change(region, role, hibernate_state);
-            }
         }
     }
 }
@@ -550,53 +469,13 @@ const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
 
 impl RunnableWithTimer for RegionCollector {
     fn on_timeout(&mut self) {
-        const LEADER: &str = "leader";
-        const NON_LEADER: &str = "non_leader";
         let mut count = 0;
         let mut leader = 0;
-
-        let mut hibernate_states: HashMap<String, HashMap<String, usize>> = HashMap::default();
-        for role in vec![LEADER, NON_LEADER].iter() {
-            hibernate_states.insert(
-                role.to_string(),
-                [
-                    (GroupState::Ordered.to_string(), 0),
-                    (GroupState::Chaos.to_string(), 0),
-                    (GroupState::PreChaos.to_string(), 0),
-                    (GroupState::Idle.to_string(), 0),
-                ]
-                .iter()
-                .cloned()
-                .collect(),
-            );
-        }
-        let mut hibernate_leader_states: HashMap<String, usize> = [
-            (LeaderState::Awaken.to_string(), 0),
-            (LeaderState::Poll(vec![]).to_string(), 0),
-            (LeaderState::Hibernated.to_string(), 0),
-        ]
-        .iter()
-        .cloned()
-        .collect();
         for r in self.regions.values() {
             count += 1;
             if r.role == StateRole::Leader {
                 leader += 1;
-                *(hibernate_leader_states
-                    .entry(r.hibernate_state.leader.to_string())
-                    .or_default()) += 1
             }
-            *(hibernate_states
-                .entry(
-                    (match r.role {
-                        StateRole::Leader => LEADER,
-                        _ => NON_LEADER,
-                    })
-                    .to_string(),
-                )
-                .or_default()
-                .entry(r.hibernate_state.group.to_string())
-                .or_default()) += 1;
         }
         REGION_COUNT_GAUGE_VEC
             .with_label_values(&["region"])
@@ -604,18 +483,6 @@ impl RunnableWithTimer for RegionCollector {
         REGION_COUNT_GAUGE_VEC
             .with_label_values(&["leader"])
             .set(leader);
-        for (role, states) in hibernate_states.iter() {
-            for (state, &count) in states.iter() {
-                HIBERNATE_STATE_GAUGE_VEC
-                    .with_label_values(&[role, state])
-                    .set(count as _);
-            }
-        }
-        for (state, &count) in hibernate_leader_states.iter() {
-            HIBERNATE_LEADER_STATE_GAUGE_VEC
-                .with_label_values(&[state])
-                .set(count as _);
-        }
     }
     fn get_interval(&self) -> Duration {
         Duration::from_millis(METRICS_FLUSH_INTERVAL)
@@ -664,7 +531,7 @@ impl RegionInfoAccessor {
 
 pub trait RegionInfoProvider: Send + Sync {
     /// Get a iterator of regions that contains `from` or have keys larger than `from`, and invoke
-    /// the callback to process the result. If `from` is None, iterate through all regions.
+    /// the callback to process the result.
     fn seek_region(&self, _from: &[u8], _callback: SeekRegionCallback) -> Result<()> {
         unimplemented!()
     }
@@ -778,27 +645,21 @@ mod tests {
         region
     }
 
-    fn check_collection(c: &RegionCollector, regions: &[(Region, StateRole, HibernateState)]) {
+    fn check_collection(c: &RegionCollector, regions: &[(Region, StateRole)]) {
         let region_ranges: Vec<_> = regions
             .iter()
-            .map(|(r, ..)| (data_end_key(r.get_end_key()), r.get_id()))
+            .map(|(r, _)| (data_end_key(r.get_end_key()), r.get_id()))
             .collect();
 
         let mut is_regions_equal = c.regions.len() == regions.len();
 
         if is_regions_equal {
-            for (expect_region, expect_role, expect_hibernate_state) in regions {
+            for (expect_region, expect_role) in regions {
                 is_regions_equal = is_regions_equal
                     && c.regions.get(&expect_region.get_id()).map_or(
                         false,
-                        |RegionInfo {
-                             region,
-                             role,
-                             hibernate_state,
-                         }| {
-                            expect_region == region
-                                && expect_role == role
-                                && expect_hibernate_state == hibernate_state
+                        |RegionInfo { region, role }| {
+                            expect_region == region && expect_role == role
                         },
                     );
 
@@ -837,7 +698,7 @@ mod tests {
 
         let expected_regions: Vec<_> = regions
             .iter()
-            .map(|r| (r.clone(), StateRole::Follower, HibernateState::ordered()))
+            .map(|r| (r.clone(), StateRole::Follower))
             .collect();
         check_collection(&c, &expected_regions);
     }
@@ -921,22 +782,6 @@ mod tests {
 
         if let Some(r) = c.regions.get(&region.get_id()) {
             assert_eq!(r.role, role);
-        }
-    }
-
-    fn must_change_hibernate_state(
-        c: &mut RegionCollector,
-        region: &Region,
-        role: StateRole,
-        hibernate_state: HibernateState,
-    ) {
-        c.handle_raftstore_event(RaftStoreEvent::HibernateStateChange {
-            region: region.clone(),
-            role,
-            hibernate_state: hibernate_state.clone(),
-        });
-        if let Some(r) = c.regions.get(&region.get_id()) {
-            assert_eq!(r.hibernate_state, hibernate_state);
         }
     }
 
@@ -1038,13 +883,7 @@ mod tests {
         must_load_regions(&mut c, &init_regions);
         let mut regions: Vec<_> = init_regions
             .iter()
-            .map(|region| {
-                (
-                    region.clone(),
-                    StateRole::Follower,
-                    HibernateState::ordered(),
-                )
-            })
+            .map(|region| (region.clone(), StateRole::Follower))
             .collect();
 
         c.check_region_range(&new_region(7, b"k2", b"k3", 2), true);
@@ -1078,33 +917,14 @@ mod tests {
         check_collection(
             &c,
             &[
-                (
-                    init_regions[0].clone(),
-                    StateRole::Follower,
-                    HibernateState::ordered(),
-                ),
-                (
-                    init_regions[2].clone(),
-                    StateRole::Follower,
-                    HibernateState::ordered(),
-                ),
-                (
-                    init_regions[5].clone(),
-                    StateRole::Follower,
-                    HibernateState::ordered(),
-                ),
+                (init_regions[0].clone(), StateRole::Follower),
+                (init_regions[2].clone(), StateRole::Follower),
+                (init_regions[5].clone(), StateRole::Follower),
             ],
         );
 
         c.check_region_range(&new_region(1, b"", b"", 2), true);
-        check_collection(
-            &c,
-            &[(
-                init_regions[0].clone(),
-                StateRole::Follower,
-                HibernateState::ordered(),
-            )],
-        );
+        check_collection(&c, &[(init_regions[0].clone(), StateRole::Follower)]);
     }
 
     #[test]
@@ -1131,21 +951,9 @@ mod tests {
         check_collection(
             &c,
             &[
-                (
-                    new_region(1, b"k0", b"k1", 2),
-                    StateRole::Follower,
-                    HibernateState::ordered(),
-                ),
-                (
-                    new_region(2, b"k2", b"k8", 2),
-                    StateRole::Follower,
-                    HibernateState::ordered(),
-                ),
-                (
-                    new_region(3, b"k9", b"k99", 2),
-                    StateRole::Follower,
-                    HibernateState::ordered(),
-                ),
+                (new_region(1, b"k0", b"k1", 2), StateRole::Follower),
+                (new_region(2, b"k2", b"k8", 2), StateRole::Follower),
+                (new_region(3, b"k9", b"k99", 2), StateRole::Follower),
             ],
         );
 
@@ -1161,70 +969,11 @@ mod tests {
         check_collection(
             &c,
             &[
-                (
-                    new_region(1, b"k0", b"k1", 2),
-                    StateRole::Candidate,
-                    HibernateState::ordered(),
-                ),
-                (
-                    new_region(4, b"k1", b"k3", 3),
-                    StateRole::Follower,
-                    HibernateState::ordered(),
-                ),
-                (
-                    new_region(2, b"k3", b"k7", 3),
-                    StateRole::Leader,
-                    HibernateState::ordered(),
-                ),
-                (
-                    new_region(3, b"k9", b"k99", 2),
-                    StateRole::Follower,
-                    HibernateState::ordered(),
-                ),
-                (
-                    new_region(5, b"k99", b"", 2),
-                    StateRole::Follower,
-                    HibernateState::ordered(),
-                ),
-            ],
-        );
-
-        let mut hibernate_state = HibernateState::ordered();
-        hibernate_state.reset(GroupState::Idle);
-        must_change_hibernate_state(
-            &mut c,
-            &new_region(5, b"k99", b"", 2),
-            StateRole::Follower,
-            hibernate_state.clone(),
-        );
-        check_collection(
-            &c,
-            &[
-                (
-                    new_region(1, b"k0", b"k1", 2),
-                    StateRole::Candidate,
-                    HibernateState::ordered(),
-                ),
-                (
-                    new_region(4, b"k1", b"k3", 3),
-                    StateRole::Follower,
-                    HibernateState::ordered(),
-                ),
-                (
-                    new_region(2, b"k3", b"k7", 3),
-                    StateRole::Leader,
-                    HibernateState::ordered(),
-                ),
-                (
-                    new_region(3, b"k9", b"k99", 2),
-                    StateRole::Follower,
-                    HibernateState::ordered(),
-                ),
-                (
-                    new_region(5, b"k99", b"", 2),
-                    StateRole::Follower,
-                    hibernate_state.clone(),
-                ),
+                (new_region(1, b"k0", b"k1", 2), StateRole::Candidate),
+                (new_region(4, b"k1", b"k3", 3), StateRole::Follower),
+                (new_region(2, b"k3", b"k7", 3), StateRole::Leader),
+                (new_region(3, b"k9", b"k99", 2), StateRole::Follower),
+                (new_region(5, b"k99", b"", 2), StateRole::Follower),
             ],
         );
 
@@ -1233,21 +982,9 @@ mod tests {
         check_collection(
             &c,
             &[
-                (
-                    new_region(1, b"k0", b"k1", 2),
-                    StateRole::Candidate,
-                    HibernateState::ordered(),
-                ),
-                (
-                    new_region(2, b"k3", b"k7", 3),
-                    StateRole::Leader,
-                    HibernateState::ordered(),
-                ),
-                (
-                    new_region(5, b"k99", b"", 2),
-                    StateRole::Follower,
-                    hibernate_state,
-                ),
+                (new_region(1, b"k0", b"k1", 2), StateRole::Candidate),
+                (new_region(2, b"k3", b"k7", 3), StateRole::Leader),
+                (new_region(5, b"k99", b"", 2), StateRole::Follower),
             ],
         );
     }
@@ -1285,7 +1022,7 @@ mod tests {
 
         let final_regions = final_regions
             .into_iter()
-            .map(|r| (r, StateRole::Follower, HibernateState::ordered()))
+            .map(|r| (r, StateRole::Follower))
             .collect::<Vec<_>>();
         check_collection(&c, &final_regions);
     }
@@ -1337,21 +1074,9 @@ mod tests {
         }
 
         let final_regions = &[
-            (
-                region_with_conf(1, b"", b"k1", 1, 1),
-                StateRole::Follower,
-                HibernateState::ordered(),
-            ),
-            (
-                updating_region,
-                StateRole::Follower,
-                HibernateState::ordered(),
-            ),
-            (
-                region_with_conf(4, b"k3", b"", 1, 100),
-                StateRole::Follower,
-                HibernateState::ordered(),
-            ),
+            (region_with_conf(1, b"", b"k1", 1, 1), StateRole::Follower),
+            (updating_region, StateRole::Follower),
+            (region_with_conf(4, b"k3", b"", 1, 100), StateRole::Follower),
         ];
         check_collection(&c, final_regions);
     }
@@ -1386,26 +1111,10 @@ mod tests {
         check_collection(
             &c,
             &[
-                (
-                    new_region(1, b"", b"k1", 1),
-                    StateRole::Follower,
-                    HibernateState::ordered(),
-                ),
-                (
-                    new_region(2, b"k1", b"k5", 2),
-                    StateRole::Leader,
-                    HibernateState::ordered(),
-                ),
-                (
-                    new_region(4, b"k5", b"k9", 2),
-                    StateRole::Follower,
-                    HibernateState::ordered(),
-                ),
-                (
-                    new_region(3, b"k9", b"", 1),
-                    StateRole::Follower,
-                    HibernateState::ordered(),
-                ),
+                (new_region(1, b"", b"k1", 1), StateRole::Follower),
+                (new_region(2, b"k1", b"k5", 2), StateRole::Leader),
+                (new_region(4, b"k5", b"k9", 2), StateRole::Follower),
+                (new_region(3, b"k9", b"", 1), StateRole::Follower),
             ],
         );
 
@@ -1418,21 +1127,9 @@ mod tests {
         check_collection(
             &c,
             &[
-                (
-                    new_region(1, b"", b"k1", 1),
-                    StateRole::Follower,
-                    HibernateState::ordered(),
-                ),
-                (
-                    new_region(2, b"k1", b"k9", 3),
-                    StateRole::Leader,
-                    HibernateState::ordered(),
-                ),
-                (
-                    new_region(3, b"k9", b"", 1),
-                    StateRole::Follower,
-                    HibernateState::ordered(),
-                ),
+                (new_region(1, b"", b"k1", 1), StateRole::Follower),
+                (new_region(2, b"k1", b"k9", 3), StateRole::Leader),
+                (new_region(3, b"k9", b"", 1), StateRole::Follower),
             ],
         );
     }
