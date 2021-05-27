@@ -920,15 +920,15 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                 .map_err(Error::from)
                 .for_each(move |msg| {
                     RAFT_MESSAGE_RECV_COUNTER.inc();
-                    ch.send_raft_msg(msg).map_err(Error::from)
+                    if let Err(e) = ch.send_raft_msg(msg) {
+                        warn!("dispatch raft msg from gRPC to raftstore fail: {}", e);
+                        return Err(Error::from(e));
+                    }
+                    Ok(())
                 })
                 .then(|res| {
                     let status = match res {
-                        Err(e) => {
-                            let msg = format!("{:?}", e);
-                            error!("dispatch raft msg from gRPC to raftstore fail: {}", msg);
-                            RpcStatus::new(RpcStatusCode::Unknown, Some(msg))
-                        }
+                        Err(e) => RpcStatus::new(RpcStatusCode::Unknown, Some(format!("{:?}", e))),
                         Ok(_) => RpcStatus::new(RpcStatusCode::Unknown, None),
                     };
                     sink.fail(status)
