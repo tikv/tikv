@@ -651,7 +651,13 @@ impl Delegate {
                 };
                 // validate commit_ts must be greater than the current resolved_ts
                 if let (Some(resolver), Some(commit_ts)) = (&self.resolver, commit_ts) {
-                    assert!(commit_ts > resolver.resolved_ts().unwrap_or_default());
+                    let resolved_ts = resolver.resolved_ts().unwrap_or_default();
+                    assert!(
+                        commit_ts > resolved_ts,
+                        "commit_ts: {:?}, resolved_ts: {:?}",
+                        commit_ts,
+                        resolved_ts
+                    );
                 }
 
                 match rows.get_mut(&row.key) {
