@@ -132,7 +132,7 @@ impl<K> Trace<K> {
     }
 }
 
-pub trait SizeTracker<K, V> {
+pub trait SizePolicy<K, V> {
     fn current(&self) -> usize;
     fn on_insert(&mut self, key: &K, value: &V);
     fn on_remove(&mut self, key: &K, value: &V);
@@ -141,7 +141,7 @@ pub trait SizeTracker<K, V> {
 
 pub struct CountTracker(usize);
 
-impl<K, V> SizeTracker<K, V> for CountTracker {
+impl<K, V> SizePolicy<K, V> for CountTracker {
     fn current(&self) -> usize {
         self.0
     }
@@ -174,7 +174,7 @@ pub struct LruCache<K, V, T = CountTracker> {
 
 impl<K, V, T> LruCache<K, V, T>
 where
-    T: SizeTracker<K, V>,
+    T: SizePolicy<K, V>,
 {
     pub fn with_capacity_sample_and_trace(
         mut capacity: usize,
@@ -242,12 +242,12 @@ where
 impl<K, V, T> LruCache<K, V, T>
 where
     K: Eq + Hash + Clone + std::fmt::Debug,
-    T: SizeTracker<K, V>,
+    T: SizePolicy<K, V>,
 {
     #[inline]
     pub fn insert(&mut self, key: K, value: V) {
         let mut old_key = None;
-        let current_size = SizeTracker::<K, V>::current(&self.size_tracker);
+        let current_size = SizePolicy::<K, V>::current(&self.size_tracker);
         match self.map.entry(key) {
             HashMapEntry::Occupied(mut e) => {
                 // TODO: evict entries if size exceeds capacity.
@@ -519,7 +519,7 @@ mod tests {
     }
 
     struct TestTracker(usize);
-    impl SizeTracker<usize, Vec<u8>> for TestTracker {
+    impl SizePolicy<usize, Vec<u8>> for TestTracker {
         fn current(&self) -> usize {
             self.0
         }
@@ -545,7 +545,7 @@ mod tests {
         for i in 0..10 {
             map.insert(i, vec![b' ']);
             assert_eq!(
-                SizeTracker::<usize, Vec<u8>>::current(&map.size_tracker),
+                SizePolicy::<usize, Vec<u8>>::current(&map.size_tracker),
                 i + 1
             )
         }
@@ -554,10 +554,7 @@ mod tests {
         }
         for i in 10..20 {
             map.insert(i, vec![b' ']);
-            assert_eq!(
-                SizeTracker::<usize, Vec<u8>>::current(&map.size_tracker),
-                10
-            )
+            assert_eq!(SizePolicy::<usize, Vec<u8>>::current(&map.size_tracker), 10)
         }
         for i in 0..10 {
             assert_eq!(map.get(&i), None);

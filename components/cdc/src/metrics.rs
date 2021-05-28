@@ -80,6 +80,8 @@ lazy_static! {
     .unwrap();
     pub static ref CDC_OLD_VALUE_CACHE_BYTES: IntGauge =
         register_int_gauge!("tikv_cdc_old_value_cache_bytes", "Bytes of old value cache").unwrap();
+    pub static ref CDC_OLD_VALUE_CACHE_MEMORY_QUOTA: IntGauge =
+        register_int_gauge!("tikv_cdc_old_value_cache_memory_quota", "Memory quota in bytes of old value cache").unwrap();
     pub static ref CDC_OLD_VALUE_SCAN_DETAILS: IntCounterVec = register_int_counter_vec!(
         "tikv_cdc_old_value_scan_details",
         "Bucketed counter of scan details for old value",
