@@ -5,10 +5,11 @@ use super::{IOOp, IOType};
 use std::future::{self, Future};
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
-    Arc, Mutex,
+    Arc,
 };
 
 use crossbeam_utils::CachePadded;
+use parking_lot::Mutex;
 use strum::EnumCount;
 
 /// Record accumulated bytes through of different types.
@@ -61,20 +62,22 @@ impl IORateLimiterStatistics {
 #[derive(Debug)]
 pub struct IORateLimiter {
     refill_bytes: usize,
-    enable_statistics: bool,
-    stats: Arc<IORateLimiterStatistics>,
+    stats: Option<Arc<IORateLimiterStatistics>>,
 }
 
 impl IORateLimiter {
     pub fn new(refill_bytes: usize, enable_statistics: bool) -> IORateLimiter {
         IORateLimiter {
             refill_bytes,
-            enable_statistics,
-            stats: Arc::new(IORateLimiterStatistics::new()),
+            stats: if enable_statistics {
+                Some(Arc::new(IORateLimiterStatistics::new()))
+            } else {
+                None
+            },
         }
     }
 
-    pub fn statistics(&self) -> Arc<IORateLimiterStatistics> {
+    pub fn statistics(&self) -> Option<Arc<IORateLimiterStatistics>> {
         self.stats.clone()
     }
 
@@ -87,8 +90,8 @@ impl IORateLimiter {
         } else {
             bytes
         };
-        if self.enable_statistics {
-            self.stats.add(io_type, io_op, bytes);
+        if let Some(stats) = &self.stats {
+            stats.add(io_type, io_op, bytes);
         }
         bytes
     }
@@ -107,38 +110,11 @@ lazy_static! {
     static ref IO_RATE_LIMITER: Mutex<Option<Arc<IORateLimiter>>> = Mutex::new(None);
 }
 
+// Do NOT use this method in test environment.
 pub fn set_io_rate_limiter(limiter: Option<Arc<IORateLimiter>>) {
-    *IO_RATE_LIMITER.lock().unwrap() = limiter;
+    *IO_RATE_LIMITER.lock() = limiter;
 }
 
 pub fn get_io_rate_limiter() -> Option<Arc<IORateLimiter>> {
-    (*IO_RATE_LIMITER.lock().unwrap()).clone()
-}
-
-pub struct WithIORateLimit {
-    previous_io_rate_limiter: Option<Arc<IORateLimiter>>,
-}
-
-impl WithIORateLimit {
-    pub fn new(refill_bytes: usize) -> (Self, Arc<IORateLimiterStatistics>) {
-        let previous_io_rate_limiter = get_io_rate_limiter();
-        let limiter = Arc::new(IORateLimiter::new(
-            refill_bytes,
-            true, /*enable_statistics*/
-        ));
-        let stats = limiter.statistics();
-        set_io_rate_limiter(Some(limiter));
-        (
-            WithIORateLimit {
-                previous_io_rate_limiter,
-            },
-            stats,
-        )
-    }
-}
-
-impl Drop for WithIORateLimit {
-    fn drop(&mut self) {
-        set_io_rate_limiter(self.previous_io_rate_limiter.take());
-    }
+    (*IO_RATE_LIMITER.lock()).clone()
 }
