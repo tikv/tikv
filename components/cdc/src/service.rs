@@ -536,7 +536,7 @@ mod tests {
                 }
                 window_size += 1;
                 // gRPC window size should not be larger than 1GB.
-                assert!(window_size <= 1024 * 1024);
+                assert!(window_size <= 1024 * 1024, "window_size: {}", window_size);
             }
             window_size
         };
