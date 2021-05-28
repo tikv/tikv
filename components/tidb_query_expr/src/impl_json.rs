@@ -229,7 +229,7 @@ fn valid_paths(expr: &tipb::Expr) -> Result<()> {
 
 fn unquote_string(s: &str) -> Result<String> {
     let first_char = s.chars().next();
-    let last_char = s.chars().nth(s.len() - 1);
+    let last_char = s.chars().last();
     if s.len() >= 2 && first_char == Some('"') && last_char == Some('"') {
         Ok(json_unquote::unquote_string(&s[1..s.len() - 1])?)
     } else {
@@ -639,6 +639,9 @@ mod tests {
                 Some(r#""hello,\"quoted string\",world""#),
                 Some(r#"hello,"quoted string",world"#),
             ),
+            (Some(r#"A中\\\"文B"#), Some(r#"A中\\\"文B"#)),
+            (Some(r#""A中\\\"文B""#), Some(r#"A中\"文B"#)),
+            (Some(r#""\u00E0A中\\\"文B""#), Some(r#"àA中\"文B"#)),
         ];
 
         for (arg, expect_output) in cases {
