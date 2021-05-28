@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use engine_rocks::Compat;
 use engine_traits::{KvEngine, Peekable};
-use file_system::{IOOp, IOType, WithIORateLimit};
+use file_system::{IOOp, IOType};
 use futures::executor::block_on;
 use grpcio::Environment;
 use kvproto::raft_serverpb::*;
@@ -488,8 +488,6 @@ fn test_request_snapshot_apply_repeatedly() {
 
 #[test]
 fn test_inspected_snapshot() {
-    let (_guard, stats) = WithIORateLimit::new(0);
-
     let mut cluster = new_server_cluster(1, 3);
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = 8;
@@ -504,8 +502,16 @@ fn test_inspected_snapshot() {
     // Sleep for a while to ensure all logs are compacted.
     sleep_ms(100);
 
+    let stats = cluster
+        .io_rate_limiter
+        .as_ref()
+        .unwrap()
+        .statistics()
+        .unwrap();
     assert_eq!(stats.fetch(IOType::Replication, IOOp::Read), 0);
     assert_eq!(stats.fetch(IOType::Replication, IOOp::Write), 0);
+    // Make sure snapshot read hits disk
+    cluster.flush_data();
     // Let store 3 inform leader to generate a snapshot.
     cluster.run_node(3).unwrap();
     must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
