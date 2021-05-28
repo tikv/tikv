@@ -1377,7 +1377,12 @@ name = "external_storage"
 version = "0.0.1"
 dependencies = [
  "bytes 0.5.3",
+<<<<<<< HEAD
  "futures 0.3.7",
+=======
+ "fail",
+ "futures 0.3.8",
+>>>>>>> 96fc324ec... external_storage: add timeout for s3 storage (#10132)
  "futures-executor",
  "futures-io",
  "futures-util",
