@@ -46,7 +46,6 @@ use tikv_util::future::{paired_future_callback, poll_future_notify};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
 use tikv_util::worker::Scheduler;
 use txn_types::{self, Key};
-
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
@@ -625,7 +624,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                     }))
                 } else {
                     let ret = ch.send_raft_msg(msg).map_err(Error::from);
-                    future::ready(ret)
+                    return future::ready(ret);
                 }
             });
             let status = match res.await {
@@ -665,6 +664,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                             my_store_id: store_id,
                         }));
                     }
+
                     if let Err(e) = ch.send_raft_msg(msg) {
                         return future::err(Error::from(e));
                     }

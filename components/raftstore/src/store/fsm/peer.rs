@@ -33,7 +33,7 @@ use raft::{Ready, StateRole};
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::memory::HeapSize;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
-use tikv_util::sys::memory_usage_reaches_high_water;
+use tikv_util::sys::{disk, memory_usage_reaches_high_water};
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
 use tikv_util::{box_err, debug, error, info, trace, warn};
@@ -1231,6 +1231,13 @@ where
             "to_peer_id" => msg.get_to_peer().get_id(),
         );
 
+        let msg_type = msg.get_message().get_msg_type();
+        let store_id = self.ctx.store_id();
+        if disk::disk_full_precheck(store_id) || disk::is_disk_full() {
+            if msg_type == MessageType::MsgAppend || msg_type == MessageType::MsgTransferLeader {
+                return Err(Error::Timeout(String::from("disk full")));
+            }
+        }
         if !self.validate_raft_msg(&msg) {
             return Ok(());
         }

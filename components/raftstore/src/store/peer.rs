@@ -56,6 +56,7 @@ use crate::{Error, Result};
 use collections::{HashMap, HashSet};
 use pd_client::INVALID_ID;
 use tikv_util::codec::number::decode_u64;
+use tikv_util::sys::disk;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::time::{Instant as UtilInstant, ThreadReadId};
 use tikv_util::worker::{FutureScheduler, Scheduler};
@@ -2341,7 +2342,13 @@ where
                 return false;
             }
             Ok(RequestPolicy::ReadIndex) => return self.read_index(ctx, req, err_resp, cb),
-            Ok(RequestPolicy::ProposeNormal) => self.propose_normal(ctx, req),
+            Ok(RequestPolicy::ProposeNormal) => {
+                if disk::disk_full_precheck(0) || disk::is_disk_full() {
+                    Err(box_err!("disk full, all the business data write forbiden"))
+                } else {
+                    self.propose_normal(ctx, req)
+                }
+            }
             Ok(RequestPolicy::ProposeTransferLeader) => {
                 return self.propose_transfer_leader(ctx, req, cb);
             }

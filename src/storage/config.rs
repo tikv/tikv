@@ -27,7 +27,7 @@ const MAX_SCHED_CONCURRENCY: usize = 2 * 1024 * 1024;
 // here we use 100MB as default value for tolerate 1s latency.
 const DEFAULT_SCHED_PENDING_WRITE_MB: u64 = 100;
 
-const DEFAULT_RESERVED_SPACE_GB: u64 = 5;
+pub const DEFAULT_RESERVED_SPACE_GB: u64 = 5;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
 #[serde(default)]

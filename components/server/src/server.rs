@@ -28,12 +28,12 @@ use cdc::MemoryQuota;
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{
-    encryption::get_env as get_encrypted_env, file_system::get_env as get_inspected_env,
+    encryption::get_env as get_encrypted_env, file_system::get_env as get_inspected_env, util,
     RocksEngine,
 };
 use engine_traits::{
     compaction_job::CompactionJobInfo, CFOptionsExt, ColumnFamilyOptions, Engines, MiscExt,
-    RaftEngine, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    RaftEngine, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
 use file_system::{
@@ -60,6 +60,7 @@ use raftstore::{
         fsm,
         fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_MSG_CAP},
         memory::MEMTRACE_ROOT,
+        snap::SnapManager,
         AutoSplitController, GlobalReplicationState, LocalReader, SnapManagerBuilder,
         SplitCheckRunner, SplitConfigManager, StoreMsg,
     },
@@ -83,13 +84,16 @@ use tikv::{
         ttl::TTLChecker,
         Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID, GRPC_THREAD_PREFIX,
     },
-    storage::{self, config::StorageConfigManger, mvcc::MvccConsistencyCheckObserver, Engine},
+    storage::{
+        self, config::StorageConfigManger, config::DEFAULT_RESERVED_SPACE_GB,
+        mvcc::MvccConsistencyCheckObserver, Engine,
+    },
 };
 use tikv_util::{
     check_environment_variables,
     config::{ensure_dir_exist, VersionTrack},
     math::MovingAvgU32,
-    sys::{register_memory_usage_high_water, SysQuota},
+    sys::{disk, register_memory_usage_high_water, SysQuota},
     time::Monitor,
     worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker, Worker},
 };
@@ -132,10 +136,11 @@ pub fn run_tikv(config: TiKvConfig) {
             let (limiter, fetcher) = tikv.init_io_utility();
             let (engines, engines_info) = tikv.init_raw_engines(Some(limiter.clone()));
             limiter.set_low_priority_io_adjustor_if_needed(Some(engines_info.clone()));
-            tikv.init_engines(engines);
+            tikv.init_engines(engines.clone());
             let server_config = tikv.init_servers();
             tikv.register_services();
             tikv.init_metrics_flusher(fetcher, engines_info);
+            tikv.init_storage_stats_task(engines);
             tikv.run_server(server_config);
             tikv.run_status_server();
 
@@ -155,6 +160,7 @@ const RESERVED_OPEN_FDS: u64 = 1000;
 
 const DEFAULT_METRICS_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
 const DEFAULT_ENGINE_METRICS_RESET_INTERVAL: Duration = Duration::from_millis(60_000);
+const DEFAULT_STORAGE_STATS_INTERVAL: Duration = Duration::from_secs(1);
 
 /// A complete TiKV server.
 struct TiKVServer<ER: RaftEngine> {
@@ -167,6 +173,7 @@ struct TiKVServer<ER: RaftEngine> {
     resolver: resolve::PdStoreAddrResolver,
     state: Arc<Mutex<GlobalReplicationState>>,
     store_path: PathBuf,
+    snap_mgr: Option<SnapManager>,
     encryption_key_manager: Option<Arc<DataKeyManager>>,
     engines: Option<TiKVEngines<ER>>,
     servers: Option<Servers<ER>>,
@@ -238,6 +245,12 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let latest_ts = block_on(pd_client.get_tso()).expect("failed to get timestamp from PD");
         let concurrency_manager = ConcurrencyManager::new(latest_ts);
 
+        let mut disk_reserved = config.storage.reserve_space.0;
+        if disk_reserved == 0 {
+            disk_reserved = (tikv::config::ReadableSize::gb(DEFAULT_RESERVED_SPACE_GB)).0;
+        }
+        disk::set_disk_reserved(disk_reserved);
+
         TiKVServer {
             config,
             cfg_controller: Some(cfg_controller),
@@ -248,6 +261,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             resolver,
             state,
             store_path,
+            snap_mgr: None,
             encryption_key_manager: None,
             engines: None,
             servers: None,
@@ -668,6 +682,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         node.try_bootstrap_store(engines.engines.clone())
             .unwrap_or_else(|e| fatal!("failed to bootstrap node id: {}", e));
 
+        self.snap_mgr = Some(snap_mgr.clone());
         // Create server
         let server = Server::new(
             node.id(),
@@ -1002,6 +1017,58 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 engines_info.update(now);
                 mem_trace_metrics.flush(now);
             });
+    }
+
+    fn init_storage_stats_task(&self, engines: Engines<RocksEngine, ER>) {
+        let config_disk_capacity: u64 = self.config.raft_store.capacity.0;
+        let store_path = self.store_path.clone();
+        let snap_mgr = self.snap_mgr.clone().unwrap();
+        self.background_worker
+            .spawn_interval_task(DEFAULT_STORAGE_STATS_INTERVAL, move || {
+                let disk_stats = match fs2::statvfs(&store_path) {
+                    Err(e) => {
+                        error!(
+                            "get disk stat for kv store failed";
+                            "kv path"=>store_path.to_str(),
+                            "err" => ?e
+                        );
+                        return;
+                    }
+                    Ok(stats) => stats,
+                };
+                let disk_cap = disk_stats.total_space();
+                let snap_size = snap_mgr.get_total_snap_size().unwrap();
+
+                let mut kv_size: u64 = 0;
+                for cf in ALL_CFS {
+                    let handle = util::get_cf_handle(engines.kv.as_inner(), cf).unwrap();
+                    kv_size += util::get_engine_cf_used_size(engines.kv.as_inner(), handle);
+                }
+
+                let used_size = snap_size + kv_size;
+                let capacity = if config_disk_capacity == 0 || disk_cap < config_disk_capacity {
+                    disk_cap
+                } else {
+                    config_disk_capacity
+                };
+
+                let mut available = capacity.checked_sub(used_size).unwrap_or_default();
+                // We only care about rocksdb SST file size, so we should check disk available here.
+                available = cmp::min(available, disk_stats.available_space());
+                if available <= disk::get_disk_reserved() {
+                    warn!(
+                        "disk full, available={},snap={},engine={},capacity={}",
+                        available, snap_size, kv_size, capacity
+                    );
+                    disk::set_disk_full();
+                } else {
+                    warn!(
+                        "disk full, available={},snap={},engine={},capacity={}",
+                        available, snap_size, kv_size, capacity
+                    );
+                    disk::clear_disk_full();
+                }
+            })
     }
 
     fn run_server(&mut self, server_config: Arc<VersionTrack<ServerConfig>>) {
