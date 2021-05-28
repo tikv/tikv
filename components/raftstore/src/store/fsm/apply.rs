@@ -66,7 +66,7 @@ use crate::store::util::{
     ConfChangeKind, KeysInfoFormatter,
 };
 use crate::store::{cmd_resp, util, Config, RegionSnapshot, RegionTask};
-use crate::{Error, Result};
+use crate::{bytes_capacity, Error, Result};
 
 use super::metrics::*;
 
@@ -2757,7 +2757,7 @@ fn get_entries_mem_size(entries: &[Entry]) -> i64 {
     }
     let data_size: i64 = entries
         .iter()
-        .map(|e| (e.data.capacity() + e.context.capacity()) as i64)
+        .map(|e| (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64)
         .sum();
     data_size
 }
@@ -3910,7 +3910,7 @@ mod tests {
             cmd.mut_put().set_value(b"value".to_vec());
             let mut req = RaftCmdRequest::default();
             req.mut_requests().push(cmd);
-            e.set_data(req.write_to_bytes().unwrap())
+            e.set_data(req.write_to_bytes().unwrap().into())
         }
         e
     }
@@ -4342,7 +4342,8 @@ mod tests {
         }
 
         fn build(mut self) -> Entry {
-            self.entry.set_data(self.req.write_to_bytes().unwrap());
+            self.entry
+                .set_data(self.req.write_to_bytes().unwrap().into());
             self.entry
         }
     }
