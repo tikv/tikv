@@ -3,10 +3,10 @@
 use std::collections::HashMap;
 use std::string::ToString;
 
-use crate::server::service::diagnostics::ioload;
+use crate::server::service::diagnostics::{ioload, SYS_INFO};
 use kvproto::diagnosticspb::{ServerInfoItem, ServerInfoPair};
 use tikv_util::config::KIB;
-use tikv_util::sys::{cpu_time::LiunxStyleCpuTime, sys_quota::SysQuota, *};
+use tikv_util::sys::{cpu_time::LiunxStyleCpuTime, SysQuota, *};
 use walkdir::WalkDir;
 
 type CpuTimeSnapshot = Option<LiunxStyleCpuTime>;
@@ -297,10 +297,7 @@ fn cpu_hardware_info(collector: &mut Vec<ServerInfoItem>) {
         None => return,
     };
     let mut infos = vec![
-        (
-            "cpu-logical-cores",
-            SysQuota::new().cpu_cores_quota().to_string(),
-        ),
+        ("cpu-logical-cores", SysQuota::cpu_cores_quota().to_string()),
         ("cpu-physical-cores", num_cpus::get_physical().to_string()),
         ("cpu-frequency", format!("{}MHz", processor.get_frequency())),
         ("cpu-vendor-id", processor.get_vendor_id().to_string()),
