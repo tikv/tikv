@@ -1741,7 +1741,7 @@ impl CachedEntries {
     pub fn new(entries: Vec<Entry>) -> Self {
         assert!(!entries.is_empty());
         let start = entries.first().map(|x| x.index).unwrap();
-        let end = entries.last().map(|x| x.index).unwrap();
+        let end = entries.last().map(|x| x.index).unwrap() + 1;
         let range = Range { start, end };
         CachedEntries {
             entries: Arc::new(Mutex::new(entries)),

@@ -3814,6 +3814,7 @@ mod tests {
     use crate::store::msg::WriteResponse;
     use crate::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::store::util::{new_learner_peer, new_peer};
+    use engine_panic::PanicEngine;
     use engine_test::kv::{new_engine, KvTestEngine, KvTestSnapshot, KvTestWriteBatch};
     use engine_traits::{Peekable as PeekableTrait, WriteBatchExt};
     use kvproto::metapb::{self, RegionEpoch};
@@ -3890,6 +3891,36 @@ mod tests {
         }
         fn clone_box(&self) -> Box<dyn Notifier<EK>> {
             Box::new(self.clone())
+        }
+    }
+
+    impl Default for Registration {
+        fn default() -> Self {
+            Registration {
+                id: Default::default(),
+                term: Default::default(),
+                apply_state: Default::default(),
+                applied_index_term: Default::default(),
+                region: Default::default(),
+                pending_request_snapshot_count: Default::default(),
+                is_merging: Default::default(),
+                raft_engine: Box::new(PanicEngine),
+            }
+        }
+    }
+
+    impl Registration {
+        fn dup(&self) -> Self {
+            Registration {
+                id: self.id,
+                term: self.term,
+                apply_state: self.apply_state.clone(),
+                applied_index_term: self.applied_index_term,
+                region: self.region.clone(),
+                pending_request_snapshot_count: self.pending_request_snapshot_count.clone(),
+                is_merging: self.is_merging,
+                raft_engine: Box::new(PanicEngine),
+            }
         }
     }
 
@@ -4052,7 +4083,7 @@ mod tests {
         };
         reg.region.set_id(2);
         reg.apply_state.set_applied_index(3);
-        router.schedule_task(2, Msg::Registration(reg.clone()));
+        router.schedule_task(2, Msg::Registration(reg.dup()));
         validate(&router, 2, move |delegate| {
             assert_eq!(delegate.id, 1);
             assert_eq!(delegate.tag, "[region 2] 1");
@@ -5006,7 +5037,7 @@ mod tests {
         };
         system.spawn("test-split".to_owned(), builder);
 
-        router.schedule_task(1, Msg::Registration(reg.clone()));
+        router.schedule_task(1, Msg::Registration(reg.dup()));
         let observe_handle = ObserveHandle::new();
         router.schedule_task(
             1,
