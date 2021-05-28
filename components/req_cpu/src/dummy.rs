@@ -1,11 +1,11 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::{Builder, ReqCpuConfig, RequestTags};
+use crate::{Builder, ReqCpuConfig, RequestTag};
 
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
-impl RequestTags {
+impl RequestTag {
     pub fn attach(self: &Arc<Self>) -> Guard {
         Guard::default()
     }

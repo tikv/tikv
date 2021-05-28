@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::collector::Collector;
-use crate::{Builder, ReqCpuConfig, RequestCpuRecords, RequestTags};
+use crate::{Builder, ReqCpuConfig, RequestCpuRecords, RequestTag};
 
 use std::cell::Cell;
 use std::fs::read_dir;
@@ -16,18 +16,20 @@ use crossbeam::channel::{unbounded, Receiver, Sender};
 use lazy_static::lazy_static;
 use libc::pid_t;
 use procinfo::pid;
+use procinfo::pid::Stat;
+use std::collections::hash_map::Entry;
 
 thread_local! {
-    static CURRENT_REQ: LocalReqTags = {
+    static CURRENT_REQ: LocalReqTag = {
         let thread_id = unsafe { libc::syscall(libc::SYS_gettid) as libc::pid_t };
 
-        let shared_ptr = SharedReqTagsPtr::default();
-        CHANNEL.0.send(RegisterMsg {
+        let shared_ptr = SharedReqTagPtr::default();
+        REGISTER_THREAD_CHANNEL.0.send(RegisterThreadMsg {
             thread_id,
             shared_ptr: shared_ptr.clone(),
         }).ok();
 
-        LocalReqTags {
+        LocalReqTag {
             is_set: Cell::new(false),
             shared_ptr,
         }
@@ -35,29 +37,29 @@ thread_local! {
 }
 
 #[derive(Default, Clone)]
-struct SharedReqTagsPtr {
-    req_tags: Arc<AtomicPtr<RequestTags>>,
+struct SharedReqTagPtr {
+    req_tag: Arc<AtomicPtr<RequestTag>>,
 }
 
-struct LocalReqTags {
+struct LocalReqTag {
     is_set: Cell<bool>,
-    shared_ptr: SharedReqTagsPtr,
+    shared_ptr: SharedReqTagPtr,
 }
 
-impl SharedReqTagsPtr {
-    fn take(&self) -> Option<Arc<RequestTags>> {
-        let prev_ptr = self.req_tags.swap(std::ptr::null_mut(), Acquire);
+impl SharedReqTagPtr {
+    fn take(&self) -> Option<Arc<RequestTag>> {
+        let prev_ptr = self.req_tag.swap(std::ptr::null_mut(), Acquire);
         (!prev_ptr.is_null()).then(|| unsafe { Arc::from_raw(prev_ptr as _) })
     }
 
-    fn swap(&self, value: Arc<RequestTags>) -> Option<Arc<RequestTags>> {
-        let tags_arc_ptr = Arc::into_raw(value);
-        let prev_ptr = self.req_tags.swap(tags_arc_ptr as _, AcqRel);
+    fn swap(&self, value: Arc<RequestTag>) -> Option<Arc<RequestTag>> {
+        let tag_arc_ptr = Arc::into_raw(value);
+        let prev_ptr = self.req_tag.swap(tag_arc_ptr as _, AcqRel);
         (!prev_ptr.is_null()).then(|| unsafe { Arc::from_raw(prev_ptr as _) })
     }
 }
 
-impl RequestTags {
+impl RequestTag {
     pub fn attach(self: &Arc<Self>) -> Guard {
         CURRENT_REQ.with(|s| {
             if s.is_set.get() {
@@ -87,15 +89,16 @@ impl Drop for Guard {
     }
 }
 
-struct RegisterMsg {
+struct RegisterThreadMsg {
     thread_id: pid_t,
-    shared_ptr: SharedReqTagsPtr,
+    shared_ptr: SharedReqTagPtr,
 }
 
 lazy_static! {
     static ref PID: pid_t = unsafe { libc::getpid() };
     static ref CLK_TCK: libc::c_long = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
-    static ref CHANNEL: (Sender<RegisterMsg>, Receiver<RegisterMsg>) = unbounded();
+    static ref REGISTER_THREAD_CHANNEL: (Sender<RegisterThreadMsg>, Receiver<RegisterThreadMsg>) =
+        unbounded();
 }
 
 struct ReqCpuRecorder {
@@ -112,7 +115,8 @@ struct ReqCpuRecorder {
 
 struct ThreadStat {
     prev_stat: pid::Stat,
-    shared_ptr: SharedReqTagsPtr,
+    shared_ptr: SharedReqTagPtr,
+    prev_tag: Option<Arc<RequestTag>>,
 }
 
 impl ReqCpuRecorder {
@@ -133,52 +137,61 @@ impl ReqCpuRecorder {
     }
 
     pub fn handle_registration(&mut self) {
-        while let Ok(RegisterMsg {
+        while let Ok(RegisterThreadMsg {
             thread_id,
             shared_ptr,
-        }) = CHANNEL.1.try_recv()
+        }) = REGISTER_THREAD_CHANNEL.1.try_recv()
         {
-            if let Ok(stat) = procinfo::pid::stat_task(*PID, thread_id) {
-                self.thread_stats.insert(
-                    thread_id,
-                    ThreadStat {
-                        prev_stat: stat,
-                        shared_ptr,
-                    },
-                );
-            }
+            self.thread_stats.insert(
+                thread_id,
+                ThreadStat {
+                    prev_stat: Stat::default(),
+                    shared_ptr,
+                    prev_tag: None,
+                },
+            );
         }
     }
 
     pub fn record(&mut self) {
         for (tid, thread_stat) in &mut self.thread_stats {
-            if let Some(req_tags) = thread_stat.shared_ptr.take() {
-                // Own the tag extracted from the shared pointer.
-
-                if !self.current_window_records.records.contains_key(&req_tags) {
-                    self.current_window_records
-                        .records
-                        .insert(req_tags.clone(), 0);
-                }
-                let recorded_ms = self
-                    .current_window_records
-                    .records
-                    .get_mut(&req_tags)
-                    .unwrap();
-
+            let cur_tag = thread_stat.shared_ptr.take().map(|req_tag| {
+                let tag = req_tag.clone();
                 // Put it back as quickly as possible.
-                assert!(thread_stat.shared_ptr.swap(req_tags).is_none());
+                assert!(thread_stat.shared_ptr.swap(req_tag).is_none());
+                tag
+            });
 
+            let prev_tag = thread_stat.prev_tag.take();
+
+            if cur_tag.is_some() || prev_tag.is_some() {
                 STAT_TASK_COUNT.inc();
-                if let Ok(stat) = procinfo::pid::stat_task(*PID, *tid) {
-                    let prev_cpu_ticks = (thread_stat.prev_stat.utime as u64)
-                        .wrapping_add(thread_stat.prev_stat.stime as u64);
-                    let current_cpu_ticks = (stat.utime as u64).wrapping_add(stat.stime as u64);
-                    thread_stat.prev_stat = stat;
 
-                    let delta_ms =
-                        current_cpu_ticks.wrapping_sub(prev_cpu_ticks) * 1_000 / (*CLK_TCK as u64);
-                    *recorded_ms += delta_ms;
+                // If current tag exists, we need to get the begin stat.
+                // If previous tag exists, we need to get the end stat.
+                if let Ok(stat) = procinfo::pid::stat_task(*PID, *tid) {
+                    // Update cpu time of the previous tag
+                    if let Some(prev_tag) = prev_tag {
+                        let prev_cpu_ticks = (thread_stat.prev_stat.utime as u64)
+                            .wrapping_add(thread_stat.prev_stat.stime as u64);
+                        let current_cpu_ticks = (stat.utime as u64).wrapping_add(stat.stime as u64);
+                        let delta_ms = current_cpu_ticks.wrapping_sub(prev_cpu_ticks) * 1_000
+                            / (*CLK_TCK as u64);
+
+                        match self.current_window_records.records.entry(prev_tag) {
+                            Entry::Occupied(mut o) => {
+                                *o.get_mut() += delta_ms;
+                            }
+                            Entry::Vacant(v) => {
+                                v.insert(delta_ms);
+                            }
+                        }
+                    }
+
+                    if cur_tag.is_some() {
+                        thread_stat.prev_tag = cur_tag;
+                        thread_stat.prev_stat = stat;
+                    }
                 }
             }
         }
@@ -283,20 +296,36 @@ mod tests {
     use std::sync::atomic::Ordering::Relaxed;
     use std::sync::Mutex;
 
+    enum Command {
+        Exit,
+        SetContext(Arc<RequestTag>),
+    }
+
+    #[derive(Default, Clone)]
+    struct DummyCollector {
+        records: Arc<Mutex<Vec<RequestCpuRecords>>>,
+    }
+
+    impl Collector for DummyCollector {
+        fn collect(&self, records: &RequestCpuRecords) {
+            let mut r = self.records.lock().unwrap();
+            r.push(records.clone());
+        }
+    }
+
+    fn heavy_job() -> u64 {
+        let m: u64 = rand::random();
+        let n: u64 = rand::random();
+        let m = m ^ n;
+        let n = m.wrapping_mul(n);
+        let m = m.wrapping_add(n);
+        let n = m & n;
+        let m = m | n;
+        m.wrapping_sub(n)
+    }
+
     #[test]
     fn one_context_per_thread() {
-        #[derive(Default, Clone)]
-        struct DummyCollector {
-            records: Arc<Mutex<Vec<RequestCpuRecords>>>,
-        }
-
-        impl Collector for DummyCollector {
-            fn collect(&self, records: &RequestCpuRecords) {
-                let mut r = self.records.lock().unwrap();
-                r.push(records.clone());
-            }
-        }
-
         let collector = DummyCollector::default();
         Builder::new().register_collector(collector.clone()).build();
 
@@ -307,25 +336,17 @@ mod tests {
                 let num = num.clone();
                 std::thread::spawn(move || {
                     let tid = unsafe { libc::syscall(libc::SYS_gettid) as libc::pid_t } as u64;
-                    let req_tags = Arc::new(RequestTags {
+                    let req_tag = Arc::new(RequestTag {
                         store_id: tid,
                         region_id: tid,
                         peer_id: tid,
                         extra_attachment: vec![],
                     });
 
-                    let _g = req_tags.attach();
+                    let _g = req_tag.attach();
 
                     for _ in 0..*i {
-                        let m: u64 = rand::random();
-                        let n: u64 = rand::random();
-                        let m = m ^ n;
-                        let n = m.wrapping_mul(n);
-                        let m = m.wrapping_add(n);
-                        let n = m & n;
-                        let m = m | n;
-                        let n = m.wrapping_sub(n);
-                        num.store(n, Relaxed);
+                        num.store(heavy_job(), Relaxed);
                     }
                 })
             })

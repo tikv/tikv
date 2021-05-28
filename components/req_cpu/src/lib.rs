@@ -40,14 +40,14 @@ impl Default for ReqCpuConfig {
 }
 
 #[derive(Debug, Default, Eq, PartialEq, Clone, Hash)]
-pub struct RequestTags {
+pub struct RequestTag {
     pub store_id: u64,
     pub region_id: u64,
     pub peer_id: u64,
     pub extra_attachment: Vec<u8>,
 }
 
-impl RequestTags {
+impl RequestTag {
     pub fn from_rpc_context(context: &kvproto::kvrpcpb::Context) -> Self {
         let peer = context.get_peer();
         Self {
@@ -63,7 +63,7 @@ impl RequestTags {
 pub struct RequestCpuRecords {
     begin_unix_time_ms: u64,
     duration_ms: u64,
-    records: HashMap<Arc<RequestTags>, u64>,
+    records: HashMap<Arc<RequestTag>, u64>,
 }
 
 impl Default for RequestCpuRecords {

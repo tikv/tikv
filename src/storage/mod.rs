@@ -84,7 +84,7 @@ use kvproto::kvrpcpb::{
 };
 use raftstore::store::util::build_key_range;
 use rand::prelude::*;
-use req_cpu::RequestTags;
+use req_cpu::RequestTag;
 use std::{
     borrow::Cow,
     iter,
@@ -352,8 +352,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
-                    let req_tags = Arc::new(RequestTags::from_rpc_context(&ctx));
-                    let _g = req_tags.attach();
+                    let req_tag = Arc::new(RequestTag::from_rpc_context(&ctx));
+                    let _g = req_tag.attach();
 
                     let begin_instant = Instant::now_coarse();
                     let mut statistics = Statistics::default();
@@ -456,7 +456,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         }
                     };
 
-                    let req_tags = Arc::new(RequestTags::from_rpc_context(&ctx));
+                    let req_tag = Arc::new(RequestTag::from_rpc_context(&ctx));
                     let snap = Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx));
                     req_snaps.push((
                         snap,
@@ -467,7 +467,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         bypass_locks,
                         region_id,
                         id,
-                        req_tags,
+                        req_tag,
                     ));
                 }
                 Self::with_tls_engine(|engine| engine.release_snapshot());
@@ -481,11 +481,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         bypass_locks,
                         region_id,
                         id,
-                        req_tags,
+                        req_tag,
                     ) = req_snap;
                     match snap.await {
                         Ok(snapshot) => {
-                            let _g = req_tags.attach();
+                            let _g = req_tag.attach();
                             match PointGetterBuilder::new(snapshot, start_ts)
                                 .fill_cache(fill_cache)
                                 .isolation_level(isolation_level)
@@ -574,8 +574,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
                     let begin_instant = Instant::now_coarse();
-                    let req_tags = Arc::new(RequestTags::from_rpc_context(&ctx));
-                    let _g = req_tags.attach();
+                    let req_tag = Arc::new(RequestTag::from_rpc_context(&ctx));
+                    let _g = req_tag.attach();
 
                     let mut statistics = Statistics::default();
                     let perf_statistics = PerfStatisticsInstant::new();
@@ -720,8 +720,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
                     let begin_instant = Instant::now_coarse();
-                    let req_tags = Arc::new(RequestTags::from_rpc_context(&ctx));
-                    let _g = req_tags.attach();
+                    let req_tag = Arc::new(RequestTag::from_rpc_context(&ctx));
+                    let _g = req_tag.attach();
 
                     let snap_store = SnapshotStore::new(
                         snapshot,
@@ -850,8 +850,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 {
                     let begin_instant = Instant::now_coarse();
 
-                    let req_tags = Arc::new(RequestTags::from_rpc_context(&ctx));
-                    let _g = req_tags.attach();
+                    let req_tag = Arc::new(RequestTag::from_rpc_context(&ctx));
+                    let _g = req_tag.attach();
 
                     let mut statistics = Statistics::default();
                     let mut reader = MvccReader::new(

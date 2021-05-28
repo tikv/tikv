@@ -57,7 +57,7 @@ use crate::storage::{
     get_priority_tag, types::StorageCallback, Error as StorageError,
     ErrorInner as StorageErrorInner,
 };
-use req_cpu::RequestTags;
+use req_cpu::RequestTag;
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
 
@@ -621,8 +621,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
                 let timer = Instant::now_coarse();
 
-                let req_tags = Arc::new(RequestTags::from_rpc_context(task.cmd.ctx()));
-                let _g = req_tags.attach();
+                let req_tag = Arc::new(RequestTag::from_rpc_context(task.cmd.ctx()));
+                let _g = req_tag.attach();
 
                 let region_id = task.cmd.ctx().get_region_id();
                 let ts = task.cmd.ts();
