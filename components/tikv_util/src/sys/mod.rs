@@ -7,6 +7,7 @@ mod cgroup;
 
 // re-export some traits for ease of use
 use crate::config::{ReadableSize, KIB};
+#[cfg(target_os = "linux")]
 use lazy_static::lazy_static;
 use std::sync::atomic::{AtomicU64, Ordering};
 use sysinfo::RefreshKind;
@@ -17,8 +18,8 @@ const CPU_CORES_QUOTA_ENV_VAR_KEY: &str = "TIKV_CPU_CORES_QUOTA";
 
 static GLOBAL_MEMORY_USAGE: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(target_os = "linux")]
 lazy_static! {
-    #[cfg(target_os = "linux")]
     static ref SELF_CGROUP: cgroup::CGroupSys = cgroup::CGroupSys::default();
 }
 
