@@ -13,7 +13,7 @@ use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::vec::Drain;
-use std::{cmp, usize};
+use std::{cmp, mem, usize};
 
 use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler, Priority,
@@ -57,14 +57,14 @@ use crate::store::metrics::*;
 use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
 use crate::store::peer::Peer;
 use crate::store::peer_storage::{
-    self, write_initial_apply_state, write_peer_state, ENTRY_MEM_SIZE,
+    self, write_initial_apply_state, write_peer_state, CachedEntries,
 };
 use crate::store::util::{
     admin_cmd_epoch_lookup, check_region_epoch, compare_region_epoch, is_learner, ChangePeerI,
     ConfChangeKind, KeysInfoFormatter,
 };
 use crate::store::{cmd_resp, util, Config, RegionSnapshot, RegionTask};
-use crate::{bytes_capacity, Error, Result};
+use crate::{Error, Result};
 
 use super::metrics::*;
 
@@ -562,7 +562,7 @@ where
         let is_synced = self.write_to_db();
 
         if !self.apply_res.is_empty() {
-            let apply_res = std::mem::take(&mut self.apply_res);
+            let apply_res = mem::take(&mut self.apply_res);
             self.notifier.notify(apply_res);
         }
 
@@ -2711,10 +2711,8 @@ where
     pub peer_id: u64,
     pub region_id: u64,
     pub term: u64,
-    pub entries: Vec<Entry>,
+    pub entries: CachedEntries,
     pub cbs: Vec<Proposal<S>>,
-    entries_mem_size: i64,
-    entries_count: i64,
 }
 
 impl<S: Snapshot> Apply<S> {
@@ -2725,39 +2723,15 @@ impl<S: Snapshot> Apply<S> {
         entries: Vec<Entry>,
         cbs: Vec<Proposal<S>>,
     ) -> Apply<S> {
-        let entries_mem_size =
-            (ENTRY_MEM_SIZE * entries.capacity()) as i64 + get_entries_mem_size(&entries);
-        APPLY_PENDING_BYTES_GAUGE.add(entries_mem_size);
-        let entries_count = entries.len() as i64;
-        APPLY_PENDING_ENTRIES_GAUGE.add(entries_count);
+        let entries = CachedEntries::new(entries);
         Apply {
             peer_id,
             region_id,
             term,
             entries,
             cbs,
-            entries_mem_size,
-            entries_count,
         }
     }
-}
-
-impl<S: Snapshot> Drop for Apply<S> {
-    fn drop(&mut self) {
-        APPLY_PENDING_BYTES_GAUGE.sub(self.entries_mem_size);
-        APPLY_PENDING_ENTRIES_GAUGE.sub(self.entries_count);
-    }
-}
-
-fn get_entries_mem_size(entries: &[Entry]) -> i64 {
-    if entries.is_empty() {
-        return 0;
-    }
-    let data_size: i64 = entries
-        .iter()
-        .map(|e| (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64)
-        .sum();
-    data_size
 }
 
 #[derive(Default, Clone)]
@@ -3101,13 +3075,18 @@ where
         fail_point!("on_handle_apply_2", self.delegate.id() == 2, |_| {});
         fail_point!("on_handle_apply", |_| {});
 
-        if apply.entries.is_empty() || self.delegate.pending_remove || self.delegate.stopped {
+        if apply.entries.range.is_empty() || self.delegate.pending_remove || self.delegate.stopped {
             return;
+        }
+
+        let mut entries = apply.entries.take_entries();
+        if entries.is_empty() {
+            // TODO: fetch entries from raft engine.
         }
 
         self.delegate.metrics = ApplyMetrics::default();
         self.delegate.term = apply.term;
-        if let Some(entry) = apply.entries.last() {
+        if let Some(entry) = entries.last() {
             let prev_state = (
                 self.delegate.apply_state.get_commit_index(),
                 self.delegate.apply_state.get_commit_term(),
@@ -3125,7 +3104,7 @@ where
 
         self.append_proposal(apply.cbs.drain(..));
         self.delegate
-            .handle_raft_committed_entries(apply_ctx, apply.entries.drain(..));
+            .handle_raft_committed_entries(apply_ctx, entries.drain(..));
         fail_point!("post_handle_apply_1003", self.delegate.id() == 1003, |_| {});
     }
 
@@ -3426,7 +3405,7 @@ where
                 }) => self.handle_change(apply_ctx, cmd, region_epoch, cb),
                 #[cfg(any(test, feature = "testexport"))]
                 Some(Msg::Validate(_, f)) => {
-                    let delegate: *const u8 = unsafe { std::mem::transmute(&self.delegate) };
+                    let delegate: *const u8 = unsafe { mem::transmute(&self.delegate) };
                     f(delegate)
                 }
                 None => break,

@@ -3,11 +3,12 @@
 use fail::fail_point;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
+use std::ops::Range;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use std::{cmp, error, u64};
+use std::{cmp, error, mem, u64};
 
 use engine_traits::CF_RAFT;
 use engine_traits::{Engines, KvEngine, Mutable, Peekable};
@@ -55,6 +56,8 @@ pub const JOB_STATUS_CANCELLED: usize = 3;
 pub const JOB_STATUS_FINISHED: usize = 4;
 pub const JOB_STATUS_FAILED: usize = 5;
 
+pub const ENTRY_MEM_SIZE: usize = mem::size_of::<Entry>();
+
 /// Possible status returned by `check_applying_snap`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CheckApplyingSnapStatus {
@@ -101,8 +104,6 @@ pub fn first_index(state: &RaftApplyState) -> u64 {
 pub fn last_index(state: &RaftLocalState) -> u64 {
     state.get_last_index()
 }
-
-pub const ENTRY_MEM_SIZE: usize = std::mem::size_of::<Entry>();
 
 struct EntryCache {
     cache: VecDeque<Entry>,
@@ -1697,6 +1698,30 @@ pub fn write_peer_state<T: Mutable>(
     );
     kv_wb.put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state)?;
     Ok(())
+}
+
+/// Committed entries sent to apply threads.
+#[derive(Clone)]
+pub struct CachedEntries {
+    pub range: Range<u64>,
+    entries: Arc<Mutex<Vec<Entry>>>,
+}
+
+impl CachedEntries {
+    pub fn new(entries: Vec<Entry>) -> Self {
+        assert!(!entries.is_empty());
+        let start = entries.first().map(|x| x.index).unwrap();
+        let end = entries.last().map(|x| x.index).unwrap();
+        let range = Range { start, end };
+        CachedEntries {
+            entries: Arc::new(Mutex::new(entries)),
+            range,
+        }
+    }
+
+    pub fn take_entries(&self) -> Vec<Entry> {
+        mem::take(&mut *self.entries.lock().unwrap())
+    }
 }
 
 #[cfg(test)]

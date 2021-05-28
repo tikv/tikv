@@ -492,18 +492,6 @@ lazy_static! {
         "Total memory size of raft entries caches."
         ).unwrap();
 
-    pub static ref APPLY_PENDING_BYTES_GAUGE: IntGauge = register_int_gauge!(
-        "tikv_raftstore_apply_pending_bytes",
-        "The bytes pending in the channel of apply FSMs."
-    )
-    .unwrap();
-
-    pub static ref APPLY_PENDING_ENTRIES_GAUGE: IntGauge = register_int_gauge!(
-            "tikv_raftstore_apply_pending_entries",
-            "The number of pending entries in the channel of apply FSMs."
-    )
-    .unwrap();
-
     pub static ref COMPACTION_GUARD_ACTION_COUNTER_VEC: IntCounterVec =
         register_int_counter_vec!(
             "tikv_raftstore_compaction_guard_action_total",
