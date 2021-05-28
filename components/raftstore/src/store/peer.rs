@@ -1911,6 +1911,7 @@ where
                 committed_entries,
                 cbs,
             );
+            self.mut_store().trace_cached_entries(apply.entries.clone());
             ctx.apply_router
                 .schedule_task(self.region_id, ApplyTask::apply(apply));
         }

@@ -57,6 +57,7 @@ pub const JOB_STATUS_FINISHED: usize = 4;
 pub const JOB_STATUS_FAILED: usize = 5;
 
 pub const ENTRY_MEM_SIZE: usize = mem::size_of::<Entry>();
+const CACHED_ENTRIES_MEM_SIZE: usize = mem::size_of::<CachedEntries>();
 
 /// Possible status returned by `check_applying_snap`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -107,6 +108,7 @@ pub fn last_index(state: &RaftLocalState) -> u64 {
 
 struct EntryCache {
     cache: VecDeque<Entry>,
+    trace: VecDeque<CachedEntries>,
     hit: Cell<i64>,
     miss: Cell<i64>,
     mem_size_change: i64,
@@ -288,14 +290,21 @@ impl EntryCache {
     fn is_empty(&self) -> bool {
         self.cache.is_empty()
     }
+
+    fn trace_cached_entries(&mut self, entries: CachedEntries) {
+        self.trace.push_back(entries)
+    }
 }
 
 impl Default for EntryCache {
     fn default() -> Self {
         let cache = VecDeque::default();
-        let size = ENTRY_MEM_SIZE * cache.capacity();
+        let trace = VecDeque::default();
+        let mut size = ENTRY_MEM_SIZE * cache.capacity();
+        size += CACHED_ENTRIES_MEM_SIZE * trace.capacity();
         let mut entry_cache = EntryCache {
             cache,
+            trace,
             hit: Cell::new(0),
             miss: Cell::new(0),
             mem_size_change: size as i64,
@@ -1515,6 +1524,12 @@ where
             region: self.region().clone(),
             destroyed_regions: ctx.destroyed_regions,
         })
+    }
+
+    pub fn trace_cached_entries(&mut self, entries: CachedEntries) {
+        if let Some(ref mut cache) = self.cache {
+            cache.trace_cached_entries(entries);
+        }
     }
 }
 

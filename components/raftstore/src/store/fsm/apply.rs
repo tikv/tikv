@@ -5,7 +5,7 @@ use std::cmp::{Ord, Ordering as CmpOrdering};
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
 use std::marker::PhantomData;
-use std::ops::{Deref, DerefMut};
+use std::ops::{Deref, DerefMut, Range as StdRange};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
@@ -23,7 +23,8 @@ use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::PerfContext;
 use engine_traits::PerfContextKind;
 use engine_traits::{
-    DeleteStrategy, KvEngine, RaftEngine, Range as EngineRange, Snapshot, WriteBatch,
+    DeleteStrategy, KvEngine, RaftEngine, RaftEngineReadOnly, Range as EngineRange, Snapshot,
+    WriteBatch,
 };
 use engine_traits::{SSTMetaInfo, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use fail::fail_point;
@@ -754,7 +755,8 @@ pub struct NewSplitPeer {
 /// Region. The apply worker receives all the apply tasks of different Regions
 /// located at this store, and it will get the corresponding apply delegate to
 /// handle the apply task to make the code logic more clear.
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct ApplyDelegate<EK>
 where
     EK: KvEngine,
@@ -813,6 +815,10 @@ where
     /// Priority in batch system. When applying some commands which have high latency,
     /// we decrease the priority of current fsm to reduce the impact on other normal commands.
     priority: Priority,
+
+    /// To fetch Raft entries for applying if necessary.
+    #[derivative(Debug = "ignore")]
+    raft_engine: Box<dyn RaftEngineReadOnly>,
 }
 
 impl<EK> ApplyDelegate<EK>
@@ -841,6 +847,7 @@ where
             pending_request_snapshot_count: reg.pending_request_snapshot_count,
             observe_info: CmdObserveInfo::default(),
             priority: Priority::Normal,
+            raft_engine: reg.raft_engine,
         }
     }
 
@@ -2734,7 +2741,6 @@ impl<S: Snapshot> Apply<S> {
     }
 }
 
-#[derive(Default, Clone)]
 pub struct Registration {
     pub id: u64,
     pub term: u64,
@@ -2743,6 +2749,7 @@ pub struct Registration {
     pub region: Region,
     pub pending_request_snapshot_count: Arc<AtomicUsize>,
     pub is_merging: bool,
+    raft_engine: Box<dyn RaftEngineReadOnly>,
 }
 
 impl Registration {
@@ -2755,6 +2762,7 @@ impl Registration {
             region: peer.region().clone(),
             pending_request_snapshot_count: peer.pending_request_snapshot_count.clone(),
             is_merging: peer.pending_merge_state.is_some(),
+            raft_engine: Box::new(peer.get_store().engines.raft.clone()),
         }
     }
 }
@@ -3081,7 +3089,14 @@ where
 
         let mut entries = apply.entries.take_entries();
         if entries.is_empty() {
-            // TODO: fetch entries from raft engine.
+            let rid = self.delegate.region_id();
+            let StdRange { start, end } = apply.entries.range;
+            entries = Vec::with_capacity((end - start) as usize);
+            self.delegate
+                .raft_engine
+                .fetch_entries_to(rid, start, end, None, &mut entries)
+                .unwrap();
+            // TODO: trace its memory usage later.
         }
 
         self.delegate.metrics = ApplyMetrics::default();

@@ -10,6 +10,8 @@
 
 #[cfg(test)]
 extern crate test;
+#[macro_use]
+extern crate derivative;
 
 pub mod coprocessor;
 pub mod errors;

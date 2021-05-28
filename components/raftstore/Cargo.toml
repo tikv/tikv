@@ -64,6 +64,7 @@ concurrency_manager = { path = "../concurrency_manager", default-features = fals
 configuration = { path = "../configuration" }
 crc32fast = "1.2"
 crossbeam = "0.8"
+derivative = "2"
 encryption = { path = "../encryption", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 error_code = { path = "../error_code", default-features = false }
