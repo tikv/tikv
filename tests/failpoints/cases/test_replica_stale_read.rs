@@ -65,10 +65,20 @@ impl PeerClient {
 }
 
 fn prepare_for_stale_read(leader: Peer) -> (Cluster<ServerCluster>, Arc<TestPdClient>, PeerClient) {
+    prepare_for_stale_read_before_run(leader, None)
+}
+
+fn prepare_for_stale_read_before_run(
+    leader: Peer,
+    before_run: Option<Box<dyn Fn(&mut Cluster<ServerCluster>)>>,
+) -> (Cluster<ServerCluster>, Arc<TestPdClient>, PeerClient) {
     let mut cluster = new_server_cluster(0, 3);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
+    if let Some(f) = before_run {
+        f(&mut cluster)
+    }
     cluster.run();
     cluster.sim.wl().start_resolved_ts_worker();
 
@@ -454,4 +464,64 @@ fn test_stale_read_while_region_merge() {
         b"value2".to_vec(),
         block_on(pd_client.get_tso()).unwrap().into_inner(),
     );
+}
+
+// Testing that during the merge, the leader of the source region won't not update the
+// `safe_ts` since it can't know when the merge is completed and whether there are new
+// kv write into its key range
+#[test]
+fn test_read_source_region_after_target_region_merged() {
+    let (mut cluster, pd_client, leader_client) =
+        prepare_for_stale_read_before_run(new_peer(1, 1), Some(Box::new(configure_for_merge)));
+
+    // Write on source region
+    let k1_commit_ts1 = leader_client.must_kv_write(
+        &pd_client,
+        vec![new_mutation(Op::Put, &b"key1"[..], &b"value1"[..])],
+        b"key1".to_vec(),
+    );
+
+    cluster.must_split(&cluster.get_region(&[]), b"key3");
+    let source = pd_client.get_region(b"key1").unwrap();
+    let target = pd_client.get_region(b"key5").unwrap();
+    // Transfer the target region leader to store 1 and the source region leader to store 2
+    cluster.must_transfer_leader(target.get_id(), new_peer(1, 1));
+    cluster.must_transfer_leader(source.get_id(), find_peer(&source, 2).unwrap().clone());
+    // Get the source region follower on store 3
+    let mut source_follower_client3 = PeerClient::new(
+        &cluster,
+        source.get_id(),
+        find_peer(&source, 3).unwrap().clone(),
+    );
+    source_follower_client3.ctx.set_stale_read(true);
+    source_follower_client3.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), k1_commit_ts1);
+
+    // Pause on source region `prepare_merge` on store 2 and store 3
+    let apply_before_prepare_merge_2_3 = "apply_before_prepare_merge_2_3";
+    fail::cfg(apply_before_prepare_merge_2_3, "pause").unwrap();
+
+    // Merge source region into target region
+    pd_client.must_merge(source.get_id(), target.get_id());
+
+    // Leave a lock on the original source region key range through the target region leader
+    let target_leader = PeerClient::new(&cluster, target.get_id(), new_peer(1, 1));
+    let k1_prewrite_ts2 = block_on(pd_client.get_tso()).unwrap().into_inner();
+    target_leader.must_kv_prewrite(
+        vec![new_mutation(Op::Put, &b"key1"[..], &b"value2"[..])],
+        b"key1".to_vec(),
+        k1_prewrite_ts2,
+    );
+
+    // Wait for the source region leader to update `safe_ts` (if it can)
+    sleep_ms(50);
+
+    // We still can read `key1` with `k1_commit_ts1` through source region
+    source_follower_client3.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), k1_commit_ts1);
+    // But can't read `key2` with `k1_prewrite_ts2` because the source leader can't update
+    // `safe_ts` after source region is merged into target region even though the source leader
+    // didn't know the merge is complement
+    let resp = source_follower_client3.kv_read(b"key1".to_vec(), k1_prewrite_ts2);
+    assert!(resp.get_region_error().has_data_is_not_ready());
+
+    fail::remove(apply_before_prepare_merge_2_3);
 }

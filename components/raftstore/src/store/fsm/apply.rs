@@ -2293,6 +2293,11 @@ where
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         fail_point!("apply_before_prepare_merge");
+        fail_point!(
+            "apply_before_prepare_merge_2_3",
+            ctx.store_id == 2 || ctx.store_id == 3,
+            |_| { unreachable!() }
+        );
 
         PEER_ADMIN_CMD_COUNTER.prepare_merge.all.inc();
 
