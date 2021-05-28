@@ -239,7 +239,7 @@ where
         );
         let scanner_pool = ScannerPool::new(cfg.scan_lock_pool_size, raft_router);
         let ep = Self {
-            cfg,
+            cfg: cfg.clone(),
             scheduler,
             store_meta,
             advance_worker,
