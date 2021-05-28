@@ -2220,7 +2220,6 @@ pub struct CdcConfig {
     pub old_value_cache_memory_quota: ReadableSize,
     // Deprecated! preserved for compatibility check.
     #[doc(hidden)]
-    #[serde(skip_serializing)]
     pub old_value_cache_size: usize,
 }
 
