@@ -220,7 +220,7 @@ impl<const CAP: usize> Smoother<CAP> {
     pub fn get_percentile_95(&self) -> u64 {
         let mut v = self.records[..self.size].to_owned();
         v.sort();
-        v[(self.size as f64 * 0.95) as usize]
+        v[(self.size as f64 * 0.80) as usize]
     }
 
     pub fn get_variance(&self) -> f64 {
@@ -296,8 +296,8 @@ struct FlowChecker<E: Engine> {
     l0_files_threshold: u64,
 
     last_num_memtables: Smoother<10>,
-    long_term_num_l0_files: Smoother<600>,
-    short_term_avg_l0_files: Smoother<60>,
+    long_term_num_l0_files: Smoother<60>,
+    short_term_avg_l0_files: Smoother<30>,
     long_term_pending_bytes: Smoother<600>,
 
     factor: f64,
@@ -412,7 +412,7 @@ impl<E: Engine> FlowChecker<E> {
                 .get_cf_num_files_at_level(cf, 0)
                 .unwrap_or(None)
                 .unwrap_or(0);
-            if num_l0_files < num {
+            if num_l0_files <= num {
                 num_l0_files = num;
                 cf_name = Some(cf.to_owned());
             }

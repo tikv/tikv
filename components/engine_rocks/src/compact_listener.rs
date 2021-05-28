@@ -225,7 +225,7 @@ impl EventListener for CompactionListener {
             return;
         }
 
-        if info.base_input_level() == 0 {
+        if info.base_input_level() == 0 && info.output_level() != 0 {
             let _ = self
                 .l0_completed_sender
                 .lock()
