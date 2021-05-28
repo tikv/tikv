@@ -113,7 +113,7 @@ impl RaftLogBatch for PanicWriteBatch {
         panic!()
     }
 
-    fn merge(&mut self, _: &Self) {
+    fn merge(&mut self, _: Self) {
         panic!()
     }
 }

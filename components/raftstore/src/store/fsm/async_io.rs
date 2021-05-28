@@ -161,8 +161,8 @@ where
         if let Some(mut kv_wb) = task.kv_wb.take() {
             self.kv_wb.merge(&mut kv_wb);
         }
-        if let Some(mut raft_wb) = task.raft_wb.take() {
-            self.raft_wb.merge(&mut raft_wb);
+        if let Some(raft_wb) = task.raft_wb.take() {
+            self.raft_wb.merge(raft_wb);
         }
         let entries = std::mem::take(&mut task.entries);
         self.raft_wb.append(task.region_id, entries).unwrap();

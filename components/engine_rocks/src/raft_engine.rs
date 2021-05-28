@@ -247,8 +247,8 @@ impl RaftLogBatch for RocksWriteBatch {
         Mutable::is_empty(self)
     }
 
-    fn merge(&mut self, src: &Self) {
-        self.merge(src);
+    fn merge(&mut self, src: Self) {
+        self.merge(&src);
     }
 }
 
