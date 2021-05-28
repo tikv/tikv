@@ -324,6 +324,7 @@ where
         let alive = self.normals.lock().unwrap().alive_cnt.clone();
         let total = self.state_cnt.load(Ordering::Relaxed);
         let alive = alive.load(Ordering::Relaxed);
+        // 1 represents the control fsm.
         let leak = if total > alive + 1 {
             total - alive - 1
         } else {

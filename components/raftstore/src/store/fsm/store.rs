@@ -309,6 +309,11 @@ where
         self.update_trace();
     }
 
+    pub fn clear_cache(&self) {
+        self.router.clear_cache();
+        self.update_trace();
+    }
+
     fn update_trace(&self) {
         let router_trace = self.router.trace();
         MEMTRACE_RAFT_ROUTER_ALIVE.trace(TraceEvent::Reset(router_trace.alive));

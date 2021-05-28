@@ -152,7 +152,6 @@ impl<N: Fsm> FsmState<N> {
                 Box::from_raw(ptr);
             }
         }
-        self.state_cnt.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
@@ -162,5 +161,6 @@ impl<N> Drop for FsmState<N> {
         if !ptr.is_null() {
             unsafe { Box::from_raw(ptr) };
         }
+        self.state_cnt.fetch_sub(1, Ordering::Relaxed);
     }
 }
