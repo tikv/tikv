@@ -2263,7 +2263,8 @@ impl Default for CdcConfig {
     fn default() -> Self {
         Self {
             min_ts_interval: ReadableDuration::secs(1),
-            old_value_cache_size: 1024,
+            // Assumes 1KB per entry, 131072 (128 * 1024) takes about 128MB.
+            old_value_cache_size: 131072,
             hibernate_regions_compatible: true,
             // TiCDC requires a SSD, the typical write speed of SSD
             // is more than 500MB/s, so 128MB/s is enough.
