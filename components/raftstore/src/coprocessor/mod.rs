@@ -305,9 +305,7 @@ impl CmdBatch {
 
 pub trait CmdObserver<E>: Coprocessor {
     /// Hook to call after flushing writes to db.
-    fn on_flush_applied_cmd_batch(&self, cmd_batches: Vec<CmdBatch>, engine: E);
-    /// `ref` version of `on_flush_applied_cmd_batch`
-    fn on_flush_applied_cmd_batch_ref(&self, cmd_batches: &[CmdBatch], engine: E);
+    fn on_flush_applied_cmd_batch(&self, cmd_batches: &mut Vec<CmdBatch>, engine: &E);
 }
 
 pub trait ReadIndexObserver: Coprocessor {

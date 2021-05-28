@@ -529,7 +529,7 @@ where
         let (mut cb_batch, cmd_batch) = self.applied_batch.take();
         // Call it before invoking callback for preventing Commit is executed before Prewrite is observed.
         self.host
-            .on_flush_applied_cmd_batch(cmd_batch, self.engine.clone());
+            .on_flush_applied_cmd_batch(cmd_batch, &self.engine);
         // Invoke callbacks
         for (cb, resp) in cb_batch.drain(..) {
             cb.invoke_with_response(resp)
@@ -4360,8 +4360,8 @@ mod tests {
     where
         E: KvEngine,
     {
-        fn on_flush_applied_cmd_batch(&self, cmd_batches: Vec<CmdBatch>, _: E) {
-            for b in cmd_batches {
+        fn on_flush_applied_cmd_batch(&self, cmd_batches: &mut Vec<CmdBatch>, _: &E) {
+            for b in std::mem::take(cmd_batches) {
                 if b.is_empty() {
                     continue;
                 }
@@ -4370,7 +4370,6 @@ mod tests {
                 }
             }
         }
-        fn on_flush_applied_cmd_batch_ref(&self, _: &[CmdBatch], _: E) {}
     }
 
     #[test]

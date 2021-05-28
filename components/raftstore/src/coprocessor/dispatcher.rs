@@ -173,7 +173,6 @@ where
     role_observers: Vec<Entry<BoxRoleObserver>>,
     region_change_observers: Vec<Entry<BoxRegionChangeObserver>>,
     cmd_observers: Vec<Entry<BoxCmdObserver<E>>>,
-    cmd_ref_observers: Vec<Entry<BoxCmdObserver<E>>>,
     read_index_observers: Vec<Entry<BoxReadIndexObserver>>,
     // TODO: add endpoint
 }
@@ -189,7 +188,6 @@ impl<E: KvEngine> Default for Registry<E> {
             role_observers: Default::default(),
             region_change_observers: Default::default(),
             cmd_observers: Default::default(),
-            cmd_ref_observers: Default::default(),
             read_index_observers: Default::default(),
         }
     }
@@ -247,10 +245,6 @@ impl<E: KvEngine> Registry<E> {
 
     pub fn register_cmd_observer(&mut self, priority: u32, rlo: BoxCmdObserver<E>) {
         push!(priority, rlo, self.cmd_observers);
-    }
-
-    pub fn register_cmd_ref_observer(&mut self, priority: u32, rlo: BoxCmdObserver<E>) {
-        push!(priority, rlo, self.cmd_ref_observers);
     }
 
     pub fn register_read_index_observer(&mut self, priority: u32, rio: BoxReadIndexObserver) {
@@ -500,33 +494,15 @@ impl<E: KvEngine> CoprocessorHost<E> {
         );
     }
 
-    pub fn on_flush_applied_cmd_batch(&self, cmd_batches: Vec<CmdBatch>, engine: E) {
+    pub fn on_flush_applied_cmd_batch(&self, mut cmd_batches: Vec<CmdBatch>, engine: &E) {
         for batch in &cmd_batches {
             for cmd in &batch.cmds {
                 self.post_apply(&batch.region, &cmd);
             }
         }
-        for observer in &self.registry.cmd_ref_observers {
+        for observer in &self.registry.cmd_observers {
             let observer = observer.observer.inner();
-            observer.on_flush_applied_cmd_batch_ref(cmd_batches.as_slice(), engine.clone());
-        }
-        if !self.registry.cmd_observers.is_empty() {
-            for i in 0..self.registry.cmd_observers.len() - 1 {
-                self.registry
-                    .cmd_observers
-                    .get(i)
-                    .unwrap()
-                    .observer
-                    .inner()
-                    .on_flush_applied_cmd_batch(cmd_batches.clone(), engine.clone())
-            }
-            self.registry
-                .cmd_observers
-                .last()
-                .unwrap()
-                .observer
-                .inner()
-                .on_flush_applied_cmd_batch(cmd_batches, engine)
+            observer.on_flush_applied_cmd_batch(&mut cmd_batches, engine);
         }
     }
 
@@ -547,9 +523,6 @@ impl<E: KvEngine> CoprocessorHost<E> {
             entry.observer.inner().stop();
         }
         for entry in &self.registry.cmd_observers {
-            entry.observer.inner().stop();
-        }
-        for entry in &self.registry.cmd_ref_observers {
             entry.observer.inner().stop();
         }
     }
@@ -663,11 +636,8 @@ mod tests {
     }
 
     impl CmdObserver<PanicEngine> for TestCoprocessor {
-        fn on_flush_applied_cmd_batch(&self, _: Vec<CmdBatch>, _: PanicEngine) {
+        fn on_flush_applied_cmd_batch(&self, _: &mut Vec<CmdBatch>, _: &PanicEngine) {
             self.called.fetch_add(13, Ordering::SeqCst);
-        }
-        fn on_flush_applied_cmd_batch_ref(&self, _: &[CmdBatch], _: PanicEngine) {
-            self.called.fetch_add(14, Ordering::SeqCst);
         }
     }
 
@@ -739,7 +709,7 @@ mod tests {
         let observe_handle = ObserveHandle::new();
         let mut cb = CmdBatch::new(&observe_handle, &observe_handle, Region::default());
         cb.push(observe_handle.id, observe_handle.id, 0, Cmd::default());
-        host.on_flush_applied_cmd_batch(vec![cb], PanicEngine);
+        host.on_flush_applied_cmd_batch(vec![cb], &PanicEngine);
         // `post_apply` + `on_flush_applied_cmd_batch` => 13 + 6 = 19
         assert_all!(&[&ob.called], &[74]);
     }

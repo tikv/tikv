@@ -32,10 +32,11 @@ impl<E: KvEngine> Observer<E> {
     }
 
     pub fn register_to(&self, coprocessor_host: &mut CoprocessorHost<E>) {
-        // 100 is the priority of the observer. `resolved-ts` worker should have a high priority.
+        // The `resolved-ts` cmd observer will `mem::take` the `Vec<CmdBatch>`, use a low priority
+        // to let it be the last observer and avoid affecting other observers
         coprocessor_host
             .registry
-            .register_cmd_observer(100, BoxCmdObserver::new(self.clone()));
+            .register_cmd_observer(0, BoxCmdObserver::new(self.clone()));
         coprocessor_host
             .registry
             .register_role_observer(100, BoxRoleObserver::new(self.clone()));
@@ -57,8 +58,8 @@ impl<E: KvEngine> Clone for Observer<E> {
 impl<E: KvEngine> Coprocessor for Observer<E> {}
 
 impl<E: KvEngine> CmdObserver<E> for Observer<E> {
-    fn on_flush_applied_cmd_batch(&self, cmd_batches: Vec<CmdBatch>, engine: E) {
-        let cmd_batches: Vec<_> = cmd_batches
+    fn on_flush_applied_cmd_batch(&self, cmd_batches: &mut Vec<CmdBatch>, engine: &E) {
+        let cmd_batches: Vec<_> = std::mem::take(cmd_batches)
             .into_iter()
             .filter_map(lock_only_filter)
             .collect();
@@ -86,10 +87,6 @@ impl<E: KvEngine> CmdObserver<E> for Observer<E> {
         }) {
             info!("failed to schedule change log event"; "err" => ?e);
         }
-    }
-
-    fn on_flush_applied_cmd_batch_ref(&self, _: &[CmdBatch], _: E) {
-        unreachable!();
     }
 }
 
@@ -183,7 +180,7 @@ mod test {
         let (cdc_handle, rts_handle) = (ObserveHandle::new(), ObserveHandle::new());
         let mut cb = CmdBatch::new(&cdc_handle, &rts_handle, Region::default());
         cb.push(cdc_handle.id, rts_handle.id, 0, cmd.clone());
-        observer.on_flush_applied_cmd_batch(vec![cb], engine.clone());
+        observer.on_flush_applied_cmd_batch(&mut vec![cb], &engine);
         // Observe all data
         expect_recv(&mut rx, data.clone());
 
@@ -192,7 +189,7 @@ mod test {
         rts_handle.stop_observing();
         let mut cb = CmdBatch::new(&cdc_handle, &rts_handle, Region::default());
         cb.push(cdc_handle.id, rts_handle.id, 0, cmd.clone());
-        observer.on_flush_applied_cmd_batch(vec![cb], engine.clone());
+        observer.on_flush_applied_cmd_batch(&mut vec![cb], &engine);
         // Still observe all data
         expect_recv(&mut rx, data.clone());
 
@@ -201,7 +198,7 @@ mod test {
         cdc_handle.stop_observing();
         let mut cb = CmdBatch::new(&cdc_handle, &rts_handle, Region::default());
         cb.push(cdc_handle.id, rts_handle.id, 0, cmd.clone());
-        observer.on_flush_applied_cmd_batch(vec![cb], engine.clone());
+        observer.on_flush_applied_cmd_batch(&mut vec![cb], &engine);
         // Only observe lock related data
         data.retain(|p| p.get_put().cf != CF_DEFAULT);
         expect_recv(&mut rx, data);
@@ -212,7 +209,7 @@ mod test {
         rts_handle.stop_observing();
         let mut cb = CmdBatch::new(&cdc_handle, &rts_handle, Region::default());
         cb.push(cdc_handle.id, rts_handle.id, 0, cmd);
-        observer.on_flush_applied_cmd_batch(vec![cb], engine);
+        observer.on_flush_applied_cmd_batch(&mut vec![cb], &engine);
         // Observe no data
         expect_recv(&mut rx, vec![]);
     }

@@ -47,7 +47,7 @@ impl CdcObserver {
         // 100 is the priority of the observer. CDC should have a high priority.
         coprocessor_host
             .registry
-            .register_cmd_ref_observer(100, BoxCmdObserver::new(self.clone()));
+            .register_cmd_observer(100, BoxCmdObserver::new(self.clone()));
         coprocessor_host
             .registry
             .register_role_observer(100, BoxRoleObserver::new(self.clone()));
@@ -94,11 +94,7 @@ impl CdcObserver {
 impl Coprocessor for CdcObserver {}
 
 impl<E: KvEngine> CmdObserver<E> for CdcObserver {
-    fn on_flush_applied_cmd_batch(&self, cmd_batches: Vec<CmdBatch>, engine: E) {
-        self.on_flush_applied_cmd_batch_ref(cmd_batches.as_slice(), engine)
-    }
-
-    fn on_flush_applied_cmd_batch_ref(&self, cmd_batches: &[CmdBatch], engine: E) {
+    fn on_flush_applied_cmd_batch(&self, cmd_batches: &mut Vec<CmdBatch>, engine: &E) {
         fail_point!("before_cdc_flush_apply");
         let cmd_batches: Vec<_> = cmd_batches
             .iter()
@@ -189,8 +185,8 @@ mod tests {
         cb.push(observe_handle.id, observe_handle.id, 0, Cmd::default());
         <CdcObserver as CmdObserver<RocksEngine>>::on_flush_applied_cmd_batch(
             &observer,
-            vec![cb],
-            engine.clone(),
+            &mut vec![cb],
+            &engine,
         );
         match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
             Task::MultiBatch { multi, .. } => {
@@ -206,8 +202,8 @@ mod tests {
         cb.push(observe_handle.id, observe_handle.id, 0, Cmd::default());
         <CdcObserver as CmdObserver<RocksEngine>>::on_flush_applied_cmd_batch(
             &observer,
-            vec![cb],
-            engine,
+            &mut vec![cb],
+            &engine,
         );
         match rx.recv_timeout(Duration::from_millis(10)) {
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
