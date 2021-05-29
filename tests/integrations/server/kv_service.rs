@@ -694,7 +694,7 @@ fn test_debug_raft_log() {
     entry.set_term(1);
     entry.set_index(1);
     entry.set_entry_type(eraftpb::EntryType::EntryNormal);
-    entry.set_data(vec![42]);
+    entry.set_data(vec![42].into());
     engine.c().put_msg(&key, &entry).unwrap();
     assert_eq!(
         engine.c().get_msg::<eraftpb::Entry>(&key).unwrap().unwrap(),

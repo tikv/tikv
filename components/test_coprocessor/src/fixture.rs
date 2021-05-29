@@ -87,8 +87,8 @@ pub fn init_data_with_details<E: Engine>(
         store.get_engine(),
     ));
     let cm = ConcurrencyManager::new(1.into());
-    let cop = Endpoint::new(cfg, pool.handle(), cm, PerfLevel::EnableCount);
-    (store, cop)
+    let copr = Endpoint::new(cfg, pool.handle(), cm, PerfLevel::EnableCount);
+    (store, copr)
 }
 
 pub fn init_data_with_commit(
