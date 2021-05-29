@@ -36,7 +36,7 @@ fn encode(map: &HashMap<&[u8], &[u8]>) -> Vec<u8> {
     let reqs = generate_requests(map);
     cmd.set_requests(reqs.into());
     let cmd_msg = cmd.write_to_bytes().unwrap();
-    e.set_data(cmd_msg);
+    e.set_data(cmd_msg.into());
     e.write_to_bytes().unwrap()
 }
 

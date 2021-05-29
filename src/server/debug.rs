@@ -367,7 +367,7 @@ impl<ER: RaftEngine> Debugger<ER> {
                 }
             };
             if region_state.get_state() == PeerState::Tombstone {
-                v1!("skip because it's already tombstone");
+                info!("skip {} because it's already tombstone", region_id);
                 continue;
             }
             let region = &region_state.get_region();
@@ -407,7 +407,7 @@ impl<ER: RaftEngine> Debugger<ER> {
     pub fn recover_all(&self, threads: usize, read_only: bool) -> Result<()> {
         let db = self.engines.kv.clone();
 
-        v1!("Calculating split keys...");
+        info!("Calculating split keys...");
         let split_keys = divide_db(db.as_inner(), threads)
             .unwrap()
             .into_iter()
@@ -433,7 +433,7 @@ impl<ER: RaftEngine> Debugger<ER> {
                 .name(format!("mvcc-recover-thread-{}", thread_index))
                 .spawn(move || {
                     tikv_alloc::add_thread_memory_accessor();
-                    v1!(
+                    info!(
                         "thread {}: started on range [{}, {})",
                         thread_index,
                         log_wrappers::Value::key(&start_key),
@@ -460,7 +460,7 @@ impl<ER: RaftEngine> Debugger<ER> {
             .map(|h: JoinHandle<Result<()>>| h.join())
             .map(|r| {
                 if let Err(e) = &r {
-                    ve1!("{:?}", e);
+                    error!("{:?}", e);
                 }
                 r
             })
@@ -846,10 +846,10 @@ fn recover_mvcc_for_range(
             write_opts.set_sync(true);
             box_try!(wb.write_opt(&write_opts));
         } else {
-            v1!("thread {}: skip write {} rows", thread_index, batch_size);
+            info!("thread {}: skip write {} rows", thread_index, batch_size);
         }
 
-        v1!(
+        info!(
             "thread {}: total fix default: {}, lock: {}, write: {}",
             thread_index,
             mvcc_checker.default_fix_count,
@@ -858,7 +858,7 @@ fn recover_mvcc_for_range(
         );
 
         if batch_size < wb_limit {
-            v1!("thread {} has finished working.", thread_index);
+            info!("thread {} has finished working.", thread_index);
             return Ok(());
         }
     }
@@ -953,10 +953,9 @@ impl MvccChecker {
     fn check_mvcc_key(&mut self, wb: &mut RocksWriteBatch, key: &[u8]) -> Result<()> {
         self.scan_count += 1;
         if self.scan_count % 1_000_000 == 0 {
-            v1!(
+            info!(
                 "thread {}: scan {} rows",
-                self.thread_index,
-                self.scan_count
+                self.thread_index, self.scan_count
             );
         }
 
@@ -989,7 +988,7 @@ impl MvccChecker {
 
                 if let Some((commit_ts, _)) = write {
                     if check_ts <= commit_ts {
-                        v1!(
+                        info!(
                             "thread {}: LOCK {} is less than WRITE ts, key: {}, {}: {}, commit_ts: {}",
                             self.thread_index,
                             kind,
@@ -1013,7 +1012,7 @@ impl MvccChecker {
                             next_default = true;
                         }
                         _ => {
-                            v1!(
+                            info!(
                                 "thread {}: no corresponding DEFAULT record for LOCK, key: {}, lock_ts: {}",
                                 self.thread_index,
                                 log_wrappers::Value::key(key),
@@ -1053,7 +1052,7 @@ impl MvccChecker {
             }
 
             if next_default {
-                v1!(
+                info!(
                     "thread {}: orphan DEFAULT record, key: {}, start_ts: {}",
                     self.thread_index,
                     log_wrappers::Value::key(key),
@@ -1065,7 +1064,7 @@ impl MvccChecker {
 
             if next_write {
                 if let Some((commit_ts, ref w)) = write {
-                    v1!(
+                    info!(
                         "thread {}: no corresponding DEFAULT record for WRITE, key: {}, start_ts: {}, commit_ts: {}",
                         self.thread_index,
                         log_wrappers::Value::key(key),
@@ -1403,7 +1402,7 @@ mod tests {
         entry.set_term(1);
         entry.set_index(1);
         entry.set_entry_type(EntryType::EntryNormal);
-        entry.set_data(vec![42]);
+        entry.set_data(vec![42].into());
         engine.put_msg(&key, &entry).unwrap();
         assert_eq!(engine.get_msg::<Entry>(&key).unwrap().unwrap(), entry);
 

@@ -6,7 +6,7 @@ use rusoto_core::{
     {ByteStream, RusotoError},
 };
 use rusoto_credential::{ProvideAwsCredentials, StaticProvider};
-use rusoto_s3::*;
+use rusoto_s3::{util::AddressingStyle, *};
 use tokio::time::{delay_for, timeout};
 
 use crate::util;
@@ -104,7 +104,7 @@ impl Config {
             bucket: StringNonEmpty::required_field(input.bucket, "bucket")?,
             prefix: StringNonEmpty::opt(input.prefix),
             storage_class: storage_class.clone(),
-            region: None,
+            region: StringNonEmpty::opt(input.region),
         };
         let access_key_pair = match StringNonEmpty::opt(input.access_key) {
             None => None,
@@ -175,7 +175,10 @@ impl S3Storage {
         let bucket_region = none_to_empty(config.bucket.region.clone());
         let bucket_endpoint = config.bucket.endpoint.clone();
         let region = util::get_region(&bucket_region, &none_to_empty(bucket_endpoint))?;
-        let client = S3Client::new_with(dispatcher, credentials_provider, region);
+        let mut client = S3Client::new_with(dispatcher, credentials_provider, region);
+        if config.force_path_style {
+            client.config_mut().addressing_style = AddressingStyle::Path;
+        }
         Ok(S3Storage { config, client })
     }
 
@@ -283,26 +286,38 @@ impl<'client> S3Uploader<'client> {
 
     /// Starts a multipart upload process.
     async fn begin(&self) -> Result<String, RusotoError<CreateMultipartUploadError>> {
-        let output = self
-            .client
-            .create_multipart_upload(CreateMultipartUploadRequest {
-                bucket: self.bucket.clone(),
-                key: self.key.clone(),
-                acl: self.acl.as_ref().map(|s| s.to_string()),
-                server_side_encryption: self.server_side_encryption.as_ref().map(|s| s.to_string()),
-                ssekms_key_id: self.sse_kms_key_id.as_ref().map(|s| s.to_string()),
-                storage_class: self.storage_class.as_ref().map(|s| s.to_string()),
-                ..Default::default()
-            })
-            .await?;
-        output.upload_id.ok_or_else(|| {
-            RusotoError::ParseError("missing upload-id from create_multipart_upload()".to_owned())
-        })
+        match timeout(
+            Self::get_timeout(),
+            self.client
+                .create_multipart_upload(CreateMultipartUploadRequest {
+                    bucket: self.bucket.clone(),
+                    key: self.key.clone(),
+                    acl: self.acl.as_ref().map(|s| s.to_string()),
+                    server_side_encryption: self
+                        .server_side_encryption
+                        .as_ref()
+                        .map(|s| s.to_string()),
+                    ssekms_key_id: self.sse_kms_key_id.as_ref().map(|s| s.to_string()),
+                    storage_class: self.storage_class.as_ref().map(|s| s.to_string()),
+                    ..Default::default()
+                }),
+        )
+        .await
+        {
+            Ok(output) => output?.upload_id.ok_or_else(|| {
+                RusotoError::ParseError(
+                    "missing upload-id from create_multipart_upload()".to_owned(),
+                )
+            }),
+            Err(_) => Err(RusotoError::ParseError(
+                "timeout after 15mins for begin in s3 storage".to_owned(),
+            )),
+        }
     }
 
     /// Completes a multipart upload process, asking S3 to join all parts into a single file.
     async fn complete(&self) -> Result<(), RusotoError<CompleteMultipartUploadError>> {
-        match timeout(
+        let res = timeout(
             Self::get_timeout(),
             self.client
                 .complete_multipart_upload(CompleteMultipartUploadRequest {
@@ -316,15 +331,15 @@ impl<'client> S3Uploader<'client> {
                 }),
         )
         .await
-        {
-            Ok(_) => Ok(()),
-            Err(_) => Err(RusotoError::ParseError("complete timeout".to_owned())),
-        }
+        .map_err(|_| {
+            RusotoError::ParseError("timeout after 15mins for complete in s3 storage".to_owned())
+        })?;
+        res.map(|_| ())
     }
 
     /// Aborts the multipart upload process, deletes all uploaded parts.
     async fn abort(&self) -> Result<(), RusotoError<AbortMultipartUploadError>> {
-        match timeout(
+        let res = timeout(
             Self::get_timeout(),
             self.client
                 .abort_multipart_upload(AbortMultipartUploadRequest {
@@ -335,10 +350,10 @@ impl<'client> S3Uploader<'client> {
                 }),
         )
         .await
-        {
-            Ok(_) => Ok(()),
-            Err(_) => Err(RusotoError::ParseError("abort timeout".to_owned())),
-        }
+        .map_err(|_| {
+            RusotoError::ParseError("timeout after 15mins for abort in s3 storage".to_owned())
+        })?;
+        res.map(|_| ())
     }
 
     /// Uploads a part of the file.
@@ -367,7 +382,9 @@ impl<'client> S3Uploader<'client> {
                 e_tag: part?.e_tag,
                 part_number: Some(part_number),
             }),
-            Err(_) => Err(RusotoError::ParseError("upload part timeout".to_owned())),
+            Err(_) => Err(RusotoError::ParseError(
+                "timeout after 15mins for upload part in s3 storage".to_owned(),
+            )),
         }
     }
 
@@ -376,7 +393,7 @@ impl<'client> S3Uploader<'client> {
     /// This should be used only when the data is known to be short, and thus relatively cheap to
     /// retry the entire upload.
     async fn upload(&self, data: &[u8]) -> Result<(), RusotoError<PutObjectError>> {
-        match timeout(Self::get_timeout(), async {
+        let res = timeout(Self::get_timeout(), async {
             #[cfg(feature = "failpoints")]
             let delay_duration = (|| {
                 fail_point!("s3_sleep_injected", |t| {
@@ -391,6 +408,11 @@ impl<'client> S3Uploader<'client> {
             if delay_duration > Duration::from_millis(0) {
                 delay_for(delay_duration).await;
             }
+
+            #[cfg(feature = "failpoints")]
+            fail_point!("s3_put_obj_err", |_| {
+                Err(RusotoError::ParseError("failed to put object".to_owned()))
+            });
 
             self.client
                 .put_object(PutObjectRequest {
@@ -410,10 +432,10 @@ impl<'client> S3Uploader<'client> {
                 .await
         })
         .await
-        {
-            Ok(_) => Ok(()),
-            Err(_) => Err(RusotoError::ParseError("upload timeout".to_owned())),
-        }
+        .map_err(|_| {
+            RusotoError::ParseError("timeout after 15mins for upload in s3 storage".to_owned())
+        })?;
+        res.map(|_| ())
     }
 
     fn get_timeout() -> Duration {
@@ -508,10 +530,12 @@ mod tests {
         let mut bucket = BucketConf::default(bucket_name);
         bucket.region = StringNonEmpty::opt("ap-southeast-2".to_string());
         bucket.prefix = StringNonEmpty::opt("myprefix".to_string());
-        let config = Config::default(bucket);
+        let mut config = Config::default(bucket);
+        config.force_path_style = true;
         let dispatcher = MockRequestDispatcher::with_status(200).with_request_checker(
             move |req: &SignedRequest| {
                 assert_eq!(req.region.name(), "ap-southeast-2");
+                assert_eq!(req.hostname(), "s3.ap-southeast-2.amazonaws.com");
                 assert_eq!(req.path(), "/mybucket/myprefix/mykey");
                 // PutObject is translated to HTTP PUT.
                 assert_eq!(req.payload.is_some(), req.method() == "PUT");
@@ -532,6 +556,17 @@ mod tests {
         assert!(ret.unwrap() == 0);
         assert!(buf.is_empty());
 
+        // inject put error
+        let s3_put_obj_err_fp = "s3_put_obj_err";
+        fail::cfg(s3_put_obj_err_fp, "return").unwrap();
+        let resp = s.put(
+            "mykey",
+            Box::new(magic_contents.as_bytes()),
+            magic_contents.len() as u64,
+        );
+        fail::remove(s3_put_obj_err_fp);
+        assert!(resp.is_err());
+
         // test timeout
         let s3_timeout_injected_fp = "s3_timeout_injected";
         let s3_sleep_injected_fp = "s3_sleep_injected";
@@ -541,7 +576,7 @@ mod tests {
         // inject 200ms delay
         fail::cfg(s3_sleep_injected_fp, "return(200)").unwrap();
         let resp = s.put(
-            "mykey2",
+            "mykey",
             Box::new(magic_contents.as_bytes()),
             magic_contents.len() as u64,
         );
@@ -560,6 +595,35 @@ mod tests {
         fail::remove(s3_timeout_injected_fp);
         // no timeout
         assert!(resp.is_ok());
+    }
+
+    #[test]
+    fn test_s3_storage_with_virtual_host() {
+        let magic_contents = "abcd";
+        let bucket_name = StringNonEmpty::required("bucket2".to_string()).unwrap();
+        let mut bucket = BucketConf::default(bucket_name);
+        bucket.region = StringNonEmpty::opt("ap-southeast-1".to_string());
+        bucket.prefix = StringNonEmpty::opt("prefix2".to_string());
+        let mut config = Config::default(bucket);
+        config.force_path_style = false;
+        let dispatcher = MockRequestDispatcher::with_status(200).with_request_checker(
+            move |req: &SignedRequest| {
+                assert_eq!(req.region.name(), "ap-southeast-1");
+                assert_eq!(req.hostname(), "bucket2.s3.ap-southeast-1.amazonaws.com");
+                assert_eq!(req.path(), "/prefix2/key2");
+                // PutObject is translated to HTTP PUT.
+                assert_eq!(req.payload.is_some(), req.method() == "PUT");
+            },
+        );
+        let credentials_provider =
+            StaticProvider::new_minimal("abc".to_string(), "xyz".to_string());
+        let s = S3Storage::new_creds_dispatcher(config, dispatcher, credentials_provider).unwrap();
+        s.put(
+            "key2",
+            Box::new(magic_contents.as_bytes()),
+            magic_contents.len() as u64,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -627,10 +691,16 @@ mod tests {
         let mut input = InputConfig::default();
         input.set_bucket("bucket".to_owned());
         input.set_prefix("backup 02/prefix/".to_owned());
+        input.set_region("us-west-2".to_owned());
         let c1 = Config::from_input(input.clone()).unwrap();
         let c2 = Config::from_cloud_dynamic(&cloud_dynamic_from_input(input)).unwrap();
         assert_eq!(c1.bucket.bucket, c2.bucket.bucket);
         assert_eq!(c1.bucket.prefix, c2.bucket.prefix);
+        assert_eq!(c1.bucket.region, c2.bucket.region);
+        assert_eq!(
+            c1.bucket.region,
+            StringNonEmpty::opt("us-west-2".to_owned())
+        );
     }
 
     fn cloud_dynamic_from_input(mut s3: InputConfig) -> CloudDynamic {

@@ -13,6 +13,7 @@ mod bootstrap;
 mod compaction_guard;
 mod hibernate_state;
 mod local_metrics;
+mod memory;
 mod metrics;
 mod peer;
 mod peer_storage;
@@ -55,7 +56,7 @@ pub use self::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
 pub use self::util::RegionReadProgress;
 pub use self::worker::{
     AutoSplitController, FlowStatistics, FlowStatsReporter, PdTask, ReadDelegate, ReadStats,
-    SplitConfig, SplitConfigManager,
+    SplitConfig, SplitConfigManager, TrackVer,
 };
 pub use self::worker::{KeyEntry, LocalReader, RegionTask};
 pub use self::worker::{SplitCheckRunner, SplitCheckTask};
