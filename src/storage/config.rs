@@ -12,7 +12,7 @@ use file_system::{get_io_rate_limiter, IOPriority, IORateLimitMode, IORateLimite
 use libc::c_int;
 use std::error::Error;
 use tikv_util::config::{self, OptionReadableSize, ReadableDuration, ReadableSize};
-use tikv_util::sys::sys_quota::SysQuota;
+use tikv_util::sys::SysQuota;
 use tikv_util::worker::Scheduler;
 
 pub const DEFAULT_DATA_DIR: &str = "./";
@@ -63,7 +63,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Config {
-        let cpu_num = SysQuota::new().cpu_cores_quota();
+        let cpu_num = SysQuota::cpu_cores_quota();
         Config {
             data_dir: DEFAULT_DATA_DIR.to_owned(),
             gc_ratio_threshold: DEFAULT_GC_RATIO_THRESHOLD,
@@ -199,7 +199,7 @@ impl BlockCacheConfig {
         }
         let capacity = match self.capacity.0 {
             None => {
-                let total_mem = SysQuota::new().memory_limit_in_bytes();
+                let total_mem = SysQuota::memory_limit_in_bytes();
                 ((total_mem as f64) * 0.45) as usize
             }
             Some(c) => c.0 as usize,

@@ -14,7 +14,6 @@ use futures::future::FutureExt;
 use grpcio::RpcStatusCode;
 use grpcio::*;
 use kvproto::coprocessor::*;
-use kvproto::coprocessor_v2::*;
 use kvproto::kvrpcpb::*;
 use kvproto::mpp::*;
 use kvproto::raft_serverpb::{Done, RaftMessage, SnapshotChunk};
@@ -211,7 +210,7 @@ trait MockKvService {
     sstream_call!(batch_coprocessor, BatchRequest, BatchResponse);
     sstream_call!(coprocessor_stream, Request, Response);
     unary_call!(
-        coprocessor_v2,
+        raw_coprocessor,
         RawCoprocessorRequest,
         RawCoprocessorResponse
     );
@@ -329,7 +328,7 @@ impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
     sstream_call_dispatch!(batch_coprocessor, BatchRequest, BatchResponse);
     sstream_call_dispatch!(coprocessor_stream, Request, Response);
     unary_call_dispatch!(
-        coprocessor_v2,
+        raw_coprocessor,
         RawCoprocessorRequest,
         RawCoprocessorResponse
     );

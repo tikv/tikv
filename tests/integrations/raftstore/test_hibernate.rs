@@ -181,18 +181,21 @@ fn test_transfer_leader_delay() {
             .msg_type(MessageType::MsgTransferLeader)
             .reserve_dropped(messages.clone()),
     ));
+
     cluster.transfer_leader(1, new_peer(3, 3));
     let timer = Instant::now();
     while timer.elapsed() < Duration::from_secs(3) && messages.lock().unwrap().is_empty() {
         thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(messages.lock().unwrap().len(), 1);
+
     // Wait till leader peer goes to sleep again.
     thread::sleep(
         cluster.cfg.raft_store.raft_base_tick_interval.0
             * 2
             * cluster.cfg.raft_store.raft_election_timeout_ticks as u32,
     );
+
     cluster.clear_send_filters();
     cluster.add_send_filter(CloneFilterFactory(DropMessageFilter::new(
         MessageType::MsgTimeoutNow,
@@ -201,6 +204,7 @@ fn test_transfer_leader_delay() {
     router
         .send_raft_message(messages.lock().unwrap().pop().unwrap())
         .unwrap();
+
     let timer = Instant::now();
     while timer.elapsed() < Duration::from_secs(3) {
         let resp = cluster.request(
@@ -213,7 +217,11 @@ fn test_transfer_leader_delay() {
         if !header.has_error() {
             return;
         }
-        if !header.get_error().get_message().contains("ProposalDropped") {
+        if !header
+            .get_error()
+            .get_message()
+            .contains("proposal dropped")
+        {
             panic!("response {:?} has error", resp);
         }
         thread::sleep(Duration::from_millis(10));

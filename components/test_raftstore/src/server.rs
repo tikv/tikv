@@ -358,19 +358,19 @@ impl Simulator for ServerCluster {
             .encryption_key_manager(key_manager)
             .build(tmp_str);
         self.snap_mgrs.insert(node_id, snap_mgr.clone());
-        let server_cfg = Arc::new(cfg.server.clone());
+        let server_cfg = Arc::new(VersionTrack::new(cfg.server.clone()));
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         let cop_read_pool = ReadPool::from(coprocessor::readpool_impl::build_read_pool_for_test(
             &tikv::config::CoprReadPoolConfig::default_for_test(),
             store.get_engine(),
         ));
-        let cop = coprocessor::Endpoint::new(
-            &server_cfg,
+        let copr = coprocessor::Endpoint::new(
+            &server_cfg.value().clone(),
             cop_read_pool.handle(),
             concurrency_manager.clone(),
             PerfLevel::EnableCount,
         );
-        let coprv2 = coprocessor_v2::Endpoint::new(&cfg.coprocessor_v2);
+        let copr_v2 = coprocessor_v2::Endpoint::new(&cfg.coprocessor_v2);
         let mut server = None;
         // Create Debug service.
         let debug_thread_pool = Arc::new(
@@ -395,7 +395,7 @@ impl Simulator for ServerCluster {
         raft_store.validate().unwrap();
         let mut node = Node::new(
             system,
-            &cfg.server,
+            &server_cfg.value().clone(),
             Arc::new(VersionTrack::new(raft_store)),
             Arc::clone(&self.pd_client),
             state,
@@ -410,8 +410,8 @@ impl Simulator for ServerCluster {
                 &server_cfg,
                 &security_mgr,
                 store.clone(),
-                cop.clone(),
-                coprv2.clone(),
+                copr.clone(),
+                copr_v2.clone(),
                 sim_router.clone(),
                 resolver.clone(),
                 snap_mgr.clone(),
@@ -448,7 +448,7 @@ impl Simulator for ServerCluster {
         cfg.server.addr = format!("{}", addr);
         let trans = server.transport();
         let simulate_trans = SimulateTransport::new(trans);
-        let server_cfg = Arc::new(cfg.server.clone());
+        let server_cfg = Arc::new(VersionTrack::new(cfg.server.clone()));
 
         // Register the role change observer of the lock manager.
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
