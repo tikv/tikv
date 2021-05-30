@@ -17,7 +17,10 @@ use std::{
     fs::{self, File},
     net::SocketAddr,
     path::{Path, PathBuf},
-    sync::{atomic::AtomicU64, Arc, Mutex},
+    sync::{
+        atomic::{AtomicU32, AtomicU64, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant},
 };
 
@@ -82,7 +85,7 @@ use tikv::{
 use tikv_util::{
     check_environment_variables,
     config::{ensure_dir_exist, VersionTrack},
-    math::MovingMaxU32,
+    math::MovingAvgU32,
     sys::sys_quota::SysQuota,
     time::Monitor,
     worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker, Worker},
@@ -1070,7 +1073,7 @@ impl TiKVServer<RocksEngine> {
         let engines_info = Arc::new(EnginesResourceInfo::new(
             engines.kv.clone(),
             Some(engines.raft.clone()),
-            60, /*max_samples_to_preserve*/
+            180, /*max_samples_to_preserve*/
         ));
 
         (engines, engines_info)
@@ -1281,9 +1284,8 @@ impl<R: RaftEngine> EngineMetricsManager<R> {
 pub struct EnginesResourceInfo {
     kv_engine: RocksEngine,
     raft_engine: Option<RocksEngine>,
-    normalized_num_mem_tables: MovingMaxU32,
-    normalized_level_zero_num_files: MovingMaxU32,
-    normalized_pending_bytes: MovingMaxU32,
+    latest_normalized_pending_bytes: AtomicU32,
+    normalized_pending_bytes: MovingAvgU32,
 }
 
 impl EnginesResourceInfo {
@@ -1295,45 +1297,20 @@ impl EnginesResourceInfo {
         EnginesResourceInfo {
             kv_engine,
             raft_engine,
-            normalized_num_mem_tables: MovingMaxU32::new(max_samples_to_preserve),
-            normalized_level_zero_num_files: MovingMaxU32::new(max_samples_to_preserve),
-            normalized_pending_bytes: MovingMaxU32::new(max_samples_to_preserve),
+            latest_normalized_pending_bytes: AtomicU32::new(0),
+            normalized_pending_bytes: MovingAvgU32::new(max_samples_to_preserve),
         }
     }
 
     pub fn update(&self, _duration: Duration) {
-        let mut normalized_values = (
-            0, /*num_mem_tables*/
-            0, /*level_zero_num_files*/
-            0, /*pending_bytes*/
-        );
+        let mut normalized_pending_bytes = 0;
 
-        fn fetch_engine_cf(
-            engine: &RocksEngine,
-            cf: &str,
-            normalized_values: &mut (u32, u32, u32),
-        ) {
+        fn fetch_engine_cf(engine: &RocksEngine, cf: &str, normalized_pending_bytes: &mut u32) {
             if let Ok(cf_opts) = engine.get_options_cf(cf) {
-                if let Ok(Some(n)) = engine.get_cf_num_immutable_mem_table(cf) {
-                    if cf_opts.get_max_write_buffer_number() > 0 {
-                        normalized_values.0 = std::cmp::max(
-                            normalized_values.0,
-                            n as u32 * 100 / cf_opts.get_max_write_buffer_number(),
-                        );
-                    }
-                }
-                if let Ok(Some(n)) = engine.get_cf_num_files_at_level(cf, 0) {
-                    if cf_opts.get_level_zero_slowdown_writes_trigger() > 0 {
-                        normalized_values.1 = std::cmp::max(
-                            normalized_values.1,
-                            n as u32 * 100 / cf_opts.get_level_zero_slowdown_writes_trigger(),
-                        );
-                    }
-                }
                 if let Ok(Some(b)) = engine.get_cf_compaction_pending_bytes(cf) {
                     if cf_opts.get_soft_pending_compaction_bytes_limit() > 0 {
-                        normalized_values.2 = std::cmp::max(
-                            normalized_values.2,
+                        *normalized_pending_bytes = std::cmp::max(
+                            *normalized_pending_bytes,
                             (b * 100 / cf_opts.get_soft_pending_compaction_bytes_limit()) as u32,
                         );
                     }
@@ -1342,32 +1319,33 @@ impl EnginesResourceInfo {
         }
 
         if let Some(raft_engine) = &self.raft_engine {
-            fetch_engine_cf(raft_engine, CF_DEFAULT, &mut normalized_values);
+            fetch_engine_cf(raft_engine, CF_DEFAULT, &mut normalized_pending_bytes);
         }
         for cf in &[CF_DEFAULT, CF_WRITE, CF_LOCK] {
-            fetch_engine_cf(&self.kv_engine, cf, &mut normalized_values);
+            fetch_engine_cf(&self.kv_engine, cf, &mut normalized_pending_bytes);
         }
-        self.normalized_num_mem_tables.add(normalized_values.0);
-        self.normalized_level_zero_num_files
-            .add(normalized_values.1);
-        self.normalized_pending_bytes.add(normalized_values.2);
-    }
-
-    pub fn normalized_num_mem_tables(&self) -> f32 {
-        self.normalized_num_mem_tables.fetch() as f32 / 100.0
-    }
-
-    pub fn normalized_level_zero_num_files(&self) -> f32 {
-        self.normalized_level_zero_num_files.fetch() as f32 / 100.0
-    }
-
-    pub fn normalized_pending_bytes(&self) -> f32 {
-        self.normalized_pending_bytes.fetch() as f32 / 100.0
+        self.normalized_pending_bytes.add(normalized_pending_bytes);
+        self.latest_normalized_pending_bytes
+            .store(normalized_pending_bytes, Ordering::Relaxed);
     }
 }
 
 impl IOBudgetAdjustor for EnginesResourceInfo {
     fn adjust(&self, total_budgets: usize) -> usize {
-        (total_budgets as f32 * (0.5 + self.normalized_pending_bytes().powi(2) / 2.0)) as usize
+        let score = std::cmp::max(
+            self.normalized_pending_bytes.fetch(),
+            self.latest_normalized_pending_bytes.load(Ordering::Relaxed),
+        ) as f32;
+        // Two reasons for adding `sqrt` on top:
+        // 1) In theory the convergence point is independent of the value of pending
+        //    bytes (as long as backlog generating rate equals consuming rate, which is
+        //    determined by compaction budgets), a convex helps reach that point while
+        //    maintaining low level of pending bytes.
+        // 2) Variance of compaction pending bytes grows with its magnitude, a filter
+        //    with decreasing derivative can help balance such trend.
+        let score = (score / 100.0).sqrt();
+        // The target global write flow slides between Bandwidth / 2 and Bandwidth.
+        let score = 0.5 + score / 2.0;
+        (total_budgets as f32 * score) as usize
     }
 }
