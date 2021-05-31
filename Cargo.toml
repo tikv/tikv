@@ -64,8 +64,8 @@ protobuf-codec = [
   "txn_types/protobuf-codec",
   "grpcio-health/protobuf-codec",
   "file_system/protobuf-codec",
-  "protobuf/bytes",
   "req_cpu/protobuf-codec",
+  "protobuf/bytes",
 ]
 prost-codec = [
   "batch-system/prost-codec",

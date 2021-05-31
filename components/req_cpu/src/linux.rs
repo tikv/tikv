@@ -18,44 +18,43 @@ use libc::pid_t;
 use procinfo::pid;
 use procinfo::pid::Stat;
 
-thread_local! {
-    static CURRENT_REQ: LocalReqTag = {
-        let thread_id = unsafe { libc::syscall(libc::SYS_gettid) as libc::pid_t };
+pub fn init_recorder() {
+    lazy_static! {
+        static ref PHANTOM: () = {
+            std::thread::Builder::new()
+                .name("req-cpu-recorder".to_owned())
+                .spawn(move || {
+                    let mut recorder = ReqCpuRecorder::new(RecorderConfig::default());
 
-        let shared_ptr = SharedReqTagPtr::default();
-        THREAD_REGISTRATION_CHANNEL.0.send(ThreadRegistrationMsg {
-            thread_id,
-            shared_ptr: shared_ptr.clone(),
-        }).ok();
+                    loop {
+                        recorder.handle_collector_registration();
+                        recorder.handle_thread_registration();
+                        recorder.record();
+                        recorder.may_advance_window();
+                        recorder.may_gc();
 
-        LocalReqTag {
-            is_set: Cell::new(false),
-            shared_ptr,
-        }
-    };
+                        std::thread::sleep(Duration::from_micros(
+                            (recorder.config.record_interval_ms * 1_000.0) as _,
+                        ));
+                    }
+                })
+                .expect("Failed to create recorder thread");
+        };
+    }
+    *PHANTOM
 }
 
-#[derive(Default, Clone)]
-struct SharedReqTagPtr {
-    req_tag: Arc<AtomicPtr<RequestTag>>,
-}
-
-struct LocalReqTag {
-    is_set: Cell<bool>,
-    shared_ptr: SharedReqTagPtr,
-}
-
-impl SharedReqTagPtr {
-    fn take(&self) -> Option<Arc<RequestTag>> {
-        let prev_ptr = self.req_tag.swap(std::ptr::null_mut(), Acquire);
-        (!prev_ptr.is_null()).then(|| unsafe { Arc::from_raw(prev_ptr as _) })
+pub fn register_collector(collector: Box<dyn Collector>) -> CollectorHandle {
+    lazy_static! {
+        static ref NEXT_COLLECTOR_ID: Arc<AtomicU64> = Arc::new(AtomicU64::new(1));
     }
 
-    fn swap(&self, value: Arc<RequestTag>) -> Option<Arc<RequestTag>> {
-        let tag_arc_ptr = Arc::into_raw(value);
-        let prev_ptr = self.req_tag.swap(tag_arc_ptr as _, AcqRel);
-        (!prev_ptr.is_null()).then(|| unsafe { Arc::from_raw(prev_ptr as _) })
-    }
+    let id = CollectorId(NEXT_COLLECTOR_ID.fetch_add(1, Relaxed));
+    COLLECTOR_REGISTRATION_CHANNEL
+        .0
+        .send(CollectorRegistrationMsg::Register { collector, id })
+        .ok();
+    CollectorHandle { id }
 }
 
 impl RequestTag {
@@ -74,6 +73,44 @@ impl RequestTag {
     }
 }
 
+#[derive(Default, Clone)]
+struct SharedReqTagPtr {
+    req_tag: Arc<AtomicPtr<RequestTag>>,
+}
+impl SharedReqTagPtr {
+    fn take(&self) -> Option<Arc<RequestTag>> {
+        let prev_ptr = self.req_tag.swap(std::ptr::null_mut(), Acquire);
+        (!prev_ptr.is_null()).then(|| unsafe { Arc::from_raw(prev_ptr as _) })
+    }
+
+    fn swap(&self, value: Arc<RequestTag>) -> Option<Arc<RequestTag>> {
+        let tag_arc_ptr = Arc::into_raw(value);
+        let prev_ptr = self.req_tag.swap(tag_arc_ptr as _, AcqRel);
+        (!prev_ptr.is_null()).then(|| unsafe { Arc::from_raw(prev_ptr as _) })
+    }
+}
+
+struct LocalReqTag {
+    is_set: Cell<bool>,
+    shared_ptr: SharedReqTagPtr,
+}
+thread_local! {
+    static CURRENT_REQ: LocalReqTag = {
+        let thread_id = unsafe { libc::syscall(libc::SYS_gettid) as libc::pid_t };
+
+        let shared_ptr = SharedReqTagPtr::default();
+        THREAD_REGISTRATION_CHANNEL.0.send(ThreadRegistrationMsg {
+            thread_id,
+            shared_ptr: shared_ptr.clone(),
+        }).ok();
+
+        LocalReqTag {
+            is_set: Cell::new(false),
+            shared_ptr,
+        }
+    };
+}
+
 #[derive(Default)]
 pub struct Guard {
     // A trick to impl !Send, !Sync
@@ -88,19 +125,16 @@ impl Drop for Guard {
     }
 }
 
-struct ThreadRegistrationMsg {
-    thread_id: pid_t,
-    shared_ptr: SharedReqTagPtr,
+pub struct CollectorHandle {
+    id: CollectorId,
 }
-
-enum CollectorRegistrationMsg {
-    Register {
-        collector: Box<dyn Collector>,
-        id: CollectorId,
-    },
-    Unregister {
-        id: CollectorId,
-    },
+impl Drop for CollectorHandle {
+    fn drop(&mut self) {
+        COLLECTOR_REGISTRATION_CHANNEL
+            .0
+            .send(CollectorRegistrationMsg::Unregister { id: self.id })
+            .ok();
+    }
 }
 
 lazy_static! {
@@ -114,6 +148,19 @@ lazy_static! {
         Sender<CollectorRegistrationMsg>,
         Receiver<CollectorRegistrationMsg>
     ) = unbounded();
+}
+struct ThreadRegistrationMsg {
+    thread_id: pid_t,
+    shared_ptr: SharedReqTagPtr,
+}
+enum CollectorRegistrationMsg {
+    Register {
+        collector: Box<dyn Collector>,
+        id: CollectorId,
+    },
+    Unregister {
+        id: CollectorId,
+    },
 }
 
 struct ReqCpuRecorder {
@@ -207,10 +254,10 @@ impl ReqCpuRecorder {
             if cur_tag.is_some() || prev_tag.is_some() {
                 STAT_TASK_COUNT.inc();
 
-                // If existing current tag, we need to store the beginning stat.
-                // If existing previous tag, we need to get the end stat to calculate delta.
+                // If existing current tag, need to store the beginning stat.
+                // If existing previous tag, need to get the end stat to calculate delta.
                 if let Ok(stat) = procinfo::pid::stat_task(*PID, *tid) {
-                    // Accumulate the cpu time of the previous tag.
+                    // Accumulate the cpu time for the previous tag.
                     if let Some(prev_tag) = prev_tag {
                         let prev_cpu_ticks = (thread_stat.prev_stat.utime as u64)
                             .wrapping_add(thread_stat.prev_stat.stime as u64);
@@ -322,57 +369,6 @@ impl ReqCpuRecorder {
     }
 }
 
-pub fn init_recorder() {
-    lazy_static! {
-        static ref PHANTOM: () = {
-            std::thread::Builder::new()
-                .name("req-cpu-recorder".to_owned())
-                .spawn(move || {
-                    let mut recorder = ReqCpuRecorder::new(RecorderConfig::default());
-
-                    loop {
-                        recorder.handle_collector_registration();
-                        recorder.handle_thread_registration();
-                        recorder.record();
-                        recorder.may_advance_window();
-                        recorder.may_gc();
-
-                        std::thread::sleep(Duration::from_micros(
-                            (recorder.config.record_interval_ms * 1_000.0) as _,
-                        ));
-                    }
-                })
-                .expect("Failed to create recorder thread");
-        };
-    }
-    *PHANTOM
-}
-
-pub struct CollectorHandle {
-    id: CollectorId,
-}
-impl Drop for CollectorHandle {
-    fn drop(&mut self) {
-        COLLECTOR_REGISTRATION_CHANNEL
-            .0
-            .send(CollectorRegistrationMsg::Unregister { id: self.id })
-            .ok();
-    }
-}
-
-pub fn register_collector(collector: Box<dyn Collector>) -> CollectorHandle {
-    lazy_static! {
-        static ref NEXT_COLLECTOR_ID: Arc<AtomicU64> = Arc::new(AtomicU64::new(1));
-    }
-
-    let id = CollectorId(NEXT_COLLECTOR_ID.fetch_add(1, Relaxed));
-    COLLECTOR_REGISTRATION_CHANNEL
-        .0
-        .send(CollectorRegistrationMsg::Register { collector, id })
-        .ok();
-    CollectorHandle { id }
-}
-
 lazy_static! {
     static ref STAT_TASK_COUNT: prometheus::IntCounter = prometheus::register_int_counter!(
         "tikv_req_cpu_stat_task_count",
@@ -385,66 +381,310 @@ lazy_static! {
 mod tests {
     use super::*;
 
-    use std::sync::atomic::AtomicU64;
-    use std::sync::atomic::Ordering::Relaxed;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering::SeqCst;
     use std::sync::Mutex;
+    use std::thread::JoinHandle;
+
+    enum Operation {
+        SetContext(&'static str),
+        ResetContext,
+        CpuHeavy(u64),
+        Sleep(u64),
+    }
+
+    struct Operations {
+        ops: Vec<Operation>,
+        current_ctx: Option<&'static str>,
+        cpu_time: HashMap<String, u64>,
+    }
+
+    impl Operations {
+        fn begin() -> Self {
+            Self {
+                ops: Vec::default(),
+                current_ctx: None,
+                cpu_time: HashMap::default(),
+            }
+        }
+
+        fn then(mut self, op: Operation) -> Self {
+            match op {
+                Operation::SetContext(tag) => {
+                    assert!(self.current_ctx.is_none(), "cannot set nested contexts");
+                    self.current_ctx = Some(tag);
+                    self.ops.push(op);
+                    self
+                }
+                Operation::ResetContext => {
+                    assert!(self.current_ctx.is_some(), "context is not set");
+                    self.ops.push(op);
+                    self.current_ctx = None;
+                    self
+                }
+                Operation::CpuHeavy(ms) => {
+                    if let Some(tag) = self.current_ctx {
+                        *self.cpu_time.entry(tag.to_string()).or_insert(0) += ms;
+                    }
+                    self.ops.push(op);
+                    self
+                }
+                Operation::Sleep(_) => {
+                    if let Some(tag) = self.current_ctx {
+                        self.cpu_time.entry(tag.to_string()).or_insert(0);
+                    }
+                    self.ops.push(op);
+                    self
+                }
+            }
+        }
+
+        fn spawn(self) -> (JoinHandle<()>, HashMap<String, u64>) {
+            assert!(
+                self.current_ctx.is_none(),
+                "should keep context clean finally"
+            );
+
+            let Operations { ops, cpu_time, .. } = self;
+
+            let handle = std::thread::spawn(|| {
+                let mut guard = None;
+
+                for op in ops {
+                    match op {
+                        Operation::SetContext(tag) => {
+                            let tag = Arc::new(RequestTag {
+                                store_id: 0,
+                                region_id: 0,
+                                peer_id: 0,
+                                extra_attachment: Vec::from(tag),
+                            });
+
+                            guard = Some(tag.attach());
+                        }
+                        Operation::ResetContext => {
+                            guard.take();
+                        }
+                        Operation::CpuHeavy(ms) => {
+                            let done = Arc::new(AtomicBool::new(false));
+                            let done1 = done.clone();
+                            std::thread::spawn(move || {
+                                std::thread::sleep(Duration::from_millis(ms));
+                                done.store(true, SeqCst);
+                            });
+
+                            while !done1.load(SeqCst) {
+                                Self::heavy_job();
+                            }
+                        }
+                        Operation::Sleep(ms) => {
+                            std::thread::sleep(Duration::from_millis(ms));
+                        }
+                    }
+                }
+            });
+
+            (handle, cpu_time)
+        }
+
+        fn heavy_job() -> u64 {
+            let m: u64 = rand::random();
+            let n: u64 = rand::random();
+            let m = m ^ n;
+            let n = m.wrapping_mul(n);
+            let m = m.wrapping_add(n);
+            let n = m & n;
+            let m = m | n;
+            m.wrapping_sub(n)
+        }
+    }
 
     #[derive(Default, Clone)]
     struct DummyCollector {
-        records: Arc<Mutex<Vec<Arc<RequestCpuRecords>>>>,
+        records: Arc<Mutex<HashMap<String, u64>>>,
     }
 
     impl Collector for DummyCollector {
         fn collect(&self, records: Arc<RequestCpuRecords>) {
-            let mut r = self.records.lock().unwrap();
-            r.push(records);
+            if let Ok(mut r) = self.records.lock() {
+                for (tag, ms) in &records.records {
+                    let str = String::from_utf8(tag.extra_attachment.clone()).unwrap();
+                    *r.entry(str).or_insert(0) += *ms;
+                }
+            }
         }
     }
 
-    fn heavy_job() -> u64 {
-        let m: u64 = rand::random();
-        let n: u64 = rand::random();
-        let m = m ^ n;
-        let n = m.wrapping_mul(n);
-        let m = m.wrapping_add(n);
-        let n = m & n;
-        let m = m | n;
-        m.wrapping_sub(n)
-    }
+    use Operation::*;
 
     #[test]
-    fn one_context_per_thread() {
+    fn test_req_cpu() {
         init_recorder();
 
-        let collector = Box::new(DummyCollector::default());
-        let _handle = register_collector(collector.clone());
+        // Heavy CPU only with 1 thread
+        {
+            let collector = DummyCollector::default();
+            let _handle = register_collector(Box::new(collector.clone()));
 
-        let num = Arc::new(AtomicU64::new(0));
-        [100000, 500000, 2000000, 1000000]
-            .iter()
-            .map(|i| {
-                let num = num.clone();
-                std::thread::spawn(move || {
-                    let tid = unsafe { libc::syscall(libc::SYS_gettid) as libc::pid_t } as u64;
-                    let req_tag = Arc::new(RequestTag {
-                        store_id: tid,
-                        region_id: tid,
-                        peer_id: tid,
-                        extra_attachment: vec![],
-                    });
+            let (handle, expected) = Operations::begin()
+                .then(SetContext("ctx-0"))
+                .then(CpuHeavy(2000))
+                .then(ResetContext)
+                .spawn();
+            handle.join().unwrap();
 
-                    let _g = req_tag.attach();
+            collector.check(expected);
+        }
 
-                    for _ in 0..*i {
-                        num.store(heavy_job(), Relaxed);
+        // Sleep only with 1 thread
+        {
+            let collector = DummyCollector::default();
+            let _handle = register_collector(Box::new(collector.clone()));
+
+            let (handle, expected) = Operations::begin()
+                .then(SetContext("ctx-0"))
+                .then(Sleep(2000))
+                .then(ResetContext)
+                .spawn();
+            handle.join().unwrap();
+
+            collector.check(expected);
+        }
+
+        // Hybrid workload with 1 thread
+        {
+            let collector = DummyCollector::default();
+            let _handle = register_collector(Box::new(collector.clone()));
+
+            let (handle, expected) = Operations::begin()
+                .then(SetContext("ctx-0"))
+                .then(CpuHeavy(600))
+                .then(Sleep(400))
+                .then(ResetContext)
+                .then(SetContext("ctx-1"))
+                .then(CpuHeavy(500))
+                .then(Sleep(500))
+                .then(ResetContext)
+                .then(CpuHeavy(400))
+                .then(SetContext("ctx-2"))
+                .then(Sleep(600))
+                .then(ResetContext)
+                .spawn();
+            handle.join().unwrap();
+
+            collector.check(expected);
+        }
+
+        // Heavy CPU with 3 threads
+        {
+            let collector = DummyCollector::default();
+            let _handle = register_collector(Box::new(collector.clone()));
+
+            let (handle0, expected0) = Operations::begin()
+                .then(SetContext("ctx-0"))
+                .then(CpuHeavy(1500))
+                .then(ResetContext)
+                .spawn();
+            let (handle1, expected1) = Operations::begin()
+                .then(SetContext("ctx-1"))
+                .then(CpuHeavy(1500))
+                .then(ResetContext)
+                .spawn();
+            let (handle2, expected2) = Operations::begin()
+                .then(SetContext("ctx-2"))
+                .then(CpuHeavy(1500))
+                .then(ResetContext)
+                .spawn();
+            handle0.join().unwrap();
+            handle1.join().unwrap();
+            handle2.join().unwrap();
+
+            collector.check(merge(vec![expected0, expected1, expected2]));
+        }
+
+        // Hybrid workload with 3 threads
+        {
+            let collector = DummyCollector::default();
+            let _handle = register_collector(Box::new(collector.clone()));
+
+            let (handle0, expected0) = Operations::begin()
+                .then(SetContext("ctx-0"))
+                .then(CpuHeavy(200))
+                .then(Sleep(300))
+                .then(ResetContext)
+                .then(SetContext("ctx-1"))
+                .then(Sleep(200))
+                .then(CpuHeavy(600))
+                .then(ResetContext)
+                .then(CpuHeavy(500))
+                .spawn();
+            let (handle1, expected1) = Operations::begin()
+                .then(SetContext("ctx-1"))
+                .then(CpuHeavy(500))
+                .then(ResetContext)
+                .then(CpuHeavy(200))
+                .then(SetContext("ctx-2"))
+                .then(Sleep(400))
+                .then(ResetContext)
+                .then(Sleep(300))
+                .spawn();
+            let (handle2, expected2) = Operations::begin()
+                .then(SetContext("ctx-2"))
+                .then(CpuHeavy(800))
+                .then(ResetContext)
+                .then(SetContext("ctx-1"))
+                .then(Sleep(200))
+                .then(ResetContext)
+                .then(CpuHeavy(200))
+                .spawn();
+            handle0.join().unwrap();
+            handle1.join().unwrap();
+            handle2.join().unwrap();
+
+            collector.check(merge(vec![expected0, expected1, expected2]));
+        }
+    }
+
+    impl DummyCollector {
+        fn check(&self, expected: HashMap<String, u64>) {
+            // Wait a collect interval to avoid losing records.
+            std::thread::sleep(Duration::from_millis(1200));
+
+            const MAX_DRIFT: u64 = 100;
+            let res = self.records.lock().unwrap();
+
+            assert_eq!(
+                expected.len(),
+                res.len(),
+                "length of records expected {} got {}",
+                expected.len(),
+                res.len()
+            );
+
+            for (k, expected_value) in expected {
+                if let Some(value) = res.get(&k) {
+                    let l = value.saturating_sub(MAX_DRIFT);
+                    let r = value.saturating_add(MAX_DRIFT);
+                    if !(l <= expected_value && expected_value <= r) {
+                        panic!(
+                            "tag {} cpu time expected {} got {}",
+                            k, expected_value, value
+                        );
                     }
-                })
-            })
-            .collect::<Vec<_>>()
-            .into_iter()
-            .for_each(|handle| handle.join().unwrap());
+                } else {
+                    panic!("tag {} not exists", k);
+                }
+            }
+        }
+    }
 
-        let r = collector.records.lock().unwrap();
-        assert!(!r.is_empty());
+    fn merge(maps: impl IntoIterator<Item = HashMap<String, u64>>) -> HashMap<String, u64> {
+        let mut map = HashMap::default();
+        for m in maps {
+            for (k, v) in m {
+                *map.entry(k).or_insert(0) += v;
+            }
+        }
+        map
     }
 }
