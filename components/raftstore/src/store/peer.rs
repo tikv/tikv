@@ -3636,7 +3636,10 @@ where
         Some(status)
     }
 
-    pub fn heartbeat_pd<T>(&mut self, ctx: &PollContext<EK, ER, T>) {
+    pub fn heartbeat_pd_fn<T>(
+        &mut self,
+        ctx: &PollContext<EK, ER, T>,
+    ) -> impl FnOnce(&PollContext<EK, ER, T>) {
         let task = PdTask::Heartbeat(HeartbeatTask {
             term: self.term(),
             region: self.region().clone(),
@@ -3649,16 +3652,24 @@ where
             approximate_keys: self.approximate_keys,
             replication_status: self.region_replication_status(),
         });
-        if let Err(e) = ctx.pd_scheduler.schedule(task) {
-            error!(
-                "failed to notify pd";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-                "err" => ?e,
-            );
-            return;
+        let region_id = self.region_id;
+        let peer_id = self.peer.get_id();
+        move |ctx| {
+            if let Err(e) = ctx.pd_scheduler.schedule(task) {
+                error!(
+                    "failed to notify pd";
+                    "region_id" => region_id,
+                    "peer_id" => peer_id,
+                    "err" => ?e,
+                );
+                return;
+            }
+            fail_point!("schedule_check_split");
         }
-        fail_point!("schedule_check_split");
+    }
+
+    pub fn heartbeat_pd<T>(&mut self, ctx: &PollContext<EK, ER, T>) {
+        (self.heartbeat_pd_fn::<T>(ctx))(ctx)
     }
 
     fn prepare_raft_message(&self) -> RaftMessage {
