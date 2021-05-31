@@ -47,6 +47,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         val: Option<&Value>,
         txn: &mut MvccTxn<S>,
         key: &Key,
+        for_update_ts: TimeStamp,
         prev_write_loaded: bool,
         prev_write: Option<Write>,
     ) -> MvccResult<OldValue> {
@@ -59,13 +60,8 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                 Some(val) => OldValue::Value { value: val.clone() },
                 None => OldValue::None,
             })
-        } else if prev_write_loaded {
-            Ok(match prev_write {
-                Some(write) => get_old_value(txn, &key, write)?,
-                None => OldValue::None,
-            })
         } else {
-            Ok(OldValue::Unspecified)
+            get_old_value(txn, &key, for_update_ts, prev_write_loaded, prev_write)
         }
     }
 
@@ -95,6 +91,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
             val.as_ref(),
             txn,
             &key,
+            for_update_ts,
             prev_write_loaded,
             prev_write,
         )?;
@@ -202,6 +199,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         val.as_ref(),
         txn,
         &key,
+        for_update_ts,
         prev_write_loaded,
         prev_write,
     )?;
@@ -875,6 +873,84 @@ pub mod tests {
                 assert_eq!(old_value, OldValue::None);
             }
         }
+    }
+
+    #[test]
+    fn test_old_value_for_update_ts() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let k = b"k1";
+        let v1 = b"v1";
+
+        // Put v1 @ start ts 1, commit ts 2
+        must_succeed(&engine, k, k, 1, 1);
+        must_pessimistic_prewrite_put(&engine, k, v1, k, 1, 1, true);
+        must_commit(&engine, k, 1, 2);
+
+        let v2 = b"v2";
+        // Put v2 @ start ts 10, commit ts 11
+        must_succeed(&engine, k, k, 10, 10);
+        must_pessimistic_prewrite_put(&engine, k, v2, k, 10, 10, true);
+        must_commit(&engine, k, 10, 11);
+
+        // Lock @ start ts 9, for update ts 12, commit ts 13
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let min_commit_ts = TimeStamp::zero();
+        let cm = ConcurrencyManager::new(min_commit_ts);
+        let start_ts = TimeStamp::new(9);
+        let for_update_ts = TimeStamp::new(12);
+        let need_old_value = true;
+        // Force to read old via reader.
+        let need_value = false;
+        let mut txn = MvccTxn::new(snapshot, start_ts, false, cm.clone());
+        let res = acquire_pessimistic_lock(
+            &mut txn,
+            Key::from_raw(k),
+            k,
+            false,
+            0,
+            for_update_ts,
+            need_value,
+            min_commit_ts,
+            need_old_value,
+        )
+        .unwrap();
+        assert_eq!(
+            res.1,
+            OldValue::Value {
+                value: b"v2".to_vec()
+            }
+        );
+
+        // Write the lock.
+        let modifies = txn.into_modifies();
+        if !modifies.is_empty() {
+            engine
+                .write(&Default::default(), WriteData::from_modifies(modifies))
+                .unwrap();
+        }
+
+        // Lock again.
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts, false, cm);
+        let res = acquire_pessimistic_lock(
+            &mut txn,
+            Key::from_raw(k),
+            k,
+            false,
+            0,
+            for_update_ts,
+            false,
+            min_commit_ts,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            res.1,
+            OldValue::Value {
+                value: b"v2".to_vec()
+            }
+        );
     }
 
     #[test]
