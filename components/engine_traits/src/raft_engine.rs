@@ -93,7 +93,7 @@ pub trait RaftLogBatch: Send {
 
     fn is_empty(&self) -> bool;
 
-    fn merge(&mut self, _: &Self);
+    fn merge(&mut self, _: Self);
 }
 
 #[derive(Clone, Copy, Default)]

@@ -1403,7 +1403,7 @@ mod tests {
         entry.set_term(1);
         entry.set_index(1);
         entry.set_entry_type(EntryType::EntryNormal);
-        entry.set_data(vec![42]);
+        entry.set_data(vec![42].into());
         engine.put_msg(&key, &entry).unwrap();
         assert_eq!(engine.get_msg::<Entry>(&key).unwrap().unwrap(), entry);
 

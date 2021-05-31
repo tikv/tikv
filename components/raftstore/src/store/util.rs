@@ -785,7 +785,7 @@ impl<'a> ChangePeerI for &'a ChangePeerRequest {
         let mut cc = eraftpb::ConfChange::default();
         cc.set_change_type(self.get_change_type());
         cc.set_node_id(self.get_peer().get_id());
-        cc.set_context(ctx);
+        cc.set_context(ctx.into());
         cc
     }
 }
@@ -819,7 +819,7 @@ impl<'a> ChangePeerI for &'a ChangePeerV2Request {
             cc.set_transition(eraftpb::ConfChangeTransition::Explicit);
         }
         cc.set_changes(changes.into());
-        cc.set_context(ctx);
+        cc.set_context(ctx.into());
         cc
     }
 }

@@ -220,7 +220,6 @@ pub struct RaftProposeMetrics {
     pub transfer_leader: u64,
     pub conf_change: u64,
     pub request_wait_time: LocalHistogram,
-    pub end_batch: usize,
 }
 
 impl Default for RaftProposeMetrics {
@@ -235,7 +234,6 @@ impl Default for RaftProposeMetrics {
             conf_change: 0,
             batch: 0,
             request_wait_time: REQUEST_WAIT_TIME_HISTOGRAM.local(),
-            end_batch: 0,
         }
     }
 }
@@ -285,12 +283,6 @@ impl RaftProposeMetrics {
         if self.batch > 0 {
             PEER_PROPOSAL_COUNTER.batch.inc_by(self.batch as i64);
             self.batch = 0;
-        }
-        if self.end_batch > 0 {
-            PEER_PROPOSAL_COUNTER
-                .end_batch
-                .inc_by(self.end_batch as i64);
-            self.end_batch = 0;
         }
         self.request_wait_time.flush();
     }
@@ -396,11 +388,17 @@ pub struct RaftMetrics {
     pub commit_log: LocalHistogram,
     pub leader_missing: Arc<Mutex<HashSet<u64>>>,
     pub invalid_proposal: RaftInvalidProposeMetrics,
+    pub persisted_msg: LocalHistogram,
+    pub waterfall_metrics: bool,
+    pub to_write_queue: LocalHistogram,
+    pub know_persist: LocalHistogram,
+    pub know_commit: LocalHistogram,
+    pub know_commit_not_persist: LocalHistogram,
 }
 
-impl Default for RaftMetrics {
-    fn default() -> RaftMetrics {
-        RaftMetrics {
+impl RaftMetrics {
+    pub fn new(waterfall_metrics: bool) -> Self {
+        Self {
             ready: Default::default(),
             send_message: Default::default(),
             message_dropped: Default::default(),
@@ -412,11 +410,14 @@ impl Default for RaftMetrics {
             commit_log: PEER_COMMIT_LOG_HISTOGRAM.local(),
             leader_missing: Arc::default(),
             invalid_proposal: Default::default(),
+            persisted_msg: STORE_PERSISTED_MSG_DURATION_HISTOGRAM.local(),
+            waterfall_metrics,
+            to_write_queue: STORE_TO_WRITE_QUEUE_DURATION_HISTOGRAM.local(),
+            know_persist: STORE_KNOW_PERSIST_DURATION_HISTOGRAM.local(),
+            know_commit: STORE_KNOW_COMMIT_DURATION_HISTOGRAM.local(),
+            know_commit_not_persist: STORE_KNOW_COMMIT_NOT_PERSIST_DURATION_HISTOGRAM.local(),
         }
     }
-}
-
-impl RaftMetrics {
     /// Flushs all metrics
     pub fn flush(&mut self) {
         self.ready.flush();
@@ -427,8 +428,39 @@ impl RaftMetrics {
         self.commit_log.flush();
         self.message_dropped.flush();
         self.invalid_proposal.flush();
+        self.persisted_msg.flush();
+        if self.waterfall_metrics {
+            self.to_write_queue.flush();
+            self.know_persist.flush();
+            self.know_commit.flush();
+            self.know_commit_not_persist.flush();
+        }
         let mut missing = self.leader_missing.lock().unwrap();
         LEADER_MISSING.set(missing.len() as i64);
         missing.clear();
+    }
+}
+
+pub struct AsyncWriteMetrics {
+    pub to_write: LocalHistogram,
+    pub kvdb_end: LocalHistogram,
+    pub write_end: LocalHistogram,
+}
+
+impl Default for AsyncWriteMetrics {
+    fn default() -> AsyncWriteMetrics {
+        AsyncWriteMetrics {
+            to_write: STORE_TO_WRITE_DURATION_HISTOGRAM.local(),
+            kvdb_end: STORE_WRITE_KVDB_END_DURATION_HISTOGRAM.local(),
+            write_end: STORE_WRITE_END_DURATION_HISTOGRAM.local(),
+        }
+    }
+}
+
+impl AsyncWriteMetrics {
+    pub fn flush(&mut self) {
+        self.to_write.flush();
+        self.kvdb_end.flush();
+        self.write_end.flush();
     }
 }
