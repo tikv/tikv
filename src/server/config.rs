@@ -91,7 +91,7 @@ pub struct Config {
 
     pub raft_client_queue_size: usize,
 
-+   pub raft_msg_max_batch_size: usize,
+    pub raft_msg_max_batch_size: usize,
 
     pub raft_msg_flush_delay_us: u64,
 
