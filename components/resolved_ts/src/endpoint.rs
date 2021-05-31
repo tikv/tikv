@@ -12,7 +12,6 @@ use grpcio::Environment;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::metapb::Region;
 use pd_client::PdClient;
-use raft::StateRole;
 use raftstore::coprocessor::CmdBatch;
 use raftstore::coprocessor::{ObserveHandle, ObserveID};
 use raftstore::router::RaftStoreRouter;
@@ -373,16 +372,6 @@ where
         }
     }
 
-    // Start to advance resolved ts after peer becomes leader.
-    // Stop to advance resolved ts after peer steps down to follower or candidate.
-    // Do not need to check observe id because we expect all role change events are scheduled in order.
-    fn region_role_changed(&mut self, region: Region, role: StateRole) {
-        match role {
-            StateRole::Leader => self.register_region(region),
-            _ => self.deregister_region(region.id),
-        }
-    }
-
     // Deregister current observed region and try to register it again.
     // Call after the version of region epoch changed.
     fn region_error(&mut self, region_id: u64, observe_id: ObserveID, error: ErrorHeader) {
@@ -496,9 +485,11 @@ where
 
 pub enum Task<S: Snapshot> {
     RegionDestroyed(Region),
-    RegionRoleChanged {
+    RegisterRegion {
         region: Region,
-        role: StateRole,
+    },
+    DeRegisterRegion {
+        region_id: u64,
     },
     RegionError {
         region_id: u64,
@@ -530,13 +521,13 @@ impl<S: Snapshot> fmt::Debug for Task<S> {
                 .field("name", &"region_destroyed")
                 .field("region", &region)
                 .finish(),
-            Task::RegionRoleChanged {
-                ref region,
-                ref role,
-            } => de
-                .field("name", &"region_role_changed")
+            Task::RegisterRegion { ref region } => de
+                .field("name", &"register_region")
                 .field("region", &region)
-                .field("role", &role)
+                .finish(),
+            Task::DeRegisterRegion { ref region_id } => de
+                .field("name", &"deregister_region")
+                .field("region_id", &region_id)
                 .finish(),
             Task::RegionError {
                 ref region_id,
@@ -591,7 +582,8 @@ where
         debug!("run resolved-ts task"; "task" => ?task);
         match task {
             Task::RegionDestroyed(region) => self.region_destroyed(region),
-            Task::RegionRoleChanged { region, role } => self.region_role_changed(region, role),
+            Task::RegisterRegion { region } => self.register_region(region),
+            Task::DeRegisterRegion { region_id } => self.deregister_region(region_id),
             Task::RegionError {
                 region_id,
                 observe_id,
