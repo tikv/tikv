@@ -162,7 +162,7 @@ where
         for mut read in self.reads.drain(self.ready_cnt..) {
             removed += read.cmds.len();
             for (_, cb, _) in read.cmds.drain(..) {
-                apply::notify_stale_req(term, cb, 9);
+                apply::notify_stale_req(term, cb);
             }
         }
         RAFT_READ_INDEX_PENDING_COUNT.sub(removed as i64);

@@ -155,7 +155,7 @@ impl<S: Snapshot> ProposalQueue<S> {
                     );
                 }
             } else {
-                apply::notify_stale_req(current_term, p.cb, 4);
+                apply::notify_stale_req(current_term, p.cb);
             }
         }
         None
@@ -282,7 +282,7 @@ impl<S: Snapshot> CmdEpochChecker<S> {
             self.term = term;
             for cmd in self.proposed_admin_cmd.drain(..) {
                 for cb in cmd.cbs {
-                    apply::notify_stale_req(term, cb, 5);
+                    apply::notify_stale_req(term, cb);
                 }
             }
         }
@@ -389,7 +389,7 @@ impl<S: Snapshot> Drop for CmdEpochChecker<S> {
     fn drop(&mut self) {
         for state in self.proposed_admin_cmd.drain(..) {
             for cb in state.cbs {
-                apply::notify_stale_req(self.term, cb, 6);
+                apply::notify_stale_req(self.term, cb);
             }
         }
     }
@@ -2223,7 +2223,7 @@ where
                 // The request could be proposed when the peer was leader.
                 // TODO: figure out that it's necessary to notify stale or not.
                 let term = self.term();
-                apply::notify_stale_req(term, cb, 7);
+                apply::notify_stale_req(term, cb);
             }
         }
     }
@@ -2971,7 +2971,7 @@ where
             && self.is_leader()
         {
             // The message gets dropped silently, can't be handled anymore.
-            apply::notify_stale_req(self.term(), cb, 8);
+            apply::notify_stale_req(self.term(), cb);
             return false;
         }
 
