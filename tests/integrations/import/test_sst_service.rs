@@ -296,3 +296,40 @@ fn test_ingest_sst_region_not_found() {
     let resp = import.ingest(&ingest).unwrap();
     assert!(resp.get_error().has_region_not_found());
 }
+
+#[test]
+fn test_ingest_multiple_sst() {
+    let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
+
+    let temp_dir = Builder::new()
+        .prefix("test_ingest_multiple_sst")
+        .tempdir()
+        .unwrap();
+
+    let sst_path = temp_dir.path().join("test.sst");
+    let sst_range1 = (0, 100);
+    let (mut meta1, data1) = gen_sst_file(sst_path, sst_range1);
+    meta1.set_region_id(ctx.get_region_id());
+    meta1.set_region_epoch(ctx.get_region_epoch().clone());
+
+    let sst_path2 = temp_dir.path().join("write-test.sst");
+    let sst_range2 = (100, 200);
+    let (mut meta2, data2) = gen_sst_file(sst_path2, sst_range2);
+    meta2.set_region_id(ctx.get_region_id());
+    meta2.set_region_epoch(ctx.get_region_epoch().clone());
+    meta2.set_cf_name("write".to_owned());
+
+    send_upload_sst(&import, &meta1, &data1).unwrap();
+    send_upload_sst(&import, &meta2, &data2).unwrap();
+
+    let mut ingest = MultiIngestRequest::default();
+    ingest.set_context(ctx.clone());
+    ingest.mut_ssts().push(meta1);
+    ingest.mut_ssts().push(meta2);
+    let resp = import.multi_ingest(&ingest).unwrap();
+    assert!(!resp.has_error(), "{:?}", resp.get_error());
+
+    // Check ingested kvs
+    check_ingested_kvs(&tikv, &ctx, sst_range1);
+    check_ingested_kvs_cf(&tikv, &ctx, "write", sst_range2);
+}
