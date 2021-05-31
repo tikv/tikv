@@ -339,7 +339,9 @@ impl IORateLimitConfig {
             self.gc_priority = self.foreground_write_priority;
         }
         if self.mode != IORateLimitMode::WriteOnly {
-            return Err("storage.io-rate-limit.mode other than WriteOnly is not supported.".into());
+            return Err(
+                "storage.io-rate-limit.mode other than write-only is not supported.".into(),
+            );
         }
         Ok(())
     }

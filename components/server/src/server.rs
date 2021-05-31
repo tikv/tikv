@@ -1143,7 +1143,7 @@ impl TiKVServer<RaftLogEngine> {
         let engines_info = Arc::new(EnginesResourceInfo::new(
             engines.kv.clone(),
             None, /*raft_engine*/
-            60,   /*max_samples_to_preserve*/
+            180,  /*max_samples_to_preserve*/
         ));
 
         (engines, engines_info)
