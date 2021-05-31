@@ -11,7 +11,7 @@ use protobuf::ProtobufError;
 use thiserror::Error;
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
-use tikv_util::codec;
+use tikv_util::{codec, deadline::DeadlineError};
 
 use super::coprocessor::Error as CopError;
 use super::store::SnapError;
@@ -126,6 +126,9 @@ pub enum Error {
 
     #[error("Encryption {0}")]
     Encryption(#[from] encryption::Error),
+
+    #[error("Deadline is exceeded")]
+    DeadlineExceeded,
 }
 
 pub type Result<T> = result::Result<T, Error>;
@@ -242,6 +245,12 @@ impl<T> From<TrySendError<T>> for Error {
     }
 }
 
+impl From<DeadlineError> for Error {
+    fn from(_: DeadlineError) -> Self {
+        Error::DeadlineExceeded
+    }
+}
+
 impl ErrorCodeExt for Error {
     fn error_code(&self) -> ErrorCode {
         match self {
@@ -273,6 +282,7 @@ impl ErrorCodeExt for Error {
             #[cfg(feature = "prost-codec")]
             Error::ProstEncode(_) => error_code::raftstore::PROTOBUF,
             Error::DataIsNotReady { .. } => error_code::raftstore::DATA_IS_NOT_READY,
+            Error::DeadlineExceeded => error_code::raftstore::DEADLINE_EXCEEDED,
 
             Error::Other(_) => error_code::raftstore::UNKNOWN,
         }

@@ -52,7 +52,7 @@ pub enum ErrorInner {
     #[error("ttl is not enabled, but get put request with ttl")]
     TTLNotEnabled,
 
-    #[error("deadline exceeded")]
+    #[error("Deadline is exceeded")]
     DeadlineExceeded,
 }
 
