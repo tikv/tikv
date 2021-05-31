@@ -1,5 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cmp;
+use std::fmt::{self, Debug, Formatter};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::vec::IntoIter;
@@ -219,8 +221,45 @@ impl ObserveHandle {
     }
 }
 
+#[derive(Default)]
+pub struct CmdObserveInfo {
+    pub cdc_id: ObserveHandle,
+    pub rts_id: ObserveHandle,
+}
+
+impl CmdObserveInfo {
+    pub fn from_handle(cdc_id: ObserveHandle, rts_id: ObserveHandle) -> CmdObserveInfo {
+        CmdObserveInfo { cdc_id, rts_id }
+    }
+
+    fn observe_level(&self) -> ObserveLevel {
+        let cdc = if self.cdc_id.is_observing() {
+            // `cdc` observe all data
+            ObserveLevel::All
+        } else {
+            ObserveLevel::None
+        };
+        let rts = if self.rts_id.is_observing() {
+            // `resolved-ts` observe lock related data
+            ObserveLevel::LockRelated
+        } else {
+            ObserveLevel::None
+        };
+        cmp::max(cdc, rts)
+    }
+}
+
+impl Debug for CmdObserveInfo {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CmdObserveInfo")
+            .field("cdc_id", &self.cdc_id.id)
+            .field("rts_id", &self.rts_id.id)
+            .finish()
+    }
+}
+
 // `ObserveLevel` describe what data the observer want to observe
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ObserveLevel {
     // Don't observe any data
     None,
@@ -228,19 +267,6 @@ pub enum ObserveLevel {
     LockRelated,
     // Observe all data
     All,
-}
-
-impl ObserveLevel {
-    fn from(cdc: &ObserveHandle, rts: &ObserveHandle) -> ObserveLevel {
-        match (cdc.is_observing(), rts.is_observing()) {
-            // Observe all data if `cdc` worker is observing
-            (true, _) => ObserveLevel::All,
-            // Observe lock related data if only `resolved-ts` worker is observing
-            (false, true) => ObserveLevel::LockRelated,
-            // No observer
-            (false, false) => ObserveLevel::None,
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -253,20 +279,20 @@ pub struct CmdBatch {
 }
 
 impl CmdBatch {
-    pub fn new(cdc: &ObserveHandle, rts: &ObserveHandle, region: Region) -> CmdBatch {
+    pub fn new(observe_info: &CmdObserveInfo, region: Region) -> CmdBatch {
         CmdBatch {
-            level: ObserveLevel::from(cdc, rts),
-            cdc_id: cdc.id,
-            rts_id: rts.id,
+            level: observe_info.observe_level(),
+            cdc_id: observe_info.cdc_id.id,
+            rts_id: observe_info.rts_id.id,
             region,
             cmds: Vec::new(),
         }
     }
 
-    pub fn push(&mut self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: Cmd) {
+    pub fn push(&mut self, observe_info: &CmdObserveInfo, region_id: u64, cmd: Cmd) {
         assert_eq!(region_id, self.region.get_id());
-        assert_eq!(cdc_id, self.cdc_id);
-        assert_eq!(rts_id, self.rts_id);
+        assert_eq!(observe_info.cdc_id.id, self.cdc_id);
+        assert_eq!(observe_info.rts_id.id, self.rts_id);
         self.cmds.push(cmd)
     }
 
@@ -311,4 +337,31 @@ pub trait CmdObserver<E>: Coprocessor {
 pub trait ReadIndexObserver: Coprocessor {
     // Hook to call when stepping in raft and the message is a read index message.
     fn on_step(&self, _msg: &mut eraftpb::Message) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_observe_level() {
+        // Both cdc and `resolved-ts` are observing
+        let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
+        assert_eq!(observe_info.observe_level(), ObserveLevel::All);
+
+        // No observer
+        observe_info.cdc_id.stop_observing();
+        observe_info.rts_id.stop_observing();
+        assert_eq!(observe_info.observe_level(), ObserveLevel::None);
+
+        // Only cdc observing
+        let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
+        observe_info.rts_id.stop_observing();
+        assert_eq!(observe_info.observe_level(), ObserveLevel::All);
+
+        // Only `resolved-ts` observing
+        let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
+        observe_info.cdc_id.stop_observing();
+        assert_eq!(observe_info.observe_level(), ObserveLevel::LockRelated);
+    }
 }

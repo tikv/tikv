@@ -52,7 +52,7 @@ use tikv_util::{Either, MustConsumeVec};
 use time::Timespec;
 use uuid::Builder as UuidBuilder;
 
-use crate::coprocessor::{Cmd, CmdBatch, CoprocessorHost, ObserveHandle, ObserveID};
+use crate::coprocessor::{Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle};
 use crate::store::fsm::RaftPollerBuilder;
 use crate::store::metrics::*;
 use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
@@ -306,8 +306,8 @@ impl<S: Snapshot> ApplyCallbackBatch<S> {
         }
     }
 
-    fn push_batch(&mut self, cdc: &ObserveHandle, rts: &ObserveHandle, region: Region) {
-        self.cmd_batch.push(CmdBatch::new(cdc, rts, region));
+    fn push_batch(&mut self, observe_info: &CmdObserveInfo, region: Region) {
+        self.cmd_batch.push(CmdBatch::new(observe_info, region));
     }
 
     fn push_cb(&mut self, cb: Callback<S>, resp: RaftCmdResponse) {
@@ -318,8 +318,7 @@ impl<S: Snapshot> ApplyCallbackBatch<S> {
         &mut self,
         cb: Option<Callback<S>>,
         cmd: Cmd,
-        cdc_id: ObserveID,
-        rts_id: ObserveID,
+        observe_info: &CmdObserveInfo,
         region_id: u64,
     ) {
         if let Some(cb) = cb {
@@ -328,7 +327,7 @@ impl<S: Snapshot> ApplyCallbackBatch<S> {
         self.cmd_batch
             .last_mut()
             .unwrap()
-            .push(cdc_id, rts_id, region_id, cmd);
+            .push(observe_info, region_id, cmd);
     }
 
     fn take(
@@ -463,11 +462,8 @@ where
     /// After all delegates are handled, `write_to_db` method should be called.
     pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate<EK>) {
         self.last_applied_index = delegate.apply_state.get_applied_index();
-        self.applied_batch.push_batch(
-            &delegate.observe_info.cdc_id,
-            &delegate.observe_info.rts_id,
-            delegate.region.clone(),
-        );
+        self.applied_batch
+            .push_batch(&delegate.observe_info, delegate.region.clone());
     }
 
     /// Commits all changes have done for delegate. `persistent` indicates whether
@@ -868,6 +864,7 @@ where
             metrics: Default::default(),
             last_merge_version: 0,
             pending_request_snapshot_count: reg.pending_request_snapshot_count,
+            // use a default `CmdObserveInfo` because observing is disable by default
             observe_info: CmdObserveInfo::default(),
             priority: Priority::Normal,
         }
@@ -1137,13 +1134,9 @@ where
         cmd_resp::bind_term(&mut resp, self.term);
         let cmd_cb = self.find_pending(index, term, is_conf_change_cmd(&cmd));
         let cmd = Cmd::new(index, cmd, resp);
-        apply_ctx.applied_batch.push(
-            cmd_cb,
-            cmd,
-            self.observe_info.cdc_id.id,
-            self.observe_info.rts_id.id,
-            self.region_id(),
-        );
+        apply_ctx
+            .applied_batch
+            .push(cmd_cb, cmd, &self.observe_info, self.region_id());
         exec_result
     }
 
@@ -2908,21 +2901,6 @@ impl Debug for GenSnapTask {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("GenSnapTask")
             .field("region_id", &self.region_id)
-            .finish()
-    }
-}
-
-#[derive(Default)]
-struct CmdObserveInfo {
-    cdc_id: ObserveHandle,
-    rts_id: ObserveHandle,
-}
-
-impl Debug for CmdObserveInfo {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CmdObserveInfo")
-            .field("cdc_id", &self.cdc_id.id)
-            .field("rts_id", &self.rts_id.id)
             .finish()
     }
 }

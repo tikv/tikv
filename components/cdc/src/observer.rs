@@ -94,9 +94,12 @@ impl CdcObserver {
 impl Coprocessor for CdcObserver {}
 
 impl<E: KvEngine> CmdObserver<E> for CdcObserver {
+    // `CdcObserver::on_flush_applied_cmd_batch` should only invoke if `cmd_batches` is not empty
     fn on_flush_applied_cmd_batch(&self, cmd_batches: &mut Vec<CmdBatch>, engine: &E) {
-        // `CdcObserver::on_flush_applied_cmd_batch` should only invoke if `cmd_batches` is not empty
         assert!(!cmd_batches.is_empty());
+        if cmd_batches.iter().all(|cb| cb.level != ObserveLevel::All) {
+            return;
+        }
         fail_point!("before_cdc_flush_apply");
         let cmd_batches: Vec<_> = cmd_batches
             .iter()
@@ -180,11 +183,11 @@ mod tests {
     fn test_register_and_deregister() {
         let (scheduler, mut rx) = tikv_util::worker::dummy_scheduler();
         let observer = CdcObserver::new(scheduler);
-        let observe_handle = ObserveHandle::new();
+        let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
         let engine = TestEngineBuilder::new().build().unwrap().get_rocksdb();
 
-        let mut cb = CmdBatch::new(&observe_handle, &observe_handle, Region::default());
-        cb.push(observe_handle.id, observe_handle.id, 0, Cmd::default());
+        let mut cb = CmdBatch::new(&observe_info, Region::default());
+        cb.push(&observe_info, 0, Cmd::default());
         <CdcObserver as CmdObserver<RocksEngine>>::on_flush_applied_cmd_batch(
             &observer,
             &mut vec![cb],
@@ -199,9 +202,9 @@ mod tests {
         };
 
         // Stop observing cmd
-        observe_handle.stop_observing();
-        let mut cb = CmdBatch::new(&observe_handle, &observe_handle, Region::default());
-        cb.push(observe_handle.id, observe_handle.id, 0, Cmd::default());
+        observe_info.cdc_id.stop_observing();
+        let mut cb = CmdBatch::new(&observe_info, Region::default());
+        cb.push(&observe_info, 0, Cmd::default());
         <CdcObserver as CmdObserver<RocksEngine>>::on_flush_applied_cmd_batch(
             &observer,
             &mut vec![cb],

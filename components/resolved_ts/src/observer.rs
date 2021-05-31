@@ -59,6 +59,9 @@ impl<E: KvEngine> Coprocessor for Observer<E> {}
 
 impl<E: KvEngine> CmdObserver<E> for Observer<E> {
     fn on_flush_applied_cmd_batch(&self, cmd_batches: &mut Vec<CmdBatch>, engine: &E) {
+        if cmd_batches.iter().all(|cb| cb.level == ObserveLevel::None) {
+            return;
+        }
         let cmd_batches: Vec<_> = std::mem::take(cmd_batches)
             .into_iter()
             .filter_map(lock_only_filter)
@@ -177,38 +180,38 @@ mod test {
         }
 
         // Both cdc and resolved-ts worker are observing
-        let (cdc_handle, rts_handle) = (ObserveHandle::new(), ObserveHandle::new());
-        let mut cb = CmdBatch::new(&cdc_handle, &rts_handle, Region::default());
-        cb.push(cdc_handle.id, rts_handle.id, 0, cmd.clone());
+        let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
+        let mut cb = CmdBatch::new(&observe_info, Region::default());
+        cb.push(&observe_info, 0, cmd.clone());
         observer.on_flush_applied_cmd_batch(&mut vec![cb], &engine);
         // Observe all data
         expect_recv(&mut rx, data.clone());
 
         // Only cdc is observing
-        let (cdc_handle, rts_handle) = (ObserveHandle::new(), ObserveHandle::new());
-        rts_handle.stop_observing();
-        let mut cb = CmdBatch::new(&cdc_handle, &rts_handle, Region::default());
-        cb.push(cdc_handle.id, rts_handle.id, 0, cmd.clone());
+        let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
+        observe_info.rts_id.stop_observing();
+        let mut cb = CmdBatch::new(&observe_info, Region::default());
+        cb.push(&observe_info, 0, cmd.clone());
         observer.on_flush_applied_cmd_batch(&mut vec![cb], &engine);
         // Still observe all data
         expect_recv(&mut rx, data.clone());
 
         // Only resolved-ts worker is observing
-        let (cdc_handle, rts_handle) = (ObserveHandle::new(), ObserveHandle::new());
-        cdc_handle.stop_observing();
-        let mut cb = CmdBatch::new(&cdc_handle, &rts_handle, Region::default());
-        cb.push(cdc_handle.id, rts_handle.id, 0, cmd.clone());
+        let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
+        observe_info.cdc_id.stop_observing();
+        let mut cb = CmdBatch::new(&observe_info, Region::default());
+        cb.push(&observe_info, 0, cmd.clone());
         observer.on_flush_applied_cmd_batch(&mut vec![cb], &engine);
         // Only observe lock related data
         data.retain(|p| p.get_put().cf != CF_DEFAULT);
         expect_recv(&mut rx, data);
 
         // Both cdc and resolved-ts worker are not observing
-        let (cdc_handle, rts_handle) = (ObserveHandle::new(), ObserveHandle::new());
-        cdc_handle.stop_observing();
-        rts_handle.stop_observing();
-        let mut cb = CmdBatch::new(&cdc_handle, &rts_handle, Region::default());
-        cb.push(cdc_handle.id, rts_handle.id, 0, cmd);
+        let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
+        observe_info.rts_id.stop_observing();
+        observe_info.cdc_id.stop_observing();
+        let mut cb = CmdBatch::new(&observe_info, Region::default());
+        cb.push(&observe_info, 0, cmd);
         observer.on_flush_applied_cmd_batch(&mut vec![cb], &engine);
         // Observe no data
         expect_recv(&mut rx, vec![]);
