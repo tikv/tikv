@@ -2,6 +2,8 @@
 
 use batch_system::test_runner::*;
 use batch_system::*;
+use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
 use std::thread::sleep;
 use std::time::Duration;
 use tikv_util::mpsc;
@@ -23,7 +25,7 @@ fn test_batch() {
         .send_control(Message::Callback(Box::new(
             move |_: &Handler, _: &mut Runner| {
                 let (tx, runner) = Runner::new(10);
-                let mailbox = BasicMailbox::new(tx, runner);
+                let mailbox = BasicMailbox::new(tx, runner, Arc::default());
                 r.register(1, mailbox);
                 tx_.send(1).unwrap();
             },
@@ -58,14 +60,15 @@ fn test_priority() {
     let (tx, rx) = mpsc::unbounded();
     let tx_ = tx.clone();
     let r = router.clone();
+    let state_cnt = Arc::new(AtomicUsize::new(0));
     router
         .send_control(Message::Callback(Box::new(
             move |_: &Handler, _: &mut Runner| {
                 let (tx, runner) = Runner::new(10);
-                r.register(1, BasicMailbox::new(tx, runner));
+                r.register(1, BasicMailbox::new(tx, runner, state_cnt.clone()));
                 let (tx2, mut runner2) = Runner::new(10);
                 runner2.set_priority(Priority::Low);
-                r.register(2, BasicMailbox::new(tx2, runner2));
+                r.register(2, BasicMailbox::new(tx2, runner2, state_cnt));
                 tx_.send(1).unwrap();
             },
         )))
