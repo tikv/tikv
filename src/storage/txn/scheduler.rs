@@ -55,14 +55,10 @@ use crate::storage::txn::{
 };
 use crate::storage::{
     get_priority_tag, types::StorageCallback, Error as StorageError,
-    ErrorInner as StorageErrorInner,
+    ErrorInner as StorageErrorInner, DEFAULT_EXECUTION_DURATION_LIMIT,
 };
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
-
-// The default limit is set to be very large. Then, requests without `max_exectuion_duration`
-// will not be aborted unexpectedly.
-const DEFAULT_EXECUTION_DURATION_LIMIT: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Task is a running command.
 pub(super) struct Task {

@@ -128,13 +128,18 @@ impl ReqContext {
         tag: ReqTag,
         mut context: kvrpcpb::Context,
         ranges: Vec<coppb::KeyRange>,
-        max_handle_duration: Duration,
+        default_max_handle_duration: Duration,
         peer: Option<String>,
         is_desc_scan: Option<bool>,
         txn_start_ts: TimeStamp,
         cache_match_version: Option<u64>,
         perf_level: PerfLevel,
     ) -> Self {
+        let max_handle_duration = if context.max_execution_duration_ms > 0 {
+            Duration::from_millis(context.max_execution_duration_ms)
+        } else {
+            default_max_handle_duration
+        };
         let deadline = Deadline::from_now(max_handle_duration);
         let bypass_locks = TsSet::from_u64s(context.take_resolved_locks());
         let lower_bound = match ranges.first().as_ref() {

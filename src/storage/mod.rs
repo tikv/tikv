@@ -89,11 +89,16 @@ use std::{
     iter,
     sync::{atomic, Arc},
 };
+use tikv_util::deadline::Deadline;
 use tikv_util::time::{Instant, ThreadReadId};
 use txn_types::{Key, KvPair, Lock, Mutation, OldValues, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
+
+// The default limit is set to be very large. Then, requests without `max_exectuion_duration`
+// will not be aborted unexpectedly.
+const DEFAULT_EXECUTION_DURATION_LIMIT: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// [`Storage`](Storage) implements transactional KV APIs and raw KV APIs on a given [`Engine`].
 /// An [`Engine`] provides low level KV functionality. [`Engine`] has multiple implementations.
@@ -318,6 +323,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
         let concurrency_manager = self.concurrency_manager.clone();
+        let deadline = deadline(&ctx);
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -350,6 +356,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 )?;
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                deadline.check()?;
                 {
                     let begin_instant = Instant::now_coarse();
                     let mut statistics = Statistics::default();
@@ -406,6 +413,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
         let priority = requests[0].get_context().get_priority();
+        // point get requests in the same batch should have a similar deadline
+        let deadline = deadline(&requests[0].get_context());
         let concurrency_manager = self.concurrency_manager.clone();
         let res = self.read_pool.spawn_handle(
             async move {
@@ -478,6 +487,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     ) = req_snap;
                     match snap.await {
                         Ok(snapshot) => {
+                            if let Err(e) = deadline.check() {
+                                consumer.consume(id, Err(e.into()));
+                                continue;
+                            }
                             match PointGetterBuilder::new(snapshot, start_ts)
                                 .fill_cache(fill_cache)
                                 .isolation_level(isolation_level)
@@ -536,6 +549,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
         let concurrency_manager = self.concurrency_manager.clone();
+        let deadline = deadline(&ctx);
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -564,6 +578,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 )?;
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                deadline.check()?;
                 {
                     let begin_instant = Instant::now_coarse();
                     let mut statistics = Statistics::default();
@@ -640,6 +655,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
         let concurrency_manager = self.concurrency_manager.clone();
+        let deadline = deadline(&ctx);
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -707,6 +723,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                deadline.check()?;
                 {
                     let begin_instant = Instant::now_coarse();
 
@@ -772,6 +789,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
         let concurrency_manager = self.concurrency_manager.clone();
+        let deadline = deadline(&ctx);
         // Do not allow replica read for scan_lock.
         ctx.set_replica_read(false);
 
@@ -834,6 +852,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                deadline.check()?;
                 {
                     let begin_instant = Instant::now_coarse();
                     let mut statistics = Statistics::default();
@@ -968,6 +987,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
         let enable_ttl = self.enable_ttl;
+        let deadline = deadline(&ctx);
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -985,6 +1005,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 };
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                deadline.check()?;
                 let store = RawStore::new(snapshot, enable_ttl);
                 let cf = Self::rawkv_cf(&cf)?;
                 {
@@ -1024,6 +1045,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let priority = gets[0].get_context().get_priority();
         let priority_tag = get_priority_tag(priority);
         let enable_ttl = self.enable_ttl;
+        // get requests in the same batch should have a similar deadline
+        let deadline = deadline(&gets[0].get_context());
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -1060,6 +1083,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let key = req.take_key();
                     match snap.await {
                         Ok(snapshot) => {
+                            if let Some(e) = deadline.check()? {
+                                consumer.consume(id, Err(e.into()));
+                                continue;
+                            }
+
                             let mut stats = Statistics::default();
                             let store = RawStore::new(snapshot, enable_ttl);
                             match Self::rawkv_cf(&cf) {
@@ -1113,6 +1141,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
         let enable_ttl = self.enable_ttl;
+        let deadline = deadline(&ctx);
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -1134,6 +1163,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 };
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                deadline.check()?;
                 let store = RawStore::new(snapshot, enable_ttl);
                 {
                     let begin_instant = Instant::now_coarse();
@@ -1195,10 +1225,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         } else if ttl != 0 {
             return Err(Error::from(ErrorInner::TTLNotEnabled));
         }
-
+        let deadline = deadline(&ctx);
+        let mut write_data = WriteData::from_modifies(vec![m]);
+        write_data.deadline = Some(deadline);
         self.engine.async_write(
             &ctx,
-            WriteData::from_modifies(vec![m]),
+            write_data,
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_put.inc();
@@ -1225,6 +1257,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         if !self.enable_ttl && ttl != 0 {
             return Err(Error::from(ErrorInner::TTLNotEnabled));
         }
+        let deadline = deadline(&ctx);
         let expire_ts = convert_to_expire_ts(ttl);
 
         let modifies = pairs
@@ -1237,9 +1270,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 m
             })
             .collect();
+        let mut write_data = WriteData::from_modifies(modifies);
+        write_data.deadline = Some(deadline);
         self.engine.async_write(
             &ctx,
-            WriteData::from_modifies(modifies),
+            write_data,
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_put.inc();
@@ -1256,12 +1291,15 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ) -> Result<()> {
         check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
 
+        let deadline = deadline(&ctx);
+        let mut write_data = WriteData::from_modifies(vec![Modify::Delete(
+            Self::rawkv_cf(&cf)?,
+            Key::from_encoded(key),
+        )]);
+        write_data.deadline = Some(deadline);
         self.engine.async_write(
             &ctx,
-            WriteData::from_modifies(vec![Modify::Delete(
-                Self::rawkv_cf(&cf)?,
-                Key::from_encoded(key),
-            )]),
+            write_data,
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_delete.inc();
@@ -1288,10 +1326,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let cf = Self::rawkv_cf(&cf)?;
         let start_key = Key::from_encoded(start_key);
         let end_key = Key::from_encoded(end_key);
-
+        let deadline = deadline(&ctx);
+        let mut write_data =
+            WriteData::from_modifies(vec![Modify::DeleteRange(cf, start_key, end_key, false)]);
+        write_data.deadline = Some(deadline);
         self.engine.async_write(
             &ctx,
-            WriteData::from_modifies(vec![Modify::DeleteRange(cf, start_key, end_key, false)]),
+            write_data,
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_delete_range.inc();
@@ -1309,13 +1350,16 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let cf = Self::rawkv_cf(&cf)?;
         check_key_size!(keys.iter(), self.max_key_size, callback);
 
+        let deadline = deadline(&ctx);
         let modifies = keys
             .into_iter()
             .map(|k| Modify::Delete(cf, Key::from_encoded(k)))
             .collect();
+        let mut write_data = WriteData::from_modifies(modifies);
+        write_data.deadline = Some(deadline);
         self.engine.async_write(
             &ctx,
-            WriteData::from_modifies(modifies),
+            write_data,
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_delete.inc();
@@ -1346,6 +1390,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
         let enable_ttl = self.enable_ttl;
+        let deadline = deadline(&ctx);
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -1371,6 +1416,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 };
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                deadline.check()?;
                 let cf = Self::rawkv_cf(&cf)?;
                 {
                     let store = RawStore::new(snapshot, enable_ttl);
@@ -1444,6 +1490,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
         let enable_ttl = self.enable_ttl;
+        let deadline = deadline(&ctx);
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -1458,6 +1505,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 };
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                deadline.check()?;
                 let cf = Self::rawkv_cf(&cf)?;
                 {
                     let store = RawStore::new(snapshot, enable_ttl);
@@ -1549,6 +1597,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
         let enable_ttl = self.enable_ttl;
+        let deadline = deadline(&ctx);
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -1566,6 +1615,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 };
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                deadline.check()?;
                 let store = RawStore::new(snapshot, enable_ttl);
                 let cf = Self::rawkv_cf(&cf)?;
                 {
@@ -1726,6 +1776,15 @@ pub fn point_key_range(key: Key) -> KeyRange {
     key_range.set_start_key(key.into_encoded());
     key_range.set_end_key(end_key.into_encoded());
     key_range
+}
+
+fn deadline(ctx: &Context) -> Deadline {
+    let duration = if ctx.max_execution_duration_ms > 0 {
+        Duration::from_millis(ctx.max_execution_duration_ms)
+    } else {
+        DEFAULT_EXECUTION_DURATION_LIMIT
+    };
+    Deadline::from_now(duration)
 }
 
 /// A builder to build a temporary `Storage<E>`.
