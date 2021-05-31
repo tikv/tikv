@@ -1118,6 +1118,7 @@ impl Initializer {
         let current = TimeStamp::max();
         let mut scanner = ScannerBuilder::new(snap, current, false)
             .range(None, None)
+            .fill_cache(false)
             .build_delta_scanner(self.checkpoint_ts, self.txn_extra_op)
             .unwrap();
         let conn_id = self.conn_id;
