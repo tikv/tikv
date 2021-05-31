@@ -202,7 +202,8 @@ macro_rules! push {
         };
         let vec = &mut $vec;
         vec.push(e);
-        vec.sort_by(|l, r| l.priority.cmp(&r.priority));
+        // reverse sorting, so observer with higher priority will call first
+        vec.sort_by(|l, r| r.priority.cmp(&l.priority));
     };
 }
 
@@ -495,6 +496,10 @@ impl<E: KvEngine> CoprocessorHost<E> {
     }
 
     pub fn on_flush_applied_cmd_batch(&self, mut cmd_batches: Vec<CmdBatch>, engine: &E) {
+        // Some observer assert `cmd_batches` is not empty
+        if cmd_batches.is_empty() {
+            return;
+        }
         for batch in &cmd_batches {
             for cmd in &batch.cmds {
                 self.post_apply(&batch.region, &cmd);

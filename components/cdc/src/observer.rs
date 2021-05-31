@@ -95,6 +95,8 @@ impl Coprocessor for CdcObserver {}
 
 impl<E: KvEngine> CmdObserver<E> for CdcObserver {
     fn on_flush_applied_cmd_batch(&self, cmd_batches: &mut Vec<CmdBatch>, engine: &E) {
+        // `CdcObserver::on_flush_applied_cmd_batch` should only invoke if `cmd_batches` is not empty
+        assert!(!cmd_batches.is_empty());
         fail_point!("before_cdc_flush_apply");
         let cmd_batches: Vec<_> = cmd_batches
             .iter()
