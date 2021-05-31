@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use collections::HashSet;
 
-use engine_traits::{name_to_cf, KvEngine, CF_WRITE};
+use engine_traits::{name_to_cf, KvEngine, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IOType};
 use futures::executor::{ThreadPool, ThreadPoolBuilder};
 use futures::{TryFutureExt, TryStreamExt};
@@ -98,12 +98,16 @@ where
     }
 
     fn check_write_stall(&self) -> Option<errorpb::Error> {
-        if self.importer.get_mode() == SwitchMode::Normal
-            && self
-                .engine
-                .ingest_maybe_slowdown_writes(CF_WRITE)
-                .expect("cf")
-        {
+        let write_stall = self
+            .engine
+            .ingest_maybe_slowdown_writes(CF_WRITE)
+            .expect("cf");
+        let default_stall = self
+            .engine
+            .ingest_maybe_slowdown_writes(CF_DEFAULT)
+            .expect("cf");
+
+        if self.importer.get_mode() == SwitchMode::Normal && (write_stall || default_stall) {
             let mut errorpb = errorpb::Error::default();
             let err = "too many sst files are ingesting";
             let mut server_is_busy_err = errorpb::ServerIsBusy::default();
