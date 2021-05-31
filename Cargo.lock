@@ -5407,7 +5407,6 @@ dependencies = [
  "txn_types",
  "url",
  "uuid",
- "vlog",
  "walkdir",
  "yatp",
  "zipf",
@@ -5449,6 +5448,7 @@ dependencies = [
  "rand 0.7.3",
  "security",
  "serde_json",
+ "server",
  "signal",
  "slog",
  "slog-global",
@@ -5460,7 +5460,6 @@ dependencies = [
  "tokio",
  "toml",
  "txn_types",
- "vlog",
  "yatp",
 ]
 
