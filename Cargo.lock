@@ -288,6 +288,7 @@ dependencies = [
  "serde_derive",
  "slog",
  "slog-global",
+ "tikv_alloc",
  "tikv_util",
 ]
 
@@ -2251,7 +2252,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?rev=511a3225c29f9272af83d28efed92eba835cd34f#511a3225c29f9272af83d28efed92eba835cd34f"
+source = "git+https://github.com/pingcap/kvproto.git?rev=f11c6fb6b3a53b214ee94d54651b01eb99239334#f11c6fb6b3a53b214ee94d54651b01eb99239334"
 dependencies = [
  "futures 0.3.8",
  "grpcio",
@@ -3638,6 +3639,7 @@ dependencies = [
  "lazy_static",
  "log",
  "log_wrappers",
+ "memory_trace_macros",
  "openssl",
  "panic_hook",
  "pd_client",
@@ -5468,7 +5470,6 @@ dependencies = [
  "txn_types",
  "url",
  "uuid",
- "vlog",
  "walkdir",
  "yatp",
  "zipf",
@@ -5510,6 +5511,7 @@ dependencies = [
  "rand 0.7.3",
  "security",
  "serde_json",
+ "server",
  "signal",
  "slog",
  "slog-global",
@@ -5521,7 +5523,6 @@ dependencies = [
  "tokio",
  "toml",
  "txn_types",
- "vlog",
  "yatp",
 ]
 
