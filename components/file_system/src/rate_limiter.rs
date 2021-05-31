@@ -159,7 +159,7 @@ pub trait IOBudgetAdjustor: Send + Sync {
 /// Limit total IO flow below provided threshold by throttling lower-priority IOs.
 /// Rate limit is disabled when total IO threshold is set to zero.
 struct PriorityBasedIORateLimiter {
-    // Only limit high-priority IOs when strict is true
+    // High-priority IOs are only limited when strict is true
     strict: bool,
     // Total bytes passed through during current epoch
     bytes_through: [CachePadded<AtomicUsize>; IOPriority::COUNT],
@@ -328,7 +328,7 @@ impl PriorityBasedIORateLimiter {
     ///    consume the same IO amount as the last few epochs without breaching global threshold.
     /// 2) Higher priority may temporarily use lower priority's IO budgets. When this happens,
     ///    total IO flow could exceed global threshold.
-    /// 3) Highest priority IO alone must not exceed global threshold.
+    /// 3) Highest priority IO alone must not exceed global threshold (in strict mode).
     fn refill(&self, locked: &mut PriorityBasedIORateLimiterProtected, now: Instant) {
         let mut total_budgets =
             self.bytes_per_epoch[IOPriority::High as usize].load(Ordering::Relaxed);
@@ -367,7 +367,7 @@ impl PriorityBasedIORateLimiter {
             used_budgets += ((served_by_first_epoch + served_by_skipped_epochs) * 16)
                 / (skipped_epochs_mul_16 + 16);
             // Only apply rate limit adjustments on low-priority IOs.
-            if !self.strict && *pri == IOPriority::Medium {
+            if *pri == IOPriority::Medium {
                 if let Some(adjustor) = &locked.adjustor {
                     total_budgets = adjustor.adjust(total_budgets);
                 }
