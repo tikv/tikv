@@ -1,13 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::collector::Collector;
-use crate::{Builder, ReqCpuConfig, RequestCpuRecords, RequestTag};
+use crate::collector::{Collector, CollectorId};
+use crate::{RecorderConfig, RequestCpuRecords, RequestTag};
 
 use std::cell::Cell;
 use std::fs::read_dir;
 use std::marker::PhantomData;
-use std::sync::atomic::AtomicPtr;
-use std::sync::atomic::Ordering::{AcqRel, Acquire};
+use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed};
+use std::sync::atomic::{AtomicPtr, AtomicU64};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -17,14 +17,13 @@ use lazy_static::lazy_static;
 use libc::pid_t;
 use procinfo::pid;
 use procinfo::pid::Stat;
-use std::collections::hash_map::Entry;
 
 thread_local! {
     static CURRENT_REQ: LocalReqTag = {
         let thread_id = unsafe { libc::syscall(libc::SYS_gettid) as libc::pid_t };
 
         let shared_ptr = SharedReqTagPtr::default();
-        REGISTER_THREAD_CHANNEL.0.send(RegisterThreadMsg {
+        THREAD_REGISTRATION_CHANNEL.0.send(ThreadRegistrationMsg {
             thread_id,
             shared_ptr: shared_ptr.clone(),
         }).ok();
@@ -89,20 +88,36 @@ impl Drop for Guard {
     }
 }
 
-struct RegisterThreadMsg {
+struct ThreadRegistrationMsg {
     thread_id: pid_t,
     shared_ptr: SharedReqTagPtr,
+}
+
+enum CollectorRegistrationMsg {
+    Register {
+        collector: Box<dyn Collector>,
+        id: CollectorId,
+    },
+    Unregister {
+        id: CollectorId,
+    },
 }
 
 lazy_static! {
     static ref PID: pid_t = unsafe { libc::getpid() };
     static ref CLK_TCK: libc::c_long = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
-    static ref REGISTER_THREAD_CHANNEL: (Sender<RegisterThreadMsg>, Receiver<RegisterThreadMsg>) =
-        unbounded();
+    static ref THREAD_REGISTRATION_CHANNEL: (
+        Sender<ThreadRegistrationMsg>,
+        Receiver<ThreadRegistrationMsg>
+    ) = unbounded();
+    static ref COLLECTOR_REGISTRATION_CHANNEL: (
+        Sender<CollectorRegistrationMsg>,
+        Receiver<CollectorRegistrationMsg>
+    ) = unbounded();
 }
 
 struct ReqCpuRecorder {
-    config: ReqCpuConfig,
+    config: RecorderConfig,
 
     thread_stats: HashMap<pid_t, ThreadStat>,
     current_window_records: RequestCpuRecords,
@@ -110,17 +125,17 @@ struct ReqCpuRecorder {
     last_collect_instant: Instant,
     last_gc_instant: Instant,
 
-    collectors: Vec<Box<dyn Collector>>,
+    collectors: HashMap<CollectorId, Box<dyn Collector>>,
 }
 
 struct ThreadStat {
-    prev_stat: pid::Stat,
     shared_ptr: SharedReqTagPtr,
     prev_tag: Option<Arc<RequestTag>>,
+    prev_stat: pid::Stat,
 }
 
 impl ReqCpuRecorder {
-    pub fn new(config: ReqCpuConfig, collectors: Vec<Box<dyn Collector>>) -> Self {
+    pub fn new(config: RecorderConfig) -> Self {
         let now = Instant::now();
 
         Self {
@@ -132,15 +147,40 @@ impl ReqCpuRecorder {
             thread_stats: HashMap::default(),
             current_window_records: RequestCpuRecords::default(),
 
-            collectors,
+            collectors: HashMap::default(),
         }
     }
 
-    pub fn handle_registration(&mut self) {
-        while let Ok(RegisterThreadMsg {
+    pub fn handle_collector_registration(&mut self) {
+        let mut should_reset = false;
+        loop {
+            while let Ok(msg) = COLLECTOR_REGISTRATION_CHANNEL.1.try_recv() {
+                self.handle_collector_registration_msg(msg);
+            }
+
+            if self.collectors.is_empty() {
+                // Block the record thread until a new collector coming.
+                if let Ok(msg) = COLLECTOR_REGISTRATION_CHANNEL.1.recv() {
+                    self.handle_collector_registration_msg(msg);
+                }
+
+                // May wait a long time. So drop out-dated state by resetting.
+                should_reset = true;
+            } else {
+                break;
+            }
+        }
+
+        if should_reset {
+            self.reset();
+        }
+    }
+
+    pub fn handle_thread_registration(&mut self) {
+        while let Ok(ThreadRegistrationMsg {
             thread_id,
             shared_ptr,
-        }) = REGISTER_THREAD_CHANNEL.1.try_recv()
+        }) = THREAD_REGISTRATION_CHANNEL.1.try_recv()
         {
             self.thread_stats.insert(
                 thread_id,
@@ -167,10 +207,10 @@ impl ReqCpuRecorder {
             if cur_tag.is_some() || prev_tag.is_some() {
                 STAT_TASK_COUNT.inc();
 
-                // If current tag exists, we need to get the begin stat.
-                // If previous tag exists, we need to get the end stat.
+                // If existing current tag, we need to store the beginning stat.
+                // If existing previous tag, we need to get the end stat to calculate delta.
                 if let Ok(stat) = procinfo::pid::stat_task(*PID, *tid) {
-                    // Update cpu time of the previous tag
+                    // Accumulate the cpu time of the previous tag.
                     if let Some(prev_tag) = prev_tag {
                         let prev_cpu_ticks = (thread_stat.prev_stat.utime as u64)
                             .wrapping_add(thread_stat.prev_stat.stime as u64);
@@ -178,16 +218,14 @@ impl ReqCpuRecorder {
                         let delta_ms = current_cpu_ticks.wrapping_sub(prev_cpu_ticks) * 1_000
                             / (*CLK_TCK as u64);
 
-                        match self.current_window_records.records.entry(prev_tag) {
-                            Entry::Occupied(mut o) => {
-                                *o.get_mut() += delta_ms;
-                            }
-                            Entry::Vacant(v) => {
-                                v.insert(delta_ms);
-                            }
-                        }
+                        *self
+                            .current_window_records
+                            .records
+                            .entry(prev_tag)
+                            .or_insert(0) += delta_ms;
                     }
 
+                    // Store the beginning stat for the current tag.
                     if cur_tag.is_some() {
                         thread_stat.prev_tag = cur_tag;
                         thread_stat.prev_stat = stat;
@@ -240,8 +278,9 @@ impl ReqCpuRecorder {
             records.duration_ms = duration as _;
 
             if !records.records.is_empty() {
-                for collector in &self.collectors {
-                    collector.collect(&records);
+                let records = Arc::new(records);
+                for collector in self.collectors.values() {
+                    collector.collect(records.clone());
                 }
             }
 
@@ -260,32 +299,86 @@ impl ReqCpuRecorder {
             .collect::<HashSet<pid_t>>()
         })
     }
+
+    fn handle_collector_registration_msg(&mut self, msg: CollectorRegistrationMsg) {
+        match msg {
+            CollectorRegistrationMsg::Register { id, collector } => {
+                self.collectors.insert(id, collector);
+            }
+            CollectorRegistrationMsg::Unregister { id } => {
+                self.collectors.remove(&id);
+            }
+        }
+    }
+
+    fn reset(&mut self) {
+        let now = Instant::now();
+        self.current_window_records = RequestCpuRecords::default();
+        for v in self.thread_stats.values_mut() {
+            v.prev_tag = None;
+        }
+        self.last_collect_instant = now;
+        self.last_gc_instant = now;
+    }
 }
 
-impl Builder {
-    pub fn build(self) {
-        if self.collectors.is_empty() {
-            return;
-        }
+pub fn init_recorder() {
+    lazy_static! {
+        static ref PHANTOM: () = {
+            std::thread::Builder::new()
+                .name("req-cpu-recorder".to_owned())
+                .spawn(move || {
+                    let mut recorder = ReqCpuRecorder::new(RecorderConfig::default());
 
-        std::thread::Builder::new()
-            .name("req-cpu-collector".to_owned())
-            .spawn(move || {
-                let mut recorder = ReqCpuRecorder::new(self.config, self.collectors);
+                    loop {
+                        recorder.handle_collector_registration();
+                        recorder.handle_thread_registration();
+                        recorder.record();
+                        recorder.may_advance_window();
+                        recorder.may_gc();
 
-                loop {
-                    recorder.record();
-                    recorder.may_advance_window();
-                    recorder.may_gc();
-                    recorder.handle_registration();
-
-                    std::thread::sleep(Duration::from_micros(
-                        (recorder.config.record_interval_ms * 1_000.0) as _,
-                    ));
-                }
-            })
-            .expect("Create req-cpu-collector thread failed.");
+                        std::thread::sleep(Duration::from_micros(
+                            (recorder.config.record_interval_ms * 1_000.0) as _,
+                        ));
+                    }
+                })
+                .expect("Failed to create recorder thread");
+        };
     }
+    *PHANTOM
+}
+
+pub struct CollectorHandle {
+    id: CollectorId,
+}
+impl Drop for CollectorHandle {
+    fn drop(&mut self) {
+        COLLECTOR_REGISTRATION_CHANNEL
+            .0
+            .send(CollectorRegistrationMsg::Unregister { id: self.id })
+            .ok();
+    }
+}
+
+pub fn register_collector(collector: Box<dyn Collector>) -> CollectorHandle {
+    lazy_static! {
+        static ref NEXT_COLLECTOR_ID: Arc<AtomicU64> = Arc::new(AtomicU64::new(1));
+    }
+
+    let id = CollectorId(NEXT_COLLECTOR_ID.fetch_add(1, Relaxed));
+    COLLECTOR_REGISTRATION_CHANNEL
+        .0
+        .send(CollectorRegistrationMsg::Register { collector, id })
+        .ok();
+    CollectorHandle { id }
+}
+
+lazy_static! {
+    static ref STAT_TASK_COUNT: prometheus::IntCounter = prometheus::register_int_counter!(
+        "tikv_req_cpu_stat_task_count",
+        "Counter of stat_task call"
+    )
+    .unwrap();
 }
 
 #[cfg(test)]
@@ -296,20 +389,15 @@ mod tests {
     use std::sync::atomic::Ordering::Relaxed;
     use std::sync::Mutex;
 
-    enum Command {
-        Exit,
-        SetContext(Arc<RequestTag>),
-    }
-
     #[derive(Default, Clone)]
     struct DummyCollector {
-        records: Arc<Mutex<Vec<RequestCpuRecords>>>,
+        records: Arc<Mutex<Vec<Arc<RequestCpuRecords>>>>,
     }
 
     impl Collector for DummyCollector {
-        fn collect(&self, records: &RequestCpuRecords) {
+        fn collect(&self, records: Arc<RequestCpuRecords>) {
             let mut r = self.records.lock().unwrap();
-            r.push(records.clone());
+            r.push(records);
         }
     }
 
@@ -326,8 +414,10 @@ mod tests {
 
     #[test]
     fn one_context_per_thread() {
-        let collector = DummyCollector::default();
-        Builder::new().register_collector(collector.clone()).build();
+        init_recorder();
+
+        let collector = Box::new(DummyCollector::default());
+        let _handle = register_collector(collector.clone());
 
         let num = Arc::new(AtomicU64::new(0));
         [100000, 500000, 2000000, 1000000]
@@ -357,12 +447,4 @@ mod tests {
         let r = collector.records.lock().unwrap();
         assert!(!r.is_empty());
     }
-}
-
-lazy_static! {
-    static ref STAT_TASK_COUNT: prometheus::IntCounter = prometheus::register_int_counter!(
-        "tikv_req_cpu_stat_task_count",
-        "Counter of stat_task call"
-    )
-    .unwrap();
 }

@@ -1,6 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::{Builder, ReqCpuConfig, RequestTag};
+use crate::collector::{Collector, CollectorId};
+use crate::{Builder, RecorderConfig, RequestTag};
 
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
@@ -17,6 +18,9 @@ pub struct Guard {
     _p: PhantomData<*const ()>,
 }
 
-impl Builder {
-    pub fn build(self) {}
+pub fn install_recorder() {}
+
+pub struct CollectorHandle;
+pub fn register_collector(collector: Box<dyn Collector>) -> CollectorHandle {
+    CollectorHandle
 }

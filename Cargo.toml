@@ -65,6 +65,7 @@ protobuf-codec = [
   "grpcio-health/protobuf-codec",
   "file_system/protobuf-codec",
   "protobuf/bytes",
+  "req_cpu/protobuf-codec",
 ]
 prost-codec = [
   "batch-system/prost-codec",
@@ -98,6 +99,7 @@ prost-codec = [
   "txn_types/prost-codec",
   "grpcio-health/prost-codec",
   "file_system/prost-codec",
+  "req_cpu/prost-codec",
 ]
 testexport = ["raftstore/testexport"]
 test-engines-rocksdb = [

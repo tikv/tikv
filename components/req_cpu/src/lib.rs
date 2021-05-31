@@ -10,26 +10,25 @@ pub use future_ext::FutureExt;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
-pub use linux::Guard;
+pub use linux::{init_recorder, register_collector, CollectorHandle, Guard};
 
 #[cfg(not(target_os = "linux"))]
 mod dummy;
 #[cfg(not(target_os = "linux"))]
-pub use dummy::Guard;
+pub use dummy::{install_recorder, register_collector, CollectorHandle, Guard};
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::collector::Collector;
 use collections::HashMap;
 
-pub struct ReqCpuConfig {
+pub struct RecorderConfig {
     record_interval_ms: f64,
     collect_interval_ms: u64,
     gc_interval_ms: u64,
 }
 
-impl Default for ReqCpuConfig {
+impl Default for RecorderConfig {
     fn default() -> Self {
         Self {
             record_interval_ms: 10.1,
@@ -76,39 +75,5 @@ impl Default for RequestCpuRecords {
             duration_ms: 0,
             records: HashMap::default(),
         }
-    }
-}
-
-pub struct Builder {
-    config: ReqCpuConfig,
-    collectors: Vec<Box<dyn Collector>>,
-}
-
-impl Builder {
-    pub fn new() -> Self {
-        Self {
-            config: ReqCpuConfig::default(),
-            collectors: Vec::default(),
-        }
-    }
-
-    pub fn record_interval_ms(mut self, value: f64) -> Self {
-        self.config.record_interval_ms = value;
-        self
-    }
-
-    pub fn collect_interval_ms(mut self, value: u64) -> Self {
-        self.config.collect_interval_ms = value;
-        self
-    }
-
-    pub fn gc_interval_ms(mut self, value: u64) -> Self {
-        self.config.gc_interval_ms = value;
-        self
-    }
-
-    pub fn register_collector<T: Collector + 'static>(mut self, c: T) -> Self {
-        self.collectors.push(Box::new(c));
-        self
     }
 }

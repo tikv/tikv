@@ -2,6 +2,11 @@
 
 use crate::RequestCpuRecords;
 
+use std::sync::Arc;
+
 pub trait Collector: Send {
-    fn collect(&self, records: &RequestCpuRecords);
+    fn collect(&self, records: Arc<RequestCpuRecords>);
 }
+
+#[derive(Copy, Clone, Default, Debug, Eq, PartialEq, Hash)]
+pub struct CollectorId(pub(crate) u64);
