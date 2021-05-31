@@ -38,7 +38,7 @@ use futures::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ExtraOp as TxnExtraOp, KeyRange};
 use thiserror::Error;
-use tikv_util::escape;
+use tikv_util::{deadline::Deadline, escape};
 use txn_types::{Key, TimeStamp, TxnExtra, Value};
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
@@ -110,11 +110,16 @@ impl Modify {
 pub struct WriteData {
     pub modifies: Vec<Modify>,
     pub extra: TxnExtra,
+    pub deadline: Option<Deadline>,
 }
 
 impl WriteData {
     pub fn new(modifies: Vec<Modify>, extra: TxnExtra) -> Self {
-        Self { modifies, extra }
+        Self {
+            modifies,
+            extra,
+            deadline: None,
+        }
     }
 
     pub fn from_modifies(modifies: Vec<Modify>) -> Self {
