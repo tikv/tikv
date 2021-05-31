@@ -44,10 +44,11 @@ impl CdcObserver {
     }
 
     pub fn register_to(&self, coprocessor_host: &mut CoprocessorHost<RocksEngine>) {
-        // 100 is the priority of the observer. CDC should have a high priority.
+        // use 0 as the priority of the cmd observer. CDC should have a higher priority than
+        // the `resolved-ts`'s cmd observer
         coprocessor_host
             .registry
-            .register_cmd_observer(100, BoxCmdObserver::new(self.clone()));
+            .register_cmd_observer(0, BoxCmdObserver::new(self.clone()));
         coprocessor_host
             .registry
             .register_role_observer(100, BoxRoleObserver::new(self.clone()));

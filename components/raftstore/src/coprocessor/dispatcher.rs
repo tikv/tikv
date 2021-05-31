@@ -202,8 +202,7 @@ macro_rules! push {
         };
         let vec = &mut $vec;
         vec.push(e);
-        // reverse sorting, so observer with higher priority will call first
-        vec.sort_by(|l, r| r.priority.cmp(&l.priority));
+        vec.sort_by(|l, r| l.priority.cmp(&r.priority));
     };
 }
 
@@ -333,7 +332,6 @@ impl<E: KvEngine> CoprocessorHost<E> {
             200,
             BoxSplitCheckObserver::new(KeysCheckObserver::new(ch)),
         );
-        // TableCheckObserver has higher priority than SizeCheckObserver.
         registry.register_split_check_observer(100, BoxSplitCheckObserver::new(HalfCheckObserver));
         registry.register_split_check_observer(
             400,
@@ -752,16 +750,16 @@ mod tests {
             host.pre_propose(&region, &mut req).unwrap();
 
             // less means more.
-            assert_all!(&[&ob1.called, &ob2.called], &[base_score + 1, 0]);
+            assert_all!(&[&ob1.called, &ob2.called], &[0, base_score + 1]);
 
             host.pre_apply(&region, &req);
-            assert_all!(&[&ob1.called, &ob2.called], &[base_score * 2 + 3, 0]);
+            assert_all!(&[&ob1.called, &ob2.called], &[0, base_score * 2 + 3]);
 
             host.post_apply(&region, &Cmd::new(0, req.clone(), resp.clone()));
-            assert_all!(&[&ob1.called, &ob2.called], &[base_score * 3 + 6, 0]);
+            assert_all!(&[&ob1.called, &ob2.called], &[0, base_score * 3 + 6]);
 
-            set_all!(&[&ob1.bypass], false);
-            set_all!(&[&ob1.called], 0);
+            set_all!(&[&ob2.bypass], false);
+            set_all!(&[&ob2.called], 0);
 
             host.pre_propose(&region, &mut req).unwrap();
 
@@ -773,9 +771,9 @@ mod tests {
             set_all!(&[&ob1.called, &ob2.called], 0);
 
             // when return error, following coprocessor should not be run.
-            set_all!(&[&ob1.return_err], true);
+            set_all!(&[&ob2.return_err], true);
             host.pre_propose(&region, &mut req).unwrap_err();
-            assert_all!(&[&ob1.called, &ob2.called], &[base_score + 1, 0]);
+            assert_all!(&[&ob1.called, &ob2.called], &[0, base_score + 1]);
         }
     }
 }

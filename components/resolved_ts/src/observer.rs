@@ -36,7 +36,7 @@ impl<E: KvEngine> Observer<E> {
         // to let it be the last observer and avoid affecting other observers
         coprocessor_host
             .registry
-            .register_cmd_observer(0, BoxCmdObserver::new(self.clone()));
+            .register_cmd_observer(1000, BoxCmdObserver::new(self.clone()));
         coprocessor_host
             .registry
             .register_role_observer(100, BoxRoleObserver::new(self.clone()));
