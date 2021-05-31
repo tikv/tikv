@@ -110,7 +110,7 @@ num-threads = 1
 wait-for-lock-timeout = "3s"
 wake-up-delay-duration = "100ms"
 
-[resolevd-ts]
+[resolved-ts]
 enable = false
 advance-ts-interval = "10ms"
 scan-lock-pool-size = 1
