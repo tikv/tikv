@@ -267,7 +267,7 @@ impl Default for Config {
             store_batch_system: BatchSystemConfig::default(),
             store_io_pool_size: 1,
             future_poll_size: 1,
-            hibernate_regions: tikv_util::build_on_master_branch(),
+            hibernate_regions: true,
             dev_assert: false,
             apply_yield_duration: ReadableDuration::millis(500),
             cmd_batch: true,

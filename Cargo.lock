@@ -288,6 +288,7 @@ dependencies = [
  "serde_derive",
  "slog",
  "slog-global",
+ "tikv_alloc",
  "tikv_util",
 ]
 
@@ -1466,6 +1467,7 @@ dependencies = [
  "maligned",
  "nix 0.19.0",
  "openssl",
+ "parking_lot 0.11.0",
  "prometheus",
  "prometheus-static-metric",
  "rand 0.7.3",
@@ -1741,6 +1743,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c31b6d751ae2c7f11320402d34e41349dd1016f8d5d45e48c4312bc8625af50c"
 dependencies = [
  "byteorder",
+]
+
+[[package]]
+name = "gag"
+version = "0.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8cc0b9f53275dc5fada808f1d2f82e3688a6c14d735633d1590b7be8eb2307b5"
+dependencies = [
+ "libc 0.2.86",
+ "tempfile",
 ]
 
 [[package]]
@@ -2229,7 +2241,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?rev=511a3225c29f9272af83d28efed92eba835cd34f#511a3225c29f9272af83d28efed92eba835cd34f"
+source = "git+https://github.com/pingcap/kvproto.git?rev=f11c6fb6b3a53b214ee94d54651b01eb99239334#f11c6fb6b3a53b214ee94d54651b01eb99239334"
 dependencies = [
  "futures 0.3.8",
  "grpcio",
@@ -2306,7 +2318,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#46b7a1da47e626ae35158a51a3c90babafbd8ff2"
+source = "git+https://github.com/tikv/rust-rocksdb.git#41d7180df72cf5aae97fbae9a18aec52ad29dfcc"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2325,7 +2337,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#46b7a1da47e626ae35158a51a3c90babafbd8ff2"
+source = "git+https://github.com/tikv/rust-rocksdb.git#41d7180df72cf5aae97fbae9a18aec52ad29dfcc"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2480,6 +2492,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "157b4208e3059a8f9e78d559edc658e13df41410cb3ae03979c83130067fdd87"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "memory_trace_macros"
+version = "0.1.0"
+dependencies = [
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -2905,8 +2925,9 @@ checksum = "77af24da69f9d9341038eba93a073b1fdaaa1b788221b00a69bce9e762cb32de"
 
 [[package]]
 name = "openssl-src"
-version = "111.10.2+1.1.1g"
-source = "git+https://github.com/busyjay/openssl-src-rs?branch=patch-for-m1#f882f3e06bfcd89b5a27daaecf6ef562cb7ff231"
+version = "111.15.0+1.1.1k"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1a5f6ae2ac04393b217ea9f700cd04fa9bf3d93fae2872069f3d15d908af70a"
 dependencies = [
  "cc",
 ]
@@ -3459,7 +3480,7 @@ dependencies = [
 [[package]]
 name = "protobuf"
 version = "2.8.0"
-source = "git+https://github.com/hicqu/rust-protobuf?rev=b56f6501a019d93a61407efd7822ae4c7257d94e#b56f6501a019d93a61407efd7822ae4c7257d94e"
+source = "git+https://github.com/pingcap/rust-protobuf?rev=82b49fea7e696fd647b5aca0a6c6ec944eab3189#82b49fea7e696fd647b5aca0a6c6ec944eab3189"
 dependencies = [
  "bytes 1.0.1",
  "heck",
@@ -3468,9 +3489,9 @@ dependencies = [
 
 [[package]]
 name = "protobuf-build"
-version = "0.12.0"
+version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "539f2589cd0892cfc07ae25f6e0d2b43440f66b10839e881698f113be28353b2"
+checksum = "6a7266835d38c38c73b091a24412de1f4b4382a5195fab1ec038161582b03b78"
 dependencies = [
  "bitflags",
  "grpcio-compiler",
@@ -3486,7 +3507,7 @@ dependencies = [
 [[package]]
 name = "protobuf-codegen"
 version = "2.8.0"
-source = "git+https://github.com/hicqu/rust-protobuf?rev=b56f6501a019d93a61407efd7822ae4c7257d94e#b56f6501a019d93a61407efd7822ae4c7257d94e"
+source = "git+https://github.com/pingcap/rust-protobuf?rev=82b49fea7e696fd647b5aca0a6c6ec944eab3189#82b49fea7e696fd647b5aca0a6c6ec944eab3189"
 dependencies = [
  "heck",
  "protobuf",
@@ -3513,7 +3534,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.6.0-alpha"
-source = "git+https://github.com/gengliqi/raft-rs?branch=add-entries-size#be15a6f54100a5eeadd1c9a8bd3fcd33d17888b7"
+source = "git+https://github.com/tikv/raft-rs?branch=master#438c671bad856e19de6ff1cad453e2642f956604"
 dependencies = [
  "bytes 1.0.1",
  "fxhash",
@@ -3547,7 +3568,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
-source = "git+https://github.com/gengliqi/raft-rs?branch=add-entries-size#be15a6f54100a5eeadd1c9a8bd3fcd33d17888b7"
+source = "git+https://github.com/tikv/raft-rs?branch=master#438c671bad856e19de6ff1cad453e2642f956604"
 dependencies = [
  "bytes 1.0.1",
  "lazy_static",
@@ -3606,6 +3627,7 @@ dependencies = [
  "lazy_static",
  "log",
  "log_wrappers",
+ "memory_trace_macros",
  "openssl",
  "panic_hook",
  "pd_client",
@@ -3996,8 +4018,7 @@ dependencies = [
 [[package]]
 name = "rusoto_core"
 version = "0.45.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e977941ee0658df96fca7291ecc6fc9a754600b21ad84b959eb1dbbc9d5abcc7"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#f56ad0217e49ab7e3100ee0cd324db14608112bb"
 dependencies = [
  "async-trait",
  "base64 0.12.0",
@@ -4024,8 +4045,7 @@ dependencies = [
 [[package]]
 name = "rusoto_credential"
 version = "0.45.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09ac05563f83489b19b4d413607a30821ab08bbd9007d14fa05618da3ef09d8b"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#f56ad0217e49ab7e3100ee0cd324db14608112bb"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4044,8 +4064,7 @@ dependencies = [
 [[package]]
 name = "rusoto_kms"
 version = "0.45.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "111b99b940b1b02f5a98a5fcc96467a24ab899c43c1caff60d4a863342798c6e"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#f56ad0217e49ab7e3100ee0cd324db14608112bb"
 dependencies = [
  "async-trait",
  "bytes 0.5.3",
@@ -4058,8 +4077,7 @@ dependencies = [
 [[package]]
 name = "rusoto_mock"
 version = "0.45.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ff14fcb9ae32511e705349da464e117bac945b541ec87283ad5dc93c1280250"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#f56ad0217e49ab7e3100ee0cd324db14608112bb"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4073,8 +4091,7 @@ dependencies = [
 [[package]]
 name = "rusoto_s3"
 version = "0.45.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1146e37a7c1df56471ea67825fe09bbbd37984b5f6e201d8b2e0be4ee15643d8"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#f56ad0217e49ab7e3100ee0cd324db14608112bb"
 dependencies = [
  "async-trait",
  "bytes 0.5.3",
@@ -4086,8 +4103,7 @@ dependencies = [
 [[package]]
 name = "rusoto_signature"
 version = "0.45.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97a740a88dde8ded81b6f2cff9cd5e054a5a2e38a38397260f7acdd2c85d17dd"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#f56ad0217e49ab7e3100ee0cd324db14608112bb"
 dependencies = [
  "base64 0.12.0",
  "bytes 0.5.3",
@@ -4111,8 +4127,7 @@ dependencies = [
 [[package]]
 name = "rusoto_sts"
 version = "0.45.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3815b8c0fc1c50caf9e87603f23daadfedb18d854de287b361c69f68dc9d49e0"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#f56ad0217e49ab7e3100ee0cd324db14608112bb"
 dependencies = [
  "async-trait",
  "bytes 0.5.3",
@@ -5012,6 +5027,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "fail",
+ "file_system",
  "futures 0.3.8",
  "grpcio",
  "keys",
@@ -5344,7 +5360,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "5.0.0-rc.x"
+version = "5.1.0-alpha"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -5392,6 +5408,7 @@ dependencies = [
  "log",
  "log_wrappers",
  "match_template",
+ "memory_trace_macros",
  "mime",
  "more-asserts",
  "murmur3",
@@ -5449,7 +5466,6 @@ dependencies = [
  "txn_types",
  "url",
  "uuid",
- "vlog",
  "walkdir",
  "yatp",
  "zipf",
@@ -5491,6 +5507,7 @@ dependencies = [
  "rand 0.7.3",
  "security",
  "serde_json",
+ "server",
  "signal",
  "slog",
  "slog-global",
@@ -5502,7 +5519,6 @@ dependencies = [
  "tokio",
  "toml",
  "txn_types",
- "vlog",
  "yatp",
 ]
 
@@ -5553,6 +5569,7 @@ dependencies = [
 name = "tikv_alloc"
 version = "0.1.0"
 dependencies = [
+ "fxhash",
  "lazy_static",
  "libc 0.2.86",
  "log",
@@ -5575,6 +5592,7 @@ dependencies = [
  "engine_traits",
  "error_code",
  "fail",
+ "file_system",
  "futures 0.3.8",
  "into_other",
  "keys",
@@ -5614,6 +5632,7 @@ dependencies = [
  "fs2",
  "futures 0.3.8",
  "futures-util",
+ "gag",
  "grpcio",
  "http",
  "kvproto",
@@ -5621,6 +5640,7 @@ dependencies = [
  "libc 0.2.86",
  "log",
  "log_wrappers",
+ "nix 0.11.1",
  "num_cpus",
  "openssl",
  "panic_hook",
@@ -6315,3 +6335,8 @@ dependencies = [
  "itertools 0.9.0",
  "libc 0.2.86",
 ]
+
+[[patch.unused]]
+name = "openssl-src"
+version = "111.10.2+1.1.1g"
+source = "git+https://github.com/busyjay/openssl-src-rs?branch=patch-for-m1#f882f3e06bfcd89b5a27daaecf6ef562cb7ff231"

@@ -65,6 +65,7 @@ use crate::storage::metrics::CommandKind;
 use crate::storage::mvcc::MvccReader;
 use crate::storage::txn::commands::{RawAtomicStore, RawCompareAndSwap};
 
+use crate::server::lock_manager::waiter_manager;
 use crate::storage::{
     config::Config,
     kv::{with_tls_engine, Modify, WriteData},
@@ -231,6 +232,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
     pub fn get_concurrency_manager(&self) -> ConcurrencyManager {
         self.concurrency_manager.clone()
+    }
+
+    pub fn dump_wait_for_entries(&self, cb: waiter_manager::Callback) {
+        self.sched.dump_wait_for_entries(cb);
     }
 
     /// Get a snapshot of `engine`.
@@ -2544,7 +2549,13 @@ mod tests {
                 CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
                 CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
             ];
-            RocksEngine::new(&path, &cfs, Some(cfs_opts), cache.is_some())
+            RocksEngine::new(
+                &path,
+                &cfs,
+                Some(cfs_opts),
+                cache.is_some(),
+                None, /*io_rate_limiter*/
+            )
         }
         .unwrap();
         let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
@@ -5628,6 +5639,10 @@ mod tests {
 
         fn has_waiter(&self) -> bool {
             self.has_waiter.load(Ordering::Relaxed)
+        }
+
+        fn dump_wait_for_entries(&self, _cb: waiter_manager::Callback) {
+            unimplemented!()
         }
     }
 
