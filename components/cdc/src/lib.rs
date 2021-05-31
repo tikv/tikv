@@ -8,7 +8,11 @@ extern crate failure;
 extern crate fail;
 #[macro_use]
 extern crate tikv_util;
+#[cfg(test)]
+#[macro_use]
+extern crate assert_matches;
 
+mod channel;
 mod delegate;
 mod endpoint;
 mod errors;
