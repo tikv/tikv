@@ -216,9 +216,10 @@ fn test_stale_read_basic_flow_lock() {
 // be updated
 #[test]
 fn test_update_apply_index_before_sync_read_state() {
-    let (mut cluster, pd_client, leader_client) = prepare_for_stale_read(new_peer(1, 1));
+    let (mut cluster, pd_client, mut leader_client) = prepare_for_stale_read(new_peer(1, 1));
     let mut follower_client2 = PeerClient::new(&cluster, 1, new_peer(2, 2));
     follower_client2.ctx.set_stale_read(true);
+    leader_client.ctx.set_stale_read(true);
 
     // Stop node 3 to ensure data must replicated to follower 2 before write return
     cluster.stop_node(3);
@@ -239,6 +240,7 @@ fn test_update_apply_index_before_sync_read_state() {
         b"key2".to_vec(),
         block_on(pd_client.get_tso()).unwrap().into_inner(),
     );
+    leader_client.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), commit_ts1);
 
     cluster.run_node(3).unwrap();
     // Stop replicate data to follower 2
