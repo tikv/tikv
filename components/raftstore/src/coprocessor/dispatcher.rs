@@ -752,16 +752,16 @@ mod tests {
             host.pre_propose(&region, &mut req).unwrap();
 
             // less means more.
-            assert_all!(&[&ob1.called, &ob2.called], &[0, base_score + 1]);
+            assert_all!(&[&ob1.called, &ob2.called], &[base_score + 1, 0]);
 
             host.pre_apply(&region, &req);
-            assert_all!(&[&ob1.called, &ob2.called], &[0, base_score * 2 + 3]);
+            assert_all!(&[&ob1.called, &ob2.called], &[base_score * 2 + 3, 0]);
 
             host.post_apply(&region, &Cmd::new(0, req.clone(), resp.clone()));
-            assert_all!(&[&ob1.called, &ob2.called], &[0, base_score * 3 + 6]);
+            assert_all!(&[&ob1.called, &ob2.called], &[base_score * 3 + 6, 0]);
 
-            set_all!(&[&ob2.bypass], false);
-            set_all!(&[&ob2.called], 0);
+            set_all!(&[&ob1.bypass], false);
+            set_all!(&[&ob1.called], 0);
 
             host.pre_propose(&region, &mut req).unwrap();
 
@@ -773,9 +773,9 @@ mod tests {
             set_all!(&[&ob1.called, &ob2.called], 0);
 
             // when return error, following coprocessor should not be run.
-            set_all!(&[&ob2.return_err], true);
+            set_all!(&[&ob1.return_err], true);
             host.pre_propose(&region, &mut req).unwrap_err();
-            assert_all!(&[&ob1.called, &ob2.called], &[0, base_score + 1]);
+            assert_all!(&[&ob1.called, &ob2.called], &[base_score + 1, 0]);
         }
     }
 }
