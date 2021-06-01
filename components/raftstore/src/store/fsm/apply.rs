@@ -2835,6 +2835,15 @@ where
     pub must_pass_epoch_check: bool,
 }
 
+impl<S> HeapSize for Proposal<S>
+where
+    S: Snapshot,
+{
+    fn heap_size(&self) -> usize {
+        0
+    }
+}
+
 pub struct Destroy {
     region_id: u64,
     merge_from_snapshot: bool,

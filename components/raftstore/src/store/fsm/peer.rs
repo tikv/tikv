@@ -313,14 +313,15 @@ where
         let mut size =
             mem::size_of::<raft::Progress>() * peer_cnt * 6 / 5 + inflight_size * peer_cnt;
         // We use Uuid for read request.
-        size += raft.read_states.heap_size() + 16 * raft.read_states.len();
+        size += raft.read_states.len() * (mem::size_of::<raft::ReadState>() + 16);
         // Every requests have at least header, which should be at least 8 bytes.
         let entries = &raft.raft_log.unstable.entries;
-        size += entries.heap_size() + entries.len() * 8;
+        size += entries.len() * (mem::size_of::<raft::eraftpb::Entry>() + 8);
         let read_only = &raft.read_only;
-        size += read_only.pending_read_index.heap_size() + read_only.pending_read_index.len() * 16;
+        size +=
+            read_only.pending_read_index.len() * (16 + mem::size_of::<raft::eraftpb::Message>());
         size += read_only.read_index_queue.heap_size() + 16 * read_only.read_index_queue.len();
-        size += raft.msgs.heap_size();
+        size += raft.msgs.len() * mem::size_of::<raft::eraftpb::Message>();
         size
     }
 

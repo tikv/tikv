@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::VecDeque;
-use std::{cmp, u64, usize};
+use std::{cmp, mem, u64, usize};
 
 use crate::store::fsm::apply;
 use crate::store::metrics::*;
@@ -326,7 +326,9 @@ where
 {
     #[inline]
     fn heap_size(&self) -> usize {
-        self.mem_size + self.reads.heap_size() + self.contexts.heap_size()
+        self.mem_size
+            + self.reads.heap_size()
+            + self.contexts.len() * (mem::size_of::<Uuid>() + mem::size_of::<usize>())
     }
 }
 
