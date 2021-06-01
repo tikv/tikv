@@ -450,7 +450,6 @@ fn is_library_file<P: AsRef<Path>>(path: P) -> bool {
 mod tests {
     use super::*;
     use coprocessor_plugin_api::util::pkgname_to_libname;
-    use std::sync::Once;
 
     fn initialize_library() -> PathBuf {
         PathBuf::from(pkgname_to_libname("example-plugin"))
