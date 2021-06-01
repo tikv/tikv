@@ -14,13 +14,8 @@ use rusoto_core::{
     request::DispatchSignedRequest,
     {ByteStream, RusotoError},
 };
-<<<<<<< HEAD:components/external_storage/src/s3.rs
-use rusoto_s3::*;
-use rusoto_util::new_client;
-=======
-use rusoto_credential::{ProvideAwsCredentials, StaticProvider};
 use rusoto_s3::{util::AddressingStyle, *};
->>>>>>> ec3572921... external_storage: support virtual-host style for s3 (#9425):components/cloud/aws/src/s3.rs
+use rusoto_util::new_client;
 use tokio::time::{delay_for, timeout};
 
 use super::{
@@ -58,24 +53,16 @@ impl S3Storage {
     where
         D: DispatchSignedRequest + Send + Sync + 'static,
     {
-<<<<<<< HEAD:components/external_storage/src/s3.rs
         Self::check_config(config)?;
-        let client = new_client!(S3Client, config, dispatcher);
+        let mut client = new_client!(S3Client, config, dispatcher);
+        if config.force_path_style {
+            client.config_mut().addressing_style = AddressingStyle::Path;
+        }
         Ok(S3Storage {
             config: config.clone(),
             client,
             _not_send: PhantomData::default(),
         })
-=======
-        let bucket_region = none_to_empty(config.bucket.region.clone());
-        let bucket_endpoint = config.bucket.endpoint.clone();
-        let region = util::get_region(&bucket_region, &none_to_empty(bucket_endpoint))?;
-        let mut client = S3Client::new_with(dispatcher, credentials_provider, region);
-        if config.force_path_style {
-            client.config_mut().addressing_style = AddressingStyle::Path;
-        }
-        Ok(S3Storage { config, client })
->>>>>>> ec3572921... external_storage: support virtual-host style for s3 (#9425):components/cloud/aws/src/s3.rs
     }
 
     fn check_config(config: &Config) -> io::Result<()> {
@@ -430,23 +417,15 @@ mod tests {
     #[test]
     fn test_s3_storage() {
         let magic_contents = "5678";
-<<<<<<< HEAD:components/external_storage/src/s3.rs
         let config = Config {
             region: "ap-southeast-2".to_string(),
             bucket: "mybucket".to_string(),
             prefix: "myprefix".to_string(),
             access_key: "abc".to_string(),
             secret_access_key: "xyz".to_string(),
+            force_path_style: true,
             ..Default::default()
         };
-=======
-        let bucket_name = StringNonEmpty::required("mybucket".to_string()).unwrap();
-        let mut bucket = BucketConf::default(bucket_name);
-        bucket.region = StringNonEmpty::opt("ap-southeast-2".to_string());
-        bucket.prefix = StringNonEmpty::opt("myprefix".to_string());
-        let mut config = Config::default(bucket);
-        config.force_path_style = true;
->>>>>>> ec3572921... external_storage: support virtual-host style for s3 (#9425):components/cloud/aws/src/s3.rs
         let dispatcher = MockRequestDispatcher::with_status(200).with_request_checker(
             move |req: &SignedRequest| {
                 assert_eq!(req.region.name(), "ap-southeast-2");
@@ -513,12 +492,15 @@ mod tests {
     #[test]
     fn test_s3_storage_with_virtual_host() {
         let magic_contents = "abcd";
-        let bucket_name = StringNonEmpty::required("bucket2".to_string()).unwrap();
-        let mut bucket = BucketConf::default(bucket_name);
-        bucket.region = StringNonEmpty::opt("ap-southeast-1".to_string());
-        bucket.prefix = StringNonEmpty::opt("prefix2".to_string());
-        let mut config = Config::default(bucket);
-        config.force_path_style = false;
+        let config = Config {
+            region: "ap-southeast-1".to_string(),
+            bucket: "bucket2".to_string(),
+            prefix: "prefix2".to_string(),
+            access_key: "abc".to_string(),
+            secret_access_key: "xyz".to_string(),
+            force_path_style: false,
+            ..Default::default()
+        };
         let dispatcher = MockRequestDispatcher::with_status(200).with_request_checker(
             move |req: &SignedRequest| {
                 assert_eq!(req.region.name(), "ap-southeast-1");
@@ -528,9 +510,7 @@ mod tests {
                 assert_eq!(req.payload.is_some(), req.method() == "PUT");
             },
         );
-        let credentials_provider =
-            StaticProvider::new_minimal("abc".to_string(), "xyz".to_string());
-        let s = S3Storage::new_creds_dispatcher(config, dispatcher, credentials_provider).unwrap();
+        let s = S3Storage::with_request_dispatcher(&config, dispatcher).unwrap();
         s.put(
             "key2",
             Box::new(magic_contents.as_bytes()),
