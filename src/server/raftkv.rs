@@ -35,7 +35,7 @@ use raftstore::{
 };
 use tikv_util::codec::number::NumberEncoder;
 use tikv_util::time::Instant;
-use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
+use txn_types::{Key, TimeStamp, TxnExtraScheduler, WriteBatchFlags};
 
 use super::metrics::*;
 use crate::storage::kv::{
@@ -244,8 +244,7 @@ where
     fn exec_write_requests(
         &self,
         ctx: &Context,
-        reqs: Vec<Request>,
-        txn_extra: TxnExtra,
+        batch: WriteData,
         write_cb: Callback<CmdRes<E::Snapshot>>,
         proposed_cb: Option<ExtCallback>,
         committed_cb: Option<ExtCallback>,
@@ -268,6 +267,8 @@ where
             raftkv_early_error_report_fp()?;
         }
 
+        let reqs = modifies_to_requests(batch.modifies);
+        let txn_extra = batch.extra;
         let len = reqs.len();
         let mut header = self.new_request_header(ctx);
         if txn_extra.one_pc {
@@ -284,19 +285,20 @@ where
             }
         }
 
-        self.router
-            .send_command(
-                cmd,
-                StoreCallback::write_ext(
-                    Box::new(move |resp| {
-                        let (cb_ctx, res) = on_write_result(resp, len);
-                        write_cb((cb_ctx, res.map_err(Error::into)));
-                    }),
-                    proposed_cb,
-                    committed_cb,
-                ),
-            )
-            .map_err(From::from)
+        let cb = StoreCallback::write_ext(
+            Box::new(move |resp| {
+                let (cb_ctx, res) = on_write_result(resp, len);
+                write_cb((cb_ctx, res.map_err(Error::into)));
+            }),
+            proposed_cb,
+            committed_cb,
+        );
+        if let Some(deadline) = batch.deadline {
+            self.router.send_command_with_deadline(cmd, cb, deadline)?;
+        } else {
+            self.router.send_command(cmd, cb)?;
+        }
+        Ok(())
     }
 }
 
@@ -395,14 +397,12 @@ where
             return Err(KvError::from(KvErrorInner::EmptyRequest));
         }
 
-        let reqs = modifies_to_requests(batch.modifies);
         ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
         let begin_instant = Instant::now_coarse();
 
         self.exec_write_requests(
             ctx,
-            reqs,
-            batch.extra,
+            batch,
             Box::new(move |(cb_ctx, res)| match res {
                 Ok(CmdRes::Resp(_)) => {
                     ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
@@ -567,7 +567,7 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                         .observe(begin_instant.elapsed().as_secs_f64());
                 }
             }
-            msg.mut_entries()[0].set_data(rctx.to_bytes());
+            msg.mut_entries()[0].set_data(rctx.to_bytes().into());
         }
     }
 }
@@ -625,7 +625,7 @@ mod tests {
         m.set_msg_type(MessageType::MsgReadIndex);
         let uuid = Uuid::new_v4();
         let mut e = eraftpb::Entry::default();
-        e.set_data(uuid.as_bytes().to_vec());
+        e.set_data(uuid.as_bytes().to_vec().into());
         m.mut_entries().push(e);
 
         checker.on_step(&mut m);
