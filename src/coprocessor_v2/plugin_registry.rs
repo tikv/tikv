@@ -452,8 +452,6 @@ mod tests {
     use coprocessor_plugin_api::util::pkgname_to_libname;
     use std::sync::Once;
 
-    static INIT: Once = Once::new();
-
     fn initialize_library() -> PathBuf {
         PathBuf::from(pkgname_to_libname("example-plugin"))
     }
