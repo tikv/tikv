@@ -1,5 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::store::metrics::*;
+
 use kvproto::metapb::Region;
 use pd_client::{Feature, FeatureGate};
 
@@ -22,17 +24,27 @@ pub enum GroupState {
     Idle,
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum LeaderState {
     Awaken,
     Poll(Vec<u64>),
     Hibernated,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct HibernateState {
     group: GroupState,
     leader: LeaderState,
+}
+
+macro_rules! update_metric {
+    ($state:expr, $op:ident) => {
+        let gauge = match $state {
+            GroupState::Idle => &HIBERNATED_PEER_STATE_GAUGE.hibernated,
+            _ => &HIBERNATED_PEER_STATE_GAUGE.awaken,
+        };
+        gauge.$op();
+    };
 }
 
 impl HibernateState {
@@ -48,6 +60,11 @@ impl HibernateState {
     }
 
     pub fn reset(&mut self, group_state: GroupState) {
+        if group_state == self.group {
+            return;
+        }
+        update_metric!(self.group, dec);
+        update_metric!(group_state, inc);
         self.group = group_state;
         if group_state != GroupState::Idle {
             self.leader = LeaderState::Awaken;
