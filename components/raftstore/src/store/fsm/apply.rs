@@ -2862,6 +2862,8 @@ pub struct CatchUpLogs {
 
 impl HeapSize for CatchUpLogs {
     fn heap_size(&self) -> usize {
+        // CommitMergeRequest includes a Region in the heap.
+        // 8 represents the atomic number.
         let mut size: usize = mem::size_of::<Region>() + 8;
         for e in &self.merge.entries {
             size += e.context.len() + e.data.len() + mem::size_of::<Entry>();
