@@ -457,7 +457,7 @@ impl<E: Engine> Endpoint<E> {
     ) -> impl Future<Output = Result<coppb::Response>> {
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx.build_task_id();
-        let req_tag = ResourceMeteringTag::from_rpc_context(&req_ctx.context);
+        let resource_tag = ResourceMeteringTag::from_rpc_context(&req_ctx.context);
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
 
@@ -465,7 +465,7 @@ impl<E: Engine> Endpoint<E> {
             .read_pool
             .spawn_handle(
                 Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder)
-                    .in_tag(req_tag),
+                    .in_resource_metering_tag(resource_tag),
                 priority,
                 task_id,
             )

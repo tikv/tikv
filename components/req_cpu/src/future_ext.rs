@@ -9,7 +9,7 @@ impl<T: std::future::Future> FutureExt for T {}
 
 pub trait FutureExt: Sized {
     #[inline]
-    fn in_tag(self, tag: ResourceMeteringTag) -> InTags<Self> {
+    fn in_resource_metering_tag(self, tag: ResourceMeteringTag) -> InTags<Self> {
         InTags { inner: self, tag }
     }
 }
