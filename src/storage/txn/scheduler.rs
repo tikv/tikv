@@ -30,7 +30,7 @@ use std::u64;
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use kvproto::kvrpcpb::{CommandPri, ExtraOp};
-use req_cpu::{FutureExt, ResourceMeteringTag};
+use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
 use tikv_util::{callback::must_call, deadline::Deadline, time::Instant};
 use txn_types::TimeStamp;
 

@@ -1,7 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::collector::{Collector, CollectorId};
-use crate::{CpuRecorderConfig, RequestCpuRecords, ResourceMeteringTag, TagInfos};
+use crate::cpu::collector::{Collector, CollectorId};
+use crate::cpu::{CpuRecorderConfig, CpuRecords};
+use crate::{ResourceMeteringTag, TagInfos};
 
 use std::cell::Cell;
 use std::fs::read_dir;
@@ -169,7 +170,7 @@ struct ReqCpuRecorder {
     config: CpuRecorderConfig,
 
     thread_stats: HashMap<pid_t, ThreadStat>,
-    current_window_records: RequestCpuRecords,
+    current_window_records: CpuRecords,
 
     last_collect_instant: Instant,
     last_gc_instant: Instant,
@@ -194,7 +195,7 @@ impl ReqCpuRecorder {
             last_gc_instant: now,
 
             thread_stats: HashMap::default(),
-            current_window_records: RequestCpuRecords::default(),
+            current_window_records: CpuRecords::default(),
 
             collectors: HashMap::default(),
         }
@@ -364,7 +365,7 @@ impl ReqCpuRecorder {
 
     fn reset(&mut self) {
         let now = Instant::now();
-        self.current_window_records = RequestCpuRecords::default();
+        self.current_window_records = CpuRecords::default();
         for v in self.thread_stats.values_mut() {
             v.prev_tag = None;
         }
@@ -383,12 +384,14 @@ lazy_static! {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering::SeqCst;
     use std::sync::Mutex;
     use std::thread::JoinHandle;
+
+    use Operation::*;
+
+    use super::*;
 
     enum Operation {
         SetContext(&'static str),
@@ -506,7 +509,7 @@ mod tests {
     }
 
     impl Collector for DummyCollector {
-        fn collect(&self, records: Arc<RequestCpuRecords>) {
+        fn collect(&self, records: Arc<CpuRecords>) {
             if let Ok(mut r) = self.records.lock() {
                 for (tag, ms) in &records.records {
                     let str = String::from_utf8(tag.infos.extra_attachment.clone()).unwrap();
@@ -515,8 +518,6 @@ mod tests {
             }
         }
     }
-
-    use Operation::*;
 
     #[test]
     fn test_req_cpu() {

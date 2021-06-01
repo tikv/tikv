@@ -1,7 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::collector::{Collector, CollectorId};
-use crate::{CpuRecorderConfig, ResourceMeteringTag};
+use crate::cpu::collector::{Collector, CollectorId};
+use crate::cpu::CpuRecorderConfig;
+use crate::ResourceMeteringTag;
 
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};

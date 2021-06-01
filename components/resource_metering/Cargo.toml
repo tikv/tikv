@@ -1,5 +1,5 @@
 [package]
-name = "req_cpu"
+name = "resource_metering"
 version = "0.0.1"
 edition = "2018"
 

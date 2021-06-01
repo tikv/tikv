@@ -84,7 +84,7 @@ use kvproto::kvrpcpb::{
 };
 use raftstore::store::util::build_key_range;
 use rand::prelude::*;
-use req_cpu::{FutureExt, ResourceMeteringTag};
+use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
 use std::{
     borrow::Cow,
     iter,

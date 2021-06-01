@@ -813,7 +813,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.to_stop.push(rts_worker);
         }
 
-        req_cpu::init_recorder();
+        resource_metering::cpu::init_recorder();
         // TODO: Register top sql collector here.
         //       This collector may contain following features:
         //         1. Implement trait `req_cpu::collector::Collector`

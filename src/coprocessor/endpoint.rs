@@ -32,7 +32,7 @@ use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::PerfLevel;
-use req_cpu::{FutureExt, ResourceMeteringTag};
+use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
 use txn_types::Lock;
 
 /// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
