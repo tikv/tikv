@@ -70,8 +70,15 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
     }
 
     #[inline(always)]
-    pub fn get_old_value(&mut self, key: &Key, prev_write: Write) -> Result<OldValue> {
-        self.reader.get_old_value(key, self.start_ts, prev_write)
+    pub fn get_old_value(
+        &mut self,
+        key: &Key,
+        ts: TimeStamp,
+        prev_write_loaded: bool,
+        prev_write: Option<Write>,
+    ) -> Result<OldValue> {
+        self.reader
+            .get_old_value(key, ts, prev_write_loaded, prev_write)
     }
 
     #[inline(always)]
@@ -457,44 +464,50 @@ impl<S: EngineSnapshot> MvccReader<S> {
         &mut self,
         key: &Key,
         start_ts: TimeStamp,
-        prev_write: Write,
+        prev_write_loaded: bool,
+        prev_write: Option<Write>,
     ) -> Result<OldValue> {
-        if !prev_write
-            .as_ref()
-            .check_gc_fence_as_latest_version(start_ts)
-        {
+        if prev_write_loaded && prev_write.is_none() {
             return Ok(OldValue::None);
         }
-        match prev_write.write_type {
-            WriteType::Put => {
-                // For Put, there must be an old value either in its
-                // short value or in the default CF.
-                Ok(match prev_write.short_value {
-                    Some(value) => OldValue::Value { value },
-                    None => OldValue::ValueTimeStamp {
-                        start_ts: prev_write.start_ts,
-                    },
-                })
+        if let Some(prev_write) = prev_write {
+            if !prev_write
+                .as_ref()
+                .check_gc_fence_as_latest_version(start_ts)
+            {
+                return Ok(OldValue::None);
             }
-            WriteType::Delete => {
-                // For Delete, no old value.
-                Ok(OldValue::None)
-            }
-            WriteType::Rollback | WriteType::Lock => {
+
+            match prev_write.write_type {
+                WriteType::Put => {
+                    // For Put, there must be an old value either in its
+                    // short value or in the default CF.
+                    return Ok(match prev_write.short_value {
+                        Some(value) => OldValue::Value { value },
+                        None => OldValue::ValueTimeStamp {
+                            start_ts: prev_write.start_ts,
+                        },
+                    });
+                }
+                WriteType::Delete => {
+                    // For Delete, no old value.
+                    return Ok(OldValue::None);
+                }
                 // For Rollback and Lock, it's unknown whether there is a more
                 // previous valid write. Call `get_write` to get a valid
                 // previous write.
-                Ok(match self.get_write(key, start_ts, Some(start_ts))? {
-                    Some(write) => match write.short_value {
-                        Some(value) => OldValue::Value { value },
-                        None => OldValue::ValueTimeStamp {
-                            start_ts: write.start_ts,
-                        },
-                    },
-                    None => OldValue::None,
-                })
+                WriteType::Rollback | WriteType::Lock => (),
             }
         }
+        Ok(match self.get_write(key, start_ts, Some(start_ts))? {
+            Some(write) => match write.short_value {
+                Some(value) => OldValue::Value { value },
+                None => OldValue::ValueTimeStamp {
+                    start_ts: write.start_ts,
+                },
+            },
+            None => OldValue::None,
+        })
     }
 }
 
@@ -1803,14 +1816,35 @@ pub mod tests {
                 let prev_write = reader
                     .seek_write(&Key::from_raw(b"a"), case.written.last().unwrap().1)
                     .unwrap()
-                    .unwrap()
-                    .1;
+                    .map(|w| w.1);
+                let prev_write_loaded = true;
                 let result = reader
-                    .get_old_value(&Key::from_raw(b"a"), TimeStamp::new(25), prev_write)
+                    .get_old_value(
+                        &Key::from_raw(b"a"),
+                        TimeStamp::new(25),
+                        prev_write_loaded,
+                        prev_write,
+                    )
                     .unwrap();
                 assert_eq!(result, case.expected, "case #{}", i);
             }
         }
+
+        // Must return Oldvalue::None when prev_write_loaded is true and prev_write is None.
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut reader = MvccReader::new(snapshot, None, true);
+        let prev_write_loaded = true;
+        let prev_write = None;
+        let result = reader
+            .get_old_value(
+                &Key::from_raw(b"a"),
+                TimeStamp::new(25),
+                prev_write_loaded,
+                prev_write,
+            )
+            .unwrap();
+        assert_eq!(result, OldValue::None);
     }
 
     #[test]

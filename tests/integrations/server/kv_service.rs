@@ -694,7 +694,7 @@ fn test_debug_raft_log() {
     entry.set_term(1);
     entry.set_index(1);
     entry.set_entry_type(eraftpb::EntryType::EntryNormal);
-    entry.set_data(vec![42]);
+    entry.set_data(vec![42].into());
     engine.c().put_msg(&key, &entry).unwrap();
     assert_eq!(
         engine.c().get_msg::<eraftpb::Entry>(&key).unwrap().unwrap(),
@@ -1686,4 +1686,34 @@ fn test_health_check() {
 
     cluster.shutdown();
     client.check(&req).unwrap_err();
+}
+
+#[test]
+fn test_wait_chain_api() {
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let client2 = client.clone();
+
+    let mut ctx1 = ctx.clone();
+    ctx1.set_resource_group_tag(b"resource_group_tag1".to_vec());
+    must_kv_pessimistic_lock(&client, ctx1, b"a".to_vec(), 20);
+    let handle = thread::spawn(move || {
+        let mut ctx2 = ctx.clone();
+        ctx2.set_resource_group_tag(b"resource_group_tag2".to_vec());
+        kv_pessimistic_lock(&client2, ctx2, vec![b"a".to_vec()], 30, 30, false);
+    });
+    thread::sleep(Duration::from_millis(10));
+    // lock_ttl is 20ms, so the lock should be in waiting state here.
+    let req = GetLockWaitInfoRequest::default();
+    let resp = client.get_lock_wait_info(&req).unwrap();
+    let entries = resp.entries.to_vec();
+
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].txn, 30);
+    assert_eq!(entries[0].wait_for_txn, 20);
+    assert_eq!(entries[0].key, b"a".to_vec());
+    assert_eq!(
+        entries[0].resource_group_tag,
+        b"resource_group_tag2".to_vec()
+    );
+    handle.join().unwrap();
 }
