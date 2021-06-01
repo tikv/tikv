@@ -233,8 +233,8 @@ example_plugin = { path = "components/test_coprocessor_plugin/example_plugin" }
 
 [patch.crates-io]
 # TODO: remove this when new raft-rs is published.
-raft = { git = "https://github.com/tikv/raft-rs", branch = "master", default-features = false }
-raft-proto = { git = "https://github.com/tikv/raft-rs", branch = "master", default-features = false }
+raft = { git = "https://github.com/hicqu/raft-rs", branch = "ready-with-options", default-features = false }
+raft-proto = { git = "https://github.com/hicqu/raft-rs", branch = "ready-with-options", default-features = false }
 protobuf = { git = "https://github.com/pingcap/rust-protobuf", rev = "82b49fea7e696fd647b5aca0a6c6ec944eab3189" }
 protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "82b49fea7e696fd647b5aca0a6c6ec944eab3189" }
 

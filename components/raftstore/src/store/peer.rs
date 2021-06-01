@@ -50,10 +50,11 @@ use crate::store::worker::{HeartbeatTask, ReadDelegate, ReadExecutor, ReadProgre
 use crate::store::{
     Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse,
 };
-use crate::{Error, Result};
+use crate::{Error, Result, MAX_COMMITTED_SIZE_PER_READY};
 use collections::{HashMap, HashSet};
 use pd_client::INVALID_ID;
 use tikv_util::codec::number::decode_u64;
+use tikv_util::sys::memory_usage_reaches_high_water;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::time::{Instant as UtilInstant, ThreadReadId};
 use tikv_util::worker::{FutureScheduler, Scheduler};
@@ -1715,6 +1716,11 @@ where
             "peer_id" => self.peer.get_id(),
         );
 
+        if memory_usage_reaches_high_water() {
+            self.raft_group.raft.max_committed_size_per_ready = 0;
+        } else {
+            self.raft_group.raft.max_committed_size_per_ready = crate::MAX_COMMITTED_SIZE_PER_READY;
+        }
         let mut ready = self.raft_group.ready();
 
         self.last_unpersisted_number = ready.number();
@@ -1938,6 +1944,11 @@ where
             return;
         }
 
+        if memory_usage_reaches_high_water() {
+            self.raft_group.raft.max_committed_size_per_ready = 0;
+        } else {
+            self.raft_group.raft.max_committed_size_per_ready = MAX_COMMITTED_SIZE_PER_READY;
+        }
         let mut light_rd = self.raft_group.advance_append(ready);
 
         self.add_light_ready_metric(&light_rd, &mut ctx.raft_metrics.ready);

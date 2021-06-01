@@ -17,6 +17,7 @@ pub const HIGH_PRI: i32 = -1;
 const CPU_CORES_QUOTA_ENV_VAR_KEY: &str = "TIKV_CPU_CORES_QUOTA";
 
 static GLOBAL_MEMORY_USAGE: AtomicU64 = AtomicU64::new(0);
+static MEMORY_USAGE_HIGH_WATER: AtomicU64 = AtomicU64::new(0);
 
 #[cfg(target_os = "linux")]
 lazy_static! {
@@ -78,15 +79,27 @@ impl SysQuota {
     }
 }
 
+/// Get the current global memory usage in bytes. Users need to call `record_global_memory_usage`
+/// to refresh it periodically.
 pub fn get_global_memory_usage() -> u64 {
     GLOBAL_MEMORY_USAGE.load(Ordering::Acquire)
 }
 
+/// Record the current global memory usage.
 pub fn record_global_memory_usage() {
     let mut system = sysinfo::System::new();
     system.refresh_memory();
     let usage = system.get_used_memory() * KIB;
     GLOBAL_MEMORY_USAGE.store(usage, Ordering::Release);
+}
+
+/// Register the high water mark so that `memory_usage_reaches_high_water` is available.
+pub fn register_memory_usage_high_water(mark: u64) {
+    MEMORY_USAGE_HIGH_WATER.store(mark, Ordering::Release);
+}
+
+pub fn memory_usage_reaches_high_water() -> bool {
+    get_global_memory_usage() >= MEMORY_USAGE_HIGH_WATER.load(Ordering::Acquire)
 }
 
 fn limit_cpu_cores_quota_by_env_var(quota: f64) -> f64 {

@@ -67,7 +67,7 @@ use crate::store::util::{
     ConfChangeKind, KeysInfoFormatter,
 };
 use crate::store::{cmd_resp, util, Config, RegionSnapshot, RegionTask};
-use crate::{bytes_capacity, Error, Result};
+use crate::{Error, Result};
 
 use super::metrics::*;
 
