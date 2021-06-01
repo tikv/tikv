@@ -7071,11 +7071,11 @@
           },
           "yaxes": [
             {
-              "format": "decbytes",
-              "label": null,
+              "format": "Bps",
+              "label": "",
               "logBase": 1,
               "max": null,
-              "min": null,
+              "min": 0,
               "show": true
             },
             {
@@ -7174,11 +7174,11 @@
           },
           "yaxes": [
             {
-              "format": "decbytes",
-              "label": null,
+              "format": "Bps",
+              "label": "",
               "logBase": 1,
               "max": null,
-              "min": null,
+              "min": 0,
               "show": true
             },
             {
@@ -7269,11 +7269,11 @@
           },
           "yaxes": [
             {
-              "format": "decbytes",
-              "label": null,
+              "format": "Bps",
+              "label": "",
               "logBase": 1,
               "max": null,
-              "min": null,
+              "min": 0,
               "show": true
             },
             {
