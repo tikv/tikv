@@ -59,6 +59,7 @@ use raftstore::{
         config::RaftstoreConfigManager,
         fsm,
         fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_MSG_CAP},
+        memory::MEMTRACE_ROOT,
         AutoSplitController, GlobalReplicationState, LocalReader, SnapManagerBuilder,
         SplitCheckRunner, SplitConfigManager, StoreMsg,
     },
@@ -81,9 +82,11 @@ use tikv::{
         status_server::StatusServer,
         ttl::TTLChecker,
         Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID, GRPC_THREAD_PREFIX,
+        MEM_TRACE_SUM_GAUGE,
     },
     storage::{self, config::StorageConfigManger, mvcc::MvccConsistencyCheckObserver, Engine},
 };
+use tikv_alloc::trace::{MemoryTrace, MemoryTraceNode};
 use tikv_util::{
     check_environment_variables,
     config::{ensure_dir_exist, VersionTrack},
@@ -991,12 +994,15 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let mut engine_metrics =
             EngineMetricsManager::new(self.engines.as_ref().unwrap().engines.clone());
         let mut io_metrics = IOMetricsManager::new(fetcher);
+        let mut mem_trace_metrics = MemoryTraceManager::default();
+        mem_trace_metrics.register_provider((&*MEMTRACE_ROOT).to_owned());
         self.background_worker
             .spawn_interval_task(DEFAULT_METRICS_FLUSH_INTERVAL, move || {
                 let now = Instant::now();
                 engine_metrics.flush(now);
                 io_metrics.flush(now);
                 engines_info.update(now);
+                mem_trace_metrics.flush(now);
             });
     }
 

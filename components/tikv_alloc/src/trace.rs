@@ -111,6 +111,8 @@ pub trait MemoryTrace {
     fn sub_trace(&self, id: Id) -> Arc<dyn MemoryTrace + Send + Sync>;
     fn add_sub_trace(&mut self, id: Id, trace: Arc<dyn MemoryTrace + Send + Sync>);
     fn sum(&self) -> usize;
+    fn readable_name(&self) -> String;
+    fn get_children_ids(&self) -> Vec<Id>;
 }
 
 pub struct MemoryTraceNode {
@@ -164,6 +166,18 @@ impl MemoryTrace for MemoryTraceNode {
     fn sum(&self) -> usize {
         let sum: usize = self.children.values().map(|c| c.sum()).sum();
         sum + self.trace.load(Ordering::Relaxed)
+    }
+
+    fn readable_name(&self) -> String {
+        self.id.readable_name()
+    }
+
+    fn get_children_ids(&self) -> Vec<Id> {
+        let mut ids = vec![];
+        for id in self.children.keys() {
+            ids.push(*id);
+        }
+        ids
     }
 }
 
