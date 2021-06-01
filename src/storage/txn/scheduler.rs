@@ -30,6 +30,7 @@ use std::u64;
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use kvproto::kvrpcpb::{CommandPri, ExtraOp};
+use req_cpu::{FutureExt, ResourceMeteringTag};
 use tikv_util::{callback::must_call, deadline::Deadline, time::Instant};
 use txn_types::TimeStamp;
 
@@ -57,7 +58,6 @@ use crate::storage::{
     get_priority_tag, types::StorageCallback, Error as StorageError,
     ErrorInner as StorageErrorInner,
 };
-use req_cpu::{FutureExt, ResourceMeteringTag};
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
 

@@ -322,7 +322,7 @@ default-members = ["cmd/tikv-server", "cmd/tikv-ctl"]
 
 [profile.dev]
 opt-level = 0
-#debug = 1 # required for line numbers in tests, see tikv #5049
+debug = 1 # required for line numbers in tests, see tikv #5049
 codegen-units = 4
 lto = false
 incremental = true
