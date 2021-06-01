@@ -317,7 +317,9 @@ fn test_read_index_retry_lock_checking() {
     let mut cluster = new_node_cluster(0, 2);
 
     // Use long election timeout and short lease.
-    configure_for_lease_read(&mut cluster, Some(10), Some(10));
+    configure_for_lease_read(&mut cluster, Some(50), Some(20));
+    cluster.cfg.raft_store.raft_store_max_leader_lease =
+        ReadableDuration(Duration::from_millis(100));
 
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -362,16 +364,27 @@ fn test_read_index_retry_lock_checking() {
     // clear filters, so later read index responses can be received
     cluster.sim.wl().clear_recv_filters(2);
     // resp1 should contain key is locked error
+<<<<<<< HEAD
     assert!(resp1
         .recv_timeout(Duration::from_secs(1))
         .unwrap()
         .responses[0]
         .get_read_index()
         .has_locked());
+=======
+    assert!(
+        resp1
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .responses[0]
+            .get_read_index()
+            .has_locked()
+    );
+>>>>>>> f2be78d9c... tests: fix flaky test_read_index_retry_lock_checking (#10277)
     // resp2 should has a successful read index
     assert!(
         resp2
-            .recv_timeout(Duration::from_secs(1))
+            .recv_timeout(Duration::from_secs(2))
             .unwrap()
             .responses[0]
             .get_read_index()
