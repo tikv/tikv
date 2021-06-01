@@ -3348,7 +3348,7 @@ where
                 notify_stale_req_with_msg(
                     self.delegate.term,
                     format!(
-                        "satle observe id {:?}, current id: {:?}",
+                        "stale observe id {:?}, current id: {:?}",
                         id, self.delegate.observe_info.cdc_id.id
                     ),
                     cb,
@@ -3362,7 +3362,7 @@ where
                 notify_stale_req_with_msg(
                     self.delegate.term,
                     format!(
-                        "satle observe id {:?}, current id: {:?}",
+                        "stale observe id {:?}, current id: {:?}",
                         id, self.delegate.observe_info.rts_id.id
                     ),
                     cb,
