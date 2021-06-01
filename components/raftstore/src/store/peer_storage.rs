@@ -279,7 +279,7 @@ impl EntryCache {
         } else {
             TraceEvent::Sub(-self.mem_size_change as usize)
         };
-        MEMTRACE_PEERS.trace(event);
+        MEMTRACE_ENTRY_CACHE.trace(event);
         RAFT_ENTRIES_CACHES_GAUGE.add(self.mem_size_change);
         self.mem_size_change = 0;
     }
@@ -316,7 +316,7 @@ impl Drop for EntryCache {
     fn drop(&mut self) {
         self.flush_mem_size_change();
         RAFT_ENTRIES_CACHES_GAUGE.sub(self.get_total_mem_size());
-        MEMTRACE_PEERS.trace(TraceEvent::Sub(self.get_total_mem_size() as usize));
+        MEMTRACE_ENTRY_CACHE.trace(TraceEvent::Sub(self.get_total_mem_size() as usize));
         self.flush_stats();
     }
 }

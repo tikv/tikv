@@ -14,6 +14,7 @@ lazy_static! {
         [
             peers,
             applys,
+            entry_cache,
             (raft_router, [alive, leak]),
             (apply_router, [alive, leak])
         ]
@@ -22,6 +23,8 @@ lazy_static! {
         MEMTRACE_ROOT.sub_trace(Id::Name("peers"));
     pub static ref MEMTRACE_APPLYS: Arc<dyn MemoryTrace + Send + Sync> =
         MEMTRACE_ROOT.sub_trace(Id::Name("applys"));
+    pub static ref MEMTRACE_ENTRY_CACHE: Arc<dyn MemoryTrace + Send + Sync> =
+        MEMTRACE_ROOT.sub_trace(Id::Name("entry_cache"));
     pub static ref MEMTRACE_RAFT_ROUTER_ALIVE: Arc<dyn MemoryTrace + Send + Sync> = MEMTRACE_ROOT
         .sub_trace(Id::Name("raft_router"))
         .sub_trace(Id::Name("alive"));
