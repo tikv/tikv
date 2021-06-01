@@ -14,8 +14,8 @@ use futures::compat::Future01CompatExt;
 use grpcio::{ChannelBuilder, Environment};
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::{
-    event::Event as Event_oneof_event, ChangeDataRequest, ResolvedTs,
-    DuplicateRequest as ErrorDuplicateRequest, Error as EventError, Event,
+    event::Event as Event_oneof_event, ChangeDataRequest,
+    DuplicateRequest as ErrorDuplicateRequest, Error as EventError, Event, ResolvedTs,
 };
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::{
