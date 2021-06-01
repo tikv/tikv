@@ -525,3 +525,46 @@ fn test_read_source_region_after_target_region_merged() {
 
     fail::remove(apply_before_prepare_merge_2_3);
 }
+
+// Testing that altough the source region's `safe_ts` wont't be updated during merge, after merge
+// rollbacked it should resume updating
+#[test]
+fn test_stale_read_after_rollback_merge() {
+    let (mut cluster, pd_client, leader_client) =
+        prepare_for_stale_read_before_run(new_peer(1, 1), Some(Box::new(configure_for_merge)));
+
+    // Write on source region
+    leader_client.must_kv_write(
+        &pd_client,
+        vec![new_mutation(Op::Put, &b"key1"[..], &b"value1"[..])],
+        b"key1".to_vec(),
+    );
+
+    cluster.must_split(&cluster.get_region(&[]), b"key3");
+    let source = pd_client.get_region(b"key1").unwrap();
+    let target = pd_client.get_region(b"key5").unwrap();
+
+    // Trigger merge rollback
+    let on_schedule_merge = "on_schedule_merge";
+    fail::cfg(on_schedule_merge, "return()").unwrap();
+    cluster.must_try_merge(source.get_id(), target.get_id());
+    // Change the epoch of target region and the merge will fail
+    pd_client.must_remove_peer(target.get_id(), new_peer(3, 3));
+    fail::remove(on_schedule_merge);
+
+    // Make sure the rollback is done, it is okey to use raw kv here
+    cluster.must_put(b"key2", b"value2");
+
+    let mut source_client3 = PeerClient::new(
+        &cluster,
+        source.get_id(),
+        find_peer(&source, 3).unwrap().clone(),
+    );
+    source_client3.ctx.set_stale_read(true);
+    // the `safe_ts` should resume updating after merge rollback so we can read `key1` with the newest ts
+    source_client3.must_kv_read_equal(
+        b"key1".to_vec(),
+        b"value1".to_vec(),
+        block_on(pd_client.get_tso()).unwrap().into_inner(),
+    );
+}

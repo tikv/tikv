@@ -1897,10 +1897,10 @@ where
         meta.pending_snapshot_regions
             .retain(|r| self.fsm.region_id() != r.get_id());
 
-        // Remove `read_progress` and call `clear` to set the `safe_ts` to zero to reject
+        // Remove `read_progress` and reset the `safe_ts` to zero to reject
         // incoming stale read request
         meta.region_read_progress.remove(&region_id);
-        self.fsm.peer.read_progress.stop(true);
+        self.fsm.peer.read_progress.pause();
 
         // Destroy read delegates.
         meta.readers.remove(&region_id);
@@ -2837,6 +2837,9 @@ where
         // Clear merge releted data
         self.fsm.peer.pending_merge_state = None;
         self.fsm.peer.want_rollback_merge_peers.clear();
+
+        // Resume updating `safe_ts`
+        self.fsm.peer.read_progress.resume();
 
         if let Some(r) = region {
             let mut meta = self.ctx.store_meta.lock().unwrap();

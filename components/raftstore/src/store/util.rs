@@ -872,7 +872,9 @@ impl RegionReadProgress {
     pub fn update_applied(&self, applied: u64) {
         let mut core = self.core.lock().unwrap();
         if let Some(ts) = core.update_applied(applied) {
-            self.safe_ts.store(ts, AtomicOrdering::Release);
+            if !core.pause {
+                self.safe_ts.store(ts, AtomicOrdering::Release);
+            }
         }
     }
 
@@ -881,24 +883,46 @@ impl RegionReadProgress {
             return;
         }
         let mut core = self.core.lock().unwrap();
+        if core.discard {
+            return;
+        }
         if let Some(ts) = core.update_safe_ts(apply_index, ts) {
-            self.safe_ts.store(ts, AtomicOrdering::Release);
+            if !core.pause {
+                self.safe_ts.store(ts, AtomicOrdering::Release);
+            }
         }
     }
 
     pub fn merge_safe_ts(&self, source_safe_ts: u64, merge_index: u64) {
         let mut core = self.core.lock().unwrap();
         if let Some(ts) = core.merge_safe_ts(source_safe_ts, merge_index) {
-            self.safe_ts.store(ts, AtomicOrdering::Release);
+            if !core.pause {
+                self.safe_ts.store(ts, AtomicOrdering::Release);
+            }
         }
     }
 
-    pub fn stop(&self, reset_ts: bool) {
+    /// Reset `safe_ts` to 0 and stop updating it
+    pub fn pause(&self) {
         let mut core = self.core.lock().unwrap();
-        core.stop();
-        if reset_ts {
-            self.safe_ts.store(0, AtomicOrdering::Release);
-        }
+        core.pause = true;
+        self.safe_ts.store(0, AtomicOrdering::Release);
+    }
+
+    /// Discard incoming `read_state` item and stop updating `safe_ts`
+    pub fn discard(&self) {
+        let mut core = self.core.lock().unwrap();
+        core.pause = true;
+        core.discard = true;
+    }
+
+    /// Reset `safe_ts` and resume updating it
+    pub fn resume(&self) {
+        let mut core = self.core.lock().unwrap();
+        core.pause = false;
+        core.discard = false;
+        self.safe_ts
+            .store(core.read_state.ts, AtomicOrdering::Release);
     }
 
     // Get the latest `read_state`
@@ -928,8 +952,10 @@ struct RegionReadProgressCore {
     // should reset to `min(source_safe_ts, target_safe_ts)`, and start reject stale `read_state` item
     // with index smaller than `last_merge_index` to avoid `safe_ts` undo the decrease
     last_merge_index: u64,
-    // Stop accepting incoming `(idx, ts)`
-    stopped: bool,
+    // Stop update `safe_ts`
+    pause: bool,
+    // Discard incoming `(idx, ts)`
+    discard: bool,
 }
 
 // A helpful wraper of `(apply_index, safe_ts)` item
@@ -947,7 +973,8 @@ impl RegionReadProgressCore {
             read_state: ReadState::default(),
             pending_items: VecDeque::with_capacity(cap),
             last_merge_index: 0,
-            stopped: false,
+            pause: false,
+            discard: false,
         }
     }
 
@@ -1001,7 +1028,7 @@ impl RegionReadProgressCore {
     // Return the `safe_ts` if it is updated
     fn update_safe_ts(&mut self, idx: u64, ts: u64) -> Option<u64> {
         // Discard stale item with `apply_index` before `last_merge_index`
-        if idx <= self.last_merge_index || self.stopped {
+        if idx <= self.last_merge_index {
             return None;
         }
         // The peer has enough data, try update `safe_ts` directly
@@ -1030,14 +1057,6 @@ impl RegionReadProgressCore {
         }
         self.push_back(ReadState { idx, ts });
         None
-    }
-
-    // Stop updating `safe_ts`
-    fn stop(&mut self) {
-        self.pending_items.clear();
-        self.read_state.ts = 0;
-        self.read_state.idx = 0;
-        self.stopped = true;
     }
 
     fn push_back(&mut self, item: ReadState) {
