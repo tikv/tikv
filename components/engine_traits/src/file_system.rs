@@ -20,6 +20,10 @@ impl EngineFileSystemInspector {
             limiter: get_io_rate_limiter(),
         }
     }
+
+    pub fn from_limiter(limiter: Option<Arc<IORateLimiter>>) -> Self {
+        EngineFileSystemInspector { limiter }
+    }
 }
 
 impl FileSystemInspector for EngineFileSystemInspector {
