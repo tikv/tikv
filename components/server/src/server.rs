@@ -813,6 +813,13 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.to_stop.push(rts_worker);
         }
 
+        req_cpu::init_recorder();
+        // TODO: Register top sql collector here.
+        //       This collector may contain following features:
+        //         1. Implement trait `req_cpu::collector::Collector`
+        //         2. Implement trait `Stop` so that can be pushed to `self.to_stop`.
+        //         3. Support dynamic enabling by leveraging `cfg_controller`.
+
         self.servers = Some(Servers {
             lock_mgr,
             server,

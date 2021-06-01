@@ -265,11 +265,13 @@ impl ReqCpuRecorder {
                         let delta_ms = current_cpu_ticks.wrapping_sub(prev_cpu_ticks) * 1_000
                             / (*CLK_TCK as u64);
 
-                        *self
-                            .current_window_records
-                            .records
-                            .entry(prev_tag)
-                            .or_insert(0) += delta_ms;
+                        if delta_ms != 0 {
+                            *self
+                                .current_window_records
+                                .records
+                                .entry(prev_tag)
+                                .or_insert(0) += delta_ms;
+                        }
                     }
 
                     // Store the beginning stat for the current tag.
@@ -430,9 +432,6 @@ mod tests {
                     self
                 }
                 Operation::Sleep(_) => {
-                    if let Some(tag) = self.current_ctx {
-                        self.cpu_time.entry(tag.to_string()).or_insert(0);
-                    }
                     self.ops.push(op);
                     self
                 }
@@ -646,33 +645,29 @@ mod tests {
     }
 
     impl DummyCollector {
-        fn check(&self, expected: HashMap<String, u64>) {
+        fn check(&self, mut expected: HashMap<String, u64>) {
             // Wait a collect interval to avoid losing records.
             std::thread::sleep(Duration::from_millis(1200));
 
-            const MAX_DRIFT: u64 = 100;
-            let res = self.records.lock().unwrap();
+            const MAX_DRIFT: u64 = 50;
+            let mut res = self.records.lock().unwrap();
 
-            assert_eq!(
-                expected.len(),
-                res.len(),
-                "length of records expected {} got {}",
-                expected.len(),
-                res.len()
-            );
+            for k in expected.keys() {
+                res.entry(k.clone()).or_insert(0);
+            }
+            for k in res.keys() {
+                expected.entry(k.clone()).or_insert(0);
+            }
 
             for (k, expected_value) in expected {
-                if let Some(value) = res.get(&k) {
-                    let l = value.saturating_sub(MAX_DRIFT);
-                    let r = value.saturating_add(MAX_DRIFT);
-                    if !(l <= expected_value && expected_value <= r) {
-                        panic!(
-                            "tag {} cpu time expected {} got {}",
-                            k, expected_value, value
-                        );
-                    }
-                } else {
-                    panic!("tag {} not exists", k);
+                let value = res.get(&k).unwrap();
+                let l = value.saturating_sub(MAX_DRIFT);
+                let r = value.saturating_add(MAX_DRIFT);
+                if !(l <= expected_value && expected_value <= r) {
+                    panic!(
+                        "tag {} cpu time expected {} got {}",
+                        k, expected_value, value
+                    );
                 }
             }
         }
