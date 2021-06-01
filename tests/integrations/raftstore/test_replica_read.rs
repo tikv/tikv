@@ -364,23 +364,12 @@ fn test_read_index_retry_lock_checking() {
     // clear filters, so later read index responses can be received
     cluster.sim.wl().clear_recv_filters(2);
     // resp1 should contain key is locked error
-<<<<<<< HEAD
     assert!(resp1
-        .recv_timeout(Duration::from_secs(1))
+        .recv_timeout(Duration::from_secs(2))
         .unwrap()
         .responses[0]
         .get_read_index()
         .has_locked());
-=======
-    assert!(
-        resp1
-            .recv_timeout(Duration::from_secs(2))
-            .unwrap()
-            .responses[0]
-            .get_read_index()
-            .has_locked()
-    );
->>>>>>> f2be78d9c... tests: fix flaky test_read_index_retry_lock_checking (#10277)
     // resp2 should has a successful read index
     assert!(
         resp2
