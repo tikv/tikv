@@ -14,8 +14,6 @@ lazy_static! {
         [
             peers,
             applys,
-            raft_context,
-            apply_context,
             (raft_router, [alive, leak]),
             (apply_router, [alive, leak])
         ]
@@ -24,10 +22,6 @@ lazy_static! {
         MEMTRACE_ROOT.sub_trace(Id::Name("peers"));
     pub static ref MEMTRACE_APPLYS: Arc<dyn MemoryTrace + Send + Sync> =
         MEMTRACE_ROOT.sub_trace(Id::Name("applys"));
-    pub static ref MEMTRACE_RAFT_CONTEXT: Arc<dyn MemoryTrace + Send + Sync> =
-        MEMTRACE_ROOT.sub_trace(Id::Name("raft_context"));
-    pub static ref MEMTRACE_APPLY_CONTEXT: Arc<dyn MemoryTrace + Send + Sync> =
-        MEMTRACE_ROOT.sub_trace(Id::Name("apply_context"));
     pub static ref MEMTRACE_RAFT_ROUTER_ALIVE: Arc<dyn MemoryTrace + Send + Sync> = MEMTRACE_ROOT
         .sub_trace(Id::Name("raft_router"))
         .sub_trace(Id::Name("alive"));
@@ -52,18 +46,5 @@ pub struct PeerMemoryTrace {
 #[derive(MemoryTraceHelper, Default, Debug)]
 pub struct ApplyMemoryTrace {
     pub pending_cmds: usize,
-    pub rest: usize,
-}
-
-#[derive(MemoryTraceHelper, Default)]
-pub struct RaftContextTrace {
-    pub write_batch: usize,
-    pub rest: usize,
-}
-
-#[derive(MemoryTraceHelper, Default)]
-pub struct ApplyContextTrace {
-    pub cbs_size: usize,
-    pub write_batch: usize,
     pub rest: usize,
 }

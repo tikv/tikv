@@ -388,8 +388,6 @@ where
     priority: Priority,
     /// Whether to yield high-latency operation to low-priority handler.
     yield_high_latency_operation: bool,
-
-    trace: ApplyContextTrace,
 }
 
 impl<EK, W> ApplyContext<EK, W>
@@ -440,7 +438,6 @@ where
             pending_create_peers,
             priority,
             yield_high_latency_operation: cfg.apply_batch_system.low_priority_pool_size > 0,
-            trace: ApplyContextTrace::default(),
         }
     }
 
@@ -3678,30 +3675,6 @@ where
 
     fn get_priority(&self) -> Priority {
         self.apply_ctx.priority
-    }
-
-    fn pause(&mut self) {
-        let mut size = self.apply_ctx.apply_res.heap_size();
-        size += self.msg_buf.heap_size();
-        size += mem::size_of::<Self>();
-        let trace = ApplyContextTrace {
-            cbs_size: self.apply_ctx.cbs.heap_size(),
-            write_batch: self.apply_ctx.kv_wb.data_size(),
-            rest: size,
-        };
-        if let Some(event) = self.apply_ctx.trace.reset(trace) {
-            MEMTRACE_APPLY_CONTEXT.trace(event);
-        }
-    }
-}
-
-impl<EK, W> Drop for ApplyPoller<EK, W>
-where
-    EK: KvEngine,
-    W: WriteBatch<EK>,
-{
-    fn drop(&mut self) {
-        MEMTRACE_APPLY_CONTEXT.trace(TraceEvent::Sub(self.apply_ctx.trace.sum()));
     }
 }
 
