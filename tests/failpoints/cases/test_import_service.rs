@@ -43,7 +43,7 @@ fn test_download_sst_blocking_sst_writer() {
     // Now perform a proper download.
     let mut download = DownloadRequest::default();
     download.set_sst(meta.clone());
-    download.set_storage_backend(external_storage::make_local_backend(temp_dir.path()));
+    download.set_storage_backend(external_storage_export::make_local_backend(temp_dir.path()));
     download.set_name("test.sst".to_owned());
     download.mut_sst().mut_range().set_start(vec![sst_range.1]);
     download
@@ -236,5 +236,9 @@ fn test_ingest_file_twice_and_conflict() {
 
     fail::remove(latch_fp);
     let resp = import.ingest(&ingest).unwrap();
-    assert!(!resp.has_error());
+    assert!(resp.has_error());
+    assert_eq!(
+        "The file which would be ingested doest not exist.",
+        resp.get_error().get_message()
+    );
 }

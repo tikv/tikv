@@ -32,6 +32,7 @@ use raftstore::router::{
 };
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
+use raftstore::store::SnapManager;
 use raftstore::store::{
     AutoSplitController, Callback, LocalReader, SnapManagerBuilder, SplitCheckRunner,
 };
@@ -137,6 +138,7 @@ pub struct ServerCluster {
     pub security_mgr: Arc<SecurityManager>,
     pub txn_extra_schedulers: HashMap<u64, Arc<dyn TxnExtraScheduler>>,
     snap_paths: HashMap<u64, TempDir>,
+    snap_mgrs: HashMap<u64, SnapManager>,
     pd_client: Arc<TestPdClient>,
     raft_client: RaftClient<AddressMap, RaftStoreBlackHole, RocksEngine>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
@@ -173,6 +175,7 @@ impl ServerCluster {
             region_info_accessors: HashMap::default(),
             importers: HashMap::default(),
             snap_paths: HashMap::default(),
+            snap_mgrs: HashMap::default(),
             pending_services: HashMap::default(),
             coprocessor_hooks: HashMap::default(),
             raft_client,
@@ -350,21 +353,24 @@ impl Simulator for ServerCluster {
         let (resolver, state) =
             resolve::new_resolver(Arc::clone(&self.pd_client), &bg_worker, router.clone());
         let snap_mgr = SnapManagerBuilder::default()
+            .max_write_bytes_per_sec(cfg.server.snap_max_write_bytes_per_sec.0 as i64)
+            .max_total_size(cfg.server.snap_max_total_size.0)
             .encryption_key_manager(key_manager)
             .build(tmp_str);
-        let server_cfg = Arc::new(cfg.server.clone());
+        self.snap_mgrs.insert(node_id, snap_mgr.clone());
+        let server_cfg = Arc::new(VersionTrack::new(cfg.server.clone()));
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         let cop_read_pool = ReadPool::from(coprocessor::readpool_impl::build_read_pool_for_test(
             &tikv::config::CoprReadPoolConfig::default_for_test(),
             store.get_engine(),
         ));
-        let cop = coprocessor::Endpoint::new(
-            &server_cfg,
+        let copr = coprocessor::Endpoint::new(
+            &server_cfg.value().clone(),
             cop_read_pool.handle(),
             concurrency_manager.clone(),
             PerfLevel::EnableCount,
         );
-        let coprv2 = coprocessor_v2::Endpoint::new(&cfg.coprocessor_v2);
+        let copr_v2 = coprocessor_v2::Endpoint::new(&cfg.coprocessor_v2);
         let mut server = None;
         // Create Debug service.
         let debug_thread_pool = Arc::new(
@@ -389,7 +395,7 @@ impl Simulator for ServerCluster {
         raft_store.validate().unwrap();
         let mut node = Node::new(
             system,
-            &cfg.server,
+            &server_cfg.value().clone(),
             Arc::new(VersionTrack::new(raft_store)),
             Arc::clone(&self.pd_client),
             state,
@@ -404,8 +410,8 @@ impl Simulator for ServerCluster {
                 &server_cfg,
                 &security_mgr,
                 store.clone(),
-                cop.clone(),
-                coprv2.clone(),
+                copr.clone(),
+                copr_v2.clone(),
                 sim_router.clone(),
                 resolver.clone(),
                 snap_mgr.clone(),
@@ -442,7 +448,7 @@ impl Simulator for ServerCluster {
         cfg.server.addr = format!("{}", addr);
         let trans = server.transport();
         let simulate_trans = SimulateTransport::new(trans);
-        let server_cfg = Arc::new(cfg.server.clone());
+        let server_cfg = Arc::new(VersionTrack::new(cfg.server.clone()));
 
         // Register the role change observer of the lock manager.
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
@@ -512,6 +518,10 @@ impl Simulator for ServerCluster {
             .to_str()
             .unwrap()
             .to_owned()
+    }
+
+    fn get_snap_mgr(&self, node_id: u64) -> &SnapManager {
+        self.snap_mgrs.get(&node_id).unwrap()
     }
 
     fn stop_node(&mut self, node_id: u64) {

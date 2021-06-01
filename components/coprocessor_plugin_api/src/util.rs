@@ -93,13 +93,13 @@ macro_rules! declare_plugin {
             $crate::allocator::HostAllocator::new();
 
         #[no_mangle]
-        pub unsafe extern "C" fn _plugin_get_build_info() -> $crate::BuildInfo {
-            $crate::BuildInfo::get()
+        pub unsafe extern "C" fn _plugin_get_build_info() -> $crate::util::BuildInfo {
+            $crate::util::BuildInfo::get()
         }
 
         #[no_mangle]
-        pub unsafe extern "C" fn _plugin_get_plugin_info() -> $crate::PluginInfo {
-            $crate::PluginInfo {
+        pub unsafe extern "C" fn _plugin_get_plugin_info() -> $crate::util::PluginInfo {
+            $crate::util::PluginInfo {
                 name: $plugin_name,
                 version: $plugin_version,
             }
@@ -132,7 +132,6 @@ macro_rules! declare_plugin {
 ///
 /// *Note: Depending on artifacts of other crates will be easier with
 /// [this RFC](https://github.com/rust-lang/cargo/issues/9096).*
-#[doc(hidden)]
 pub fn pkgname_to_libname(pkgname: &str) -> String {
     let pkgname = pkgname.to_string().replace("-", "_");
     if cfg!(target_os = "windows") {

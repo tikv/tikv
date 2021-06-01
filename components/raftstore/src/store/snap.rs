@@ -1,8 +1,8 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::{Ordering as CmpOrdering, Reverse};
+use std::borrow::Cow;
+use std::cmp::{self, Ordering as CmpOrdering, Reverse};
 use std::fmt::{self, Display, Formatter};
-use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::{self, ErrorKind, Read, Write};
 use std::path::Path;
 use std::path::PathBuf;
@@ -12,8 +12,6 @@ use std::time::Instant;
 use std::{error::Error as StdError, result, str, thread, time, u64};
 
 use fail::fail_point;
-use futures::executor::block_on;
-use futures_util::io::{AllowStdIo, AsyncWriteExt};
 use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
@@ -32,6 +30,7 @@ use engine_traits::{EncryptionKeyManager, KvEngine};
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use file_system::{
     calc_crc32, calc_crc32_and_size, delete_file_if_exist, file_exists, get_file_size, sync_dir,
+    File, Metadata, OpenOptions,
 };
 use keys::{enc_end_key, enc_start_key};
 use tikv_util::time::{duration_to_sec, Limiter};
@@ -57,6 +56,7 @@ pub const SNAPSHOT_CFS_ENUM_PAIR: &[(CfNames, CfName)] = &[
     (CfNames::write, CF_WRITE),
 ];
 pub const SNAPSHOT_VERSION: u64 = 2;
+pub const IO_LIMITER_CHUNK_SIZE: usize = 4 * 1024;
 
 /// Name prefix for the self-generated snapshot file.
 const SNAP_GEN_PREFIX: &str = "gen";
@@ -372,7 +372,7 @@ impl Snap {
     ) -> RaftStoreResult<Self> {
         let dir_path = dir.into();
         if !dir_path.exists() {
-            fs::create_dir_all(dir_path.as_path())?;
+            file_system::create_dir_all(dir_path.as_path())?;
         }
         let snap_prefix = if is_sending {
             SNAP_GEN_PREFIX
@@ -559,7 +559,7 @@ impl Snap {
     }
 
     fn read_snapshot_meta(&mut self) -> RaftStoreResult<SnapshotMeta> {
-        let buf = fs::read(&self.meta_file.path)?;
+        let buf = file_system::read(&self.meta_file.path)?;
         let mut snapshot_meta = SnapshotMeta::default();
         snapshot_meta.merge_from_bytes(&buf)?;
         Ok(snapshot_meta)
@@ -675,7 +675,7 @@ impl Snap {
             f.write_all(&v[..])?;
             f.flush()?;
             f.sync_all()?;
-            fs::rename(&self.meta_file.tmp_path, &self.meta_file.path)?;
+            file_system::rename(&self.meta_file.tmp_path, &self.meta_file.path)?;
             self.hold_tmp_files = false;
             Ok(())
         } else {
@@ -896,7 +896,7 @@ impl GenericSnapshot for Snap {
     }
 
     fn meta(&self) -> io::Result<Metadata> {
-        fs::metadata(&self.meta_file.path)
+        file_system::metadata(&self.meta_file.path)
     }
 
     fn total_size(&self) -> io::Result<u64> {
@@ -949,7 +949,7 @@ impl GenericSnapshot for Snap {
                 ));
             }
 
-            fs::rename(&cf_file.tmp_path, &cf_file.path)?;
+            file_system::rename(&cf_file.tmp_path, &cf_file.path)?;
         }
         sync_dir(&self.dir_path)?;
 
@@ -960,7 +960,7 @@ impl GenericSnapshot for Snap {
             meta_file.write_all(&v[..])?;
             meta_file.sync_all()?;
         }
-        fs::rename(&self.meta_file.tmp_path, &self.meta_file.path)?;
+        file_system::rename(&self.meta_file.tmp_path, &self.meta_file.path)?;
         sync_dir(&self.dir_path)?;
         self.hold_tmp_files = false;
         Ok(())
@@ -1030,10 +1030,9 @@ impl Write for Snap {
             file_for_recving.written_size += write_len as u64;
             written_bytes += write_len;
 
-            let file = AllowStdIo::new(&mut file_for_recving.file);
-            let mut file = self.mgr.limiter.clone().limit(file);
-            if file_for_recving.encrypter.is_none() {
-                block_on(file.write_all(&next_buf[0..write_len]))?;
+            let file = &mut file_for_recving.file;
+            let encrypt_buffer = if file_for_recving.encrypter.is_none() {
+                Cow::Borrowed(&next_buf[0..write_len])
             } else {
                 let (cipher, crypter) = file_for_recving.encrypter.as_mut().unwrap();
                 let mut encrypt_buffer = vec![0; write_len + cipher.block_size()];
@@ -1042,7 +1041,19 @@ impl Write for Snap {
                     bytes += crypter.finalize(&mut encrypt_buffer)?;
                 }
                 encrypt_buffer.truncate(bytes);
-                block_on(file.write_all(&encrypt_buffer))?;
+                Cow::Owned(encrypt_buffer)
+            };
+            let encrypt_len = encrypt_buffer.len();
+
+            let mut start = 0;
+            loop {
+                let acquire = cmp::min(IO_LIMITER_CHUNK_SIZE, encrypt_len - start);
+                self.mgr.limiter.blocking_consume(acquire);
+                file.write_all(&encrypt_buffer[start..start + acquire])?;
+                if start + acquire == encrypt_len {
+                    break;
+                }
+                start += acquire;
             }
 
             if switch {
@@ -1112,14 +1123,14 @@ struct SnapManagerCore {
 /// `SnapManagerCore` trace all current processing snapshots.
 pub struct SnapManager {
     core: SnapManagerCore,
-    max_total_size: u64,
+    max_total_size: AtomicU64,
 }
 
 impl Clone for SnapManager {
     fn clone(&self) -> Self {
         SnapManager {
             core: self.core.clone(),
-            max_total_size: self.max_total_size,
+            max_total_size: AtomicU64::new(self.max_total_size.load(Ordering::Acquire)),
         }
     }
 }
@@ -1140,7 +1151,7 @@ impl SnapManager {
         let _lock = self.core.registry.wl();
         let path = Path::new(&self.core.base);
         if !path.exists() {
-            fs::create_dir_all(path)?;
+            file_system::create_dir_all(path)?;
             return Ok(());
         }
         if !path.is_dir() {
@@ -1149,12 +1160,12 @@ impl SnapManager {
                 format!("{} should be a directory", path.display()),
             ));
         }
-        for f in fs::read_dir(path)? {
+        for f in file_system::read_dir(path)? {
             let p = f?;
             if p.file_type()?.is_file() {
                 if let Some(s) = p.file_name().to_str() {
                     if s.ends_with(TMP_FILE_SUFFIX) {
-                        fs::remove_file(p.path())?;
+                        file_system::remove_file(p.path())?;
                     }
                 }
             }
@@ -1166,7 +1177,7 @@ impl SnapManager {
     pub fn list_idle_snap(&self) -> io::Result<Vec<(SnapKey, bool)>> {
         // Use a lock to protect the directory when scanning.
         let registry = self.core.registry.rl();
-        let read_dir = fs::read_dir(Path::new(&self.core.base))?;
+        let read_dir = file_system::read_dir(Path::new(&self.core.base))?;
         // Remove the duplicate snap keys.
         let mut v: Vec<_> = read_dir
             .filter_map(|p| {
@@ -1357,7 +1368,19 @@ impl SnapManager {
     }
 
     pub fn max_total_snap_size(&self) -> u64 {
-        self.max_total_size
+        self.max_total_size.load(Ordering::Acquire)
+    }
+
+    pub fn set_max_total_snap_size(&self, max_total_size: u64) {
+        self.max_total_size.store(max_total_size, Ordering::Release);
+    }
+
+    pub fn set_speed_limit(&self, bytes_per_sec: f64) {
+        self.core.limiter.set_speed_limit(bytes_per_sec);
+    }
+
+    pub fn get_speed_limit(&self) -> f64 {
+        self.core.limiter.speed_limit()
     }
 
     pub fn register(&self, key: SnapKey, entry: SnapEntry) {
@@ -1449,7 +1472,7 @@ impl SnapManager {
 impl SnapManagerCore {
     fn get_total_snap_size(&self) -> Result<u64> {
         let mut total_size = 0;
-        for entry in fs::read_dir(&self.base)? {
+        for entry in file_system::read_dir(&self.base)? {
             let (entry, metadata) = match entry.and_then(|e| e.metadata().map(|m| (e, m))) {
                 Ok((e, m)) => (e, m),
                 Err(e) if e.kind() == ErrorKind::NotFound => continue,
@@ -1501,7 +1524,7 @@ impl SnapManagerCore {
     }
 
     fn rename_tmp_cf_file_for_send(&self, cf_file: &mut CfFile) -> RaftStoreResult<()> {
-        fs::rename(&cf_file.tmp_path, &cf_file.path)?;
+        file_system::rename(&cf_file.tmp_path, &cf_file.path)?;
         let mgr = self.encryption_key_manager.as_ref();
         if let Some(mgr) = &mgr {
             let src = cf_file.tmp_path.to_str().unwrap();
@@ -1557,15 +1580,15 @@ impl SnapManagerBuilder {
                 temp_sst_id: Arc::new(AtomicU64::new(0)),
                 encryption_key_manager: self.key_manager,
             },
-            max_total_size,
+            max_total_size: AtomicU64::new(max_total_size),
         }
     }
 }
 
 #[cfg(test)]
 pub mod tests {
+    use file_system::{self, File, OpenOptions};
     use std::cmp;
-    use std::fs::{self, File, OpenOptions};
     use std::io::{self, Read, Seek, SeekFrom, Write};
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, AtomicUsize};
@@ -1981,7 +2004,7 @@ pub mod tests {
     // Make all the snapshot in the specified dir corrupted to have incorrect size.
     fn corrupt_snapshot_size_in<T: Into<PathBuf>>(dir: T) {
         let dir_path = dir.into();
-        let read_dir = fs::read_dir(dir_path).unwrap();
+        let read_dir = file_system::read_dir(dir_path).unwrap();
         for p in read_dir {
             if p.is_ok() {
                 let e = p.as_ref().unwrap();
@@ -2002,7 +2025,7 @@ pub mod tests {
     fn corrupt_snapshot_checksum_in<T: Into<PathBuf>>(dir: T) -> Vec<SnapshotMeta> {
         let dir_path = dir.into();
         let mut res = Vec::new();
-        let read_dir = fs::read_dir(dir_path).unwrap();
+        let read_dir = file_system::read_dir(dir_path).unwrap();
         for p in read_dir {
             if p.is_ok() {
                 let e = p.as_ref().unwrap();
@@ -2047,7 +2070,7 @@ pub mod tests {
     fn corrupt_snapshot_meta_file<T: Into<PathBuf>>(dir: T) -> usize {
         let mut total = 0;
         let dir_path = dir.into();
-        let read_dir = fs::read_dir(dir_path).unwrap();
+        let read_dir = file_system::read_dir(dir_path).unwrap();
         for p in read_dir {
             if p.is_ok() {
                 let e = p.as_ref().unwrap();

@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "5.0.0-rc.x"
+version = "5.1.0-alpha"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -24,8 +24,14 @@ failpoints = [
   "raftstore/failpoints",
   "engine_rocks/failpoints"
 ]
-cloud-aws = [ "encryption_export/cloud-aws" ]
-cloud-gcp = [ "encryption_export/cloud-gcp" ]
+cloud-aws = [
+  "encryption_export/cloud-aws",
+  "sst_importer/cloud-aws",
+]
+cloud-gcp = [
+  "encryption_export/cloud-gcp",
+  "sst_importer/cloud-gcp",
+]
 protobuf-codec = [
   "batch-system/protobuf-codec",
   "codec/protobuf-codec",
@@ -58,6 +64,7 @@ protobuf-codec = [
   "txn_types/protobuf-codec",
   "grpcio-health/protobuf-codec",
   "file_system/protobuf-codec",
+  "protobuf/bytes",
 ]
 prost-codec = [
   "batch-system/prost-codec",
@@ -102,6 +109,8 @@ test-engines-panic = [
 bcc-iosnoop = [
   "file_system/bcc-iosnoop",
 ]
+cloud-storage-grpc = ["sst_importer/cloud-storage-grpc"]
+cloud-storage-dylib = ["sst_importer/cloud-storage-dylib"]
 
 # for testing configure propegate to other crates
 # https://stackoverflow.com/questions/41700543/can-we-share-test-utilites-between-crates
@@ -148,12 +157,13 @@ hyper-openssl = "0.8"
 http = "0"
 into_other = { path = "components/into_other", default-features = false }
 keys = { path = "components/keys", default-features = false }
-kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+kvproto = { rev = "f11c6fb6b3a53b214ee94d54651b01eb99239334", git = "https://github.com/pingcap/kvproto.git", default-features = false }
 lazy_static = "1.3"
 libc = "0.2"
 libloading = "0.7"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { path = "components/log_wrappers" }
+memory_trace_macros = { path = "components/memory_trace_macros" }
 mime = "0.3.13"
 more-asserts = "0.2"
 murmur3 = "0.5.1"
@@ -208,7 +218,6 @@ toml = "0.5"
 txn_types = { path = "components/txn_types", default-features = false }
 url = "2"
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
-vlog = "0.1.4"
 walkdir = "2"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
@@ -226,12 +235,25 @@ example_plugin = { path = "components/test_coprocessor_plugin/example_plugin" }
 # TODO: remove this when new raft-rs is published.
 raft = { git = "https://github.com/tikv/raft-rs", branch = "master", default-features = false }
 raft-proto = { git = "https://github.com/tikv/raft-rs", branch = "master", default-features = false }
-protobuf = { git = "https://github.com/pingcap/rust-protobuf", rev = "65e9df20fbcbcf2409d5ee86a2332ecd04c534f8" }
-protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "65e9df20fbcbcf2409d5ee86a2332ecd04c534f8" }
-openssl-src = { git = "https://github.com/busyjay/openssl-src-rs", branch = "patch-for-m1" }
+protobuf = { git = "https://github.com/pingcap/rust-protobuf", rev = "82b49fea7e696fd647b5aca0a6c6ec944eab3189" }
+protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "82b49fea7e696fd647b5aca0a6c6ec944eab3189" }
+
+# TODO: remove this replacement after rusoto_s3 truly supports virtual-host style (https://github.com/rusoto/rusoto/pull/1823).
+rusoto_core = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
+rusoto_credential = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
+rusoto_kms = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles", features = ["serialize_structs"] }
+rusoto_mock = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
+rusoto_s3 = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
+rusoto_sts = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
+
+# When changing TiKV cooperatively with kvproto, this will be useful to submit the PR to TiKV concurrently with
+# the PR to kvproto.
+# After the PR to kvproto is merged, remember to comment this out and change the rev for kvproto dependency.
+# [patch.'https://github.com/pingcap/kvproto']
+# kvproto = {git = "https://github.com/your_github_id/kvproto", branch="your_branch"}
 
 [workspace]
 # See https://github.com/rust-lang/rfcs/blob/master/text/2957-cargo-features2.md
@@ -269,8 +291,10 @@ members = [
   "components/tidb_query_executors",
   "components/pd_client",
   "components/external_storage",
+  "components/external_storage/export",
   "components/cloud",
   "components/cloud/aws",
+  "components/cloud/gcp",
   "components/backup",
   "components/keys",
   "components/sst_importer",
@@ -281,6 +305,7 @@ members = [
   "components/raftstore",
   "components/into_other",
   "components/encryption",
+  "components/encryption/export",
   "components/error_code",
   "components/concurrency_manager",
   "components/server",
