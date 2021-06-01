@@ -32,12 +32,14 @@ use tikv_util::time::Limiter;
 use txn_types::{is_short_value, Key, TimeStamp, Write as KvWrite, WriteRef, WriteType};
 
 use super::{Error, Result};
+use crate::import_mode::{ImportModeSwitcher, RocksDBMetricsFn};
 use crate::metrics::*;
 
 /// SSTImporter manages SST files that are waiting for ingesting.
 pub struct SSTImporter {
     dir: ImportDir,
     key_manager: Option<Arc<DataKeyManager>>,
+    switcher: ImportModeSwitcher,
 }
 
 impl SSTImporter {
@@ -45,19 +47,14 @@ impl SSTImporter {
         root: P,
         key_manager: Option<Arc<DataKeyManager>>,
     ) -> Result<SSTImporter> {
+        let switcher = ImportModeSwitcher::new();
         Ok(SSTImporter {
             dir: ImportDir::new(root)?,
             key_manager,
+            switcher,
         })
     }
 
-<<<<<<< HEAD
-=======
-    pub fn start_switch_mode_check<E: KvEngine>(&self, executor: &ThreadPool, db: E) {
-        self.switcher.start(executor, db);
-    }
-
->>>>>>> 50e71b481... raftstore: fix not schedule split check (#10119)
     pub fn get_path(&self, meta: &SstMeta) -> PathBuf {
         let path = self.dir.join(meta).unwrap();
         path.save
@@ -190,6 +187,18 @@ impl SSTImporter {
         IMPORTER_DOWNLOAD_BYTES.observe(file_length as _);
 
         Ok(())
+    }
+
+    pub fn enter_normal_mode<E: KvEngine>(&self, db: &E, mf: RocksDBMetricsFn) -> Result<bool> {
+        self.switcher.enter_normal_mode(db, mf)
+    }
+
+    pub fn enter_import_mode<E: KvEngine>(&self, db: &E, mf: RocksDBMetricsFn) -> Result<bool> {
+        self.switcher.enter_import_mode(db, mf)
+    }
+
+    pub fn get_mode(&self) -> SwitchMode {
+        self.switcher.get_mode()
     }
 
     fn do_download<E: KvEngine>(

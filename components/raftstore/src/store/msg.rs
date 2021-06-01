@@ -390,11 +390,7 @@ pub enum PeerMsg<E: KvEngine> {
     /// that the raft node will not work anymore.
     Tick(PeerTicks),
     /// Result of applying committed entries. The message can't be lost.
-<<<<<<< HEAD
     ApplyRes { res: ApplyTaskRes },
-=======
-    ApplyRes { res: ApplyTaskRes<EK::Snapshot> },
->>>>>>> 50e71b481... raftstore: fix not schedule split check (#10119)
     /// Message that can't be lost but rarely created. If they are lost, real bad
     /// things happen like some peers will be considered dead in the group.
     SignificantMsg(SignificantMsg),
@@ -406,11 +402,6 @@ pub enum PeerMsg<E: KvEngine> {
     CasualMessage(CasualMessage<E>),
     /// Ask region to report a heartbeat to PD.
     HeartbeatPd,
-<<<<<<< HEAD
-=======
-    /// Asks region to change replication mode.
-    UpdateReplicationMode,
->>>>>>> 50e71b481... raftstore: fix not schedule split check (#10119)
 }
 
 impl<E: KvEngine> fmt::Debug for PeerMsg<E> {
@@ -429,10 +420,6 @@ impl<E: KvEngine> fmt::Debug for PeerMsg<E> {
             PeerMsg::Noop => write!(fmt, "Noop"),
             PeerMsg::CasualMessage(msg) => write!(fmt, "CasualMessage {:?}", msg),
             PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
-<<<<<<< HEAD
-=======
-            PeerMsg::UpdateReplicationMode => write!(fmt, "UpdateReplicationMode"),
->>>>>>> 50e71b481... raftstore: fix not schedule split check (#10119)
         }
     }
 }
