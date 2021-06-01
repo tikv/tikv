@@ -281,7 +281,7 @@ impl Default for IORateLimitConfig {
         IORateLimitConfig {
             max_bytes_per_sec: ReadableSize::mb(0),
             mode: IORateLimitMode::WriteOnly,
-            strict: true,
+            strict: false,
             foreground_read_priority: IOPriority::High,
             foreground_write_priority: IOPriority::High,
             flush_priority: IOPriority::High,
