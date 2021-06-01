@@ -30,7 +30,7 @@ pub use self::bootstrap::{
 pub use self::compaction_guard::CompactionGuardGeneratorFactory;
 pub use self::config::Config;
 pub use self::fsm::{DestroyPeerJob, RaftRouter, StoreInfo};
-pub use self::hibernate_state::GroupState;
+pub use self::hibernate_state::{GroupState, HibernateState};
 pub use self::msg::{
     Callback, CasualMessage, ExtCallback, MergeResultKind, PeerMsg, PeerTicks, RaftCommand,
     ReadCallback, ReadResponse, SignificantMsg, StoreMsg, StoreTick, WriteCallback, WriteResponse,
