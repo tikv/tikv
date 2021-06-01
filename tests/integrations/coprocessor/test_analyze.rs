@@ -4,8 +4,8 @@ use kvproto::coprocessor::{KeyRange, Request};
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use protobuf::Message;
 use tipb::{
-    AnalyzeColumnsReq, AnalyzeColumnsResp, AnalyzeIndexReq, AnalyzeIndexResp, AnalyzeReq,
-    AnalyzeType, AnalyzeColumnGroup,
+    AnalyzeColumnGroup, AnalyzeColumnsReq, AnalyzeColumnsResp, AnalyzeIndexReq, AnalyzeIndexResp,
+    AnalyzeReq, AnalyzeType,
 };
 
 use test_coprocessor::*;
@@ -75,7 +75,7 @@ fn new_analyze_index_req(
 
 fn new_analyze_sampling_req(table: &Table, idx: i64, sample_size: i64) -> Request {
     let mut col_req = AnalyzeColumnsReq::default();
-    let mut col_groups: Vec<AnalyzeColumnGroup>  = Vec::new();
+    let mut col_groups: Vec<AnalyzeColumnGroup> = Vec::new();
     let mut col_group = AnalyzeColumnGroup::default();
     let offsets = vec![idx];
     let lengths = vec![-1 as i64];

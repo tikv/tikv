@@ -461,7 +461,8 @@ impl RowSampleCollector {
             }
             // Use a in place murmur3 to replace this memory copy.
             for j in 0..offsets.len() {
-                self.row_buf.extend_from_slice(&columns_val[offsets[j] as usize]);
+                self.row_buf
+                    .extend_from_slice(&columns_val[offsets[j] as usize]);
             }
             self.fm_sketches[col_len + i].insert(&self.row_buf);
         }
