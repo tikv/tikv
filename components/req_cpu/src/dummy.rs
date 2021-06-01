@@ -7,7 +7,7 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
 impl ResourceMeteringTag {
-    pub fn attach(self: &Arc<Self>) -> Guard {
+    pub fn attach(&self) -> Guard {
         Guard::default()
     }
 }
@@ -18,7 +18,7 @@ pub struct Guard {
     _p: PhantomData<*const ()>,
 }
 
-pub fn install_recorder() {}
+pub fn init_recorder() {}
 
 pub struct CollectorHandle;
 pub fn register_collector(collector: Box<dyn Collector>) -> CollectorHandle {

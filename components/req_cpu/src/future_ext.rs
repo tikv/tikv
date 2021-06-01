@@ -1,15 +1,15 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::ResourceMeteringTag;
+
 use std::pin::Pin;
-use std::sync::Arc;
 use std::task::{Context, Poll};
 
 impl<T: std::future::Future> FutureExt for T {}
 
 pub trait FutureExt: Sized {
     #[inline]
-    fn in_tag(self, tag: Arc<ResourceMeteringTag>) -> InTags<Self> {
+    fn in_tag(self, tag: ResourceMeteringTag) -> InTags<Self> {
         InTags { inner: self, tag }
     }
 }
@@ -18,7 +18,7 @@ pub trait FutureExt: Sized {
 pub struct InTags<T> {
     #[pin]
     inner: T,
-    tag: Arc<ResourceMeteringTag>,
+    tag: ResourceMeteringTag,
 }
 
 impl<T: std::future::Future> std::future::Future for InTags<T> {

@@ -15,7 +15,7 @@ pub use linux::{init_recorder, register_collector, CollectorHandle, Guard};
 #[cfg(not(target_os = "linux"))]
 mod dummy;
 #[cfg(not(target_os = "linux"))]
-pub use dummy::{install_recorder, register_collector, CollectorHandle, Guard};
+pub use dummy::{init_recorder, register_collector, CollectorHandle, Guard};
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -40,16 +40,33 @@ impl Default for CpuRecorderConfig {
 
 #[derive(Debug, Default, Eq, PartialEq, Clone, Hash)]
 pub struct ResourceMeteringTag {
+    pub infos: Arc<TagInfos>,
+}
+
+impl ResourceMeteringTag {
+    pub fn from_rpc_context(context: &kvproto::kvrpcpb::Context) -> Self {
+        Arc::new(TagInfos::from_rpc_context(context)).into()
+    }
+}
+
+impl From<Arc<TagInfos>> for ResourceMeteringTag {
+    fn from(infos: Arc<TagInfos>) -> Self {
+        Self { infos }
+    }
+}
+
+#[derive(Debug, Default, Eq, PartialEq, Clone, Hash)]
+pub struct TagInfos {
     pub store_id: u64,
     pub region_id: u64,
     pub peer_id: u64,
     pub extra_attachment: Vec<u8>,
 }
 
-impl ResourceMeteringTag {
+impl TagInfos {
     pub fn from_rpc_context(context: &kvproto::kvrpcpb::Context) -> Self {
         let peer = context.get_peer();
-        Self {
+        TagInfos {
             store_id: peer.get_store_id(),
             peer_id: peer.get_id(),
             region_id: context.get_region_id(),
@@ -62,7 +79,7 @@ impl ResourceMeteringTag {
 pub struct RequestCpuRecords {
     begin_unix_time_ms: u64,
     duration_ms: u64,
-    records: HashMap<Arc<ResourceMeteringTag>, u64>,
+    records: HashMap<ResourceMeteringTag, u64>,
 }
 
 impl Default for RequestCpuRecords {

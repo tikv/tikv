@@ -621,7 +621,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
                 let timer = Instant::now_coarse();
 
-                let req_tag = Arc::new(ResourceMeteringTag::from_rpc_context(task.cmd.ctx()));
+                let req_tag = ResourceMeteringTag::from_rpc_context(task.cmd.ctx());
                 let _g = req_tag.attach();
 
                 let region_id = task.cmd.ctx().get_region_id();

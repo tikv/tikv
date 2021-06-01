@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::collector::{Collector, CollectorId};
-use crate::{CpuRecorderConfig, RequestCpuRecords, ResourceMeteringTag};
+use crate::{CpuRecorderConfig, RequestCpuRecords, ResourceMeteringTag, TagInfos};
 
 use std::cell::Cell;
 use std::fs::read_dir;
@@ -58,7 +58,7 @@ pub fn register_collector(collector: Box<dyn Collector>) -> CollectorHandle {
 }
 
 impl ResourceMeteringTag {
-    pub fn attach(self: &Arc<Self>) -> Guard {
+    pub fn attach(&self) -> Guard {
         CURRENT_REQ.with(|s| {
             if s.is_set.get() {
                 panic!("Nested attachment is not allowed.")
@@ -74,31 +74,33 @@ impl ResourceMeteringTag {
 }
 
 #[derive(Default, Clone)]
-struct SharedReqTagPtr {
-    req_tag: Arc<AtomicPtr<ResourceMeteringTag>>,
+struct SharedTagPtr {
+    tag: Arc<AtomicPtr<TagInfos>>,
 }
-impl SharedReqTagPtr {
-    fn take(&self) -> Option<Arc<ResourceMeteringTag>> {
-        let prev_ptr = self.req_tag.swap(std::ptr::null_mut(), Acquire);
-        (!prev_ptr.is_null()).then(|| unsafe { Arc::from_raw(prev_ptr as _) })
+impl SharedTagPtr {
+    fn take(&self) -> Option<ResourceMeteringTag> {
+        let prev_ptr = self.tag.swap(std::ptr::null_mut(), Acquire);
+        (!prev_ptr.is_null())
+            .then(|| unsafe { ResourceMeteringTag::from(Arc::from_raw(prev_ptr as _)) })
     }
 
-    fn swap(&self, value: Arc<ResourceMeteringTag>) -> Option<Arc<ResourceMeteringTag>> {
-        let tag_arc_ptr = Arc::into_raw(value);
-        let prev_ptr = self.req_tag.swap(tag_arc_ptr as _, AcqRel);
-        (!prev_ptr.is_null()).then(|| unsafe { Arc::from_raw(prev_ptr as _) })
+    fn swap(&self, value: ResourceMeteringTag) -> Option<ResourceMeteringTag> {
+        let tag_arc_ptr = Arc::into_raw(value.infos);
+        let prev_ptr = self.tag.swap(tag_arc_ptr as _, AcqRel);
+        (!prev_ptr.is_null())
+            .then(|| unsafe { ResourceMeteringTag::from(Arc::from_raw(prev_ptr as _)) })
     }
 }
 
 struct LocalReqTag {
     is_set: Cell<bool>,
-    shared_ptr: SharedReqTagPtr,
+    shared_ptr: SharedTagPtr,
 }
 thread_local! {
     static CURRENT_REQ: LocalReqTag = {
         let thread_id = unsafe { libc::syscall(libc::SYS_gettid) as libc::pid_t };
 
-        let shared_ptr = SharedReqTagPtr::default();
+        let shared_ptr = SharedTagPtr::default();
         THREAD_REGISTRATION_CHANNEL.0.send(ThreadRegistrationMsg {
             thread_id,
             shared_ptr: shared_ptr.clone(),
@@ -151,7 +153,7 @@ lazy_static! {
 }
 struct ThreadRegistrationMsg {
     thread_id: pid_t,
-    shared_ptr: SharedReqTagPtr,
+    shared_ptr: SharedTagPtr,
 }
 enum CollectorRegistrationMsg {
     Register {
@@ -176,8 +178,8 @@ struct ReqCpuRecorder {
 }
 
 struct ThreadStat {
-    shared_ptr: SharedReqTagPtr,
-    prev_tag: Option<Arc<ResourceMeteringTag>>,
+    shared_ptr: SharedTagPtr,
+    prev_tag: Option<ResourceMeteringTag>,
     prev_stat: pid::Stat,
 }
 
@@ -452,12 +454,12 @@ mod tests {
                 for op in ops {
                     match op {
                         Operation::SetContext(tag) => {
-                            let tag = Arc::new(ResourceMeteringTag {
+                            let tag = ResourceMeteringTag::from(Arc::new(TagInfos {
                                 store_id: 0,
                                 region_id: 0,
                                 peer_id: 0,
                                 extra_attachment: Vec::from(tag),
-                            });
+                            }));
 
                             guard = Some(tag.attach());
                         }
@@ -507,7 +509,7 @@ mod tests {
         fn collect(&self, records: Arc<RequestCpuRecords>) {
             if let Ok(mut r) = self.records.lock() {
                 for (tag, ms) in &records.records {
-                    let str = String::from_utf8(tag.extra_attachment.clone()).unwrap();
+                    let str = String::from_utf8(tag.infos.extra_attachment.clone()).unwrap();
                     *r.entry(str).or_insert(0) += *ms;
                 }
             }
