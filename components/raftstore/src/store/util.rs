@@ -1028,6 +1028,7 @@ impl RegionReadProgressCore {
     // Return the `safe_ts` if it is updated
     fn update_safe_ts(&mut self, idx: u64, ts: u64) -> Option<u64> {
         // Discard stale item with `apply_index` before `last_merge_index`
+        // in order to prevent the stale item makes the `safe_ts` larger again
         if idx <= self.last_merge_index {
             return None;
         }
