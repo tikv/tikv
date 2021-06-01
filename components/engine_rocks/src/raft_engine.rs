@@ -245,10 +245,6 @@ impl RaftLogBatch for RocksWriteBatch {
     fn is_empty(&self) -> bool {
         WriteBatch::is_empty(self)
     }
-
-    fn data_size(&self) -> usize {
-        WriteBatch::data_size(self)
-    }
 }
 
 impl RocksWriteBatch {
