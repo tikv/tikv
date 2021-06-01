@@ -337,8 +337,8 @@ impl PriorityBasedIORateLimiter {
             return;
         }
         debug_assert!(now >= locked.next_refill_time);
-        let skipped_epochs_mul_16 = ((now - locked.next_refill_time).as_secs_f32() * 16.0
-            / DEFAULT_REFILL_PERIOD.as_secs_f32()) as usize;
+        let skipped_epochs =
+            (now - locked.next_refill_time).as_secs_f32() / DEFAULT_REFILL_PERIOD.as_secs_f32();
         locked.next_refill_time = now + DEFAULT_REFILL_PERIOD;
 
         debug_assert!(
@@ -352,7 +352,7 @@ impl PriorityBasedIORateLimiter {
             // Skipped epochs can only serve pending requests rather that in-coming ones, catch up
             // by subtracting them from pending_bytes.
             let served_by_skipped_epochs = std::cmp::min(
-                (remaining_budgets * skipped_epochs_mul_16) >> 4,
+                (remaining_budgets as f32 * skipped_epochs) as usize,
                 locked.pending_bytes[p],
             );
             locked.pending_bytes[p] -= served_by_skipped_epochs;
@@ -364,8 +364,8 @@ impl PriorityBasedIORateLimiter {
                 self.bytes_through[p].swap(to_serve_pending_bytes, Ordering::Relaxed),
                 remaining_budgets,
             );
-            used_budgets += ((served_by_first_epoch + served_by_skipped_epochs) * 16)
-                / (skipped_epochs_mul_16 + 16);
+            used_budgets += ((served_by_first_epoch + served_by_skipped_epochs) as f32
+                / (skipped_epochs + 1.0)) as usize;
             // Only apply rate limit adjustments on low-priority IOs.
             if *pri == IOPriority::Medium {
                 if let Some(adjustor) = &locked.adjustor {
