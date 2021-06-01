@@ -1154,6 +1154,20 @@ where
         }
     }
 
+    /// Evict half of entries from the cache.
+    pub fn half_evict_cache(&mut self) {
+        if self.engines.raft.has_builtin_entry_cache() {
+            // TODO: unify entry cache.
+            return;
+        }
+        let cache = self.cache.as_mut().unwrap();
+        if !cache.cache.is_empty() {
+            let drain_to = cache.cache.len() / 2;
+            let idx = cache.cache[drain_to].index;
+            cache.compact_to(idx + 1);
+        }
+    }
+
     #[inline]
     pub fn flush_cache_metrics(&mut self) {
         if let Some(ref mut cache) = self.cache {
