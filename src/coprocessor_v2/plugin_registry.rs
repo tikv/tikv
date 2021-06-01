@@ -455,7 +455,7 @@ mod tests {
     static INIT: Once = Once::new();
 
     fn initialize_library() -> PathBuf {
-        pkgname_to_libname("example-plugin")
+        PathBuf::from(pkgname_to_libname("example-plugin"))
     }
 
     #[test]
