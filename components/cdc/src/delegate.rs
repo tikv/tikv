@@ -351,7 +351,6 @@ impl Delegate {
     where
         F: Fn(&Downstream) -> Result<()>,
     {
-        // fn broadcast(&self, change_data_event: Event, normal_only: bool) {
         let downstreams = self.downstreams();
         assert!(
             !downstreams.is_empty(),
