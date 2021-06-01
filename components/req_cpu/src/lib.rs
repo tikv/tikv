@@ -22,13 +22,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use collections::HashMap;
 
-pub struct RecorderConfig {
+pub struct CpuRecorderConfig {
     record_interval_ms: f64,
     collect_interval_ms: u64,
     gc_interval_ms: u64,
 }
 
-impl Default for RecorderConfig {
+impl Default for CpuRecorderConfig {
     fn default() -> Self {
         Self {
             record_interval_ms: 10.1,
@@ -39,14 +39,14 @@ impl Default for RecorderConfig {
 }
 
 #[derive(Debug, Default, Eq, PartialEq, Clone, Hash)]
-pub struct RequestTag {
+pub struct ResourceMeteringTag {
     pub store_id: u64,
     pub region_id: u64,
     pub peer_id: u64,
     pub extra_attachment: Vec<u8>,
 }
 
-impl RequestTag {
+impl ResourceMeteringTag {
     pub fn from_rpc_context(context: &kvproto::kvrpcpb::Context) -> Self {
         let peer = context.get_peer();
         Self {
@@ -62,7 +62,7 @@ impl RequestTag {
 pub struct RequestCpuRecords {
     begin_unix_time_ms: u64,
     duration_ms: u64,
-    records: HashMap<Arc<RequestTag>, u64>,
+    records: HashMap<Arc<ResourceMeteringTag>, u64>,
 }
 
 impl Default for RequestCpuRecords {

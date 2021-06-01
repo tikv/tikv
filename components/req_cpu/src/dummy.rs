@@ -1,12 +1,12 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::collector::{Collector, CollectorId};
-use crate::{Builder, RecorderConfig, RequestTag};
+use crate::{CpuRecorderConfig, ResourceMeteringTag};
 
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
-impl RequestTag {
+impl ResourceMeteringTag {
     pub fn attach(self: &Arc<Self>) -> Guard {
         Guard::default()
     }

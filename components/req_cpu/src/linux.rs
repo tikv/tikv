@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::collector::{Collector, CollectorId};
-use crate::{RecorderConfig, RequestCpuRecords, RequestTag};
+use crate::{CpuRecorderConfig, RequestCpuRecords, ResourceMeteringTag};
 
 use std::cell::Cell;
 use std::fs::read_dir;
@@ -24,7 +24,7 @@ pub fn init_recorder() {
             std::thread::Builder::new()
                 .name("req-cpu-recorder".to_owned())
                 .spawn(move || {
-                    let mut recorder = ReqCpuRecorder::new(RecorderConfig::default());
+                    let mut recorder = ReqCpuRecorder::new(CpuRecorderConfig::default());
 
                     loop {
                         recorder.handle_collector_registration();
@@ -57,7 +57,7 @@ pub fn register_collector(collector: Box<dyn Collector>) -> CollectorHandle {
     CollectorHandle { id }
 }
 
-impl RequestTag {
+impl ResourceMeteringTag {
     pub fn attach(self: &Arc<Self>) -> Guard {
         CURRENT_REQ.with(|s| {
             if s.is_set.get() {
@@ -75,15 +75,15 @@ impl RequestTag {
 
 #[derive(Default, Clone)]
 struct SharedReqTagPtr {
-    req_tag: Arc<AtomicPtr<RequestTag>>,
+    req_tag: Arc<AtomicPtr<ResourceMeteringTag>>,
 }
 impl SharedReqTagPtr {
-    fn take(&self) -> Option<Arc<RequestTag>> {
+    fn take(&self) -> Option<Arc<ResourceMeteringTag>> {
         let prev_ptr = self.req_tag.swap(std::ptr::null_mut(), Acquire);
         (!prev_ptr.is_null()).then(|| unsafe { Arc::from_raw(prev_ptr as _) })
     }
 
-    fn swap(&self, value: Arc<RequestTag>) -> Option<Arc<RequestTag>> {
+    fn swap(&self, value: Arc<ResourceMeteringTag>) -> Option<Arc<ResourceMeteringTag>> {
         let tag_arc_ptr = Arc::into_raw(value);
         let prev_ptr = self.req_tag.swap(tag_arc_ptr as _, AcqRel);
         (!prev_ptr.is_null()).then(|| unsafe { Arc::from_raw(prev_ptr as _) })
@@ -164,7 +164,7 @@ enum CollectorRegistrationMsg {
 }
 
 struct ReqCpuRecorder {
-    config: RecorderConfig,
+    config: CpuRecorderConfig,
 
     thread_stats: HashMap<pid_t, ThreadStat>,
     current_window_records: RequestCpuRecords,
@@ -177,12 +177,12 @@ struct ReqCpuRecorder {
 
 struct ThreadStat {
     shared_ptr: SharedReqTagPtr,
-    prev_tag: Option<Arc<RequestTag>>,
+    prev_tag: Option<Arc<ResourceMeteringTag>>,
     prev_stat: pid::Stat,
 }
 
 impl ReqCpuRecorder {
-    pub fn new(config: RecorderConfig) -> Self {
+    pub fn new(config: CpuRecorderConfig) -> Self {
         let now = Instant::now();
 
         Self {
@@ -452,7 +452,7 @@ mod tests {
                 for op in ops {
                     match op {
                         Operation::SetContext(tag) => {
-                            let tag = Arc::new(RequestTag {
+                            let tag = Arc::new(ResourceMeteringTag {
                                 store_id: 0,
                                 region_id: 0,
                                 peer_id: 0,

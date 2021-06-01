@@ -84,7 +84,7 @@ use kvproto::kvrpcpb::{
 };
 use raftstore::store::util::build_key_range;
 use rand::prelude::*;
-use req_cpu::RequestTag;
+use req_cpu::ResourceMeteringTag;
 use std::{
     borrow::Cow,
     iter,
@@ -352,7 +352,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
-                    let req_tag = Arc::new(RequestTag::from_rpc_context(&ctx));
+                    let req_tag = Arc::new(ResourceMeteringTag::from_rpc_context(&ctx));
                     let _g = req_tag.attach();
 
                     let begin_instant = Instant::now_coarse();
@@ -456,7 +456,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         }
                     };
 
-                    let req_tag = Arc::new(RequestTag::from_rpc_context(&ctx));
+                    let req_tag = Arc::new(ResourceMeteringTag::from_rpc_context(&ctx));
                     let snap = Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx));
                     req_snaps.push((
                         snap,
@@ -574,7 +574,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
                     let begin_instant = Instant::now_coarse();
-                    let req_tag = Arc::new(RequestTag::from_rpc_context(&ctx));
+                    let req_tag = Arc::new(ResourceMeteringTag::from_rpc_context(&ctx));
                     let _g = req_tag.attach();
 
                     let mut statistics = Statistics::default();
@@ -720,7 +720,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
                     let begin_instant = Instant::now_coarse();
-                    let req_tag = Arc::new(RequestTag::from_rpc_context(&ctx));
+                    let req_tag = Arc::new(ResourceMeteringTag::from_rpc_context(&ctx));
                     let _g = req_tag.attach();
 
                     let snap_store = SnapshotStore::new(
@@ -850,7 +850,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 {
                     let begin_instant = Instant::now_coarse();
 
-                    let req_tag = Arc::new(RequestTag::from_rpc_context(&ctx));
+                    let req_tag = Arc::new(ResourceMeteringTag::from_rpc_context(&ctx));
                     let _g = req_tag.attach();
 
                     let mut statistics = Statistics::default();
