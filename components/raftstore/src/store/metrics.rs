@@ -520,8 +520,6 @@ lazy_static! {
         ).unwrap();
     pub static ref COMPACTION_GUARD_ACTION_COUNTER: CompactionGuardActionVec =
         auto_flush_from!(COMPACTION_GUARD_ACTION_COUNTER_VEC, CompactionGuardActionVec);
-<<<<<<< HEAD
-=======
 
     pub static ref RAFT_PEER_PENDING_DURATION: Histogram =
     register_histogram!(
@@ -536,5 +534,4 @@ lazy_static! {
         "Number of peers in hibernated state.",
         &["state"],
     ).unwrap();
->>>>>>> 0f5f66632... raftstore: Add hibernate region metrics (#10152)
 }
