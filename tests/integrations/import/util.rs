@@ -179,10 +179,15 @@ pub fn send_write_sst(
 }
 
 pub fn check_ingested_kvs(tikv: &TikvClient, ctx: &Context, sst_range: (u8, u8)) {
+    check_ingested_kvs_cf(tikv, ctx, "", sst_range);
+}
+
+pub fn check_ingested_kvs_cf(tikv: &TikvClient, ctx: &Context, cf: &str, sst_range: (u8, u8)) {
     for i in sst_range.0..sst_range.1 {
         let mut m = RawGetRequest::default();
         m.set_context(ctx.clone());
         m.set_key(vec![i]);
+        m.set_cf(cf.to_owned());
         let resp = tikv.raw_get(&m).unwrap();
         assert!(resp.get_error().is_empty());
         assert!(!resp.has_region_error());
