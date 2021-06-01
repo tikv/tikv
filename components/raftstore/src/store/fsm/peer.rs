@@ -851,7 +851,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             self.on_role_changed(&r.ready);
             if !r.ready.entries().is_empty() {
                 self.register_raft_gc_log_tick();
-                self.register_split_region_check_tick();
             }
             self.ctx.ready_res.push(r);
         }
@@ -1087,7 +1086,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 );
                 // After applying, several metrics are updated, report it to pd to
                 // get fair schedule.
-                self.register_pd_heartbeat_tick();
+                if self.fsm.peer.is_leader() {
+                    self.register_pd_heartbeat_tick();
+                    self.register_split_region_check_tick();
+                }
             }
             ApplyTaskRes::Destroy {
                 region_id,
