@@ -37,8 +37,6 @@ extern crate serde_derive;
 #[macro_use]
 extern crate more_asserts;
 #[macro_use]
-extern crate vlog;
-#[macro_use]
 extern crate tikv_util;
 
 #[cfg(test)]

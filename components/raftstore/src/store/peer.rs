@@ -413,6 +413,8 @@ where
     /// 1. when merging, its data in storeMeta will be removed early by the target peer.
     /// 2. all read requests must be rejected.
     pub pending_remove: bool,
+    /// If a snapshot is being applied asynchronously, messages should not be sent.
+    pending_messages: Vec<eraftpb::Message>,
 
     /// Record the instants of peers being added into the configuration.
     /// Remove them after they are not pending any more.
@@ -589,6 +591,7 @@ where
             },
             raft_log_size_hint: 0,
             leader_lease: Lease::new(cfg.raft_store_max_leader_lease()),
+            pending_messages: vec![],
             peer_stat: PeerStat::default(),
             catch_up_logs: None,
             bcast_wake_up_time: None,
@@ -1631,8 +1634,18 @@ where
                 }
                 self.post_pending_read_index_on_replica(ctx);
                 self.read_progress.update_applied(self.last_applying_idx);
+                if !self.pending_messages.is_empty() {
+                    let msgs = mem::take(&mut self.pending_messages);
+                    self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.send_message);
+                }
             }
-            CheckApplyingSnapStatus::Idle => {}
+            CheckApplyingSnapStatus::Idle => {
+                // FIXME: It's possible that the snapshot applying task is canceled.
+                // Although it only happens when shutting down the store or destroying
+                // the peer, it's still dengerous if continue to handle ready for the
+                // peer. So it's better to revoke `JOB_STATUS_CANCELLING` to ensure all
+                // started tasks can get finished correctly.
+            }
         }
 
         let mut destroy_regions = vec![];
@@ -1733,9 +1746,8 @@ where
             if !self.is_leader() {
                 fail_point!("raft_before_follower_send");
             }
-            for vec_msg in ready.take_messages() {
-                self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.send_message);
-            }
+            let msgs = ready.take_messages();
+            self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.send_message);
         }
 
         self.apply_reads(ctx, &ready);
@@ -1773,6 +1785,7 @@ where
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         invoke_ctx: InvokeContext,
+        ready: &mut Ready,
     ) -> Option<ApplySnapResult> {
         if invoke_ctx.has_snapshot() {
             // When apply snapshot, there is no log applied and not compacted yet.
@@ -1780,7 +1793,11 @@ where
         }
 
         let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
+        let has_msg = !ready.persisted_messages().is_empty();
+
         if apply_snap_result.is_some() {
+            self.pending_messages = ready.take_persisted_messages();
+
             // The peer may change from learner to voter after snapshot applied.
             let peer = self
                 .region()
@@ -1799,13 +1816,14 @@ where
                 );
                 self.peer = peer;
             };
-        }
 
-        if apply_snap_result.is_some() {
             self.activate(ctx);
             let mut meta = ctx.store_meta.lock().unwrap();
             meta.readers
                 .insert(self.region_id, ReadDelegate::from_peer(self));
+        } else if has_msg {
+            let msgs = ready.take_persisted_messages();
+            self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.send_message);
         }
 
         apply_snap_result
@@ -1938,9 +1956,8 @@ where
             if !self.is_leader() {
                 fail_point!("raft_before_follower_send");
             }
-            for vec_msg in light_rd.take_messages() {
-                self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.send_message);
-            }
+            let msgs = light_rd.take_messages();
+            self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.send_message);
         }
 
         if !light_rd.committed_entries().is_empty() {

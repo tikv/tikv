@@ -13,10 +13,13 @@ use collections::HashMap;
 use errors::{extract_key_error, extract_region_error};
 use futures::executor::block_on;
 use test_raftstore::{must_get_equal, must_get_none, new_peer, new_server_cluster};
-use tikv::storage::kv::{Error as KvError, ErrorInner as KvErrorInner, SnapContext};
 use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner};
 use tikv::storage::{self, test_util::*, *};
+use tikv::storage::{
+    kv::{Error as KvError, ErrorInner as KvErrorInner, SnapContext},
+    Error as StorageError, ErrorInner as StorageErrorInner,
+};
 use tikv_util::future::paired_future_callback;
 use tikv_util::HandyRwLock;
 use txn_types::Key;
@@ -1058,4 +1061,80 @@ fn test_atomic_cas_lock_by_latch() {
     let f = storage.raw_get(ctx, "".to_string(), b"key".to_vec());
     let ret = block_on(f).unwrap().unwrap();
     assert_eq!(b"v2".to_vec(), ret);
+}
+
+#[test]
+fn test_before_async_write_deadline() {
+    let mut cluster = new_server_cluster(0, 1);
+    cluster.run();
+
+    let engine = cluster
+        .sim
+        .read()
+        .unwrap()
+        .storages
+        .get(&1)
+        .unwrap()
+        .clone();
+    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+        engine,
+        DummyLockManager {},
+    )
+    .build()
+    .unwrap();
+
+    let mut ctx = Context::default();
+    ctx.set_region_id(1);
+    ctx.set_region_epoch(cluster.get_region_epoch(1));
+    ctx.set_peer(cluster.leader_of_region(1).unwrap());
+    ctx.max_execution_duration_ms = 200;
+    let (tx, rx) = channel();
+    fail::cfg("cleanup", "sleep(500)").unwrap();
+    storage
+        .sched_txn_command(
+            commands::Rollback::new(vec![Key::from_raw(b"k")], 10.into(), ctx),
+            Box::new(move |res: storage::Result<_>| {
+                tx.send(res).unwrap();
+            }),
+        )
+        .unwrap();
+
+    assert!(matches!(
+        rx.recv().unwrap(),
+        Err(StorageError(box StorageErrorInner::DeadlineExceeded))
+    ));
+}
+
+#[test]
+fn test_before_propose_deadline() {
+    let mut cluster = new_server_cluster(0, 1);
+    cluster.run();
+
+    let engine = cluster.sim.read().unwrap().storages[&1].clone();
+    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+        engine,
+        DummyLockManager {},
+    )
+    .build()
+    .unwrap();
+
+    let mut ctx = Context::default();
+    ctx.set_region_id(1);
+    ctx.set_region_epoch(cluster.get_region_epoch(1));
+    ctx.set_peer(cluster.leader_of_region(1).unwrap());
+    ctx.max_execution_duration_ms = 200;
+    let (tx, rx) = channel();
+    fail::cfg("pause_on_peer_collect_message", "sleep(500)").unwrap();
+    storage
+        .sched_txn_command(
+            commands::Rollback::new(vec![Key::from_raw(b"k")], 10.into(), ctx),
+            Box::new(move |res: storage::Result<_>| {
+                tx.send(res).unwrap();
+            }),
+        )
+        .unwrap();
+    assert!(matches!(
+        rx.recv().unwrap(),
+        Err(StorageError(box StorageErrorInner::DeadlineExceeded))
+    ));
 }

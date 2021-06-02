@@ -1,5 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::server::lock_manager::waiter_manager;
+use crate::server::lock_manager::waiter_manager::Callback;
 use crate::storage::{txn::ProcessResult, types::StorageCallback};
 use std::time::Duration;
 use txn_types::TimeStamp;
@@ -10,9 +12,13 @@ pub struct Lock {
     pub hash: u64,
 }
 
+/// DiagnosticContext is for diagnosing problems about locks
 #[derive(Clone, Default)]
 pub struct DiagnosticContext {
+    /// The key we care about
     pub key: Vec<u8>,
+    /// This tag is used for aggregate related kv requests (eg. generated from same statement)
+    /// Currently it is the encoded SQL digest if the client is TiDB
     pub resource_group_tag: Vec<u8>,
 }
 
@@ -86,6 +92,8 @@ pub trait LockManager: Clone + Send + 'static {
     fn has_waiter(&self) -> bool {
         true
     }
+
+    fn dump_wait_for_entries(&self, cb: waiter_manager::Callback);
 }
 
 // For test
@@ -112,5 +120,9 @@ impl LockManager for DummyLockManager {
         _commit_ts: TimeStamp,
         _is_pessimistic_txn: bool,
     ) {
+    }
+
+    fn dump_wait_for_entries(&self, cb: Callback) {
+        cb(vec![])
     }
 }

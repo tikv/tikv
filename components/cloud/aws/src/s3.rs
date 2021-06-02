@@ -6,7 +6,7 @@ use rusoto_core::{
     {ByteStream, RusotoError},
 };
 use rusoto_credential::{ProvideAwsCredentials, StaticProvider};
-use rusoto_s3::*;
+use rusoto_s3::{util::AddressingStyle, *};
 use tokio::time::{delay_for, timeout};
 
 use crate::util;
@@ -104,7 +104,7 @@ impl Config {
             bucket: StringNonEmpty::required_field(input.bucket, "bucket")?,
             prefix: StringNonEmpty::opt(input.prefix),
             storage_class: storage_class.clone(),
-            region: None,
+            region: StringNonEmpty::opt(input.region),
         };
         let access_key_pair = match StringNonEmpty::opt(input.access_key) {
             None => None,
@@ -175,7 +175,10 @@ impl S3Storage {
         let bucket_region = none_to_empty(config.bucket.region.clone());
         let bucket_endpoint = config.bucket.endpoint.clone();
         let region = util::get_region(&bucket_region, &none_to_empty(bucket_endpoint))?;
-        let client = S3Client::new_with(dispatcher, credentials_provider, region);
+        let mut client = S3Client::new_with(dispatcher, credentials_provider, region);
+        if config.force_path_style {
+            client.config_mut().addressing_style = AddressingStyle::Path;
+        }
         Ok(S3Storage { config, client })
     }
 
@@ -527,10 +530,12 @@ mod tests {
         let mut bucket = BucketConf::default(bucket_name);
         bucket.region = StringNonEmpty::opt("ap-southeast-2".to_string());
         bucket.prefix = StringNonEmpty::opt("myprefix".to_string());
-        let config = Config::default(bucket);
+        let mut config = Config::default(bucket);
+        config.force_path_style = true;
         let dispatcher = MockRequestDispatcher::with_status(200).with_request_checker(
             move |req: &SignedRequest| {
                 assert_eq!(req.region.name(), "ap-southeast-2");
+                assert_eq!(req.hostname(), "s3.ap-southeast-2.amazonaws.com");
                 assert_eq!(req.path(), "/mybucket/myprefix/mykey");
                 // PutObject is translated to HTTP PUT.
                 assert_eq!(req.payload.is_some(), req.method() == "PUT");
@@ -590,6 +595,35 @@ mod tests {
         fail::remove(s3_timeout_injected_fp);
         // no timeout
         assert!(resp.is_ok());
+    }
+
+    #[test]
+    fn test_s3_storage_with_virtual_host() {
+        let magic_contents = "abcd";
+        let bucket_name = StringNonEmpty::required("bucket2".to_string()).unwrap();
+        let mut bucket = BucketConf::default(bucket_name);
+        bucket.region = StringNonEmpty::opt("ap-southeast-1".to_string());
+        bucket.prefix = StringNonEmpty::opt("prefix2".to_string());
+        let mut config = Config::default(bucket);
+        config.force_path_style = false;
+        let dispatcher = MockRequestDispatcher::with_status(200).with_request_checker(
+            move |req: &SignedRequest| {
+                assert_eq!(req.region.name(), "ap-southeast-1");
+                assert_eq!(req.hostname(), "bucket2.s3.ap-southeast-1.amazonaws.com");
+                assert_eq!(req.path(), "/prefix2/key2");
+                // PutObject is translated to HTTP PUT.
+                assert_eq!(req.payload.is_some(), req.method() == "PUT");
+            },
+        );
+        let credentials_provider =
+            StaticProvider::new_minimal("abc".to_string(), "xyz".to_string());
+        let s = S3Storage::new_creds_dispatcher(config, dispatcher, credentials_provider).unwrap();
+        s.put(
+            "key2",
+            Box::new(magic_contents.as_bytes()),
+            magic_contents.len() as u64,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -657,10 +691,16 @@ mod tests {
         let mut input = InputConfig::default();
         input.set_bucket("bucket".to_owned());
         input.set_prefix("backup 02/prefix/".to_owned());
+        input.set_region("us-west-2".to_owned());
         let c1 = Config::from_input(input.clone()).unwrap();
         let c2 = Config::from_cloud_dynamic(&cloud_dynamic_from_input(input)).unwrap();
         assert_eq!(c1.bucket.bucket, c2.bucket.bucket);
         assert_eq!(c1.bucket.prefix, c2.bucket.prefix);
+        assert_eq!(c1.bucket.region, c2.bucket.region);
+        assert_eq!(
+            c1.bucket.region,
+            StringNonEmpty::opt("us-west-2".to_owned())
+        );
     }
 
     fn cloud_dynamic_from_input(mut s3: InputConfig) -> CloudDynamic {

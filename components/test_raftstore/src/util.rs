@@ -35,6 +35,7 @@ use engine_rocks::{
 use engine_rocks::{CompactionListener, RocksCompactionJobInfo};
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::{Engines, Iterable, Peekable};
+use file_system::IORateLimiter;
 use futures::executor::block_on;
 use raftstore::store::fsm::RaftRouter;
 use raftstore::store::*;
@@ -588,6 +589,7 @@ fn dummpy_filter(_: &RocksCompactionJobInfo) -> bool {
 pub fn create_test_engine(
     // TODO: pass it in for all cases.
     router: Option<RaftRouter<RocksEngine, RocksEngine>>,
+    limiter: Option<Arc<IORateLimiter>>,
     cfg: &TiKvConfig,
 ) -> (
     Engines<RocksEngine, RocksEngine>,
@@ -601,7 +603,7 @@ pub fn create_test_engine(
             .map(Arc::new);
 
     let env = get_encrypted_env(key_manager.clone(), None).unwrap();
-    let env = get_inspected_env(Some(env)).unwrap();
+    let env = get_inspected_env(Some(env), limiter).unwrap();
     let cache = cfg.storage.block_cache.build_shared_cache();
 
     let kv_path = dir.path().join(DEFAULT_ROCKSDB_SUB_DIR);
