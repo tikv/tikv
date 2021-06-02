@@ -21,7 +21,7 @@ use crate::store::fsm::apply::{CatchUpLogs, ChangeObserver};
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::KeysInfoFormatter;
 use crate::store::SnapKey;
-use tikv_util::{deadline::Deadline, escape};
+use tikv_util::{deadline::Deadline, escape, memory::HeapSize};
 
 use super::{AbstractPeer, RegionSnapshot};
 
@@ -79,6 +79,8 @@ pub enum Callback<S: Snapshot> {
         committed_cb: Option<ExtCallback>,
     },
 }
+
+impl<S: Snapshot> HeapSize for Callback<S> {}
 
 impl<S> Callback<S>
 where
