@@ -509,6 +509,16 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
     }
 
+    pub fn on_applied_current_term(&self, role: StateRole, region: &Region) {
+        if self.registry.cmd_observers.is_empty() {
+            return;
+        }
+        for observer in &self.registry.cmd_observers {
+            let observer = observer.observer.inner();
+            observer.on_applied_current_term(role, region);
+        }
+    }
+
     pub fn on_step_read_index(&self, msg: &mut eraftpb::Message) {
         for step_ob in &self.registry.read_index_observers {
             step_ob.observer.inner().on_step(msg);
@@ -642,6 +652,7 @@ mod tests {
         fn on_flush_applied_cmd_batch(&self, _: &mut Vec<CmdBatch>, _: &PanicEngine) {
             self.called.fetch_add(13, Ordering::SeqCst);
         }
+        fn on_applied_current_term(&self, _: StateRole, _: &Region) {}
     }
 
     macro_rules! assert_all {

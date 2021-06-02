@@ -126,6 +126,8 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
             warn!("cdc schedule task failed"; "error" => ?e);
         }
     }
+
+    fn on_applied_current_term(&self, _: StateRole, _: &Region) {}
 }
 
 impl RoleObserver for CdcObserver {
