@@ -5,7 +5,7 @@ use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::iter::Iterator;
 use std::time::Instant;
-use std::{cmp, u64};
+use std::{cmp, mem, u64};
 
 use batch_system::{BasicMailbox, Fsm};
 use collections::HashMap;
@@ -30,6 +30,8 @@ use protobuf::Message;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 use raft::{Ready, StateRole};
+use tikv_alloc::trace::TraceEvent;
+use tikv_util::memory::HeapSize;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
@@ -46,6 +48,7 @@ use crate::store::fsm::{
 };
 use crate::store::hibernate_state::{GroupState, HibernateState};
 use crate::store::local_metrics::RaftProposeMetrics;
+use crate::store::memory::*;
 use crate::store::metrics::*;
 use crate::store::msg::{Callback, ExtCallback};
 use crate::store::peer::{ConsistencyState, Peer, StaleState};
@@ -122,6 +125,8 @@ where
 
     // Batch raft command which has the same header into an entry
     batch_req_builder: BatchRaftCmdRequestBuilder<EK>,
+
+    trace: PeerMemoryTrace,
 }
 
 pub struct BatchRaftCmdRequestBuilder<E>
@@ -155,6 +160,11 @@ where
             resp.mut_header().set_error(err);
             callback.invoke_with_response(resp);
         }
+        (match self.hibernate_state.group_state() {
+            GroupState::Idle => &HIBERNATED_PEER_STATE_GAUGE.hibernated,
+            _ => &HIBERNATED_PEER_STATE_GAUGE.awaken,
+        })
+        .dec();
     }
 }
 
@@ -191,6 +201,7 @@ where
             "region_id" => region.get_id(),
             "peer_id" => meta_peer.get_id(),
         );
+        HIBERNATED_PEER_STATE_GAUGE.awaken.inc();
         let (tx, rx) = mpsc::loose_bounded(cfg.notify_capacity);
         Ok((
             tx,
@@ -208,6 +219,7 @@ where
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(
                     cfg.raft_entry_max_size.0 as f64,
                 ),
+                trace: PeerMemoryTrace::default(),
             }),
         ))
     }
@@ -250,6 +262,7 @@ where
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(
                     cfg.raft_entry_max_size.0 as f64,
                 ),
+                trace: PeerMemoryTrace::default(),
             }),
         ))
     }
@@ -280,6 +293,46 @@ where
 
     pub fn schedule_applying_snapshot(&mut self) {
         self.peer.mut_store().schedule_applying_snapshot();
+    }
+
+    pub fn reset_hibernate_state(&mut self, state: GroupState) {
+        self.hibernate_state.reset(state);
+    }
+
+    pub fn maybe_hibernate(&mut self) -> bool {
+        self.hibernate_state
+            .maybe_hibernate(self.peer.peer_id(), self.peer.region())
+    }
+
+    #[inline]
+    pub fn raft_heap_size(&self, cfg: &Config) -> usize {
+        let raft = &self.peer.raft_group.raft;
+        let peer_cnt = self.peer.region().get_peers().len();
+        let inflight_size = cfg.raft_max_inflight_msgs * mem::size_of::<u64>();
+        // Progress size
+        let mut size =
+            mem::size_of::<raft::Progress>() * peer_cnt * 6 / 5 + inflight_size * peer_cnt;
+        // We use Uuid for read request.
+        size += raft.read_states.len() * (mem::size_of::<raft::ReadState>() + 16);
+        // Every requests have at least header, which should be at least 8 bytes.
+        let entries = &raft.raft_log.unstable.entries;
+        size += entries.len() * (mem::size_of::<raft::eraftpb::Entry>() + 8);
+        let read_only = &raft.read_only;
+        size +=
+            read_only.pending_read_index.len() * (16 + mem::size_of::<raft::eraftpb::Message>());
+        size += read_only.read_index_queue.heap_size() + 16 * read_only.read_index_queue.len();
+        size += raft.msgs.len() * mem::size_of::<raft::eraftpb::Message>();
+        size
+    }
+
+    #[inline]
+    pub fn update_memory_trace(&mut self, cfg: &Config) -> Option<TraceEvent> {
+        let trace = PeerMemoryTrace {
+            raft_machine: self.raft_heap_size(cfg),
+            proposals: self.peer.proposal_size(),
+            rest: self.peer.rest_size() + mem::size_of::<Self>(),
+        };
+        self.trace.reset(trace)
     }
 }
 
@@ -497,6 +550,11 @@ where
                         .propose
                         .request_wait_time
                         .observe(duration_to_sec(cmd.send_time.elapsed()) as f64);
+                    if let Some(Err(e)) = cmd.deadline.map(|deadline| deadline.check()) {
+                        cmd.callback.invoke_with_response(new_error(e.into()));
+                        continue;
+                    }
+
                     let req_size = cmd.request.compute_size();
                     if self.fsm.batch_req_builder.can_batch(&cmd.request, req_size) {
                         self.fsm.batch_req_builder.add(cmd, req_size);
@@ -590,7 +648,7 @@ where
             CasualMessage::RegionOverlapped => {
                 debug!("start ticking for overlapped"; "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id());
                 // Maybe do some safe check first?
-                self.fsm.hibernate_state.reset(GroupState::Chaos);
+                self.fsm.reset_hibernate_state(GroupState::Chaos);
                 self.register_raft_base_tick();
 
                 if is_learner(&self.fsm.peer.peer) {
@@ -805,7 +863,7 @@ where
                 if self.fsm.peer.is_leader() {
                     self.fsm.peer.raft_group.report_unreachable(to_peer_id);
                 } else if to_peer_id == self.fsm.peer.leader_id() {
-                    self.fsm.hibernate_state.reset(GroupState::Chaos);
+                    self.fsm.reset_hibernate_state(GroupState::Chaos);
                     self.register_raft_base_tick();
                 }
             }
@@ -815,7 +873,7 @@ where
                     if self.fsm.peer.is_leader() {
                         self.fsm.peer.raft_group.report_unreachable(peer_id);
                     } else if peer_id == self.fsm.peer.leader_id() {
-                        self.fsm.hibernate_state.reset(GroupState::Chaos);
+                        self.fsm.reset_hibernate_state(GroupState::Chaos);
                         self.register_raft_base_tick();
                     }
                 }
@@ -933,10 +991,12 @@ where
             );
         }
         let is_merging = self.fsm.peer.pending_merge_state.is_some();
-        let res = self.fsm.peer.post_raft_ready_append(self.ctx, ready.ctx);
-        self.fsm
+        let CollectedReady { ctx, mut ready, .. } = ready;
+        let res = self
+            .fsm
             .peer
-            .handle_raft_ready_advance(self.ctx, ready.ready);
+            .post_raft_ready_append(self.ctx, ctx, &mut ready);
+        self.fsm.peer.handle_raft_ready_advance(self.ctx, ready);
         if let Some(apply_res) = res {
             self.on_ready_apply_snapshot(apply_res);
             if is_merging {
@@ -946,7 +1006,7 @@ where
             self.register_raft_base_tick();
         }
         if self.fsm.peer.leader_unreachable {
-            self.fsm.hibernate_state.reset(GroupState::Chaos);
+            self.fsm.reset_hibernate_state(GroupState::Chaos);
             self.register_raft_base_tick();
             self.fsm.peer.leader_unreachable = false;
         }
@@ -1093,7 +1153,7 @@ where
         }
 
         debug!("stop ticking"; "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id(), "res" => ?res);
-        self.fsm.hibernate_state.reset(GroupState::Idle);
+        self.fsm.reset_hibernate_state(GroupState::Idle);
         // Followers will stop ticking at L789. Keep ticking for followers
         // to allow it to campaign quickly when abnormal situation is detected.
         if !self.fsm.peer.is_leader() {
@@ -1220,7 +1280,7 @@ where
             || msg.get_message().get_msg_type() == MessageType::MsgTimeoutNow
         {
             if self.fsm.hibernate_state.group_state() != GroupState::Chaos {
-                self.fsm.hibernate_state.reset(GroupState::Chaos);
+                self.fsm.reset_hibernate_state(GroupState::Chaos);
                 self.register_raft_base_tick();
             }
         } else if msg.get_from_peer().get_id() == self.fsm.peer.leader_id() {
@@ -1266,11 +1326,7 @@ where
     }
 
     fn all_agree_to_hibernate(&mut self) -> bool {
-        if self
-            .fsm
-            .hibernate_state
-            .maybe_hibernate(self.fsm.peer_id(), self.fsm.peer.region())
-        {
+        if self.fsm.maybe_hibernate() {
             return true;
         }
         if !self
@@ -1360,7 +1416,7 @@ where
     }
 
     fn reset_raft_tick(&mut self, state: GroupState) {
-        self.fsm.hibernate_state.reset(state);
+        self.fsm.reset_hibernate_state(state);
         self.fsm.missing_ticks = 0;
         self.fsm.peer.should_wake_up = false;
         self.register_raft_base_tick();
@@ -1935,6 +1991,7 @@ where
         // So in here, it's necessary to held the StoreMeta lock when closing the router.
         self.ctx.router.close(region_id);
         self.fsm.stop();
+        MEMTRACE_PEERS.trace(TraceEvent::Sub(self.fsm.trace.sum()));
 
         if is_initialized
             && !merged_by_target
@@ -2032,7 +2089,7 @@ where
             match self.fsm.peer.raft_group.apply_conf_change(&cp.conf_change) {
                 Ok(_) => {}
                 // PD could dispatch redundant conf changes.
-                Err(raft::Error::NotExists(..)) | Err(raft::Error::Exists(..)) => {}
+                Err(raft::Error::NotExists { .. }) | Err(raft::Error::Exists { .. }) => {}
                 _ => unreachable!(),
             }
         } else {
@@ -2136,7 +2193,7 @@ where
                 need_ping = false;
             }
         } else if !self.fsm.peer.has_valid_leader() {
-            self.fsm.hibernate_state.reset(GroupState::Chaos);
+            self.fsm.reset_hibernate_state(GroupState::Chaos);
             self.register_raft_base_tick();
         }
         if need_ping {
@@ -2340,7 +2397,7 @@ where
                 // check again after split.
                 new_peer.peer.size_diff_hint = self.ctx.cfg.region_split_check_diff.0;
             }
-            let mailbox = BasicMailbox::new(sender, new_peer);
+            let mailbox = BasicMailbox::new(sender, new_peer, self.ctx.router.state_cnt().clone());
             self.ctx.router.register(new_region_id, mailbox);
             self.ctx
                 .router
@@ -3215,7 +3272,7 @@ where
         {
             self.ctx.raft_metrics.invalid_proposal.not_leader += 1;
             let leader = self.fsm.peer.get_peer_from_cache(leader_id);
-            self.fsm.hibernate_state.reset(GroupState::Chaos);
+            self.fsm.reset_hibernate_state(GroupState::Chaos);
             self.register_raft_base_tick();
             return Err(Error::NotLeader(region_id, leader));
         }
@@ -3767,7 +3824,7 @@ where
                 if !self.fsm.peer.is_leader() {
                     // If leader is able to receive messge but can't send out any,
                     // follower should be able to start an election.
-                    self.fsm.hibernate_state.reset(GroupState::PreChaos);
+                    self.fsm.reset_hibernate_state(GroupState::PreChaos);
                 } else {
                     self.fsm.has_ready = true;
                     // Schedule a pd heartbeat to discover down and pending peer when
@@ -3775,7 +3832,7 @@ where
                     self.register_pd_heartbeat_tick();
                 }
             } else if group_state == GroupState::PreChaos {
-                self.fsm.hibernate_state.reset(GroupState::Chaos);
+                self.fsm.reset_hibernate_state(GroupState::Chaos);
             } else if group_state == GroupState::Chaos {
                 // Register tick if it's not yet. Only when it fails to receive ping from leader
                 // after two stale check can a follower actually tick.

@@ -21,11 +21,13 @@ use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 
 use crate::store::fsm::GenSnapTask;
+use crate::store::memory::*;
 use crate::store::util;
 use crate::store::ProposalContext;
-use crate::{Error, Result};
+use crate::{bytes_capacity, Error, Result};
 use engine_traits::{RaftEngine, RaftLogBatch};
 use into_other::into_other;
+use tikv_alloc::trace::TraceEvent;
 use tikv_util::worker::Scheduler;
 use tikv_util::{box_err, box_try, debug, defer, error, info, warn};
 
@@ -176,7 +178,7 @@ impl EntryCache {
                         .cache
                         .iter()
                         .skip(left)
-                        .map(|e| (e.data.capacity() + e.context.capacity()) as i64)
+                        .map(|e| (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64)
                         .sum::<i64>();
                     self.cache.truncate(left);
                 }
@@ -202,7 +204,8 @@ impl EntryCache {
             if len < self.cache.len() {
                 let mut drained_cache_entries_size = 0;
                 self.cache.drain(..len).for_each(|e| {
-                    drained_cache_entries_size += (e.data.capacity() + e.context.capacity()) as i64
+                    drained_cache_entries_size +=
+                        (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64
                 });
                 self.mem_size_change -= drained_cache_entries_size;
             } else {
@@ -215,7 +218,7 @@ impl EntryCache {
         let mut entries_mem_size = 0;
         for e in &entries[start_idx..] {
             self.cache.push_back(e.to_owned());
-            entries_mem_size += (e.data.capacity() + e.context.capacity()) as i64;
+            entries_mem_size += (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64;
         }
         self.mem_size_change += self
             .get_cache_vec_mem_size_change(self.cache.capacity() as i64, old_capacity as i64)
@@ -234,7 +237,8 @@ impl EntryCache {
         self.cache
             .drain(..(cmp::min(cache_last_idx + 1, idx) - cache_first_idx) as usize)
             .for_each(|e| {
-                drained_cache_entries_size += (e.data.capacity() + e.context.capacity()) as i64
+                drained_cache_entries_size +=
+                    (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64
             });
         self.mem_size_change -= drained_cache_entries_size;
         if self.cache.len() < SHRINK_CACHE_CAPACITY && self.cache.capacity() > SHRINK_CACHE_CAPACITY
@@ -252,7 +256,7 @@ impl EntryCache {
         self.mem_size_change -= self
             .cache
             .iter()
-            .map(|e| (e.data.capacity() + e.context.capacity()) as i64)
+            .map(|e| (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64)
             .sum::<i64>();
     }
 
@@ -264,12 +268,18 @@ impl EntryCache {
         let data_size: usize = self
             .cache
             .iter()
-            .map(|e| e.data.capacity() + e.context.capacity())
+            .map(|e| bytes_capacity(&e.data) + bytes_capacity(&e.context))
             .sum();
         (ENTRY_MEM_SIZE * self.cache.capacity() + data_size) as i64
     }
 
     fn flush_mem_size_change(&mut self) {
+        let event = if self.mem_size_change > 0 {
+            TraceEvent::Add(self.mem_size_change as usize)
+        } else {
+            TraceEvent::Sub(-self.mem_size_change as usize)
+        };
+        MEMTRACE_ENTRY_CACHE.trace(event);
         RAFT_ENTRIES_CACHES_GAUGE.add(self.mem_size_change);
         self.mem_size_change = 0;
     }
@@ -306,6 +316,7 @@ impl Drop for EntryCache {
     fn drop(&mut self) {
         self.flush_mem_size_change();
         RAFT_ENTRIES_CACHES_GAUGE.sub(self.get_total_mem_size());
+        MEMTRACE_ENTRY_CACHE.trace(TraceEvent::Sub(self.get_total_mem_size() as usize));
         self.flush_stats();
     }
 }
@@ -1638,7 +1649,7 @@ where
     )?;
     snap_data.mut_meta().set_for_balance(for_balance);
     let v = snap_data.write_to_bytes()?;
-    snapshot.set_data(v);
+    snapshot.set_data(v.into());
 
     SNAPSHOT_KV_COUNT_HISTOGRAM.observe(stat.kv_count as f64);
     SNAPSHOT_SIZE_HISTOGRAM.observe(stat.size as f64);
@@ -2553,7 +2564,7 @@ mod tests {
         // Sync if context is marked sync.
         let context = ProposalContext::SYNC_LOG.to_vec();
         let mut e = Entry::default();
-        e.set_context(context);
+        e.set_context(context.into());
         tbl.push((e.clone(), true));
 
         // Sync if sync_log is set and context is marked sync_log.
