@@ -138,12 +138,13 @@ pub struct Sink {
 }
 
 impl Sink {
-    pub fn unbounded_send(&self, event: CdcEvent) -> Result<(), SendError> {
+    pub fn unbounded_send(&self, event: CdcEvent, force: bool) -> Result<(), SendError> {
         if self.closed.load(Ordering::Acquire) {
             return Err(SendError::Disconnected);
         }
-        let bytes = event.size() as usize;
-        if !self.memory_quota.alloc(bytes) {
+        // Try it's best to send error events.
+        let bytes = if !force { event.size() as usize } else { 0 };
+        if bytes != 0 && !self.memory_quota.alloc(bytes) {
             return Err(SendError::Congested);
         }
         self.unbounded_sender
@@ -295,14 +296,14 @@ mod tests {
     use std::time::Duration;
 
     type Send = Box<dyn FnMut(CdcEvent) -> Result<(), SendError>>;
-    fn new_test_cancal(buffer: usize, capacity: usize) -> (Send, Drain) {
+    fn new_test_cancal(buffer: usize, capacity: usize, force_send: bool) -> (Send, Drain) {
         let memory_quota = MemoryQuota::new(capacity);
         let (mut tx, rx) = channel(buffer, memory_quota);
         let mut flag = true;
         let send = move |event| {
             flag = !flag;
             if flag {
-                tx.unbounded_send(event)
+                tx.unbounded_send(event, force_send)
             } else {
                 block_on(tx.send_all(vec![event]))
             }
@@ -312,7 +313,8 @@ mod tests {
 
     #[test]
     fn test_barrier() {
-        let (mut send, rx) = new_test_cancal(10, std::usize::MAX);
+        let force_send = false;
+        let (mut send, rx) = new_test_cancal(10, std::usize::MAX, force_send);
         send(CdcEvent::Event(Default::default())).unwrap();
         let (btx1, brx1) = mpsc::channel();
         send(CdcEvent::Barrier(Some(Box::new(move |()| {
@@ -345,7 +347,9 @@ mod tests {
 
     #[test]
     fn test_nonblocking_batch() {
-        let (mut send, rx) = new_test_cancal(CDC_MSG_MAX_BATCH_SIZE * 2, std::usize::MAX);
+        let force_send = false;
+        let (mut send, rx) =
+            new_test_cancal(CDC_MSG_MAX_BATCH_SIZE * 2, std::usize::MAX, force_send);
         let mut drain = rx.drain_grpc_message();
         for count in 1..CDC_EVENT_MAX_BATCH_SIZE + CDC_EVENT_MAX_BATCH_SIZE / 2 {
             for _ in 0..count {
@@ -368,11 +372,35 @@ mod tests {
         // 1KB
         let max_pending_bytes = 1024;
         let buffer = max_pending_bytes / event.size();
-        let (mut send, _rx) = new_test_cancal(buffer as _, max_pending_bytes as _);
+        let force_send = false;
+        let (mut send, _rx) = new_test_cancal(buffer as _, max_pending_bytes as _, force_send);
         for _ in 0..buffer {
             send(CdcEvent::Event(e.clone())).unwrap();
         }
         assert_matches!(send(CdcEvent::Event(e)).unwrap_err(), SendError::Congested);
+    }
+
+    #[test]
+    fn test_force_send() {
+        let mut e = kvproto::cdcpb::Event::default();
+        e.region_id = 1;
+        let event = CdcEvent::Event(e.clone());
+        assert!(event.size() != 0);
+        // 1KB
+        let max_pending_bytes = 1024;
+        let buffer = max_pending_bytes / event.size();
+        let memory_quota = MemoryQuota::new(max_pending_bytes as _);
+        let (tx, _rx) = channel(buffer as _, memory_quota);
+        for _ in 0..buffer {
+            tx.unbounded_send(CdcEvent::Event(e.clone()), false)
+                .unwrap();
+        }
+        assert_matches!(
+            tx.unbounded_send(CdcEvent::Event(e.clone()), false)
+                .unwrap_err(),
+            SendError::Congested
+        );
+        tx.unbounded_send(CdcEvent::Event(e), true).unwrap();
     }
 
     #[test]
@@ -384,9 +412,10 @@ mod tests {
         // 1KB
         let max_pending_bytes = 1024;
         let buffer = max_pending_bytes / event.size() + 1;
+        let force_send = false;
         // Make sure memory quota is freed when rx is dropped before tx.
         {
-            let (mut send, rx) = new_test_cancal(buffer as _, max_pending_bytes as _);
+            let (mut send, rx) = new_test_cancal(buffer as _, max_pending_bytes as _, force_send);
             loop {
                 match send(CdcEvent::Event(e.clone())) {
                     Ok(_) => (),
@@ -403,7 +432,7 @@ mod tests {
         }
         // Make sure memory quota is freed when tx is dropped before rx.
         {
-            let (mut send, rx) = new_test_cancal(buffer as _, max_pending_bytes as _);
+            let (mut send, rx) = new_test_cancal(buffer as _, max_pending_bytes as _, force_send);
             loop {
                 match send(CdcEvent::Event(e.clone())) {
                     Ok(_) => (),

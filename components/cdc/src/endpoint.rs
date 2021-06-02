@@ -667,7 +667,8 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
         let send_cdc_event = |conn: &Conn, event| {
             // No need force send, as resolved ts messages is sent regularly.
             // And errors can be ignored.
-            match conn.get_sink().unbounded_send(event) {
+            let force_send = false;
+            match conn.get_sink().unbounded_send(event, force_send) {
                 Ok(_) => (),
                 Err(SendError::Disconnected) => {
                     debug!("cdc send event failed, disconnected";
@@ -731,7 +732,8 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
         resolved_ts_event.event = Some(Event_oneof_event::ResolvedTs(resolved_ts));
         // No need force send, as resolved ts messages is sent regularly.
         // And errors can be ignored.
-        let _ = downstream.sink_event(resolved_ts_event);
+        let force_send = false;
+        let _ = downstream.sink_event(resolved_ts_event, force_send);
     }
 
     fn register_min_ts_event(&self) {
