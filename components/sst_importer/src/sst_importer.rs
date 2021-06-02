@@ -921,9 +921,7 @@ mod tests {
         collect, name_to_cf, EncryptionMethod, Iterable, Iterator, SeekKey, CF_DEFAULT, DATA_CFS,
     };
     use engine_traits::{Error as TraitError, SstWriterBuilder};
-    use engine_traits::{
-        ExternalSstFileInfo, SstExt,
-    };
+    use engine_traits::{ExternalSstFileInfo, SstExt};
     use tempfile::Builder;
     use test_sst_importer::{
         new_sst_reader, new_sst_writer, new_test_engine, RocksSstWriter, PROP_TEST_MARKER_CF_NAME,
