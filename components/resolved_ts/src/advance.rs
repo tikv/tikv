@@ -12,6 +12,7 @@ use kvproto::kvrpcpb::{CheckLeaderRequest, LeaderInfo, ReadState};
 use kvproto::metapb::{PeerRole, Region};
 use kvproto::tikvpb::TikvClient;
 use pd_client::{Feature, PdClient};
+use protobuf::Message;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::StoreMeta;
 use raftstore::store::msg::{Callback, SignificantMsg};
@@ -23,7 +24,7 @@ use txn_types::TimeStamp;
 
 use crate::endpoint::Task;
 use crate::errors::Result;
-use crate::metrics::RESOLVED_TS_ADVANCE_METHOD;
+use crate::metrics::{CHECK_LEADER_REQ_SIZE_HISTOGRAM, RESOLVED_TS_ADVANCE_METHOD};
 
 const FEATURE_RESOLVED_TS_STORE: Feature = Feature::require(5, 0, 0);
 
@@ -270,6 +271,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
                 let mut req = CheckLeaderRequest::default();
                 req.set_regions(regions.into());
                 req.set_ts(min_ts.into_inner());
+                // TODO: maybe should compute request size by len * `LeaderInfo::compute_size`
+                CHECK_LEADER_REQ_SIZE_HISTOGRAM.observe(req.compute_size() as f64);
                 let res = box_try!(client.check_leader_async(&req)).await;
                 let resp = box_try!(res);
                 Result::Ok((store_id, resp))

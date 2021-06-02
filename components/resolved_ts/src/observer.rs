@@ -11,6 +11,7 @@ use raftstore::store::RegionSnapshot;
 use tikv_util::worker::Scheduler;
 
 use crate::endpoint::Task;
+use crate::metrics::RTS_CHANNEL_PENDING_CMD_BYTES;
 
 pub struct Observer<E: KvEngine> {
     cmd_batches: RefCell<Vec<CmdBatch>>,
@@ -102,6 +103,8 @@ impl<E: KvEngine> CmdObserver<E> for Observer<E> {
             } else {
                 None
             };
+            let size = batches.iter().map(|b| b.size()).sum::<usize>();
+            RTS_CHANNEL_PENDING_CMD_BYTES.add(size as i64);
             if let Err(e) = self.scheduler.schedule(Task::ChangeLog {
                 cmd_batch: batches,
                 snapshot,

@@ -785,7 +785,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             // TODO: replace to the cdc sinker
             resolved_ts::DummySinker::new(),
         );
-        rts_worker.start(rts_endpoint);
+        rts_worker.start_with_timer(rts_endpoint);
         self.to_stop.push(rts_worker);
 
         self.servers = Some(Servers {

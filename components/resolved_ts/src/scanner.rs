@@ -14,10 +14,12 @@ use raftstore::store::RegionSnapshot;
 use tikv::storage::kv::{ScanMode as MvccScanMode, Snapshot};
 use tikv::storage::mvcc::{DeltaScanner, MvccReader, ScannerBuilder};
 use tikv::storage::txn::{TxnEntry, TxnEntryScanner};
+use tikv_util::time::Instant;
 use tokio::runtime::{Builder, Runtime};
 use txn_types::{Key, Lock, TimeStamp};
 
 use crate::errors::{Error, Result};
+use crate::metrics::RTS_SCAN_DURATION_HISTOGRAM;
 
 const DEFAULT_SCAN_BATCH_SIZE: usize = 1024;
 
@@ -94,6 +96,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                     return;
                 }
             };
+            let start = Instant::now_coarse();
             let apply_index = snap.get_apply_index().unwrap();
             let mut entries = vec![];
             match task.mode {
@@ -161,6 +164,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                 }
             }
             entries.push(ScanEntry::None);
+            RTS_SCAN_DURATION_HISTOGRAM.observe(start.elapsed().as_secs_f64());
             (task.send_entries)(entries, apply_index);
         };
         self.workers.spawn(fut);
