@@ -1716,7 +1716,7 @@ mod tests {
         });
         let _raft_rx = raft_router.add_region(1 /* region id */, 100 /* cap */);
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
-        let (tx, rx) = channel::channel(1, quota);
+        let (tx, mut rx) = channel::channel(1, quota);
         let mut rx = rx.drain();
 
         let conn = Conn::new(tx, String::new());
@@ -1846,7 +1846,7 @@ mod tests {
         let _raft_rx = raft_router.add_region(1 /* region id */, 100 /* cap */);
 
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
-        let (tx, rx) = channel::channel(1, quota);
+        let (tx, mut rx) = channel::channel(1, quota);
         let mut rx = rx.drain();
         let mut region = Region::default();
         region.set_id(1);
@@ -1912,7 +1912,7 @@ mod tests {
 
         // Register region 3 to another conn which is not support batch resolved ts.
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
-        let (tx, rx2) = channel::channel(1, quota);
+        let (tx, mut rx2) = channel::channel(1, quota);
         let mut rx2 = rx2.drain();
         let mut region = Region::default();
         region.set_id(3);
@@ -1970,7 +1970,7 @@ mod tests {
         let (mut ep, raft_router, _task_rx) = mock_endpoint(&CdcConfig::default());
         let _raft_rx = raft_router.add_region(1 /* region id */, 100 /* cap */);
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
-        let (tx, rx) = channel::channel(1, quota);
+        let (tx, mut rx) = channel::channel(1, quota);
         let mut rx = rx.drain();
 
         let conn = Conn::new(tx, String::new());

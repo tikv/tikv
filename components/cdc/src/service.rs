@@ -280,7 +280,7 @@ impl ChangeData for Service {
     ) {
         // TODO explain buffer.
         let buffer = 1024;
-        let (event_sink, event_drain) = channel(buffer, self.memory_quota.clone());
+        let (event_sink, mut event_drain) = channel(buffer, self.memory_quota.clone());
         let peer = ctx.peer();
         let conn = Conn::new(event_sink, peer);
         let conn_id = conn.get_id();
@@ -358,9 +358,9 @@ impl ChangeData for Service {
         let peer = ctx.peer();
         let scheduler = self.scheduler.clone();
 
-        let mut rx = event_drain.drain_grpc_message();
         ctx.spawn(async move {
-            let res = sink.send_all(&mut rx).await;
+            // let res = sink.send_all(&mut rx).await;
+            let res = event_drain.forward(&mut sink).await;
             // Unregister this downstream only.
             let deregister = Deregister::Conn(conn_id);
             if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
@@ -536,7 +536,10 @@ mod tests {
         let must_fill_window = || {
             let mut window_size = 0;
             loop {
-                if poll_timeout(&mut send(), Duration::from_millis(100)).is_err() {
+                if matches!(
+                    poll_timeout(&mut send(), Duration::from_millis(100)),
+                    Err(_) | Ok(Err(_))
+                ) {
                     // Window is filled and flow control in sink is triggered.
                     break;
                 }
