@@ -12,7 +12,9 @@ use std::hash::Hash;
 use std::mem;
 
 pub trait HeapSize {
-    fn heap_size(&self) -> usize;
+    fn heap_size(&self) -> usize {
+        0
+    }
 }
 
 impl HeapSize for Region {

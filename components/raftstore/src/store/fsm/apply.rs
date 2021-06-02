@@ -127,6 +127,8 @@ where
     }
 }
 
+impl<S: Snapshot> HeapSize for PendingCmd<S> {}
+
 /// Commands waiting to be committed and applied.
 #[derive(Debug)]
 pub struct PendingCmdQueue<S>
@@ -185,7 +187,7 @@ where
 {
     #[inline]
     fn heap_size(&self) -> usize {
-        self.normals.capacity() * mem::size_of::<PendingCmd<S>>()
+        self.normals.heap_size()
     }
 }
 
@@ -753,13 +755,11 @@ where
     EK: KvEngine,
 {
     fn heap_size(&self) -> usize {
+        // TODO: impl HeapSize for Entry and
         let mut size = self.pending_entries.capacity() * mem::size_of::<Entry>()
-            + self.pending_msgs.capacity() * mem::size_of::<Msg<EK>>();
+            + self.pending_msgs.heap_size();
         for e in &self.pending_entries {
             size += e.get_data().len() + e.get_context().len();
-        }
-        for m in &self.pending_msgs {
-            size += m.heap_size();
         }
         size
     }
@@ -2835,14 +2835,7 @@ where
     pub must_pass_epoch_check: bool,
 }
 
-impl<S> HeapSize for Proposal<S>
-where
-    S: Snapshot,
-{
-    fn heap_size(&self) -> usize {
-        0
-    }
-}
+impl<S: Snapshot> HeapSize for Proposal<S> {}
 
 pub struct Destroy {
     region_id: u64,
