@@ -216,7 +216,9 @@ impl Runnable for ResourceMeteringReporter {
                 if !new_config.should_report() {
                     self.client.take();
                     self.cpu_records_collector.take();
-                } else if new_config.agent_address != self.config.agent_address {
+                } else if new_config.agent_address != self.config.agent_address
+                    || new_config.enabled != self.config.enabled
+                {
                     self.init_reporter(&new_config.agent_address);
                 }
 
@@ -225,13 +227,17 @@ impl Runnable for ResourceMeteringReporter {
             Task::CpuRecords(records) => {
                 let timestamp_secs = records.begin_unix_time_ms / 1000;
                 let mut should_push_record = false;
-                if self.last_timestamp_secs + self.config.precision_seconds <= timestamp_secs {
+                if self.last_timestamp_secs + self.config.precision_seconds < timestamp_secs {
                     self.last_timestamp_secs = timestamp_secs;
                     should_push_record = true;
                 }
 
                 for (tag, record) in &records.records {
                     let tag = &tag.infos.extra_attachment;
+                    if tag.is_empty() {
+                        continue;
+                    }
+
                     let ms = *record as u32;
                     match self.records.get_mut(tag) {
                         Some((ts, cpu_time, total)) => {
