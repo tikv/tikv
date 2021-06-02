@@ -1104,3 +1104,37 @@ fn test_before_async_write_deadline() {
         Err(StorageError(box StorageErrorInner::DeadlineExceeded))
     ));
 }
+
+#[test]
+fn test_before_propose_deadline() {
+    let mut cluster = new_server_cluster(0, 1);
+    cluster.run();
+
+    let engine = cluster.sim.read().unwrap().storages[&1].clone();
+    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+        engine,
+        DummyLockManager {},
+    )
+    .build()
+    .unwrap();
+
+    let mut ctx = Context::default();
+    ctx.set_region_id(1);
+    ctx.set_region_epoch(cluster.get_region_epoch(1));
+    ctx.set_peer(cluster.leader_of_region(1).unwrap());
+    ctx.max_execution_duration_ms = 200;
+    let (tx, rx) = channel();
+    fail::cfg("pause_on_peer_collect_message", "sleep(500)").unwrap();
+    storage
+        .sched_txn_command(
+            commands::Rollback::new(vec![Key::from_raw(b"k")], 10.into(), ctx),
+            Box::new(move |res: storage::Result<_>| {
+                tx.send(res).unwrap();
+            }),
+        )
+        .unwrap();
+    assert!(matches!(
+        rx.recv().unwrap(),
+        Err(StorageError(box StorageErrorInner::DeadlineExceeded))
+    ));
+}

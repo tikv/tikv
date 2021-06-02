@@ -19,18 +19,18 @@ pub fn next_id() -> i64 {
     ID_GENERATOR.fetch_add(1, Ordering::Relaxed) as i64
 }
 
-pub fn handle_request<E>(cop: &Endpoint<E>, req: Request) -> Response
+pub fn handle_request<E>(copr: &Endpoint<E>, req: Request) -> Response
 where
     E: Engine,
 {
-    block_on(cop.parse_and_handle_unary_request(req, None))
+    block_on(copr.parse_and_handle_unary_request(req, None))
 }
 
-pub fn handle_select<E>(cop: &Endpoint<E>, req: Request) -> SelectResponse
+pub fn handle_select<E>(copr: &Endpoint<E>, req: Request) -> SelectResponse
 where
     E: Engine,
 {
-    let resp = handle_request(cop, req);
+    let resp = handle_request(copr, req);
     assert!(!resp.get_data().is_empty(), "{:?}", resp);
     let mut sel_resp = SelectResponse::default();
     sel_resp.merge_from_bytes(resp.get_data()).unwrap();
@@ -38,7 +38,7 @@ where
 }
 
 pub fn handle_streaming_select<E, F>(
-    cop: &Endpoint<E>,
+    copr: &Endpoint<E>,
     req: Request,
     mut check_range: F,
 ) -> Vec<StreamResponse>
@@ -46,7 +46,7 @@ where
     E: Engine,
     F: FnMut(&Response) + Send + 'static,
 {
-    let resps = cop
+    let resps = copr
         .parse_and_handle_stream_request(req, None)
         .map(|resp| {
             check_range(&resp);
