@@ -5,9 +5,11 @@ use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use futures::Sink as Sink03;
 use futures::{Future, Stream};
-use futures03::compat::Compat;
+use futures03::{
+    compat::{Compat, Compat01As03Sink},
+    FutureExt,
+};
 use grpcio::{DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
 use kvproto::cdcpb::{
     ChangeData, ChangeDataEvent, ChangeDataRequest, Compatibility, Event, ResolvedTs,
@@ -290,7 +292,7 @@ impl ChangeData for Service {
         }
         // TODO explain buffer.
         let buffer = 1024;
-        let (event_sink, event_drain) = channel(buffer, self.memory_quota.clone());
+        let (event_sink, mut event_drain) = channel(buffer, self.memory_quota.clone());
         let peer = ctx.peer();
         let conn = Conn::new(event_sink, peer);
         let conn_id = conn.get_id();
@@ -366,9 +368,10 @@ impl ChangeData for Service {
         let peer = ctx.peer();
         let scheduler = self.scheduler.clone();
 
-        let rx = event_drain.drain_grpc_message();
-        let send_resp = sink.send_all(Compat::new(rx));
-        ctx.spawn(send_resp.then(move |res| {
+        ctx.spawn(Compat::new(async move {
+            // let res = sink.send_all(&mut rx).await;
+            let mut sink = Compat01As03Sink::new(sink);
+            let res = event_drain.forward(&mut sink).await;
             // Unregister this downstream only.
             let deregister = Deregister::Conn(conn_id);
             if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
@@ -382,8 +385,7 @@ impl ChangeData for Service {
                     warn!("cdc send failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
                 }
             }
-            Ok(())
-        }));
+        }.unit_error().boxed()));
     }
 }
 
@@ -392,6 +394,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use futures::sink::Sink;
     use futures03::compat::Compat01As03;
     use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder, WriteFlags};
     #[cfg(feature = "prost-codec")]
@@ -539,7 +542,10 @@ mod tests {
         let must_fill_window = || {
             let mut window_size = 0;
             loop {
-                if poll_timeout(&mut send(), Duration::from_millis(100)).is_err() {
+                if matches!(
+                    poll_timeout(&mut send(), Duration::from_millis(100)),
+                    Err(_) | Ok(Err(_))
+                ) {
                     // Window is filled and flow control in sink is triggered.
                     break;
                 }
