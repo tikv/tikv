@@ -50,8 +50,8 @@ use tikv_util::sys::SysQuota;
 use tikv_util::time::duration_to_sec;
 use tikv_util::yatp_pool;
 
-use crate::import::Config as ImportConfig;
 use crate::coprocessor_v2::Config as RawCoprocessorConfig;
+use crate::import::Config as ImportConfig;
 use crate::server::gc_worker::GcConfig;
 use crate::server::gc_worker::WriteCompactionFilterFactory;
 use crate::server::lock_manager::Config as PessimisticTxnConfig;
