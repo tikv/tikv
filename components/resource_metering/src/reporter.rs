@@ -133,8 +133,12 @@ impl Runnable for ResourceMeteringReporter {
                     let ms = *ms as u32;
                     match self.records.get_mut(tag) {
                         Some((ts, cpu_time, total)) => {
-                            ts.push(timestamp_secs);
-                            cpu_time.push(ms);
+                            if *ts.last().unwrap() == timestamp_secs {
+                                *cpu_time.last_mut().unwrap() += ms;
+                            } else {
+                                ts.push(timestamp_secs);
+                                cpu_time.push(ms);
+                            }
                             *total += ms;
                         }
                         None => {
