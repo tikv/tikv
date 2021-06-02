@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use coprocessor_plugin_api::*;
-use kvproto::kvrpcpb as raw_coppb;
+use kvproto::kvrpcpb;
 use semver::VersionReq;
 use std::future::Future;
 use std::ops::Not;
@@ -52,9 +52,9 @@ impl Endpoint {
     pub fn handle_request<E: Engine, L: LockManager>(
         &self,
         storage: &Storage<E, L>,
-        req: raw_coppb::RawCoprocessorRequest,
-    ) -> impl Future<Output = raw_coppb::RawCoprocessorResponse> {
-        let mut response = raw_coppb::RawCoprocessorResponse::default();
+        req: kvrpcpb::RawCoprocessorRequest,
+    ) -> impl Future<Output = kvrpcpb::RawCoprocessorResponse> {
+        let mut response = kvrpcpb::RawCoprocessorResponse::default();
 
         let coprocessor_result = self.handle_request_impl(storage, req);
 
@@ -71,7 +71,7 @@ impl Endpoint {
     fn handle_request_impl<E: Engine, L: LockManager>(
         &self,
         storage: &Storage<E, L>,
-        mut req: raw_coppb::RawCoprocessorRequest,
+        mut req: kvrpcpb::RawCoprocessorRequest,
     ) -> Result<RawResponse, CoprocessorError> {
         let plugin = self
             .plugin_registry
