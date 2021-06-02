@@ -1,8 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use raft::eraftpb::MessageType;
 use raftstore::store::MEMTRACE_ENTRY_CACHE;
 use test_raftstore::*;
-use raft::eraftpb::{ MessageType};
 use tikv_util::config::ReadableDuration;
 
 // Test even if memory usage reaches high water, committed entries can still get applied slowly.
