@@ -14,7 +14,7 @@ use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::vec::Drain;
-use std::{cmp, mem, usize};
+use std::{cmp, usize};
 
 use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler, Priority,

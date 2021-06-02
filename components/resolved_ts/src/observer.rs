@@ -1,6 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::KvEngine;
+use kvproto::metapb::Region;
 use raft::StateRole;
 use raftstore::coprocessor::*;
 use tikv_util::worker::Scheduler;
