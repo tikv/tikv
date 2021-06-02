@@ -2339,7 +2339,6 @@ where
                     );
                 }
                 self.ctx.router.close(new_region_id);
-                MEMTRACE_PEERS.trace(TraceEvent::Sub(self.fsm.trace.sum()));
             }
 
             let (sender, mut new_peer) = match PeerFsm::create(

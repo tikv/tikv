@@ -82,7 +82,11 @@ pub enum Callback<S: Snapshot> {
 
 impl<S: Snapshot> HeapSize for Callback<S> {
     fn heap_size(&self) -> usize {
-        0
+        match self {
+            Callback::None => 0,
+            Callback::Read(_) => 8, // function pointer
+            Callback::Write { .. } => 8 * 3,
+        }
     }
 }
 
