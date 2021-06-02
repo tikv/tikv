@@ -97,6 +97,7 @@ impl Add for TraceEvent {
                     TraceEvent::Sub(r - l)
                 }
             }
+            // `r` should be smaller than `v` which it's promised by caller.
             (TraceEvent::Reset(v), TraceEvent::Sub(r)) => TraceEvent::Reset(v - r),
             (TraceEvent::Reset(v), TraceEvent::Add(r)) => TraceEvent::Reset(v + r),
             (_, e @ TraceEvent::Reset(_)) => e,
