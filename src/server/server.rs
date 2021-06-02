@@ -81,8 +81,8 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
         cfg: &Arc<VersionTrack<Config>>,
         security_mgr: &Arc<SecurityManager>,
         storage: Storage<E, L>,
-        cop: Endpoint<E>,
-        coprv2: coprocessor_v2::Endpoint,
+        copr: Endpoint<E>,
+        copr_v2: coprocessor_v2::Endpoint,
         raft_router: T,
         resolver: S,
         snap_mgr: SnapManager,
@@ -115,8 +115,8 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             store_id,
             storage,
             gc_worker,
-            cop,
-            coprv2,
+            copr,
+            copr_v2,
             raft_router.clone(),
             lazy_worker.scheduler(),
             Arc::clone(&grpc_thread_load),
@@ -485,13 +485,13 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             storage.get_engine(),
         ));
-        let cop = coprocessor::Endpoint::new(
+        let copr = coprocessor::Endpoint::new(
             &cfg.value().clone(),
             cop_read_pool.handle(),
             storage.get_concurrency_manager(),
             PerfLevel::EnableCount,
         );
-        let coprv2 = coprocessor_v2::Endpoint::new(&coprocessor_v2::Config::default());
+        let copr_v2 = coprocessor_v2::Endpoint::new(&coprocessor_v2::Config::default());
         let debug_thread_pool = Arc::new(
             TokioBuilder::new()
                 .threaded_scheduler()
@@ -507,8 +507,8 @@ mod tests {
             &cfg,
             &security_mgr,
             storage,
-            cop,
-            coprv2,
+            copr,
+            copr_v2,
             router.clone(),
             MockResolver {
                 quick_fail: Arc::clone(&quick_fail),

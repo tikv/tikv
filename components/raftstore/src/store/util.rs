@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 use std::fmt::Display;
 use std::option::Option;
-use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 use std::{fmt, u64};
 
@@ -785,7 +785,7 @@ impl<'a> ChangePeerI for &'a ChangePeerRequest {
         let mut cc = eraftpb::ConfChange::default();
         cc.set_change_type(self.get_change_type());
         cc.set_node_id(self.get_peer().get_id());
-        cc.set_context(ctx);
+        cc.set_context(ctx.into());
         cc
     }
 }
@@ -819,7 +819,7 @@ impl<'a> ChangePeerI for &'a ChangePeerV2Request {
             cc.set_transition(eraftpb::ConfChangeTransition::Explicit);
         }
         cc.set_changes(changes.into());
-        cc.set_context(ctx);
+        cc.set_context(ctx.into());
         cc
     }
 }
@@ -859,6 +859,8 @@ pub struct RegionReadProgress {
     // The fast path to read `safe_ts` without acquiring the mutex
     // on `core`
     safe_ts: AtomicU64,
+    // `true` means stop updating `safe_ts` until `resume` is called
+    stopped: AtomicBool,
 }
 
 impl RegionReadProgress {
@@ -866,13 +868,16 @@ impl RegionReadProgress {
         RegionReadProgress {
             core: Mutex::new(RegionReadProgressCore::new(applied_index, cap)),
             safe_ts: AtomicU64::from(0),
+            stopped: AtomicBool::from(false),
         }
     }
 
     pub fn update_applied(&self, applied: u64) {
         let mut core = self.core.lock().unwrap();
         if let Some(ts) = core.update_applied(applied) {
-            self.safe_ts.store(ts, AtomicOrdering::Release);
+            if !self.stopped.load(AtomicOrdering::Acquire) {
+                self.safe_ts.store(ts, AtomicOrdering::Release);
+            }
         }
     }
 
@@ -882,14 +887,25 @@ impl RegionReadProgress {
         }
         let mut core = self.core.lock().unwrap();
         if let Some(ts) = core.update_safe_ts(apply_index, ts) {
-            self.safe_ts.store(ts, AtomicOrdering::Release);
+            if !self.stopped.load(AtomicOrdering::Acquire) {
+                self.safe_ts.store(ts, AtomicOrdering::Release);
+            }
         }
     }
 
-    pub fn clear(&self) {
-        let mut core = self.core.lock().unwrap();
-        core.clear();
+    /// Reset `safe_ts` to 0 and stop updating it
+    pub fn stop(&self) {
+        let _guard = self.core.lock().unwrap();
+        self.stopped.store(true, AtomicOrdering::Release);
         self.safe_ts.store(0, AtomicOrdering::Release);
+    }
+
+    /// Reset `safe_ts` and resume updating it
+    pub fn resume(&self) {
+        let core = self.core.lock().unwrap();
+        self.stopped.store(false, AtomicOrdering::Release);
+        self.safe_ts
+            .store(core.read_state.ts, AtomicOrdering::Release);
     }
 
     // Get the latest `read_state`
@@ -987,12 +1003,6 @@ impl RegionReadProgressCore {
         }
         self.push_back(ReadState { idx, ts });
         None
-    }
-
-    fn clear(&mut self) {
-        self.pending_items.clear();
-        self.read_state.ts = 0;
-        self.read_state.idx = 0;
     }
 
     fn push_back(&mut self, item: ReadState) {

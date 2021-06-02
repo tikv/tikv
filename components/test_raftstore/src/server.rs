@@ -345,13 +345,13 @@ impl Simulator for ServerCluster {
             &tikv::config::CoprReadPoolConfig::default_for_test(),
             store.get_engine(),
         ));
-        let cop = coprocessor::Endpoint::new(
+        let copr = coprocessor::Endpoint::new(
             &server_cfg.value().clone(),
             cop_read_pool.handle(),
             concurrency_manager.clone(),
             PerfLevel::EnableCount,
         );
-        let coprv2 = coprocessor_v2::Endpoint::new(&cfg.coprocessor_v2);
+        let copr_v2 = coprocessor_v2::Endpoint::new(&cfg.coprocessor_v2);
         let mut server = None;
         // Create Debug service.
         let debug_thread_pool = Arc::new(
@@ -391,8 +391,8 @@ impl Simulator for ServerCluster {
                 &server_cfg,
                 &security_mgr,
                 store.clone(),
-                cop.clone(),
-                coprv2.clone(),
+                copr.clone(),
+                copr_v2.clone(),
                 sim_router.clone(),
                 resolver.clone(),
                 snap_mgr.clone(),
