@@ -79,7 +79,7 @@ use tikv::{
 use tikv_util::{
     check_environment_variables,
     config::{ensure_dir_exist, VersionTrack},
-    sys::sys_quota::SysQuota,
+    sys::SysQuota,
     time::Monitor,
     worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker, Worker},
 };
@@ -101,8 +101,8 @@ pub fn run_tikv(config: TiKvConfig) {
     tikv::log_tikv_info(build_timestamp);
 
     // Print resource quota.
-    SysQuota::new().log_quota();
-    CPU_CORES_QUOTA_GAUGE.set(SysQuota::new().cpu_cores_quota());
+    SysQuota::log_quota();
+    CPU_CORES_QUOTA_GAUGE.set(SysQuota::cpu_cores_quota());
 
     // Do some prepare works before start.
     pre_start();

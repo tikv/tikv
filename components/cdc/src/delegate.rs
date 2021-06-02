@@ -351,7 +351,6 @@ impl Delegate {
     where
         F: Fn(&Downstream) -> Result<()>,
     {
-        // fn broadcast(&self, change_data_event: Event, normal_only: bool) {
         let downstreams = self.downstreams();
         assert!(
             !downstreams.is_empty(),
@@ -648,7 +647,13 @@ impl Delegate {
                 };
                 // validate commit_ts must be greater than the current resolved_ts
                 if let (Some(resolver), Some(commit_ts)) = (&self.resolver, commit_ts) {
-                    assert!(commit_ts > resolver.resolved_ts());
+                    let resolved_ts = resolver.resolved_ts();
+                    assert!(
+                        commit_ts > resolved_ts,
+                        "commit_ts: {:?}, resolved_ts: {:?}",
+                        commit_ts,
+                        resolved_ts
+                    );
                 }
 
                 match rows.get_mut(&row.key) {

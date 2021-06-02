@@ -10,7 +10,7 @@ use regex::Regex;
 use collections::HashMap;
 use configuration::{ConfigChange, ConfigManager, Configuration};
 use tikv_util::config::{self, ReadableDuration, ReadableSize, VersionTrack};
-use tikv_util::sys::sys_quota::SysQuota;
+use tikv_util::sys::SysQuota;
 use tikv_util::worker::Scheduler;
 
 pub use crate::storage::config::Config as StorageConfig;
@@ -172,7 +172,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Config {
-        let cpu_num = SysQuota::new().cpu_cores_quota();
+        let cpu_num = SysQuota::cpu_cores_quota();
         let background_thread_count = if cpu_num > 16.0 { 3 } else { 2 };
         Config {
             cluster_id: DEFAULT_CLUSTER_ID,

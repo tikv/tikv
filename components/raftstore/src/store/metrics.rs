@@ -199,6 +199,15 @@ make_auto_flush_static_metric! {
     }
 }
 
+make_static_metric! {
+    pub struct HibernatedPeerStateGauge: IntGauge {
+        "state" => {
+            awaken,
+            hibernated,
+        },
+    }
+}
+
 lazy_static! {
     pub static ref PEER_PROPOSAL_COUNTER_VEC: IntCounterVec =
         register_int_counter_vec!(
@@ -518,5 +527,12 @@ lazy_static! {
         "tikv_raftstore_peer_pending_duration_seconds",
         "Bucketed histogram of region peer pending duration.",
         exponential_buckets(0.1, 1.5, 30).unwrap()  // 0.1s ~ 5.3 hours
+    ).unwrap();
+
+    pub static ref HIBERNATED_PEER_STATE_GAUGE: HibernatedPeerStateGauge = register_static_int_gauge_vec!(
+        HibernatedPeerStateGauge,
+        "tikv_raftstore_hibernated_peer_state",
+        "Number of peers in hibernated state.",
+        &["state"],
     ).unwrap();
 }
