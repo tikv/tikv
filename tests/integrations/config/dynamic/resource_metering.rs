@@ -2,7 +2,9 @@
 
 use std::sync::mpsc::{channel, Receiver, Sender};
 
-use resource_metering::reporter::{ConfigManager, Task};
+use resource_metering::cpu::recorder::RecorderHandle;
+use resource_metering::reporter::Task;
+use resource_metering::ConfigManager;
 use tikv::config::{ConfigController, Module, TiKvConfig};
 use tikv_util::worker::{LazyWorker, Runnable};
 
@@ -27,7 +29,7 @@ impl Runnable for MockResourceMeteringReporter {
 fn setup_cfg_manager(
     config: TiKvConfig,
 ) -> (ConfigController, Receiver<Task>, Box<LazyWorker<Task>>) {
-    let mut worker = Box::new(LazyWorker::new("resource-metering-agent"));
+    let mut worker = Box::new(LazyWorker::new("resource-metering-reporter"));
     let scheduler = worker.scheduler();
 
     let (tx, rx) = channel();
@@ -36,7 +38,11 @@ fn setup_cfg_manager(
     let cfg_controller = ConfigController::new(config);
     cfg_controller.register(
         Module::ResourceMetering,
-        Box::new(ConfigManager::new(resource_metering_config, scheduler)),
+        Box::new(ConfigManager::new(
+            resource_metering_config,
+            scheduler,
+            RecorderHandle::default(),
+        )),
     );
 
     worker.start(MockResourceMeteringReporter::new(tx));

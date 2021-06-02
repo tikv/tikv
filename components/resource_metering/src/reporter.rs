@@ -1,120 +1,19 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::cpu::{register_collector, Collector, CollectorHandle, CpuRecords};
+use crate::cpu::collector::{register_collector, Collector, CollectorHandle};
+use crate::cpu::recorder::CpuRecords;
+use crate::Config;
 
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
 use collections::HashMap;
-use configuration::{ConfigChange, Configuration};
 use futures::SinkExt;
 use grpcio::{CallOption, ChannelBuilder, Environment, WriteFlags};
 use kvproto::resource_usage_agent::{CollectCpuTimeRequest, ResourceUsageAgentClient};
 use security::SecurityManager;
-use serde_derive::{Deserialize, Serialize};
 use tikv_util::time::Duration;
 use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
-
-const MIN_PRECISION_SECONDS: u64 = 1;
-const MAX_PRECISION_SECONDS: u64 = 60 * 60;
-const MAX_MAX_RESOURCE_GROUPS: usize = 5_000;
-const MIN_REPORT_AGENT_INTERVAL_SECONDS: u64 = 15;
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
-#[serde(default)]
-#[serde(rename_all = "kebab-case")]
-pub struct Config {
-    pub enabled: bool,
-    pub agent_address: String,
-    pub report_agent_interval_seconds: u64,
-    pub precision_seconds: u64,
-    pub max_resource_groups: usize,
-}
-
-impl Default for Config {
-    fn default() -> Config {
-        Config {
-            enabled: false,
-            agent_address: "".to_string(),
-            precision_seconds: 1,
-            report_agent_interval_seconds: 60,
-            max_resource_groups: 200,
-        }
-    }
-}
-
-impl Config {
-    pub fn validate(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
-        if !self.agent_address.is_empty() {
-            tikv_util::config::check_addr(&self.agent_address)?;
-        }
-
-        if self.precision_seconds < MIN_PRECISION_SECONDS
-            || self.precision_seconds > MAX_PRECISION_SECONDS
-        {
-            return Err(format!(
-                "precision seconds must between {} and {}",
-                MIN_PRECISION_SECONDS, MAX_PRECISION_SECONDS
-            )
-            .into());
-        }
-
-        if self.max_resource_groups > MAX_MAX_RESOURCE_GROUPS {
-            return Err(format!(
-                "max resource groups must between {} and {}",
-                0, MAX_MAX_RESOURCE_GROUPS
-            )
-            .into());
-        }
-
-        if self.report_agent_interval_seconds < MIN_REPORT_AGENT_INTERVAL_SECONDS
-            || self.report_agent_interval_seconds > self.precision_seconds * 500
-        {
-            return Err(format!(
-                "report interval seconds must between {} and {}",
-                MIN_REPORT_AGENT_INTERVAL_SECONDS,
-                self.precision_seconds * 500
-            )
-            .into());
-        }
-
-        Ok(())
-    }
-
-    fn should_report(&self) -> bool {
-        self.enabled && !self.agent_address.is_empty() && self.max_resource_groups != 0
-    }
-}
-
-pub struct ConfigManager {
-    current_config: Config,
-    scheduler: Scheduler<Task>,
-}
-
-impl ConfigManager {
-    pub fn new(current_config: Config, scheduler: Scheduler<Task>) -> Self {
-        ConfigManager {
-            current_config,
-            scheduler,
-        }
-    }
-}
-
-impl configuration::ConfigManager for ConfigManager {
-    fn dispatch(
-        &mut self,
-        change: ConfigChange,
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
-        self.current_config.update(change);
-        self.current_config.validate()?;
-
-        self.scheduler
-            .schedule(Task::ConfigChange(self.current_config.clone()))
-            .ok();
-
-        Ok(())
-    }
-}
 
 pub struct CpuRecordsCollector {
     scheduler: Scheduler<Task>,
@@ -166,7 +65,6 @@ pub struct ResourceMeteringReporter {
 
     // resource_tag -> ([timestamp_secs], [cpu_time_ms], total_cpu_time_ms)
     records: HashMap<Vec<u8>, (Vec<u64>, Vec<u32>, u32)>,
-    last_timestamp_secs: u64,
 
     find_top_k: Vec<u32>,
 }
@@ -186,7 +84,6 @@ impl ResourceMeteringReporter {
             client: None,
             cpu_records_collector: None,
             records: HashMap::default(),
-            last_timestamp_secs: 0,
             find_top_k: Vec::default(),
         }
     }
@@ -225,28 +122,19 @@ impl Runnable for ResourceMeteringReporter {
                 self.config = new_config;
             }
             Task::CpuRecords(records) => {
-                let timestamp_secs = records.begin_unix_time_ms / 1000;
-                let mut should_push_record = false;
-                if self.last_timestamp_secs + self.config.precision_seconds < timestamp_secs {
-                    self.last_timestamp_secs = timestamp_secs;
-                    should_push_record = true;
-                }
+                let timestamp_secs = records.begin_unix_time_secs;
 
-                for (tag, record) in &records.records {
+                for (tag, ms) in &records.records {
                     let tag = &tag.infos.extra_attachment;
                     if tag.is_empty() {
                         continue;
                     }
 
-                    let ms = *record as u32;
+                    let ms = *ms as u32;
                     match self.records.get_mut(tag) {
                         Some((ts, cpu_time, total)) => {
-                            if should_push_record {
-                                ts.push(timestamp_secs);
-                                cpu_time.push(ms);
-                            } else {
-                                *cpu_time.last_mut().unwrap() += ms;
-                            }
+                            ts.push(timestamp_secs);
+                            cpu_time.push(ms);
                             *total += ms;
                         }
                         None => {

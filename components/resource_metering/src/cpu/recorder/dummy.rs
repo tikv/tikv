@@ -1,11 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::cpu::collector::{Collector, CollectorId};
-use crate::cpu::CpuRecorderConfig;
+use crate::cpu::recorder::RecorderHandle;
 use crate::ResourceMeteringTag;
 
 use std::marker::PhantomData;
-use std::sync::{Arc, Mutex};
 
 impl ResourceMeteringTag {
     pub fn attach(&self) -> Guard {
@@ -19,9 +17,6 @@ pub struct Guard {
     _p: PhantomData<*const ()>,
 }
 
-pub fn init_recorder() {}
-
-pub struct CollectorHandle;
-pub fn register_collector(collector: Box<dyn Collector>) -> CollectorHandle {
-    CollectorHandle
+pub fn init_recorder() -> RecorderHandle {
+    RecorderHandle::default()
 }

@@ -1,15 +1,17 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::cpu::collector::{Collector, CollectorId};
-use crate::cpu::{CpuRecorderConfig, CpuRecords};
+use crate::cpu::collector::{CollectorRegistrationMsg, COLLECTOR_REGISTRATION_CHANNEL};
+use crate::cpu::recorder::CpuRecords;
 use crate::{ResourceMeteringTag, TagInfos};
 
 use std::cell::Cell;
 use std::fs::read_dir;
 use std::marker::PhantomData;
-use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed};
-use std::sync::atomic::{AtomicPtr, AtomicU64};
+use std::sync::atomic::Ordering::SeqCst;
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64};
 use std::sync::Arc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use collections::{HashMap, HashSet};
@@ -19,15 +21,28 @@ use libc::pid_t;
 use procinfo::pid;
 use procinfo::pid::Stat;
 
-pub fn init_recorder() {
+use super::RecorderHandle;
+
+const RECORD_FREQUENCY: f64 = 99.0;
+const GC_INTERVAL_SECS: u64 = 15 * 60;
+
+pub fn init_recorder() -> RecorderHandle {
     lazy_static! {
-        static ref PHANTOM: () = {
-            std::thread::Builder::new()
+        static ref HANDLE: RecorderHandle = {
+            let config = crate::Config::default();
+
+            let pause = Arc::new(AtomicBool::new(config.enabled));
+            let pause0 = pause.clone();
+            let precision_seconds = Arc::new(AtomicU64::new(config.precision_seconds));
+            let precision_seconds0 = precision_seconds.clone();
+
+            let join_handle = std::thread::Builder::new()
                 .name("req-cpu-recorder".to_owned())
                 .spawn(move || {
-                    let mut recorder = ReqCpuRecorder::new(CpuRecorderConfig::default());
+                    let mut recorder = ReqCpuRecorder::new(pause, precision_seconds);
 
                     loop {
+                        recorder.handle_pause();
                         recorder.handle_collector_registration();
                         recorder.handle_thread_registration();
                         recorder.record();
@@ -35,27 +50,15 @@ pub fn init_recorder() {
                         recorder.may_gc();
 
                         std::thread::sleep(Duration::from_micros(
-                            (recorder.config.record_interval_ms * 1_000.0) as _,
+                            (1_000.0 / RECORD_FREQUENCY * 1_000.0) as _,
                         ));
                     }
                 })
                 .expect("Failed to create recorder thread");
+            RecorderHandle::new(join_handle, pause0, precision_seconds0)
         };
     }
-    *PHANTOM
-}
-
-pub fn register_collector(collector: Box<dyn Collector>) -> CollectorHandle {
-    lazy_static! {
-        static ref NEXT_COLLECTOR_ID: Arc<AtomicU64> = Arc::new(AtomicU64::new(1));
-    }
-
-    let id = CollectorId(NEXT_COLLECTOR_ID.fetch_add(1, Relaxed));
-    COLLECTOR_REGISTRATION_CHANNEL
-        .0
-        .send(CollectorRegistrationMsg::Register { collector, id })
-        .ok();
-    CollectorHandle { id }
+    HANDLE.clone()
 }
 
 impl ResourceMeteringTag {
@@ -80,14 +83,14 @@ struct SharedTagPtr {
 }
 impl SharedTagPtr {
     fn take(&self) -> Option<ResourceMeteringTag> {
-        let prev_ptr = self.tag.swap(std::ptr::null_mut(), Acquire);
+        let prev_ptr = self.tag.swap(std::ptr::null_mut(), SeqCst);
         (!prev_ptr.is_null())
             .then(|| unsafe { ResourceMeteringTag::from(Arc::from_raw(prev_ptr as _)) })
     }
 
     fn swap(&self, value: ResourceMeteringTag) -> Option<ResourceMeteringTag> {
         let tag_arc_ptr = Arc::into_raw(value.infos);
-        let prev_ptr = self.tag.swap(tag_arc_ptr as _, AcqRel);
+        let prev_ptr = self.tag.swap(tag_arc_ptr as _, SeqCst);
         (!prev_ptr.is_null())
             .then(|| unsafe { ResourceMeteringTag::from(Arc::from_raw(prev_ptr as _)) })
     }
@@ -128,18 +131,6 @@ impl Drop for Guard {
     }
 }
 
-pub struct CollectorHandle {
-    id: CollectorId,
-}
-impl Drop for CollectorHandle {
-    fn drop(&mut self) {
-        COLLECTOR_REGISTRATION_CHANNEL
-            .0
-            .send(CollectorRegistrationMsg::Unregister { id: self.id })
-            .ok();
-    }
-}
-
 lazy_static! {
     static ref PID: pid_t = unsafe { libc::getpid() };
     static ref CLK_TCK: libc::c_long = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
@@ -147,27 +138,15 @@ lazy_static! {
         Sender<ThreadRegistrationMsg>,
         Receiver<ThreadRegistrationMsg>
     ) = unbounded();
-    static ref COLLECTOR_REGISTRATION_CHANNEL: (
-        Sender<CollectorRegistrationMsg>,
-        Receiver<CollectorRegistrationMsg>
-    ) = unbounded();
 }
 struct ThreadRegistrationMsg {
     thread_id: pid_t,
     shared_ptr: SharedTagPtr,
 }
-enum CollectorRegistrationMsg {
-    Register {
-        collector: Box<dyn Collector>,
-        id: CollectorId,
-    },
-    Unregister {
-        id: CollectorId,
-    },
-}
 
 struct ReqCpuRecorder {
-    config: CpuRecorderConfig,
+    pause: Arc<AtomicBool>,
+    precision_seconds: Arc<AtomicU64>,
 
     thread_stats: HashMap<pid_t, ThreadStat>,
     current_window_records: CpuRecords,
@@ -185,11 +164,12 @@ struct ThreadStat {
 }
 
 impl ReqCpuRecorder {
-    pub fn new(config: CpuRecorderConfig) -> Self {
+    pub fn new(pause: Arc<AtomicBool>, precision_seconds: Arc<AtomicU64>) -> Self {
         let now = Instant::now();
 
         Self {
-            config,
+            pause,
+            precision_seconds,
 
             last_collect_instant: now,
             last_gc_instant: now,
@@ -198,6 +178,13 @@ impl ReqCpuRecorder {
             current_window_records: CpuRecords::default(),
 
             collectors: HashMap::default(),
+        }
+    }
+
+    pub fn handle_pause(&mut self) {
+        while self.pause.load(SeqCst) {
+            thread::park();
+            self.reset();
         }
     }
 
@@ -291,8 +278,8 @@ impl ReqCpuRecorder {
         const THREAD_STAT_LEN_THRESHOLD: usize = 500;
         const RECORD_LEN_THRESHOLD: usize = 20_000;
 
-        let duration = self.last_gc_instant.elapsed().as_millis();
-        let need_gc = duration > self.config.gc_interval_ms as _;
+        let duration_secs = self.last_gc_instant.elapsed().as_secs();
+        let need_gc = duration_secs >= GC_INTERVAL_SECS;
 
         if need_gc {
             if let Some(thread_ids) = Self::get_thread_ids() {
@@ -322,12 +309,12 @@ impl ReqCpuRecorder {
     }
 
     pub fn may_advance_window(&mut self) -> bool {
-        let duration = self.last_collect_instant.elapsed().as_millis();
-        let need_advance = duration >= self.config.collect_interval_ms as _;
+        let duration_secs = self.last_collect_instant.elapsed().as_secs();
+        let need_advance = duration_secs >= self.precision_seconds.load(SeqCst);
 
         if need_advance {
             let mut records = std::mem::take(&mut self.current_window_records);
-            records.duration_ms = duration as _;
+            records.duration_secs = duration_secs;
 
             if !records.records.is_empty() {
                 let records = Arc::new(records);
@@ -384,14 +371,13 @@ lazy_static! {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::cpu::collector::register_collector;
+
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering::SeqCst;
     use std::sync::Mutex;
     use std::thread::JoinHandle;
-
-    use Operation::*;
-
-    use super::*;
 
     enum Operation {
         SetContext(&'static str),
@@ -399,6 +385,7 @@ mod tests {
         CpuHeavy(u64),
         Sleep(u64),
     }
+    use Operation::*;
 
     struct Operations {
         ops: Vec<Operation>,
@@ -520,8 +507,9 @@ mod tests {
     }
 
     #[test]
-    fn test_req_cpu() {
-        init_recorder();
+    fn test_cpu_record() {
+        let handle = init_recorder();
+        handle.resume();
 
         // Heavy CPU only with 1 thread
         {
