@@ -755,7 +755,7 @@ where
     EK: KvEngine,
 {
     fn heap_size(&self) -> usize {
-        // TODO: impl HeapSize for Entry and
+        // TODO: impl HeapSize for Entry.
         let mut size = self.pending_entries.capacity() * mem::size_of::<Entry>()
             + self.pending_msgs.heap_size();
         for e in &self.pending_entries {
