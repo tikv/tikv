@@ -298,9 +298,7 @@ impl Simulator for ServerCluster {
         // Resolved ts worker
         let resolved_ts_worker = LazyWorker::new("resolved-ts");
         let resolved_ts_scheduler = resolved_ts_worker.scheduler();
-        let mut resolved_ts_ob = resolved_ts::Observer::new(resolved_ts_scheduler.clone());
-        // Disable old value
-        resolved_ts_ob.disable_old_value();
+        let resolved_ts_ob = resolved_ts::Observer::new(resolved_ts_scheduler.clone());
         resolved_ts_ob.register_to(&mut coprocessor_host);
 
         // Resolved ts endpoint

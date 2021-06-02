@@ -1,12 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
-
 use engine_traits::KvEngine;
-use kvproto::metapb::{Peer, Region};
 use raft::StateRole;
 use raftstore::coprocessor::*;
-use raftstore::store::RegionSnapshot;
 use tikv_util::worker::Scheduler;
 
 use crate::cmd::lock_only_filter;
@@ -14,21 +10,11 @@ use crate::endpoint::Task;
 
 pub struct Observer<E: KvEngine> {
     scheduler: Scheduler<Task<E::Snapshot>>,
-    need_old_value: bool,
 }
 
 impl<E: KvEngine> Observer<E> {
     pub fn new(scheduler: Scheduler<Task<E::Snapshot>>) -> Self {
-        Observer {
-            scheduler,
-            need_old_value: true,
-        }
-    }
-
-    // Disable old value, currently only use in tests to avoid holding the snapshot
-    // and cause data can not be deleted
-    pub fn disable_old_value(&mut self) {
-        self.need_old_value = false;
+        Observer { scheduler }
     }
 
     pub fn register_to(&self, coprocessor_host: &mut CoprocessorHost<E>) {
@@ -50,7 +36,6 @@ impl<E: KvEngine> Clone for Observer<E> {
     fn clone(&self) -> Self {
         Self {
             scheduler: self.scheduler.clone(),
-            need_old_value: self.need_old_value,
         }
     }
 }
@@ -58,7 +43,7 @@ impl<E: KvEngine> Clone for Observer<E> {
 impl<E: KvEngine> Coprocessor for Observer<E> {}
 
 impl<E: KvEngine> CmdObserver<E> for Observer<E> {
-    fn on_flush_applied_cmd_batch(&self, cmd_batches: &mut Vec<CmdBatch>, engine: &E) {
+    fn on_flush_applied_cmd_batch(&self, cmd_batches: &mut Vec<CmdBatch>, _: &E) {
         if cmd_batches.iter().all(|cb| cb.level == ObserveLevel::None) {
             return;
         }
@@ -69,24 +54,9 @@ impl<E: KvEngine> CmdObserver<E> for Observer<E> {
         if cmd_batches.is_empty() {
             return;
         }
-        let region = {
-            let mut r = Region::default();
-            r.mut_peers().push(Peer::default());
-            r
-        };
-        // Create a snapshot here for preventing the old value was GC-ed.
-        // TODO: only need it after enabling old value, may add a flag to indicate whether to get it.
-        let snapshot = if self.need_old_value {
-            Some(RegionSnapshot::from_snapshot(
-                Arc::new(engine.snapshot()),
-                Arc::new(region),
-            ))
-        } else {
-            None
-        };
         if let Err(e) = self.scheduler.schedule(Task::ChangeLog {
             cmd_batch: cmd_batches,
-            snapshot,
+            snapshot: None,
         }) {
             info!("failed to schedule change log event"; "err" => ?e);
         }
@@ -128,6 +98,7 @@ mod test {
     use super::*;
     use engine_rocks::RocksSnapshot;
     use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+    use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::*;
     use std::time::Duration;
     use tikv::storage::kv::TestEngineBuilder;
