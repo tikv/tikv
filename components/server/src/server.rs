@@ -614,6 +614,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         // Register cdc
         let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
         cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+        // TODO: register a cdc config manager here to support dynamically change cdc config
 
         // Create resolved ts worker
         let rts_worker = if self.config.resolved_ts.enable {
@@ -621,7 +622,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             // Register the resolved ts observer
             let resolved_ts_ob = resolved_ts::Observer::new(worker.scheduler());
             resolved_ts_ob.register_to(self.coprocessor_host.as_mut().unwrap());
-
             // Register config manager for resolved ts worker
             cfg_controller.register(
                 tikv::config::Module::ResolvedTs,
@@ -629,7 +629,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                     worker.scheduler(),
                 )),
             );
-
             Some(worker)
         } else {
             None
