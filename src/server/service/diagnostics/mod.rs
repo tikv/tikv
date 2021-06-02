@@ -66,9 +66,9 @@ impl Diagnostics for Service {
             log::search(log_file, req)
                 .map(|stream| stream.map(|resp| (resp, WriteFlags::default().buffer_hint(true))))
                 .map_err(|e| {
-                    grpcio::Error::RpcFailure(RpcStatus::new(
+                    grpcio::Error::RpcFailure(RpcStatus::with_message(
                         RpcStatusCode::UNKNOWN,
-                        Some(format!("{:?}", e)),
+                        format!("{:?}", e),
                     ))
                 })
         });
