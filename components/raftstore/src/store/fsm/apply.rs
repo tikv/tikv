@@ -3171,7 +3171,6 @@ where
                 .raft_engine
                 .fetch_entries_to(rid, start, end, None, &mut entries)
                 .unwrap();
-            // TODO: trace its memory usage later.
         }
 
         self.delegate.metrics = ApplyMetrics::default();

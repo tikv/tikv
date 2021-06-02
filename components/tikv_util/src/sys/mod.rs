@@ -17,7 +17,7 @@ pub const HIGH_PRI: i32 = -1;
 const CPU_CORES_QUOTA_ENV_VAR_KEY: &str = "TIKV_CPU_CORES_QUOTA";
 
 static GLOBAL_MEMORY_USAGE: AtomicU64 = AtomicU64::new(0);
-static MEMORY_USAGE_HIGH_WATER: AtomicU64 = AtomicU64::new(0);
+static MEMORY_USAGE_HIGH_WATER: AtomicU64 = AtomicU64::new(u64::MAX);
 
 #[cfg(target_os = "linux")]
 lazy_static! {

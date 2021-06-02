@@ -7,6 +7,8 @@ use tikv_alloc::{
     mem_trace,
     trace::{Id, MemoryTrace, MemoryTraceNode},
 };
+use tikv_util::config::GIB;
+use tikv_util::sys::{get_global_memory_usage, memory_usage_reaches_high_water};
 
 lazy_static! {
     pub static ref MEMTRACE_ROOT: Arc<MemoryTraceNode> = mem_trace!(
@@ -50,4 +52,16 @@ pub struct PeerMemoryTrace {
 pub struct ApplyMemoryTrace {
     pub pending_cmds: usize,
     pub rest: usize,
+}
+
+pub fn needs_evict_entry_cache() -> bool {
+    if memory_usage_reaches_high_water() {
+        let usage = get_global_memory_usage();
+        let ec_usage = MEMTRACE_ENTRY_CACHE.sum() as u64;
+        if ec_usage > GIB || ec_usage > usage / 3 {
+            // Evict cache if entry cache memory usage reaches 1/3 of global or 1GB.
+            return true;
+        }
+    }
+    false
 }

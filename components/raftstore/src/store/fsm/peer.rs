@@ -33,7 +33,6 @@ use raft::{Ready, StateRole};
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::memory::HeapSize;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
-use tikv_util::sys::memory_usage_reaches_high_water;
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
 use tikv_util::{box_err, debug, error, info, trace, warn};
@@ -3440,11 +3439,10 @@ where
         let applied_idx = self.fsm.peer.get_store().applied_index();
         if !self.fsm.peer.is_leader() {
             self.fsm.peer.mut_store().compact_to(applied_idx + 1);
-            if memory_usage_reaches_high_water() {
-                // FIXME: also consider memory usage for entry cache itself.
+            if needs_evict_entry_cache() {
                 self.fsm.peer.mut_store().half_evict_cache();
-                return;
             }
+            return;
         }
 
         // As leader, we would not keep caches for the peers that didn't response heartbeat in the
@@ -3498,7 +3496,7 @@ where
             .peer
             .mut_store()
             .maybe_gc_cache(alive_cache_idx, applied_idx);
-        if memory_usage_reaches_high_water() {
+        if needs_evict_entry_cache() {
             self.fsm.peer.mut_store().half_evict_cache();
         }
 
