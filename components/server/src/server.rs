@@ -180,7 +180,7 @@ struct TiKVServer<ER: RaftEngine> {
     snap_mgr: Option<SnapManager>, // Will be filled in `init_servers`.
     encryption_key_manager: Option<Arc<DataKeyManager>>,
     engines: Option<TiKVEngines<RocksEngine, ER>>,
-    servers: Option<Servers<ER>>,
+    servers: Option<Servers<RocksEngine, ER>>,
     region_info_accessor: RegionInfoAccessor,
     coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
     to_stop: Vec<Box<dyn Stop>>,
@@ -196,9 +196,9 @@ struct TiKVEngines<EK: KvEngine, ER: RaftEngine> {
     engine: RaftKv<EK, ServerRaftStoreRouter<EK, ER>>,
 }
 
-struct Servers<ER: RaftEngine> {
+struct Servers<EK: KvEngine, ER: RaftEngine> {
     lock_mgr: LockManager,
-    server: LocalServer<RocksEngine, ER>,
+    server: LocalServer<EK, ER>,
     node: Node<RpcClient, ER>,
     importer: Arc<SSTImporter>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
