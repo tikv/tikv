@@ -3,6 +3,6 @@
 mod gc_worker;
 mod pessimistic_txn;
 mod raftstore;
-mod resource_metering_agent;
+mod resource_metering;
 mod snap;
 mod split_check;

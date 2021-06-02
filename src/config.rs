@@ -42,7 +42,7 @@ use raft_log_engine::RaftLogEngine;
 use raftstore::coprocessor::{Config as CopConfig, RegionInfoAccessor};
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::{CompactionGuardGeneratorFactory, SplitConfig};
-use resource_metering::agent::Config as ResourceMeteringAgentConfig;
+use resource_metering::reporter::Config as ResourceMeteringConfig;
 use security::SecurityConfig;
 use tikv_util::config::{
     self, LogFormat, OptionReadableSize, ReadableDuration, ReadableSize, TomlWriter, GIB, MIB,
@@ -2369,7 +2369,7 @@ pub struct TiKvConfig {
     pub resolved_ts: ResolvedTsConfig,
 
     #[config(submodule)]
-    pub resource_metering_agent: ResourceMeteringAgentConfig,
+    pub resource_metering: ResourceMeteringConfig,
 }
 
 impl Default for TiKvConfig {
@@ -2407,7 +2407,7 @@ impl Default for TiKvConfig {
             split: SplitConfig::default(),
             cdc: CdcConfig::default(),
             resolved_ts: ResolvedTsConfig::default(),
-            resource_metering_agent: ResourceMeteringAgentConfig::default(),
+            resource_metering: ResourceMeteringConfig::default(),
         }
     }
 }
@@ -2528,7 +2528,7 @@ impl TiKvConfig {
         self.pessimistic_txn.validate()?;
         self.gc.validate()?;
         self.resolved_ts.validate()?;
-        self.resource_metering_agent.validate()?;
+        self.resource_metering.validate()?;
 
         let default_memory_usage_limit = Self::default_memory_usage_limit();
         if self.memory_usage_limit.0 == 0 {
@@ -3018,7 +3018,7 @@ pub enum Module {
     Split,
     CDC,
     ResolvedTs,
-    ResourceMeteringAgent,
+    ResourceMetering,
     Unknown(String),
 }
 
@@ -3043,7 +3043,7 @@ impl From<&str> for Module {
             "gc" => Module::Gc,
             "cdc" => Module::CDC,
             "resolved_ts" => Module::ResolvedTs,
-            "resource_metering_agent" => Module::ResourceMeteringAgent,
+            "resource_metering" => Module::ResourceMetering,
             n => Module::Unknown(n.to_owned()),
         }
     }

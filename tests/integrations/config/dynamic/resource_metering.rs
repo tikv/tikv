@@ -2,21 +2,21 @@
 
 use std::sync::mpsc::{channel, Receiver, Sender};
 
-use resource_metering::agent::{ConfigManager, Task};
+use resource_metering::reporter::{ConfigManager, Task};
 use tikv::config::{ConfigController, Module, TiKvConfig};
 use tikv_util::worker::{LazyWorker, Runnable};
 
-pub struct MockResourceMeteringAgent {
+pub struct MockResourceMeteringReporter {
     tx: Sender<Task>,
 }
 
-impl MockResourceMeteringAgent {
+impl MockResourceMeteringReporter {
     fn new(tx: Sender<Task>) -> Self {
-        MockResourceMeteringAgent { tx }
+        MockResourceMeteringReporter { tx }
     }
 }
 
-impl Runnable for MockResourceMeteringAgent {
+impl Runnable for MockResourceMeteringReporter {
     type Task = Task;
 
     fn run(&mut self, task: Self::Task) {
@@ -32,47 +32,52 @@ fn setup_cfg_manager(
 
     let (tx, rx) = channel();
 
-    let resource_metering_config = config.resource_metering_agent.clone();
+    let resource_metering_config = config.resource_metering.clone();
     let cfg_controller = ConfigController::new(config);
     cfg_controller.register(
-        Module::ResourceMeteringAgent,
+        Module::ResourceMetering,
         Box::new(ConfigManager::new(resource_metering_config, scheduler)),
     );
 
-    worker.start(MockResourceMeteringAgent::new(tx));
+    worker.start(MockResourceMeteringReporter::new(tx));
     (cfg_controller, rx, worker)
 }
 
 #[test]
 fn test_update_resource_metering_agent_config() {
     let (mut config, _dir) = TiKvConfig::with_tmp().unwrap();
-    config.resource_metering_agent.agent_address = "localhost:8888".to_owned();
     config.validate().unwrap();
 
     let (cfg_controller, rx, worker) = setup_cfg_manager(config);
 
     let change = {
         let mut m = std::collections::HashMap::new();
+        m.insert("resource-metering.enabled".to_owned(), "true".to_owned());
         m.insert(
-            "resource-metering-agent.enabled".to_owned(),
-            "true".to_owned(),
+            "resource-metering.agent-address".to_owned(),
+            "localhost:8888".to_owned(),
         );
         m.insert(
-            "resource-metering-agent.precision-seconds".to_owned(),
+            "resource-metering.precision-seconds".to_owned(),
             "20".to_owned(),
         );
         m.insert(
-            "resource-metering-agent.max-resource-groups".to_owned(),
+            "resource-metering.report-interval-seconds".to_owned(),
+            "80".to_owned(),
+        );
+        m.insert(
+            "resource-metering.max-resource-groups".to_owned(),
             "3000".to_owned(),
         );
         m
     };
     cfg_controller.update(change).unwrap();
 
-    let new_config = cfg_controller.get_current().resource_metering_agent;
+    let new_config = cfg_controller.get_current().resource_metering;
     assert!(new_config.enabled);
     assert_eq!(new_config.agent_address, "localhost:8888".to_string());
     assert_eq!(new_config.precision_seconds, 20);
+    assert_eq!(new_config.report_agent_interval_seconds, 80);
     assert_eq!(new_config.max_resource_groups, 3000);
 
     let task = rx.recv().unwrap();

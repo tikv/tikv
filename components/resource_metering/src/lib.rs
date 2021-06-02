@@ -2,10 +2,13 @@
 
 #![feature(shrink_to)]
 
+#[macro_use]
+extern crate tikv_util;
+
 use std::sync::Arc;
 
-pub mod agent;
 pub mod cpu;
+pub mod reporter;
 
 #[derive(Debug, Default, Eq, PartialEq, Clone, Hash)]
 pub struct ResourceMeteringTag {

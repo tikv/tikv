@@ -24,9 +24,9 @@ pub use dummy::{init_recorder, register_collector, CollectorHandle, Guard};
 
 #[derive(Debug, Clone)]
 pub struct CpuRecords {
-    begin_unix_time_ms: u64,
-    duration_ms: u64,
-    records: HashMap<ResourceMeteringTag, u64>,
+    pub begin_unix_time_ms: u64,
+    pub duration_ms: u64,
+    pub records: HashMap<ResourceMeteringTag, u64>,
 }
 
 impl Default for CpuRecords {

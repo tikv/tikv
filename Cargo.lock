@@ -3114,6 +3114,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdqselect"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ec91767ecc0a0bbe558ce8c9da33c068066c57ecc8bb8477ef8c1ad3ef77c27"
+
+[[package]]
 name = "peeking_take_while"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4022,10 +4028,13 @@ dependencies = [
  "collections",
  "configuration",
  "crossbeam",
+ "futures 0.3.8",
  "grpcio",
  "kvproto",
  "lazy_static",
  "libc 0.2.86",
+ "log",
+ "pdqselect",
  "pin-project 1.0.1",
  "procinfo",
  "prometheus",
@@ -4034,6 +4043,8 @@ dependencies = [
  "security",
  "serde",
  "serde_derive",
+ "slog",
+ "slog-global",
  "tikv_util",
 ]
 
