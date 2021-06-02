@@ -99,6 +99,7 @@ pub fn register_memory_usage_high_water(mark: u64) {
 }
 
 pub fn memory_usage_reaches_high_water() -> bool {
+    fail_point!("memory_usage_reaches_high_water", |_| true);
     get_global_memory_usage() >= MEMORY_USAGE_HIGH_WATER.load(Ordering::Acquire)
 }
 
