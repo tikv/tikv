@@ -199,6 +199,23 @@ impl Latches {
         wakeup_list
     }
 
+    /// Update `owned_count` of the `lock` of command with ID `who`.
+    /// After some other command releases its latches, some locks may be naturally
+    /// acquired then the `owned_count` may be inaccurate in this case.
+    /// This function should be called before actions that depend on an accurate
+    /// `owned_count` (e.g. `release`) with part of locks are not acquired.
+    pub fn update_owned_count(&self, lock: &mut Lock, who: u64) {
+        for &key_hash in &lock.required_hashes[lock.owned_count..] {
+            let latch = self.lock_latch(key_hash);
+            match latch.get_first_req_by_hash(key_hash) {
+                Some(cid) if cid == who => {
+                    lock.owned_count += 1;
+                }
+                _ => break,
+            }
+        }
+    }
+
     #[inline]
     fn lock_latch(&self, hash: u64) -> MutexGuard<Latch> {
         self.slots[(hash as usize) & (self.size - 1)].lock()
