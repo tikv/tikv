@@ -1035,6 +1035,7 @@ where
             + self.check_stale_peers.heap_size()
             + self.want_rollback_merge_peers.heap_size()
             + self.pending_messages.len() * mem::size_of::<raft::eraftpb::Message>()
+            + mem::size_of_val(self.pending_request_snapshot_count.as_ref())
     }
 
     fn add_ready_metric(&self, ready: &Ready, metrics: &mut RaftReadyMetrics) {

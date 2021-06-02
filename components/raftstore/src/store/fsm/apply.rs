@@ -726,7 +726,7 @@ where
     /// the source peer has applied its logs and pending entries
     /// are all handled.
     pending_msgs: Vec<Msg<EK>>,
-
+    /// Approximate size of current buffer.
     approximate_size: usize,
 }
 
