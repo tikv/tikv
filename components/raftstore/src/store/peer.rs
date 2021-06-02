@@ -35,6 +35,7 @@ use raft::{
 };
 use raft_proto::ConfChangeI;
 use smallvec::SmallVec;
+use tikv_util::memory::HeapSize;
 use time::Timespec;
 use uuid::Uuid;
 
@@ -413,6 +414,8 @@ where
     /// 1. when merging, its data in storeMeta will be removed early by the target peer.
     /// 2. all read requests must be rejected.
     pub pending_remove: bool,
+    /// If a snapshot is being applied asynchronously, messages should not be sent.
+    pending_messages: Vec<eraftpb::Message>,
 
     /// Record the instants of peers being added into the configuration.
     /// Remove them after they are not pending any more.
@@ -589,6 +592,7 @@ where
             },
             raft_log_size_hint: 0,
             leader_lease: Lease::new(cfg.raft_store_max_leader_lease()),
+            pending_messages: vec![],
             peer_stat: PeerStat::default(),
             catch_up_logs: None,
             bcast_wake_up_time: None,
@@ -1018,6 +1022,23 @@ where
         self.raft_group.snap()
     }
 
+    #[inline]
+    pub fn proposal_size(&self) -> usize {
+        self.proposals.queue.heap_size() + self.pending_reads.heap_size()
+    }
+
+    #[inline]
+    pub fn rest_size(&self) -> usize {
+        self.peer_cache.borrow().heap_size()
+            + self.peer_heartbeats.heap_size()
+            + self.peers_start_pending_time.heap_size()
+            + self.down_peer_ids.heap_size()
+            + self.check_stale_peers.heap_size()
+            + self.want_rollback_merge_peers.heap_size()
+            + self.pending_messages.len() * mem::size_of::<raft::eraftpb::Message>()
+            + mem::size_of_val(self.pending_request_snapshot_count.as_ref())
+    }
+
     fn add_ready_metric(&self, ready: &Ready, metrics: &mut RaftReadyMetrics) {
         metrics.message += ready.messages().len() as u64;
         metrics.commit += ready.committed_entries().len() as u64;
@@ -1397,6 +1418,8 @@ where
                 _ => {}
             }
             self.on_leader_changed(ctx, ss.leader_id, self.term());
+            // TODO: it may possible that only the `leader_id` change and the role
+            // didn't change
             ctx.coprocessor_host
                 .on_role_change(self.region(), ss.raft_state);
             self.cmd_epoch_checker.maybe_update_term(self.term());
@@ -1621,6 +1644,7 @@ where
                 return None;
             }
             CheckApplyingSnapStatus::Success => {
+                fail_point!("raft_before_applying_snap_finished");
                 // 0 means snapshot is scheduled after being restarted.
                 if self.last_unpersisted_number != 0 {
                     // Because we only handle raft ready when not applying snapshot, so following
@@ -1633,9 +1657,22 @@ where
                     );
                 }
                 self.post_pending_read_index_on_replica(ctx);
+                // Resume `read_progress`
+                self.read_progress.resume();
+                // Update apply index to `last_applying_idx`
                 self.read_progress.update_applied(self.last_applying_idx);
+                if !self.pending_messages.is_empty() {
+                    let msgs = mem::take(&mut self.pending_messages);
+                    self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.send_message);
+                }
             }
-            CheckApplyingSnapStatus::Idle => {}
+            CheckApplyingSnapStatus::Idle => {
+                // FIXME: It's possible that the snapshot applying task is canceled.
+                // Although it only happens when shutting down the store or destroying
+                // the peer, it's still dengerous if continue to handle ready for the
+                // peer. So it's better to revoke `JOB_STATUS_CANCELLING` to ensure all
+                // started tasks can get finished correctly.
+            }
         }
 
         let mut destroy_regions = vec![];
@@ -1736,9 +1773,8 @@ where
             if !self.is_leader() {
                 fail_point!("raft_before_follower_send");
             }
-            for vec_msg in ready.take_messages() {
-                self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.send_message);
-            }
+            let msgs = ready.take_messages();
+            self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.send_message);
         }
 
         self.apply_reads(ctx, &ready);
@@ -1776,14 +1812,21 @@ where
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         invoke_ctx: InvokeContext,
+        ready: &mut Ready,
     ) -> Option<ApplySnapResult> {
         if invoke_ctx.has_snapshot() {
             // When apply snapshot, there is no log applied and not compacted yet.
             self.raft_log_size_hint = 0;
+            // Pause `read_progress` to prevent serving stale read while applying snapshot
+            self.read_progress.pause();
         }
 
         let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
+        let has_msg = !ready.persisted_messages().is_empty();
+
         if apply_snap_result.is_some() {
+            self.pending_messages = ready.take_persisted_messages();
+
             // The peer may change from learner to voter after snapshot applied.
             let peer = self
                 .region()
@@ -1802,13 +1845,14 @@ where
                 );
                 self.peer = peer;
             };
-        }
 
-        if apply_snap_result.is_some() {
             self.activate(ctx);
             let mut meta = ctx.store_meta.lock().unwrap();
             meta.readers
                 .insert(self.region_id, ReadDelegate::from_peer(self));
+        } else if has_msg {
+            let msgs = ready.take_persisted_messages();
+            self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.send_message);
         }
 
         apply_snap_result
@@ -1941,9 +1985,8 @@ where
             if !self.is_leader() {
                 fail_point!("raft_before_follower_send");
             }
-            for vec_msg in light_rd.take_messages() {
-                self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.send_message);
-            }
+            let msgs = light_rd.take_messages();
+            self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.send_message);
         }
 
         if !light_rd.committed_entries().is_empty() {
@@ -2159,6 +2202,10 @@ where
 
         // Only leaders need to update applied_index_term.
         if progress_to_be_updated && self.is_leader() {
+            if applied_index_term == self.term() {
+                ctx.coprocessor_host
+                    .on_applied_current_term(StateRole::Leader, self.region());
+            }
             let progress = ReadProgress::applied_index_term(applied_index_term);
             let mut meta = ctx.store_meta.lock().unwrap();
             let reader = meta.readers.get_mut(&self.region_id).unwrap();

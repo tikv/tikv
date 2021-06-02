@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 use std::fmt::Display;
 use std::option::Option;
-use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 use std::{cmp, fmt, u64};
 
@@ -785,7 +785,7 @@ impl<'a> ChangePeerI for &'a ChangePeerRequest {
         let mut cc = eraftpb::ConfChange::default();
         cc.set_change_type(self.get_change_type());
         cc.set_node_id(self.get_peer().get_id());
-        cc.set_context(ctx);
+        cc.set_context(ctx.into());
         cc
     }
 }
@@ -819,7 +819,7 @@ impl<'a> ChangePeerI for &'a ChangePeerV2Request {
             cc.set_transition(eraftpb::ConfChangeTransition::Explicit);
         }
         cc.set_changes(changes.into());
-        cc.set_context(ctx);
+        cc.set_context(ctx.into());
         cc
     }
 }
@@ -859,6 +859,8 @@ pub struct RegionReadProgress {
     // The fast path to read `safe_ts` without acquiring the mutex
     // on `core`
     safe_ts: AtomicU64,
+    // `true` means stop updating `safe_ts` until `resume` is called
+    stopped: AtomicBool,
 }
 
 impl RegionReadProgress {
@@ -866,6 +868,7 @@ impl RegionReadProgress {
         RegionReadProgress {
             core: Mutex::new(RegionReadProgressCore::new(applied_index, cap, tag)),
             safe_ts: AtomicU64::from(0),
+            stopped: AtomicBool::from(false),
         }
     }
 

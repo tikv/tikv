@@ -110,15 +110,29 @@ impl<E: KvEngine> CmdObserver<E> for Observer<E> {
             }
         }
     }
+
+    fn on_applied_current_term(&self, role: StateRole, region: &Region) {
+        // Start to advance resolved ts after peer becomes leader and apply on its term
+        if role == StateRole::Leader {
+            if let Err(e) = self.scheduler.schedule(Task::RegisterRegion {
+                region: region.clone(),
+            }) {
+                info!("failed to schedule register region task"; "err" => ?e);
+            }
+        }
+    }
 }
 
 impl<E: KvEngine> RoleObserver for Observer<E> {
     fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role: StateRole) {
-        if let Err(e) = self.scheduler.schedule(Task::RegionRoleChanged {
-            role,
-            region: ctx.region().clone(),
-        }) {
-            info!("failed to schedule region role changed event"; "err" => ?e);
+        // Stop to advance resolved ts after peer steps down to follower or candidate.
+        // Do not need to check observe id because we expect all role change events are scheduled in order.
+        if role != StateRole::Leader {
+            if let Err(e) = self.scheduler.schedule(Task::DeRegisterRegion {
+                region_id: ctx.region().id,
+            }) {
+                info!("failed to schedule deregister region task"; "err" => ?e);
+            }
         }
     }
 }
