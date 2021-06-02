@@ -128,6 +128,8 @@ where
     }
 }
 
+impl<S: Snapshot> HeapSize for PendingCmd<S> {}
+
 /// Commands waiting to be committed and applied.
 #[derive(Debug)]
 pub struct PendingCmdQueue<S>
@@ -186,7 +188,7 @@ where
 {
     #[inline]
     fn heap_size(&self) -> usize {
-        self.normals.capacity() * mem::size_of::<PendingCmd<S>>()
+        self.normals.heap_size()
     }
 }
 
@@ -726,6 +728,7 @@ where
     /// are all handled.
     pending_msgs: Vec<Msg<EK>>,
 
+    /// Approximate size of current buffer.
     approximate_size: usize,
 }
 
@@ -754,13 +757,11 @@ where
     EK: KvEngine,
 {
     fn heap_size(&self) -> usize {
+        // TODO: impl HeapSize for Entry.
         let mut size = self.pending_entries.capacity() * mem::size_of::<Entry>()
-            + self.pending_msgs.capacity() * mem::size_of::<Msg<EK>>();
+            + self.pending_msgs.heap_size();
         for e in &self.pending_entries {
             size += e.get_data().len() + e.get_context().len();
-        }
-        for m in &self.pending_msgs {
-            size += m.heap_size();
         }
         size
     }
@@ -2817,14 +2818,7 @@ where
     pub must_pass_epoch_check: bool,
 }
 
-impl<S> HeapSize for Proposal<S>
-where
-    S: Snapshot,
-{
-    fn heap_size(&self) -> usize {
-        0
-    }
-}
+impl<S: Snapshot> HeapSize for Proposal<S> {}
 
 pub struct Destroy {
     region_id: u64,
@@ -3466,7 +3460,7 @@ where
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
         msgs: &mut Vec<Msg<EK>>,
-    ) {
+    ) -> Option<TraceEvent> {
         let mut drainer = msgs.drain(..);
         loop {
             match drainer.next() {
@@ -3510,9 +3504,7 @@ where
             pending_cmds: self.delegate.pending_cmds.heap_size(),
             rest: s + mem::size_of::<Self>(),
         };
-        if let Some(event) = self.delegate.trace.reset(trace) {
-            MEMTRACE_APPLYS.trace(event);
-        }
+        self.delegate.trace.reset(trace)
     }
 }
 
@@ -3580,6 +3572,7 @@ where
     apply_ctx: ApplyContext<EK, W>,
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
+    trace_event: Option<TraceEvent>,
 }
 
 impl<EK, W> PollHandler<ApplyFsm<EK>, ControlFsm> for ApplyPoller<EK, W>
@@ -3655,7 +3648,10 @@ where
                 }
             }
         }
-        normal.handle_tasks(&mut self.apply_ctx, &mut self.msg_buf);
+        if let Some(trace_event) = normal.handle_tasks(&mut self.apply_ctx, &mut self.msg_buf) {
+            self.trace_event = Some(self.trace_event.map_or(trace_event, |e| e + trace_event));
+        }
+
         if normal.delegate.wait_merge_state.is_some() {
             // Check it again immediately as catching up logs can be very fast.
             expected_msg_count = Some(0);
@@ -3672,6 +3668,9 @@ where
             for fsm in fsms {
                 fsm.delegate.last_sync_apply_index = fsm.delegate.apply_state.get_applied_index();
             }
+        }
+        if let Some(e) = self.trace_event.take() {
+            MEMTRACE_APPLYS.trace(e);
         }
     }
 
@@ -3745,6 +3744,7 @@ where
             ),
             messages_per_tick: cfg.messages_per_tick,
             cfg_tracker: self.cfg.clone().tracker(self.tag.clone()),
+            trace_event: None,
         }
     }
 }

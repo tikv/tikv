@@ -80,11 +80,7 @@ pub enum Callback<S: Snapshot> {
     },
 }
 
-impl<S: Snapshot> HeapSize for Callback<S> {
-    fn heap_size(&self) -> usize {
-        0
-    }
-}
+impl<S: Snapshot> HeapSize for Callback<S> {}
 
 impl<S> Callback<S>
 where
