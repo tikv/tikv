@@ -1293,7 +1293,7 @@ pub struct EnginesResourceInfo {
     kv_engine: RocksEngine,
     raft_engine: Option<RocksEngine>,
     latest_normalized_pending_bytes: AtomicU32,
-    normalized_pending_bytes: MovingAvgU32,
+    normalized_pending_bytes_collector: MovingAvgU32,
 }
 
 impl EnginesResourceInfo {
@@ -1306,7 +1306,7 @@ impl EnginesResourceInfo {
             kv_engine,
             raft_engine,
             latest_normalized_pending_bytes: AtomicU32::new(0),
-            normalized_pending_bytes: MovingAvgU32::new(max_samples_to_preserve),
+            normalized_pending_bytes_collector: MovingAvgU32::new(max_samples_to_preserve),
         }
     }
 
@@ -1332,18 +1332,19 @@ impl EnginesResourceInfo {
         for cf in &[CF_DEFAULT, CF_WRITE, CF_LOCK] {
             fetch_engine_cf(&self.kv_engine, cf, &mut normalized_pending_bytes);
         }
-        self.normalized_pending_bytes.add(normalized_pending_bytes);
-        self.latest_normalized_pending_bytes
-            .store(normalized_pending_bytes, Ordering::Relaxed);
+        let (_, avg) = self
+            .normalized_pending_bytes_collector
+            .add(normalized_pending_bytes);
+        self.latest_normalized_pending_bytes.store(
+            std::cmp::max(normalized_pending_bytes, avg),
+            Ordering::Relaxed,
+        );
     }
 }
 
 impl IOBudgetAdjustor for EnginesResourceInfo {
     fn adjust(&self, total_budgets: usize) -> usize {
-        let score = std::cmp::max(
-            self.normalized_pending_bytes.fetch(),
-            self.latest_normalized_pending_bytes.load(Ordering::Relaxed),
-        ) as f32;
+        let score = self.latest_normalized_pending_bytes.load(Ordering::Relaxed) as f32 / 100.0;
         // Two reasons for adding `sqrt` on top:
         // 1) In theory the convergence point is independent of the value of pending
         //    bytes (as long as backlog generating rate equals consuming rate, which is
@@ -1351,7 +1352,7 @@ impl IOBudgetAdjustor for EnginesResourceInfo {
         //    maintaining low level of pending bytes.
         // 2) Variance of compaction pending bytes grows with its magnitude, a filter
         //    with decreasing derivative can help balance such trend.
-        let score = (score / 100.0).sqrt();
+        let score = score.sqrt();
         // The target global write flow slides between Bandwidth / 2 and Bandwidth.
         let score = 0.5 + score / 2.0;
         (total_budgets as f32 * score) as usize
