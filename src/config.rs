@@ -2233,8 +2233,7 @@ impl Default for CdcConfig {
             // TiCDC requires a SSD, the typical write speed of SSD
             // is more than 500MB/s, so 128MB/s is enough.
             incremental_scan_speed_limit: ReadableSize::mb(128),
-            // 10% total memory by default.
-            old_value_cache_memory_quota: ReadableSize(((total_mem as f64) * 0.1) as u64),
+            old_value_cache_memory_quota: ReadableSize::mb(512),
             // Deprecated! preserved for compatibility check.
             old_value_cache_size: 0,
         }
