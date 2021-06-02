@@ -82,11 +82,9 @@ use tikv::{
         status_server::StatusServer,
         ttl::TTLChecker,
         Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID, GRPC_THREAD_PREFIX,
-        MEM_TRACE_SUM_GAUGE,
     },
     storage::{self, config::StorageConfigManger, mvcc::MvccConsistencyCheckObserver, Engine},
 };
-use tikv_alloc::trace::{MemoryTrace, MemoryTraceNode};
 use tikv_util::{
     check_environment_variables,
     config::{ensure_dir_exist, VersionTrack},
@@ -98,7 +96,7 @@ use tikv_util::{
 use tokio::runtime::Builder;
 
 use crate::raft_engine_switch::{check_and_dump_raft_db, check_and_dump_raft_engine};
-use crate::{setup::*, signal_handler};
+use crate::{setup::*, signal_handler, memory::*};
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
@@ -1344,6 +1342,7 @@ impl<R: RaftEngine> EngineMetricsManager<R> {
     }
 }
 
+
 pub struct EnginesResourceInfo {
     kv_engine: RocksEngine,
     raft_engine: Option<RocksEngine>,
@@ -1379,42 +1378,4 @@ impl EnginesResourceInfo {
                             (b * EnginesResourceInfo::SCALE_FACTOR
                                 / cf_opts.get_soft_pending_compaction_bytes_limit())
                                 as u32,
-                        );
-                    }
-                }
-            }
-        }
-
-        if let Some(raft_engine) = &self.raft_engine {
-            fetch_engine_cf(raft_engine, CF_DEFAULT, &mut normalized_pending_bytes);
-        }
-        for cf in &[CF_DEFAULT, CF_WRITE, CF_LOCK] {
-            fetch_engine_cf(&self.kv_engine, cf, &mut normalized_pending_bytes);
-        }
-        let (_, avg) = self
-            .normalized_pending_bytes_collector
-            .add(normalized_pending_bytes);
-        self.latest_normalized_pending_bytes.store(
-            std::cmp::max(normalized_pending_bytes, avg),
-            Ordering::Relaxed,
-        );
-    }
-}
-
-impl IOBudgetAdjustor for EnginesResourceInfo {
-    fn adjust(&self, total_budgets: usize) -> usize {
-        let score = self.latest_normalized_pending_bytes.load(Ordering::Relaxed) as f32
-            / Self::SCALE_FACTOR as f32;
-        // Two reasons for adding `sqrt` on top:
-        // 1) In theory the convergence point is independent of the value of pending
-        //    bytes (as long as backlog generating rate equals consuming rate, which is
-        //    determined by compaction budgets), a convex helps reach that point while
-        //    maintaining low level of pending bytes.
-        // 2) Variance of compaction pending bytes grows with its magnitude, a filter
-        //    with decreasing derivative can help balance such trend.
-        let score = score.sqrt();
-        // The target global write flow slides between Bandwidth / 2 and Bandwidth.
-        let score = 0.5 + score / 2.0;
-        (total_budgets as f32 * score) as usize
-    }
-}
+                        
