@@ -18,6 +18,7 @@
 
 use std::fmt::{self, Display};
 use std::num::NonZeroU64;
+use std::ops::Add;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
@@ -75,11 +76,32 @@ impl Display for Id {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TraceEvent {
     Add(usize),
     Sub(usize),
     Reset(usize),
+}
+
+impl Add for TraceEvent {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
+        match (self, other) {
+            (TraceEvent::Add(l), TraceEvent::Add(r)) => TraceEvent::Add(l + r),
+            (TraceEvent::Sub(l), TraceEvent::Sub(r)) => TraceEvent::Sub(l + r),
+            (TraceEvent::Add(l), TraceEvent::Sub(r)) | (TraceEvent::Sub(r), TraceEvent::Add(l)) => {
+                if l > r {
+                    TraceEvent::Add(l - r)
+                } else {
+                    TraceEvent::Sub(r - l)
+                }
+            }
+            (TraceEvent::Reset(v), TraceEvent::Sub(r)) => TraceEvent::Reset(v - r),
+            (TraceEvent::Reset(v), TraceEvent::Add(r)) => TraceEvent::Reset(v + r),
+            (_, e @ TraceEvent::Reset(_)) => e,
+        }
+    }
 }
 
 pub trait MemoryTrace {
@@ -217,5 +239,32 @@ mod tests {
             .sub_trace(Id::Name("mid2"))
             .trace(TraceEvent::Add(100));
         assert_eq!(111, trace.sum());
+    }
+
+    #[test]
+    fn test_trace_event_add() {
+        assert_eq!(TraceEvent::Add(1) + TraceEvent::Add(1), TraceEvent::Add(2));
+        assert_eq!(TraceEvent::Sub(1) + TraceEvent::Sub(1), TraceEvent::Sub(2));
+        assert_eq!(TraceEvent::Add(1) + TraceEvent::Sub(1), TraceEvent::Sub(0));
+        assert_eq!(TraceEvent::Sub(1) + TraceEvent::Add(1), TraceEvent::Sub(0));
+        assert_eq!(TraceEvent::Add(1) + TraceEvent::Sub(2), TraceEvent::Sub(1));
+        assert_eq!(TraceEvent::Sub(2) + TraceEvent::Add(1), TraceEvent::Sub(1));
+
+        assert_eq!(
+            TraceEvent::Add(1) + TraceEvent::Reset(3),
+            TraceEvent::Reset(3)
+        );
+        assert_eq!(
+            TraceEvent::Sub(1) + TraceEvent::Reset(3),
+            TraceEvent::Reset(3)
+        );
+        assert_eq!(
+            TraceEvent::Reset(3) + TraceEvent::Add(1),
+            TraceEvent::Reset(4)
+        );
+        assert_eq!(
+            TraceEvent::Reset(3) + TraceEvent::Sub(1),
+            TraceEvent::Reset(2)
+        );
     }
 }
