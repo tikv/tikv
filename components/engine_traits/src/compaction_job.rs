@@ -7,6 +7,7 @@ pub trait CompactionJobInfo {
     fn status(&self) -> Result<(), String>;
     fn cf_name(&self) -> &str;
     fn input_file_count(&self) -> usize;
+    fn num_input_files_at_output_level(&self) -> usize;
     fn input_file_at(&self, pos: usize) -> &Path;
     fn output_file_count(&self) -> usize;
     fn output_file_at(&self, pos: usize) -> &Path;

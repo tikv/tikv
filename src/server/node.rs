@@ -31,6 +31,8 @@ use tikv_util::worker::{FutureWorker, Scheduler, Worker};
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 
+use engine_rocks::Info;
+
 /// Creates a new storage engine which is backed by the Raft consensus
 /// protocol.
 pub fn create_raft_storage<S>(
@@ -40,7 +42,7 @@ pub fn create_raft_storage<S>(
     lock_mgr: LockManager,
     concurrency_manager: ConcurrencyManager,
     pipelined_pessimistic_lock: Arc<AtomicBool>,
-    l0_completed_receiver: Option<std::sync::mpsc::Receiver<String>>,
+    l0_completed_receiver: Option<std::sync::mpsc::Receiver<Info>>,
 ) -> Result<Storage<RaftKv<S>, LockManager>>
 where
     S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,

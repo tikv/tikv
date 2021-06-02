@@ -141,7 +141,7 @@ pub fn run_tikv(config: TiKvConfig) {
 const RESERVED_OPEN_FDS: u64 = 1000;
 
 const DEFAULT_METRICS_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
-
+use engine_rocks::Info;
 /// A complete TiKV server.
 struct TiKVServer<ER: RaftEngine> {
     config: TiKvConfig,
@@ -149,7 +149,7 @@ struct TiKVServer<ER: RaftEngine> {
     security_mgr: Arc<SecurityManager>,
     pd_client: Arc<RpcClient>,
     router: RaftRouter<RocksEngine, ER>,
-    l0_completed_receiver: Option<mpsc::Receiver<String>>,
+    l0_completed_receiver: Option<mpsc::Receiver<Info>>,
     system: Option<RaftBatchSystem<RocksEngine, ER>>,
     resolver: resolve::PdStoreAddrResolver,
     state: Arc<Mutex<GlobalReplicationState>>,

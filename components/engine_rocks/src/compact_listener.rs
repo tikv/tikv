@@ -9,7 +9,8 @@ use collections::hash_set_with_capacity;
 use engine_traits::CompactedEvent;
 use engine_traits::CompactionJobInfo;
 use rocksdb::{
-    CompactionJobInfo as RawCompactionJobInfo, CompactionReason, TablePropertiesCollectionView,
+    CompactionJobInfo as RawCompactionJobInfo, CompactionReason, FlushJobInfo,
+    TablePropertiesCollectionView,
 };
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
@@ -41,6 +42,10 @@ impl CompactionJobInfo for RocksCompactionJobInfo<'_> {
 
     fn input_file_count(&self) -> usize {
         self.0.input_file_count()
+    }
+
+    fn num_input_files_at_output_level(&self) -> usize {
+        self.0.num_input_files_at_output_level()
     }
 
     fn input_file_at(&self, pos: usize) -> &Path {
@@ -198,17 +203,22 @@ pub type Filter = fn(&RocksCompactionJobInfo) -> bool;
 use std::sync::mpsc::Sender;
 use std::sync::Mutex;
 
+pub enum Info {
+    L0(String, u64),
+    Flush(String, u64),
+}
+
 pub struct CompactionListener {
     ch: Box<dyn Fn(RocksCompactedEvent) + Send + Sync>,
     filter: Option<Filter>,
-    l0_completed_sender: Mutex<Sender<String>>,
+    l0_completed_sender: Mutex<Sender<Info>>,
 }
 
 impl CompactionListener {
     pub fn new(
         ch: Box<dyn Fn(RocksCompactedEvent) + Send + Sync>,
         filter: Option<Filter>,
-        l0_completed_sender: Sender<String>,
+        l0_completed_sender: Sender<Info>,
     ) -> CompactionListener {
         CompactionListener {
             ch,
@@ -219,6 +229,17 @@ impl CompactionListener {
 }
 
 impl EventListener for CompactionListener {
+    fn on_flush_completed(&self, info: &FlushJobInfo) {
+        let mut total = 0;
+        let p = info.table_properties();
+        total += p.data_size() + p.index_size() + p.filter_size();
+        let _ = self
+            .l0_completed_sender
+            .lock()
+            .unwrap()
+            .send(Info::Flush(info.cf_name().to_owned(), total));
+    }
+
     fn on_compaction_completed(&self, info: &RawCompactionJobInfo) {
         let info = &RocksCompactionJobInfo::from_raw(info);
         if info.status().is_err() {
@@ -226,11 +247,24 @@ impl EventListener for CompactionListener {
         }
 
         if info.base_input_level() == 0 && info.output_level() != 0 {
+            let index = info.input_file_count() - info.num_input_files_at_output_level();
+            let props = info.table_properties();
+            let mut read_bytes = 0;
+            for i in 0..index {
+                let file = info.input_file_at(i);
+                for (file_name, prop) in props.iter() {
+                    if file_name == file.to_str().unwrap() {
+                        read_bytes += prop.data_size() + prop.index_size() + prop.filter_size();
+                        break;
+                    }
+                }
+            }
+
             let _ = self
                 .l0_completed_sender
                 .lock()
                 .unwrap()
-                .send(info.cf_name().to_owned());
+                .send(Info::L0(info.cf_name().to_owned(), read_bytes));
         }
         if let Some(ref f) = self.filter {
             if !f(info) {

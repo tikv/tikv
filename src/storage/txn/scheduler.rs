@@ -252,40 +252,48 @@ impl<const CAP: usize> Smoother<CAP> {
     }
 
     pub fn trend(&self) -> Trend {
-        if self.size == 0 {
+        if self.size != CAP {
             return Trend::NoTrend;
         }
 
-        // follow the way of Cox-Stuart
-        let half = if self.size % 2 == 0 {
-            self.size / 2
-        } else {
-            (self.size - 1) / 2
-        };
-
-        use std::cmp::Ordering;
-        let mut num_pos = 0;
-        let mut num_neg = 0;
-        for i in 0..half {
-            match self.records[(self.idx + i + half) % CAP].cmp(&self.records[(self.idx + i) % CAP])
-            {
-                Ordering::Greater => num_pos += 1,
-                Ordering::Less => num_neg += 1,
-                Ordering::Equal => {}
-            }
-        }
-
-        let num = num_neg + num_pos;
-        let k = std::cmp::min(num_neg, num_pos);
-        let p_value = 2.0 * self.binom_cdf(k, num, 0.5);
-
-        if num_pos > num_neg && p_value < 0.05 {
+        if self.records[(self.idx - 1) % CAP] > self.records[self.idx % CAP] + 2 {
             Trend::Increasing
-        } else if num_pos < num_neg && p_value < 0.05 {
+        } else if self.records[(self.idx - 1) % CAP] < self.records[self.idx % CAP] - 2 {
             Trend::Decreasing
         } else {
             Trend::NoTrend
         }
+
+        // follow the way of Cox-Stuart
+        // let half = if self.size % 2 == 0 {
+        //     self.size / 2
+        // } else {
+        //     (self.size - 1) / 2
+        // };
+
+        // use std::cmp::Ordering;
+        // let mut num_pos = 0;
+        // let mut num_neg = 0;
+        // for i in 0..half {
+        //     match self.records[(self.idx + i + half) % CAP].cmp(&self.records[(self.idx + i) % CAP])
+        //     {
+        //         Ordering::Greater => num_pos += 1,
+        //         Ordering::Less => num_neg += 1,
+        //         Ordering::Equal => {}
+        //     }
+        // }
+
+        // let num = num_neg + num_pos;
+        // let k = std::cmp::min(num_neg, num_pos);
+        // let p_value = 2.0 * self.binom_cdf(k, num, 0.5);
+
+        // if num_pos > num_neg && p_value < 0.05 {
+        //     Trend::Increasing
+        // } else if num_pos < num_neg && p_value < 0.05 {
+        //     Trend::Decreasing
+        // } else {
+        //     Trend::NoTrend
+        // }
     }
 }
 
@@ -296,9 +304,14 @@ struct FlowChecker<E: Engine> {
     l0_files_threshold: u64,
 
     last_num_memtables: Smoother<10>,
-    long_term_num_l0_files: Smoother<60>,
-    short_term_avg_l0_files: Smoother<30>,
+    long_term_num_l0_files: Smoother<6>,
+    // short_term_avg_l0_files: Smoother<5>,
     long_term_pending_bytes: Smoother<600>,
+    last_flush_bytes_time: Instant,
+    last_flush_bytes: u64,
+    last_l0_bytes: u64,
+    last_l0_bytes_time: Instant,
+    last_l0_flow: f64,
 
     factor: f64,
 
@@ -306,12 +319,13 @@ struct FlowChecker<E: Engine> {
     discard_ratio: Arc<AtomicU64>,
 
     engine: E,
-    recorder: Smoother<60>,
+    recorder: Smoother<30>,
     limiter: Arc<Limiter>,
 }
+use engine_rocks::Info;
 
 impl<E: Engine> FlowChecker<E> {
-    fn start(self, rx: Receiver<bool>, l0_completed_receiver: Receiver<String>) -> JoinHandle<()> {
+    fn start(self, rx: Receiver<bool>, l0_completed_receiver: Receiver<Info>) -> JoinHandle<()> {
         Builder::new()
             .name(thd_name!("flow-checker"))
             .spawn(move || {
@@ -320,8 +334,14 @@ impl<E: Engine> FlowChecker<E> {
                 let mut ticks = 0;
                 while rx.try_recv().is_err() {
                     thread::sleep(Duration::from_millis(CHECK_TICK_INTERVAL));
-                    if let Ok(cf) = l0_completed_receiver.try_recv() {
-                        checker.adjust_l0_files(cf);
+                    loop {
+                        match l0_completed_receiver.try_recv() {
+                            Ok(Info::L0(cf, l0_bytes)) => checker.adjust_l0_files(cf, l0_bytes),
+                            Ok(Info::Flush(cf, flush_bytes)) => {
+                                checker.check_l0_flow(cf, flush_bytes)
+                            }
+                            Err(_) => break,
+                        }
                     }
                     ticks += 1;
                     if ticks == ADJUST_TICKS {
@@ -402,7 +422,7 @@ impl<E: Engine> FlowChecker<E> {
         self.last_num_memtables.observe(num_memtables);
     }
 
-    fn adjust_l0_files(&mut self, cf: String) {
+    fn adjust_l0_files(&mut self, cf: String, l0_bytes: u64) {
         let mut num_l0_files = 0;
         let mut cf_name = None;
         for cf in self.engine.kv_engine().cf_names() {
@@ -421,49 +441,33 @@ impl<E: Engine> FlowChecker<E> {
             return;
         }
 
+        self.last_l0_bytes += l0_bytes;
         self.long_term_num_l0_files.observe(num_l0_files);
 
         let is_throttled = self.limiter.speed_limit() != INFINITY;
-        let should_throttle =
-            self.long_term_num_l0_files.get_avg() > self.l0_files_threshold as f64;
+        let should_throttle = num_l0_files > self.l0_files_threshold;
 
-        self.short_term_avg_l0_files
-            .observe(self.long_term_num_l0_files.get_avg() as u64);
+        // self.short_term_avg_l0_files
+        //     .observe(self.long_term_num_l0_files.get_avg() as u64);
 
-        let mut throttle = if !is_throttled && should_throttle {
+        let throttle = if !is_throttled && should_throttle {
             SCHED_THROTTLE_ACTION_COUNTER
                 .with_label_values(&["init"])
                 .inc();
             self.recorder.get_percentile_95() as f64
         } else if is_throttled && should_throttle {
-            match self.short_term_avg_l0_files.trend() {
+            match self.long_term_num_l0_files.trend() {
                 Trend::Increasing => {
-                    if self.long_term_num_l0_files.get_recent() < self.l0_files_threshold {
-                        SCHED_THROTTLE_ACTION_COUNTER
-                            .with_label_values(&["keep3"])
-                            .inc();
-                        self.limiter.speed_limit()
-                    } else {
-                        SCHED_THROTTLE_ACTION_COUNTER
-                            .with_label_values(&["down"])
-                            .inc();
-                        self.recorder.get_percentile_95() as f64 * (1.0 - LIMIT_DOWN_PERCENT)
-                    }
+                    SCHED_THROTTLE_ACTION_COUNTER
+                        .with_label_values(&["down"])
+                        .inc();
+                    self.limiter.speed_limit() * (1.0 - LIMIT_DOWN_PERCENT)
                 }
                 Trend::Decreasing => {
-                    if self.long_term_num_l0_files.get_recent() < self.l0_files_threshold {
-                        // now the number of l0 files is already below the threshold,
-                        // so we'd better limit up the throttle fast
-                        SCHED_THROTTLE_ACTION_COUNTER
-                            .with_label_values(&["up2"])
-                            .inc();
-                        self.recorder.get_percentile_95() as f64 * (1.0 + LIMIT_UP_PERCENT * 3.0)
-                    } else {
-                        SCHED_THROTTLE_ACTION_COUNTER
-                            .with_label_values(&["up"])
-                            .inc();
-                        self.recorder.get_percentile_95() as f64 * (1.0 + LIMIT_UP_PERCENT)
-                    }
+                    SCHED_THROTTLE_ACTION_COUNTER
+                        .with_label_values(&["keep_decr"])
+                        .inc();
+                    self.limiter.speed_limit()
                 }
                 Trend::NoTrend => {
                     SCHED_THROTTLE_ACTION_COUNTER
@@ -475,19 +479,19 @@ impl<E: Engine> FlowChecker<E> {
         } else if is_throttled && !should_throttle {
             if (num_l0_files as f64) > self.l0_files_threshold as f64 * 0.8 {
                 SCHED_THROTTLE_ACTION_COUNTER
-                    .with_label_values(&["keep3"])
+                    .with_label_values(&["keep2"])
                     .inc();
                 self.limiter.speed_limit()
             } else if (num_l0_files as f64) > self.l0_files_threshold as f64 * 0.5 {
                 SCHED_THROTTLE_ACTION_COUNTER
-                    .with_label_values(&["back"])
+                    .with_label_values(&["up"])
                     .inc();
-                self.recorder.get_avg() * (1.0 + LIMIT_UP_PERCENT * 3.0)
+                self.limiter.speed_limit() * (1.0 + LIMIT_UP_PERCENT * 2.0)
             } else {
                 SCHED_THROTTLE_ACTION_COUNTER
-                    .with_label_values(&["reset"])
+                    .with_label_values(&["back"])
                     .inc();
-                INFINITY
+                self.limiter.speed_limit() * (1.0 + LIMIT_UP_PERCENT * 3.0)
             }
         } else {
             INFINITY
@@ -496,8 +500,15 @@ impl<E: Engine> FlowChecker<E> {
         SCHED_L0_GAUGE.set(num_l0_files as i64);
         SCHED_L0_AVG_GAUGE.set(self.long_term_num_l0_files.get_avg() as i64);
 
+        self.update_speed_limit(throttle)
+    }
+
+    fn update_speed_limit(&mut self, mut throttle: f64) {
         if throttle < MIN_THROTTLE_SPEED {
             throttle = MIN_THROTTLE_SPEED;
+        }
+        if throttle > 2.0 * self.recorder.get_max() as f64 {
+            throttle = INFINITY;
         }
         SCHED_THROTTLE_FLOW_GAUGE.set(if throttle == INFINITY {
             0
@@ -505,6 +516,61 @@ impl<E: Engine> FlowChecker<E> {
             throttle as i64
         });
         self.limiter.set_speed_limit(throttle)
+    }
+
+    fn check_l0_flow(&mut self, cf: String, flush_bytes: u64) {
+        let mut num_l0_files = 0;
+        let mut cf_name = None;
+        for cf in self.engine.kv_engine().cf_names() {
+            let num = self
+                .engine
+                .kv_engine()
+                .get_cf_num_files_at_level(cf, 0)
+                .unwrap_or(None)
+                .unwrap_or(0);
+            if num_l0_files <= num {
+                num_l0_files = num;
+                cf_name = Some(cf.to_owned());
+            }
+        }
+        if cf_name.unwrap() != cf {
+            return;
+        }
+
+        SCHED_FLUSH_L0_GAUGE.set(num_l0_files as i64);
+
+        self.last_flush_bytes += flush_bytes;
+        if self.last_flush_bytes_time.elapsed_secs() > 10.0 {
+            let flush_flow =
+                self.last_flush_bytes as f64 / self.last_flush_bytes_time.elapsed_secs();
+            SCHED_FLUSH_FLOW_GAUGE.set(flush_flow as i64);
+
+            if self.last_l0_bytes != 0 {
+                let l0_flow = self.last_l0_bytes as f64 / self.last_l0_bytes_time.elapsed_secs();
+                self.last_l0_bytes_time = Instant::now_coarse();
+                SCHED_L0_FLOW_GAUGE.set(l0_flow as i64);
+                self.last_l0_flow = l0_flow;
+            }
+
+            self.last_flush_bytes_time = Instant::now_coarse();
+            self.last_l0_bytes = 0;
+            self.last_flush_bytes = 0;
+
+            if num_l0_files > self.l0_files_threshold {
+                // flush flow > l0 flow
+                if flush_flow > self.last_l0_flow {
+                    SCHED_THROTTLE_ACTION_COUNTER
+                        .with_label_values(&["down_flow"])
+                        .inc();
+                    let throttle = if self.limiter.speed_limit() == INFINITY {
+                        self.recorder.get_percentile_95() as f64
+                    } else {
+                        self.limiter.speed_limit()
+                    };
+                    self.update_speed_limit(throttle * (1.0 - LIMIT_DOWN_PERCENT))
+                }
+            }
+        }
     }
 }
 
@@ -538,7 +604,7 @@ impl FlowController {
     pub fn new<E: Engine>(
         config: &Config,
         engine: E,
-        l0_completed_receiver: Option<Receiver<String>>,
+        l0_completed_receiver: Option<Receiver<Info>>,
     ) -> Self {
         let limiter = Arc::new(Limiter::new(INFINITY));
         let discard_ratio = Arc::new(AtomicU64::new(0));
@@ -549,7 +615,7 @@ impl FlowController {
             l0_files_threshold: config.l0_files_threshold,
             last_num_memtables: Smoother::new(),
             long_term_num_l0_files: Smoother::new(),
-            short_term_avg_l0_files: Smoother::new(),
+            // short_term_avg_l0_files: Smoother::new(),
             long_term_pending_bytes: Smoother::new(),
             engine,
             factor: EMA_FACTOR,
@@ -557,6 +623,11 @@ impl FlowController {
             start_control_time: Instant::now_coarse(),
             limiter: limiter.clone(),
             recorder: Smoother::new(),
+            last_flush_bytes: 0,
+            last_l0_bytes: 0,
+            last_flush_bytes_time: Instant::now_coarse(),
+            last_l0_bytes_time: Instant::now_coarse(),
+            last_l0_flow: 0.0,
         };
         let (tx, rx) = mpsc::channel();
         let handle = if config.disable_write_stall {
@@ -706,7 +777,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         concurrency_manager: ConcurrencyManager,
         config: &Config,
         pipelined_pessimistic_lock: Arc<AtomicBool>,
-        l0_completed_receiver: Option<Receiver<String>>,
+        l0_completed_receiver: Option<Receiver<Info>>,
     ) -> Self {
         let t = Instant::now_coarse();
         let mut task_slots = Vec::with_capacity(TASKS_SLOTS_NUM);

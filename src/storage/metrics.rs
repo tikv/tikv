@@ -315,8 +315,23 @@ lazy_static! {
         "The speed of throttle flow."
     )
     .unwrap();
+    pub static ref SCHED_FLUSH_L0_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_scheduler_flush_l0",
+        "The speed of throttle flow."
+    )
+    .unwrap();
     pub static ref SCHED_L0_AVG_GAUGE: IntGauge = register_int_gauge!(
         "tikv_scheduler_l0_avg",
+        "The speed of throttle flow."
+    )
+    .unwrap();
+    pub static ref SCHED_FLUSH_FLOW_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_scheduler_flush_flow",
+        "The speed of throttle flow."
+    )
+    .unwrap();
+    pub static ref SCHED_L0_FLOW_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_scheduler_l0_flow",
         "The speed of throttle flow."
     )
     .unwrap();
