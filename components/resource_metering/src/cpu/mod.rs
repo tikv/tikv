@@ -22,7 +22,7 @@ mod dummy;
 #[cfg(not(target_os = "linux"))]
 pub use dummy::{init_recorder, register_collector, CollectorHandle, Guard};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct CpuRecords {
     pub begin_unix_time_ms: u64,
     pub duration_ms: u64,
