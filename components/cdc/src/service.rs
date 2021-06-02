@@ -17,7 +17,7 @@ use protobuf::Message;
 use tikv_util::worker::*;
 use tikv_util::{error, info, warn};
 
-use crate::channel::{canal, MemoryQuota, Sink};
+use crate::channel::{channel, MemoryQuota, Sink};
 use crate::delegate::{Downstream, DownstreamID};
 use crate::endpoint::{Deregister, Task};
 
@@ -280,7 +280,7 @@ impl ChangeData for Service {
     ) {
         // TODO explain buffer.
         let buffer = 1024;
-        let (event_sink, event_drain) = canal(buffer, self.memory_quota.clone());
+        let (event_sink, event_drain) = channel(buffer, self.memory_quota.clone());
         let peer = ctx.peer();
         let conn = Conn::new(event_sink, peer);
         let conn_id = conn.get_id();
