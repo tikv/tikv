@@ -12,6 +12,7 @@ use std::sync::Arc;
 use ::security::{SecurityConfig, SecurityManager};
 use grpcio::*;
 use kvproto::tikvpb::{create_tikv, Tikv};
+
 fn tikv_service<T>(kv: T, ip: &str, port: u16) -> Result<Server>
 where
     T: Tikv + Clone + Send + 'static,
