@@ -2,6 +2,7 @@
 
 use lazy_static::lazy_static;
 use memory_trace_macros::MemoryTraceHelper;
+use fail::fail_point;
 use std::sync::Arc;
 use tikv_alloc::{
     mem_trace,
@@ -55,6 +56,7 @@ pub struct ApplyMemoryTrace {
 }
 
 pub fn needs_evict_entry_cache() -> bool {
+    fail_point!("needs_evict_entry_cache", |_| true);
     if memory_usage_reaches_high_water() {
         let usage = get_global_memory_usage();
         let ec_usage = MEMTRACE_ENTRY_CACHE.sum() as u64;
