@@ -1,6 +1,5 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::future::Future;
 use std::pin::Pin;
 use std::sync::{
     atomic::Ordering,
@@ -12,14 +11,16 @@ use std::time::{Duration, Instant};
 
 use futures03::{
     channel::mpsc::{
-        channel, unbounded, Receiver, SendError as FuturesSendError, Sender, TrySendError,
-        UnboundedReceiver, UnboundedSender,
+        channel as bounded, unbounded, Receiver, SendError as FuturesSendError, Sender,
+        TrySendError, UnboundedReceiver, UnboundedSender,
     },
     executor::block_on,
-    stream, SinkExt, Stream, StreamExt,
+    stream, FutureExt, SinkExt, Stream, StreamExt,
 };
 use grpcio::{Result as GrpcResult, WriteFlags};
 use kvproto::cdcpb::ChangeDataEvent;
+
+use tikv_util::warn;
 
 use crate::service::{CdcEvent, EventBatcher};
 
@@ -30,49 +31,49 @@ pub const CDC_EVENT_MAX_BATCH_SIZE: usize = 2;
 
 #[derive(Clone)]
 pub struct MemoryQuota {
-    max_bytes: usize,
-    total_bytes: Arc<AtomicUsize>,
+    capacity: usize,
+    in_use: Arc<AtomicUsize>,
 }
 
 impl MemoryQuota {
-    pub fn new(max_bytes: usize) -> MemoryQuota {
+    pub fn new(capacity: usize) -> MemoryQuota {
         MemoryQuota {
-            max_bytes,
-            total_bytes: Arc::new(AtomicUsize::new(0)),
+            capacity,
+            in_use: Arc::new(AtomicUsize::new(0)),
         }
     }
     pub fn in_use(&self) -> usize {
-        self.total_bytes.load(Ordering::Relaxed)
+        self.in_use.load(Ordering::Relaxed)
     }
     pub fn cap(&self) -> usize {
-        self.max_bytes
+        self.capacity
     }
     fn alloc(&self, bytes: usize) -> bool {
-        let mut total_bytes = self.total_bytes.load(Ordering::Relaxed);
+        let mut in_use_bytes = self.in_use.load(Ordering::Relaxed);
         loop {
-            if total_bytes + bytes > self.max_bytes {
+            if in_use_bytes + bytes > self.capacity {
                 return false;
             }
-            let new_total_bytes = total_bytes + bytes;
-            match self.total_bytes.compare_exchange(
-                total_bytes,
-                new_total_bytes,
+            let new_in_use_bytes = in_use_bytes + bytes;
+            match self.in_use.compare_exchange(
+                in_use_bytes,
+                new_in_use_bytes,
                 Ordering::Acquire,
                 Ordering::Relaxed,
             ) {
                 Ok(_) => return true,
-                Err(current) => total_bytes = current,
+                Err(current) => in_use_bytes = current,
             }
         }
     }
     fn free(&self, bytes: usize) {
-        self.total_bytes.fetch_sub(bytes, Ordering::Relaxed);
+        self.in_use.fetch_sub(bytes, Ordering::Release);
     }
 }
 
-pub fn canal(buffer: usize, memory_quota: MemoryQuota) -> (Sink, Drain) {
+pub fn channel(buffer: usize, memory_quota: MemoryQuota) -> (Sink, Drain) {
     let (unbounded_sender, unbounded_receiver) = unbounded();
-    let (bounded_sender, bounded_receiver) = channel(buffer);
+    let (bounded_sender, bounded_receiver) = bounded(buffer);
     let closed = Arc::new(AtomicBool::new(false));
     (
         Sink {
@@ -237,13 +238,12 @@ impl<S: Stream + Unpin> Drop for DrainGrpcMessage<S> {
         // Receiver maybe dropped before senders, so set closed flag to prevent
         // futher messages.
         self.closed.store(true, Ordering::Release);
-        std::sync::atomic::compiler_fence(Ordering::SeqCst);
         let start = Instant::now();
         let mut drain = Box::pin(async {
             loop {
                 let mut next = self.stream.next();
                 let item = futures03::future::poll_fn(|cx| {
-                    match Pin::new(&mut next).poll(cx) {
+                    match next.poll_unpin(cx) {
                         // In case it is dropped before senders.
                         Poll::Pending => Poll::Ready(None),
                         t => t,
@@ -257,8 +257,8 @@ impl<S: Stream + Unpin> Drop for DrainGrpcMessage<S> {
         });
         block_on(&mut drain);
         let takes = start.elapsed();
-        if takes >= Duration::from_millis(500) {
-            warn!("cdc drop DrainGrpcMessage too slow"; "takes" => ?takes);
+        if takes >= Duration::from_millis(200) {
+            warn!("drop DrainGrpcMessage too slow"; "takes" => ?takes);
         }
     }
 }
@@ -276,7 +276,6 @@ pub fn poll_timeout<F, I>(fut: &mut F, dur: std::time::Duration) -> Result<I, ()
 where
     F: std::future::Future<Output = I> + Unpin,
 {
-    use futures03::FutureExt;
     let mut timeout = futures_timer::Delay::new(dur).fuse();
     let mut f = fut.fuse();
     futures03::executor::block_on(async {
@@ -296,9 +295,9 @@ mod tests {
     use std::time::Duration;
 
     type Send = Box<dyn FnMut(CdcEvent) -> Result<(), SendError>>;
-    fn new_test_cancal(buffer: usize, max_bytes: usize) -> (Send, Drain) {
-        let memory_quota = MemoryQuota::new(max_bytes);
-        let (mut tx, rx) = canal(buffer, memory_quota);
+    fn new_test_cancal(buffer: usize, capacity: usize) -> (Send, Drain) {
+        let memory_quota = MemoryQuota::new(capacity);
+        let (mut tx, rx) = channel(buffer, memory_quota);
         let mut flag = true;
         let send = move |event| {
             flag = !flag;
