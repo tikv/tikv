@@ -2225,7 +2225,6 @@ pub struct CdcConfig {
 
 impl Default for CdcConfig {
     fn default() -> Self {
-        let total_mem = SysQuota::memory_limit_in_bytes();
         Self {
             min_ts_interval: ReadableDuration::secs(1),
             hibernate_regions_compatible: true,
