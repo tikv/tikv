@@ -62,7 +62,7 @@ fn test_update_resource_metering_agent_config() {
             "20".to_owned(),
         );
         m.insert(
-            "resource-metering.report-interval-seconds".to_owned(),
+            "resource-metering.report-agent-interval-seconds".to_owned(),
             "80".to_owned(),
         );
         m.insert(
