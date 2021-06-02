@@ -6,6 +6,7 @@ use std::mem;
 use crate::storage::{kv::PerfStatisticsDelta, FlowStatsReporter, Statistics};
 use collections::HashMap;
 use kvproto::metapb;
+use kvproto::pdpb::QueryKind;
 use raftstore::store::util::build_key_range;
 use raftstore::store::ReadStats;
 
@@ -409,7 +410,7 @@ pub fn tls_collect_read_flow(region_id: u64, statistics: &Statistics) {
     });
 }
 
-pub fn tls_collect_qps(
+pub fn tls_collect_query(
     region_id: u64,
     peer: &metapb::Peer,
     start_key: &[u8],
@@ -419,7 +420,8 @@ pub fn tls_collect_qps(
     TLS_COP_METRICS.with(|m| {
         let mut m = m.borrow_mut();
         let key_range = build_key_range(start_key, end_key, reverse_scan);
-        m.local_read_stats.add_qps(region_id, peer, key_range);
+        m.local_read_stats
+            .add_query_num(region_id, peer, key_range, QueryKind::Coprocessor);
     });
 }
 

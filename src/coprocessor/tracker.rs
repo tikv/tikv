@@ -330,7 +330,7 @@ impl Tracker {
             false
         };
 
-        tls_collect_qps(
+        tls_collect_query(
             region_id,
             peer,
             Key::from_raw(start_key).as_encoded(),

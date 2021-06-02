@@ -1488,6 +1488,7 @@ where
                 );
             });
         }
+        self.metrics.written_query_num += 1;
         Ok(resp)
     }
 
@@ -3077,6 +3078,7 @@ pub struct ApplyMetrics {
 
     pub written_bytes: u64,
     pub written_keys: u64,
+    pub written_query_num: u64,
     pub lock_cf_written_bytes: u64,
 }
 

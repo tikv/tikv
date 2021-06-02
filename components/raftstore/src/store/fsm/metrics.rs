@@ -19,6 +19,7 @@ pub struct StoreStat {
     pub lock_cf_bytes_written: AtomicU64,
     pub engine_total_bytes_written: AtomicU64,
     pub engine_total_keys_written: AtomicU64,
+    pub engine_total_query_written: AtomicU64,
     pub is_busy: AtomicBool,
 }
 
@@ -34,6 +35,7 @@ impl GlobalStoreStat {
             lock_cf_bytes_written: 0,
             engine_total_bytes_written: 0,
             engine_total_keys_written: 0,
+            engine_total_query_written: 0,
             is_busy: false,
 
             global: self.clone(),
@@ -45,6 +47,7 @@ pub struct LocalStoreStat {
     pub lock_cf_bytes_written: u64,
     pub engine_total_bytes_written: u64,
     pub engine_total_keys_written: u64,
+    pub engine_total_query_written: u64,
     pub is_busy: bool,
 
     global: GlobalStoreStat,
@@ -79,6 +82,13 @@ impl LocalStoreStat {
                 .engine_total_keys_written
                 .fetch_add(self.engine_total_keys_written, Ordering::Relaxed);
             self.engine_total_keys_written = 0;
+        }
+        if self.engine_total_query_written != 0 {
+            self.global
+                .stat
+                .engine_total_query_written
+                .fetch_add(self.engine_total_query_written, Ordering::Relaxed);
+            self.engine_total_query_written = 0;
         }
         if self.is_busy {
             self.global.stat.is_busy.store(true, Ordering::Relaxed);

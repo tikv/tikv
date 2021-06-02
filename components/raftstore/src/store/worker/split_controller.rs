@@ -2,20 +2,22 @@
 
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::slice::Iter;
 use std::time::{Duration, SystemTime};
 
 use kvproto::kvrpcpb::KeyRange;
 use kvproto::metapb::Peer;
+use kvproto::pdpb::QueryKind;
 
 use rand::Rng;
 
-use collections::HashMap;
 use tikv_util::config::Tracker;
 use tikv_util::{debug, info};
 
 use crate::store::metrics::*;
+use crate::store::worker::query_stats::{is_read_query, QueryStats};
 use crate::store::worker::split_config::DEFAULT_SAMPLE_NUM;
 use crate::store::worker::{FlowStatistics, SplitConfig, SplitConfigManager};
 
@@ -103,7 +105,7 @@ where
 #[derive(Debug, Clone)]
 pub struct RegionInfo {
     pub sample_num: usize,
-    pub qps: usize,
+    pub query_stats: QueryStats,
     pub peer: Peer,
     pub key_ranges: Vec<KeyRange>,
     pub flow: FlowStatistics,
@@ -113,15 +115,15 @@ impl RegionInfo {
     fn new(sample_num: usize) -> RegionInfo {
         RegionInfo {
             sample_num,
-            qps: 0,
+            query_stats: QueryStats::default(),
             key_ranges: Vec::with_capacity(sample_num),
             peer: Peer::default(),
             flow: FlowStatistics::default(),
         }
     }
 
-    fn get_qps(&self) -> usize {
-        self.qps
+    fn get_read_qps(&self) -> usize {
+        self.query_stats.get_read_query_num() as usize
     }
 
     fn get_key_ranges_mut(&mut self) -> &mut Vec<KeyRange> {
@@ -129,17 +131,20 @@ impl RegionInfo {
     }
 
     fn add_key_ranges(&mut self, key_ranges: Vec<KeyRange>) {
-        self.qps += key_ranges.len();
         for key_range in key_ranges {
-            if self.key_ranges.len() < self.sample_num {
+            if self.key_ranges.len() < self.sample_num || self.get_read_qps() == 0 {
                 self.key_ranges.push(key_range);
             } else {
-                let i = rand::thread_rng().gen_range(0, self.qps) as usize;
+                let i = rand::thread_rng().gen_range(0, self.get_read_qps()) as usize;
                 if i < self.sample_num {
                     self.key_ranges[i] = key_range;
                 }
             }
         }
+    }
+
+    fn add_query_num(&mut self, kind: QueryKind, query_num: u64) {
+        self.query_stats.add_query_num(kind, query_num);
     }
 
     fn update_peer(&mut self, peer: &Peer) {
@@ -280,18 +285,34 @@ pub struct ReadStats {
 }
 
 impl ReadStats {
-    pub fn add_qps(&mut self, region_id: u64, peer: &Peer, key_range: KeyRange) {
-        self.add_qps_batch(region_id, peer, vec![key_range]);
+    pub fn add_query_num(
+        &mut self,
+        region_id: u64,
+        peer: &Peer,
+        key_range: KeyRange,
+        kind: QueryKind,
+    ) {
+        self.add_query_num_batch(region_id, peer, vec![key_range], kind);
     }
 
-    pub fn add_qps_batch(&mut self, region_id: u64, peer: &Peer, key_ranges: Vec<KeyRange>) {
-        let num = self.sample_num;
+    pub fn add_query_num_batch(
+        &mut self,
+        region_id: u64,
+        peer: &Peer,
+        key_ranges: Vec<KeyRange>,
+        kind: QueryKind,
+    ) {
+        let sample_num = self.sample_num;
+        let query_num = key_ranges.len() as u64;
         let region_info = self
             .region_infos
             .entry(region_id)
-            .or_insert_with(|| RegionInfo::new(num));
+            .or_insert_with(|| RegionInfo::new(sample_num));
         region_info.update_peer(peer);
-        region_info.add_key_ranges(key_ranges);
+        region_info.add_query_num(kind, query_num);
+        if is_read_query(kind) {
+            region_info.add_key_ranges(key_ranges);
+        }
     }
 
     pub fn add_flow(&mut self, region_id: u64, write: &FlowStatistics, data: &FlowStatistics) {
@@ -358,7 +379,7 @@ impl AutoSplitController {
         let region_infos_map = self.collect_read_stats(read_stats_vec);
 
         for (region_id, region_infos) in region_infos_map {
-            let pre_sum = prefix_sum(region_infos.iter(), RegionInfo::get_qps);
+            let pre_sum = prefix_sum(region_infos.iter(), RegionInfo::get_read_qps);
             let qps = *pre_sum.last().unwrap(); // region_infos is not empty
             let byte = region_infos
                 .iter()
@@ -514,7 +535,12 @@ mod tests {
     fn gen_read_stats(region_id: u64, key_ranges: Vec<KeyRange>) -> ReadStats {
         let mut qps_stats = ReadStats::default();
         for key_range in &key_ranges {
-            qps_stats.add_qps(region_id, &Peer::default(), key_range.clone());
+            qps_stats.add_query_num(
+                region_id,
+                &Peer::default(),
+                key_range.clone(),
+                QueryKind::Get,
+            );
         }
         qps_stats
     }
@@ -652,12 +678,22 @@ mod tests {
             let mut qps_stats_vec = vec![];
 
             let mut qps_stats = ReadStats::default();
-            qps_stats.add_qps(1, &Peer::default(), build_key_range(b"a", b"b", false));
+            qps_stats.add_query_num(
+                1,
+                &Peer::default(),
+                build_key_range(b"a", b"b", false),
+                QueryKind::Get,
+            );
             qps_stats_vec.push(qps_stats);
 
             let mut qps_stats = ReadStats::default();
             for _ in 0..2000 {
-                qps_stats.add_qps(1, &Peer::default(), build_key_range(b"b", b"c", false));
+                qps_stats.add_query_num(
+                    1,
+                    &Peer::default(),
+                    build_key_range(b"b", b"c", false),
+                    QueryKind::Get,
+                );
             }
             qps_stats_vec.push(qps_stats);
             hub.flush(qps_stats_vec);
@@ -722,7 +758,12 @@ mod tests {
         let mut qps_stats = ReadStats::default();
         for i in 0..REGION_NUM {
             for _j in 0..KEY_RANGE_NUM {
-                qps_stats.add_qps(i, &Peer::default(), build_key_range(b"a", b"b", false))
+                qps_stats.add_query_num(
+                    i,
+                    &Peer::default(),
+                    build_key_range(b"a", b"b", false),
+                    QueryKind::Get,
+                )
             }
         }
         qps_stats
@@ -763,10 +804,11 @@ mod tests {
                         key = end_key;
                     }
                 }
-                qps_stats.add_qps(
+                qps_stats.add_query_num(
                     1,
                     &Peer::default(),
                     build_key_range(&start_key, &key, false),
+                    QueryKind::Scan,
                 );
             }
         });
@@ -776,7 +818,12 @@ mod tests {
     fn qps_add(b: &mut test::Bencher) {
         let mut qps_stats = default_qps_stats();
         b.iter(|| {
-            qps_stats.add_qps(1, &Peer::default(), build_key_range(b"a", b"b", false));
+            qps_stats.add_query_num(
+                1,
+                &Peer::default(),
+                build_key_range(b"a", b"b", false),
+                QueryKind::Get,
+            );
         });
     }
 }

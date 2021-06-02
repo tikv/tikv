@@ -362,3 +362,6 @@ incremental = false
 debug-assertions = false
 overflow-checks = false
 rpath = false
+
+[patch.'https://github.com/pingcap/kvproto.git']
+kvproto = { git = "https://github.com/lhy1024/kvproto.git", rev = "ab7feceb1a9402b01f727464367d7915a266722a", default-features = false }
