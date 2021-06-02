@@ -284,6 +284,9 @@ pub trait CmdObserver<E>: Coprocessor {
     fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: &Cmd);
     /// Hook to call after flushing writes to db.
     fn on_flush_apply(&self, engine: E);
+    // TODO: maybe shoulde move `on_applied_current_term` to a separated `Coprocessor`
+    /// Hook to call at the first time the leader applied on its term
+    fn on_applied_current_term(&self, role: StateRole, region: &Region);
 }
 
 pub trait ReadIndexObserver: Coprocessor {
