@@ -1052,7 +1052,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         engines_info: Arc<EnginesResourceInfo>,
     ) {
         let mut engine_metrics =
-            EngineMetricsManager::new(self.engines.as_ref().unwrap().engines.clone());
+            EngineMetricsManager::<RocksEngine, ER>::new(self.engines.as_ref().unwrap().engines.clone());
         let mut io_metrics = IOMetricsManager::new(fetcher);
         self.background_worker
             .spawn_interval_task(DEFAULT_METRICS_FLUSH_INTERVAL, move || {
@@ -1464,13 +1464,13 @@ impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
     }
 }
 
-pub struct EngineMetricsManager<R: RaftEngine> {
-    engines: Engines<RocksEngine, R>,
+pub struct EngineMetricsManager<EK: KvEngine, R: RaftEngine> {
+    engines: Engines<EK, R>,
     last_reset: Instant,
 }
 
-impl<R: RaftEngine> EngineMetricsManager<R> {
-    pub fn new(engines: Engines<RocksEngine, R>) -> Self {
+impl<EK: KvEngine, R: RaftEngine> EngineMetricsManager<EK, R> {
+    pub fn new(engines: Engines<EK, R>) -> Self {
         EngineMetricsManager {
             engines,
             last_reset: Instant::now(),
