@@ -813,12 +813,31 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.to_stop.push(rts_worker);
         }
 
+        // Start resource metering.
         resource_metering::cpu::init_recorder();
-        // TODO: Register top sql collector here.
-        //       This collector may contain following features:
-        //         1. Implement trait `req_cpu::collector::Collector`
-        //         2. Implement trait `Stop` so that can be pushed to `self.to_stop`.
-        //         3. Support dynamic enabling by leveraging `cfg_controller`.
+        let mut resource_metering_agent_worker =
+            Box::new(LazyWorker::new("resource-metering-agent"));
+        let resource_metering_agent_scheduler = resource_metering_agent_worker.scheduler();
+        cfg_controller.register(
+            tikv::config::Module::ResourceMeteringAgent,
+            Box::new(resource_metering::agent::ConfigManager::new(
+                self.config.resource_metering_agent.clone(),
+                resource_metering_agent_scheduler.clone(),
+            )),
+        );
+        let resource_metering_agent_collector = resource_metering::cpu::register_collector(
+            Box::new(resource_metering::agent::CpuRecordsCollector::new(
+                resource_metering_agent_scheduler,
+            )),
+        );
+        let resource_metering_agent = resource_metering::agent::ResourceMeteringAgent::new(
+            self.config.resource_metering_agent.clone(),
+            self.env.clone(),
+            self.security_mgr.clone(),
+            resource_metering_agent_collector,
+        );
+        resource_metering_agent_worker.start_with_timer(resource_metering_agent);
+        self.to_stop.push(resource_metering_agent_worker);
 
         self.servers = Some(Servers {
             lock_mgr,

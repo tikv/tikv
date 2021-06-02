@@ -7,9 +7,13 @@ edition = "2018"
 default = ["protobuf-codec"]
 protobuf-codec = [
     "kvproto/protobuf-codec",
+    "grpcio/protobuf-codec",
+    "security/protobuf-codec",
 ]
 prost-codec = [
     "kvproto/prost-codec",
+    "grpcio/prost-codec",
+    "security/prost-codec",
 ]
 
 [dependencies]
@@ -21,6 +25,12 @@ pin-project = "1.0"
 prometheus = { version = "0.10", features = ["nightly"] }
 prometheus-static-metric = "0.4"
 kvproto = { rev = "f11c6fb6b3a53b214ee94d54651b01eb99239334", git = "https://github.com/pingcap/kvproto.git", default-features = false }
+tikv_util = { path = "../tikv_util" }
+grpcio = { version = "0.8",  default-features = false, features = ["openssl-vendored"] }
+security = { path = "../security", default-features = false }
+configuration = { path = "../configuration" }
+serde = "1.0"
+serde_derive = "1.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }

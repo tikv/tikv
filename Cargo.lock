@@ -4020,7 +4020,9 @@ name = "resource_metering"
 version = "0.0.1"
 dependencies = [
  "collections",
+ "configuration",
  "crossbeam",
+ "grpcio",
  "kvproto",
  "lazy_static",
  "libc 0.2.86",
@@ -4029,6 +4031,10 @@ dependencies = [
  "prometheus",
  "prometheus-static-metric",
  "rand 0.8.3",
+ "security",
+ "serde",
+ "serde_derive",
+ "tikv_util",
 ]
 
 [[package]]
@@ -5192,6 +5198,7 @@ dependencies = [
  "raftstore",
  "rand 0.7.3",
  "rand_xorshift",
+ "resource_metering",
  "security",
  "serde_json",
  "slog",

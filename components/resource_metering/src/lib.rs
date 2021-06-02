@@ -2,9 +2,10 @@
 
 #![feature(shrink_to)]
 
-pub mod cpu;
-
 use std::sync::Arc;
+
+pub mod agent;
+pub mod cpu;
 
 #[derive(Debug, Default, Eq, PartialEq, Clone, Hash)]
 pub struct ResourceMeteringTag {

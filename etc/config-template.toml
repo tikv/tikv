@@ -1003,3 +1003,9 @@
 
 ## Garbage ratio threshold to trigger a GC.
 # ratio-threshold = 1.1
+
+[resource-metering-agent]
+# enabled = false
+# agent-address = ""
+# precision-seconds = 1
+# max-resource-groups = 5000
