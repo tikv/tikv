@@ -722,6 +722,12 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
                     .post_raft_ready_append(ready);
             }
         }
+        // TODO: update memory trace by one event?
+        for peer in peers {
+            if let Some(event) = peer.update_memory_trace(&self.poll_ctx.cfg) {
+                MEMTRACE_PEERS.trace(event);
+            }
+        }
         let dur = self.timer.elapsed();
         if !self.poll_ctx.store_stat.is_busy {
             let election_timeout = Duration::from_millis(

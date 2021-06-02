@@ -35,6 +35,7 @@ use raft::{
 };
 use raft_proto::ConfChangeI;
 use smallvec::SmallVec;
+use tikv_util::memory::HeapSize;
 use time::Timespec;
 use uuid::Uuid;
 
@@ -1021,6 +1022,22 @@ where
         self.raft_group.snap()
     }
 
+    #[inline]
+    pub fn proposal_size(&self) -> usize {
+        self.proposals.queue.heap_size() + self.pending_reads.heap_size()
+    }
+
+    #[inline]
+    pub fn rest_size(&self) -> usize {
+        self.peer_cache.borrow().heap_size()
+            + self.peer_heartbeats.heap_size()
+            + self.peers_start_pending_time.heap_size()
+            + self.down_peer_ids.heap_size()
+            + self.check_stale_peers.heap_size()
+            + self.want_rollback_merge_peers.heap_size()
+            + self.pending_messages.len() * mem::size_of::<raft::eraftpb::Message>()
+    }
+
     fn add_ready_metric(&self, ready: &Ready, metrics: &mut RaftReadyMetrics) {
         metrics.message += ready.messages().len() as u64;
         metrics.commit += ready.committed_entries().len() as u64;
@@ -1716,11 +1733,14 @@ where
             "peer_id" => self.peer.get_id(),
         );
 
-        if memory_usage_reaches_high_water() {
-            self.raft_group.raft.max_committed_size_per_ready = 0;
+        let max_committed_size = if memory_usage_reaches_high_water() {
+            0
         } else {
-            self.raft_group.raft.max_committed_size_per_ready = crate::MAX_COMMITTED_SIZE_PER_READY;
-        }
+            MAX_COMMITTED_SIZE_PER_READY
+        };
+        self.raft_group
+            .raft
+            .set_max_committed_size_per_ready(max_committed_size);
         let mut ready = self.raft_group.ready();
 
         self.last_unpersisted_number = ready.number();
@@ -1944,11 +1964,14 @@ where
             return;
         }
 
-        if memory_usage_reaches_high_water() {
-            self.raft_group.raft.max_committed_size_per_ready = 0;
+        let max_committed_size = if memory_usage_reaches_high_water() {
+            0
         } else {
-            self.raft_group.raft.max_committed_size_per_ready = MAX_COMMITTED_SIZE_PER_READY;
-        }
+            MAX_COMMITTED_SIZE_PER_READY
+        };
+        self.raft_group
+            .raft
+            .set_max_committed_size_per_ready(max_committed_size);
         let mut light_rd = self.raft_group.advance_append(ready);
 
         self.add_light_ready_metric(&light_rd, &mut ctx.raft_metrics.ready);

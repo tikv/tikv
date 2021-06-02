@@ -21,7 +21,7 @@ use crate::store::fsm::apply::{CatchUpLogs, ChangeObserver};
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::KeysInfoFormatter;
 use crate::store::SnapKey;
-use tikv_util::{deadline::Deadline, escape};
+use tikv_util::{deadline::Deadline, escape, memory::HeapSize};
 
 use super::{AbstractPeer, RegionSnapshot};
 
@@ -78,6 +78,12 @@ pub enum Callback<S: Snapshot> {
         /// it's guaranteed that the request will be successfully applied soon.
         committed_cb: Option<ExtCallback>,
     },
+}
+
+impl<S: Snapshot> HeapSize for Callback<S> {
+    fn heap_size(&self) -> usize {
+        0
+    }
 }
 
 impl<S> Callback<S>

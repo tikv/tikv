@@ -5,7 +5,7 @@ use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::iter::Iterator;
 use std::time::Instant;
-use std::{cmp, u64};
+use std::{cmp, mem, u64};
 
 use batch_system::{BasicMailbox, Fsm};
 use collections::HashMap;
@@ -30,6 +30,8 @@ use protobuf::Message;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 use raft::{Ready, StateRole};
+use tikv_alloc::trace::TraceEvent;
+use tikv_util::memory::HeapSize;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::sys::memory_usage_reaches_high_water;
 use tikv_util::time::duration_to_sec;
@@ -47,6 +49,7 @@ use crate::store::fsm::{
 };
 use crate::store::hibernate_state::{GroupState, HibernateState};
 use crate::store::local_metrics::RaftProposeMetrics;
+use crate::store::memory::*;
 use crate::store::metrics::*;
 use crate::store::msg::{Callback, ExtCallback};
 use crate::store::peer::{ConsistencyState, Peer, StaleState};
@@ -123,6 +126,8 @@ where
 
     // Batch raft command which has the same header into an entry
     batch_req_builder: BatchRaftCmdRequestBuilder<EK>,
+
+    trace: PeerMemoryTrace,
 }
 
 pub struct BatchRaftCmdRequestBuilder<E>
@@ -215,6 +220,7 @@ where
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(
                     cfg.raft_entry_max_size.0 as f64,
                 ),
+                trace: PeerMemoryTrace::default(),
             }),
         ))
     }
@@ -257,6 +263,7 @@ where
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(
                     cfg.raft_entry_max_size.0 as f64,
                 ),
+                trace: PeerMemoryTrace::default(),
             }),
         ))
     }
@@ -296,6 +303,37 @@ where
     pub fn maybe_hibernate(&mut self) -> bool {
         self.hibernate_state
             .maybe_hibernate(self.peer.peer_id(), self.peer.region())
+    }
+
+    #[inline]
+    pub fn raft_heap_size(&self, cfg: &Config) -> usize {
+        let raft = &self.peer.raft_group.raft;
+        let peer_cnt = self.peer.region().get_peers().len();
+        let inflight_size = cfg.raft_max_inflight_msgs * mem::size_of::<u64>();
+        // Progress size
+        let mut size =
+            mem::size_of::<raft::Progress>() * peer_cnt * 6 / 5 + inflight_size * peer_cnt;
+        // We use Uuid for read request.
+        size += raft.read_states.len() * (mem::size_of::<raft::ReadState>() + 16);
+        // Every requests have at least header, which should be at least 8 bytes.
+        let entries = &raft.raft_log.unstable.entries;
+        size += entries.len() * (mem::size_of::<raft::eraftpb::Entry>() + 8);
+        let read_only = &raft.read_only;
+        size +=
+            read_only.pending_read_index.len() * (16 + mem::size_of::<raft::eraftpb::Message>());
+        size += read_only.read_index_queue.heap_size() + 16 * read_only.read_index_queue.len();
+        size += raft.msgs.len() * mem::size_of::<raft::eraftpb::Message>();
+        size
+    }
+
+    #[inline]
+    pub fn update_memory_trace(&mut self, cfg: &Config) -> Option<TraceEvent> {
+        let trace = PeerMemoryTrace {
+            raft_machine: self.raft_heap_size(cfg),
+            proposals: self.peer.proposal_size(),
+            rest: self.peer.rest_size() + mem::size_of::<Self>(),
+        };
+        self.trace.reset(trace)
     }
 }
 
@@ -1953,6 +1991,7 @@ where
         // So in here, it's necessary to held the StoreMeta lock when closing the router.
         self.ctx.router.close(region_id);
         self.fsm.stop();
+        MEMTRACE_PEERS.trace(TraceEvent::Sub(self.fsm.trace.sum()));
 
         if is_initialized
             && !merged_by_target
@@ -2301,6 +2340,7 @@ where
                     );
                 }
                 self.ctx.router.close(new_region_id);
+                MEMTRACE_PEERS.trace(TraceEvent::Sub(self.fsm.trace.sum()));
             }
 
             let (sender, mut new_peer) = match PeerFsm::create(

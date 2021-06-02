@@ -22,11 +22,13 @@ use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 
 use crate::store::fsm::GenSnapTask;
+use crate::store::memory::*;
 use crate::store::util;
 use crate::store::ProposalContext;
 use crate::{bytes_capacity, Error, Result};
 use engine_traits::{RaftEngine, RaftLogBatch};
 use into_other::into_other;
+use tikv_alloc::trace::TraceEvent;
 use tikv_util::worker::Scheduler;
 use tikv_util::{box_err, box_try, debug, defer, error, info, warn};
 
@@ -291,6 +293,12 @@ impl EntryCache {
     }
 
     fn flush_mem_size_change(&mut self) {
+        let event = if self.mem_size_change > 0 {
+            TraceEvent::Add(self.mem_size_change as usize)
+        } else {
+            TraceEvent::Sub(-self.mem_size_change as usize)
+        };
+        MEMTRACE_ENTRY_CACHE.trace(event);
         RAFT_ENTRIES_CACHES_GAUGE.add(self.mem_size_change);
         self.mem_size_change = 0;
     }
@@ -333,6 +341,7 @@ impl Drop for EntryCache {
     fn drop(&mut self) {
         self.flush_mem_size_change();
         RAFT_ENTRIES_CACHES_GAUGE.sub(self.get_total_mem_size());
+        MEMTRACE_ENTRY_CACHE.trace(TraceEvent::Sub(self.get_total_mem_size() as usize));
         self.flush_stats();
     }
 }
