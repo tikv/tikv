@@ -255,7 +255,7 @@ impl<L: LockManager> SchedulerInner<L> {
         if let Err(e) = tctx.task.as_ref().unwrap().deadline.check() {
             // `acquire_lock_on_wakeup` is called when another command releases its locks and wakes up
             // command `cid`. This command inserted its lock before and now the lock is at the
-            // front the the queue. The actual acquired count is one more than the `owned_count`
+            // front of the queue. The actual acquired count is one more than the `owned_count`
             // recorded in the lock, so we increase one to make `release` work.
             tctx.lock.owned_count += 1;
             return Err(e.into());
