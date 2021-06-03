@@ -228,6 +228,11 @@ impl From<Error> for errorpb::Error {
                 e.set_safe_ts(safe_ts);
                 errorpb.set_data_is_not_ready(e);
             }
+            Error::RegionNotInitialized(region_id) => {
+                let mut e = errorpb::RegionNotInitialized::default();
+                e.set_region_id(region_id);
+                errorpb.set_region_not_initialized(e);
+            }
             _ => {}
         };
 
