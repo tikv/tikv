@@ -422,3 +422,158 @@ fn test_stale_read_while_applying_snapshot() {
     // We can read `key1` with the newest ts now
     follower_client2.must_kv_read_equal(b"key2".to_vec(), b"value1".to_vec(), get_tso(&pd_client));
 }
+
+// Testing that after region merged the region's `safe_ts` should reset to
+// min(`target_safe_ts`, `source_safe_ts`)
+#[test]
+fn test_stale_read_while_region_merge() {
+    let (mut cluster, pd_client, _) =
+        prepare_for_stale_read_before_run(new_peer(1, 1), Some(Box::new(configure_for_merge)));
+
+    cluster.must_split(&cluster.get_region(&[]), b"key3");
+    let source = pd_client.get_region(b"key1").unwrap();
+    let target = pd_client.get_region(b"key5").unwrap();
+
+    cluster.must_transfer_leader(target.get_id(), new_peer(1, 1));
+    let target_leader = PeerClient::new(&cluster, target.get_id(), new_peer(1, 1));
+    // Write `(key5, value1)`
+    target_leader.must_kv_write(
+        &pd_client,
+        vec![new_mutation(Op::Put, &b"key5"[..], &b"value1"[..])],
+        b"key5".to_vec(),
+    );
+
+    let source_leader = cluster.leader_of_region(source.get_id()).unwrap();
+    let source_leader = PeerClient::new(&cluster, source.get_id(), source_leader);
+    // Prewrite on `key1` but not commit yet
+    let k1_prewrite_ts = get_tso(&pd_client);
+    source_leader.must_kv_prewrite(
+        vec![new_mutation(Op::Put, &b"key1"[..], &b"value1"[..])],
+        b"key1".to_vec(),
+        k1_prewrite_ts,
+    );
+
+    // Write `(key5, value2)`
+    let k5_commit_ts = target_leader.must_kv_write(
+        &pd_client,
+        vec![new_mutation(Op::Put, &b"key5"[..], &b"value2"[..])],
+        b"key5".to_vec(),
+    );
+
+    // Merge source region into target region, the lock on source region should also merge
+    // into the target region and cause the target region's `safe_ts` decrease
+    pd_client.must_merge(source.get_id(), target.get_id());
+
+    let mut follower_client2 = PeerClient::new(&cluster, target.get_id(), new_peer(2, 2));
+    follower_client2.ctx.set_stale_read(true);
+    // Can't read `key5` with `k5_commit_ts` because `k1_prewrite_ts` is smaller than `k5_commit_ts`
+    let resp = follower_client2.kv_read(b"key5".to_vec(), k5_commit_ts);
+    assert!(resp.get_region_error().has_data_is_not_ready());
+    // We can read `(key5, value1)` with `k1_prewrite_ts`
+    follower_client2.must_kv_read_equal(b"key5".to_vec(), b"value1".to_vec(), k1_prewrite_ts);
+
+    let target_leader = PeerClient::new(&cluster, target.get_id(), new_peer(1, 1));
+    // Commit on `key1`
+    target_leader.must_kv_commit(vec![b"key1".to_vec()], k1_prewrite_ts, get_tso(&pd_client));
+    // We can read `(key5, value2)` now
+    follower_client2.must_kv_read_equal(b"key5".to_vec(), b"value2".to_vec(), get_tso(&pd_client));
+}
+
+// Testing that during the merge, the leader of the source region won't not update the
+// `safe_ts` since it can't know when the merge is completed and whether there are new
+// kv write into its key range
+#[test]
+fn test_read_source_region_after_target_region_merged() {
+    let (mut cluster, pd_client, leader_client) =
+        prepare_for_stale_read_before_run(new_peer(1, 1), Some(Box::new(configure_for_merge)));
+
+    // Write on source region
+    let k1_commit_ts1 = leader_client.must_kv_write(
+        &pd_client,
+        vec![new_mutation(Op::Put, &b"key1"[..], &b"value1"[..])],
+        b"key1".to_vec(),
+    );
+
+    cluster.must_split(&cluster.get_region(&[]), b"key3");
+    let source = pd_client.get_region(b"key1").unwrap();
+    let target = pd_client.get_region(b"key5").unwrap();
+    // Transfer the target region leader to store 1 and the source region leader to store 2
+    cluster.must_transfer_leader(target.get_id(), new_peer(1, 1));
+    cluster.must_transfer_leader(source.get_id(), find_peer(&source, 2).unwrap().clone());
+    // Get the source region follower on store 3
+    let mut source_follower_client3 = PeerClient::new(
+        &cluster,
+        source.get_id(),
+        find_peer(&source, 3).unwrap().clone(),
+    );
+    source_follower_client3.ctx.set_stale_read(true);
+    source_follower_client3.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), k1_commit_ts1);
+
+    // Pause on source region `prepare_merge` on store 2 and store 3
+    let apply_before_prepare_merge_2_3 = "apply_before_prepare_merge_2_3";
+    fail::cfg(apply_before_prepare_merge_2_3, "pause").unwrap();
+
+    // Merge source region into target region
+    pd_client.must_merge(source.get_id(), target.get_id());
+
+    // Leave a lock on the original source region key range through the target region leader
+    let target_leader = PeerClient::new(&cluster, target.get_id(), new_peer(1, 1));
+    let k1_prewrite_ts2 = get_tso(&pd_client);
+    target_leader.must_kv_prewrite(
+        vec![new_mutation(Op::Put, &b"key1"[..], &b"value2"[..])],
+        b"key1".to_vec(),
+        k1_prewrite_ts2,
+    );
+
+    // Wait for the source region leader to update `safe_ts` (if it can)
+    sleep_ms(50);
+
+    // We still can read `key1` with `k1_commit_ts1` through source region
+    source_follower_client3.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), k1_commit_ts1);
+    // But can't read `key2` with `k1_prewrite_ts2` because the source leader can't update
+    // `safe_ts` after source region is merged into target region even though the source leader
+    // didn't know the merge is complement
+    let resp = source_follower_client3.kv_read(b"key1".to_vec(), k1_prewrite_ts2);
+    assert!(resp.get_region_error().has_data_is_not_ready());
+
+    fail::remove(apply_before_prepare_merge_2_3);
+}
+
+// Testing that altough the source region's `safe_ts` wont't be updated during merge, after merge
+// rollbacked it should resume updating
+#[test]
+fn test_stale_read_after_rollback_merge() {
+    let (mut cluster, pd_client, leader_client) =
+        prepare_for_stale_read_before_run(new_peer(1, 1), Some(Box::new(configure_for_merge)));
+
+    // Write on source region
+    leader_client.must_kv_write(
+        &pd_client,
+        vec![new_mutation(Op::Put, &b"key1"[..], &b"value1"[..])],
+        b"key1".to_vec(),
+    );
+
+    cluster.must_split(&cluster.get_region(&[]), b"key3");
+    let source = pd_client.get_region(b"key1").unwrap();
+    let target = pd_client.get_region(b"key5").unwrap();
+
+    // Trigger merge rollback
+    let on_schedule_merge = "on_schedule_merge";
+    fail::cfg(on_schedule_merge, "return()").unwrap();
+    cluster.must_try_merge(source.get_id(), target.get_id());
+    // Change the epoch of target region and the merge will fail
+    pd_client.must_remove_peer(target.get_id(), new_peer(3, 3));
+    fail::remove(on_schedule_merge);
+
+    // Make sure the rollback is done, it is okey to use raw kv here
+    cluster.must_put(b"key2", b"value2");
+
+    let mut source_client3 = PeerClient::new(
+        &cluster,
+        source.get_id(),
+        find_peer(&source, 3).unwrap().clone(),
+    );
+    source_client3.ctx.set_stale_read(true);
+    // the `safe_ts` should resume updating after merge rollback so we can read `key1` with the newest ts
+    source_client3.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), get_tso(&pd_client));
+}
