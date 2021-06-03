@@ -262,20 +262,17 @@ macro_rules! request_imp {
             if wait > MAX_WAIT_DURATION_PER_REQUEST {
                 // Long wait duration could freeze request thread not to react to latest budgets
                 // adjustment. Exit early by returning partial quotas.
-                let full_amount = amount.swap(std::cmp::max(
+                amount = std::cmp::max(
                     (MAX_WAIT_DURATION_PER_REQUEST.as_secs_f32() * amount as f32
                         / wait.as_secs_f32()) as usize,
                     1,
-                ));
+                );
                 // Subtracting redundant bytes requested before.
                 // In this situation, the prolonged wait is caused by accumulated pending-bytes,
                 // and bytes-through is always saturated.
-                debug_assert!(
-                    MAX_WAIT_DURATION_PER_REQUEST > DEFAULT_REFILL_PERIOD * 2
-                        && locked.pending_bytes[priority_idx] >= cached_bytes_per_epoch
-                        && cached_bytes_per_epoch > full_amount - amount
-                );
-                locked.pending_bytes[priority_idx] -= full_amount - amount;
+                // `saturating_sub`: Better safe than sorry.
+                locked.pending_bytes[priority_idx] = locked.pending_bytes[priority_idx]
+                    .saturating_sub(remains.saturating_sub(amount));
                 MAX_WAIT_DURATION_PER_REQUEST
             } else {
                 wait
