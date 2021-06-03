@@ -446,7 +446,7 @@ fn test_stale_read_while_region_merge() {
     let source_leader = cluster.leader_of_region(source.get_id()).unwrap();
     let source_leader = PeerClient::new(&cluster, source.get_id(), source_leader);
     // Prewrite on `key1` but not commit yet
-    let k1_prewrite_ts = block_on(pd_client.get_tso()).unwrap().into_inner();
+    let k1_prewrite_ts = get_tso(&pd_client);
     source_leader.must_kv_prewrite(
         vec![new_mutation(Op::Put, &b"key1"[..], &b"value1"[..])],
         b"key1".to_vec(),
@@ -474,17 +474,9 @@ fn test_stale_read_while_region_merge() {
 
     let target_leader = PeerClient::new(&cluster, target.get_id(), new_peer(1, 1));
     // Commit on `key1`
-    target_leader.must_kv_commit(
-        vec![b"key1".to_vec()],
-        k1_prewrite_ts,
-        block_on(pd_client.get_tso()).unwrap().into_inner(),
-    );
+    target_leader.must_kv_commit(vec![b"key1".to_vec()], k1_prewrite_ts, get_tso(&pd_client));
     // We can read `(key5, value2)` now
-    follower_client2.must_kv_read_equal(
-        b"key5".to_vec(),
-        b"value2".to_vec(),
-        block_on(pd_client.get_tso()).unwrap().into_inner(),
-    );
+    follower_client2.must_kv_read_equal(b"key5".to_vec(), b"value2".to_vec(), get_tso(&pd_client));
 }
 
 // Testing that during the merge, the leader of the source region won't not update the
@@ -526,7 +518,7 @@ fn test_read_source_region_after_target_region_merged() {
 
     // Leave a lock on the original source region key range through the target region leader
     let target_leader = PeerClient::new(&cluster, target.get_id(), new_peer(1, 1));
-    let k1_prewrite_ts2 = block_on(pd_client.get_tso()).unwrap().into_inner();
+    let k1_prewrite_ts2 = get_tso(&pd_client);
     target_leader.must_kv_prewrite(
         vec![new_mutation(Op::Put, &b"key1"[..], &b"value2"[..])],
         b"key1".to_vec(),
@@ -583,9 +575,5 @@ fn test_stale_read_after_rollback_merge() {
     );
     source_client3.ctx.set_stale_read(true);
     // the `safe_ts` should resume updating after merge rollback so we can read `key1` with the newest ts
-    source_client3.must_kv_read_equal(
-        b"key1".to_vec(),
-        b"value1".to_vec(),
-        block_on(pd_client.get_tso()).unwrap().into_inner(),
-    );
+    source_client3.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), get_tso(&pd_client));
 }
