@@ -4,11 +4,6 @@ use lazy_static::*;
 use prometheus::*;
 
 lazy_static! {
-    pub static ref RESOLVED_TS_ADVANCE_METHOD: IntGauge = register_int_gauge!(
-        "tikv_resolved_ts_advance_method",
-        "Resolved Ts advance method, 0 = advanced through raft command, 1 = advanced through store RPC"
-    )
-    .unwrap();
     pub static ref RTS_CHANNEL_PENDING_CMD_BYTES: IntGauge = register_int_gauge!(
         "tikv_resolved_ts_channel_penging_cmd_bytes_total",
         "Total bytes of pending commands in the channel"
