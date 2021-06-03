@@ -70,6 +70,6 @@ where
     }
 
     fn flush(&mut self) {
-        self.raft_client.force_flush();
+        self.raft_client.flush();
     }
 }

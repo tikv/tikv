@@ -38,11 +38,6 @@ use tikv_util::worker::Scheduler;
 use yatp::task::future::TaskCell;
 use yatp::ThreadPool;
 
-// When merge raft messages into a batch message, leave a buffer.
-const GRPC_SEND_MSG_BUF: usize = 64 * 1024;
-
-const RAFT_MSG_MAX_BATCH_SIZE: usize = 128;
-
 static CONN_ID: AtomicI32 = AtomicI32::new(0);
 
 const _ON_RESOLVE_FP: &str = "transport_snapshot_on_resolve";
@@ -186,8 +181,9 @@ impl Buffer for BatchMessageBuffer {
         // To avoid building too large batch, we limit each batch's size. Since `msg_size`
         // is estimated, `GRPC_SEND_MSG_BUF` is reserved for errors.
         if self.size > 0
-            && (self.size + msg_size + GRPC_SEND_MSG_BUF >= self.cfg.max_grpc_send_msg_len as usize
-                || self.batch.get_msgs().len() >= RAFT_MSG_MAX_BATCH_SIZE)
+            && (self.size + msg_size + self.cfg.raft_client_grpc_send_msg_buffer
+                >= self.cfg.max_grpc_send_msg_len as usize
+                || self.batch.get_msgs().len() >= self.cfg.raft_msg_max_batch_size)
         {
             self.overflowing = Some(msg);
             return;
@@ -929,12 +925,12 @@ where
 
     /// Tries to flush messages if it is time
     pub fn try_flush(&mut self) {
-        self.flush(false);
+        self.flush_msg(false);
     }
 
     /// Flushes all buffered messages.
-    pub fn force_flush(&mut self) {
-        self.flush(true);
+    pub fn flush(&mut self) {
+        self.flush_msg(true);
     }
 
     fn flush_full_metrics(&mut self) {
@@ -956,7 +952,7 @@ where
         }
     }
 
-    fn flush(&mut self, force: bool) {
+    fn flush_msg(&mut self, force: bool) {
         if force {
             self.flush_full_metrics();
         }
