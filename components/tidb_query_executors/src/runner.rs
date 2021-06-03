@@ -508,7 +508,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         self.out_most_executor.collect_storage_stats(dest);
     }
 
-    pub fn collect_kv_read_time(&mut self, dest: &mut ExecSummary) {
+    pub fn collect_scan_summary(&mut self, dest: &mut ExecSummary) {
         if !self.collect_exec_summary {
             return;
         }
@@ -516,7 +516,6 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         if let Some(exec_stat) = result.first() {
             dest.clone_from(exec_stat);
         }
-        self.exec_stats.clear();
     }
 
     pub fn can_be_cached(&self) -> bool {

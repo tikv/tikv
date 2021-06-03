@@ -71,7 +71,7 @@ pub trait RequestHandler: Send {
     }
 
     /// Collects kv_read_time in this request handler so far.
-    fn collect_kv_read_time(&mut self, _dest: &mut ExecSummary) {
+    fn collect_scan_summary(&mut self, _dest: &mut ExecSummary) {
         // Do nothing by default
     }
 
