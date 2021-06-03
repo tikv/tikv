@@ -7,12 +7,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use concurrency_manager::ConcurrencyManager;
+use configuration::{self, ConfigChange, ConfigManager, Configuration};
 use engine_traits::{KvEngine, Snapshot};
 use grpcio::Environment;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::metapb::Region;
 use pd_client::PdClient;
-use raft::StateRole;
 use raftstore::coprocessor::CmdBatch;
 use raftstore::coprocessor::{ObserveHandle, ObserveID};
 use raftstore::router::RaftStoreRouter;
@@ -20,7 +20,7 @@ use raftstore::store::fsm::StoreMeta;
 use raftstore::store::util::{self, RegionReadProgress};
 use raftstore::store::RegionSnapshot;
 use security::SecurityManager;
-use tikv::config::CdcConfig;
+use tikv::config::ResolvedTsConfig;
 use tikv_util::worker::{Runnable, Scheduler};
 use txn_types::{Key, TimeStamp};
 
@@ -201,12 +201,13 @@ impl ObserveRegion {
 }
 
 pub struct Endpoint<T, E: KvEngine, C> {
+    cfg: ResolvedTsConfig,
     store_meta: Arc<Mutex<StoreMeta>>,
     regions: HashMap<u64, ObserveRegion>,
     scanner_pool: ScannerPool<T, E>,
     scheduler: Scheduler<Task<E::Snapshot>>,
     sinker: C,
-    advance_worker: AdvanceTsWorker<T, E>,
+    advance_worker: AdvanceTsWorker<E>,
     _phantom: PhantomData<(T, E)>,
 }
 
@@ -217,7 +218,7 @@ where
     C: CmdSinker<E::Snapshot>,
 {
     pub fn new(
-        cfg: &CdcConfig,
+        cfg: &ResolvedTsConfig,
         scheduler: Scheduler<Task<E::Snapshot>>,
         raft_router: T,
         store_meta: Arc<Mutex<StoreMeta>>,
@@ -230,16 +231,14 @@ where
         let advance_worker = AdvanceTsWorker::new(
             pd_client,
             scheduler.clone(),
-            raft_router.clone(),
             store_meta.clone(),
             concurrency_manager,
             env,
             security_mgr,
-            cfg.min_ts_interval.0,
-            cfg.hibernate_regions_compatible,
         );
         let scanner_pool = ScannerPool::new(cfg.scan_lock_pool_size, raft_router);
         let ep = Self {
+            cfg: cfg.clone(),
             scheduler,
             store_meta,
             advance_worker,
@@ -311,7 +310,6 @@ where
                     })
                     .unwrap_or_else(|e| debug!("schedule resolved ts task failed"; "err" => ?e));
             }),
-            before_start: None,
             on_error: Some(Box::new(move |observe_id, _region, e| {
                 let error = e.extract_error_header();
                 scheduler_error
@@ -345,7 +343,7 @@ where
                 cancelled.store(true, Ordering::Release);
             }
         } else {
-            warn!("deregister unregister region"; "region_id" => region_id);
+            debug!("deregister unregister region"; "region_id" => region_id);
         }
     }
 
@@ -371,16 +369,6 @@ where
                     "request_epoch" => ?region.get_region_epoch(),
                 )
             }
-        }
-    }
-
-    // Start to advance resolved ts after peer becomes leader.
-    // Stop to advance resolved ts after peer steps down to follower or candidate.
-    // Do not need to check observe id because we expect all role change events are scheduled in order.
-    fn region_role_changed(&mut self, region: Region, role: StateRole) {
-        match role {
-            StateRole::Leader => self.register_region(region),
-            _ => self.deregister_region(region.id),
         }
     }
 
@@ -491,15 +479,18 @@ where
 
     fn register_advance_event(&self) {
         let regions = self.regions.keys().into_iter().copied().collect();
-        self.advance_worker.register_advance_event(regions);
+        self.advance_worker
+            .register_advance_event(self.cfg.advance_ts_interval.0, regions);
     }
 }
 
 pub enum Task<S: Snapshot> {
     RegionDestroyed(Region),
-    RegionRoleChanged {
+    RegisterRegion {
         region: Region,
-        role: StateRole,
+    },
+    DeRegisterRegion {
+        region_id: u64,
     },
     RegionError {
         region_id: u64,
@@ -521,6 +512,9 @@ pub enum Task<S: Snapshot> {
         entries: Vec<ScanEntry>,
         apply_index: u64,
     },
+    ChangeConfig {
+        change: ConfigChange,
+    },
 }
 
 impl<S: Snapshot> fmt::Debug for Task<S> {
@@ -531,13 +525,13 @@ impl<S: Snapshot> fmt::Debug for Task<S> {
                 .field("name", &"region_destroyed")
                 .field("region", &region)
                 .finish(),
-            Task::RegionRoleChanged {
-                ref region,
-                ref role,
-            } => de
-                .field("name", &"region_role_changed")
+            Task::RegisterRegion { ref region } => de
+                .field("name", &"register_region")
                 .field("region", &region)
-                .field("role", &role)
+                .finish(),
+            Task::DeRegisterRegion { ref region_id } => de
+                .field("name", &"deregister_region")
+                .field("region_id", &region_id)
                 .finish(),
             Task::RegionError {
                 ref region_id,
@@ -570,6 +564,10 @@ impl<S: Snapshot> fmt::Debug for Task<S> {
                 .field("apply_index", &apply_index)
                 .finish(),
             Task::RegisterAdvanceEvent => de.field("name", &"register_advance_event").finish(),
+            Task::ChangeConfig { ref change } => de
+                .field("name", &"change_config")
+                .field("change", &change)
+                .finish(),
         }
     }
 }
@@ -592,7 +590,8 @@ where
         debug!("run resolved-ts task"; "task" => ?task);
         match task {
             Task::RegionDestroyed(region) => self.region_destroyed(region),
-            Task::RegionRoleChanged { region, role } => self.region_role_changed(region, role),
+            Task::RegisterRegion { region } => self.register_region(region),
+            Task::DeRegisterRegion { region_id } => self.deregister_region(region_id),
             Task::RegionError {
                 region_id,
                 observe_id,
@@ -610,6 +609,32 @@ where
                 apply_index,
             } => self.handle_scan_locks(region_id, observe_id, entries, apply_index),
             Task::RegisterAdvanceEvent => self.register_advance_event(),
+            Task::ChangeConfig { change } => {
+                let prev = format!("{:?}", self.cfg);
+                self.cfg.update(change);
+                info!(
+                    "resolved-ts config changed";
+                    "prev" => prev,
+                    "current" => ?self.cfg,
+                );
+            }
         }
+    }
+}
+
+pub struct ResolvedTsConfigManager<S: Snapshot>(Scheduler<Task<S>>);
+
+impl<S: Snapshot> ResolvedTsConfigManager<S> {
+    pub fn new(scheduler: Scheduler<Task<S>>) -> ResolvedTsConfigManager<S> {
+        ResolvedTsConfigManager(scheduler)
+    }
+}
+
+impl<S: Snapshot> ConfigManager for ResolvedTsConfigManager<S> {
+    fn dispatch(&mut self, change: ConfigChange) -> configuration::Result<()> {
+        if let Err(e) = self.0.schedule(Task::ChangeConfig { change }) {
+            error!("failed to schedule ChangeConfig task"; "err" => ?e);
+        }
+        Ok(())
     }
 }

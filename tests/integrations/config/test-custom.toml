@@ -573,8 +573,12 @@ pipelined = false
 min-ts-interval = "4s"
 old-value-cache-size = 512
 hibernate-regions-compatible = false
-scan-lock-pool-size = 1
 incremental-scan-speed-limit = 7
+
+[resolved-ts]
+enable = true
+advance-ts-interval = "5s"
+scan-lock-pool-size = 1
 
 [split]
 detect-times = 10
