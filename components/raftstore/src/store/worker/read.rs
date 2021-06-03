@@ -915,7 +915,7 @@ mod tests {
         region1.set_region_epoch(epoch13.clone());
         let term6 = 6;
         let mut lease = Lease::new(Duration::seconds(1)); // 1s is long enough.
-        let read_progress = Arc::new(RegionReadProgress::new(1, 1));
+        let read_progress = Arc::new(RegionReadProgress::new(1, 1, "".to_owned()));
 
         let mut cmd = RaftCmdRequest::default();
         let mut header = RaftRequestHeader::default();
@@ -1192,7 +1192,7 @@ mod tests {
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
                 max_ts_sync_status: Arc::new(AtomicU64::new(0)),
                 track_ver: TrackVer::new(),
-                read_progress: Arc::new(RegionReadProgress::new(0, 0)),
+                read_progress: Arc::new(RegionReadProgress::new(0, 0, "".to_owned())),
             };
             meta.readers.insert(1, read_delegate);
         }
