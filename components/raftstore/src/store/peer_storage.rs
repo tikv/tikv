@@ -1112,6 +1112,7 @@ where
             // TODO: unify entry cache.
             return;
         }
+        RAFT_ENTRIES_CACHES_EVICT.inc();
         let cache = self.cache.as_mut().unwrap();
         if !cache.cache.is_empty() {
             let drain_to = cache.cache.len() / 2;
