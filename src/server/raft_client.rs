@@ -11,8 +11,8 @@ use futures::compat::Future01CompatExt;
 use futures::task::{Context, Poll, Waker};
 use futures::{Future, Sink};
 use grpcio::{
-    ChannelBuilder, ClientCStreamReceiver, ClientCStreamSender, Environment, RpcStatus,
-    RpcStatusCode, WriteFlags,
+    ChannelBuilder, ClientCStreamReceiver, ClientCStreamSender, Environment, RpcStatusCode,
+    WriteFlags,
 };
 use kvproto::raft_serverpb::{Done, RaftMessage};
 use kvproto::tikvpb::{BatchRaftMessage, TikvClient};
@@ -330,11 +330,11 @@ where
 }
 
 fn grpc_error_is_unimplemented(e: &grpcio::Error) -> bool {
-    if let grpcio::Error::RpcFailure(RpcStatus { ref status, .. }) = e {
-        let x = *status == RpcStatusCode::UNIMPLEMENTED;
-        return x;
+    if let grpcio::Error::RpcFailure(ref status) = e {
+        status.code() == RpcStatusCode::UNIMPLEMENTED
+    } else {
+        false
     }
-    false
 }
 
 /// Struct tracks the lifetime of a `raft` or `batch_raft` RPC.

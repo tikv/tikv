@@ -71,7 +71,7 @@ aws = { optional = true, path = "../../cloud/aws", default-features = false }
 cloud = { path = "../../cloud", default_features = false }
 lazy_static = { optional = true, version = "1.3" }
 gcp = { optional = true, path = "../../cloud/gcp", default-features = false }
-grpcio = { optional = true, version = "0.8",  default-features = false, features = ["openssl-vendored"] }
+grpcio = { optional = true, version = "0.9",  default-features = false, features = ["openssl-vendored"] }
 encryption = { path = "../../encryption", default-features = false }
 external_storage = { path = "../", default-features = false }
 ffi-support = { optional = true, version = "0.4.2" }
@@ -80,7 +80,7 @@ futures = { optional = true, version = "0.3" }
 futures-executor = { optional = true, version = "0.3" }
 futures-io = { version = "0.3" }
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
-kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false, rev="511a3225c29f9272af83d28efed92eba835cd34f" }
+kvproto = { rev = "73468940541b2e801cb5f9739cd0cf6465889e72", git = "https://github.com/pingcap/kvproto.git", default-features = false }
 libloading = { optional = true, version = "0.7.0" }
 once_cell = { optional = true, version = "1.3.1" }
 protobuf = { optional = true, version = "2" }

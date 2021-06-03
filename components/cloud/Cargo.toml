@@ -20,7 +20,7 @@ async-trait = "0.1"
 derive_more = "0.99.3"
 error_code = { path = "../error_code", default-features = false }
 futures-io = "0.3"
-kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false, rev="511a3225c29f9272af83d28efed92eba835cd34f" }
+kvproto = { rev = "73468940541b2e801cb5f9739cd0cf6465889e72", git = "https://github.com/pingcap/kvproto.git", default-features = false }
 openssl = "0.10"
 protobuf = "2.8"
 rusoto_core = "0.45.0"

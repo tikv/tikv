@@ -283,6 +283,10 @@ impl LockManagerTrait for LockManager {
     fn has_waiter(&self) -> bool {
         self.waiter_count.load(Ordering::SeqCst) > 0
     }
+
+    fn dump_wait_for_entries(&self, cb: waiter_manager::Callback) {
+        self.waiter_mgr_scheduler.dump_wait_table(cb);
+    }
 }
 
 #[cfg(test)]

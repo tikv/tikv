@@ -284,7 +284,9 @@ impl ChangeData for Service {
         if let Err(status) = self
             .scheduler
             .schedule(Task::OpenConn { conn })
-            .map_err(|e| RpcStatus::new(RpcStatusCode::INVALID_ARGUMENT, Some(format!("{:?}", e))))
+            .map_err(|e| {
+                RpcStatus::with_message(RpcStatusCode::INVALID_ARGUMENT, format!("{:?}", e))
+            })
         {
             error!("cdc connection initiate failed"; "error" => ?status);
             ctx.spawn(
@@ -324,9 +326,9 @@ impl ChangeData for Service {
                     version,
                 })
                 .map_err(|e| {
-                    GrpcError::RpcFailure(RpcStatus::new(
+                    GrpcError::RpcFailure(RpcStatus::with_message(
                         RpcStatusCode::INVALID_ARGUMENT,
-                        Some(format!("{:?}", e)),
+                        format!("{:?}", e),
                     ))
                 });
             future::ready(ret)
@@ -536,7 +538,7 @@ mod tests {
                 }
                 window_size += 1;
                 // gRPC window size should not be larger than 1GB.
-                assert!(window_size <= 1024 * 1024);
+                assert!(window_size <= 1024 * 1024, "window_size: {}", window_size);
             }
             window_size
         };

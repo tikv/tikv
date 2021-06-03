@@ -3,10 +3,10 @@
 use std::collections::HashMap;
 use std::string::ToString;
 
-use crate::server::service::diagnostics::ioload;
+use crate::server::service::diagnostics::{ioload, SYS_INFO};
 use kvproto::diagnosticspb::{ServerInfoItem, ServerInfoPair};
-use tikv_util::config::KB;
-use tikv_util::sys::{cpu_time::LiunxStyleCpuTime, sys_quota::SysQuota, *};
+use tikv_util::config::KIB;
+use tikv_util::sys::{cpu_time::LiunxStyleCpuTime, SysQuota, *};
 use walkdir::WalkDir;
 
 type CpuTimeSnapshot = Option<LiunxStyleCpuTime>;
@@ -127,12 +127,12 @@ fn cpu_load_info(prev_cpu: CpuTimeSnapshot, collector: &mut Vec<ServerInfoItem>)
 fn mem_load_info(collector: &mut Vec<ServerInfoItem>) {
     let mut system = SYS_INFO.lock().unwrap();
     system.refresh_memory();
-    let total_memory = system.get_total_memory() * KB;
-    let used_memory = system.get_used_memory() * KB;
-    let free_memory = system.get_free_memory() * KB;
-    let total_swap = system.get_total_swap() * KB;
-    let used_swap = system.get_used_swap() * KB;
-    let free_swap = system.get_free_swap() * KB;
+    let total_memory = system.get_total_memory() * KIB;
+    let used_memory = system.get_used_memory() * KIB;
+    let free_memory = system.get_free_memory() * KIB;
+    let total_swap = system.get_total_swap() * KIB;
+    let used_swap = system.get_used_swap() * KIB;
+    let free_swap = system.get_free_swap() * KIB;
     drop(system);
     let used_memory_pct = (used_memory as f64) / (total_memory as f64);
     let free_memory_pct = (free_memory as f64) / (total_memory as f64);
@@ -297,10 +297,7 @@ fn cpu_hardware_info(collector: &mut Vec<ServerInfoItem>) {
         None => return,
     };
     let mut infos = vec![
-        (
-            "cpu-logical-cores",
-            SysQuota::new().cpu_cores_quota().to_string(),
-        ),
+        ("cpu-logical-cores", SysQuota::cpu_cores_quota().to_string()),
         ("cpu-physical-cores", num_cpus::get_physical().to_string()),
         ("cpu-frequency", format!("{}MHz", processor.get_frequency())),
         ("cpu-vendor-id", processor.get_vendor_id().to_string()),
@@ -351,7 +348,7 @@ fn mem_hardware_info(collector: &mut Vec<ServerInfoItem>) {
     system.refresh_memory();
     let mut pair = ServerInfoPair::default();
     pair.set_key("capacity".to_string());
-    pair.set_value((system.get_total_memory() * KB).to_string());
+    pair.set_value((system.get_total_memory() * KIB).to_string());
     let mut item = ServerInfoItem::default();
     item.set_tp("memory".to_string());
     item.set_name("memory".to_string());
