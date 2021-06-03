@@ -958,15 +958,12 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let mut engine_metrics =
             EngineMetricsManager::new(self.engines.as_ref().unwrap().engines.clone());
         let mut io_metrics = IOMetricsManager::new(fetcher);
-        let mut last_call = Instant::now();
         self.background_worker
             .spawn_interval_task(DEFAULT_METRICS_FLUSH_INTERVAL, move || {
                 let now = Instant::now();
-                let duration = now - last_call;
-                last_call = now;
-                engine_metrics.flush(duration);
-                io_metrics.flush(duration);
-                engines_info.update(duration);
+                engine_metrics.flush(now);
+                io_metrics.flush(now);
+                engines_info.update(now);
             });
     }
 
@@ -1286,19 +1283,24 @@ impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
 
 pub struct EngineMetricsManager<R: RaftEngine> {
     engines: Engines<RocksEngine, R>,
+    last_reset: Instant,
 }
 
 impl<R: RaftEngine> EngineMetricsManager<R> {
     pub fn new(engines: Engines<RocksEngine, R>) -> Self {
-        EngineMetricsManager { engines }
+        EngineMetricsManager {
+            engines,
+            last_reset: Instant::now(),
+        }
     }
 
-    pub fn flush(&mut self, duration: Duration) {
+    pub fn flush(&mut self, now: Instant) {
         self.engines.kv.flush_metrics("kv");
         self.engines.raft.flush_metrics("raft");
-        if duration >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
+        if now.duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
             self.engines.kv.reset_statistics();
             self.engines.raft.reset_statistics();
+            self.last_reset = now;
         }
     }
 }
@@ -1326,7 +1328,7 @@ impl EnginesResourceInfo {
         }
     }
 
-    pub fn update(&self, _duration: Duration) {
+    pub fn update(&self, _now: Instant) {
         let mut normalized_pending_bytes = 0;
 
         fn fetch_engine_cf(engine: &RocksEngine, cf: &str, normalized_pending_bytes: &mut u32) {

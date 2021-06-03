@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::Instant;
 
 use strum::EnumCount;
 
@@ -53,7 +53,7 @@ impl MetricsManager {
         }
     }
 
-    pub fn flush(&mut self, _duration: Duration) {
+    pub fn flush(&mut self, _now: Instant) {
         tls_flush();
         flush_io_latency_metrics();
         flush_io_bytes!(
