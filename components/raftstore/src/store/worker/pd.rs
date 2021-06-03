@@ -436,8 +436,8 @@ where
 }
 
 const HOTSPOT_KEY_RATE_THRESHOLD: u64 = 128;
+const HOTSPOT_QUERY_RATE_THRESHOLD: u64 = 128;
 const HOTSPOT_BYTE_RATE_THRESHOLD: u64 = 8 * 1024;
-const HOTSPOT_QUERY_RATE_THRESHOLD: u64 = 8; // TODO: need more test
 
 // TODO: support dyamic configure threshold in future
 fn hotspot_key_report_threshold() -> u64 {
