@@ -149,6 +149,7 @@ pub fn run_tikv(config: TiKvConfig) {
 const RESERVED_OPEN_FDS: u64 = 1000;
 
 const DEFAULT_METRICS_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
+const DEFAULT_ENGINE_METRICS_RESET_INTERVAL: Duration = Duration::from_millis(60_000);
 
 /// A complete TiKV server.
 struct TiKVServer<ER: RaftEngine> {
@@ -1283,8 +1284,6 @@ impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
     }
 }
 
-const DEFAULT_ENGINE_METRICS_RESET_INTERVAL: Duration = Duration::from_millis(60_000);
-
 pub struct EngineMetricsManager<R: RaftEngine> {
     engines: Engines<RocksEngine, R>,
 }
@@ -1312,6 +1311,8 @@ pub struct EnginesResourceInfo {
 }
 
 impl EnginesResourceInfo {
+    const SCALE_FACTOR: u64 = 100;
+
     pub fn new(
         kv_engine: RocksEngine,
         raft_engine: Option<RocksEngine>,
@@ -1334,7 +1335,9 @@ impl EnginesResourceInfo {
                     if cf_opts.get_soft_pending_compaction_bytes_limit() > 0 {
                         *normalized_pending_bytes = std::cmp::max(
                             *normalized_pending_bytes,
-                            (b * 100 / cf_opts.get_soft_pending_compaction_bytes_limit()) as u32,
+                            (b * EnginesResourceInfo::SCALE_FACTOR
+                                / cf_opts.get_soft_pending_compaction_bytes_limit())
+                                as u32,
                         );
                     }
                 }
@@ -1359,7 +1362,8 @@ impl EnginesResourceInfo {
 
 impl IOBudgetAdjustor for EnginesResourceInfo {
     fn adjust(&self, total_budgets: usize) -> usize {
-        let score = self.latest_normalized_pending_bytes.load(Ordering::Relaxed) as f32 / 100.0;
+        let score = self.latest_normalized_pending_bytes.load(Ordering::Relaxed) as f32
+            / Self::SCALE_FACTOR as f32;
         // Two reasons for adding `sqrt` on top:
         // 1) In theory the convergence point is independent of the value of pending
         //    bytes (as long as backlog generating rate equals consuming rate, which is

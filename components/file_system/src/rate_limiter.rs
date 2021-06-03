@@ -212,6 +212,7 @@ macro_rules! do_sleep {
 /// Macro is necessary to de-dup codes used both in async/sync functions.
 macro_rules! request_imp {
     ($limiter:ident, $priority:ident, $amount:ident, $mode:tt) => {{
+        debug_assert!($amount > 0);
         let priority_idx = $priority as usize;
         let cached_bytes_per_epoch = $limiter.bytes_per_epoch[priority_idx].load(Ordering::Relaxed);
         // Flow control is disabled when limit is zero.
@@ -227,7 +228,7 @@ macro_rules! request_imp {
         {
             return amount;
         }
-        let mut wait = {
+        let wait = {
             let now = Instant::now_coarse();
             let mut locked = $limiter.protected.lock();
             // The request is already partially fulfilled in current epoch when consumption
@@ -245,7 +246,7 @@ macro_rules! request_imp {
             // of logical queue to wait in.
             locked.pending_bytes[priority_idx] += remains;
             // Calculate wait duration by queue_len / served_per_epoch.
-            if locked.next_refill_time <= now {
+            let wait = if locked.next_refill_time <= now {
                 $limiter.refill(&mut locked, now);
                 // Bytes served by next epoch (and skipped epochs) during refill are subtracted
                 // from pending_bytes, round up the rest.
@@ -257,18 +258,29 @@ macro_rules! request_imp {
                 locked.next_refill_time - now
                     + DEFAULT_REFILL_PERIOD
                         * ((locked.pending_bytes[priority_idx] - 1) / cached_bytes_per_epoch) as u32
+            };
+            if wait > MAX_WAIT_DURATION_PER_REQUEST {
+                // Long wait duration could freeze request thread not to react to latest budgets
+                // adjustment. Exit early by returning partial quotas.
+                let full_amount = amount.swap(std::cmp::max(
+                    (MAX_WAIT_DURATION_PER_REQUEST.as_secs_f32() * amount as f32
+                        / wait.as_secs_f32()) as usize,
+                    1,
+                ));
+                // Subtracting redundant bytes requested before.
+                // In this situation, the prolonged wait is caused by accumulated pending-bytes,
+                // and bytes-through is always saturated.
+                debug_assert!(
+                    MAX_WAIT_DURATION_PER_REQUEST > DEFAULT_REFILL_PERIOD * 2
+                        && locked.pending_bytes[priority_idx] >= cached_bytes_per_epoch
+                        && cached_bytes_per_epoch > full_amount - amount
+                );
+                locked.pending_bytes[priority_idx] -= full_amount - amount;
+                MAX_WAIT_DURATION_PER_REQUEST
+            } else {
+                wait
             }
         };
-        if wait > MAX_WAIT_DURATION_PER_REQUEST {
-            // Long wait duration could freeze request thread not to react to latest budgets
-            // adjustment. Exit early by returning partial quotas.
-            amount = std::cmp::max(
-                (MAX_WAIT_DURATION_PER_REQUEST.as_secs_f32() * amount as f32 / wait.as_secs_f32())
-                    as usize,
-                1,
-            );
-            wait = MAX_WAIT_DURATION_PER_REQUEST;
-        }
         tls_collect_rate_limiter_request_wait($priority.as_str(), wait);
         do_sleep!(wait, $mode);
         amount
