@@ -32,6 +32,7 @@ use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::PerfLevel;
+use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
 use txn_types::Lock;
 
 /// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
@@ -456,13 +457,15 @@ impl<E: Engine> Endpoint<E> {
     ) -> impl Future<Output = Result<coppb::Response>> {
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx.build_task_id();
+        let resource_tag = ResourceMeteringTag::from_rpc_context(&req_ctx.context);
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
 
         let res = self
             .read_pool
             .spawn_handle(
-                Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder),
+                Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder)
+                    .in_resource_metering_tag(resource_tag),
                 priority,
                 task_id,
             )
@@ -830,7 +833,7 @@ mod tests {
             engine,
         ));
         let cm = ConcurrencyManager::new(1.into());
-        let cop = Endpoint::<RocksEngine>::new(
+        let copr = Endpoint::<RocksEngine>::new(
             &Config::default(),
             read_pool.handle(),
             cm,
@@ -841,7 +844,7 @@ mod tests {
         let handler_builder =
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed()));
         let resp =
-            block_on(cop.handle_unary_request(ReqContext::default_for_test(), handler_builder))
+            block_on(copr.handle_unary_request(ReqContext::default_for_test(), handler_builder))
                 .unwrap();
         assert!(resp.get_other_error().is_empty());
 
@@ -859,7 +862,7 @@ mod tests {
             None,
             PerfLevel::EnableCount,
         );
-        assert!(block_on(cop.handle_unary_request(outdated_req_ctx, handler_builder)).is_err());
+        assert!(block_on(copr.handle_unary_request(outdated_req_ctx, handler_builder)).is_err());
     }
 
     #[test]
@@ -870,13 +873,13 @@ mod tests {
             engine,
         ));
         let cm = ConcurrencyManager::new(1.into());
-        let mut cop = Endpoint::<RocksEngine>::new(
+        let mut copr = Endpoint::<RocksEngine>::new(
             &Config::default(),
             read_pool.handle(),
             cm,
             PerfLevel::EnableCount,
         );
-        cop.recursion_limit = 100;
+        copr.recursion_limit = 100;
 
         let req = {
             let mut expr = Expr::default();
@@ -897,7 +900,7 @@ mod tests {
             req
         };
 
-        let resp: coppb::Response = block_on(cop.parse_and_handle_unary_request(req, None));
+        let resp: coppb::Response = block_on(copr.parse_and_handle_unary_request(req, None));
         assert!(!resp.get_other_error().is_empty());
     }
 
@@ -909,7 +912,7 @@ mod tests {
             engine,
         ));
         let cm = ConcurrencyManager::new(1.into());
-        let cop = Endpoint::<RocksEngine>::new(
+        let copr = Endpoint::<RocksEngine>::new(
             &Config::default(),
             read_pool.handle(),
             cm,
@@ -919,7 +922,7 @@ mod tests {
         let mut req = coppb::Request::default();
         req.set_tp(9999);
 
-        let resp: coppb::Response = block_on(cop.parse_and_handle_unary_request(req, None));
+        let resp: coppb::Response = block_on(copr.parse_and_handle_unary_request(req, None));
         assert!(!resp.get_other_error().is_empty());
     }
 
@@ -931,7 +934,7 @@ mod tests {
             engine,
         ));
         let cm = ConcurrencyManager::new(1.into());
-        let cop = Endpoint::<RocksEngine>::new(
+        let copr = Endpoint::<RocksEngine>::new(
             &Config::default(),
             read_pool.handle(),
             cm,
@@ -942,7 +945,7 @@ mod tests {
         req.set_tp(REQ_TYPE_DAG);
         req.set_data(vec![1, 2, 3]);
 
-        let resp = block_on(cop.parse_and_handle_unary_request(req, None));
+        let resp = block_on(copr.parse_and_handle_unary_request(req, None));
         assert!(!resp.get_other_error().is_empty());
     }
 
@@ -976,7 +979,7 @@ mod tests {
         );
 
         let cm = ConcurrencyManager::new(1.into());
-        let cop = Endpoint::<RocksEngine>::new(
+        let copr = Endpoint::<RocksEngine>::new(
             &Config::default(),
             read_pool.handle(),
             cm,
@@ -996,7 +999,7 @@ mod tests {
             let handler_builder = Box::new(|_, _: &_| {
                 Ok(UnaryFixture::new_with_duration(Ok(response), 1000).into_boxed())
             });
-            let future = cop.handle_unary_request(ReqContext::default_for_test(), handler_builder);
+            let future = copr.handle_unary_request(ReqContext::default_for_test(), handler_builder);
             let tx = tx.clone();
             thread::spawn(move || {
                 tx.send(block_on(future)).unwrap();
@@ -1023,7 +1026,7 @@ mod tests {
             engine,
         ));
         let cm = ConcurrencyManager::new(1.into());
-        let cop = Endpoint::<RocksEngine>::new(
+        let copr = Endpoint::<RocksEngine>::new(
             &Config::default(),
             read_pool.handle(),
             cm,
@@ -1033,7 +1036,7 @@ mod tests {
         let handler_builder =
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Err(box_err!("foo"))).into_boxed()));
         let resp =
-            block_on(cop.handle_unary_request(ReqContext::default_for_test(), handler_builder))
+            block_on(copr.handle_unary_request(ReqContext::default_for_test(), handler_builder))
                 .unwrap();
         assert_eq!(resp.get_data().len(), 0);
         assert!(!resp.get_other_error().is_empty());
@@ -1047,7 +1050,7 @@ mod tests {
             engine,
         ));
         let cm = ConcurrencyManager::new(1.into());
-        let cop = Endpoint::<RocksEngine>::new(
+        let copr = Endpoint::<RocksEngine>::new(
             &Config::default(),
             read_pool.handle(),
             cm,
@@ -1058,7 +1061,7 @@ mod tests {
         let handler_builder =
             Box::new(|_, _: &_| Ok(StreamFixture::new(vec![Err(box_err!("foo"))]).into_boxed()));
         let resp_vec = block_on_stream(
-            cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+            copr.handle_stream_request(ReqContext::default_for_test(), handler_builder)
                 .unwrap(),
         )
         .collect::<Result<Vec<_>>>()
@@ -1078,7 +1081,7 @@ mod tests {
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(responses).into_boxed()));
         let resp_vec = block_on_stream(
-            cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+            copr.handle_stream_request(ReqContext::default_for_test(), handler_builder)
                 .unwrap(),
         )
         .collect::<Result<Vec<_>>>()
@@ -1099,7 +1102,7 @@ mod tests {
             engine,
         ));
         let cm = ConcurrencyManager::new(1.into());
-        let cop = Endpoint::<RocksEngine>::new(
+        let copr = Endpoint::<RocksEngine>::new(
             &Config::default(),
             read_pool.handle(),
             cm,
@@ -1108,7 +1111,7 @@ mod tests {
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(vec![]).into_boxed()));
         let resp_vec = block_on_stream(
-            cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+            copr.handle_stream_request(ReqContext::default_for_test(), handler_builder)
                 .unwrap(),
         )
         .collect::<Result<Vec<_>>>()
@@ -1126,7 +1129,7 @@ mod tests {
             engine,
         ));
         let cm = ConcurrencyManager::new(1.into());
-        let cop = Endpoint::<RocksEngine>::new(
+        let copr = Endpoint::<RocksEngine>::new(
             &Config::default(),
             read_pool.handle(),
             cm,
@@ -1150,7 +1153,7 @@ mod tests {
         });
         let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
         let resp_vec = block_on_stream(
-            cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+            copr.handle_stream_request(ReqContext::default_for_test(), handler_builder)
                 .unwrap(),
         )
         .collect::<Result<Vec<_>>>()
@@ -1176,7 +1179,7 @@ mod tests {
         });
         let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
         let resp_vec = block_on_stream(
-            cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+            copr.handle_stream_request(ReqContext::default_for_test(), handler_builder)
                 .unwrap(),
         )
         .collect::<Result<Vec<_>>>()
@@ -1202,7 +1205,7 @@ mod tests {
         });
         let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
         let resp_vec = block_on_stream(
-            cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+            copr.handle_stream_request(ReqContext::default_for_test(), handler_builder)
                 .unwrap(),
         )
         .collect::<Result<Vec<_>>>()
@@ -1221,7 +1224,7 @@ mod tests {
             engine,
         ));
         let cm = ConcurrencyManager::new(1.into());
-        let cop = Endpoint::<RocksEngine>::new(
+        let copr = Endpoint::<RocksEngine>::new(
             &Config {
                 end_point_stream_channel_size: 3,
                 ..Config::default()
@@ -1242,7 +1245,7 @@ mod tests {
         });
         let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
         let resp_vec = block_on_stream(
-            cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+            copr.handle_stream_request(ReqContext::default_for_test(), handler_builder)
                 .unwrap(),
         )
         .take(7)
@@ -1291,7 +1294,7 @@ mod tests {
         };
 
         let cm = ConcurrencyManager::new(1.into());
-        let cop =
+        let copr =
             Endpoint::<RocksEngine>::new(&config, read_pool.handle(), cm, PerfLevel::EnableCount);
 
         let (tx, rx) = std::sync::mpsc::channel();
@@ -1312,7 +1315,7 @@ mod tests {
                 .into_boxed())
             });
             let resp_future_1 =
-                cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
+                copr.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![block_on(resp_future_1).unwrap()]).unwrap());
             // Sleep a while to make sure that thread is spawn and snapshot is taken.
@@ -1326,7 +1329,7 @@ mod tests {
                 )
             });
             let resp_future_2 =
-                cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
+                copr.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![block_on(resp_future_2).unwrap()]).unwrap());
             thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
@@ -1400,7 +1403,7 @@ mod tests {
                 .into_boxed())
             });
             let resp_future_1 =
-                cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
+                copr.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![block_on(resp_future_1).unwrap()]).unwrap());
             // Sleep a while to make sure that thread is spawn and snapshot is taken.
@@ -1415,7 +1418,7 @@ mod tests {
                 .into_boxed())
             });
             let resp_future_2 =
-                cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
+                copr.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![block_on(resp_future_2).unwrap()]).unwrap());
             thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
@@ -1477,7 +1480,7 @@ mod tests {
                 .into_boxed())
             });
             let resp_future_1 =
-                cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
+                copr.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![block_on(resp_future_1).unwrap()]).unwrap());
             // Sleep a while to make sure that thread is spawn and snapshot is taken.
@@ -1499,7 +1502,7 @@ mod tests {
                 )
                 .into_boxed())
             });
-            let resp_future_3 = cop
+            let resp_future_3 = copr
                 .handle_stream_request(req_with_exec_detail, handler_builder)
                 .unwrap();
             thread::spawn(move || {
@@ -1629,7 +1632,7 @@ mod tests {
         });
 
         let config = Config::default();
-        let cop =
+        let copr =
             Endpoint::<RocksEngine>::new(&config, read_pool.handle(), cm, PerfLevel::EnableCount);
 
         let mut req = coppb::Request::default();
@@ -1644,7 +1647,7 @@ mod tests {
         dag.mut_executors().push(Executor::default());
         req.set_data(dag.write_to_bytes().unwrap());
 
-        let resp = block_on(cop.parse_and_handle_unary_request(req, None));
+        let resp = block_on(copr.parse_and_handle_unary_request(req, None));
         assert_eq!(resp.get_locked().get_key(), b"key");
     }
 }

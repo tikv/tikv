@@ -21,7 +21,7 @@ use grpcio::{ChannelBuilder, Environment};
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::{
     event::Event as Event_oneof_event, ChangeDataRequest,
-    DuplicateRequest as ErrorDuplicateRequest, Error as EventError, Event,
+    DuplicateRequest as ErrorDuplicateRequest, Error as EventError, Event, ResolvedTs,
 };
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::{
@@ -583,7 +583,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
     pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>, old_value_cb: OldValueCallback) {
         fail_point!("cdc_before_handle_multi_batch", |_| {});
         for batch in multi {
-            let region_id = batch.region_id;
+            let region_id = batch.region.get_id();
             let mut deregister = None;
             if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
                 if delegate.has_failed() {
@@ -1478,7 +1478,7 @@ mod tests {
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
             max_ts_sync_status: Arc::new(AtomicU64::new(0)),
             track_ver: TrackVer::new(),
-            read_progress: Arc::new(RegionReadProgress::new(0, 0)),
+            read_progress: Arc::new(RegionReadProgress::new(0, 0, "".to_owned())),
         };
         store_meta.lock().unwrap().readers.insert(1, read_delegate);
         let (task_sched, task_rx) = dummy_scheduler();

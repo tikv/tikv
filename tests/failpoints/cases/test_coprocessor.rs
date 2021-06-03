@@ -58,7 +58,6 @@ fn test_deadline_3() {
     fail::cfg("kv_cursor_seek", "sleep(2000)").unwrap();
     fail::cfg("copr_batch_initial_size", "return(1)").unwrap();
     let cop_resp = handle_request(&endpoint, req);
-    println!("{:?}", cop_resp);
     let mut resp = SelectResponse::default();
     resp.merge_from_bytes(cop_resp.get_data()).unwrap();
 

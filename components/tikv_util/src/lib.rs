@@ -32,6 +32,8 @@ pub mod deadline;
 pub mod keybuilder;
 pub mod logger;
 pub mod lru;
+pub mod math;
+pub mod memory;
 pub mod metrics;
 pub mod mpsc;
 pub mod stream;

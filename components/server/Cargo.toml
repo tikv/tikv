@@ -85,10 +85,10 @@ file_system = { path = "../file_system", default-features = false }
 fs2 = "0.4"
 futures = "0.3"
 tokio = { version = "0.2", features = ["rt-threaded"] }
-grpcio = { version = "0.8", default-features = false, features = ["openssl-vendored"] }
+grpcio = { version = "0.9", default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"
 keys = { path = "../keys", default-features = false }
-kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false, rev="511a3225c29f9272af83d28efed92eba835cd34f" }
+kvproto = { rev = "7a046020d1c091638e1e8aba623c8c1e8962219d", git = "https://github.com/pingcap/kvproto.git", default-features = false }
 libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { path = "../log_wrappers" }
@@ -113,6 +113,7 @@ toml = "0.5"
 txn_types = { path = "../txn_types", default-features = false }
 vlog = "0.1.4"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+resource_metering = { path = "../resource_metering" }
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.6"
