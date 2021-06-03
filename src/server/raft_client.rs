@@ -998,7 +998,7 @@ where
             builder: self.builder.clone(),
             engine: PhantomData::<E>,
             last_hash: (0, 0),
-            delay_time: self.delay_time.clone(),
+            delay_time: self.delay_time,
         }
     }
 }
