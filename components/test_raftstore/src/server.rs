@@ -279,7 +279,7 @@ impl Simulator for ServerCluster {
         let rts_worker = if cfg.resolved_ts.enable {
             // Resolved ts worker
             let mut rts_worker = LazyWorker::new("resolved-ts");
-            let mut rts_ob = resolved_ts::Observer::new(rts_worker.scheduler());
+            let rts_ob = resolved_ts::Observer::new(rts_worker.scheduler());
             rts_ob.register_to(&mut coprocessor_host);
             // Resolved ts endpoint
             let rts_endpoint = resolved_ts::Endpoint::new(
