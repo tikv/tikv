@@ -71,6 +71,10 @@ fn test_serde_custom_tikv_config() {
         advertise_status_addr: "example.com:443".to_owned(),
         status_thread_pool_size: 1,
         max_grpc_send_msg_len: 6 * (1 << 20),
+        raft_client_grpc_send_msg_buffer: 1234 * 1024,
+        raft_client_queue_size: 1234,
+        raft_msg_max_batch_size: 123,
+        raft_msg_flush_delay_us: 1234,
         concurrent_send_snap_limit: 4,
         concurrent_recv_snap_limit: 4,
         grpc_compression_type: GrpcCompressionType::Gzip,
@@ -198,11 +202,16 @@ fn test_serde_custom_tikv_config() {
         local_read_batch_size: 33,
         apply_batch_system,
         store_batch_system,
+        store_io_pool_size: 5,
         future_poll_size: 2,
         hibernate_regions: false,
         dev_assert: true,
         apply_yield_duration: ReadableDuration::millis(333),
         perf_level: PerfLevel::EnableTime,
+        cmd_batch: false,
+        trigger_ready_size: ReadableSize::mb(12),
+        trigger_write_size: ReadableSize::mb(34),
+        store_waterfall_metrics: true,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {

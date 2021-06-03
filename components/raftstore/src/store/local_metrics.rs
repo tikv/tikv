@@ -1,7 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use prometheus::local::LocalHistogram;
 use std::sync::{Arc, Mutex};
+
+use prometheus::local::LocalHistogram;
+use raft::eraftpb::MessageType;
 
 use collections::HashSet;
 
@@ -86,7 +88,6 @@ pub struct RaftSendMessageMetrics {
     pub vote: SendStatus,
     pub vote_resp: SendStatus,
     pub snapshot: SendStatus,
-    pub request_snapshot: SendStatus,
     pub heartbeat: SendStatus,
     pub heartbeat_resp: SendStatus,
     pub transfer_leader: SendStatus,
@@ -96,8 +97,35 @@ pub struct RaftSendMessageMetrics {
 }
 
 impl RaftSendMessageMetrics {
+    pub fn add(&mut self, msg_type: MessageType, success: bool) {
+        let i = success as usize;
+        match msg_type {
+            MessageType::MsgAppend => self.append[i] += 1,
+            MessageType::MsgAppendResponse => self.append_resp[i] += 1,
+            MessageType::MsgRequestPreVote => self.prevote[i] += 1,
+            MessageType::MsgRequestPreVoteResponse => self.prevote_resp[i] += 1,
+            MessageType::MsgRequestVote => self.vote[i] += 1,
+            MessageType::MsgRequestVoteResponse => self.vote_resp[i] += 1,
+            MessageType::MsgSnapshot => self.snapshot[i] += 1,
+            MessageType::MsgHeartbeat => self.heartbeat[i] += 1,
+            MessageType::MsgHeartbeatResponse => self.heartbeat_resp[i] += 1,
+            MessageType::MsgTransferLeader => self.transfer_leader[i] += 1,
+            MessageType::MsgReadIndex => self.read_index[i] += 1,
+            MessageType::MsgReadIndexResp => self.read_index_resp[i] += 1,
+            MessageType::MsgTimeoutNow => self.timeout_now[i] += 1,
+            // We do not care about these message types for metrics.
+            // Explicitly declare them so when we add new message types we are forced to
+            // decide.
+            MessageType::MsgHup
+            | MessageType::MsgBeat
+            | MessageType::MsgPropose
+            | MessageType::MsgUnreachable
+            | MessageType::MsgSnapStatus
+            | MessageType::MsgCheckQuorum => {}
+        }
+    }
     /// Flushes all metrics
-    fn flush(&mut self) {
+    pub fn flush(&mut self) {
         // reset all buffered metrics once they have been added
         flush_send_status!(append, self);
         flush_send_status!(append_resp, self);
@@ -106,7 +134,6 @@ impl RaftSendMessageMetrics {
         flush_send_status!(vote, self);
         flush_send_status!(vote_resp, self);
         flush_send_status!(snapshot, self);
-        flush_send_status!(request_snapshot, self);
         flush_send_status!(heartbeat, self);
         flush_send_status!(heartbeat_resp, self);
         flush_send_status!(transfer_leader, self);
@@ -361,11 +388,17 @@ pub struct RaftMetrics {
     pub commit_log: LocalHistogram,
     pub leader_missing: Arc<Mutex<HashSet<u64>>>,
     pub invalid_proposal: RaftInvalidProposeMetrics,
+    pub persisted_msg: LocalHistogram,
+    pub waterfall_metrics: bool,
+    pub to_write_queue: LocalHistogram,
+    pub know_persist: LocalHistogram,
+    pub know_commit: LocalHistogram,
+    pub know_commit_not_persist: LocalHistogram,
 }
 
-impl Default for RaftMetrics {
-    fn default() -> RaftMetrics {
-        RaftMetrics {
+impl RaftMetrics {
+    pub fn new(waterfall_metrics: bool) -> Self {
+        Self {
             ready: Default::default(),
             send_message: Default::default(),
             message_dropped: Default::default(),
@@ -377,11 +410,14 @@ impl Default for RaftMetrics {
             commit_log: PEER_COMMIT_LOG_HISTOGRAM.local(),
             leader_missing: Arc::default(),
             invalid_proposal: Default::default(),
+            persisted_msg: STORE_PERSISTED_MSG_DURATION_HISTOGRAM.local(),
+            waterfall_metrics,
+            to_write_queue: STORE_TO_WRITE_QUEUE_DURATION_HISTOGRAM.local(),
+            know_persist: STORE_KNOW_PERSIST_DURATION_HISTOGRAM.local(),
+            know_commit: STORE_KNOW_COMMIT_DURATION_HISTOGRAM.local(),
+            know_commit_not_persist: STORE_KNOW_COMMIT_NOT_PERSIST_DURATION_HISTOGRAM.local(),
         }
     }
-}
-
-impl RaftMetrics {
     /// Flushs all metrics
     pub fn flush(&mut self) {
         self.ready.flush();
@@ -392,8 +428,39 @@ impl RaftMetrics {
         self.commit_log.flush();
         self.message_dropped.flush();
         self.invalid_proposal.flush();
+        self.persisted_msg.flush();
+        if self.waterfall_metrics {
+            self.to_write_queue.flush();
+            self.know_persist.flush();
+            self.know_commit.flush();
+            self.know_commit_not_persist.flush();
+        }
         let mut missing = self.leader_missing.lock().unwrap();
         LEADER_MISSING.set(missing.len() as i64);
         missing.clear();
+    }
+}
+
+pub struct AsyncWriteMetrics {
+    pub to_write: LocalHistogram,
+    pub kvdb_end: LocalHistogram,
+    pub write_end: LocalHistogram,
+}
+
+impl Default for AsyncWriteMetrics {
+    fn default() -> AsyncWriteMetrics {
+        AsyncWriteMetrics {
+            to_write: STORE_TO_WRITE_DURATION_HISTOGRAM.local(),
+            kvdb_end: STORE_WRITE_KVDB_END_DURATION_HISTOGRAM.local(),
+            write_end: STORE_WRITE_END_DURATION_HISTOGRAM.local(),
+        }
+    }
+}
+
+impl AsyncWriteMetrics {
+    pub fn flush(&mut self) {
+        self.to_write.flush();
+        self.kvdb_end.flush();
+        self.write_end.flush();
     }
 }

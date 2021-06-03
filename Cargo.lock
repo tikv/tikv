@@ -3534,7 +3534,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.6.0-alpha"
-source = "git+https://github.com/tikv/raft-rs?branch=master#438c671bad856e19de6ff1cad453e2642f956604"
+source = "git+https://github.com/gengliqi/raft-rs?branch=add-entries-size#f5abc1f7c2dae0c13ec806a267ca92acac591bac"
 dependencies = [
  "bytes 1.0.1",
  "fxhash",
@@ -3549,7 +3549,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine?branch=master#8d559deaf53a3d1daf482f4523f71d33f4cd715f"
+source = "git+https://github.com/gengliqi/raft-engine?branch=add-merge-batch#a76f6c85af99c63047cec98c7440611fc89023cd"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -3568,7 +3568,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
-source = "git+https://github.com/tikv/raft-rs?branch=master#438c671bad856e19de6ff1cad453e2642f956604"
+source = "git+https://github.com/gengliqi/raft-rs?branch=add-entries-size#f5abc1f7c2dae0c13ec806a267ca92acac591bac"
 dependencies = [
  "bytes 1.0.1",
  "lazy_static",
@@ -3638,6 +3638,7 @@ dependencies = [
  "raft",
  "raft-proto",
  "rand 0.7.3",
+ "seahash",
  "serde",
  "serde_derive",
  "serde_with",
@@ -4246,6 +4247,12 @@ name = "scopeguard"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d29ab0c6d3fc0ee92fe66e2d99f700eab17a8d57d1c1d3b748380fb20baa78cd"
+
+[[package]]
+name = "seahash"
+version = "4.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c107b6f4780854c8b126e228ea8869f4d7b71260f962fefb57b996b8959ba6b"
 
 [[package]]
 name = "security"
@@ -5427,6 +5434,7 @@ dependencies = [
  "rand 0.7.3",
  "regex",
  "rev_lines",
+ "seahash",
  "security",
  "semver 0.11.0",
  "serde",

@@ -569,7 +569,7 @@ fn test_node_merge_reject_request_snapshot() {
             1,
             req,
             Callback::Write {
-                cb: Box::new(|_: WriteResponse| {}),
+                cb: (Box::new(|_: WriteResponse| {}), Instant::now()),
                 proposed_cb: Some(Box::new(move || tx.send(()).unwrap())),
                 committed_cb: None,
             },

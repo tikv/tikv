@@ -220,6 +220,7 @@ url = "2"
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 walkdir = "2"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+seahash = "4.1.0"
 
 [dev-dependencies]
 panic_hook = { path = "components/panic_hook" }
@@ -233,8 +234,8 @@ example_plugin = { path = "components/test_coprocessor_plugin/example_plugin" }
 
 [patch.crates-io]
 # TODO: remove this when new raft-rs is published.
-raft = { git = "https://github.com/tikv/raft-rs", branch = "master", default-features = false }
-raft-proto = { git = "https://github.com/tikv/raft-rs", branch = "master", default-features = false }
+raft = { git = "https://github.com/gengliqi/raft-rs", branch = "add-entries-size", default-features = false }
+raft-proto = { git = "https://github.com/gengliqi/raft-rs", branch = "add-entries-size", default-features = false }
 protobuf = { git = "https://github.com/pingcap/rust-protobuf", rev = "82b49fea7e696fd647b5aca0a6c6ec944eab3189" }
 protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "82b49fea7e696fd647b5aca0a6c6ec944eab3189" }
 

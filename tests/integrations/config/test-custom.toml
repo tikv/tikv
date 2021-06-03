@@ -43,6 +43,10 @@ status-addr = "example.com:443"
 advertise-status-addr = "example.com:443"
 status-thread-pool-size = 1
 max-grpc-send-msg-len = 6291456
+raft-client-grpc-send-msg-buffer = 1263616
+raft-client-queue-size = 1234
+raft-msg-max-batch-size = 123
+raft-msg-flush-delay-us = 1234
 grpc-compression-type = "gzip"
 grpc-concurrency = 123
 grpc-concurrent-stream = 1234
@@ -163,6 +167,10 @@ future-poll-size = 2
 hibernate-regions = false
 dev-assert = true
 perf-level = 5
+cmd-batch = false
+trigger-ready-size = "12MB"
+trigger-write-size = "34MB"
+store-waterfall-metrics = true
 
 [coprocessor]
 split-region-on-table = false
