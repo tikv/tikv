@@ -79,8 +79,8 @@ fn prepare_for_stale_read_before_run(
     if let Some(f) = before_run {
         f(&mut cluster);
     };
+    cluster.cfg.resolved_ts.enable = true;
     cluster.run();
-    cluster.sim.wl().start_resolved_ts_worker();
 
     cluster.must_transfer_leader(1, leader.clone());
     let leader_client = PeerClient::new(&cluster, 1, leader);
@@ -210,9 +210,10 @@ fn test_stale_read_basic_flow_lock() {
 // be updated
 #[test]
 fn test_update_apply_index_before_sync_read_state() {
-    let (mut cluster, pd_client, leader_client) = prepare_for_stale_read(new_peer(1, 1));
+    let (mut cluster, pd_client, mut leader_client) = prepare_for_stale_read(new_peer(1, 1));
     let mut follower_client2 = PeerClient::new(&cluster, 1, new_peer(2, 2));
     follower_client2.ctx.set_stale_read(true);
+    leader_client.ctx.set_stale_read(true);
 
     // Stop node 3 to ensure data must replicated to follower 2 before write return
     cluster.stop_node(3);
@@ -233,6 +234,7 @@ fn test_update_apply_index_before_sync_read_state() {
         b"key2".to_vec(),
         get_tso(&pd_client),
     );
+    leader_client.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), commit_ts1);
 
     cluster.run_node(3).unwrap();
     // Stop replicate data to follower 2

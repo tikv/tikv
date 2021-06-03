@@ -676,7 +676,7 @@ fn test_debug_get() {
     req.set_key(b"foo".to_vec());
     match debug_client.get(&req).unwrap_err() {
         Error::RpcFailure(status) => {
-            assert_eq!(status.status, RpcStatusCode::NOT_FOUND);
+            assert_eq!(status.code(), RpcStatusCode::NOT_FOUND);
         }
         _ => panic!("expect NotFound"),
     }
@@ -713,7 +713,7 @@ fn test_debug_raft_log() {
     req.set_log_index(region_id + 1);
     match debug_client.raft_log(&req).unwrap_err() {
         Error::RpcFailure(status) => {
-            assert_eq!(status.status, RpcStatusCode::NOT_FOUND);
+            assert_eq!(status.code(), RpcStatusCode::NOT_FOUND);
         }
         _ => panic!("expect NotFound"),
     }
@@ -786,7 +786,7 @@ fn test_debug_region_info() {
     req.set_region_id(region_id + 1);
     match debug_client.region_info(&req).unwrap_err() {
         Error::RpcFailure(status) => {
-            assert_eq!(status.status, RpcStatusCode::NOT_FOUND);
+            assert_eq!(status.code(), RpcStatusCode::NOT_FOUND);
         }
         _ => panic!("expect NotFound"),
     }
@@ -836,7 +836,7 @@ fn test_debug_region_size() {
     req.set_region_id(region_id + 1);
     match debug_client.region_size(&req).unwrap_err() {
         Error::RpcFailure(status) => {
-            assert_eq!(status.status, RpcStatusCode::NOT_FOUND);
+            assert_eq!(status.code(), RpcStatusCode::NOT_FOUND);
         }
         _ => panic!("expect NotFound"),
     }
@@ -1658,7 +1658,7 @@ fn test_forwarding_reconnect() {
     assert!(elapsed < timeout, "{:?}", elapsed);
     // Because leader server is shutdown, reconnecting has to be timeout.
     match res {
-        Err(grpcio::Error::RpcFailure(s)) => assert_eq!(s.status, RpcStatusCode::CANCELLED),
+        Err(grpcio::Error::RpcFailure(s)) => assert_eq!(s.code(), RpcStatusCode::CANCELLED),
         _ => panic!("unexpected result {:?}", res),
     }
 
