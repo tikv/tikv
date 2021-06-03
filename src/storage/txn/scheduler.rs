@@ -242,15 +242,24 @@ impl<L: LockManager> SchedulerInner<L> {
         self.running_write_bytes.load(Ordering::Acquire) >= self.sched_pending_write_threshold
     }
 
-    /// Tries to acquire all the required latches for a command.
+    /// Tries to acquire all the required latches for a command when waken up by
+    /// another finished command.
     ///
-    /// Returns the `Task` if successful; returns `None` otherwise.
-    fn acquire_lock(&self, cid: u64) -> Result<Option<Task>, StorageError> {
+    /// Returns a deadline error if the deadline is exceeded. Returns the `Task` if
+    /// all latches are acquired, returns `None` otherwise.
+    fn acquire_lock_on_wakeup(&self, cid: u64) -> Result<Option<Task>, StorageError> {
         let mut task_slot = self.get_task_slot(cid);
         let tctx = task_slot.get_mut(&cid).unwrap();
         // Check deadline early during acquiring latches to avoid expired requests blocking
         // other requests.
-        tctx.task.as_ref().unwrap().deadline.check()?;
+        if let Err(e) = tctx.task.as_ref().unwrap().deadline.check() {
+            // `acquire_lock_on_wakeup` is called when another command releases its locks and wakes up
+            // command `cid`. This command inserted its lock before and now the lock is at the
+            // front of the queue. The actual acquired count is one more than the `owned_count`
+            // recorded in the lock, so we increase one to make `release` work.
+            tctx.lock.owned_count += 1;
+            return Err(e.into());
+        }
         if self.latches.acquire(&mut tctx.lock, cid) {
             tctx.on_schedule();
             return Ok(tctx.task.take());
@@ -369,7 +378,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// Tries to acquire all the necessary latches. If all the necessary latches are acquired,
     /// the method initiates a get snapshot operation for further processing.
     fn try_to_wake_up(&self, cid: u64) {
-        match self.inner.acquire_lock(cid) {
+        match self.inner.acquire_lock_on_wakeup(cid) {
             Ok(Some(task)) => {
                 fail_point!("txn_scheduler_try_to_wake_up");
                 self.execute(task);
@@ -1036,6 +1045,14 @@ mod tests {
             block_on(f).unwrap(),
             Err(StorageError(box StorageErrorInner::DeadlineExceeded))
         ));
+
+        // A new request should not be blocked.
+        let mut req = BatchRollbackRequest::default();
+        req.set_keys(vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()].into());
+        let cmd: TypedCommand<()> = req.into();
+        let (cb, f) = paired_future_callback();
+        scheduler.run_cmd(cmd.cmd, StorageCallback::Boolean(cb));
+        assert!(block_on(f).is_ok());
     }
 
     #[test]
@@ -1073,5 +1090,13 @@ mod tests {
             block_on(f).unwrap(),
             Err(StorageError(box StorageErrorInner::DeadlineExceeded))
         ));
+
+        // A new request should not be blocked.
+        let mut req = BatchRollbackRequest::default();
+        req.set_keys(vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()].into());
+        let cmd: TypedCommand<()> = req.into();
+        let (cb, f) = paired_future_callback();
+        scheduler.run_cmd(cmd.cmd, StorageCallback::Boolean(cb));
+        assert!(block_on(f).is_ok());
     }
 }
