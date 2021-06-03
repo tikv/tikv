@@ -151,11 +151,8 @@ impl ConfigManager for StorageConfigManger {
                 Some(limiter) => limiter,
             };
             if let Some(limit) = io_rate_limit.remove("max_bytes_per_sec") {
-                if let OptionReadableSize(Some(limit)) = limit.into() {
-                    limiter.set_io_rate_limit(limit.0 as usize);
-                } else {
-                    limiter.set_io_rate_limit(0);
-                }
+                let limit: ReadableSize = limit.into();
+                limiter.set_io_rate_limit(limit.0 as usize);
             }
         }
         Ok(())
