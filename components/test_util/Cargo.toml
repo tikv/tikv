@@ -26,8 +26,8 @@ cloud-gcp = [ "encryption_export/cloud-gcp" ]
 [dependencies]
 encryption_export = { path = "../encryption/export", default-features = false }
 fail = "0.4"
-grpcio = { version = "0.8",  default-features = false, features = ["openssl-vendored"] }
-kvproto = { rev = "f11c6fb6b3a53b214ee94d54651b01eb99239334", git = "https://github.com/pingcap/kvproto.git", default-features = false }
+grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored"] }
+kvproto = { rev = "73468940541b2e801cb5f9739cd0cf6465889e72", git = "https://github.com/pingcap/kvproto.git", default-features = false }
 rand = "0.8"
 rand_isaac = "0.3"
 security = { path = "../security", default-features = false }

@@ -721,6 +721,15 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
                     .post_raft_ready_append(ready);
             }
         }
+        let mut trace_event = None;
+        for peer in peers {
+            if let Some(event) = peer.update_memory_trace(&self.poll_ctx.cfg) {
+                trace_event = Some(trace_event.map_or(event, |e| e + event));
+            }
+        }
+        if let Some(e) = trace_event {
+            MEMTRACE_PEERS.trace(e);
+        }
         let dur = self.timer.elapsed();
         if !self.poll_ctx.store_stat.is_busy {
             let election_timeout = Duration::from_millis(

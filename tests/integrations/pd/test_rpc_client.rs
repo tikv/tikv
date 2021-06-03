@@ -148,9 +148,9 @@ fn test_connect_follower() {
     let res = format!("{}", client1.alloc_id().unwrap_err());
     let err = format!(
         "{}",
-        PdError::Grpc(GrpcError::RpcFailure(RpcStatus::new(
+        PdError::Grpc(GrpcError::RpcFailure(RpcStatus::with_message(
             RpcStatusCode::UNAVAILABLE,
-            Some("".to_string()),
+            "".to_string(),
         )))
     );
     assert_eq!(res, err);
@@ -164,9 +164,9 @@ fn test_connect_follower() {
     let res = format!("{}", client.alloc_id().unwrap_err());
     let err = format!(
         "{}",
-        PdError::Grpc(GrpcError::RpcFailure(RpcStatus::new(
+        PdError::Grpc(GrpcError::RpcFailure(RpcStatus::with_message(
             RpcStatusCode::UNAVAILABLE,
-            Some(leader_addr),
+            leader_addr,
         )))
     );
     assert_eq!(res, err);
