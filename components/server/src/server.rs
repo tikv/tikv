@@ -1256,6 +1256,7 @@ const DEFAULT_ENGINE_METRICS_RESET_INTERVAL: Duration = Duration::from_millis(60
 
 pub struct EngineMetricsManager<R: RaftEngine> {
     engines: Engines<RocksEngine, R>,
+    since_last_reset: Duration,
 }
 
 impl<R: RaftEngine> EngineMetricsManager<R> {
@@ -1266,7 +1267,8 @@ impl<R: RaftEngine> EngineMetricsManager<R> {
     pub fn flush(&mut self, duration: Duration) {
         self.engines.kv.flush_metrics("kv");
         self.engines.raft.flush_metrics("raft");
-        if duration >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
+        self.since_last_reset += duration;
+        if self.since_last_reset >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
             self.engines.kv.reset_statistics();
             self.engines.raft.reset_statistics();
         }
