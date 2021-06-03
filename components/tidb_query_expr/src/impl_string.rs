@@ -707,7 +707,7 @@ pub fn substring_index(
     } else {
         twoway::rfind_bytes
     };
-    let mut remaining = &s[..];
+    let mut remaining = s;
     let mut remaining_pattern_count = count.abs();
     let mut bound = 0;
     while remaining_pattern_count > 0 {
@@ -726,7 +726,7 @@ pub fn substring_index(
     }
 
     let result = if remaining_pattern_count > 0 {
-        &s[..]
+        s
     } else if count > 0 {
         &s[..bound - delim.len()]
     } else {
@@ -3351,6 +3351,26 @@ mod tests {
                 ],
                 Some("Cześć".as_bytes().to_vec()),
             ),
+            (
+                vec![
+                    Some(1).into(),
+                    tidb_query_datatype::codec::data_type::ScalarValue::Enum(Some(Enum::new(
+                        "aaa".as_bytes().to_vec(),
+                        1u64,
+                    ))),
+                ],
+                Some("aaa".as_bytes().to_vec()),
+            ),
+            (
+                vec![
+                    tidb_query_datatype::codec::data_type::ScalarValue::Enum(Some(Enum::new(
+                        "aaa".as_bytes().to_vec(),
+                        1u64,
+                    ))),
+                    Some(b"bbb".to_vec()).into(),
+                ],
+                Some("bbb".as_bytes().to_vec()),
+            ),
         ];
         for (args, expect_output) in test_cases {
             let output = RpnFnScalarEvaluator::new()
@@ -3881,7 +3901,7 @@ mod tests {
             (
                 "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
                 "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw\nMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw",
-            )
+            ),
         ];
 
         for (arg, expected) in cases {

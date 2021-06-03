@@ -380,11 +380,7 @@ impl<'a> Iterator for Iter<'a> {
 
     fn last(mut self) -> Option<Self::Item> {
         let l = self.offsets.len();
-        if l == 0 {
-            None
-        } else {
-            self.nth(l - 1)
-        }
+        if l == 0 { None } else { self.nth(l - 1) }
     }
 
     fn nth(&mut self, n: usize) -> Option<Self::Item> {

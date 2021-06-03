@@ -137,7 +137,7 @@ fn test_connect_follower() {
     let connect_leader_fp = "connect_leader";
     let server = MockServer::new(2);
     let eps = server.bind_addrs();
-    let mut cfg = new_config(eps.clone());
+    let mut cfg = new_config(eps);
 
     // test switch
     cfg.enable_forwarding = false;
@@ -149,9 +149,9 @@ fn test_connect_follower() {
     let res = format!("{}", client1.alloc_id().unwrap_err());
     let err = format!(
         "{}",
-        PdError::Grpc(GrpcError::RpcFailure(RpcStatus::new(
+        PdError::Grpc(GrpcError::RpcFailure(RpcStatus::with_message(
             RpcStatusCode::UNAVAILABLE,
-            Some("".to_string()),
+            "".to_string(),
         )))
     );
     assert_eq!(res, err);
@@ -165,9 +165,9 @@ fn test_connect_follower() {
     let res = format!("{}", client.alloc_id().unwrap_err());
     let err = format!(
         "{}",
-        PdError::Grpc(GrpcError::RpcFailure(RpcStatus::new(
+        PdError::Grpc(GrpcError::RpcFailure(RpcStatus::with_message(
             RpcStatusCode::UNAVAILABLE,
-            Some(leader_addr),
+            leader_addr,
         )))
     );
     assert_eq!(res, err);
@@ -207,10 +207,10 @@ fn test_get_tombstone_stores() {
     assert_eq!(s, all_stores);
 
     all_stores.push(store99.clone());
-    all_stores.sort_by(|a, b| a.get_id().cmp(&b.get_id()));
+    all_stores.sort_by_key(|a| a.get_id());
     // include tombstone, there should be 2 stores.
     let mut s = client.get_all_stores(false).unwrap();
-    s.sort_by(|a, b| a.get_id().cmp(&b.get_id()));
+    s.sort_by_key(|a| a.get_id());
     assert_eq!(s, all_stores);
 
     // Add another tombstone store.
@@ -219,9 +219,9 @@ fn test_get_tombstone_stores() {
     server.default_handler().add_store(store199.clone());
 
     all_stores.push(store199);
-    all_stores.sort_by(|a, b| a.get_id().cmp(&b.get_id()));
+    all_stores.sort_by_key(|a| a.get_id());
     let mut s = client.get_all_stores(false).unwrap();
-    s.sort_by(|a, b| a.get_id().cmp(&b.get_id()));
+    s.sort_by_key(|a| a.get_id());
     assert_eq!(s, all_stores);
 
     client.get_store(store_id).unwrap();

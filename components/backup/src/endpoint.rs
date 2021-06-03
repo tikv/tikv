@@ -12,7 +12,7 @@ use concurrency_manager::ConcurrencyManager;
 use configuration::Configuration;
 use engine_rocks::raw::DB;
 use engine_traits::{name_to_cf, CfName, SstCompressionType};
-use external_storage::*;
+use external_storage_export::{create_storage, ExternalStorage};
 use file_system::{IOType, WithIOType};
 use futures::channel::mpsc::*;
 use kvproto::backup::*;
@@ -435,7 +435,7 @@ impl ConfigManager {
 /// The endpoint of backup.
 ///
 /// It coordinates backup tasks and dispatches them to different workers.
-pub struct Endpoint<E: Engine, R: RegionInfoProvider> {
+pub struct Endpoint<E: Engine, R: RegionInfoProvider + Clone + 'static> {
     store_id: u64,
     pool: RefCell<ControlThreadPool>,
     pool_idle_threshold: u64,
@@ -619,7 +619,7 @@ impl ControlThreadPool {
     }
 }
 
-impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
+impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
     pub fn new(
         store_id: u64,
         engine: E,
@@ -684,7 +684,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
 
             let storage = LimitedStorage {
                 limiter: request.limiter,
-                storage: backend,
+                storage: Arc::new(backend),
             };
 
             loop {
@@ -837,7 +837,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
     }
 }
 
-impl<E: Engine, R: RegionInfoProvider> Runnable for Endpoint<E, R> {
+impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Runnable for Endpoint<E, R> {
     type Task = Task;
 
     fn run(&mut self, task: Task) {
@@ -851,7 +851,7 @@ impl<E: Engine, R: RegionInfoProvider> Runnable for Endpoint<E, R> {
     }
 }
 
-impl<E: Engine, R: RegionInfoProvider> RunnableWithTimer for Endpoint<E, R> {
+impl<E: Engine, R: RegionInfoProvider + Clone + 'static> RunnableWithTimer for Endpoint<E, R> {
     fn on_timeout(&mut self) {
         let pool_idle_duration = Duration::from_millis(self.pool_idle_threshold);
         self.pool.borrow_mut().check_active(pool_idle_duration);
@@ -945,8 +945,8 @@ pub mod tests {
     use std::{fs, thread};
 
     use engine_traits::MiscExt;
-    use external_storage::{make_local_backend, make_noop_backend};
-    use file_system::{IOOp, WithIORateLimit};
+    use external_storage_export::{make_local_backend, make_noop_backend};
+    use file_system::{IOOp, IORateLimiter};
     use futures::executor::block_on;
     use futures::stream::StreamExt;
     use kvproto::metapb;
@@ -1012,6 +1012,12 @@ pub mod tests {
     }
 
     pub fn new_endpoint() -> (TempDir, Endpoint<RocksEngine, MockRegionInfoProvider>) {
+        new_endpoint_with_limiter(None)
+    }
+
+    pub fn new_endpoint_with_limiter(
+        limiter: Option<Arc<IORateLimiter>>,
+    ) -> (TempDir, Endpoint<RocksEngine, MockRegionInfoProvider>) {
         let temp = TempDir::new().unwrap();
         let rocks = TestEngineBuilder::new()
             .path(temp.path())
@@ -1020,6 +1026,7 @@ pub mod tests {
                 engine_traits::CF_LOCK,
                 engine_traits::CF_WRITE,
             ])
+            .io_rate_limiter(limiter)
             .build()
             .unwrap();
         let concurrency_manager = ConcurrencyManager::new(1.into());
@@ -1161,7 +1168,7 @@ pub mod tests {
         let test_handle_backup_task_range =
             |start_key: &[u8], end_key: &[u8], expect: Vec<(&[u8], &[u8])>| {
                 let tmp = TempDir::new().unwrap();
-                let backend = external_storage::make_local_backend(tmp.path());
+                let backend = make_local_backend(tmp.path());
                 let (tx, rx) = unbounded();
                 let task = Task {
                     request: Request {
@@ -1233,8 +1240,9 @@ pub mod tests {
 
     #[test]
     fn test_handle_backup_task() {
-        let (_guard, stats) = WithIORateLimit::new(0);
-        let (tmp, endpoint) = new_endpoint();
+        let limiter = Arc::new(IORateLimiter::new(0, true /*enable_statistics*/));
+        let stats = limiter.statistics().unwrap();
+        let (tmp, endpoint) = new_endpoint_with_limiter(Some(limiter));
         let engine = endpoint.engine.clone();
 
         endpoint
@@ -1500,10 +1508,10 @@ pub mod tests {
         assert!(endpoint.pool.borrow().size == 3);
     }
 
-    pub struct EndpointWrapper<E: Engine, R: RegionInfoProvider> {
+    pub struct EndpointWrapper<E: Engine, R: RegionInfoProvider + Clone + 'static> {
         inner: Arc<Mutex<Endpoint<E, R>>>,
     }
-    impl<E: Engine, R: RegionInfoProvider> Runnable for EndpointWrapper<E, R> {
+    impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Runnable for EndpointWrapper<E, R> {
         type Task = Task;
 
         fn run(&mut self, task: Task) {
@@ -1511,7 +1519,9 @@ pub mod tests {
         }
     }
 
-    impl<E: Engine, R: RegionInfoProvider> RunnableWithTimer for EndpointWrapper<E, R> {
+    impl<E: Engine, R: RegionInfoProvider + Clone + 'static> RunnableWithTimer
+        for EndpointWrapper<E, R>
+    {
         fn on_timeout(&mut self) {
             self.inner.lock().unwrap().on_timeout();
         }
@@ -1523,7 +1533,7 @@ pub mod tests {
 
     #[test]
     fn test_thread_pool_shutdown_when_idle() {
-        let (_, mut endpoint) = new_endpoint();
+        let (_tmp, mut endpoint) = new_endpoint();
 
         // set the idle threshold to 100ms
         endpoint.pool_idle_threshold = 100;

@@ -21,8 +21,8 @@ fail = "0.4"
 
 # FIXME: switch to the crates.io version after crossbeam-skiplist is released
 [dependencies.crossbeam-skiplist]
-git = "https://github.com/sticnarf/crossbeam.git"
-rev = "a58551085ce0cfbb07f28c6c0a3071c2d7d4c878"
+git = "https://github.com/tikv/crossbeam.git"
+branch = "tikv-5.0"
 package = "crossbeam-skiplist" 
 
 [dev-dependencies]

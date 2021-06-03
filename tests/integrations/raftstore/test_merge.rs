@@ -150,11 +150,12 @@ fn test_node_merge_with_slow_learner() {
     let resp = cluster
         .call_command_on_leader(req, Duration::from_secs(3))
         .unwrap();
-    assert!(resp
-        .get_header()
-        .get_error()
-        .get_message()
-        .contains("log gap"));
+    assert!(
+        resp.get_header()
+            .get_error()
+            .get_message()
+            .contains("log gap")
+    );
 
     cluster.clear_send_filters();
     cluster.must_put(b"k11", b"v100");
@@ -849,7 +850,7 @@ fn test_request_snapshot_after_propose_merge() {
     let leader = cluster.leader_of_region(region.get_id()).unwrap();
     let followers: Vec<_> = region
         .get_peers()
-        .into_iter()
+        .iter()
         .filter(|p| p.id != leader.id)
         .collect();
 

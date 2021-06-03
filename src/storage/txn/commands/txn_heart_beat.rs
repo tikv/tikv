@@ -158,18 +158,20 @@ pub mod tests {
             start_ts,
             advise_ttl,
         };
-        assert!(command
-            .process_write(
-                snapshot,
-                WriteContext {
-                    lock_mgr: &DummyLockManager,
-                    concurrency_manager: cm,
-                    extra_op: Default::default(),
-                    statistics: &mut Default::default(),
-                    async_apply_prewrite: false,
-                },
-            )
-            .is_err());
+        assert!(
+            command
+                .process_write(
+                    snapshot,
+                    WriteContext {
+                        lock_mgr: &DummyLockManager,
+                        concurrency_manager: cm,
+                        extra_op: Default::default(),
+                        statistics: &mut Default::default(),
+                        async_apply_prewrite: false,
+                    },
+                )
+                .is_err()
+        );
     }
 
     #[test]

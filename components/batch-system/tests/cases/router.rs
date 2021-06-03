@@ -10,7 +10,7 @@ use tikv_util::mpsc;
 
 fn counter_closure(counter: &Arc<AtomicUsize>) -> Message {
     let c = counter.clone();
-    Message::Callback(Box::new(move |_: &mut Runner, _: &HandleMetrics| {
+    Message::Callback(Box::new(move |_: &Handler, _: &mut Runner| {
         c.fetch_add(1, Ordering::SeqCst);
     }))
 }
@@ -20,7 +20,7 @@ fn noop() -> Message {
 }
 
 fn unreachable() -> Message {
-    Message::Callback(Box::new(|_, _| unreachable!()))
+    Message::Callback(Box::new(|_: &Handler, _: &mut Runner| unreachable!()))
 }
 
 #[test]
@@ -49,11 +49,11 @@ fn test_basic() {
     // Control mailbox should be connected.
     router
         .send_control(Message::Callback(Box::new(
-            move |_: &mut Runner, _: &HandleMetrics| {
+            move |_: &Handler, _: &mut Runner, _: &HandleMetrics| {
                 let (sender, mut runner) = Runner::new(10);
                 let (tx1, rx1) = mpsc::unbounded();
                 runner.sender = Some(tx1);
-                let mailbox = BasicMailbox::new(sender, runner);
+                let mailbox = BasicMailbox::new(sender, runner, Arc::default());
                 router_.register(1, mailbox);
                 tx.send(rx1).unwrap();
             },
@@ -70,12 +70,12 @@ fn test_basic() {
     router
         .send(
             1,
-            Message::Callback(Box::new(move |_: &mut Runner, _: &HandleMetrics| {
+            Message::Callback(Box::new(move |_: &Handler, _: &mut Runner, _: &HandleMetrics| {
                 rx.recv_timeout(Duration::from_secs(100)).unwrap();
             })),
         )
         .unwrap();
-    let counter = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::default();
     let sent_cnt = (0..)
         .take_while(|_| router.send(1, counter_closure(&counter)).is_ok())
         .count();
@@ -91,7 +91,7 @@ fn test_basic() {
     router
         .force_send(
             1,
-            Message::Callback(Box::new(move |_: &mut Runner, _: &HandleMetrics| {
+            Message::Callback(Box::new(move |_: &Handler, _: &mut Runner, _: &HandleMetrics| {
                 tx.send(1).unwrap();
             })),
         )
@@ -123,4 +123,44 @@ fn test_basic() {
         control_drop_rx.recv_timeout(Duration::from_secs(3)),
         Err(RecvTimeoutError::Disconnected)
     );
+}
+
+#[test]
+fn test_router_trace() {
+    let (control_tx, control_fsm) = Runner::new(10);
+    let (router, mut system) =
+        batch_system::create_system(&Config::default(), control_tx, control_fsm);
+    let builder = Builder::new();
+    system.spawn("test".to_owned(), builder);
+
+    let register_runner = |addr| {
+        let (sender, runner) = Runner::new(10);
+        let mailbox = BasicMailbox::new(sender, runner, router.state_cnt().clone());
+        router.register(addr, mailbox);
+    };
+    let close_runner = |addr| {
+        router.close(addr);
+    };
+
+    let router_clone = router.clone();
+    for i in 0..10 {
+        register_runner(i);
+        // Read mailbox to cache.
+        router_clone.mailbox(i).unwrap();
+    }
+    assert_eq!(router.alive_cnt().load(Ordering::Relaxed), 10);
+    assert_eq!(router.state_cnt().load(Ordering::Relaxed), 11);
+    // Routers closed but exist in the cache.
+    for i in 0..10 {
+        close_runner(i);
+    }
+    assert_eq!(router.alive_cnt().load(Ordering::Relaxed), 0);
+    assert_eq!(router.state_cnt().load(Ordering::Relaxed), 11);
+    for i in 0..1024 {
+        register_runner(i);
+        // Read mailbox to cache, closed routers should be evicted.
+        router_clone.mailbox(i).unwrap();
+    }
+    assert_eq!(router.alive_cnt().load(Ordering::Relaxed), 1024);
+    assert_eq!(router.state_cnt().load(Ordering::Relaxed), 1025);
 }

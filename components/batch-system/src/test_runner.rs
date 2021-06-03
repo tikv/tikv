@@ -3,6 +3,7 @@
 //! A sample Handler for test and micro-benchmark purpose.
 
 use crate::*;
+use derive_more::{Add, AddAssign};
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
 use tikv_util::mpsc;
@@ -14,7 +15,7 @@ pub enum Message {
     /// `Runner` will cost little time for the given messages.
     HeartBeat,
     /// `Runner` will call the callback directly.
-    Callback(Box<dyn FnOnce(&mut Runner, &HandleMetrics) + Send + 'static>),
+    Callback(Box<dyn FnOnce(&Handler, &mut Runner) + Send + 'static>),
 }
 
 /// A simple runner used for benchmarking only.
@@ -26,6 +27,7 @@ pub struct Runner {
     /// Result of the calculation triggered by `Message::Loop`.
     /// Stores it inside `Runner` to avoid accidental optimization.
     res: usize,
+    priority: Priority,
 }
 
 impl Fsm for Runner {
@@ -42,6 +44,10 @@ impl Fsm for Runner {
     fn take_mailbox(&mut self) -> Option<BasicMailbox<Self>> {
         self.mailbox.take()
     }
+
+    fn get_priority(&self) -> Priority {
+        self.priority
+    }
 }
 
 impl Runner {
@@ -53,8 +59,13 @@ impl Runner {
             mailbox: None,
             sender: None,
             res: 0,
+            priority: Priority::Normal,
         });
         (tx, fsm)
+    }
+
+    pub fn set_priority(&mut self, priority: Priority) {
+        self.priority = priority
     }
 }
 
@@ -69,6 +80,7 @@ pub struct HandleMetrics {
 pub struct Handler {
     local: HandleMetrics,
     metrics: Arc<Mutex<HandleMetrics>>,
+    priority: Priority,
 }
 
 impl Handler {
@@ -83,12 +95,15 @@ impl Handler {
                     }
                     self.local.processed_count += 1;
                 }
-                Ok(Message::HeartBeat) => {}
-                Ok(Message::Callback(cb)) => cb(r, &self.local),
+                Ok(Message::Callback(cb)) => cb(self, r),
                 Err(_) => break,
             }
         }
         Some(0)
+    }
+
+    pub fn get_priority(&self) -> Priority {
+        self.priority
     }
 }
 
@@ -133,10 +148,11 @@ impl Builder {
 impl HandlerBuilder<Runner, Runner> for Builder {
     type Handler = Handler;
 
-    fn build(&mut self) -> Handler {
+    fn build(&mut self, priority: Priority) -> Handler {
         Handler {
             local: HandleMetrics::default(),
             metrics: self.metrics.clone(),
+            priority,
         }
     }
 }

@@ -5,7 +5,9 @@ use crate::storage::kv::{Result, RocksEngine};
 use engine_rocks::raw::ColumnFamilyOptions;
 use engine_rocks::raw_util::CFOptions;
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use file_system::IORateLimiter;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 // Duplicated from rocksdb_engine
 const TEMP_DIR: &str = "";
@@ -17,6 +19,7 @@ const TEMP_DIR: &str = "";
 pub struct TestEngineBuilder {
     path: Option<PathBuf>,
     cfs: Option<Vec<CfName>>,
+    io_rate_limiter: Option<Arc<IORateLimiter>>,
     enable_ttl: bool,
 }
 
@@ -25,6 +28,7 @@ impl TestEngineBuilder {
         Self {
             path: None,
             cfs: None,
+            io_rate_limiter: None,
             enable_ttl: false,
         }
     }
@@ -47,6 +51,11 @@ impl TestEngineBuilder {
 
     pub fn ttl(mut self, b: bool) -> Self {
         self.enable_ttl = b;
+        self
+    }
+
+    pub fn io_rate_limiter(mut self, limiter: Option<Arc<IORateLimiter>>) -> Self {
+        self.io_rate_limiter = limiter;
         self
     }
 
@@ -77,7 +86,13 @@ impl TestEngineBuilder {
                 _ => CFOptions::new(*cf, ColumnFamilyOptions::new()),
             })
             .collect();
-        RocksEngine::new(&path, &cfs, Some(cfs_opts), cache.is_some())
+        RocksEngine::new(
+            &path,
+            &cfs,
+            Some(cfs_opts),
+            cache.is_some(),
+            self.io_rate_limiter,
+        )
     }
 }
 
@@ -171,10 +186,11 @@ mod tests {
         let mut statistics = CfStatistics::default();
         let res = iter.seek(&Key::from_raw(b"foo"), &mut statistics);
         assert!(res.is_err());
-        assert!(res
-            .unwrap_err()
-            .to_string()
-            .contains("Result incomplete: Too many internal keys skipped"));
+        assert!(
+            res.unwrap_err()
+                .to_string()
+                .contains("Result incomplete: Too many internal keys skipped")
+        );
     }
 
     fn test_perf_statistics<E: Engine>(engine: &E) {

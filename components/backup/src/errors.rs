@@ -7,6 +7,7 @@ use engine_traits::Error as EngineTraitError;
 use kvproto::backup::Error as ErrorPb;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 use kvproto::kvrpcpb::KeyError;
+use thiserror::Error;
 use tikv::storage::kv::{Error as EngineError, ErrorInner as EngineErrorInner};
 use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
@@ -94,7 +95,7 @@ impl From<Error> for ErrorPb {
 }
 
 /// The error type for backup.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Error)]
 pub enum Error {
     #[error("Other error {0}")]
     Other(#[from] Box<dyn error::Error + Sync + Send>),

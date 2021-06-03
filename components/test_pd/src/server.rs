@@ -130,17 +130,15 @@ fn hijack_unary<F, R, C: PdMocker>(
                 .unwrap_or_else(|e| error!("failed to reply: {:?}", e)),
         ),
         Some(Err(err)) => {
-            let status = RpcStatus::new(RpcStatusCode::UNKNOWN, Some(format!("{:?}", err)));
+            let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", err));
             ctx.spawn(
                 sink.fail(status)
                     .unwrap_or_else(|e| error!("failed to reply: {:?}", e)),
             );
         }
         None => {
-            let mut status = RpcStatus::new(
-                RpcStatusCode::UNIMPLEMENTED,
-                Some("Unimplemented".to_owned()),
-            );
+            let mut status =
+                RpcStatus::with_message(RpcStatusCode::UNIMPLEMENTED, "Unimplemented".to_owned());
             #[allow(clippy::redundant_closure_call)]
             (|| {
                 fail_point!("connect_leader", |_| {
@@ -151,7 +149,7 @@ fn hijack_unary<F, R, C: PdMocker>(
                     } else {
                         ""
                     };
-                    status = RpcStatus::new(RpcStatusCode::UNAVAILABLE, Some(v.to_string()));
+                    status = RpcStatus::with_message(RpcStatusCode::UNAVAILABLE, v.to_string());
                 })
             })();
             ctx.spawn(
@@ -456,7 +454,7 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
         _: kvproto::pdpb::SplitRegionsRequest,
         _: grpcio::UnarySink<kvproto::pdpb::SplitRegionsResponse>,
     ) {
-        todo!()
+        unimplemented!()
     }
 
     fn get_dc_location_info(
@@ -465,6 +463,6 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
         _: kvproto::pdpb::GetDcLocationInfoRequest,
         _: grpcio::UnarySink<kvproto::pdpb::GetDcLocationInfoResponse>,
     ) {
-        todo!()
+        unimplemented!()
     }
 }

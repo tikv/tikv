@@ -307,7 +307,7 @@ pub fn add_datetime_and_duration(
                     "DATETIME",
                     format!("({} + {})", datetime, duration),
                 ))
-                .map(|_| Ok(None))?
+                .map(|_| Ok(None))?;
         }
     };
     if res.set_time_type(TimeType::DateTime).is_err() {
@@ -386,7 +386,7 @@ pub fn sub_duration_and_duration(
                     "Duration",
                     format!("({} - {})", duration1, duration2),
                 ))
-                .map(|_| Ok(None))?
+                .map(|_| Ok(None))?;
         }
     };
     Ok(Some(result))
@@ -407,7 +407,7 @@ pub fn sub_datetime_and_duration(
                     "DATETIME",
                     format!("({} - {})", datetime, duration),
                 ))
-                .map(|_| Ok(None))?
+                .map(|_| Ok(None))?;
         }
     };
     if res.set_time_type(TimeType::DateTime).is_err() {
@@ -700,7 +700,7 @@ pub fn add_duration_and_duration(
                     "DURATION",
                     format!("({} + {})", duration1, duration2),
                 ))
-                .map(|_| Ok(None))?
+                .map(|_| Ok(None))?;
         }
         Some(res) => res,
     };
@@ -1256,10 +1256,7 @@ mod tests {
 
         let mut ctx = EvalContext::default();
         for (arg, exp) in cases {
-            let time = match arg {
-                Some(arg) => Some(Time::parse_datetime(&mut ctx, arg, 6, true).unwrap()),
-                None => None,
-            };
+            let time = arg.map(|arg| Time::parse_datetime(&mut ctx, arg, 6, true).unwrap());
             let output = RpnFnScalarEvaluator::new()
                 .push_param(time)
                 .evaluate(ScalarFuncSig::ToDays)

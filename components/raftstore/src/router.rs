@@ -2,13 +2,13 @@
 
 use std::cell::RefCell;
 
-use crossbeam::{SendError, TrySendError};
+use crossbeam::channel::{SendError, TrySendError};
 use engine_traits::{KvEngine, RaftEngine, Snapshot};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::SnapshotStatus;
-use tikv_util::error;
 use tikv_util::time::ThreadReadId;
+use tikv_util::{deadline::Deadline, error};
 
 use crate::store::fsm::RaftRouter;
 use crate::store::transport::{CasualRouter, ProposalRouter, StoreRouter};
@@ -48,10 +48,16 @@ where
 
     /// Sends RaftCmdRequest to local store.
     fn send_command(&self, req: RaftCmdRequest, cb: Callback<EK::Snapshot>) -> RaftStoreResult<()> {
-        let region_id = req.get_header().get_region_id();
-        let cmd = RaftCommand::new(req, cb);
-        <Self as ProposalRouter<EK::Snapshot>>::send(self, cmd)
-            .map_err(|e| handle_send_error(region_id, e))
+        send_command_impl::<EK, _>(self, req, cb, None)
+    }
+
+    fn send_command_with_deadline(
+        &self,
+        req: RaftCmdRequest,
+        cb: Callback<EK::Snapshot>,
+        deadline: Deadline,
+    ) -> RaftStoreResult<()> {
+        send_command_impl::<EK, _>(self, req, cb, Some(deadline))
     }
 
     /// Reports the peer being unreachable to the Region.
@@ -89,6 +95,24 @@ where
             PeerMsg::SignificantMsg(SignificantMsg::StoreResolved { store_id, group_id })
         })
     }
+}
+
+fn send_command_impl<EK, PR>(
+    router: &PR,
+    req: RaftCmdRequest,
+    cb: Callback<EK::Snapshot>,
+    deadline: Option<Deadline>,
+) -> RaftStoreResult<()>
+where
+    EK: KvEngine,
+    PR: ProposalRouter<EK::Snapshot>,
+{
+    let region_id = req.get_header().get_region_id();
+    let mut cmd = RaftCommand::new(req, cb);
+    cmd.deadline = deadline;
+    router
+        .send(cmd)
+        .map_err(|e| handle_send_error(region_id, e))
 }
 
 pub trait LocalReadRouter<EK>: Send + Clone

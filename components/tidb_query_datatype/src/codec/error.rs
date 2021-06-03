@@ -224,7 +224,7 @@ impl ErrorCodeExt for Error {
             Error::ColumnOffset(_) => error_code::coprocessor::COLUMN_OFFSET,
             Error::UnknownSignature(_) => error_code::coprocessor::UNKNOWN_SIGNATURE,
             Error::CorruptedData(_) => error_code::coprocessor::CORRUPTED_DATA,
-            Error::Eval(_, _) => error_code::coprocessor::EVAL,
+            Error::Eval(..) => error_code::coprocessor::EVAL,
             Error::Other(_) => error_code::UNKNOWN,
         }
     }
