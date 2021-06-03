@@ -1471,10 +1471,12 @@ dependencies = [
  "prometheus",
  "prometheus-static-metric",
  "rand 0.7.3",
+ "serde",
  "strum",
  "tempfile",
  "tikv_alloc",
  "tikv_util",
+ "tokio",
 ]
 
 [[package]]
@@ -3942,6 +3944,7 @@ version = "0.0.1"
 dependencies = [
  "collections",
  "concurrency_manager",
+ "configuration",
  "crossbeam",
  "engine_rocks",
  "engine_traits",
@@ -4009,7 +4012,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#46b7a1da47e626ae35158a51a3c90babafbd8ff2"
+source = "git+https://github.com/tikv/rust-rocksdb.git#41d7180df72cf5aae97fbae9a18aec52ad29dfcc"
 dependencies = [
  "libc 0.2.86",
  "librocksdb_sys",

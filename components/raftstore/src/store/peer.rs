@@ -622,7 +622,7 @@ where
             last_proposed_prepare_merge_idx: 0,
             last_committed_prepare_merge_idx: 0,
             leader_missing_time: Some(Instant::now()),
-            tag,
+            tag: tag.clone(),
             last_applying_idx: applied_index,
             last_compacted_idx: 0,
             last_urgent_proposal_idx: u64::MAX,
@@ -650,6 +650,7 @@ where
             read_progress: Arc::new(RegionReadProgress::new(
                 applied_index,
                 REGION_READ_PROGRESS_CAP,
+                tag,
             )),
             unpersisted_readies: VecDeque::default(),
             unpersisted_message_count: 0,
@@ -1591,6 +1592,8 @@ where
                     // region writes new values.
                     // To prevent unsafe local read, we suspect its leader lease.
                     self.leader_lease.suspect(monotonic_raw_now());
+                    // Stop updating `safe_ts`
+                    self.read_progress.discard();
                 }
             }
         }
@@ -2027,8 +2030,8 @@ where
                 // Snapshot will be scheduled after persisting this ready
                 self.raft_group.advance_append_async(ready);
 
-                // Stop `read_progress` to prevent serving stale read while applying snapshot
-                self.read_progress.stop();
+                // Pause `read_progress` to prevent serving stale read while applying snapshot
+                self.read_progress.pause();
             }
             HandleReadyResult::NoIOTask { msgs } => {
                 if let Some(last) = self.unpersisted_readies.back_mut() {
