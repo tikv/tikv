@@ -50,7 +50,7 @@ impl<E: KvEngine> CmdObserver<E> for Observer<E> {
         cmd_batches: &mut Vec<CmdBatch>,
         _: &E,
     ) {
-        if max_level < ObserveLevel::LockRelated {
+        if max_level == ObserveLevel::None {
             return;
         }
         let cmd_batches: Vec<_> = std::mem::take(cmd_batches)
