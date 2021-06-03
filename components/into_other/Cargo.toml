@@ -19,5 +19,5 @@ prost-codec = [
 
 [dependencies]
 engine_traits = { path = "../engine_traits", default-features = false }
-kvproto = { rev = "f42e582bf0bb6bc2aee647e5f4126d51ccf6d377", git = "https://github.com/pingcap/kvproto.git", default-features = false }
+kvproto = { rev = "7a046020d1c091638e1e8aba623c8c1e8962219d", git = "https://github.com/pingcap/kvproto.git", default-features = false }
 raft = { version = "0.6.0-alpha", default-features = false }
