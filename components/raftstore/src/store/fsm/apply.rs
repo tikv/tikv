@@ -53,6 +53,7 @@ use tikv_util::{Either, MustConsumeVec};
 use time::Timespec;
 use uuid::Builder as UuidBuilder;
 
+use super::batch_strategy::BatchStrategy;
 use crate::coprocessor::{Cmd, CoprocessorHost, ObserveHandle};
 use crate::store::fsm::RaftPollerBuilder;
 use crate::store::memory::*;
@@ -74,6 +75,8 @@ use super::metrics::*;
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
+const DEFAULT_BATCH_SIZE: usize = 256;
+const MAX_BATCH_SIZE: usize = 256 * 64;
 
 pub struct PendingCmd<S>
 where
@@ -390,6 +393,9 @@ where
     priority: Priority,
     /// Whether to yield high-latency operation to low-priority handler.
     yield_high_latency_operation: bool,
+
+    batch_strategy: BatchStrategy,
+    last_process_wait_time: f64,
 }
 
 impl<EK, W> ApplyContext<EK, W>
@@ -412,7 +418,8 @@ where
     ) -> ApplyContext<EK, W> {
         // If `enable_multi_batch_write` was set true, we create `RocksWriteBatchVec`.
         // Otherwise create `RocksWriteBatch`.
-        let kv_wb = W::with_capacity(&engine, DEFAULT_APPLY_WB_SIZE);
+        let kv_wb = W::with_capacity(&engine, DEFAULT_BATCH_SIZE, DEFAULT_APPLY_WB_SIZE);
+        let batch_strategy = BatchStrategy::new(DEFAULT_BATCH_SIZE, MAX_BATCH_SIZE);
 
         ApplyContext {
             tag,
@@ -440,6 +447,8 @@ where
             pending_create_peers,
             priority,
             yield_high_latency_operation: cfg.apply_batch_system.low_priority_pool_size > 0,
+            batch_strategy,
+            last_process_wait_time: 0.0,
         }
     }
 
@@ -498,7 +507,11 @@ where
             if data_size > APPLY_WB_SHRINK_SIZE {
                 // Control the memory usage for the WriteBatch. Whether it's `RocksWriteBatch` or
                 // `RocksWriteBatchVec` depends on the `enable_multi_batch_write` configuration.
-                self.kv_wb = W::with_capacity(&self.engine, DEFAULT_APPLY_WB_SIZE);
+                self.kv_wb = W::with_capacity(
+                    &self.engine,
+                    self.batch_strategy.get_batch_size(),
+                    DEFAULT_APPLY_WB_SIZE,
+                );
             } else {
                 // Clear data, reuse the WriteBatch, this can reduce memory allocations and deallocations.
                 self.kv_wb_mut().clear();
@@ -590,7 +603,6 @@ where
             self.tag,
             self.committed_count
         );
-        self.committed_count = 0;
         is_synced
     }
 }
@@ -3491,7 +3503,8 @@ where
         loop {
             match drainer.next() {
                 Some(Msg::Apply { start, apply }) => {
-                    APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(start.elapsed_secs());
+                    let t = start.elapsed_secs();
+                    apply_ctx.last_process_wait_time = t;
                     // If there is any apply task, we change this fsm to normal-priority.
                     // When it meets a ingest-request or a delete-range request, it will change to
                     // low-priority.
@@ -3620,7 +3633,14 @@ where
                 _ => {}
             }
         }
+        self.apply_ctx.committed_count = 0;
+        let max_batch_size = self.apply_ctx.batch_strategy.get_batch_size();
         self.apply_ctx.perf_context.start_observe();
+        self.apply_ctx.kv_wb = W::with_capacity(
+            &self.apply_ctx.engine,
+            max_batch_size,
+            DEFAULT_APPLY_WB_SIZE,
+        );
     }
 
     /// There is no control fsm in apply poller.
@@ -3698,14 +3718,20 @@ where
         if let Some(e) = self.trace_event.take() {
             MEMTRACE_APPLYS.trace(e);
         }
+
+        APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(self.apply_ctx.last_process_wait_time);
+        self.apply_ctx.batch_strategy.optimize_current_batch_limit(
+            self.apply_ctx.committed_count,
+            self.apply_ctx.last_process_wait_time,
+        )
     }
 
     fn get_priority(&self) -> Priority {
         self.apply_ctx.priority
     }
 
-    fn processed_messages(&self) -> usize {
-        self.apply_ctx.committed_count
+    fn reach_process_limit(&self) -> bool {
+        self.apply_ctx.committed_count > self.apply_ctx.batch_strategy.get_batch_size()
     }
 }
 

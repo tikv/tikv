@@ -95,17 +95,17 @@ impl RaftEngine for RaftLogEngine {
     }
 
     fn sync(&self) -> Result<()> {
-        box_try!(self.inner.sync());
+        box_try!(self.0.sync());
         Ok(())
     }
 
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {
-        let state = box_try!(self.inner.get_msg(raft_group_id, RAFT_LOG_STATE_KEY));
+        let state = box_try!(self.0.get_msg(raft_group_id, RAFT_LOG_STATE_KEY));
         Ok(state)
     }
 
     fn get_entry(&self, raft_group_id: u64, index: u64) -> Result<Option<Entry>> {
-        self.inner
+        self.0
             .get_entry(raft_group_id, index)
             .map_err(transfer_error)
     }
@@ -118,13 +118,13 @@ impl RaftEngine for RaftLogEngine {
         max_size: Option<usize>,
         to: &mut Vec<Entry>,
     ) -> Result<usize> {
-        self.inner
+        self.0
             .fetch_entries_to(raft_group_id, begin, end, max_size, to)
             .map_err(transfer_error)
     }
 
     fn consume(&self, batch: &mut Self::LogBatch, sync: bool) -> Result<usize> {
-        let ret = box_try!(self.inner.write(&mut batch.inner, sync));
+        let ret = box_try!(self.0.write(&mut batch.inner, sync));
         Ok(ret)
     }
 
@@ -135,7 +135,7 @@ impl RaftEngine for RaftLogEngine {
         _: usize,
         _: usize,
     ) -> Result<usize> {
-        let ret = box_try!(self.inner.write(&mut batch.inner, sync));
+        let ret = box_try!(self.0.write(&mut batch.inner, sync));
         Ok(ret)
     }
 
@@ -152,21 +152,21 @@ impl RaftEngine for RaftLogEngine {
     fn append(&self, raft_group_id: u64, entries: Vec<Entry>) -> Result<usize> {
         let mut batch = Self::LogBatch::default();
         batch.inner.add_entries(raft_group_id, entries);
-        let ret = box_try!(self.inner.write(&mut batch.inner, false));
+        let ret = box_try!(self.0.write(&mut batch.inner, false));
         Ok(ret)
     }
 
     fn put_raft_state(&self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
-        box_try!(self.inner.put_msg(raft_group_id, RAFT_LOG_STATE_KEY, state));
+        box_try!(self.0.put_msg(raft_group_id, RAFT_LOG_STATE_KEY, state));
         Ok(())
     }
 
     fn gc(&self, raft_group_id: u64, _from: u64, to: u64) -> Result<usize> {
-        Ok(self.inner.compact_to(raft_group_id, to) as usize)
+        Ok(self.0.compact_to(raft_group_id, to) as usize)
     }
 
     fn purge_expired_files(&self) -> Result<Vec<u64>> {
-        let ret = box_try!(self.inner.purge_expired_files());
+        let ret = box_try!(self.0.purge_expired_files());
         Ok(ret)
     }
 
@@ -175,11 +175,11 @@ impl RaftEngine for RaftLogEngine {
     }
 
     fn gc_entry_cache(&self, raft_group_id: u64, to: u64) {
-        self.inner.compact_cache_to(raft_group_id, to)
+        self.0.compact_cache_to(raft_group_id, to)
     }
     /// Flush current cache stats.
     fn flush_stats(&self) -> Option<CacheStats> {
-        let stat = self.inner.flush_cache_stats();
+        let stat = self.0.flush_cache_stats();
         Some(engine_traits::CacheStats {
             hit: stat.hit,
             miss: stat.miss,
@@ -188,7 +188,7 @@ impl RaftEngine for RaftLogEngine {
     }
 
     fn stop(&self) {
-        self.inner.stop();
+        self.0.stop();
     }
 
     fn dump_stats(&self) -> Result<String> {

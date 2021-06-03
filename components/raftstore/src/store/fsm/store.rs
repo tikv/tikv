@@ -50,6 +50,7 @@ use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
 use crate::coprocessor::split_observer::SplitObserver;
 use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
 use crate::store::config::Config;
+use crate::store::fsm::batch_strategy::BatchStrategy;
 use crate::store::fsm::metrics::*;
 use crate::store::fsm::peer::{
     maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair,
@@ -85,6 +86,10 @@ type Key = Vec<u8>;
 
 const KV_WB_SHRINK_SIZE: usize = 256 * 1024;
 const RAFT_WB_SHRINK_SIZE: usize = 1024 * 1024;
+
+const MIN_LOG_BATCH_SIZE: usize = 256 * 1024; // 256KB
+const MAX_LOG_BATCH_SIZE: usize = 16 * 1024 * 1024; // 16MB
+
 pub const PENDING_MSG_CAP: usize = 100;
 const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
 
@@ -386,6 +391,8 @@ where
     pub perf_context: EK::PerfContext,
     pub tick_batch: Vec<PeerTickBatch>,
     pub node_start_time: Option<TiInstant>,
+    pub batch_strategy: BatchStrategy,
+    pub last_process_wait_time: f64,
 }
 
 impl<EK, ER, T> HandleRaftReadyContext<EK::WriteBatch, ER::LogBatch> for PollContext<EK, ER, T>
@@ -891,6 +898,11 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
 
     fn end(&mut self, peers: &mut [Box<PeerFsm<EK, ER>>]) {
         self.flush_ticks();
+        // we must refresh process wait time before flush raft writebatch.
+        self.poll_ctx.batch_strategy.optimize_current_batch_limit(
+            self.poll_ctx.raft_wb.size(),
+            self.poll_ctx.last_process_wait_time,
+        );
         if self.poll_ctx.has_ready {
             self.handle_raft_ready(peers);
         }
@@ -903,9 +915,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         self.poll_ctx.store_stat.flush();
     }
 
-    fn processed_messages(&self) -> usize {
-        // Transfer unit from B to KB
-        self.poll_ctx.raft_wb.size() / 1024
+    fn reach_process_limit(&self) -> bool {
+        self.poll_ctx.raft_wb.size() > self.poll_ctx.batch_strategy.get_batch_size()
     }
 
     fn pause(&mut self) {
@@ -1153,6 +1164,8 @@ where
             tick_batch: vec![PeerTickBatch::default(); 256],
             node_start_time: Some(TiInstant::now_coarse()),
             feature_gate: self.feature_gate.clone(),
+            batch_strategy: BatchStrategy::new(MIN_LOG_BATCH_SIZE, MAX_LOG_BATCH_SIZE),
+            last_process_wait_time: 0.0,
         };
         ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());

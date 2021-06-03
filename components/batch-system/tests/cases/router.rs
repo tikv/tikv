@@ -70,9 +70,11 @@ fn test_basic() {
     router
         .send(
             1,
-            Message::Callback(Box::new(move |_: &Handler, _: &mut Runner, _: &HandleMetrics| {
-                rx.recv_timeout(Duration::from_secs(100)).unwrap();
-            })),
+            Message::Callback(Box::new(
+                move |_: &Handler, _: &mut Runner, _: &HandleMetrics| {
+                    rx.recv_timeout(Duration::from_secs(100)).unwrap();
+                },
+            )),
         )
         .unwrap();
     let counter = Arc::default();
@@ -91,9 +93,11 @@ fn test_basic() {
     router
         .force_send(
             1,
-            Message::Callback(Box::new(move |_: &Handler, _: &mut Runner, _: &HandleMetrics| {
-                tx.send(1).unwrap();
-            })),
+            Message::Callback(Box::new(
+                move |_: &Handler, _: &mut Runner, _: &HandleMetrics| {
+                    tx.send(1).unwrap();
+                },
+            )),
         )
         .unwrap();
     rx.recv_timeout(Duration::from_secs(100)).unwrap();

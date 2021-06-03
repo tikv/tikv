@@ -239,7 +239,7 @@ pub trait PollHandler<N, C> {
 
     /// The messages which will be persisted in disk or written to engine. We shall control
     /// the batch size of it to make batch-system balance.
-    fn processed_messages(&self) -> usize;
+    fn reach_process_limit(&self) -> bool;
 
     /// This function is called when batch system is going to sleep.
     fn pause(&mut self) {}
@@ -293,7 +293,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         // from becoming hungry if some regions are hot points. Since we fetch new fsm every time
         // calling `poll`, we do not need to configure a large value for `self.max_batch_size`.
         let mut run = true;
-        const MAX_FSM_ONCE_POLL: usize = 2048;
+        const MAX_FSM_ONCE_POLL: usize = 10240;
         while run && self.fetch_fsm(&mut batch) {
             self.handler.begin(MAX_FSM_ONCE_POLL);
 
@@ -330,9 +330,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 }
             }
             let mut fsm_cnt = batch.normals.len();
-            while batch.normals.len() < MAX_FSM_ONCE_POLL
-                && self.handler.processed_messages() < self.max_batch_size
-            {
+            while batch.normals.len() < MAX_FSM_ONCE_POLL && !self.handler.reach_process_limit() {
                 if let Ok(fsm) = self.fsm_receiver.try_recv() {
                     run = batch.push(fsm);
                 }
