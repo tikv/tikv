@@ -259,7 +259,7 @@ impl Debug for CmdObserveInfo {
 }
 
 // `ObserveLevel` describe what data the observer want to observe
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ObserveLevel {
     // Don't observe any data
     None,
@@ -331,7 +331,12 @@ impl CmdBatch {
 
 pub trait CmdObserver<E>: Coprocessor {
     /// Hook to call after flushing writes to db.
-    fn on_flush_applied_cmd_batch(&self, cmd_batches: &mut Vec<CmdBatch>, engine: &E);
+    fn on_flush_applied_cmd_batch(
+        &self,
+        max_level: ObserveLevel,
+        cmd_batches: &mut Vec<CmdBatch>,
+        engine: &E,
+    );
     // TODO: maybe shoulde move `on_applied_current_term` to a separated `Coprocessor`
     /// Hook to call at the first time the leader applied on its term
     fn on_applied_current_term(&self, role: StateRole, region: &Region);

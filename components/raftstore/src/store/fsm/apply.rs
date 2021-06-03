@@ -54,7 +54,9 @@ use tikv_util::{Either, MustConsumeVec};
 use time::Timespec;
 use uuid::Builder as UuidBuilder;
 
-use crate::coprocessor::{Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle};
+use crate::coprocessor::{
+    Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle, ObserveLevel,
+};
 use crate::store::fsm::RaftPollerBuilder;
 use crate::store::memory::*;
 use crate::store::metrics::*;
@@ -310,6 +312,8 @@ where
     S: Snapshot,
 {
     cmd_batch: Vec<CmdBatch>,
+    // The max observe level of current `Vec<CmdBatch>`
+    batch_max_level: ObserveLevel,
     cb_batch: MustConsumeVec<(Callback<S>, RaftCmdResponse)>,
 }
 
@@ -317,12 +321,15 @@ impl<S: Snapshot> ApplyCallbackBatch<S> {
     fn new() -> ApplyCallbackBatch<S> {
         ApplyCallbackBatch {
             cmd_batch: vec![],
+            batch_max_level: ObserveLevel::None,
             cb_batch: MustConsumeVec::new("callback of apply callback batch"),
         }
     }
 
     fn push_batch(&mut self, observe_info: &CmdObserveInfo, region: Region) {
-        self.cmd_batch.push(CmdBatch::new(observe_info, region));
+        let cb = CmdBatch::new(observe_info, region);
+        self.batch_max_level = cmp::max(self.batch_max_level, cb.level);
+        self.cmd_batch.push(cb);
     }
 
     fn push_cb(&mut self, cb: Callback<S>, resp: RaftCmdResponse) {
@@ -343,21 +350,6 @@ impl<S: Snapshot> ApplyCallbackBatch<S> {
             .last_mut()
             .unwrap()
             .push(observe_info, region_id, cmd);
-    }
-
-    fn take(
-        &mut self,
-    ) -> (
-        MustConsumeVec<(Callback<S>, RaftCmdResponse)>,
-        Vec<CmdBatch>,
-    ) {
-        (
-            mem::replace(
-                &mut self.cb_batch,
-                MustConsumeVec::new("callback of apply callback batch"),
-            ),
-            mem::take(&mut self.cmd_batch),
-        )
     }
 }
 
@@ -537,10 +529,14 @@ where
             }
         }
         // Take the applied commands and their callback
-        let (mut cb_batch, cmd_batch) = self.applied_batch.take();
+        let ApplyCallbackBatch {
+            cmd_batch,
+            batch_max_level,
+            mut cb_batch,
+        } = mem::replace(&mut self.applied_batch, ApplyCallbackBatch::new());
         // Call it before invoking callback for preventing Commit is executed before Prewrite is observed.
         self.host
-            .on_flush_applied_cmd_batch(cmd_batch, &self.engine);
+            .on_flush_applied_cmd_batch(batch_max_level, cmd_batch, &self.engine);
         // Invoke callbacks
         for (cb, resp) in cb_batch.drain(..) {
             cb.invoke_with_response(resp)
@@ -4480,7 +4476,12 @@ mod tests {
     where
         E: KvEngine,
     {
-        fn on_flush_applied_cmd_batch(&self, cmd_batches: &mut Vec<CmdBatch>, _: &E) {
+        fn on_flush_applied_cmd_batch(
+            &self,
+            _: ObserveLevel,
+            cmd_batches: &mut Vec<CmdBatch>,
+            _: &E,
+        ) {
             for b in std::mem::take(cmd_batches) {
                 if b.is_empty() {
                     continue;

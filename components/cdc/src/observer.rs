@@ -96,12 +96,17 @@ impl Coprocessor for CdcObserver {}
 
 impl<E: KvEngine> CmdObserver<E> for CdcObserver {
     // `CdcObserver::on_flush_applied_cmd_batch` should only invoke if `cmd_batches` is not empty
-    fn on_flush_applied_cmd_batch(&self, cmd_batches: &mut Vec<CmdBatch>, engine: &E) {
+    fn on_flush_applied_cmd_batch(
+        &self,
+        max_level: ObserveLevel,
+        cmd_batches: &mut Vec<CmdBatch>,
+        engine: &E,
+    ) {
         assert!(!cmd_batches.is_empty());
-        if cmd_batches.iter().all(|cb| cb.level != ObserveLevel::All) {
+        fail_point!("before_cdc_flush_apply");
+        if max_level < ObserveLevel::All {
             return;
         }
-        fail_point!("before_cdc_flush_apply");
         let cmd_batches: Vec<_> = cmd_batches
             .iter()
             .filter(|cb| cb.level == ObserveLevel::All && !cb.is_empty())
@@ -194,6 +199,7 @@ mod tests {
         cb.push(&observe_info, 0, Cmd::default());
         <CdcObserver as CmdObserver<RocksEngine>>::on_flush_applied_cmd_batch(
             &observer,
+            cb.level,
             &mut vec![cb],
             &engine,
         );
@@ -211,6 +217,7 @@ mod tests {
         cb.push(&observe_info, 0, Cmd::default());
         <CdcObserver as CmdObserver<RocksEngine>>::on_flush_applied_cmd_batch(
             &observer,
+            cb.level,
             &mut vec![cb],
             &engine,
         );

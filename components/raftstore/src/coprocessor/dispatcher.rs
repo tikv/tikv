@@ -493,7 +493,12 @@ impl<E: KvEngine> CoprocessorHost<E> {
         );
     }
 
-    pub fn on_flush_applied_cmd_batch(&self, mut cmd_batches: Vec<CmdBatch>, engine: &E) {
+    pub fn on_flush_applied_cmd_batch(
+        &self,
+        max_level: ObserveLevel,
+        mut cmd_batches: Vec<CmdBatch>,
+        engine: &E,
+    ) {
         // Some observer assert `cmd_batches` is not empty
         if cmd_batches.is_empty() {
             return;
@@ -505,7 +510,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
         for observer in &self.registry.cmd_observers {
             let observer = observer.observer.inner();
-            observer.on_flush_applied_cmd_batch(&mut cmd_batches, engine);
+            observer.on_flush_applied_cmd_batch(max_level, &mut cmd_batches, engine);
         }
     }
 
@@ -649,7 +654,12 @@ mod tests {
     }
 
     impl CmdObserver<PanicEngine> for TestCoprocessor {
-        fn on_flush_applied_cmd_batch(&self, _: &mut Vec<CmdBatch>, _: &PanicEngine) {
+        fn on_flush_applied_cmd_batch(
+            &self,
+            _: ObserveLevel,
+            _: &mut Vec<CmdBatch>,
+            _: &PanicEngine,
+        ) {
             self.called.fetch_add(13, Ordering::SeqCst);
         }
         fn on_applied_current_term(&self, _: StateRole, _: &Region) {}
@@ -723,7 +733,7 @@ mod tests {
         let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
         let mut cb = CmdBatch::new(&observe_info, Region::default());
         cb.push(&observe_info, 0, Cmd::default());
-        host.on_flush_applied_cmd_batch(vec![cb], &PanicEngine);
+        host.on_flush_applied_cmd_batch(cb.level, vec![cb], &PanicEngine);
         // `post_apply` + `on_flush_applied_cmd_batch` => 13 + 6 = 19
         assert_all!(&[&ob.called], &[74]);
     }

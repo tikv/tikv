@@ -44,8 +44,13 @@ impl<E: KvEngine> Clone for Observer<E> {
 impl<E: KvEngine> Coprocessor for Observer<E> {}
 
 impl<E: KvEngine> CmdObserver<E> for Observer<E> {
-    fn on_flush_applied_cmd_batch(&self, cmd_batches: &mut Vec<CmdBatch>, _: &E) {
-        if cmd_batches.iter().all(|cb| cb.level == ObserveLevel::None) {
+    fn on_flush_applied_cmd_batch(
+        &self,
+        max_level: ObserveLevel,
+        cmd_batches: &mut Vec<CmdBatch>,
+        _: &E,
+    ) {
+        if max_level < ObserveLevel::LockRelated {
             return;
         }
         let cmd_batches: Vec<_> = std::mem::take(cmd_batches)
@@ -169,7 +174,7 @@ mod test {
         let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
         let mut cb = CmdBatch::new(&observe_info, Region::default());
         cb.push(&observe_info, 0, cmd.clone());
-        observer.on_flush_applied_cmd_batch(&mut vec![cb], &engine);
+        observer.on_flush_applied_cmd_batch(cb.level, &mut vec![cb], &engine);
         // Observe all data
         expect_recv(&mut rx, data.clone());
 
@@ -178,7 +183,7 @@ mod test {
         observe_info.rts_id.stop_observing();
         let mut cb = CmdBatch::new(&observe_info, Region::default());
         cb.push(&observe_info, 0, cmd.clone());
-        observer.on_flush_applied_cmd_batch(&mut vec![cb], &engine);
+        observer.on_flush_applied_cmd_batch(cb.level, &mut vec![cb], &engine);
         // Still observe all data
         expect_recv(&mut rx, data.clone());
 
@@ -187,7 +192,7 @@ mod test {
         observe_info.cdc_id.stop_observing();
         let mut cb = CmdBatch::new(&observe_info, Region::default());
         cb.push(&observe_info, 0, cmd.clone());
-        observer.on_flush_applied_cmd_batch(&mut vec![cb], &engine);
+        observer.on_flush_applied_cmd_batch(cb.level, &mut vec![cb], &engine);
         // Only observe lock related data
         data.retain(|p| p.get_put().cf != CF_DEFAULT);
         expect_recv(&mut rx, data);
@@ -198,7 +203,7 @@ mod test {
         observe_info.cdc_id.stop_observing();
         let mut cb = CmdBatch::new(&observe_info, Region::default());
         cb.push(&observe_info, 0, cmd);
-        observer.on_flush_applied_cmd_batch(&mut vec![cb], &engine);
+        observer.on_flush_applied_cmd_batch(cb.level, &mut vec![cb], &engine);
         // Observe no data
         expect_recv(&mut rx, vec![]);
     }
