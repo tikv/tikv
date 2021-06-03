@@ -242,16 +242,18 @@ impl<L: LockManager> SchedulerInner<L> {
         self.running_write_bytes.load(Ordering::Acquire) >= self.sched_pending_write_threshold
     }
 
-    /// Tries to acquire all the required latches for a command.
+    /// Tries to acquire all the required latches for a command when waken up by
+    /// another finished command.
     ///
-    /// Returns the `Task` if successful; returns `None` otherwise.
-    fn acquire_lock(&self, cid: u64) -> Result<Option<Task>, StorageError> {
+    /// Returns a deadline error if the deadline is exceeded. Returns the `Task` if
+    /// all latches are acquired, returns `None` otherwise.
+    fn acquire_lock_on_wakeup(&self, cid: u64) -> Result<Option<Task>, StorageError> {
         let mut task_slot = self.get_task_slot(cid);
         let tctx = task_slot.get_mut(&cid).unwrap();
         // Check deadline early during acquiring latches to avoid expired requests blocking
         // other requests.
         if let Err(e) = tctx.task.as_ref().unwrap().deadline.check() {
-            // `acquire_lock` is called when another command releases its locks and wakes up
+            // `acquire_lock_on_wakeup` is called when another command releases its locks and wakes up
             // command `cid`. This command inserted its lock before and now the lock is at the
             // front the the queue. The actual acquired count is one more than the `owned_count`
             // recorded in the lock, so we increase one to make `release` work.
