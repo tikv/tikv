@@ -31,3 +31,5 @@ mod errors;
 pub use errors::*;
 mod scanner;
 pub use scanner::*;
+mod metrics;
+pub use metrics::*;
