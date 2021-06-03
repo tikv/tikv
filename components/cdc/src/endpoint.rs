@@ -1472,7 +1472,7 @@ mod tests {
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
             max_ts_sync_status: Arc::new(AtomicU64::new(0)),
             track_ver: TrackVer::new(),
-            read_progress: Arc::new(RegionReadProgress::new(0, 0)),
+            read_progress: Arc::new(RegionReadProgress::new(0, 0, "".to_owned())),
         };
         store_meta.lock().unwrap().readers.insert(1, read_delegate);
         let (task_sched, task_rx) = dummy_scheduler();

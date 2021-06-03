@@ -23,6 +23,8 @@ pub struct Resolver {
     read_progress: Option<Arc<RegionReadProgress>>,
     // The timestamps that advance the resolved_ts when there is no more write.
     min_ts: TimeStamp,
+    // Whether the `Resolver` is stopped
+    stopped: bool,
 }
 
 impl Resolver {
@@ -42,6 +44,7 @@ impl Resolver {
             read_progress,
             tracked_index: 0,
             min_ts: TimeStamp::zero(),
+            stopped: false,
         }
     }
 
@@ -60,6 +63,12 @@ impl Resolver {
 
     pub fn locks(&self) -> &BTreeMap<TimeStamp, HashSet<Arc<[u8]>>> {
         &self.lock_ts_heap
+    }
+
+    pub fn stop_tracking(&mut self) {
+        // TODO: should we also clear the lock heap?
+        self.stopped = true;
+        self.read_progress.take();
     }
 
     pub fn update_tracked_index(&mut self, index: u64) {
@@ -119,6 +128,10 @@ impl Resolver {
     /// `min_ts` advances the resolver even if there is no write.
     /// Return None means the resolver is not initialized.
     pub fn resolve(&mut self, min_ts: TimeStamp) -> TimeStamp {
+        // The `Resolver` is stopped, not need to advance, just return the current `resolved_ts`
+        if self.stopped {
+            return self.resolved_ts;
+        }
         // Find the min start ts.
         let min_lock = self.lock_ts_heap.keys().next().cloned();
         let has_lock = min_lock.is_some();

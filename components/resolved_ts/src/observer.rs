@@ -145,15 +145,33 @@ impl<E: KvEngine> RegionChangeObserver for Observer<E> {
         &self,
         ctx: &mut ObserverContext<'_>,
         event: RegionChangeEvent,
-        _: StateRole,
+        role: StateRole,
     ) {
-        // TODO: handle region update event
-        if let RegionChangeEvent::Destroy = event {
-            if let Err(e) = self
-                .scheduler
-                .schedule(Task::RegionDestroyed(ctx.region().clone()))
-            {
-                info!("failed to schedule region destroyed event"; "err" => ?e);
+        // If the peer is not leader, it must has not registered the observe region or it is deregistering
+        // the observe region, so don't need to send `RegionUpdated`/`RegionDestroyed` to update the observe
+        // region
+        if role != StateRole::Leader {
+            return;
+        }
+        match event {
+            RegionChangeEvent::Create => {}
+            RegionChangeEvent::Update => {
+                if let Err(e) = self
+                    .scheduler
+                    .schedule(Task::RegionUpdated(ctx.region().clone()))
+                {
+                    info!("failed to schedule region updated event"; "err" => ?e);
+                }
+            }
+            RegionChangeEvent::Destroy => {
+                if let RegionChangeEvent::Destroy = event {
+                    if let Err(e) = self
+                        .scheduler
+                        .schedule(Task::RegionDestroyed(ctx.region().clone()))
+                    {
+                        info!("failed to schedule region destroyed event"; "err" => ?e);
+                    }
+                }
             }
         }
     }
