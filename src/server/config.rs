@@ -95,9 +95,6 @@ pub struct Config {
 
     pub raft_msg_max_batch_size: usize,
 
-    #[config(skip)]
-    pub raft_msg_flush_delay_us: u64,
-
     // TODO: use CompressionAlgorithms instead once it supports traits like Clone etc.
     #[config(skip)]
     pub grpc_compression_type: GrpcCompressionType,
@@ -197,7 +194,6 @@ impl Default for Config {
             raft_client_grpc_send_msg_buffer: 512 * 1024,
             raft_client_queue_size: 4096,
             raft_msg_max_batch_size: 128,
-            raft_msg_flush_delay_us: 100,
             grpc_compression_type: GrpcCompressionType::None,
             grpc_concurrency: DEFAULT_GRPC_CONCURRENCY,
             grpc_concurrent_stream: DEFAULT_GRPC_CONCURRENT_STREAM,
