@@ -5,7 +5,6 @@ use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::errorpb;
 use kvproto::raft_cmdpb::{AdminCmdType, CmdType, Request};
 use raftstore::coprocessor::{Cmd, CmdBatch, ObserveLevel};
-use raftstore::errors::Error as RaftStoreError;
 use txn_types::{
     Key, Lock, LockType, TimeStamp, Value, Write, WriteBatchFlags, WriteRef, WriteType,
 };
@@ -37,13 +36,14 @@ pub enum ChangeRow {
 pub enum ChangeLog {
     Error(errorpb::Error),
     Rows { index: u64, rows: Vec<ChangeRow> },
+    Admin(AdminCmdType),
 }
 
 impl ChangeLog {
     pub fn encode_change_log(region_id: u64, batch: CmdBatch) -> Vec<ChangeLog> {
         batch
             .into_iter(region_id)
-            .filter_map(|cmd| {
+            .map(|cmd| {
                 let Cmd {
                     index,
                     mut request,
@@ -56,34 +56,13 @@ impl ChangeLog {
                         let is_one_pc = flags.contains(WriteBatchFlags::ONE_PC);
                         let changes = group_row_changes(request.requests.into());
                         let rows = Self::encode_rows(changes, is_one_pc);
-                        Some(ChangeLog::Rows { index, rows })
+                        ChangeLog::Rows { index, rows }
                     } else {
-                        let mut response = response.take_admin_response();
-                        // TODO: Should use another variant to distinguish split/merge command with region error
-                        let error = match request.take_admin_request().get_cmd_type() {
-                            AdminCmdType::Split => Some(RaftStoreError::EpochNotMatch(
-                                "split".to_owned(),
-                                vec![
-                                    response.mut_split().take_left(),
-                                    response.mut_split().take_right(),
-                                ],
-                            )),
-                            AdminCmdType::BatchSplit => Some(RaftStoreError::EpochNotMatch(
-                                "batchsplit".to_owned(),
-                                response.mut_splits().take_regions().into(),
-                            )),
-                            AdminCmdType::PrepareMerge
-                            | AdminCmdType::CommitMerge
-                            | AdminCmdType::RollbackMerge => {
-                                Some(RaftStoreError::EpochNotMatch("merge".to_owned(), vec![]))
-                            }
-                            _ => None,
-                        };
-                        error.map(|e| ChangeLog::Error(e.into()))
+                        ChangeLog::Admin(request.take_admin_request().get_cmd_type())
                     }
                 } else {
                     let err_header = response.mut_header().take_error();
-                    Some(ChangeLog::Error(err_header))
+                    ChangeLog::Error(err_header)
                 }
             })
             .collect()

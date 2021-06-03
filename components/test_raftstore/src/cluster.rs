@@ -206,9 +206,12 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn create_engines(&mut self) {
-        self.io_rate_limiter = Some(Arc::new(IORateLimiter::new(
-            0, true, /*enable_statistics*/
-        )));
+        self.io_rate_limiter = Some(Arc::new(
+            self.cfg
+                .storage
+                .io_rate_limit
+                .build(true /*enable_statistics*/),
+        ));
         for _ in 0..self.count {
             self.create_engine(None);
         }
