@@ -214,6 +214,12 @@ impl Key {
     pub fn gen_hash(&self) -> u64 {
         farmhash::fingerprint64(&self.to_raw().unwrap())
     }
+
+    #[allow(clippy::len_without_is_empty)]
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
 }
 
 impl Clone for Key {

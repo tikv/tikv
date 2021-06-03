@@ -5,6 +5,7 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use concurrency_manager::ConcurrencyManager;
 use configuration::{self, ConfigChange, ConfigManager, Configuration};
@@ -20,11 +21,12 @@ use raftstore::store::util::{self, RegionReadProgress};
 use raftstore::store::RegionSnapshot;
 use security::SecurityManager;
 use tikv::config::ResolvedTsConfig;
-use tikv_util::worker::{Runnable, Scheduler};
+use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
 use txn_types::{Key, TimeStamp};
 
 use crate::advance::AdvanceTsWorker;
 use crate::cmd::{ChangeLog, ChangeRow};
+use crate::metrics::*;
 use crate::resolver::Resolver;
 use crate::scanner::{ScanEntry, ScanMode, ScanTask, ScannerPool};
 use crate::sinker::{CmdSinker, SinkCmd};
@@ -323,6 +325,7 @@ where
 
         let scan_task = self.build_scan_task(region, observe_handle, cancelled);
         self.scanner_pool.spawn_task(scan_task);
+        RTS_SCAN_TASKS.with_label_values(&["total"]).inc();
     }
 
     fn build_scan_task(
@@ -351,6 +354,7 @@ where
                         apply_index,
                     })
                     .unwrap_or_else(|e| debug!("schedule resolved ts task failed"; "err" => ?e));
+                RTS_SCAN_TASKS.with_label_values(&["finish"]).inc();
             }),
             on_error: Some(Box::new(move |observe_id, _region, e| {
                 scheduler_error
@@ -360,6 +364,7 @@ where
                         cause: format!("met error while handle scan task {:?}", e),
                     })
                     .unwrap();
+                RTS_SCAN_TASKS.with_label_values(&["abort"]).inc();
             })),
         }
     }
@@ -483,6 +488,8 @@ where
         cmd_batch: Vec<CmdBatch>,
         snapshot: Option<RegionSnapshot<E::Snapshot>>,
     ) {
+        let size = cmd_batch.iter().map(|b| b.size()).sum::<usize>();
+        RTS_CHANNEL_PENDING_CMD_BYTES.sub(size as i64);
         let logs = cmd_batch
             .into_iter()
             .filter_map(|batch| {
@@ -703,5 +710,70 @@ impl<S: Snapshot> ConfigManager for ResolvedTsConfigManager<S> {
             error!("failed to schedule ChangeConfig task"; "err" => ?e);
         }
         Ok(())
+    }
+}
+
+const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
+
+impl<T, E, C> RunnableWithTimer for Endpoint<T, E, C>
+where
+    T: 'static + RaftStoreRouter<E>,
+    E: KvEngine,
+    C: CmdSinker<E::Snapshot>,
+{
+    fn on_timeout(&mut self) {
+        let (mut oldest_ts, mut oldest_region, mut zero_ts_count) = (u64::MAX, 0, 0);
+        {
+            let meta = self.store_meta.lock().unwrap();
+            for (region_id, read_progress) in &meta.region_read_progress {
+                let ts = read_progress.safe_ts();
+                if ts == 0 {
+                    zero_ts_count += 1;
+                    continue;
+                }
+                if ts < oldest_ts {
+                    oldest_ts = ts;
+                    oldest_region = *region_id;
+                }
+            }
+        }
+        let mut lock_heap_size = 0;
+        let (mut resolved_count, mut unresolved_count) = (0, 0);
+        for observe_region in self.regions.values() {
+            match &observe_region.resolver_status {
+                ResolverStatus::Pending { locks, .. } => {
+                    for l in locks {
+                        match l {
+                            PendingLock::Track { key, .. } => lock_heap_size += key.len(),
+                            PendingLock::Untrack { key, .. } => lock_heap_size += key.len(),
+                        }
+                    }
+                    unresolved_count += 1;
+                }
+                ResolverStatus::Ready { .. } => {
+                    lock_heap_size += observe_region.resolver.size();
+                    resolved_count += 1;
+                }
+            }
+        }
+        RTS_MIN_RESOLVED_TS_REGION.set(oldest_region as i64);
+        RTS_MIN_RESOLVED_TS.set(oldest_ts as i64);
+        RTS_ZERO_RESOLVED_TS.set(zero_ts_count as i64);
+        RESOLVED_TS_GAP_HISTOGRAM.observe(
+            (TimeStamp::physical_now().saturating_sub(TimeStamp::from(oldest_ts).physical()))
+                as f64
+                / 1000f64,
+        );
+        RTS_LOCK_HEAP_BYTES_GAUGE.set(lock_heap_size as i64);
+        RTS_REGION_RESOLVE_STATUS_GAUGE_VEC
+            .with_label_values(&["resolved"])
+            .set(resolved_count as _);
+        RTS_REGION_RESOLVE_STATUS_GAUGE_VEC
+            .with_label_values(&["unresolved"])
+            .set(unresolved_count as _);
+    }
+
+    fn get_interval(&self) -> Duration {
+        Duration::from_millis(METRICS_FLUSH_INTERVAL)
     }
 }
