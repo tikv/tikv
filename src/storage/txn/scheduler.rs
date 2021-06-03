@@ -378,7 +378,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// Tries to acquire all the necessary latches. If all the necessary latches are acquired,
     /// the method initiates a get snapshot operation for further processing.
     fn try_to_wake_up(&self, cid: u64) {
-        match self.inner.acquire_lock(cid) {
+        match self.inner.acquire_lock_on_wakeup(cid) {
             Ok(Some(task)) => {
                 fail_point!("txn_scheduler_try_to_wake_up");
                 self.execute(task);
