@@ -2017,13 +2017,27 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         );
 
         let mut query_stats = QueryStats::default();
-        let query_num = self
-            .ctx
-            .global_stat
-            .stat
-            .engine_total_query_written
-            .swap(0, Ordering::SeqCst);
-        query_stats.set_put(query_num);
+        query_stats.set_put(
+            self.ctx
+                .global_stat
+                .stat
+                .engine_total_query_put
+                .swap(0, Ordering::SeqCst),
+        );
+        query_stats.set_delete(
+            self.ctx
+                .global_stat
+                .stat
+                .engine_total_query_delete
+                .swap(0, Ordering::SeqCst),
+        );
+        query_stats.set_delete_range(
+            self.ctx
+                .global_stat
+                .stat
+                .engine_total_query_delete_range
+                .swap(0, Ordering::SeqCst),
+        );
         stats.set_query_stats(query_stats);
 
         let store_info = StoreInfo {

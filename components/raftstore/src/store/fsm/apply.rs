@@ -30,6 +30,7 @@ use fail::fail_point;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{PeerRole, Region, RegionEpoch};
+use kvproto::pdpb::QueryKind;
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
     RaftCmdRequest, RaftCmdResponse, Request, Response,
@@ -53,7 +54,6 @@ use tikv_util::{Either, MustConsumeVec};
 use time::Timespec;
 use uuid::Builder as UuidBuilder;
 
-use crate::coprocessor::{Cmd, CoprocessorHost, ObserveHandle};
 use crate::store::fsm::RaftPollerBuilder;
 use crate::store::memory::*;
 use crate::store::metrics::*;
@@ -68,6 +68,10 @@ use crate::store::util::{
 };
 use crate::store::{cmd_resp, util, Config, RegionSnapshot, RegionTask};
 use crate::{bytes_capacity, Error, Result};
+use crate::{
+    coprocessor::{Cmd, CoprocessorHost, ObserveHandle},
+    store::QueryStats,
+};
 
 use super::metrics::*;
 
@@ -1382,10 +1386,23 @@ where
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = match cmd_type {
-                CmdType::Put => self.handle_put(ctx.kv_wb_mut(), req),
-                CmdType::Delete => self.handle_delete(ctx.kv_wb_mut(), req),
+                CmdType::Put => {
+                    self.metrics
+                        .written_query_stats
+                        .add_query_num(QueryKind::Put, 1);
+                    self.handle_put(ctx.kv_wb_mut(), req)
+                }
+                CmdType::Delete => {
+                    self.metrics
+                        .written_query_stats
+                        .add_query_num(QueryKind::Delete, 1);
+                    self.handle_delete(ctx.kv_wb_mut(), req)
+                }
                 CmdType::DeleteRange => {
                     assert!(ctx.kv_wb.is_empty());
+                    self.metrics
+                        .written_query_stats
+                        .add_query_num(QueryKind::DeleteRange, 1);
                     self.handle_delete_range(&ctx.engine, req, &mut ranges, ctx.use_delete_range)
                 }
                 CmdType::IngestSst => {
@@ -1488,7 +1505,6 @@ where
                 );
             });
         }
-        self.metrics.written_query_num += 1;
         Ok(resp)
     }
 
@@ -3078,7 +3094,7 @@ pub struct ApplyMetrics {
 
     pub written_bytes: u64,
     pub written_keys: u64,
-    pub written_query_num: u64,
+    pub written_query_stats: QueryStats,
     pub lock_cf_written_bytes: u64,
 }
 

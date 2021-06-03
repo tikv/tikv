@@ -88,7 +88,7 @@ pub struct HeartbeatTask {
     pub pending_peers: Vec<metapb::Peer>,
     pub written_bytes: u64,
     pub written_keys: u64,
-    pub written_query_num: u64,
+    pub written_query_stats: QueryStats,
     pub approximate_size: u64,
     pub approximate_keys: u64,
     pub replication_status: Option<RegionReplicationStatus>,
@@ -204,7 +204,7 @@ pub struct PeerStat {
     pub last_region_report_read_query_stats: QueryStats,
     pub last_region_report_written_bytes: u64,
     pub last_region_report_written_keys: u64,
-    pub last_region_report_written_query_num: u64,
+    pub last_region_report_written_query_stats: QueryStats,
     pub last_region_report_ts: UnixSecs,
     // last_store_report_attributes records the state of the last store heartbeat
     pub last_store_report_read_bytes: u64,
@@ -707,9 +707,6 @@ where
                 .sub_query_stats(&region_peer.last_store_report_query_stats);
             region_peer.last_store_report_read_bytes = region_peer.read_bytes;
             region_peer.last_store_report_read_keys = region_peer.read_keys;
-            info!("read peer qps";"region id"=>region_id,"qps"=>read_query_stats.get_read_query_num());
-            info!("read_query_stats qps";"region id"=>region_id,"qps"=>region_peer.read_query_stats.get_read_query_num());
-            info!("last_store_report_query_stats qps";"region id"=>region_id,"qps"=>region_peer.last_store_report_query_stats.get_read_query_num());
             region_peer
                 .last_store_report_query_stats
                 .fill_query_stats(&region_peer.read_query_stats);
@@ -762,9 +759,6 @@ where
             .store_stat
             .engine_total_query_num
             .sub_query_stats(&self.store_stat.engine_last_query_num);
-        info!("read store qps";"store id"=>stats.get_store_id(),"qps"=>res.get_read_query_num());
-        info!("engine_total_query_num qps";"store id"=>stats.get_store_id(),"qps"=>self.store_stat.engine_total_query_num.get_read_query_num());
-        info!("engine_last_query_num qps";"store id"=>stats.get_store_id(),"qps"=>self.store_stat.engine_last_query_num.get_read_query_num());
         stats.set_query_stats(res.0);
 
         stats.set_cpu_usages(self.store_stat.store_cpu_usages.clone().into());
@@ -1214,17 +1208,17 @@ where
                         hb_task.written_bytes - peer_stat.last_region_report_written_bytes;
                     let written_keys_delta =
                         hb_task.written_keys - peer_stat.last_region_report_written_keys;
-                    let written_query_num_delta =
-                        hb_task.written_query_num - peer_stat.last_region_report_written_query_num;
+                    let written_query_stats_delta = hb_task
+                        .written_query_stats
+                        .sub_query_stats(&peer_stat.last_region_report_written_query_stats);
                     let mut query_stats = peer_stat
                         .read_query_stats
                         .sub_query_stats(&peer_stat.last_region_report_read_query_stats);
-                    query_stats.0.set_put(written_query_num_delta); // add write info
+                    query_stats.add_query_stats(&written_query_stats_delta.0); // add write info
                     let mut last_report_ts = peer_stat.last_region_report_ts;
-
                     peer_stat.last_region_report_written_bytes = hb_task.written_bytes;
                     peer_stat.last_region_report_written_keys = hb_task.written_keys;
-                    peer_stat.last_region_report_written_query_num = hb_task.written_query_num;
+                    peer_stat.last_region_report_written_query_stats = hb_task.written_query_stats;
                     peer_stat.last_region_report_read_bytes = peer_stat.read_bytes;
                     peer_stat.last_region_report_read_keys = peer_stat.read_keys;
                     peer_stat.last_region_report_read_query_stats =

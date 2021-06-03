@@ -56,7 +56,7 @@ impl QueryStats {
         }
     }
 
-    pub fn sub_query_stats(&mut self, query_stats: &QueryStats) -> QueryStats {
+    pub fn sub_query_stats(&self, query_stats: &QueryStats) -> QueryStats {
         let mut res = QueryStats::default();
         for kind in QUERY_KINDS {
             let query_num = QueryStats::get_query_num(&self.0, *kind)
