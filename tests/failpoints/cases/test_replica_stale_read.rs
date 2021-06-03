@@ -425,17 +425,8 @@ fn test_stale_read_while_applying_snapshot() {
 // min(`target_safe_ts`, `source_safe_ts`)
 #[test]
 fn test_stale_read_while_region_merge() {
-    let mut cluster = new_server_cluster(0, 3);
-    configure_for_merge(&mut cluster);
-    let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_operator();
-
-    cluster.run();
-    cluster.sim.wl().start_resolved_ts_worker();
-
-    // There should be no read index message while handling stale read request
-    let on_step_read_index_msg = "on_step_read_index_msg";
-    fail::cfg(on_step_read_index_msg, "panic").unwrap();
+    let (mut cluster, pd_client, _) =
+        prepare_for_stale_read_before_run(new_peer(1, 1), Some(Box::new(configure_for_merge)));
 
     cluster.must_split(&cluster.get_region(&[]), b"key3");
     let source = pd_client.get_region(b"key1").unwrap();
