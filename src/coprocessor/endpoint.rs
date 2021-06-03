@@ -9,8 +9,8 @@ use std::{borrow::Cow, time::Duration};
 use async_stream::try_stream;
 use futures::channel::mpsc;
 use futures::prelude::*;
-use tokio::sync::Semaphore;
 use tidb_query_common::execute_stats::ExecSummary;
+use tokio::sync::Semaphore;
 
 use kvproto::kvrpcpb::{self, IsolationLevel};
 use kvproto::{coprocessor as coppb, errorpb};

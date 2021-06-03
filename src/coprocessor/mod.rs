@@ -39,9 +39,9 @@ use crate::storage::Statistics;
 use async_trait::async_trait;
 use engine_rocks::PerfLevel;
 use kvproto::{coprocessor as coppb, kvrpcpb};
-use tidb_query_common::execute_stats::ExecSummary;
 use metrics::ReqTag;
 use rand::prelude::*;
+use tidb_query_common::execute_stats::ExecSummary;
 use tikv_util::deadline::Deadline;
 use tikv_util::time::Duration;
 use txn_types::TsSet;
@@ -69,12 +69,12 @@ pub trait RequestHandler: Send {
     fn collect_scan_statistics(&mut self, _dest: &mut Statistics) {
         // Do nothing by default
     }
-    
+
     /// Collects kv_read_time in this request handler so far.
     fn collect_kv_read_time(&mut self, _dest: &mut ExecSummary) {
         // Do nothing by default
     }
-    
+
     fn into_boxed(self) -> Box<dyn RequestHandler>
     where
         Self: 'static + Sized,
