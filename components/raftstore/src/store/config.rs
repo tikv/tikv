@@ -207,7 +207,7 @@ impl Default for Config {
             raft_max_size_per_msg: ReadableSize::mb(1),
             raft_max_inflight_msgs: 256,
             raft_entry_max_size: ReadableSize::mb(8),
-            raft_log_gc_tick_interval: ReadableDuration::secs(1),
+            raft_log_gc_tick_interval: ReadableDuration::secs(10),
             raft_log_gc_threshold: 50,
             // Assume the average size of entries is 1k.
             raft_log_gc_count_limit: split_size * 3 / 4 / ReadableSize::kb(1),

@@ -40,6 +40,7 @@ fn test_evict_entry_cache() {
 
     // Forbid store 1 to clean entry cache.
     fail::cfg("on_raft_gc_log_tick_1", "pause").unwrap();
+    fail::cfg("on_entry_cache_evict_tick", "return").unwrap();
 
     let value = vec![b'x'; 1024];
     for i in 0..100 {
@@ -64,4 +65,5 @@ fn test_evict_entry_cache() {
 
     fail::cfg("memory_usage_reaches_high_water", "off").unwrap();
     fail::cfg("needs_evict_entry_cache", "off").unwrap();
+    fail::cfg("on_entry_cache_evict_tick", "off").unwrap();
 }
