@@ -611,16 +611,28 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             cop_read_pools.handle()
         };
 
-        // Create resolved ts worker
-        let mut rts_worker = Box::new(LazyWorker::new("resolved-ts"));
-        let rts_scheduler = rts_worker.scheduler();
-
         // Register cdc
         let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
         cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
-        // Register resolved ts
-        let resolved_ts_ob = resolved_ts::Observer::new(rts_scheduler.clone());
-        resolved_ts_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+        // TODO: register a cdc config manager here to support dynamically change cdc config
+
+        // Create resolved ts worker
+        let rts_worker = if self.config.resolved_ts.enable {
+            let worker = Box::new(LazyWorker::new("resolved-ts"));
+            // Register the resolved ts observer
+            let resolved_ts_ob = resolved_ts::Observer::new(worker.scheduler());
+            resolved_ts_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+            // Register config manager for resolved ts worker
+            cfg_controller.register(
+                tikv::config::Module::ResolvedTs,
+                Box::new(resolved_ts::ResolvedTsConfigManager::new(
+                    worker.scheduler(),
+                )),
+            );
+            Some(worker)
+        } else {
+            None
+        };
 
         let server_config = Arc::new(VersionTrack::new(self.config.server.clone()));
 
@@ -772,21 +784,24 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         );
         cdc_worker.start_with_timer(cdc_endpoint);
         self.to_stop.push(cdc_worker);
+
         // Start resolved ts
-        let rts_endpoint = resolved_ts::Endpoint::new(
-            &self.config.cdc,
-            rts_scheduler,
-            self.router.clone(),
-            engines.store_meta.clone(),
-            self.pd_client.clone(),
-            self.concurrency_manager.clone(),
-            server.env(),
-            self.security_mgr.clone(),
-            // TODO: replace to the cdc sinker
-            resolved_ts::DummySinker::new(),
-        );
-        rts_worker.start(rts_endpoint);
-        self.to_stop.push(rts_worker);
+        if let Some(mut rts_worker) = rts_worker {
+            let rts_endpoint = resolved_ts::Endpoint::new(
+                &self.config.resolved_ts,
+                rts_worker.scheduler(),
+                self.router.clone(),
+                engines.store_meta.clone(),
+                self.pd_client.clone(),
+                self.concurrency_manager.clone(),
+                server.env(),
+                self.security_mgr.clone(),
+                // TODO: replace to the cdc sinker
+                resolved_ts::DummySinker::new(),
+            );
+            rts_worker.start(rts_endpoint);
+            self.to_stop.push(rts_worker);
+        }
 
         self.servers = Some(Servers {
             lock_mgr,
@@ -927,14 +942,11 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let mut engine_metrics =
             EngineMetricsManager::new(self.engines.as_ref().unwrap().engines.clone());
         let mut io_metrics = IOMetricsManager::new(fetcher);
-        let mut last_call = Instant::now();
         self.background_worker
             .spawn_interval_task(DEFAULT_METRICS_FLUSH_INTERVAL, move || {
                 let now = Instant::now();
-                let duration = now - last_call;
-                last_call = now;
-                engine_metrics.flush(duration);
-                io_metrics.flush(duration);
+                engine_metrics.flush(now);
+                io_metrics.flush(now);
             });
     }
 
@@ -1241,19 +1253,24 @@ const DEFAULT_ENGINE_METRICS_RESET_INTERVAL: Duration = Duration::from_millis(60
 
 pub struct EngineMetricsManager<R: RaftEngine> {
     engines: Engines<RocksEngine, R>,
+    last_reset: Instant,
 }
 
 impl<R: RaftEngine> EngineMetricsManager<R> {
     pub fn new(engines: Engines<RocksEngine, R>) -> Self {
-        EngineMetricsManager { engines }
+        EngineMetricsManager {
+            engines,
+            last_reset: Instant::now(),
+        }
     }
 
-    pub fn flush(&mut self, duration: Duration) {
+    pub fn flush(&mut self, now: Instant) {
         self.engines.kv.flush_metrics("kv");
         self.engines.raft.flush_metrics("raft");
-        if duration >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
+        if now.duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
             self.engines.kv.reset_statistics();
             self.engines.raft.reset_statistics();
+            self.last_reset = now;
         }
     }
 }
