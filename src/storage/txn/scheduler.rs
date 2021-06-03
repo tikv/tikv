@@ -251,7 +251,11 @@ impl<L: LockManager> SchedulerInner<L> {
         // Check deadline early during acquiring latches to avoid expired requests blocking
         // other requests.
         if let Err(e) = tctx.task.as_ref().unwrap().deadline.check() {
-            self.latches.update_owned_count(&mut tctx.lock, cid);
+            // `acquire_lock` is called when another command releases its locks and wakes up
+            // command `cid`. This command inserted its lock before and now the lock is at the
+            // front the the queue. The actual acquired count is one more than the `owned_count`
+            // recorded in the lock, so we increase one to make `release` work.
+            tctx.lock.owned_count += 1;
             return Err(e.into());
         }
         if self.latches.acquire(&mut tctx.lock, cid) {
