@@ -3941,6 +3941,7 @@ version = "0.0.1"
 dependencies = [
  "collections",
  "concurrency_manager",
+ "configuration",
  "crossbeam",
  "engine_rocks",
  "engine_traits",
