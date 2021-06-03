@@ -10,7 +10,7 @@ use std::sync::Arc;
 use collections::HashMap;
 use futures::SinkExt;
 use grpcio::{CallOption, ChannelBuilder, Environment, WriteFlags};
-use kvproto::resource_usage_agent::{CollectCpuTimeRequest, ResourceUsageAgentClient};
+use kvproto::resource_usage_agent::{ReportCpuTimeRequest, ResourceUsageAgentClient};
 use security::SecurityManager;
 use tikv_util::time::Duration;
 use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
@@ -88,7 +88,7 @@ impl ResourceMeteringReporter {
         }
     }
 
-    pub fn init_reporter(&mut self, addr: &str) {
+    pub fn init_client(&mut self, addr: &str) {
         let channel = {
             let cb = ChannelBuilder::new(self.env.clone())
                 .keepalive_time(Duration::from_secs(10))
@@ -116,7 +116,7 @@ impl Runnable for ResourceMeteringReporter {
                 } else if new_config.agent_address != self.config.agent_address
                     || new_config.enabled != self.config.enabled
                 {
-                    self.init_reporter(&new_config.agent_address);
+                    self.init_client(&new_config.agent_address);
                 }
 
                 self.config = new_config;
@@ -179,15 +179,15 @@ impl RunnableWithTimer for ResourceMeteringReporter {
 
         let records = std::mem::take(&mut self.records);
         if let Some(client) = self.client.as_ref() {
-            match client.collect_cpu_time_opt(CallOption::default().timeout(Duration::from_secs(2)))
+            match client.report_cpu_time_opt(CallOption::default().timeout(Duration::from_secs(2)))
             {
                 Ok((mut tx, rx)) => {
                     client.spawn(async move {
                         for (tag, (timestamp_list, cpu_time_ms_list, _)) in records {
-                            let mut req = CollectCpuTimeRequest::default();
-                            req.set_resource_tag(tag);
-                            req.set_timestamp_list(timestamp_list);
-                            req.set_cpu_time_ms_list(cpu_time_ms_list);
+                            let mut req = ReportCpuTimeRequest::default();
+                            req.set_resource_group_tag(tag);
+                            req.set_record_list_timestamp_sec(timestamp_list);
+                            req.set_record_list_cpu_time_ms(cpu_time_ms_list);
                             if tx.send((req, WriteFlags::default())).await.is_err() {
                                 return;
                             }

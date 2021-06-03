@@ -39,7 +39,7 @@ pub fn init_recorder() -> RecorderHandle {
             let join_handle = std::thread::Builder::new()
                 .name("req-cpu-recorder".to_owned())
                 .spawn(move || {
-                    let mut recorder = ReqCpuRecorder::new(pause, precision_seconds);
+                    let mut recorder = CpuRecorder::new(pause, precision_seconds);
 
                     loop {
                         recorder.handle_pause();
@@ -144,7 +144,7 @@ struct ThreadRegistrationMsg {
     shared_ptr: SharedTagPtr,
 }
 
-struct ReqCpuRecorder {
+struct CpuRecorder {
     pause: Arc<AtomicBool>,
     precision_seconds: Arc<AtomicU64>,
 
@@ -163,7 +163,7 @@ struct ThreadStat {
     prev_stat: pid::Stat,
 }
 
-impl ReqCpuRecorder {
+impl CpuRecorder {
     pub fn new(pause: Arc<AtomicBool>, precision_seconds: Arc<AtomicU64>) -> Self {
         let now = Instant::now();
 
@@ -182,8 +182,13 @@ impl ReqCpuRecorder {
     }
 
     pub fn handle_pause(&mut self) {
+        let mut should_reset = false;
         while self.pause.load(SeqCst) {
             thread::park();
+            should_reset = true;
+        }
+
+        if should_reset {
             self.reset();
         }
     }

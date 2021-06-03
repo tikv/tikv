@@ -28,7 +28,7 @@ failpoints = ["fail/failpoints"]
 error_code = { path = "../error_code", default-features = false }
 futures = "0.3"
 grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored"] }
-kvproto = { rev = "f42e582bf0bb6bc2aee647e5f4126d51ccf6d377", git = "https://github.com/pingcap/kvproto.git", default-features = false }
+kvproto = { rev = "7a046020d1c091638e1e8aba623c8c1e8962219d", git = "https://github.com/pingcap/kvproto.git", default-features = false }
 lazy_static = "1.3"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { path = "../log_wrappers" }
