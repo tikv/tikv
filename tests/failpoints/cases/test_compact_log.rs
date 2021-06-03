@@ -48,7 +48,7 @@ fn test_evict_entry_cache() {
         must_get_equal(&cluster.get_engine(1), &k, &value);
     }
 
-    sleep_ms(200); // Wait to trigger a raft log compaction.
+    sleep_ms(500); // Wait to trigger a raft log compaction.
     let entry_cache_size = MEMTRACE_ENTRY_CACHE.sum();
     // Entries on store 2 will be cleaned, but on store 1 won't.
     assert!(entry_cache_size > 100 * 1024);
@@ -57,7 +57,7 @@ fn test_evict_entry_cache() {
     fail::cfg("needs_evict_entry_cache", "return").unwrap();
     fail::cfg("on_raft_gc_log_tick_1", "off").unwrap();
 
-    sleep_ms(200); // Wait to trigger a raft log compaction.
+    sleep_ms(500); // Wait to trigger a raft log compaction.
     let entry_cache_size = MEMTRACE_ENTRY_CACHE.sum();
     // Entries on store 1 will be evict even if they are still in life time.
     assert!(entry_cache_size < 50 * 1024);

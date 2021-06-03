@@ -3,8 +3,6 @@
 #![cfg_attr(test, feature(test))]
 #![feature(thread_id_value)]
 #![feature(box_patterns)]
-#[macro_use]
-extern crate fail;
 
 #[cfg(test)]
 extern crate test;

@@ -60,8 +60,9 @@ pub fn needs_evict_entry_cache() -> bool {
     if memory_usage_reaches_high_water() {
         let usage = get_global_memory_usage();
         let ec_usage = MEMTRACE_ENTRY_CACHE.sum() as u64;
-        if ec_usage > GIB || ec_usage > usage / 3 {
-            // Evict cache if entry cache memory usage reaches 1/3 of global or 1GB.
+        // Evict cache if entry cache memory usage reaches 1/3 of global,
+        // or 1GiB for small instances.
+        if ec_usage > GIB && (ec_usage > usage / 3 || usage <= 3 * GIB) {
             return true;
         }
     }

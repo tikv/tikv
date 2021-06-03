@@ -45,17 +45,17 @@ use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, CollectedReady, Proposal};
 use crate::store::hibernate_state::GroupState;
+use crate::store::memory::needs_evict_entry_cache;
 use crate::store::msg::RaftCommand;
 use crate::store::util::{admin_cmd_epoch_lookup, RegionReadProgress};
 use crate::store::worker::{HeartbeatTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
 use crate::store::{
     Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse,
 };
-use crate::{Error, Result, MAX_COMMITTED_SIZE_PER_READY};
+use crate::{Error, Result};
 use collections::{HashMap, HashSet};
 use pd_client::INVALID_ID;
 use tikv_util::codec::number::decode_u64;
-use tikv_util::sys::memory_usage_reaches_high_water;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::time::{Instant as UtilInstant, ThreadReadId};
 use tikv_util::worker::{FutureScheduler, Scheduler};
@@ -80,6 +80,7 @@ use super::DestroyPeerJob;
 const SHRINK_CACHE_CAPACITY: usize = 64;
 const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000; // 1s
 const REGION_READ_PROGRESS_CAP: usize = 128;
+const MAX_COMMITTED_SIZE_PER_READY: u64 = 16 * 1024 * 1024;
 
 /// The returned states of the peer after checking whether it is stale
 #[derive(Debug, PartialEq, Eq)]
@@ -550,6 +551,7 @@ where
             check_quorum: true,
             skip_bcast_commit: true,
             pre_vote: cfg.prevote,
+            max_committed_size_per_ready: MAX_COMMITTED_SIZE_PER_READY,
             ..Default::default()
         };
 
@@ -1736,14 +1738,6 @@ where
             "peer_id" => self.peer.get_id(),
         );
 
-        let max_committed_size = if memory_usage_reaches_high_water() {
-            0
-        } else {
-            MAX_COMMITTED_SIZE_PER_READY
-        };
-        self.raft_group
-            .raft
-            .set_max_committed_size_per_ready(max_committed_size);
         let mut ready = self.raft_group.ready();
 
         self.last_unpersisted_number = ready.number();
@@ -1940,6 +1934,10 @@ where
                 committed_entries,
                 cbs,
             );
+            if needs_evict_entry_cache() {
+                self.mut_store().half_evict_cache();
+            }
+
             self.mut_store().trace_cached_entries(apply.entries.clone());
             ctx.apply_router
                 .schedule_task(self.region_id, ApplyTask::apply(apply));
@@ -1967,14 +1965,6 @@ where
             return;
         }
 
-        let max_committed_size = if memory_usage_reaches_high_water() {
-            0
-        } else {
-            MAX_COMMITTED_SIZE_PER_READY
-        };
-        self.raft_group
-            .raft
-            .set_max_committed_size_per_ready(max_committed_size);
         let mut light_rd = self.raft_group.advance_append(ready);
 
         self.add_light_ready_metric(&light_rd, &mut ctx.raft_metrics.ready);

@@ -20,8 +20,6 @@ pub mod store;
 pub use self::coprocessor::{RegionInfo, RegionInfoAccessor, SeekRegionCallback};
 pub use self::errors::{DiscardReason, Error, Result};
 
-const MAX_COMMITTED_SIZE_PER_READY: u64 = 16 * 1024 * 1024;
-
 // With feature protobuf-codec, `bytes::Bytes` is generated for `bytes` in protobuf.
 #[cfg(feature = "protobuf-codec")]
 fn bytes_capacity(b: &bytes::Bytes) -> usize {

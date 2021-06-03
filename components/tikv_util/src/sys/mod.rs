@@ -7,6 +7,7 @@ mod cgroup;
 
 // re-export some traits for ease of use
 use crate::config::{ReadableSize, KIB};
+use fail::fail_point;
 #[cfg(target_os = "linux")]
 use lazy_static::lazy_static;
 use std::sync::atomic::{AtomicU64, Ordering};
