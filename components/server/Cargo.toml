@@ -88,7 +88,7 @@ tokio = { version = "0.2", features = ["rt-threaded"] }
 grpcio = { version = "0.9", default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"
 keys = { path = "../keys", default-features = false }
-kvproto = { rev = "73468940541b2e801cb5f9739cd0cf6465889e72", git = "https://github.com/pingcap/kvproto.git", default-features = false }
+kvproto = { rev = "f42e582bf0bb6bc2aee647e5f4126d51ccf6d377", git = "https://github.com/pingcap/kvproto.git", default-features = false }
 libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { path = "../log_wrappers" }
