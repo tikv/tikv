@@ -1043,17 +1043,23 @@ where
             if apply_ctx.yield_high_latency_operation && has_high_latency_operation(&cmd) {
                 self.priority = Priority::Low;
             }
-            let need_sync = should_write_to_engine(&cmd)
-                && self.last_sync_applied_index != self.apply_state.get_applied_index();
-            if need_sync || apply_ctx.kv_wb().should_write_to_engine() {
+            let mut has_unsynced_data =
+                self.last_sync_applied_index != self.apply_state.get_applied_index();
+            if has_unsynced_data && should_write_to_engine(&cmd)
+                || apply_ctx.kv_wb().should_write_to_engine()
+            {
                 apply_ctx.commit(self);
                 if let Some(start) = self.handle_start.as_ref() {
                     if start.elapsed() >= apply_ctx.yield_duration {
                         return ApplyResult::Yield;
                     }
                 }
+                has_unsynced_data = false;
             }
             if self.priority != apply_ctx.priority {
+                if has_unsynced_data {
+                    apply_ctx.commit(self);
+                }
                 return ApplyResult::Yield;
             }
 
