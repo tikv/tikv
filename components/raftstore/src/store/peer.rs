@@ -2184,6 +2184,10 @@ where
             self.raft_group.store().region(),
         );
 
+        if !self.is_leader() {
+            self.mut_store().compact_cache_to(apply_state.applied_index + 1);
+        }
+
         let progress_to_be_updated = self.mut_store().applied_index_term() != applied_index_term;
         self.mut_store().set_applied_state(apply_state);
         self.mut_store().set_applied_term(applied_index_term);

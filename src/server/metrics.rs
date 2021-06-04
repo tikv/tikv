@@ -377,8 +377,8 @@ lazy_static! {
         "Total CPU cores quota for TiKV server"
     )
     .unwrap();
-    pub static ref MEMORY_USAGE_GAUGE: Gauge =
-        register_gauge!("tikv_server_memory_usage", "Memory usage for the instance").unwrap();
+    pub static ref MEMORY_USAGE_GAUGE: IntGauge =
+        register_int_gauge!("tikv_server_memory_usage", "Memory usage for the instance").unwrap();
 }
 
 make_auto_flush_static_metric! {

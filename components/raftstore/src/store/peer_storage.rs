@@ -1113,6 +1113,15 @@ where
         self.cancel_generating_snap(Some(idx));
     }
 
+    pub fn compact_cache_to(&mut self, idx: u64) {
+        if let Some(ref mut cache) = self.cache {
+            cache.compact_to(idx);
+        } else {
+            let rid = self.get_region_id();
+            self.engines.raft.gc_entry_cache(rid, idx);
+        }
+    }
+
     #[inline]
     pub fn is_cache_empty(&self) -> bool {
         self.cache.as_ref().map_or(true, |c| c.is_empty())
