@@ -491,6 +491,7 @@ where
         if persistent {
             self.write_to_db();
             self.prepare_for(delegate);
+            delegate.last_flush_apply_index = delegate.apply_state.get_applied_index()
         }
         self.kv_wb_last_bytes = self.kv_wb().data_size() as u64;
         self.kv_wb_last_keys = self.kv_wb().count() as u64;
