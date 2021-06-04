@@ -3574,7 +3574,7 @@ where
     }
 
     fn on_entry_cache_evict_tick(&mut self) {
-        fail_point!("on_entry_cache_evict_tick", |_| return);
+        fail_point!("on_entry_cache_evict_tick", |_| {});
         if needs_evict_entry_cache() {
             self.fsm.peer.mut_store().half_evict_cache();
         }
