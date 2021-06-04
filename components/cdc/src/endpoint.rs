@@ -1323,12 +1323,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> RunnableWithTimer for Endpoint<T
         self.min_resolved_ts = TimeStamp::max();
         self.min_ts_region_id = 0;
 
-        let cache_size: usize = self
-            .old_value_cache
-            .cache
-            .iter()
-            .map(|(k, v)| k.as_encoded().len() + v.0.size())
-            .sum();
+        let cache_size = self.old_value_cache.cache.size();
         CDC_OLD_VALUE_CACHE_BYTES.set(cache_size as i64);
         CDC_OLD_VALUE_CACHE_ACCESS.add(self.old_value_cache.access_count as i64);
         CDC_OLD_VALUE_CACHE_MISS.add(self.old_value_cache.miss_count as i64);
