@@ -46,7 +46,6 @@ max-grpc-send-msg-len = 6291456
 raft-client-grpc-send-msg-buffer = 1263616
 raft-client-queue-size = 1234
 raft-msg-max-batch-size = 123
-raft-msg-flush-delay-us = 1234
 grpc-compression-type = "gzip"
 grpc-concurrency = 123
 grpc-concurrent-stream = 1234
