@@ -2229,7 +2229,7 @@ impl Default for CdcConfig {
             hibernate_regions_compatible: true,
             // 4 threads for incremental scan.
             incremental_scan_threads: 4,
-            // At most 16 concurrent running tasks.
+            // At most 6 concurrent running tasks.
             incremental_scan_concurrency: 6,
             // TiCDC requires a SSD, the typical write speed of SSD
             // is more than 500MB/s, so 128MB/s is enough.
