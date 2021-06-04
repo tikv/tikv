@@ -2230,7 +2230,7 @@ impl Default for CdcConfig {
             // 4 threads for incremental scan.
             incremental_scan_threads: 4,
             // At most 16 concurrent running tasks.
-            incremental_scan_concurrency: 16,
+            incremental_scan_concurrency: 6,
             // TiCDC requires a SSD, the typical write speed of SSD
             // is more than 500MB/s, so 128MB/s is enough.
             incremental_scan_speed_limit: ReadableSize::mb(128),
