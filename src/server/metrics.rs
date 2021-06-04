@@ -377,6 +377,12 @@ lazy_static! {
         "Total CPU cores quota for TiKV server"
     )
     .unwrap();
+    pub static ref MEM_TRACE_SUM_GAUGE: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_server_mem_trace_sum",
+        "The sum of memory trace for TiKV server",
+        &["name"]
+    )
+    .unwrap();
     pub static ref MEMORY_USAGE_GAUGE: IntGauge =
         register_int_gauge!("tikv_server_memory_usage", "Memory usage for the instance").unwrap();
 }
