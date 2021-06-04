@@ -480,7 +480,7 @@ where
     ///
     /// This call is valid only when it's between a `prepare_for` and `finish_for`.
     pub fn commit(&mut self, delegate: &mut ApplyDelegate<EK>) {
-        if delegate.last_flush_apply_index < delegate.apply_state.get_applied_index() {
+        if delegate.last_flush_applied_index < delegate.apply_state.get_applied_index() {
             delegate.write_apply_state(self.kv_wb_mut());
         }
         self.commit_opt(delegate, true);
@@ -491,7 +491,7 @@ where
         if persistent {
             self.write_to_db();
             self.prepare_for(delegate);
-            delegate.last_flush_apply_index = delegate.apply_state.get_applied_index()
+            delegate.last_flush_applied_index = delegate.apply_state.get_applied_index()
         }
         self.kv_wb_last_bytes = self.kv_wb().data_size() as u64;
         self.kv_wb_last_keys = self.kv_wb().count() as u64;
@@ -876,8 +876,8 @@ where
     apply_state: RaftApplyState,
     /// The term of the raft log at applied index.
     applied_index_term: u64,
-    /// The latest flushed apply index.
-    last_flush_apply_index: u64,
+    /// The latest flushed applied index.
+    last_flush_applied_index: u64,
 
     /// Info about cmd observer.
     observe_info: CmdObserveInfo,
@@ -902,7 +902,7 @@ where
             tag: format!("[region {}] {}", reg.region.get_id(), reg.id),
             region: reg.region,
             pending_remove: false,
-            last_flush_apply_index: reg.apply_state.get_applied_index(),
+            last_flush_applied_index: reg.apply_state.get_applied_index(),
             apply_state: reg.apply_state,
             applied_index_term: reg.applied_index_term,
             term: reg.term,
@@ -1042,8 +1042,8 @@ where
                 self.priority = Priority::Low;
             }
             let mut has_unflushed_data =
-                self.last_flush_apply_index != self.apply_state.get_applied_index();
-            if !has_unflushed_data && should_write_to_engine(&cmd)
+                self.last_flush_applied_index != self.apply_state.get_applied_index();
+            if has_unflushed_data && should_write_to_engine(&cmd)
                 || apply_ctx.kv_wb().should_write_to_engine()
             {
                 apply_ctx.commit(self);
@@ -3378,7 +3378,7 @@ where
             .apply_res
             .iter()
             .any(|res| res.region_id == self.delegate.region_id())
-            && self.delegate.last_flush_apply_index != applied_index;
+            && self.delegate.last_flush_applied_index != applied_index;
         #[cfg(feature = "failpoint")]
         (|| fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true }))();
         if need_sync {
@@ -3393,7 +3393,7 @@ where
             );
 
             apply_ctx.flush();
-            self.delegate.last_flush_apply_index = applied_index;
+            self.delegate.last_flush_applied_index = applied_index;
         }
 
         if let Err(e) = snap_task.generate_and_schedule_snapshot::<EK>(
@@ -3712,7 +3712,7 @@ where
     fn end(&mut self, fsms: &mut [Box<ApplyFsm<EK>>]) {
         self.apply_ctx.flush();
         for fsm in fsms {
-            fsm.delegate.last_flush_apply_index = fsm.delegate.apply_state.get_applied_index();
+            fsm.delegate.last_flush_applied_index = fsm.delegate.apply_state.get_applied_index();
         }
         if let Some(e) = self.trace_event.take() {
             MEMTRACE_APPLYS.trace(e);
@@ -4336,7 +4336,7 @@ mod tests {
             assert_eq!(delegate.apply_state.get_applied_index(), 5);
             assert_eq!(
                 delegate.apply_state.get_applied_index(),
-                delegate.last_flush_apply_index
+                delegate.last_flush_applied_index
             );
         });
 
@@ -4937,7 +4937,7 @@ mod tests {
         let mut keys = Vec::new();
         let keys_count = 1 << 5;
         for i in 0..keys_count {
-            keys.push(format!("k1/{}", i).as_bytes().to_vec());
+            keys.push(format!("k1/{:02}", i).as_bytes().to_vec());
         }
         let mut expected_vals = Vec::new();
         expected_vals.resize(keys_count, Vec::new());
@@ -4999,13 +4999,13 @@ mod tests {
             let mut file = importer.create(&meta).unwrap();
             file.append(&data).unwrap();
             file.finish().unwrap();
-            EntryBuilder::new(2, 1)
+            EntryBuilder::new(4, 1)
                 .ingest_sst(&meta)
                 .epoch(1, 3)
                 .build()
         };
         let entry5 = {
-            let mut entry = EntryBuilder::new(3, 1);
+            let mut entry = EntryBuilder::new(5, 1);
             for i in 0..keys_count {
                 if (i & 16) > 0 {
                     entry = entry.put(&keys[i], b"5");
