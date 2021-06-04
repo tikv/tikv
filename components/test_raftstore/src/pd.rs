@@ -1560,9 +1560,9 @@ impl PdClient for TestPdClient {
         });
         if self.trigger_tso_failure.swap(false, Ordering::SeqCst) {
             return Box::pin(err(pd_client::errors::Error::Grpc(
-                grpcio::Error::RpcFailure(grpcio::RpcStatus::new(
+                grpcio::Error::RpcFailure(grpcio::RpcStatus::with_message(
                     grpcio::RpcStatusCode::UNKNOWN,
-                    Some("tso error".to_owned()),
+                    "tso error".to_owned(),
                 )),
             )));
         }
