@@ -17,7 +17,7 @@ use protobuf::Message;
 use tikv_util::worker::*;
 use tikv_util::{error, info, warn};
 
-use crate::channel::{canal, Sink};
+use crate::channel::{channel, MemoryQuota, Sink};
 use crate::delegate::{Downstream, DownstreamID};
 use crate::endpoint::{Deregister, Task};
 
@@ -256,14 +256,18 @@ impl Conn {
 #[derive(Clone)]
 pub struct Service {
     scheduler: Scheduler<Task>,
+    memory_quota: MemoryQuota,
 }
 
 impl Service {
     /// Create a ChangeData service.
     ///
     /// It requires a scheduler of an `Endpoint` in order to schedule tasks.
-    pub fn new(scheduler: Scheduler<Task>) -> Service {
-        Service { scheduler }
+    pub fn new(scheduler: Scheduler<Task>, memory_quota: MemoryQuota) -> Service {
+        Service {
+            scheduler,
+            memory_quota,
+        }
     }
 }
 
@@ -276,7 +280,7 @@ impl ChangeData for Service {
     ) {
         // TODO explain buffer.
         let buffer = 1024;
-        let (event_sink, event_drain) = canal(buffer);
+        let (event_sink, mut event_drain) = channel(buffer, self.memory_quota.clone());
         let peer = ctx.peer();
         let conn = Conn::new(event_sink, peer);
         let conn_id = conn.get_id();
@@ -356,9 +360,8 @@ impl ChangeData for Service {
         let peer = ctx.peer();
         let scheduler = self.scheduler.clone();
 
-        let mut rx = event_drain.drain_grpc_message();
         ctx.spawn(async move {
-            let res = sink.send_all(&mut rx).await;
+            let res = event_drain.forward(&mut sink).await;
             // Unregister this downstream only.
             let deregister = Deregister::Conn(conn_id);
             if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
@@ -486,10 +489,11 @@ mod tests {
         );
     }
 
-    fn new_rpc_suite() -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
-        let env = Arc::new(EnvBuilder::new().build());
+    fn new_rpc_suite(capacity: usize) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
+        let memory_quota = MemoryQuota::new(capacity);
         let (scheduler, rx) = dummy_scheduler();
-        let cdc_service = Service::new(scheduler);
+        let cdc_service = Service::new(scheduler, memory_quota);
+        let env = Arc::new(EnvBuilder::new().build());
         let builder =
             ServerBuilder::new(env.clone()).register_service(create_change_data(cdc_service));
         let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
@@ -504,7 +508,8 @@ mod tests {
     #[test]
     fn test_flow_control() {
         // Disable CDC sink memory quota.
-        let (_server, client, mut task_rx) = new_rpc_suite();
+        let capacity = usize::MAX;
+        let (_server, client, mut task_rx) = new_rpc_suite(capacity);
         // Create a event feed stream.
         let (mut tx, mut rx) = client.event_feed().unwrap();
         let mut req = ChangeDataRequest {
@@ -532,7 +537,10 @@ mod tests {
         let must_fill_window = || {
             let mut window_size = 0;
             loop {
-                if poll_timeout(&mut send(), Duration::from_millis(100)).is_err() {
+                if matches!(
+                    poll_timeout(&mut send(), Duration::from_millis(100)),
+                    Err(_) | Ok(Err(_))
+                ) {
                     // Window is filled and flow control in sink is triggered.
                     break;
                 }
