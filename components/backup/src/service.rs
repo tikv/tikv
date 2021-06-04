@@ -38,12 +38,12 @@ impl Backup for Service {
             Ok((task, c)) => {
                 cancel = Some(c);
                 self.scheduler.schedule(task).map_err(|e| {
-                    RpcStatus::new(RpcStatusCode::INVALID_ARGUMENT, Some(format!("{:?}", e)))
+                    RpcStatus::with_message(RpcStatusCode::INVALID_ARGUMENT, format!("{:?}", e))
                 })
             }
-            Err(e) => Err(RpcStatus::new(
+            Err(e) => Err(RpcStatus::with_message(
                 RpcStatusCode::UNKNOWN,
-                Some(format!("{:?}", e)),
+                format!("{:?}", e),
             )),
         } {
             error!("backup task initiate failed"; "error" => ?status);

@@ -12,7 +12,7 @@ use kvproto::kvrpcpb::*;
 use kvproto::tikvpb::TikvClient;
 use raftstore::coprocessor::CoprocessorHost;
 use test_raftstore::*;
-use tikv::config::CdcConfig;
+use tikv::config::ResolvedTsConfig;
 use tikv_util::worker::LazyWorker;
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
@@ -72,8 +72,10 @@ impl TestSuite {
             let raft_router = sim.get_server_router(*id);
             let cm = sim.get_concurrency_manager(*id);
             let env = Arc::new(Environment::new(1));
-            let cfg = CdcConfig {
-                min_ts_interval: tikv_util::config::ReadableDuration(Duration::from_millis(100)),
+            let cfg = ResolvedTsConfig {
+                advance_ts_interval: tikv_util::config::ReadableDuration(Duration::from_millis(
+                    100,
+                )),
                 ..Default::default()
             };
             let rts_endpoint = resolved_ts::Endpoint::new(
