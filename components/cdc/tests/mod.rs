@@ -20,7 +20,7 @@ use tikv_util::worker::LazyWorker;
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
 
-use cdc::{CdcObserver, Task};
+use cdc::{CdcObserver, MemoryQuota, Task};
 static INIT: Once = Once::new();
 
 pub fn init() {
@@ -124,7 +124,8 @@ impl TestSuite {
                 .entry(id)
                 .or_default()
                 .push(Box::new(move || {
-                    create_change_data(cdc::Service::new(scheduler.clone()))
+                    let memory_quota = MemoryQuota::new(usize::MAX);
+                    create_change_data(cdc::Service::new(scheduler.clone(), memory_quota))
                 }));
             sim.txn_extra_schedulers.insert(
                 id,
@@ -158,6 +159,7 @@ impl TestSuite {
                 cm.clone(),
                 env,
                 sim.security_mgr.clone(),
+                MemoryQuota::new(usize::MAX),
             );
             cdc_endpoint.set_min_ts_interval(Duration::from_millis(100));
             cdc_endpoint.set_max_scan_batch_size(2);
