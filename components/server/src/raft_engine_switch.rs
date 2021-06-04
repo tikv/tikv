@@ -4,7 +4,7 @@ use crossbeam::channel::{unbounded, Receiver};
 use engine_rocks::{self, raw::Env, RocksEngine};
 use engine_traits::{
     CompactExt, DeleteStrategy, Error as EngineError, Iterable, Iterator, MiscExt, RaftEngine,
-    RaftLogBatch, Range, SeekKey,
+    RaftEngineReadOnly, RaftLogBatch, Range, SeekKey,
 };
 use file_system::delete_dir_if_exist;
 use kvproto::raft_serverpb::RaftLocalState;
