@@ -381,7 +381,6 @@ where
     kv_wb_last_bytes: u64,
     kv_wb_last_keys: u64,
 
-    last_applied_index: u64,
     committed_count: usize,
 
     // Whether synchronize WAL is preferred.
@@ -451,7 +450,6 @@ where
             apply_res: vec![],
             kv_wb_last_bytes: 0,
             kv_wb_last_keys: 0,
-            last_applied_index: 0,
             committed_count: 0,
             sync_log_hint: false,
             exec_ctx: None,
@@ -473,7 +471,6 @@ where
     /// `prepare_for` -> `commit` [-> `commit` ...] -> `finish_for`.
     /// After all delegates are handled, `write_to_db` method should be called.
     pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate<EK>) {
-        self.last_applied_index = delegate.apply_state.get_applied_index();
         self.applied_batch
             .push_batch(&delegate.observe_info, delegate.region.clone());
     }
@@ -483,11 +480,9 @@ where
     ///
     /// This call is valid only when it's between a `prepare_for` and `finish_for`.
     pub fn commit(&mut self, delegate: &mut ApplyDelegate<EK>) {
-        if self.last_applied_index < delegate.apply_state.get_applied_index() {
+        if delegate.last_flush_apply_index < delegate.apply_state.get_applied_index() {
             delegate.write_apply_state(self.kv_wb_mut());
         }
-        // last_applied_index doesn't need to be updated, set persistent to true will
-        // force it call `prepare_for` automatically.
         self.commit_opt(delegate, true);
     }
 
@@ -880,8 +875,8 @@ where
     apply_state: RaftApplyState,
     /// The term of the raft log at applied index.
     applied_index_term: u64,
-    /// The latest synced apply index.
-    last_sync_apply_index: u64,
+    /// The latest flushed apply index.
+    last_flush_apply_index: u64,
 
     /// Info about cmd observer.
     observe_info: CmdObserveInfo,
@@ -906,7 +901,7 @@ where
             tag: format!("[region {}] {}", reg.region.get_id(), reg.id),
             region: reg.region,
             pending_remove: false,
-            last_sync_apply_index: reg.apply_state.get_applied_index(),
+            last_flush_apply_index: reg.apply_state.get_applied_index(),
             apply_state: reg.apply_state,
             applied_index_term: reg.applied_index_term,
             term: reg.term,
@@ -1045,9 +1040,9 @@ where
             if apply_ctx.yield_high_latency_operation && has_high_latency_operation(&cmd) {
                 self.priority = Priority::Low;
             }
-            let mut has_unsynced_data =
-                apply_ctx.last_applied_index != self.apply_state.get_applied_index();
-            if has_unsynced_data && should_write_to_engine(&cmd)
+            let mut has_unflushed_data =
+                self.last_flush_apply_index != self.apply_state.get_applied_index();
+            if !has_unflushed_data && should_write_to_engine(&cmd)
                 || apply_ctx.kv_wb().should_write_to_engine()
             {
                 apply_ctx.commit(self);
@@ -1056,10 +1051,10 @@ where
                         return ApplyResult::Yield;
                     }
                 }
-                has_unsynced_data = false;
+                has_unflushed_data = false;
             }
             if self.priority != apply_ctx.priority {
-                if has_unsynced_data {
+                if has_unflushed_data {
                     apply_ctx.commit(self);
                 }
                 return ApplyResult::Yield;
@@ -3382,7 +3377,7 @@ where
             .apply_res
             .iter()
             .any(|res| res.region_id == self.delegate.region_id())
-            && self.delegate.last_sync_apply_index != applied_index;
+            && self.delegate.last_flush_apply_index != applied_index;
         #[cfg(feature = "failpoint")]
         (|| fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true }))();
         if need_sync {
@@ -3397,9 +3392,7 @@ where
             );
 
             apply_ctx.flush();
-            // For now, it's more like last_flush_apply_index.
-            // TODO: Update it only when `flush()` returns true.
-            self.delegate.last_sync_apply_index = applied_index;
+            self.delegate.last_flush_apply_index = applied_index;
         }
 
         if let Err(e) = snap_task.generate_and_schedule_snapshot::<EK>(
@@ -3716,11 +3709,9 @@ where
     }
 
     fn end(&mut self, fsms: &mut [Box<ApplyFsm<EK>>]) {
-        let is_synced = self.apply_ctx.flush();
-        if is_synced {
-            for fsm in fsms {
-                fsm.delegate.last_sync_apply_index = fsm.delegate.apply_state.get_applied_index();
-            }
+        self.apply_ctx.flush();
+        for fsm in fsms {
+            fsm.delegate.last_flush_apply_index = fsm.delegate.apply_state.get_applied_index();
         }
         if let Some(e) = self.trace_event.take() {
             MEMTRACE_APPLYS.trace(e);
@@ -4344,7 +4335,7 @@ mod tests {
             assert_eq!(delegate.apply_state.get_applied_index(), 5);
             assert_eq!(
                 delegate.apply_state.get_applied_index(),
-                delegate.last_sync_apply_index
+                delegate.last_flush_apply_index
             );
         });
 
