@@ -110,13 +110,8 @@ pub fn last_index(state: &RaftLocalState) -> u64 {
 struct EntryCache {
     cache: VecDeque<Entry>,
     trace: VecDeque<CachedEntries>,
-<<<<<<< HEAD
-    hit: Cell<u64>,
-    miss: Cell<u64>,
-=======
     hit: Cell<i64>,
     miss: Cell<i64>,
->>>>>>> 8b7559b8a... evict entry cache when memory usage is high (#10263)
     #[cfg(test)]
     size_change_cb: Option<Box<dyn Fn(i64) + Send + 'static>>,
 }

@@ -3649,13 +3649,13 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
+          "datasource": "playground",
           "decimals": null,
           "fill": 1,
           "gridPos": {
             "h": 8,
             "w": 12,
-            "x": 12,
+            "x": 0,
             "y": 51
           },
           "id": 7266,
