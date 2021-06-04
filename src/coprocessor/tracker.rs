@@ -166,7 +166,7 @@ impl Tracker {
     }
 
     pub fn collect_scan_process_time(&mut self, exec_summary: ExecSummary) {
-        self.scan_process_time_ms = exec_summary.time_processed_ns as u64;
+        self.scan_process_time_ms = (exec_summary.time_processed_ns/1000) as u64;
     }
 
     /// Get current item's ExecDetail according to previous collected metrics.
