@@ -539,8 +539,8 @@ mod tests {
 
     macro_rules! approximate_eq {
         ($left:expr, $right:expr) => {
-            assert!(($left) >= ($right) * 0.9);
-            assert!(($right) >= ($left) * 0.9);
+            assert!(($left) >= ($right) * 0.85);
+            assert!(($right) >= ($left) * 0.85);
         };
     }
 
