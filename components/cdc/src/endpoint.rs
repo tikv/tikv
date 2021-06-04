@@ -522,7 +522,6 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             build_resolver: is_new_delegate,
         };
 
-        let (cb, fut) = tikv_util::future::paired_future_callback();
         let scheduler = self.scheduler.clone();
         let deregister_downstream = move |err| {
             warn!("cdc send capture change cmd failed"; "region_id" => region_id, "error" => ?err);
@@ -546,32 +545,38 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 error!("cdc schedule cdc task failed"; "error" => ?e);
             }
         };
+        let raft_router = self.raft_router.clone();
         let scheduler = self.scheduler.clone();
-        if let Err(e) = self.raft_router.significant_send(
-            region_id,
-            SignificantMsg::CaptureChange {
-                cmd: change_cmd,
-                region_epoch: request.take_region_epoch(),
-                callback: Callback::Read(Box::new(move |resp| {
-                    if let Err(e) = scheduler.schedule(Task::InitDownstream {
-                        downstream_id,
-                        downstream_state,
-                        cb: Box::new(move || {
-                            cb(resp);
-                        }),
-                    }) {
-                        error!("cdc schedule cdc task failed"; "error" => ?e);
-                    }
-                })),
-            },
-        ) {
-            warn!("cdc send capture change cmd failed"; "region_id" => region_id, "error" => ?e);
-            deregister_downstream(Error::request(e.into()));
-            return;
-        }
         let scan_concurrency_semaphore = self.scan_concurrency_semaphore.clone();
         self.workers.spawn(async move {
             let _permit = scan_concurrency_semaphore.acquire().await;
+
+            // To avoid holding too many snapshots and holding them too long,
+            // we need to acquire scan concurrency permit first.
+            let (cb, fut) = tikv_util::future::paired_future_callback();
+            if let Err(e) = raft_router.significant_send(
+                region_id,
+                SignificantMsg::CaptureChange {
+                    cmd: change_cmd,
+                    region_epoch: request.take_region_epoch(),
+                    callback: Callback::Read(Box::new(move |resp| {
+                        if let Err(e) = scheduler.schedule(Task::InitDownstream {
+                            downstream_id,
+                            downstream_state,
+                            cb: Box::new(move || {
+                                cb(resp);
+                            }),
+                        }) {
+                            error!("cdc schedule cdc task failed"; "error" => ?e);
+                        }
+                    })),
+                },
+            ) {
+                warn!("cdc send capture change cmd failed"; "region_id" => region_id, "error" => ?e);
+                deregister_downstream(Error::request(e.into()));
+                return;
+            }
+
             match fut.await {
                 Ok(resp) => init.on_change_cmd(resp).await,
                 Err(e) => deregister_downstream(Error::Other(box_err!(e))),
