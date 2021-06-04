@@ -23,7 +23,6 @@ use seahash::SeaHasher;
 use security::SecurityManager;
 use std::collections::VecDeque;
 use std::ffi::CString;
-use std::hash::Hasher;
 use std::marker::PhantomData;
 use std::marker::Unpin;
 use std::pin::Pin;
@@ -851,12 +850,9 @@ where
             0
         } else {
             if self.last_hash.0 == 0 || msg.region_id != self.last_hash.0 {
-                let mut hasher = SeaHasher::new();
-                hasher.write_u64(msg.region_id);
-                let h = hasher.finish();
                 self.last_hash = (
                     msg.region_id,
-                    h % self.builder.cfg.grpc_raft_conn_num as u64,
+                    seahash::hash(msg.region_id.as_ne_bytes()) % self.builder.cfg.grpc_raft_conn_num as u64,
                 );
             };
             self.last_hash.1 as usize

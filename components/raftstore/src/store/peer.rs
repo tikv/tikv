@@ -1770,7 +1770,6 @@ where
                 self.read_progress.resume();
                 // Update apply index to `last_applying_idx`
                 self.read_progress.update_applied(self.last_applying_idx);
-                self.read_progress.update_applied(self.last_applying_idx);
 
                 if self.snap_ctx.is_some() {
                     let snap_ctx = self.snap_ctx.as_mut().unwrap();
@@ -1786,7 +1785,7 @@ where
 
                     self.snap_ctx = None;
 
-                    // Snapshot's has been applied.
+                    // Snapshot has been persisted.
                     self.last_applying_idx = self.get_store().truncated_index();
                     self.raft_group.advance_apply_to(self.last_applying_idx);
                     self.cmd_epoch_checker.advance_apply(
