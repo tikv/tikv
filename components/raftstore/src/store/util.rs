@@ -3,9 +3,9 @@
 use std::collections::VecDeque;
 use std::fmt::Display;
 use std::option::Option;
-use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
-use std::{fmt, u64};
+use std::{cmp, fmt, u64};
 
 use kvproto::kvrpcpb::KeyRange;
 use kvproto::metapb::{self, PeerRole};
@@ -16,7 +16,7 @@ use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
 use raft::INVALID_INDEX;
 use raft_proto::ConfChangeI;
 use tikv_util::time::monotonic_raw_now;
-use tikv_util::{box_err, debug};
+use tikv_util::{box_err, debug, info};
 use time::{Duration, Timespec};
 
 use super::peer_storage;
@@ -785,7 +785,7 @@ impl<'a> ChangePeerI for &'a ChangePeerRequest {
         let mut cc = eraftpb::ConfChange::default();
         cc.set_change_type(self.get_change_type());
         cc.set_node_id(self.get_peer().get_id());
-        cc.set_context(ctx);
+        cc.set_context(ctx.into());
         cc
     }
 }
@@ -819,7 +819,7 @@ impl<'a> ChangePeerI for &'a ChangePeerV2Request {
             cc.set_transition(eraftpb::ConfChangeTransition::Explicit);
         }
         cc.set_changes(changes.into());
-        cc.set_context(ctx);
+        cc.set_context(ctx.into());
         cc
     }
 }
@@ -856,27 +856,29 @@ pub struct RegionReadProgress {
     // `core` used to keep track and update `safe_ts`, it should
     // not be accessed outside to avoid dead lock
     core: Mutex<RegionReadProgressCore>,
-    // The fast path to read `safe_ts` and `applied_index` without
-    // acquiring the mutex on `core`
+    // The fast path to read `safe_ts` without acquiring the mutex
+    // on `core`
     safe_ts: AtomicU64,
-    applied_index: AtomicU64,
+    // `true` means stop updating `safe_ts` until `resume` is called
+    stopped: AtomicBool,
 }
 
 impl RegionReadProgress {
-    pub fn new(applied_index: u64, cap: usize) -> RegionReadProgress {
+    pub fn new(applied_index: u64, cap: usize, tag: String) -> RegionReadProgress {
         RegionReadProgress {
-            core: Mutex::new(RegionReadProgressCore::new(applied_index, cap)),
-            applied_index: AtomicU64::from(applied_index),
+            core: Mutex::new(RegionReadProgressCore::new(applied_index, cap, tag)),
             safe_ts: AtomicU64::from(0),
+            stopped: AtomicBool::from(false),
         }
     }
 
     pub fn update_applied(&self, applied: u64) {
         let mut core = self.core.lock().unwrap();
         if let Some(ts) = core.update_applied(applied) {
-            self.safe_ts.store(ts, AtomicOrdering::Release);
+            if !core.pause {
+                self.safe_ts.store(ts, AtomicOrdering::Release);
+            }
         }
-        self.applied_index.store(applied, AtomicOrdering::Release);
     }
 
     pub fn update_safe_ts(&self, apply_index: u64, ts: u64) {
@@ -884,47 +886,121 @@ impl RegionReadProgress {
             return;
         }
         let mut core = self.core.lock().unwrap();
+        if core.discard {
+            return;
+        }
         if let Some(ts) = core.update_safe_ts(apply_index, ts) {
-            self.safe_ts.store(ts, AtomicOrdering::Release);
+            if !core.pause {
+                self.safe_ts.store(ts, AtomicOrdering::Release);
+            }
         }
     }
 
-    pub fn clear(&self) {
+    pub fn merge_safe_ts(&self, source_safe_ts: u64, merge_index: u64) {
         let mut core = self.core.lock().unwrap();
-        core.clear();
+        if let Some(ts) = core.merge_safe_ts(source_safe_ts, merge_index) {
+            if !core.pause {
+                self.safe_ts.store(ts, AtomicOrdering::Release);
+            }
+        }
+    }
+
+    /// Reset `safe_ts` to 0 and stop updating it
+    pub fn pause(&self) {
+        let mut core = self.core.lock().unwrap();
+        core.pause = true;
         self.safe_ts.store(0, AtomicOrdering::Release);
     }
 
-    pub fn applied_index(&self) -> u64 {
-        self.applied_index.load(AtomicOrdering::Acquire)
+    /// Discard incoming `read_state` item and stop updating `safe_ts`
+    pub fn discard(&self) {
+        let mut core = self.core.lock().unwrap();
+        core.pause = true;
+        core.discard = true;
+    }
+
+    /// Reset `safe_ts` and resume updating it
+    pub fn resume(&self) {
+        let mut core = self.core.lock().unwrap();
+        core.pause = false;
+        core.discard = false;
+        self.safe_ts
+            .store(core.read_state.ts, AtomicOrdering::Release);
+    }
+
+    // Get the latest `read_state`
+    pub fn read_state(&self) -> ReadState {
+        let core = self.core.lock().unwrap();
+        core.pending_items
+            .back()
+            .unwrap_or(&core.read_state)
+            .clone()
     }
 
     pub fn safe_ts(&self) -> u64 {
         self.safe_ts.load(AtomicOrdering::Acquire)
     }
-
-    pub fn fetch_max_safe_ts(&self, incoming_safe_ts: u64) {
-        self.safe_ts
-            .fetch_max(incoming_safe_ts, AtomicOrdering::SeqCst);
-    }
 }
 
 #[derive(Default, Debug)]
 struct RegionReadProgressCore {
+    tag: String,
     applied_index: u64,
-    // TODO: after region merged, the region's key range is extended and this
-    // region wide `safe_ts` should reset to `min(source_safe_ts, target_safe_ts)`
-    safe_ts: u64,
-    // `pending_items` is a *sorted* list of `(apply index, safe ts)` item
-    pending_items: VecDeque<(u64, u64)>,
+    // A wraper of `(apply_index, safe_ts)` item, where the `read_state.ts` is the peer's current `safe_ts`
+    // and the `read_state.idx` is the smallest `apply_index` required for that `safe_ts`
+    read_state: ReadState,
+    // `pending_items` is a *sorted* list of `(apply_index, safe_ts)` item
+    pending_items: VecDeque<ReadState>,
+    // After the region commit merged, the region's key range is extended and the region's `safe_ts`
+    // should reset to `min(source_safe_ts, target_safe_ts)`, and start reject stale `read_state` item
+    // with index smaller than `last_merge_index` to avoid `safe_ts` undo the decrease
+    last_merge_index: u64,
+    // Stop update `safe_ts`
+    pause: bool,
+    // Discard incoming `(idx, ts)`
+    discard: bool,
+}
+
+// A helpful wraper of `(apply_index, safe_ts)` item
+#[derive(Clone, Debug, Default)]
+pub struct ReadState {
+    pub idx: u64,
+    pub ts: u64,
 }
 
 impl RegionReadProgressCore {
-    fn new(applied_index: u64, cap: usize) -> RegionReadProgressCore {
+    fn new(applied_index: u64, cap: usize, tag: String) -> RegionReadProgressCore {
         RegionReadProgressCore {
+            tag,
             applied_index,
-            safe_ts: 0,
+            read_state: ReadState::default(),
             pending_items: VecDeque::with_capacity(cap),
+            last_merge_index: 0,
+            pause: false,
+            discard: false,
+        }
+    }
+
+    // Reset target region's `safe_ts` to min(`source_safe_ts`, `safe_ts`)
+    fn merge_safe_ts(&mut self, source_safe_ts: u64, merge_index: u64) -> Option<u64> {
+        // Consume all pending items before `merge_index`
+        self.update_applied(merge_index);
+        // Update `last_merge_index`
+        self.last_merge_index = merge_index;
+        // Reset target region's `safe_ts`
+        let target_safe_ts = self.read_state.ts;
+        self.read_state.ts = cmp::min(source_safe_ts, target_safe_ts);
+        info!(
+            "reset safe_ts due to merge";
+            "tag" => &self.tag,
+            "source_safe_ts" => source_safe_ts,
+            "target_safe_ts" => target_safe_ts,
+            "safe_ts" => self.read_state.ts,
+        );
+        if self.read_state.ts != target_safe_ts {
+            Some(self.read_state.ts)
+        } else {
+            None
         }
     }
 
@@ -934,62 +1010,62 @@ impl RegionReadProgressCore {
         assert!(applied >= self.applied_index);
         self.applied_index = applied;
         // Consume pending items with `apply_index` less or equal to `self.applied_index`
-        let mut ts_to_update = self.safe_ts;
-        while let Some((idx, ts)) = self.pending_items.pop_front() {
-            if self.applied_index < idx {
-                self.pending_items.push_front((idx, ts));
+        let mut to_update = self.read_state.clone();
+        while let Some(item) = self.pending_items.pop_front() {
+            if self.applied_index < item.idx {
+                self.pending_items.push_front(item);
                 break;
             }
-            if ts_to_update < ts {
-                ts_to_update = ts;
+            if to_update.ts < item.ts {
+                to_update = item;
             }
         }
-        if self.safe_ts < ts_to_update {
-            self.safe_ts = ts_to_update;
-            Some(ts_to_update)
+        if self.read_state.ts < to_update.ts {
+            self.read_state = to_update;
+            Some(self.read_state.ts)
         } else {
             None
         }
     }
 
     // Return the `safe_ts` if it is updated
-    fn update_safe_ts(&mut self, apply_index: u64, ts: u64) -> Option<u64> {
+    fn update_safe_ts(&mut self, idx: u64, ts: u64) -> Option<u64> {
+        // Discard stale item with `apply_index` before `last_merge_index`
+        // in order to prevent the stale item makes the `safe_ts` larger again
+        if idx <= self.last_merge_index {
+            return None;
+        }
         // The peer has enough data, try update `safe_ts` directly
-        if self.applied_index >= apply_index {
+        if self.applied_index >= idx {
             let mut updated_ts = None;
-            if self.safe_ts < ts {
-                self.safe_ts = ts;
+            if self.read_state.ts < ts {
+                self.read_state = ReadState { idx, ts };
                 updated_ts = Some(ts);
             }
             return updated_ts;
         }
         // The peer doesn't has enough data, keep the item for future use
-        if let Some(item) = self.pending_items.back_mut() {
-            // Discord the item if it has a smaller `safe_ts`
-            if item.1 >= ts {
+        if let Some(prev_item) = self.pending_items.back_mut() {
+            // Discard the item if it has a smaller `safe_ts`
+            if prev_item.ts >= ts {
                 return None;
             }
-            // Discord the item if it has a smaller `apply_index`
-            if item.0 >= apply_index {
-                // Instead of adding a new item, try update the last one,
-                // update the last item's `safe_ts` if the incoming item
-                // require a less or equal `apply_index` with a larger `safe_ts`
-                item.1 = ts;
+            // Discard the item if it has a smaller `apply_index`
+            if prev_item.idx >= idx {
+                // Instead of dropping the incoming item, try use it to update
+                // the last one, update the last item's `safe_ts` if the incoming
+                // item require a less or equal `apply_index` with a larger `safe_ts`
+                prev_item.ts = ts;
                 return None;
             }
         }
-        self.push_back((apply_index, ts));
+        self.push_back(ReadState { idx, ts });
         None
     }
 
-    fn clear(&mut self) {
-        self.pending_items.clear();
-        self.safe_ts = 0;
-    }
-
-    fn push_back(&mut self, item: (u64, u64)) {
+    fn push_back(&mut self, item: ReadState) {
         if self.pending_items.len() >= self.pending_items.capacity() {
-            // Stepping by one to evently remove the items, so the follower can keep
+            // Stepping by one to evently remove pending items, so the follower can keep
             // the old items and use them to update the `safe_ts` even when the follower
             // not catch up new enough data
             let mut keep = false;
@@ -1627,7 +1703,7 @@ mod tests {
         }
 
         let cap = 10;
-        let rrp = RegionReadProgress::new(10, cap);
+        let rrp = RegionReadProgress::new(10, cap, "".to_owned());
         for i in 1..=20 {
             rrp.update_safe_ts(i, i);
         }

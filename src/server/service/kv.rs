@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use tikv_util::time::{duration_to_sec, Instant};
 
-use super::batch::ReqBatcher;
+use super::batch::{BatcherBuilder, ReqBatcher};
 use crate::coprocessor::Endpoint;
 use crate::coprocessor_v2;
 use crate::server::gc_worker::GcWorker;
@@ -33,7 +33,6 @@ use grpcio::{
     RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
 };
 use kvproto::coprocessor::*;
-use kvproto::coprocessor_v2::*;
 use kvproto::errorpb::{Error as RegionError, *};
 use kvproto::kvrpcpb::*;
 use kvproto::mpp::*;
@@ -59,9 +58,9 @@ pub struct Service<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: Lock
     // For handling KV requests.
     storage: Storage<E, L>,
     // For handling coprocessor requests.
-    cop: Endpoint<E>,
+    copr: Endpoint<E>,
     // For handling corprocessor v2 requests.
-    coprv2: coprocessor_v2::Endpoint,
+    copr_v2: coprocessor_v2::Endpoint,
     // For handling raft messages.
     ch: T,
     // For handling snapshot.
@@ -70,8 +69,6 @@ pub struct Service<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: Lock
     enable_req_batch: bool,
 
     grpc_thread_load: Arc<ThreadLoad>,
-
-    readpool_normal_thread_load: Arc<ThreadLoad>,
 
     proxy: Proxy,
 }
@@ -84,13 +81,12 @@ impl<T: RaftStoreRouter<RocksEngine> + Clone + 'static, E: Engine + Clone, L: Lo
             store_id: self.store_id,
             gc_worker: self.gc_worker.clone(),
             storage: self.storage.clone(),
-            cop: self.cop.clone(),
-            coprv2: self.coprv2.clone(),
+            copr: self.copr.clone(),
+            copr_v2: self.copr_v2.clone(),
             ch: self.ch.clone(),
             snap_scheduler: self.snap_scheduler.clone(),
             enable_req_batch: self.enable_req_batch,
             grpc_thread_load: self.grpc_thread_load.clone(),
-            readpool_normal_thread_load: self.readpool_normal_thread_load.clone(),
             proxy: self.proxy.clone(),
         }
     }
@@ -102,12 +98,11 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
         store_id: u64,
         storage: Storage<E, L>,
         gc_worker: GcWorker<E, T>,
-        cop: Endpoint<E>,
-        coprv2: coprocessor_v2::Endpoint,
+        copr: Endpoint<E>,
+        copr_v2: coprocessor_v2::Endpoint,
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
         grpc_thread_load: Arc<ThreadLoad>,
-        readpool_normal_thread_load: Arc<ThreadLoad>,
         enable_req_batch: bool,
         proxy: Proxy,
     ) -> Self {
@@ -115,13 +110,12 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
             store_id,
             gc_worker,
             storage,
-            cop,
-            coprv2,
+            copr,
+            copr_v2,
             ch,
             snap_scheduler,
             enable_req_batch,
             grpc_thread_load,
-            readpool_normal_thread_load,
             proxy,
         }
     }
@@ -299,7 +293,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
     }
 
     fn kv_gc(&mut self, ctx: RpcContext<'_>, _: GcRequest, sink: UnarySink<GcResponse>) {
-        let e = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
+        let e = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED);
         ctx.spawn(
             sink.fail(e)
                 .unwrap_or_else(|e| error!("kv rpc failed"; "err" => ?e)),
@@ -309,7 +303,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
     fn coprocessor(&mut self, ctx: RpcContext<'_>, req: Request, sink: UnarySink<Response>) {
         forward_unary!(self.proxy, coprocessor, ctx, req, sink);
         let begin_instant = Instant::now_coarse();
-        let future = future_cop(&self.cop, Some(ctx.peer()), req);
+        let future = future_copr(&self.copr, Some(ctx.peer()), req);
         let task = async move {
             let resp = future.await?;
             sink.success(resp).await?;
@@ -330,19 +324,19 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         ctx.spawn(task);
     }
 
-    fn coprocessor_v2(
+    fn raw_coprocessor(
         &mut self,
         ctx: RpcContext<'_>,
         req: RawCoprocessorRequest,
         sink: UnarySink<RawCoprocessorResponse>,
     ) {
         let begin_instant = Instant::now_coarse();
-        let future = future_coprv2(&self.coprv2, &self.storage, req);
+        let future = future_raw_coprocessor(&self.copr_v2, &self.storage, req);
         let task = async move {
             let resp = future.await?;
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
-                .coprocessor_v2
+                .raw_coprocessor
                 .observe(duration_to_sec(begin_instant.elapsed()));
             ServerResult::Ok(())
         }
@@ -351,7 +345,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 "request" => "coprocessor_v2",
                 "err" => ?e
             );
-            GRPC_MSG_FAIL_COUNTER.coprocessor_v2.inc();
+            GRPC_MSG_FAIL_COUNTER.raw_coprocessor.inc();
         })
         .map(|_| ());
 
@@ -583,7 +577,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let begin_instant = Instant::now_coarse();
 
         let mut stream = self
-            .cop
+            .copr
             .parse_and_handle_stream_request(req, Some(ctx.peer()))
             .map(|resp| {
                 GrpcResult::<(Response, WriteFlags)>::Ok((
@@ -638,9 +632,9 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 Err(e) => {
                     let msg = format!("{:?}", e);
                     error!("dispatch raft msg from gRPC to raftstore fail"; "err" => %msg);
-                    RpcStatus::new(RpcStatusCode::UNKNOWN, Some(msg))
+                    RpcStatus::with_message(RpcStatusCode::UNKNOWN, msg)
                 }
-                Ok(_) => RpcStatus::new(RpcStatusCode::UNKNOWN, None),
+                Ok(_) => RpcStatus::new(RpcStatusCode::UNKNOWN),
             };
             let _ = sink
                 .fail(status)
@@ -681,9 +675,9 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 Err(e) => {
                     let msg = format!("{:?}", e);
                     error!("dispatch raft msg from gRPC to raftstore fail"; "err" => %msg);
-                    RpcStatus::new(RpcStatusCode::UNKNOWN, Some(msg))
+                    RpcStatus::with_message(RpcStatusCode::UNKNOWN, msg)
                 }
-                Ok(_) => RpcStatus::new(RpcStatusCode::UNKNOWN, None),
+                Ok(_) => RpcStatus::new(RpcStatusCode::UNKNOWN),
             };
             let _ = sink
                 .fail(status)
@@ -705,7 +699,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 SnapTask::Recv { sink, .. } => sink,
                 _ => unreachable!(),
             };
-            let status = RpcStatus::new(RpcStatusCode::RESOURCE_EXHAUSTED, Some(err_msg));
+            let status = RpcStatus::with_message(RpcStatusCode::RESOURCE_EXHAUSTED, err_msg);
             ctx.spawn(sink.fail(status).map(|_| ()));
         }
     }
@@ -903,33 +897,33 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let ctx = Arc::new(ctx);
         let peer = ctx.peer();
         let storage = self.storage.clone();
-        let cop = self.cop.clone();
-        let coprv2 = self.coprv2.clone();
-        let enable_req_batch = self.enable_req_batch;
+        let copr = self.copr.clone();
+        let copr_v2 = self.copr_v2.clone();
+        let pool_size = storage.get_normal_pool_size();
+        let batch_builder = BatcherBuilder::new(self.enable_req_batch, pool_size);
         let request_handler = stream.try_for_each(move |mut req| {
             let request_ids = req.take_request_ids();
             let requests: Vec<_> = req.take_requests().into();
-            let mut batcher = if enable_req_batch && requests.len() > 2 {
-                Some(ReqBatcher::new())
-            } else {
-                None
-            };
+            let queue = storage.get_readpool_queue_per_worker();
+            let mut batcher = batch_builder.build(queue, request_ids.len());
             GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
             for (id, req) in request_ids.into_iter().zip(requests) {
                 handle_batch_commands_request(
                     &mut batcher,
                     &storage,
-                    &cop,
-                    &coprv2,
+                    &copr,
+                    &copr_v2,
                     &peer,
                     id,
                     req,
                     &tx,
                 );
+                if let Some(batch) = batcher.as_mut() {
+                    batch.maybe_commit(&storage, &tx);
+                }
             }
-            if let Some(mut batch) = batcher {
+            if let Some(batch) = batcher {
                 batch.commit(&storage, &tx);
-                storage.release_snapshot();
             }
             future::ok(())
         });
@@ -1059,11 +1053,24 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
 
     fn get_lock_wait_info(
         &mut self,
-        _: RpcContext<'_>,
-        _: GetLockWaitInfoRequest,
-        _: UnarySink<GetLockWaitInfoResponse>,
+        ctx: RpcContext<'_>,
+        _request: GetLockWaitInfoRequest,
+        sink: UnarySink<GetLockWaitInfoResponse>,
     ) {
-        unimplemented!()
+        let (cb, f) = paired_future_callback();
+        self.storage.dump_wait_for_entries(cb);
+        let task = async move {
+            let res = f.await?;
+            let mut response = GetLockWaitInfoResponse::default();
+            response.set_entries(RepeatedField::from_vec(res));
+            sink.success(response).await?;
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            warn!("call dump_wait_for_entries failed"; "err" => ?e);
+        })
+        .map(|_| ());
+        ctx.spawn(task);
     }
 }
 
@@ -1078,8 +1085,8 @@ fn response_batch_commands_request<F>(
 {
     let task = async move {
         if let Ok(resp) = resp.await {
-            if tx.send_and_notify((id, resp)).is_err() {
-                error!("KvService response batch commands fail");
+            if let Err(e) = tx.send_and_notify((id, resp)) {
+                error!("KvService response batch commands fail"; "err" => ?e);
             } else {
                 GRPC_MSG_HISTOGRAM_STATIC
                     .get(label_enum)
@@ -1093,8 +1100,8 @@ fn response_batch_commands_request<F>(
 fn handle_batch_commands_request<E: Engine, L: LockManager>(
     batcher: &mut Option<ReqBatcher>,
     storage: &Storage<E, L>,
-    cop: &Endpoint<E>,
-    coprv2: &coprocessor_v2::Endpoint,
+    copr: &Endpoint<E>,
+    copr_v2: &coprocessor_v2::Endpoint,
     peer: &str,
     id: u64,
     req: batch_commands_request::Request,
@@ -1121,7 +1128,6 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
                 },
                 Some(batch_commands_request::request::Cmd::Get(req)) => {
                     if batcher.as_mut().map_or(false, |req_batch| {
-                        req_batch.maybe_commit(storage, tx);
                         req_batch.can_batch_get(&req)
                     }) {
                         batcher.as_mut().unwrap().add_get_request(req, id);
@@ -1135,7 +1141,6 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
                 },
                 Some(batch_commands_request::request::Cmd::RawGet(req)) => {
                     if batcher.as_mut().map_or(false, |req_batch| {
-                        req_batch.maybe_commit(storage, tx);
                         req_batch.can_batch_raw_get(&req)
                     }) {
                         batcher.as_mut().unwrap().add_raw_get_request(req, id);
@@ -1181,8 +1186,8 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
         RawScan, future_raw_scan(storage), raw_scan;
         RawDeleteRange, future_raw_delete_range(storage), raw_delete_range;
         RawBatchScan, future_raw_batch_scan(storage), raw_batch_scan;
-        Coprocessor, future_cop(cop, Some(peer.to_string())), coprocessor;
-        CoprocessorV2, future_coprv2(coprv2, storage), coprocessor;
+        Coprocessor, future_copr(copr, Some(peer.to_string())), coprocessor;
+        RawCoprocessor, future_raw_coprocessor(copr_v2, storage), coprocessor;
         PessimisticLock, future_acquire_pessimistic_lock(storage), kv_pessimistic_lock;
         PessimisticRollback, future_pessimistic_rollback(storage), kv_pessimistic_rollback;
         Empty, future_handle_empty(), invalid;
@@ -1348,7 +1353,6 @@ fn future_scan_lock<E: Engine, L: LockManager>(
 async fn future_gc(_: GcRequest) -> ServerResult<GcResponse> {
     Err(Error::Grpc(GrpcError::RpcFailure(RpcStatus::new(
         RpcStatusCode::UNIMPLEMENTED,
-        None,
     ))))
 }
 
@@ -1701,21 +1705,21 @@ fn future_raw_compare_and_swap<E: Engine, L: LockManager>(
     }
 }
 
-fn future_cop<E: Engine>(
-    cop: &Endpoint<E>,
+fn future_copr<E: Engine>(
+    copr: &Endpoint<E>,
     peer: Option<String>,
     req: Request,
 ) -> impl Future<Output = ServerResult<Response>> {
-    let ret = cop.parse_and_handle_unary_request(req, peer);
+    let ret = copr.parse_and_handle_unary_request(req, peer);
     async move { Ok(ret.await) }
 }
 
-fn future_coprv2<E: Engine, L: LockManager>(
-    coprv2: &coprocessor_v2::Endpoint,
+fn future_raw_coprocessor<E: Engine, L: LockManager>(
+    copr_v2: &coprocessor_v2::Endpoint,
     storage: &Storage<E, L>,
     req: RawCoprocessorRequest,
 ) -> impl Future<Output = ServerResult<RawCoprocessorResponse>> {
-    let ret = coprv2.handle_request(storage, req);
+    let ret = copr_v2.handle_request(storage, req);
     async move { Ok(ret.await) }
 }
 
@@ -1886,6 +1890,7 @@ pub mod batch_commands_request {
 pub use kvproto::tikvpb::batch_commands_request;
 #[cfg(feature = "prost-codec")]
 pub use kvproto::tikvpb::batch_commands_response;
+use protobuf::RepeatedField;
 
 struct BatchRespCollector;
 impl BatchCollector<BatchCommandsResponse, (u64, batch_commands_response::Response)>

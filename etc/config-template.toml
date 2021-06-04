@@ -1,6 +1,6 @@
 ## TiKV config template
 ##  Human-readable big numbers:
-##   File size(based on byte): KB, MB, GB, TB, PB
+##   File size(based on byte, binary units): KB, MB, GB, TB, PB
 ##    e.g.: 1_048_576 = "1MB"
 ##   Time(based on ms): ms, s, m, h
 ##    e.g.: 78_000 = "1.3m"
@@ -38,6 +38,18 @@
 ## Enable io snoop which utilize eBPF to get accurate disk io of TiKV
 ## It won't take effect when compiling without BCC_IOSNOOP=1. 
 # enable-io-snoop = true
+
+## Use abort when TiKV panic. By default TiKV will use _exit() on panic, in that case
+## core dump file will not be generated, regardless of system settings.
+## If this config is enabled, core dump files needs to be cleanup to avoid disk space
+## being filled up.
+# abort-on-panic = false
+
+## Memory usage limit for the TiKV instance. Set it to 0 means the total of system memory
+## is available to TiKV.
+# memory-usage-limit = "0B"
+## TiKV can oppress itself if memory usage ratio reaches `memory-usage-high-water`.
+# memory-usage-high-water = 0.8
 
 ## Configurations for the single thread pool serving read requests.
 [readpool.unified]
@@ -146,6 +158,9 @@
 ## Time to wait before closing the connection without receiving KeepAlive ping Ack.
 # grpc-keepalive-timeout = "3s"
 
+## Set maximum message length in bytes that gRPC can send. `-1` means unlimited.
+# max-grpc-send-msg-len = 10485760
+
 ## How many snapshots can be sent concurrently.
 # concurrent-send-snap-limit = 32
 
@@ -229,6 +244,21 @@
 ## To deploy multiple TiKV nodes on a single physical machine, configure this parameter explicitly.
 ## Otherwise, the OOM problem might occur in TiKV.
 # capacity = "1GB"
+
+[storage.io-rate-limit]
+## Maximum I/O bytes that this server can write to or read from disk (determined by mode)
+## in one second. Internally it prefers throttling background operations over foreground
+## ones. This value should be set to the disk's optimal IO bandwidth, e.g. maximum IO
+## bandwidth specified by cloud disk vendors.
+##
+## When set to zero, disk IO operations are not limited.
+# max-bytes-per-sec = "0MB"
+
+## Determine which types of IO operations are counted and restrained below threshold.
+## Three different modes are: write-only, read-only, all-io.
+##
+## Only write-only mode is supported for now.
+# mode = "write-only"
 
 [pd]
 ## PD endpoints.

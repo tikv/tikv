@@ -61,11 +61,12 @@ fn test_deadline_3() {
     let mut resp = SelectResponse::default();
     resp.merge_from_bytes(cop_resp.get_data()).unwrap();
 
-    // Errors during evaluation becomes an eval error.
     assert!(
-        resp.get_error()
-            .get_msg()
-            .contains("exceeding the deadline")
+        cop_resp.other_error.contains("exceeding the deadline")
+            || resp
+                .get_error()
+                .get_msg()
+                .contains("exceeding the deadline")
     );
 }
 

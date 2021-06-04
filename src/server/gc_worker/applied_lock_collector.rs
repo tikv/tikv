@@ -168,7 +168,7 @@ impl LockObserver {
 impl Coprocessor for LockObserver {}
 
 impl QueryObserver for LockObserver {
-    fn post_apply_query(&self, _: &mut ObserverContext<'_>, cmd: &mut Cmd) {
+    fn post_apply_query(&self, _: &mut ObserverContext<'_>, cmd: &Cmd) {
         fail_point!("notify_lock_observer_query");
         let max_ts = self.state.load_max_ts();
         if max_ts.is_zero() {
@@ -690,7 +690,7 @@ mod tests {
             make_apply_request(b"1".to_vec(), b"1".to_vec(), CF_DEFAULT, CmdType::Put),
             make_apply_request(b"2".to_vec(), b"2".to_vec(), CF_LOCK, CmdType::Delete),
         ];
-        coprocessor_host.post_apply(&Region::default(), &mut make_raft_cmd(req));
+        coprocessor_host.post_apply(&Region::default(), &make_raft_cmd(req));
         expected_result.push(locks[0].clone());
         assert_eq!(
             get_collected_locks(&c, 100).unwrap(),
@@ -715,7 +715,7 @@ mod tests {
                 .filter(|l| l.get_lock_version() <= 100)
                 .cloned(),
         );
-        coprocessor_host.post_apply(&Region::default(), &mut make_raft_cmd(req.clone()));
+        coprocessor_host.post_apply(&Region::default(), &make_raft_cmd(req.clone()));
         assert_eq!(
             get_collected_locks(&c, 100).unwrap(),
             (expected_result, true)
@@ -725,7 +725,7 @@ mod tests {
         // dropped.
         start_collecting(&c, 110).unwrap();
         assert_eq!(get_collected_locks(&c, 110).unwrap(), (vec![], true));
-        coprocessor_host.post_apply(&Region::default(), &mut make_raft_cmd(req));
+        coprocessor_host.post_apply(&Region::default(), &make_raft_cmd(req));
         assert_eq!(get_collected_locks(&c, 110).unwrap(), (locks, true));
     }
 
@@ -821,7 +821,7 @@ mod tests {
         // The value is not a valid lock.
         let (k, v) = (Key::from_raw(b"k1").into_encoded(), b"v1".to_vec());
         let req = make_apply_request(k.clone(), v.clone(), CF_LOCK, CmdType::Put);
-        coprocessor_host.post_apply(&Region::default(), &mut make_raft_cmd(vec![req]));
+        coprocessor_host.post_apply(&Region::default(), &make_raft_cmd(vec![req]));
         assert_eq!(get_collected_locks(&c, 1).unwrap(), (vec![], false));
 
         // `is_clean` should be reset after invoking `start_collecting`.
@@ -847,8 +847,8 @@ mod tests {
         let batch_generate_locks = |count| {
             let (k, v) = lock_info_to_kv(lock.clone());
             let req = make_apply_request(k, v, CF_LOCK, CmdType::Put);
-            let mut raft_cmd = make_raft_cmd(vec![req; count]);
-            coprocessor_host.post_apply(&Region::default(), &mut raft_cmd);
+            let raft_cmd = make_raft_cmd(vec![req; count]);
+            coprocessor_host.post_apply(&Region::default(), &raft_cmd);
         };
 
         batch_generate_locks(MAX_COLLECT_SIZE - 1);

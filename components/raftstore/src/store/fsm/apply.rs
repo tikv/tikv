@@ -5,6 +5,7 @@ use std::cmp::{Ord, Ordering as CmpOrdering};
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
 use std::marker::PhantomData;
+use std::mem;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 #[cfg(test)]
@@ -42,7 +43,9 @@ use raft::eraftpb::{
 };
 use raft_proto::ConfChangeI;
 use sst_importer::SSTImporter;
+use tikv_alloc::trace::TraceEvent;
 use tikv_util::config::{Tracker, VersionTrack};
+use tikv_util::memory::HeapSize;
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant};
 use tikv_util::worker::Scheduler;
@@ -51,8 +54,11 @@ use tikv_util::{Either, MustConsumeVec};
 use time::Timespec;
 use uuid::Builder as UuidBuilder;
 
-use crate::coprocessor::{Cmd, CoprocessorHost};
+use crate::coprocessor::{
+    Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle, ObserveLevel,
+};
 use crate::store::fsm::RaftPollerBuilder;
+use crate::store::memory::*;
 use crate::store::metrics::*;
 use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
 use crate::store::peer::Peer;
@@ -64,7 +70,7 @@ use crate::store::util::{
     ConfChangeKind, KeysInfoFormatter,
 };
 use crate::store::{cmd_resp, util, Config, RegionSnapshot, RegionTask};
-use crate::{Error, Result};
+use crate::{bytes_capacity, Error, Result};
 
 use super::metrics::*;
 
@@ -124,6 +130,8 @@ where
     }
 }
 
+impl<S: Snapshot> HeapSize for PendingCmd<S> {}
+
 /// Commands waiting to be committed and applied.
 #[derive(Debug)]
 pub struct PendingCmdQueue<S>
@@ -173,6 +181,16 @@ where
     // TODO: seems we don't need to separate conf change from normal entries.
     fn set_conf_change(&mut self, cmd: PendingCmd<S>) {
         self.conf_change = Some(cmd);
+    }
+}
+
+impl<S> HeapSize for PendingCmdQueue<S>
+where
+    S: Snapshot,
+{
+    #[inline]
+    fn heap_size(&self) -> usize {
+        self.normals.heap_size()
     }
 }
 
@@ -234,6 +252,7 @@ pub enum ExecResult<S> {
         state: MergeState,
     },
     CommitMerge {
+        index: u64,
         region: Region,
         source: Region,
     },
@@ -288,34 +307,50 @@ impl ExecContext {
     }
 }
 
-struct ApplyCallback<EK>
+// The applied command and their callback
+struct ApplyCallbackBatch<S>
 where
-    EK: KvEngine,
+    S: Snapshot,
 {
-    region: Region,
-    cbs: Vec<(Option<Callback<EK::Snapshot>>, Cmd)>,
+    cmd_batch: Vec<CmdBatch>,
+    // The max observe level of current `Vec<CmdBatch>`
+    batch_max_level: ObserveLevel,
+    cb_batch: MustConsumeVec<(Callback<S>, RaftCmdResponse)>,
 }
 
-impl<EK> ApplyCallback<EK>
-where
-    EK: KvEngine,
-{
-    fn new(region: Region) -> Self {
-        let cbs = vec![];
-        ApplyCallback { region, cbs }
-    }
-
-    fn invoke_all(self, host: &CoprocessorHost<EK>) {
-        for (cb, mut cmd) in self.cbs {
-            host.post_apply(&self.region, &mut cmd);
-            if let Some(cb) = cb {
-                cb.invoke_with_response(cmd.response)
-            };
+impl<S: Snapshot> ApplyCallbackBatch<S> {
+    fn new() -> ApplyCallbackBatch<S> {
+        ApplyCallbackBatch {
+            cmd_batch: vec![],
+            batch_max_level: ObserveLevel::None,
+            cb_batch: MustConsumeVec::new("callback of apply callback batch"),
         }
     }
 
-    fn push(&mut self, cb: Option<Callback<EK::Snapshot>>, cmd: Cmd) {
-        self.cbs.push((cb, cmd));
+    fn push_batch(&mut self, observe_info: &CmdObserveInfo, region: Region) {
+        let cb = CmdBatch::new(observe_info, region);
+        self.batch_max_level = cmp::max(self.batch_max_level, cb.level);
+        self.cmd_batch.push(cb);
+    }
+
+    fn push_cb(&mut self, cb: Callback<S>, resp: RaftCmdResponse) {
+        self.cb_batch.push((cb, resp));
+    }
+
+    fn push(
+        &mut self,
+        cb: Option<Callback<S>>,
+        cmd: Cmd,
+        observe_info: &CmdObserveInfo,
+        region_id: u64,
+    ) {
+        if let Some(cb) = cb {
+            self.cb_batch.push((cb, cmd.response.clone()));
+        }
+        self.cmd_batch
+            .last_mut()
+            .unwrap()
+            .push(observe_info, region_id, cmd);
     }
 }
 
@@ -338,7 +373,7 @@ where
     router: ApplyRouter<EK>,
     notifier: Box<dyn Notifier<EK>>,
     engine: EK,
-    cbs: MustConsumeVec<ApplyCallback<EK>>,
+    applied_batch: ApplyCallbackBatch<EK::Snapshot>,
     apply_res: Vec<ApplyRes<EK::Snapshot>>,
     exec_ctx: Option<ExecContext>,
 
@@ -409,7 +444,7 @@ where
             router,
             notifier,
             kv_wb,
-            cbs: MustConsumeVec::new("callback of apply context"),
+            applied_batch: ApplyCallbackBatch::new(),
             apply_res: vec![],
             kv_wb_last_bytes: 0,
             kv_wb_last_keys: 0,
@@ -434,15 +469,9 @@ where
     /// `prepare_for` -> `commit` [-> `commit` ...] -> `finish_for`.
     /// After all delegates are handled, `write_to_db` method should be called.
     pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate<EK>) {
-        self.cbs.push(ApplyCallback::new(delegate.region.clone()));
         self.last_applied_index = delegate.apply_state.get_applied_index();
-
-        // TODO: skip this step when we do not need to observe cmds.
-        self.host.prepare_for_apply(
-            delegate.observe_cmd.cdc_id,
-            delegate.observe_cmd.rts_id,
-            delegate.region_id(),
-        );
+        self.applied_batch
+            .push_batch(&delegate.observe_info, delegate.region.clone());
     }
 
     /// Commits all changes have done for delegate. `persistent` indicates whether
@@ -500,11 +529,18 @@ where
                 });
             }
         }
+        // Take the applied commands and their callback
+        let ApplyCallbackBatch {
+            cmd_batch,
+            batch_max_level,
+            mut cb_batch,
+        } = mem::replace(&mut self.applied_batch, ApplyCallbackBatch::new());
         // Call it before invoking callback for preventing Commit is executed before Prewrite is observed.
-        self.host.on_flush_apply(self.engine.clone());
-
-        for cbs in self.cbs.drain(..) {
-            cbs.invoke_all(&self.host);
+        self.host
+            .on_flush_applied_cmd_batch(batch_max_level, cmd_batch, &self.engine);
+        // Invoke callbacks
+        for (cb, resp) in cb_batch.drain(..) {
+            cb.invoke_with_response(resp)
         }
         need_sync
     }
@@ -563,7 +599,7 @@ where
         let is_synced = self.write_to_db();
 
         if !self.apply_res.is_empty() {
-            let apply_res = std::mem::take(&mut self.apply_res);
+            let apply_res = mem::take(&mut self.apply_res);
             self.notifier.notify(apply_res);
         }
 
@@ -618,6 +654,12 @@ fn notify_stale_command(
 
 pub fn notify_stale_req(term: u64, cb: Callback<impl Snapshot>) {
     let resp = cmd_resp::err_resp(Error::StaleCommand, term);
+    cb.invoke_with_response(resp);
+}
+
+pub fn notify_stale_req_with_msg(term: u64, msg: String, cb: Callback<impl Snapshot>) {
+    let mut resp = cmd_resp::err_resp(Error::StaleCommand, term);
+    resp.mut_header().mut_error().set_message(msg);
     cb.invoke_with_response(resp);
 }
 
@@ -712,6 +754,8 @@ where
     /// the source peer has applied its logs and pending entries
     /// are all handled.
     pending_msgs: Vec<Msg<EK>>,
+    /// Approximate size of current buffer.
+    approximate_size: usize,
 }
 
 impl<EK> Debug for YieldState<EK>
@@ -731,6 +775,21 @@ impl Debug for WaitSourceMergeState {
         f.debug_struct("WaitSourceMergeState")
             .field("logs_up_to_date", &self.logs_up_to_date)
             .finish()
+    }
+}
+
+impl<EK> HeapSize for YieldState<EK>
+where
+    EK: KvEngine,
+{
+    fn heap_size(&self) -> usize {
+        // TODO: impl HeapSize for Entry.
+        let mut size = self.pending_entries.capacity() * mem::size_of::<Entry>()
+            + self.pending_msgs.heap_size();
+        for e in &self.pending_entries {
+            size += e.get_data().len() + e.get_context().len();
+        }
+        size
     }
 }
 
@@ -806,7 +865,7 @@ where
     last_sync_apply_index: u64,
 
     /// Info about cmd observer.
-    observe_cmd: ObserveCmd,
+    observe_info: CmdObserveInfo,
 
     /// The local metrics, and it will be flushed periodically.
     metrics: ApplyMetrics,
@@ -814,6 +873,8 @@ where
     /// Priority in batch system. When applying some commands which have high latency,
     /// we decrease the priority of current fsm to reduce the impact on other normal commands.
     priority: Priority,
+
+    trace: ApplyMemoryTrace,
 }
 
 impl<EK> ApplyDelegate<EK>
@@ -840,8 +901,10 @@ where
             metrics: Default::default(),
             last_merge_version: 0,
             pending_request_snapshot_count: reg.pending_request_snapshot_count,
-            observe_cmd: ObserveCmd::default(),
+            // use a default `CmdObserveInfo` because observing is disable by default
+            observe_info: CmdObserveInfo::default(),
             priority: Priority::Normal,
+            trace: ApplyMemoryTrace::default(),
         }
     }
 
@@ -909,6 +972,7 @@ where
                     self.yield_state = Some(YieldState {
                         pending_entries,
                         pending_msgs: Vec::default(),
+                        approximate_size: 0,
                     });
                     if let ApplyResult::WaitMergeSource(logs_up_to_date) = res {
                         self.wait_merge_state = Some(WaitSourceMergeState { logs_up_to_date });
@@ -988,14 +1052,11 @@ where
         //    it will also propose an empty entry. But that entry will not contain
         //    any associated callback. So no need to clear callback.
         while let Some(mut cmd) = self.pending_cmds.pop_normal(std::u64::MAX, term - 1) {
-            apply_ctx.cbs.last_mut().unwrap().push(
-                cmd.cb.take(),
-                Cmd::new(
-                    cmd.index,
-                    RaftCmdRequest::default(),
-                    cmd_resp::err_resp(Error::StaleCommand, term),
-                ),
-            );
+            if let Some(cb) = cmd.cb.take() {
+                apply_ctx
+                    .applied_batch
+                    .push_cb(cb, cmd_resp::err_resp(Error::StaleCommand, term));
+            }
         }
         ApplyResult::None
     }
@@ -1112,15 +1173,9 @@ where
         cmd_resp::bind_term(&mut resp, self.term);
         let cmd_cb = self.find_pending(index, term, is_conf_change_cmd(&cmd));
         let cmd = Cmd::new(index, cmd, resp);
-        apply_ctx.host.on_apply_cmd(
-            self.observe_cmd.cdc_id,
-            self.observe_cmd.rts_id,
-            self.region_id(),
-            cmd.clone(),
-        );
-
-        apply_ctx.cbs.last_mut().unwrap().push(cmd_cb, cmd);
-
+        apply_ctx
+            .applied_batch
+            .push(cmd_cb, cmd, &self.observe_info, self.region_id());
         exec_result
     }
 
@@ -1237,6 +1292,7 @@ where
     fn destroy<W: WriteBatch<EK>>(&mut self, apply_ctx: &mut ApplyContext<EK, W>) {
         self.stopped = true;
         apply_ctx.router.close(self.region_id());
+        MEMTRACE_APPLYS.trace(TraceEvent::Sub(self.trace.sum()));
         for cmd in self.pending_cmds.normals.drain(..) {
             notify_region_removed(self.region.get_id(), self.id, cmd);
         }
@@ -2293,6 +2349,11 @@ where
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         fail_point!("apply_before_prepare_merge");
+        fail_point!(
+            "apply_before_prepare_merge_2_3",
+            ctx.store_id == 2 || ctx.store_id == 3,
+            |_| { unreachable!() }
+        );
 
         PEER_ADMIN_CMD_COUNTER.prepare_merge.all.inc();
 
@@ -2485,6 +2546,7 @@ where
         Ok((
             resp,
             ApplyResult::Res(ExecResult::CommitMerge {
+                index: ctx.exec_ctx.as_ref().unwrap().index,
                 region,
                 source: source_region.to_owned(),
             }),
@@ -2756,7 +2818,7 @@ fn get_entries_mem_size(entries: &[Entry]) -> i64 {
     }
     let data_size: i64 = entries
         .iter()
-        .map(|e| (e.data.capacity() + e.context.capacity()) as i64)
+        .map(|e| (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64)
         .sum();
     data_size
 }
@@ -2799,6 +2861,8 @@ where
     pub must_pass_epoch_check: bool,
 }
 
+impl<S: Snapshot> HeapSize for Proposal<S> {}
+
 pub struct Destroy {
     region_id: u64,
     merge_from_snapshot: bool,
@@ -2819,6 +2883,18 @@ pub struct CatchUpLogs {
     /// But due to the FIFO natural of channel, we need a flag to check if it's
     /// ready when polling.
     pub logs_up_to_date: Arc<AtomicU64>,
+}
+
+impl HeapSize for CatchUpLogs {
+    fn heap_size(&self) -> usize {
+        // CommitMergeRequest includes a Region in the heap.
+        // 8 represents the atomic number.
+        let mut size: usize = mem::size_of::<Region>() + 8;
+        for e in &self.merge.entries {
+            size += e.context.len() + e.data.len() + mem::size_of::<Entry>();
+        }
+        size
+    }
 }
 
 pub struct GenSnapTask {
@@ -2889,51 +2965,15 @@ impl Debug for GenSnapTask {
     }
 }
 
-static OBSERVE_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
-
-/// A unique identifier for checking stale observed commands.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct ObserveID(usize);
-
-impl ObserveID {
-    pub fn new() -> ObserveID {
-        ObserveID(OBSERVE_ID_ALLOC.fetch_add(1, Ordering::SeqCst))
-    }
-}
-
-struct ObserveCmd {
-    // TODO: Add flags to disable observing.
-    cdc_id: ObserveID,
-    rts_id: ObserveID,
-}
-
-impl Debug for ObserveCmd {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ObserveCmd")
-            .field("cdc_id", &self.cdc_id)
-            .field("rts_id", &self.rts_id)
-            .finish()
-    }
-}
-
-impl Default for ObserveCmd {
-    fn default() -> Self {
-        Self {
-            cdc_id: ObserveID(0),
-            rts_id: ObserveID(0),
-        }
-    }
-}
-
 #[derive(Debug)]
 pub struct ChangeObserver {
-    cdc_id: Option<ObserveID>,
-    rts_id: Option<ObserveID>,
+    cdc_id: Option<ObserveHandle>,
+    rts_id: Option<ObserveHandle>,
     region_id: u64,
 }
 
 impl ChangeObserver {
-    pub fn from_cdc(region_id: u64, id: ObserveID) -> Self {
+    pub fn from_cdc(region_id: u64, id: ObserveHandle) -> Self {
         Self {
             cdc_id: Some(id),
             rts_id: None,
@@ -2941,7 +2981,7 @@ impl ChangeObserver {
         }
     }
 
-    pub fn from_rts(region_id: u64, id: ObserveID) -> Self {
+    pub fn from_rts(region_id: u64, id: ObserveHandle) -> Self {
         Self {
             cdc_id: None,
             rts_id: Some(id),
@@ -3018,6 +3058,23 @@ where
             } => write!(f, "[region {}] change cmd", region_id),
             #[cfg(any(test, feature = "testexport"))]
             Msg::Validate(region_id, _) => write!(f, "[region {}] validate", region_id),
+        }
+    }
+}
+
+impl<EK> HeapSize for Msg<EK>
+where
+    EK: KvEngine,
+{
+    #[inline]
+    fn heap_size(&self) -> usize {
+        match self {
+            Msg::Apply { apply, .. } => apply.entries_mem_size as usize,
+            Msg::Registration(r) => r.region.heap_size(),
+            Msg::LogsUpToDate(l) => l.heap_size(),
+            Msg::Snapshot(_) | Msg::Destroy(_) | Msg::Noop | Msg::Change { .. } => 0,
+            #[cfg(any(test, feature = "testexport"))]
+            Msg::Validate(..) => 0,
         }
     }
 }
@@ -3359,16 +3416,30 @@ where
             region_id,
         } = cmd;
 
-        if let Some(id) = cdc_id {
-            if self.delegate.observe_cmd.cdc_id > id {
-                notify_stale_req(self.delegate.term, cb);
+        if let Some(ObserveHandle { id, .. }) = cdc_id {
+            if self.delegate.observe_info.cdc_id.id > id {
+                notify_stale_req_with_msg(
+                    self.delegate.term,
+                    format!(
+                        "stale observe id {:?}, current id: {:?}",
+                        id, self.delegate.observe_info.cdc_id.id
+                    ),
+                    cb,
+                );
                 return;
             }
         }
 
-        if let Some(id) = rts_id {
-            if self.delegate.observe_cmd.rts_id > id {
-                notify_stale_req(self.delegate.term, cb);
+        if let Some(ObserveHandle { id, .. }) = rts_id {
+            if self.delegate.observe_info.rts_id.id > id {
+                notify_stale_req_with_msg(
+                    self.delegate.term,
+                    format!(
+                        "stale observe id {:?}, current id: {:?}",
+                        id, self.delegate.observe_info.rts_id.id
+                    ),
+                    cb,
+                );
                 return;
             }
         }
@@ -3407,10 +3478,10 @@ where
         };
 
         if let Some(id) = cdc_id {
-            self.delegate.observe_cmd.cdc_id = id;
+            self.delegate.observe_info.cdc_id = id;
         }
         if let Some(id) = rts_id {
-            self.delegate.observe_cmd.rts_id = id;
+            self.delegate.observe_info.rts_id = id;
         }
 
         cb.invoke_read(resp);
@@ -3420,7 +3491,7 @@ where
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
         msgs: &mut Vec<Msg<EK>>,
-    ) {
+    ) -> Option<TraceEvent> {
         let mut drainer = msgs.drain(..);
         loop {
             match drainer.next() {
@@ -3448,12 +3519,23 @@ where
                 }) => self.handle_change(apply_ctx, cmd, region_epoch, cb),
                 #[cfg(any(test, feature = "testexport"))]
                 Some(Msg::Validate(_, f)) => {
-                    let delegate: *const u8 = unsafe { std::mem::transmute(&self.delegate) };
+                    let delegate: *const u8 = unsafe { mem::transmute(&self.delegate) };
                     f(delegate)
                 }
                 None => break,
             }
         }
+        let s = self.delegate.yield_state.as_mut().map_or(0, |s| {
+            if s.approximate_size == 0 {
+                s.approximate_size = s.heap_size();
+            }
+            s.approximate_size
+        });
+        let trace = ApplyMemoryTrace {
+            pending_cmds: self.delegate.pending_cmds.heap_size(),
+            rest: s + mem::size_of::<Self>(),
+        };
+        self.delegate.trace.reset(trace)
     }
 }
 
@@ -3521,6 +3603,7 @@ where
     apply_ctx: ApplyContext<EK, W>,
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
+    trace_event: Option<TraceEvent>,
 }
 
 impl<EK, W> PollHandler<ApplyFsm<EK>, ControlFsm> for ApplyPoller<EK, W>
@@ -3596,7 +3679,10 @@ where
                 }
             }
         }
-        normal.handle_tasks(&mut self.apply_ctx, &mut self.msg_buf);
+        if let Some(trace_event) = normal.handle_tasks(&mut self.apply_ctx, &mut self.msg_buf) {
+            self.trace_event = Some(self.trace_event.map_or(trace_event, |e| e + trace_event));
+        }
+
         if normal.delegate.wait_merge_state.is_some() {
             // Check it again immediately as catching up logs can be very fast.
             expected_msg_count = Some(0);
@@ -3613,6 +3699,9 @@ where
             for fsm in fsms {
                 fsm.delegate.last_sync_apply_index = fsm.delegate.apply_state.get_applied_index();
             }
+        }
+        if let Some(e) = self.trace_event.take() {
+            MEMTRACE_APPLYS.trace(e);
         }
     }
 
@@ -3686,6 +3775,7 @@ where
             ),
             messages_per_tick: cfg.messages_per_tick,
             cfg_tracker: self.cfg.clone().tracker(self.tag.clone()),
+            trace_event: None,
         }
     }
 }
@@ -3696,6 +3786,16 @@ where
     EK: KvEngine,
 {
     pub router: BatchRouter<ApplyFsm<EK>, ControlFsm>,
+}
+
+impl<EK> Drop for ApplyRouter<EK>
+where
+    EK: KvEngine,
+{
+    fn drop(&mut self) {
+        MEMTRACE_APPLY_ROUTER_ALIVE.trace(TraceEvent::Reset(0));
+        MEMTRACE_APPLY_ROUTER_LEAK.trace(TraceEvent::Reset(0));
+    }
 }
 
 impl<EK> Deref for ApplyRouter<EK>
@@ -3786,8 +3886,29 @@ where
         // queued inside both queue of control fsm and normal fsm, which can reorder
         // messages.
         let (sender, apply_fsm) = ApplyFsm::from_registration(reg);
-        let mailbox = BasicMailbox::new(sender, apply_fsm);
+        let mailbox = BasicMailbox::new(sender, apply_fsm, self.state_cnt().clone());
         self.register(region_id, mailbox);
+    }
+
+    pub fn register(&self, region_id: u64, mailbox: BasicMailbox<ApplyFsm<EK>>) {
+        self.router.register(region_id, mailbox);
+        self.update_trace();
+    }
+
+    pub fn register_all(&self, mailboxes: Vec<(u64, BasicMailbox<ApplyFsm<EK>>)>) {
+        self.router.register_all(mailboxes);
+        self.update_trace();
+    }
+
+    pub fn close(&self, region_id: u64) {
+        self.router.close(region_id);
+        self.update_trace();
+    }
+
+    fn update_trace(&self) {
+        let router_trace = self.router.trace();
+        MEMTRACE_APPLY_ROUTER_ALIVE.trace(TraceEvent::Reset(router_trace.alive));
+        MEMTRACE_APPLY_ROUTER_LEAK.trace(TraceEvent::Reset(router_trace.leak));
     }
 }
 
@@ -3814,7 +3935,10 @@ impl<EK: KvEngine> ApplyBatchSystem<EK> {
         let mut mailboxes = Vec::with_capacity(peers.size_hint().0);
         for peer in peers {
             let (tx, fsm) = ApplyFsm::from_peer(peer);
-            mailboxes.push((peer.region().get_id(), BasicMailbox::new(tx, fsm)));
+            mailboxes.push((
+                peer.region().get_id(),
+                BasicMailbox::new(tx, fsm, self.router().state_cnt().clone()),
+            ));
         }
         self.router().register_all(mailboxes);
     }
@@ -3896,7 +4020,7 @@ mod tests {
             cmd.mut_put().set_value(b"value".to_vec());
             let mut req = RaftCmdRequest::default();
             req.mut_requests().push(cmd);
-            e.set_data(req.write_to_bytes().unwrap())
+            e.set_data(req.write_to_bytes().unwrap().into())
         }
         e
     }
@@ -4328,7 +4452,8 @@ mod tests {
         }
 
         fn build(mut self) -> Entry {
-            self.entry.set_data(self.req.write_to_bytes().unwrap());
+            self.entry
+                .set_data(self.req.write_to_bytes().unwrap().into());
             self.entry
         }
     }
@@ -4339,7 +4464,6 @@ mod tests {
         pre_query_count: Arc<AtomicUsize>,
         post_admin_count: Arc<AtomicUsize>,
         post_query_count: Arc<AtomicUsize>,
-        cmd_batches: RefCell<Vec<CmdBatch>>,
         cmd_sink: Option<Arc<Mutex<Sender<CmdBatch>>>>,
     }
 
@@ -4350,7 +4474,7 @@ mod tests {
             self.pre_query_count.fetch_add(1, Ordering::SeqCst);
         }
 
-        fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &mut Cmd) {
+        fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &Cmd) {
             self.post_query_count.fetch_add(1, Ordering::SeqCst);
         }
     }
@@ -4359,33 +4483,23 @@ mod tests {
     where
         E: KvEngine,
     {
-        fn on_prepare_for_apply(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64) {
-            self.cmd_batches
-                .borrow_mut()
-                .push(CmdBatch::new(cdc_id, rts_id, region_id));
-        }
-
-        fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: Cmd) {
-            self.cmd_batches
-                .borrow_mut()
-                .last_mut()
-                .expect("should exist some cmd batch")
-                .push(cdc_id, rts_id, region_id, cmd);
-        }
-
-        fn on_flush_apply(&self, _: E) {
-            if !self.cmd_batches.borrow().is_empty() {
-                let batches = self.cmd_batches.replace(Vec::default());
-                for b in batches {
-                    if b.is_empty() {
-                        continue;
-                    }
-                    if let Some(sink) = self.cmd_sink.as_ref() {
-                        sink.lock().unwrap().send(b).unwrap();
-                    }
+        fn on_flush_applied_cmd_batch(
+            &self,
+            _: ObserveLevel,
+            cmd_batches: &mut Vec<CmdBatch>,
+            _: &E,
+        ) {
+            for b in std::mem::take(cmd_batches) {
+                if b.is_empty() {
+                    continue;
+                }
+                if let Some(sink) = self.cmd_sink.as_ref() {
+                    sink.lock().unwrap().send(b).unwrap();
                 }
             }
         }
+
+        fn on_applied_current_term(&self, _: raft::StateRole, _: &Region) {}
     }
 
     #[test]
@@ -4783,15 +4897,14 @@ mod tests {
             .build();
         router.schedule_task(1, Msg::apply(apply(peer_id, 1, 2, vec![put_entry], vec![])));
         // Register cmd observer to region 1.
-        let enabled = Arc::new(AtomicBool::new(true));
-        let observe_id = ObserveID::new();
+        let observe_handle = ObserveHandle::with_id(1);
         router.schedule_task(
             1,
             Msg::Change {
                 region_epoch: region_epoch.clone(),
                 cmd: ChangeObserver {
-                    cdc_id: Some(observe_id),
-                    rts_id: Some(observe_id),
+                    cdc_id: Some(observe_handle.clone()),
+                    rts_id: Some(observe_handle.clone()),
                     region_id: 1,
                 },
                 cb: Callback::Read(Box::new(|resp: ReadResponse<KvTestSnapshot>| {
@@ -4805,6 +4918,10 @@ mod tests {
         // Unblock the apply worker
         block_tx.send(()).unwrap();
         fetch_apply_res(&rx);
+        let cmd_batch = cmdbatch_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert_eq!(cmd_batch.cdc_id, ObserveHandle::with_id(0).id);
+        assert_eq!(cmd_batch.rts_id, ObserveHandle::with_id(0).id);
+
         let (capture_tx, capture_rx) = mpsc::channel();
         let put_entry = EntryBuilder::new(3, 2)
             .put_cf(CF_LOCK, b"k1", b"v1")
@@ -4825,6 +4942,8 @@ mod tests {
         assert!(!resp.get_header().has_error(), "{:?}", resp);
         assert_eq!(resp.get_responses().len(), 1);
         let cmd_batch = cmdbatch_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert_eq!(cmd_batch.cdc_id, observe_handle.id);
+        assert_eq!(cmd_batch.rts_id, observe_handle.id);
         assert_eq!(resp, cmd_batch.into_iter(1).next().unwrap().response);
 
         let put_entry1 = EntryBuilder::new(4, 2)
@@ -4840,10 +4959,12 @@ mod tests {
             Msg::apply(apply(peer_id, 1, 2, vec![put_entry1, put_entry2], vec![])),
         );
         let cmd_batch = cmdbatch_rx.recv_timeout(Duration::from_secs(3)).unwrap();
-        assert_eq!(1, cmd_batch.len());
+        assert_eq!(2, cmd_batch.len());
 
         // Stop observer regoin 1.
-        enabled.store(false, Ordering::SeqCst);
+        observe_handle.stop_observing();
+
+        let observe_handle = ObserveHandle::new();
         let put_entry = EntryBuilder::new(6, 2)
             .put(b"k2", b"v2")
             .epoch(1, 3)
@@ -4856,8 +4977,8 @@ mod tests {
             Msg::Change {
                 region_epoch,
                 cmd: ChangeObserver {
-                    cdc_id: Some(observe_id),
-                    rts_id: Some(observe_id),
+                    cdc_id: Some(observe_handle.clone()),
+                    rts_id: Some(observe_handle),
                     region_id: 2,
                 },
                 cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
@@ -5027,15 +5148,14 @@ mod tests {
         system.spawn("test-split".to_owned(), builder);
 
         router.schedule_task(1, Msg::Registration(reg.clone()));
-        let enabled = Arc::new(AtomicBool::new(true));
-        let observe_id = ObserveID::new();
+        let observe_handle = ObserveHandle::new();
         router.schedule_task(
             1,
             Msg::Change {
                 region_epoch: region_epoch.clone(),
                 cmd: ChangeObserver {
-                    cdc_id: Some(observe_id),
-                    rts_id: Some(observe_id),
+                    cdc_id: Some(observe_handle.clone()),
+                    rts_id: Some(observe_handle.clone()),
                     region_id: 1,
                 },
                 cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
@@ -5187,14 +5307,14 @@ mod tests {
         checker.check(b"k32", b"k4", 28, &[29, 30, 31], true);
 
         let (tx, rx) = mpsc::channel();
-        enabled.store(false, Ordering::SeqCst);
+        observe_handle.stop_observing();
         router.schedule_task(
             1,
             Msg::Change {
                 region_epoch,
                 cmd: ChangeObserver {
-                    cdc_id: Some(observe_id),
-                    rts_id: Some(observe_id),
+                    cdc_id: Some(observe_handle.clone()),
+                    rts_id: Some(observe_handle),
                     region_id: 1,
                 },
                 cb: Callback::Read(Box::new(move |resp: ReadResponse<_>| {

@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::mem;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use collections::HashMap;
@@ -25,8 +25,7 @@ use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, AdminResponse, CmdType, DeleteRequest, PutRequest, Request,
 };
-use raftstore::coprocessor::{Cmd, CmdBatch};
-use raftstore::store::fsm::ObserveID;
+use raftstore::coprocessor::{Cmd, CmdBatch, ObserveHandle};
 use raftstore::store::util::compare_region_epoch;
 use raftstore::Error as RaftStoreError;
 use resolved_ts::Resolver;
@@ -36,8 +35,8 @@ use tikv_util::{debug, info, warn};
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
 
 use crate::channel::{SendError, Sink};
-use crate::endpoint::{OldValueCache, OldValueCallback};
 use crate::metrics::*;
+use crate::old_value::{OldValueCache, OldValueCallback};
 use crate::service::{CdcEvent, ConnID};
 use crate::{Error, Result};
 
@@ -108,7 +107,7 @@ impl Downstream {
     }
 
     /// Sink events to the downstream.
-    pub fn sink_event(&self, mut event: Event) -> Result<()> {
+    pub fn sink_event(&self, mut event: Event, force: bool) -> Result<()> {
         event.set_request_id(self.req_id);
         if self.sink.is_none() {
             info!("cdc drop event, no sink";
@@ -116,7 +115,7 @@ impl Downstream {
             return Err(Error::Sink(SendError::Disconnected));
         }
         let sink = self.sink.as_ref().unwrap();
-        match sink.unbounded_send(CdcEvent::Event(event)) {
+        match sink.unbounded_send(CdcEvent::Event(event), force) {
             Ok(_) => Ok(()),
             Err(SendError::Disconnected) => {
                 debug!("cdc send event failed, disconnected";
@@ -136,7 +135,9 @@ impl Downstream {
         let mut change_data_event = Event::default();
         change_data_event.event = Some(Event_oneof_event::Error(err_event));
         change_data_event.region_id = region_id;
-        self.sink_event(change_data_event)
+        // Try it's best to send error events.
+        let force_send = true;
+        self.sink_event(change_data_event, force_send)
     }
 
     pub fn set_sink(&mut self, sink: Sink) {
@@ -189,13 +190,12 @@ enum PendingLock {
 /// It converts raft commands into CDC events and broadcast to downstreams.
 /// It also track trancation on the fly in order to compute resolved ts.
 pub struct Delegate {
-    pub id: ObserveID,
+    pub handle: ObserveHandle,
     pub region_id: u64,
     region: Option<Region>,
     pub downstreams: Vec<Downstream>,
     pub resolver: Option<Resolver>,
     pending: Option<Pending>,
-    enabled: Arc<AtomicBool>,
     failed: bool,
     pub txn_extra_op: TxnExtraOp,
 }
@@ -205,22 +205,14 @@ impl Delegate {
     pub fn new(region_id: u64) -> Delegate {
         Delegate {
             region_id,
-            id: ObserveID::new(),
+            handle: ObserveHandle::new(),
             downstreams: Vec::new(),
             resolver: None,
             region: None,
             pending: Some(Pending::default()),
-            enabled: Arc::new(AtomicBool::new(true)),
             failed: false,
             txn_extra_op: TxnExtraOp::default(),
         }
-    }
-
-    /// Returns a shared flag.
-    /// True if there are some active downstreams subscribe the region.
-    /// False if all downstreams has unsubscribed.
-    pub fn enabled(&self) -> Arc<AtomicBool> {
-        self.enabled.clone()
     }
 
     /// Return false if subscribe failed.
@@ -296,7 +288,7 @@ impl Delegate {
         });
         let is_last = downstreams.is_empty();
         if is_last {
-            self.enabled.store(false, Ordering::SeqCst);
+            self.handle.stop_observing();
         }
         is_last
     }
@@ -334,7 +326,7 @@ impl Delegate {
     pub fn stop(&mut self, err: Error) {
         self.mark_failed();
         // Stop observe further events.
-        self.enabled.store(false, Ordering::SeqCst);
+        self.handle.stop_observing();
 
         info!("cdc met region error";
             "region_id" => self.region_id, "error" => ?err);
@@ -361,7 +353,6 @@ impl Delegate {
     where
         F: Fn(&Downstream) -> Result<()>,
     {
-        // fn broadcast(&self, change_data_event: Event, normal_only: bool) {
         let downstreams = self.downstreams();
         assert!(
             !downstreams.is_empty(),
@@ -386,8 +377,8 @@ impl Delegate {
         let mut pending = self.pending.take().unwrap();
         for lock in pending.take_locks() {
             match lock {
-                PendingLock::Track { key, start_ts } => resolver.track_lock(start_ts, key),
-                PendingLock::Untrack { key } => resolver.untrack_lock(&key),
+                PendingLock::Track { key, start_ts } => resolver.track_lock(start_ts, key, None),
+                PendingLock::Untrack { key } => resolver.untrack_lock(&key, None),
             }
         }
         self.resolver = Some(resolver);
@@ -419,7 +410,7 @@ impl Delegate {
         old_value_cache: &mut OldValueCache,
     ) -> Result<()> {
         // Stale CmdBatch, drop it sliently.
-        if batch.cdc_id != self.id {
+        if batch.cdc_id != self.handle.id {
             return Ok(());
         }
         for cmd in batch.into_iter(self.region_id) {
@@ -617,7 +608,9 @@ impl Delegate {
                     }
                 }
             }
-            downstream.sink_event(event)
+            // Do not force send for real time change data events.
+            let force_send = false;
+            downstream.sink_event(event, force_send)
         };
         match self.broadcast(send) {
             Ok(()) => Ok(()),
@@ -658,7 +651,13 @@ impl Delegate {
                 };
                 // validate commit_ts must be greater than the current resolved_ts
                 if let (Some(resolver), Some(commit_ts)) = (&self.resolver, commit_ts) {
-                    assert!(commit_ts > resolver.resolved_ts());
+                    let resolved_ts = resolver.resolved_ts();
+                    assert!(
+                        commit_ts > resolved_ts,
+                        "commit_ts: {:?}, resolved_ts: {:?}",
+                        commit_ts,
+                        resolved_ts
+                    );
                 }
 
                 match rows.get_mut(&row.key) {
@@ -694,7 +693,7 @@ impl Delegate {
                 // we must track inflight txns.
                 match self.resolver {
                     Some(ref mut resolver) => {
-                        resolver.track_lock(row.start_ts.into(), row.key.clone())
+                        resolver.track_lock(row.start_ts.into(), row.key.clone(), None)
                     }
                     None => {
                         assert!(self.pending.is_some(), "region resolver not ready");
@@ -726,7 +725,7 @@ impl Delegate {
             "lock" => {
                 let raw_key = Key::from_encoded(delete.take_key()).into_raw().unwrap();
                 match self.resolver {
-                    Some(ref mut resolver) => resolver.untrack_lock(&raw_key),
+                    Some(ref mut resolver) => resolver.untrack_lock(&raw_key, None),
                     None => {
                         assert!(self.pending.is_some(), "region resolver not ready");
                         let key_len = raw_key.len();
@@ -884,7 +883,8 @@ mod tests {
         region.mut_region_epoch().set_conf_ver(2);
         let region_epoch = region.get_region_epoch().clone();
 
-        let (sink, drain) = crate::channel::canal(1);
+        let quota = crate::channel::MemoryQuota::new(usize::MAX);
+        let (sink, mut drain) = crate::channel::channel(1, quota);
         let rx = drain.drain();
         let request_id = 123;
         let mut downstream =
@@ -892,8 +892,7 @@ mod tests {
         downstream.set_sink(sink);
         let mut delegate = Delegate::new(region_id);
         delegate.subscribe(downstream);
-        let enabled = delegate.enabled();
-        assert!(enabled.load(Ordering::SeqCst));
+        assert!(delegate.handle.is_observing());
         let resolver = Resolver::new(region_id);
         for downstream in delegate.on_region_ready(resolver, region) {
             delegate.subscribe(downstream);
@@ -926,8 +925,8 @@ mod tests {
         delegate.stop(Error::request(err_header));
         let err = receive_error();
         assert!(err.has_not_leader());
-        // Enable is disabled by any error.
-        assert!(!enabled.load(Ordering::SeqCst));
+        // Observing is disabled by any error.
+        assert!(!delegate.handle.is_observing());
 
         let mut err_header = ErrorHeader::default();
         err_header.set_region_not_found(Default::default());

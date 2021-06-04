@@ -14,6 +14,7 @@ mem-profiling = ["tikv-jemallocator/profiling", "log"]
 snmalloc = ["snmalloc-rs"]
 
 [dependencies]
+fxhash = "0.2.1"
 libc = "0.2"
 log = { version = "0.4", optional = true }
 lazy_static = "1.3"

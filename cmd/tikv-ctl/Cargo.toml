@@ -16,8 +16,16 @@ sse = ["tikv/sse"]
 mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
 bcc-iosnoop = ["tikv/bcc-iosnoop"]
-cloud-aws = [ "encryption_export/cloud-aws" ]
-cloud-gcp = [ "encryption_export/cloud-gcp" ]
+cloud-aws = [
+   "encryption_export/cloud-aws",
+   "backup/cloud-aws",
+]
+cloud-gcp = [
+  "encryption_export/cloud-gcp",
+  "backup/cloud-gcp",
+]
+cloud-storage-grpc = [ "backup/cloud-storage-grpc" ]
+cloud-storage-dylib = [ "backup/cloud-storage-dylib" ]
 protobuf-codec = [
   "backup/protobuf-codec",
   "cdc/protobuf-codec",
@@ -85,10 +93,10 @@ file_system = { path = "../../components/file_system", default-features = false 
 fs2 = "0.4"
 futures = "0.3"
 tokio = { version = "0.2", features = ["rt-threaded", "time"] }
-grpcio = { version = "0.8",  default-features = false, features = ["openssl-vendored"] }
+grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"
 keys = { path = "../../components/keys", default-features = false }
-kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+kvproto = { rev = "7a046020d1c091638e1e8aba623c8c1e8962219d", git = "https://github.com/pingcap/kvproto.git", default-features = false }
 libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { path = "../../components/log_wrappers" }
@@ -104,6 +112,7 @@ rand = "0.7"
 security = { path = "../../components/security", default-features = false }
 serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+server = { path = "../../components/server" }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tikv = { path = "../../", default-features = false }
 tikv_alloc = { path = "../../components/tikv_alloc" }
@@ -111,7 +120,6 @@ tikv_util = { path = "../../components/tikv_util", default-features = false }
 collections = { path = "../../components/collections" }
 toml = "0.5"
 txn_types = { path = "../../components/txn_types", default-features = false }
-vlog = "0.1.4"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [build-dependencies]

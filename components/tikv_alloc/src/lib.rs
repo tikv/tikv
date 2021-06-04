@@ -91,6 +91,7 @@ extern crate log;
 extern crate lazy_static;
 
 pub mod error;
+pub mod trace;
 
 #[cfg(not(all(unix, not(fuzzing), feature = "jemalloc")))]
 mod default;

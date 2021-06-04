@@ -49,7 +49,7 @@ make_auto_flush_static_metric! {
         remove_lock_observer,
         coprocessor,
         coprocessor_stream,
-        coprocessor_v2,
+        raw_coprocessor,
         mvcc_get_by_key,
         mvcc_get_by_start_ts,
         split_region,
@@ -134,9 +134,8 @@ make_static_metric! {
     }
 
     pub label_enum BatchableRequestKind {
-        point_get,
-        prewrite,
-        commit,
+        kv_get,
+        raw_get,
     }
 
     pub struct GrpcMsgHistogramGlobal: Histogram {
@@ -370,16 +369,7 @@ lazy_static! {
             "tikv_server_request_batch_size",
             "Size of request batch input",
             &["type"],
-            exponential_buckets(1f64, 5f64, 10).unwrap()
-        )
-        .unwrap();
-    pub static ref REQUEST_BATCH_RATIO_HISTOGRAM_VEC: RequestBatchRatioHistogramVec =
-        register_static_histogram_vec!(
-            RequestBatchRatioHistogramVec,
-            "tikv_server_request_batch_ratio",
-            "Ratio of request batch output to input",
-            &["type"],
-            exponential_buckets(1f64, 5f64, 10).unwrap()
+            vec![1.0, 2.0, 4.0, 8.0, 12.0, 16.0, 20.0, 24.0, 28.0, 32.0, 64.0]
         )
         .unwrap();
     pub static ref CPU_CORES_QUOTA_GAUGE: Gauge = register_gauge!(

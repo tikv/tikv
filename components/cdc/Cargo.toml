@@ -57,8 +57,8 @@ crossbeam = "0.8"
 engine_rocks = { path = "../engine_rocks", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 futures = "0.3"
-grpcio = { version = "0.8",  default-features = false, features = ["openssl-vendored"] }
-kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored"] }
+kvproto = { rev = "7a046020d1c091638e1e8aba623c8c1e8962219d", git = "https://github.com/pingcap/kvproto.git", default-features = false }
 pd_client = { path = "../pd_client", default-features = false }
 raft = { version = "0.6.0-alpha", default-features = false }
 raftstore = { path = "../raftstore", default-features = false }
@@ -89,6 +89,7 @@ test_raftstore = { path = "../test_raftstore", default-features = false }
 test_util = { path = "../test_util", default-features = false }
 panic_hook = { path = "../panic_hook" }
 raft = { version = "0.6.0-alpha", default-features = false }
+time = "0.1"
 
 [[test]]
 name = "integrations"
