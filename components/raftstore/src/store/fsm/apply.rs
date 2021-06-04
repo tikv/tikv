@@ -711,8 +711,6 @@ fn should_write_to_engine(cmd: &RaftCmdRequest) -> bool {
 
 /// Checks if a write has high-latency operation.
 fn has_high_latency_operation(cmd: &RaftCmdRequest) -> bool {
-    // Some commands may modify keys covered by the current write batch, so we
-    // must write the current write batch to the engine first.
     for req in cmd.get_requests() {
         if req.has_delete_range() {
             return true;
