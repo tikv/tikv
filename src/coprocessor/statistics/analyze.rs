@@ -447,11 +447,12 @@ impl RowSampleCollector {
             self.row_buf.clear();
             let offsets = column_groups[i].get_column_offsets();
             let mut has_null = true;
-            for j in 0..offsets.len() {
-                if columns_val[j][0] != NIL_FLAG {
-                    has_null = false
+            for j in offsets {
+                if columns_val[*j as usize][0] == NIL_FLAG {
+                    continue;
                 }
-                self.total_sizes[col_len + i] += columns_val[i].len() as i64
+                has_null = false;
+                self.total_sizes[col_len + i] += columns_val[*j as usize].len() as i64
             }
             // We only maintain the null count for single column case.
             if has_null && offsets.len() == 1 {
@@ -459,8 +460,8 @@ impl RowSampleCollector {
                 continue;
             }
             // Use a in place murmur3 to replace this memory copy.
-            for j in 0..offsets.len() {
-                self.row_buf.extend_from_slice(&columns_val[j]);
+            for j in offsets {
+                self.row_buf.extend_from_slice(&columns_val[*j as usize]);
             }
             self.fm_sketches[col_len + i].insert(&self.row_buf);
         }
