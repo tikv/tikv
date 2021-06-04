@@ -1275,6 +1275,7 @@ version = "0.0.1"
 dependencies = [
  "error_code",
  "file_system",
+ "keys",
  "kvproto",
  "log_wrappers",
  "protobuf",
