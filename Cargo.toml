@@ -250,7 +250,7 @@ rusoto_s3 = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-s
 rusoto_sts = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
+procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "309c751b31e644c318ff7c33cda015d43e39ec52" }
 
 # When changing TiKV cooperatively with kvproto, this will be useful to submit the PR to TiKV concurrently with
 # the PR to kvproto.
