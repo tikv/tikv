@@ -369,7 +369,6 @@ impl ChangeData for Service {
         let scheduler = self.scheduler.clone();
 
         ctx.spawn(Compat::new(async move {
-            // let res = sink.send_all(&mut rx).await;
             let mut sink = Compat01As03Sink::new(sink);
             let res = event_drain.forward(&mut sink).await;
             // Unregister this downstream only.
