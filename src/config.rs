@@ -2217,6 +2217,8 @@ pub struct CdcConfig {
     pub old_value_cache_size: usize,
     pub hibernate_regions_compatible: bool,
     pub scan_lock_pool_size: usize,
+    pub incremental_scan_pool_size: usize,
+    pub incremental_scan_concurrency: usize,
     pub incremental_scan_speed_limit: ReadableSize,
 }
 
@@ -2227,10 +2229,38 @@ impl Default for CdcConfig {
             old_value_cache_size: 1024,
             hibernate_regions_compatible: true,
             scan_lock_pool_size: 2,
+            // 4 threads for incremental scan.
+            incremental_scan_pool_size: 4,
+            // At most 16 concurrent running tasks.
+            incremental_scan_concurrency: 16,
             // TiCDC requires a SSD, the typical write speed of SSD
             // is more than 500MB/s, so 128MB/s is enough.
             incremental_scan_speed_limit: ReadableSize::mb(128),
         }
+    }
+}
+
+impl CdcConfig {
+    fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+        if self.old_value_cache_size == 0 {
+            return Err("cdc.old-value-cache-size can't be 0".into());
+        }
+        if self.min_ts_interval == ReadableDuration::secs(0) {
+            return Err("cdc.min-ts-interval can't be 0s".into());
+        }
+        if self.scan_lock_pool_size == 0 {
+            return Err("cdc.scan-lock-pool-size can't be 0".into());
+        }
+        if self.incremental_scan_pool_size == 0 {
+            return Err("cdc.incremental-scan-pool-size can't be 0".into());
+        }
+        if self.incremental_scan_concurrency == 0 {
+            return Err("cdc.incremental-scan-concurrency can't be 0".into());
+        }
+        if self.incremental_scan_concurrency < self.incremental_scan_pool_size {
+            return Err("cdc.incremental-scan-concurrency must be larger than cdc.incremental-scan-pool-size".into());
+        }
+        Ok(())
     }
 }
 
@@ -2487,6 +2517,7 @@ impl TiKvConfig {
         self.security.validate()?;
         self.import.validate()?;
         self.backup.validate()?;
+        self.cdc.validate()?;
         self.pessimistic_txn.validate()?;
         self.gc.validate()?;
 
@@ -3952,5 +3983,49 @@ mod tests {
         cfg.coprocessor_v2.coprocessor_plugin_directory = None; // Default is `None`, which is represented by not setting the key.
 
         assert_eq!(cfg, default_cfg);
+    }
+
+    #[test]
+    fn test_cdc() {
+        let content = r#"
+            [cdc]
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+
+        let content = r#"
+            [cdc]
+            old-value-cache-size = 0
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap_err();
+
+        let content = r#"
+            [cdc]
+            min-ts-interval = "0s"
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap_err();
+
+        let content = r#"
+            [cdc]
+            scan-lock-pool-size = 0
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap_err();
+
+        let content = r#"
+            [cdc]
+            incremental-scan-pool-size = 0
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap_err();
+
+        let content = r#"
+            [cdc]
+            incremental-scan-concurrency = 0
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap_err();
     }
 }
