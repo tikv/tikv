@@ -2777,6 +2777,23 @@ dependencies = [
 [[package]]
 name = "page_size"
 version = "0.4.2"
+<<<<<<< HEAD
+=======
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eebde548fbbf1ea81a99b128872779c437752fb99f217c45245e1a61dcd9edcd"
+dependencies = [
+ "libc 0.2.86",
+ "winapi 0.3.8",
+]
+
+[[package]]
+name = "panic_hook"
+version = "0.0.1"
+
+[[package]]
+name = "parking_lot"
+version = "0.10.0"
+>>>>>>> 8b7559b8a... evict entry cache when memory usage is high (#10263)
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eebde548fbbf1ea81a99b128872779c437752fb99f217c45245e1a61dcd9edcd"
 dependencies = [

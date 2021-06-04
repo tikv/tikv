@@ -3583,6 +3583,20 @@ where
         }
     }
 
+    fn register_entry_cache_evict_tick(&mut self) {
+        self.schedule_tick(PeerTicks::ENTRY_CACHE_EVICT)
+    }
+
+    fn on_entry_cache_evict_tick(&mut self) {
+        fail_point!("on_entry_cache_evict_tick", |_| {});
+        if needs_evict_entry_cache() {
+            self.fsm.peer.mut_store().half_evict_cache();
+        }
+        if memory_usage_reaches_high_water() && !self.fsm.peer.get_store().cache_is_empty() {
+            self.register_entry_cache_evict_tick();
+        }
+    }
+
     fn register_split_region_check_tick(&mut self) {
         self.schedule_tick(PeerTicks::SPLIT_REGION_CHECK)
     }
