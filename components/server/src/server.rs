@@ -24,6 +24,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use cdc::MemoryQuota;
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{
@@ -186,6 +187,7 @@ struct Servers<ER: RaftEngine> {
     node: Node<RpcClient, ER>,
     importer: Arc<SSTImporter>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
+    cdc_memory_quota: MemoryQuota,
 }
 
 impl<ER: RaftEngine> TiKVServer<ER> {
@@ -781,6 +783,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
 
         // Start CDC.
+        let cdc_memory_quota = MemoryQuota::new(self.config.cdc.sink_memory_quota.0 as _);
         let cdc_endpoint = cdc::Endpoint::new(
             &self.config.cdc,
             self.pd_client.clone(),
@@ -791,6 +794,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.concurrency_manager.clone(),
             server.env(),
             self.security_mgr.clone(),
+            cdc_memory_quota.clone(),
         );
         cdc_worker.start_with_timer(cdc_endpoint);
         self.to_stop.push(cdc_worker);
@@ -809,9 +813,31 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 // TODO: replace to the cdc sinker
                 resolved_ts::DummySinker::new(),
             );
-            rts_worker.start(rts_endpoint);
+            rts_worker.start_with_timer(rts_endpoint);
             self.to_stop.push(rts_worker);
         }
+
+        // Start resource metering.
+        let resource_metering_cpu_recorder = resource_metering::cpu::recorder::init_recorder();
+        let mut resource_metering_reporter_worker =
+            Box::new(LazyWorker::new("resource-metering-reporter"));
+        let resource_metering_reporter_scheduler = resource_metering_reporter_worker.scheduler();
+        cfg_controller.register(
+            tikv::config::Module::ResourceMetering,
+            Box::new(resource_metering::ConfigManager::new(
+                self.config.resource_metering.clone(),
+                resource_metering_reporter_scheduler.clone(),
+                resource_metering_cpu_recorder,
+            )),
+        );
+        let resource_metering_reporter = resource_metering::reporter::ResourceMeteringReporter::new(
+            self.config.resource_metering.clone(),
+            resource_metering_reporter_scheduler,
+            self.env.clone(),
+            self.security_mgr.clone(),
+        );
+        resource_metering_reporter_worker.start_with_timer(resource_metering_reporter);
+        self.to_stop.push(resource_metering_reporter_worker);
 
         self.servers = Some(Servers {
             lock_mgr,
@@ -819,6 +845,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             node,
             importer,
             cdc_scheduler,
+            cdc_memory_quota,
         });
 
         server_config
@@ -918,7 +945,10 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         );
         backup_worker.start_with_timer(backup_endpoint);
 
-        let cdc_service = cdc::Service::new(servers.cdc_scheduler.clone());
+        let cdc_service = cdc::Service::new(
+            servers.cdc_scheduler.clone(),
+            servers.cdc_memory_quota.clone(),
+        );
         if servers
             .server
             .register_service(create_change_data(cdc_service))

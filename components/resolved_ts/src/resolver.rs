@@ -52,6 +52,15 @@ impl Resolver {
         self.resolved_ts
     }
 
+    pub fn size(&self) -> usize {
+        self.locks_by_key.keys().map(|k| k.len()).sum::<usize>()
+            + self
+                .lock_ts_heap
+                .values()
+                .map(|h| h.iter().map(|k| k.len()).sum::<usize>())
+                .sum::<usize>()
+    }
+
     pub fn locks(&self) -> &BTreeMap<TimeStamp, HashSet<Arc<[u8]>>> {
         &self.lock_ts_heap
     }

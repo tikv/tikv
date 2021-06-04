@@ -5,6 +5,7 @@ use std::cmp::{Ord, Ordering as CmpOrdering};
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
 use std::marker::PhantomData;
+use std::mem;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 #[cfg(test)]
@@ -13,7 +14,7 @@ use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::vec::Drain;
-use std::{cmp, mem, usize};
+use std::{cmp, usize};
 
 use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler, Priority,
@@ -53,7 +54,9 @@ use tikv_util::{Either, MustConsumeVec};
 use time::Timespec;
 use uuid::Builder as UuidBuilder;
 
-use crate::coprocessor::{Cmd, CoprocessorHost, ObserveHandle};
+use crate::coprocessor::{
+    Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle, ObserveLevel,
+};
 use crate::store::fsm::RaftPollerBuilder;
 use crate::store::memory::*;
 use crate::store::metrics::*;
@@ -304,34 +307,50 @@ impl ExecContext {
     }
 }
 
-struct ApplyCallback<EK>
+// The applied command and their callback
+struct ApplyCallbackBatch<S>
 where
-    EK: KvEngine,
+    S: Snapshot,
 {
-    region: Region,
-    cbs: Vec<(Option<Callback<EK::Snapshot>>, Cmd)>,
+    cmd_batch: Vec<CmdBatch>,
+    // The max observe level of current `Vec<CmdBatch>`
+    batch_max_level: ObserveLevel,
+    cb_batch: MustConsumeVec<(Callback<S>, RaftCmdResponse)>,
 }
 
-impl<EK> ApplyCallback<EK>
-where
-    EK: KvEngine,
-{
-    fn new(region: Region) -> Self {
-        let cbs = vec![];
-        ApplyCallback { region, cbs }
-    }
-
-    fn invoke_all(self, host: &CoprocessorHost<EK>) {
-        for (cb, mut cmd) in self.cbs {
-            host.post_apply(&self.region, &mut cmd);
-            if let Some(cb) = cb {
-                cb.invoke_with_response(cmd.response)
-            };
+impl<S: Snapshot> ApplyCallbackBatch<S> {
+    fn new() -> ApplyCallbackBatch<S> {
+        ApplyCallbackBatch {
+            cmd_batch: vec![],
+            batch_max_level: ObserveLevel::None,
+            cb_batch: MustConsumeVec::new("callback of apply callback batch"),
         }
     }
 
-    fn push(&mut self, cb: Option<Callback<EK::Snapshot>>, cmd: Cmd) {
-        self.cbs.push((cb, cmd));
+    fn push_batch(&mut self, observe_info: &CmdObserveInfo, region: Region) {
+        let cb = CmdBatch::new(observe_info, region);
+        self.batch_max_level = cmp::max(self.batch_max_level, cb.level);
+        self.cmd_batch.push(cb);
+    }
+
+    fn push_cb(&mut self, cb: Callback<S>, resp: RaftCmdResponse) {
+        self.cb_batch.push((cb, resp));
+    }
+
+    fn push(
+        &mut self,
+        cb: Option<Callback<S>>,
+        cmd: Cmd,
+        observe_info: &CmdObserveInfo,
+        region_id: u64,
+    ) {
+        if let Some(cb) = cb {
+            self.cb_batch.push((cb, cmd.response.clone()));
+        }
+        self.cmd_batch
+            .last_mut()
+            .unwrap()
+            .push(observe_info, region_id, cmd);
     }
 }
 
@@ -354,7 +373,7 @@ where
     router: ApplyRouter<EK>,
     notifier: Box<dyn Notifier<EK>>,
     engine: EK,
-    cbs: MustConsumeVec<ApplyCallback<EK>>,
+    applied_batch: ApplyCallbackBatch<EK::Snapshot>,
     apply_res: Vec<ApplyRes<EK::Snapshot>>,
     exec_ctx: Option<ExecContext>,
 
@@ -425,7 +444,7 @@ where
             router,
             notifier,
             kv_wb,
-            cbs: MustConsumeVec::new("callback of apply context"),
+            applied_batch: ApplyCallbackBatch::new(),
             apply_res: vec![],
             kv_wb_last_bytes: 0,
             kv_wb_last_keys: 0,
@@ -450,14 +469,9 @@ where
     /// `prepare_for` -> `commit` [-> `commit` ...] -> `finish_for`.
     /// After all delegates are handled, `write_to_db` method should be called.
     pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate<EK>) {
-        self.cbs.push(ApplyCallback::new(delegate.region.clone()));
         self.last_applied_index = delegate.apply_state.get_applied_index();
-
-        self.host.prepare_for_apply(
-            &delegate.observe_info.cdc_id,
-            &delegate.observe_info.rts_id,
-            delegate.region_id(),
-        );
+        self.applied_batch
+            .push_batch(&delegate.observe_info, delegate.region.clone());
     }
 
     /// Commits all changes have done for delegate. `persistent` indicates whether
@@ -515,11 +529,18 @@ where
                 });
             }
         }
+        // Take the applied commands and their callback
+        let ApplyCallbackBatch {
+            cmd_batch,
+            batch_max_level,
+            mut cb_batch,
+        } = mem::replace(&mut self.applied_batch, ApplyCallbackBatch::new());
         // Call it before invoking callback for preventing Commit is executed before Prewrite is observed.
-        self.host.on_flush_apply(self.engine.clone());
-
-        for cbs in self.cbs.drain(..) {
-            cbs.invoke_all(&self.host);
+        self.host
+            .on_flush_applied_cmd_batch(batch_max_level, cmd_batch, &self.engine);
+        // Invoke callbacks
+        for (cb, resp) in cb_batch.drain(..) {
+            cb.invoke_with_response(resp)
         }
         need_sync
     }
@@ -578,7 +599,7 @@ where
         let is_synced = self.write_to_db();
 
         if !self.apply_res.is_empty() {
-            let apply_res = std::mem::take(&mut self.apply_res);
+            let apply_res = mem::take(&mut self.apply_res);
             self.notifier.notify(apply_res);
         }
 
@@ -880,6 +901,7 @@ where
             metrics: Default::default(),
             last_merge_version: 0,
             pending_request_snapshot_count: reg.pending_request_snapshot_count,
+            // use a default `CmdObserveInfo` because observing is disable by default
             observe_info: CmdObserveInfo::default(),
             priority: Priority::Normal,
             trace: ApplyMemoryTrace::default(),
@@ -1030,14 +1052,11 @@ where
         //    it will also propose an empty entry. But that entry will not contain
         //    any associated callback. So no need to clear callback.
         while let Some(mut cmd) = self.pending_cmds.pop_normal(std::u64::MAX, term - 1) {
-            apply_ctx.cbs.last_mut().unwrap().push(
-                cmd.cb.take(),
-                Cmd::new(
-                    cmd.index,
-                    RaftCmdRequest::default(),
-                    cmd_resp::err_resp(Error::StaleCommand, term),
-                ),
-            );
+            if let Some(cb) = cmd.cb.take() {
+                apply_ctx
+                    .applied_batch
+                    .push_cb(cb, cmd_resp::err_resp(Error::StaleCommand, term));
+            }
         }
         ApplyResult::None
     }
@@ -1154,15 +1173,9 @@ where
         cmd_resp::bind_term(&mut resp, self.term);
         let cmd_cb = self.find_pending(index, term, is_conf_change_cmd(&cmd));
         let cmd = Cmd::new(index, cmd, resp);
-        apply_ctx.host.on_apply_cmd(
-            self.observe_info.cdc_id.id,
-            self.observe_info.rts_id.id,
-            self.region_id(),
-            &cmd,
-        );
-
-        apply_ctx.cbs.last_mut().unwrap().push(cmd_cb, cmd);
-
+        apply_ctx
+            .applied_batch
+            .push(cmd_cb, cmd, &self.observe_info, self.region_id());
         exec_result
     }
 
@@ -2952,21 +2965,6 @@ impl Debug for GenSnapTask {
     }
 }
 
-#[derive(Default)]
-struct CmdObserveInfo {
-    cdc_id: ObserveHandle,
-    rts_id: ObserveHandle,
-}
-
-impl Debug for CmdObserveInfo {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CmdObserveInfo")
-            .field("cdc_id", &self.cdc_id.id)
-            .field("rts_id", &self.rts_id.id)
-            .finish()
-    }
-}
-
 #[derive(Debug)]
 pub struct ChangeObserver {
     cdc_id: Option<ObserveHandle>,
@@ -3521,7 +3519,7 @@ where
                 }) => self.handle_change(apply_ctx, cmd, region_epoch, cb),
                 #[cfg(any(test, feature = "testexport"))]
                 Some(Msg::Validate(_, f)) => {
-                    let delegate: *const u8 = unsafe { std::mem::transmute(&self.delegate) };
+                    let delegate: *const u8 = unsafe { mem::transmute(&self.delegate) };
                     f(delegate)
                 }
                 None => break,
@@ -4466,7 +4464,6 @@ mod tests {
         pre_query_count: Arc<AtomicUsize>,
         post_admin_count: Arc<AtomicUsize>,
         post_query_count: Arc<AtomicUsize>,
-        cmd_batches: RefCell<Vec<CmdBatch>>,
         cmd_sink: Option<Arc<Mutex<Sender<CmdBatch>>>>,
     }
 
@@ -4477,7 +4474,7 @@ mod tests {
             self.pre_query_count.fetch_add(1, Ordering::SeqCst);
         }
 
-        fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &mut Cmd) {
+        fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &Cmd) {
             self.post_query_count.fetch_add(1, Ordering::SeqCst);
         }
     }
@@ -4486,30 +4483,18 @@ mod tests {
     where
         E: KvEngine,
     {
-        fn on_prepare_for_apply(&self, cdc: &ObserveHandle, rts: &ObserveHandle, region_id: u64) {
-            self.cmd_batches
-                .borrow_mut()
-                .push(CmdBatch::new(cdc.id, rts.id, region_id));
-        }
-
-        fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: &Cmd) {
-            self.cmd_batches
-                .borrow_mut()
-                .last_mut()
-                .expect("should exist some cmd batch")
-                .push(cdc_id, rts_id, region_id, cmd.clone());
-        }
-
-        fn on_flush_apply(&self, _: E) {
-            if !self.cmd_batches.borrow().is_empty() {
-                let batches = self.cmd_batches.replace(Vec::default());
-                for b in batches {
-                    if b.is_empty() {
-                        continue;
-                    }
-                    if let Some(sink) = self.cmd_sink.as_ref() {
-                        sink.lock().unwrap().send(b).unwrap();
-                    }
+        fn on_flush_applied_cmd_batch(
+            &self,
+            _: ObserveLevel,
+            cmd_batches: &mut Vec<CmdBatch>,
+            _: &E,
+        ) {
+            for b in std::mem::take(cmd_batches) {
+                if b.is_empty() {
+                    continue;
+                }
+                if let Some(sink) = self.cmd_sink.as_ref() {
+                    sink.lock().unwrap().send(b).unwrap();
                 }
             }
         }

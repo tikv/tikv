@@ -30,6 +30,7 @@ use std::u64;
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use kvproto::kvrpcpb::{CommandPri, ExtraOp};
+use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
 use tikv_util::{callback::must_call, deadline::Deadline, time::Instant};
 use txn_types::TimeStamp;
 
@@ -607,45 +608,49 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
 
         let tag = task.cmd.tag();
+        let resource_tag = ResourceMeteringTag::from_rpc_context(task.cmd.ctx());
         self.get_sched_pool(task.cmd.priority())
             .clone()
             .pool
-            .spawn(async move {
-                fail_point!("scheduler_async_snapshot_finish");
-                SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
+            .spawn(
+                async move {
+                    fail_point!("scheduler_async_snapshot_finish");
+                    SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
 
-                if self.check_task_deadline_exceeded(&task) {
-                    return;
-                }
-
-                let read_duration = Instant::now_coarse();
-
-                let region_id = task.cmd.ctx().get_region_id();
-                let ts = task.cmd.ts();
-                let timer = Instant::now_coarse();
-                let mut statistics = Statistics::default();
-
-                if task.cmd.readonly() {
-                    self.process_read(snapshot, task, &mut statistics);
-                } else {
-                    // Safety: `self.sched_pool` ensures a TLS engine exists.
-                    unsafe {
-                        with_tls_engine(|engine| {
-                            self.process_write(engine, snapshot, task, &mut statistics)
-                        });
+                    if self.check_task_deadline_exceeded(&task) {
+                        return;
                     }
-                };
-                tls_collect_scan_details(tag.get_str(), &statistics);
-                slow_log!(
-                    timer.elapsed(),
-                    "[region {}] scheduler handle command: {}, ts: {}",
-                    region_id,
-                    tag,
-                    ts
-                );
 
-                tls_collect_read_duration(tag.get_str(), read_duration.elapsed());
-            })
+                    let timer = Instant::now_coarse();
+
+                    let region_id = task.cmd.ctx().get_region_id();
+                    let ts = task.cmd.ts();
+                    let mut statistics = Statistics::default();
+
+                    if task.cmd.readonly() {
+                        self.process_read(snapshot, task, &mut statistics);
+                    } else {
+                        // Safety: `self.sched_pool` ensures a TLS engine exists.
+                        unsafe {
+                            with_tls_engine(|engine| {
+                                self.process_write(engine, snapshot, task, &mut statistics)
+                            });
+                        }
+                    };
+                    tls_collect_scan_details(tag.get_str(), &statistics);
+                    let elapsed = timer.elapsed();
+                    slow_log!(
+                        elapsed,
+                        "[region {}] scheduler handle command: {}, ts: {}",
+                        region_id,
+                        tag,
+                        ts
+                    );
+
+                    tls_collect_read_duration(tag.get_str(), elapsed);
+                }
+                .in_resource_metering_tag(resource_tag),
+            )
             .unwrap();
     }
 

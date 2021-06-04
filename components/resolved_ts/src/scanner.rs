@@ -21,6 +21,7 @@ use tokio::runtime::{Builder, Runtime};
 use txn_types::{Key, Lock, TimeStamp};
 
 use crate::errors::{Error, Result};
+use crate::metrics::RTS_SCAN_DURATION_HISTOGRAM;
 
 const DEFAULT_SCAN_BATCH_SIZE: usize = 1024;
 const GET_SNAPSHOT_RETRY_TIME: u32 = 3;
@@ -98,6 +99,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                     return;
                 }
             };
+            let start = Instant::now();
             let apply_index = snap.get_apply_index().unwrap();
             let mut entries = vec![];
             match task.mode {
@@ -165,6 +167,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                 }
             }
             entries.push(ScanEntry::None);
+            RTS_SCAN_DURATION_HISTOGRAM.observe(start.elapsed().as_secs_f64());
             (task.send_entries)(entries, apply_index);
         };
         self.workers.spawn(fut);
