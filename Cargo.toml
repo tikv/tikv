@@ -64,6 +64,7 @@ protobuf-codec = [
   "txn_types/protobuf-codec",
   "grpcio-health/protobuf-codec",
   "file_system/protobuf-codec",
+  "resource_metering/protobuf-codec",
   "protobuf/bytes",
 ]
 prost-codec = [
@@ -98,6 +99,7 @@ prost-codec = [
   "txn_types/prost-codec",
   "grpcio-health/prost-codec",
   "file_system/prost-codec",
+  "resource_metering/prost-codec",
 ]
 testexport = ["raftstore/testexport"]
 test-engines-rocksdb = [
@@ -146,8 +148,8 @@ fs2 = "0.4"
 futures = { version = "0.3", features = ["thread-pool", "compat"] }
 futures-executor = "0.3.1"
 futures-util = { version = "0.3.1", default-features = false, features = ["io", "async-await"] }
-grpcio = { version = "0.8",  default-features = false, features = ["openssl-vendored"] }
-grpcio-health = { version = "0.8", default-features = false }
+grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored"] }
+grpcio-health = { version = "0.9", default-features = false }
 hex = "0.4"
 hyper-tls = "0.4"
 itertools = "0.8"
@@ -157,7 +159,7 @@ hyper-openssl = "0.8"
 http = "0"
 into_other = { path = "components/into_other", default-features = false }
 keys = { path = "components/keys", default-features = false }
-kvproto = { rev = "f11c6fb6b3a53b214ee94d54651b01eb99239334", git = "https://github.com/pingcap/kvproto.git", default-features = false }
+kvproto = { rev = "7a046020d1c091638e1e8aba623c8c1e8962219d", git = "https://github.com/pingcap/kvproto.git", default-features = false }
 lazy_static = "1.3"
 libc = "0.2"
 libloading = "0.7"
@@ -220,6 +222,7 @@ url = "2"
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 walkdir = "2"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+resource_metering = { path = "components/resource_metering" }
 
 [dev-dependencies]
 panic_hook = { path = "components/panic_hook" }
@@ -312,7 +315,8 @@ members = [
   "components/file_system",
   "components/collections",
   "components/coprocessor_plugin_api",
-  "components/test_coprocessor_plugin/example_plugin"
+  "components/test_coprocessor_plugin/example_plugin",
+  "components/resource_metering",
 ]
 default-members = ["cmd/tikv-server", "cmd/tikv-ctl"]
 

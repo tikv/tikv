@@ -23,7 +23,7 @@ use collections::HashSet;
 use fail::fail_point;
 use grpcio::{
     CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
-    Error::RpcFailure, MetadataBuilder, Result as GrpcResult, RpcStatus, RpcStatusCode,
+    Error::RpcFailure, MetadataBuilder, Result as GrpcResult, RpcStatusCode,
 };
 use kvproto::pdpb::{
     ErrorType, GetMembersRequest, GetMembersResponse, Member, PdClient as PdClientStub,
@@ -651,9 +651,9 @@ impl PdConnector {
                     return Ok((Some((client, ep.clone(), resp)), false));
                 }
                 Err(Error::Grpc(e)) => {
-                    if let RpcFailure(RpcStatus { status, details: _ }) = e {
-                        if status == RpcStatusCode::UNAVAILABLE
-                            || status == RpcStatusCode::DEADLINE_EXCEEDED
+                    if let RpcFailure(ref status) = e {
+                        if status.code() == RpcStatusCode::UNAVAILABLE
+                            || status.code() == RpcStatusCode::DEADLINE_EXCEEDED
                         {
                             network_fail_num += 1;
                         }

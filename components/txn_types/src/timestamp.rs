@@ -3,6 +3,7 @@
 use collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct TimeStamp(u64);
@@ -64,6 +65,13 @@ impl TimeStamp {
 
     pub fn into_inner(self) -> u64 {
         self.0
+    }
+
+    pub fn physical_now() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
     }
 }
 
