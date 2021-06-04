@@ -4128,7 +4128,7 @@ mod tests {
 
         let content = r#"
             [cdc]
-            incremental-scan-scan-threads = 0
+            incremental-scan-threads = 0
         "#;
         let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
         cfg.validate().unwrap_err();

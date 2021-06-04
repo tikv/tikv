@@ -263,7 +263,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         let workers = Builder::new()
             .threaded_scheduler()
             .thread_name("cdcwkr")
-            .core_threads(cfg.incremental_scan_pool_size)
+            .core_threads(cfg.incremental_scan_threads)
             .build()
             .unwrap();
         let scan_concurrency_semaphore = Arc::new(Semaphore::new(cfg.incremental_scan_concurrency));
