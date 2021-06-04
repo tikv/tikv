@@ -579,7 +579,7 @@ where
             last_proposed_prepare_merge_idx: 0,
             last_committed_prepare_merge_idx: 0,
             leader_missing_time: Some(Instant::now()),
-            tag,
+            tag: tag.clone(),
             last_applying_idx: applied_index,
             last_compacted_idx: 0,
             last_urgent_proposal_idx: u64::MAX,
@@ -609,6 +609,7 @@ where
             read_progress: Arc::new(RegionReadProgress::new(
                 applied_index,
                 REGION_READ_PROGRESS_CAP,
+                tag,
             )),
         };
 
@@ -1483,6 +1484,8 @@ where
                     // region writes new values.
                     // To prevent unsafe local read, we suspect its leader lease.
                     self.leader_lease.suspect(monotonic_raw_now());
+                    // Stop updating `safe_ts`
+                    self.read_progress.discard();
                 }
             }
         }
@@ -1814,8 +1817,8 @@ where
         if invoke_ctx.has_snapshot() {
             // When apply snapshot, there is no log applied and not compacted yet.
             self.raft_log_size_hint = 0;
-            // Stop `read_progress` to prevent serving stale read while applying snapshot
-            self.read_progress.stop();
+            // Pause `read_progress` to prevent serving stale read while applying snapshot
+            self.read_progress.pause();
         }
 
         let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
