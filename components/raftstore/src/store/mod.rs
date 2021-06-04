@@ -3,6 +3,7 @@
 pub mod cmd_resp;
 pub mod config;
 pub mod fsm;
+pub mod memory;
 pub mod msg;
 pub mod transport;
 
@@ -13,7 +14,6 @@ mod bootstrap;
 mod compaction_guard;
 mod hibernate_state;
 mod local_metrics;
-mod memory;
 mod metrics;
 mod peer;
 mod peer_storage;
