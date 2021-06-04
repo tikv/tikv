@@ -722,31 +722,31 @@ mod tests {
         {
             let _write = start_background_jobs(
                 &limiter,
-                2, /*job_count*/
+                1, /*job_count*/
                 Request(
                     IOType::ForegroundWrite,
                     IOOp::Write,
-                    write_work * bytes_per_sec / 100 / 1000 / 2,
+                    write_work * bytes_per_sec / 100 / 1000,
                 ),
                 Some(Duration::from_millis(1)),
             );
             let _compaction = start_background_jobs(
                 &limiter,
-                2, /*job_count*/
+                1, /*job_count*/
                 Request(
                     IOType::Compaction,
                     IOOp::Write,
-                    compaction_work * bytes_per_sec / 100 / 1000 / 2,
+                    compaction_work * bytes_per_sec / 100 / 1000,
                 ),
                 Some(Duration::from_millis(1)),
             );
             let _import = start_background_jobs(
                 &limiter,
-                2, /*job_count*/
+                1, /*job_count*/
                 Request(
                     IOType::Import,
                     IOOp::Write,
-                    import_work * bytes_per_sec / 100 / 1000 / 2,
+                    import_work * bytes_per_sec / 100 / 1000,
                 ),
                 Some(Duration::from_millis(1)),
             );
