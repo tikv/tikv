@@ -86,12 +86,17 @@ pub fn get_global_memory_usage() -> u64 {
     GLOBAL_MEMORY_USAGE.load(Ordering::Acquire)
 }
 
-/// Record the current global memory usage.
+/// Record the current global memory usage of the process.
+#[cfg(target_os = "linux")]
 pub fn record_global_memory_usage() {
-    let mut system = sysinfo::System::new();
-    system.refresh_memory();
-    let usage = system.get_used_memory() * KIB;
-    GLOBAL_MEMORY_USAGE.store(usage, Ordering::Release);
+    let s = procinfo::pid::statm_self().unwrap();
+    let usage = s.size * page_size::get();
+    GLOBAL_MEMORY_USAGE.store(usage as u64, Ordering::Release);
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn record_global_memory_usage() {
+    GLOBAL_MEMORY_USAGE.store(0, Ordering::Release);
 }
 
 /// Register the high water mark so that `memory_usage_reaches_high_water` is available.

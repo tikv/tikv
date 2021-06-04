@@ -2185,7 +2185,8 @@ where
         );
 
         if !self.is_leader() {
-            self.mut_store().compact_cache_to(apply_state.applied_index + 1);
+            self.mut_store()
+                .compact_cache_to(apply_state.applied_index + 1);
         }
 
         let progress_to_be_updated = self.mut_store().applied_index_term() != applied_index_term;

@@ -2969,6 +2969,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "page_size"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eebde548fbbf1ea81a99b128872779c437752fb99f217c45245e1a61dcd9edcd"
+dependencies = [
+ "libc 0.2.86",
+ "winapi 0.3.8",
+]
+
+[[package]]
 name = "panic_hook"
 version = "0.0.1"
 
@@ -5686,6 +5696,7 @@ dependencies = [
  "nix 0.11.1",
  "num_cpus",
  "openssl",
+ "page_size",
  "panic_hook",
  "procfs",
  "procinfo",
