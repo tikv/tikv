@@ -42,6 +42,7 @@ use raft_log_engine::RaftLogEngine;
 use raftstore::coprocessor::{Config as CopConfig, RegionInfoAccessor};
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::{CompactionGuardGeneratorFactory, SplitConfig};
+use resource_metering::Config as ResourceMeteringConfig;
 use security::SecurityConfig;
 use tikv_util::config::{
     self, LogFormat, OptionReadableSize, ReadableDuration, ReadableSize, TomlWriter, GIB, MIB,
@@ -547,7 +548,7 @@ impl Default for DefaultCfConfig {
             max_bytes_for_level_multiplier: 10,
             compaction_style: DBCompactionStyle::Level,
             disable_auto_compactions: false,
-            soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(192),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
             force_consistency_checks: false,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
@@ -642,7 +643,7 @@ impl Default for WriteCfConfig {
             max_bytes_for_level_multiplier: 10,
             compaction_style: DBCompactionStyle::Level,
             disable_auto_compactions: false,
-            soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(192),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
             force_consistency_checks: false,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
@@ -732,7 +733,7 @@ impl Default for LockCfConfig {
             max_bytes_for_level_multiplier: 10,
             compaction_style: DBCompactionStyle::Level,
             disable_auto_compactions: false,
-            soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(192),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
             force_consistency_checks: false,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
@@ -805,7 +806,7 @@ impl Default for RaftCfConfig {
             max_bytes_for_level_multiplier: 10,
             compaction_style: DBCompactionStyle::Level,
             disable_auto_compactions: false,
-            soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(192),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
             force_consistency_checks: false,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
@@ -1157,7 +1158,7 @@ impl Default for RaftDefaultCfConfig {
             max_bytes_for_level_multiplier: 10,
             compaction_style: DBCompactionStyle::Level,
             disable_auto_compactions: false,
-            soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(192),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
             force_consistency_checks: false,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
@@ -2207,17 +2208,14 @@ impl Default for BackupConfig {
     }
 }
 
-// TODO: `CdcConfig` is used by both `cdc` worker and `resolved ts` worker
-// should separate it into two configs
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct CdcConfig {
     pub min_ts_interval: ReadableDuration,
     pub old_value_cache_size: usize,
     pub hibernate_regions_compatible: bool,
-    pub scan_lock_pool_size: usize,
-    pub incremental_scan_pool_size: usize,
+    pub incremental_scan_threads: usize,
     pub incremental_scan_concurrency: usize,
     pub incremental_scan_speed_limit: ReadableSize,
 }
@@ -2228,9 +2226,8 @@ impl Default for CdcConfig {
             min_ts_interval: ReadableDuration::secs(1),
             old_value_cache_size: 1024,
             hibernate_regions_compatible: true,
-            scan_lock_pool_size: 2,
             // 4 threads for incremental scan.
-            incremental_scan_pool_size: 4,
+            incremental_scan_threads: 4,
             // At most 16 concurrent running tasks.
             incremental_scan_concurrency: 16,
             // TiCDC requires a SSD, the typical write speed of SSD
@@ -2248,19 +2245,52 @@ impl CdcConfig {
         if self.min_ts_interval == ReadableDuration::secs(0) {
             return Err("cdc.min-ts-interval can't be 0s".into());
         }
-        if self.scan_lock_pool_size == 0 {
-            return Err("cdc.scan-lock-pool-size can't be 0".into());
-        }
-        if self.incremental_scan_pool_size == 0 {
-            return Err("cdc.incremental-scan-pool-size can't be 0".into());
+        if self.incremental_scan_threads == 0 {
+            return Err("cdc.incremental-scan-threads can't be 0".into());
         }
         if self.incremental_scan_concurrency == 0 {
             return Err("cdc.incremental-scan-concurrency can't be 0".into());
         }
-        if self.incremental_scan_concurrency < self.incremental_scan_pool_size {
-            return Err("cdc.incremental-scan-concurrency must be larger than cdc.incremental-scan-pool-size".into());
+        if self.incremental_scan_concurrency < self.incremental_scan_threads {
+            return Err(
+                "cdc.incremental-scan-concurrency must be larger than cdc.incremental-scan-threads"
+                    .into(),
+            );
         }
         Ok(())
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct ResolvedTsConfig {
+    #[config(skip)]
+    pub enable: bool,
+    pub advance_ts_interval: ReadableDuration,
+    #[config(skip)]
+    pub scan_lock_pool_size: usize,
+}
+
+impl ResolvedTsConfig {
+    fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.advance_ts_interval.is_zero() {
+            return Err("resolved-ts.advance-ts-interval can't be zero".into());
+        }
+        if self.scan_lock_pool_size == 0 {
+            return Err("resolved-ts.scan-lock-pool-size can't be zero".into());
+        }
+        Ok(())
+    }
+}
+
+impl Default for ResolvedTsConfig {
+    fn default() -> Self {
+        Self {
+            enable: true,
+            advance_ts_interval: ReadableDuration::secs(1),
+            scan_lock_pool_size: 2,
+        }
     }
 }
 
@@ -2362,8 +2392,14 @@ pub struct TiKvConfig {
     #[config(submodule)]
     pub split: SplitConfig,
 
-    #[config(submodule)]
+    #[config(skip)]
     pub cdc: CdcConfig,
+
+    #[config(submodule)]
+    pub resolved_ts: ResolvedTsConfig,
+
+    #[config(submodule)]
+    pub resource_metering: ResourceMeteringConfig,
 }
 
 impl Default for TiKvConfig {
@@ -2400,6 +2436,8 @@ impl Default for TiKvConfig {
             gc: GcConfig::default(),
             split: SplitConfig::default(),
             cdc: CdcConfig::default(),
+            resolved_ts: ResolvedTsConfig::default(),
+            resource_metering: ResourceMeteringConfig::default(),
         }
     }
 }
@@ -2520,6 +2558,8 @@ impl TiKvConfig {
         self.cdc.validate()?;
         self.pessimistic_txn.validate()?;
         self.gc.validate()?;
+        self.resolved_ts.validate()?;
+        self.resource_metering.validate()?;
 
         let default_memory_usage_limit = Self::default_memory_usage_limit();
         if self.memory_usage_limit.0 == 0 {
@@ -3007,6 +3047,9 @@ pub enum Module {
     PessimisticTxn,
     Gc,
     Split,
+    CDC,
+    ResolvedTs,
+    ResourceMetering,
     Unknown(String),
 }
 
@@ -3029,6 +3072,9 @@ impl From<&str> for Module {
             "backup" => Module::Backup,
             "pessimistic_txn" => Module::PessimisticTxn,
             "gc" => Module::Gc,
+            "cdc" => Module::CDC,
+            "resolved_ts" => Module::ResolvedTs,
+            "resource_metering" => Module::ResourceMetering,
             n => Module::Unknown(n.to_owned()),
         }
     }
@@ -3429,6 +3475,79 @@ mod tests {
             Box::new(StorageConfigManger::new(engine.clone(), shared, scheduler)),
         );
         (engine, cfg_controller, receiver)
+    }
+
+    #[test]
+    fn test_change_resolved_ts_config() {
+        use crossbeam::channel;
+
+        pub struct TestConfigManager(channel::Sender<ConfigChange>);
+        impl ConfigManager for TestConfigManager {
+            fn dispatch(&mut self, change: ConfigChange) -> configuration::Result<()> {
+                self.0.send(change).unwrap();
+                Ok(())
+            }
+        }
+
+        let (cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        let cfg_controller = ConfigController::new(cfg);
+        let (tx, rx) = channel::unbounded();
+        cfg_controller.register(Module::ResolvedTs, Box::new(TestConfigManager(tx)));
+
+        // Return error if try to update not support config or unknow config
+        assert!(
+            cfg_controller
+                .update_config("resolved-ts.enable", "false")
+                .is_err()
+        );
+        assert!(
+            cfg_controller
+                .update_config("resolved-ts.scan-lock-pool-size", "10")
+                .is_err()
+        );
+        assert!(
+            cfg_controller
+                .update_config("resolved-ts.xxx", "false")
+                .is_err()
+        );
+
+        let mut resolved_ts_cfg = cfg_controller.get_current().resolved_ts;
+        // Default value
+        assert_eq!(
+            resolved_ts_cfg.advance_ts_interval,
+            ReadableDuration::secs(1)
+        );
+
+        // Update `advance-ts-interval` to 100ms
+        cfg_controller
+            .update_config("resolved-ts.advance-ts-interval", "100ms")
+            .unwrap();
+        resolved_ts_cfg.update(rx.recv().unwrap());
+        assert_eq!(
+            resolved_ts_cfg.advance_ts_interval,
+            ReadableDuration::millis(100)
+        );
+
+        // Return error if try to update `advance-ts-interval` to an invalid value
+        assert!(
+            cfg_controller
+                .update_config("resolved-ts.advance-ts-interval", "0m")
+                .is_err()
+        );
+        assert_eq!(
+            resolved_ts_cfg.advance_ts_interval,
+            ReadableDuration::millis(100)
+        );
+
+        // Update `advance-ts-interval` to 3s
+        cfg_controller
+            .update_config("resolved-ts.advance-ts-interval", "3s")
+            .unwrap();
+        resolved_ts_cfg.update(rx.recv().unwrap());
+        assert_eq!(
+            resolved_ts_cfg.advance_ts_interval,
+            ReadableDuration::secs(3)
+        );
     }
 
     #[test]
@@ -4009,14 +4128,7 @@ mod tests {
 
         let content = r#"
             [cdc]
-            scan-lock-pool-size = 0
-        "#;
-        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
-        cfg.validate().unwrap_err();
-
-        let content = r#"
-            [cdc]
-            incremental-scan-pool-size = 0
+            incremental-scan-scan-threads = 0
         "#;
         let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
         cfg.validate().unwrap_err();
