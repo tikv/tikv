@@ -3459,9 +3459,6 @@ where
         let applied_idx = self.fsm.peer.get_store().applied_index();
         if !self.fsm.peer.is_leader() {
             self.fsm.peer.mut_store().compact_to(applied_idx + 1);
-            if needs_evict_entry_cache() {
-                self.fsm.peer.mut_store().half_evict_cache();
-            }
             return;
         }
 
@@ -3518,6 +3515,9 @@ where
             .maybe_gc_cache(alive_cache_idx, applied_idx);
         if needs_evict_entry_cache() {
             self.fsm.peer.mut_store().half_evict_cache();
+            if !self.fsm.peer.get_store().cache_is_empty() {
+                self.register_entry_cache_evict_tick();
+            }
         }
 
         let mut total_gc_logs = 0;
@@ -3578,7 +3578,7 @@ where
         if needs_evict_entry_cache() {
             self.fsm.peer.mut_store().half_evict_cache();
         }
-        if memory_usage_reaches_high_water() {
+        if memory_usage_reaches_high_water() && !self.fsm.peer.get_store().cache_is_empty() {
             self.register_entry_cache_evict_tick();
         }
     }

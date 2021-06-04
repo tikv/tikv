@@ -112,6 +112,8 @@ struct EntryCache {
     trace: VecDeque<CachedEntries>,
     hit: Cell<i64>,
     miss: Cell<i64>,
+    #[cfg(test)]
+    size_change_cb: Option<Box<dyn Fn(i64) + Send + 'static>>,
 }
 
 impl EntryCache {
@@ -167,15 +169,15 @@ impl EntryCache {
         if !entries.is_empty() {
             let mut mem_size_change = 0;
             let old_capacity = self.cache.capacity();
-            self.append_impl(tag, entries);
+            mem_size_change += self.append_impl(tag, entries);
             let new_capacity = self.cache.capacity();
             mem_size_change += Self::get_cache_vec_mem_size_change(new_capacity, old_capacity);
             mem_size_change += self.shrink_if_necessary();
-            Self::flush_mem_size_change(mem_size_change);
+            self.flush_mem_size_change(mem_size_change);
         }
     }
 
-    fn append_impl(&mut self, tag: &str, mut entries: &[Entry]) {
+    fn append_impl(&mut self, tag: &str, mut entries: &[Entry]) -> i64 {
         let mut mem_size_change = 0;
 
         if let Some(cache_last_index) = self.cache.back().map(|e| e.get_index()) {
@@ -215,10 +217,12 @@ impl EntryCache {
             mem_size_change += (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64;
         }
 
-        Self::flush_mem_size_change(mem_size_change);
+        mem_size_change
     }
 
     pub fn compact_to(&mut self, mut idx: u64) {
+        let mut mem_size_change = 0;
+
         // Clean cached entries which have been already sent to apply threads. For example,
         // if entries [1, 10), [10, 20), [20, 30) are sent to apply threads and `compact_to(15)`
         // is called, only [20, 30) will still be kept in cache.
@@ -229,7 +233,7 @@ impl EntryCache {
                 let trace_len = self.trace.len();
                 let trace_cap = self.trace.capacity();
                 if trace_len < SHRINK_CACHE_CAPACITY && trace_cap > SHRINK_CACHE_CAPACITY {
-                    self.trace.shrink_to_fit();
+                    self.trace.shrink_to(SHRINK_CACHE_CAPACITY);
                 }
                 break;
             }
@@ -237,15 +241,11 @@ impl EntryCache {
             idx = cmp::max(cached_entries.range.end - 1, idx);
         }
         let new_trace_cap = self.trace.capacity();
-        if new_trace_cap < old_trace_cap {
-            let diff = mem::size_of::<CachedEntries>() * (old_trace_cap - new_trace_cap);
-            Self::flush_mem_size_change(-(diff as i64));
-        }
-
-        let mut mem_size_change = 0;
+        mem_size_change += Self::get_trace_vec_mem_size_change(new_trace_cap, old_trace_cap);
 
         let cache_first_idx = self.first_index().unwrap_or(u64::MAX);
         if cache_first_idx > idx {
+            self.flush_mem_size_change(mem_size_change);
             return;
         }
 
@@ -257,25 +257,33 @@ impl EntryCache {
         }
 
         mem_size_change += self.shrink_if_necessary();
-        Self::flush_mem_size_change(mem_size_change);
+        self.flush_mem_size_change(mem_size_change);
     }
 
     fn get_total_mem_size(&self) -> i64 {
-        let data_size: usize = self
+        let data_size: i64 = self
             .cache
             .iter()
-            .map(|e| bytes_capacity(&e.data) + bytes_capacity(&e.context))
+            .map(|e| (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64)
             .sum();
-        (ENTRY_MEM_SIZE * self.cache.capacity()
-            + mem::size_of::<CachedEntries>() * self.trace.capacity()
-            + data_size) as i64
+        let cache_vec_size = Self::get_cache_vec_mem_size_change(self.cache.capacity(), 0);
+        let trace_vec_size = Self::get_trace_vec_mem_size_change(self.trace.capacity(), 0);
+        data_size + cache_vec_size + trace_vec_size
     }
 
     fn get_cache_vec_mem_size_change(new_capacity: usize, old_capacity: usize) -> i64 {
         ENTRY_MEM_SIZE as i64 * (new_capacity as i64 - old_capacity as i64)
     }
 
-    fn flush_mem_size_change(mem_size_change: i64) {
+    fn get_trace_vec_mem_size_change(new_capacity: usize, old_capacity: usize) -> i64 {
+        mem::size_of::<CachedEntries>() as i64 * (new_capacity as i64 - old_capacity as i64)
+    }
+
+    fn flush_mem_size_change(&self, mem_size_change: i64) {
+        #[cfg(test)]
+        if let Some(size_change_cb) = self.size_change_cb.as_ref() {
+            size_change_cb(mem_size_change);
+        }
         let event = if mem_size_change > 0 {
             TraceEvent::Add(mem_size_change as usize)
         } else {
@@ -301,10 +309,8 @@ impl EntryCache {
         let old_capacity = self.trace.capacity();
         self.trace.push_back(entries);
         let new_capacity = self.trace.capacity();
-        if new_capacity > old_capacity {
-            let diff = mem::size_of::<CachedEntries>() * (new_capacity - old_capacity);
-            Self::flush_mem_size_change(diff as i64);
-        }
+        let diff = Self::get_trace_vec_mem_size_change(new_capacity, old_capacity);
+        self.flush_mem_size_change(diff);
     }
 
     fn shrink_if_necessary(&mut self) -> i64 {
@@ -326,8 +332,10 @@ impl Default for EntryCache {
             trace: Default::default(),
             hit: Cell::new(0),
             miss: Cell::new(0),
+            #[cfg(test)]
+            size_change_cb: None,
         };
-        EntryCache::flush_mem_size_change(entry_cache.get_total_mem_size());
+        entry_cache.flush_mem_size_change(entry_cache.get_total_mem_size());
         entry_cache
     }
 }
@@ -335,7 +343,7 @@ impl Default for EntryCache {
 impl Drop for EntryCache {
     fn drop(&mut self) {
         let mem_size_change = self.get_total_mem_size();
-        EntryCache::flush_mem_size_change(-mem_size_change);
+        self.flush_mem_size_change(-mem_size_change);
         self.flush_stats();
     }
 }
@@ -1172,13 +1180,20 @@ where
             // TODO: unify entry cache.
             return;
         }
-        RAFT_ENTRIES_CACHES_EVICT.inc();
         let cache = self.cache.as_mut().unwrap();
         if !cache.cache.is_empty() {
+            RAFT_ENTRIES_CACHES_EVICT.inc();
+            let cache = self.cache.as_mut().unwrap();
             let drain_to = cache.cache.len() / 2;
             let idx = cache.cache[drain_to].index;
             cache.compact_to(idx + 1);
         }
+    }
+
+    pub fn cache_is_empty(&self) -> bool {
+        self.cache
+            .as_ref()
+            .map_or_else(|| true, |c| c.cache.is_empty())
     }
 
     #[inline]
@@ -1807,6 +1822,20 @@ mod tests {
     use tikv_util::worker::{LazyWorker, Scheduler, Worker};
 
     use super::*;
+
+    impl EntryCache {
+        fn new_with_cb(cb: impl Fn(i64) + Send + 'static) -> Self {
+            let entry_cache = EntryCache {
+                cache: Default::default(),
+                trace: Default::default(),
+                hit: Cell::new(0),
+                miss: Cell::new(0),
+                size_change_cb: Some(Box::new(cb) as Box<dyn Fn(i64) + Send + 'static>),
+            };
+            entry_cache.flush_mem_size_change(entry_cache.get_total_mem_size());
+            entry_cache
+        }
+    }
 
     fn new_storage(
         sched: Scheduler<RegionTask<KvTestSnapshot>>,
@@ -2451,6 +2480,25 @@ mod tests {
         validate_cache(&store, &[]);
         // invalid compaction should be ignored.
         store.compact_to(cap);
+    }
+
+    #[test]
+    fn test_storage_cache_size_change() {
+        let (tx, rx) = mpsc::sync_channel(8);
+        let mut cache = EntryCache::new_with_cb(move |c: i64| tx.send(c).unwrap());
+        assert_eq!(rx.try_recv().unwrap(), 896);
+
+        cache.append("", &[new_entry(1, 1), new_entry(2, 1)]);
+        assert_eq!(rx.try_recv().unwrap(), 0);
+
+        cache.append("", &[new_entry(2, 2)]);
+        assert_eq!(rx.try_recv().unwrap(), 0);
+
+        cache.append("", &[new_entry(1, 2), new_entry(2, 2)]);
+        assert_eq!(rx.try_recv().unwrap(), 0);
+
+        drop(cache);
+        assert_eq!(rx.try_recv().unwrap(), -896);
     }
 
     #[test]
