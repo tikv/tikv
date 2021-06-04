@@ -1958,10 +1958,10 @@ where
         meta.pending_snapshot_regions
             .retain(|r| self.fsm.region_id() != r.get_id());
 
-        // Remove `read_progress` and call `clear` to set the `safe_ts` to zero to reject
+        // Remove `read_progress` and reset the `safe_ts` to zero to reject
         // incoming stale read request
         meta.region_read_progress.remove(&region_id);
-        self.fsm.peer.read_progress.clear();
+        self.fsm.peer.read_progress.pause();
 
         // Destroy read delegates.
         meta.readers.remove(&region_id);
@@ -2802,7 +2802,12 @@ where
         self.fsm.peer.catch_up_logs = Some(catch_up_logs);
     }
 
-    fn on_ready_commit_merge(&mut self, region: metapb::Region, source: metapb::Region) {
+    fn on_ready_commit_merge(
+        &mut self,
+        merge_index: u64,
+        region: metapb::Region,
+        source: metapb::Region,
+    ) {
         self.register_split_region_check_tick();
         let mut meta = self.ctx.store_meta.lock().unwrap();
 
@@ -2824,6 +2829,14 @@ where
         assert!(meta.regions.remove(&source.get_id()).is_some());
         meta.set_region(&self.ctx.coprocessor_host, region, &mut self.fsm.peer);
         meta.readers.remove(&source.get_id());
+
+        // After the region commit merged, the region's key range is extended and the region's `safe_ts`
+        // should reset to `min(source_safe_ts, target_safe_ts)`
+        let source_read_progress = meta.region_read_progress.remove(&source.get_id()).unwrap();
+        self.fsm
+            .peer
+            .read_progress
+            .merge_safe_ts(source_read_progress.safe_ts(), merge_index);
 
         // If a follower merges into a leader, a more recent read may happen
         // on the leader of the follower. So max ts should be updated after
@@ -2887,6 +2900,9 @@ where
         // Clear merge releted data
         self.fsm.peer.pending_merge_state = None;
         self.fsm.peer.want_rollback_merge_peers.clear();
+
+        // Resume updating `safe_ts`
+        self.fsm.peer.read_progress.resume();
 
         if let Some(r) = region {
             let mut meta = self.ctx.store_meta.lock().unwrap();
@@ -3130,9 +3146,11 @@ where
                 ExecResult::PrepareMerge { region, state } => {
                     self.on_ready_prepare_merge(region, state)
                 }
-                ExecResult::CommitMerge { region, source } => {
-                    self.on_ready_commit_merge(region.clone(), source.clone())
-                }
+                ExecResult::CommitMerge {
+                    index,
+                    region,
+                    source,
+                } => self.on_ready_commit_merge(index, region, source),
                 ExecResult::RollbackMerge { region, commit } => {
                     self.on_ready_rollback_merge(commit, Some(region))
                 }

@@ -582,7 +582,7 @@ where
             last_proposed_prepare_merge_idx: 0,
             last_committed_prepare_merge_idx: 0,
             leader_missing_time: Some(Instant::now()),
-            tag,
+            tag: tag.clone(),
             last_applying_idx: applied_index,
             last_compacted_idx: 0,
             last_urgent_proposal_idx: u64::MAX,
@@ -612,6 +612,7 @@ where
             read_progress: Arc::new(RegionReadProgress::new(
                 applied_index,
                 REGION_READ_PROGRESS_CAP,
+                tag,
             )),
         };
 
@@ -1486,6 +1487,8 @@ where
                     // region writes new values.
                     // To prevent unsafe local read, we suspect its leader lease.
                     self.leader_lease.suspect(monotonic_raw_now());
+                    // Stop updating `safe_ts`
+                    self.read_progress.discard();
                 }
             }
         }
@@ -1644,6 +1647,7 @@ where
                 return None;
             }
             CheckApplyingSnapStatus::Success => {
+                fail_point!("raft_before_applying_snap_finished");
                 // 0 means snapshot is scheduled after being restarted.
                 if self.last_unpersisted_number != 0 {
                     // Because we only handle raft ready when not applying snapshot, so following
@@ -1656,6 +1660,9 @@ where
                     );
                 }
                 self.post_pending_read_index_on_replica(ctx);
+                // Resume `read_progress`
+                self.read_progress.resume();
+                // Update apply index to `last_applying_idx`
                 self.read_progress.update_applied(self.last_applying_idx);
                 if !self.pending_messages.is_empty() {
                     let msgs = mem::take(&mut self.pending_messages);
@@ -1813,6 +1820,8 @@ where
         if invoke_ctx.has_snapshot() {
             // When apply snapshot, there is no log applied and not compacted yet.
             self.raft_log_size_hint = 0;
+            // Pause `read_progress` to prevent serving stale read while applying snapshot
+            self.read_progress.pause();
         }
 
         let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
