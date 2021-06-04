@@ -93,6 +93,22 @@ strict-capacity-limit = true
 high-pri-pool-ratio = 0.8
 memory-allocator = "nodump"
 
+[storage.io-rate-limit]
+max-bytes-per-sec = "1000MB"
+mode = "all-io"
+strict = true
+foreground-read-priority = "low"
+foreground-write-priority = "low"
+flush-priority = "low"
+level-zero-compaction-priority = "low"
+compaction-priority = "high"
+replication-priority = "low"
+load-balance-priority = "low"
+gc-priority = "high"
+import-priority = "high"
+export-priority = "high"
+other-priority = "low"
+
 [pd]
 endpoints = [
     "example.com:443",

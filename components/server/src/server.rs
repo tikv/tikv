@@ -17,7 +17,10 @@ use std::{
     fs::{self, File},
     net::SocketAddr,
     path::{Path, PathBuf},
-    sync::{atomic::AtomicU64, Arc, Mutex},
+    sync::{
+        atomic::{AtomicU32, AtomicU64, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant},
 };
 
@@ -27,10 +30,14 @@ use engine_rocks::{
     encryption::get_env as get_encrypted_env, file_system::get_env as get_inspected_env,
     RocksEngine,
 };
-use engine_traits::{compaction_job::CompactionJobInfo, Engines, RaftEngine, CF_DEFAULT, CF_WRITE};
+use engine_traits::{
+    compaction_job::CompactionJobInfo, CFOptionsExt, ColumnFamilyOptions, Engines, MiscExt,
+    RaftEngine, CF_DEFAULT, CF_LOCK, CF_WRITE,
+};
 use error_code::ErrorCodeExt;
 use file_system::{
-    set_io_rate_limiter, BytesFetcher, IORateLimiter, MetricsManager as IOMetricsManager,
+    set_io_rate_limiter, BytesFetcher, IOBudgetAdjustor, IORateLimiter,
+    MetricsManager as IOMetricsManager,
 };
 use fs2::FileExt;
 use futures::executor::block_on;
@@ -79,6 +86,7 @@ use tikv::{
 use tikv_util::{
     check_environment_variables,
     config::{ensure_dir_exist, VersionTrack},
+    math::MovingAvgU32,
     sys::SysQuota,
     time::Monitor,
     worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker, Worker},
@@ -117,11 +125,12 @@ pub fn run_tikv(config: TiKvConfig) {
             tikv.init_yatp();
             tikv.init_encryption();
             let (limiter, fetcher) = tikv.init_io_utility();
-            let engines = tikv.init_raw_engines(Some(limiter.clone()));
+            let (engines, engines_info) = tikv.init_raw_engines(Some(limiter.clone()));
+            limiter.set_low_priority_io_adjustor_if_needed(Some(engines_info.clone()));
             tikv.init_engines(engines);
             let server_config = tikv.init_servers();
             tikv.register_services();
-            tikv.init_metrics_flusher(fetcher);
+            tikv.init_metrics_flusher(fetcher, engines_info);
             tikv.run_server(server_config);
             tikv.run_status_server();
 
@@ -140,6 +149,7 @@ pub fn run_tikv(config: TiKvConfig) {
 const RESERVED_OPEN_FDS: u64 = 1000;
 
 const DEFAULT_METRICS_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
+const DEFAULT_ENGINE_METRICS_RESET_INTERVAL: Duration = Duration::from_millis(60_000);
 
 /// A complete TiKV server.
 struct TiKVServer<ER: RaftEngine> {
@@ -798,9 +808,31 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 // TODO: replace to the cdc sinker
                 resolved_ts::DummySinker::new(),
             );
-            rts_worker.start(rts_endpoint);
+            rts_worker.start_with_timer(rts_endpoint);
             self.to_stop.push(rts_worker);
         }
+
+        // Start resource metering.
+        let resource_metering_cpu_recorder = resource_metering::cpu::recorder::init_recorder();
+        let mut resource_metering_reporter_worker =
+            Box::new(LazyWorker::new("resource-metering-reporter"));
+        let resource_metering_reporter_scheduler = resource_metering_reporter_worker.scheduler();
+        cfg_controller.register(
+            tikv::config::Module::ResourceMetering,
+            Box::new(resource_metering::ConfigManager::new(
+                self.config.resource_metering.clone(),
+                resource_metering_reporter_scheduler.clone(),
+                resource_metering_cpu_recorder,
+            )),
+        );
+        let resource_metering_reporter = resource_metering::reporter::ResourceMeteringReporter::new(
+            self.config.resource_metering.clone(),
+            resource_metering_reporter_scheduler,
+            self.env.clone(),
+            self.security_mgr.clone(),
+        );
+        resource_metering_reporter_worker.start_with_timer(resource_metering_reporter);
+        self.to_stop.push(resource_metering_reporter_worker);
 
         self.servers = Some(Servers {
             lock_mgr,
@@ -922,10 +954,12 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             && file_system::init_io_snooper()
                 .map_err(|e| error_unknown!(%e; "failed to init io snooper"))
                 .is_ok();
-        let limiter = Arc::new(IORateLimiter::new(
-            0,
-            !io_snooper_on, /*enable_statistics*/
-        ));
+        let limiter = Arc::new(
+            self.config
+                .storage
+                .io_rate_limit
+                .build(!io_snooper_on /*enable_statistics*/),
+        );
         let fetcher = if io_snooper_on {
             BytesFetcher::FromIOSnooper()
         } else {
@@ -937,7 +971,11 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         (limiter, fetcher)
     }
 
-    fn init_metrics_flusher(&mut self, fetcher: BytesFetcher) {
+    fn init_metrics_flusher(
+        &mut self,
+        fetcher: BytesFetcher,
+        engines_info: Arc<EnginesResourceInfo>,
+    ) {
         let mut engine_metrics =
             EngineMetricsManager::new(self.engines.as_ref().unwrap().engines.clone());
         let mut io_metrics = IOMetricsManager::new(fetcher);
@@ -946,6 +984,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 let now = Instant::now();
                 engine_metrics.flush(now);
                 io_metrics.flush(now);
+                engines_info.update(now);
             });
     }
 
@@ -1010,7 +1049,7 @@ impl TiKVServer<RocksEngine> {
     fn init_raw_engines(
         &mut self,
         limiter: Option<Arc<IORateLimiter>>,
-    ) -> Engines<RocksEngine, RocksEngine> {
+    ) -> (Engines<RocksEngine, RocksEngine>, Arc<EnginesResourceInfo>) {
         let env =
             get_encrypted_env(self.encryption_key_manager.clone(), None /*base_env*/).unwrap();
         let env = get_inspected_env(Some(env), limiter).unwrap();
@@ -1073,7 +1112,13 @@ impl TiKVServer<RocksEngine> {
             )),
         );
 
-        engines
+        let engines_info = Arc::new(EnginesResourceInfo::new(
+            engines.kv.clone(),
+            Some(engines.raft.clone()),
+            180, /*max_samples_to_preserve*/
+        ));
+
+        (engines, engines_info)
     }
 }
 
@@ -1081,7 +1126,10 @@ impl TiKVServer<RaftLogEngine> {
     fn init_raw_engines(
         &mut self,
         limiter: Option<Arc<IORateLimiter>>,
-    ) -> Engines<RocksEngine, RaftLogEngine> {
+    ) -> (
+        Engines<RocksEngine, RaftLogEngine>,
+        Arc<EnginesResourceInfo>,
+    ) {
         let env =
             get_encrypted_env(self.encryption_key_manager.clone(), None /*base_env*/).unwrap();
         let env = get_inspected_env(Some(env), limiter).unwrap();
@@ -1126,7 +1174,13 @@ impl TiKVServer<RaftLogEngine> {
             )),
         );
 
-        engines
+        let engines_info = Arc::new(EnginesResourceInfo::new(
+            engines.kv.clone(),
+            None, /*raft_engine*/
+            180,  /*max_samples_to_preserve*/
+        ));
+
+        (engines, engines_info)
     }
 }
 
@@ -1248,8 +1302,6 @@ impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
     }
 }
 
-const DEFAULT_ENGINE_METRICS_RESET_INTERVAL: Duration = Duration::from_millis(60_000);
-
 pub struct EngineMetricsManager<R: RaftEngine> {
     engines: Engines<RocksEngine, R>,
     last_reset: Instant,
@@ -1271,5 +1323,80 @@ impl<R: RaftEngine> EngineMetricsManager<R> {
             self.engines.raft.reset_statistics();
             self.last_reset = now;
         }
+    }
+}
+
+pub struct EnginesResourceInfo {
+    kv_engine: RocksEngine,
+    raft_engine: Option<RocksEngine>,
+    latest_normalized_pending_bytes: AtomicU32,
+    normalized_pending_bytes_collector: MovingAvgU32,
+}
+
+impl EnginesResourceInfo {
+    const SCALE_FACTOR: u64 = 100;
+
+    pub fn new(
+        kv_engine: RocksEngine,
+        raft_engine: Option<RocksEngine>,
+        max_samples_to_preserve: usize,
+    ) -> Self {
+        EnginesResourceInfo {
+            kv_engine,
+            raft_engine,
+            latest_normalized_pending_bytes: AtomicU32::new(0),
+            normalized_pending_bytes_collector: MovingAvgU32::new(max_samples_to_preserve),
+        }
+    }
+
+    pub fn update(&self, _now: Instant) {
+        let mut normalized_pending_bytes = 0;
+
+        fn fetch_engine_cf(engine: &RocksEngine, cf: &str, normalized_pending_bytes: &mut u32) {
+            if let Ok(cf_opts) = engine.get_options_cf(cf) {
+                if let Ok(Some(b)) = engine.get_cf_compaction_pending_bytes(cf) {
+                    if cf_opts.get_soft_pending_compaction_bytes_limit() > 0 {
+                        *normalized_pending_bytes = std::cmp::max(
+                            *normalized_pending_bytes,
+                            (b * EnginesResourceInfo::SCALE_FACTOR
+                                / cf_opts.get_soft_pending_compaction_bytes_limit())
+                                as u32,
+                        );
+                    }
+                }
+            }
+        }
+
+        if let Some(raft_engine) = &self.raft_engine {
+            fetch_engine_cf(raft_engine, CF_DEFAULT, &mut normalized_pending_bytes);
+        }
+        for cf in &[CF_DEFAULT, CF_WRITE, CF_LOCK] {
+            fetch_engine_cf(&self.kv_engine, cf, &mut normalized_pending_bytes);
+        }
+        let (_, avg) = self
+            .normalized_pending_bytes_collector
+            .add(normalized_pending_bytes);
+        self.latest_normalized_pending_bytes.store(
+            std::cmp::max(normalized_pending_bytes, avg),
+            Ordering::Relaxed,
+        );
+    }
+}
+
+impl IOBudgetAdjustor for EnginesResourceInfo {
+    fn adjust(&self, total_budgets: usize) -> usize {
+        let score = self.latest_normalized_pending_bytes.load(Ordering::Relaxed) as f32
+            / Self::SCALE_FACTOR as f32;
+        // Two reasons for adding `sqrt` on top:
+        // 1) In theory the convergence point is independent of the value of pending
+        //    bytes (as long as backlog generating rate equals consuming rate, which is
+        //    determined by compaction budgets), a convex helps reach that point while
+        //    maintaining low level of pending bytes.
+        // 2) Variance of compaction pending bytes grows with its magnitude, a filter
+        //    with decreasing derivative can help balance such trend.
+        let score = score.sqrt();
+        // The target global write flow slides between Bandwidth / 2 and Bandwidth.
+        let score = 0.5 + score / 2.0;
+        (total_budgets as f32 * score) as usize
     }
 }
