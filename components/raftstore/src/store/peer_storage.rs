@@ -222,6 +222,7 @@ impl EntryCache {
         // Clean cached entries which have been already sent to apply threads. For example,
         // if entries [1, 10), [10, 20), [20, 30) are sent to apply threads and `compact_to(15)`
         // is called, only [20, 30) will still be kept in cache.
+        let old_trace_cap = self.trace.capacity();
         while let Some(cached_entries) = self.trace.pop_front() {
             if cached_entries.range.start > idx {
                 self.trace.push_front(cached_entries);
@@ -234,6 +235,11 @@ impl EntryCache {
             }
             *cached_entries.entries.lock().unwrap() = Default::default();
             idx = cmp::max(cached_entries.range.end - 1, idx);
+        }
+        let new_trace_cap = self.trace.capacity();
+        if new_trace_cap < old_trace_cap {
+            let diff = mem::size_of::<CachedEntries>() * (old_trace_cap - new_trace_cap);
+            Self::flush_mem_size_change(-(diff as i64));
         }
 
         let mut mem_size_change = 0;
@@ -260,7 +266,9 @@ impl EntryCache {
             .iter()
             .map(|e| bytes_capacity(&e.data) + bytes_capacity(&e.context))
             .sum();
-        (ENTRY_MEM_SIZE * self.cache.capacity() + data_size) as i64
+        (ENTRY_MEM_SIZE * self.cache.capacity()
+            + mem::size_of::<CachedEntries>() * self.trace.capacity()
+            + data_size) as i64
     }
 
     fn get_cache_vec_mem_size_change(new_capacity: usize, old_capacity: usize) -> i64 {
@@ -290,7 +298,13 @@ impl EntryCache {
     }
 
     fn trace_cached_entries(&mut self, entries: CachedEntries) {
-        self.trace.push_back(entries)
+        let old_capacity = self.trace.capacity();
+        self.trace.push_back(entries);
+        let new_capacity = self.trace.capacity();
+        if new_capacity > old_capacity {
+            let diff = mem::size_of::<CachedEntries>() * (new_capacity - old_capacity);
+            Self::flush_mem_size_change(diff as i64);
+        }
     }
 
     fn shrink_if_necessary(&mut self) -> i64 {

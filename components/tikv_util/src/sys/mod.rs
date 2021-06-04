@@ -90,7 +90,7 @@ pub fn get_global_memory_usage() -> u64 {
 #[cfg(target_os = "linux")]
 pub fn record_global_memory_usage() {
     let s = procinfo::pid::statm_self().unwrap();
-    let usage = s.size * page_size::get();
+    let usage = s.resident * page_size::get();
     GLOBAL_MEMORY_USAGE.store(usage as u64, Ordering::Release);
 }
 

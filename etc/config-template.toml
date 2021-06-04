@@ -551,7 +551,7 @@
 ## default: false
 # enabled = false
 
-## Maximum number of threads of `Titan` background ac jobs.
+## Maximum number of threads of `Titan` background gc jobs.
 ## default: 4
 # max-background-gc = 4
 
