@@ -1068,6 +1068,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "derivative"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fcc3dd5e9e9c0b295d6e1e4d811fb6f157d5ffd784b8d202fc62eac8035a770b"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "derive-new"
 version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2958,6 +2969,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "page_size"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eebde548fbbf1ea81a99b128872779c437752fb99f217c45245e1a61dcd9edcd"
+dependencies = [
+ "libc 0.2.86",
+ "winapi 0.3.8",
+]
+
+[[package]]
 name = "panic_hook"
 version = "0.0.1"
 
@@ -3542,7 +3563,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.6.0-alpha"
-source = "git+https://github.com/tikv/raft-rs?branch=master#438c671bad856e19de6ff1cad453e2642f956604"
+source = "git+https://github.com/tikv/raft-rs?branch=master#b84afe99b5e54b10a306ec844d1b83ae8a7a3c31"
 dependencies = [
  "bytes 1.0.1",
  "fxhash",
@@ -3576,7 +3597,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
-source = "git+https://github.com/tikv/raft-rs?branch=master#438c671bad856e19de6ff1cad453e2642f956604"
+source = "git+https://github.com/tikv/raft-rs?branch=master#b84afe99b5e54b10a306ec844d1b83ae8a7a3c31"
 dependencies = [
  "bytes 1.0.1",
  "lazy_static",
@@ -3618,6 +3639,7 @@ dependencies = [
  "configuration",
  "crc32fast",
  "crossbeam",
+ "derivative",
  "encryption",
  "engine_panic",
  "engine_rocks",
@@ -5681,6 +5703,7 @@ dependencies = [
  "nix 0.11.1",
  "num_cpus",
  "openssl",
+ "page_size",
  "panic_hook",
  "procfs",
  "procinfo",

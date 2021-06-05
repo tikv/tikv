@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use fail::fail_point;
 use lazy_static::lazy_static;
 use memory_trace_macros::MemoryTraceHelper;
 use std::sync::Arc;
@@ -7,6 +8,8 @@ use tikv_alloc::{
     mem_trace,
     trace::{Id, MemoryTrace, MemoryTraceNode},
 };
+use tikv_util::config::GIB;
+use tikv_util::sys::{get_global_memory_usage, memory_usage_reaches_high_water};
 
 lazy_static! {
     pub static ref MEMTRACE_ROOT: Arc<MemoryTraceNode> = mem_trace!(
@@ -50,4 +53,18 @@ pub struct PeerMemoryTrace {
 pub struct ApplyMemoryTrace {
     pub pending_cmds: usize,
     pub rest: usize,
+}
+
+pub fn needs_evict_entry_cache() -> bool {
+    fail_point!("needs_evict_entry_cache", |_| true);
+    if memory_usage_reaches_high_water() {
+        let usage = get_global_memory_usage();
+        let ec_usage = MEMTRACE_ENTRY_CACHE.sum() as u64;
+        // Evict cache if entry cache memory usage reaches 1/3 of global,
+        // or 1GiB for small instances.
+        if ec_usage > GIB && (ec_usage > usage / 3 || usage <= 3 * GIB) {
+            return true;
+        }
+    }
+    false
 }
