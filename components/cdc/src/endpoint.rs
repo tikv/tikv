@@ -62,7 +62,7 @@ pub enum Deregister {
         conn_id: ConnID,
         err: Option<Error>,
     },
-    Region {
+    Delegate {
         region_id: u64,
         observe_id: ObserveID,
         err: Error,
@@ -88,12 +88,12 @@ impl fmt::Debug for Deregister {
                 .field("conn_id", conn_id)
                 .field("err", err)
                 .finish(),
-            Deregister::Region {
+            Deregister::Delegate {
                 ref region_id,
                 ref observe_id,
                 ref err,
             } => de
-                .field("deregister", &"region")
+                .field("deregister", &"delegate")
                 .field("region_id", region_id)
                 .field("observe_id", observe_id)
                 .field("err", err)
@@ -367,7 +367,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                     );
                 }
             }
-            Deregister::Region {
+            Deregister::Delegate {
                 region_id,
                 observe_id,
                 err,
@@ -562,8 +562,8 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 }
                 if let Err(e) = delegate.on_batch(batch, &old_value_cb, &mut self.old_value_cache) {
                     assert!(delegate.has_failed());
-                    // Delegate has error, deregister the corresponding region.
-                    deregister = Some(Deregister::Region {
+                    // Delegate has error, deregister the delegate.
+                    deregister = Some(Deregister::Delegate {
                         region_id,
                         observe_id: delegate.handle.id,
                         err: e,
@@ -802,7 +802,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                         }))),
                     ) {
                         warn!("cdc send LeaderCallback failed"; "err" => ?e, "min_ts" => min_ts);
-                        let deregister = Deregister::Region {
+                        let deregister = Deregister::Delegate {
                             observe_id,
                             region_id,
                             err: Error::request(e.into()),
@@ -1023,7 +1023,11 @@ impl Initializer {
     ) -> Result<()> {
         let _permit = concurrency_semaphore.acquire().await;
 
-        // The initialization maybe canceled after acquiring a permit.
+        // When downstream_state is Stopped, it means the corresponding delegate
+        // is stopped. The initialization can be safely canceled.
+        //
+        // Acquiring a permit may take some time, it is possiable that
+        // initialization can be canceled.
         if self.downstream_state.load() == DownstreamState::Stopped {
             info!("cdc async incremental scan canceled";
                 "region_id" => self.region_id,
@@ -1081,12 +1085,7 @@ impl Initializer {
         if let Some(region_snapshot) = resp.snapshot {
             assert_eq!(self.region_id, region_snapshot.get_region().get_id());
             let region = region_snapshot.get_region().clone();
-            // Require barrier before finishing incremental scan, because
-            // CDC needs to make sure resovled ts events can only be sent after
-            // incremental scan is finished.
-            let require_barrier = true;
-            self.async_incremental_scan(region_snapshot, region, require_barrier)
-                .await
+            self.async_incremental_scan(region_snapshot, region).await
         } else {
             assert!(
                 resp.response.get_header().has_error(),
@@ -1102,7 +1101,6 @@ impl Initializer {
         &mut self,
         snap: S,
         region: Region,
-        require_barrier: bool,
     ) -> Result<()> {
         let downstream_id = self.downstream_id;
         let region_id = region.get_id();
@@ -1130,6 +1128,8 @@ impl Initializer {
         let conn_id = self.conn_id;
         let mut done = false;
         while !done {
+            // When downstream_state is Stopped, it means the corresponding
+            // delegate is stopped. The initialization can be safely canceled.
             if self.downstream_state.load() == DownstreamState::Stopped {
                 info!("cdc async incremental scan canceled";
                     "region_id" => region_id,
@@ -1145,8 +1145,7 @@ impl Initializer {
             }
             debug!("cdc scan entries"; "len" => entries.len(), "region_id" => region_id);
             fail_point!("before_schedule_incremental_scan");
-            self.sink_scan_events(entries, done, require_barrier)
-                .await?;
+            self.sink_scan_events(entries, done).await?;
         }
 
         let takes = start.elapsed();
@@ -1202,12 +1201,7 @@ impl Initializer {
         Ok(entries)
     }
 
-    async fn sink_scan_events(
-        &mut self,
-        entries: Vec<Option<TxnEntry>>,
-        done: bool,
-        require_barrier: bool,
-    ) -> Result<()> {
+    async fn sink_scan_events(&mut self, entries: Vec<Option<TxnEntry>>, done: bool) -> Result<()> {
         let mut barrier = None;
         let mut events = Delegate::convert_to_grpc_events(self.region_id, self.request_id, entries);
         if done {
@@ -1219,11 +1213,12 @@ impl Initializer {
             error!("cdc send scan event failed"; "req_id" => ?self.request_id);
             return Err(Error::Sink(e));
         }
-        if require_barrier {
-            if let Some(barrier) = barrier {
-                // Make sure tikv sends out all scan events.
-                let _ = barrier.await;
-            }
+
+        if let Some(barrier) = barrier {
+            // CDC needs to make sure resovled ts events can only be sent after
+            // incremental scan is finished.
+            // Wait the barrier to ensure tikv sends out all scan events.
+            let _ = barrier.await;
         }
 
         Ok(())
@@ -1253,10 +1248,15 @@ impl Initializer {
         }
     }
 
+    // Deregister downstream when the Initializer fails to initialize.
     fn deregister_downstream(&self, err: Error) {
-        let deregister = if self.build_resolver || matches!(err, Error::Request(_)) {
-            // Deregister region if it builds resolver or region reports error.
-            Deregister::Region {
+        let deregister = if self.build_resolver || err.has_region_error() {
+            // Deregister delegate on the conditions,
+            // * It fails to build a resolver. A delegate requires a resolver
+            //   to advance resolved ts.
+            // * A region error. It usually mean a peer is not leader or
+            //   a leader meets an error and can not serve.
+            Deregister::Delegate {
                 region_id: self.region_id,
                 observe_id: self.observe_id,
                 err,
@@ -1390,6 +1390,7 @@ mod tests {
     use collections::HashSet;
     use engine_traits::DATA_CFS;
     use futures::executor::block_on;
+    use futures::StreamExt;
     use kvproto::cdcpb::Header;
     #[cfg(feature = "prost-codec")]
     use kvproto::cdcpb::{event::Event as Event_oneof_event, Header};
@@ -1560,7 +1561,8 @@ mod tests {
         let snap = engine.snapshot(Default::default()).unwrap();
         // Buffer must be large enough to unblock async incremental scan.
         let buffer = 1000;
-        let (mut worker, _pool, mut initializer, rx, drain) = mock_initializer(total_bytes, buffer);
+        let (mut worker, pool, mut initializer, rx, mut drain) =
+            mock_initializer(total_bytes, buffer);
         let check_result = || loop {
             let task = rx.recv().unwrap();
             match task {
@@ -1572,20 +1574,21 @@ mod tests {
             }
         };
         // To not block test by barrier.
-        let require_barrier = false;
-        block_on(initializer.async_incremental_scan(snap.clone(), region.clone(), require_barrier))
-            .unwrap();
+        pool.spawn(async move {
+            let mut d = drain.drain();
+            while let Some(_) = d.next().await {}
+        });
+
+        block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap();
         check_result();
 
         initializer.max_scan_batch_bytes = total_bytes;
-        block_on(initializer.async_incremental_scan(snap.clone(), region.clone(), require_barrier))
-            .unwrap();
+        block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap();
         check_result();
 
         initializer.max_scan_batch_bytes = total_bytes / 3;
         let start_1_3 = Instant::now();
-        block_on(initializer.async_incremental_scan(snap.clone(), region.clone(), require_barrier))
-            .unwrap();
+        block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap();
         check_result();
         // 2s to allow certain inaccuracy.
         assert!(
@@ -1596,8 +1599,7 @@ mod tests {
 
         let start_1_6 = Instant::now();
         initializer.max_scan_batch_bytes = total_bytes / 6;
-        block_on(initializer.async_incremental_scan(snap.clone(), region.clone(), require_barrier))
-            .unwrap();
+        block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap();
         check_result();
         // 4s to allow certain inaccuracy.
         assert!(
@@ -1607,8 +1609,7 @@ mod tests {
         );
 
         initializer.build_resolver = false;
-        block_on(initializer.async_incremental_scan(snap.clone(), region.clone(), require_barrier))
-            .unwrap();
+        block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap();
 
         loop {
             let task = rx.recv_timeout(Duration::from_millis(100));
@@ -1621,8 +1622,7 @@ mod tests {
 
         // Test cancellation.
         initializer.downstream_state.store(DownstreamState::Stopped);
-        block_on(initializer.async_incremental_scan(snap.clone(), region, require_barrier))
-            .unwrap_err();
+        block_on(initializer.async_incremental_scan(snap.clone(), region)).unwrap_err();
 
         // Cancel error should trigger a deregsiter.
         let mut region = Region::default();
@@ -1636,8 +1636,8 @@ mod tests {
         };
         block_on(initializer.on_change_cmd_response(resp.clone())).unwrap_err();
 
-        // Sink is disconnected.
-        drop(drain);
+        // Disconnect sink by dropping runtime (it also drops drain).
+        drop(pool);
         initializer.downstream_state.store(DownstreamState::Normal);
         block_on(initializer.on_change_cmd_response(resp)).unwrap_err();
 
@@ -1656,7 +1656,7 @@ mod tests {
         initializer.deregister_downstream(Error::request(ErrorHeader::default()));
         let task = rx.recv_timeout(Duration::from_millis(100));
         match task {
-            Ok(Task::Deregister(Deregister::Region { region_id, .. })) => {
+            Ok(Task::Deregister(Deregister::Delegate { region_id, .. })) => {
                 assert_eq!(region_id, initializer.region_id);
             }
             Ok(other) => panic!("unexpected task {:?}", other),
@@ -1679,7 +1679,7 @@ mod tests {
         initializer.deregister_downstream(Error::Other(box_err!("test")));
         let task = rx.recv_timeout(Duration::from_millis(100));
         match task {
-            Ok(Task::Deregister(Deregister::Region { region_id, .. })) => {
+            Ok(Task::Deregister(Deregister::Delegate { region_id, .. })) => {
                 assert_eq!(region_id, initializer.region_id);
             }
             Ok(other) => panic!("unexpected task {:?}", other),
@@ -1892,7 +1892,7 @@ mod tests {
         assert_eq!(ep.capture_regions.len(), 2);
         let task = task_rx.recv_timeout(Duration::from_millis(100)).unwrap();
         match task.unwrap() {
-            Task::Deregister(Deregister::Region { region_id, err, .. }) => {
+            Task::Deregister(Deregister::Delegate { region_id, err, .. }) => {
                 assert_eq!(region_id, 100);
                 assert!(matches!(err, Error::Request(_)), "{:?}", err);
             }
@@ -1914,7 +1914,7 @@ mod tests {
         assert_eq!(ep.capture_regions.len(), 3);
         let task = task_rx.recv_timeout(Duration::from_millis(100)).unwrap();
         match task.unwrap() {
-            Task::Deregister(Deregister::Region { region_id, err, .. }) => {
+            Task::Deregister(Deregister::Delegate { region_id, err, .. }) => {
                 assert_eq!(region_id, 101);
                 assert!(matches!(err, Error::Other(_)), "{:?}", err);
             }
@@ -2155,7 +2155,7 @@ mod tests {
             version: semver::Version::new(0, 0, 0),
         });
         assert_eq!(ep.capture_regions.len(), 1);
-        let deregister = Deregister::Region {
+        let deregister = Deregister::Delegate {
             region_id: 1,
             // A stale ObserveID (different from the actual one).
             observe_id: ObserveID::new(),
