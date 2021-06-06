@@ -21,7 +21,7 @@ use crate::store::fsm::apply::{CatchUpLogs, ChangeObserver};
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::KeysInfoFormatter;
 use crate::store::SnapKey;
-use tikv_util::{deadline::Deadline, escape};
+use tikv_util::{deadline::Deadline, escape, memory::HeapSize};
 
 use super::{AbstractPeer, RegionSnapshot};
 
@@ -79,6 +79,8 @@ pub enum Callback<S: Snapshot> {
         committed_cb: Option<ExtCallback>,
     },
 }
+
+impl<S: Snapshot> HeapSize for Callback<S> {}
 
 impl<S> Callback<S>
 where
@@ -167,6 +169,7 @@ bitflags! {
         const PD_HEARTBEAT           = 0b00001000;
         const CHECK_MERGE            = 0b00010000;
         const CHECK_PEER_STALE_STATE = 0b00100000;
+        const ENTRY_CACHE_EVICT      = 0b01000000;
     }
 }
 
@@ -180,6 +183,7 @@ impl PeerTicks {
             PeerTicks::PD_HEARTBEAT => "pd_heartbeat",
             PeerTicks::CHECK_MERGE => "check_merge",
             PeerTicks::CHECK_PEER_STALE_STATE => "check_peer_stale_state",
+            PeerTicks::ENTRY_CACHE_EVICT => "entry_cache_evict",
             _ => unreachable!(),
         }
     }
@@ -191,6 +195,7 @@ impl PeerTicks {
             PeerTicks::PD_HEARTBEAT,
             PeerTicks::CHECK_MERGE,
             PeerTicks::CHECK_PEER_STALE_STATE,
+            PeerTicks::ENTRY_CACHE_EVICT,
         ];
         TICKS
     }

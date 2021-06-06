@@ -35,6 +35,7 @@ use raft::{
 };
 use raft_proto::ConfChangeI;
 use smallvec::SmallVec;
+use tikv_util::memory::HeapSize;
 use time::Timespec;
 use uuid::Uuid;
 
@@ -44,6 +45,7 @@ use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, CollectedReady, Proposal};
 use crate::store::hibernate_state::GroupState;
+use crate::store::memory::needs_evict_entry_cache;
 use crate::store::msg::RaftCommand;
 use crate::store::util::{admin_cmd_epoch_lookup, RegionReadProgress};
 use crate::store::worker::{HeartbeatTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
@@ -78,6 +80,7 @@ use super::DestroyPeerJob;
 const SHRINK_CACHE_CAPACITY: usize = 64;
 const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000; // 1s
 const REGION_READ_PROGRESS_CAP: usize = 128;
+const MAX_COMMITTED_SIZE_PER_READY: u64 = 16 * 1024 * 1024;
 
 /// The returned states of the peer after checking whether it is stale
 #[derive(Debug, PartialEq, Eq)]
@@ -548,6 +551,7 @@ where
             check_quorum: true,
             skip_bcast_commit: true,
             pre_vote: cfg.prevote,
+            max_committed_size_per_ready: MAX_COMMITTED_SIZE_PER_READY,
             ..Default::default()
         };
 
@@ -578,7 +582,7 @@ where
             last_proposed_prepare_merge_idx: 0,
             last_committed_prepare_merge_idx: 0,
             leader_missing_time: Some(Instant::now()),
-            tag,
+            tag: tag.clone(),
             last_applying_idx: applied_index,
             last_compacted_idx: 0,
             last_urgent_proposal_idx: u64::MAX,
@@ -608,6 +612,7 @@ where
             read_progress: Arc::new(RegionReadProgress::new(
                 applied_index,
                 REGION_READ_PROGRESS_CAP,
+                tag,
             )),
         };
 
@@ -1020,6 +1025,23 @@ where
         self.raft_group.snap()
     }
 
+    #[inline]
+    pub fn proposal_size(&self) -> usize {
+        self.proposals.queue.heap_size() + self.pending_reads.heap_size()
+    }
+
+    #[inline]
+    pub fn rest_size(&self) -> usize {
+        self.peer_cache.borrow().heap_size()
+            + self.peer_heartbeats.heap_size()
+            + self.peers_start_pending_time.heap_size()
+            + self.down_peer_ids.heap_size()
+            + self.check_stale_peers.heap_size()
+            + self.want_rollback_merge_peers.heap_size()
+            + self.pending_messages.len() * mem::size_of::<raft::eraftpb::Message>()
+            + mem::size_of_val(self.pending_request_snapshot_count.as_ref())
+    }
+
     fn add_ready_metric(&self, ready: &Ready, metrics: &mut RaftReadyMetrics) {
         metrics.message += ready.messages().len() as u64;
         metrics.commit += ready.committed_entries().len() as u64;
@@ -1399,6 +1421,8 @@ where
                 _ => {}
             }
             self.on_leader_changed(ctx, ss.leader_id, self.term());
+            // TODO: it may possible that only the `leader_id` change and the role
+            // didn't change
             ctx.coprocessor_host
                 .on_role_change(self.region(), ss.raft_state);
             self.cmd_epoch_checker.maybe_update_term(self.term());
@@ -1463,6 +1487,8 @@ where
                     // region writes new values.
                     // To prevent unsafe local read, we suspect its leader lease.
                     self.leader_lease.suspect(monotonic_raw_now());
+                    // Stop updating `safe_ts`
+                    self.read_progress.discard();
                 }
             }
         }
@@ -1621,6 +1647,7 @@ where
                 return None;
             }
             CheckApplyingSnapStatus::Success => {
+                fail_point!("raft_before_applying_snap_finished");
                 // 0 means snapshot is scheduled after being restarted.
                 if self.last_unpersisted_number != 0 {
                     // Because we only handle raft ready when not applying snapshot, so following
@@ -1633,6 +1660,9 @@ where
                     );
                 }
                 self.post_pending_read_index_on_replica(ctx);
+                // Resume `read_progress`
+                self.read_progress.resume();
+                // Update apply index to `last_applying_idx`
                 self.read_progress.update_applied(self.last_applying_idx);
                 if !self.pending_messages.is_empty() {
                     let msgs = mem::take(&mut self.pending_messages);
@@ -1790,6 +1820,8 @@ where
         if invoke_ctx.has_snapshot() {
             // When apply snapshot, there is no log applied and not compacted yet.
             self.raft_log_size_hint = 0;
+            // Pause `read_progress` to prevent serving stale read while applying snapshot
+            self.read_progress.pause();
         }
 
         let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
@@ -1911,6 +1943,11 @@ where
                 committed_entries,
                 cbs,
             );
+            if needs_evict_entry_cache() {
+                self.mut_store().half_evict_cache();
+            }
+
+            self.mut_store().trace_cached_entries(apply.entries.clone());
             ctx.apply_router
                 .schedule_task(self.region_id, ApplyTask::apply(apply));
         }
@@ -2147,6 +2184,11 @@ where
             self.raft_group.store().region(),
         );
 
+        if !self.is_leader() {
+            self.mut_store()
+                .compact_cache_to(apply_state.applied_index + 1);
+        }
+
         let progress_to_be_updated = self.mut_store().applied_index_term() != applied_index_term;
         self.mut_store().set_applied_state(apply_state);
         self.mut_store().set_applied_term(applied_index_term);
@@ -2173,6 +2215,10 @@ where
 
         // Only leaders need to update applied_index_term.
         if progress_to_be_updated && self.is_leader() {
+            if applied_index_term == self.term() {
+                ctx.coprocessor_host
+                    .on_applied_current_term(StateRole::Leader, self.region());
+            }
             let progress = ReadProgress::applied_index_term(applied_index_term);
             let mut meta = ctx.store_meta.lock().unwrap();
             let reader = meta.readers.get_mut(&self.region_id).unwrap();

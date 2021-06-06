@@ -10,6 +10,8 @@
 
 #[cfg(test)]
 extern crate test;
+#[macro_use]
+extern crate derivative;
 
 pub mod coprocessor;
 pub mod errors;
@@ -22,9 +24,7 @@ pub use self::errors::{DiscardReason, Error, Result};
 #[cfg(feature = "protobuf-codec")]
 fn bytes_capacity(b: &bytes::Bytes) -> usize {
     // NOTE: For deserialized raft messages, `len` equals capacity.
-    // This is used to report memory usage to metrics. It's possible that the reported value is
-    // higher than exact, because some bytes can be shared in entry cache and apply threads. We
-    // should handle this case later.
+    // This is used to report memory usage to metrics.
     b.len()
 }
 
