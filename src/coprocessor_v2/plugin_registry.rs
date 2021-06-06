@@ -452,7 +452,12 @@ mod tests {
     use coprocessor_plugin_api::util::pkgname_to_libname;
 
     fn initialize_library() -> PathBuf {
-        Path::new("target/debug/deps").join(pkgname_to_libname("example-plugin"))
+        Path::new(if cfg!(debug_assertions) {
+            "target/debug/deps"
+        } else {
+            "target/release/deps"
+        })
+        .join(pkgname_to_libname("example-plugin"))
     }
 
     #[test]
