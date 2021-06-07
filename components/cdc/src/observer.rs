@@ -192,7 +192,7 @@ impl RoleObserver for CdcObserver {
             if let Some(observe_id) = self.is_subscribed(region_id) {
                 // Unregister all downstreams.
                 let store_err = RaftStoreError::NotLeader(region_id, None);
-                let deregister = Deregister::Region {
+                let deregister = Deregister::Delegate {
                     region_id,
                     observe_id,
                     err: CdcError::Request(store_err.into()),
@@ -217,7 +217,7 @@ impl RegionChangeObserver for CdcObserver {
             if let Some(observe_id) = self.is_subscribed(region_id) {
                 // Unregister all downstreams.
                 let store_err = RaftStoreError::RegionNotFound(region_id);
-                let deregister = Deregister::Region {
+                let deregister = Deregister::Delegate {
                     region_id,
                     observe_id,
                     err: CdcError::Request(store_err.into()),
@@ -351,7 +351,7 @@ mod tests {
         let mut ctx = ObserverContext::new(&region);
         observer.on_role_change(&mut ctx, StateRole::Follower);
         match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
-            Task::Deregister(Deregister::Region {
+            Task::Deregister(Deregister::Delegate {
                 region_id,
                 observe_id,
                 ..

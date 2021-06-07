@@ -2256,6 +2256,8 @@ pub struct CdcConfig {
     pub min_ts_interval: ReadableDuration,
     pub old_value_cache_size: usize,
     pub hibernate_regions_compatible: bool,
+    pub incremental_scan_threads: usize,
+    pub incremental_scan_concurrency: usize,
     pub incremental_scan_speed_limit: ReadableSize,
 }
 
@@ -2266,10 +2268,35 @@ impl Default for CdcConfig {
             // Assumes 1KB per entry, 131072 (128 * 1024) takes about 128MB.
             old_value_cache_size: 131072,
             hibernate_regions_compatible: true,
+            // 4 threads for incremental scan.
+            incremental_scan_threads: 4,
+            // At most 6 concurrent running tasks.
+            incremental_scan_concurrency: 6,
             // TiCDC requires a SSD, the typical write speed of SSD
             // is more than 500MB/s, so 128MB/s is enough.
             incremental_scan_speed_limit: ReadableSize::mb(128),
         }
+    }
+}
+
+impl CdcConfig {
+    fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+        if self.old_value_cache_size == 0 {
+            return Err("cdc.old-value-cache-size can't be 0".into());
+        }
+        if self.min_ts_interval == ReadableDuration::secs(0) {
+            return Err("cdc.min-ts-interval can't be 0s".into());
+        }
+        if self.incremental_scan_threads == 0 {
+            return Err("cdc.incremental-scan-threads can't be 0".into());
+        }
+        if self.incremental_scan_concurrency < self.incremental_scan_threads {
+            return Err(
+                "cdc.incremental-scan-concurrency must be larger than cdc.incremental-scan-threads"
+                    .into(),
+            );
+        }
+        Ok(())
     }
 }
 
@@ -2510,6 +2537,7 @@ impl TiKvConfig {
         self.security.validate()?;
         self.import.validate()?;
         self.backup.validate()?;
+        self.cdc.validate()?;
         self.pessimistic_txn.validate()?;
         self.gc.validate()?;
         Ok(())
@@ -3716,5 +3744,50 @@ mod tests {
             cfg.raft_store.region_split_check_diff.0,
             default_region_split_check_diff + 1
         );
+    }
+
+    #[test]
+    fn test_cdc() {
+        let content = r#"
+            [cdc]
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+
+        let content = r#"
+            [cdc]
+            old-value-cache-size = 0
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap_err();
+
+        let content = r#"
+            [cdc]
+            min-ts-interval = "0s"
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap_err();
+
+        let content = r#"
+            [cdc]
+            incremental-scan-threads = 0
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap_err();
+
+        let content = r#"
+            [cdc]
+            incremental-scan-concurrency = 0
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap_err();
+
+        let content = r#"
+            [cdc]
+            incremental-scan-concurrency = 1
+            incremental-scan-threads = 2
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap_err();
     }
 }
