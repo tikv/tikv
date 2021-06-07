@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
 use std::marker::PhantomData;
 use std::mem;
-use std::ops::{Deref, DerefMut};
+use std::ops::{Deref, DerefMut, Range as StdRange};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
@@ -24,7 +24,8 @@ use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::PerfContext;
 use engine_traits::PerfContextKind;
 use engine_traits::{
-    DeleteStrategy, KvEngine, RaftEngine, Range as EngineRange, Snapshot, WriteBatch,
+    DeleteStrategy, KvEngine, RaftEngine, RaftEngineReadOnly, Range as EngineRange, Snapshot,
+    WriteBatch,
 };
 use engine_traits::{SSTMetaInfo, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use fail::fail_point;
@@ -63,14 +64,14 @@ use crate::store::metrics::*;
 use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
 use crate::store::peer::Peer;
 use crate::store::peer_storage::{
-    self, write_initial_apply_state, write_peer_state, ENTRY_MEM_SIZE,
+    self, write_initial_apply_state, write_peer_state, CachedEntries,
 };
 use crate::store::util::{
     admin_cmd_epoch_lookup, check_region_epoch, compare_region_epoch, is_learner, ChangePeerI,
     ConfChangeKind, KeysInfoFormatter,
 };
 use crate::store::{cmd_resp, util, Config, RegionSnapshot, RegionTask};
-use crate::{bytes_capacity, Error, Result};
+use crate::{Error, Result};
 
 use super::metrics::*;
 
@@ -769,6 +770,7 @@ where
     /// the source peer has applied its logs and pending entries
     /// are all handled.
     pending_msgs: Vec<Msg<EK>>,
+
     /// Approximate size of current buffer.
     approximate_size: usize,
 }
@@ -829,7 +831,8 @@ pub struct NewSplitPeer {
 /// Region. The apply worker receives all the apply tasks of different Regions
 /// located at this store, and it will get the corresponding apply delegate to
 /// handle the apply task to make the code logic more clear.
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct ApplyDelegate<EK>
 where
     EK: KvEngine,
@@ -889,6 +892,10 @@ where
     /// we decrease the priority of current fsm to reduce the impact on other normal commands.
     priority: Priority,
 
+    /// To fetch Raft entries for applying if necessary.
+    #[derivative(Debug = "ignore")]
+    raft_engine: Box<dyn RaftEngineReadOnly>,
+
     trace: ApplyMemoryTrace,
 }
 
@@ -919,6 +926,7 @@ where
             // use a default `CmdObserveInfo` because observing is disable by default
             observe_info: CmdObserveInfo::default(),
             priority: Priority::Normal,
+            raft_engine: reg.raft_engine,
             trace: ApplyMemoryTrace::default(),
         }
     }
@@ -2792,10 +2800,8 @@ where
     pub peer_id: u64,
     pub region_id: u64,
     pub term: u64,
-    pub entries: Vec<Entry>,
+    pub entries: CachedEntries,
     pub cbs: Vec<Proposal<S>>,
-    entries_mem_size: i64,
-    entries_count: i64,
 }
 
 impl<S: Snapshot> Apply<S> {
@@ -2806,42 +2812,17 @@ impl<S: Snapshot> Apply<S> {
         entries: Vec<Entry>,
         cbs: Vec<Proposal<S>>,
     ) -> Apply<S> {
-        let entries_mem_size =
-            (ENTRY_MEM_SIZE * entries.capacity()) as i64 + get_entries_mem_size(&entries);
-        APPLY_PENDING_BYTES_GAUGE.add(entries_mem_size);
-        let entries_count = entries.len() as i64;
-        APPLY_PENDING_ENTRIES_GAUGE.add(entries_count);
+        let entries = CachedEntries::new(entries);
         Apply {
             peer_id,
             region_id,
             term,
             entries,
             cbs,
-            entries_mem_size,
-            entries_count,
         }
     }
 }
 
-impl<S: Snapshot> Drop for Apply<S> {
-    fn drop(&mut self) {
-        APPLY_PENDING_BYTES_GAUGE.sub(self.entries_mem_size);
-        APPLY_PENDING_ENTRIES_GAUGE.sub(self.entries_count);
-    }
-}
-
-fn get_entries_mem_size(entries: &[Entry]) -> i64 {
-    if entries.is_empty() {
-        return 0;
-    }
-    let data_size: i64 = entries
-        .iter()
-        .map(|e| (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64)
-        .sum();
-    data_size
-}
-
-#[derive(Default, Clone)]
 pub struct Registration {
     pub id: u64,
     pub term: u64,
@@ -2850,6 +2831,7 @@ pub struct Registration {
     pub region: Region,
     pub pending_request_snapshot_count: Arc<AtomicUsize>,
     pub is_merging: bool,
+    raft_engine: Box<dyn RaftEngineReadOnly>,
 }
 
 impl Registration {
@@ -2862,6 +2844,7 @@ impl Registration {
             region: peer.region().clone(),
             pending_request_snapshot_count: peer.pending_request_snapshot_count.clone(),
             is_merging: peer.pending_merge_state.is_some(),
+            raft_engine: Box::new(peer.get_store().engines.raft.clone()),
         }
     }
 }
@@ -3087,7 +3070,7 @@ where
     #[inline]
     fn heap_size(&self) -> usize {
         match self {
-            Msg::Apply { apply, .. } => apply.entries_mem_size as usize,
+            Msg::Apply { .. } => 0, // It's already counted when building.
             Msg::Registration(r) => r.region.heap_size(),
             Msg::LogsUpToDate(l) => l.heap_size(),
             Msg::Snapshot(_) | Msg::Destroy(_) | Msg::Noop | Msg::Change { .. } => 0,
@@ -3198,13 +3181,24 @@ where
         fail_point!("on_handle_apply_2", self.delegate.id() == 2, |_| {});
         fail_point!("on_handle_apply", |_| {});
 
-        if apply.entries.is_empty() || self.delegate.pending_remove || self.delegate.stopped {
+        if apply.entries.range.is_empty() || self.delegate.pending_remove || self.delegate.stopped {
             return;
+        }
+
+        let mut entries = apply.entries.take_entries();
+        if entries.is_empty() {
+            let rid = self.delegate.region_id();
+            let StdRange { start, end } = apply.entries.range;
+            entries = Vec::with_capacity((end - start) as usize);
+            self.delegate
+                .raft_engine
+                .fetch_entries_to(rid, start, end, None, &mut entries)
+                .unwrap();
         }
 
         self.delegate.metrics = ApplyMetrics::default();
         self.delegate.term = apply.term;
-        if let Some(entry) = apply.entries.last() {
+        if let Some(entry) = entries.last() {
             let prev_state = (
                 self.delegate.apply_state.get_commit_index(),
                 self.delegate.apply_state.get_commit_term(),
@@ -3222,7 +3216,7 @@ where
 
         self.append_proposal(apply.cbs.drain(..));
         self.delegate
-            .handle_raft_committed_entries(apply_ctx, apply.entries.drain(..));
+            .handle_raft_committed_entries(apply_ctx, entries.drain(..));
         fail_point!("post_handle_apply_1003", self.delegate.id() == 1003, |_| {});
     }
 
@@ -3980,6 +3974,7 @@ mod tests {
     use crate::store::msg::WriteResponse;
     use crate::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::store::util::{new_learner_peer, new_peer};
+    use engine_panic::PanicEngine;
     use engine_test::kv::{new_engine, KvTestEngine, KvTestSnapshot, KvTestWriteBatch};
     use engine_traits::{Peekable as PeekableTrait, WriteBatchExt};
     use kvproto::metapb::{self, RegionEpoch};
@@ -4056,6 +4051,36 @@ mod tests {
         }
         fn clone_box(&self) -> Box<dyn Notifier<EK>> {
             Box::new(self.clone())
+        }
+    }
+
+    impl Default for Registration {
+        fn default() -> Self {
+            Registration {
+                id: Default::default(),
+                term: Default::default(),
+                apply_state: Default::default(),
+                applied_index_term: Default::default(),
+                region: Default::default(),
+                pending_request_snapshot_count: Default::default(),
+                is_merging: Default::default(),
+                raft_engine: Box::new(PanicEngine),
+            }
+        }
+    }
+
+    impl Registration {
+        fn dup(&self) -> Self {
+            Registration {
+                id: self.id,
+                term: self.term,
+                apply_state: self.apply_state.clone(),
+                applied_index_term: self.applied_index_term,
+                region: self.region.clone(),
+                pending_request_snapshot_count: self.pending_request_snapshot_count.clone(),
+                is_merging: self.is_merging,
+                raft_engine: Box::new(PanicEngine),
+            }
         }
     }
 
@@ -4245,7 +4270,7 @@ mod tests {
         };
         reg.region.set_id(2);
         reg.apply_state.set_applied_index(3);
-        router.schedule_task(2, Msg::Registration(reg.clone()));
+        router.schedule_task(2, Msg::Registration(reg.dup()));
         validate(&router, 2, move |delegate| {
             assert_eq!(delegate.id, 1);
             assert_eq!(delegate.tag, "[region 2] 1");
@@ -5380,7 +5405,7 @@ mod tests {
         };
         system.spawn("test-split".to_owned(), builder);
 
-        router.schedule_task(1, Msg::Registration(reg.clone()));
+        router.schedule_task(1, Msg::Registration(reg.dup()));
         let observe_handle = ObserveHandle::new();
         router.schedule_task(
             1,

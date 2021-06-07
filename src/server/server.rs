@@ -25,13 +25,13 @@ use raftstore::router::RaftStoreRouter;
 use raftstore::store::SnapManager;
 use security::SecurityManager;
 use tikv_util::config::VersionTrack;
-use tikv_util::sys::record_global_memory_usage;
+use tikv_util::sys::{get_global_memory_usage, record_global_memory_usage};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::{LazyWorker, Scheduler, Worker};
 use tikv_util::Either;
 
 use super::load_statistics::*;
-use super::metrics::SERVER_INFO_GAUGE_VEC;
+use super::metrics::{MEMORY_USAGE_GAUGE, SERVER_INFO_GAUGE_VEC};
 use super::raft_client::{ConnectionBuilder, RaftClient};
 use super::resolve::StoreAddrResolver;
 use super::service::*;
@@ -266,6 +266,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             p.spawn(async move {
                 while let Some(Ok(_)) = delay.next().await {
                     record_global_memory_usage();
+                    MEMORY_USAGE_GAUGE.set(get_global_memory_usage() as i64);
                 }
             });
         };
