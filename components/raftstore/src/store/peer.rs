@@ -1,9 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use seahash::SeaHasher;
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::hash::Hasher;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -595,11 +593,6 @@ where
 
         let logger = slog_global::get_global().new(slog::o!("region_id" => region.get_id()));
         let raft_group = RawNode::new(&raft_cfg, ps, &logger)?;
-        let async_writer_id = {
-            let mut hasher = SeaHasher::new();
-            hasher.write_u64(region.get_id());
-            hasher.finish() as usize % cfg.store_io_pool_size
-        };
         let mut peer = Peer {
             peer,
             region_id: region.get_id(),
@@ -659,7 +652,7 @@ where
             unpersisted_message_count: 0,
             persisted_number: 0,
             snap_ctx: None,
-            async_writer_id,
+            async_writer_id: seahash::hash(region.get_id().as_ne_bytes()) as usize % cfg.store_io_pool_size,
         };
 
         // If this region has only one peer and I am the one, campaign directly.

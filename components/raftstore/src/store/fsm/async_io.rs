@@ -27,31 +27,77 @@ use tikv_util::{debug, thd_name, warn};
 const KV_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const RAFT_WB_SHRINK_SIZE: usize = 10 * 1024 * 1024;
 
-#[derive(Default)]
-pub struct UnsyncedReady {
+#[derive(Default, Debug, Clone, Copy, PartialEq)]
+pub struct UnpersistedReady {
     pub peer_id: u64,
     pub number: u64,
 }
 
-impl UnsyncedReady {
+impl UnpersistedReady {
     pub fn new(peer_id: u64, number: u64) -> Self {
         Self { peer_id, number }
     }
+}
 
-    fn flush<EK, ER>(&self, region_id: u64, router: &RaftRouter<EK, ER>, now: Instant)
-    where
-        EK: KvEngine,
-        ER: RaftEngine,
-    {
-        if let Err(e) = router.force_send(
+pub trait Notifier: Clone + Send + 'static {
+    fn notify_persisted(&self, region_id: u64, ready: UnpersistedReady, now: Instant);
+    fn notify_unreachable(&self, region_id: u64, to_peer_id: u64);
+}
+
+#[derive(Clone)]
+pub struct RegionNotifier<EK, ER> 
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    router: RaftRouter<EK, ER>,
+}
+
+impl<EK, ER> RegionNotifier<EK, ER> 
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    pub fn new(router: RaftRouter<EK, ER>) -> Self {
+        Self {
+            router,
+        }
+    }
+}
+
+impl<EK, ER> Notifier for RegionNotifier<EK, ER> 
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    fn notify_persisted(&self, region_id: u64, ready: UnpersistedReady, now: Instant) {
+        if let Err(e) = self.router.force_send(
             region_id,
-            PeerMsg::Persisted((self.peer_id, self.number, now)),
+            PeerMsg::Persisted((ready.peer_id, ready.number, now)),
         ) {
             warn!(
                 "failed to send noop to trigger persisted ready";
                 "region_id" => region_id,
-                "peer_id" => self.peer_id,
-                "ready_number" => self.number,
+                "peer_id" => ready.peer_id,
+                "ready_number" => ready.number,
+                "error" => ?e,
+            );
+        }
+    }
+
+    fn notify_unreachable(&self, region_id: u64, to_peer_id: u64) {
+        let msg = SignificantMsg::Unreachable {
+            region_id,
+            to_peer_id,
+        };
+        if let Err(e) = self
+            .router
+            .force_send(region_id, PeerMsg::SignificantMsg(msg))
+        {
+            warn!(
+                "failed to send unreachable";
+                "region_id" => region_id,
+                "unreachable_peer_id" => to_peer_id,
                 "error" => ?e,
             );
         }
@@ -70,7 +116,7 @@ where
     pub raft_wb: Option<ER::LogBatch>,
     pub entries: Vec<Entry>,
     pub cut_logs: Option<(u64, u64)>,
-    pub unsynced_ready: Option<UnsyncedReady>,
+    pub ready: Option<UnpersistedReady>,
     pub raft_state: Option<RaftLocalState>,
     pub proposal_times: Vec<Instant>,
     pub messages: Vec<RaftMessage>,
@@ -90,7 +136,7 @@ where
             raft_wb: None,
             entries: vec![],
             cut_logs: None,
-            unsynced_ready: None,
+            ready: None,
             raft_state: None,
             proposal_times: vec![],
             messages: vec![],
@@ -122,7 +168,7 @@ where
 {
     pub kv_wb: EK::WriteBatch,
     pub raft_wb: ER::LogBatch,
-    pub unsynced_readies: HashMap<u64, UnsyncedReady>,
+    pub readies: HashMap<u64, UnpersistedReady>,
     pub raft_states: HashMap<u64, RaftLocalState>,
     pub state_size: usize,
     pub tasks: Vec<AsyncWriteTask<EK, ER>>,
@@ -140,7 +186,7 @@ where
         Self {
             kv_wb,
             raft_wb,
-            unsynced_readies: HashMap::default(),
+            readies: HashMap::default(),
             raft_states: HashMap::default(),
             tasks: vec![],
             state_size: 0,
@@ -162,8 +208,8 @@ where
         if let Some((from, to)) = task.cut_logs {
             self.raft_wb.cut_logs(task.region_id, from, to);
         }
-        if let Some(ready) = task.unsynced_ready.take() {
-            self.unsynced_readies.insert(task.region_id, ready);
+        if let Some(ready) = task.ready.take() {
+            self.readies.insert(task.region_id, ready);
         }
         if let Some(raft_state) = task.raft_state.take() {
             if self
@@ -180,7 +226,7 @@ where
     pub fn clear(&mut self) {
         // raft_wb doesn't have clear interface but it should be consumed by raft db before
         self.kv_wb.clear();
-        self.unsynced_readies.clear();
+        self.readies.clear();
         self.raft_states.clear();
         self.tasks.clear();
         self.state_size = 0;
@@ -235,18 +281,19 @@ where
 }
 
 #[allow(dead_code)]
-struct AsyncWriteWorker<EK, ER, T>
+struct AsyncWriteWorker<EK, ER, T, N>
 where
     EK: KvEngine,
     ER: RaftEngine,
     T: Transport,
+    N: Notifier,
 {
     store_id: u64,
     tag: String,
     kv_engine: EK,
     raft_engine: ER,
-    router: RaftRouter<EK, ER>,
     receiver: Receiver<AsyncWriteMsg<EK, ER>>,
+    notifier: N,
     trans: T,
     wb: AsyncWriteBatch<EK, ER>,
     trigger_write_size: usize,
@@ -254,19 +301,20 @@ where
     perf_context: EK::PerfContext,
 }
 
-impl<EK, ER, T> AsyncWriteWorker<EK, ER, T>
+impl<EK, ER, T, N> AsyncWriteWorker<EK, ER, T, N>
 where
     EK: KvEngine,
     ER: RaftEngine,
     T: Transport,
+    N: Notifier,
 {
     fn new(
         store_id: u64,
         tag: String,
         kv_engine: EK,
         raft_engine: ER,
-        router: RaftRouter<EK, ER>,
         receiver: Receiver<AsyncWriteMsg<EK, ER>>,
+        notifier: N,
         trans: T,
         config: &Config,
     ) -> Self {
@@ -282,8 +330,8 @@ where
             tag,
             kv_engine,
             raft_engine,
-            router,
             receiver,
+            notifier,
             trans,
             wb,
             trigger_write_size: config.trigger_write_size.0 as usize,
@@ -416,28 +464,14 @@ where
         self.trans.flush();
         self.message_metrics.flush();
         for (region_id, to_peer_id) in unreachable_peers {
-            let msg = SignificantMsg::Unreachable {
-                region_id,
-                to_peer_id,
-            };
-            if let Err(e) = self
-                .router
-                .force_send(region_id, PeerMsg::SignificantMsg(msg))
-            {
-                warn!(
-                    "failed to send unreachable";
-                    "region_id" => region_id,
-                    "unreachable_peer_id" => to_peer_id,
-                    "error" => ?e,
-                );
-            }
+            self.notifier.notify_unreachable(region_id, to_peer_id);
         }
         STORE_WRITE_SEND_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()));
         now = Instant::now();
         // The order between send msg and send ready callback is important for snapshot process
         // TODO: add more comments
-        for (region_id, r) in &self.wb.unsynced_readies {
-            r.flush(*region_id, &self.router, now);
+        for (region_id, r) in &self.wb.readies {
+            self.notifier.notify_persisted(*region_id, *r, now);
         }
         STORE_WRITE_CALLBACK_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()));
 
@@ -473,12 +507,12 @@ where
         &self.writers
     }
 
-    pub fn spawn<T: Transport + 'static>(
+    pub fn spawn<T: Transport + 'static, N: Notifier>(
         &mut self,
         store_id: u64,
         kv_engine: &EK,
         raft_engine: &ER,
-        router: &RaftRouter<EK, ER>,
+        notifier: &N,
         trans: &T,
         config: &Config,
     ) -> Result<()> {
@@ -490,8 +524,8 @@ where
                 tag.clone(),
                 kv_engine.clone(),
                 raft_engine.clone(),
-                router.clone(),
                 rx,
+                notifier.clone(),
                 trans.clone(),
                 config,
             );
@@ -510,5 +544,142 @@ where
             self.writers[i].send(AsyncWriteMsg::Shutdown).unwrap();
             handler.join().unwrap();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use crate::Result;
+    use crate::store::{Config, Transport};
+    use engine_test::kv::{new_engine, KvTestEngine};
+    use engine_traits::{ALL_CFS, Mutable, Peekable, WriteBatchExt};
+    use kvproto::raft_serverpb::RaftMessage;
+    use tempfile::{Builder, TempDir};
+
+    use super::*;
+
+    pub fn create_tmp_engine(path: &str) -> (TempDir, KvTestEngine) {
+        let path = Builder::new().prefix(path).tempdir().unwrap();
+        let engine = new_engine(
+            path.path().join("db").to_str().unwrap(),
+            None,
+            ALL_CFS,
+            None,
+        )
+        .unwrap();
+        (path, engine)
+    }
+
+    fn new_entry(index: u64, term: u64) -> Entry {
+        let mut e = Entry::default();
+        e.set_index(index);
+        e.set_term(term);
+        e
+    }
+
+    #[derive(Clone)]
+    struct TestNotifier {
+        tx: Sender<(u64, UnpersistedReady)>,
+    }
+
+    impl Notifier for TestNotifier {
+        fn notify_persisted(&self, region_id: u64, ready: UnpersistedReady, _now: Instant) {
+            self.tx.send((region_id, ready)).unwrap()
+        }
+        fn notify_unreachable(&self, _region_id: u64, _to_peer_id: u64) {
+            panic!("unreachable");
+        }
+    }
+    #[derive(Clone)]
+    struct TestTransport {
+        tx: Sender<RaftMessage>,
+    }
+
+    impl Transport for TestTransport {
+        fn send(&mut self, msg: RaftMessage) -> Result<()> {
+            self.tx.send(msg).unwrap();
+            Ok(())
+        }
+        fn need_flush(&self) -> bool {
+            false
+        }
+        fn flush(&mut self) {
+        }
+    }
+
+    struct TestAsyncWriteWorker {
+        worker: AsyncWriteWorker<KvTestEngine, KvTestEngine, TestTransport, TestNotifier>,
+        kv_engine: KvTestEngine,
+        raft_engine: KvTestEngine,
+        task_tx: Sender<AsyncWriteMsg<KvTestEngine, KvTestEngine>>,
+        notify_rx: Receiver<(u64, UnpersistedReady)>,
+        msg_rx: Receiver<RaftMessage>,
+    }
+
+    impl TestAsyncWriteWorker {
+        fn new(cfg: &Config, path_kv: &str, path_raft: &str) -> Self {
+            let (_dir, kv_engine) = create_tmp_engine(path_kv);
+            let (_dir, raft_engine) = create_tmp_engine(path_raft);
+            let (task_tx, task_rx) = channel();
+            let (notify_tx, notify_rx) = channel();
+            let notifier = TestNotifier {
+                tx: notify_tx,
+            };
+            let (msg_tx, msg_rx) = channel();
+            let trans = TestTransport {
+                tx: msg_tx,
+            };
+            Self {
+                worker: AsyncWriteWorker::new(1, "writer".to_string(), kv_engine.clone(), raft_engine.clone(), task_rx, notifier, trans, cfg),
+                kv_engine,
+                raft_engine,
+                task_tx,
+                notify_rx,
+                msg_rx,
+            }
+        }
+    }
+
+    #[test]
+    fn test_batch_write() {
+        let mut t = TestAsyncWriteWorker::new(&Config::default(), "async-io-batch-kv", "async-io-batch-raft");
+
+        let mut task_1 = AsyncWriteTask::<KvTestEngine, KvTestEngine>::new(1, 1);
+        task_1.kv_wb = Some(t.kv_engine.write_batch());
+        task_1.kv_wb.as_mut().unwrap().put(b"kv_k1", b"kv_v1").unwrap();
+        task_1.raft_wb = Some(t.raft_engine.write_batch());
+        task_1.raft_wb.as_mut().unwrap().put(b"raft_k1", b"raft_v1").unwrap();
+        task_1.entries.push(new_entry(5, 5));
+        task_1.entries.push(new_entry(6, 5));
+        task_1.ready = Some(UnpersistedReady::new(1, 10));
+
+        let mut task_2 = AsyncWriteTask::<KvTestEngine, KvTestEngine>::new(2, 2);
+        task_2.kv_wb = Some(t.kv_engine.write_batch());
+        task_2.kv_wb.as_mut().unwrap().put(b"kv_k2", b"kv_v2").unwrap();
+        task_2.raft_wb = Some(t.raft_engine.write_batch());
+        task_2.raft_wb.as_mut().unwrap().put(b"raft_k2", b"raft_v2").unwrap();
+        task_2.entries.push(new_entry(5, 5));
+        task_2.entries.push(new_entry(6, 5));
+        task_2.ready = Some(UnpersistedReady::new(2, 15));
+
+        t.worker.wb.add_write_task(task_1);
+        t.worker.wb.add_write_task(task_2);
+
+        t.worker.sync_write();
+
+        let snapshot = t.kv_engine.snapshot();
+        assert_eq!(snapshot.get_value(b"kv_k1").unwrap().unwrap(), b"kv_v1");
+        assert_eq!(snapshot.get_value(b"kv_k2").unwrap().unwrap(), b"kv_v2");
+
+        let snapshot = t.raft_engine.snapshot();
+        assert_eq!(snapshot.get_value(b"raft_k1").unwrap().unwrap(), b"raft_v1");
+        assert_eq!(snapshot.get_value(b"raft_k2").unwrap().unwrap(), b"raft_v2");
+
+        let notify = t.notify_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(notify, (1, UnpersistedReady::new(1, 10)));
+        let notify = t.notify_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(notify, (2, UnpersistedReady::new(2, 15)));
     }
 }

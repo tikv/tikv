@@ -85,7 +85,7 @@ pub const PENDING_MSG_CAP: usize = 100;
 const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
 const ENTRY_CACHE_EVICT_TICK_DURATION: Duration = Duration::from_secs(1);
 
-use crate::store::fsm::async_io::{AsyncWriteMsg, AsyncWriters};
+use crate::store::fsm::async_io::{AsyncWriteMsg, AsyncWriters, RegionNotifier};
 
 pub struct StoreInfo<E> {
     pub engine: E,
@@ -1186,7 +1186,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             meta.get_id(),
             &engines.kv,
             &engines.raft,
-            &self.router,
+            &RegionNotifier::new(self.router.clone()),
             &trans,
             &cfg.value(),
         )?;
