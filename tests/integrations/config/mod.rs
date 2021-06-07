@@ -713,6 +713,16 @@ fn test_serde_custom_tikv_config() {
         old_value_cache_size: 512,
         hibernate_regions_compatible: false,
         incremental_scan_speed_limit: ReadableSize(7),
+<<<<<<< HEAD
+=======
+        old_value_cache_memory_quota: ReadableSize::mb(14),
+        sink_memory_quota: ReadableSize::mb(7),
+    };
+    value.resolved_ts = ResolvedTsConfig {
+        enable: true,
+        advance_ts_interval: ReadableDuration::secs(5),
+        scan_lock_pool_size: 1,
+>>>>>>> 193c84298... cdc: change old value cache to memory-bounded (#10252)
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");

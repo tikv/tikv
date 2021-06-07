@@ -617,6 +617,16 @@ min-ts-interval = "4s"
 old-value-cache-size = 512
 hibernate-regions-compatible = false
 incremental-scan-speed-limit = 7
+<<<<<<< HEAD
+=======
+old-value-cache-memory-quota = "14MB"
+sink-memory-quota = "7MB"
+
+[resolved-ts]
+enable = true
+advance-ts-interval = "5s"
+scan-lock-pool-size = 1
+>>>>>>> 193c84298... cdc: change old value cache to memory-bounded (#10252)
 
 [split]
 detect-times = 10

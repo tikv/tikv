@@ -2254,21 +2254,73 @@ impl Default for BackupConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct CdcConfig {
     pub min_ts_interval: ReadableDuration,
-    pub old_value_cache_size: usize,
     pub hibernate_regions_compatible: bool,
     pub incremental_scan_speed_limit: ReadableSize,
+<<<<<<< HEAD
+=======
+    pub sink_memory_quota: ReadableSize,
+    pub old_value_cache_memory_quota: ReadableSize,
+    // Deprecated! preserved for compatibility check.
+    #[doc(hidden)]
+    pub old_value_cache_size: usize,
+>>>>>>> 193c84298... cdc: change old value cache to memory-bounded (#10252)
 }
 
 impl Default for CdcConfig {
     fn default() -> Self {
         Self {
             min_ts_interval: ReadableDuration::secs(1),
+<<<<<<< HEAD
             // Assumes 1KB per entry, 131072 (128 * 1024) takes about 128MB.
             old_value_cache_size: 131072,
+=======
+>>>>>>> 193c84298... cdc: change old value cache to memory-bounded (#10252)
             hibernate_regions_compatible: true,
             // TiCDC requires a SSD, the typical write speed of SSD
             // is more than 500MB/s, so 128MB/s is enough.
             incremental_scan_speed_limit: ReadableSize::mb(128),
+<<<<<<< HEAD
+=======
+            // 512MB memory for CDC sink.
+            sink_memory_quota: ReadableSize::mb(512),
+            // 512MB memory for old value cache.
+            old_value_cache_memory_quota: ReadableSize::mb(512),
+            // Deprecated! preserved for compatibility check.
+            old_value_cache_size: 0,
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct ResolvedTsConfig {
+    #[config(skip)]
+    pub enable: bool,
+    pub advance_ts_interval: ReadableDuration,
+    #[config(skip)]
+    pub scan_lock_pool_size: usize,
+}
+
+impl ResolvedTsConfig {
+    fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.advance_ts_interval.is_zero() {
+            return Err("resolved-ts.advance-ts-interval can't be zero".into());
+        }
+        if self.scan_lock_pool_size == 0 {
+            return Err("resolved-ts.scan-lock-pool-size can't be zero".into());
+        }
+        Ok(())
+    }
+}
+
+impl Default for ResolvedTsConfig {
+    fn default() -> Self {
+        Self {
+            enable: true,
+            advance_ts_interval: ReadableDuration::secs(1),
+            scan_lock_pool_size: 2,
+>>>>>>> 193c84298... cdc: change old value cache to memory-bounded (#10252)
         }
     }
 }
