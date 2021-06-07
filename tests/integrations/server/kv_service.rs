@@ -1705,7 +1705,7 @@ fn test_get_lock_wait_info_api() {
     let mut entries = None;
     for _retry in 0..100 {
         thread::sleep(Duration::from_millis(10));
-        // lock_ttl is 20ms, so the lock should be in waiting state here.
+        // The lock should be in waiting state here.
         let req = GetLockWaitInfoRequest::default();
         let resp = client.get_lock_wait_info(&req).unwrap();
         if resp.entries.len() != 0 {
