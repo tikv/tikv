@@ -10,7 +10,7 @@ use regex::Regex;
 use collections::HashMap;
 use configuration::{ConfigChange, ConfigManager, Configuration};
 use tikv_util::config::{self, ReadableDuration, ReadableSize, VersionTrack};
-use tikv_util::sys::sys_quota::SysQuota;
+use tikv_util::sys::SysQuota;
 use tikv_util::worker::Scheduler;
 
 pub use crate::storage::config::Config as StorageConfig;
@@ -86,6 +86,14 @@ pub struct Config {
 
     #[config(skip)]
     pub max_grpc_send_msg_len: i32,
+
+    // When merge raft messages into a batch message, leave a buffer.
+    pub raft_client_grpc_send_msg_buffer: usize,
+
+    #[config(skip)]
+    pub raft_client_queue_size: usize,
+
+    pub raft_msg_max_batch_size: usize,
 
     // TODO: use CompressionAlgorithms instead once it supports traits like Clone etc.
     #[config(skip)]
@@ -172,7 +180,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Config {
-        let cpu_num = SysQuota::new().cpu_cores_quota();
+        let cpu_num = SysQuota::cpu_cores_quota();
         let background_thread_count = if cpu_num > 16.0 { 3 } else { 2 };
         Config {
             cluster_id: DEFAULT_CLUSTER_ID,
@@ -183,6 +191,9 @@ impl Default for Config {
             advertise_status_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
             status_thread_pool_size: 1,
             max_grpc_send_msg_len: DEFAULT_MAX_GRPC_SEND_MSG_LEN,
+            raft_client_grpc_send_msg_buffer: 512 * 1024,
+            raft_client_queue_size: 8192,
+            raft_msg_max_batch_size: 128,
             grpc_compression_type: GrpcCompressionType::None,
             grpc_concurrency: DEFAULT_GRPC_CONCURRENCY,
             grpc_concurrent_stream: DEFAULT_GRPC_CONCURRENT_STREAM,

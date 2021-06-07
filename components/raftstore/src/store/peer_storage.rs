@@ -3,11 +3,12 @@
 use fail::fail_point;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
+use std::ops::Range;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use std::{cmp, error, u64};
+use std::{cmp, error, mem, u64};
 
 use engine_traits::CF_RAFT;
 use engine_traits::{Engines, KvEngine, Mutable, Peekable};
@@ -21,11 +22,13 @@ use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 
 use crate::store::fsm::GenSnapTask;
+use crate::store::memory::*;
 use crate::store::util;
 use crate::store::ProposalContext;
-use crate::{Error, Result};
+use crate::{bytes_capacity, Error, Result};
 use engine_traits::{RaftEngine, RaftLogBatch};
 use into_other::into_other;
+use tikv_alloc::trace::TraceEvent;
 use tikv_util::worker::Scheduler;
 use tikv_util::{box_err, box_try, debug, defer, error, info, warn};
 
@@ -54,6 +57,8 @@ pub const JOB_STATUS_CANCELLING: usize = 2;
 pub const JOB_STATUS_CANCELLED: usize = 3;
 pub const JOB_STATUS_FINISHED: usize = 4;
 pub const JOB_STATUS_FAILED: usize = 5;
+
+const ENTRY_MEM_SIZE: usize = mem::size_of::<Entry>();
 
 /// Possible status returned by `check_applying_snap`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -102,13 +107,13 @@ pub fn last_index(state: &RaftLocalState) -> u64 {
     state.get_last_index()
 }
 
-pub const ENTRY_MEM_SIZE: usize = std::mem::size_of::<Entry>();
-
 struct EntryCache {
     cache: VecDeque<Entry>,
+    trace: VecDeque<CachedEntries>,
     hit: Cell<i64>,
     miss: Cell<i64>,
-    mem_size_change: i64,
+    #[cfg(test)]
+    size_change_cb: Option<Box<dyn Fn(i64) + Send + 'static>>,
 }
 
 impl EntryCache {
@@ -161,34 +166,30 @@ impl EntryCache {
     }
 
     fn append(&mut self, tag: &str, entries: &[Entry]) {
-        if entries.is_empty() {
-            return;
+        if !entries.is_empty() {
+            let mut mem_size_change = 0;
+            let old_capacity = self.cache.capacity();
+            mem_size_change += self.append_impl(tag, entries);
+            let new_capacity = self.cache.capacity();
+            mem_size_change += Self::get_cache_vec_mem_size_change(new_capacity, old_capacity);
+            mem_size_change += self.shrink_if_necessary();
+            self.flush_mem_size_change(mem_size_change);
         }
+    }
+
+    fn append_impl(&mut self, tag: &str, mut entries: &[Entry]) -> i64 {
+        let mut mem_size_change = 0;
+
         if let Some(cache_last_index) = self.cache.back().map(|e| e.get_index()) {
             let first_index = entries[0].get_index();
             if cache_last_index >= first_index {
-                if self.cache.front().unwrap().get_index() >= first_index {
-                    self.update_mem_size_change_before_clear();
-                    self.cache.clear();
-                } else {
-                    let left = self.cache.len() - (cache_last_index - first_index + 1) as usize;
-                    self.mem_size_change -= self
-                        .cache
-                        .iter()
-                        .skip(left)
-                        .map(|e| (e.data.capacity() + e.context.capacity()) as i64)
-                        .sum::<i64>();
-                    self.cache.truncate(left);
-                }
-                if self.cache.len() + entries.len() < SHRINK_CACHE_CAPACITY
-                    && self.cache.capacity() > SHRINK_CACHE_CAPACITY
-                {
-                    let old_capacity = self.cache.capacity();
-                    self.cache.shrink_to_fit();
-                    self.mem_size_change += self.get_cache_vec_mem_size_change(
-                        self.cache.capacity() as i64,
-                        old_capacity as i64,
-                    )
+                let cache_len = self.cache.len();
+                let truncate_to = cache_len
+                    .checked_sub((cache_last_index - first_index + 1) as usize)
+                    .unwrap_or_default();
+                for e in self.cache.drain(truncate_to..) {
+                    mem_size_change -=
+                        (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64;
                 }
             } else if cache_last_index + 1 < first_index {
                 panic!(
@@ -197,81 +198,99 @@ impl EntryCache {
                 );
             }
         }
-        let mut start_idx = 0;
-        if let Some(len) = (self.cache.len() + entries.len()).checked_sub(MAX_CACHE_CAPACITY) {
-            if len < self.cache.len() {
-                let mut drained_cache_entries_size = 0;
-                self.cache.drain(..len).for_each(|e| {
-                    drained_cache_entries_size += (e.data.capacity() + e.context.capacity()) as i64
-                });
-                self.mem_size_change -= drained_cache_entries_size;
-            } else {
-                start_idx = len - self.cache.len();
-                self.update_mem_size_change_before_clear();
-                self.cache.clear();
+
+        let (cache_len, mut entries_len) = (self.cache.len(), entries.len());
+        if entries_len > MAX_CACHE_CAPACITY {
+            entries = &entries[(entries_len - MAX_CACHE_CAPACITY)..];
+            entries_len = entries.len();
+        }
+
+        if let Some(mut compact_to) = (cache_len + entries_len).checked_sub(MAX_CACHE_CAPACITY) {
+            compact_to = cmp::min(compact_to, cache_len);
+            for e in self.cache.drain(..compact_to) {
+                mem_size_change -= (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64;
             }
         }
-        let old_capacity = self.cache.capacity();
-        let mut entries_mem_size = 0;
-        for e in &entries[start_idx..] {
+
+        for e in entries {
             self.cache.push_back(e.to_owned());
-            entries_mem_size += (e.data.capacity() + e.context.capacity()) as i64;
+            mem_size_change += (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64;
         }
-        self.mem_size_change += self
-            .get_cache_vec_mem_size_change(self.cache.capacity() as i64, old_capacity as i64)
-            + entries_mem_size;
+
+        mem_size_change
     }
 
-    pub fn compact_to(&mut self, idx: u64) {
+    pub fn compact_to(&mut self, mut idx: u64) {
+        let mut mem_size_change = 0;
+
+        // Clean cached entries which have been already sent to apply threads. For example,
+        // if entries [1, 10), [10, 20), [20, 30) are sent to apply threads and `compact_to(15)`
+        // is called, only [20, 30) will still be kept in cache.
+        let old_trace_cap = self.trace.capacity();
+        while let Some(cached_entries) = self.trace.pop_front() {
+            if cached_entries.range.start > idx {
+                self.trace.push_front(cached_entries);
+                let trace_len = self.trace.len();
+                let trace_cap = self.trace.capacity();
+                if trace_len < SHRINK_CACHE_CAPACITY && trace_cap > SHRINK_CACHE_CAPACITY {
+                    self.trace.shrink_to(SHRINK_CACHE_CAPACITY);
+                }
+                break;
+            }
+            *cached_entries.entries.lock().unwrap() = Default::default();
+            idx = cmp::max(cached_entries.range.end - 1, idx);
+        }
+        let new_trace_cap = self.trace.capacity();
+        mem_size_change += Self::get_trace_vec_mem_size_change(new_trace_cap, old_trace_cap);
+
         let cache_first_idx = self.first_index().unwrap_or(u64::MAX);
         if cache_first_idx > idx {
+            self.flush_mem_size_change(mem_size_change);
             return;
         }
-        let mut drained_cache_entries_size = 0;
+
         let cache_last_idx = self.cache.back().unwrap().get_index();
-        // Use `cache_last_idx + 1` to make sure cache can be cleared completely
-        // if necessary.
-        self.cache
-            .drain(..(cmp::min(cache_last_idx + 1, idx) - cache_first_idx) as usize)
-            .for_each(|e| {
-                drained_cache_entries_size += (e.data.capacity() + e.context.capacity()) as i64
-            });
-        self.mem_size_change -= drained_cache_entries_size;
-        if self.cache.len() < SHRINK_CACHE_CAPACITY && self.cache.capacity() > SHRINK_CACHE_CAPACITY
-        {
-            let old_capacity = self.cache.capacity();
-            // So the peer storage doesn't have much writes since the proposal of compaction,
-            // we can consider this peer is going to be inactive.
-            self.cache.shrink_to_fit();
-            self.mem_size_change += self
-                .get_cache_vec_mem_size_change(self.cache.capacity() as i64, old_capacity as i64)
+        // Use `cache_last_idx + 1` to make sure cache can be cleared completely if necessary.
+        let compact_to = (cmp::min(cache_last_idx + 1, idx) - cache_first_idx) as usize;
+        for e in self.cache.drain(..compact_to) {
+            mem_size_change -= (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64
         }
-    }
 
-    fn update_mem_size_change_before_clear(&mut self) {
-        self.mem_size_change -= self
-            .cache
-            .iter()
-            .map(|e| (e.data.capacity() + e.context.capacity()) as i64)
-            .sum::<i64>();
-    }
-
-    fn get_cache_vec_mem_size_change(&self, new_capacity: i64, old_capacity: i64) -> i64 {
-        ENTRY_MEM_SIZE as i64 * (new_capacity - old_capacity)
+        mem_size_change += self.shrink_if_necessary();
+        self.flush_mem_size_change(mem_size_change);
     }
 
     fn get_total_mem_size(&self) -> i64 {
-        let data_size: usize = self
+        let data_size: i64 = self
             .cache
             .iter()
-            .map(|e| e.data.capacity() + e.context.capacity())
+            .map(|e| (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64)
             .sum();
-        (ENTRY_MEM_SIZE * self.cache.capacity() + data_size) as i64
+        let cache_vec_size = Self::get_cache_vec_mem_size_change(self.cache.capacity(), 0);
+        let trace_vec_size = Self::get_trace_vec_mem_size_change(self.trace.capacity(), 0);
+        data_size + cache_vec_size + trace_vec_size
     }
 
-    fn flush_mem_size_change(&mut self) {
-        RAFT_ENTRIES_CACHES_GAUGE.add(self.mem_size_change);
-        self.mem_size_change = 0;
+    fn get_cache_vec_mem_size_change(new_capacity: usize, old_capacity: usize) -> i64 {
+        ENTRY_MEM_SIZE as i64 * (new_capacity as i64 - old_capacity as i64)
+    }
+
+    fn get_trace_vec_mem_size_change(new_capacity: usize, old_capacity: usize) -> i64 {
+        mem::size_of::<CachedEntries>() as i64 * (new_capacity as i64 - old_capacity as i64)
+    }
+
+    fn flush_mem_size_change(&self, mem_size_change: i64) {
+        #[cfg(test)]
+        if let Some(size_change_cb) = self.size_change_cb.as_ref() {
+            size_change_cb(mem_size_change);
+        }
+        let event = if mem_size_change > 0 {
+            TraceEvent::Add(mem_size_change as usize)
+        } else {
+            TraceEvent::Sub(-mem_size_change as usize)
+        };
+        MEMTRACE_ENTRY_CACHE.trace(event);
+        RAFT_ENTRIES_CACHES_GAUGE.add(mem_size_change);
     }
 
     fn flush_stats(&self) {
@@ -285,27 +304,46 @@ impl EntryCache {
     fn is_empty(&self) -> bool {
         self.cache.is_empty()
     }
+
+    fn trace_cached_entries(&mut self, entries: CachedEntries) {
+        let old_capacity = self.trace.capacity();
+        self.trace.push_back(entries);
+        let new_capacity = self.trace.capacity();
+        let diff = Self::get_trace_vec_mem_size_change(new_capacity, old_capacity);
+        self.flush_mem_size_change(diff);
+    }
+
+    fn shrink_if_necessary(&mut self) -> i64 {
+        if self.cache.len() < SHRINK_CACHE_CAPACITY && self.cache.capacity() > SHRINK_CACHE_CAPACITY
+        {
+            let old_capacity = self.cache.capacity();
+            self.cache.shrink_to_fit();
+            let new_capacity = self.cache.capacity();
+            return Self::get_cache_vec_mem_size_change(new_capacity, old_capacity);
+        }
+        0
+    }
 }
 
 impl Default for EntryCache {
     fn default() -> Self {
-        let cache = VecDeque::default();
-        let size = ENTRY_MEM_SIZE * cache.capacity();
-        let mut entry_cache = EntryCache {
-            cache,
+        let entry_cache = EntryCache {
+            cache: Default::default(),
+            trace: Default::default(),
             hit: Cell::new(0),
             miss: Cell::new(0),
-            mem_size_change: size as i64,
+            #[cfg(test)]
+            size_change_cb: None,
         };
-        entry_cache.flush_mem_size_change();
+        entry_cache.flush_mem_size_change(entry_cache.get_total_mem_size());
         entry_cache
     }
 }
 
 impl Drop for EntryCache {
     fn drop(&mut self) {
-        self.flush_mem_size_change();
-        RAFT_ENTRIES_CACHES_GAUGE.sub(self.get_total_mem_size());
+        let mem_size_change = self.get_total_mem_size();
+        self.flush_mem_size_change(-mem_size_change);
         self.flush_stats();
     }
 }
@@ -1097,6 +1135,15 @@ where
         self.cancel_generating_snap(Some(idx));
     }
 
+    pub fn compact_cache_to(&mut self, idx: u64) {
+        if let Some(ref mut cache) = self.cache {
+            cache.compact_to(idx);
+        } else {
+            let rid = self.get_region_id();
+            self.engines.raft.gc_entry_cache(rid, idx);
+        }
+    }
+
     #[inline]
     pub fn is_cache_empty(&self) -> bool {
         self.cache.as_ref().map_or(true, |c| c.is_empty())
@@ -1127,10 +1174,32 @@ where
         }
     }
 
+    /// Evict half of entries from the cache.
+    pub fn half_evict_cache(&mut self) {
+        if self.engines.raft.has_builtin_entry_cache() {
+            // TODO: unify entry cache.
+            return;
+        }
+        let cache = self.cache.as_mut().unwrap();
+        if !cache.cache.is_empty() {
+            RAFT_ENTRIES_CACHES_EVICT.inc();
+            let cache = self.cache.as_mut().unwrap();
+            let drain_to = cache.cache.len() / 2;
+            let idx = cache.cache[drain_to].index;
+            cache.compact_to(idx + 1);
+        }
+    }
+
+    pub fn cache_is_empty(&self) -> bool {
+        self.cache
+            .as_ref()
+            .map_or_else(|| true, |c| c.cache.is_empty())
+    }
+
     #[inline]
     pub fn flush_cache_metrics(&mut self) {
         if let Some(ref mut cache) = self.cache {
-            cache.flush_mem_size_change();
+            // NOTE: memory usage of entry cache is flushed realtime.
             cache.flush_stats();
             return;
         }
@@ -1513,6 +1582,12 @@ where
             destroyed_regions: ctx.destroyed_regions,
         })
     }
+
+    pub fn trace_cached_entries(&mut self, entries: CachedEntries) {
+        if let Some(ref mut cache) = self.cache {
+            cache.trace_cached_entries(entries);
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -1638,7 +1713,7 @@ where
     )?;
     snap_data.mut_meta().set_for_balance(for_balance);
     let v = snap_data.write_to_bytes()?;
-    snapshot.set_data(v);
+    snapshot.set_data(v.into());
 
     SNAPSHOT_KV_COUNT_HISTOGRAM.observe(stat.kv_count as f64);
     SNAPSHOT_SIZE_HISTOGRAM.observe(stat.size as f64);
@@ -1697,6 +1772,30 @@ pub fn write_peer_state<T: Mutable>(
     Ok(())
 }
 
+/// Committed entries sent to apply threads.
+#[derive(Clone)]
+pub struct CachedEntries {
+    pub range: Range<u64>,
+    entries: Arc<Mutex<Vec<Entry>>>,
+}
+
+impl CachedEntries {
+    pub fn new(entries: Vec<Entry>) -> Self {
+        assert!(!entries.is_empty());
+        let start = entries.first().map(|x| x.index).unwrap();
+        let end = entries.last().map(|x| x.index).unwrap() + 1;
+        let range = Range { start, end };
+        CachedEntries {
+            entries: Arc::new(Mutex::new(entries)),
+            range,
+        }
+    }
+
+    pub fn take_entries(&self) -> Vec<Entry> {
+        mem::take(&mut *self.entries.lock().unwrap())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::coprocessor::CoprocessorHost;
@@ -1723,6 +1822,20 @@ mod tests {
     use tikv_util::worker::{LazyWorker, Scheduler, Worker};
 
     use super::*;
+
+    impl EntryCache {
+        fn new_with_cb(cb: impl Fn(i64) + Send + 'static) -> Self {
+            let entry_cache = EntryCache {
+                cache: Default::default(),
+                trace: Default::default(),
+                hit: Cell::new(0),
+                miss: Cell::new(0),
+                size_change_cb: Some(Box::new(cb) as Box<dyn Fn(i64) + Send + 'static>),
+            };
+            entry_cache.flush_mem_size_change(entry_cache.get_total_mem_size());
+            entry_cache
+        }
+    }
 
     fn new_storage(
         sched: Scheduler<RegionTask<KvTestSnapshot>>,
@@ -2370,6 +2483,25 @@ mod tests {
     }
 
     #[test]
+    fn test_storage_cache_size_change() {
+        let (tx, rx) = mpsc::sync_channel(8);
+        let mut cache = EntryCache::new_with_cb(move |c: i64| tx.send(c).unwrap());
+        assert_eq!(rx.try_recv().unwrap(), 896);
+
+        cache.append("", &[new_entry(1, 1), new_entry(2, 1)]);
+        assert_eq!(rx.try_recv().unwrap(), 0);
+
+        cache.append("", &[new_entry(2, 2)]);
+        assert_eq!(rx.try_recv().unwrap(), 0);
+
+        cache.append("", &[new_entry(1, 2), new_entry(2, 2)]);
+        assert_eq!(rx.try_recv().unwrap(), 0);
+
+        drop(cache);
+        assert_eq!(rx.try_recv().unwrap(), -896);
+    }
+
+    #[test]
     fn test_storage_apply_snapshot() {
         let ents = vec![
             new_entry(3, 3),
@@ -2553,7 +2685,7 @@ mod tests {
         // Sync if context is marked sync.
         let context = ProposalContext::SYNC_LOG.to_vec();
         let mut e = Entry::default();
-        e.set_context(context);
+        e.set_context(context.into());
         tbl.push((e.clone(), true));
 
         // Sync if sync_log is set and context is marked sync_log.

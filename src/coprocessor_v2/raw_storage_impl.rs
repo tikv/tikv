@@ -17,36 +17,36 @@ use crate::storage::{self, lock_manager::LockManager, Engine, Storage};
 /// The `RawStorageImpl` should be constructed for every invocation of a [`CoprocessorPlugin`] as
 /// it wraps a [`Context`] that is unique for every request.
 pub struct RawStorageImpl<'a, E: Engine, L: LockManager> {
-    context: &'a Context,
+    context: Context,
     storage: &'a Storage<E, L>,
 }
 
 impl<'a, E: Engine, L: LockManager> RawStorageImpl<'a, E, L> {
     /// Constructs a new `RawStorageImpl` that wraps a given [`Context`] and [`Storage`].
-    pub fn new(context: &'a Context, storage: &'a Storage<E, L>) -> Self {
+    pub fn new(context: Context, storage: &'a Storage<E, L>) -> Self {
         RawStorageImpl { context, storage }
     }
 }
 
 #[async_trait(?Send)]
 impl<E: Engine, L: LockManager> RawStorage for RawStorageImpl<'_, E, L> {
-    async fn get(&self, key: Key) -> StorageResult<Option<Value>> {
+    async fn get(&self, key: Key) -> PluginResult<Option<Value>> {
         let ctx = self.context.clone();
         let cf = engine_traits::CF_DEFAULT.to_string();
 
         let res = self.storage.raw_get(ctx, cf, key);
 
-        let value = res.await.map_err(StorageErrorShim::from)?;
+        let value = res.await.map_err(PluginErrorShim::from)?;
         Ok(value)
     }
 
-    async fn batch_get(&self, keys: Vec<Key>) -> StorageResult<Vec<KvPair>> {
+    async fn batch_get(&self, keys: Vec<Key>) -> PluginResult<Vec<KvPair>> {
         let ctx = self.context.clone();
         let cf = engine_traits::CF_DEFAULT.to_string();
 
         let res = self.storage.raw_batch_get(ctx, cf, keys);
 
-        let v = res.await.map_err(StorageErrorShim::from)?;
+        let v = res.await.map_err(PluginErrorShim::from)?;
         let kv_pairs = extract_kv_pairs(Ok(v))
             .into_iter()
             .map(|kv| (kv.key, kv.value))
@@ -54,7 +54,7 @@ impl<E: Engine, L: LockManager> RawStorage for RawStorageImpl<'_, E, L> {
         Ok(kv_pairs)
     }
 
-    async fn scan(&self, key_range: Range<Key>) -> StorageResult<Vec<Value>> {
+    async fn scan(&self, key_range: Range<Key>) -> PluginResult<Vec<Value>> {
         let ctx = self.context.clone();
         let cf = engine_traits::CF_DEFAULT.to_string();
         let key_only = false;
@@ -70,7 +70,7 @@ impl<E: Engine, L: LockManager> RawStorage for RawStorageImpl<'_, E, L> {
             reverse,
         );
 
-        let v = res.await.map_err(StorageErrorShim::from)?;
+        let v = res.await.map_err(PluginErrorShim::from)?;
         let values = extract_kv_pairs(Ok(v))
             .into_iter()
             .map(|kv| kv.value)
@@ -78,7 +78,7 @@ impl<E: Engine, L: LockManager> RawStorage for RawStorageImpl<'_, E, L> {
         Ok(values)
     }
 
-    async fn put(&self, key: Key, value: Value) -> StorageResult<()> {
+    async fn put(&self, key: Key, value: Value) -> PluginResult<()> {
         let ctx = self.context.clone();
         let cf = engine_traits::CF_DEFAULT.to_string();
         let ttl = 0; // unlimited
@@ -88,13 +88,13 @@ impl<E: Engine, L: LockManager> RawStorage for RawStorageImpl<'_, E, L> {
 
         match res {
             Err(e) => Err(e),
-            Ok(_) => f.await.map_err(StorageErrorShim::from)?,
+            Ok(_) => f.await.map_err(PluginErrorShim::from)?,
         }
-        .map_err(StorageErrorShim::from)?;
+        .map_err(PluginErrorShim::from)?;
         Ok(())
     }
 
-    async fn batch_put(&self, kv_pairs: Vec<KvPair>) -> StorageResult<()> {
+    async fn batch_put(&self, kv_pairs: Vec<KvPair>) -> PluginResult<()> {
         let ctx = self.context.clone();
         let cf = engine_traits::CF_DEFAULT.to_string();
         let ttl = 0; // unlimited
@@ -104,13 +104,13 @@ impl<E: Engine, L: LockManager> RawStorage for RawStorageImpl<'_, E, L> {
 
         match res {
             Err(e) => Err(e),
-            Ok(_) => f.await.map_err(StorageErrorShim::from)?,
+            Ok(_) => f.await.map_err(PluginErrorShim::from)?,
         }
-        .map_err(StorageErrorShim::from)?;
+        .map_err(PluginErrorShim::from)?;
         Ok(())
     }
 
-    async fn delete(&self, key: Key) -> StorageResult<()> {
+    async fn delete(&self, key: Key) -> PluginResult<()> {
         let ctx = self.context.clone();
         let cf = engine_traits::CF_DEFAULT.to_string();
         let (cb, f) = paired_future_callback();
@@ -119,13 +119,13 @@ impl<E: Engine, L: LockManager> RawStorage for RawStorageImpl<'_, E, L> {
 
         match res {
             Err(e) => Err(e),
-            Ok(_) => f.await.map_err(StorageErrorShim::from)?,
+            Ok(_) => f.await.map_err(PluginErrorShim::from)?,
         }
-        .map_err(StorageErrorShim::from)?;
+        .map_err(PluginErrorShim::from)?;
         Ok(())
     }
 
-    async fn batch_delete(&self, keys: Vec<Key>) -> StorageResult<()> {
+    async fn batch_delete(&self, keys: Vec<Key>) -> PluginResult<()> {
         let ctx = self.context.clone();
         let cf = engine_traits::CF_DEFAULT.to_string();
         let (cb, f) = paired_future_callback();
@@ -134,13 +134,13 @@ impl<E: Engine, L: LockManager> RawStorage for RawStorageImpl<'_, E, L> {
 
         match res {
             Err(e) => Err(e),
-            Ok(_) => f.await.map_err(StorageErrorShim::from)?,
+            Ok(_) => f.await.map_err(PluginErrorShim::from)?,
         }
-        .map_err(StorageErrorShim::from)?;
+        .map_err(PluginErrorShim::from)?;
         Ok(())
     }
 
-    async fn delete_range(&self, key_range: Range<Key>) -> StorageResult<()> {
+    async fn delete_range(&self, key_range: Range<Key>) -> PluginResult<()> {
         let ctx = self.context.clone();
         let cf = engine_traits::CF_DEFAULT.to_string();
 
@@ -152,24 +152,24 @@ impl<E: Engine, L: LockManager> RawStorage for RawStorageImpl<'_, E, L> {
 
         match res {
             Err(e) => Err(e),
-            Ok(_) => f.await.map_err(StorageErrorShim::from)?,
+            Ok(_) => f.await.map_err(PluginErrorShim::from)?,
         }
-        .map_err(StorageErrorShim::from)?;
+        .map_err(PluginErrorShim::from)?;
         Ok(())
     }
 }
 
 /// Helper struct for converting between [`storage::errors::Error`] and
-/// [`coprocessor_plugin_api::StorageError`].
-struct StorageErrorShim(StorageError);
+/// [`coprocessor_plugin_api::PluginError`].
+struct PluginErrorShim(PluginError);
 
-impl From<StorageErrorShim> for StorageError {
-    fn from(err_shim: StorageErrorShim) -> Self {
+impl From<PluginErrorShim> for PluginError {
+    fn from(err_shim: PluginErrorShim) -> Self {
         err_shim.0
     }
 }
 
-impl From<storage::errors::Error> for StorageErrorShim {
+impl From<storage::errors::Error> for PluginErrorShim {
     fn from(error: storage::errors::Error) -> Self {
         let inner = match *error.0 {
             // Key not in region
@@ -177,7 +177,7 @@ impl From<storage::errors::Error> for StorageErrorShim {
                 ref req_err,
             ))) if req_err.has_key_not_in_region() => {
                 let key_err = req_err.get_key_not_in_region();
-                StorageError::KeyNotInRegion {
+                PluginError::KeyNotInRegion {
                     key: key_err.get_key().to_owned(),
                     region_id: key_err.get_region_id(),
                     start_key: key_err.get_start_key().to_owned(),
@@ -187,17 +187,17 @@ impl From<storage::errors::Error> for StorageErrorShim {
             // Timeout
             storage::errors::ErrorInner::Engine(EngineError(box EngineErrorInner::Timeout(
                 duration,
-            ))) => StorageError::Timeout(duration),
+            ))) => PluginError::Timeout(duration),
             // Other errors are passed as-is inside their `Result` so we get a `&Result` when using `Any::downcast_ref`.
-            _ => StorageError::Other(Box::new(storage::Result::<()>::Err(error))),
+            _ => PluginError::Other(Box::new(storage::Result::<()>::Err(error))),
         };
-        StorageErrorShim(inner)
+        PluginErrorShim(inner)
     }
 }
 
-impl From<Canceled> for StorageErrorShim {
+impl From<Canceled> for PluginErrorShim {
     fn from(_c: Canceled) -> Self {
-        StorageErrorShim(StorageError::Canceled)
+        PluginErrorShim(PluginError::Canceled)
     }
 }
 
@@ -214,7 +214,7 @@ mod test {
             .unwrap();
         let ctx = Context::new();
 
-        let raw_storage = RawStorageImpl::new(&ctx, &storage);
+        let raw_storage = RawStorageImpl::new(ctx, &storage);
 
         let key = vec![0];
         let val1 = vec![42];
@@ -247,7 +247,7 @@ mod test {
             .unwrap();
         let ctx = Context::new();
 
-        let raw_storage = RawStorageImpl::new(&ctx, &storage);
+        let raw_storage = RawStorageImpl::new(ctx, &storage);
 
         let keys = vec![0, 8, 16].into_iter().map(|k| vec![k]);
         let values = vec![42, 99, 128].into_iter().map(|v| vec![v]);
