@@ -202,7 +202,7 @@ fn quote(bytes: BytesRef) -> Result<Option<Bytes>> {
     Ok(Some(result))
 }
 
-#[rpn_fn()]
+#[rpn_fn]
 #[inline]
 fn json_unquote(arg: BytesRef) -> Result<Option<Bytes>> {
     let tmp_str = std::str::from_utf8(arg)?;
