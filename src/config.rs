@@ -2248,9 +2248,6 @@ impl Default for CdcConfig {
 
 impl CdcConfig {
     fn validate(&mut self) -> Result<(), Box<dyn Error>> {
-        if self.old_value_cache_size == 0 {
-            return Err("cdc.old-value-cache-size can't be 0".into());
-        }
         if self.min_ts_interval == ReadableDuration::secs(0) {
             return Err("cdc.min-ts-interval can't be 0s".into());
         }
