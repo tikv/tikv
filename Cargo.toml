@@ -223,6 +223,7 @@ uuid = { version = "0.8.1", features = ["serde", "v4"] }
 walkdir = "2"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 resource_metering = { path = "components/resource_metering" }
+seahash = "4.1.0"
 
 [dev-dependencies]
 panic_hook = { path = "components/panic_hook" }
