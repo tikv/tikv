@@ -224,6 +224,7 @@ uuid = { version = "0.8.1", features = ["serde", "v4"] }
 walkdir = "2"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 resource_metering = { path = "components/resource_metering" }
+seahash = "4.1.0"
 
 [dev-dependencies]
 example_plugin = { path = "components/test_coprocessor_plugin/example_plugin" } # should be a binary dependency
