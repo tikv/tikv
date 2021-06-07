@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use configuration::{ConfigChange, Configuration};
 use serde_derive::{Deserialize, Serialize};
+use tikv_util::config::ReadableDuration;
 use tikv_util::worker::Scheduler;
 
 pub mod cpu;
@@ -54,10 +55,10 @@ impl TagInfos {
     }
 }
 
-const MIN_PRECISION_SECONDS: u64 = 1;
-const MAX_PRECISION_SECONDS: u64 = 60 * 60;
+const MIN_PRECISION: ReadableDuration = ReadableDuration::secs(1);
+const MAX_PRECISION: ReadableDuration = ReadableDuration::hours(1);
 const MAX_MAX_RESOURCE_GROUPS: usize = 5_000;
-const MIN_REPORT_AGENT_INTERVAL_SECONDS: u64 = 15;
+const MIN_REPORT_AGENT_INTERVAL: ReadableDuration = ReadableDuration::secs(5);
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
 #[serde(default)]
@@ -66,10 +67,10 @@ pub struct Config {
     pub enabled: bool,
 
     pub agent_address: String,
-    pub report_agent_interval_seconds: u64,
+    pub report_agent_interval: ReadableDuration,
     pub max_resource_groups: usize,
 
-    pub precision_seconds: u64,
+    pub precision: ReadableDuration,
 }
 
 impl Default for Config {
@@ -77,9 +78,9 @@ impl Default for Config {
         Config {
             enabled: false,
             agent_address: "".to_string(),
-            precision_seconds: 1,
-            report_agent_interval_seconds: 60,
+            report_agent_interval: ReadableDuration::secs(60),
             max_resource_groups: 200,
+            precision: ReadableDuration::secs(1),
         }
     }
 }
@@ -90,12 +91,10 @@ impl Config {
             tikv_util::config::check_addr(&self.agent_address)?;
         }
 
-        if self.precision_seconds < MIN_PRECISION_SECONDS
-            || self.precision_seconds > MAX_PRECISION_SECONDS
-        {
+        if self.precision < MIN_PRECISION || self.precision > MAX_PRECISION {
             return Err(format!(
-                "precision seconds must between {} and {}",
-                MIN_PRECISION_SECONDS, MAX_PRECISION_SECONDS
+                "precision must between {} and {}",
+                MIN_PRECISION, MAX_PRECISION
             )
             .into());
         }
@@ -108,13 +107,13 @@ impl Config {
             .into());
         }
 
-        if self.report_agent_interval_seconds < MIN_REPORT_AGENT_INTERVAL_SECONDS
-            || self.report_agent_interval_seconds > self.precision_seconds * 500
+        if self.report_agent_interval < MIN_REPORT_AGENT_INTERVAL
+            || self.report_agent_interval > self.precision * 500
         {
             return Err(format!(
                 "report interval seconds must between {} and {}",
-                MIN_REPORT_AGENT_INTERVAL_SECONDS,
-                self.precision_seconds * 500
+                MIN_REPORT_AGENT_INTERVAL,
+                self.precision * 500
             )
             .into());
         }
@@ -164,9 +163,8 @@ impl configuration::ConfigManager for ConfigManager {
             }
         }
 
-        if self.current_config.precision_seconds != new_config.precision_seconds {
-            self.recorder
-                .set_precision_seconds(new_config.precision_seconds);
+        if self.current_config.precision != new_config.precision {
+            self.recorder.set_precision(new_config.precision.0);
         }
 
         self.scheduler

@@ -9,8 +9,8 @@ use std::cell::Cell;
 use std::fs::read_dir;
 use std::marker::PhantomData;
 use std::sync::atomic::Ordering::SeqCst;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicPtr};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -33,13 +33,13 @@ pub fn init_recorder() -> RecorderHandle {
 
             let pause = Arc::new(AtomicBool::new(config.enabled));
             let pause0 = pause.clone();
-            let precision_seconds = Arc::new(AtomicU64::new(config.precision_seconds));
-            let precision_seconds0 = precision_seconds.clone();
+            let precision = Arc::new(Mutex::new(config.precision.0));
+            let precision0 = precision.clone();
 
             let join_handle = std::thread::Builder::new()
                 .name("req-cpu-recorder".to_owned())
                 .spawn(move || {
-                    let mut recorder = CpuRecorder::new(pause, precision_seconds);
+                    let mut recorder = CpuRecorder::new(pause, precision);
 
                     loop {
                         recorder.handle_pause();
@@ -55,7 +55,7 @@ pub fn init_recorder() -> RecorderHandle {
                     }
                 })
                 .expect("Failed to create recorder thread");
-            RecorderHandle::new(join_handle, pause0, precision_seconds0)
+            RecorderHandle::new(join_handle, pause0, precision0)
         };
     }
     HANDLE.clone()
@@ -146,7 +146,8 @@ struct ThreadRegistrationMsg {
 
 struct CpuRecorder {
     pause: Arc<AtomicBool>,
-    precision_seconds: Arc<AtomicU64>,
+    precision: Arc<Mutex<Duration>>,
+    shadow_precision: Duration,
 
     thread_stats: HashMap<pid_t, ThreadStat>,
     current_window_records: CpuRecords,
@@ -164,12 +165,14 @@ struct ThreadStat {
 }
 
 impl CpuRecorder {
-    pub fn new(pause: Arc<AtomicBool>, precision_seconds: Arc<AtomicU64>) -> Self {
+    pub fn new(pause: Arc<AtomicBool>, precision: Arc<Mutex<Duration>>) -> Self {
+        let shadow_precision = *precision.lock().unwrap();
         let now = Instant::now();
 
         Self {
             pause,
-            precision_seconds,
+            precision,
+            shadow_precision,
 
             last_collect_instant: now,
             last_gc_instant: now,
@@ -314,12 +317,12 @@ impl CpuRecorder {
     }
 
     pub fn may_advance_window(&mut self) -> bool {
-        let duration_secs = self.last_collect_instant.elapsed().as_secs();
-        let need_advance = duration_secs >= self.precision_seconds.load(SeqCst);
+        let duration = self.last_collect_instant.elapsed();
+        let need_advance = duration >= self.shadow_precision;
 
         if need_advance {
             let mut records = std::mem::take(&mut self.current_window_records);
-            records.duration_secs = duration_secs;
+            records.duration = duration;
 
             if !records.records.is_empty() {
                 let records = Arc::new(records);
@@ -328,6 +331,7 @@ impl CpuRecorder {
                 }
             }
 
+            self.shadow_precision = *self.precision.lock().unwrap();
             self.last_collect_instant = Instant::now();
         }
 

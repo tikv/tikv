@@ -11,7 +11,6 @@ use collections::HashMap;
 use futures::SinkExt;
 use grpcio::{CallOption, ChannelBuilder, Environment, WriteFlags};
 use kvproto::resource_usage_agent::{ReportCpuTimeRequest, ResourceUsageAgentClient};
-use security::SecurityManager;
 use tikv_util::time::Duration;
 use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
 
@@ -53,9 +52,7 @@ impl Display for Task {
 
 pub struct ResourceMeteringReporter {
     config: Config,
-
     env: Arc<Environment>,
-    security_mgr: Arc<SecurityManager>,
 
     scheduler: Scheduler<Task>,
 
@@ -70,16 +67,10 @@ pub struct ResourceMeteringReporter {
 }
 
 impl ResourceMeteringReporter {
-    pub fn new(
-        config: Config,
-        scheduler: Scheduler<Task>,
-        env: Arc<Environment>,
-        security_mgr: Arc<SecurityManager>,
-    ) -> Self {
+    pub fn new(config: Config, scheduler: Scheduler<Task>, env: Arc<Environment>) -> Self {
         Self {
             config,
             env,
-            security_mgr,
             scheduler,
             client: None,
             cpu_records_collector: None,
@@ -93,7 +84,7 @@ impl ResourceMeteringReporter {
             let cb = ChannelBuilder::new(self.env.clone())
                 .keepalive_time(Duration::from_secs(10))
                 .keepalive_timeout(Duration::from_secs(3));
-            self.security_mgr.connect(cb, addr)
+            cb.connect(addr)
         };
         self.client = Some(ResourceUsageAgentClient::new(channel));
         if self.cpu_records_collector.is_none() {
@@ -206,6 +197,6 @@ impl RunnableWithTimer for ResourceMeteringReporter {
     }
 
     fn get_interval(&self) -> Duration {
-        Duration::from_secs(self.config.report_agent_interval_seconds)
+        self.config.report_agent_interval.0
     }
 }

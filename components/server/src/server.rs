@@ -838,7 +838,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.config.resource_metering.clone(),
             resource_metering_reporter_scheduler,
             self.env.clone(),
-            self.security_mgr.clone(),
         );
         resource_metering_reporter_worker.start_with_timer(resource_metering_reporter);
         self.to_stop.push(resource_metering_reporter_worker);
