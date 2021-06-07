@@ -34,6 +34,13 @@ pub enum Id {
 }
 
 impl Id {
+    pub fn name(&self) -> String {
+        match self {
+            Id::Name(s) => s.to_string(),
+            Id::Number(n) => n.to_string(),
+        }
+    }
+
     pub fn readable_name(&self) -> String {
         match self {
             Id::Name(s) => {
@@ -111,6 +118,8 @@ pub trait MemoryTrace {
     fn sub_trace(&self, id: Id) -> Arc<dyn MemoryTrace + Send + Sync>;
     fn add_sub_trace(&mut self, id: Id, trace: Arc<dyn MemoryTrace + Send + Sync>);
     fn sum(&self) -> usize;
+    fn name(&self) -> String;
+    fn get_children_ids(&self) -> Vec<Id>;
 }
 
 pub struct MemoryTraceNode {
@@ -165,6 +174,18 @@ impl MemoryTrace for MemoryTraceNode {
         let sum: usize = self.children.values().map(|c| c.sum()).sum();
         sum + self.trace.load(Ordering::Relaxed)
     }
+
+    fn name(&self) -> String {
+        self.id.name()
+    }
+
+    fn get_children_ids(&self) -> Vec<Id> {
+        let mut ids = vec![];
+        for id in self.children.keys() {
+            ids.push(*id);
+        }
+        ids
+    }
 }
 
 pub struct MemoryTraceSnapshot {
@@ -216,6 +237,14 @@ mod tests {
         self as tikv_alloc,
         trace::{Id, MemoryTrace, TraceEvent},
     };
+
+    #[test]
+    fn test_id_name() {
+        let id = Id::Name("test_id");
+        assert_eq!(id.name(), "test_id");
+        let id = Id::Number(100);
+        assert_eq!(id.name(), "100");
+    }
 
     #[test]
     fn test_id_readable_name() {

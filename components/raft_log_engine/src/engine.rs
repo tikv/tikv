@@ -3,7 +3,9 @@
 use std::fs;
 use std::path::Path;
 
-use engine_traits::{CacheStats, RaftEngine, RaftLogBatch as RaftLogBatchTrait, Result};
+use engine_traits::{
+    CacheStats, RaftEngine, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait, Result,
+};
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::Entry;
 use raft_engine::{EntryExt, Error as RaftEngineError, LogBatch, RaftLogEngine as RawRaftEngine};
@@ -77,18 +79,7 @@ impl RaftLogBatchTrait for RaftLogBatch {
     }
 }
 
-impl RaftEngine for RaftLogEngine {
-    type LogBatch = RaftLogBatch;
-
-    fn log_batch(&self, _capacity: usize) -> Self::LogBatch {
-        RaftLogBatch::default()
-    }
-
-    fn sync(&self) -> Result<()> {
-        box_try!(self.0.sync());
-        Ok(())
-    }
-
+impl RaftEngineReadOnly for RaftLogEngine {
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {
         let state = box_try!(self.0.get_msg(raft_group_id, RAFT_LOG_STATE_KEY));
         Ok(state)
@@ -111,6 +102,19 @@ impl RaftEngine for RaftLogEngine {
         self.0
             .fetch_entries_to(raft_group_id, begin, end, max_size, to)
             .map_err(transfer_error)
+    }
+}
+
+impl RaftEngine for RaftLogEngine {
+    type LogBatch = RaftLogBatch;
+
+    fn log_batch(&self, _capacity: usize) -> Self::LogBatch {
+        RaftLogBatch::default()
+    }
+
+    fn sync(&self) -> Result<()> {
+        box_try!(self.0.sync());
+        Ok(())
     }
 
     fn consume(&self, batch: &mut Self::LogBatch, sync: bool) -> Result<usize> {

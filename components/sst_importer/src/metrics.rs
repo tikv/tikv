@@ -59,6 +59,11 @@ lazy_static! {
         exponential_buckets(1024.0, 2.0, 20).unwrap()
     )
     .unwrap();
+    pub static ref INPORTER_INGEST_COUNT: Histogram = register_histogram!(
+        "tikv_import_ingest_count",
+        "Bucketed histogram of importer ingest count",
+        exponential_buckets(1.0, 2.0, 20).unwrap()
+    ).unwrap();
     pub static ref IMPORTER_ERROR_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_import_error_counter",
         "Total number of importer errors",
