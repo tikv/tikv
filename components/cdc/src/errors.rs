@@ -10,6 +10,8 @@ use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 use txn_types::Error as TxnTypesError;
 
+use crate::channel::SendError;
+
 /// The error type for cdc.
 #[derive(Debug, Fail)]
 pub enum Error {
@@ -31,6 +33,8 @@ pub enum Error {
     EngineTraits(EngineTraitsError),
     #[fail(display = "Resolver Builder has disconnected")]
     ResolverBuilderConnExited,
+    #[fail(display = "Sink send error {:?}", _0)]
+    Sink(SendError),
 }
 
 macro_rules! impl_from {
@@ -54,6 +58,7 @@ impl_from! {
     MvccError => Mvcc,
     TxnTypesError => Mvcc,
     EngineTraitsError => EngineTraits,
+    SendError => Sink,
 }
 
 pub type Result<T> = result::Result<T, Error>;

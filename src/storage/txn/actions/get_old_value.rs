@@ -2,7 +2,7 @@
 
 use crate::storage::mvcc::{MvccTxn, Result as MvccResult};
 use crate::storage::Snapshot;
-use txn_types::{Key, OldValue, Write, WriteType};
+use txn_types::{Key, OldValue, TimeStamp, Write, WriteType};
 
 /// Read the old value for key for CDC.
 /// `prev_write` stands for the previous write record of the key
@@ -10,42 +10,52 @@ use txn_types::{Key, OldValue, Write, WriteType};
 pub fn get_old_value<S: Snapshot>(
     txn: &mut MvccTxn<S>,
     key: &Key,
-    prev_write: Write,
+    start_ts: TimeStamp,
+    prev_write_loaded: bool,
+    prev_write: Option<Write>,
 ) -> MvccResult<OldValue> {
-    let reader = &mut txn.reader;
-    let start_ts = txn.start_ts;
-    if !prev_write
-        .as_ref()
-        .check_gc_fence_as_latest_version(start_ts)
-    {
+    if prev_write_loaded && prev_write.is_none() {
         return Ok(OldValue::None);
     }
-    match prev_write.write_type {
-        WriteType::Put => {
-            // For Put, there must be an old value either in its
-            // short value or in the default CF.
-            Ok(OldValue::Value {
-                short_value: prev_write.short_value,
-                start_ts: prev_write.start_ts,
-            })
+    let reader = &mut txn.reader;
+    if let Some(prev_write) = prev_write {
+        if !prev_write
+            .as_ref()
+            .check_gc_fence_as_latest_version(start_ts)
+        {
+            return Ok(OldValue::None);
         }
-        WriteType::Delete => {
-            // For Delete, no old value.
-            Ok(OldValue::None)
-        }
-        WriteType::Rollback | WriteType::Lock => {
+
+        match prev_write.write_type {
+            WriteType::Put => {
+                // For Put, there must be an old value either in its
+                // short value or in the default CF.
+                return Ok(match prev_write.short_value {
+                    Some(value) => OldValue::Value { value },
+                    None => OldValue::ValueTimeStamp {
+                        start_ts: prev_write.start_ts,
+                    },
+                });
+            }
+            WriteType::Delete => {
+                // For Delete, no old value.
+                return Ok(OldValue::None);
+            }
             // For Rollback and Lock, it's unknown whether there is a more
             // previous valid write. Call `get_write` to get a valid
             // previous write.
-            Ok(match reader.get_write(key, start_ts, Some(start_ts))? {
-                Some(write) => OldValue::Value {
-                    short_value: write.short_value,
-                    start_ts: write.start_ts,
-                },
-                None => OldValue::None,
-            })
+            WriteType::Rollback | WriteType::Lock => (),
         }
     }
+    Ok(match reader.get_write(key, start_ts, Some(start_ts))? {
+        Some(write) => match write.short_value {
+            Some(value) => OldValue::Value { value },
+            None => OldValue::ValueTimeStamp {
+                start_ts: write.start_ts,
+            },
+        },
+        None => OldValue::None,
+    })
 }
 
 #[cfg(test)]
@@ -76,8 +86,7 @@ mod tests {
             },
             // prev_write is Rollback, and there exists a more previous valid write
             Case {
-                expected: OldValue::Value {
-                    short_value: None,
+                expected: OldValue::ValueTimeStamp {
                     start_ts: TimeStamp::new(4),
                 },
 
@@ -94,8 +103,7 @@ mod tests {
             },
             Case {
                 expected: OldValue::Value {
-                    short_value: Some(b"v".to_vec()),
-                    start_ts: TimeStamp::new(4),
+                    value: b"v".to_vec(),
                 },
 
                 written: vec![
@@ -119,8 +127,7 @@ mod tests {
             },
             // prev_write is Lock, and there exists a more previous valid write
             Case {
-                expected: OldValue::Value {
-                    short_value: None,
+                expected: OldValue::ValueTimeStamp {
                     start_ts: TimeStamp::new(3),
                 },
 
@@ -145,8 +152,7 @@ mod tests {
             },
             // prev_write is not Rollback or Lock, check_gc_fence_as_latest_version is true
             Case {
-                expected: OldValue::Value {
-                    short_value: None,
+                expected: OldValue::ValueTimeStamp {
                     start_ts: TimeStamp::new(7),
                 },
                 written: vec![(
@@ -194,7 +200,7 @@ mod tests {
                 ],
             },
         ];
-        for case in cases {
+        for (i, case) in cases.into_iter().enumerate() {
             let engine = TestEngineBuilder::new().build().unwrap();
             let cm = ConcurrencyManager::new(42.into());
             let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -214,11 +220,34 @@ mod tests {
                     .reader
                     .seek_write(&Key::from_raw(b"a"), case.written.last().unwrap().1)
                     .unwrap()
-                    .unwrap()
-                    .1;
-                let result = get_old_value(&mut txn, &Key::from_raw(b"a"), prev_write).unwrap();
-                assert_eq!(result, case.expected);
+                    .map(|w| w.1);
+                let prev_write_loaded = true;
+                let result = get_old_value(
+                    &mut txn,
+                    &Key::from_raw(b"a"),
+                    TimeStamp::new(25),
+                    prev_write_loaded,
+                    prev_write,
+                )
+                .unwrap();
+                assert_eq!(result, case.expected, "case #{}", i);
             }
         }
+        // Must return Oldvalue::None when prev_write_loaded is true and prev_write is None.
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let cm = ConcurrencyManager::new(42.into());
+        let mut txn = MvccTxn::new(snapshot, TimeStamp::new(10), true, cm);
+        let prev_write_loaded = true;
+        let prev_write = None;
+        let result = get_old_value(
+            &mut txn,
+            &Key::from_raw(b"a"),
+            TimeStamp::new(25),
+            prev_write_loaded,
+            prev_write,
+        )
+        .unwrap();
+        assert_eq!(result, OldValue::None);
     }
 }

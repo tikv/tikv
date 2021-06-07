@@ -2263,7 +2263,8 @@ impl Default for CdcConfig {
     fn default() -> Self {
         Self {
             min_ts_interval: ReadableDuration::secs(1),
-            old_value_cache_size: 1024,
+            // Assumes 1KB per entry, 131072 (128 * 1024) takes about 128MB.
+            old_value_cache_size: 131072,
             hibernate_regions_compatible: true,
             // TiCDC requires a SSD, the typical write speed of SSD
             // is more than 500MB/s, so 128MB/s is enough.
@@ -2308,6 +2309,9 @@ pub struct TiKvConfig {
 
     #[config(skip)]
     pub enable_io_snoop: bool,
+
+    #[config(skip)]
+    pub abort_on_panic: bool,
 
     #[config(skip)]
     pub readpool: ReadPoolConfig,
@@ -2375,6 +2379,7 @@ impl Default for TiKvConfig {
             log_rotation_size: ReadableSize::mb(300),
             panic_when_unexpected_key_or_data: false,
             enable_io_snoop: true,
+            abort_on_panic: false,
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
