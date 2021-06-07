@@ -6,8 +6,8 @@ use resource_metering::cpu::recorder::RecorderHandle;
 use resource_metering::reporter::Task;
 use resource_metering::ConfigManager;
 use tikv::config::{ConfigController, Module, TiKvConfig};
-use tikv_util::worker::{LazyWorker, Runnable};
 use tikv_util::config::ReadableDuration;
+use tikv_util::worker::{LazyWorker, Runnable};
 
 pub struct MockResourceMeteringReporter {
     tx: Sender<Task>,
@@ -64,10 +64,7 @@ fn test_update_resource_metering_agent_config() {
             "resource-metering.agent-address".to_owned(),
             "localhost:8888".to_owned(),
         );
-        m.insert(
-            "resource-metering.precision".to_owned(),
-            "20s".to_owned(),
-        );
+        m.insert("resource-metering.precision".to_owned(), "20s".to_owned());
         m.insert(
             "resource-metering.report-agent-interval".to_owned(),
             "80s".to_owned(),
