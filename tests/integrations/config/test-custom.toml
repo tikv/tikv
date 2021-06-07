@@ -581,6 +581,7 @@ min-ts-interval = "4s"
 old-value-cache-size = 512
 hibernate-regions-compatible = false
 incremental-scan-speed-limit = 7
+old-value-cache-memory-quota = "14MB"
 sink-memory-quota = "7MB"
 
 [resolved-ts]
