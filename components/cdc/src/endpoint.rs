@@ -275,8 +275,8 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             .build()
             .unwrap();
         CDC_SINK_CAP.set(sink_memory_quota.cap() as i64);
-        CDC_OLD_VALUE_CACHE_CAP.set(cfg.old_value_cache_size as i64);
-        let old_value_cache = OldValueCache::new(cfg.old_value_cache_size);
+        CDC_OLD_VALUE_CACHE_MEMORY_QUOTA.set(cfg.old_value_cache_memory_quota.0 as i64);
+        let old_value_cache = OldValueCache::new(cfg.old_value_cache_memory_quota);
         let speed_limter = Limiter::new(if cfg.incremental_scan_speed_limit.0 > 0 {
             cfg.incremental_scan_speed_limit.0 as f64
         } else {
@@ -1323,12 +1323,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> RunnableWithTimer for Endpoint<T
         self.min_resolved_ts = TimeStamp::max();
         self.min_ts_region_id = 0;
 
-        let cache_size: usize = self
-            .old_value_cache
-            .cache
-            .iter()
-            .map(|(k, v)| k.as_encoded().len() + v.0.size())
-            .sum();
+        let cache_size = self.old_value_cache.cache.size();
         CDC_OLD_VALUE_CACHE_BYTES.set(cache_size as i64);
         CDC_OLD_VALUE_CACHE_ACCESS.add(self.old_value_cache.access_count as i64);
         CDC_OLD_VALUE_CACHE_MISS.add(self.old_value_cache.miss_count as i64);

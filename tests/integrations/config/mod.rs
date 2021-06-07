@@ -682,6 +682,7 @@ fn test_serde_custom_tikv_config() {
         old_value_cache_size: 512,
         hibernate_regions_compatible: false,
         incremental_scan_speed_limit: ReadableSize(7),
+        old_value_cache_memory_quota: ReadableSize::mb(14),
         sink_memory_quota: ReadableSize::mb(7),
     };
     value.resolved_ts = ResolvedTsConfig {
