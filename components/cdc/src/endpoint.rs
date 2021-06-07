@@ -1576,7 +1576,7 @@ mod tests {
         // To not block test by barrier.
         pool.spawn(async move {
             let mut d = drain.drain();
-            while let Some(_) = d.next().await {}
+            while d.next().await.is_some() {}
         });
 
         block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap();

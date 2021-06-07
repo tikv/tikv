@@ -61,17 +61,17 @@ impl Error {
     }
 
     pub fn has_region_error(&self) -> bool {
-        match self {
+        matches!(
+            self,
             Error::Engine(EngineError(box EngineErrorInner::Request(_)))
-            | Error::Txn(TxnError(box TxnErrorInner::Engine(EngineError(
-                box EngineErrorInner::Request(_),
-            ))))
-            | Error::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-                box MvccErrorInner::Engine(EngineError(box EngineErrorInner::Request(_))),
-            ))))
-            | Error::Request(_) => true,
-            _ => false,
-        }
+                | Error::Txn(TxnError(box TxnErrorInner::Engine(EngineError(
+                    box EngineErrorInner::Request(_),
+                ))))
+                | Error::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+                    box MvccErrorInner::Engine(EngineError(box EngineErrorInner::Request(_))),
+                ))))
+                | Error::Request(_)
+        )
     }
 
     pub fn extract_region_error(self) -> errorpb::Error {
