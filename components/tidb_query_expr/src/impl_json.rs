@@ -202,13 +202,11 @@ fn quote(bytes: BytesRef) -> Result<Option<Bytes>> {
     Ok(Some(result))
 }
 
-#[rpn_fn(nullable)]
+#[rpn_fn()]
 #[inline]
-fn json_unquote(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
-    arg.as_ref().map_or(Ok(None), |json_arg| {
-        let tmp_str = std::str::from_utf8(json_arg)?;
-        Ok(Some(Bytes::from(self::unquote_string(tmp_str)?)))
-    })
+fn json_unquote(arg: BytesRef) -> Result<Option<Bytes>> {
+    let tmp_str = std::str::from_utf8(arg)?;
+    Ok(Some(Bytes::from(self::unquote_string(tmp_str)?)))
 }
 
 // Args should be like `(Option<JsonRef> , &[Option<BytesRef>])`.
