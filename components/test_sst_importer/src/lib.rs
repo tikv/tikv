@@ -117,21 +117,38 @@ pub fn gen_sst_file_by_db<P: AsRef<Path>>(
     }
     w.finish().unwrap();
 
-    read_sst_file(path, range)
+    read_sst_file(path, (&[range.0], &[range.1]))
 }
 
 pub fn gen_sst_file<P: AsRef<Path>>(path: P, range: (u8, u8)) -> (SstMeta, Vec<u8>) {
     gen_sst_file_by_db(path, range, None)
 }
 
-pub fn read_sst_file<P: AsRef<Path>>(path: P, range: (u8, u8)) -> (SstMeta, Vec<u8>) {
+pub fn gen_sst_file_with_kvs<P: AsRef<Path>>(
+    path: P,
+    kvs: &[(&[u8], &[u8])],
+) -> (SstMeta, Vec<u8>) {
+    let builder = RocksSstWriterBuilder::new();
+    let mut w = builder.build(path.as_ref().to_str().unwrap()).unwrap();
+    for (k, v) in kvs {
+        let dk = keys::data_key(k);
+        w.put(&dk, v).unwrap();
+    }
+    w.finish().unwrap();
+
+    let start_key = kvs[0].0;
+    let end_key = keys::next_key(kvs.last().cloned().unwrap().0);
+    read_sst_file(path, (start_key, &end_key))
+}
+
+pub fn read_sst_file<P: AsRef<Path>>(path: P, range: (&[u8], &[u8])) -> (SstMeta, Vec<u8>) {
     let data = fs::read(path).unwrap();
     let crc32 = calc_data_crc32(&data);
 
     let mut meta = SstMeta::default();
     meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
-    meta.mut_range().set_start(vec![range.0]);
-    meta.mut_range().set_end(vec![range.1]);
+    meta.mut_range().set_start(range.0.to_vec());
+    meta.mut_range().set_end(range.1.to_vec());
     meta.set_crc32(crc32);
     meta.set_length(data.len() as u64);
     meta.set_cf_name("default".to_owned());
