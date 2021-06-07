@@ -2251,9 +2251,6 @@ impl CdcConfig {
         if self.incremental_scan_threads == 0 {
             return Err("cdc.incremental-scan-threads can't be 0".into());
         }
-        if self.incremental_scan_concurrency == 0 {
-            return Err("cdc.incremental-scan-concurrency can't be 0".into());
-        }
         if self.incremental_scan_concurrency < self.incremental_scan_threads {
             return Err(
                 "cdc.incremental-scan-concurrency must be larger than cdc.incremental-scan-threads"
@@ -4139,6 +4136,14 @@ mod tests {
         let content = r#"
             [cdc]
             incremental-scan-concurrency = 0
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap_err();
+
+        let content = r#"
+            [cdc]
+            incremental-scan-concurrency = 1
+            incremental-scan-threads = 2
         "#;
         let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
         cfg.validate().unwrap_err();
