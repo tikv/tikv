@@ -19,7 +19,10 @@ pub trait HeapSize {
 
 impl HeapSize for Region {
     fn heap_size(&self) -> usize {
-        self.start_key.len() + self.end_key.len() + mem::size_of::<RegionEpoch>()
+        let mut size = self.start_key.capacity() + self.end_key.capacity();
+        size += mem::size_of::<RegionEpoch>();
+        size += self.peers.capacity() * mem::size_of::<Peer>();
+        size
     }
 }
 

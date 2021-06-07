@@ -16,16 +16,24 @@ lazy_static! {
         raftstore,
         [
             peers,
-            applys,
             entry_cache,
+            apply_pending_commands,
+            apply_merge_yield,
             (raft_router, [alive, leak]),
             (apply_router, [alive, leak])
         ]
     );
     pub static ref MEMTRACE_PEERS: Arc<dyn MemoryTrace + Send + Sync> =
         MEMTRACE_ROOT.sub_trace(Id::Name("peers"));
-    pub static ref MEMTRACE_APPLYS: Arc<dyn MemoryTrace + Send + Sync> =
-        MEMTRACE_ROOT.sub_trace(Id::Name("applys"));
+
+    /// Memory usage for pending commands in all `ApplyFsm`.
+    pub static ref MEMTRACE_APPLY_COMMANDS: Arc<dyn MemoryTrace + Send + Sync> =
+        MEMTRACE_ROOT.sub_trace(Id::Name("apply_pending_commands"));
+
+    /// Memory usage for merge yield state in all `ApplyFsm`.
+    pub static ref MEMTRACE_APPLY_YIELD: Arc<dyn MemoryTrace + Send + Sync> =
+        MEMTRACE_ROOT.sub_trace(Id::Name("apply_merge_yield"));
+
     pub static ref MEMTRACE_ENTRY_CACHE: Arc<dyn MemoryTrace + Send + Sync> =
         MEMTRACE_ROOT.sub_trace(Id::Name("entry_cache"));
     pub static ref MEMTRACE_RAFT_ROUTER_ALIVE: Arc<dyn MemoryTrace + Send + Sync> = MEMTRACE_ROOT
@@ -46,12 +54,6 @@ lazy_static! {
 pub struct PeerMemoryTrace {
     pub raft_machine: usize,
     pub proposals: usize,
-    pub rest: usize,
-}
-
-#[derive(MemoryTraceHelper, Default, Debug)]
-pub struct ApplyMemoryTrace {
-    pub pending_cmds: usize,
     pub rest: usize,
 }
 
