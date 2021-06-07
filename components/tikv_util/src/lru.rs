@@ -232,7 +232,8 @@ where
         if new_cap < self.capacity && self.map.len() > new_cap {
             for _ in new_cap..self.map.len() {
                 let key = self.trace.remove_tail();
-                self.map.remove(&key);
+                let entry = self.map.remove(&key).unwrap();
+                self.size_policy.on_remove(&key, &entry.value);
             }
             self.map.shrink_to_fit();
         }
