@@ -4115,12 +4115,13 @@ mod tests {
         let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
         cfg.validate().unwrap();
 
+        // old-value-cache-size is deprecated, 0 must not report error.
         let content = r#"
             [cdc]
             old-value-cache-size = 0
         "#;
         let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
-        cfg.validate().unwrap_err();
+        cfg.validate().unwrap();
 
         let content = r#"
             [cdc]
