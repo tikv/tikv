@@ -78,7 +78,7 @@ impl Default for Config {
         Config {
             enabled: false,
             agent_address: "".to_string(),
-            report_agent_interval: ReadableDuration::secs(60),
+            report_agent_interval: ReadableDuration::minutes(1),
             max_resource_groups: 200,
             precision: ReadableDuration::secs(1),
         }

@@ -5,6 +5,8 @@ use crate::cpu::recorder::CpuRecords;
 use crate::Config;
 
 use std::fmt::{self, Display, Formatter};
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering::SeqCst;
 use std::sync::Arc;
 
 use collections::HashMap;
@@ -58,6 +60,7 @@ pub struct ResourceMeteringReporter {
 
     // TODO: mock client for testing
     client: Option<ResourceUsageAgentClient>,
+    reporting: Arc<AtomicBool>,
     cpu_records_collector: Option<CollectorHandle>,
 
     // resource_tag -> ([timestamp_secs], [cpu_time_ms], total_cpu_time_ms)
@@ -73,6 +76,7 @@ impl ResourceMeteringReporter {
             env,
             scheduler,
             client: None,
+            reporting: Arc::new(AtomicBool::new(false)),
             cpu_records_collector: None,
             records: HashMap::default(),
             find_top_k: Vec::default(),
@@ -169,11 +173,19 @@ impl RunnableWithTimer for ResourceMeteringReporter {
         }
 
         let records = std::mem::take(&mut self.records);
+        if self.reporting.load(SeqCst) {
+            return;
+        }
+
         if let Some(client) = self.client.as_ref() {
             match client.report_cpu_time_opt(CallOption::default().timeout(Duration::from_secs(2)))
             {
                 Ok((mut tx, rx)) => {
+                    self.reporting.store(true, SeqCst);
+                    let reporting = self.reporting.clone();
                     client.spawn(async move {
+                        defer!(reporting.store(false, SeqCst));
+
                         for (tag, (timestamp_list, cpu_time_ms_list, _)) in records {
                             let mut req = ReportCpuTimeRequest::default();
                             req.set_resource_group_tag(tag);
