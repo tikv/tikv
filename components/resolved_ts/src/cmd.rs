@@ -4,7 +4,7 @@ use collections::HashMap;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::errorpb;
 use kvproto::raft_cmdpb::{AdminCmdType, CmdType, Request};
-use raftstore::coprocessor::{Cmd, CmdBatch};
+use raftstore::coprocessor::{Cmd, CmdBatch, ObserveLevel};
 use txn_types::{
     Key, Lock, LockType, TimeStamp, Value, Write, WriteBatchFlags, WriteRef, WriteType,
 };
@@ -249,6 +249,33 @@ fn group_row_changes(requests: Vec<Request>) -> HashMap<Key, RowChange> {
         }
     }
     changes
+}
+
+/// Filter non-lock related data (i.e `default_cf` data), the implement is subject to
+/// how `group_row_changes` and `encode_rows` encode `ChangeRow`
+pub fn lock_only_filter(mut cmd_batch: CmdBatch) -> Option<CmdBatch> {
+    if cmd_batch.is_empty() {
+        return None;
+    }
+    match cmd_batch.level {
+        ObserveLevel::None => None,
+        ObserveLevel::All => Some(cmd_batch),
+        ObserveLevel::LockRelated => {
+            for cmd in &mut cmd_batch.cmds {
+                let mut requests = cmd.request.take_requests().into_vec();
+                requests.retain(|req| {
+                    let cf = match req.get_cmd_type() {
+                        CmdType::Put => req.get_put().cf.as_str(),
+                        CmdType::Delete => req.get_delete().cf.as_str(),
+                        _ => "",
+                    };
+                    cf == CF_LOCK || cf == CF_WRITE
+                });
+                cmd.request.set_requests(requests.into());
+            }
+            Some(cmd_batch)
+        }
+    }
 }
 
 #[cfg(test)]

@@ -75,7 +75,6 @@ fn test_serde_custom_tikv_config() {
         raft_client_grpc_send_msg_buffer: 1234 * 1024,
         raft_client_queue_size: 1234,
         raft_msg_max_batch_size: 123,
-        raft_msg_flush_delay_us: 1234,
         concurrent_send_snap_limit: 4,
         concurrent_recv_snap_limit: 4,
         grpc_compression_type: GrpcCompressionType::Gzip,
@@ -691,6 +690,7 @@ fn test_serde_custom_tikv_config() {
         old_value_cache_size: 512,
         hibernate_regions_compatible: false,
         incremental_scan_speed_limit: ReadableSize(7),
+        sink_memory_quota: ReadableSize::mb(7),
     };
     value.resolved_ts = ResolvedTsConfig {
         enable: true,

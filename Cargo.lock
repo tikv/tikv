@@ -1068,6 +1068,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "derivative"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fcc3dd5e9e9c0b295d6e1e4d811fb6f157d5ffd784b8d202fc62eac8035a770b"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "derive-new"
 version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2243,7 +2254,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?rev=73468940541b2e801cb5f9739cd0cf6465889e72#73468940541b2e801cb5f9739cd0cf6465889e72"
+source = "git+https://github.com/pingcap/kvproto.git?rev=7a046020d1c091638e1e8aba623c8c1e8962219d#7a046020d1c091638e1e8aba623c8c1e8962219d"
 dependencies = [
  "futures 0.3.8",
  "grpcio",
@@ -2320,7 +2331,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#41d7180df72cf5aae97fbae9a18aec52ad29dfcc"
+source = "git+https://github.com/tikv/rust-rocksdb.git#46b7a1da47e626ae35158a51a3c90babafbd8ff2"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2339,7 +2350,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#41d7180df72cf5aae97fbae9a18aec52ad29dfcc"
+source = "git+https://github.com/tikv/rust-rocksdb.git#46b7a1da47e626ae35158a51a3c90babafbd8ff2"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2958,6 +2969,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "page_size"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eebde548fbbf1ea81a99b128872779c437752fb99f217c45245e1a61dcd9edcd"
+dependencies = [
+ "libc 0.2.86",
+ "winapi 0.3.8",
+]
+
+[[package]]
 name = "panic_hook"
 version = "0.0.1"
 
@@ -3072,6 +3093,12 @@ dependencies = [
  "txn_types",
  "yatp",
 ]
+
+[[package]]
+name = "pdqselect"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ec91767ecc0a0bbe558ce8c9da33c068066c57ecc8bb8477ef8c1ad3ef77c27"
 
 [[package]]
 name = "peeking_take_while"
@@ -3536,7 +3563,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.6.0-alpha"
-source = "git+https://github.com/gengliqi/raft-rs?branch=add-entries-size#f5abc1f7c2dae0c13ec806a267ca92acac591bac"
+source = "git+https://github.com/gengliqi/raft-rs?branch=add-entries-size#823bc81bb2c6bede65db1fe41fdb07e516446362"
 dependencies = [
  "bytes 1.0.1",
  "fxhash",
@@ -3570,7 +3597,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
-source = "git+https://github.com/gengliqi/raft-rs?branch=add-entries-size#f5abc1f7c2dae0c13ec806a267ca92acac591bac"
+source = "git+https://github.com/gengliqi/raft-rs?branch=add-entries-size#823bc81bb2c6bede65db1fe41fdb07e516446362"
 dependencies = [
  "bytes 1.0.1",
  "lazy_static",
@@ -3612,6 +3639,7 @@ dependencies = [
  "configuration",
  "crc32fast",
  "crossbeam",
+ "derivative",
  "encryption",
  "engine_panic",
  "engine_rocks",
@@ -3974,6 +4002,33 @@ dependencies = [
  "tikv_util",
  "tokio",
  "txn_types",
+]
+
+[[package]]
+name = "resource_metering"
+version = "0.0.1"
+dependencies = [
+ "collections",
+ "configuration",
+ "crossbeam",
+ "futures 0.3.8",
+ "grpcio",
+ "kvproto",
+ "lazy_static",
+ "libc 0.2.86",
+ "log",
+ "pdqselect",
+ "pin-project 1.0.1",
+ "procinfo",
+ "prometheus",
+ "prometheus-static-metric",
+ "rand 0.8.3",
+ "security",
+ "serde",
+ "serde_derive",
+ "slog",
+ "slog-global",
+ "tikv_util",
 ]
 
 [[package]]
@@ -4454,6 +4509,7 @@ dependencies = [
  "raftstore",
  "rand 0.7.3",
  "resolved_ts",
+ "resource_metering",
  "security",
  "serde_json",
  "signal",
@@ -5142,6 +5198,7 @@ dependencies = [
  "raftstore",
  "rand 0.7.3",
  "rand_xorshift",
+ "resource_metering",
  "security",
  "serde_json",
  "slog",
@@ -5436,6 +5493,7 @@ dependencies = [
  "raftstore",
  "rand 0.7.3",
  "regex",
+ "resource_metering",
  "rev_lines",
  "seahash",
  "security",
@@ -5646,6 +5704,7 @@ dependencies = [
  "nix 0.11.1",
  "num_cpus",
  "openssl",
+ "page_size",
  "panic_hook",
  "procfs",
  "procinfo",
