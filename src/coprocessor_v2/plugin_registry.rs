@@ -450,17 +450,14 @@ fn is_library_file<P: AsRef<Path>>(path: P) -> bool {
 mod tests {
     use super::*;
     use coprocessor_plugin_api::util::pkgname_to_libname;
-    use std::sync::Once;
-
-    static INIT: Once = Once::new();
-    static EXAMPLE_PLUGIN: &[u8] = include_bytes!(env!("CARGO_DYLIB_FILE_EXAMPLE_PLUGIN"));
 
     fn initialize_library() -> PathBuf {
-        let lib_path = std::env::temp_dir().join(&pkgname_to_libname("example-plugin"));
-        INIT.call_once(|| {
-            std::fs::write(&lib_path, EXAMPLE_PLUGIN).unwrap();
-        });
-        lib_path
+        Path::new(if cfg!(debug_assertions) {
+            "target/debug/deps"
+        } else {
+            "target/release/deps"
+        })
+        .join(pkgname_to_libname("example-plugin"))
     }
 
     #[test]
