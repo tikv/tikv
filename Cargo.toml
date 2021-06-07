@@ -208,6 +208,11 @@ vlog = "0.1.4"
 walkdir = "2"
 minitrace = { git = "https://github.com/pingcap-incubator/minitrace-rust.git", branch = "master" }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+<<<<<<< HEAD
+=======
+resource_metering = { path = "components/resource_metering" }
+seahash = "4.1.0"
+>>>>>>> a41ae4597... raft_client: fix imbalance load of raft msg (#10226)
 
 [dev-dependencies]
 panic_hook = { path = "components/panic_hook" }
