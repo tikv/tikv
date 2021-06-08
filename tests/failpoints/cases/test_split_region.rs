@@ -659,3 +659,82 @@ fn test_split_duplicated_batch() {
     rx2.recv_timeout(Duration::from_secs(3)).unwrap();
     must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
 }
+
+#[test]
+fn test_report_approximate_size_after_split_check() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.region_split_check_diff = ReadableSize::mb(2);
+    cluster.run();
+    for i in 0..100 {
+        let (k, v) = (format!("k{}", i), format!("v{}", i));
+        cluster.must_put_cf("write", k.as_bytes(), v.as_bytes());
+    }
+    cluster.must_flush_cf("write", true);
+
+    let ids = cluster.get_node_ids();
+    for id in ids {
+        cluster.stop_node(id);
+        cluster.run_node(id).unwrap();
+    }
+
+    let region_id = cluster.get_region_id(b"");
+    let mut approximate_size = 0;
+    let mut approximate_keys = 0;
+    for _ in 0..10 {
+        approximate_size = cluster
+            .pd_client
+            .get_region_approximate_size(region_id)
+            .unwrap_or_default();
+        approximate_keys = cluster
+            .pd_client
+            .get_region_approximate_keys(region_id)
+            .unwrap_or_default();
+        if approximate_size > 0 && approximate_keys > 0 {
+            break;
+        }
+        sleep_ms(100);
+    }
+    assert!(approximate_size > 0 && approximate_keys > 0);
+    let value = vec![1 as u8; 1000];
+    let mut reqs = vec![];
+    for i in 100..210 {
+        let k = format!("k{}", i);
+        reqs.push(new_put_cf_cmd("write", k.as_bytes(), &value));
+    }
+    let (tx, rx) = mpsc::sync_channel(0);
+    let tx = Arc::new(Mutex::new(tx));
+
+    fail::cfg_callback("on_split_region_check_tick", move || {
+        // notify split region tick
+        let _ = tx.lock().unwrap().send(());
+        let tx1 = tx.clone();
+        fail::cfg_callback("on_approximate_region_size", move || {
+            // notify split check finished
+            let _ = tx1.lock().unwrap().send(());
+            let tx2 = tx1.clone();
+            fail::cfg_callback("test_raftstore::pd::region_heartbeat", move || {
+                // notify heartbeat region
+                let _ = tx2.lock().unwrap().send(());
+            })
+            .unwrap();
+        })
+        .unwrap();
+    })
+    .unwrap();
+    cluster.batch_put("k100".as_bytes(), reqs).unwrap();
+    rx.recv().unwrap();
+    fail::remove("on_split_region_check_tick");
+    rx.recv().unwrap();
+    fail::remove("on_approximate_region_size");
+    rx.recv().unwrap();
+    let size = cluster
+        .pd_client
+        .get_region_approximate_size(region_id)
+        .unwrap_or_default();
+    // The region does not split, but it still refreshes the approximate_size.
+    let region_number = cluster.pd_client.get_regions_number();
+    assert_eq!(region_number, 1);
+    assert!(size > approximate_size);
+}
