@@ -1071,7 +1071,7 @@ where
 
         task.entries = entries;
         // Delete any previously appended log entries which never committed.
-        task.cut_logs = Some((last_index + 1, prev_last_index));
+        task.cut_logs = Some((last_index + 1, prev_last_index + 1));
 
         invoke_ctx.raft_state.set_last_index(last_index);
         invoke_ctx.last_term = last_term;

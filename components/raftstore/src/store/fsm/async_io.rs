@@ -27,7 +27,7 @@ use tikv_util::{debug, thd_name, warn};
 const KV_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const RAFT_WB_SHRINK_SIZE: usize = 10 * 1024 * 1024;
 
-#[derive(Default, Debug, Clone, Copy, PartialEq)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct UnpersistedReady {
     pub peer_id: u64,
     pub number: u64,
@@ -45,7 +45,7 @@ pub trait Notifier: Clone + Send + 'static {
 }
 
 #[derive(Clone)]
-pub struct RegionNotifier<EK, ER> 
+pub struct RegionNotifier<EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,
@@ -53,19 +53,17 @@ where
     router: RaftRouter<EK, ER>,
 }
 
-impl<EK, ER> RegionNotifier<EK, ER> 
+impl<EK, ER> RegionNotifier<EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,
 {
     pub fn new(router: RaftRouter<EK, ER>) -> Self {
-        Self {
-            router,
-        }
+        Self { router }
     }
 }
 
-impl<EK, ER> Notifier for RegionNotifier<EK, ER> 
+impl<EK, ER> Notifier for RegionNotifier<EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,
@@ -118,8 +116,8 @@ where
     pub cut_logs: Option<(u64, u64)>,
     pub ready: Option<UnpersistedReady>,
     pub raft_state: Option<RaftLocalState>,
-    pub proposal_times: Vec<Instant>,
     pub messages: Vec<RaftMessage>,
+    pub proposal_times: Vec<Instant>,
 }
 
 impl<EK, ER> AsyncWriteTask<EK, ER>
@@ -138,8 +136,8 @@ where
             cut_logs: None,
             ready: None,
             raft_state: None,
-            proposal_times: vec![],
             messages: vec![],
+            proposal_times: vec![],
         }
     }
 
@@ -203,9 +201,11 @@ where
         if let Some(raft_wb) = task.raft_wb.take() {
             self.raft_wb.merge(raft_wb);
         }
+        let last_index = task.entries.last().map_or(0, |e| e.get_index());
         let entries = std::mem::take(&mut task.entries);
         self.raft_wb.append(task.region_id, entries).unwrap();
         if let Some((from, to)) = task.cut_logs {
+            assert!(from > last_index);
             self.raft_wb.cut_logs(task.region_id, from, to);
         }
         if let Some(ready) = task.ready.take() {
@@ -549,18 +549,16 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
-    use crate::Result;
     use crate::store::{Config, Transport};
+    use crate::Result;
     use engine_test::kv::{new_engine, KvTestEngine};
-    use engine_traits::{ALL_CFS, Mutable, Peekable, WriteBatchExt};
+    use engine_traits::{Mutable, Peekable, WriteBatchExt, ALL_CFS};
     use kvproto::raft_serverpb::RaftMessage;
     use tempfile::{Builder, TempDir};
 
     use super::*;
 
-    pub fn create_tmp_engine(path: &str) -> (TempDir, KvTestEngine) {
+    fn create_tmp_engine(path: &str) -> (TempDir, KvTestEngine) {
         let path = Builder::new().prefix(path).tempdir().unwrap();
         let engine = new_engine(
             path.path().join("db").to_str().unwrap(),
@@ -572,11 +570,42 @@ mod tests {
         (path, engine)
     }
 
+    fn must_have_entries_and_state(
+        raft_engine: &KvTestEngine,
+        entries_state: Vec<(u64, Vec<Entry>, RaftLocalState)>,
+    ) {
+        let snapshot = raft_engine.snapshot();
+        for (region_id, entries, state) in entries_state {
+            for e in entries {
+                let key = keys::raft_log_key(region_id, e.get_index());
+                let val = snapshot.get_msg::<Entry>(&key).unwrap().unwrap();
+                assert_eq!(val, e);
+            }
+            let val = snapshot
+                .get_msg::<RaftLocalState>(&keys::raft_state_key(region_id))
+                .unwrap()
+                .unwrap();
+            assert_eq!(val, state);
+            let key = keys::raft_log_key(region_id, state.get_last_index() + 1);
+            // last_index + 1 entry should not exist
+            assert!(snapshot.get_msg::<Entry>(&key).unwrap().is_none());
+        }
+    }
+
     fn new_entry(index: u64, term: u64) -> Entry {
         let mut e = Entry::default();
         e.set_index(index);
         e.set_term(term);
         e
+    }
+
+    fn new_raft_state(term: u64, vote: u64, commit: u64, last_index: u64) -> RaftLocalState {
+        let mut raft_state = RaftLocalState::new();
+        raft_state.mut_hard_state().set_term(term);
+        raft_state.mut_hard_state().set_vote(vote);
+        raft_state.mut_hard_state().set_commit(commit);
+        raft_state.set_last_index(last_index);
+        raft_state
     }
 
     #[derive(Clone)]
@@ -589,7 +618,7 @@ mod tests {
             self.tx.send((region_id, ready)).unwrap()
         }
         fn notify_unreachable(&self, _region_id: u64, _to_peer_id: u64) {
-            panic!("unreachable");
+            panic!("unimplemented");
         }
     }
     #[derive(Clone)]
@@ -605,81 +634,183 @@ mod tests {
         fn need_flush(&self) -> bool {
             false
         }
-        fn flush(&mut self) {
-        }
+        fn flush(&mut self) {}
     }
 
     struct TestAsyncWriteWorker {
         worker: AsyncWriteWorker<KvTestEngine, KvTestEngine, TestTransport, TestNotifier>,
-        kv_engine: KvTestEngine,
-        raft_engine: KvTestEngine,
-        task_tx: Sender<AsyncWriteMsg<KvTestEngine, KvTestEngine>>,
-        notify_rx: Receiver<(u64, UnpersistedReady)>,
         msg_rx: Receiver<RaftMessage>,
+        notify_rx: Receiver<(u64, UnpersistedReady)>,
     }
 
     impl TestAsyncWriteWorker {
-        fn new(cfg: &Config, path_kv: &str, path_raft: &str) -> Self {
-            let (_dir, kv_engine) = create_tmp_engine(path_kv);
-            let (_dir, raft_engine) = create_tmp_engine(path_raft);
-            let (task_tx, task_rx) = channel();
-            let (notify_tx, notify_rx) = channel();
-            let notifier = TestNotifier {
-                tx: notify_tx,
-            };
+        fn new(cfg: &Config, kv_engine: &KvTestEngine, raft_engine: &KvTestEngine) -> Self {
+            let (_, task_rx) = channel();
             let (msg_tx, msg_rx) = channel();
-            let trans = TestTransport {
-                tx: msg_tx,
-            };
+            let trans = TestTransport { tx: msg_tx };
+            let (notify_tx, notify_rx) = channel();
+            let notifier = TestNotifier { tx: notify_tx };
             Self {
-                worker: AsyncWriteWorker::new(1, "writer".to_string(), kv_engine.clone(), raft_engine.clone(), task_rx, notifier, trans, cfg),
-                kv_engine,
-                raft_engine,
-                task_tx,
-                notify_rx,
+                worker: AsyncWriteWorker::new(
+                    1,
+                    "writer".to_string(),
+                    kv_engine.clone(),
+                    raft_engine.clone(),
+                    task_rx,
+                    notifier,
+                    trans,
+                    cfg,
+                ),
                 msg_rx,
+                notify_rx,
             }
+        }
+
+        fn must_have_same_count_msg(&self, msg_count: u32) {
+            let mut count = 0;
+            while let Ok(_) = self.msg_rx.try_recv() {
+                count += 1;
+            }
+            assert_eq!(count, msg_count);
+        }
+
+        fn must_have_same_notifies(&self, notifies: Vec<(u64, UnpersistedReady)>) {
+            let mut notify_set = HashSet::default();
+            for n in notifies {
+                notify_set.insert(n);
+            }
+            while let Ok(n) = self.notify_rx.try_recv() {
+                if !notify_set.remove(&n) {
+                    panic!("{:?} not in expected nofity", n);
+                }
+            }
+            assert!(
+                notify_set.is_empty(),
+                "remaining expected notify {:?} not exist",
+                notify_set
+            );
         }
     }
 
     #[test]
     fn test_batch_write() {
-        let mut t = TestAsyncWriteWorker::new(&Config::default(), "async-io-batch-kv", "async-io-batch-raft");
+        let (_dir, kv_engine) = create_tmp_engine("async-io-batch-kv");
+        let (_dir, raft_engine) = create_tmp_engine("async-io-batch-raft");
+        let mut t = TestAsyncWriteWorker::new(&Config::default(), &kv_engine, &raft_engine);
 
         let mut task_1 = AsyncWriteTask::<KvTestEngine, KvTestEngine>::new(1, 1);
-        task_1.kv_wb = Some(t.kv_engine.write_batch());
-        task_1.kv_wb.as_mut().unwrap().put(b"kv_k1", b"kv_v1").unwrap();
-        task_1.raft_wb = Some(t.raft_engine.write_batch());
-        task_1.raft_wb.as_mut().unwrap().put(b"raft_k1", b"raft_v1").unwrap();
-        task_1.entries.push(new_entry(5, 5));
-        task_1.entries.push(new_entry(6, 5));
+        task_1.kv_wb = Some(kv_engine.write_batch());
+        task_1
+            .kv_wb
+            .as_mut()
+            .unwrap()
+            .put(b"kv_k1", b"kv_v1")
+            .unwrap();
+        task_1.raft_wb = Some(raft_engine.write_batch());
+        task_1
+            .raft_wb
+            .as_mut()
+            .unwrap()
+            .put(b"raft_k1", b"raft_v1")
+            .unwrap();
+        task_1.entries.append(&mut vec![
+            new_entry(5, 5),
+            new_entry(6, 5),
+            new_entry(7, 5),
+            new_entry(8, 5),
+        ]);
         task_1.ready = Some(UnpersistedReady::new(1, 10));
-
-        let mut task_2 = AsyncWriteTask::<KvTestEngine, KvTestEngine>::new(2, 2);
-        task_2.kv_wb = Some(t.kv_engine.write_batch());
-        task_2.kv_wb.as_mut().unwrap().put(b"kv_k2", b"kv_v2").unwrap();
-        task_2.raft_wb = Some(t.raft_engine.write_batch());
-        task_2.raft_wb.as_mut().unwrap().put(b"raft_k2", b"raft_v2").unwrap();
-        task_2.entries.push(new_entry(5, 5));
-        task_2.entries.push(new_entry(6, 5));
-        task_2.ready = Some(UnpersistedReady::new(2, 15));
+        task_1.raft_state = Some(new_raft_state(5, 123, 6, 8));
+        task_1.messages.append(&mut vec![RaftMessage::default()]);
 
         t.worker.wb.add_write_task(task_1);
+
+        let mut task_2 = AsyncWriteTask::<KvTestEngine, KvTestEngine>::new(2, 2);
+        task_2.kv_wb = Some(kv_engine.write_batch());
+        task_2
+            .kv_wb
+            .as_mut()
+            .unwrap()
+            .put(b"kv_k2", b"kv_v2")
+            .unwrap();
+        task_2.raft_wb = Some(raft_engine.write_batch());
+        task_2
+            .raft_wb
+            .as_mut()
+            .unwrap()
+            .put(b"raft_k2", b"raft_v2")
+            .unwrap();
+        task_2
+            .entries
+            .append(&mut vec![new_entry(20, 15), new_entry(21, 15)]);
+        task_2.ready = Some(UnpersistedReady::new(2, 15));
+        task_2.raft_state = Some(new_raft_state(15, 234, 20, 21));
+        task_2
+            .messages
+            .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
+
         t.worker.wb.add_write_task(task_2);
+
+        let mut task_3 = AsyncWriteTask::<KvTestEngine, KvTestEngine>::new(1, 1);
+        task_3.kv_wb = Some(kv_engine.write_batch());
+        task_3
+            .kv_wb
+            .as_mut()
+            .unwrap()
+            .put(b"kv_k3", b"kv_v3")
+            .unwrap();
+        task_3.raft_wb = Some(raft_engine.write_batch());
+        task_3
+            .raft_wb
+            .as_mut()
+            .unwrap()
+            .put(b"raft_k3", b"raft_v3")
+            .unwrap();
+        task_3.raft_wb.as_mut().unwrap().delete(b"raft_k1").unwrap();
+        task_3
+            .entries
+            .append(&mut vec![new_entry(6, 6), new_entry(7, 7)]);
+        task_3.cut_logs = Some((8, 9));
+        task_3.ready = Some(UnpersistedReady::new(1, 11));
+        task_3.raft_state = Some(new_raft_state(7, 124, 6, 7));
+        task_3
+            .messages
+            .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
+
+        t.worker.wb.add_write_task(task_3);
 
         t.worker.sync_write();
 
-        let snapshot = t.kv_engine.snapshot();
+        let snapshot = kv_engine.snapshot();
         assert_eq!(snapshot.get_value(b"kv_k1").unwrap().unwrap(), b"kv_v1");
         assert_eq!(snapshot.get_value(b"kv_k2").unwrap().unwrap(), b"kv_v2");
+        assert_eq!(snapshot.get_value(b"kv_k3").unwrap().unwrap(), b"kv_v3");
 
-        let snapshot = t.raft_engine.snapshot();
-        assert_eq!(snapshot.get_value(b"raft_k1").unwrap().unwrap(), b"raft_v1");
+        let snapshot = raft_engine.snapshot();
+        assert!(snapshot.get_value(b"raft_k1").unwrap().is_none());
         assert_eq!(snapshot.get_value(b"raft_k2").unwrap().unwrap(), b"raft_v2");
+        assert_eq!(snapshot.get_value(b"raft_k3").unwrap().unwrap(), b"raft_v3");
 
-        let notify = t.notify_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        assert_eq!(notify, (1, UnpersistedReady::new(1, 10)));
-        let notify = t.notify_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        assert_eq!(notify, (2, UnpersistedReady::new(2, 15)));
+        must_have_entries_and_state(
+            &raft_engine,
+            vec![
+                (
+                    1,
+                    vec![new_entry(5, 5), new_entry(6, 6), new_entry(7, 7)],
+                    new_raft_state(7, 124, 6, 7),
+                ),
+                (
+                    2,
+                    vec![new_entry(20, 15), new_entry(21, 15)],
+                    new_raft_state(15, 234, 20, 21),
+                ),
+            ],
+        );
+
+        t.must_have_same_count_msg(5);
+        t.must_have_same_notifies(vec![
+            (1, UnpersistedReady::new(1, 11)),
+            (2, UnpersistedReady::new(2, 15)),
+        ]);
     }
 }
