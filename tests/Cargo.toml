@@ -52,6 +52,7 @@ cloud-gcp = [ "external_storage_export/cloud-gcp" ]
 testexport = ["raftstore/testexport", "tikv/testexport"]
 profiling = ["profiler/profiling"]
 protobuf-codec = [
+  "protobuf/bytes",
   "batch-system/protobuf-codec",
   "cdc/protobuf-codec",
   "encryption/protobuf-codec",

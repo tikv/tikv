@@ -5,7 +5,7 @@ publish = false
 
 [features]
 default = ["protobuf-codec"]
-protobuf-codec = ["fuzz-targets/protobuf-codec"]
+protobuf-codec = [ "fuzz-targets/protobuf-codec" ]
 prost-codec = ["fuzz-targets/prost-codec"]
 
 [dependencies]
