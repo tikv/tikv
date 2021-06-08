@@ -2,9 +2,9 @@
 
 use crate::ResourceMeteringTag;
 
-use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::SeqCst;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -28,20 +28,20 @@ pub struct RecorderHandle {
 pub struct RecorderHandleInner {
     join_handle: JoinHandle<()>,
     pause: Arc<AtomicBool>,
-    precision: Arc<Mutex<Duration>>,
+    precision_ms: Arc<AtomicU64>,
 }
 
 impl RecorderHandle {
     pub fn new(
         join_handle: JoinHandle<()>,
         pause: Arc<AtomicBool>,
-        precision: Arc<Mutex<Duration>>,
+        precision_ms: Arc<AtomicU64>,
     ) -> Self {
         Self {
             inner: Some(Arc::new(RecorderHandleInner {
                 join_handle,
                 pause,
-                precision,
+                precision_ms,
             })),
         }
     }
@@ -61,8 +61,7 @@ impl RecorderHandle {
 
     pub fn set_precision(&self, value: Duration) {
         if let Some(inner) = self.inner.as_ref() {
-            let mut p = inner.precision.lock().unwrap();
-            *p = value;
+            inner.precision_ms.store(value.as_millis() as _, SeqCst);
         }
     }
 }
