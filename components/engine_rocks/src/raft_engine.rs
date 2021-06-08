@@ -252,7 +252,7 @@ impl RaftLogBatch for RocksWriteBatch {
     }
 
     fn merge(&mut self, src: Self) {
-        self.merge(&src);
+        WriteBatch::<RocksEngine>::merge(self, src);
     }
 }
 

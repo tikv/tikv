@@ -194,7 +194,7 @@ where
 
     pub fn add_write_task(&mut self, mut task: AsyncWriteTask<EK, ER>) {
         if let Some(kv_wb) = task.kv_wb.take() {
-            self.kv_wb.merge(&kv_wb);
+            self.kv_wb.merge(kv_wb);
         }
         if let Some(raft_wb) = task.raft_wb.take() {
             self.raft_wb.merge(raft_wb);
