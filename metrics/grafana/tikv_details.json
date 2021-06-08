@@ -3655,7 +3655,7 @@
           "gridPos": {
             "h": 8,
             "w": 12,
-            "x": 0,
+            "x": 12,
             "y": 51
           },
           "id": 7266,
@@ -7238,7 +7238,7 @@
               "expr": "max_over_time((sum(rate(tikv_io_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", op=\"write\"}[30s])))[30s:10s])",
               "format": "time_series",
               "intervalFactor": 2,
-              "legendFormat": " {{type}}",
+              "legendFormat": "total",
               "refId": "B",
               "step": 4
             }
@@ -7500,7 +7500,7 @@
             "x": 12,
             "y": 14
           },
-          "id": 7235,
+          "id": 7225,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -7792,7 +7792,7 @@
             "x": 0,
             "y": 28
           },
-          "id": 5597,
+          "id": 5508,
           "legend": {
             "alignAsTable": true,
             "avg": false,
