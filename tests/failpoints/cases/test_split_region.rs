@@ -665,10 +665,11 @@ fn test_report_approximate_size_after_split_check() {
     let mut cluster = new_server_cluster(0, 3);
     cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
-    cluster.cfg.raft_store.region_split_check_diff = ReadableSize::mb(1);
+    cluster.cfg.raft_store.region_split_check_diff = ReadableSize::kb(256);
     cluster.run();
 
-    let region_id = cluster.get_region_id(b"k");
+    cluster.must_put_cf("write", b"k0", b"k1");
+    let region_id = cluster.get_region_id(b"k0");
     let approximate_size = cluster
         .pd_client
         .get_region_approximate_size(region_id)
@@ -678,9 +679,9 @@ fn test_report_approximate_size_after_split_check() {
         .get_region_approximate_keys(region_id)
         .unwrap_or_default();
     assert!(approximate_size == 0 && approximate_keys == 0);
-    let value = vec![1_u8; 4000];
+    let value = vec![1_u8; 1000];
     let mut reqs = vec![];
-    for i in 100..410 {
+    for i in 100..400 {
         let k = format!("k{}", i);
         reqs.push(new_put_cf_cmd("write", k.as_bytes(), &value));
     }
