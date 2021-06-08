@@ -5,7 +5,6 @@ use std::sync::Arc;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use std::ops::Add;
 use test_raftstore::*;
 use tikv_util::config::*;
 use tikv_util::time::UnixSecs as PdInstant;
