@@ -153,7 +153,8 @@ struct RaftStoreProxyFFIHelper {
                                                  BaseBuffView);
   FileEncryptionInfoRaw (*fn_handle_link_file)(RaftStoreProxyPtr, BaseBuffView,
                                                BaseBuffView);
-  RawVoidPtr (*fn_handle_batch_read_index)(RaftStoreProxyPtr, CppStrVecView);
+  RawVoidPtr (*fn_handle_batch_read_index)(RaftStoreProxyPtr, CppStrVecView,
+                                           uint64_t);
   SSTReaderInterfaces sst_reader_interfaces;
 };
 

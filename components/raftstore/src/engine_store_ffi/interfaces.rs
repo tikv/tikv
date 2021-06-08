@@ -530,6 +530,7 @@ pub mod root {
                 unsafe extern "C" fn(
                     arg1: root::DB::RaftStoreProxyPtr,
                     arg2: root::DB::CppStrVecView,
+                    arg3: u64,
                 ) -> root::DB::RawVoidPtr,
             >,
             pub sst_reader_interfaces: root::DB::SSTReaderInterfaces,
@@ -629,7 +630,7 @@ pub mod root {
                 ),
             >,
         }
-        pub const RAFT_STORE_PROXY_VERSION: u32 = 401006;
+        pub const RAFT_STORE_PROXY_VERSION: u32 = 500000;
         pub const RAFT_STORE_PROXY_MAGIC_NUMBER: u32 = 324508639;
     }
     pub type __builtin_va_list = [root::__va_list_tag; 1usize];

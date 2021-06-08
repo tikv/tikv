@@ -81,13 +81,13 @@ impl<T> Ord for TimeoutTask<T> {
 }
 
 lazy_static! {
-    pub static ref GLOBAL_TIMER_HANDLE: Handle = start_global_timer();
+    pub static ref GLOBAL_TIMER_HANDLE: Handle = start_global_timer("timer");
 }
 
-fn start_global_timer() -> Handle {
+fn start_global_timer(name: &str) -> Handle {
     let (tx, rx) = mpsc::channel();
     Builder::new()
-        .name(thd_name!("timer"))
+        .name(thd_name!(name))
         .spawn(move || {
             tikv_alloc::add_thread_memory_accessor();
             let mut timer = tokio_timer::Timer::default();
@@ -253,4 +253,8 @@ mod tests {
         block_on(delay.compat()).unwrap();
         assert!(timer.elapsed() >= Duration::from_millis(100));
     }
+}
+
+lazy_static! {
+    pub static ref READ_INDEX_TIMER_HANDLE: Handle = start_global_timer("readindex-timer");
 }

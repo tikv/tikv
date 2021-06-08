@@ -30,6 +30,7 @@ use crate::engine_store_ffi::interfaces::root::DB::{
     RAFT_STORE_PROXY_VERSION,
 };
 use crate::store::LockCFFileReader;
+use std::time::Duration;
 
 impl From<&[u8]> for BaseBuffView {
     fn from(s: &[u8]) -> Self {
@@ -111,6 +112,7 @@ pub extern "C" fn ffi_encryption_method(
 pub extern "C" fn ffi_batch_read_index(
     proxy_ptr: RaftStoreProxyPtr,
     view: CppStrVecView,
+    timeout_ms: u64,
 ) -> RawVoidPtr {
     assert!(!proxy_ptr.is_null());
     if view.len != 0 {
@@ -129,7 +131,7 @@ pub extern "C" fn ffi_batch_read_index(
         let resp = proxy_ptr
             .as_ref()
             .read_index_client
-            .batch_read_index(req_vec);
+            .batch_read_index(req_vec, Duration::from_millis(timeout_ms));
         let res = get_engine_store_server_helper().gen_batch_read_index_res(resp.len() as u64);
         assert_ne!(res, std::ptr::null_mut());
         for (r, region_id) in &resp {
