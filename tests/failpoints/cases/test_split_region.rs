@@ -665,41 +665,22 @@ fn test_report_approximate_size_after_split_check() {
     let mut cluster = new_server_cluster(0, 3);
     cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
-    cluster.cfg.raft_store.region_split_check_diff = ReadableSize::mb(2);
+    cluster.cfg.raft_store.region_split_check_diff = ReadableSize::mb(1);
     cluster.run();
-    for i in 0..100 {
-        let (k, v) = (format!("k{}", i), format!("v{}", i));
-        cluster.must_put_cf("write", k.as_bytes(), v.as_bytes());
-    }
-    cluster.must_flush_cf("write", true);
 
-    let ids = cluster.get_node_ids();
-    for id in ids {
-        cluster.stop_node(id);
-        cluster.run_node(id).unwrap();
-    }
-
-    let region_id = cluster.get_region_id(b"");
-    let mut approximate_size = 0;
-    let mut approximate_keys = 0;
-    for _ in 0..10 {
-        approximate_size = cluster
-            .pd_client
-            .get_region_approximate_size(region_id)
-            .unwrap_or_default();
-        approximate_keys = cluster
-            .pd_client
-            .get_region_approximate_keys(region_id)
-            .unwrap_or_default();
-        if approximate_size > 0 && approximate_keys > 0 {
-            break;
-        }
-        sleep_ms(100);
-    }
-    assert!(approximate_size > 0 && approximate_keys > 0);
-    let value = vec![1 as u8; 1000];
+    let region_id = cluster.get_region_id(b"k");
+    let approximate_size = cluster
+        .pd_client
+        .get_region_approximate_size(region_id)
+        .unwrap_or_default();
+    let approximate_keys = cluster
+        .pd_client
+        .get_region_approximate_keys(region_id)
+        .unwrap_or_default();
+    assert!(approximate_size == 0 && approximate_keys == 0);
+    let value = vec![1 as u8; 4000];
     let mut reqs = vec![];
-    for i in 100..210 {
+    for i in 100..410 {
         let k = format!("k{}", i);
         reqs.push(new_put_cf_cmd("write", k.as_bytes(), &value));
     }
@@ -729,6 +710,7 @@ fn test_report_approximate_size_after_split_check() {
     rx.recv().unwrap();
     fail::remove("on_approximate_region_size");
     rx.recv().unwrap();
+    fail::remove("test_raftstore::pd::region_heartbeat");
     let size = cluster
         .pd_client
         .get_region_approximate_size(region_id)
