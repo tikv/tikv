@@ -3710,10 +3710,8 @@ where
 
     fn end(&mut self, fsms: &mut [Box<ApplyFsm<EK>>]) {
         let is_synced = self.apply_ctx.flush();
-        if is_synced {
-            for fsm in fsms {
-                fsm.delegate.last_sync_apply_index = fsm.delegate.apply_state.get_applied_index();
-            }
+        for fsm in fsms {
+            fsm.delegate.last_sync_apply_index = fsm.delegate.apply_state.get_applied_index();
         }
         if let Some(e) = self.trace_event.take() {
             MEMTRACE_APPLYS.trace(e);

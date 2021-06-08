@@ -81,6 +81,7 @@ pub struct Handler {
     local: HandleMetrics,
     metrics: Arc<Mutex<HandleMetrics>>,
     priority: Priority,
+    max_processed_count: usize,
 }
 
 impl Handler {
@@ -128,8 +129,8 @@ impl PollHandler<Runner, Runner> for Handler {
         self.local = HandleMetrics::default();
     }
 
-    fn processed_messages(&self) -> usize {
-        self.local.processed_count
+    fn reach_process_limit(&self) -> bool {
+        self.local.processed_count > self.max_processed_count
     }
 }
 
@@ -153,6 +154,7 @@ impl HandlerBuilder<Runner, Runner> for Builder {
             local: HandleMetrics::default(),
             metrics: self.metrics.clone(),
             priority,
+            max_processed_count: 128,
         }
     }
 }
