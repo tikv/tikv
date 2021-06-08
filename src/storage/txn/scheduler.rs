@@ -24,9 +24,9 @@ use crossbeam::utils::CachePadded;
 use parking_lot::{Mutex, MutexGuard};
 use std::f64::INFINITY;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, Sender, RecvTimeoutError};
 use std::sync::Arc;
-use std::thread::{self, Builder, JoinHandle};
+use std::thread::{Builder, JoinHandle};
 use std::time::Duration;
 use std::u64;
 
@@ -145,8 +145,7 @@ impl TaskContext {
     }
 }
 
-const CHECK_TICK_INTERVAL: u64 = 100; // 100ms
-const ADJUST_TICKS: u64 = 10; // 1000ms
+const ADJUST_DURATION: u64 = 1000; // 1000ms
 const RATIO_PERCISION: f64 = 10000000.0;
 const EMA_FACTOR: f64 = 0.1;
 const LIMIT_UP_PERCENT: f64 = 0.04; // 4%
@@ -297,22 +296,29 @@ impl<const CAP: usize> Smoother<CAP> {
     }
 }
 
+use engine_rocks::Info;
+
+struct CFFlowChecker {
+    last_num_memtables: Smoother<10>,
+    last_num_l0_files: u64,
+    long_term_num_l0_files: Smoother<6>,
+    long_term_pending_bytes: Smoother<600>,
+
+    last_flush_bytes_time: Instant,
+    last_flush_bytes: u64,
+    short_term_flush_flow: Smoother<10>,
+    last_l0_bytes: u64,
+    last_l0_bytes_time: Instant,
+    short_term_l0_flow: Smoother<3>,
+}
+
 struct FlowChecker<E: Engine> {
     pending_compaction_bytes_soft_limit: u64,
     pending_compaction_bytes_hard_limit: u64,
     memtables_threshold: u64,
     l0_files_threshold: u64,
 
-    last_num_memtables: Smoother<10>,
-    long_term_num_l0_files: Smoother<6>,
-    // short_term_avg_l0_files: Smoother<5>,
-    long_term_pending_bytes: Smoother<600>,
-    last_flush_bytes_time: Instant,
-    last_flush_bytes: u64,
-    last_l0_bytes: u64,
-    last_l0_bytes_time: Instant,
-    last_l0_flow: f64,
-
+    cf_checkers: HashMap<String, CFFlowChecker>,
     factor: f64,
 
     start_control_time: Instant,
@@ -321,34 +327,67 @@ struct FlowChecker<E: Engine> {
     engine: E,
     recorder: Smoother<30>,
     limiter: Arc<Limiter>,
+    last_record_time: Instant,
 }
-use engine_rocks::Info;
 
 impl<E: Engine> FlowChecker<E> {
+    pub fn new(
+        config: &Config,
+        engine: E,
+        discard_ratio: Arc<AtomicU64>,
+        limiter: Arc<Limiter>,
+    ) -> Self {
+        let mut cf_checkers = map![];
+
+        for cf in engine.kv_engine().cf_names() {
+            cf_checkers.insert(cf.to_owned(), CFFlowChecker {
+                last_num_memtables: Smoother::new(),
+                long_term_pending_bytes: Smoother::new(),
+                long_term_num_l0_files: Smoother::new(),
+                last_num_l0_files: 0,
+                last_flush_bytes: 0,
+                last_flush_bytes_time: Instant::now_coarse(),
+                short_term_flush_flow: Smoother::new(),
+                last_l0_bytes: 0,
+                last_l0_bytes_time: Instant::now_coarse(),
+                short_term_l0_flow: Smoother::new(),
+            });
+        }
+        Self {
+            pending_compaction_bytes_soft_limit: config.pending_compaction_bytes_soft_limit,
+            pending_compaction_bytes_hard_limit: config.pending_compaction_bytes_hard_limit,
+            memtables_threshold: config.memtables_threshold,
+            l0_files_threshold: config.l0_files_threshold,
+            engine,
+            factor: EMA_FACTOR,
+            discard_ratio,
+            start_control_time: Instant::now_coarse(),
+            limiter,
+            recorder: Smoother::new(),
+            cf_checkers,
+            last_record_time: Instant::now_coarse(),
+        }
+    }
+
     fn start(self, rx: Receiver<bool>, l0_completed_receiver: Receiver<Info>) -> JoinHandle<()> {
         Builder::new()
             .name(thd_name!("flow-checker"))
             .spawn(move || {
                 tikv_alloc::add_thread_memory_accessor();
                 let mut checker = self;
-                let mut ticks = 0;
                 while rx.try_recv().is_err() {
-                    thread::sleep(Duration::from_millis(CHECK_TICK_INTERVAL));
-                    loop {
-                        match l0_completed_receiver.try_recv() {
-                            Ok(Info::L0(cf, l0_bytes)) => checker.adjust_l0_files(cf, l0_bytes),
-                            Ok(Info::Flush(cf, flush_bytes)) => {
-                                checker.check_l0_flow(cf, flush_bytes)
-                            }
-                            Err(_) => break,
+                    match l0_completed_receiver.recv_timeout(Duration::from_millis(ADJUST_DURATION)) {
+                        Ok(Info::L0(cf, l0_bytes)) => checker.check_long_term_l0_files(cf, l0_bytes),
+                        Ok(Info::Flush(cf, flush_bytes)) => {
+                            checker.check_l0_flow(cf, flush_bytes)
                         }
-                    }
-                    ticks += 1;
-                    if ticks == ADJUST_TICKS {
-                        ticks = 0;
-                        checker.update_statistics();
-                        checker.adjust_memtables();
-                        checker.adjust_pending_compaction_bytes();
+                        Err(RecvTimeoutError::Timeout) => {
+                            checker.update_statistics();
+                            // checker.tick_l0_files();
+                            checker.adjust_memtables();
+                            checker.adjust_pending_compaction_bytes();
+                        }
+                        Err(e) => { error!("failed to receive compaction info {:?}", e); }
                     }
                 }
                 tikv_alloc::remove_thread_memory_accessor();
@@ -357,30 +396,30 @@ impl<E: Engine> FlowChecker<E> {
     }
 
     fn update_statistics(&mut self) {
-        let bytes = self.limiter.total_bytes_consumed() as u64;
-        if bytes != 0 {
-            self.recorder.observe(bytes);
+        let rate = self.limiter.total_bytes_consumed() as f64 / self.last_record_time.elapsed_secs();
+        if self.limiter.total_bytes_consumed() != 0 {
+            self.recorder.observe(rate as u64);
         }
-        SCHED_WRITE_FLOW_GAUGE.set(bytes as i64);
+        SCHED_WRITE_FLOW_GAUGE.set(rate as i64);
+        self.last_record_time = Instant::now_coarse();
         self.limiter.reset_statistics();
     }
 
     fn adjust_pending_compaction_bytes(&mut self) {
-        let mut pending_compaction_bytes = 0;
-        for cf in self.engine.kv_engine().cf_names() {
-            pending_compaction_bytes = std::cmp::max(
-                pending_compaction_bytes,
-                self.engine
-                    .kv_engine()
-                    .get_cf_pending_compaction_bytes(cf)
-                    .unwrap_or(None)
-                    .unwrap_or(0),
-            );
+        let mut pending_compaction_bytes = 0.0;
+        for (cf, checker) in &mut self.cf_checkers {
+            let num = self.engine
+                .kv_engine()
+                .get_cf_pending_compaction_bytes(&cf)
+                .unwrap_or(None)
+                .unwrap_or(0);
+            checker.long_term_pending_bytes
+                .observe(num);
+            if pending_compaction_bytes < checker.long_term_pending_bytes.get_avg() {
+                pending_compaction_bytes = checker.long_term_pending_bytes.get_avg();
+            }
         }
-        self.long_term_pending_bytes
-            .observe(pending_compaction_bytes);
-        let pending_compaction_bytes = self.long_term_pending_bytes.get_avg();
-
+       
         let ratio = if pending_compaction_bytes < self.pending_compaction_bytes_soft_limit as f64 {
             0
         } else {
@@ -404,51 +443,53 @@ impl<E: Engine> FlowChecker<E> {
     }
 
     fn adjust_memtables(&mut self) {
-        let mut num_memtables = 0;
-        for cf in self.engine.kv_engine().cf_names() {
-            num_memtables = std::cmp::max(
-                num_memtables,
-                self.engine
+        for (cf, checker) in &mut self.cf_checkers {
+            let num_memtables = self.engine
                     .kv_engine()
-                    .get_cf_num_memtables(cf)
+                    .get_cf_num_memtables(&cf)
                     .unwrap_or(None)
-                    .unwrap_or(0),
-            );
+                    .unwrap_or(0);
+            SCHED_MEMTABLE_GAUGE.with_label_values(&[&cf]).set(num_memtables as i64);
+            checker.last_num_memtables.observe(num_memtables);
         }
-        let is_throttled = self.limiter.speed_limit() != INFINITY;
-        let should_throttle = self.last_num_memtables.get_avg() > self.memtables_threshold as f64;
-
-        SCHED_MEMTABLE_GAUGE.set(num_memtables as i64);
-        self.last_num_memtables.observe(num_memtables);
+        // let is_throttled = self.limiter.speed_limit() != INFINITY;
+        // let should_throttle = self.last_num_memtables.get_avg() > self.memtables_threshold as f64;
     }
 
-    fn adjust_l0_files(&mut self, cf: String, l0_bytes: u64) {
-        let mut num_l0_files = 0;
-        let mut cf_name = None;
-        for cf in self.engine.kv_engine().cf_names() {
-            let num = self
-                .engine
-                .kv_engine()
-                .get_cf_num_files_at_level(cf, 0)
-                .unwrap_or(None)
-                .unwrap_or(0);
-            if num_l0_files <= num {
-                num_l0_files = num;
-                cf_name = Some(cf.to_owned());
+    fn check_long_term_l0_files(&mut self, cf: String, l0_bytes: u64) {
+        let num_l0_files = self
+            .engine
+            .kv_engine()
+            .get_cf_num_files_at_level(&cf, 0)
+            .unwrap_or(None)
+            .unwrap_or(0);
+        {
+            let checker = self.cf_checkers.get_mut(&cf).unwrap();
+            checker.last_l0_bytes += l0_bytes;
+            checker.long_term_num_l0_files.observe(num_l0_files);
+            checker.last_num_l0_files = num_l0_files;
+            SCHED_L0_GAUGE.with_label_values(&[&cf]).set(num_l0_files as i64);
+            SCHED_L0_AVG_GAUGE.with_label_values(&[&cf]).set(checker.long_term_num_l0_files.get_avg() as i64);
+        }
+
+        for (_, c) in &self.cf_checkers {
+            if num_l0_files < c.last_num_l0_files {
+                return;
             }
         }
-        if cf_name.unwrap() != cf {
-            return;
-        }
+        self.adjust_l0_files(cf);
+    }
 
-        self.last_l0_bytes += l0_bytes;
-        self.long_term_num_l0_files.observe(num_l0_files);
+    fn tick_l0_files(&mut self) {
+        let cf = self.cf_checkers.iter().max_by_key(|(_, checker)|checker.last_num_l0_files).unwrap().0.to_owned();
+        self.adjust_l0_files(cf)
+    }
+
+    fn adjust_l0_files(&mut self, cf: String) {
+        let checker = self.cf_checkers.get_mut(&cf).unwrap();
 
         let is_throttled = self.limiter.speed_limit() != INFINITY;
-        let should_throttle = num_l0_files > self.l0_files_threshold;
-
-        // self.short_term_avg_l0_files
-        //     .observe(self.long_term_num_l0_files.get_avg() as u64);
+        let should_throttle = checker.last_num_l0_files > self.l0_files_threshold;
 
         let throttle = if !is_throttled && should_throttle {
             SCHED_THROTTLE_ACTION_COUNTER
@@ -456,7 +497,7 @@ impl<E: Engine> FlowChecker<E> {
                 .inc();
             self.recorder.get_percentile_95() as f64
         } else if is_throttled && should_throttle {
-            match self.long_term_num_l0_files.trend() {
+            match checker.long_term_num_l0_files.trend() {
                 Trend::Increasing => {
                     SCHED_THROTTLE_ACTION_COUNTER
                         .with_label_values(&["down"])
@@ -477,28 +518,27 @@ impl<E: Engine> FlowChecker<E> {
                 }
             }
         } else if is_throttled && !should_throttle {
-            if (num_l0_files as f64) > self.l0_files_threshold as f64 * 0.8 {
+            if checker.long_term_num_l0_files.get_avg() >= self.l0_files_threshold as f64 * 0.45 {
                 SCHED_THROTTLE_ACTION_COUNTER
                     .with_label_values(&["keep2"])
                     .inc();
                 self.limiter.speed_limit()
-            } else if (num_l0_files as f64) > self.l0_files_threshold as f64 * 0.5 {
-                SCHED_THROTTLE_ACTION_COUNTER
-                    .with_label_values(&["up"])
-                    .inc();
-                self.limiter.speed_limit() * (1.0 + LIMIT_UP_PERCENT * 2.0)
             } else {
-                SCHED_THROTTLE_ACTION_COUNTER
-                    .with_label_values(&["back"])
-                    .inc();
-                self.limiter.speed_limit() * (1.0 + LIMIT_UP_PERCENT * 3.0)
+                if checker.long_term_num_l0_files.get_recent() as f64 >= self.l0_files_threshold as f64 * 0.45 {
+                    SCHED_THROTTLE_ACTION_COUNTER
+                        .with_label_values(&["keep3"])
+                        .inc();
+                    self.limiter.speed_limit()
+                } else {
+                    SCHED_THROTTLE_ACTION_COUNTER
+                        .with_label_values(&["up"])
+                        .inc();
+                    self.limiter.speed_limit() * (1.0 + LIMIT_UP_PERCENT * 3.0)
+                }
             }
         } else {
             INFINITY
         };
-
-        SCHED_L0_GAUGE.set(num_l0_files as i64);
-        SCHED_L0_AVG_GAUGE.set(self.long_term_num_l0_files.get_avg() as i64);
 
         self.update_speed_limit(throttle)
     }
@@ -507,7 +547,7 @@ impl<E: Engine> FlowChecker<E> {
         if throttle < MIN_THROTTLE_SPEED {
             throttle = MIN_THROTTLE_SPEED;
         }
-        if throttle > 2.0 * self.recorder.get_max() as f64 {
+        if throttle > 1.5 * self.recorder.get_max() as f64 {
             throttle = INFINITY;
         }
         SCHED_THROTTLE_FLOW_GAUGE.set(if throttle == INFINITY {
@@ -519,55 +559,54 @@ impl<E: Engine> FlowChecker<E> {
     }
 
     fn check_l0_flow(&mut self, cf: String, flush_bytes: u64) {
-        let mut num_l0_files = 0;
-        let mut cf_name = None;
-        for cf in self.engine.kv_engine().cf_names() {
-            let num = self
-                .engine
-                .kv_engine()
-                .get_cf_num_files_at_level(cf, 0)
-                .unwrap_or(None)
-                .unwrap_or(0);
-            if num_l0_files <= num {
-                num_l0_files = num;
-                cf_name = Some(cf.to_owned());
-            }
-        }
-        if cf_name.unwrap() != cf {
-            return;
-        }
+        let num_l0_files = self
+            .engine
+            .kv_engine()
+            .get_cf_num_files_at_level(&cf, 0)
+            .unwrap_or(None)
+            .unwrap_or(0);
 
-        SCHED_FLUSH_L0_GAUGE.set(num_l0_files as i64);
+        let checker = self.cf_checkers.get_mut(&cf).unwrap();
+        checker.last_flush_bytes += flush_bytes;
+        // no need to add it to long_term_num_l0_files, we want to exclude the 
+        checker.last_num_l0_files = num_l0_files;
+        SCHED_FLUSH_L0_GAUGE.with_label_values(&[&cf]).set(num_l0_files as i64);
 
-        self.last_flush_bytes += flush_bytes;
-        if self.last_flush_bytes_time.elapsed_secs() > 10.0 {
+        if checker.last_flush_bytes_time.elapsed_secs() > 1.0 {
             let flush_flow =
-                self.last_flush_bytes as f64 / self.last_flush_bytes_time.elapsed_secs();
-            SCHED_FLUSH_FLOW_GAUGE.set(flush_flow as i64);
+                checker.last_flush_bytes as f64 / checker.last_flush_bytes_time.elapsed_secs();
+            checker.short_term_flush_flow.observe(flush_flow as u64);
+            SCHED_FLUSH_FLOW_GAUGE.with_label_values(&[&cf]).set(checker.short_term_flush_flow.get_avg() as i64);
 
-            if self.last_l0_bytes != 0 {
-                let l0_flow = self.last_l0_bytes as f64 / self.last_l0_bytes_time.elapsed_secs();
-                self.last_l0_bytes_time = Instant::now_coarse();
-                SCHED_L0_FLOW_GAUGE.set(l0_flow as i64);
-                self.last_l0_flow = l0_flow;
+            if checker.last_l0_bytes != 0 {
+                let l0_flow = checker.last_l0_bytes as f64 / checker.last_l0_bytes_time.elapsed_secs();
+                checker.last_l0_bytes_time = Instant::now_coarse();
+                checker.short_term_l0_flow.observe(l0_flow as u64);
+                SCHED_L0_FLOW_GAUGE.with_label_values(&[&cf]).set(checker.short_term_l0_flow.get_avg() as i64);
             }
 
-            self.last_flush_bytes_time = Instant::now_coarse();
-            self.last_l0_bytes = 0;
-            self.last_flush_bytes = 0;
+            checker.last_flush_bytes_time = Instant::now_coarse();
+            checker.last_l0_bytes = 0;
+            checker.last_flush_bytes = 0;
 
+            for (_, c) in &self.cf_checkers {
+                if num_l0_files < c.last_num_l0_files {
+                    return;
+                }
+            }
+    
             if num_l0_files > self.l0_files_threshold {
                 // flush flow > l0 flow
-                if flush_flow > self.last_l0_flow {
+                if self.cf_checkers[&cf].short_term_flush_flow.get_avg() > self.cf_checkers[&cf].short_term_l0_flow.get_avg() * 0.9 {
                     SCHED_THROTTLE_ACTION_COUNTER
                         .with_label_values(&["down_flow"])
                         .inc();
                     let throttle = if self.limiter.speed_limit() == INFINITY {
                         self.recorder.get_percentile_95() as f64
                     } else {
-                        self.limiter.speed_limit()
+                        self.limiter.speed_limit() * (1.0 - 3.0 * LIMIT_DOWN_PERCENT)
                     };
-                    self.update_speed_limit(throttle * (1.0 - LIMIT_DOWN_PERCENT))
+                    self.update_speed_limit(throttle)
                 }
             }
         }
@@ -608,27 +647,12 @@ impl FlowController {
     ) -> Self {
         let limiter = Arc::new(Limiter::new(INFINITY));
         let discard_ratio = Arc::new(AtomicU64::new(0));
-        let checker = FlowChecker {
-            pending_compaction_bytes_soft_limit: config.pending_compaction_bytes_soft_limit,
-            pending_compaction_bytes_hard_limit: config.pending_compaction_bytes_hard_limit,
-            memtables_threshold: config.memtables_threshold,
-            l0_files_threshold: config.l0_files_threshold,
-            last_num_memtables: Smoother::new(),
-            long_term_num_l0_files: Smoother::new(),
-            // short_term_avg_l0_files: Smoother::new(),
-            long_term_pending_bytes: Smoother::new(),
+        let checker = FlowChecker::new(
+            config,
             engine,
-            factor: EMA_FACTOR,
-            discard_ratio: discard_ratio.clone(),
-            start_control_time: Instant::now_coarse(),
-            limiter: limiter.clone(),
-            recorder: Smoother::new(),
-            last_flush_bytes: 0,
-            last_l0_bytes: 0,
-            last_flush_bytes_time: Instant::now_coarse(),
-            last_l0_bytes_time: Instant::now_coarse(),
-            last_l0_flow: 0.0,
-        };
+            discard_ratio.clone(),
+            limiter.clone(),
+        );
         let (tx, rx) = mpsc::channel();
         let handle = if config.disable_write_stall {
             Some(checker.start(rx, l0_completed_receiver.unwrap()))

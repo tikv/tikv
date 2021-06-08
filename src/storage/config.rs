@@ -84,7 +84,7 @@ impl Default for Config {
             pending_compaction_bytes_soft_limit: ReadableSize::gb(64).0,
             pending_compaction_bytes_hard_limit: ReadableSize::gb(1000).0,
             memtables_threshold: 10,
-            l0_files_threshold: 10,
+            l0_files_threshold: 8,
         }
     }
 }

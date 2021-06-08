@@ -305,34 +305,40 @@ lazy_static! {
         "The speed of throttle flow."
     )
     .unwrap();
-    pub static ref SCHED_MEMTABLE_GAUGE: IntGauge = register_int_gauge!(
+    pub static ref SCHED_MEMTABLE_GAUGE: IntGaugeVec = register_int_gauge_vec!(
         "tikv_scheduler_memtable",
-        "The speed of throttle flow."
+        "The speed of throttle flow.",
+        &["cf"]
     )
     .unwrap();
-    pub static ref SCHED_L0_GAUGE: IntGauge = register_int_gauge!(
+    pub static ref SCHED_L0_GAUGE: IntGaugeVec = register_int_gauge_vec!(
         "tikv_scheduler_l0",
-        "The speed of throttle flow."
+        "The speed of throttle flow.",
+        &["cf"]
     )
     .unwrap();
-    pub static ref SCHED_FLUSH_L0_GAUGE: IntGauge = register_int_gauge!(
+    pub static ref SCHED_FLUSH_L0_GAUGE: IntGaugeVec = register_int_gauge_vec!(
         "tikv_scheduler_flush_l0",
-        "The speed of throttle flow."
+        "The speed of throttle flow.",
+        &["cf"]
     )
     .unwrap();
-    pub static ref SCHED_L0_AVG_GAUGE: IntGauge = register_int_gauge!(
+    pub static ref SCHED_L0_AVG_GAUGE: IntGaugeVec = register_int_gauge_vec!(
         "tikv_scheduler_l0_avg",
-        "The speed of throttle flow."
+        "The speed of throttle flow.",
+        &["cf"]
     )
     .unwrap();
-    pub static ref SCHED_FLUSH_FLOW_GAUGE: IntGauge = register_int_gauge!(
+    pub static ref SCHED_FLUSH_FLOW_GAUGE: IntGaugeVec = register_int_gauge_vec!(
         "tikv_scheduler_flush_flow",
-        "The speed of throttle flow."
+        "The speed of throttle flow.",
+        &["cf"]
     )
     .unwrap();
-    pub static ref SCHED_L0_FLOW_GAUGE: IntGauge = register_int_gauge!(
+    pub static ref SCHED_L0_FLOW_GAUGE: IntGaugeVec = register_int_gauge_vec!(
         "tikv_scheduler_l0_flow",
-        "The speed of throttle flow."
+        "The speed of throttle flow.",
+        &["cf"]
     )
     .unwrap();
     pub static ref SCHED_THROTTLE_ACTION_COUNTER: IntCounterVec = {
