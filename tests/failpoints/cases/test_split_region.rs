@@ -678,7 +678,7 @@ fn test_report_approximate_size_after_split_check() {
         .get_region_approximate_keys(region_id)
         .unwrap_or_default();
     assert!(approximate_size == 0 && approximate_keys == 0);
-    let value = vec![1 as u8; 4000];
+    let value = vec![1_u8; 4000];
     let mut reqs = vec![];
     for i in 100..410 {
         let k = format!("k{}", i);
