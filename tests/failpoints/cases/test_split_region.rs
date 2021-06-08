@@ -668,6 +668,8 @@ fn test_report_approximate_size_after_split_check() {
     cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
     cluster.cfg.raft_store.region_split_check_diff = ReadableSize::kb(256);
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(500);
     cluster.run();
     let value = vec![1_u8; 1000];
     let mut reqs = vec![];
@@ -686,7 +688,7 @@ fn test_report_approximate_size_after_split_check() {
         .get_region_approximate_keys(region_id)
         .unwrap_or_default();
     assert!(approximate_size == 0 && approximate_keys == 0);
-    let (tx, rx) = mpsc::sync_channel(0);
+    let (tx, rx) = mpsc::sync_channel(1);
     let tx = Arc::new(Mutex::new(tx));
 
     fail::cfg_callback("on_split_region_check_tick", move || {
