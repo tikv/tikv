@@ -638,6 +638,8 @@ mod tests {
 
             collector.check(merge(vec![expected0, expected1, expected2]));
         }
+
+        handle.pause();
     }
 
     impl DummyCollector {
@@ -645,7 +647,7 @@ mod tests {
             // Wait a collect interval to avoid losing records.
             std::thread::sleep(Duration::from_millis(1200));
 
-            const MAX_DRIFT: u64 = 50;
+            const MAX_DRIFT: u64 = 150;
             let mut res = self.records.lock().unwrap();
 
             for k in expected.keys() {
@@ -661,7 +663,7 @@ mod tests {
                 let r = value.saturating_add(MAX_DRIFT);
                 if !(l <= expected_value && expected_value <= r) {
                     panic!(
-                        "tag {} cpu time expected {} got {}",
+                        "tag {} cpu time expected {} but got {}",
                         k, expected_value, value
                     );
                 }
