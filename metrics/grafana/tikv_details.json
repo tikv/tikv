@@ -3649,7 +3649,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "playground",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": null,
           "fill": 1,
           "gridPos": {
