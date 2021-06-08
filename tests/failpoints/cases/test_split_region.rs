@@ -667,6 +667,7 @@ fn test_report_approximate_size_after_split_check() {
     cluster.cfg.raft_store = RaftstoreConfig::default();
     cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.region_split_check_diff = ReadableSize::kb(256);
     cluster.run();
     let value = vec![1_u8; 1000];
     let mut reqs = vec![];
