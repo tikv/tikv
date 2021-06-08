@@ -686,6 +686,8 @@ fn test_serde_custom_tikv_config() {
         min_ts_interval: ReadableDuration::secs(4),
         old_value_cache_size: 512,
         hibernate_regions_compatible: false,
+        incremental_scan_threads: 3,
+        incremental_scan_concurrency: 4,
         incremental_scan_speed_limit: ReadableSize(7),
         old_value_cache_memory_quota: ReadableSize::mb(14),
         sink_memory_quota: ReadableSize::mb(7),

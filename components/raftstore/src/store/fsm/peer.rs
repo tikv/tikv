@@ -928,7 +928,6 @@ where
                 "persisted_peer_id" => peer_id,
                 "persisted_number" => number,
             );
-            return;
         }
         // TODO: add truly async io logic
     }

@@ -419,9 +419,8 @@ where
             self.notifier.notify_unreachable(region_id, to_peer_id);
         }
         STORE_WRITE_SEND_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()));
+
         now = Instant::now();
-        // The order between send msg and send ready callback is important for snapshot process
-        // TODO: add more comments
         for (region_id, r) in &self.wb.readies {
             self.notifier.notify_persisted(*region_id, *r, now);
         }
@@ -619,7 +618,7 @@ mod tests {
 
         fn must_have_same_count_msg(&self, msg_count: u32) {
             let mut count = 0;
-            while let Ok(_) = self.msg_rx.try_recv() {
+            while self.msg_rx.try_recv().is_ok() {
                 count += 1;
             }
             assert_eq!(count, msg_count);
