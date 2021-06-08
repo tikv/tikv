@@ -202,11 +202,13 @@ fn test_serde_custom_tikv_config() {
         local_read_batch_size: 33,
         apply_batch_system,
         store_batch_system,
+        store_io_pool_size: 5,
         future_poll_size: 2,
         hibernate_regions: false,
         dev_assert: true,
         apply_yield_duration: ReadableDuration::millis(333),
         perf_level: PerfLevel::EnableTime,
+        trigger_write_size: ReadableSize::mb(34),
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
@@ -684,8 +686,6 @@ fn test_serde_custom_tikv_config() {
         min_ts_interval: ReadableDuration::secs(4),
         old_value_cache_size: 512,
         hibernate_regions_compatible: false,
-        incremental_scan_threads: 3,
-        incremental_scan_concurrency: 4,
         incremental_scan_speed_limit: ReadableSize(7),
         old_value_cache_memory_quota: ReadableSize::mb(14),
         sink_memory_quota: ReadableSize::mb(7),

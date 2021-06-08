@@ -1,7 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use prometheus::local::LocalHistogram;
 use std::sync::{Arc, Mutex};
+
+use prometheus::local::LocalHistogram;
+use raft::eraftpb::MessageType;
 
 use collections::HashSet;
 
@@ -86,7 +88,6 @@ pub struct RaftSendMessageMetrics {
     pub vote: SendStatus,
     pub vote_resp: SendStatus,
     pub snapshot: SendStatus,
-    pub request_snapshot: SendStatus,
     pub heartbeat: SendStatus,
     pub heartbeat_resp: SendStatus,
     pub transfer_leader: SendStatus,
@@ -96,8 +97,35 @@ pub struct RaftSendMessageMetrics {
 }
 
 impl RaftSendMessageMetrics {
+    pub fn add(&mut self, msg_type: MessageType, success: bool) {
+        let i = success as usize;
+        match msg_type {
+            MessageType::MsgAppend => self.append[i] += 1,
+            MessageType::MsgAppendResponse => self.append_resp[i] += 1,
+            MessageType::MsgRequestPreVote => self.prevote[i] += 1,
+            MessageType::MsgRequestPreVoteResponse => self.prevote_resp[i] += 1,
+            MessageType::MsgRequestVote => self.vote[i] += 1,
+            MessageType::MsgRequestVoteResponse => self.vote_resp[i] += 1,
+            MessageType::MsgSnapshot => self.snapshot[i] += 1,
+            MessageType::MsgHeartbeat => self.heartbeat[i] += 1,
+            MessageType::MsgHeartbeatResponse => self.heartbeat_resp[i] += 1,
+            MessageType::MsgTransferLeader => self.transfer_leader[i] += 1,
+            MessageType::MsgReadIndex => self.read_index[i] += 1,
+            MessageType::MsgReadIndexResp => self.read_index_resp[i] += 1,
+            MessageType::MsgTimeoutNow => self.timeout_now[i] += 1,
+            // We do not care about these message types for metrics.
+            // Explicitly declare them so when we add new message types we are forced to
+            // decide.
+            MessageType::MsgHup
+            | MessageType::MsgBeat
+            | MessageType::MsgPropose
+            | MessageType::MsgUnreachable
+            | MessageType::MsgSnapStatus
+            | MessageType::MsgCheckQuorum => {}
+        }
+    }
     /// Flushes all metrics
-    fn flush(&mut self) {
+    pub fn flush(&mut self) {
         // reset all buffered metrics once they have been added
         flush_send_status!(append, self);
         flush_send_status!(append_resp, self);
@@ -106,7 +134,6 @@ impl RaftSendMessageMetrics {
         flush_send_status!(vote, self);
         flush_send_status!(vote_resp, self);
         flush_send_status!(snapshot, self);
-        flush_send_status!(request_snapshot, self);
         flush_send_status!(heartbeat, self);
         flush_send_status!(heartbeat_resp, self);
         flush_send_status!(transfer_leader, self);

@@ -7,6 +7,7 @@
 #![feature(min_specialization)]
 #![feature(box_patterns)]
 #![feature(vecdeque_binary_search)]
+#![recursion_limit = "256"]
 
 #[cfg(test)]
 extern crate test;

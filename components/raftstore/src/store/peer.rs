@@ -1072,46 +1072,19 @@ where
     {
         for msg in msgs {
             let msg_type = msg.get_msg_type();
-            let snapshot_index = msg.get_request_snapshot();
-            let i = self.send_raft_message(msg, trans) as usize;
-            match msg_type {
-                MessageType::MsgAppend => metrics.append[i] += 1,
-                MessageType::MsgAppendResponse => {
-                    if snapshot_index != raft::INVALID_INDEX {
-                        metrics.request_snapshot[i] += 1;
-                    }
-                    metrics.append_resp[i] += 1;
-                }
-                MessageType::MsgRequestPreVote => metrics.prevote[i] += 1,
-                MessageType::MsgRequestPreVoteResponse => metrics.prevote_resp[i] += 1,
-                MessageType::MsgRequestVote => metrics.vote[i] += 1,
-                MessageType::MsgRequestVoteResponse => metrics.vote_resp[i] += 1,
-                MessageType::MsgSnapshot => metrics.snapshot[i] += 1,
-                MessageType::MsgHeartbeat => metrics.heartbeat[i] += 1,
-                MessageType::MsgHeartbeatResponse => metrics.heartbeat_resp[i] += 1,
-                MessageType::MsgTransferLeader => metrics.transfer_leader[i] += 1,
-                MessageType::MsgReadIndex => metrics.read_index[i] += 1,
-                MessageType::MsgReadIndexResp => metrics.read_index_resp[i] += 1,
-                MessageType::MsgTimeoutNow => {
-                    // After a leader transfer procedure is triggered, the lease for
-                    // the old leader may be expired earlier than usual, since a new leader
-                    // may be elected and the old leader doesn't step down due to
-                    // network partition from the new leader.
-                    // For lease safety during leader transfer, transit `leader_lease`
-                    // to suspect.
-                    self.leader_lease.suspect(monotonic_raw_now());
-
-                    metrics.timeout_now[i] += 1;
-                }
-                // We do not care about these message types for metrics.
-                // Explicitly declare them so when we add new message types we are forced to
-                // decide.
-                MessageType::MsgHup
-                | MessageType::MsgBeat
-                | MessageType::MsgPropose
-                | MessageType::MsgUnreachable
-                | MessageType::MsgSnapStatus
-                | MessageType::MsgCheckQuorum => {}
+            if msg_type == MessageType::MsgTimeoutNow && self.is_leader() {
+                // After a leader transfer procedure is triggered, the lease for
+                // the old leader may be expired earlier than usual, since a new leader
+                // may be elected and the old leader doesn't step down due to
+                // network partition from the new leader.
+                // For lease safety during leader transfer, transit `leader_lease`
+                // to suspect.
+                self.leader_lease.suspect(monotonic_raw_now());
+            }
+            if self.send_raft_message(msg, trans) {
+                metrics.add(msg_type, true);
+            } else {
+                metrics.add(msg_type, false);
             }
         }
     }

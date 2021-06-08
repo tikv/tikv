@@ -438,7 +438,9 @@ pub enum PeerMsg<EK: KvEngine> {
     /// that the raft node will not work anymore.
     Tick(PeerTicks),
     /// Result of applying committed entries. The message can't be lost.
-    ApplyRes { res: ApplyTaskRes<EK::Snapshot> },
+    ApplyRes {
+        res: ApplyTaskRes<EK::Snapshot>,
+    },
     /// Message that can't be lost but rarely created. If they are lost, real bad
     /// things happen like some peers will be considered dead in the group.
     SignificantMsg(SignificantMsg<EK::Snapshot>),
@@ -446,6 +448,7 @@ pub enum PeerMsg<EK: KvEngine> {
     Start,
     /// A message only used to notify a peer.
     Noop,
+    Persisted((u64, u64, Instant)),
     /// Message that is not important and can be dropped occasionally.
     CasualMessage(CasualMessage<EK>),
     /// Ask region to report a heartbeat to PD.
@@ -468,6 +471,7 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
             PeerMsg::ApplyRes { res } => write!(fmt, "ApplyRes {:?}", res),
             PeerMsg::Start => write!(fmt, "Startup"),
             PeerMsg::Noop => write!(fmt, "Noop"),
+            PeerMsg::Persisted(ts) => write!(fmt, "Persisted {:?}", ts),
             PeerMsg::CasualMessage(msg) => write!(fmt, "CasualMessage {:?}", msg),
             PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
             PeerMsg::UpdateReplicationMode => write!(fmt, "UpdateReplicationMode"),

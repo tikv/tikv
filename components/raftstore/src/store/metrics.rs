@@ -61,7 +61,6 @@ make_auto_flush_static_metric! {
         vote,
         vote_resp,
         snapshot,
-        request_snapshot,
         heartbeat,
         heartbeat_resp,
         transfer_leader,
@@ -209,6 +208,61 @@ make_static_metric! {
 }
 
 lazy_static! {
+    pub static ref STORE_WRITE_TASK_WAIT_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_write_task_wait_duration_secs",
+            "Bucketed histogram of store write task wait time duration.",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    pub static ref STORE_WRITE_TASK_GEN_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_write_task_gen_duration_secs",
+            "Bucketed histogram of waiting the first store write task duration.",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    pub static ref STORE_WRITE_HANDLE_MSG_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_write_handle_msg_duration_secs",
+            "Bucketed histogram of handle store write msg duration.",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    pub static ref STORE_WRITE_TRIGGER_SIZE_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_write_trigger_wb_bytes",
+            "Bucketed histogram of store write task size of raft writebatch.",
+            exponential_buckets(0.5, 2.0, 28).unwrap()
+        ).unwrap();
+    pub static ref STORE_WRITE_KVDB_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_write_kvdb_duration_seconds",
+            "Bucketed histogram of store write kv db duration.",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    pub static ref STORE_WRITE_RAFTDB_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_write_raftdb_duration_seconds",
+            "Bucketed histogram of store write raft db duration.",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    pub static ref STORE_WRITE_SEND_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_write_send_duration_seconds",
+            "Bucketed histogram of sending msg duration after writing db.",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    pub static ref STORE_WRITE_CALLBACK_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_write_callback_duration_seconds",
+            "Bucketed histogram of sending callback to store thread duration.",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    pub static ref STORE_WRITE_LOOP_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_write_loop_duration_seconds",
+            "Bucketed histogram of store write loop duration.",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+
     pub static ref PEER_PROPOSAL_COUNTER_VEC: IntCounterVec =
         register_int_counter_vec!(
             "tikv_raftstore_proposal_total",
@@ -310,8 +364,7 @@ lazy_static! {
         register_histogram!(
             "tikv_raftstore_propose_log_size",
             "Bucketed histogram of peer proposing log size.",
-            vec![256.0, 512.0, 1024.0, 4096.0, 65536.0, 262144.0, 524288.0, 1048576.0,
-                    2097152.0, 4194304.0, 8388608.0, 16777216.0]
+            exponential_buckets(0.5, 2.0, 26).unwrap()
         ).unwrap();
 
     pub static ref REGION_HASH_COUNTER_VEC: IntCounterVec =

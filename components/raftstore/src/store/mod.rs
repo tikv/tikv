@@ -10,6 +10,7 @@ pub mod transport;
 #[macro_use]
 pub mod util;
 
+mod async_io;
 mod bootstrap;
 mod compaction_guard;
 mod hibernate_state;

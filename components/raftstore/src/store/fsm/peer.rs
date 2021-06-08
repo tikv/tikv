@@ -580,6 +580,9 @@ where
                     }
                 }
                 PeerMsg::Noop => {}
+                PeerMsg::Persisted((peer_id, number, ts)) => {
+                    self.on_persisted_msg(peer_id, number, ts)
+                }
                 PeerMsg::UpdateReplicationMode => self.on_update_replication_mode(),
             }
         }
@@ -914,6 +917,20 @@ where
                 self.on_leader_callback(cb);
             }
         }
+    }
+
+    fn on_persisted_msg(&mut self, peer_id: u64, number: u64, _ts: Instant) {
+        if peer_id != self.fsm.peer_id() {
+            error!(
+                "peer id not match";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "persisted_peer_id" => peer_id,
+                "persisted_number" => number,
+            );
+            return;
+        }
+        // TODO: add truly async io logic
     }
 
     fn report_snapshot_status(&mut self, to_peer_id: u64, status: SnapshotStatus) {

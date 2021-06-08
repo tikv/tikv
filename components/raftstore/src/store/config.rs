@@ -163,6 +163,9 @@ pub struct Config {
     pub store_batch_system: BatchSystemConfig,
 
     #[config(skip)]
+    pub store_io_pool_size: usize,
+
+    #[config(skip)]
     pub future_poll_size: usize,
     #[config(hidden)]
     pub hibernate_regions: bool,
@@ -171,6 +174,13 @@ pub struct Config {
     pub dev_assert: bool,
     #[config(hidden)]
     pub apply_yield_duration: ReadableDuration,
+
+    #[serde(with = "engine_config::perf_level_serde")]
+    #[config(skip)]
+    pub perf_level: PerfLevel,
+
+    #[config(skip)]
+    pub trigger_write_size: ReadableSize,
 
     // Deprecated! These configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
@@ -187,9 +197,6 @@ pub struct Config {
     #[serde(skip_serializing)]
     #[config(skip)]
     pub clean_stale_peer_delay: ReadableDuration,
-    #[serde(with = "engine_config::perf_level_serde")]
-    #[config(skip)]
-    pub perf_level: PerfLevel,
 }
 
 impl Default for Config {
@@ -250,16 +257,18 @@ impl Default for Config {
             local_read_batch_size: 1024,
             apply_batch_system: BatchSystemConfig::default(),
             store_batch_system: BatchSystemConfig::default(),
+            store_io_pool_size: 2,
             future_poll_size: 1,
             hibernate_regions: true,
             dev_assert: false,
             apply_yield_duration: ReadableDuration::millis(500),
+            perf_level: PerfLevel::Disable,
+            trigger_write_size: ReadableSize::mb(1),
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
             region_split_size: ReadableSize(0),
             clean_stale_peer_delay: ReadableDuration::minutes(0),
-            perf_level: PerfLevel::Disable,
         }
     }
 }
@@ -603,11 +612,17 @@ impl Config {
             .with_label_values(&["store_pool_size"])
             .set(self.store_batch_system.pool_size as f64);
         CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["store_io_pool_size"])
+            .set((self.store_io_pool_size as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["future_poll_size"])
             .set(self.future_poll_size as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["hibernate_regions"])
             .set((self.hibernate_regions as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["trigger_write_size"])
+            .set(self.trigger_write_size.0 as f64);
     }
 
     fn write_change_into_metrics(change: ConfigChange) {

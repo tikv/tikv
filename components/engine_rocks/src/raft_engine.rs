@@ -243,8 +243,16 @@ impl RaftLogBatch for RocksWriteBatch {
         self.put_msg(&keys::raft_state_key(raft_group_id), state)
     }
 
+    fn persist_size(&self) -> usize {
+        self.data_size()
+    }
+
     fn is_empty(&self) -> bool {
         WriteBatch::is_empty(self)
+    }
+
+    fn merge(&mut self, src: Self) {
+        self.merge(&src);
     }
 }
 
