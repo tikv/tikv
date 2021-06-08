@@ -65,7 +65,8 @@ pub struct ResourceMeteringReporter {
 
     // resource_tag -> ([timestamp_secs], [cpu_time_ms], total_cpu_time_ms)
     records: HashMap<Vec<u8>, (Vec<u64>, Vec<u32>, u32)>,
-
+    // timestamp_secs -> cpu_time_ms
+    others: HashMap<u64, u32>,
     find_top_k: Vec<u32>,
 }
 
@@ -79,6 +80,7 @@ impl ResourceMeteringReporter {
             reporting: Arc::new(AtomicBool::new(false)),
             cpu_records_collector: None,
             records: HashMap::default(),
+            others: HashMap::default(),
             find_top_k: Vec::default(),
         }
     }
@@ -154,7 +156,16 @@ impl Runnable for ResourceMeteringReporter {
                         |a, b| b.cmp(a),
                     );
                     let kth = self.find_top_k[self.config.max_resource_groups];
-                    self.records.retain(|_, (_, _, total)| *total >= kth);
+                    let others = &mut self.others;
+                    self.records.retain(|_, (secs_list, cpu_time_list, total)| {
+                        let retain = *total >= kth;
+                        if !retain {
+                            for (secs, cpu_time) in secs_list.iter().zip(cpu_time_list.iter()) {
+                                *others.entry(*secs).or_insert(0) += *cpu_time;
+                            }
+                        }
+                        retain
+                    });
                 }
             }
         }
@@ -169,10 +180,13 @@ impl Runnable for ResourceMeteringReporter {
 impl RunnableWithTimer for ResourceMeteringReporter {
     fn on_timeout(&mut self) {
         if self.records.is_empty() {
+            assert!(self.others.is_empty());
             return;
         }
 
         let records = std::mem::take(&mut self.records);
+        let others = std::mem::take(&mut self.others);
+
         if self.reporting.load(SeqCst) {
             return;
         }
@@ -195,6 +209,22 @@ impl RunnableWithTimer for ResourceMeteringReporter {
                                 return;
                             }
                         }
+
+                        // others
+                        let mut timestamp_list = others.keys().cloned().collect::<Vec<_>>();
+                        timestamp_list.sort_unstable();
+                        let cpu_time_ms_list = timestamp_list
+                            .iter()
+                            .map(|ts| others.get(ts).unwrap())
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        let mut req = ReportCpuTimeRequest::default();
+                        req.set_record_list_timestamp_sec(timestamp_list);
+                        req.set_record_list_cpu_time_ms(cpu_time_ms_list);
+                        if tx.send((req, WriteFlags::default())).await.is_err() {
+                            return;
+                        }
+
                         if tx.close().await.is_err() {
                             return;
                         }
