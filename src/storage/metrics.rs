@@ -345,7 +345,7 @@ lazy_static! {
         register_int_counter_vec!(
             "tikv_scheduler_throttle_action_total",
             "Total number of commands on each stage.",
-            &["type"]
+            &["cf", "type"]
         )
         .unwrap()
     };
