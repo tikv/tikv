@@ -27,11 +27,9 @@ use kvproto::raft_serverpb::{
 };
 use kvproto::replication_modepb::{DrAutoSyncState, ReplicationMode};
 use protobuf::Message;
-use raft::eraftpb::{ConfChangeType, MessageType};
-use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
-use raft::{Ready, StateRole};
+use raft::eraftpb::{ConfChangeType, Entry, MessageType};
+use raft::{self, Progress, ReadState, Ready, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT};
 use tikv_alloc::trace::TraceEvent;
-use tikv_util::memory::HeapSize;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::sys::memory_usage_reaches_high_water;
 use tikv_util::time::duration_to_sec;
@@ -40,6 +38,8 @@ use tikv_util::{box_err, debug, error, info, trace, warn};
 use tikv_util::{escape, is_zero_duration, Either};
 use txn_types::WriteBatchFlags;
 
+pub use self::memtrace::PeerMemoryTraceEvents;
+use self::memtrace::*;
 use crate::coprocessor::RegionChangeEvent;
 use crate::store::cmd_resp::{bind_term, new_error};
 use crate::store::fsm::store::{PollContext, StoreMeta};
@@ -127,6 +127,8 @@ where
     // Batch raft command which has the same header into an entry
     batch_req_builder: BatchRaftCmdRequestBuilder<EK>,
 
+    max_inflight_msgs: usize,
+
     trace: PeerMemoryTrace,
 }
 
@@ -166,6 +168,12 @@ where
             _ => &HIBERNATED_PEER_STATE_GAUGE.awaken,
         })
         .dec();
+
+        let mut events = PeerMemoryTraceEvents::default();
+        self.update_memory_trace(&mut events);
+        MEMTRACE_PEER_READ_ONLY.trace(events.read_only);
+        MEMTRACE_PEER_PROGRESS.trace(events.progress);
+        MEMTRACE_PEER_ENTRIES.trace(events.entries);
     }
 }
 
@@ -220,6 +228,7 @@ where
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(
                     cfg.raft_entry_max_size.0 as f64,
                 ),
+                max_inflight_msgs: cfg.raft_max_inflight_msgs,
                 trace: PeerMemoryTrace::default(),
             }),
         ))
@@ -263,6 +272,7 @@ where
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(
                     cfg.raft_entry_max_size.0 as f64,
                 ),
+                max_inflight_msgs: cfg.raft_max_inflight_msgs,
                 trace: PeerMemoryTrace::default(),
             }),
         ))
@@ -305,35 +315,50 @@ where
             .maybe_hibernate(self.peer.peer_id(), self.peer.region())
     }
 
-    #[inline]
-    pub fn raft_heap_size(&self, cfg: &Config) -> usize {
+    pub fn raft_read_size(&self) -> usize {
+        let msg_size = mem::size_of::<raft::eraftpb::Message>();
         let raft = &self.peer.raft_group.raft;
-        let peer_cnt = self.peer.region().get_peers().len();
-        let inflight_size = cfg.raft_max_inflight_msgs * mem::size_of::<u64>();
-        // Progress size
-        let mut size =
-            mem::size_of::<raft::Progress>() * peer_cnt * 6 / 5 + inflight_size * peer_cnt;
+
         // We use Uuid for read request.
-        size += raft.read_states.len() * (mem::size_of::<raft::ReadState>() + 16);
+        let mut size = raft.read_states.len() * (mem::size_of::<ReadState>() + 16);
+        size += raft.read_only.read_index_queue.len() * 16;
+
         // Every requests have at least header, which should be at least 8 bytes.
-        let entries = &raft.raft_log.unstable.entries;
-        size += entries.len() * (mem::size_of::<raft::eraftpb::Entry>() + 8);
-        let read_only = &raft.read_only;
-        size +=
-            read_only.pending_read_index.len() * (16 + mem::size_of::<raft::eraftpb::Message>());
-        size += read_only.read_index_queue.heap_size() + 16 * read_only.read_index_queue.len();
-        size += raft.msgs.len() * mem::size_of::<raft::eraftpb::Message>();
-        size
+        size + raft.read_only.pending_read_index.len() * (16 + msg_size)
     }
 
-    #[inline]
-    pub fn update_memory_trace(&mut self, cfg: &Config) -> Option<TraceEvent> {
-        let trace = PeerMemoryTrace {
-            raft_machine: self.raft_heap_size(cfg),
-            proposals: self.peer.proposal_size(),
-            rest: self.peer.rest_size() + mem::size_of::<Self>(),
-        };
-        self.trace.reset(trace)
+    pub fn raft_progress_size(&self) -> usize {
+        let peer_cnt = self.peer.region().get_peers().len();
+        let inflight_size = self.max_inflight_msgs * mem::size_of::<u64>();
+        mem::size_of::<Progress>() * peer_cnt * 6 / 5 + inflight_size * peer_cnt
+    }
+
+    /// Unstable entries heap size.
+    /// NOTE: Entry::data and Entry::context is not counted.
+    pub fn raft_entries_size(&self) -> usize {
+        let raft = &self.peer.raft_group.raft;
+        let entries = &raft.raft_log.unstable.entries;
+        entries.len() * (mem::size_of::<Entry>() + 8)
+    }
+
+    pub fn update_memory_trace(&mut self, events: &mut PeerMemoryTraceEvents) {
+        let heap_size = self.raft_read_size();
+        let task = RaftReadOnly { heap_size };
+        if let Some(event) = self.trace.read_only.reset(task) {
+            events.read_only = events.read_only + event;
+        }
+
+        let heap_size = self.raft_progress_size();
+        let task = RaftProgress { heap_size };
+        if let Some(event) = self.trace.progress.reset(task) {
+            events.progress = events.progress + event;
+        }
+
+        let heap_size = self.raft_entries_size();
+        let task = RaftEntries { heap_size };
+        if let Some(event) = self.trace.entries.reset(task) {
+            events.entries = events.entries + event;
+        }
     }
 }
 
@@ -1993,7 +2018,6 @@ where
         // So in here, it's necessary to held the StoreMeta lock when closing the router.
         self.ctx.router.close(region_id);
         self.fsm.stop();
-        MEMTRACE_PEERS.trace(TraceEvent::Sub(self.fsm.trace.sum()));
 
         if is_initialized
             && !merged_by_target
@@ -4264,6 +4288,43 @@ impl<EK: KvEngine, ER: RaftEngine> AbstractPeer for PeerFsm<EK, ER> {
     }
     fn pending_merge_state(&self) -> Option<&MergeState> {
         self.peer.pending_merge_state.as_ref()
+    }
+}
+
+mod memtrace {
+    use super::*;
+    use memory_trace_macros::MemoryTraceHelper;
+
+    /// Heap size for Raft internal `ReadOnly`.
+    #[derive(MemoryTraceHelper, Default, Debug)]
+    pub struct RaftReadOnly {
+        pub heap_size: usize,
+    }
+
+    /// Heap size for Raft progresses.
+    #[derive(MemoryTraceHelper, Default, Debug)]
+    pub struct RaftProgress {
+        pub heap_size: usize,
+    }
+
+    /// Heap size for Raft unstable entries.
+    #[derive(MemoryTraceHelper, Default, Debug)]
+    pub struct RaftEntries {
+        pub heap_size: usize,
+    }
+
+    #[derive(Default, Debug)]
+    pub struct PeerMemoryTrace {
+        pub read_only: RaftReadOnly,
+        pub progress: RaftProgress,
+        pub entries: RaftEntries,
+    }
+
+    #[derive(Default)]
+    pub struct PeerMemoryTraceEvents {
+        pub read_only: TraceEvent,
+        pub progress: TraceEvent,
+        pub entries: TraceEvent,
     }
 }
 

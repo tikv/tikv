@@ -3546,6 +3546,10 @@ where
 {
     fn drop(&mut self) {
         self.delegate.clear_all_commands_as_stale();
+        let mut events = ApplyMemoryTraceEvents::default();
+        self.delegate.update_memory_trace(&mut events);
+        MEMTRACE_APPLY_COMMANDS.trace(events.pending_cmds);
+        MEMTRACE_APPLY_YIELD.trace(events.merge_yield);
     }
 }
 

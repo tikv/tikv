@@ -2,7 +2,6 @@
 
 use fail::fail_point;
 use lazy_static::lazy_static;
-use memory_trace_macros::MemoryTraceHelper;
 use std::sync::Arc;
 use tikv_alloc::{
     mem_trace,
@@ -15,27 +14,42 @@ lazy_static! {
     pub static ref MEMTRACE_ROOT: Arc<MemoryTraceNode> = mem_trace!(
         raftstore,
         [
-            peers,
-            entry_cache,
-            apply_pending_commands,
+            raft_read_only,
+            raft_progress,
+            raft_entries,
+            apply_pending_cmds,
             apply_merge_yield,
+            entry_cache,
             (raft_router, [alive, leak]),
             (apply_router, [alive, leak])
         ]
     );
-    pub static ref MEMTRACE_PEERS: Arc<dyn MemoryTrace + Send + Sync> =
-        MEMTRACE_ROOT.sub_trace(Id::Name("peers"));
+
+
+    /// Memory usage for `ReadOnly`s in all raft groups.
+    pub static ref MEMTRACE_PEER_READ_ONLY: Arc<dyn MemoryTrace + Send + Sync> =
+        MEMTRACE_ROOT.sub_trace(Id::Name("raft_read_only"));
+
+    /// Memory usage for `Progress` in all raft groups.
+    pub static ref MEMTRACE_PEER_PROGRESS: Arc<dyn MemoryTrace + Send + Sync> =
+        MEMTRACE_ROOT.sub_trace(Id::Name("raft_progress"));
+
+    /// Memory usage for unstale raft entries in all raft groups.
+    pub static ref MEMTRACE_PEER_ENTRIES: Arc<dyn MemoryTrace + Send + Sync> =
+        MEMTRACE_ROOT.sub_trace(Id::Name("raft_entries"));
 
     /// Memory usage for pending commands in all `ApplyFsm`.
     pub static ref MEMTRACE_APPLY_COMMANDS: Arc<dyn MemoryTrace + Send + Sync> =
-        MEMTRACE_ROOT.sub_trace(Id::Name("apply_pending_commands"));
+        MEMTRACE_ROOT.sub_trace(Id::Name("apply_pending_cmds"));
 
     /// Memory usage for merge yield state in all `ApplyFsm`.
     pub static ref MEMTRACE_APPLY_YIELD: Arc<dyn MemoryTrace + Send + Sync> =
         MEMTRACE_ROOT.sub_trace(Id::Name("apply_merge_yield"));
 
+    /// Memory usage for raft entry cache.
     pub static ref MEMTRACE_ENTRY_CACHE: Arc<dyn MemoryTrace + Send + Sync> =
         MEMTRACE_ROOT.sub_trace(Id::Name("entry_cache"));
+
     pub static ref MEMTRACE_RAFT_ROUTER_ALIVE: Arc<dyn MemoryTrace + Send + Sync> = MEMTRACE_ROOT
         .sub_trace(Id::Name("raft_router"))
         .sub_trace(Id::Name("alive"));
@@ -48,13 +62,6 @@ lazy_static! {
     pub static ref MEMTRACE_APPLY_ROUTER_LEAK: Arc<dyn MemoryTrace + Send + Sync> = MEMTRACE_ROOT
         .sub_trace(Id::Name("apply_router"))
         .sub_trace(Id::Name("leak"));
-}
-
-#[derive(MemoryTraceHelper, Default)]
-pub struct PeerMemoryTrace {
-    pub raft_machine: usize,
-    pub proposals: usize,
-    pub rest: usize,
 }
 
 pub fn needs_evict_entry_cache() -> bool {

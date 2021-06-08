@@ -58,7 +58,7 @@ pub const JOB_STATUS_CANCELLED: usize = 3;
 pub const JOB_STATUS_FINISHED: usize = 4;
 pub const JOB_STATUS_FAILED: usize = 5;
 
-const ENTRY_MEM_SIZE: usize = mem::size_of::<Entry>();
+pub const ENTRY_MEM_SIZE: usize = mem::size_of::<Entry>();
 
 /// Possible status returned by `check_applying_snap`.
 #[derive(Debug, Clone, Copy, PartialEq)]
