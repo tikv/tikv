@@ -682,26 +682,25 @@ fn test_report_approximate_size_after_split_check() {
         .get_region_approximate_keys(region_id)
         .unwrap_or_default();
     assert!(approximate_size == 0 && approximate_keys == 0);
-    // let (tx, rx) = mpsc::sync_channel(1);
-    // let tx = Arc::new(Mutex::new(tx));
+    let (tx, rx) = mpsc::sync_channel(10);
+    let tx = Arc::new(Mutex::new(tx));
 
-    // fail::cfg_callback("on_split_region_check_tick", move || {
-    //     // notify split region tick
-    //     let _ = tx.lock().unwrap().send(());
-    //     let tx1 = tx.clone();
-    //     fail::cfg_callback("on_approximate_region_size", move || {
-    //         // notify split check finished
-    //         let _ = tx1.lock().unwrap().send(());
-    //         let tx2 = tx1.clone();
-    //         fail::cfg_callback("test_raftstore::pd::region_heartbeat", move || {
-    //             // notify heartbeat region
-    //             let _ = tx2.lock().unwrap().send(());
-    //         })
-    //         .unwrap();
-    //     })
-    //     .unwrap();
-    // })
-    // .unwrap();
+    fail::cfg_callback("on_split_region_check_tick", move || {
+        // notify split region tick
+        let _ = tx.lock().unwrap().send(());
+        let tx1 = tx.clone();
+        fail::cfg_callback("on_approximate_region_size", move || {
+            // notify split check finished
+            let _ = tx1.lock().unwrap().send(());
+            let tx2 = tx1.clone();
+            fail::cfg_callback("test_raftstore::pd::region_heartbeat", move || {
+                // notify heartbeat region
+                let _ = tx2.lock().unwrap().send(());
+            })
+            .unwrap();
+        })
+        .unwrap();
+    }).unwrap();
     let value = vec![1_u8; 8096];
     for i in 0..10 {
         let mut reqs = vec![];
@@ -711,13 +710,12 @@ fn test_report_approximate_size_after_split_check() {
         }
         cluster.batch_put("k100".as_bytes(), reqs).unwrap();
     }
-    // rx.recv().unwrap();
-    // fail::remove("on_split_region_check_tick");
-    // rx.recv().unwrap();
-    // fail::remove("on_approximate_region_size");
-    // rx.recv().unwrap();
-    // fail::remove("test_raftstore::pd::region_heartbeat");
-    sleep_ms(500);
+    rx.recv().unwrap();
+    fail::remove("on_split_region_check_tick");
+    rx.recv().unwrap();
+    fail::remove("on_approximate_region_size");
+    rx.recv().unwrap();
+    fail::remove("test_raftstore::pd::region_heartbeat");
     let size = cluster
         .pd_client
         .get_region_approximate_size(region_id)
