@@ -2,6 +2,20 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [5.0.2] - 2021-06-09
++ Improvements
+  + Enable hibernate regions by default (i.e. `raftstore.hibernate-regions = true`). [#10266](https://github.com/tikv/tikv/pull/10266)
+  + Fix CDC OOM issue caused by reading old values. [#10246](https://github.com/tikv/tikv/pull/10246)
+  + BR now supports S3-compatible storage using virtual-host addressing style. [#10243](https://github.com/tikv/tikv/pull/10243)
+  + Fix read empty value for the clustered primary key column in the secondary index when collation is latin1_bin. [#10239](https://github.com/tikv/tikv/pull/10239)
+  + Add `abort-on-panic` config, which allow core dump to be generated when panic. Users still need to correctly config the environment to enable core dump. [#10216](https://github.com/tikv/tikv/pull/10216)
+  + Support ingesting default-cf and write-cf sst in one raft command. [#10202](https://github.com/tikv/tikv/pull/10202)
+  + Support back pressure CDC scan speed. [#10151](https://github.com/tikv/tikv/pull/10151)
+  + Reduce memory usage of CDC initial scan. [#10133](https://github.com/tikv/tikv/pull/10133)
+  + Fix sysbench point-get performance regression when TiKV readpool is not busy. [#10115](https://github.com/tikv/tikv/pull/10115)
+  + Improve CDC old value cache hit ratio in pessimistic txn [#10089](https://github.com/tikv/tikv/pull/10089)
+  + Approximate split range evenly [#10086](https://github.com/tikv/tikv/pull/10086)
+
 ## [5.0.1] - 2021-04-23
 
 + Improvements
