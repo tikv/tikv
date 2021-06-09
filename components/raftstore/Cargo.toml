@@ -10,6 +10,7 @@ publish = false
 default = ["protobuf-codec", "test-engines-rocksdb"]
 failpoints = ["fail/failpoints"]
 protobuf-codec = [
+  "protobuf/bytes",
   "batch-system/protobuf-codec",
   "concurrency_manager/protobuf-codec",
   "engine_test/protobuf-codec",
