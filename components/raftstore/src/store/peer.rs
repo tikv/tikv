@@ -1996,8 +1996,8 @@ where
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
         );
-        RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
-        for (req, cb, mut read_index) in read.cmds.drain(..) {
+        RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds().len() as i64);
+        for (req, cb, mut read_index) in read.take_cmds().drain(..) {
             // leader reports key is locked
             if let Some(locked) = read.locked.take() {
                 let mut response = raft_cmdpb::Response::default();
@@ -2038,8 +2038,8 @@ where
             // The response of this read index request is lost, but we need it for
             // the memory lock checking result. Resend the request.
             if let Some(read_index) = read.addition_request.take() {
-                assert_eq!(read.cmds.len(), 1);
-                let (mut req, cb, _) = read.cmds.pop().unwrap();
+                assert_eq!(read.cmds().len(), 1);
+                let (mut req, cb, _) = read.take_cmds().pop().unwrap();
                 assert_eq!(req.requests.len(), 1);
                 req.requests[0].set_read_index(*read_index);
                 let read_cmd = RaftCommand::new(req, cb);
@@ -2054,9 +2054,9 @@ where
             }
 
             assert!(read.read_index.is_some());
-            let is_read_index_request = read.cmds.len() == 1
-                && read.cmds[0].0.get_requests().len() == 1
-                && read.cmds[0].0.get_requests()[0].get_cmd_type() == CmdType::ReadIndex;
+            let is_read_index_request = read.cmds().len() == 1
+                && read.cmds()[0].0.get_requests().len() == 1
+                && read.cmds()[0].0.get_requests()[0].get_cmd_type() == CmdType::ReadIndex;
 
             if is_read_index_request {
                 self.response_read(&mut read, ctx, false);
