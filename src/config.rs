@@ -1249,12 +1249,12 @@ pub struct RaftDbConfig {
     pub allow_concurrent_memtable_write: bool,
     pub bytes_per_sync: ReadableSize,
     pub wal_bytes_per_sync: ReadableSize,
+    #[config(skip)]
+    pub gc_on_compaction: bool,
     #[config(submodule)]
     pub defaultcf: RaftDefaultCfConfig,
     #[config(skip)]
     pub titan: TitanDBConfig,
-    #[config(skip)]
-    pub gc_on_compaction: bool,
 }
 
 impl Default for RaftDbConfig {
