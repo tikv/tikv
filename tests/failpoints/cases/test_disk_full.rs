@@ -144,7 +144,12 @@ fn fail_leader_full(cluster: &mut Cluster<ServerCluster>) {
         let region2 = cluster.get_region(&right_key);
         assert!(region1.get_id() != region2.get_id());
         let resp = cluster.try_merge(region1.get_id(), region2.get_id());
-        assert!(is_error_response(&resp));
+        assert!(
+            resp.get_header()
+                .get_error()
+                .get_message()
+                .contains("disk full, all the business data write forbiden")
+        );
 
         let raft_stat = cluster.raft_local_state(1, leader.get_store_id());
         let index_4 = raft_stat.get_last_index();
