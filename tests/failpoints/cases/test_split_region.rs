@@ -667,16 +667,10 @@ fn test_report_approximate_size_after_split_check() {
     cluster.cfg.raft_store = RaftstoreConfig::default();
     cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
-    cluster.cfg.raft_store.region_split_check_diff = ReadableSize::kb(256);
-    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(100);
-    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(500);
+    cluster.cfg.raft_store.region_split_check_diff = ReadableSize::kb(64);
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(50);
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(300);
     cluster.run();
-    let value = vec![1_u8; 1000];
-    let mut reqs = vec![];
-    for i in 100..400 {
-        let k = format!("k{}", i);
-        reqs.push(new_put_cf_cmd("write", k.as_bytes(), &value));
-    }
     cluster.must_put_cf("write", b"k0", b"k1");
     let region_id = cluster.get_region_id(b"k0");
     let approximate_size = cluster
@@ -708,7 +702,15 @@ fn test_report_approximate_size_after_split_check() {
         .unwrap();
     })
     .unwrap();
-    cluster.batch_put("k100".as_bytes(), reqs).unwrap();
+    let value = vec![1_u8; 8096];
+    for i in 0..10 {
+        let mut reqs = vec![];
+        for j in 0..10 {
+            let k = format!("k{}", i * 10 + j);
+            reqs.push(new_put_cf_cmd("write", k.as_bytes(), &value));
+        }
+        cluster.batch_put("k100".as_bytes(), reqs).unwrap();
+    }
     rx.recv().unwrap();
     fail::remove("on_split_region_check_tick");
     rx.recv().unwrap();
