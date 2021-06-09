@@ -9,20 +9,6 @@ use std::time::*;
 use test_raftstore::*;
 use tikv_util::config::*;
 
-/*
-Disk full test will have 3 scenarios.
-[leader full]
-1. not allowed: business wirte, region merge/split,etc.
-2. allowed: read, config change(add/remove peer), transfer leader etc.
-
-[minority full]
-1. not allowed: log entry append
-2. allowed: config change,transfer leader,etc.
-
-[majority full]
-1. equal to minority full, no additional design.
-*/
-
 const DISK_FULL_PEER_1: &str = "disk_full_peer_1";
 const DISK_FULL_PEER: &str = "disk_full_peer";
 
@@ -74,11 +60,6 @@ fn fail_leader_full(cluster: &mut Cluster<ServerCluster>) {
 
         let split_key = String::from("0000").into_bytes();
         let region = cluster.get_region(&split_key);
-        // let split_count_before = cluster.pd_client.get_split_count();
-        // cluster.split_region(&region, &split_key, Callback::None);
-        // let split_count_after = cluster.pd_client.get_split_count();
-        // assert!(split_count_before == split_count_after);
-
         {
             let mut try_cnt = 0;
             let flag = Arc::new(AtomicBool::new(true));
@@ -114,9 +95,6 @@ fn fail_leader_full(cluster: &mut Cluster<ServerCluster>) {
                         let split_resp = admin_resp.mut_splits();
                         let regions = split_resp.get_regions();
                         assert_eq!(regions.len(), 1);
-                        // assert_eq!(regions.len(), 2);
-                        // assert_eq!(regions[0].get_end_key(), key.as_slice());
-                        // assert_eq!(regions[0].get_end_key(), regions[1].get_start_key());
                     });
                     cluster.split_region(&region, &split_key, Callback::write(check));
                 }
@@ -181,24 +159,16 @@ fn success_leader_full(cluster: &mut Cluster<ServerCluster>) {
         .find(|x| x.get_store_id() != old_leader.get_store_id())
         .unwrap();
     cluster.must_transfer_leader(region.get_id(), (*target).clone());
-    let new_leader = cluster.leader_of_region(region.get_id()).unwrap();
-    assert!(
-        new_leader.get_store_id() != old_leader.get_store_id()
-            && new_leader.get_id() != old_leader.get_id()
-    );
 
     // remove peer allowed.
     let pd_client = cluster.pd_client.clone();
     pd_client.must_remove_peer(region.get_id(), old_leader.clone());
-    let region = cluster.get_region(&key);
-    assert!(region.get_peers().len() == 2);
 
     // add peer allowed.
     let peer_3 = new_learner_peer(old_leader.get_store_id(), 20000);
-    pd_client.must_add_peer(region.get_id(), peer_3); //can not!
+    pd_client.must_add_peer(region.get_id(), peer_3);
     pd_client.must_add_peer(region.get_id(), new_peer(old_leader.get_store_id(), 20000));
-    let region = cluster.get_region(&key);
-    assert!(region.get_peers().len() == 3);
+
     fail::remove(DISK_FULL_PEER);
 }
 
@@ -212,22 +182,6 @@ fn fail_follower_full(cluster: &mut Cluster<ServerCluster>) {
         .find(|x| x.get_store_id() == 3)
         .unwrap();
     let leader = cluster.leader_of_region(region.get_id()).unwrap();
-
-    // must_transfer_leader will failed accidentally.
-    // if leader.get_store_id() != target_peer.get_store_id() {
-    //     println!(
-    //         "need transfer: leader store id {}, target peer store id {}",
-    //         leader.get_store_id(),
-    //         target_peer.get_store_id()
-    //     );
-    //     cluster.must_transfer_leader(region.get_id(), (*target_peer).clone());
-    // } else {
-    //     println!(
-    //         "no need transfer: leader target peer store id equal, {}",
-    //         target_peer.get_store_id()
-    //     );
-    // }
-    // deal with config version older problems
 
     // first transfer leader to target(store 3)
     let region_id = region.get_id();
@@ -281,9 +235,6 @@ fn fail_follower_full(cluster: &mut Cluster<ServerCluster>) {
         .unwrap();
 
     fail::cfg(DISK_FULL_PEER_1, "return").unwrap();
-    assert!(leader.get_store_id() == 3);
-    assert!(follower1.get_store_id() == 1);
-    assert!(follower2.get_store_id() == 2);
     {
         cluster.must_put(&key, &value);
         let leader_state = cluster.raft_local_state(region.get_id(), leader.get_store_id());

@@ -1026,7 +1026,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                     Err(e) => {
                         error!(
                             "get disk stat for kv store failed";
-                            "kv path"=>store_path.to_str(),
+                            "kv path" => store_path.to_str(),
                             "err" => ?e
                         );
                         return;
