@@ -8,6 +8,7 @@ publish = false
 default = ["protobuf-codec"]
 failpoints = ["fail/failpoints"]
 protobuf-codec = [
+  "protobuf/bytes",
   "error_code/protobuf-codec",
   "grpcio/protobuf-codec",
   "kvproto/protobuf-codec",

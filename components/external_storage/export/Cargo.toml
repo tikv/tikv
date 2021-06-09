@@ -16,6 +16,7 @@ name = "external_storage_export"
 [features]
 default = ["protobuf-codec", "cloud-gcp", "cloud-aws"]
 protobuf-codec = [
+  "protobuf/bytes",
   "kvproto/protobuf-codec",
   "external_storage/protobuf-codec",
   "aws/protobuf-codec",

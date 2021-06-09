@@ -7,6 +7,7 @@ publish = false
 [features]
 default = ["protobuf-codec", "test-engines-rocksdb"]
 protobuf-codec = [
+  "protobuf/bytes",
   "concurrency_manager/protobuf-codec",
   "engine_rocks/protobuf-codec",
   "engine_traits/protobuf-codec",
