@@ -160,11 +160,12 @@ impl Runnable for ResourceMeteringReporter {
                     self.records
                         .drain_filter(|_, (_, _, total)| *total < kth)
                         .for_each(|(_, (secs_list, cpu_time_list, _))| {
-                            for (secs, cpu_time) in
-                                secs_list.into_iter().zip(cpu_time_list.into_iter())
-                            {
-                                *others.entry(secs).or_insert(0) += cpu_time;
-                            }
+                            secs_list
+                                .into_iter()
+                                .zip(cpu_time_list.into_iter())
+                                .for_each(|(secs, cpu_time)| {
+                                    *others.entry(secs).or_insert(0) += cpu_time
+                                })
                         });
                 }
             }
