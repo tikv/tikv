@@ -1307,7 +1307,9 @@ where
         self.yield_state = None;
 
         let mut event = TraceEvent::default();
-        self.update_memory_trace(&mut event);
+        if let Some(e) = self.trace.reset(ApplyMemoryTrace::default()) {
+            event = event + e;
+        }
         MEMTRACE_APPLYS.trace(event);
     }
 

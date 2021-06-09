@@ -169,7 +169,9 @@ where
         .dec();
 
         let mut event = TraceEvent::default();
-        self.update_memory_trace(&mut event);
+        if let Some(e) = self.trace.reset(PeerMemoryTrace::default()) {
+            event = event + e;
+        }
         MEMTRACE_PEERS.trace(event);
     }
 }
