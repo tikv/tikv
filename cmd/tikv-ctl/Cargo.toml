@@ -27,6 +27,7 @@ cloud-gcp = [
 cloud-storage-grpc = [ "backup/cloud-storage-grpc" ]
 cloud-storage-dylib = [ "backup/cloud-storage-dylib" ]
 protobuf-codec = [
+  "protobuf/bytes",
   "backup/protobuf-codec",
   "cdc/protobuf-codec",
   "concurrency_manager/protobuf-codec",
