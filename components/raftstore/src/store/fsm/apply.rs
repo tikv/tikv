@@ -3156,7 +3156,11 @@ where
             return;
         }
 
-        let mut entries = apply.entries.take_entries();
+        let (mut entries, dangle_size) = apply.entries.take_entries();
+        if dangle_size > 0 {
+            MEMTRACE_ENTRY_CACHE.trace(TraceEvent::Sub(dangle_size));
+            RAFT_ENTRIES_CACHES_GAUGE.sub(dangle_size as i64);
+        }
         if entries.is_empty() {
             let rid = self.delegate.region_id();
             let StdRange { start, end } = apply.entries.range;
