@@ -36,7 +36,7 @@ mod imp {
 
 #[cfg(not(unix))]
 mod imp {
-    use engine_traits::{Engines, KvEngine};
+    use engine_traits::{Engines, KvEngine, RaftEngine};
 
-    pub fn wait_for_signal(_: Option<Engines<impl KvEngine, RocksEngine>>) {}
+    pub fn wait_for_signal<ER: RaftEngine>(_: Option<Engines<impl KvEngine, ER>>) {}
 }
