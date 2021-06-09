@@ -700,7 +700,8 @@ fn test_report_approximate_size_after_split_check() {
             .unwrap();
         })
         .unwrap();
-    }).unwrap();
+    })
+    .unwrap();
     let value = vec![1_u8; 8096];
     for i in 0..10 {
         let mut reqs = vec![];
