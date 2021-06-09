@@ -43,6 +43,9 @@ status-addr = "example.com:443"
 advertise-status-addr = "example.com:443"
 status-thread-pool-size = 1
 max-grpc-send-msg-len = 6291456
+raft-client-grpc-send-msg-buffer = 1263616
+raft-client-queue-size = 1234
+raft-msg-max-batch-size = 123
 grpc-compression-type = "gzip"
 grpc-concurrency = 123
 grpc-concurrent-stream = 1234
@@ -573,7 +576,11 @@ pipelined = false
 min-ts-interval = "4s"
 old-value-cache-size = 512
 hibernate-regions-compatible = false
+incremental-scan-threads = 3
+incremental-scan-concurrency = 4
 incremental-scan-speed-limit = 7
+old-value-cache-memory-quota = "14MB"
+sink-memory-quota = "7MB"
 
 [resolved-ts]
 enable = true

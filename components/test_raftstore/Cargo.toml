@@ -9,6 +9,7 @@ default = ["protobuf-codec", "test-engines-rocksdb", "cloud-aws", "cloud-gcp"]
 cloud-aws = [ "encryption_export/cloud-aws" ]
 cloud-gcp = [ "encryption_export/cloud-gcp" ]
 protobuf-codec = [
+  "protobuf/bytes",
   "concurrency_manager/protobuf-codec",
   "encryption_export/protobuf-codec",
   "engine_rocks/protobuf-codec",

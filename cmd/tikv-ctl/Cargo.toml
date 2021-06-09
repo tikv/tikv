@@ -10,6 +10,7 @@ default = ["protobuf-codec", "test-engines-rocksdb", "cloud-aws", "cloud-gcp"]
 tcmalloc = ["tikv/tcmalloc"]
 jemalloc = ["tikv/jemalloc"]
 mimalloc = ["tikv/mimalloc"]
+snmalloc = ["tikv/snmalloc"]
 portable = ["tikv/portable"]
 sse = ["tikv/sse"]
 mem-profiling = ["tikv/mem-profiling"]
@@ -26,6 +27,7 @@ cloud-gcp = [
 cloud-storage-grpc = [ "backup/cloud-storage-grpc" ]
 cloud-storage-dylib = [ "backup/cloud-storage-dylib" ]
 protobuf-codec = [
+  "protobuf/bytes",
   "backup/protobuf-codec",
   "cdc/protobuf-codec",
   "concurrency_manager/protobuf-codec",

@@ -52,6 +52,7 @@ cloud-gcp = [ "external_storage_export/cloud-gcp" ]
 testexport = ["raftstore/testexport", "tikv/testexport"]
 profiling = ["profiler/profiling"]
 protobuf-codec = [
+  "protobuf/bytes",
   "batch-system/protobuf-codec",
   "cdc/protobuf-codec",
   "encryption/protobuf-codec",
@@ -108,6 +109,8 @@ test-engines-panic = [
   "raftstore/test-engines-panic",
 ]
 jemalloc = ["tikv/jemalloc"]
+mimalloc = ["tikv/mimalloc"]
+snmalloc = ["tikv/snmalloc"]
 mem-profiling = ["tikv/mem-profiling"]
 sse = ["tikv/sse"]
 portable = ["tikv/portable"]

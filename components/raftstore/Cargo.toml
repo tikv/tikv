@@ -10,6 +10,7 @@ publish = false
 default = ["protobuf-codec", "test-engines-rocksdb"]
 failpoints = ["fail/failpoints"]
 protobuf-codec = [
+  "protobuf/bytes",
   "batch-system/protobuf-codec",
   "concurrency_manager/protobuf-codec",
   "engine_test/protobuf-codec",
@@ -64,6 +65,7 @@ concurrency_manager = { path = "../concurrency_manager", default-features = fals
 configuration = { path = "../configuration" }
 crc32fast = "1.2"
 crossbeam = "0.8"
+derivative = "2"
 encryption = { path = "../encryption", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 error_code = { path = "../error_code", default-features = false }

@@ -33,6 +33,7 @@ use raft::{Ready, StateRole};
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::memory::HeapSize;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
+use tikv_util::sys::memory_usage_reaches_high_water;
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
 use tikv_util::{box_err, debug, error, info, trace, warn};
@@ -710,6 +711,7 @@ where
             PeerTicks::SPLIT_REGION_CHECK => self.on_split_region_check_tick(),
             PeerTicks::CHECK_MERGE => self.on_check_merge(),
             PeerTicks::CHECK_PEER_STALE_STATE => self.on_check_peer_stale_state_tick(),
+            PeerTicks::ENTRY_CACHE_EVICT => self.on_entry_cache_evict_tick(),
             _ => unreachable!(),
         }
     }
@@ -976,6 +978,7 @@ where
             self.on_role_changed(&r.ready);
             if r.ctx.has_new_entries {
                 self.register_raft_gc_log_tick();
+                self.register_entry_cache_evict_tick();
             }
             self.ctx.ready_res.push(r);
         }
@@ -3452,20 +3455,19 @@ where
         fail_point!("on_raft_gc_log_tick", |_| {});
         debug_assert!(!self.fsm.stopped);
 
+        // The most simple case: compact log and cache to applied index directly.
+        let applied_idx = self.fsm.peer.get_store().applied_index();
+        if !self.fsm.peer.is_leader() {
+            self.fsm.peer.mut_store().compact_to(applied_idx + 1);
+            return;
+        }
+
         // As leader, we would not keep caches for the peers that didn't response heartbeat in the
         // last few seconds. That happens probably because another TiKV is down. In this case if we
         // do not clean up the cache, it may keep growing.
         let drop_cache_duration =
             self.ctx.cfg.raft_heartbeat_interval() + self.ctx.cfg.raft_entry_cache_life_time.0;
         let cache_alive_limit = Instant::now() - drop_cache_duration;
-
-        let mut total_gc_logs = 0;
-
-        let applied_idx = self.fsm.peer.get_store().applied_index();
-        if !self.fsm.peer.is_leader() {
-            self.fsm.peer.mut_store().compact_to(applied_idx + 1);
-            return;
-        }
 
         // Leader will replicate the compact log command to followers,
         // If we use current replicated_index (like 10) as the compact index,
@@ -3511,6 +3513,14 @@ where
             .peer
             .mut_store()
             .maybe_gc_cache(alive_cache_idx, applied_idx);
+        if needs_evict_entry_cache() {
+            self.fsm.peer.mut_store().half_evict_cache();
+            if !self.fsm.peer.get_store().cache_is_empty() {
+                self.register_entry_cache_evict_tick();
+            }
+        }
+
+        let mut total_gc_logs = 0;
 
         let first_idx = self.fsm.peer.get_store().first_index();
 
@@ -3557,6 +3567,20 @@ where
         self.fsm.skip_gc_raft_log_ticks = 0;
         self.register_raft_gc_log_tick();
         PEER_GC_RAFT_LOG_COUNTER.inc_by(total_gc_logs);
+    }
+
+    fn register_entry_cache_evict_tick(&mut self) {
+        self.schedule_tick(PeerTicks::ENTRY_CACHE_EVICT)
+    }
+
+    fn on_entry_cache_evict_tick(&mut self) {
+        fail_point!("on_entry_cache_evict_tick", |_| {});
+        if needs_evict_entry_cache() {
+            self.fsm.peer.mut_store().half_evict_cache();
+        }
+        if memory_usage_reaches_high_water() && !self.fsm.peer.get_store().cache_is_empty() {
+            self.register_entry_cache_evict_tick();
+        }
     }
 
     fn register_split_region_check_tick(&mut self) {

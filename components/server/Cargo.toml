@@ -9,6 +9,7 @@ publish = false
 tcmalloc = ["tikv/tcmalloc"]
 jemalloc = ["tikv/jemalloc"]
 mimalloc = ["tikv/mimalloc"]
+snmalloc = ["tikv/snmalloc"]
 portable = ["tikv/portable"]
 sse = ["tikv/sse"]
 mem-profiling = ["tikv/mem-profiling"]
@@ -17,6 +18,7 @@ bcc-iosnoop = ["tikv/bcc-iosnoop"]
 cloud-aws = [ "encryption_export/cloud-aws" ]
 cloud-gcp = [ "encryption_export/cloud-gcp" ]
 protobuf-codec = [
+  "protobuf/bytes",
   "backup/protobuf-codec",
   "cdc/protobuf-codec",
   "concurrency_manager/protobuf-codec",

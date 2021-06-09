@@ -57,6 +57,16 @@ lazy_static! {
         "Capacity of old value cache"
     )
     .unwrap();
+    pub static ref CDC_SINK_BYTES: IntGauge = register_int_gauge!(
+        "tikv_cdc_sink_memory_bytes",
+        "Total bytes of memory used in CDC sink"
+    )
+    .unwrap();
+    pub static ref CDC_SINK_CAP: IntGauge = register_int_gauge!(
+        "tikv_cdc_sink_memory_capacity",
+        "Capacity of CDC sink capacity in bytes"
+    )
+    .unwrap();
     pub static ref CDC_REGION_RESOLVE_STATUS_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_cdc_region_resolve_status",
         "The status of CDC captured regions",
@@ -80,6 +90,8 @@ lazy_static! {
     .unwrap();
     pub static ref CDC_OLD_VALUE_CACHE_BYTES: IntGauge =
         register_int_gauge!("tikv_cdc_old_value_cache_bytes", "Bytes of old value cache").unwrap();
+    pub static ref CDC_OLD_VALUE_CACHE_MEMORY_QUOTA: IntGauge =
+        register_int_gauge!("tikv_cdc_old_value_cache_memory_quota", "Memory quota in bytes of old value cache").unwrap();
     pub static ref CDC_OLD_VALUE_SCAN_DETAILS: IntCounterVec = register_int_counter_vec!(
         "tikv_cdc_old_value_scan_details",
         "Bucketed counter of scan details for old value",
