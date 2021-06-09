@@ -84,10 +84,7 @@ use tikv::{
         ttl::TTLChecker,
         Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID, GRPC_THREAD_PREFIX,
     },
-    storage::{
-        self, config::StorageConfigManger, config::DEFAULT_RESERVED_SPACE_GB,
-        mvcc::MvccConsistencyCheckObserver, Engine,
-    },
+    storage::{self, config::StorageConfigManger, mvcc::MvccConsistencyCheckObserver, Engine},
 };
 use tikv_util::{
     check_environment_variables,
@@ -245,10 +242,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let latest_ts = block_on(pd_client.get_tso()).expect("failed to get timestamp from PD");
         let concurrency_manager = ConcurrencyManager::new(latest_ts);
 
-        let mut disk_reserved = config.storage.reserve_space.0;
-        if disk_reserved == 0 {
-            disk_reserved = (tikv::config::ReadableSize::gb(DEFAULT_RESERVED_SPACE_GB)).0;
-        }
+        let disk_reserved = config.storage.reserve_space.0;
         disk::set_disk_reserved(disk_reserved);
 
         TiKVServer {
@@ -1025,6 +1019,9 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let snap_mgr = self.snap_mgr.clone().unwrap();
         self.background_worker
             .spawn_interval_task(DEFAULT_STORAGE_STATS_INTERVAL, move || {
+                if disk::get_disk_reserved() == 0 {
+                    return;
+                }
                 let disk_stats = match fs2::statvfs(&store_path) {
                     Err(e) => {
                         error!(
@@ -1062,10 +1059,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                     );
                     disk::set_disk_full();
                 } else {
-                    warn!(
-                        "disk full, available={},snap={},engine={},capacity={}",
-                        available, snap_size, kv_size, capacity
-                    );
                     disk::clear_disk_full();
                 }
             })

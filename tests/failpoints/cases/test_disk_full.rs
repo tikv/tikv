@@ -2,10 +2,12 @@
 
 use kvproto::raft_cmdpb::*;
 use raftstore::store::msg::*;
+use std::thread::*;
 use std::time::Duration;
 use std::time::*;
 use test_raftstore::*;
 use tikv_util::config::*;
+
 /*
 Disk full test will have 3 scenarios.
 [leader full]
@@ -19,8 +21,9 @@ Disk full test will have 3 scenarios.
 [majority full]
 1. equal to minority full, no additional design.
 */
-const DISK_FULL_LEADER: &str = "disk_full_leader";
-const DISK_FULL_FOLLOWER_1: &str = "disk_full_follower_1";
+
+const DISK_FULL_PEER_1: &str = "disk_full_peer_1";
+const DISK_FULL_PEER: &str = "disk_full_peer";
 
 fn prepare_test_data(cluster: &mut Cluster<ServerCluster>) {
     let left_key = String::from("5555").into_bytes();
@@ -37,11 +40,12 @@ fn prepare_test_data(cluster: &mut Cluster<ServerCluster>) {
 }
 
 fn fail_leader_full(cluster: &mut Cluster<ServerCluster>) {
-    fail::cfg(DISK_FULL_LEADER, "return").unwrap();
+    fail::cfg(DISK_FULL_PEER, "return").unwrap();
 
     let leader = cluster.leader_of_region(1).unwrap();
 
     {
+        // write data not allowed.
         let raft_stat = cluster.raft_local_state(1, leader.get_store_id());
         let index_1 = raft_stat.get_last_index();
 
@@ -56,19 +60,66 @@ fn fail_leader_full(cluster: &mut Cluster<ServerCluster>) {
     }
 
     {
+        // split region not allowed.
         let raft_stat = cluster.raft_local_state(1, leader.get_store_id());
         let index_1 = raft_stat.get_last_index();
 
         let split_key = String::from("0000").into_bytes();
         let region = cluster.get_region(&split_key);
-        let split_count_before = cluster.pd_client.get_split_count();
-        cluster.split_region(&region, &split_key, Callback::None);
-        let split_count_after = cluster.pd_client.get_split_count();
-        // println!(
-        //     "fail split count: {} {}",
-        //     split_count_before, split_count_after
-        // );
-        assert!(split_count_before == split_count_after);
+        // let split_count_before = cluster.pd_client.get_split_count();
+        // cluster.split_region(&region, &split_key, Callback::None);
+        // let split_count_after = cluster.pd_client.get_split_count();
+        // assert!(split_count_before == split_count_after);
+
+        {
+            let mut try_cnt = 0;
+            let split_count = cluster.pd_client.get_split_count();
+            loop {
+                // In case ask split message is ignored, we should retry.
+                if try_cnt % 50 == 0 {
+                    cluster.reset_leader_of_region(region.get_id());
+                    let check = Box::new(move |write_resp: WriteResponse| {
+                        let mut resp = write_resp.response;
+                        if resp.get_header().has_error() {
+                            let error = resp.get_header().get_error();
+                            if error.has_epoch_not_match()
+                                || error.has_not_leader()
+                                || error.has_stale_command()
+                                || error
+                                    .get_message()
+                                    .contains("peer has not applied to current term")
+                                || error
+                                    .get_message()
+                                    .contains("disk full, all the business data write forbiden")
+                            {
+                                return;
+                            }
+                            panic!("split region match unexcept error: {:?}", resp);
+                        }
+                        let admin_resp = resp.mut_admin_response();
+                        let split_resp = admin_resp.mut_splits();
+                        let regions = split_resp.get_regions();
+                        assert_eq!(regions.len(), 1);
+                        // assert_eq!(regions.len(), 2);
+                        // assert_eq!(regions[0].get_end_key(), key.as_slice());
+                        // assert_eq!(regions[0].get_end_key(), regions[1].get_start_key());
+                    });
+                    cluster.split_region(&region, &split_key, Callback::write(check));
+                }
+
+                if cluster.pd_client.check_split(&region, &split_key)
+                    && cluster.pd_client.get_split_count() > split_count
+                {
+                    panic!("should not split when leader disk full");
+                }
+
+                if try_cnt > 250 {
+                    break;
+                }
+                try_cnt += 1;
+                sleep(Duration::from_millis(20));
+            }
+        }
 
         let raft_stat = cluster.raft_local_state(1, leader.get_store_id());
         let index_3 = raft_stat.get_last_index();
@@ -76,6 +127,7 @@ fn fail_leader_full(cluster: &mut Cluster<ServerCluster>) {
     }
 
     {
+        // merge region not allowed.
         let raft_stat = cluster.raft_local_state(1, leader.get_store_id());
         let index_1 = raft_stat.get_last_index();
 
@@ -92,23 +144,23 @@ fn fail_leader_full(cluster: &mut Cluster<ServerCluster>) {
         assert!(index_1 == index_4);
     }
 
-    fail::remove(DISK_FULL_LEADER);
+    fail::remove(DISK_FULL_PEER);
 }
 
 fn success_leader_full(cluster: &mut Cluster<ServerCluster>) {
+    // read only allowed.
     let key = String::from("5555").into_bytes();
-    fail::cfg(DISK_FULL_LEADER, "return").unwrap();
+    fail::cfg(DISK_FULL_PEER, "return").unwrap();
     cluster.must_get(&key).unwrap();
 
+    // transfer leader allowed.
     let region = cluster.get_region(&key);
     let old_leader = cluster.leader_of_region(region.get_id()).unwrap();
     let peers = region.get_peers();
-
     let target = peers
         .into_iter()
         .find(|x| x.get_store_id() != old_leader.get_store_id())
         .unwrap();
-
     cluster.must_transfer_leader(region.get_id(), (*target).clone());
     let new_leader = cluster.leader_of_region(region.get_id()).unwrap();
     assert!(
@@ -116,21 +168,19 @@ fn success_leader_full(cluster: &mut Cluster<ServerCluster>) {
             && new_leader.get_id() != old_leader.get_id()
     );
 
+    // remove peer allowed.
     let pd_client = cluster.pd_client.clone();
     pd_client.must_remove_peer(region.get_id(), old_leader.clone());
     let region = cluster.get_region(&key);
     assert!(region.get_peers().len() == 2);
 
+    // add peer allowed.
     let peer_3 = new_learner_peer(old_leader.get_store_id(), 20000);
     pd_client.must_add_peer(region.get_id(), peer_3); //can not!
     pd_client.must_add_peer(region.get_id(), new_peer(old_leader.get_store_id(), 20000));
     let region = cluster.get_region(&key);
-    // for i in region.get_peers() {
-    //     println!("peer info: {}-{}", i.get_store_id(), i.get_id());
-    // }
     assert!(region.get_peers().len() == 3);
-    //failed to propose confchange, error: Other("[components/raftstore/src/store/peer.rs:2469]: [region 1000] 1002 unsafe to perform conf change [peer { id: 2000 store_id: 1 }], before: voters: 1004 voters: 1002 voters: 1003, after: voters: 2000 voters: 1002 voters: 1004 voters: 1003, truncated index 5, promoted commit index 0")
-    fail::remove(DISK_FULL_LEADER);
+    fail::remove(DISK_FULL_PEER);
 }
 
 fn fail_follower_full(cluster: &mut Cluster<ServerCluster>) {
@@ -143,6 +193,8 @@ fn fail_follower_full(cluster: &mut Cluster<ServerCluster>) {
         .find(|x| x.get_store_id() == 3)
         .unwrap();
     let leader = cluster.leader_of_region(region.get_id()).unwrap();
+
+    // must_transfer_leader will failed accidentally.
     // if leader.get_store_id() != target_peer.get_store_id() {
     //     println!(
     //         "need transfer: leader store id {}, target peer store id {}",
@@ -157,6 +209,8 @@ fn fail_follower_full(cluster: &mut Cluster<ServerCluster>) {
     //     );
     // }
     // deal with config version older problems
+
+    // first transfer leader to target(store 3)
     let region_id = region.get_id();
     if leader.get_store_id() != target_peer.get_store_id() {
         let new_leader = (*target_peer).clone();
@@ -207,7 +261,7 @@ fn fail_follower_full(cluster: &mut Cluster<ServerCluster>) {
         .find(|x| x.get_store_id() == 2)
         .unwrap();
 
-    fail::cfg(DISK_FULL_FOLLOWER_1, "return").unwrap();
+    fail::cfg(DISK_FULL_PEER_1, "return").unwrap();
     assert!(leader.get_store_id() == 3);
     assert!(follower1.get_store_id() == 1);
     assert!(follower2.get_store_id() == 2);
@@ -238,7 +292,7 @@ fn fail_follower_full(cluster: &mut Cluster<ServerCluster>) {
             cluster.transfer_leader(region.get_id(), (*follower1).clone());
         }
     }
-    fail::remove(DISK_FULL_FOLLOWER_1);
+    fail::remove(DISK_FULL_PEER_1);
 }
 
 #[test]
@@ -248,8 +302,8 @@ fn test_disk_full() {
     cluster.cfg.storage.reserve_space = ReadableSize(reserve);
     cluster.cfg.raft_store.pd_store_heartbeat_tick_interval =
         ReadableDuration(Duration::from_secs(3000)); //disable disk status update influence.
-    cluster.run();
     cluster.pd_client.disable_default_operator();
+    cluster.run();
     prepare_test_data(&mut cluster);
     success_leader_full(&mut cluster);
     fail_leader_full(&mut cluster);

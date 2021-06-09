@@ -624,7 +624,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                     }))
                 } else {
                     let ret = ch.send_raft_msg(msg).map_err(Error::from);
-                    return future::ready(ret);
+                    future::ready(ret)
                 }
             });
             let status = match res.await {

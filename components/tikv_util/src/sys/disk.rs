@@ -18,15 +18,16 @@ pub fn is_disk_full() -> bool {
 
 pub fn disk_full_precheck(_store_id: u64) -> bool {
     if cfg!(feature = "failpoints") {
-        fail_point!("disk_full_leader", _store_id == 0, |_| {
+        fail_point!("disk_full_peer_1", _store_id == 1, |_| {
             return true;
         });
-        fail_point!("disk_full_follower_1", _store_id == 1, |_| {
+        //set 0 to not limit transfer leader target.
+        fail_point!("disk_full_peer", _store_id == 0, |_| {
             return true;
         });
-        return false;
+        false
     } else {
-        return false;
+        false
     }
 }
 
