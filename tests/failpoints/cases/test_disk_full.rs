@@ -2,6 +2,7 @@
 
 use kvproto::raft_cmdpb::*;
 use raftstore::store::msg::*;
+use std::sync::{atomic::*, Arc};
 use std::thread::*;
 use std::time::Duration;
 use std::time::*;
@@ -73,11 +74,13 @@ fn fail_leader_full(cluster: &mut Cluster<ServerCluster>) {
 
         {
             let mut try_cnt = 0;
+            let flag = Arc::new(AtomicBool::new(true));
             let split_count = cluster.pd_client.get_split_count();
-            loop {
+            while flag.load(Ordering::Acquire) {
                 // In case ask split message is ignored, we should retry.
                 if try_cnt % 50 == 0 {
                     cluster.reset_leader_of_region(region.get_id());
+                    let fg = flag.clone();
                     let check = Box::new(move |write_resp: WriteResponse| {
                         let mut resp = write_resp.response;
                         if resp.get_header().has_error() {
@@ -88,10 +91,14 @@ fn fail_leader_full(cluster: &mut Cluster<ServerCluster>) {
                                 || error
                                     .get_message()
                                     .contains("peer has not applied to current term")
-                                || error
-                                    .get_message()
-                                    .contains("disk full, all the business data write forbiden")
                             {
+                                return;
+                            }
+                            if error
+                                .get_message()
+                                .contains("disk full, all the business data write forbiden")
+                            {
+                                fg.store(false, Ordering::Release);
                                 return;
                             }
                             panic!("split region match unexcept error: {:?}", resp);
@@ -114,7 +121,7 @@ fn fail_leader_full(cluster: &mut Cluster<ServerCluster>) {
                 }
 
                 if try_cnt > 250 {
-                    break;
+                    flag.store(false, Ordering::Release);
                 }
                 try_cnt += 1;
                 sleep(Duration::from_millis(20));
