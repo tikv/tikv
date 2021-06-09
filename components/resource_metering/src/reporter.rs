@@ -157,15 +157,15 @@ impl Runnable for ResourceMeteringReporter {
                     );
                     let kth = self.find_top_k[self.config.max_resource_groups];
                     let others = &mut self.others;
-                    self.records.retain(|_, (secs_list, cpu_time_list, total)| {
-                        let retain = *total >= kth;
-                        if !retain {
-                            for (secs, cpu_time) in secs_list.iter().zip(cpu_time_list.iter()) {
-                                *others.entry(*secs).or_insert(0) += *cpu_time;
+                    self.records
+                        .drain_filter(|_, (_, _, total)| *total < kth)
+                        .for_each(|(_, (secs_list, cpu_time_list, _))| {
+                            for (secs, cpu_time) in
+                                secs_list.into_iter().zip(cpu_time_list.into_iter())
+                            {
+                                *others.entry(secs).or_insert(0) += cpu_time;
                             }
-                        }
-                        retain
-                    });
+                        });
                 }
             }
         }
@@ -211,13 +211,8 @@ impl RunnableWithTimer for ResourceMeteringReporter {
                         }
 
                         // others
-                        let mut timestamp_list = others.keys().cloned().collect::<Vec<_>>();
-                        timestamp_list.sort_unstable();
-                        let cpu_time_ms_list = timestamp_list
-                            .iter()
-                            .map(|ts| others.get(ts).unwrap())
-                            .cloned()
-                            .collect::<Vec<_>>();
+                        let timestamp_list = others.keys().cloned().collect::<Vec<_>>();
+                        let cpu_time_ms_list = others.values().cloned().collect::<Vec<_>>();
                         let mut req = ReportCpuTimeRequest::default();
                         req.set_record_list_timestamp_sec(timestamp_list);
                         req.set_record_list_cpu_time_ms(cpu_time_ms_list);
