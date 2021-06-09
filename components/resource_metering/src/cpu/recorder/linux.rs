@@ -379,8 +379,6 @@ mod tests {
     use super::*;
     use crate::cpu::collector::register_collector;
 
-    use std::sync::atomic::AtomicBool;
-    use std::sync::atomic::Ordering::SeqCst;
     use std::sync::Mutex;
     use std::thread::JoinHandle;
 
@@ -445,6 +443,7 @@ mod tests {
 
             let handle = std::thread::spawn(|| {
                 let mut guard = None;
+                let thread_id = unsafe { libc::syscall(libc::SYS_gettid) as libc::pid_t };
 
                 for op in ops {
                     match op {
@@ -462,15 +461,22 @@ mod tests {
                             guard.take();
                         }
                         Operation::CpuHeavy(ms) => {
-                            let done = Arc::new(AtomicBool::new(false));
-                            let done1 = done.clone();
-                            std::thread::spawn(move || {
-                                std::thread::sleep(Duration::from_millis(ms));
-                                done.store(true, SeqCst);
-                            });
+                            let begin_stat = procinfo::pid::stat_task(*PID, thread_id).unwrap();
+                            let begin_ticks =
+                                (begin_stat.utime as u64).wrapping_add(begin_stat.stime as u64);
 
-                            while !done1.load(SeqCst) {
+                            loop {
                                 Self::heavy_job();
+                                let later_stat = procinfo::pid::stat_task(*PID, thread_id).unwrap();
+
+                                let later_ticks =
+                                    (later_stat.utime as u64).wrapping_add(later_stat.stime as u64);
+                                let delta_ms = later_ticks.wrapping_sub(begin_ticks) * 1_000
+                                    / (*CLK_TCK as u64);
+
+                                if delta_ms >= ms {
+                                    break;
+                                }
                             }
                         }
                         Operation::Sleep(ms) => {
@@ -647,7 +653,7 @@ mod tests {
             // Wait a collect interval to avoid losing records.
             std::thread::sleep(Duration::from_millis(1200));
 
-            const MAX_DRIFT: u64 = 150;
+            const MAX_DRIFT: u64 = 50;
             let mut res = self.records.lock().unwrap();
 
             for k in expected.keys() {
