@@ -7,6 +7,7 @@ publish = false
 [features]
 default = ["protobuf-codec"]
 protobuf-codec = [
+  "protobuf/bytes",
   "engine_traits/protobuf-codec",
   "error_code/protobuf-codec",
   "kvproto/protobuf-codec",
