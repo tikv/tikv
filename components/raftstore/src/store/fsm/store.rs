@@ -52,8 +52,7 @@ use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
 use crate::store::config::Config;
 use crate::store::fsm::metrics::*;
 use crate::store::fsm::peer::{
-    maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, PeerMemoryTraceEvents,
-    SenderFsmPair,
+    maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair,
 };
 use crate::store::fsm::ApplyNotifier;
 use crate::store::fsm::ApplyTaskRes;
@@ -664,7 +663,7 @@ pub struct RaftPoller<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: 'stat
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
 
-    trace_events: PeerMemoryTraceEvents,
+    trace_event: TraceEvent,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
@@ -900,11 +899,9 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         self.poll_ctx.store_stat.flush();
 
         for peer in peers {
-            peer.update_memory_trace(&mut self.trace_events);
+            peer.update_memory_trace(&mut self.trace_event);
         }
-        MEMTRACE_PEER_READ_ONLY.trace(mem::take(&mut self.trace_events.read_only));
-        MEMTRACE_PEER_PROGRESS.trace(mem::take(&mut self.trace_events.progress));
-        MEMTRACE_PEER_ENTRIES.trace(mem::take(&mut self.trace_events.entries));
+        MEMTRACE_PEERS.trace(mem::take(&mut self.trace_event));
     }
 
     fn pause(&mut self) {
@@ -1164,7 +1161,7 @@ where
             messages_per_tick: ctx.cfg.messages_per_tick,
             poll_ctx: ctx,
             cfg_tracker: self.cfg.clone().tracker(tag),
-            trace_events: PeerMemoryTraceEvents::default(),
+            trace_event: TraceEvent::default(),
         }
     }
 }

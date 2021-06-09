@@ -35,7 +35,6 @@ use raft::{
 };
 use raft_proto::ConfChangeI;
 use smallvec::SmallVec;
-use tikv_util::memory::HeapSize;
 use time::Timespec;
 use uuid::Uuid;
 
@@ -1023,23 +1022,6 @@ where
     #[inline]
     pub fn get_pending_snapshot(&self) -> Option<&eraftpb::Snapshot> {
         self.raft_group.snap()
-    }
-
-    #[inline]
-    pub fn proposal_size(&self) -> usize {
-        self.proposals.queue.heap_size() + self.pending_reads.heap_size()
-    }
-
-    #[inline]
-    pub fn rest_size(&self) -> usize {
-        self.peer_cache.borrow().heap_size()
-            + self.peer_heartbeats.heap_size()
-            + self.peers_start_pending_time.heap_size()
-            + self.down_peer_ids.heap_size()
-            + self.check_stale_peers.heap_size()
-            + self.want_rollback_merge_peers.heap_size()
-            + self.pending_messages.len() * mem::size_of::<raft::eraftpb::Message>()
-            + mem::size_of_val(self.pending_request_snapshot_count.as_ref())
     }
 
     fn add_ready_metric(&self, ready: &Ready, metrics: &mut RaftReadyMetrics) {
@@ -3849,6 +3831,39 @@ pub trait AbstractPeer {
     fn raft_commit_index(&self) -> u64;
     fn raft_request_snapshot(&mut self, index: u64);
     fn pending_merge_state(&self) -> Option<&MergeState>;
+}
+
+mod memtrace {
+    use super::*;
+    use std::mem;
+    use tikv_util::memory::HeapSize;
+
+    impl<EK, ER> Peer<EK, ER>
+    where
+        EK: KvEngine,
+        ER: RaftEngine,
+    {
+        pub fn proposal_size(&self) -> usize {
+            let mut heap_size = self.pending_reads.heap_size();
+            for prop in &self.proposals.queue {
+                heap_size += prop.heap_size();
+            }
+            heap_size
+        }
+
+        pub fn rest_size(&self) -> usize {
+            // 2 words for every item in `peer_heartbeats`.
+            16 * self.peer_heartbeats.capacity()
+            // 2 words for every item in `peers_start_pending_time`.
+            + 16 * self.peers_start_pending_time.capacity()
+            // 1 word for every item in `down_peer_ids`
+            + 8 * self.down_peer_ids.capacity()
+            + mem::size_of::<metapb::Peer>() * self.check_stale_peers.capacity()
+            // 1 word for every item in `want_rollback_merge_peers`
+            + 8 * self.want_rollback_merge_peers.capacity()
+            + self.pending_messages.len() * mem::size_of::<raft::eraftpb::Message>()
+        }
+    }
 }
 
 #[cfg(test)]

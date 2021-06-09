@@ -38,7 +38,6 @@ use tikv_util::{box_err, debug, error, info, trace, warn};
 use tikv_util::{escape, is_zero_duration, Either};
 use txn_types::WriteBatchFlags;
 
-pub use self::memtrace::PeerMemoryTraceEvents;
 use self::memtrace::*;
 use crate::coprocessor::RegionChangeEvent;
 use crate::store::cmd_resp::{bind_term, new_error};
@@ -169,11 +168,9 @@ where
         })
         .dec();
 
-        let mut events = PeerMemoryTraceEvents::default();
-        self.update_memory_trace(&mut events);
-        MEMTRACE_PEER_READ_ONLY.trace(events.read_only);
-        MEMTRACE_PEER_PROGRESS.trace(events.progress);
-        MEMTRACE_PEER_ENTRIES.trace(events.entries);
+        let mut event = TraceEvent::default();
+        self.update_memory_trace(&mut event);
+        MEMTRACE_PEERS.trace(event);
     }
 }
 
@@ -315,49 +312,16 @@ where
             .maybe_hibernate(self.peer.peer_id(), self.peer.region())
     }
 
-    pub fn raft_read_size(&self) -> usize {
-        let msg_size = mem::size_of::<raft::eraftpb::Message>();
-        let raft = &self.peer.raft_group.raft;
-
-        // We use Uuid for read request.
-        let mut size = raft.read_states.len() * (mem::size_of::<ReadState>() + 16);
-        size += raft.read_only.read_index_queue.len() * 16;
-
-        // Every requests have at least header, which should be at least 8 bytes.
-        size + raft.read_only.pending_read_index.len() * (16 + msg_size)
-    }
-
-    pub fn raft_progress_size(&self) -> usize {
-        let peer_cnt = self.peer.region().get_peers().len();
-        let inflight_size = self.max_inflight_msgs * mem::size_of::<u64>();
-        mem::size_of::<Progress>() * peer_cnt * 6 / 5 + inflight_size * peer_cnt
-    }
-
-    /// Unstable entries heap size.
-    /// NOTE: Entry::data and Entry::context is not counted.
-    pub fn raft_entries_size(&self) -> usize {
-        let raft = &self.peer.raft_group.raft;
-        let entries = &raft.raft_log.unstable.entries;
-        entries.len() * (mem::size_of::<Entry>() + 8)
-    }
-
-    pub fn update_memory_trace(&mut self, events: &mut PeerMemoryTraceEvents) {
-        let heap_size = self.raft_read_size();
-        let task = RaftReadOnly { heap_size };
-        if let Some(event) = self.trace.read_only.reset(task) {
-            events.read_only = events.read_only + event;
-        }
-
-        let heap_size = self.raft_progress_size();
-        let task = RaftProgress { heap_size };
-        if let Some(event) = self.trace.progress.reset(task) {
-            events.progress = events.progress + event;
-        }
-
-        let heap_size = self.raft_entries_size();
-        let task = RaftEntries { heap_size };
-        if let Some(event) = self.trace.entries.reset(task) {
-            events.entries = events.entries + event;
+    pub fn update_memory_trace(&mut self, event: &mut TraceEvent) {
+        let task = PeerMemoryTrace {
+            read_only: self.raft_read_size(),
+            progress: self.raft_progress_size(),
+            entries: self.raft_entries_size(),
+            proposals: self.peer.proposal_size(),
+            rest: self.peer.rest_size(),
+        };
+        if let Some(e) = self.trace.reset(task) {
+            *event = *event + e;
         }
     }
 }
@@ -4297,34 +4261,48 @@ mod memtrace {
 
     /// Heap size for Raft internal `ReadOnly`.
     #[derive(MemoryTraceHelper, Default, Debug)]
-    pub struct RaftReadOnly {
-        pub heap_size: usize,
-    }
-
-    /// Heap size for Raft progresses.
-    #[derive(MemoryTraceHelper, Default, Debug)]
-    pub struct RaftProgress {
-        pub heap_size: usize,
-    }
-
-    /// Heap size for Raft unstable entries.
-    #[derive(MemoryTraceHelper, Default, Debug)]
-    pub struct RaftEntries {
-        pub heap_size: usize,
-    }
-
-    #[derive(Default, Debug)]
     pub struct PeerMemoryTrace {
-        pub read_only: RaftReadOnly,
-        pub progress: RaftProgress,
-        pub entries: RaftEntries,
+        /// `ReadOnly` memory usage in Raft groups.
+        pub read_only: usize,
+        /// `Progress` memory usage in Raft groups.
+        pub progress: usize,
+        /// `Entry` memory usage in Raft groups.
+        pub entries: usize,
+        /// `Proposal` memory usage for peers.
+        pub proposals: usize,
+        pub rest: usize,
     }
 
-    #[derive(Default)]
-    pub struct PeerMemoryTraceEvents {
-        pub read_only: TraceEvent,
-        pub progress: TraceEvent,
-        pub entries: TraceEvent,
+    impl<EK, ER> PeerFsm<EK, ER>
+    where
+        EK: KvEngine,
+        ER: RaftEngine,
+    {
+        pub fn raft_read_size(&self) -> usize {
+            let msg_size = mem::size_of::<raft::eraftpb::Message>();
+            let raft = &self.peer.raft_group.raft;
+
+            // We use Uuid for read request.
+            let mut size = raft.read_states.len() * (mem::size_of::<ReadState>() + 16);
+            size += raft.read_only.read_index_queue.len() * 16;
+
+            // Every requests have at least header, which should be at least 8 bytes.
+            size + raft.read_only.pending_read_index.len() * (16 + msg_size)
+        }
+
+        pub fn raft_progress_size(&self) -> usize {
+            let peer_cnt = self.peer.region().get_peers().len();
+            let inflight_size = self.max_inflight_msgs * mem::size_of::<u64>();
+            mem::size_of::<Progress>() * peer_cnt * 6 / 5 + inflight_size * peer_cnt
+        }
+
+        /// Unstable entries heap size.
+        /// NOTE: Entry::data and Entry::context is not counted.
+        pub fn raft_entries_size(&self) -> usize {
+            let raft = &self.peer.raft_group.raft;
+            let entries = &raft.raft_log.unstable.entries;
+            entries.len() * (mem::size_of::<Entry>() + 8)
+        }
     }
 }
 

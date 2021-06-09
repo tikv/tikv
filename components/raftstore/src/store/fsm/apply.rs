@@ -1304,8 +1304,11 @@ where
         if let Some(cmd) = self.pending_cmds.conf_change.take() {
             notify_region_removed(self.region.get_id(), self.id, cmd);
         }
+        self.yield_state = None;
 
-        MEMTRACE_APPLY_COMMANDS.trace(TraceEvent::Sub(self.trace.pending_cmds.sum()));
+        let mut event = TraceEvent::default();
+        self.update_memory_trace(&mut event);
+        MEMTRACE_APPLYS.trace(event);
     }
 
     fn clear_all_commands_as_stale(&mut self) {
@@ -2700,14 +2703,9 @@ where
         ))
     }
 
-    fn update_memory_trace(&mut self, events: &mut ApplyMemoryTraceEvents) {
-        let heap_size = self.pending_cmds.heap_size();
-        let task = ApplyPendingCommands { heap_size };
-        if let Some(event) = self.trace.pending_cmds.reset(task) {
-            events.pending_cmds = events.pending_cmds + event;
-        }
-
-        let heap_size = if let Some(ref mut state) = self.yield_state {
+    fn update_memory_trace(&mut self, event: &mut TraceEvent) {
+        let pending_cmds = self.pending_cmds.heap_size();
+        let merge_yield = if let Some(ref mut state) = self.yield_state {
             if state.heap_size.is_none() {
                 state.heap_size = Some(state.heap_size());
             }
@@ -2715,9 +2713,13 @@ where
         } else {
             0
         };
-        let task = ApplyMergeYield { heap_size };
-        if let Some(event) = self.trace.merge_yield.reset(task) {
-            events.merge_yield = events.merge_yield + event;
+
+        let task = ApplyMemoryTrace {
+            pending_cmds,
+            merge_yield,
+        };
+        if let Some(e) = self.trace.reset(task) {
+            *event = *event + e;
         }
     }
 }
@@ -3546,10 +3548,9 @@ where
 {
     fn drop(&mut self) {
         self.delegate.clear_all_commands_as_stale();
-        let mut events = ApplyMemoryTraceEvents::default();
-        self.delegate.update_memory_trace(&mut events);
-        MEMTRACE_APPLY_COMMANDS.trace(events.pending_cmds);
-        MEMTRACE_APPLY_YIELD.trace(events.merge_yield);
+        let mut event = TraceEvent::default();
+        self.delegate.update_memory_trace(&mut event);
+        MEMTRACE_APPLYS.trace(event);
     }
 }
 
@@ -3576,7 +3577,7 @@ where
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
 
-    trace_events: ApplyMemoryTraceEvents,
+    trace_event: TraceEvent,
 }
 
 impl<EK, W> PollHandler<ApplyFsm<EK>, ControlFsm> for ApplyPoller<EK, W>
@@ -3669,10 +3670,9 @@ where
         self.apply_ctx.flush();
         for fsm in fsms {
             fsm.delegate.last_flush_applied_index = fsm.delegate.apply_state.get_applied_index();
-            fsm.delegate.update_memory_trace(&mut self.trace_events);
+            fsm.delegate.update_memory_trace(&mut self.trace_event);
         }
-        MEMTRACE_APPLY_COMMANDS.trace(mem::take(&mut self.trace_events.pending_cmds));
-        MEMTRACE_APPLY_YIELD.trace(mem::take(&mut self.trace_events.merge_yield));
+        MEMTRACE_APPLYS.trace(mem::take(&mut self.trace_event));
     }
 
     fn get_priority(&self) -> Priority {
@@ -3745,7 +3745,7 @@ where
             ),
             messages_per_tick: cfg.messages_per_tick,
             cfg_tracker: self.cfg.clone().tracker(self.tag.clone()),
-            trace_events: Default::default(),
+            trace_event: Default::default(),
         }
     }
 }
@@ -3928,25 +3928,9 @@ mod memtrace {
     use memory_trace_macros::MemoryTraceHelper;
 
     #[derive(MemoryTraceHelper, Default, Debug)]
-    pub struct ApplyPendingCommands {
-        pub heap_size: usize,
-    }
-
-    #[derive(MemoryTraceHelper, Default, Debug)]
-    pub struct ApplyMergeYield {
-        pub heap_size: usize,
-    }
-
-    #[derive(Default, Debug)]
     pub struct ApplyMemoryTrace {
-        pub pending_cmds: ApplyPendingCommands,
-        pub merge_yield: ApplyMergeYield,
-    }
-
-    #[derive(Default)]
-    pub struct ApplyMemoryTraceEvents {
-        pub pending_cmds: TraceEvent,
-        pub merge_yield: TraceEvent,
+        pub pending_cmds: usize,
+        pub merge_yield: usize,
     }
 
     impl<S> HeapSize for PendingCmdQueue<S>

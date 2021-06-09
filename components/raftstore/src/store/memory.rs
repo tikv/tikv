@@ -14,39 +14,21 @@ lazy_static! {
     pub static ref MEMTRACE_ROOT: Arc<MemoryTraceNode> = mem_trace!(
         raftstore,
         [
-            raft_read_only,
-            raft_progress,
-            raft_entries,
-            apply_pending_cmds,
-            apply_merge_yield,
+            peers,
+            applys,
             entry_cache,
             (raft_router, [alive, leak]),
             (apply_router, [alive, leak])
         ]
     );
+    /// Memory usage for raft peers fsms.
+    pub static ref MEMTRACE_PEERS: Arc<dyn MemoryTrace + Send + Sync> =
+        MEMTRACE_ROOT.sub_trace(Id::Name("peers"));
 
+    /// Memory usage for apply fsms.
+    pub static ref MEMTRACE_APPLYS: Arc<dyn MemoryTrace + Send + Sync> =
+        MEMTRACE_ROOT.sub_trace(Id::Name("applys"));
 
-    /// Memory usage for `ReadOnly`s in all raft groups.
-    pub static ref MEMTRACE_PEER_READ_ONLY: Arc<dyn MemoryTrace + Send + Sync> =
-        MEMTRACE_ROOT.sub_trace(Id::Name("raft_read_only"));
-
-    /// Memory usage for `Progress` in all raft groups.
-    pub static ref MEMTRACE_PEER_PROGRESS: Arc<dyn MemoryTrace + Send + Sync> =
-        MEMTRACE_ROOT.sub_trace(Id::Name("raft_progress"));
-
-    /// Memory usage for unstale raft entries in all raft groups.
-    pub static ref MEMTRACE_PEER_ENTRIES: Arc<dyn MemoryTrace + Send + Sync> =
-        MEMTRACE_ROOT.sub_trace(Id::Name("raft_entries"));
-
-    /// Memory usage for pending commands in all `ApplyFsm`.
-    pub static ref MEMTRACE_APPLY_COMMANDS: Arc<dyn MemoryTrace + Send + Sync> =
-        MEMTRACE_ROOT.sub_trace(Id::Name("apply_pending_cmds"));
-
-    /// Memory usage for merge yield state in all `ApplyFsm`.
-    pub static ref MEMTRACE_APPLY_YIELD: Arc<dyn MemoryTrace + Send + Sync> =
-        MEMTRACE_ROOT.sub_trace(Id::Name("apply_merge_yield"));
-
-    /// Memory usage for raft entry cache.
     pub static ref MEMTRACE_ENTRY_CACHE: Arc<dyn MemoryTrace + Send + Sync> =
         MEMTRACE_ROOT.sub_trace(Id::Name("entry_cache"));
 

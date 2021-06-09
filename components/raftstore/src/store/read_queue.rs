@@ -83,7 +83,8 @@ where
 {
     #[inline]
     fn heap_size(&self) -> usize {
-        self.cmds.heap_size() + 8 * self.cmds.len() + self.addition_request.heap_size()
+        // FIXME: cache it
+        0
     }
 }
 
@@ -326,9 +327,7 @@ where
 {
     #[inline]
     fn heap_size(&self) -> usize {
-        self.mem_size
-            + self.reads.heap_size()
-            + self.contexts.len() * (mem::size_of::<Uuid>() + mem::size_of::<usize>())
+        0
     }
 }
 
@@ -413,7 +412,7 @@ impl ReadIndexContext {
 
 impl HeapSize for ReadIndexContext {
     fn heap_size(&self) -> usize {
-        self.request.heap_size() + self.locked.heap_size()
+        0
     }
 }
 
