@@ -293,7 +293,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
     }
 
     fn kv_gc(&mut self, ctx: RpcContext<'_>, _: GcRequest, sink: UnarySink<GcResponse>) {
-        let e = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
+        let e = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED);
         ctx.spawn(
             sink.fail(e)
                 .unwrap_or_else(|e| error!("kv rpc failed"; "err" => ?e)),
@@ -632,9 +632,9 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 Err(e) => {
                     let msg = format!("{:?}", e);
                     error!("dispatch raft msg from gRPC to raftstore fail"; "err" => %msg);
-                    RpcStatus::new(RpcStatusCode::UNKNOWN, Some(msg))
+                    RpcStatus::with_message(RpcStatusCode::UNKNOWN, msg)
                 }
-                Ok(_) => RpcStatus::new(RpcStatusCode::UNKNOWN, None),
+                Ok(_) => RpcStatus::new(RpcStatusCode::UNKNOWN),
             };
             let _ = sink
                 .fail(status)
@@ -675,9 +675,9 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 Err(e) => {
                     let msg = format!("{:?}", e);
                     error!("dispatch raft msg from gRPC to raftstore fail"; "err" => %msg);
-                    RpcStatus::new(RpcStatusCode::UNKNOWN, Some(msg))
+                    RpcStatus::with_message(RpcStatusCode::UNKNOWN, msg)
                 }
-                Ok(_) => RpcStatus::new(RpcStatusCode::UNKNOWN, None),
+                Ok(_) => RpcStatus::new(RpcStatusCode::UNKNOWN),
             };
             let _ = sink
                 .fail(status)
@@ -699,7 +699,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 SnapTask::Recv { sink, .. } => sink,
                 _ => unreachable!(),
             };
-            let status = RpcStatus::new(RpcStatusCode::RESOURCE_EXHAUSTED, Some(err_msg));
+            let status = RpcStatus::with_message(RpcStatusCode::RESOURCE_EXHAUSTED, err_msg);
             ctx.spawn(sink.fail(status).map(|_| ()));
         }
     }
@@ -1365,7 +1365,6 @@ fn future_scan_lock<E: Engine, L: LockManager>(
 async fn future_gc(_: GcRequest) -> ServerResult<GcResponse> {
     Err(Error::Grpc(GrpcError::RpcFailure(RpcStatus::new(
         RpcStatusCode::UNIMPLEMENTED,
-        None,
     ))))
 }
 

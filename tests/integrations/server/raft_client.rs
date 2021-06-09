@@ -5,6 +5,7 @@ use std::sync::{mpsc, Arc};
 use std::time::Duration;
 use std::{thread, time};
 
+use super::*;
 use engine_rocks::RocksEngine;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use grpcio::{
@@ -16,15 +17,12 @@ use kvproto::tikvpb::BatchRaftMessage;
 use raft::eraftpb::Entry;
 use raftstore::errors::DiscardReason;
 use raftstore::router::{RaftStoreBlackHole, RaftStoreRouter};
-use security::{SecurityConfig, SecurityManager};
 use tikv::server::resolve::Callback;
 use tikv::server::{
     self, resolve, Config, ConnectionBuilder, RaftClient, StoreAddrResolver, TestRaftStoreRouter,
 };
 use tikv_util::worker::Builder as WorkerBuilder;
 use tikv_util::worker::LazyWorker;
-
-use super::{mock_kv_service, MockKv, MockKvService};
 
 #[derive(Clone)]
 pub struct StaticResolver {
@@ -85,7 +83,7 @@ impl MockKvForRaft {
     }
 }
 
-impl MockKvService for MockKvForRaft {
+impl Tikv for MockKvForRaft {
     fn raft(
         &mut self,
         ctx: RpcContext<'_>,
@@ -111,7 +109,7 @@ impl MockKvService for MockKvForRaft {
         sink: ClientStreamingSink<Done>,
     ) {
         if !self.allow_batch {
-            let status = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
+            let status = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED);
             ctx.spawn(sink.fail(status).map(|_| ()));
             return;
         }
@@ -223,11 +221,11 @@ fn test_batch_size_limit() {
 // port chosen between [`min_port`, `max_port`]. Return `None` if no port is available.
 fn create_mock_server<T>(service: T, min_port: u16, max_port: u16) -> Option<(Server, u16)>
 where
-    T: MockKvService + Clone + Send + 'static,
+    T: Tikv + Clone + Send + 'static,
 {
     for port in min_port..max_port {
-        let kv = MockKv(service.clone());
-        let mut mock_server = match mock_kv_service(kv, "localhost", port) {
+        let kv = service.clone();
+        let mut mock_server = match tikv_service(kv, "localhost", port) {
             Ok(s) => s,
             Err(_) => continue,
         };
@@ -241,9 +239,9 @@ where
 // Return `None` is the port is unavailable.
 fn create_mock_server_on<T>(service: T, port: u16) -> Option<Server>
 where
-    T: MockKvService + Clone + Send + 'static,
+    T: Tikv + Clone + Send + 'static,
 {
-    let mut mock_server = match mock_kv_service(MockKv(service), "localhost", port) {
+    let mut mock_server = match tikv_service(service, "localhost", port) {
         Ok(s) => s,
         Err(_) => return None,
     };

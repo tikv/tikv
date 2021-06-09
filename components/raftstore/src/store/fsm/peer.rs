@@ -5,7 +5,7 @@ use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::iter::Iterator;
 use std::time::Instant;
-use std::{cmp, u64};
+use std::{cmp, mem, u64};
 
 use batch_system::{BasicMailbox, Fsm};
 use collections::HashMap;
@@ -30,6 +30,8 @@ use protobuf::Message;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 use raft::{Ready, StateRole};
+use tikv_alloc::trace::TraceEvent;
+use tikv_util::memory::HeapSize;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
@@ -46,6 +48,7 @@ use crate::store::fsm::{
 };
 use crate::store::hibernate_state::{GroupState, HibernateState};
 use crate::store::local_metrics::RaftProposeMetrics;
+use crate::store::memory::*;
 use crate::store::metrics::*;
 use crate::store::msg::{Callback, ExtCallback};
 use crate::store::peer::{ConsistencyState, Peer, StaleState};
@@ -122,6 +125,8 @@ where
 
     // Batch raft command which has the same header into an entry
     batch_req_builder: BatchRaftCmdRequestBuilder<EK>,
+
+    trace: PeerMemoryTrace,
 }
 
 pub struct BatchRaftCmdRequestBuilder<E>
@@ -214,6 +219,7 @@ where
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(
                     cfg.raft_entry_max_size.0 as f64,
                 ),
+                trace: PeerMemoryTrace::default(),
             }),
         ))
     }
@@ -256,6 +262,7 @@ where
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(
                     cfg.raft_entry_max_size.0 as f64,
                 ),
+                trace: PeerMemoryTrace::default(),
             }),
         ))
     }
@@ -295,6 +302,37 @@ where
     pub fn maybe_hibernate(&mut self) -> bool {
         self.hibernate_state
             .maybe_hibernate(self.peer.peer_id(), self.peer.region())
+    }
+
+    #[inline]
+    pub fn raft_heap_size(&self, cfg: &Config) -> usize {
+        let raft = &self.peer.raft_group.raft;
+        let peer_cnt = self.peer.region().get_peers().len();
+        let inflight_size = cfg.raft_max_inflight_msgs * mem::size_of::<u64>();
+        // Progress size
+        let mut size =
+            mem::size_of::<raft::Progress>() * peer_cnt * 6 / 5 + inflight_size * peer_cnt;
+        // We use Uuid for read request.
+        size += raft.read_states.len() * (mem::size_of::<raft::ReadState>() + 16);
+        // Every requests have at least header, which should be at least 8 bytes.
+        let entries = &raft.raft_log.unstable.entries;
+        size += entries.len() * (mem::size_of::<raft::eraftpb::Entry>() + 8);
+        let read_only = &raft.read_only;
+        size +=
+            read_only.pending_read_index.len() * (16 + mem::size_of::<raft::eraftpb::Message>());
+        size += read_only.read_index_queue.heap_size() + 16 * read_only.read_index_queue.len();
+        size += raft.msgs.len() * mem::size_of::<raft::eraftpb::Message>();
+        size
+    }
+
+    #[inline]
+    pub fn update_memory_trace(&mut self, cfg: &Config) -> Option<TraceEvent> {
+        let trace = PeerMemoryTrace {
+            raft_machine: self.raft_heap_size(cfg),
+            proposals: self.peer.proposal_size(),
+            rest: self.peer.rest_size() + mem::size_of::<Self>(),
+        };
+        self.trace.reset(trace)
     }
 }
 
@@ -1917,10 +1955,10 @@ where
         meta.pending_snapshot_regions
             .retain(|r| self.fsm.region_id() != r.get_id());
 
-        // Remove `read_progress` and call `clear` to set the `safe_ts` to zero to reject
+        // Remove `read_progress` and reset the `safe_ts` to zero to reject
         // incoming stale read request
         meta.region_read_progress.remove(&region_id);
-        self.fsm.peer.read_progress.clear();
+        self.fsm.peer.read_progress.pause();
 
         // Destroy read delegates.
         meta.readers.remove(&region_id);
@@ -1952,6 +1990,7 @@ where
         // So in here, it's necessary to held the StoreMeta lock when closing the router.
         self.ctx.router.close(region_id);
         self.fsm.stop();
+        MEMTRACE_PEERS.trace(TraceEvent::Sub(self.fsm.trace.sum()));
 
         if is_initialized
             && !merged_by_target
@@ -2759,7 +2798,12 @@ where
         self.fsm.peer.catch_up_logs = Some(catch_up_logs);
     }
 
-    fn on_ready_commit_merge(&mut self, region: metapb::Region, source: metapb::Region) {
+    fn on_ready_commit_merge(
+        &mut self,
+        merge_index: u64,
+        region: metapb::Region,
+        source: metapb::Region,
+    ) {
         self.register_split_region_check_tick();
         let mut meta = self.ctx.store_meta.lock().unwrap();
 
@@ -2781,6 +2825,14 @@ where
         assert!(meta.regions.remove(&source.get_id()).is_some());
         meta.set_region(&self.ctx.coprocessor_host, region, &mut self.fsm.peer);
         meta.readers.remove(&source.get_id());
+
+        // After the region commit merged, the region's key range is extended and the region's `safe_ts`
+        // should reset to `min(source_safe_ts, target_safe_ts)`
+        let source_read_progress = meta.region_read_progress.remove(&source.get_id()).unwrap();
+        self.fsm
+            .peer
+            .read_progress
+            .merge_safe_ts(source_read_progress.safe_ts(), merge_index);
 
         // If a follower merges into a leader, a more recent read may happen
         // on the leader of the follower. So max ts should be updated after
@@ -2844,6 +2896,9 @@ where
         // Clear merge releted data
         self.fsm.peer.pending_merge_state = None;
         self.fsm.peer.want_rollback_merge_peers.clear();
+
+        // Resume updating `safe_ts`
+        self.fsm.peer.read_progress.resume();
 
         if let Some(r) = region {
             let mut meta = self.ctx.store_meta.lock().unwrap();
@@ -3087,9 +3142,11 @@ where
                 ExecResult::PrepareMerge { region, state } => {
                     self.on_ready_prepare_merge(region, state)
                 }
-                ExecResult::CommitMerge { region, source } => {
-                    self.on_ready_commit_merge(region.clone(), source.clone())
-                }
+                ExecResult::CommitMerge {
+                    index,
+                    region,
+                    source,
+                } => self.on_ready_commit_merge(index, region, source),
                 ExecResult::RollbackMerge { region, commit } => {
                     self.on_ready_rollback_merge(commit, Some(region))
                 }

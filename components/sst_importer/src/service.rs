@@ -5,7 +5,7 @@ use std::fmt::Debug;
 
 pub fn make_rpc_error<E: Debug>(err: E) -> RpcStatus {
     // FIXME: Just spewing debug error formatting here seems pretty unfriendly
-    RpcStatus::new(RpcStatusCode::UNKNOWN, Some(format!("{:?}", err)))
+    RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", err))
 }
 
 #[macro_export]
