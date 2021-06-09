@@ -7,6 +7,7 @@ publish = false
 [features]
 default = ["protobuf-codec"]
 protobuf-codec = [
+  "protobuf/bytes",
   "grpcio/protobuf-codec",
   "kvproto/protobuf-codec",
   "pd_client/protobuf-codec",
@@ -31,6 +32,7 @@ prost-codec = [
 tcmalloc = ["tikv/tcmalloc"]
 jemalloc = ["tikv/jemalloc"]
 mimalloc = ["tikv/mimalloc"]
+snmalloc = ["tikv/snmalloc"]
 portable = ["tikv/portable"]
 sse = ["tikv/sse"]
 mem-profiling = ["tikv/mem-profiling"]

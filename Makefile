@@ -39,6 +39,8 @@ ifeq ($(TCMALLOC),1)
 ENABLE_FEATURES += tcmalloc
 else ifeq ($(MIMALLOC),1)
 ENABLE_FEATURES += mimalloc
+else ifeq ($(SNMALLOC),1)
+ENABLE_FEATURES += snmalloc
 else ifeq ($(SYSTEM_ALLOC),1)
 # no feature needed for system allocator
 else

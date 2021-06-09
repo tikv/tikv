@@ -2,8 +2,8 @@
 
 pub use crate::default::*;
 
-pub type Allocator = mimalloc::MiMalloc;
+pub type Allocator = snmalloc_rs::SnMalloc;
 
 pub const fn allocator() -> Allocator {
-    mimalloc::MiMalloc
+    snmalloc_rs::SnMalloc
 }
