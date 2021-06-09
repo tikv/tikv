@@ -53,7 +53,14 @@ fn fail_leader_full(cluster: &mut Cluster<ServerCluster>) {
         let key = String::from("8000").into_bytes();
         let value = String::from("8000").into_bytes();
         let rx = cluster.async_put(&key, &value).unwrap();
-        is_error_response(&rx.recv_timeout(Duration::from_secs(10)).unwrap());
+        assert!(
+            rx.recv_timeout(Duration::from_secs(10))
+                .unwrap()
+                .get_header()
+                .get_error()
+                .get_message()
+                .contains("disk full, all the business data write forbiden")
+        );
 
         let raft_stat = cluster.raft_local_state(1, leader.get_store_id());
         let index_2 = raft_stat.get_last_index();
