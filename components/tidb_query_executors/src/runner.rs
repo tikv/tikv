@@ -513,6 +513,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             return;
         }
         let result = &self.exec_stats.summary_per_executor;
+        // Get the first executor which is always the scan executor
         if let Some(exec_stat) = result.first() {
             dest.clone_from(exec_stat);
         }

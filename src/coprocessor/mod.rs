@@ -70,7 +70,7 @@ pub trait RequestHandler: Send {
         // Do nothing by default
     }
 
-    /// Collects kv_read_time in this request handler so far.
+    /// Collects scan executor time in this request handler so far.
     fn collect_scan_summary(&mut self, _dest: &mut ExecSummary) {
         // Do nothing by default
     }
