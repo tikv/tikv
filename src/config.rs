@@ -54,7 +54,7 @@ use tikv_util::yatp_pool;
 use crate::coprocessor_v2::Config as CoprocessorV2Config;
 use crate::import::Config as ImportConfig;
 use crate::server::gc_worker::GcConfig;
-use crate::server::gc_worker::WriteCompactionFilterFactory;
+use crate::server::gc_worker::{RaftLogCompactionFilterFactory, WriteCompactionFilterFactory};
 use crate::server::lock_manager::Config as PessimisticTxnConfig;
 use crate::server::ttl::TTLCompactionFilterFactory;
 use crate::server::Config as ServerConfig;
@@ -1176,7 +1176,7 @@ impl Default for RaftDefaultCfConfig {
 }
 
 impl RaftDefaultCfConfig {
-    pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
+    pub fn build_opt(&self, cache: &Option<Cache>, gc_on_compaction: bool) -> ColumnFamilyOptions {
         let no_region_info_accessor: Option<&RegionInfoAccessor> = None;
         let mut cf_opts = build_cf_opt!(self, CF_DEFAULT, cache, no_region_info_accessor);
         let f = Box::new(FixedPrefixSliceTransform::new(region_raft_prefix_len()));
@@ -1184,6 +1184,14 @@ impl RaftDefaultCfConfig {
             .set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform", f)
             .unwrap();
         cf_opts.set_titandb_options(&self.titan.build_opts());
+        if gc_on_compaction {
+            cf_opts
+                .set_compaction_filter_factory(
+                    "raft_log_compaction_filter_factory",
+                    Box::new(RaftLogCompactionFilterFactory {}),
+                )
+                .unwrap();
+        }
         cf_opts
     }
 }
@@ -1245,6 +1253,8 @@ pub struct RaftDbConfig {
     pub defaultcf: RaftDefaultCfConfig,
     #[config(skip)]
     pub titan: TitanDBConfig,
+    #[config(skip)]
+    pub gc_on_compaction: bool,
 }
 
 impl Default for RaftDbConfig {
@@ -1283,6 +1293,7 @@ impl Default for RaftDbConfig {
             wal_bytes_per_sync: ReadableSize::kb(512),
             defaultcf: RaftDefaultCfConfig::default(),
             titan: titan_config,
+            gc_on_compaction: true,
         }
     }
 }
@@ -1331,7 +1342,10 @@ impl RaftDbConfig {
     }
 
     pub fn build_cf_opts(&self, cache: &Option<Cache>) -> Vec<CFOptions<'_>> {
-        vec![CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt(cache))]
+        vec![CFOptions::new(
+            CF_DEFAULT,
+            self.defaultcf.build_opt(cache, self.gc_on_compaction),
+        )]
     }
 
     fn validate(&mut self) -> Result<(), Box<dyn Error>> {

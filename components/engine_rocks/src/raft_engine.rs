@@ -1,6 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::{RocksEngine, RocksWriteBatch};
+use lazy_static::lazy_static;
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 
 use engine_traits::{
     Error, Iterable, KvEngine, MiscExt, Mutable, Peekable, RaftEngine, RaftEngineReadOnly,
@@ -12,6 +15,19 @@ use raft::eraftpb::Entry;
 use tikv_util::{box_err, box_try};
 
 const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
+
+pub struct RaftLogGcContext {
+    pub gc_on_compaction: bool,
+    pub apply_idxs: HashMap<u64, u64>,
+}
+
+lazy_static! {
+    pub static ref RAFT_LOG_GC_CONTEXT: Arc<RwLock<RaftLogGcContext>> =
+        Arc::new(RwLock::new(RaftLogGcContext {
+            gc_on_compaction: false,
+            apply_idxs: HashMap::new(),
+        }));
+}
 
 impl RaftEngineReadOnly for RocksEngine {
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {
@@ -171,7 +187,15 @@ impl RaftEngine for RocksEngine {
         self.put_msg(&keys::raft_state_key(raft_group_id), state)
     }
 
+    // Always returns Ok(0) when using compaction filter.
     fn gc(&self, raft_group_id: u64, mut from: u64, to: u64) -> Result<usize> {
+        {
+            let mut ctx = RAFT_LOG_GC_CONTEXT.write().unwrap();
+            if ctx.gc_on_compaction {
+                ctx.apply_idxs.insert(raft_group_id, to);
+                return Ok(0);
+            }
+        }
         if from >= to {
             return Ok(0);
         }
@@ -233,6 +257,13 @@ impl RaftLogBatch for RocksWriteBatch {
     }
 
     fn cut_logs(&mut self, raft_group_id: u64, from: u64, to: u64) {
+        {
+            let mut ctx = RAFT_LOG_GC_CONTEXT.write().unwrap();
+            if ctx.gc_on_compaction {
+                ctx.apply_idxs.insert(raft_group_id, to);
+                return;
+            }
+        }
         for index in from..to {
             let key = keys::raft_log_key(raft_group_id, index);
             self.delete(&key).unwrap();

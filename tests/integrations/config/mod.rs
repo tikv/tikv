@@ -585,6 +585,7 @@ fn test_serde_custom_tikv_config() {
             bottommost_zstd_compression_sample_size: 0,
         },
         titan: titan_db_config,
+        gc_on_compaction: true,
     };
     value.raft_engine.enable = true;
     value.raft_engine.mut_config().dir = "test-dir".to_owned();

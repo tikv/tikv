@@ -4,6 +4,7 @@ mod applied_lock_collector;
 mod compaction_filter;
 mod config;
 mod gc_manager;
+mod gc_raftdb;
 mod gc_worker;
 
 // TODO: Use separated error type for GCWorker instead.
@@ -15,6 +16,7 @@ use compaction_filter::{
 pub use config::{GcConfig, GcWorkerConfigManager, DEFAULT_GC_BATCH_KEYS};
 use engine_traits::MvccProperties;
 pub use gc_manager::AutoGcConfig;
+pub use gc_raftdb::RaftLogCompactionFilterFactory;
 pub use gc_worker::{sync_gc, GcSafePointProvider, GcTask, GcWorker, GC_MAX_EXECUTING_TASKS};
 use txn_types::TimeStamp;
 

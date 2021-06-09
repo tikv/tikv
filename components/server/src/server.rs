@@ -1083,6 +1083,10 @@ impl TiKVServer<RocksEngine> {
             raft_db_cf_opts,
         )
         .unwrap_or_else(|s| fatal!("failed to create raft engine: {}", s));
+        if config_raftdb.gc_on_compaction {
+            let mut ctx = engine_rocks::RAFT_LOG_GC_CONTEXT.write().unwrap();
+            ctx.gc_on_compaction = true;
+        }
 
         // Create kv engine.
         let mut kv_db_opts = self.config.rocksdb.build_opt();

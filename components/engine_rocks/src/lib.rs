@@ -95,6 +95,7 @@ pub mod encryption;
 pub mod file_system;
 
 mod raft_engine;
+pub use raft_engine::RAFT_LOG_GC_CONTEXT;
 
 pub use rocksdb::set_perf_level;
 pub use rocksdb::PerfContext;
