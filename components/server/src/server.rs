@@ -194,7 +194,7 @@ struct TiKVEngines<EK: KvEngine, ER: RaftEngine> {
 struct Servers<EK: KvEngine, ER: RaftEngine> {
     lock_mgr: LockManager,
     server: LocalServer<EK, ER>,
-    node: Node<RpcClient, ER>,
+    node: Node<RpcClient, EK, ER>,
     importer: Arc<SSTImporter>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
     cdc_memory_quota: MemoryQuota,

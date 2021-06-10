@@ -104,7 +104,7 @@ impl StoreAddrResolver for AddressMap {
 }
 
 struct ServerMeta {
-    node: Node<TestPdClient, RocksEngine>,
+    node: Node<TestPdClient, RocksEngine, RocksEngine>,
     server: Server<SimulateStoreTransport, PdStoreAddrResolver, SimulateEngine>,
     sim_router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
