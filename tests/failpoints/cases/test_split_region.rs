@@ -9,6 +9,7 @@ use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftMessage;
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
+use raftstore::store::config::Config as RaftstoreConfig;
 use raftstore::store::util::is_vote_msg;
 use raftstore::Result;
 use tikv_util::HandyRwLock;
@@ -658,4 +659,72 @@ fn test_split_duplicated_batch() {
     // Exit on_split hook.
     rx2.recv_timeout(Duration::from_secs(3)).unwrap();
     must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
+}
+
+/// We depend on split-check task to update approximate size of region even if this region does not
+/// need to split.
+#[test]
+fn test_report_approximate_size_after_split_check() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store = RaftstoreConfig::default();
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.region_split_check_diff = ReadableSize::kb(64);
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(50);
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(300);
+    cluster.run();
+    cluster.must_put_cf("write", b"k0", b"k1");
+    let region_id = cluster.get_region_id(b"k0");
+    let approximate_size = cluster
+        .pd_client
+        .get_region_approximate_size(region_id)
+        .unwrap_or_default();
+    let approximate_keys = cluster
+        .pd_client
+        .get_region_approximate_keys(region_id)
+        .unwrap_or_default();
+    assert!(approximate_size == 0 && approximate_keys == 0);
+    let (tx, rx) = mpsc::sync_channel(10);
+    let tx = Arc::new(Mutex::new(tx));
+
+    fail::cfg_callback("on_split_region_check_tick", move || {
+        // notify split region tick
+        let _ = tx.lock().unwrap().send(());
+        let tx1 = tx.clone();
+        fail::cfg_callback("on_approximate_region_size", move || {
+            // notify split check finished
+            let _ = tx1.lock().unwrap().send(());
+            let tx2 = tx1.clone();
+            fail::cfg_callback("test_raftstore::pd::region_heartbeat", move || {
+                // notify heartbeat region
+                let _ = tx2.lock().unwrap().send(());
+            })
+            .unwrap();
+        })
+        .unwrap();
+    })
+    .unwrap();
+    let value = vec![1_u8; 8096];
+    for i in 0..10 {
+        let mut reqs = vec![];
+        for j in 0..10 {
+            let k = format!("k{}", i * 10 + j);
+            reqs.push(new_put_cf_cmd("write", k.as_bytes(), &value));
+        }
+        cluster.batch_put("k100".as_bytes(), reqs).unwrap();
+    }
+    rx.recv().unwrap();
+    fail::remove("on_split_region_check_tick");
+    rx.recv().unwrap();
+    fail::remove("on_approximate_region_size");
+    rx.recv().unwrap();
+    fail::remove("test_raftstore::pd::region_heartbeat");
+    let size = cluster
+        .pd_client
+        .get_region_approximate_size(region_id)
+        .unwrap_or_default();
+    // The region does not split, but it still refreshes the approximate_size.
+    let region_number = cluster.pd_client.get_regions_number();
+    assert_eq!(region_number, 1);
+    assert!(size > approximate_size);
 }
