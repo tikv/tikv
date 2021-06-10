@@ -59,11 +59,21 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    fn notify_persisted(&self, region_id: u64, peer_id: u64, ready_number: u64, now: Instant) {
-        if let Err(e) = self
-            .router
-            .force_send(region_id, PeerMsg::Persisted((peer_id, ready_number, now)))
-        {
+    fn notify_persisted(
+        &self,
+        region_id: u64,
+        peer_id: u64,
+        ready_number: u64,
+        send_time: Instant,
+    ) {
+        if let Err(e) = self.router.force_send(
+            region_id,
+            PeerMsg::Persisted {
+                peer_id,
+                ready_number,
+                send_time,
+            },
+        ) {
             warn!(
                 "failed to send noop to trigger persisted ready";
                 "region_id" => region_id,

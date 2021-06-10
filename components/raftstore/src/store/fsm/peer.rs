@@ -580,9 +580,11 @@ where
                     }
                 }
                 PeerMsg::Noop => {}
-                PeerMsg::Persisted((peer_id, number, ts)) => {
-                    self.on_persisted_msg(peer_id, number, ts)
-                }
+                PeerMsg::Persisted {
+                    peer_id,
+                    ready_number,
+                    send_time,
+                } => self.on_persisted_msg(peer_id, ready_number, send_time),
                 PeerMsg::UpdateReplicationMode => self.on_update_replication_mode(),
             }
         }
@@ -919,14 +921,14 @@ where
         }
     }
 
-    fn on_persisted_msg(&mut self, peer_id: u64, number: u64, _ts: Instant) {
+    fn on_persisted_msg(&mut self, peer_id: u64, ready_number: u64, _send_time: Instant) {
         if peer_id != self.fsm.peer_id() {
             error!(
                 "peer id not match";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
                 "persisted_peer_id" => peer_id,
-                "persisted_number" => number,
+                "persisted_number" => ready_number,
             );
         }
         // TODO: add truly async io logic

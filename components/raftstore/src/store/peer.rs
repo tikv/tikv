@@ -1081,11 +1081,8 @@ where
                 // to suspect.
                 self.leader_lease.suspect(monotonic_raw_now());
             }
-            if self.send_raft_message(msg, trans) {
-                metrics.add(msg_type, true);
-            } else {
-                metrics.add(msg_type, false);
-            }
+            let b = self.send_raft_message(msg, trans);
+            metrics.add(msg_type, b);
         }
     }
 
