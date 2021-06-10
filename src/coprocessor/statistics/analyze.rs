@@ -386,7 +386,12 @@ impl<S: Snapshot> RowSampleBuilder<S> {
                     column_vals.push(val);
                 }
                 collector.count += 1;
-                collector.collect_column_group(&column_vals, &collation_key_vals, &self.columns_info, &self.column_groups);
+                collector.collect_column_group(
+                    &column_vals,
+                    &collation_key_vals,
+                    &self.columns_info,
+                    &self.column_groups,
+                );
                 collector.collect_column(column_vals, collation_key_vals, &self.columns_info);
             }
         }
@@ -466,7 +471,8 @@ impl RowSampleCollector {
             // Use a in place murmur3 to replace this memory copy.
             for j in offsets {
                 if columns_info[*j as usize].as_accessor().is_string_like() {
-                    self.row_buf.extend_from_slice(&collation_keys_val[*j as usize]);
+                    self.row_buf
+                        .extend_from_slice(&collation_keys_val[*j as usize]);
                 } else {
                     self.row_buf.extend_from_slice(&columns_val[*j as usize]);
                 }
@@ -475,7 +481,12 @@ impl RowSampleCollector {
         }
     }
 
-    pub fn collect_column(&mut self, columns_val: Vec<Vec<u8>>, collation_keys_val: Vec<Vec<u8>>, columns_info: &Vec<tipb::ColumnInfo>) {
+    pub fn collect_column(
+        &mut self,
+        columns_val: Vec<Vec<u8>>,
+        collation_keys_val: Vec<Vec<u8>>,
+        columns_info: &Vec<tipb::ColumnInfo>,
+    ) {
         for i in 0..columns_val.len() {
             if columns_val[i][0] == NIL_FLAG {
                 self.null_count[i] += 1;
