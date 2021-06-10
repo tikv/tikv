@@ -35,6 +35,7 @@ cloud-gcp = [
   "sst_importer/cloud-gcp",
 ]
 protobuf-codec = [
+  "protobuf/bytes",
   "batch-system/protobuf-codec",
   "codec/protobuf-codec",
   "concurrency_manager/protobuf-codec",
