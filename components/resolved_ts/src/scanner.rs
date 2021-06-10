@@ -66,10 +66,9 @@ pub struct ScannerPool<T, E> {
 impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
     pub fn new(count: usize, raft_router: T) -> Self {
         let workers = Arc::new(
-            Builder::new()
-                .threaded_scheduler()
+            Builder::new_multi_thread()
                 .thread_name("inc-scan")
-                .core_threads(count)
+                .worker_threads(count)
                 .build()
                 .unwrap(),
         );

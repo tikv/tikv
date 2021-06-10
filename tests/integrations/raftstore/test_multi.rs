@@ -155,7 +155,7 @@ fn test_multi_random_restart<T: Simulator>(
     let mut value = [0u8; 5];
 
     for i in 1..restart_count {
-        let id = 1 + rng.gen_range(0, node_count as u64);
+        let id = 1 + rng.gen_range(0..node_count as u64);
         cluster.stop_node(id);
 
         let key = i.to_string().into_bytes();
