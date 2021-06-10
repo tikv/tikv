@@ -173,18 +173,17 @@ where
                 ));
             }
         }
-        if last_index != 0 {
-            if self
+        if last_index != 0
+            && self
                 .raft_state
                 .as_ref()
                 .map_or(true, |r| r.get_last_index() != last_index)
-            {
-                return Err(box_err!(
-                    "invalid raft state, last_index {}, raft_state {:?}",
-                    last_index,
-                    self.raft_state
-                ));
-            }
+        {
+            return Err(box_err!(
+                "invalid raft state, last_index {}, raft_state {:?}",
+                last_index,
+                self.raft_state
+            ));
         }
         Ok(())
     }
@@ -585,9 +584,6 @@ mod tests {
         for (region_id, entries, state) in entries_state {
             for e in entries {
                 let key = keys::raft_log_key(region_id, e.get_index());
-                if let None = snapshot.get_msg::<Entry>(&key).unwrap() {
-                    println!("xxx??? {} {}", region_id, e.get_index());
-                }
                 let val = snapshot.get_msg::<Entry>(&key).unwrap().unwrap();
                 assert_eq!(val, e);
             }
