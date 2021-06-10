@@ -24,25 +24,14 @@ use fail::fail_point;
 use kvproto::raft_serverpb::{RaftLocalState, RaftMessage};
 use raft::eraftpb::Entry;
 use tikv_util::time::duration_to_sec;
-use tikv_util::{debug, thd_name, warn};
+use tikv_util::{box_err, debug, thd_name, warn};
 
 const KV_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const RAFT_WB_SHRINK_SIZE: usize = 10 * 1024 * 1024;
 
-#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct UnpersistedReady {
-    pub peer_id: u64,
-    pub number: u64,
-}
-
-impl UnpersistedReady {
-    pub fn new(peer_id: u64, number: u64) -> Self {
-        Self { peer_id, number }
-    }
-}
-
+/// Notify the event to the specified region.
 pub trait Notifier: Clone + Send + 'static {
-    fn notify_persisted(&self, region_id: u64, ready: UnpersistedReady, now: Instant);
+    fn notify_persisted(&self, region_id: u64, peer_id: u64, ready_number: u64, now: Instant);
     fn notify_unreachable(&self, region_id: u64, to_peer_id: u64);
 }
 
@@ -70,16 +59,16 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    fn notify_persisted(&self, region_id: u64, ready: UnpersistedReady, now: Instant) {
-        if let Err(e) = self.router.force_send(
-            region_id,
-            PeerMsg::Persisted((ready.peer_id, ready.number, now)),
-        ) {
+    fn notify_persisted(&self, region_id: u64, peer_id: u64, ready_number: u64, now: Instant) {
+        if let Err(e) = self
+            .router
+            .force_send(region_id, PeerMsg::Persisted((peer_id, ready_number, now)))
+        {
             warn!(
                 "failed to send noop to trigger persisted ready";
                 "region_id" => region_id,
-                "peer_id" => ready.peer_id,
-                "ready_number" => ready.number,
+                "peer_id" => peer_id,
+                "ready_number" => ready_number,
                 "error" => ?e,
             );
         }
@@ -104,6 +93,8 @@ where
     }
 }
 
+/// AsyncWriteTask contains write tasks which need to be persisted to kv db and raft db.
+#[derive(Debug)]
 pub struct AsyncWriteTask<EK, ER>
 where
     EK: KvEngine,
@@ -111,12 +102,12 @@ where
 {
     region_id: u64,
     peer_id: u64,
+    ready_number: u64,
     pub send_time: Instant,
     pub kv_wb: Option<EK::WriteBatch>,
     pub raft_wb: Option<ER::LogBatch>,
     pub entries: Vec<Entry>,
     pub cut_logs: Option<(u64, u64)>,
-    pub ready: Option<UnpersistedReady>,
     pub raft_state: Option<RaftLocalState>,
     pub messages: Vec<RaftMessage>,
     pub proposal_times: Vec<Instant>,
@@ -127,16 +118,16 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    pub fn new(region_id: u64, peer_id: u64) -> Self {
+    pub fn new(region_id: u64, peer_id: u64, ready_number: u64) -> Self {
         Self {
             region_id,
             peer_id,
+            ready_number,
             send_time: Instant::now(),
             kv_wb: None,
             raft_wb: None,
             entries: vec![],
             cut_logs: None,
-            ready: None,
             raft_state: None,
             messages: vec![],
             proposal_times: vec![],
@@ -150,8 +141,33 @@ where
             && self.kv_wb.as_ref().map_or(true, |wb| wb.is_empty())
             && self.raft_wb.as_ref().map_or(true, |wb| wb.is_empty()))
     }
+
+    /// Sanity check for robustness.
+    pub fn valid(&self) -> Result<()> {
+        if self.region_id == 0 || self.peer_id == 0 || self.ready_number == 0 {
+            return Err(box_err!(
+                "invalid id, region_id {}, peer_id {}, ready_number {}",
+                self.region_id,
+                self.peer_id,
+                self.ready_number
+            ));
+        }
+        let last_index = self.entries.last().map_or(0, |e| e.get_index());
+        if let Some((from, _)) = self.cut_logs {
+            if from <= last_index {
+                // Entries are put and deleted in the same writebatch.
+                return Err(box_err!(
+                    "invalid cut logs, last_index {}, cut_logs {:?}",
+                    last_index,
+                    self.cut_logs
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
+/// Message that can be sent to AsyncWriteWorker
 pub enum AsyncWriteMsg<EK, ER>
 where
     EK: KvEngine,
@@ -161,14 +177,17 @@ where
     Shutdown,
 }
 
-pub struct AsyncWriteBatch<EK, ER>
+/// AsyncWriteBatch is used for combining several AsyncWriteTask into one.
+struct AsyncWriteBatch<EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,
 {
     pub kv_wb: EK::WriteBatch,
     pub raft_wb: ER::LogBatch,
-    pub readies: HashMap<u64, UnpersistedReady>,
+    // region_id -> (peer_id, ready_number)
+    pub readies: HashMap<u64, (u64, u64)>,
+    // Write raft state once for a region everytime writing to disk
     pub raft_states: HashMap<u64, RaftLocalState>,
     pub state_size: usize,
     pub tasks: Vec<AsyncWriteTask<EK, ER>>,
@@ -180,7 +199,7 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    pub fn new(kv_wb: EK::WriteBatch, raft_wb: ER::LogBatch) -> Self {
+    fn new(kv_wb: EK::WriteBatch, raft_wb: ER::LogBatch) -> Self {
         Self {
             kv_wb,
             raft_wb,
@@ -192,22 +211,24 @@ where
         }
     }
 
-    pub fn add_write_task(&mut self, mut task: AsyncWriteTask<EK, ER>) {
+    /// Add write task to this batch
+    fn add_write_task(&mut self, mut task: AsyncWriteTask<EK, ER>) {
+        if let Err(e) = task.valid() {
+            panic!("task is not valid: {:?}", e);
+        }
+        self.readies
+            .insert(task.region_id, (task.peer_id, task.ready_number));
         if let Some(kv_wb) = task.kv_wb.take() {
             self.kv_wb.merge(kv_wb);
         }
         if let Some(raft_wb) = task.raft_wb.take() {
             self.raft_wb.merge(raft_wb);
         }
-        let last_index = task.entries.last().map_or(0, |e| e.get_index());
+
         let entries = std::mem::take(&mut task.entries);
         self.raft_wb.append(task.region_id, entries).unwrap();
         if let Some((from, to)) = task.cut_logs {
-            assert!(from > last_index);
             self.raft_wb.cut_logs(task.region_id, from, to);
-        }
-        if let Some(ready) = task.ready.take() {
-            self.readies.insert(task.region_id, ready);
         }
         if let Some(raft_state) = task.raft_state.take() {
             if self
@@ -221,7 +242,7 @@ where
         self.tasks.push(task);
     }
 
-    pub fn clear(&mut self) {
+    fn clear(&mut self) {
         // raft_wb doesn't have clear interface but it should be consumed by raft db before
         self.kv_wb.clear();
         self.readies.clear();
@@ -231,11 +252,12 @@ where
     }
 
     #[inline]
-    pub fn get_raft_size(&self) -> usize {
+    fn get_raft_size(&self) -> usize {
         self.state_size + self.raft_wb.persist_size()
     }
 
-    pub fn before_write_to_db(&mut self) {
+    fn before_write_to_db(&mut self) {
+        // Put raft state to raft writebatch
         let raft_states = std::mem::take(&mut self.raft_states);
         for (region_id, state) in raft_states {
             self.raft_wb.put_raft_state(region_id, &state).unwrap();
@@ -244,6 +266,7 @@ where
     }
 }
 
+/// AsyncWriteWorker is the worker that handling async write msg.
 struct AsyncWriteWorker<EK, ER, T, N>
 where
     EK: KvEngine,
@@ -421,8 +444,9 @@ where
         STORE_WRITE_SEND_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()));
 
         now = Instant::now();
-        for (region_id, r) in &self.wb.readies {
-            self.notifier.notify_persisted(*region_id, *r, now);
+        for (region_id, (peer_id, ready_number)) in &self.wb.readies {
+            self.notifier
+                .notify_persisted(*region_id, *peer_id, *ready_number, now);
         }
         STORE_WRITE_CALLBACK_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()));
 
@@ -560,12 +584,12 @@ mod tests {
 
     #[derive(Clone)]
     struct TestNotifier {
-        tx: Sender<(u64, UnpersistedReady)>,
+        tx: Sender<(u64, (u64, u64))>,
     }
 
     impl Notifier for TestNotifier {
-        fn notify_persisted(&self, region_id: u64, ready: UnpersistedReady, _now: Instant) {
-            self.tx.send((region_id, ready)).unwrap()
+        fn notify_persisted(&self, region_id: u64, peer_id: u64, ready_number: u64, _now: Instant) {
+            self.tx.send((region_id, (peer_id, ready_number))).unwrap()
         }
         fn notify_unreachable(&self, _region_id: u64, _to_peer_id: u64) {
             panic!("unimplemented");
@@ -590,7 +614,7 @@ mod tests {
     struct TestAsyncWriteWorker {
         worker: AsyncWriteWorker<KvTestEngine, KvTestEngine, TestTransport, TestNotifier>,
         msg_rx: Receiver<RaftMessage>,
-        notify_rx: Receiver<(u64, UnpersistedReady)>,
+        notify_rx: Receiver<(u64, (u64, u64))>,
     }
 
     impl TestAsyncWriteWorker {
@@ -624,7 +648,7 @@ mod tests {
             assert_eq!(count, msg_count);
         }
 
-        fn must_have_same_notifies(&self, notifies: Vec<(u64, UnpersistedReady)>) {
+        fn must_have_same_notifies(&self, notifies: Vec<(u64, (u64, u64))>) {
             let mut notify_set = HashSet::default();
             for n in notifies {
                 notify_set.insert(n);
@@ -648,7 +672,7 @@ mod tests {
         let (_dir, raft_engine) = create_tmp_engine("async-io-batch-raft");
         let mut t = TestAsyncWriteWorker::new(&Config::default(), &kv_engine, &raft_engine);
 
-        let mut task_1 = AsyncWriteTask::<KvTestEngine, KvTestEngine>::new(1, 1);
+        let mut task_1 = AsyncWriteTask::<KvTestEngine, KvTestEngine>::new(1, 1, 10);
         task_1.kv_wb = Some(kv_engine.write_batch());
         task_1
             .kv_wb
@@ -669,13 +693,12 @@ mod tests {
             new_entry(7, 5),
             new_entry(8, 5),
         ]);
-        task_1.ready = Some(UnpersistedReady::new(1, 10));
         task_1.raft_state = Some(new_raft_state(5, 123, 6, 8));
         task_1.messages.append(&mut vec![RaftMessage::default()]);
 
         t.worker.wb.add_write_task(task_1);
 
-        let mut task_2 = AsyncWriteTask::<KvTestEngine, KvTestEngine>::new(2, 2);
+        let mut task_2 = AsyncWriteTask::<KvTestEngine, KvTestEngine>::new(2, 2, 15);
         task_2.kv_wb = Some(kv_engine.write_batch());
         task_2
             .kv_wb
@@ -693,7 +716,6 @@ mod tests {
         task_2
             .entries
             .append(&mut vec![new_entry(20, 15), new_entry(21, 15)]);
-        task_2.ready = Some(UnpersistedReady::new(2, 15));
         task_2.raft_state = Some(new_raft_state(15, 234, 20, 21));
         task_2
             .messages
@@ -701,7 +723,7 @@ mod tests {
 
         t.worker.wb.add_write_task(task_2);
 
-        let mut task_3 = AsyncWriteTask::<KvTestEngine, KvTestEngine>::new(1, 1);
+        let mut task_3 = AsyncWriteTask::<KvTestEngine, KvTestEngine>::new(1, 1, 11);
         task_3.kv_wb = Some(kv_engine.write_batch());
         task_3
             .kv_wb
@@ -721,7 +743,6 @@ mod tests {
             .entries
             .append(&mut vec![new_entry(6, 6), new_entry(7, 7)]);
         task_3.cut_logs = Some((8, 9));
-        task_3.ready = Some(UnpersistedReady::new(1, 11));
         task_3.raft_state = Some(new_raft_state(7, 124, 6, 7));
         task_3
             .messages
@@ -758,9 +779,6 @@ mod tests {
         );
 
         t.must_have_same_count_msg(5);
-        t.must_have_same_notifies(vec![
-            (1, UnpersistedReady::new(1, 11)),
-            (2, UnpersistedReady::new(2, 15)),
-        ]);
+        t.must_have_same_notifies(vec![(1, (1, 11)), (2, (2, 15))]);
     }
 }
