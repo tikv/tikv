@@ -5,7 +5,7 @@ use std::sync::mpsc::{self, sync_channel};
 use std::sync::Arc;
 use std::time::Duration;
 
-use engine::{rocks, DB};
+use engine_rocks::raw::DB;
 use engine_rocks::Compat;
 use raftstore::coprocessor::{
     config::{Config, SplitCheckConfigManager},
@@ -13,11 +13,11 @@ use raftstore::coprocessor::{
 };
 use raftstore::store::{SplitCheckRunner as Runner, SplitCheckTask as Task};
 use tikv::config::{ConfigController, Module, TiKvConfig};
-use tikv_util::worker::{Scheduler, Worker};
+use tikv_util::worker::{LazyWorker, Scheduler, Worker};
 
 fn tmp_engine<P: AsRef<Path>>(path: P) -> Arc<DB> {
     Arc::new(
-        rocks::util::new_engine(
+        engine_rocks::raw_util::new_engine(
             path.as_ref().to_str().unwrap(),
             None,
             &["split-check-config"],
@@ -27,16 +27,16 @@ fn tmp_engine<P: AsRef<Path>>(path: P) -> Arc<DB> {
     )
 }
 
-fn setup(cfg: TiKvConfig, engine: Arc<DB>) -> (ConfigController, Worker<Task>) {
+fn setup(cfg: TiKvConfig, engine: Arc<DB>) -> (ConfigController, LazyWorker<Task>) {
     let (router, _) = sync_channel(1);
     let runner = Runner::new(
         engine.c().clone(),
         router.clone(),
-        CoprocessorHost::new(router),
-        cfg.coprocessor.clone(),
+        CoprocessorHost::new(router, cfg.coprocessor.clone()),
     );
-    let mut worker: Worker<Task> = Worker::new("split-check-config");
-    worker.start(runner).unwrap();
+    let share_worker = Worker::new("split-check-config");
+    let mut worker = share_worker.lazy_build("split-check-config");
+    worker.start(runner);
 
     let cfg_controller = ConfigController::new(cfg);
     cfg_controller.register(
@@ -105,5 +105,5 @@ fn test_update_split_check_config() {
         assert_eq!(cfg, &cop_config);
     });
 
-    worker.stop().unwrap().join().unwrap();
+    worker.stop();
 }

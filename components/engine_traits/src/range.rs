@@ -3,6 +3,7 @@
 /// A range of keys, `start_key` is included, but not `end_key`.
 ///
 /// You should make sure `end_key` is not less than `start_key`.
+#[derive(Copy, Clone)]
 pub struct Range<'a> {
     pub start_key: &'a [u8],
     pub end_key: &'a [u8],

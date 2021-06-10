@@ -40,6 +40,18 @@ pub struct IoLoad {
     /// total wait time for all requests
     /// units: milliseconds
     pub time_in_queue: f64,
+    /// number of discard I/Os processed
+    /// units: requests
+    pub discard_io: Option<f64>,
+    /// number of discard I/Os merged with in-queue I/O
+    /// units: requests
+    pub discard_merged: Option<f64>,
+    /// number of sectors discarded
+    /// units: sectors
+    pub discard_sectors: Option<f64>,
+    /// total wait time for discard requests
+    /// units: milliseconds
+    pub discard_ticks: Option<f64>,
 }
 
 impl IoLoad {
@@ -59,38 +71,42 @@ impl IoLoad {
         let mut result = HashMap::new();
         // https://www.kernel.org/doc/Documentation/block/stat.txt
         if let Ok(dir) = std::fs::read_dir("/sys/block/") {
-            for entry in dir {
-                if let Ok(entry) = entry {
-                    let stat = entry.path().join("stat");
-                    let mut s = String::new();
-                    if File::open(stat)
-                        .and_then(|mut f| f.read_to_string(&mut s))
-                        .is_err()
-                    {
-                        continue;
-                    }
-                    let parts = s
-                        .split_whitespace()
-                        .map(|w| w.parse().unwrap_or_default())
-                        .collect::<Vec<f64>>();
-                    if parts.len() != 11 {
-                        continue;
-                    }
-                    let load = IoLoad {
-                        read_io: parts[0],
-                        read_merges: parts[1],
-                        read_sectors: parts[2],
-                        read_ticks: parts[3],
-                        write_io: parts[4],
-                        write_merges: parts[5],
-                        write_sectors: parts[6],
-                        write_ticks: parts[7],
-                        in_flight: parts[8],
-                        io_ticks: parts[9],
-                        time_in_queue: parts[10],
-                    };
-                    result.insert(format!("{:?}", entry.file_name()), load);
+            for entry in dir.flatten() {
+                let stat = entry.path().join("stat");
+                let mut s = String::new();
+                if File::open(stat)
+                    .and_then(|mut f| f.read_to_string(&mut s))
+                    .is_err()
+                {
+                    continue;
                 }
+                let parts = s
+                    .split_whitespace()
+                    .map(|w| w.parse().unwrap_or_default())
+                    .collect::<Vec<f64>>();
+                // A not too old Linux kernel supports the first 11 block statistics.
+                // Others stats are supported by Linux 4.19+, we consider them as optional ones.
+                if parts.len() < 11 {
+                    continue;
+                }
+                let load = IoLoad {
+                    read_io: parts[0],
+                    read_merges: parts[1],
+                    read_sectors: parts[2],
+                    read_ticks: parts[3],
+                    write_io: parts[4],
+                    write_merges: parts[5],
+                    write_sectors: parts[6],
+                    write_ticks: parts[7],
+                    in_flight: parts[8],
+                    io_ticks: parts[9],
+                    time_in_queue: parts[10],
+                    discard_io: parts.get(11).cloned(),
+                    discard_merged: parts.get(12).cloned(),
+                    discard_sectors: parts.get(13).cloned(),
+                    discard_ticks: parts.get(14).cloned(),
+                };
+                result.insert(format!("{:?}", entry.file_name()), load);
             }
         }
         result

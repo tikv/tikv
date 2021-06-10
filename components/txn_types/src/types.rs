@@ -1,5 +1,9 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use super::timestamp::TimeStamp;
+use bitflags::bitflags;
 use byteorder::{ByteOrder, NativeEndian};
+use collections::HashMap;
 use kvproto::kvrpcpb;
 use std::fmt::{self, Debug, Display, Formatter};
 use tikv_util::codec;
@@ -47,6 +51,16 @@ impl Key {
         let mut encoded = Vec::with_capacity(len);
         encoded.encode_bytes(key, false).unwrap();
         Key(encoded)
+    }
+
+    /// Creates a key from raw bytes but returns None if the key is an empty slice.
+    #[inline]
+    pub fn from_raw_maybe_unbounded(key: &[u8]) -> Option<Key> {
+        if key.is_empty() {
+            None
+        } else {
+            Some(Key::from_raw(key))
+        }
     }
 
     /// Gets and moves the raw representation of this key.
@@ -102,7 +116,7 @@ impl Key {
     /// key.
     #[inline]
     pub fn decode_ts(&self) -> Result<TimeStamp, codec::Error> {
-        Ok(Self::decode_ts_from(&self.0)?)
+        Self::decode_ts_from(&self.0)
     }
 
     /// Creates a new key by truncating the timestamp from this key.
@@ -200,6 +214,12 @@ impl Key {
     pub fn gen_hash(&self) -> u64 {
         farmhash::fingerprint64(&self.to_raw().unwrap())
     }
+
+    #[allow(clippy::len_without_is_empty)]
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
 }
 
 impl Clone for Key {
@@ -214,14 +234,23 @@ impl Clone for Key {
 
 impl Debug for Key {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.write_str(&hex::encode_upper(&self.0))
+        write!(f, "{:?}", &log_wrappers::Value::key(&self.0))
     }
 }
 
 impl Display for Key {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.write_str(&hex::encode_upper(&self.0))
+        write!(f, "{:?}", &log_wrappers::Value::key(&self.0))
     }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum MutationType {
+    Put,
+    Delete,
+    Lock,
+    Insert,
+    Other,
 }
 
 /// A row mutation.
@@ -235,11 +264,11 @@ pub enum Mutation {
     Lock(Key),
     /// Put `Value` into `Key` if `Key` does not yet exist.
     ///
-    /// Returns [`KeyError::AlreadyExists`](kvproto::kvrpcpb::KeyError::AlreadyExists) if the key already exists.
+    /// Returns `kvrpcpb::KeyError::AlreadyExists` if the key already exists.
     Insert((Key, Value)),
     /// Check `key` must be not exist.
     ///
-    /// Returns [`KeyError::AlreadyExists`](kvproto::kvrpcpb::KeyError::AlreadyExists) if the key already exists.
+    /// Returns `kvrpcpb::KeyError::AlreadyExists` if the key already exists.
     CheckNotExists(Key),
 }
 
@@ -254,6 +283,16 @@ impl Mutation {
         }
     }
 
+    pub fn mutation_type(&self) -> MutationType {
+        match self {
+            Mutation::Put(_) => MutationType::Put,
+            Mutation::Delete(_) => MutationType::Delete,
+            Mutation::Lock(_) => MutationType::Lock,
+            Mutation::Insert(_) => MutationType::Insert,
+            _ => MutationType::Other,
+        }
+    }
+
     pub fn into_key_value(self) -> (Key, Option<Value>) {
         match self {
             Mutation::Put((key, value)) => (key, Some(value)),
@@ -265,17 +304,11 @@ impl Mutation {
     }
 
     pub fn should_not_exists(&self) -> bool {
-        match self {
-            Mutation::Insert(_) | Mutation::CheckNotExists(_) => true,
-            _ => false,
-        }
+        matches!(self, Mutation::Insert(_) | Mutation::CheckNotExists(_))
     }
 
     pub fn should_not_write(&self) -> bool {
-        match self {
-            Mutation::CheckNotExists(_) => true,
-            _ => false,
-        }
+        matches!(self, Mutation::CheckNotExists(_))
     }
 }
 
@@ -292,9 +325,123 @@ impl From<kvrpcpb::Mutation> for Mutation {
     }
 }
 
+/// `OldValue` is used by cdc to read the previous value associated with some key during the prewrite process
+#[derive(Debug, Clone, PartialEq)]
+pub enum OldValue {
+    /// A real `OldValue`
+    Value { value: Value },
+    /// A timestamp of an old value in case a value is not inlined in Write
+    ValueTimeStamp { start_ts: TimeStamp },
+    /// `None` means we don't found a previous value
+    None,
+    /// `Unspecified` means one of the following:
+    ///   - The user doesn't care about the previous value
+    ///   - We don't sure if there is a previous value
+    Unspecified,
+}
+
+impl Default for OldValue {
+    fn default() -> Self {
+        OldValue::Unspecified
+    }
+}
+
+impl OldValue {
+    pub fn valid(&self) -> bool {
+        !matches!(self, OldValue::Unspecified)
+    }
+
+    pub fn size(&self) -> usize {
+        let value_size = match self {
+            OldValue::Value { value } => value.len(),
+            _ => 0,
+        };
+        value_size + std::mem::size_of::<OldValue>()
+    }
+}
+
+// Returned by MvccTxn when extra_op is set to kvrpcpb::ExtraOp::ReadOldValue.
+// key with current ts -> (short value of the prev txn, start ts of the prev txn).
+// The value of the map will be None when the mutation is `Insert`.
+// MutationType is the type of mutation of the current write.
+pub type OldValues = HashMap<Key, (OldValue, Option<MutationType>)>;
+
+// Extra data fields filled by kvrpcpb::ExtraOp.
+#[derive(Default, Debug, Clone)]
+pub struct TxnExtra {
+    pub old_values: OldValues,
+    // Marks that this transaction is a 1PC transaction. RaftKv should set this flag
+    // in the raft command request.
+    pub one_pc: bool,
+}
+
+impl TxnExtra {
+    pub fn is_empty(&self) -> bool {
+        self.old_values.is_empty()
+    }
+}
+
+pub trait TxnExtraScheduler: Send + Sync {
+    fn schedule(&self, txn_extra: TxnExtra);
+}
+
+bitflags! {
+    /// Additional flags for a write batch.
+    /// They should be set in the `flags` field in `RaftRequestHeader`.
+    pub struct WriteBatchFlags: u64 {
+        /// Indicates this request is from a 1PC transaction.
+        /// It helps CDC recognize 1PC transactions and handle them correctly.
+        const ONE_PC = 0b00000001;
+        /// Indicates this request is from a stale read-only transaction.
+        const STALE_READ = 0b00000010;
+    }
+}
+
+impl WriteBatchFlags {
+    /// Convert from underlying bit representation
+    /// panic if it contains bits that do not correspond to a flag
+    pub fn from_bits_check(bits: u64) -> WriteBatchFlags {
+        match WriteBatchFlags::from_bits(bits) {
+            None => panic!("unrecognized flags: {:b}", bits),
+            // zero or more flags
+            Some(f) => f,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_flags() {
+        assert!(WriteBatchFlags::from_bits_check(0).is_empty());
+        assert_eq!(
+            WriteBatchFlags::from_bits_check(WriteBatchFlags::ONE_PC.bits()),
+            WriteBatchFlags::ONE_PC
+        );
+        assert_eq!(
+            WriteBatchFlags::from_bits_check(WriteBatchFlags::STALE_READ.bits()),
+            WriteBatchFlags::STALE_READ
+        );
+    }
+
+    #[test]
+    fn test_flags_panic() {
+        for _ in 0..100 {
+            assert!(
+                panic_hook::recover_safe(|| {
+                    // r must be an invalid flags if it is not zero
+                    let r = rand::random::<u64>() & !WriteBatchFlags::all().bits();
+                    WriteBatchFlags::from_bits_check(r);
+                    if r == 0 {
+                        panic!("panic for zero");
+                    }
+                })
+                .is_err()
+            );
+        }
+    }
 
     #[test]
     fn test_is_user_key_eq() {
@@ -395,6 +542,19 @@ mod tests {
             let mut longer_raw = raw.to_vec();
             longer_raw.push(0);
             assert!(!encoded.is_encoded_from(&longer_raw));
+        }
+    }
+
+    #[test]
+    fn test_old_value_valid() {
+        let cases = vec![
+            (OldValue::Unspecified, false),
+            (OldValue::None, true),
+            (OldValue::Value { value: vec![] }, true),
+            (OldValue::ValueTimeStamp { start_ts: 0.into() }, true),
+        ];
+        for (old_value, v) in cases {
+            assert_eq!(old_value.valid(), v);
         }
     }
 }

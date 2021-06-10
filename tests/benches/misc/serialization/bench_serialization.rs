@@ -7,7 +7,7 @@ use protobuf::{self, Message};
 use rand::{thread_rng, RngCore};
 use test::Bencher;
 
-use tikv_util::collections::HashMap;
+use collections::HashMap;
 
 #[inline]
 fn gen_rand_str(len: usize) -> Vec<u8> {
@@ -36,7 +36,7 @@ fn encode(map: &HashMap<&[u8], &[u8]>) -> Vec<u8> {
     let reqs = generate_requests(map);
     cmd.set_requests(reqs.into());
     let cmd_msg = cmd.write_to_bytes().unwrap();
-    e.set_data(cmd_msg);
+    e.set_data(cmd_msg.into());
     e.write_to_bytes().unwrap()
 }
 

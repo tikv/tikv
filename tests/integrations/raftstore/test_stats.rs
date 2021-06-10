@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use kvproto::kvrpcpb::*;
 use pd_client::PdClient;
 use test_raftstore::*;
 use tikv_util::config::*;
@@ -87,63 +88,38 @@ fn test_node_simple_store_stats() {
 }
 
 #[test]
-fn test_server_store_snap_stats() {
-    let mut cluster = new_server_cluster(0, 2);
-    cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::secs(600);
+fn test_store_heartbeat_report_hotspots() {
+    fail::cfg("mock_hotspot_threshold", "return(0)").unwrap();
+    fail::cfg("mock_tick_interval", "return(0)").unwrap();
+    let (cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
+        cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(10);
+    });
+    let (k, v) = (b"key".to_vec(), b"v2".to_vec());
 
-    let pd_client = Arc::clone(&cluster.pd_client);
-    // Disable default max peer number check.
-    pd_client.disable_default_operator();
-
-    let r1 = cluster.run_conf_change();
-
-    // make a big snapshot
-    for i in 0..2 * 1024 {
-        let key = format!("{:01024}", i);
-        let value = format!("{:01024}", i);
-        cluster.must_put(key.as_bytes(), value.as_bytes());
+    // Raw put
+    let mut put_req = RawPutRequest::default();
+    put_req.set_context(ctx.clone());
+    put_req.key = k.clone();
+    put_req.value = v.clone();
+    let put_resp = client.raw_put(&put_req).unwrap();
+    assert!(!put_resp.has_region_error());
+    assert!(put_resp.error.is_empty());
+    for _i in 0..100 {
+        // Raw get
+        let mut get_req = RawGetRequest::default();
+        get_req.set_context(ctx.clone());
+        get_req.key = k.clone();
+        let get_resp = client.raw_get(&get_req).unwrap();
+        assert_eq!(get_resp.value, v);
     }
-
-    pd_client.must_add_peer(r1, new_peer(2, 2));
-
-    must_detect_snap(&pd_client, &[1, 2]);
-
-    // wait snapshot finish.
-    sleep_ms(100);
-
-    // remove the peer so we can't do any snapshot now.
-    pd_client.must_remove_peer(r1, new_peer(2, 2));
-    cluster.must_put(b"k2", b"v2");
-
-    must_not_detect_snap(&pd_client);
-}
-
-fn must_detect_snap(pd_client: &Arc<TestPdClient>, nodes: &[u64]) {
-    for _ in 0..200 {
-        sleep_ms(10);
-
-        for id in nodes {
-            if let Some(stats) = pd_client.get_store_stats(*id) {
-                if stats.get_sending_snap_count() > 0 || stats.get_receiving_snap_count() > 0 {
-                    return;
-                }
-            }
-        }
-    }
-
-    panic!("must detect snapshot sending/receiving");
-}
-
-fn must_not_detect_snap(pd_client: &Arc<TestPdClient>) {
-    for _ in 0..200 {
-        sleep_ms(10);
-
-        if let Some(stats) = pd_client.get_store_stats(1) {
-            if stats.get_sending_snap_count() == 0 && stats.get_receiving_snap_count() == 0 {
-                return;
-            }
-        }
-    }
-
-    panic!("must not detect snapshot sending/receiving");
+    sleep_ms(50);
+    let region_id = cluster.get_region_id(b"");
+    let store_id = 1;
+    let hot_peers = cluster.pd_client.get_store_hotspots(store_id).unwrap();
+    let peer_stat = hot_peers.get(&region_id).unwrap();
+    assert_eq!(peer_stat.get_region_id(), region_id);
+    assert!(peer_stat.get_read_keys() > 0);
+    assert!(peer_stat.get_read_bytes() > 0);
+    fail::remove("mock_tick_interval");
+    fail::remove("mock_hotspot_threshold");
 }

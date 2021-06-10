@@ -34,10 +34,13 @@ pub use self::endpoint::Endpoint;
 pub use self::error::{Error, Result};
 pub use checksum::checksum_crc64_xor;
 
+use crate::storage::mvcc::TimeStamp;
 use crate::storage::Statistics;
 use async_trait::async_trait;
+use engine_rocks::PerfLevel;
 use kvproto::{coprocessor as coppb, kvrpcpb};
 use metrics::ReqTag;
+use rand::prelude::*;
 use tikv_util::deadline::Deadline;
 use tikv_util::time::Duration;
 use txn_types::TsSet;
@@ -75,7 +78,7 @@ pub trait RequestHandler: Send {
 }
 
 type RequestHandlerBuilder<Snap> =
-    Box<dyn for<'a> FnOnce(Snap, &'a ReqContext) -> Result<Box<dyn RequestHandler>> + Send>;
+    Box<dyn for<'a> FnOnce(Snap, &ReqContext) -> Result<Box<dyn RequestHandler>> + Send>;
 
 /// Encapsulate the `kvrpcpb::Context` to provide some extra properties.
 #[derive(Debug, Clone)]
@@ -86,11 +89,8 @@ pub struct ReqContext {
     /// The rpc context carried in the request
     pub context: kvrpcpb::Context,
 
-    /// The first range of the request
-    pub first_range: Option<coppb::KeyRange>,
-
-    /// The length of the range
-    pub ranges_len: usize,
+    /// Scan ranges of this request
+    pub ranges: Vec<coppb::KeyRange>,
 
     /// The deadline of the request
     pub deadline: Deadline,
@@ -102,7 +102,7 @@ pub struct ReqContext {
     pub is_desc_scan: Option<bool>,
 
     /// The transaction start_ts of the request
-    pub txn_start_ts: Option<u64>,
+    pub txn_start_ts: TimeStamp,
 
     /// The set of timestamps of locks that can be bypassed during the reading.
     pub bypass_locks: TsSet,
@@ -118,18 +118,22 @@ pub struct ReqContext {
 
     /// The upper bound key in ranges of the request
     pub upper_bound: Vec<u8>,
+
+    /// Perf level
+    pub perf_level: PerfLevel,
 }
 
 impl ReqContext {
     pub fn new(
         tag: ReqTag,
         mut context: kvrpcpb::Context,
-        ranges: &[coppb::KeyRange],
+        ranges: Vec<coppb::KeyRange>,
         max_handle_duration: Duration,
         peer: Option<String>,
         is_desc_scan: Option<bool>,
-        txn_start_ts: Option<u64>,
+        txn_start_ts: TimeStamp,
         cache_match_version: Option<u64>,
+        perf_level: PerfLevel,
     ) -> Self {
         let deadline = Deadline::from_now(max_handle_duration);
         let bypass_locks = TsSet::from_u64s(context.take_resolved_locks());
@@ -148,12 +152,12 @@ impl ReqContext {
             peer,
             is_desc_scan,
             txn_start_ts,
-            first_range: ranges.first().cloned(),
-            ranges_len: ranges.len(),
+            ranges,
             bypass_locks,
             cache_match_version,
             lower_bound,
             upper_bound,
+            perf_level,
         }
     }
 
@@ -161,13 +165,52 @@ impl ReqContext {
     pub fn default_for_test() -> Self {
         Self::new(
             ReqTag::test,
-            kvrpcpb::Context::default(),
-            &[],
+            Default::default(),
+            Vec::new(),
             Duration::from_secs(100),
             None,
             None,
+            TimeStamp::max(),
             None,
-            None,
+            PerfLevel::EnableCount,
         )
+    }
+
+    pub fn build_task_id(&self) -> u64 {
+        const ID_SHIFT: u32 = 16;
+        const MASK: u64 = u64::max_value() >> ID_SHIFT;
+        const MAX_TS: u64 = u64::max_value();
+        let base = match self.txn_start_ts.into_inner() {
+            0 | MAX_TS => thread_rng().next_u64(),
+            start_ts => start_ts,
+        };
+        let task_id: u64 = self.context.get_task_id();
+        if task_id > 0 {
+            // It is assumed that the lower bits of task IDs in a single transaction
+            // tend to be different. So if task_id is provided, we concatenate the
+            // low 16 bits of the task_id and the low 48 bits of the start_ts to build
+            // the final task id.
+            (task_id << (64 - ID_SHIFT)) | (base & MASK)
+        } else {
+            // Otherwise we use the start_ts as the task_id.
+            base
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_task_id() {
+        let mut ctx = ReqContext::default_for_test();
+        let start_ts: u64 = 0x05C6_1BFA_2648_324A;
+        ctx.txn_start_ts = start_ts.into();
+        ctx.context.set_task_id(1);
+        assert_eq!(ctx.build_task_id(), 0x0001_1BFA_2648_324A);
+
+        ctx.context.set_task_id(0);
+        assert_eq!(ctx.build_task_id(), start_ts);
     }
 }

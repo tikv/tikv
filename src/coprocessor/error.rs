@@ -5,21 +5,24 @@ use crate::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
 use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 
-#[derive(Fail, Debug)]
+use error_code::{self, ErrorCode, ErrorCodeExt};
+use thiserror::Error;
+
+#[derive(Debug, Error)]
 pub enum Error {
-    #[fail(display = "Region error (will back off and retry) {:?}", _0)]
+    #[error("Region error (will back off and retry) {0:?}")]
     Region(kvproto::errorpb::Error),
 
-    #[fail(display = "Key is locked (will clean up) {:?}", _0)]
+    #[error("Key is locked (will clean up) {0:?}")]
     Locked(kvproto::kvrpcpb::LockInfo),
 
-    #[fail(display = "Coprocessor task terminated due to exceeding the deadline")]
+    #[error("Coprocessor task terminated due to exceeding the deadline")]
     DeadlineExceeded,
 
-    #[fail(display = "Coprocessor task canceled due to exceeding max pending tasks")]
+    #[error("Coprocessor task canceled due to exceeding max pending tasks")]
     MaxPendingTasksExceeded,
 
-    #[fail(display = "{}", _0)]
+    #[error("{0}")]
     Other(String),
 }
 
@@ -32,7 +35,7 @@ impl From<Box<dyn std::error::Error + Send + Sync>> for Error {
 
 impl From<Error> for tidb_query_common::error::StorageError {
     fn from(err: Error) -> Self {
-        failure::Error::from(err).into()
+        anyhow::Error::from(err).into()
     }
 }
 
@@ -97,4 +100,28 @@ impl From<tikv_util::deadline::DeadlineError> for Error {
     }
 }
 
+impl From<tidb_query_datatype::DataTypeError> for Error {
+    fn from(err: tidb_query_datatype::DataTypeError) -> Self {
+        Error::Other(err.to_string())
+    }
+}
+
+impl From<tidb_query_datatype::codec::Error> for Error {
+    fn from(err: tidb_query_datatype::codec::Error) -> Self {
+        Error::Other(err.to_string())
+    }
+}
+
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self {
+            Error::Region(e) => e.error_code(),
+            Error::Locked(_) => error_code::coprocessor::LOCKED,
+            Error::DeadlineExceeded => error_code::coprocessor::DEADLINE_EXCEEDED,
+            Error::MaxPendingTasksExceeded => error_code::coprocessor::MAX_PENDING_TASKS_EXCEEDED,
+            Error::Other(_) => error_code::UNKNOWN,
+        }
+    }
+}

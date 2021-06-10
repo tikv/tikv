@@ -1,10 +1,12 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{self, BufRead, BufReader};
 use std::path::Path;
+
+use thiserror::Error;
 
 const CGROUP_PATH: &str = "/proc/self/cgroup";
 const CGROUP_MOUNTINFO: &str = "/proc/self/mountinfo";
@@ -14,6 +16,8 @@ const MEM_LIMIT_IN_BYTES: &str = "memory.limit_in_bytes";
 const CPU_SUBSYS: &str = "cpu";
 const CPU_QUOTA: &str = "cpu.cfs_quota_us";
 const CPU_PERIOD: &str = "cpu.cfs_period_us";
+const CPUSET_SUBSYS: &str = "cpuset";
+const CPUSET_CPUS: &str = "cpuset.cpus";
 
 const MOUNTINFO_SEP: &str = " ";
 const OPTIONS_SEP: &str = ",";
@@ -22,25 +26,14 @@ const OPTIONAL_FIELDS_SEP: &str = "-";
 const CGROUP_SEP: &str = ":";
 const SUBSYS_SEP: &str = ",";
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        Other(err: Box<dyn error::Error + Sync + Send>) {
-            from()
-            cause(err.as_ref())
-            display("{}", err)
-        }
-        Io(err: std::io::Error) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        PathErr(err: std::path::StripPrefixError) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-    }
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("{0}")]
+    Other(#[from] Box<dyn error::Error + Sync + Send>),
+    #[error("{0}")]
+    Io(#[from] std::io::Error),
+    #[error("{0}")]
+    PathErr(#[from] std::path::StripPrefixError),
 }
 
 enum MountInfoFieldPart1 {
@@ -181,10 +174,8 @@ where
 {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
-    for line in reader.lines() {
-        if let Ok(l) = line {
-            f(&l);
-        }
+    for line in reader.lines().flatten() {
+        f(&line);
     }
     Ok(())
 }
@@ -200,13 +191,33 @@ impl CGroup {
         Self { path }
     }
 
-    pub fn read_num(&self, param: &str) -> Result<i64, Box<dyn error::Error>> {
+    fn read_line(&self, param: &str) -> io::Result<String> {
         let f = File::open(Path::new(&self.path).join(param))?;
         let mut reader = BufReader::new(f);
 
         let mut first_line = String::new();
         let _len = reader.read_line(&mut first_line)?;
-        Ok(first_line.trim().parse::<i64>()?)
+        Ok(first_line)
+    }
+
+    pub fn read_num(&self, param: &str) -> Result<i64, Box<dyn error::Error>> {
+        Ok(self.read_line(param)?.trim().parse::<i64>()?)
+    }
+
+    pub fn read_cpuset(&self) -> Result<HashSet<usize>, Box<dyn error::Error>> {
+        let line = self.read_line(CPUSET_CPUS)?;
+        let content = line.trim();
+        let mut cpuset = HashSet::new();
+
+        for seg in content.split(',') {
+            if let Some((start, end)) = seg.split_once('-') {
+                cpuset.extend(start.parse::<usize>()?..=end.parse()?)
+            } else if !seg.is_empty() {
+                cpuset.insert(seg.parse()?);
+            }
+        }
+
+        Ok(cpuset)
     }
 }
 
@@ -253,20 +264,25 @@ impl CGroupSys {
         Self { cgroups }
     }
 
-    pub fn cpu_cores_quota(&self) -> i64 {
+    pub fn cpu_cores_quota(&self) -> Option<f64> {
         if let Some(sub_cpu) = self.cgroups.get(CPU_SUBSYS) {
             if let Ok(quota) = sub_cpu.read_num(CPU_QUOTA) {
                 if quota < 0 {
-                    return -1;
+                    return None;
                 }
                 if let Ok(period) = sub_cpu.read_num(CPU_PERIOD) {
-                    return quota / period;
+                    return Some(quota as f64 / period as f64);
                 }
             }
         }
+        None
+    }
 
-        // -1 means no limit.
-        -1
+    pub fn cpuset_cores(&self) -> HashSet<usize> {
+        self.cgroups
+            .get(CPUSET_SUBSYS)
+            .and_then(|sub_cpuset| sub_cpuset.read_cpuset().ok())
+            .unwrap_or_else(HashSet::new)
     }
 
     pub fn memory_limit_in_bytes(&self) -> i64 {
@@ -285,7 +301,7 @@ impl CGroupSys {
 mod tests {
     use super::{
         parse_mount_point_from_line, parse_subsys_from_line, CGroup, CGroupSubsys, CGroupSys,
-        MountPoint,
+        MountPoint, CPUSET_CPUS,
     };
     use std::collections::HashMap;
     use std::fs::File;
@@ -319,8 +335,10 @@ mod tests {
 
     #[test]
     fn test_parse_mount_point_from_line() {
-        let lines = vec!["1 0 252:0 / / rw,noatime - ext4 /dev/dm-0 rw,errors=remount-ro,data=ordered",
-                         "31 23 0:24 /docker /sys/fs/cgroup/cpu rw,nosuid,nodev,noexec,relatime shared:1 - cgroup cgroup rw,cpu"];
+        let lines = vec![
+            "1 0 252:0 / / rw,noatime - ext4 /dev/dm-0 rw,errors=remount-ro,data=ordered",
+            "31 23 0:24 /docker /sys/fs/cgroup/cpu rw,nosuid,nodev,noexec,relatime shared:1 - cgroup cgroup rw,cpu",
+        ];
         let expected_mps = vec![
             MountPoint {
                 mount_id: 1,
@@ -420,6 +438,44 @@ mod tests {
         f1.write_all(b"123\n").unwrap();
         f1.sync_all().unwrap();
         assert_eq!(123, cgroup.read_num("memory.max_usage").unwrap());
+    }
+
+    #[test]
+    fn test_read_cpuset() {
+        use std::io::{Seek, SeekFrom};
+
+        let tmp_dir = TempDir::new().unwrap();
+        let cgroup = CGroup::new(tmp_dir.path().to_str().unwrap().to_string());
+
+        // Read number from file `memory.limits_in_bytes`
+        let path = tmp_dir.path().join(CPUSET_CPUS);
+        let mut f = File::create(&path).unwrap();
+        f.sync_all().unwrap();
+        assert_eq!(0, cgroup.read_cpuset().unwrap().len());
+
+        f.set_len(0).unwrap();
+        f.seek(SeekFrom::Start(0)).unwrap();
+        f.write_all(b"0\n").unwrap();
+        f.sync_all().unwrap();
+        assert_eq!(1, cgroup.read_cpuset().unwrap().len());
+
+        f.set_len(0).unwrap();
+        f.seek(SeekFrom::Start(0)).unwrap();
+        f.write_all(b"1,2,3\n").unwrap();
+        f.sync_all().unwrap();
+        assert_eq!(3, cgroup.read_cpuset().unwrap().len());
+
+        f.set_len(0).unwrap();
+        f.seek(SeekFrom::Start(0)).unwrap();
+        f.write_all(b"4-6\n").unwrap();
+        f.sync_all().unwrap();
+        assert_eq!(3, cgroup.read_cpuset().unwrap().len());
+
+        f.set_len(0).unwrap();
+        f.seek(SeekFrom::Start(0)).unwrap();
+        f.write_all(b"7,8-9,10,11-12\n").unwrap();
+        f.sync_all().unwrap();
+        assert_eq!(6, cgroup.read_cpuset().unwrap().len());
     }
 
     #[test]

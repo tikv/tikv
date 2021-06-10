@@ -1,64 +1,49 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![cfg_attr(test, feature(test))]
-#![feature(str_strip)]
+#![feature(thread_id_value)]
+#![feature(box_patterns)]
 
-#[macro_use(fail_point)]
-extern crate fail;
-#[macro_use]
-extern crate futures;
-#[macro_use]
-extern crate lazy_static;
-#[macro_use]
-extern crate quick_error;
-#[macro_use]
-extern crate serde_derive;
-#[macro_use(slog_o)]
-extern crate slog;
-#[macro_use]
-extern crate slog_global;
-#[macro_use]
-extern crate derive_more;
 #[cfg(test)]
 extern crate test;
 
 use std::collections::hash_map::Entry;
 use std::collections::vec_deque::{Iter, VecDeque};
 use std::fs::File;
-use std::io;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Duration;
 use std::{env, thread, u64};
 
-use fs2::FileExt;
 use rand::rngs::ThreadRng;
 
+#[macro_use]
+pub mod log;
 pub mod buffer_vec;
 pub mod codec;
-pub mod collections;
 pub mod config;
-pub mod file;
 pub mod future;
-pub mod future_pool;
 #[macro_use]
 pub mod macros;
+pub mod callback;
 pub mod deadline;
 pub mod keybuilder;
 pub mod logger;
+pub mod lru;
+pub mod math;
+pub mod memory;
 pub mod metrics;
 pub mod mpsc;
-pub mod security;
+pub mod stream;
 pub mod sys;
-pub mod threadpool;
 pub mod time;
 pub mod timer;
 pub mod worker;
+pub mod yatp_pool;
 
 static PANIC_WHEN_UNEXPECTED_KEY_OR_DATA: AtomicBool = AtomicBool::new(false);
-const SPACE_PLACEHOLDER_FILE: &str = "space_placeholder_file";
 
 pub fn panic_when_unexpected_key_or_data() -> bool {
     PANIC_WHEN_UNEXPECTED_KEY_OR_DATA.load(Ordering::SeqCst)
@@ -89,27 +74,15 @@ pub fn create_panic_mark_file<P: AsRef<Path>>(data_dir: P) {
     File::create(&file).unwrap();
 }
 
-pub fn panic_mark_file_exists<P: AsRef<Path>>(data_dir: P) -> bool {
-    let path = panic_mark_file_path(data_dir);
-    file::file_exists(path)
+// Copied from file_system to avoid cyclic dependency
+fn file_exists<P: AsRef<Path>>(file: P) -> bool {
+    let path = file.as_ref();
+    path.exists() && path.is_file()
 }
 
-// create a file with hole, to reserve space for TiKV.
-pub fn reserve_space_for_recover<P: AsRef<Path>>(data_dir: P, file_size: u64) -> io::Result<()> {
-    let path = data_dir.as_ref().join(SPACE_PLACEHOLDER_FILE);
-    if file::file_exists(path.clone()) {
-        if file::get_file_size(path.clone())? == file_size {
-            return Ok(());
-        }
-        file::delete_file_if_exist(path.clone())?;
-    }
-    if file_size > 0 {
-        let f = File::create(path)?;
-        f.allocate(file_size)?;
-        f.sync_all()?;
-        file::sync_dir(data_dir)?;
-    }
-    Ok(())
+pub fn panic_mark_file_exists<P: AsRef<Path>>(data_dir: P) -> bool {
+    let path = panic_mark_file_path(data_dir);
+    file_exists(path)
 }
 
 pub const NO_LIMIT: u64 = u64::MAX;
@@ -212,7 +185,7 @@ pub fn escape(data: &[u8]) -> String {
             b'"' => escaped.extend_from_slice(b"\\\""),
             b'\\' => escaped.extend_from_slice(br"\\"),
             _ => {
-                if c >= 0x20 && c < 0x7f {
+                if (0x20..0x7f).contains(&c) {
                     // c is printable
                     escaped.push(c);
                 } else {
@@ -462,37 +435,35 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
         .unwrap();
 
     let data_dir = data_dir.to_string();
-    let orig_hook = panic::take_hook();
+
     panic::set_hook(Box::new(move |info: &panic::PanicInfo<'_>| {
-        use slog::Drain;
-        if slog_global::borrow_global().is_enabled(::slog::Level::Error) {
-            let msg = match info.payload().downcast_ref::<&'static str>() {
-                Some(s) => *s,
-                None => match info.payload().downcast_ref::<String>() {
-                    Some(s) => &s[..],
-                    None => "Box<Any>",
-                },
-            };
-            let thread = thread::current();
-            let name = thread.name().unwrap_or("<unnamed>");
-            let loc = info
-                .location()
-                .map(|l| format!("{}:{}", l.file(), l.line()));
-            let bt = backtrace::Backtrace::new();
-            crit!("{}", msg;
-                "thread_name" => name,
-                "location" => loc.unwrap_or_else(|| "<unknown>".to_owned()),
-                "backtrace" => format_args!("{:?}", bt),
-            );
-        } else {
-            orig_hook(info);
-        }
+        let msg = match info.payload().downcast_ref::<&'static str>() {
+            Some(s) => *s,
+            None => match info.payload().downcast_ref::<String>() {
+                Some(s) => &s[..],
+                None => "Box<Any>",
+            },
+        };
+
+        let thread = thread::current();
+        let name = thread.name().unwrap_or("<unnamed>");
+        let loc = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()));
+        let bt = backtrace::Backtrace::new();
+        crit!("{}", msg;
+            "thread_name" => name,
+            "location" => loc.unwrap_or_else(|| "<unknown>".to_owned()),
+            "backtrace" => format_args!("{:?}", bt),
+        );
 
         // There might be remaining logs in the async logger.
         // To collect remaining logs and also collect future logs, replace the old one with a
         // terminal logger.
-        if let Some(level) = log::max_level().to_level() {
-            let drainer = logger::term_drainer();
+        // When the old global async logger is replaced, the old async guard will be taken and dropped.
+        // In the drop() the async guard, it waits for the finish of the remaining logs in the async logger.
+        if let Some(level) = ::log::max_level().to_level() {
+            let drainer = logger::text_format(logger::term_writer());
             let _ = logger::init_log(
                 drainer,
                 logger::convert_log_level_to_slog_level(level),
@@ -550,15 +521,97 @@ pub fn is_zero_duration(d: &Duration) -> bool {
     d.as_secs() == 0 && d.subsec_nanos() == 0
 }
 
+pub fn empty_shared_slice<T>() -> Arc<[T]> {
+    Vec::new().into()
+}
+
+/// A useful hook to check if master branch is being built.
+pub fn build_on_master_branch() -> bool {
+    option_env!("TIKV_BUILD_GIT_BRANCH").map_or(false, |b| "master" == b)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    use std::io::Read;
     use std::rc::Rc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::*;
 
     use tempfile::Builder;
+
+    #[test]
+    #[cfg(unix)]
+    fn test_panic_hook() {
+        use gag::BufferRedirect;
+        use nix::sys::wait::{wait, WaitStatus};
+        use nix::unistd::{fork, ForkResult};
+        use slog::{self, Drain, OwnedKVList, Record};
+
+        struct DelayDrain<D>(D);
+
+        impl<D> Drain for DelayDrain<D>
+        where
+            D: Drain,
+            <D as Drain>::Err: std::fmt::Display,
+        {
+            type Ok = <D as Drain>::Ok;
+            type Err = <D as Drain>::Err;
+
+            fn log(
+                &self,
+                record: &Record<'_>,
+                values: &OwnedKVList,
+            ) -> Result<Self::Ok, Self::Err> {
+                std::thread::sleep(Duration::from_millis(100));
+                self.0.log(record, values)
+            }
+        }
+
+        fn run_and_wait_child_process(child: impl Fn()) -> Result<i32, String> {
+            match fork() {
+                Ok(ForkResult::Parent { .. }) => match wait().unwrap() {
+                    WaitStatus::Exited(_, status) => Ok(status),
+                    v => Err(format!("{:?}", v)),
+                },
+                Ok(ForkResult::Child) => {
+                    child();
+                    std::process::exit(0);
+                }
+                Err(e) => Err(format!("Fork failed: {}", e)),
+            }
+        }
+
+        let mut stderr = BufferRedirect::stderr().unwrap();
+        let status = run_and_wait_child_process(|| {
+            set_panic_hook(false, "./");
+            let drainer = logger::text_format(logger::term_writer());
+            crate::logger::init_log(
+                DelayDrain(drainer),
+                logger::get_level_by_string("debug").unwrap(),
+                true, // use async drainer
+                true, // init std log
+                vec![],
+                0,
+            )
+            .unwrap();
+
+            let _ = std::thread::spawn(|| {
+                // let the global logger is held by the other thread, so the
+                // drop() of the async drain is not called in time.
+                let _guard = slog_global::borrow_global();
+                std::thread::sleep(Duration::from_secs(1));
+            });
+            panic!("test");
+        })
+        .unwrap();
+
+        assert_eq!(status, 1);
+        let mut panic = String::new();
+        stderr.read_to_string(&mut panic).unwrap();
+        assert!(!panic.is_empty());
+    }
 
     #[test]
     fn test_panic_mark_file_path() {
@@ -718,24 +771,5 @@ mod tests {
             // the test would fail.
         });
         res.unwrap_err();
-    }
-
-    #[test]
-    fn test_reserve_space_for_recover() {
-        let tmp_dir = Builder::new()
-            .prefix("test_reserve_space_for_recover")
-            .tempdir()
-            .unwrap();
-        let data_path = tmp_dir.path();
-        let file_path = data_path.join(SPACE_PLACEHOLDER_FILE);
-        let file = file_path.as_path();
-        let reserve_size = 4096 * 4;
-        assert!(!file.exists());
-        reserve_space_for_recover(data_path, reserve_size).unwrap();
-        assert!(file.exists());
-        let meta = file.metadata().unwrap();
-        assert_eq!(meta.len(), reserve_size);
-        reserve_space_for_recover(data_path, 0).unwrap();
-        assert!(!file.exists());
     }
 }

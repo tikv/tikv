@@ -6,14 +6,14 @@ use configuration::{ConfigChange, ConfigManager, Configuration};
 use serde::de::{Deserialize, Deserializer, IntoDeserializer};
 
 use std::error::Error;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tikv_util::config::ReadableDuration;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    #[config(skip)]
-    pub enabled: bool,
     #[serde(deserialize_with = "readable_duration_or_u64")]
     pub wait_for_lock_timeout: ReadableDuration,
     #[serde(deserialize_with = "readable_duration_or_u64")]
@@ -34,7 +34,7 @@ where
         Value::String(s) => ReadableDuration::deserialize(s.into_deserializer()),
         Value::Number(n) => n
             .as_u64()
-            .map(|n| ReadableDuration::millis(n))
+            .map(ReadableDuration::millis)
             .ok_or_else(|| serde::de::Error::custom(format!("expect unsigned integer: {}", n))),
         other => Err(serde::de::Error::custom(format!(
             "expect ReadableDuration or unsigned integer: {}",
@@ -46,10 +46,9 @@ where
 impl Default for Config {
     fn default() -> Self {
         Self {
-            enabled: true,
             wait_for_lock_timeout: ReadableDuration::millis(1000),
             wake_up_delay_duration: ReadableDuration::millis(20),
-            pipelined: false,
+            pipelined: true,
         }
     }
 }
@@ -66,16 +65,19 @@ impl Config {
 pub struct LockManagerConfigManager {
     pub waiter_mgr_scheduler: WaiterMgrScheduler,
     pub detector_scheduler: DeadlockScheduler,
+    pub pipelined: Arc<AtomicBool>,
 }
 
 impl LockManagerConfigManager {
     pub fn new(
         waiter_mgr_scheduler: WaiterMgrScheduler,
         detector_scheduler: DeadlockScheduler,
+        pipelined: Arc<AtomicBool>,
     ) -> Self {
         LockManagerConfigManager {
             waiter_mgr_scheduler,
             detector_scheduler,
+            pipelined,
         }
     }
 }
@@ -93,6 +95,9 @@ impl ConfigManager for LockManagerConfigManager {
             (None, delay @ Some(_)) => self.waiter_mgr_scheduler.change_config(None, delay),
             (None, None) => {}
         };
+        if let Some(p) = change.remove("pipelined").map(Into::into) {
+            self.pipelined.store(p, Ordering::Relaxed);
+        }
         Ok(())
     }
 }
@@ -107,13 +112,12 @@ mod tests {
         enabled = false
         wait-for-lock-timeout = "10ms"
         wake-up-delay-duration = 100
-        pipelined = true
+        pipelined = false
         "#;
 
         let config: Config = toml::from_str(conf).unwrap();
-        assert_eq!(config.enabled, false);
         assert_eq!(config.wait_for_lock_timeout.as_millis(), 10);
         assert_eq!(config.wake_up_delay_duration.as_millis(), 100);
-        assert_eq!(config.pipelined, true);
+        assert_eq!(config.pipelined, false);
     }
 }

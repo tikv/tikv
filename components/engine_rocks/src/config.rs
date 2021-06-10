@@ -2,8 +2,31 @@
 
 use configuration::ConfigValue;
 pub use rocksdb::PerfLevel;
-use rocksdb::{DBCompressionType, DBTitanDBBlobRunMode};
+use rocksdb::{DBCompressionType, DBInfoLogLevel, DBTitanDBBlobRunMode};
+use serde::{Deserialize, Serialize};
 use std::str::FromStr;
+
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LogLevel {
+    Error,
+    Fatal,
+    Info,
+    Warn,
+    Debug,
+}
+
+impl From<LogLevel> for DBInfoLogLevel {
+    fn from(compression_type: LogLevel) -> DBInfoLogLevel {
+        match compression_type {
+            LogLevel::Error => DBInfoLogLevel::Error,
+            LogLevel::Fatal => DBInfoLogLevel::Fatal,
+            LogLevel::Info => DBInfoLogLevel::Info,
+            LogLevel::Warn => DBInfoLogLevel::Warn,
+            LogLevel::Debug => DBInfoLogLevel::Debug,
+        }
+    }
+}
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -119,6 +142,73 @@ pub mod compression_type_level_serde {
     }
 }
 
+pub mod compression_type_serde {
+    use std::fmt;
+
+    use serde::de::{Error, Unexpected, Visitor};
+    use serde::{Deserializer, Serializer};
+
+    use rocksdb::DBCompressionType;
+
+    pub fn serialize<S>(t: &DBCompressionType, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let name = match *t {
+            DBCompressionType::No => "no",
+            DBCompressionType::Snappy => "snappy",
+            DBCompressionType::Zlib => "zlib",
+            DBCompressionType::Bz2 => "bzip2",
+            DBCompressionType::Lz4 => "lz4",
+            DBCompressionType::Lz4hc => "lz4hc",
+            DBCompressionType::Zstd => "zstd",
+            DBCompressionType::ZstdNotFinal => "zstd-not-final",
+            DBCompressionType::Disable => "disable",
+        };
+        serializer.serialize_str(name)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<DBCompressionType, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct StrVistor;
+        impl<'de> Visitor<'de> for StrVistor {
+            type Value = DBCompressionType;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(formatter, "a compression type")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<DBCompressionType, E>
+            where
+                E: Error,
+            {
+                let str = match &*value.trim().to_lowercase() {
+                    "no" => DBCompressionType::No,
+                    "snappy" => DBCompressionType::Snappy,
+                    "zlib" => DBCompressionType::Zlib,
+                    "bzip2" => DBCompressionType::Bz2,
+                    "lz4" => DBCompressionType::Lz4,
+                    "lz4hc" => DBCompressionType::Lz4hc,
+                    "zstd" => DBCompressionType::Zstd,
+                    "zstd-not-final" => DBCompressionType::ZstdNotFinal,
+                    "disable" => DBCompressionType::Disable,
+                    _ => {
+                        return Err(E::invalid_value(
+                            Unexpected::Other(&"invalid compression type".to_string()),
+                            &self,
+                        ));
+                    }
+                };
+                Ok(str)
+            }
+        }
+
+        deserializer.deserialize_str(StrVistor)
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BlobRunMode {
@@ -133,9 +223,9 @@ impl From<BlobRunMode> for ConfigValue {
     }
 }
 
-impl Into<BlobRunMode> for ConfigValue {
-    fn into(self) -> BlobRunMode {
-        if let ConfigValue::BlobRunMode(s) = self {
+impl From<ConfigValue> for BlobRunMode {
+    fn from(c: ConfigValue) -> BlobRunMode {
+        if let ConfigValue::BlobRunMode(s) = c {
             match s.as_str() {
                 "kNormal" => BlobRunMode::Normal,
                 "kReadOnly" => BlobRunMode::ReadOnly,
@@ -143,7 +233,7 @@ impl Into<BlobRunMode> for ConfigValue {
                 m => panic!("expect: kNormal, kReadOnly or kFallback, got: {:?}", m),
             }
         } else {
-            panic!("expect: ConfigValue::BlobRunMode, got: {:?}", self);
+            panic!("expect: ConfigValue::BlobRunMode, got: {:?}", c);
         }
     }
 }
@@ -163,9 +253,9 @@ impl FromStr for BlobRunMode {
     }
 }
 
-impl Into<DBTitanDBBlobRunMode> for BlobRunMode {
-    fn into(self) -> DBTitanDBBlobRunMode {
-        match self {
+impl From<BlobRunMode> for DBTitanDBBlobRunMode {
+    fn from(m: BlobRunMode) -> DBTitanDBBlobRunMode {
+        match m {
             BlobRunMode::Normal => DBTitanDBBlobRunMode::Normal,
             BlobRunMode::ReadOnly => DBTitanDBBlobRunMode::ReadOnly,
             BlobRunMode::Fallback => DBTitanDBBlobRunMode::Fallback,
@@ -217,6 +307,7 @@ macro_rules! numeric_enum_mod {
             mod tests {
                 use toml;
                 use rocksdb::$enum;
+                use serde::{Deserialize, Serialize};
 
                 #[test]
                 fn test_serde() {
@@ -319,18 +410,22 @@ mod tests {
 
         // length is wrong.
         assert!(toml::from_str::<CompressionTypeHolder>("tp = [\"no\"]").is_err());
-        assert!(toml::from_str::<CompressionTypeHolder>(
-            r#"tp = [
+        assert!(
+            toml::from_str::<CompressionTypeHolder>(
+                r#"tp = [
             "no", "no", "no", "no", "no", "no", "no", "no"
         ]"#
-        )
-        .is_err());
+            )
+            .is_err()
+        );
         // value is wrong.
-        assert!(toml::from_str::<CompressionTypeHolder>(
-            r#"tp = [
+        assert!(
+            toml::from_str::<CompressionTypeHolder>(
+                r#"tp = [
             "no", "no", "no", "no", "no", "no", "yes"
         ]"#
-        )
-        .is_err());
+            )
+            .is_err()
+        );
     }
 }

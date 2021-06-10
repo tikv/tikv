@@ -172,34 +172,64 @@ mod tests {
             ),
         ];
         for (i, (json, path, value, mt, expected, success)) in test_cases.drain(..).enumerate() {
-            let j: Result<Json> = json.parse();
-            assert!(j.is_ok(), "#{} expect json parse ok but got {:?}", i, j);
-            let p = parse_json_path_expr(path);
-            assert!(p.is_ok(), "#{} expect path parse ok but got {:?}", i, p);
-            let v = value.parse();
-            assert!(v.is_ok(), "#{} expect value parse ok but got {:?}", i, v);
-            let e: Result<Json> = expected.parse();
+            let json: Result<Json> = json.parse();
             assert!(
-                e.is_ok(),
+                json.is_ok(),
+                "#{} expect json parse ok but got {:?}",
+                i,
+                json
+            );
+            let path = parse_json_path_expr(path);
+            assert!(
+                path.is_ok(),
+                "#{} expect path parse ok but got {:?}",
+                i,
+                path
+            );
+            let value = value.parse();
+            assert!(
+                value.is_ok(),
+                "#{} expect value parse ok but got {:?}",
+                i,
+                value
+            );
+            let expected: Result<Json> = expected.parse();
+            assert!(
+                expected.is_ok(),
                 "#{} expect expected value parse ok but got {:?}",
                 i,
-                e
+                expected
             );
-            let (j, p, v, e) = (j.unwrap(), p.unwrap(), v.unwrap(), e.unwrap());
-            let r = j.as_ref().modify(vec![p].as_slice(), vec![v], mt);
+            let (json, path, value, expected) = (
+                json.unwrap(),
+                path.unwrap(),
+                value.unwrap(),
+                expected.unwrap(),
+            );
+            let result = json.as_ref().modify(vec![path].as_slice(), vec![value], mt);
             if success {
-                assert!(r.is_ok(), "#{} expect modify ok but got {:?}", i, r);
-                let j = r.unwrap();
+                assert!(
+                    result.is_ok(),
+                    "#{} expect modify ok but got {:?}",
+                    i,
+                    result
+                );
+                let json = result.unwrap();
                 assert_eq!(
-                    e,
-                    j,
+                    expected,
+                    json,
                     "#{} expect modified json {:?} == {:?}",
                     i,
-                    j.to_string(),
-                    e.to_string()
+                    json.to_string(),
+                    expected.to_string()
                 );
             } else {
-                assert!(r.is_err(), "#{} expect modify error but got {:?}", i, r);
+                assert!(
+                    result.is_err(),
+                    "#{} expect modify error but got {:?}",
+                    i,
+                    result
+                );
             }
         }
     }

@@ -5,7 +5,8 @@ use std::io::{Error, ErrorKind, Result};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use crate::collections::HashMap;
+use collections::HashMap;
+use lazy_static::lazy_static;
 use libc::{self, pid_t};
 use prometheus::core::{Collector, Desc};
 use prometheus::{self, proto, CounterVec, IntCounterVec, IntGaugeVec, Opts};
@@ -226,7 +227,7 @@ pub fn get_thread_ids(pid: pid_t) -> Result<Vec<pid_t>> {
             }
         })
         .collect();
-    tids.sort();
+    tids.sort_unstable();
     Ok(tids)
 }
 
@@ -298,7 +299,7 @@ lazy_static! {
 
 #[inline]
 fn get_name(command: &str) -> String {
-    if command != "" {
+    if !command.is_empty() {
         return command.to_owned();
     }
     String::from("anony")
@@ -474,8 +475,8 @@ impl TidRetriever {
             } else {
                 self.tid_buffer = new_tid_buffer;
                 self.tid_buffer_update_interval = TID_MIN_UPDATE_INTERVAL;
-                self.tid_buffer_last_update = Instant::now();
             }
+            self.tid_buffer_last_update = Instant::now();
         }
 
         &self.tid_buffer

@@ -1,8 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::rocks_metrics::*;
+
+use file_system::{get_io_type, set_io_type, IOType};
 use rocksdb::{
-    CompactionJobInfo, DBBackgroundErrorReason, FlushJobInfo, IngestionInfo, WriteStallInfo,
+    CompactionJobInfo, DBBackgroundErrorReason, FlushJobInfo, IngestionInfo, SubcompactionJobInfo,
+    WriteStallInfo,
 };
 use tikv_util::set_panic_mark;
 
@@ -19,10 +22,25 @@ impl RocksEventListener {
 }
 
 impl rocksdb::EventListener for RocksEventListener {
+    fn on_flush_begin(&self, _info: &FlushJobInfo) {
+        set_io_type(IOType::Flush);
+    }
+
     fn on_flush_completed(&self, info: &FlushJobInfo) {
         STORE_ENGINE_EVENT_COUNTER_VEC
             .with_label_values(&[&self.db_name, info.cf_name(), "flush"])
             .inc();
+        if get_io_type() == IOType::Flush {
+            set_io_type(IOType::Other);
+        }
+    }
+
+    fn on_compaction_begin(&self, info: &CompactionJobInfo) {
+        if info.base_input_level() == 0 {
+            set_io_type(IOType::LevelZeroCompaction);
+        } else {
+            set_io_type(IOType::Compaction);
+        }
     }
 
     fn on_compaction_completed(&self, info: &CompactionJobInfo) {
@@ -42,6 +60,27 @@ impl rocksdb::EventListener for RocksEventListener {
                 &info.compaction_reason().to_string(),
             ])
             .inc();
+        if info.base_input_level() == 0 && get_io_type() == IOType::LevelZeroCompaction
+            || info.base_input_level() != 0 && get_io_type() == IOType::Compaction
+        {
+            set_io_type(IOType::Other);
+        }
+    }
+
+    fn on_subcompaction_begin(&self, info: &SubcompactionJobInfo) {
+        if info.base_input_level() == 0 {
+            set_io_type(IOType::LevelZeroCompaction);
+        } else {
+            set_io_type(IOType::Compaction);
+        }
+    }
+
+    fn on_subcompaction_completed(&self, info: &SubcompactionJobInfo) {
+        if info.base_input_level() == 0 && get_io_type() == IOType::LevelZeroCompaction
+            || info.base_input_level() != 0 && get_io_type() == IOType::Compaction
+        {
+            set_io_type(IOType::Other);
+        }
     }
 
     fn on_external_file_ingested(&self, info: &IngestionInfo) {

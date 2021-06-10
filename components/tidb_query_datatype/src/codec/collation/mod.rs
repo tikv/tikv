@@ -1,8 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-mod utf8mb4;
-
-pub use self::utf8mb4::*;
+mod charset;
+pub mod collator;
 
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
@@ -10,46 +9,48 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 
 use codec::prelude::*;
+use num::Unsigned;
 
 use crate::codec::Result;
 
-pub macro match_template_collator($t:tt, $($tail:tt)*) {
-    match_template::match_template! {
-        $t = [
-            Binary => CollatorBinary,
-            Utf8Mb4Bin => CollatorUtf8Mb4Bin,
-            Utf8Mb4BinNoPadding => CollatorUtf8Mb4BinNoPadding,
-            Utf8Mb4GeneralCi => CollatorUtf8Mb4GeneralCi,
-        ],
-        $($tail)*
-    }
+#[macro_export]
+macro_rules! match_template_collator {
+     ($t:tt, $($tail:tt)*) => {{
+         #[allow(unused_imports)]
+         use $crate::codec::collation::collator::*;
+
+         match_template::match_template! {
+             $t = [
+                Binary => CollatorBinary,
+                Utf8Mb4Bin => CollatorUtf8Mb4Bin,
+                Utf8Mb4BinNoPadding => CollatorUtf8Mb4BinNoPadding,
+                Utf8Mb4GeneralCi => CollatorUtf8Mb4GeneralCi,
+                Utf8Mb4UnicodeCi => CollatorUtf8Mb4UnicodeCi,
+                Latin1Bin => CollatorLatin1Bin,
+            ],
+            $($tail)*
+         }
+     }}
 }
 
 pub trait Charset {
     type Char: Copy + Into<u32>;
 
+    fn validate(bstr: &[u8]) -> Result<()>;
+
     fn decode_one(data: &[u8]) -> Option<(Self::Char, usize)>;
 }
 
-pub struct CharsetBinary;
-
-impl Charset for CharsetBinary {
-    type Char = u8;
-
-    #[inline]
-    fn decode_one(data: &[u8]) -> Option<(Self::Char, usize)> {
-        if data.is_empty() {
-            None
-        } else {
-            Some((data[0], 1))
-        }
-    }
-}
-
-pub trait Collator: 'static + std::marker::Send + std::marker::Sync {
+pub trait Collator: 'static + std::marker::Send + std::marker::Sync + std::fmt::Debug {
     type Charset: Charset;
+    type Weight: Unsigned;
 
-    fn validate(bstr: &[u8]) -> Result<()>;
+    const IS_CASE_INSENSITIVE: bool;
+
+    /// Returns the weight of a given char. The chars that have equal
+    /// weight are considered as the same char with this collation.
+    /// See more on <http://www.unicode.org/reports/tr10/#Weight_Level_Defn>.
+    fn char_weight(char: <Self::Charset as Charset>::Char) -> Self::Weight;
 
     /// Writes the SortKey of `bstr` into `writer`.
     fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8]) -> Result<usize>;
@@ -70,35 +71,6 @@ pub trait Collator: 'static + std::marker::Send + std::marker::Sync {
     fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8]) -> Result<()>;
 }
 
-/// Collator for binary collation without padding.
-pub struct CollatorBinary;
-
-impl Collator for CollatorBinary {
-    type Charset = CharsetBinary;
-
-    #[inline]
-    fn validate(_bstr: &[u8]) -> Result<()> {
-        Ok(())
-    }
-
-    #[inline]
-    fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8]) -> Result<usize> {
-        writer.write_bytes(bstr)?;
-        Ok(bstr.len())
-    }
-
-    #[inline]
-    fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering> {
-        Ok(a.cmp(b))
-    }
-
-    #[inline]
-    fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8]) -> Result<()> {
-        bstr.hash(state);
-        Ok(())
-    }
-}
-
 #[derive(Debug)]
 #[repr(transparent)]
 pub struct SortKey<T, C: Collator>
@@ -115,7 +87,7 @@ where
 {
     #[inline]
     pub fn new(inner: T) -> Result<Self> {
-        C::validate(inner.as_ref())?;
+        C::Charset::validate(inner.as_ref())?;
         Ok(Self {
             inner,
             _phantom: PhantomData,
@@ -139,7 +111,7 @@ where
     #[inline]
     #[allow(clippy::transmute_ptr_to_ptr)]
     pub fn new_ref(inner: &T) -> Result<&Self> {
-        C::validate(inner.as_ref())?;
+        C::Charset::validate(inner.as_ref())?;
         Ok(unsafe { std::mem::transmute(inner) })
     }
 
@@ -147,9 +119,19 @@ where
     #[allow(clippy::transmute_ptr_to_ptr)]
     pub fn map_option(inner: &Option<T>) -> Result<&Option<Self>> {
         if let Some(inner) = inner {
-            C::validate(inner.as_ref())?;
+            C::Charset::validate(inner.as_ref())?;
         }
         Ok(unsafe { std::mem::transmute(inner) })
+    }
+
+    #[inline]
+    #[allow(clippy::transmute_ptr_to_ptr)]
+    pub fn map_option_owned(inner: Option<T>) -> Result<Option<Self>> {
+        if let Some(inner) = inner {
+            C::Charset::validate(inner.as_ref())?;
+            return Self::new(inner).map(Some);
+        }
+        Ok(None)
     }
 
     #[inline]

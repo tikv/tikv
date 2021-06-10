@@ -1,11 +1,31 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Ordering;
+use std::cmp::{Ord, Ordering};
 use std::f64;
 
 use super::super::Result;
 use super::constants::*;
 use super::{Json, JsonRef, JsonType, ERR_CONVERT_FAILED};
+
+fn compare<T: Ord>(x: T, y: T) -> Ordering {
+    x.cmp(&y)
+}
+
+fn compare_i64_u64(x: i64, y: u64) -> Ordering {
+    if x < 0 {
+        Ordering::Less
+    } else {
+        compare::<u64>(x as u64, y)
+    }
+}
+
+fn compare_f64_with_epsilon(x: f64, y: f64) -> Option<Ordering> {
+    if (x - y).abs() < f64::EPSILON {
+        Some(Ordering::Equal)
+    } else {
+        x.partial_cmp(&y)
+    }
+}
 
 impl<'a> JsonRef<'a> {
     fn get_precedence(&self) -> i32 {
@@ -63,14 +83,26 @@ impl<'a> PartialOrd for JsonRef<'a> {
             }
 
             return match self.get_type() {
-                JsonType::I64 | JsonType::U64 | JsonType::Double => {
-                    let left_data = self.as_f64().unwrap();
-                    let right_data = right.as_f64().unwrap();
-                    if (left_data - right_data).abs() < f64::EPSILON {
-                        Some(Ordering::Equal)
-                    } else {
-                        left_data.partial_cmp(&right_data)
+                JsonType::I64 => match right.get_type() {
+                    JsonType::I64 => Some(compare(self.get_i64(), right.get_i64())),
+                    JsonType::U64 => Some(compare_i64_u64(self.get_i64(), right.get_u64())),
+                    JsonType::Double => {
+                        compare_f64_with_epsilon(self.get_i64() as f64, right.as_f64().unwrap())
                     }
+                    _ => unreachable!(),
+                },
+                JsonType::U64 => match right.get_type() {
+                    JsonType::I64 => {
+                        Some(compare_i64_u64(right.get_i64(), self.get_u64()).reverse())
+                    }
+                    JsonType::U64 => Some(compare(self.get_u64(), right.get_u64())),
+                    JsonType::Double => {
+                        compare_f64_with_epsilon(self.get_u64() as f64, right.as_f64().unwrap())
+                    }
+                    _ => unreachable!(),
+                },
+                JsonType::Double => {
+                    compare_f64_with_epsilon(self.as_f64().unwrap(), right.as_f64().unwrap())
                 }
                 JsonType::Literal => {
                     // false is less than true.
@@ -151,6 +183,67 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_cmp_json_numberic_type() {
+        let cases = vec![
+            (
+                Json::from_i64(922337203685477581),
+                Json::from_i64(922337203685477580),
+                Ordering::Greater,
+            ),
+            (
+                Json::from_i64(-1),
+                Json::from_u64(18446744073709551615),
+                Ordering::Less,
+            ),
+            (
+                Json::from_i64(922337203685477580),
+                Json::from_u64(922337203685477581),
+                Ordering::Less,
+            ),
+            (Json::from_i64(2), Json::from_u64(1), Ordering::Greater),
+            (
+                Json::from_i64(std::i64::MAX),
+                Json::from_u64(std::i64::MAX as u64),
+                Ordering::Equal,
+            ),
+            (
+                Json::from_u64(18446744073709551615),
+                Json::from_i64(-1),
+                Ordering::Greater,
+            ),
+            (
+                Json::from_u64(922337203685477581),
+                Json::from_i64(922337203685477580),
+                Ordering::Greater,
+            ),
+            (Json::from_u64(1), Json::from_i64(2), Ordering::Less),
+            (
+                Json::from_u64(std::i64::MAX as u64),
+                Json::from_i64(std::i64::MAX),
+                Ordering::Equal,
+            ),
+            (Json::from_f64(9.0), Json::from_i64(9), Ordering::Equal),
+            (Json::from_f64(8.9), Json::from_i64(9), Ordering::Less),
+            (Json::from_f64(9.1), Json::from_i64(9), Ordering::Greater),
+            (Json::from_f64(9.0), Json::from_u64(9), Ordering::Equal),
+            (Json::from_f64(8.9), Json::from_u64(9), Ordering::Less),
+            (Json::from_f64(9.1), Json::from_u64(9), Ordering::Greater),
+            (Json::from_i64(9), Json::from_f64(9.0), Ordering::Equal),
+            (Json::from_i64(9), Json::from_f64(8.9), Ordering::Greater),
+            (Json::from_i64(9), Json::from_f64(9.1), Ordering::Less),
+            (Json::from_u64(9), Json::from_f64(9.0), Ordering::Equal),
+            (Json::from_u64(9), Json::from_f64(8.9), Ordering::Greater),
+            (Json::from_u64(9), Json::from_f64(9.1), Ordering::Less),
+        ];
+
+        for (left, right, expected) in cases {
+            let left = left.unwrap();
+            let right = right.unwrap();
+            assert_eq!(expected, left.partial_cmp(&right).unwrap());
+        }
+    }
+
+    #[test]
     fn test_cmp_json_between_same_type() {
         let test_cases = vec![
             ("false", "true"),
@@ -165,7 +258,7 @@ mod tests {
             let left: Json = left_str.parse().unwrap();
             let right: Json = right_str.parse().unwrap();
             assert!(left < right);
-            assert_eq!(left, left);
+            assert_eq!(left, left.clone());
         }
         assert_eq!(Json::none().unwrap(), Json::none().unwrap());
     }

@@ -10,13 +10,13 @@ use crate::codec::datum_codec::DatumFlagAndPayloadEncoder;
 use crate::codec::{datum, Error, Result};
 
 #[inline]
-fn decode_v2_u64(v: &[u8]) -> Result<u64> {
+pub fn decode_v2_u64(v: &[u8]) -> Result<u64> {
     // See `decodeInt` in TiDB.
     match v.len() {
         1 => Ok(u64::from(v[0])),
         2 => Ok(u64::from(NumberCodec::decode_u16_le(v))),
         4 => Ok(u64::from(NumberCodec::decode_u32_le(v))),
-        8 => Ok(u64::from(NumberCodec::decode_u64_le(v))),
+        8 => Ok(NumberCodec::decode_u64_le(v)),
         _ => Err(Error::InvalidDataType(
             "Failed to decode row v2 data as u64".to_owned(),
         )),
@@ -114,7 +114,7 @@ pub trait V1CompatibleEncoder: DatumFlagAndPayloadEncoder {
                 return Err(Error::InvalidDataType(format!(
                     "Unsupported FieldType {:?}",
                     fp
-                )))
+                )));
             }
         }
         Ok(())
@@ -134,7 +134,7 @@ impl<T: BufferWriter> V1CompatibleEncoder for T {}
 /// encoded-bytes using v1 directly.
 #[cfg(test)]
 mod tests {
-    use super::super::encoder::{Column, ScalarValueEncoder};
+    use super::super::encoder_for_test::{Column, ScalarValueEncoder};
     use super::V1CompatibleEncoder;
     use crate::FieldTypeTp;
     use crate::{
@@ -294,8 +294,8 @@ mod tests {
     fn test_duration() {
         let mut ctx = EvalContext::default();
         let cases = vec![
-            Duration::parse(&mut ctx, b"31 11:30:45.123", 4).unwrap(),
-            Duration::parse(&mut ctx, b"-11:30:45.9233456", 4).unwrap(),
+            Duration::parse(&mut ctx, "31 11:30:45.123", 4).unwrap(),
+            Duration::parse(&mut ctx, "-11:30:45.9233456", 4).unwrap(),
         ];
 
         let mut ctx = EvalContext::default();

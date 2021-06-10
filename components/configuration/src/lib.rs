@@ -19,6 +19,7 @@ pub enum ConfigValue {
     Bool(bool),
     String(String),
     BlobRunMode(String),
+    OptionSize(Option<u64>),
     Module(ConfigChange),
     Skip,
 }
@@ -28,6 +29,8 @@ impl Display for ConfigValue {
         match self {
             ConfigValue::Duration(v) => write!(f, "{}ms", v),
             ConfigValue::Size(v) => write!(f, "{}b", v),
+            ConfigValue::OptionSize(Some(v)) => write!(f, "{}b", v),
+            ConfigValue::OptionSize(None) => write!(f, ""),
             ConfigValue::U64(v) => write!(f, "{}", v),
             ConfigValue::F64(v) => write!(f, "{}", v),
             ConfigValue::I32(v) => write!(f, "{}", v),
@@ -68,15 +71,15 @@ impl_from!(ConfigChange, Module);
 
 macro_rules! impl_into {
     ($into: ty, $from: tt) => {
-        impl Into<$into> for ConfigValue {
-            fn into(self) -> $into {
-                if let ConfigValue::$from(v) = self {
+        impl From<ConfigValue> for $into {
+            fn from(c: ConfigValue) -> $into {
+                if let ConfigValue::$from(v) = c {
                     v
                 } else {
                     panic!(
                         "expect: {:?}, got: {:?}",
                         format!("ConfigValue::{}", stringify!($from)),
-                        self
+                        c
                     );
                 }
             }

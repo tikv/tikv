@@ -1,0 +1,47 @@
+[package]
+name = "engine_test"
+version = "0.0.1"
+description = "A single engine that masquerades as all other engines, for testing"
+edition = "2018"
+publish = false
+
+[features]
+default = ["protobuf-codec", "test-engines-rocksdb"]
+
+protobuf-codec = [
+  "engine_panic/protobuf-codec",
+  "engine_rocks/protobuf-codec",
+  "engine_traits/protobuf-codec",
+  "tikv_util/protobuf-codec",
+]
+
+prost-codec = [
+  "engine_panic/prost-codec",
+  "engine_rocks/prost-codec",
+  "engine_traits/prost-codec",
+  "tikv_util/prost-codec",
+]
+
+test-engine-kv-panic = []
+test-engine-kv-rocksdb = []
+test-engine-raft-panic = []
+test-engine-raft-rocksdb = []
+
+test-engines-rocksdb = [
+  "test-engine-kv-rocksdb",
+  "test-engine-raft-rocksdb",
+]
+test-engines-panic = [
+  "test-engine-kv-panic",
+  "test-engine-raft-panic",
+]
+
+
+[dependencies]
+engine_panic = { path = "../engine_panic", default-features = false }
+engine_rocks = { path = "../engine_rocks", default-features = false }
+engine_traits = { path = "../engine_traits", default-features = false }
+tempfile = "3.0"
+tikv_alloc = { path = "../tikv_alloc" }
+# FIXME: Remove this dep from the engine_traits interface
+tikv_util = { path = "../tikv_util", default-features = false }

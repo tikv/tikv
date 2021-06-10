@@ -53,11 +53,19 @@ pub trait Scanner: Send {
     fn next(&mut self) -> Result<Option<(Key, Value)>>;
 
     /// Get the next [`KvPair`](KvPair)s up to `limit` if they exist.
-    fn scan(&mut self, limit: usize) -> Result<Vec<Result<KvPair>>> {
+    /// If `sample_step` is greater than 0, skips `sample_step - 1` number of keys after each returned key.
+    fn scan(&mut self, limit: usize, sample_step: usize) -> Result<Vec<Result<KvPair>>> {
+        let mut row_count = 0;
         let mut results = Vec::with_capacity(limit);
         while results.len() < limit {
             match self.next() {
                 Ok(Some((k, v))) => {
+                    if sample_step > 0 {
+                        row_count += 1;
+                        if (row_count - 1) % sample_step != 0 {
+                            continue;
+                        }
+                    }
                     results.push(Ok((k.to_raw()?, v)));
                 }
                 Ok(None) => break,
@@ -122,10 +130,18 @@ pub trait TxnEntryScanner: Send {
 }
 
 /// A transaction entry in underlying storage.
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum TxnEntry {
-    Prewrite { default: KvPair, lock: KvPair },
-    Commit { default: KvPair, write: KvPair },
+    Prewrite {
+        default: KvPair,
+        lock: KvPair,
+        old_value: Option<Value>,
+    },
+    Commit {
+        default: KvPair,
+        write: KvPair,
+        old_value: Option<Value>,
+    },
     // TOOD: Add more entry if needed.
 }
 
@@ -135,7 +151,7 @@ impl TxnEntry {
     /// reture by ```StoreScanner::next```
     pub fn into_kvpair(self) -> Result<(Vec<u8>, Vec<u8>)> {
         match self {
-            TxnEntry::Commit { default, write } => {
+            TxnEntry::Commit { default, write, .. } => {
                 if !default.0.is_empty() {
                     let k = Key::from_encoded(default.0).truncate_ts()?;
                     let k = k.into_raw()?;
@@ -153,6 +169,45 @@ impl TxnEntry {
             // Prewrite are not support
             _ => unreachable!(),
         }
+    }
+    /// This method will generate this kv pair's key
+    pub fn to_key(&self) -> Result<Key> {
+        match self {
+            TxnEntry::Commit { write, .. } => Ok(Key::from_encoded_slice(
+                Key::truncate_ts_for(&write.0).unwrap(),
+            )),
+            // Prewrite are not support
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn size(&self) -> usize {
+        let mut size = 0;
+        match self {
+            TxnEntry::Commit {
+                default,
+                write,
+                old_value,
+            } => {
+                size += default.0.len();
+                size += default.1.len();
+                size += write.0.len();
+                size += write.1.len();
+                size += old_value.as_ref().map_or(0, |v| v.len())
+            }
+            TxnEntry::Prewrite {
+                default,
+                lock,
+                old_value,
+            } => {
+                size += default.0.len();
+                size += default.1.len();
+                size += lock.0.len();
+                size += lock.1.len();
+                size += old_value.as_ref().map_or(0, |v| v.len())
+            }
+        }
+        size
     }
 }
 
@@ -325,6 +380,13 @@ impl<S: Snapshot> TxnEntryStore for SnapshotStore<S> {
     ) -> Result<EntryScanner<S>> {
         // Check request bounds with physical bound
         self.verify_range(&lower_bound, &upper_bound)?;
+        let (min_ts, max_ts) = if after_ts == TimeStamp::new(0) {
+            // Do not set min_ts and max_ts as it wants to read all versions.
+            (None, None)
+        } else {
+            // Scan ts in (after_ts, start_ts].
+            (Some(after_ts.next()), Some(self.start_ts))
+        };
         let scanner =
             ScannerBuilder::new(self.snapshot.clone(), self.start_ts, false /* desc */)
                 .range(lower_bound, upper_bound)
@@ -332,8 +394,8 @@ impl<S: Snapshot> TxnEntryStore for SnapshotStore<S> {
                 .fill_cache(self.fill_cache)
                 .isolation_level(self.isolation_level)
                 .bypass_locks(self.bypass_locks.clone())
-                .hint_min_ts(Some(after_ts.next()))
-                .hint_max_ts(Some(self.start_ts))
+                .hint_min_ts(min_ts)
+                .hint_max_ts(max_ts)
                 .build_entry_scanner(after_ts, output_delete)?;
 
         Ok(scanner)
@@ -563,13 +625,18 @@ impl Scanner for FixtureStoreScanner {
 mod tests {
     use super::*;
     use crate::storage::kv::{
-        Cursor, Engine, Iterator, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode,
-        TestEngineBuilder,
+        Engine, Iterator, Result as EngineResult, RocksEngine, RocksSnapshot, SnapContext,
+        TestEngineBuilder, WriteData,
     };
-    use crate::storage::mvcc::{Mutation, MvccTxn};
+    use crate::storage::mvcc::{Mutation, MvccTxn, SnapshotReader};
+    use crate::storage::txn::{
+        commit, prewrite, CommitKind, TransactionKind, TransactionProperties,
+    };
+    use concurrency_manager::ConcurrencyManager;
     use engine_traits::CfName;
-    use engine_traits::IterOptions;
+    use engine_traits::{IterOptions, ReadOptions};
     use kvproto::kvrpcpb::Context;
+    use std::sync::Arc;
 
     const KEY_PREFIX: &str = "key_prefix";
     const START_TS: TimeStamp = TimeStamp::new(10);
@@ -578,7 +645,7 @@ mod tests {
 
     struct TestStore {
         keys: Vec<String>,
-        snapshot: RocksSnapshot,
+        snapshot: Arc<RocksSnapshot>,
         ctx: Context,
         engine: RocksEngine,
     }
@@ -590,7 +657,7 @@ mod tests {
                 .map(|i| format!("{}{}", KEY_PREFIX, i))
                 .collect();
             let ctx = Context::default();
-            let snapshot = engine.snapshot(&ctx).unwrap();
+            let snapshot = engine.snapshot(Default::default()).unwrap();
             let mut store = TestStore {
                 keys,
                 snapshot,
@@ -605,42 +672,62 @@ mod tests {
         fn init_data(&mut self) {
             let primary_key = format!("{}{}", KEY_PREFIX, START_ID);
             let pk = primary_key.as_bytes();
+
             // do prewrite.
             {
-                let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true);
+                let cm = ConcurrencyManager::new(START_TS);
+                let mut txn = MvccTxn::new(START_TS, cm);
+                let mut reader = SnapshotReader::new(START_TS, self.snapshot.clone(), true);
                 for key in &self.keys {
                     let key = key.as_bytes();
-                    txn.prewrite(
+                    prewrite(
+                        &mut txn,
+                        &mut reader,
+                        &TransactionProperties {
+                            start_ts: START_TS,
+                            kind: TransactionKind::Optimistic(false),
+                            commit_kind: CommitKind::TwoPc,
+                            primary: pk,
+                            txn_size: 0,
+                            lock_ttl: 0,
+                            min_commit_ts: TimeStamp::default(),
+                            need_old_value: false,
+                        },
                         Mutation::Put((Key::from_raw(key), key.to_vec())),
-                        pk,
+                        &None,
                         false,
-                        0,
-                        0,
-                        TimeStamp::default(),
                     )
                     .unwrap();
                 }
-                self.engine.write(&self.ctx, txn.into_modifies()).unwrap();
+                let write_data = WriteData::from_modifies(txn.into_modifies());
+                self.engine.write(&self.ctx, write_data).unwrap();
             }
             self.refresh_snapshot();
             // do commit
             {
-                let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true);
+                let cm = ConcurrencyManager::new(START_TS);
+                let mut txn = MvccTxn::new(START_TS, cm);
+                let mut reader = SnapshotReader::new(START_TS, self.snapshot.clone(), true);
                 for key in &self.keys {
                     let key = key.as_bytes();
-                    txn.commit(Key::from_raw(key), COMMIT_TS).unwrap();
+                    commit(&mut txn, &mut reader, Key::from_raw(key), COMMIT_TS).unwrap();
                 }
-                self.engine.write(&self.ctx, txn.into_modifies()).unwrap();
+                let write_data = WriteData::from_modifies(txn.into_modifies());
+                self.engine.write(&self.ctx, write_data).unwrap();
             }
             self.refresh_snapshot();
         }
 
         #[inline]
         fn refresh_snapshot(&mut self) {
-            self.snapshot = self.engine.snapshot(&self.ctx).unwrap()
+            let snap_ctx = SnapContext {
+                pb_ctx: &self.ctx,
+                ..Default::default()
+            };
+            self.snapshot = self.engine.snapshot(snap_ctx).unwrap()
         }
 
-        fn store(&self) -> SnapshotStore<RocksSnapshot> {
+        fn store(&self) -> SnapshotStore<Arc<RocksSnapshot>> {
             SnapshotStore::new(
                 self.snapshot.clone(),
                 COMMIT_TS.next(),
@@ -710,22 +797,14 @@ mod tests {
         fn get_cf(&self, _: CfName, _: &Key) -> EngineResult<Option<Value>> {
             Ok(None)
         }
-        fn iter(&self, _: IterOptions, _: ScanMode) -> EngineResult<Cursor<Self::Iter>> {
-            Ok(Cursor::new(
-                MockRangeSnapshotIter::default(),
-                ScanMode::Forward,
-            ))
+        fn get_cf_opt(&self, _: ReadOptions, _: CfName, _: &Key) -> EngineResult<Option<Value>> {
+            Ok(None)
         }
-        fn iter_cf(
-            &self,
-            _: CfName,
-            _: IterOptions,
-            _: ScanMode,
-        ) -> EngineResult<Cursor<Self::Iter>> {
-            Ok(Cursor::new(
-                MockRangeSnapshotIter::default(),
-                ScanMode::Forward,
-            ))
+        fn iter(&self, _: IterOptions) -> EngineResult<Self::Iter> {
+            Ok(MockRangeSnapshotIter::default())
+        }
+        fn iter_cf(&self, _: CfName, _: IterOptions) -> EngineResult<Self::Iter> {
+            Ok(MockRangeSnapshotIter::default())
         }
         fn lower_bound(&self) -> Option<&[u8]> {
             Some(self.start.as_slice())
@@ -782,7 +861,7 @@ mod tests {
 
         let half = (key_num / 2) as usize;
         let expect = &store.keys[0..half];
-        let result = scanner.scan(half).unwrap();
+        let result = scanner.scan(half, 0).unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
         let expect: Vec<Option<KvPair>> = expect
             .iter()
@@ -805,7 +884,7 @@ mod tests {
             .scanner(true, false, false, None, Some(start_key))
             .unwrap();
 
-        let result = scanner.scan(half).unwrap();
+        let result = scanner.scan(half, 0).unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
 
         let mut expect: Vec<Option<KvPair>> = expect
@@ -876,36 +955,44 @@ mod tests {
         let bound_c = Key::from_encoded(b"c".to_vec());
         let bound_d = Key::from_encoded(b"d".to_vec());
         assert!(store.scanner(false, false, false, None, None).is_ok());
-        assert!(store
-            .scanner(
-                false,
-                false,
-                false,
-                Some(bound_b.clone()),
-                Some(bound_c.clone())
-            )
-            .is_ok());
-        assert!(store
-            .scanner(
-                false,
-                false,
-                false,
-                Some(bound_a.clone()),
-                Some(bound_c.clone())
-            )
-            .is_err());
-        assert!(store
-            .scanner(
-                false,
-                false,
-                false,
-                Some(bound_b.clone()),
-                Some(bound_d.clone())
-            )
-            .is_err());
-        assert!(store
-            .scanner(false, false, false, Some(bound_a.clone()), Some(bound_d))
-            .is_err());
+        assert!(
+            store
+                .scanner(
+                    false,
+                    false,
+                    false,
+                    Some(bound_b.clone()),
+                    Some(bound_c.clone())
+                )
+                .is_ok()
+        );
+        assert!(
+            store
+                .scanner(
+                    false,
+                    false,
+                    false,
+                    Some(bound_a.clone()),
+                    Some(bound_c.clone())
+                )
+                .is_err()
+        );
+        assert!(
+            store
+                .scanner(
+                    false,
+                    false,
+                    false,
+                    Some(bound_b.clone()),
+                    Some(bound_d.clone())
+                )
+                .is_err()
+        );
+        assert!(
+            store
+                .scanner(false, false, false, Some(bound_a.clone()), Some(bound_d))
+                .is_err()
+        );
 
         // Store with whole range
         let snap2 = MockRangeSnapshot::new(b"".to_vec(), b"".to_vec());
@@ -918,15 +1005,21 @@ mod tests {
             false,
         );
         assert!(store2.scanner(false, false, false, None, None).is_ok());
-        assert!(store2
-            .scanner(false, false, false, Some(bound_a.clone()), None)
-            .is_ok());
-        assert!(store2
-            .scanner(false, false, false, Some(bound_a), Some(bound_b))
-            .is_ok());
-        assert!(store2
-            .scanner(false, false, false, None, Some(bound_c))
-            .is_ok());
+        assert!(
+            store2
+                .scanner(false, false, false, Some(bound_a.clone()), None)
+                .is_ok()
+        );
+        assert!(
+            store2
+                .scanner(false, false, false, Some(bound_a), Some(bound_b))
+                .is_ok()
+        );
+        assert!(
+            store2
+                .scanner(false, false, false, None, Some(bound_c))
+                .is_ok()
+        );
     }
 
     fn gen_fixture_store() -> FixtureStore {
@@ -1223,6 +1316,49 @@ mod tests {
         );
         assert_eq!(scanner.next().unwrap(), None);
     }
+
+    #[test]
+    fn test_txn_entry_size() {
+        assert_eq!(
+            TxnEntry::Prewrite {
+                default: (vec![0; 10], vec![0; 10]),
+                lock: (vec![0; 10], vec![0; 10]),
+                old_value: None,
+            }
+            .size(),
+            40
+        );
+
+        assert_eq!(
+            TxnEntry::Prewrite {
+                default: (vec![0; 10], vec![0; 10]),
+                lock: (vec![0; 10], vec![0; 10]),
+                old_value: Some(vec![0; 10]),
+            }
+            .size(),
+            50
+        );
+
+        assert_eq!(
+            TxnEntry::Commit {
+                default: (vec![0; 10], vec![0; 10]),
+                write: (vec![0; 10], vec![0; 10]),
+                old_value: None,
+            }
+            .size(),
+            40
+        );
+
+        assert_eq!(
+            TxnEntry::Commit {
+                default: (vec![0; 10], vec![0; 10]),
+                write: (vec![0; 10], vec![0; 10]),
+                old_value: Some(vec![0; 10]),
+            }
+            .size(),
+            50
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1348,7 +1484,7 @@ mod benches {
                     test::black_box(None),
                 )
                 .unwrap();
-            test::black_box(scanner.scan(1000).unwrap());
+            test::black_box(scanner.scan(1000, 0).unwrap());
         })
     }
 }

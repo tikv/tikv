@@ -4,10 +4,14 @@ use crate::engine::RocksEngine;
 use crate::options::RocksReadOptions;
 use engine_traits::Error;
 use engine_traits::IterOptions;
-use engine_traits::{CfName, CF_DEFAULT};
-use engine_traits::{ExternalSstFileInfo, SstWriter, SstWriterBuilder};
+use engine_traits::CF_DEFAULT;
+use engine_traits::{
+    ExternalSstFileInfo, SSTMetaInfo, SstCompressionType, SstWriter, SstWriterBuilder,
+};
 use engine_traits::{Iterable, Result, SstExt, SstReader};
 use engine_traits::{Iterator, SeekKey};
+use fail::fail_point;
+use rocksdb::rocksdb::supported_compression;
 use rocksdb::DBCompressionType;
 use rocksdb::DBIterator;
 use rocksdb::ExternalSstFileInfo as RawExternalSstFileInfo;
@@ -19,7 +23,7 @@ use std::sync::Arc;
 // FIXME: Move RocksSeekKey into a common module since
 // it's shared between multiple iterators
 use crate::engine_iterator::RocksSeekKey;
-use engine::rocks::util::get_fastest_supported_compression_type;
+use kvproto::import_sstpb::SstMeta;
 use std::path::PathBuf;
 
 impl SstExt for RocksEngine {
@@ -36,6 +40,19 @@ pub struct RocksSstReader {
 }
 
 impl RocksSstReader {
+    pub fn sst_meta_info(&self, sst: SstMeta) -> SSTMetaInfo {
+        let mut meta = SSTMetaInfo {
+            total_kvs: 0,
+            total_bytes: 0,
+            meta: sst,
+        };
+        self.inner.read_table_properties(|p| {
+            meta.total_kvs = p.num_entries();
+            meta.total_bytes = p.raw_key_size() + p.raw_value_size();
+        });
+        meta
+    }
+
     pub fn open_with_env(path: &str, env: Option<Arc<Env>>) -> Result<Self> {
         let mut cf_options = ColumnFamilyOptions::new();
         if let Some(env) = env {
@@ -81,6 +98,10 @@ impl Iterable for RocksSstReader {
 // FIXME: See comment on RocksSstReader for why this contains Rc
 pub struct RocksSstIterator(DBIterator<Rc<SstFileReader>>);
 
+// TODO(5kbpers): Temporarily force to add `Send` here, add a method for creating
+// DBIterator<Arc<SstFileReader>> in rust-rocksdb later.
+unsafe impl Send for RocksSstIterator {}
+
 impl Iterator for RocksSstIterator {
     fn seek(&mut self, key: SeekKey) -> Result<bool> {
         let k: RocksSeekKey = key.into();
@@ -114,9 +135,11 @@ impl Iterator for RocksSstIterator {
 }
 
 pub struct RocksSstWriterBuilder {
-    cf: Option<CfName>,
+    cf: Option<String>,
     db: Option<Arc<DB>>,
     in_memory: bool,
+    compression_type: Option<DBCompressionType>,
+    compression_level: i32,
 }
 
 impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
@@ -125,6 +148,8 @@ impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
             cf: None,
             in_memory: false,
             db: None,
+            compression_type: None,
+            compression_level: 0,
         }
     }
 
@@ -133,8 +158,8 @@ impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
         self
     }
 
-    fn set_cf(mut self, cf: CfName) -> Self {
-        self.cf = Some(cf);
+    fn set_cf(mut self, cf: &str) -> Self {
+        self.cf = Some(cf.to_string());
         self
     }
 
@@ -143,12 +168,22 @@ impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
         self
     }
 
+    fn set_compression_type(mut self, compression: Option<SstCompressionType>) -> Self {
+        self.compression_type = compression.map(to_rocks_compression_type);
+        self
+    }
+
+    fn set_compression_level(mut self, level: i32) -> Self {
+        self.compression_level = level;
+        self
+    }
+
     fn build(self, path: &str) -> Result<RocksSstWriter> {
         let mut env = None;
         let mut io_options = if let Some(db) = self.db.as_ref() {
             env = db.env();
             let handle = db
-                .cf_handle(self.cf.unwrap_or(CF_DEFAULT))
+                .cf_handle(self.cf.as_deref().unwrap_or(CF_DEFAULT))
                 .ok_or_else(|| format!("CF {:?} is not found", self.cf))?;
             db.get_options_cf(handle)
         } else {
@@ -162,13 +197,35 @@ impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
         } else if let Some(env) = env.as_ref() {
             io_options.set_env(env.clone());
         }
-        io_options.compression(get_fastest_supported_compression_type());
+        let compress_type = if let Some(ct) = self.compression_type {
+            let all_supported_compression = supported_compression();
+            if !all_supported_compression.contains(&ct) {
+                return Err(Error::Other(
+                    format!(
+                        "compression type '{}' is not supported by rocksdb",
+                        fmt_db_compression_type(ct)
+                    )
+                    .into(),
+                ));
+            }
+            ct
+        } else {
+            get_fastest_supported_compression_type()
+        };
+        // TODO: 0 is a valid value for compression_level
+        if self.compression_level != 0 {
+            // other three fields are default value.
+            // see: https://github.com/facebook/rocksdb/blob/8cb278d11a43773a3ac22e523f4d183b06d37d88/include/rocksdb/advanced_options.h#L146-L153
+            io_options.set_compression_options(-14, self.compression_level, 0, 0, 0);
+        }
+        io_options.compression(compress_type);
         // in rocksdb 5.5.1, SstFileWriter will try to use bottommost_compression and
         // compression_per_level first, so to make sure our specified compression type
         // being used, we must set them empty or disabled.
         io_options.compression_per_level(&[]);
         io_options.bottommost_compression(DBCompressionType::Disable);
         let mut writer = SstFileWriter::new(EnvOptions::new(), io_options);
+        fail_point!("on_open_sst_writer");
         writer.open(path)?;
         Ok(RocksSstWriter { writer, env })
     }
@@ -245,6 +302,38 @@ impl ExternalSstFileInfo for RocksExternalSstFileInfo {
 
     fn num_entries(&self) -> u64 {
         self.0.num_entries()
+    }
+}
+
+// Zlib and bzip2 are too slow.
+const COMPRESSION_PRIORITY: [DBCompressionType; 3] = [
+    DBCompressionType::Lz4,
+    DBCompressionType::Snappy,
+    DBCompressionType::Zstd,
+];
+
+fn get_fastest_supported_compression_type() -> DBCompressionType {
+    let all_supported_compression = supported_compression();
+    *COMPRESSION_PRIORITY
+        .iter()
+        .find(|c| all_supported_compression.contains(c))
+        .unwrap_or(&DBCompressionType::No)
+}
+
+fn fmt_db_compression_type(ct: DBCompressionType) -> &'static str {
+    match ct {
+        DBCompressionType::Lz4 => "lz4",
+        DBCompressionType::Snappy => "snappy",
+        DBCompressionType::Zstd => "zstd",
+        _ => unreachable!(),
+    }
+}
+
+fn to_rocks_compression_type(ct: SstCompressionType) -> DBCompressionType {
+    match ct {
+        SstCompressionType::Lz4 => DBCompressionType::Lz4,
+        SstCompressionType::Snappy => DBCompressionType::Snappy,
+        SstCompressionType::Zstd => DBCompressionType::Zstd,
     }
 }
 

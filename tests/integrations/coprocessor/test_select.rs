@@ -7,7 +7,7 @@ use std::thread;
 use kvproto::coprocessor::Response;
 use kvproto::kvrpcpb::Context;
 use protobuf::Message;
-use tipb::{Chunk, Expr, ExprType, ScalarFuncSig};
+use tipb::{Chunk, Expr, ExprType, ScalarFuncSig, SelectResponse};
 
 use test_coprocessor::*;
 use test_storage::*;
@@ -127,6 +127,11 @@ fn test_stream_batch_row_limit() {
 
     // only ignore first 7 bytes of the row id
     let ignored_suffix_len = tidb_query_datatype::codec::table::RECORD_ROW_KEY_LEN - 1;
+
+    // `expected_ranges_last_bytes` checks those assertions:
+    // 1. We always fetch no more than stream_row_limit rows.
+    // 2. The responses' key ranges are disjoint.
+    // 3. Each returned key range should cover the returned rows.
     let mut expected_ranges_last_bytes: Vec<(&[u8], &[u8])> = vec![
         (b"\x00", b"\x02\x00"),
         (b"\x02\x00", b"\x05\x00"),
@@ -137,12 +142,13 @@ fn test_stream_batch_row_limit() {
         let start = resp.get_range().get_start();
         let end = resp.get_range().get_end();
         assert_eq!(&start[ignored_suffix_len..], start_last_bytes);
+
         assert_eq!(&end[ignored_suffix_len..], end_last_bytes);
     };
 
     let resps = handle_streaming_select(&endpoint, req, check_range);
     assert_eq!(resps.len(), 3);
-    let expected_output_counts = vec![vec![2 as i64], vec![2 as i64], vec![1 as i64]];
+    let expected_output_counts = vec![vec![2_i64], vec![2_i64], vec![1_i64]];
     for (i, resp) in resps.into_iter().enumerate() {
         let mut chunk = Chunk::default();
         chunk.merge_from_bytes(resp.get_data()).unwrap();
@@ -225,17 +231,21 @@ fn test_scan_detail() {
     ];
 
     for mut req in reqs {
-        req.mut_context().set_scan_detail(true);
-        req.mut_context().set_handle_time(true);
+        req.mut_context().set_record_scan_stat(true);
+        req.mut_context().set_record_time_stat(true);
 
         let resp = handle_request(&endpoint, req);
-        assert!(resp.get_exec_details().has_handle_time());
-
+        assert!(resp.get_exec_details().has_time_detail());
         let scan_detail = resp.get_exec_details().get_scan_detail();
         // Values would occur in data cf are inlined in write cf.
         assert_eq!(scan_detail.get_write().get_total(), 5);
         assert_eq!(scan_detail.get_write().get_processed(), 4);
         assert_eq!(scan_detail.get_lock().get_total(), 1);
+
+        assert!(resp.get_exec_details_v2().has_time_detail());
+        let scan_detail_v2 = resp.get_exec_details_v2().get_scan_detail_v2();
+        assert_eq!(scan_detail_v2.get_total_versions(), 5);
+        assert_eq!(scan_detail_v2.get_processed_versions(), 4);
     }
 }
 
@@ -835,7 +845,7 @@ fn test_index() {
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
     let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 1);
-    for (row, (id, _, _)) in spliter.zip(data) {
+    for (row, (id, ..)) in spliter.zip(data) {
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &[id.into()]).unwrap();
         let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
@@ -869,7 +879,7 @@ fn test_index_reverse_limit() {
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
     let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 1);
-    for (row, (id, _, _)) in spliter.zip(expect) {
+    for (row, (id, ..)) in spliter.zip(expect) {
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &[id.into()]).unwrap();
         let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
@@ -899,7 +909,7 @@ fn test_limit_oom() {
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
     let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 1);
-    for (row, (id, _, _)) in spliter.zip(data) {
+    for (row, (id, ..)) in spliter.zip(data) {
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &[id.into()]).unwrap();
         let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
@@ -932,14 +942,23 @@ fn test_del_select() {
     store.commit();
 
     // for dag
-    let req = DAGSelect::from_index(&product, &product["id"]).build();
-    let mut resp = handle_select(&endpoint, req);
-    let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 1);
+    let mut req = DAGSelect::from_index(&product, &product["id"]).build();
+    req.mut_context().set_record_scan_stat(true);
+
+    let resp = handle_request(&endpoint, req);
+    let mut sel_resp = SelectResponse::default();
+    sel_resp.merge_from_bytes(resp.get_data()).unwrap();
+    let spliter = DAGChunkSpliter::new(sel_resp.take_chunks().into(), 1);
     let mut row_count = 0;
     for _ in spliter {
         row_count += 1;
     }
     assert_eq!(row_count, 5);
+
+    assert!(resp.get_exec_details_v2().has_time_detail());
+    let scan_detail_v2 = resp.get_exec_details_v2().get_scan_detail_v2();
+    assert_eq!(scan_detail_v2.get_total_versions(), 8);
+    assert_eq!(scan_detail_v2.get_processed_versions(), 5);
 }
 
 #[test]
@@ -1629,46 +1648,19 @@ fn test_exec_details() {
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &data);
 
-    // get none
-    let req = DAGSelect::from(&product).build();
-    let resp = handle_request(&endpoint, req);
-    assert!(resp.has_exec_details());
-    let exec_details = resp.get_exec_details();
-    assert!(!exec_details.has_handle_time());
-    assert!(!exec_details.has_scan_detail());
-
     let flags = &[0];
 
-    // get handle_time
-    let mut ctx = Context::default();
-    ctx.set_handle_time(true);
+    let ctx = Context::default();
     let req = DAGSelect::from(&product).build_with(ctx, flags);
     let resp = handle_request(&endpoint, req);
     assert!(resp.has_exec_details());
     let exec_details = resp.get_exec_details();
-    assert!(exec_details.has_handle_time());
-    assert!(!exec_details.has_scan_detail());
-
-    // get scan detail
-    let mut ctx = Context::default();
-    ctx.set_scan_detail(true);
-    let req = DAGSelect::from(&product).build_with(ctx, flags);
-    let resp = handle_request(&endpoint, req);
-    assert!(resp.has_exec_details());
-    let exec_details = resp.get_exec_details();
-    assert!(!exec_details.has_handle_time());
+    assert!(exec_details.has_time_detail());
     assert!(exec_details.has_scan_detail());
-
-    // get both
-    let mut ctx = Context::default();
-    ctx.set_scan_detail(true);
-    ctx.set_handle_time(true);
-    let req = DAGSelect::from(&product).build_with(ctx, flags);
-    let resp = handle_request(&endpoint, req);
-    assert!(resp.has_exec_details());
-    let exec_details = resp.get_exec_details();
-    assert!(exec_details.has_handle_time());
-    assert!(exec_details.has_scan_detail());
+    assert!(resp.has_exec_details_v2());
+    let exec_details = resp.get_exec_details_v2();
+    assert!(exec_details.has_time_detail());
+    assert!(exec_details.has_scan_detail_v2());
 }
 
 #[test]

@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# This script runs all the tests under a variety of conditions.
+# This should pass before submitting pull requests.
+# Arguments given will be passed through to "cargo test"
+# This runs in the Makefile environment via "make run"
+
+set -euo pipefail
+
+# Run from the Makefile environment
+MAKEFILE_RUN=${MAKEFILE_RUN:-""}
+if [[ -z $MAKEFILE_RUN ]] ; then
+  COMMAND="$0 $*" exec make run
+fi
+
+./scripts/test "$@" -- --nocapture
+# The special Linux case below is testing the mem-profiling
+# features in tikv_alloc, which are marked #[ignore] since
+# they require special compile-time and run-time setup
+# Fortunately rebuilding with the mem-profiling feature will only
+# rebuild starting at jemalloc-sys.
+if [[ "$(uname)" == "Linux" ]]; then
+    export MALLOC_CONF=prof:true,prof_active:false
+    ./scripts/test -p tikv -p tikv_alloc --lib "$@" -- --nocapture --ignored
+fi
+
+if [[ "$(uname)" = "Linux" ]]; then
+    EXTRA_CARGO_ARGS="" ./scripts/test --message-format=json-render-diagnostics -q --no-run -- --nocapture |
+            python scripts/check-bins.py --features "${TIKV_ENABLE_FEATURES}" --check-tests
+fi

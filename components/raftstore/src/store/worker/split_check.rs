@@ -5,20 +5,22 @@ use std::collections::BinaryHeap;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
 
-use engine_rocks::RocksEngine;
 use engine_traits::{CfName, IterOptions, Iterable, Iterator, KvEngine, CF_WRITE, LARGE_CFS};
 use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
 
+#[cfg(any(test, feature = "testexport"))]
 use crate::coprocessor::Config;
 use crate::coprocessor::CoprocessorHost;
 use crate::coprocessor::SplitCheckerHost;
 use crate::store::{Callback, CasualMessage, CasualRouter};
 use crate::Result;
 use configuration::{ConfigChange, Configuration};
+use file_system::{IOType, WithIOType};
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Runnable;
+use tikv_util::{box_err, debug, error, info, warn};
 
 use super::metrics::*;
 
@@ -162,25 +164,25 @@ impl Display for Task {
     }
 }
 
-pub struct Runner<S> {
-    engine: RocksEngine,
+pub struct Runner<E, S>
+where
+    E: KvEngine,
+{
+    engine: E,
     router: S,
-    coprocessor: CoprocessorHost<RocksEngine>,
-    cfg: Config,
+    coprocessor: CoprocessorHost<E>,
 }
 
-impl<S: CasualRouter<RocksEngine>> Runner<S> {
-    pub fn new(
-        engine: RocksEngine,
-        router: S,
-        coprocessor: CoprocessorHost<RocksEngine>,
-        cfg: Config,
-    ) -> Runner<S> {
+impl<E, S> Runner<E, S>
+where
+    E: KvEngine,
+    S: CasualRouter<E>,
+{
+    pub fn new(engine: E, router: S, coprocessor: CoprocessorHost<E>) -> Runner<E, S> {
         Runner {
             engine,
             router,
             coprocessor,
-            cfg,
         }
     }
 
@@ -192,18 +194,14 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
         debug!(
             "executing task";
             "region_id" => region_id,
-            "start_key" => log_wrappers::Key(&start_key),
-            "end_key" => log_wrappers::Key(&end_key),
+            "start_key" => log_wrappers::Value::key(&start_key),
+            "end_key" => log_wrappers::Value::key(&end_key),
         );
         CHECK_SPILT_COUNTER.all.inc();
 
-        let mut host = self.coprocessor.new_split_checker_host(
-            &self.cfg,
-            region,
-            &self.engine,
-            auto_split,
-            policy,
-        );
+        let mut host =
+            self.coprocessor
+                .new_split_checker_host(region, &self.engine, auto_split, policy);
         if host.skip() {
             debug!("skip split check"; "region_id" => region.get_id());
             return;
@@ -214,7 +212,7 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
                 match self.scan_split_keys(&mut host, region, &start_key, &end_key) {
                     Ok(keys) => keys,
                     Err(e) => {
-                        error!("failed to scan split key"; "region_id" => region_id, "err" => %e);
+                        error!(%e; "failed to scan split key"; "region_id" => region_id,);
                         return;
                     }
                 }
@@ -225,15 +223,14 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
                     .map(|k| keys::origin_key(&k).to_vec())
                     .collect(),
                 Err(e) => {
-                    error!(
+                    error!(%e;
                         "failed to get approximate split key, try scan way";
                         "region_id" => region_id,
-                        "err" => %e,
                     );
                     match self.scan_split_keys(&mut host, region, &start_key, &end_key) {
                         Ok(keys) => keys,
                         Err(e) => {
-                            error!("failed to scan split key"; "region_id" => region_id, "err" => %e);
+                            error!(%e; "failed to scan split key"; "region_id" => region_id,);
                             return;
                         }
                     }
@@ -244,7 +241,7 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
 
         if !split_keys.is_empty() {
             let region_epoch = region.get_region_epoch().clone();
-            let msg = new_split_region(region_epoch, split_keys);
+            let msg = new_split_region(region_epoch, split_keys, "split checker");
             let res = self.router.send(region_id, msg);
             if let Err(e) = res {
                 warn!("failed to send check result"; "region_id" => region_id, "err" => %e);
@@ -264,13 +261,13 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
     /// Gets the split keys by scanning the range.
     fn scan_split_keys(
         &self,
-        host: &mut SplitCheckerHost<'_, RocksEngine>,
+        host: &mut SplitCheckerHost<'_, E>,
         region: &Region,
         start_key: &[u8],
         end_key: &[u8],
     ) -> Result<Vec<Vec<u8>>> {
         let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
-        MergedIterator::<<RocksEngine as Iterable>::Iterator>::new(
+        MergedIterator::<<E as Iterable>::Iterator>::new(
             &self.engine,
             LARGE_CFS,
             start_key,
@@ -314,12 +311,18 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
             "split check config updated";
             "change" => ?change
         );
-        self.cfg.update(change);
+        self.coprocessor.cfg.update(change);
     }
 }
 
-impl<S: CasualRouter<RocksEngine>> Runnable<Task> for Runner<S> {
+impl<E, S> Runnable for Runner<E, S>
+where
+    E: KvEngine,
+    S: CasualRouter<E>,
+{
+    type Task = Task;
     fn run(&mut self, task: Task) {
+        let _io_type_guard = WithIOType::new(IOType::LoadBalance);
         match task {
             Task::SplitCheckTask {
                 region,
@@ -328,18 +331,23 @@ impl<S: CasualRouter<RocksEngine>> Runnable<Task> for Runner<S> {
             } => self.check_split(&region, auto_split, policy),
             Task::ChangeConfig(c) => self.change_cfg(c),
             #[cfg(any(test, feature = "testexport"))]
-            Task::Validate(f) => f(&self.cfg),
+            Task::Validate(f) => f(&self.coprocessor.cfg),
         }
     }
 }
 
-fn new_split_region(
+fn new_split_region<E>(
     region_epoch: RegionEpoch,
     split_keys: Vec<Vec<u8>>,
-) -> CasualMessage<RocksEngine> {
+    source: &'static str,
+) -> CasualMessage<E>
+where
+    E: KvEngine,
+{
     CasualMessage::SplitRegion {
         region_epoch,
         split_keys,
         callback: Callback::None,
+        source: source.into(),
     }
 }

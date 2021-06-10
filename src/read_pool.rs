@@ -1,22 +1,23 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use futures::sync::oneshot;
-use futures::{future, Future};
+use std::future::Future;
+use std::sync::{Arc, Mutex};
+
+use futures::channel::oneshot;
+use futures::future::TryFutureExt;
 use kvproto::kvrpcpb::CommandPri;
-use std::cell::Cell;
-use std::future::Future as StdFuture;
-use std::time::Duration;
-use tikv_util::future_pool::{self, FuturePool};
-use tikv_util::time::Instant;
-use yatp::pool::{CloneRunnerBuilder, Local, Runner};
-use yatp::queue::{multilevel, Extras, QueueType};
-use yatp::task::future::{Runner as FutureRunner, TaskCell};
-use yatp::Remote;
+use prometheus::IntGauge;
+use thiserror::Error;
+use yatp::pool::Remote;
+use yatp::queue::Extras;
+use yatp::task::future::TaskCell;
+
+use file_system::{set_io_type, IOType};
+use tikv_util::yatp_pool::{self, FuturePool, PoolTicker, YatpPoolBuilder};
 
 use self::metrics::*;
 use crate::config::UnifiedReadPoolConfig;
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter};
-use prometheus::IntGauge;
 
 pub enum ReadPool {
     FuturePools {
@@ -28,6 +29,7 @@ pub enum ReadPool {
         pool: yatp::ThreadPool<TaskCell>,
         running_tasks: IntGauge,
         max_tasks: usize,
+        pool_size: usize,
     },
 }
 
@@ -47,10 +49,12 @@ impl ReadPool {
                 pool,
                 running_tasks,
                 max_tasks,
+                pool_size,
             } => ReadPoolHandle::Yatp {
                 remote: pool.remote().clone(),
                 running_tasks: running_tasks.clone(),
                 max_tasks: *max_tasks,
+                pool_size: *pool_size,
             },
         }
     }
@@ -67,13 +71,14 @@ pub enum ReadPoolHandle {
         remote: Remote<TaskCell>,
         running_tasks: IntGauge,
         max_tasks: usize,
+        pool_size: usize,
     },
 }
 
 impl ReadPoolHandle {
     pub fn spawn<F>(&self, f: F, priority: CommandPri, task_id: u64) -> Result<(), ReadPoolError>
     where
-        F: StdFuture<Output = ()> + Send + 'static,
+        F: Future<Output = ()> + Send + 'static,
     {
         match self {
             ReadPoolHandle::FuturePools {
@@ -93,6 +98,7 @@ impl ReadPoolHandle {
                 remote,
                 running_tasks,
                 max_tasks,
+                ..
             } => {
                 let running_tasks = running_tasks.clone();
                 // Note that the running task number limit is not strict.
@@ -103,6 +109,7 @@ impl ReadPoolHandle {
                     return Err(ReadPoolError::UnifiedReadPoolFull);
                 }
 
+                running_tasks.inc();
                 let fixed_level = match priority {
                     CommandPri::High => Some(0),
                     CommandPri::Normal => None,
@@ -111,7 +118,6 @@ impl ReadPoolHandle {
                 let extras = Extras::new_multilevel(task_id, fixed_level);
                 let task_cell = TaskCell::new(
                     async move {
-                        running_tasks.inc();
                         f.await;
                         running_tasks.dec();
                     },
@@ -128,94 +134,65 @@ impl ReadPoolHandle {
         f: F,
         priority: CommandPri,
         task_id: u64,
-    ) -> impl Future<Item = T, Error = ReadPoolError>
+    ) -> impl Future<Output = Result<T, ReadPoolError>>
     where
-        F: StdFuture<Output = T> + Send + 'static,
+        F: Future<Output = T> + Send + 'static,
         T: Send + 'static,
     {
         let (tx, rx) = oneshot::channel::<T>();
-        let spawn_res = self.spawn(
+        let res = self.spawn(
             async move {
-                let _ = tx.send(f.await);
+                let res = f.await;
+                let _ = tx.send(res);
             },
             priority,
             task_id,
         );
-        if let Err(e) = spawn_res {
-            future::Either::A(future::err(e))
-        } else {
-            future::Either::B(rx.map_err(ReadPoolError::from))
+        async move {
+            res?;
+            rx.map_err(ReadPoolError::from).await
+        }
+    }
+
+    pub fn get_normal_pool_size(&self) -> usize {
+        match self {
+            ReadPoolHandle::FuturePools {
+                read_pool_normal, ..
+            } => read_pool_normal.get_pool_size(),
+            ReadPoolHandle::Yatp { pool_size, .. } => *pool_size,
+        }
+    }
+
+    pub fn get_queue_size_per_worker(&self) -> usize {
+        match self {
+            ReadPoolHandle::FuturePools {
+                read_pool_normal, ..
+            } => {
+                read_pool_normal.get_running_task_count() as usize
+                    / read_pool_normal.get_pool_size()
+            }
+            ReadPoolHandle::Yatp {
+                running_tasks,
+                pool_size,
+                ..
+            } => running_tasks.get() as usize / *pool_size,
         }
     }
 }
 
 #[derive(Clone)]
-pub struct ReadPoolRunner<E: Engine, R: FlowStatsReporter> {
-    engine: Option<E>,
+pub struct ReporterTicker<R: FlowStatsReporter> {
     reporter: R,
-    inner: FutureRunner,
 }
 
-impl<E: Engine, R: FlowStatsReporter> Runner for ReadPoolRunner<E, R> {
-    type TaskCell = TaskCell;
-
-    fn start(&mut self, local: &mut Local<Self::TaskCell>) {
-        set_tls_engine(self.engine.take().unwrap());
-        self.inner.start(local)
-    }
-
-    fn handle(&mut self, local: &mut Local<Self::TaskCell>, task_cell: Self::TaskCell) -> bool {
-        let finished = self.inner.handle(local, task_cell);
-        if finished {
-            self.flush_metrics_on_tick();
-        }
-        finished
-    }
-
-    fn pause(&mut self, local: &mut Local<Self::TaskCell>) -> bool {
-        self.inner.pause(local)
-    }
-
-    fn resume(&mut self, local: &mut Local<Self::TaskCell>) {
-        self.inner.resume(local)
-    }
-
-    fn end(&mut self, local: &mut Local<Self::TaskCell>) {
-        self.inner.end(local);
-        self.flush_metrics();
-        unsafe { destroy_tls_engine::<E>() }
+impl<R: FlowStatsReporter> PoolTicker for ReporterTicker<R> {
+    fn on_tick(&mut self) {
+        self.flush_metrics_on_tick();
     }
 }
 
-impl<E: Engine, R: FlowStatsReporter> ReadPoolRunner<E, R> {
-    pub fn new(engine: E, inner: FutureRunner, reporter: R) -> Self {
-        ReadPoolRunner {
-            engine: Some(engine),
-            reporter,
-            inner,
-        }
-    }
-
-    // Do nothing if no tick passed
-    fn flush_metrics_on_tick(&self) {
-        const TICK_INTERVAL: Duration = Duration::from_secs(1);
-
-        thread_local! {
-            static THREAD_LAST_TICK_TIME: Cell<Instant> = Cell::new(Instant::now_coarse());
-        }
-
-        THREAD_LAST_TICK_TIME.with(|tls_last_tick| {
-            let now = Instant::now_coarse();
-            let last_tick = tls_last_tick.get();
-            if now.duration_since(last_tick) < TICK_INTERVAL {
-                return;
-            }
-            tls_last_tick.set(now);
-            self.flush_metrics();
-        })
-    }
-
-    fn flush_metrics(&self) {
+impl<R: FlowStatsReporter> ReporterTicker<R> {
+    fn flush_metrics_on_tick(&mut self) {
         crate::storage::metrics::tls_flush(&self.reporter);
         crate::coprocessor::metrics::tls_flush(&self.reporter);
     }
@@ -243,18 +220,21 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
     engine: E,
 ) -> ReadPool {
     let unified_read_pool_name = get_unified_read_pool_name();
-
-    let mut builder = yatp::Builder::new(&unified_read_pool_name);
-    builder
-        .stack_size(config.stack_size.0 as usize)
-        .min_thread_count(config.min_thread_count)
-        .max_thread_count(config.max_thread_count);
-    let multilevel_builder =
-        multilevel::Builder::new(multilevel::Config::default().name(Some(&unified_read_pool_name)));
-    let read_pool_runner = ReadPoolRunner::new(engine, Default::default(), reporter);
-    let runner_builder = multilevel_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
+    let mut builder = YatpPoolBuilder::new(ReporterTicker { reporter });
+    let raftkv = Arc::new(Mutex::new(engine));
     let pool = builder
-        .build_with_queue_and_runner(QueueType::Multilevel(multilevel_builder), runner_builder);
+        .name_prefix(&unified_read_pool_name)
+        .stack_size(config.stack_size.0 as usize)
+        .thread_count(config.min_thread_count, config.max_thread_count)
+        .after_start(move || {
+            let engine = raftkv.lock().unwrap().clone();
+            set_tls_engine(engine);
+            set_io_type(IOType::ForegroundRead);
+        })
+        .before_stop(|| unsafe {
+            destroy_tls_engine::<E>();
+        })
+        .build_multi_level_pool();
     ReadPool::Yatp {
         pool,
         running_tasks: UNIFIED_READ_POOL_RUNNING_TASKS
@@ -262,6 +242,7 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
         max_tasks: config
             .max_tasks_per_worker
             .saturating_mul(config.max_thread_count),
+        pool_size: config.max_thread_count,
     }
 }
 
@@ -279,23 +260,16 @@ impl From<Vec<FuturePool>> for ReadPool {
     }
 }
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum ReadPoolError {
-        FuturePoolFull(err: future_pool::Full) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        UnifiedReadPoolFull {
-            display("Unified read pool is full")
-        }
-        Canceled(err: oneshot::Canceled) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-    }
+#[derive(Debug, Error)]
+pub enum ReadPoolError {
+    #[error("{0}")]
+    FuturePoolFull(#[from] yatp_pool::Full),
+
+    #[error("Unified read pool is full")]
+    UnifiedReadPoolFull,
+
+    #[error("{0}")]
+    Canceled(#[from] oneshot::Canceled),
 }
 
 mod metrics {
@@ -315,9 +289,10 @@ mod metrics {
 mod tests {
     use super::*;
     use crate::storage::TestEngineBuilder;
-    use futures03::channel::oneshot;
+    use futures::channel::oneshot;
     use raftstore::store::ReadStats;
     use std::thread;
+    use std::time::Duration;
 
     #[derive(Clone)]
     struct DummyReporter;

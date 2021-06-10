@@ -1,14 +1,13 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use test_raftstore::*;
-use test_util;
 
 fn test_partition_write<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
 
     let (key, value) = (b"k1", b"v1");
     cluster.must_put(key, value);
-    must_get_equal(&cluster.engines[&1].kv, key, value);
+    must_get_equal(&cluster.engines[&1].kv.as_inner(), key, value);
 
     let region_id = cluster.get_region_id(key);
 
@@ -53,7 +52,8 @@ fn test_server_partition_write() {
 fn test_secure_connect() {
     let mut cluster = new_server_cluster(0, 3);
     cluster.cfg.security = test_util::new_security_cfg(None);
-    cluster.run_conf_change();
+    cluster.pd_client.disable_default_operator();
+    cluster.run();
 
     let (key, value) = (b"k1", b"v1");
     cluster.must_put(key, value);

@@ -7,6 +7,8 @@ use crate::codec::data_type::VectorValue;
 use crate::codec::Result;
 use crate::expr::EvalContext;
 
+use std::ops::{Index, IndexMut, Range, RangeFrom, RangeTo};
+
 /// Stores multiple `LazyBatchColumn`s. Each column has an equal length.
 #[derive(Clone, Debug)]
 pub struct LazyBatchColumnVec {
@@ -28,10 +30,7 @@ impl From<Vec<VectorValue>> for LazyBatchColumnVec {
     #[inline]
     fn from(columns: Vec<VectorValue>) -> Self {
         LazyBatchColumnVec {
-            columns: columns
-                .into_iter()
-                .map(|v| LazyBatchColumn::from(v))
-                .collect(),
+            columns: columns.into_iter().map(LazyBatchColumn::from).collect(),
         }
     }
 }
@@ -185,7 +184,7 @@ impl LazyBatchColumnVec {
 // Do not implement Deref, since we want to forbid some misleading function calls like
 // `LazyBatchColumnVec.len()`.
 
-impl std::ops::Index<usize> for LazyBatchColumnVec {
+impl Index<usize> for LazyBatchColumnVec {
     type Output = LazyBatchColumn;
 
     fn index(&self, index: usize) -> &LazyBatchColumn {
@@ -193,8 +192,50 @@ impl std::ops::Index<usize> for LazyBatchColumnVec {
     }
 }
 
-impl std::ops::IndexMut<usize> for LazyBatchColumnVec {
+impl IndexMut<usize> for LazyBatchColumnVec {
     fn index_mut(&mut self, index: usize) -> &mut LazyBatchColumn {
         &mut self.columns[index]
+    }
+}
+
+impl Index<Range<usize>> for LazyBatchColumnVec {
+    type Output = [LazyBatchColumn];
+
+    fn index(&self, index: Range<usize>) -> &Self::Output {
+        &self.columns[index]
+    }
+}
+
+impl IndexMut<Range<usize>> for LazyBatchColumnVec {
+    fn index_mut(&mut self, index: Range<usize>) -> &mut Self::Output {
+        &mut self.columns[index]
+    }
+}
+
+impl Index<RangeTo<usize>> for LazyBatchColumnVec {
+    type Output = [LazyBatchColumn];
+
+    fn index(&self, index: RangeTo<usize>) -> &Self::Output {
+        &self.columns[..index.end]
+    }
+}
+
+impl IndexMut<RangeTo<usize>> for LazyBatchColumnVec {
+    fn index_mut(&mut self, index: RangeTo<usize>) -> &mut Self::Output {
+        &mut self.columns[..index.end]
+    }
+}
+
+impl Index<RangeFrom<usize>> for LazyBatchColumnVec {
+    type Output = [LazyBatchColumn];
+
+    fn index(&self, index: RangeFrom<usize>) -> &Self::Output {
+        &self.columns[index.start..]
+    }
+}
+
+impl IndexMut<RangeFrom<usize>> for LazyBatchColumnVec {
+    fn index_mut(&mut self, index: RangeFrom<usize>) -> &mut Self::Output {
+        &mut self.columns[index.start..]
     }
 }

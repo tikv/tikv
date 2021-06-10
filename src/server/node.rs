@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -11,23 +11,22 @@ use crate::read_pool::ReadPoolHandle;
 use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
 use crate::storage::{config::Config as StorageConfig, Storage};
-use engine::Engines;
-use engine_rocks::{CloneCompat, Compat, RocksEngine};
-use engine_traits::Peekable;
+use concurrency_manager::ConcurrencyManager;
+use engine_rocks::RocksEngine;
+use engine_traits::{Engines, Peekable, RaftEngine};
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::replication_modepb::ReplicationStatus;
 use pd_client::{Error as PdError, PdClient, INVALID_ID};
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
-use raftstore::router::RaftStoreRouter;
+use raftstore::router::{LocalReadRouter, RaftStoreRouter};
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
 use raftstore::store::AutoSplitController;
 use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager, Transport};
 use raftstore::store::{GlobalReplicationState, PdTask, SplitCheckTask};
 use tikv_util::config::VersionTrack;
-use tikv_util::worker::FutureWorker;
-use tikv_util::worker::Worker;
+use tikv_util::worker::{FutureWorker, Scheduler, Worker};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
@@ -35,44 +34,55 @@ const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 /// Creates a new storage engine which is backed by the Raft consensus
 /// protocol.
 pub fn create_raft_storage<S>(
-    engine: RaftKv<S>,
+    engine: RaftKv<RocksEngine, S>,
     cfg: &StorageConfig,
     read_pool: ReadPoolHandle,
-    lock_mgr: Option<LockManager>,
-    pipelined_pessimistic_lock: bool,
-) -> Result<Storage<RaftKv<S>, LockManager>>
+    lock_mgr: LockManager,
+    concurrency_manager: ConcurrencyManager,
+    pipelined_pessimistic_lock: Arc<AtomicBool>,
+) -> Result<Storage<RaftKv<RocksEngine, S>, LockManager>>
 where
-    S: RaftStoreRouter<RocksEngine> + 'static,
+    S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
 {
-    let store = Storage::from_engine(engine, cfg, read_pool, lock_mgr, pipelined_pessimistic_lock)?;
+    let store = Storage::from_engine(
+        engine,
+        cfg,
+        read_pool,
+        lock_mgr,
+        concurrency_manager,
+        pipelined_pessimistic_lock,
+    )?;
     Ok(store)
 }
 
 /// A wrapper for the raftstore which runs Multi-Raft.
 // TODO: we will rename another better name like RaftStore later.
-pub struct Node<C: PdClient + 'static> {
+pub struct Node<C: PdClient + 'static, ER: RaftEngine> {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: Arc<VersionTrack<StoreConfig>>,
-    system: RaftBatchSystem,
+    system: RaftBatchSystem<RocksEngine, ER>,
     has_started: bool,
 
     pd_client: Arc<C>,
     state: Arc<Mutex<GlobalReplicationState>>,
+    bg_worker: Worker,
 }
 
-impl<C> Node<C>
+impl<C, ER> Node<C, ER>
 where
     C: PdClient,
+    ER: RaftEngine,
 {
     /// Creates a new Node.
     pub fn new(
-        system: RaftBatchSystem,
+        system: RaftBatchSystem<RocksEngine, ER>,
         cfg: &ServerConfig,
         store_cfg: Arc<VersionTrack<StoreConfig>>,
         pd_client: Arc<C>,
         state: Arc<Mutex<GlobalReplicationState>>,
-    ) -> Node<C> {
+        bg_worker: Worker,
+    ) -> Node<C, ER> {
         let mut store = metapb::Store::default();
         store.set_id(INVALID_ID);
         if cfg.advertise_addr.is_empty() {
@@ -80,8 +90,12 @@ where
         } else {
             store.set_address(cfg.advertise_addr.clone())
         }
+        if cfg.advertise_status_addr.is_empty() {
+            store.set_status_address(cfg.status_addr.clone());
+        } else {
+            store.set_status_address(cfg.advertise_status_addr.clone())
+        }
         store.set_version(env!("CARGO_PKG_VERSION").to_string());
-        store.set_status_address(cfg.status_addr.clone());
 
         if let Ok(path) = std::env::current_exe() {
             if let Some(path) = path.parent() {
@@ -113,7 +127,22 @@ where
             system,
             has_started: false,
             state,
+            bg_worker,
         }
+    }
+
+    pub fn try_bootstrap_store(&mut self, engines: Engines<RocksEngine, ER>) -> Result<()> {
+        let mut store_id = self.check_store(&engines)?;
+        if store_id == INVALID_ID {
+            store_id = self.alloc_id()?;
+            debug!("alloc store id"; "store_id" => store_id);
+            store::bootstrap_store(&engines, self.cluster_id, store_id)?;
+            fail_point!("node_after_bootstrap_store", |_| Err(box_err!(
+                "injected error: node_after_bootstrap_store"
+            )));
+        }
+        self.store.set_id(store_id);
+        Ok(())
     }
 
     /// Starts the Node. It tries to bootstrap cluster if the cluster is not
@@ -122,27 +151,21 @@ where
     #[allow(clippy::too_many_arguments)]
     pub fn start<T>(
         &mut self,
-        engines: Engines,
+        engines: Engines<RocksEngine, ER>,
         trans: T,
-        snap_mgr: SnapManager<RocksEngine>,
+        snap_mgr: SnapManager,
         pd_worker: FutureWorker<PdTask<RocksEngine>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,
-        split_check_worker: Worker<SplitCheckTask>,
+        split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
+        concurrency_manager: ConcurrencyManager,
     ) -> Result<()>
     where
         T: Transport + 'static,
     {
-        let mut store_id = self.check_store(&engines)?;
-        if store_id == INVALID_ID {
-            store_id = self.bootstrap_store(&engines)?;
-            fail_point!("node_after_bootstrap_store", |_| Err(box_err!(
-                "injected error: node_after_bootstrap_store"
-            )));
-        }
-        self.store.set_id(store_id);
+        let store_id = self.id();
         {
             let mut meta = store_meta.lock().unwrap();
             meta.store_id = Some(store_id);
@@ -170,8 +193,9 @@ where
             store_meta,
             coprocessor_host,
             importer,
-            split_check_worker,
+            split_check_scheduler,
             auto_split_controller,
+            concurrency_manager,
         )?;
 
         Ok(())
@@ -184,21 +208,18 @@ where
 
     /// Gets a transmission end of a channel which is used to send `Msg` to the
     /// raftstore.
-    pub fn get_router(&self) -> RaftRouter<RocksEngine> {
+    pub fn get_router(&self) -> RaftRouter<RocksEngine, ER> {
         self.system.router()
     }
     /// Gets a transmission end of a channel which is used send messages to apply worker.
-    pub fn get_apply_router(&self) -> ApplyRouter {
+    pub fn get_apply_router(&self) -> ApplyRouter<RocksEngine> {
         self.system.apply_router()
     }
 
     // check store, return store id for the engine.
     // If the store is not bootstrapped, use INVALID_ID.
-    fn check_store(&self, engines: &Engines) -> Result<u64> {
-        let res = engines
-            .kv
-            .c()
-            .get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?;
+    fn check_store(&self, engines: &Engines<RocksEngine, ER>) -> Result<u64> {
+        let res = engines.kv.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?;
         if res.is_none() {
             return Ok(INVALID_ID);
         }
@@ -226,45 +247,27 @@ where
     }
 
     fn load_all_stores(&mut self, status: Option<ReplicationStatus>) {
-        let status = match status {
-            Some(s) => s,
-            None => {
-                info!("no status is returned, using majority mode");
-                return;
-            }
-        };
         info!("initializing replication mode"; "status" => ?status, "store_id" => self.store.id);
         let stores = match self.pd_client.get_all_stores(false) {
             Ok(stores) => stores,
             Err(e) => panic!("failed to load all stores: {:?}", e),
         };
-        let label_key = &status.get_dr_auto_sync().label_key;
         let mut state = self.state.lock().unwrap();
-        for store in stores {
-            for l in store.get_labels() {
-                if l.key == *label_key {
-                    state.group.register_store(store.id, l.value.clone());
-                    break;
-                }
-            }
+        if let Some(s) = status {
+            state.set_status(s);
         }
-        state.status = status;
-    }
-
-    fn bootstrap_store(&self, engines: &Engines) -> Result<u64> {
-        let store_id = self.alloc_id()?;
-        debug!("alloc store id"; "store_id" => store_id);
-
-        store::bootstrap_store(&engines.c(), self.cluster_id, store_id)?;
-
-        Ok(store_id)
+        for mut store in stores {
+            state
+                .group
+                .register_store(store.id, store.take_labels().into());
+        }
     }
 
     // Exported for tests.
     #[doc(hidden)]
     pub fn prepare_bootstrap_cluster(
         &self,
-        engines: &Engines,
+        engines: &Engines<RocksEngine, ER>,
         store_id: u64,
     ) -> Result<metapb::Region> {
         let region_id = self.alloc_id()?;
@@ -282,27 +285,29 @@ where
         );
 
         let region = initial_region(store_id, region_id, peer_id);
-        store::prepare_bootstrap_cluster(&engines.c(), &region)?;
+        store::prepare_bootstrap_cluster(&engines, &region)?;
         Ok(region)
     }
 
     fn check_or_prepare_bootstrap_cluster(
         &self,
-        engines: &Engines,
+        engines: &Engines<RocksEngine, ER>,
         store_id: u64,
     ) -> Result<Option<metapb::Region>> {
-        if let Some(first_region) = engines.kv.c().get_msg(keys::PREPARE_BOOTSTRAP_KEY)? {
+        if let Some(first_region) = engines.kv.get_msg(keys::PREPARE_BOOTSTRAP_KEY)? {
             Ok(Some(first_region))
+        } else if self.check_cluster_bootstrapped()? {
+            Ok(None)
         } else {
-            if self.check_cluster_bootstrapped()? {
-                Ok(None)
-            } else {
-                self.prepare_bootstrap_cluster(engines, store_id).map(Some)
-            }
+            self.prepare_bootstrap_cluster(engines, store_id).map(Some)
         }
     }
 
-    fn bootstrap_cluster(&mut self, engines: &Engines, first_region: metapb::Region) -> Result<()> {
+    fn bootstrap_cluster(
+        &mut self,
+        engines: &Engines<RocksEngine, ER>,
+        first_region: metapb::Region,
+    ) -> Result<()> {
         let region_id = first_region.get_id();
         let mut retry = 0;
         while retry < MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT {
@@ -313,30 +318,27 @@ where
                 Ok(_) => {
                     info!("bootstrap cluster ok"; "cluster_id" => self.cluster_id);
                     fail_point!("node_after_bootstrap_cluster", |_| Err(box_err!(
-                        "injected error: node_after_prepare_bootstrap_cluster"
+                        "injected error: node_after_bootstrap_cluster"
                     )));
-                    store::clear_prepare_bootstrap_key(&engines.c())?;
+                    store::clear_prepare_bootstrap_key(&engines)?;
                     return Ok(());
                 }
                 Err(PdError::ClusterBootstrapped(_)) => match self.pd_client.get_region(b"") {
                     Ok(region) => {
                         if region == first_region {
-                            store::clear_prepare_bootstrap_key(&engines.c())?;
-                            return Ok(());
+                            store::clear_prepare_bootstrap_key(&engines)?;
                         } else {
                             info!("cluster is already bootstrapped"; "cluster_id" => self.cluster_id);
-                            store::clear_prepare_bootstrap_cluster(&engines.c(), region_id)?;
-                            return Ok(());
+                            store::clear_prepare_bootstrap_cluster(&engines, region_id)?;
                         }
+                        return Ok(());
                     }
                     Err(e) => {
                         warn!("get the first region failed"; "err" => ?e);
                     }
                 },
                 // TODO: should we clean region for other errors too?
-                Err(e) => {
-                    error!("bootstrap cluster"; "cluster_id" => self.cluster_id, "error" => ?e)
-                }
+                Err(e) => error!(?e; "bootstrap cluster"; "cluster_id" => self.cluster_id,),
             }
             retry += 1;
             thread::sleep(Duration::from_secs(
@@ -365,15 +367,16 @@ where
     fn start_store<T>(
         &mut self,
         store_id: u64,
-        engines: Engines,
+        engines: Engines<RocksEngine, ER>,
         trans: T,
-        snap_mgr: SnapManager<RocksEngine>,
+        snap_mgr: SnapManager,
         pd_worker: FutureWorker<PdTask<RocksEngine>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,
-        split_check_worker: Worker<SplitCheckTask>,
+        split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
+        concurrency_manager: ConcurrencyManager,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -387,10 +390,11 @@ where
         let cfg = self.store_cfg.clone();
         let pd_client = Arc::clone(&self.pd_client);
         let store = self.store.clone();
+
         self.system.spawn(
             store,
             cfg,
-            engines.c(),
+            engines,
             trans,
             pd_client,
             snap_mgr,
@@ -398,9 +402,11 @@ where
             store_meta,
             coprocessor_host,
             importer,
-            split_check_worker,
+            split_check_scheduler,
+            self.bg_worker.clone(),
             auto_split_controller,
             self.state.clone(),
+            concurrency_manager,
         )?;
         Ok(())
     }
@@ -413,6 +419,7 @@ where
     /// Stops the Node.
     pub fn stop(&mut self) {
         let store_id = self.store.get_id();
-        self.stop_store(store_id)
+        self.stop_store(store_id);
+        self.bg_worker.stop();
     }
 }

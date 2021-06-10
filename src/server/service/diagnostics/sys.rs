@@ -3,12 +3,10 @@
 use std::collections::HashMap;
 use std::string::ToString;
 
-use crate::server::service::diagnostics::ioload;
+use crate::server::service::diagnostics::{ioload, SYS_INFO};
 use kvproto::diagnosticspb::{ServerInfoItem, ServerInfoPair};
-use sysinfo::{DiskExt, NetworkExt, ProcessExt, ProcessorExt, SystemExt};
-use tikv_util::config::KB;
-use tikv_util::sys::cpu_time::LiunxStyleCpuTime;
-use tikv_util::sys::sys_quota::SysQuota;
+use tikv_util::config::KIB;
+use tikv_util::sys::{cpu_time::LiunxStyleCpuTime, SysQuota, *};
 use walkdir::WalkDir;
 
 type CpuTimeSnapshot = Option<LiunxStyleCpuTime>;
@@ -59,14 +57,16 @@ impl NicSnapshot {
 fn cpu_load_info(prev_cpu: CpuTimeSnapshot, collector: &mut Vec<ServerInfoItem>) {
     // CPU load
     {
-        let mut system = sysinfo::System::new();
-        system.refresh_system();
-        let load = system.get_load_average();
-        let infos = vec![
-            ("load1", load.one),
-            ("load5", load.five),
-            ("load15", load.fifteen),
-        ];
+        let infos = {
+            let mut system = SYS_INFO.lock().unwrap();
+            system.refresh_system();
+            let load = system.get_load_average();
+            vec![
+                ("load1", load.one),
+                ("load5", load.five),
+                ("load15", load.fifteen),
+            ]
+        };
         let mut pairs = vec![];
         for info in infos.iter() {
             let mut pair = ServerInfoPair::default();
@@ -125,14 +125,15 @@ fn cpu_load_info(prev_cpu: CpuTimeSnapshot, collector: &mut Vec<ServerInfoItem>)
 }
 
 fn mem_load_info(collector: &mut Vec<ServerInfoItem>) {
-    let mut system = sysinfo::System::new();
+    let mut system = SYS_INFO.lock().unwrap();
     system.refresh_memory();
-    let total_memory = SysQuota::new().memory_limit_in_bytes();
-    let used_memory = system.get_used_memory() * KB;
-    let free_memory = system.get_free_memory() * KB;
-    let total_swap = system.get_total_swap() * KB;
-    let used_swap = system.get_used_swap() * KB;
-    let free_swap = system.get_free_swap() * KB;
+    let total_memory = system.get_total_memory() * KIB;
+    let used_memory = system.get_used_memory() * KIB;
+    let free_memory = system.get_free_memory() * KIB;
+    let total_swap = system.get_total_swap() * KIB;
+    let used_swap = system.get_used_swap() * KIB;
+    let free_swap = system.get_free_swap() * KIB;
+    drop(system);
     let used_memory_pct = (used_memory as f64) / (total_memory as f64);
     let free_memory_pct = (free_memory as f64) / (total_memory as f64);
     let used_swap_pct = (used_swap as f64) / (total_swap as f64);
@@ -176,7 +177,7 @@ fn mem_load_info(collector: &mut Vec<ServerInfoItem>) {
 }
 
 fn nic_load_info(prev_nic: HashMap<String, NicSnapshot>, collector: &mut Vec<ServerInfoItem>) {
-    let mut system = sysinfo::System::new();
+    let mut system = SYS_INFO.lock().unwrap();
     system.refresh_networks_list();
     system.refresh_networks();
     let current = system.get_networks();
@@ -204,7 +205,7 @@ fn io_load_info(prev_io: HashMap<String, ioload::IoLoad>, collector: &mut Vec<Se
             Some(p) => p,
             None => continue,
         };
-        let infos = vec![
+        let mut infos = vec![
             ("read_io/s", rate(cur.read_io, prev.read_io)),
             ("read_merges/s", rate(cur.read_merges, prev.read_merges)),
             (
@@ -226,6 +227,26 @@ fn io_load_info(prev_io: HashMap<String, ioload::IoLoad>, collector: &mut Vec<Se
                 rate(cur.time_in_queue, prev.time_in_queue),
             ),
         ];
+        infos.extend(
+            [
+                ("discard_io/s", cur.discard_io, prev.discard_io),
+                ("discard_merged/s", cur.discard_merged, prev.discard_merged),
+                (
+                    "discard_sectors/s",
+                    cur.discard_sectors,
+                    prev.discard_sectors,
+                ),
+                ("discard_ticks/s", cur.discard_ticks, prev.discard_ticks),
+            ]
+            .iter()
+            .filter_map(|(name, cur_stat, prev_stat)| {
+                if let (Some(cur_stat), Some(prev_stat)) = (cur_stat, prev_stat) {
+                    Some((*name, rate(*cur_stat, *prev_stat)))
+                } else {
+                    None
+                }
+            }),
+        );
         let mut pairs = vec![];
         for info in infos.into_iter() {
             let mut pair = ServerInfoPair::default();
@@ -269,29 +290,39 @@ pub fn load_info(
 }
 
 fn cpu_hardware_info(collector: &mut Vec<ServerInfoItem>) {
-    let mut system = sysinfo::System::new();
+    let mut system = SYS_INFO.lock().unwrap();
     system.refresh_cpu();
     let processor = match system.get_processors().iter().next() {
         Some(p) => p,
         None => return,
     };
     let mut infos = vec![
-        (
-            "cpu-logical-cores",
-            SysQuota::new().cpu_cores_quota().to_string(),
-        ),
+        ("cpu-logical-cores", SysQuota::cpu_cores_quota().to_string()),
         ("cpu-physical-cores", num_cpus::get_physical().to_string()),
         ("cpu-frequency", format!("{}MHz", processor.get_frequency())),
         ("cpu-vendor-id", processor.get_vendor_id().to_string()),
     ];
+    // Depend on Rust lib return CPU arch not matching
+    // Golang lib so need this match loop to conversion
+    // Golang Doc:https://go.googlesource.com/go/+/go1.15.8/src/runtime/internal/sys/zgoarch_amd64.go#7
+    // Rust Doc:http://web.mit.edu/rust-lang_v1.26.0/arch/amd64_ubuntu1404/share/doc/rust/html/std/env/consts/constant.ARCH.html
+    let arch = match std::env::consts::ARCH {
+        "x86_64" => "amd64",
+        "x86" => "386",
+        "aarch64" => "arm64",
+        "powerpc" => "ppc",
+        "powerpc64" => "ppc64",
+        _ => std::env::consts::ARCH,
+    };
+    infos.push(("cpu-arch", arch.to_string()));
     // cache
     let caches = vec![
-        ("l1-cache-size", cache_size::l1_cache_size()),
-        ("l1-cache-line-size", cache_size::l1_cache_line_size()),
-        ("l2-cache-size", cache_size::l2_cache_size()),
-        ("l2-cache-line-size", cache_size::l2_cache_line_size()),
-        ("l3-cache-size", cache_size::l3_cache_size()),
-        ("l3-cache-line-size", cache_size::l3_cache_line_size()),
+        ("l1-cache-size", cache_size(1)),
+        ("l1-cache-line-size", cache_line_size(1)),
+        ("l2-cache-size", cache_size(2)),
+        ("l2-cache-line-size", cache_line_size(2)),
+        ("l3-cache-size", cache_size(3)),
+        ("l3-cache-line-size", cache_line_size(3)),
     ];
     for cache in caches.into_iter() {
         if let Some(v) = cache.1 {
@@ -313,11 +344,11 @@ fn cpu_hardware_info(collector: &mut Vec<ServerInfoItem>) {
 }
 
 fn mem_hardware_info(collector: &mut Vec<ServerInfoItem>) {
-    let mut system = sysinfo::System::new();
+    let mut system = SYS_INFO.lock().unwrap();
     system.refresh_memory();
     let mut pair = ServerInfoPair::default();
     pair.set_key("capacity".to_string());
-    pair.set_value((system.get_total_memory() * KB).to_string());
+    pair.set_value((system.get_total_memory() * KIB).to_string());
     let mut item = ServerInfoItem::default();
     item.set_tp("memory".to_string());
     item.set_name("memory".to_string());
@@ -326,7 +357,7 @@ fn mem_hardware_info(collector: &mut Vec<ServerInfoItem>) {
 }
 
 fn disk_hardware_info(collector: &mut Vec<ServerInfoItem>) {
-    let mut system = sysinfo::System::new();
+    let mut system = SYS_INFO.lock().unwrap();
     system.refresh_disks_list();
     system.refresh_disks();
     let disks = system.get_disks();
@@ -341,14 +372,14 @@ fn disk_hardware_info(collector: &mut Vec<ServerInfoItem>) {
             (
                 "fstype",
                 std::str::from_utf8(disk.get_file_system())
-                    .unwrap_or_else(|_| "unkonwn")
+                    .unwrap_or("unkonwn")
                     .to_string(),
             ),
             (
                 "path",
                 disk.get_mount_point()
                     .to_str()
-                    .unwrap_or_else(|| "unknown")
+                    .unwrap_or("unknown")
                     .to_string(),
             ),
             ("total", total.to_string()),
@@ -366,14 +397,16 @@ fn disk_hardware_info(collector: &mut Vec<ServerInfoItem>) {
         }
         let mut item = ServerInfoItem::default();
         item.set_tp("disk".to_string());
-        item.set_name(
-            disk.get_name()
-                .to_str()
-                .unwrap_or_else(|| "disk")
-                .to_string(),
-        );
+        item.set_name(disk.get_name().to_str().unwrap_or("disk").to_string());
         item.set_pairs(pairs.into());
         collector.push(item);
+    }
+}
+
+fn mac_address(mac: Option<pnet_datalink::MacAddr>) -> String {
+    match mac {
+        Some(mac) => mac.to_string(),
+        None => "none".to_string(),
     }
 }
 
@@ -381,7 +414,7 @@ fn nic_hardware_info(collector: &mut Vec<ServerInfoItem>) {
     let nics = pnet_datalink::interfaces();
     for nic in nics.into_iter() {
         let mut infos = vec![
-            ("mac", nic.mac_address().to_string()),
+            ("mac", mac_address(nic.mac)),
             ("flag", nic.flags.to_string()),
             ("index", nic.index.to_string()),
             ("is-up", nic.is_up().to_string()),
@@ -434,6 +467,9 @@ pub fn system_info(collector: &mut Vec<ServerInfoItem>) {
     item.set_name("sysctl".to_string());
     item.set_pairs(pairs.into());
     collector.push(item);
+    if let Some(item) = get_transparent_hugepage() {
+        collector.push(item);
+    }
 }
 
 /// Returns system wide configuration
@@ -456,11 +492,27 @@ fn get_sysctl_list() -> HashMap<String, String> {
         .collect()
 }
 
+fn get_transparent_hugepage() -> Option<ServerInfoItem> {
+    if let Ok(content) = std::fs::read_to_string("/sys/kernel/mm/transparent_hugepage/enabled") {
+        let mut pairs = vec![];
+        let mut pair = ServerInfoPair::default();
+        pair.set_key("transparent_hugepage_enabled".to_string());
+        pair.set_value(content.trim().to_string());
+        pairs.push(pair);
+        let mut item = ServerInfoItem::default();
+        item.set_tp("system".to_string());
+        item.set_name("kernel".to_string());
+        item.set_pairs(pairs.into());
+        return Some(item);
+    }
+    None
+}
+
 /// process_info collects all process list
 /// TODO: use different `ServerInfoType` to collect process list
 #[allow(dead_code)]
 pub fn process_info(collector: &mut Vec<ServerInfoItem>) {
-    let mut system = sysinfo::System::new();
+    let mut system = SYS_INFO.lock().unwrap();
     system.refresh_processes();
     let processes = system.get_processes();
     for (pid, p) in processes.iter() {
@@ -497,19 +549,22 @@ mod tests {
     #[test]
     fn test_load_info() {
         let prev_cpu = cpu_time_snapshot();
-        let mut system = sysinfo::System::new();
-        system.refresh_all();
-        let prev_nic = system
-            .get_networks()
-            .into_iter()
-            .map(|(n, d)| (n.to_owned(), NicSnapshot::from_network_data(d)))
-            .collect();
+        let prev_nic = {
+            let mut system = SYS_INFO.lock().unwrap();
+            system.refresh_networks_list();
+            system.refresh_all();
+            system
+                .get_networks()
+                .into_iter()
+                .map(|(n, d)| (n.to_owned(), NicSnapshot::from_network_data(d)))
+                .collect()
+        };
         let prev_io = ioload::IoLoad::snapshot();
         let mut collector = vec![];
         load_info((prev_cpu, prev_nic, prev_io), &mut collector);
-        #[cfg(linux)]
+        #[cfg(target_os = "linux")]
         let tps = vec!["cpu", "memory", "net", "io"];
-        #[cfg(not(linux))]
+        #[cfg(not(target_os = "linux"))]
         let tps = vec!["cpu", "memory"];
         for tp in tps.into_iter() {
             assert!(
@@ -566,7 +621,7 @@ mod tests {
                 vec!["total", "used", "free", "used-percent", "free-percent",]
             );
         }
-        #[cfg(linux)]
+        #[cfg(target_os = "linux")]
         {
             // io
             let item = collector.iter().find(|x| x.get_tp() == "io");
@@ -603,11 +658,15 @@ mod tests {
             collector.iter().any(|x| x.get_tp() == "system"),
             "expect collect system, but collect nothing",
         );
-        #[cfg(linux)]
+        #[cfg(target_os = "linux")]
         {
             let item = collector
-                .filter(|x| x.get_tp() == "system" && x.get_name() == "sysctl")
-                .unwrap();
+                .iter()
+                .filter(|x| x.get_tp() == "system" && x.get_name() == "sysctl");
+            assert_ne!(item.count(), 0);
+            let item = collector
+                .iter()
+                .filter(|x| x.get_tp() == "system" && x.get_name() == "kernel");
             assert_ne!(item.count(), 0);
         }
     }
@@ -657,6 +716,7 @@ mod tests {
                     "cpu-physical-cores",
                     "cpu-frequency",
                     "cpu-vendor-id",
+                    "cpu-arch",
                     "l1-cache-size",
                     "l1-cache-line-size",
                     "l2-cache-size",

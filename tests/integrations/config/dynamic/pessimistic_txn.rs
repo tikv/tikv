@@ -1,13 +1,15 @@
-use std::sync::{mpsc, Arc};
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
+use std::sync::{atomic::Ordering, mpsc, Arc};
 use std::time::Duration;
 
-use pd_client::PdClient;
+use security::SecurityManager;
+use test_raftstore::TestPdClient;
 use tikv::config::*;
 use tikv::server::lock_manager::*;
 use tikv::server::resolve::{Callback, StoreAddrResolver};
 use tikv::server::{Error, Result};
 use tikv_util::config::ReadableDuration;
-use tikv_util::security::SecurityManager;
 
 #[test]
 fn test_config_validate() {
@@ -18,9 +20,6 @@ fn test_config_validate() {
     invalid_cfg.wait_for_lock_timeout = ReadableDuration::millis(0);
     assert!(invalid_cfg.validate().is_err());
 }
-
-struct MockPdClient;
-impl PdClient for MockPdClient {}
 
 #[derive(Clone)]
 struct MockResolver;
@@ -38,8 +37,8 @@ fn setup(
     DetectorScheduler,
     LockManager,
 ) {
-    let mut lock_mgr = LockManager::new();
-    let pd_client = Arc::new(MockPdClient);
+    let mut lock_mgr = LockManager::new(cfg.pessimistic_txn.pipelined);
+    let pd_client = Arc::new(TestPdClient::new(0, true));
     let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
     lock_mgr
         .start(
@@ -93,6 +92,7 @@ fn test_lock_manager_cfg_update() {
     let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
     cfg.pessimistic_txn.wait_for_lock_timeout = ReadableDuration::millis(DEFAULT_TIMEOUT);
     cfg.pessimistic_txn.wake_up_delay_duration = ReadableDuration::millis(DEFAULT_DELAY);
+    cfg.pessimistic_txn.pipelined = false;
     cfg.validate().unwrap();
     let (cfg_controller, waiter, deadlock, mut lock_mgr) = setup(cfg);
 
@@ -164,6 +164,13 @@ fn test_lock_manager_cfg_update() {
     validate_dead_lock(&deadlock, move |ttl: u64| {
         assert_eq!(ttl, 4321);
     });
+
+    // update pipelined
+    assert!(!lock_mgr.get_pipelined().load(Ordering::Relaxed));
+    cfg_controller
+        .update_config("pessimistic-txn.pipelined", "true")
+        .unwrap();
+    assert!(lock_mgr.get_pipelined().load(Ordering::Relaxed));
 
     lock_mgr.stop();
 }

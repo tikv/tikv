@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine::rocks::{CompactOptions, Writable, DB};
+use engine_rocks::raw::{CompactOptions, Writable, DB};
 use engine_traits::{CF_DEFAULT, CF_LOCK};
 use test_raftstore::*;
 

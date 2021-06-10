@@ -10,7 +10,7 @@ use tikv_util::buffer_vec::BufferVec;
 use tipb::FieldType;
 
 use super::{Error, Result};
-use crate::codec::data_type::VectorValue;
+use crate::codec::data_type::{ChunkRef, VectorValue};
 use crate::codec::datum;
 use crate::codec::datum_codec::DatumPayloadDecoder;
 use crate::codec::mysql::decimal::{
@@ -19,7 +19,12 @@ use crate::codec::mysql::decimal::{
 use crate::codec::mysql::duration::{
     Duration, DurationDatumPayloadChunkEncoder, DurationDecoder, DurationEncoder,
 };
-use crate::codec::mysql::json::{Json, JsonDatumPayloadChunkEncoder, JsonDecoder, JsonEncoder};
+use crate::codec::mysql::enums::{
+    Enum, EnumDatumPayloadChunkEncoder, EnumDecoder, EnumEncoder, EnumRef,
+};
+use crate::codec::mysql::json::{
+    Json, JsonDatumPayloadChunkEncoder, JsonDecoder, JsonEncoder, JsonRef,
+};
 use crate::codec::mysql::time::{Time, TimeDatumPayloadChunkEncoder, TimeDecoder, TimeEncoder};
 use crate::codec::Datum;
 use crate::expr::EvalContext;
@@ -114,6 +119,12 @@ impl Column {
                     col.append_json_datum(&raw_datums[row_index])?
                 }
             }
+            EvalType::Enum => {
+                for &row_index in logical_rows {
+                    col.append_enum_datum(&raw_datums[row_index], field_type)?
+                }
+            }
+            EvalType::Set => unimplemented!(),
         }
 
         Ok(col)
@@ -130,7 +141,7 @@ impl Column {
             VectorValue::Int(vec) => {
                 if field_type.is_unsigned() {
                     for &row_index in logical_rows {
-                        match &vec[row_index] {
+                        match vec.get_option_ref(row_index) {
                             None => {
                                 col.append_null();
                             }
@@ -141,7 +152,7 @@ impl Column {
                     }
                 } else {
                     for &row_index in logical_rows {
-                        match &vec[row_index] {
+                        match vec.get_option_ref(row_index) {
                             None => {
                                 col.append_null();
                             }
@@ -155,7 +166,7 @@ impl Column {
             VectorValue::Real(vec) => {
                 if col.get_fixed_len() == 4 {
                     for &row_index in logical_rows {
-                        match &vec[row_index] {
+                        match vec.get_option_ref(row_index) {
                             None => {
                                 col.append_null();
                             }
@@ -166,7 +177,7 @@ impl Column {
                     }
                 } else {
                     for &row_index in logical_rows {
-                        match &vec[row_index] {
+                        match vec.get_option_ref(row_index) {
                             None => {
                                 col.append_null();
                             }
@@ -179,7 +190,7 @@ impl Column {
             }
             VectorValue::Decimal(vec) => {
                 for &row_index in logical_rows {
-                    match &vec[row_index] {
+                    match vec.get_option_ref(row_index) {
                         None => {
                             col.append_null();
                         }
@@ -191,7 +202,7 @@ impl Column {
             }
             VectorValue::Bytes(vec) => {
                 for &row_index in logical_rows {
-                    match &vec[row_index] {
+                    match vec.get_option_ref(row_index) {
                         None => {
                             col.append_null();
                         }
@@ -203,7 +214,7 @@ impl Column {
             }
             VectorValue::DateTime(vec) => {
                 for &row_index in logical_rows {
-                    match &vec[row_index] {
+                    match vec.get_option_ref(row_index) {
                         None => {
                             col.append_null();
                         }
@@ -215,7 +226,7 @@ impl Column {
             }
             VectorValue::Duration(vec) => {
                 for &row_index in logical_rows {
-                    match &vec[row_index] {
+                    match vec.get_option_ref(row_index) {
                         None => {
                             col.append_null();
                         }
@@ -227,14 +238,25 @@ impl Column {
             }
             VectorValue::Json(vec) => {
                 for &row_index in logical_rows {
-                    match &vec[row_index] {
+                    match vec.get_option_ref(row_index) {
                         None => {
                             col.append_null();
                         }
-                        Some(val) => col.append_json(&val)?,
+                        Some(val) => col.append_json(val)?,
                     }
                 }
             }
+            VectorValue::Enum(vec) => {
+                for &row_index in logical_rows {
+                    match vec.get_option_ref(row_index) {
+                        None => {
+                            col.append_null();
+                        }
+                        Some(val) => col.append_enum(val)?,
+                    }
+                }
+            }
+            VectorValue::Set(_) => unimplemented!(),
         }
         Ok(col)
     }
@@ -265,7 +287,8 @@ impl Column {
             FieldTypeTp::Duration => Datum::Dur(self.get_duration(idx, field_type.decimal())?),
             FieldTypeTp::NewDecimal => Datum::Dec(self.get_decimal(idx)?),
             FieldTypeTp::JSON => Datum::Json(self.get_json(idx)?),
-            FieldTypeTp::Enum | FieldTypeTp::Bit | FieldTypeTp::Set => {
+            FieldTypeTp::Enum => Datum::Enum(self.get_enum(idx)?),
+            FieldTypeTp::Bit | FieldTypeTp::Set => {
                 return Err(box_err!(
                     "get datum with {} is not supported yet.",
                     field_type.tp()
@@ -303,7 +326,7 @@ impl Column {
             Datum::Dec(ref v) => self.append_decimal(v),
             Datum::Dur(v) => self.append_duration(*v),
             Datum::Time(v) => self.append_time(*v),
-            Datum::Json(ref v) => self.append_json(v),
+            Datum::Json(ref v) => self.append_json(v.as_ref()),
             _ => Err(box_err!("unsupported datum {:?}", data)),
         }
     }
@@ -442,7 +465,7 @@ impl Column {
                 return Err(Error::InvalidDataType(format!(
                     "Unsupported datum flag {} for Int vector",
                     flag
-                )))
+                )));
             }
         }
         Ok(())
@@ -485,7 +508,7 @@ impl Column {
                 return Err(Error::InvalidDataType(format!(
                     "Unsupported datum flag {} for Int vector",
                     flag
-                )))
+                )));
             }
         }
         Ok(())
@@ -528,7 +551,7 @@ impl Column {
                 return Err(Error::InvalidDataType(format!(
                     "Unsupported datum flag {} for Real vector",
                     flag
-                )))
+                )));
             }
         }
         Ok(())
@@ -561,7 +584,7 @@ impl Column {
                 return Err(Error::InvalidDataType(format!(
                     "Unsupported datum flag {} for Real vector",
                     flag
-                )))
+                )));
             }
         }
         Ok(())
@@ -616,7 +639,7 @@ impl Column {
                 return Err(Error::InvalidDataType(format!(
                     "Unsupported datum flag {} for Bytes vector",
                     flag
-                )))
+                )));
             }
         }
         Ok(())
@@ -670,7 +693,7 @@ impl Column {
                 return Err(Error::InvalidDataType(format!(
                     "Unsupported datum flag {} for DateTime vector.",
                     flag
-                )))
+                )));
             }
         }
         Ok(())
@@ -719,7 +742,7 @@ impl Column {
                 return Err(Error::InvalidDataType(format!(
                     "Unsupported datum flag {} for Duration vector",
                     flag
-                )))
+                )));
             }
         }
         Ok(())
@@ -762,7 +785,7 @@ impl Column {
                 return Err(Error::InvalidDataType(format!(
                     "Unsupported datum flag {} for Decimal vector",
                     flag
-                )))
+                )));
             }
         }
         Ok(())
@@ -779,8 +802,8 @@ impl Column {
 
     /// Append a json datum to the column.
     #[inline]
-    pub fn append_json(&mut self, j: &Json) -> Result<()> {
-        self.data.write_json(j.as_ref())?;
+    pub fn append_json(&mut self, j: JsonRef) -> Result<()> {
+        self.data.write_json(j)?;
         self.finished_append_var();
         Ok(())
     }
@@ -805,7 +828,7 @@ impl Column {
                 return Err(Error::InvalidDataType(format!(
                     "Unsupported datum flag {} for Json vector",
                     flag
-                )))
+                )));
             }
         }
         Ok(())
@@ -818,6 +841,58 @@ impl Column {
         let end = self.var_offsets[idx + 1];
         let mut data = &self.data[start..end];
         data.read_json()
+    }
+
+    // Append an Enum datum to the column
+    #[inline]
+    pub fn append_enum(&mut self, e: EnumRef) -> Result<()> {
+        self.data.write_enum_to_chunk(e.value(), e.name())?;
+        self.finished_append_var();
+        Ok(())
+    }
+
+    pub fn append_enum_datum(&mut self, src_datum: &[u8], field_type: &FieldType) -> Result<()> {
+        if src_datum.is_empty() {
+            return Err(Error::InvalidDataType(
+                "Failed to decode datum flag".to_owned(),
+            ));
+        }
+        let flag = src_datum[0];
+        let raw_datum = &src_datum[1..];
+        match flag {
+            datum::NIL_FLAG => self.append_null(),
+            datum::COMPACT_BYTES_FLAG => {
+                self.data
+                    .write_enum_to_chunk_by_datum_payload_compact_bytes(raw_datum, field_type)?;
+                self.finished_append_var();
+            }
+            datum::UINT_FLAG => {
+                self.data
+                    .write_enum_to_chunk_by_datum_payload_uint(raw_datum, field_type)?;
+                self.finished_append_var();
+            }
+            datum::VAR_UINT_FLAG => {
+                self.data
+                    .write_enum_to_chunk_by_datum_payload_var_uint(raw_datum, field_type)?;
+                self.finished_append_var();
+            }
+            _ => {
+                return Err(Error::InvalidDataType(format!(
+                    "Unsupported datum flag {} for Enum vector",
+                    flag
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Get the enum datum of the row in the column.
+    #[inline]
+    pub fn get_enum(&self, idx: usize) -> Result<Enum> {
+        let start = idx * self.fixed_len;
+        let end = start + self.fixed_len;
+        let mut data = &self.data[start..end];
+        data.read_enum_from_chunk()
     }
 
     /// Return the total rows in the column.
@@ -837,7 +912,7 @@ impl Column {
         let mut col = Column::new(tp, length);
         col.length = length;
         col.null_cnt = buf.read_u32_le()? as usize;
-        let null_length = (col.length + 7) / 8 as usize;
+        let null_length = (col.length + 7) / 8_usize;
         if col.null_cnt > 0 {
             col.null_bitmap = buf.read_bytes(null_length)?.to_vec();
         } else {
@@ -990,7 +1065,7 @@ mod tests {
     #[test]
     fn test_column_duration() {
         let fields: Vec<FieldType> = vec![FieldTypeTp::Duration.into()];
-        let duration = Duration::parse(&mut EvalContext::default(), b"10:11:12", 0).unwrap();
+        let duration = Duration::parse(&mut EvalContext::default(), "10:11:12", 0).unwrap();
         let data = vec![Datum::Null, Datum::Dur(duration)];
         test_colum_datum(fields, data);
     }

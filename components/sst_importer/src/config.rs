@@ -2,6 +2,7 @@
 
 use std::error::Error;
 use std::result::Result;
+use tikv_util::config::ReadableDuration;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
@@ -9,6 +10,10 @@ use std::result::Result;
 pub struct Config {
     pub num_threads: usize,
     pub stream_channel_window: usize,
+    /// The timeout for going back into normal mode from import mode.
+    ///
+    /// Default is 10m.
+    pub import_mode_timeout: ReadableDuration,
 }
 
 impl Default for Config {
@@ -16,6 +21,7 @@ impl Default for Config {
         Config {
             num_threads: 8,
             stream_channel_window: 128,
+            import_mode_timeout: ReadableDuration::minutes(10),
         }
     }
 }

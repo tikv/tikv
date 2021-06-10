@@ -3,21 +3,14 @@
 use crate::iterable::Iterable;
 use crate::peekable::Peekable;
 use std::fmt::Debug;
-use std::ops::Deref;
 
+/// A consistent read-only view of the database.
+///
+/// Snapshots can be sent and shared, but not cloned. To make a snapshot
+/// clonable, call `into_sync` to create a `SyncSnapshot`.
 pub trait Snapshot
 where
     Self: 'static + Peekable + Iterable + Send + Sync + Sized + Debug,
 {
-    type SyncSnapshot: SyncSnapshot<Self>;
-
     fn cf_names(&self) -> Vec<&str>;
-
-    fn into_sync(self) -> Self::SyncSnapshot;
-}
-
-pub trait SyncSnapshot<T>
-where
-    Self: Clone + Send + Sync + Sized + Debug + Deref<Target = T>,
-{
 }

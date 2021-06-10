@@ -14,50 +14,54 @@ use futures_util::{
 };
 use rand::Rng;
 
-use super::{util::error_stream, ExternalStorage};
+use super::ExternalStorage;
+use tikv_util::stream::error_stream;
 
-const LOCAL_STORAGE_TMP_DIR: &str = "localtmp";
 const LOCAL_STORAGE_TMP_FILE_SUFFIX: &str = "tmp";
-
-fn maybe_create_dir(path: &Path) -> io::Result<()> {
-    if let Err(e) = fs::create_dir_all(path) {
-        if e.kind() != io::ErrorKind::AlreadyExists {
-            return Err(e);
-        }
-    }
-    Ok(())
-}
 
 /// A storage saves files in local file system.
 #[derive(Clone)]
 pub struct LocalStorage {
     base: PathBuf,
     base_dir: Arc<File>,
-    tmp: PathBuf,
 }
 
 impl LocalStorage {
     /// Create a new local storage in the given path.
     pub fn new(base: &Path) -> io::Result<LocalStorage> {
         info!("create local storage"; "base" => base.display());
-        let tmp_dir = base.join(LOCAL_STORAGE_TMP_DIR);
-        maybe_create_dir(&tmp_dir)?;
         let base_dir = Arc::new(File::open(base)?);
         Ok(LocalStorage {
             base: base.to_owned(),
             base_dir,
-            tmp: tmp_dir,
         })
     }
 
     fn tmp_path(&self, path: &Path) -> PathBuf {
         let uid: u64 = rand::thread_rng().gen();
         let tmp_suffix = format!("{}{:016x}", LOCAL_STORAGE_TMP_FILE_SUFFIX, uid);
-        self.tmp.join(path).with_extension(tmp_suffix)
+        // Save tmp files in base directory.
+        self.base.join(path).with_extension(tmp_suffix)
     }
 }
 
+fn url_for(base: &Path) -> url::Url {
+    let mut u = url::Url::parse("local:///").unwrap();
+    u.set_path(base.to_str().unwrap());
+    u
+}
+
+const STORAGE_NAME: &str = "local";
+
 impl ExternalStorage for LocalStorage {
+    fn name(&self) -> &'static str {
+        &STORAGE_NAME
+    }
+
+    fn url(&self) -> io::Result<url::Url> {
+        Ok(url_for(&self.base.as_path()))
+    }
+
     fn write(
         &self,
         name: &str,
@@ -85,9 +89,7 @@ impl ExternalStorage for LocalStorage {
         let tmp_path = self.tmp_path(Path::new(name));
         let mut tmp_f = AllowStdIo::new(File::create(&tmp_path)?);
         block_on(copy(reader, &mut tmp_f))?;
-        let tmp_f = tmp_f.into_inner();
-        tmp_f.metadata()?.permissions().set_readonly(true);
-        tmp_f.sync_all()?;
+        tmp_f.into_inner().sync_all()?;
         debug!("save file to local storage";
             "name" => %name, "base" => %self.base.display());
         fs::rename(tmp_path, self.base.join(name))?;
@@ -95,7 +97,7 @@ impl ExternalStorage for LocalStorage {
         self.base_dir.sync_all()
     }
 
-    fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
+    fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin> {
         debug!("read file from local storage";
             "name" => %name, "base" => %self.base.display());
         match File::open(self.base.join(name)) {
@@ -118,15 +120,16 @@ mod tests {
 
         // Test tmp_path
         let tp = ls.tmp_path(Path::new("t.sst"));
-        assert_eq!(tp.parent().unwrap(), path.join(LOCAL_STORAGE_TMP_DIR));
+        assert_eq!(tp.parent().unwrap(), path);
         assert!(tp.file_name().unwrap().to_str().unwrap().starts_with('t'));
-        assert!(tp
-            .as_path()
-            .extension()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .starts_with(LOCAL_STORAGE_TMP_FILE_SUFFIX));
+        assert!(
+            tp.as_path()
+                .extension()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with(LOCAL_STORAGE_TMP_FILE_SUFFIX)
+        );
 
         // Test save_file
         let magic_contents: &[u8] = b"5678";
@@ -144,5 +147,10 @@ mod tests {
         // root is not allowed.
         ls.write("/", Box::new(magic_contents), content_length)
             .unwrap_err();
+    }
+
+    #[test]
+    fn test_url_of_backend() {
+        assert_eq!(url_for(Path::new("/tmp/a")).to_string(), "local:///tmp/a");
     }
 }

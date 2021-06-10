@@ -9,20 +9,14 @@ impl ImportExt for PanicEngine {
 
     fn ingest_external_file_cf(
         &self,
-        cf: &Self::CFHandle,
+        cf: &str,
         opts: &Self::IngestExternalFileOptions,
         files: &[&str],
     ) -> Result<()> {
         panic!()
     }
 
-    fn validate_sst_for_ingestion<P: AsRef<Path>>(
-        &self,
-        cf: &Self::CFHandle,
-        path: P,
-        expected_size: u64,
-        expected_checksum: u32,
-    ) -> Result<()> {
+    fn reset_global_seq<P: AsRef<Path>>(&self, cf: &str, path: P) -> Result<()> {
         panic!()
     }
 }

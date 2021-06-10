@@ -5,6 +5,9 @@ pub mod number;
 
 use std::io::{self, ErrorKind};
 
+use error_code::{self, ErrorCode, ErrorCodeExt};
+use thiserror::Error;
+
 pub type BytesSlice<'a> = &'a [u8];
 
 #[inline]
@@ -18,18 +21,18 @@ pub fn read_slice<'a>(data: &mut BytesSlice<'a>, size: usize) -> Result<BytesSli
     }
 }
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        Io(err: io::Error) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        KeyLength {display("bad format key(length)")}
-        KeyPadding {display("bad format key(padding)")}
-        KeyNotFound {display("key not found")}
-    }
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("{0}")]
+    Io(#[from] io::Error),
+    #[error("bad format key(length)")]
+    KeyLength,
+    #[error("bad format key(padding)")]
+    KeyPadding,
+    #[error("key not found")]
+    KeyNotFound,
+    #[error("bad format value(length)")]
+    ValueLength,
 }
 
 impl Error {
@@ -38,6 +41,7 @@ impl Error {
             Error::KeyLength => Some(Error::KeyLength),
             Error::KeyPadding => Some(Error::KeyPadding),
             Error::KeyNotFound => Some(Error::KeyNotFound),
+            Error::ValueLength => Some(Error::ValueLength),
             Error::Io(_) => None,
         }
     }
@@ -47,3 +51,15 @@ impl Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> ErrorCode {
+        match self {
+            Error::Io(_) => error_code::codec::IO,
+            Error::KeyLength => error_code::codec::KEY_LENGTH,
+            Error::KeyPadding => error_code::codec::BAD_PADDING,
+            Error::KeyNotFound => error_code::codec::KEY_NOT_FOUND,
+            Error::ValueLength => error_code::codec::VALUE_LENGTH,
+        }
+    }
+}

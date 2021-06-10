@@ -2,7 +2,8 @@
 
 use std::cmp::Ordering;
 
-use crate::codec::collation::{match_template_collator, Collator};
+use crate::codec::collation::Collator;
+use crate::{match_template_collator, match_template_evaltype};
 use crate::{Collation, EvalType, FieldTypeAccessor};
 use match_template::match_template;
 use tipb::FieldType;
@@ -31,12 +32,14 @@ pub enum ScalarValue {
     DateTime(Option<super::DateTime>),
     Duration(Option<super::Duration>),
     Json(Option<super::Json>),
+    Enum(Option<super::Enum>),
+    Set(Option<super::Set>),
 }
 
 impl ScalarValue {
     #[inline]
     pub fn eval_type(&self) -> EvalType {
-        match_template_evaluable! {
+        match_template_evaltype! {
             TT, match self {
                 ScalarValue::TT(_) => EvalType::TT,
             }
@@ -45,16 +48,22 @@ impl ScalarValue {
 
     #[inline]
     pub fn as_scalar_value_ref(&self) -> ScalarValueRef<'_> {
-        match_template_evaluable! {
-            TT, match self {
-                ScalarValue::TT(v) => ScalarValueRef::TT(v),
-            }
+        match self {
+            ScalarValue::Int(x) => ScalarValueRef::Int(x.as_ref()),
+            ScalarValue::Duration(x) => ScalarValueRef::Duration(x.as_ref()),
+            ScalarValue::DateTime(x) => ScalarValueRef::DateTime(x.as_ref()),
+            ScalarValue::Real(x) => ScalarValueRef::Real(x.as_ref()),
+            ScalarValue::Decimal(x) => ScalarValueRef::Decimal(x.as_ref()),
+            ScalarValue::Bytes(x) => ScalarValueRef::Bytes(x.as_ref().map(|x| x.as_slice())),
+            ScalarValue::Json(x) => ScalarValueRef::Json(x.as_ref().map(|x| x.as_ref())),
+            ScalarValue::Enum(x) => ScalarValueRef::Enum(x.as_ref().map(|x| x.as_ref())),
+            ScalarValue::Set(x) => ScalarValueRef::Set(x.as_ref().map(|x| x.as_ref())),
         }
     }
 
     #[inline]
     pub fn is_none(&self) -> bool {
-        match_template_evaluable! {
+        match_template_evaltype! {
             TT, match self {
                 ScalarValue::TT(v) => v.is_none(),
             }
@@ -63,7 +72,7 @@ impl ScalarValue {
 
     #[inline]
     pub fn is_some(&self) -> bool {
-        match_template_evaluable! {
+        match_template_evaltype! {
             TT, match self {
                 ScalarValue::TT(v) => v.is_some(),
             }
@@ -74,9 +83,9 @@ impl ScalarValue {
 impl AsMySQLBool for ScalarValue {
     #[inline]
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
-        match_template_evaluable! {
+        match_template_evaltype! {
             TT, match self {
-                ScalarValue::TT(v) => v.as_mysql_bool(context),
+                ScalarValue::TT(v) => v.as_ref().as_mysql_bool(context),
             }
         }
     }
@@ -129,6 +138,20 @@ impl From<Option<f64>> for ScalarValue {
     }
 }
 
+impl<'a> From<Option<JsonRef<'a>>> for ScalarValue {
+    #[inline]
+    fn from(s: Option<JsonRef<'a>>) -> ScalarValue {
+        ScalarValue::Json(s.map(|x| x.to_owned()))
+    }
+}
+
+impl<'a> From<Option<BytesRef<'a>>> for ScalarValue {
+    #[inline]
+    fn from(s: Option<BytesRef<'a>>) -> ScalarValue {
+        ScalarValue::Bytes(s.map(|x| x.to_vec()))
+    }
+}
+
 impl From<f64> for ScalarValue {
     #[inline]
     fn from(s: f64) -> ScalarValue {
@@ -149,29 +172,37 @@ impl From<ScalarValue> for Option<f64> {
 /// A scalar value reference container. Can be created from `ScalarValue` or `VectorValue`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScalarValueRef<'a> {
-    Int(&'a Option<super::Int>),
-    Real(&'a Option<super::Real>),
-    Decimal(&'a Option<super::Decimal>),
-    Bytes(&'a Option<super::Bytes>),
-    DateTime(&'a Option<super::DateTime>),
-    Duration(&'a Option<super::Duration>),
-    Json(&'a Option<super::Json>),
+    Int(Option<&'a super::Int>),
+    Real(Option<&'a super::Real>),
+    Decimal(Option<&'a super::Decimal>),
+    Bytes(Option<BytesRef<'a>>),
+    DateTime(Option<&'a super::DateTime>),
+    Duration(Option<&'a super::Duration>),
+    Json(Option<JsonRef<'a>>),
+    Enum(Option<EnumRef<'a>>),
+    Set(Option<SetRef<'a>>),
 }
 
 impl<'a> ScalarValueRef<'a> {
     #[inline]
     #[allow(clippy::clone_on_copy)]
     pub fn to_owned(self) -> ScalarValue {
-        match_template_evaluable! {
-            TT, match self {
-                ScalarValueRef::TT(v) => ScalarValue::TT(v.clone()),
-            }
+        match self {
+            ScalarValueRef::Int(x) => ScalarValue::Int(x.cloned()),
+            ScalarValueRef::Duration(x) => ScalarValue::Duration(x.cloned()),
+            ScalarValueRef::DateTime(x) => ScalarValue::DateTime(x.cloned()),
+            ScalarValueRef::Real(x) => ScalarValue::Real(x.cloned()),
+            ScalarValueRef::Decimal(x) => ScalarValue::Decimal(x.cloned()),
+            ScalarValueRef::Bytes(x) => ScalarValue::Bytes(x.map(|x| x.to_vec())),
+            ScalarValueRef::Json(x) => ScalarValue::Json(x.map(|x| x.to_owned())),
+            ScalarValueRef::Enum(x) => ScalarValue::Enum(x.map(|x| x.to_owned())),
+            ScalarValueRef::Set(x) => ScalarValue::Set(x.map(|x| x.to_owned())),
         }
     }
 
     #[inline]
     pub fn eval_type(&self) -> EvalType {
-        match_template_evaluable! {
+        match_template_evaltype! {
             TT, match self {
                 ScalarValueRef::TT(_) => EvalType::TT,
             }
@@ -196,7 +227,7 @@ impl<'a> ScalarValueRef<'a> {
                     Some(val) => {
                         // Always encode to INT / UINT instead of VAR INT to be efficient.
                         let is_unsigned = field_type.is_unsigned();
-                        output.write_evaluable_datum_int(*val, is_unsigned)?;
+                        output.write_evaluable_datum_int(**val, is_unsigned)?;
                     }
                 }
                 Ok(())
@@ -240,7 +271,7 @@ impl<'a> ScalarValueRef<'a> {
                         output.write_evaluable_datum_null()?;
                     }
                     Some(val) => {
-                        output.write_evaluable_datum_date_time(*val, ctx)?;
+                        output.write_evaluable_datum_date_time(**val, ctx)?;
                     }
                 }
                 Ok(())
@@ -251,7 +282,7 @@ impl<'a> ScalarValueRef<'a> {
                         output.write_evaluable_datum_null()?;
                     }
                     Some(val) => {
-                        output.write_evaluable_datum_duration(*val)?;
+                        output.write_evaluable_datum_duration(**val)?;
                     }
                 }
                 Ok(())
@@ -262,11 +293,14 @@ impl<'a> ScalarValueRef<'a> {
                         output.write_evaluable_datum_null()?;
                     }
                     Some(ref val) => {
-                        output.write_evaluable_datum_json(val)?;
+                        output.write_evaluable_datum_json(*val)?;
                     }
                 }
                 Ok(())
             }
+            // TODO: we should implement enum/set encode
+            ScalarValueRef::Enum(_) => unimplemented!(),
+            ScalarValueRef::Set(_) => unimplemented!(),
         }
     }
 
@@ -306,10 +340,10 @@ impl<'a> ScalarValueRef<'a> {
         field_type: &FieldType,
     ) -> crate::codec::Result<Ordering> {
         Ok(match_template! {
-            TT = [Real, Decimal, DateTime, Duration, Json],
+            TT = [Real, Decimal, DateTime, Duration, Json, Enum],
             match (self, other) {
                 (ScalarValueRef::TT(v1), ScalarValueRef::TT(v2)) => v1.cmp(v2),
-                (ScalarValueRef::Int(v1), ScalarValueRef::Int(v2)) => compare_int(v1, v2, &field_type),
+                (ScalarValueRef::Int(v1), ScalarValueRef::Int(v2)) => compare_int(&v1.cloned(), &v2.cloned(), &field_type),
                 (ScalarValueRef::Bytes(None), ScalarValueRef::Bytes(None)) => Ordering::Equal,
                 (ScalarValueRef::Bytes(Some(_)), ScalarValueRef::Bytes(None)) => Ordering::Greater,
                 (ScalarValueRef::Bytes(None), ScalarValueRef::Bytes(Some(_))) => Ordering::Less,
@@ -343,57 +377,53 @@ macro_rules! impl_as_ref {
     ($ty:tt, $name:ident) => {
         impl ScalarValue {
             #[inline]
-            pub fn $name(&self) -> &Option<$ty> {
-                match self {
-                    ScalarValue::$ty(v) => v,
-                    other => panic!(
-                        "Cannot cast {} scalar value into {}",
-                        other.eval_type(),
-                        stringify!($ty),
-                    ),
-                }
-            }
-        }
-
-        impl AsRef<Option<$ty>> for ScalarValue {
-            #[inline]
-            fn as_ref(&self) -> &Option<$ty> {
-                self.$name()
+            pub fn $name(&self) -> Option<&$ty> {
+                Evaluable::borrow_scalar_value(self)
             }
         }
 
         impl<'a> ScalarValueRef<'a> {
             #[inline]
-            pub fn $name(&'a self) -> &'a Option<$ty> {
-                match self {
-                    ScalarValueRef::$ty(v) => v,
-                    other => panic!(
-                        "Cannot cast {} scalar value into {}",
-                        other.eval_type(),
-                        stringify!($ty),
-                    ),
-                }
+            pub fn $name(&'a self) -> Option<&'a $ty> {
+                Evaluable::borrow_scalar_value_ref(*self)
             }
         }
-
-        impl AsRef<Option<$ty>> for ScalarValueRef<'_> {
-            #[inline]
-            fn as_ref(&self) -> &Option<$ty> {
-                self.$name()
-            }
-        }
-
-        // `AsMut` is not implemented intentionally.
     };
 }
 
 impl_as_ref! { Int, as_int }
 impl_as_ref! { Real, as_real }
 impl_as_ref! { Decimal, as_decimal }
-impl_as_ref! { Bytes, as_bytes }
 impl_as_ref! { DateTime, as_date_time }
 impl_as_ref! { Duration, as_duration }
-impl_as_ref! { Json, as_json }
+
+impl ScalarValue {
+    #[inline]
+    pub fn as_json(&self) -> Option<JsonRef> {
+        EvaluableRef::borrow_scalar_value(self)
+    }
+}
+
+impl<'a> ScalarValueRef<'a> {
+    #[inline]
+    pub fn as_json(&'a self) -> Option<JsonRef<'a>> {
+        EvaluableRef::borrow_scalar_value_ref(*self)
+    }
+}
+
+impl ScalarValue {
+    #[inline]
+    pub fn as_bytes(&self) -> Option<BytesRef> {
+        EvaluableRef::borrow_scalar_value(self)
+    }
+}
+
+impl<'a> ScalarValueRef<'a> {
+    #[inline]
+    pub fn as_bytes(&'a self) -> Option<BytesRef<'a>> {
+        EvaluableRef::borrow_scalar_value_ref(*self)
+    }
+}
 
 impl<'a> Ord for ScalarValueRef<'a> {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -404,7 +434,7 @@ impl<'a> Ord for ScalarValueRef<'a> {
 
 impl<'a> PartialOrd for ScalarValueRef<'a> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match_template_evaluable! {
+        match_template_evaltype! {
             TT, match (self, other) {
                 // v1 and v2 are `Option<T>`. However, in MySQL NULL values are considered lower
                 // than any non-NULL value, so using `Option::PartialOrd` directly is fine.
@@ -417,12 +447,7 @@ impl<'a> PartialOrd for ScalarValueRef<'a> {
 
 impl<'a> PartialEq<ScalarValue> for ScalarValueRef<'a> {
     fn eq(&self, other: &ScalarValue) -> bool {
-        match_template_evaluable! {
-            TT, match (self, other) {
-                (ScalarValueRef::TT(v1), ScalarValue::TT(v2)) => v1 == &v2,
-                _ => false
-            }
-        }
+        self == &other.as_scalar_value_ref()
     }
 }
 

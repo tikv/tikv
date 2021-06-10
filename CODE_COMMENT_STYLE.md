@@ -99,13 +99,23 @@ A comment is generally used for:
     - Open the file    (Wrong)
 
 - Use "this" instead of "the" to refer to the current thing.
-    
+
     - Gets the toolkit for this component   (Recommended)
     - Gets the toolkit for the component    (Not recommended)
 
 - The Markdown format is allowed.
     
     - Opens the `log` file
+
+### Taboos in comments
+
+The Code Comment Style defined in this document follows the [CNCF Code of Conduct](https://github.com/tikv/tikv/blob/master/CODE_COMMENT_STYLE.md). The following language uses are deemed as taboos and are not acceptable in code comments:
+
+- Sexualized language
+- Racial or political allusions
+- Public or private harassment
+- Language that contains private information, such as a physical or electronic address, without explicit permission
+- Other inapproiate uses
 
 ### Tips for a good comment
 

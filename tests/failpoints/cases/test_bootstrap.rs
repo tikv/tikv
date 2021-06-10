@@ -2,7 +2,6 @@
 
 use std::sync::{Arc, RwLock};
 
-use engine_rocks::Compat;
 use engine_traits::Peekable;
 use kvproto::{metapb, raft_serverpb};
 use test_raftstore::*;
@@ -19,24 +18,24 @@ fn test_bootstrap_half_way_failure(fp: &str) {
     let engines = cluster.dbs[0].clone();
     let ident = engines
         .kv
-        .c()
         .get_msg::<raft_serverpb::StoreIdent>(keys::STORE_IDENT_KEY)
         .unwrap()
         .unwrap();
     let store_id = ident.get_store_id();
     debug!("store id {:?}", store_id);
-    assert!(cluster.engines.insert(store_id, engines.clone()).is_none());
+    cluster.set_bootstrapped(store_id, 0);
 
     // Check whether it can bootstrap cluster successfully.
     fail::remove(fp);
     cluster.start().unwrap();
 
-    assert!(engines
-        .kv
-        .c()
-        .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
-        .unwrap()
-        .is_none());
+    assert!(
+        engines
+            .kv
+            .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
+            .unwrap()
+            .is_none()
+    );
 
     let k = b"k1";
     let v = b"v1";

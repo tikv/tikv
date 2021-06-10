@@ -5,6 +5,7 @@ use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
 use std::usize;
 
+use crossbeam::utils::CachePadded;
 use parking_lot::{Mutex, MutexGuard};
 
 const WAITING_LIST_SHRINK_SIZE: usize = 8;
@@ -33,11 +34,9 @@ impl Latch {
 
     /// Find the first command ID in the queue whose hash value is equal to hash.
     pub fn get_first_req_by_hash(&self, hash: u64) -> Option<u64> {
-        for item in self.waiting.iter() {
-            if let Some((h, cid)) = item {
-                if *h == hash {
-                    return Some(*cid);
-                }
+        for (h, cid) in self.waiting.iter().flatten() {
+            if *h == hash {
+                return Some(*cid);
             }
         }
         None
@@ -56,6 +55,8 @@ impl Latch {
                 }
                 self.waiting.push_front(item);
             }
+            // FIXME: remove this clippy attribute once https://github.com/rust-lang/rust-clippy/issues/6784 is fixed.
+            #[allow(clippy::manual_flatten)]
             for it in self.waiting.iter_mut() {
                 if let Some((v, _)) = it {
                     if *v == key_hash {
@@ -100,8 +101,23 @@ pub struct Lock {
 }
 
 impl Lock {
-    /// Creates a lock.
-    pub fn new(required_hashes: Vec<u64>) -> Lock {
+    /// Creates a lock specifing all the required latches for a command.
+    pub fn new<'a, K, I>(keys: I) -> Lock
+    where
+        K: Hash + 'a,
+        I: IntoIterator<Item = &'a K>,
+    {
+        // prevent from deadlock, so we sort and deduplicate the index
+        let mut required_hashes: Vec<u64> = keys
+            .into_iter()
+            .map(|key| {
+                let mut s = DefaultHasher::new();
+                key.hash(&mut s);
+                s.finish()
+            })
+            .collect();
+        required_hashes.sort_unstable();
+        required_hashes.dedup();
         Lock {
             required_hashes,
             owned_count: 0,
@@ -123,7 +139,7 @@ impl Lock {
 /// Each latch is indexed by a slot ID, hence the term latch and slot are used interchangeably, but
 /// conceptually a latch is a queue, and a slot is an index to the queue.
 pub struct Latches {
-    slots: Vec<Mutex<Latch>>,
+    slots: Vec<CachePadded<Mutex<Latch>>>,
     size: usize,
 }
 
@@ -134,20 +150,8 @@ impl Latches {
     pub fn new(size: usize) -> Latches {
         let size = usize::next_power_of_two(size);
         let mut slots = Vec::with_capacity(size);
-        (0..size).for_each(|_| slots.push(Mutex::new(Latch::new())));
+        (0..size).for_each(|_| slots.push(Mutex::new(Latch::new()).into()));
         Latches { slots, size }
-    }
-
-    /// Creates a lock which specifies all the required latches for a command.
-    pub fn gen_lock<H>(&self, keys: &[H]) -> Lock
-    where
-        H: Hash,
-    {
-        // prevent from deadlock, so we sort and deduplicate the index
-        let mut hashes: Vec<u64> = keys.iter().map(|x| self.calc_slot(x)).collect();
-        hashes.sort();
-        hashes.dedup();
-        Lock::new(hashes)
     }
 
     /// Tries to acquire the latches specified by the `lock` for command with ID `who`.
@@ -195,17 +199,6 @@ impl Latches {
         wakeup_list
     }
 
-    /// Calculates the hash value of the `key`.
-    fn calc_slot<H>(&self, key: &H) -> u64
-    where
-        H: Hash,
-    {
-        let mut s = DefaultHasher::new();
-        key.hash(&mut s);
-
-        s.finish()
-    }
-
     #[inline]
     fn lock_latch(&self, hash: u64) -> MutexGuard<Latch> {
         self.slots[(hash as usize) & (self.size - 1)].lock()
@@ -220,10 +213,10 @@ mod tests {
     fn test_wakeup() {
         let latches = Latches::new(256);
 
-        let slots_a: Vec<u64> = vec![1, 3, 5];
-        let mut lock_a = Lock::new(slots_a);
-        let slots_b: Vec<u64> = vec![4, 5, 6];
-        let mut lock_b = Lock::new(slots_b);
+        let keys_a = vec!["k1", "k3", "k5"];
+        let mut lock_a = Lock::new(keys_a.iter());
+        let keys_b = vec!["k4", "k5", "k6"];
+        let mut lock_b = Lock::new(keys_b.iter());
         let cid_a: u64 = 1;
         let cid_b: u64 = 2;
 
@@ -248,12 +241,12 @@ mod tests {
     fn test_wakeup_by_multi_cmds() {
         let latches = Latches::new(256);
 
-        let slots_a: Vec<u64> = vec![1, 2, 3];
-        let slots_b: Vec<u64> = vec![4, 5, 6];
-        let slots_c: Vec<u64> = vec![3, 4];
-        let mut lock_a = Lock::new(slots_a);
-        let mut lock_b = Lock::new(slots_b);
-        let mut lock_c = Lock::new(slots_c);
+        let keys_a = vec!["k1", "k2", "k3"];
+        let keys_b = vec!["k4", "k5", "k6"];
+        let keys_c = vec!["k3", "k4"];
+        let mut lock_a = Lock::new(keys_a.iter());
+        let mut lock_b = Lock::new(keys_b.iter());
+        let mut lock_c = Lock::new(keys_c.iter());
         let cid_a: u64 = 1;
         let cid_b: u64 = 2;
         let cid_c: u64 = 3;
@@ -291,14 +284,14 @@ mod tests {
     fn test_wakeup_by_small_latch_slot() {
         let latches = Latches::new(5);
 
-        let slots_a: Vec<u64> = vec![1, 2, 3];
-        let slots_b: Vec<u64> = vec![6, 7, 8];
-        let slots_c: Vec<u64> = vec![3, 4];
-        let slots_d: Vec<u64> = vec![7, 10];
-        let mut lock_a = Lock::new(slots_a);
-        let mut lock_b = Lock::new(slots_b);
-        let mut lock_c = Lock::new(slots_c);
-        let mut lock_d = Lock::new(slots_d);
+        let keys_a = vec!["k1", "k2", "k3"];
+        let keys_b = vec!["k6", "k7", "k8"];
+        let keys_c = vec!["k3", "k4"];
+        let keys_d = vec!["k7", "k10"];
+        let mut lock_a = Lock::new(keys_a.iter());
+        let mut lock_b = Lock::new(keys_b.iter());
+        let mut lock_c = Lock::new(keys_c.iter());
+        let mut lock_d = Lock::new(keys_d.iter());
         let cid_a: u64 = 1;
         let cid_b: u64 = 2;
         let cid_c: u64 = 3;

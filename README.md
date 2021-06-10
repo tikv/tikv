@@ -14,7 +14,7 @@ If you're interested in contributing to TiKV, or want to build it from source, s
 
 ![cncf_logo](images/cncf.png)
 
-TiKV is an incubating project of the [Cloud Native Computing Foundation](https://cncf.io/) (CNCF). If you are an organization that wants to help shape the evolution of technologies that are container-packaged, dynamically-scheduled and microservices-oriented, consider joining the CNCF. For details about who's involved and how TiKV plays a role, read the CNCF [announcement](https://www.cncf.io/blog/2019/05/21/toc-votes-to-move-tikv-into-cncf-incubator/).
+TiKV is a graduated project of the [Cloud Native Computing Foundation](https://cncf.io/) (CNCF). If you are an organization that wants to help shape the evolution of technologies that are container-packaged, dynamically-scheduled and microservices-oriented, consider joining the CNCF. For details about who's involved and how TiKV plays a role, read the CNCF [announcement](https://www.cncf.io/announcements/2020/09/02/cloud-native-computing-foundation-announces-tikv-graduation/).
 
 ---
 
@@ -36,7 +36,7 @@ TiKV has the following key features:
 
 - **Coprocessor support**
 
-    Similar to Hbase, TiKV implements a coprocessor framework to support distributed computing.
+    Similar to HBase, TiKV implements a coprocessor framework to support distributed computing.
 
 - **Cooperates with [TiDB](https://github.com/pingcap/tidb)**
 
@@ -48,17 +48,17 @@ See [Governance](https://github.com/tikv/community/blob/master/GOVERNANCE.md).
 
 ## Documentation
 
-For instructions on deployment, configuration, and maintenance of TiKV,see TiKV documentation on our [website](https://tikv.org/docs/3.0/tasks/introduction/). For more details on concepts and designs behind TiKV, see [Deep Dive TiKV](https://tikv.org/deep-dive/introduction/).
+For instructions on deployment, configuration, and maintenance of TiKV,see TiKV documentation on our [website](https://tikv.org/docs/4.0/tasks/introduction/). For more details on concepts and designs behind TiKV, see [Deep Dive TiKV](https://tikv.org/deep-dive/introduction/).
 
 > **Note:**
 >
 > We have migrated our documentation from the [TiKV's wiki page](https://github.com/tikv/tikv/wiki/) to the [official website](https://tikv.org/docs). The original Wiki page is discontinued. If you have any suggestions or issues regarding documentation, offer your feedback [here](https://github.com/tikv/website).
 
-## TiKV Adopters
+## TiKV adopters
 
 You can view the list of [TiKV Adopters](https://tikv.org/adopters/).
 
-## TiKV Roadmap
+## TiKV roadmap
 
 You can see the [TiKV Roadmap](docs/ROADMAP.md).
 
@@ -73,29 +73,67 @@ You can see the [TiKV Roadmap](docs/ROADMAP.md).
 
 When a node starts, the metadata of the Node, Store and Region are recorded into PD. The status of each Region and Store is reported to PD regularly.
 
-## Try TiKV
+## Quick start
 
-TiKV was originally a component of [TiDB](https://github.com/pingcap/tidb). To run TiKV you must build and run it with PD, which is used to manage a TiKV cluster. You can use TiKV together with TiDB or separately on its own.
+### Deploy a playground with TiUP
 
-We provide multiple deployment methods, but it is recommended to use our Ansible deployment for production environment. The TiKV documentation is available on [TiKV's website](https://tikv.org/docs/3.0/concepts/overview/).
+The most quickest to try out TiKV with TiDB is using TiUP, a component manager for TiDB.
 
-### Testing deployment
+You can see [this page](https://docs.pingcap.com/tidb/stable/quick-start-with-tidb#deploy-a-local-test-environment-using-tiup-playground) for a step by step tutorial.
 
-- [Try TiKV and TiDB](https://tikv.org/docs/3.0/tasks/try/)
+### Deploy a playground with binary
 
-    You can use [`tidb-docker-compose`](https://github.com/pingcap/tidb-docker-compose/) to quickly test TiKV and TiDB on a single machine. This is the easiest way. For other ways, see [TiDB documentation](https://pingcap.com/docs/).
+TiKV is able to run separatedly with PD, which is the minimal deployment required.
 
-- Try TiKV separately
-    - [Deploy TiKV Using Docker Compose/Swarm](https://tikv.org/docs/3.0/tasks/deploy/docker-compose/): To quickly test TiKV separately without TiDB using [`tidb-docker-compose`](https://github.com/pingcap/tidb-docker-compose/) on a single machine
-    - [Deploy TiKV Using Docker](https://tikv.org/docs/3.0/tasks/deploy/docker/): To deploy a multi-node TiKV testing cluster using Docker
-    - [Deploy TiKV Using Binary Files](https://tikv.org/docs/3.0/tasks/deploy/binary/): To deploy a TiKV cluster using binary files on a single node or on multiple nodes
+1. Download and extract binaries.
 
-### Production deployment
+```bash
+$ export TIKV_VERSION=v4.0.12
+$ export GOOS=darwin  # only {darwin, linux} are supported
+$ export GOARCH=amd64 # only {amd64, arm64} are supported
+$ curl -O  https://tiup-mirrors.pingcap.com/tikv-$TIKV_VERSION-$GOOS-$GOARCH.tar.gz
+$ curl -O  https://tiup-mirrors.pingcap.com/pd-$TIKV_VERSION-$GOOS-$GOARCH.tar.gz
+$ tar -xzf tikv-$TIKV_VERSION-$GOOS-$GOARCH.tar.gz
+$ tar -xzf pd-$TIKV_VERSION-$GOOS-$GOARCH.tar.gz
+```
 
-For the production environment, use [Ansible](https://github.com/pingcap/tidb-ansible) to deploy the cluster.
+2. Start PD instance.
 
-- [Deploy TiDB Using Ansible](https://github.com/pingcap/docs/blob/master/dev/how-to/deploy/orchestrated/ansible.md)
-- [Deploy TiKV separately Using Ansible](https://tikv.org/docs/3.0/tasks/deploy/ansible/)
+```bash
+$ ./pd-server --name=pd --data-dir=/tmp/pd/data --client-urls="http://127.0.0.1:2379" --peer-urls="http://127.0.0.1:2380" --initial-cluster="pd=http://127.0.0.1:2380" --log-file=/tmp/pd/log/pd.log
+```
+
+3. Start TiKV instance.
+
+```bash
+$ ./tikv-server --pd-endpoints="127.0.0.1:2379" --addr="127.0.0.1:20160" --data-dir=/tmp/tikv/data --log-file=/tmp/tikv/log/tikv.log
+```
+
+4. Install TiKV Client(Python) and verify the deployment, required Python 3.5+.
+
+```bash
+$ pip3 install -i https://test.pypi.org/simple/ tikv-client
+```
+
+```python
+from tikv_client import RawClient
+
+client = RawClient.connect("127.0.0.1:2379")
+
+client.put(b'foo', b'bar')
+print(client.get(b'foo')) # b'bar'
+
+client.put(b'foo', b'baz')
+print(client.get(b'foo')) # b'baz'
+```
+
+### Deploy a cluster with TiUP
+
+You can see [this manual](./doc/deploy.md) of production-like cluster deployment presented by @c4pt0r.
+
+### Build from source
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## Client drivers
 
@@ -108,23 +146,19 @@ These are the clients for TiKV:
 - [Rust](https://github.com/tikv/client-rust)
 - [C](https://github.com/tikv/client-c)
 
-If you want to try the Go client, see [Go Client](https://tikv.org/docs/3.0/reference/clients/go/).
-
-## Community Meeting
-
-The TiKV team meets on the 4th Wednesday of every month (unless otherwise specified) at 06.00 p.m. PST ([Time zone converter](https://www.google.com/search?sxsrf=ALeKk02SmvBBaYBXqhMbPnrJ05YKvGfBzQ%3A1584965273869&ei=maZ4XtXbNI61mAXs4oSIBQ&q=6pm+PST&oq=6pm+PST&gs_l=psy-ab.3..0l2j0i20i263j0l7.27953.27953..28837...0.2..0.261.261.2-1......0....1..gws-wiz.......0i71.FHU-fAZ7FLU&ved=0ahUKEwiVjIXhx7DoAhWOGqYKHWwxAVEQ4dUDCAs&uact=5)).
-
-Quick links:
-
-*   [Meeting notes](https://docs.google.com/document/d/1CWUAkBrcm9KPclAu8fWHZzByZ0yhsQdRggnEdqtRMQ8/edit)
-*   [Zoom meeting link](https://zoom.us/my/cncftikvproject)
+If you want to try the Go client, see [Go Client](https://tikv.org/docs/4.0/reference/clients/go/).
 
 ## Security
 
+### Security audit
 
-### Security Audit
+A third-party security auditing was performed by Cure53. See the full report [here](./security/Security-Audit.pdf).
 
-A third-party security auditing was performed by Cure53. See the full report [here](./docs/Security-Audit.pdf).
+### Reporting Security Vulnerabilities
+
+To report a security vulnerability, please send an email to [TiKV-security](mailto:tikv-security@lists.cncf.io) group.
+
+See [Security](./security/SECURITY.md) for the process and policy followed by the TiKV project.
 
 ## Communication
 
@@ -146,7 +180,7 @@ appearance, race, religion, or sexual identity and orientation.
 
 ### Slack
 
-Join the TiKV community on [Slack](https://join.slack.com/t/tikv-wg/shared_invite/enQtNTUyODE4ODU2MzI0LWVlMWMzMDkyNWE5ZjY1ODAzMWUwZGVhNGNhYTc3MzJhYWE0Y2FjYjliYzY1OWJlYTc4OWVjZWM1NDkwN2QxNDE) - Sign up and join channels on TiKV topics that interest you.
+Join the TiKV community on [Slack](https://slack.tidb.io/invite?team=tikv-wg&channel=general) - Sign up and join channels on TiKV topics that interest you.
 
 ### WeChat
 

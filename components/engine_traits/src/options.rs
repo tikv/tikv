@@ -3,28 +3,44 @@ use std::ops::Bound;
 use tikv_util::keybuilder::KeyBuilder;
 
 #[derive(Clone)]
-pub struct ReadOptions {}
+pub struct ReadOptions {
+    fill_cache: bool,
+}
 
 impl ReadOptions {
     pub fn new() -> ReadOptions {
-        ReadOptions {}
+        ReadOptions::default()
+    }
+
+    #[inline]
+    pub fn fill_cache(&self) -> bool {
+        self.fill_cache
+    }
+
+    #[inline]
+    pub fn set_fill_cache(&mut self, v: bool) {
+        self.fill_cache = v;
     }
 }
 
 impl Default for ReadOptions {
     fn default() -> ReadOptions {
-        ReadOptions {}
+        ReadOptions { fill_cache: true }
     }
 }
 
 #[derive(Clone)]
 pub struct WriteOptions {
     sync: bool,
+    no_slowdown: bool,
 }
 
 impl WriteOptions {
     pub fn new() -> WriteOptions {
-        WriteOptions { sync: false }
+        WriteOptions {
+            sync: false,
+            no_slowdown: false,
+        }
     }
 
     pub fn set_sync(&mut self, sync: bool) {
@@ -34,11 +50,22 @@ impl WriteOptions {
     pub fn sync(&self) -> bool {
         self.sync
     }
+
+    pub fn set_no_slowdown(&mut self, no_slowdown: bool) {
+        self.no_slowdown = no_slowdown;
+    }
+
+    pub fn no_slowdown(&self) -> bool {
+        self.no_slowdown
+    }
 }
 
 impl Default for WriteOptions {
     fn default() -> WriteOptions {
-        WriteOptions { sync: false }
+        WriteOptions {
+            sync: false,
+            no_slowdown: false,
+        }
     }
 }
 
@@ -48,6 +75,7 @@ pub enum SeekMode {
     Prefix,
 }
 
+#[derive(Clone)]
 pub struct IterOptions {
     lower_bound: Option<KeyBuilder>,
     upper_bound: Option<KeyBuilder>,
@@ -60,6 +88,11 @@ pub struct IterOptions {
     // only supported when Titan enabled, otherwise it doesn't take effect.
     key_only: bool,
     seek_mode: SeekMode,
+    // A threshold for the number of keys that can be skipped before failing an
+    // iterator seek as incomplete. The default value of 0 should be used to
+    // never fail a request as incomplete, even on skipping too many keys.
+    // It's used to avoid encountering too many tombstones when seeking.
+    max_skippable_internal_keys: u64,
 }
 
 impl IterOptions {
@@ -77,13 +110,18 @@ impl IterOptions {
             hint_max_ts: None,
             key_only: false,
             seek_mode: SeekMode::TotalOrder,
+            max_skippable_internal_keys: 0,
         }
     }
 
     #[inline]
-    pub fn use_prefix_seek(mut self) -> IterOptions {
+    pub fn prefix_seek_used(&self) -> bool {
+        self.seek_mode == SeekMode::Prefix
+    }
+
+    #[inline]
+    pub fn use_prefix_seek(&mut self) {
         self.seek_mode = SeekMode::Prefix;
-        self
     }
 
     #[inline]
@@ -194,9 +232,18 @@ impl IterOptions {
     }
 
     #[inline]
-    pub fn set_prefix_same_as_start(mut self, enable: bool) -> IterOptions {
+    pub fn set_prefix_same_as_start(&mut self, enable: bool) {
         self.prefix_same_as_start = enable;
-        self
+    }
+
+    #[inline]
+    pub fn max_skippable_internal_keys(&self) -> u64 {
+        self.max_skippable_internal_keys
+    }
+
+    #[inline]
+    pub fn set_max_skippable_internal_keys(&mut self, threshold: u64) {
+        self.max_skippable_internal_keys = threshold;
     }
 }
 
@@ -211,6 +258,7 @@ impl Default for IterOptions {
             hint_max_ts: None,
             key_only: false,
             seek_mode: SeekMode::TotalOrder,
+            max_skippable_internal_keys: 0,
         }
     }
 }

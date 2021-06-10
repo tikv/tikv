@@ -1,17 +1,21 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cell::RefCell;
 use std::sync::{Arc, RwLock};
 
+use collections::HashMap;
 use engine_rocks::RocksEngine;
+use engine_traits::KvEngine;
+use fail::fail_point;
+use kvproto::metapb::{Peer, Region};
 use raft::StateRole;
 use raftstore::coprocessor::*;
-use raftstore::store::fsm::ObserveID;
+use raftstore::store::RegionSnapshot;
 use raftstore::Error as RaftStoreError;
-use tikv_util::collections::HashMap;
 use tikv_util::worker::Scheduler;
+use tikv_util::{error, warn};
 
 use crate::endpoint::{Deregister, Task};
+use crate::old_value::{self, OldValueCache, OldValueReader};
 use crate::Error as CdcError;
 
 /// An Observer for CDC.
@@ -25,7 +29,6 @@ pub struct CdcObserver {
     // A shared registry for managing observed regions.
     // TODO: it may become a bottleneck, find a better way to manage the registry.
     observe_regions: Arc<RwLock<HashMap<u64, ObserveID>>>,
-    cmd_batches: RefCell<Vec<CmdBatch>>,
 }
 
 impl CdcObserver {
@@ -37,15 +40,15 @@ impl CdcObserver {
         CdcObserver {
             sched,
             observe_regions: Arc::default(),
-            cmd_batches: RefCell::default(),
         }
     }
 
     pub fn register_to(&self, coprocessor_host: &mut CoprocessorHost<RocksEngine>) {
-        // 100 is the priority of the observer. CDC should have a high priority.
+        // use 0 as the priority of the cmd observer. CDC should have a higher priority than
+        // the `resolved-ts`'s cmd observer
         coprocessor_host
             .registry
-            .register_cmd_observer(100, BoxCmdObserver::new(self.clone()));
+            .register_cmd_observer(0, BoxCmdObserver::new(self.clone()));
         coprocessor_host
             .registry
             .register_role_observer(100, BoxRoleObserver::new(self.clone()));
@@ -91,30 +94,45 @@ impl CdcObserver {
 
 impl Coprocessor for CdcObserver {}
 
-impl CmdObserver for CdcObserver {
-    fn on_prepare_for_apply(&self, observe_id: ObserveID, region_id: u64) {
-        self.cmd_batches
-            .borrow_mut()
-            .push(CmdBatch::new(observe_id, region_id));
-    }
-
-    fn on_apply_cmd(&self, observe_id: ObserveID, region_id: u64, cmd: Cmd) {
-        self.cmd_batches
-            .borrow_mut()
-            .last_mut()
-            .expect("should exist some cmd batch")
-            .push(observe_id, region_id, cmd);
-    }
-
-    fn on_flush_apply(&self) {
+impl<E: KvEngine> CmdObserver<E> for CdcObserver {
+    // `CdcObserver::on_flush_applied_cmd_batch` should only invoke if `cmd_batches` is not empty
+    fn on_flush_applied_cmd_batch(
+        &self,
+        max_level: ObserveLevel,
+        cmd_batches: &mut Vec<CmdBatch>,
+        engine: &E,
+    ) {
+        assert!(!cmd_batches.is_empty());
         fail_point!("before_cdc_flush_apply");
-        if !self.cmd_batches.borrow().is_empty() {
-            let batches = self.cmd_batches.replace(Vec::default());
-            if let Err(e) = self.sched.schedule(Task::MultiBatch { multi: batches }) {
-                warn!("schedule cdc task failed"; "error" => ?e);
-            }
+        if max_level < ObserveLevel::All {
+            return;
+        }
+        let cmd_batches: Vec<_> = cmd_batches
+            .iter()
+            .filter(|cb| cb.level == ObserveLevel::All && !cb.is_empty())
+            .cloned()
+            .collect();
+        if cmd_batches.is_empty() {
+            return;
+        }
+        let mut region = Region::default();
+        region.mut_peers().push(Peer::default());
+        // Create a snapshot here for preventing the old value was GC-ed.
+        // TODO: only need it after enabling old value, may add a flag to indicate whether to get it.
+        let snapshot = RegionSnapshot::from_snapshot(Arc::new(engine.snapshot()), Arc::new(region));
+        let reader = OldValueReader::new(snapshot);
+        let get_old_value = move |key, query_ts, old_value_cache: &mut OldValueCache| {
+            old_value::get_old_value(&reader, key, query_ts, old_value_cache)
+        };
+        if let Err(e) = self.sched.schedule(Task::MultiBatch {
+            multi: cmd_batches,
+            old_value_cb: Box::new(get_old_value),
+        }) {
+            warn!("cdc schedule task failed"; "error" => ?e);
         }
     }
+
+    fn on_applied_current_term(&self, _: StateRole, _: &Region) {}
 }
 
 impl RoleObserver for CdcObserver {
@@ -124,13 +142,13 @@ impl RoleObserver for CdcObserver {
             if let Some(observe_id) = self.is_subscribed(region_id) {
                 // Unregister all downstreams.
                 let store_err = RaftStoreError::NotLeader(region_id, None);
-                let deregister = Deregister::Region {
+                let deregister = Deregister::Delegate {
                     region_id,
                     observe_id,
-                    err: CdcError::Request(store_err.into()),
+                    err: CdcError::request(store_err.into()),
                 };
                 if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
-                    error!("schedule cdc task failed"; "error" => ?e);
+                    error!("cdc schedule cdc task failed"; "error" => ?e);
                 }
             }
         }
@@ -149,13 +167,13 @@ impl RegionChangeObserver for CdcObserver {
             if let Some(observe_id) = self.is_subscribed(region_id) {
                 // Unregister all downstreams.
                 let store_err = RaftStoreError::RegionNotFound(region_id);
-                let deregister = Deregister::Region {
+                let deregister = Deregister::Delegate {
                     region_id,
                     observe_id,
-                    err: CdcError::Request(store_err.into()),
+                    err: CdcError::request(store_err.into()),
                 };
                 if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
-                    error!("schedule cdc task failed"; "error" => ?e);
+                    error!("cdc schedule cdc task failed"; "error" => ?e);
                 }
             }
         }
@@ -165,30 +183,47 @@ impl RegionChangeObserver for CdcObserver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use engine_rocks::RocksEngine;
     use kvproto::metapb::Region;
-    use kvproto::raft_cmdpb::*;
     use std::time::Duration;
+    use tikv::storage::kv::TestEngineBuilder;
 
     #[test]
     fn test_register_and_deregister() {
-        let (scheduler, rx) = tikv_util::worker::dummy_scheduler();
+        let (scheduler, mut rx) = tikv_util::worker::dummy_scheduler();
         let observer = CdcObserver::new(scheduler);
-        let observe_id = ObserveID::new();
+        let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
+        let engine = TestEngineBuilder::new().build().unwrap().get_rocksdb();
 
-        observer.on_prepare_for_apply(observe_id, 0);
-        observer.on_apply_cmd(
-            observe_id,
-            0,
-            Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),
+        let mut cb = CmdBatch::new(&observe_info, Region::default());
+        cb.push(&observe_info, 0, Cmd::default());
+        <CdcObserver as CmdObserver<RocksEngine>>::on_flush_applied_cmd_batch(
+            &observer,
+            cb.level,
+            &mut vec![cb],
+            &engine,
         );
-        observer.on_flush_apply();
-
         match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
-            Task::MultiBatch { multi } => {
+            Task::MultiBatch { multi, .. } => {
                 assert_eq!(multi.len(), 1);
                 assert_eq!(multi[0].len(), 1);
             }
             _ => panic!("unexpected task"),
+        };
+
+        // Stop observing cmd
+        observe_info.cdc_id.stop_observing();
+        let mut cb = CmdBatch::new(&observe_info, Region::default());
+        cb.push(&observe_info, 0, Cmd::default());
+        <CdcObserver as CmdObserver<RocksEngine>>::on_flush_applied_cmd_batch(
+            &observer,
+            cb.level,
+            &mut vec![cb],
+            &engine,
+        );
+        match rx.recv_timeout(Duration::from_millis(10)) {
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            _ => panic!("unexpected result"),
         };
 
         // Does not send unsubscribed region events.
@@ -203,7 +238,7 @@ mod tests {
         let mut ctx = ObserverContext::new(&region);
         observer.on_role_change(&mut ctx, StateRole::Follower);
         match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
-            Task::Deregister(Deregister::Region {
+            Task::Deregister(Deregister::Delegate {
                 region_id,
                 observe_id,
                 ..

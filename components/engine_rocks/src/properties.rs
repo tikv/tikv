@@ -1,22 +1,25 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{DecodeProperties, IndexHandles};
 use std::cmp;
 use std::collections::HashMap;
 use std::io::Read;
 use std::ops::{Deref, DerefMut};
 use std::u64;
 
-use engine_traits::KvEngine;
-use engine_traits::Range;
-use engine_traits::{IndexHandle, TableProperties, TablePropertiesCollection};
+use engine_traits::{
+    DecodeProperties, IndexHandle, IndexHandles, KvEngine, MvccProperties, Range, TableProperties,
+    TablePropertiesCollection,
+};
 use rocksdb::{
     DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,
     UserCollectedProperties,
 };
 use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::{Error, Result};
-use txn_types::{Key, TimeStamp, Write, WriteType};
+use tikv_util::info;
+use txn_types::{Key, Write, WriteType};
+
+use crate::mvcc_properties::*;
 
 const PROP_TOTAL_SIZE: &str = "tikv.total_size";
 const PROP_SIZE_INDEX: &str = "tikv.size_index";
@@ -51,10 +54,10 @@ impl SizeProperties {
     }
 
     pub fn decode<T: DecodeProperties>(props: &T) -> Result<SizeProperties> {
-        let mut res = SizeProperties::default();
-        res.total_size = props.decode_u64(PROP_TOTAL_SIZE)?;
-        res.index_handles = props.decode_handles(PROP_SIZE_INDEX)?;
-        Ok(res)
+        Ok(SizeProperties {
+            total_size: props.decode_u64(PROP_TOTAL_SIZE)?,
+            index_handles: props.decode_handles(PROP_SIZE_INDEX)?,
+        })
     }
 }
 
@@ -166,7 +169,10 @@ impl RangeProperties {
     pub fn decode<T: DecodeProperties>(props: &T) -> Result<RangeProperties> {
         match RangeProperties::decode_from_range_properties(props) {
             Ok(res) => return Ok(res),
-            Err(e) => info!("decode to RangeProperties failed with err: {:?}, try to decode to SizeProperties, maybe upgrade from v2.0 or older version?", e),
+            Err(e) => info!(
+                "decode to RangeProperties failed with err: {:?}, try to decode to SizeProperties, maybe upgrade from v2.0 or older version?",
+                e
+            ),
         }
         SizeProperties::decode(props).map(|res| res.into())
     }
@@ -178,9 +184,10 @@ impl RangeProperties {
             let klen = number::decode_u64(&mut buf)?;
             let mut k = vec![0; klen as usize];
             buf.read_exact(&mut k)?;
-            let mut offsets = RangeOffsets::default();
-            offsets.size = number::decode_u64(&mut buf)?;
-            offsets.keys = number::decode_u64(&mut buf)?;
+            let offsets = RangeOffsets {
+                size: number::decode_u64(&mut buf)?,
+                keys: number::decode_u64(&mut buf)?,
+            };
             res.offsets.push((k, offsets));
         }
         Ok(res)
@@ -292,8 +299,10 @@ impl From<SizeProperties> for RangeProperties {
     fn from(p: SizeProperties) -> RangeProperties {
         let mut res = RangeProperties::default();
         for (key, size_handle) in p.index_handles.into_map() {
-            let mut range = RangeOffsets::default();
-            range.size = size_handle.offset;
+            let range = RangeOffsets {
+                size: size_handle.offset,
+                ..Default::default()
+            };
             res.offsets.push((key, range));
         }
         res
@@ -398,79 +407,7 @@ impl TablePropertiesCollectorFactory for RangePropertiesCollectorFactory {
     }
 }
 
-const PROP_NUM_ERRORS: &str = "tikv.num_errors";
-const PROP_MIN_TS: &str = "tikv.min_ts";
-const PROP_MAX_TS: &str = "tikv.max_ts";
-const PROP_NUM_ROWS: &str = "tikv.num_rows";
-const PROP_NUM_PUTS: &str = "tikv.num_puts";
-const PROP_NUM_DELETES: &str = "tikv.num_deletes";
-const PROP_NUM_VERSIONS: &str = "tikv.num_versions";
-const PROP_MAX_ROW_VERSIONS: &str = "tikv.max_row_versions";
-const PROP_ROWS_INDEX: &str = "tikv.rows_index";
-const PROP_ROWS_INDEX_DISTANCE: u64 = 10000;
-
-#[derive(Clone, Debug, Default)]
-pub struct MvccProperties {
-    pub min_ts: TimeStamp,     // The minimal timestamp.
-    pub max_ts: TimeStamp,     // The maximal timestamp.
-    pub num_rows: u64,         // The number of rows.
-    pub num_puts: u64,         // The number of MVCC puts of all rows.
-    pub num_deletes: u64,      // The number of MVCC deletes of all rows.
-    pub num_versions: u64,     // The number of MVCC versions of all rows.
-    pub max_row_versions: u64, // The maximal number of MVCC versions of a single row.
-}
-
-impl MvccProperties {
-    pub fn new() -> MvccProperties {
-        MvccProperties {
-            min_ts: TimeStamp::max(),
-            max_ts: TimeStamp::zero(),
-            num_rows: 0,
-            num_puts: 0,
-            num_deletes: 0,
-            num_versions: 0,
-            max_row_versions: 0,
-        }
-    }
-
-    pub fn add(&mut self, other: &MvccProperties) {
-        self.min_ts = cmp::min(self.min_ts, other.min_ts);
-        self.max_ts = cmp::max(self.max_ts, other.max_ts);
-        self.num_rows += other.num_rows;
-        self.num_puts += other.num_puts;
-        self.num_deletes += other.num_deletes;
-        self.num_versions += other.num_versions;
-        self.max_row_versions = cmp::max(self.max_row_versions, other.max_row_versions);
-    }
-
-    pub fn encode(&self) -> UserProperties {
-        let mut props = UserProperties::new();
-        props.encode_u64(PROP_MIN_TS, self.min_ts.into_inner());
-        props.encode_u64(PROP_MAX_TS, self.max_ts.into_inner());
-        props.encode_u64(PROP_NUM_ROWS, self.num_rows);
-        props.encode_u64(PROP_NUM_PUTS, self.num_puts);
-        props.encode_u64(PROP_NUM_DELETES, self.num_deletes);
-        props.encode_u64(PROP_NUM_VERSIONS, self.num_versions);
-        props.encode_u64(PROP_MAX_ROW_VERSIONS, self.max_row_versions);
-        props
-    }
-
-    pub fn decode<T: DecodeProperties>(props: &T) -> Result<MvccProperties> {
-        let mut res = MvccProperties::new();
-        res.min_ts = props.decode_u64(PROP_MIN_TS)?.into();
-        res.max_ts = props.decode_u64(PROP_MAX_TS)?.into();
-        res.num_rows = props.decode_u64(PROP_NUM_ROWS)?;
-        res.num_puts = props.decode_u64(PROP_NUM_PUTS)?;
-        res.num_versions = props.decode_u64(PROP_NUM_VERSIONS)?;
-        // To be compatible with old versions.
-        res.num_deletes = props
-            .decode_u64(PROP_NUM_DELETES)
-            .unwrap_or_else(|_| res.num_versions - res.num_puts);
-        res.max_row_versions = props.decode_u64(PROP_MAX_ROW_VERSIONS)?;
-        Ok(res)
-    }
-}
-
+/// Can only be used for write CF.
 pub struct MvccPropertiesCollector {
     props: MvccProperties,
     last_row: Vec<u8>,
@@ -495,7 +432,10 @@ impl MvccPropertiesCollector {
 
 impl TablePropertiesCollector for MvccPropertiesCollector {
     fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
-        if entry_type != DBEntryType::Put {
+        // TsFilter filters sst based on max_ts and min_ts during iterating.
+        // To prevent seeing outdated (GC) records, we should consider
+        // RocksDB delete entry type.
+        if entry_type != DBEntryType::Put && entry_type != DBEntryType::Delete {
             return;
         }
 
@@ -514,6 +454,11 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
 
         self.props.min_ts = cmp::min(self.props.min_ts, ts);
         self.props.max_ts = cmp::max(self.props.max_ts, ts);
+        if entry_type == DBEntryType::Delete {
+            // Empty value for delete entry type, skip following properties.
+            return;
+        }
+
         self.props.num_versions += 1;
 
         if k != self.last_row.as_slice() {
@@ -562,13 +507,14 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
             self.row_index_handles
                 .insert(self.last_row.clone(), self.cur_index_handle.clone());
         }
-        let mut res = self.props.encode();
+        let mut res = RocksMvccProperties::encode(&self.props);
         res.encode_u64(PROP_NUM_ERRORS, self.num_errors);
         res.encode_handles(PROP_ROWS_INDEX, &self.row_index_handles);
         res.0
     }
 }
 
+/// Can only be used for write CF.
 #[derive(Default)]
 pub struct MvccPropertiesCollectorFactory {}
 
@@ -580,7 +526,7 @@ impl TablePropertiesCollectorFactory for MvccPropertiesCollectorFactory {
 
 pub fn get_range_entries_and_versions<E>(
     engine: &E,
-    cf: &E::CFHandle,
+    cf: &str,
     start: &[u8],
     end: &[u8],
 ) -> Option<(u64, u64)>
@@ -601,7 +547,7 @@ where
     let mut props = MvccProperties::new();
     let mut num_entries = 0;
     for (_, v) in collection.iter() {
-        let mvcc = match MvccProperties::decode(&v.user_collected_properties()) {
+        let mvcc = match RocksMvccProperties::decode(&v.user_collected_properties()) {
             Ok(v) => v,
             Err(_) => return None,
         };
@@ -618,20 +564,19 @@ mod tests {
 
     use std::sync::Arc;
 
-    use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
-    use engine::rocks::{DBEntryType, TablePropertiesCollector};
+    use crate::raw::{ColumnFamilyOptions, DBOptions, Writable};
+    use crate::raw::{DBEntryType, TablePropertiesCollector};
     use tempfile::Builder;
     use test::Bencher;
 
     use crate::compat::Compat;
-    use engine::rocks;
-    use engine::rocks::util::CFOptions;
-    use engine_traits::CFHandleExt;
+    use crate::raw_util::CFOptions;
     use engine_traits::{CF_WRITE, LARGE_CFS};
     use txn_types::{Key, Write, WriteType};
 
     use super::*;
 
+    #[allow(clippy::many_single_char_names)]
     #[test]
     fn test_range_properties() {
         let cases = [
@@ -682,7 +627,7 @@ mod tests {
             props.get_approximate_size_in_range(b"", b"k"),
             DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8 * 25 + 11
         );
-        assert_eq!(props.get_approximate_keys_in_range(b"", b"k"), 11 as u64);
+        assert_eq!(props.get_approximate_keys_in_range(b"", b"k"), 11_u64);
 
         assert_eq!(props.offsets.len(), 7);
         let a = props.get(b"a".as_ref());
@@ -803,7 +748,7 @@ mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db = Arc::new(rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
+        let db = Arc::new(crate::raw_util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
         let cases = ["a", "b", "c"];
         for &key in &cases {
@@ -826,9 +771,8 @@ mod tests {
 
         let start_keys = keys::data_key(&[]);
         let end_keys = keys::data_end_key(&[]);
-        let cf = db.c().cf_handle(CF_WRITE).unwrap();
         let (entries, versions) =
-            get_range_entries_and_versions(db.c(), cf, &start_keys, &end_keys).unwrap();
+            get_range_entries_and_versions(db.c(), CF_WRITE, &start_keys, &end_keys).unwrap();
         assert_eq!(entries, (cases.len() * 2) as u64);
         assert_eq!(versions, cases.len() as u64);
     }
@@ -856,7 +800,7 @@ mod tests {
         }
         let result = UserProperties(collector.finish());
 
-        let props = MvccProperties::decode(&result).unwrap();
+        let props = RocksMvccProperties::decode(&result).unwrap();
         assert_eq!(props.min_ts, 1.into());
         assert_eq!(props.max_ts, 7.into());
         assert_eq!(props.num_rows, 4);

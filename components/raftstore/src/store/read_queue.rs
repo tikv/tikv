@@ -1,73 +1,97 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::VecDeque;
-use std::{cmp, u64, usize};
+use std::{cmp, mem, u64, usize};
 
 use crate::store::fsm::apply;
 use crate::store::metrics::*;
 use crate::store::{Callback, Config};
+use crate::Result;
 
-use engine_rocks::RocksSnapshot;
-use kvproto::raft_cmdpb::RaftCmdRequest;
-use tikv_util::collections::HashMap;
+use collections::HashMap;
+use engine_traits::Snapshot;
+use kvproto::kvrpcpb::LockInfo;
+use kvproto::raft_cmdpb::{self, RaftCmdRequest};
+use protobuf::Message;
+use tikv_util::codec::number::{NumberEncoder, MAX_VAR_U64_LEN};
+use tikv_util::memory::HeapSize;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::MustConsumeVec;
+use tikv_util::{box_err, debug};
 use time::Timespec;
 use uuid::Uuid;
 
 const READ_QUEUE_SHRINK_SIZE: usize = 64;
 
-pub struct ReadIndexRequest {
+pub struct ReadIndexRequest<S>
+where
+    S: Snapshot,
+{
     pub id: Uuid,
-    pub cmds: MustConsumeVec<(RaftCmdRequest, Callback<RocksSnapshot>)>,
-    pub renew_lease_time: Timespec,
+    pub cmds: MustConsumeVec<(RaftCmdRequest, Callback<S>, Option<u64>)>,
+    pub propose_time: Timespec,
     pub read_index: Option<u64>,
+    pub addition_request: Option<Box<raft_cmdpb::ReadIndexRequest>>,
+    pub locked: Option<Box<LockInfo>>,
     // `true` means it's in `ReadIndexQueue::reads`.
     in_contexts: bool,
 }
 
-impl ReadIndexRequest {
-    // Transmutes `self.id` to a 8 bytes slice, so that we can use the payload to do read index.
-    pub fn binary_id(&self) -> &[u8] {
-        self.id.as_bytes()
-    }
-
-    pub fn push_command(&mut self, req: RaftCmdRequest, cb: Callback<RocksSnapshot>) {
+impl<S> ReadIndexRequest<S>
+where
+    S: Snapshot,
+{
+    pub fn push_command(&mut self, req: RaftCmdRequest, cb: Callback<S>, read_index: u64) {
         RAFT_READ_INDEX_PENDING_COUNT.inc();
-        self.cmds.push((req, cb));
+        self.cmds.push((req, cb, Some(read_index)));
     }
 
     pub fn with_command(
         id: Uuid,
         req: RaftCmdRequest,
-        cb: Callback<RocksSnapshot>,
-        renew_lease_time: Timespec,
+        cb: Callback<S>,
+        propose_time: Timespec,
     ) -> Self {
         RAFT_READ_INDEX_PENDING_COUNT.inc();
         let mut cmds = MustConsumeVec::with_capacity("callback of index read", 1);
-        cmds.push((req, cb));
+        cmds.push((req, cb, None));
         ReadIndexRequest {
             id,
             cmds,
-            renew_lease_time,
+            propose_time,
             read_index: None,
+            addition_request: None,
+            locked: None,
             in_contexts: false,
         }
     }
 }
 
-impl Drop for ReadIndexRequest {
+impl<S> Drop for ReadIndexRequest<S>
+where
+    S: Snapshot,
+{
     fn drop(&mut self) {
-        let dur = (monotonic_raw_now() - self.renew_lease_time)
-            .to_std()
-            .unwrap();
+        let dur = (monotonic_raw_now() - self.propose_time).to_std().unwrap();
         RAFT_READ_INDEX_PENDING_DURATION.observe(duration_to_sec(dur));
     }
 }
 
-#[derive(Default)]
-pub struct ReadIndexQueue {
-    reads: VecDeque<ReadIndexRequest>,
+impl<S> HeapSize for ReadIndexRequest<S>
+where
+    S: Snapshot,
+{
+    #[inline]
+    fn heap_size(&self) -> usize {
+        self.cmds.heap_size() + 8 * self.cmds.len() + self.addition_request.heap_size()
+    }
+}
+
+pub struct ReadIndexQueue<S>
+where
+    S: Snapshot,
+{
+    reads: VecDeque<ReadIndexRequest<S>>,
     ready_cnt: usize,
     // How many requests are handled.
     handled_cnt: usize,
@@ -75,9 +99,29 @@ pub struct ReadIndexQueue {
     contexts: HashMap<Uuid, usize>,
 
     retry_countdown: usize,
+    mem_size: usize,
 }
 
-impl ReadIndexQueue {
+impl<S> Default for ReadIndexQueue<S>
+where
+    S: Snapshot,
+{
+    fn default() -> ReadIndexQueue<S> {
+        ReadIndexQueue {
+            reads: VecDeque::new(),
+            ready_cnt: 0,
+            handled_cnt: 0,
+            contexts: HashMap::default(),
+            retry_countdown: 0,
+            mem_size: 0,
+        }
+    }
+}
+
+impl<S> ReadIndexQueue<S>
+where
+    S: Snapshot,
+{
     /// Check it's necessary to retry pending read requests or not.
     /// Return true if all such conditions are satisfied:
     /// 1. more than an election timeout elapsed from the last request push;
@@ -113,7 +157,7 @@ impl ReadIndexQueue {
         for mut read in self.reads.drain(..) {
             removed += read.cmds.len();
             if let Some(region_id) = notify_removed {
-                for (_, cb) in read.cmds.drain(..) {
+                for (_, cb, _) in read.cmds.drain(..) {
                     apply::notify_req_region_removed(region_id, cb);
                 }
             } else {
@@ -124,13 +168,15 @@ impl ReadIndexQueue {
         self.contexts.clear();
         self.ready_cnt = 0;
         self.handled_cnt = 0;
+        self.mem_size = 0;
     }
 
     pub fn clear_uncommitted_on_role_change(&mut self, term: u64) {
         let mut removed = 0;
         for mut read in self.reads.drain(self.ready_cnt..) {
             removed += read.cmds.len();
-            for (_, cb) in read.cmds.drain(..) {
+            self.mem_size -= read.heap_size();
+            for (_, cb, _) in read.cmds.drain(..) {
                 apply::notify_stale_req(term, cb);
             }
         }
@@ -139,21 +185,22 @@ impl ReadIndexQueue {
         self.contexts.clear();
     }
 
-    pub fn push_back(&mut self, mut read: ReadIndexRequest, is_leader: bool) {
+    pub fn push_back(&mut self, mut read: ReadIndexRequest<S>, is_leader: bool) {
         if !is_leader {
             read.in_contexts = true;
             let offset = self.handled_cnt + self.reads.len();
             self.contexts.insert(read.id, offset);
         }
+        self.mem_size += read.heap_size();
         self.reads.push_back(read);
         self.retry_countdown = usize::MAX;
     }
 
-    pub fn back_mut(&mut self) -> Option<&mut ReadIndexRequest> {
+    pub fn back_mut(&mut self) -> Option<&mut ReadIndexRequest<S>> {
         self.reads.back_mut()
     }
 
-    pub fn last_ready(&self) -> Option<&ReadIndexRequest> {
+    pub fn last_ready(&self) -> Option<&ReadIndexRequest<S>> {
         if self.ready_cnt > 0 {
             return Some(&self.reads[self.ready_cnt - 1]);
         }
@@ -162,9 +209,9 @@ impl ReadIndexQueue {
 
     pub fn advance_leader_reads<T>(&mut self, states: T)
     where
-        T: IntoIterator<Item = (Uuid, u64)>,
+        T: IntoIterator<Item = (Uuid, Option<LockInfo>, u64)>,
     {
-        for (uuid, index) in states {
+        for (uuid, _, index) in states {
             assert_eq!(uuid, self.reads[self.ready_cnt].id);
             self.reads[self.ready_cnt].read_index = Some(index);
             self.ready_cnt += 1;
@@ -174,10 +221,10 @@ impl ReadIndexQueue {
     /// update the read index of the requests that before the specified id.
     pub fn advance_replica_reads<T>(&mut self, states: T)
     where
-        T: IntoIterator<Item = (Uuid, u64)>,
+        T: IntoIterator<Item = (Uuid, Option<LockInfo>, u64)>,
     {
         let (mut min_changed_offset, mut max_changed_offset) = (usize::MAX, 0);
-        for (uuid, index) in states {
+        for (uuid, locked, index) in states {
             if let Some(raw_offset) = self.contexts.remove(&uuid) {
                 let offset = match raw_offset.checked_sub(self.handled_cnt) {
                     Some(offset) => offset,
@@ -192,6 +239,9 @@ impl ReadIndexQueue {
                     raw_offset, self.reads[offset].id, uuid
                 );
                 self.reads[offset].in_contexts = false;
+                // clear addition_request to indicate lock checking has finished
+                self.reads[offset].addition_request = None;
+                self.reads[offset].locked = locked.map(Box::new);
                 if let Some(occur_index) = self.reads[offset].read_index {
                     if occur_index < index {
                         continue;
@@ -244,7 +294,7 @@ impl ReadIndexQueue {
         }
     }
 
-    pub fn pop_front(&mut self) -> Option<ReadIndexRequest> {
+    pub fn pop_front(&mut self) -> Option<ReadIndexRequest<S>> {
         if self.ready_cnt == 0 {
             return None;
         }
@@ -262,7 +312,7 @@ impl ReadIndexQueue {
     }
 
     /// Raft could have not been ready to handle the poped task. So put it back into the queue.
-    pub fn push_front(&mut self, read: ReadIndexRequest) {
+    pub fn push_front(&mut self, read: ReadIndexRequest<S>) {
         debug_assert!(read.read_index.is_some());
         self.reads.push_front(read);
         self.ready_cnt += 1;
@@ -270,14 +320,156 @@ impl ReadIndexQueue {
     }
 }
 
+impl<S> HeapSize for ReadIndexQueue<S>
+where
+    S: Snapshot,
+{
+    #[inline]
+    fn heap_size(&self) -> usize {
+        self.mem_size
+            + self.reads.heap_size()
+            + self.contexts.len() * (mem::size_of::<Uuid>() + mem::size_of::<usize>())
+    }
+}
+
+const UUID_LEN: usize = 16;
+const REQUEST_FLAG: u8 = b'r';
+const LOCKED_FLAG: u8 = b'l';
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReadIndexContext {
+    pub id: Uuid,
+    pub request: Option<raft_cmdpb::ReadIndexRequest>,
+    pub locked: Option<LockInfo>,
+}
+
+impl ReadIndexContext {
+    pub fn parse(bytes: &[u8]) -> Result<ReadIndexContext> {
+        use tikv_util::codec::number::*;
+
+        if bytes.len() < UUID_LEN {
+            return Err(box_err!(
+                "read index context must contain a {} byte long UUID",
+                UUID_LEN
+            ));
+        }
+        let mut res = ReadIndexContext {
+            id: Uuid::from_slice(&bytes[..UUID_LEN]).unwrap(),
+            request: None,
+            locked: None,
+        };
+        let mut bytes = &bytes[UUID_LEN..];
+        while !bytes.is_empty() {
+            match read_u8(&mut bytes).unwrap() {
+                REQUEST_FLAG => {
+                    let len = decode_var_u64(&mut bytes)? as usize;
+                    let mut request = raft_cmdpb::ReadIndexRequest::default();
+                    request.merge_from_bytes(&bytes[..len])?;
+                    bytes = &bytes[len..];
+                    res.request = Some(request);
+                }
+                LOCKED_FLAG => {
+                    let len = decode_var_u64(&mut bytes)? as usize;
+                    let mut locked = LockInfo::default();
+                    locked.merge_from_bytes(&bytes[..len])?;
+                    bytes = &bytes[len..];
+                    res.locked = Some(locked);
+                }
+                // just break for forward compatibility
+                _ => break,
+            }
+        }
+        Ok(res)
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        Self::fields_to_bytes(self.id, self.request.as_ref(), self.locked.as_ref())
+    }
+
+    pub fn fields_to_bytes(
+        id: Uuid,
+        request: Option<&raft_cmdpb::ReadIndexRequest>,
+        locked: Option<&LockInfo>,
+    ) -> Vec<u8> {
+        let request_size = request.map(Message::compute_size);
+        let locked_size = locked.map(Message::compute_size);
+        let field_size = |s: Option<u32>| s.map(|s| 1 + MAX_VAR_U64_LEN + s as usize).unwrap_or(0);
+        let cap = UUID_LEN + field_size(request_size) + field_size(locked_size);
+        let mut b = Vec::with_capacity(cap);
+        b.extend_from_slice(id.as_bytes());
+        if let Some(request) = request {
+            b.push(REQUEST_FLAG);
+            b.encode_var_u64(request_size.unwrap() as u64).unwrap();
+            request.write_to_vec(&mut b).unwrap();
+        }
+        if let Some(locked) = locked {
+            b.push(LOCKED_FLAG);
+            b.encode_var_u64(locked_size.unwrap() as u64).unwrap();
+            locked.write_to_vec(&mut b).unwrap();
+        }
+        b
+    }
+}
+
+impl HeapSize for ReadIndexContext {
+    fn heap_size(&self) -> usize {
+        self.request.heap_size() + self.locked.heap_size()
+    }
+}
+
+#[cfg(test)]
+mod read_index_ctx_tests {
+    use super::*;
+
+    // Test backward compatibility
+    #[test]
+    fn test_single_uuid() {
+        let id = Uuid::new_v4();
+        // We should be able to parse old version context (a single UUID).
+        let ctx = ReadIndexContext::parse(id.as_bytes()).unwrap();
+        assert_eq!(
+            ctx,
+            ReadIndexContext {
+                id,
+                request: None,
+                locked: None,
+            }
+        );
+
+        // Old version TiKV should be able to parse context without lock checking fields.
+        let bytes = ctx.to_bytes();
+        assert_eq!(bytes, id.as_bytes());
+    }
+
+    #[test]
+    fn test_serde_request() {
+        let id = Uuid::new_v4();
+        let mut request = raft_cmdpb::ReadIndexRequest::default();
+        request.set_start_ts(10);
+        let mut locked = LockInfo::default();
+        locked.set_lock_version(5);
+        let ctx = ReadIndexContext {
+            id,
+            request: Some(request),
+            locked: Some(locked),
+        };
+        let bytes = ctx.to_bytes();
+        let parsed_ctx = ReadIndexContext::parse(&bytes).unwrap();
+        assert_eq!(ctx, parsed_ctx);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use engine_test::kv::KvTestSnapshot;
 
     #[test]
     fn test_read_queue_fold() {
-        let mut queue = ReadIndexQueue::default();
-        queue.handled_cnt = 125;
+        let mut queue = ReadIndexQueue::<KvTestSnapshot> {
+            handled_cnt: 125,
+            ..Default::default()
+        };
         for _ in 0..100 {
             let id = Uuid::new_v4();
             queue.reads.push_back(ReadIndexRequest::with_command(
@@ -291,30 +483,30 @@ mod tests {
             queue.contexts.insert(id, offset);
         }
 
-        queue.advance_replica_reads(Vec::<(Uuid, u64)>::default());
+        queue.advance_replica_reads(Vec::<(Uuid, Option<LockInfo>, u64)>::default());
         assert_eq!(queue.ready_cnt, 0);
 
-        queue.advance_replica_reads(vec![(queue.reads[0].id, 100)]);
+        queue.advance_replica_reads(vec![(queue.reads[0].id, None, 100)]);
         assert_eq!(queue.ready_cnt, 1);
 
-        queue.advance_replica_reads(vec![(queue.reads[1].id, 100)]);
+        queue.advance_replica_reads(vec![(queue.reads[1].id, None, 100)]);
         assert_eq!(queue.ready_cnt, 2);
 
         queue.advance_replica_reads(vec![
-            (queue.reads[80].id, 80),
-            (queue.reads[84].id, 100),
-            (queue.reads[82].id, 70),
-            (queue.reads[78].id, 120),
-            (queue.reads[77].id, 40),
+            (queue.reads[80].id, None, 80),
+            (queue.reads[84].id, None, 100),
+            (queue.reads[82].id, None, 70),
+            (queue.reads[78].id, None, 120),
+            (queue.reads[77].id, None, 40),
         ]);
         assert_eq!(queue.ready_cnt, 85);
 
         queue.advance_replica_reads(vec![
-            (queue.reads[20].id, 80),
-            (queue.reads[24].id, 100),
-            (queue.reads[22].id, 70),
-            (queue.reads[18].id, 120),
-            (queue.reads[17].id, 40),
+            (queue.reads[20].id, None, 80),
+            (queue.reads[24].id, None, 100),
+            (queue.reads[22].id, None, 70),
+            (queue.reads[18].id, None, 120),
+            (queue.reads[17].id, None, 40),
         ]);
         assert_eq!(queue.ready_cnt, 85);
 
@@ -333,8 +525,10 @@ mod tests {
 
     #[test]
     fn test_become_leader_then_become_follower() {
-        let mut queue = ReadIndexQueue::default();
-        queue.handled_cnt = 100;
+        let mut queue = ReadIndexQueue::<KvTestSnapshot> {
+            handled_cnt: 100,
+            ..Default::default()
+        };
 
         // Push a pending comand when the peer is follower.
         let id = Uuid::new_v4();
@@ -348,7 +542,7 @@ mod tests {
 
         // After the peer becomes leader, `advance` could be called before
         // `clear_uncommitted_on_role_change`.
-        queue.advance_leader_reads(vec![(id, 10)]);
+        queue.advance_leader_reads(vec![(id, None, 10)]);
         while let Some(mut read) = queue.pop_front() {
             read.cmds.clear();
         }
@@ -363,20 +557,22 @@ mod tests {
         );
         queue.push_back(req, true);
         let last_id = queue.reads.back().map(|t| t.id).unwrap();
-        queue.advance_leader_reads(vec![(last_id, 10)]);
+        queue.advance_leader_reads(vec![(last_id, None, 10)]);
         assert_eq!(queue.ready_cnt, 1);
         while let Some(mut read) = queue.pop_front() {
             read.cmds.clear();
         }
 
         // Shouldn't panic when call `advance_replica_reads` with `id` again.
-        queue.advance_replica_reads(vec![(id, 10)]);
+        queue.advance_replica_reads(vec![(id, None, 10)]);
     }
 
     #[test]
     fn test_retake_leadership() {
-        let mut queue = ReadIndexQueue::default();
-        queue.handled_cnt = 100;
+        let mut queue = ReadIndexQueue::<KvTestSnapshot> {
+            handled_cnt: 100,
+            ..Default::default()
+        };
 
         // Push a pending read comand when the peer is leader.
         let id = Uuid::new_v4();
@@ -389,7 +585,7 @@ mod tests {
         queue.push_back(req, true);
 
         // Advance on leader, but the peer is not ready to handle it (e.g. it's in merging).
-        queue.advance_leader_reads(vec![(id, 10)]);
+        queue.advance_leader_reads(vec![(id, None, 10)]);
 
         // The leader steps down to follower, clear uncommitted reads.
         queue.clear_uncommitted_on_role_change(10);
@@ -406,7 +602,7 @@ mod tests {
         queue.push_back(req, true);
 
         // Advance on leader again, shouldn't panic.
-        queue.advance_leader_reads(vec![(id_1, 10)]);
+        queue.advance_leader_reads(vec![(id_1, None, 10)]);
         while let Some(mut read) = queue.pop_front() {
             read.cmds.clear();
         }
@@ -414,14 +610,16 @@ mod tests {
 
     #[test]
     fn test_advance_replica_reads_out_of_order() {
-        let mut queue = ReadIndexQueue::default();
-        queue.handled_cnt = 100;
+        let mut queue = ReadIndexQueue::<KvTestSnapshot> {
+            handled_cnt: 100,
+            ..Default::default()
+        };
 
         let ids: [Uuid; 2] = [Uuid::new_v4(), Uuid::new_v4()];
-        for i in 0..2 {
+        for id in &ids {
             // Push a pending read comand when the peer is follower.
             let req = ReadIndexRequest::with_command(
-                ids[i],
+                *id,
                 RaftCmdRequest::default(),
                 Callback::None,
                 Timespec::new(0, 0),
@@ -429,12 +627,12 @@ mod tests {
             queue.push_back(req, false);
         }
 
-        queue.advance_replica_reads(vec![(ids[1], 100)]);
+        queue.advance_replica_reads(vec![(ids[1], None, 100)]);
         assert_eq!(queue.ready_cnt, 2);
         while let Some(mut read) = queue.pop_front() {
             read.cmds.clear();
         }
 
-        queue.advance_replica_reads(vec![(ids[0], 100)]);
+        queue.advance_replica_reads(vec![(ids[0], None, 100)]);
     }
 }

@@ -1,15 +1,16 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt::{self, Display, Formatter};
+use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use collections::HashMap;
 use engine_traits::KvEngine;
-use kvproto::metapb;
 use kvproto::replication_modepb::ReplicationMode;
 use pd_client::{take_peer_address, PdClient};
-use raftstore::store::{GlobalReplicationState, RaftRouter};
-use tikv_util::collections::HashMap;
+use raftstore::router::RaftStoreRouter;
+use raftstore::store::GlobalReplicationState;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
 use super::metrics::*;
@@ -18,6 +19,12 @@ use super::Result;
 const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 
 pub type Callback = Box<dyn FnOnce(Result<String>) + Send>;
+
+pub fn store_address_refresh_interval_secs() -> u64 {
+    fail_point!("mock_store_refresh_interval_secs", |arg| arg
+        .map_or(0, |e| e.parse().unwrap()));
+    STORE_ADDRESS_REFRESH_SECONDS
+}
 
 /// A trait for resolving store addresses.
 pub trait StoreAddrResolver: Send + Clone {
@@ -43,19 +50,30 @@ struct StoreAddr {
 }
 
 /// A runner for resolving store addresses.
-struct Runner<T: PdClient, E: KvEngine> {
+struct Runner<T, RR, E>
+where
+    T: PdClient,
+    RR: RaftStoreRouter<E>,
+    E: KvEngine,
+{
     pd_client: Arc<T>,
     store_addrs: HashMap<u64, StoreAddr>,
     state: Arc<Mutex<GlobalReplicationState>>,
-    router: Option<RaftRouter<E>>,
+    router: RR,
+    engine: PhantomData<E>,
 }
 
-impl<T: PdClient, E: KvEngine> Runner<T, E> {
+impl<T, RR, E> Runner<T, RR, E>
+where
+    T: PdClient,
+    RR: RaftStoreRouter<E>,
+    E: KvEngine,
+{
     fn resolve(&mut self, store_id: u64) -> Result<String> {
         if let Some(s) = self.store_addrs.get(&store_id) {
             let now = Instant::now();
             let elapsed = now.duration_since(s.last_update);
-            if elapsed.as_secs() < STORE_ADDRESS_REFRESH_SECONDS {
+            if elapsed.as_secs() < store_address_refresh_interval_secs() {
                 return Ok(s.addr.clone());
             }
         }
@@ -73,27 +91,29 @@ impl<T: PdClient, E: KvEngine> Runner<T, E> {
 
     fn get_address(&self, store_id: u64) -> Result<String> {
         let pd_client = Arc::clone(&self.pd_client);
-        let mut s = box_try!(pd_client.get_store(store_id));
+        let mut s = match pd_client.get_store(store_id) {
+            Ok(s) => s,
+            // `get_store` will filter tombstone store, so here needs to handle
+            // it explicitly.
+            Err(pd_client::Error::StoreTombstone(_)) => {
+                RESOLVE_STORE_COUNTER_STATIC.tombstone.inc();
+                return Err(box_err!("store {} has been removed", store_id));
+            }
+            Err(e) => return Err(box_err!(e)),
+        };
         let mut group_id = None;
         let mut state = self.state.lock().unwrap();
-        let label_key = &state.status.get_dr_auto_sync().label_key;
-        if state.status.get_mode() == ReplicationMode::DrAutoSync {
-            if state.group.group_id(store_id).is_none() {
-                for l in s.get_labels() {
-                    if l.key == *label_key {
-                        group_id = Some(state.group.register_store(store_id, l.value.clone()));
-                        break;
-                    }
-                }
+        if state.status().get_mode() == ReplicationMode::DrAutoSync {
+            let state_id = state.status().get_dr_auto_sync().state_id;
+            if state.group.group_id(state_id, store_id).is_none() {
+                group_id = state.group.register_store(store_id, s.take_labels().into());
             }
+        } else {
+            state.group.backup_store_labels(&mut s);
         }
         drop(state);
-        if let (Some(group_id), Some(router)) = (group_id, &self.router) {
-            router.report_resolved(store_id, group_id);
-        }
-        if s.get_state() == metapb::StoreState::Tombstone {
-            RESOLVE_STORE_COUNTER_STATIC.tombstone.inc();
-            return Err(box_err!("store {} has been removed", store_id));
+        if let Some(group_id) = group_id {
+            self.router.report_resolved(store_id, group_id);
         }
         let addr = take_peer_address(&mut s);
         // In some tests, we use empty address for store first,
@@ -106,7 +126,13 @@ impl<T: PdClient, E: KvEngine> Runner<T, E> {
     }
 }
 
-impl<T: PdClient, E: KvEngine> Runnable<Task> for Runner<T, E> {
+impl<T, RR, E> Runnable for Runner<T, RR, E>
+where
+    T: PdClient,
+    RR: RaftStoreRouter<E>,
+    E: KvEngine,
+{
+    type Task = Task;
     fn run(&mut self, task: Task) {
         let store_id = task.store_id;
         let resp = self.resolve(store_id);
@@ -127,29 +153,27 @@ impl PdStoreAddrResolver {
 }
 
 /// Creates a new `PdStoreAddrResolver`.
-pub fn new_resolver<T, E>(
+pub fn new_resolver<T, RR: 'static, E>(
     pd_client: Arc<T>,
-    router: RaftRouter<E>,
-) -> Result<(
-    Worker<Task>,
-    PdStoreAddrResolver,
-    Arc<Mutex<GlobalReplicationState>>,
-)>
+    worker: &Worker,
+    router: RR,
+) -> (PdStoreAddrResolver, Arc<Mutex<GlobalReplicationState>>)
 where
     T: PdClient + 'static,
+    RR: RaftStoreRouter<E>,
     E: KvEngine,
 {
-    let mut worker = Worker::new("addr-resolver");
     let state = Arc::new(Mutex::new(GlobalReplicationState::default()));
     let runner = Runner {
         pd_client,
         store_addrs: HashMap::default(),
         state: state.clone(),
-        router: Some(router),
+        router,
+        engine: PhantomData,
     };
-    box_try!(worker.start(runner));
-    let resolver = PdStoreAddrResolver::new(worker.scheduler());
-    Ok((worker, resolver, state))
+    let scheduler = worker.start("addr-resolver", runner);
+    let resolver = PdStoreAddrResolver::new(scheduler);
+    (resolver, state)
 }
 
 impl StoreAddrResolver for PdStoreAddrResolver {
@@ -163,6 +187,7 @@ impl StoreAddrResolver for PdStoreAddrResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::marker::PhantomData;
     use std::net::SocketAddr;
     use std::ops::Sub;
     use std::str::FromStr;
@@ -170,10 +195,11 @@ mod tests {
     use std::thread;
     use std::time::{Duration, Instant};
 
-    use engine_rocks::RocksEngine;
+    use collections::HashMap;
+    use engine_test::kv::KvTestEngine;
     use kvproto::metapb;
     use pd_client::{PdClient, Result};
-    use tikv_util::collections::HashMap;
+    use raftstore::router::RaftStoreBlackHole;
 
     const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 
@@ -184,6 +210,13 @@ mod tests {
 
     impl PdClient for MockPdClient {
         fn get_store(&self, _: u64) -> Result<metapb::Store> {
+            if self.store.get_state() == metapb::StoreState::Tombstone {
+                // Simulate the behavior of `get_store` in pd client.
+                return Err(pd_client::Error::StoreTombstone(format!(
+                    "{:?}",
+                    self.store
+                )));
+            }
             // The store address will be changed every millisecond.
             let mut store = self.store.clone();
             let mut sock = SocketAddr::from_str(store.get_address()).unwrap();
@@ -201,7 +234,7 @@ mod tests {
         store
     }
 
-    fn new_runner(store: metapb::Store) -> Runner<MockPdClient, RocksEngine> {
+    fn new_runner(store: metapb::Store) -> Runner<MockPdClient, RaftStoreBlackHole, KvTestEngine> {
         let client = MockPdClient {
             start: Instant::now(),
             store,
@@ -210,7 +243,8 @@ mod tests {
             pd_client: Arc::new(client),
             store_addrs: HashMap::default(),
             state: Default::default(),
-            router: None,
+            router: RaftStoreBlackHole,
+            engine: PhantomData,
         }
     }
 

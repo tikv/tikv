@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use lazy_static::lazy_static;
 use prometheus::*;
 use prometheus_static_metric::*;
 
@@ -43,6 +44,7 @@ make_static_metric! {
         epoch,
         appiled_term,
         channel_full,
+        safe_ts,
     }
 
     pub struct ReadRejectCounter : IntCounter {
@@ -107,6 +109,11 @@ lazy_static! {
         ReadRejectCounter::from(&LOCAL_READ_REJECT_VEC);
     pub static ref LOCAL_READ_EXECUTED_REQUESTS: IntCounter = register_int_counter!(
         "tikv_raftstore_local_read_executed_requests",
+        "Total number of requests directly executed by local reader."
+    )
+    .unwrap();
+    pub static ref LOCAL_READ_EXECUTED_CACHE_REQUESTS: IntCounter = register_int_counter!(
+        "tikv_raftstore_local_read_cache_requests",
         "Total number of requests directly executed by local reader."
     )
     .unwrap();

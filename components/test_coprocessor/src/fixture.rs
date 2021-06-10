@@ -2,8 +2,10 @@
 
 use super::*;
 
+use concurrency_manager::ConcurrencyManager;
 use kvproto::kvrpcpb::Context;
 
+use engine_rocks::PerfLevel;
 use tidb_query_datatype::codec::Datum;
 use tikv::config::CoprReadPoolConfig;
 use tikv::coprocessor::{readpool_impl, Endpoint};
@@ -84,8 +86,9 @@ pub fn init_data_with_details<E: Engine>(
         &CoprReadPoolConfig::default_for_test(),
         store.get_engine(),
     ));
-    let cop = Endpoint::new(cfg, pool.handle());
-    (store, cop)
+    let cm = ConcurrencyManager::new(1.into());
+    let copr = Endpoint::new(cfg, pool.handle(), cm, PerfLevel::EnableCount);
+    (store, copr)
 }
 
 pub fn init_data_with_commit(

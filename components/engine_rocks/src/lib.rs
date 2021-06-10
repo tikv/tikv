@@ -18,19 +18,10 @@
 
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
-#[macro_use]
-extern crate tikv_util;
-#[macro_use]
-extern crate slog_global;
-
-#[macro_use]
-extern crate serde_derive;
 
 #[cfg(test)]
 extern crate test;
 
-mod cf_handle;
-pub use crate::cf_handle::*;
 mod cf_names;
 pub use crate::cf_names::*;
 mod cf_options;
@@ -45,21 +36,34 @@ mod engine;
 pub use crate::engine::*;
 mod import;
 pub use crate::import::*;
+mod logger;
+pub use crate::logger::*;
 mod misc;
 pub use crate::misc::*;
+pub mod range_properties;
 mod snapshot;
+pub use crate::range_properties::*;
 pub use crate::snapshot::*;
 mod sst;
 pub use crate::sst::*;
+mod sst_partitioner;
+pub use crate::sst_partitioner::*;
 mod table_properties;
 pub use crate::table_properties::*;
 mod write_batch;
 pub use crate::write_batch::*;
+pub mod mvcc_properties;
+pub use crate::mvcc_properties::*;
+pub mod perf_context;
+pub use crate::perf_context::*;
+mod perf_context_impl;
+mod perf_context_metrics;
 
 mod engine_iterator;
 pub use crate::engine_iterator::*;
 
 mod options;
+pub mod raw_util;
 pub mod util;
 
 mod compat;
@@ -82,7 +86,17 @@ pub use event_listener::*;
 
 pub mod config;
 pub use config::*;
+
+pub mod ttl_properties;
+pub use ttl_properties::*;
+
 pub mod encryption;
+
+pub mod file_system;
+
+mod raft_engine;
 
 pub use rocksdb::set_perf_level;
 pub use rocksdb::PerfContext;
+
+pub mod raw;

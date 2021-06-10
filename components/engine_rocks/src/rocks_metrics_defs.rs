@@ -11,9 +11,11 @@ pub const ROCKSDB_PENDING_COMPACTION_BYTES: &str = "rocksdb.\
 pub const ROCKSDB_COMPRESSION_RATIO_AT_LEVEL: &str = "rocksdb.compression-ratio-at-level";
 pub const ROCKSDB_NUM_SNAPSHOTS: &str = "rocksdb.num-snapshots";
 pub const ROCKSDB_OLDEST_SNAPSHOT_TIME: &str = "rocksdb.oldest-snapshot-time";
+pub const ROCKSDB_OLDEST_SNAPSHOT_SEQUENCE: &str = "rocksdb.oldest-snapshot-sequence";
 pub const ROCKSDB_NUM_FILES_AT_LEVEL: &str = "rocksdb.num-files-at-level";
 pub const ROCKSDB_NUM_IMMUTABLE_MEM_TABLE: &str = "rocksdb.num-immutable-mem-table";
 
+pub const ROCKSDB_TITANDB_NUM_BLOB_FILES_AT_LEVEL: &str = "rocksdb.titandb.num-blob-files-at-level";
 pub const ROCKSDB_TITANDB_LIVE_BLOB_SIZE: &str = "rocksdb.titandb.live-blob-size";
 pub const ROCKSDB_TITANDB_NUM_LIVE_BLOB_FILE: &str = "rocksdb.titandb.num-live-blob-file";
 pub const ROCKSDB_TITANDB_NUM_OBSOLETE_BLOB_FILE: &str = "rocksdb.titandb.\
@@ -22,6 +24,17 @@ pub const ROCKSDB_TITANDB_LIVE_BLOB_FILE_SIZE: &str = "rocksdb.titandb.\
                                                        live-blob-file-size";
 pub const ROCKSDB_TITANDB_OBSOLETE_BLOB_FILE_SIZE: &str = "rocksdb.titandb.\
                                                            obsolete-blob-file-size";
+pub const ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE0_FILE: &str =
+    "rocksdb.titandb.num-discardable-ratio-le0-file";
+pub const ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE20_FILE: &str =
+    "rocksdb.titandb.num-discardable-ratio-le20-file";
+pub const ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE50_FILE: &str =
+    "rocksdb.titandb.num-discardable-ratio-le50-file";
+pub const ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE80_FILE: &str =
+    "rocksdb.titandb.num-discardable-ratio-le80-file";
+pub const ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE100_FILE: &str =
+    "rocksdb.titandb.num-discardable-ratio-le100-file";
+
 pub const ROCKSDB_CFSTATS: &str = "rocksdb.cfstats";
 pub const ROCKSDB_IOSTALL_KEY: &[&str] = &[
     "io_stalls.level0_slowdown",
@@ -100,22 +113,36 @@ pub const ENGINE_TICKER_TYPES: &[TickerType] = &[
     TickerType::FlushWriteBytes,
     TickerType::ReadAmpEstimateUsefulBytes,
     TickerType::ReadAmpTotalReadBytes,
-    TickerType::BlobDbNumSeek,
-    TickerType::BlobDbNumNext,
-    TickerType::BlobDbNumPrev,
-    TickerType::BlobDbNumKeysWritten,
-    TickerType::BlobDbNumKeysRead,
-    TickerType::BlobDbBytesWritten,
-    TickerType::BlobDbBytesRead,
-    TickerType::BlobDbBlobFileBytesWritten,
-    TickerType::BlobDbBlobFileBytesRead,
-    TickerType::BlobDbBlobFileSynced,
-    TickerType::BlobDbGcNumFiles,
-    TickerType::BlobDbGcNumNewFiles,
-    TickerType::BlobDbGcNumKeysOverwritten,
-    TickerType::BlobDbGcNumKeysRelocated,
-    TickerType::BlobDbGcBytesOverwritten,
-    TickerType::BlobDbGcBytesRelocated,
+];
+
+pub const TITAN_ENGINE_TICKER_TYPES: &[TickerType] = &[
+    TickerType::TitanNumGet,
+    TickerType::TitanNumSeek,
+    TickerType::TitanNumNext,
+    TickerType::TitanNumPrev,
+    TickerType::TitanBlobFileNumKeysWritten,
+    TickerType::TitanBlobFileNumKeysRead,
+    TickerType::TitanBlobFileBytesWritten,
+    TickerType::TitanBlobFileBytesRead,
+    TickerType::TitanBlobFileSynced,
+    TickerType::TitanGcNumFiles,
+    TickerType::TitanGcNumNewFiles,
+    TickerType::TitanGcNumKeysOverwritten,
+    TickerType::TitanGcNumKeysRelocated,
+    TickerType::TitanGcBytesOverwritten,
+    TickerType::TitanGcBytesRelocated,
+    TickerType::TitanGcBytesWritten,
+    TickerType::TitanGcBytesRead,
+    TickerType::TitanBlobCacheHit,
+    TickerType::TitanBlobCacheMiss,
+    TickerType::TitanGcNoNeed,
+    TickerType::TitanGcRemain,
+    TickerType::TitanGcDiscardable,
+    TickerType::TitanGcSample,
+    TickerType::TitanGcSmallFile,
+    TickerType::TitanGcFailure,
+    TickerType::TitanGcSuccess,
+    TickerType::TitanGcTriggerNext,
 ];
 
 pub const ENGINE_HIST_TYPES: &[HistType] = &[
@@ -142,14 +169,22 @@ pub const ENGINE_HIST_TYPES: &[HistType] = &[
     HistType::BytesDecompressed,
     HistType::CompressionTimesNanos,
     HistType::DecompressionTimesNanos,
-    HistType::BlobDbKeySize,
-    HistType::BlobDbValueSize,
-    HistType::BlobDbSeekMicros,
-    HistType::BlobDbNextMicros,
-    HistType::BlobDbPrevMicros,
-    HistType::BlobDbBlobFileWriteMicros,
-    HistType::BlobDbBlobFileReadMicros,
-    HistType::BlobDbBlobFileSyncMicros,
-    HistType::BlobDbGcMicros,
     HistType::DbWriteWalTime,
+];
+
+pub const TITAN_ENGINE_HIST_TYPES: &[HistType] = &[
+    HistType::TitanKeySize,
+    HistType::TitanValueSize,
+    HistType::TitanGetMicros,
+    HistType::TitanSeekMicros,
+    HistType::TitanNextMicros,
+    HistType::TitanPrevMicros,
+    HistType::TitanBlobFileWriteMicros,
+    HistType::TitanBlobFileReadMicros,
+    HistType::TitanBlobFileSyncMicros,
+    HistType::TitanManifestFileSyncMicros,
+    HistType::TitanGcMicros,
+    HistType::TitanGcInputFileSize,
+    HistType::TitanGcOutputFileSize,
+    HistType::TitanIterTouchBlobFileCount,
 ];

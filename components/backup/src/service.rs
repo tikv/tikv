@@ -1,14 +1,13 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::sync::atomic::*;
-use std::sync::Arc;
 
 use futures::channel::mpsc;
-use futures::compat::Compat;
-use futures::StreamExt;
-use futures_01::{future::Future, sink::Sink, stream::Stream};
+use futures::{FutureExt, SinkExt, StreamExt, TryFutureExt};
 use grpcio::{self, *};
 use kvproto::backup::*;
-use tikv_util::security::{check_common_name, SecurityManager};
 use tikv_util::worker::*;
+use tikv_util::{error, info};
 
 use super::Task;
 
@@ -16,16 +15,12 @@ use super::Task;
 #[derive(Clone)]
 pub struct Service {
     scheduler: Scheduler<Task>,
-    security_mgr: Arc<SecurityManager>,
 }
 
 impl Service {
     /// Create a new backup service.
-    pub fn new(scheduler: Scheduler<Task>, security_mgr: Arc<SecurityManager>) -> Service {
-        Service {
-            scheduler,
-            security_mgr,
-        }
+    pub fn new(scheduler: Scheduler<Task>) -> Service {
+        Service { scheduler }
     }
 }
 
@@ -34,11 +29,8 @@ impl Backup for Service {
         &mut self,
         ctx: RpcContext,
         req: BackupRequest,
-        sink: ServerStreamingSink<BackupResponse>,
+        mut sink: ServerStreamingSink<BackupResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let mut cancel = None;
         // TODO: make it a bounded channel.
         let (tx, rx) = mpsc::unbounded();
@@ -46,46 +38,44 @@ impl Backup for Service {
             Ok((task, c)) => {
                 cancel = Some(c);
                 self.scheduler.schedule(task).map_err(|e| {
-                    RpcStatus::new(RpcStatusCode::INVALID_ARGUMENT, Some(format!("{:?}", e)))
+                    RpcStatus::with_message(RpcStatusCode::INVALID_ARGUMENT, format!("{:?}", e))
                 })
             }
-            Err(e) => Err(RpcStatus::new(
+            Err(e) => Err(RpcStatus::with_message(
                 RpcStatusCode::UNKNOWN,
-                Some(format!("{:?}", e)),
+                format!("{:?}", e),
             )),
         } {
             error!("backup task initiate failed"; "error" => ?status);
-            ctx.spawn(sink.fail(status).map_err(|e| {
-                error!("backup failed to send error"; "error" => ?e);
-            }));
+            ctx.spawn(
+                sink.fail(status)
+                    .unwrap_or_else(|e| error!("backup failed to send error"; "error" => ?e)),
+            );
             return;
         };
 
-        let send_resp = sink.send_all(Compat::new(rx.map(Ok)).then(
-            |resp: Result<BackupResponse>| match resp {
-                Ok(resp) => Ok((resp, WriteFlags::default())),
-                Err(e) => {
-                    error!("backup send failed"; "error" => ?e);
-                    Err(grpcio::Error::RpcFailure(RpcStatus::new(
-                        RpcStatusCode::UNKNOWN,
-                        Some(format!("{:?}", e)),
-                    )))
+        let send_task = async move {
+            let mut s = rx.map(|resp| Ok((resp, WriteFlags::default())));
+            sink.send_all(&mut s).await?;
+            sink.close().await?;
+            Ok(())
+        }
+        .map(|res: Result<()>| {
+            match res {
+                Ok(_) => {
+                    info!("backup closed");
                 }
-            },
-        ));
-        ctx.spawn(
-            send_resp
-                .map(|_s /* the sink */| {
-                    info!("backup send half closed");
-                })
-                .map_err(move |e| {
+                Err(e) => {
                     if let Some(c) = cancel {
                         // Cancel the running task.
                         c.store(true, Ordering::SeqCst);
                     }
                     error!("backup canceled"; "error" => ?e);
-                }),
-        );
+                }
+            }
+        });
+
+        ctx.spawn(send_task);
     }
 }
 
@@ -96,17 +86,15 @@ mod tests {
 
     use super::*;
     use crate::endpoint::tests::*;
-    use external_storage::make_local_backend;
-    use tikv::storage::mvcc::tests::*;
-    use tikv_util::mpsc::Receiver;
-    use tikv_util::security::*;
+    use external_storage_export::make_local_backend;
+    use tikv::storage::txn::tests::{must_commit, must_prewrite_put};
+    use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
     use txn_types::TimeStamp;
 
-    fn new_rpc_suite() -> (Server, BackupClient, Receiver<Option<Task>>) {
-        let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
+    fn new_rpc_suite() -> (Server, BackupClient, ReceiverWrapper<Task>) {
         let env = Arc::new(EnvBuilder::new().build());
         let (scheduler, rx) = dummy_scheduler();
-        let backup_service = super::Service::new(scheduler, security_mgr);
+        let backup_service = super::Service::new(scheduler);
         let builder =
             ServerBuilder::new(env.clone()).register_service(create_backup(backup_service));
         let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
@@ -120,7 +108,7 @@ mod tests {
 
     #[test]
     fn test_client_stop() {
-        let (_server, client, rx) = new_rpc_suite();
+        let (_server, client, mut rx) = new_rpc_suite();
 
         let (tmp, endpoint) = new_endpoint();
         let engine = endpoint.engine.clone();
@@ -163,9 +151,11 @@ mod tests {
 
         // Set an unique path to avoid AlreadyExists error.
         req.set_storage_backend(make_local_backend(&tmp.path().join(alloc_ts().to_string())));
-        let stream = client.backup(&req).unwrap();
+        let mut stream = client.backup(&req).unwrap();
         // Drop steam once it received something.
-        client.spawn(stream.into_future().then(|_res| Ok(())));
+        client.spawn(async move {
+            let _ = stream.next().await;
+        });
         let task = rx.recv_timeout(Duration::from_secs(5)).unwrap();
         // A stopped remote must not cause panic.
         endpoint.handle_backup_task(task.unwrap());
@@ -173,7 +163,7 @@ mod tests {
         // Set an unique path to avoid AlreadyExists error.
         req.set_storage_backend(make_local_backend(&tmp.path().join(alloc_ts().to_string())));
         let stream = client.backup(&req).unwrap();
-        let task = rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+        let task = rx.recv().unwrap();
         // Drop stream without start receiving will cause cancel error.
         drop(stream);
         // Wait util the task is canceled in map_err.

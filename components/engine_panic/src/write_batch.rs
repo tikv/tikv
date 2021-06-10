@@ -7,15 +7,9 @@ impl WriteBatchExt for PanicEngine {
     type WriteBatch = PanicWriteBatch;
     type WriteBatchVec = PanicWriteBatch;
 
-    fn write_opt(&self, wb: &Self::WriteBatch, opts: &WriteOptions) -> Result<()> {
-        panic!()
-    }
+    const WRITE_BATCH_MAX_KEYS: usize = 1;
 
     fn support_write_batch_vec(&self) -> bool {
-        panic!()
-    }
-
-    fn write_vec_opt(&self, wb: &Self::WriteBatchVec, opts: &WriteOptions) -> Result<()> {
         panic!()
     }
 
@@ -25,14 +19,19 @@ impl WriteBatchExt for PanicEngine {
     fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
         panic!()
     }
-    fn write_batch_vec(&self, vec_size: usize, cap: usize) -> Self::WriteBatchVec {
-        panic!()
-    }
 }
 
 pub struct PanicWriteBatch;
 
-impl WriteBatch for PanicWriteBatch {
+impl WriteBatch<PanicEngine> for PanicWriteBatch {
+    fn with_capacity(_: &PanicEngine, _: usize) -> Self {
+        panic!()
+    }
+
+    fn write_opt(&self, _: &WriteOptions) -> Result<()> {
+        panic!()
+    }
+
     fn data_size(&self) -> usize {
         panic!()
     }
@@ -72,6 +71,9 @@ impl Mutable for PanicWriteBatch {
         panic!()
     }
     fn delete_cf(&mut self, cf: &str, key: &[u8]) -> Result<()> {
+        panic!()
+    }
+    fn delete_range(&mut self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         panic!()
     }
     fn delete_range_cf(&mut self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {

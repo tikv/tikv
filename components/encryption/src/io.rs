@@ -13,6 +13,8 @@ use kvproto::encryptionpb::EncryptionMethod;
 use openssl::symm::{Cipher as OCipher, Crypter as OCrypter, Mode};
 
 use crate::{Iv, Result};
+use file_system::File;
+use tikv_util::box_err;
 
 /// Encrypt content as data being read.
 pub struct EncrypterReader<R>(CrypterReader<R>);
@@ -79,7 +81,7 @@ pub fn create_aes_ctr_crypter(
     }
     let cipher = match method {
         EncryptionMethod::Unknown | EncryptionMethod::Plaintext => {
-            return Err(box_err!("init crypter while encryption is not enabled"))
+            return Err(box_err!("init crypter while encryption is not enabled"));
         }
         EncryptionMethod::Aes128Ctr => OCipher::aes_128_ctr(),
         EncryptionMethod::Aes192Ctr => OCipher::aes_192_ctr(),
@@ -230,6 +232,12 @@ impl<W: Write> Write for EncrypterWriter<W> {
     fn flush(&mut self) -> IoResult<()> {
         let writer = self.writer.as_mut().unwrap();
         writer.flush()
+    }
+}
+
+impl EncrypterWriter<File> {
+    pub fn sync_all(&self) -> IoResult<()> {
+        self.writer.as_ref().unwrap().sync_all()
     }
 }
 

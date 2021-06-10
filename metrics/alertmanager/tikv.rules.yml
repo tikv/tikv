@@ -14,7 +14,7 @@ groups:
       summary: TiKV memory used too fast
 
   - alert: TiKV_GC_can_not_work
-    expr: sum(increase(tikv_gcworker_gc_tasks_vec{task="gc"}[1d])) < 1
+    expr: sum(increase(tikv_gcworker_gc_tasks_vec{task="gc"}[1d])) < 1 and sum(increase(tikv_gc_compaction_filter_perform[1d])) < 1
     for: 1m
     labels:
       env: ENV_LABELS_ENV
@@ -241,18 +241,6 @@ groups:
       value: '{{ $value }}'
       summary: TiKV scheduler command duration seconds more than 1s
 
-  - alert: tikv_coprocessor_request_wait_seconds
-    expr: delta( tikv_coprocessor_request_wait_seconds_count[10m] )  > 0
-    for: 1m
-    labels:
-      env: ENV_LABELS_ENV
-      level: warning
-      expr:  delta( tikv_coprocessor_request_wait_seconds_count[10m] )  > 0
-    annotations:
-      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values: {{ $value }}'
-      value: '{{ $value }}'
-      summary: TiKV coprocessor request wait seconds
-
   - alert: TiKV_coprocessor_request_error
     expr: increase(tikv_coprocessor_request_error{reason!="lock"}[10m]) > 100
     for: 1m
@@ -337,3 +325,14 @@ groups:
       value: '{{ $value }}'
       summary: TiKV approximate region size is more than 1GB
 
+  - alert: TiKV_node_restart
+    expr: changes(process_start_time_seconds{job="tikv"}[5m]) > 0
+    for: 1m
+    labels:
+      env: ENV_LABELS_ENV
+      level: warning
+      expr:  changes(process_start_time_seconds{job="tikv"}[5m]) > 0
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values:{{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV server has been restarted

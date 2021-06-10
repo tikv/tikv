@@ -1,68 +1,57 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Ordering;
 use std::iter::FromIterator;
 use std::path::Path;
 use std::sync::Arc;
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
-use std::{error, result};
+use std::{error::Error as StdError, result};
 
-use engine::rocks::util::get_cf_handle;
-use engine::rocks::{
-    CompactOptions, DBBottommostLevelCompaction, DBIterator as RocksIterator, ReadOptions, SeekKey,
-    DB,
-};
-use engine::IterOptionsExt;
-use engine::{self, Engines};
-use engine_rocks::{CloneCompat, Compat, RocksEngine, RocksWriteBatch};
-use engine_traits::{
-    IterOptions, Iterable, Mutable, Peekable, TableProperties, TablePropertiesCollection,
-    TablePropertiesExt, WriteBatch, WriteOptions,
-};
-use engine_traits::{WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::debugpb::{self, Db as DBType};
-use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
-use kvproto::metapb::{Peer, Region};
+use kvproto::metapb::Region;
 use kvproto::raft_serverpb::*;
 use protobuf::Message;
 use raft::eraftpb::Entry;
 use raft::{self, RawNode};
+use thiserror::Error;
 
-use crate::config::ConfigController;
-use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
-use crate::storage::Iterator as EngineIterator;
-use engine_rocks::properties::MvccProperties;
-use engine_rocks::RangeProperties;
-use raftstore::coprocessor::{get_region_approximate_keys_cf, get_region_approximate_middle};
+use collections::HashSet;
+use engine_rocks::raw::{CompactOptions, DBBottommostLevelCompaction, DB};
+use engine_rocks::util::get_cf_handle;
+use engine_rocks::RocksMvccProperties;
+use engine_rocks::{Compat, RocksEngine, RocksEngineIterator, RocksWriteBatch};
+use engine_traits::{
+    Engines, IterOptions, Iterable, Iterator as EngineIterator, Mutable, Peekable, RaftEngine,
+    RangePropertiesExt, SeekKey, TableProperties, TablePropertiesCollection, TablePropertiesExt,
+    WriteBatch, WriteOptions,
+};
+use engine_traits::{MvccProperties, Range, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use raftstore::coprocessor::get_region_approximate_middle;
 use raftstore::store::util as raftstore_util;
 use raftstore::store::PeerStorage;
 use raftstore::store::{write_initial_apply_state, write_initial_raft_state, write_peer_state};
 use tikv_util::codec::bytes;
-use tikv_util::collections::HashSet;
 use tikv_util::config::ReadableSize;
-use tikv_util::escape;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Worker;
 use txn_types::Key;
 
-pub type Result<T> = result::Result<T, Error>;
-type DBIterator = RocksIterator<Arc<DB>>;
+use crate::config::ConfigController;
+use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        InvalidArgument(msg: String) {
-            display("Invalid Argument {:?}", msg)
-        }
-        NotFound(msg: String) {
-            display("Not Found {:?}", msg)
-        }
-        Other(err: Box<dyn error::Error + Sync + Send>) {
-            from()
-            cause(err.as_ref())
-            display("{:?}", err)
-        }
-    }
+pub use crate::storage::mvcc::MvccInfoIterator;
+
+pub type Result<T> = result::Result<T, Error>;
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("Invalid Argument {0:?}")]
+    InvalidArgument(String),
+
+    #[error("Not Found {0:?}")]
+    NotFound(String),
+
+    #[error("{0:?}")]
+    Other(#[from] Box<dyn StdError + Sync + Send>),
 }
 
 /// Describes the meta information of a Region.
@@ -128,20 +117,23 @@ impl From<BottommostLevelCompaction> for debugpb::BottommostLevelCompaction {
 }
 
 #[derive(Clone)]
-pub struct Debugger {
-    engines: Engines,
+pub struct Debugger<ER: RaftEngine> {
+    engines: Engines<RocksEngine, ER>,
     cfg_controller: ConfigController,
 }
 
-impl Debugger {
-    pub fn new(engines: Engines, cfg_controller: ConfigController) -> Debugger {
+impl<ER: RaftEngine> Debugger<ER> {
+    pub fn new(
+        engines: Engines<RocksEngine, ER>,
+        cfg_controller: ConfigController,
+    ) -> Debugger<ER> {
         Debugger {
             engines,
             cfg_controller,
         }
     }
 
-    pub fn get_engine(&self) -> &Engines {
+    pub fn get_engine(&self) -> &Engines<RocksEngine, ER> {
         &self.engines
     }
 
@@ -152,7 +144,7 @@ impl Debugger {
         let start_key = keys::REGION_META_MIN_KEY;
         let end_key = keys::REGION_META_MAX_KEY;
         let mut regions = Vec::with_capacity(128);
-        box_try!(db.c().scan_cf(cf, start_key, end_key, false, |key, _| {
+        box_try!(db.scan_cf(cf, start_key, end_key, false, |key, _| {
             let (id, suffix) = box_try!(keys::decode_region_meta_key(key));
             if suffix != keys::REGION_STATE_SUFFIX {
                 return Ok(true);
@@ -165,8 +157,8 @@ impl Debugger {
 
     fn get_db_from_type(&self, db: DBType) -> Result<&Arc<DB>> {
         match db {
-            DBType::Kv => Ok(&self.engines.kv),
-            DBType::Raft => Ok(&self.engines.raft),
+            DBType::Kv => Ok(self.engines.kv.as_inner()),
+            DBType::Raft => Err(box_err!("Get raft db is not allowed")),
             _ => Err(box_err!("invalid DBType type")),
         }
     }
@@ -185,38 +177,31 @@ impl Debugger {
     }
 
     pub fn raft_log(&self, region_id: u64, log_index: u64) -> Result<Entry> {
-        let key = keys::raft_log_key(region_id, log_index);
-        match self.engines.raft.c().get_msg(&key) {
-            Ok(Some(entry)) => Ok(entry),
-            Ok(None) => Err(Error::NotFound(format!(
-                "raft log for region {} at index {}",
-                region_id, log_index
-            ))),
-            Err(e) => Err(box_err!(e)),
+        if let Some(e) = box_try!(self.engines.raft.get_entry(region_id, log_index)) {
+            return Ok(e);
         }
+        Err(Error::NotFound(format!(
+            "raft log for region {} at index {}",
+            region_id, log_index
+        )))
     }
 
     pub fn region_info(&self, region_id: u64) -> Result<RegionInfo> {
-        let raft_state_key = keys::raft_state_key(region_id);
-        let raft_state = box_try!(self
-            .engines
-            .raft
-            .c()
-            .get_msg::<RaftLocalState>(&raft_state_key));
+        let raft_state = box_try!(self.engines.raft.get_raft_state(region_id));
 
         let apply_state_key = keys::apply_state_key(region_id);
-        let apply_state = box_try!(self
-            .engines
-            .kv
-            .c()
-            .get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key));
+        let apply_state = box_try!(
+            self.engines
+                .kv
+                .get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key)
+        );
 
         let region_state_key = keys::region_state_key(region_id);
-        let region_state = box_try!(self
-            .engines
-            .kv
-            .c()
-            .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key));
+        let region_state = box_try!(
+            self.engines
+                .kv
+                .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
+        );
 
         match (raft_state, apply_state, region_state) {
             (None, None, None) => Err(Error::NotFound(format!("info for region {}", region_id))),
@@ -235,7 +220,6 @@ impl Debugger {
         match self
             .engines
             .kv
-            .c()
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
         {
             Ok(Some(region_state)) => {
@@ -245,7 +229,7 @@ impl Debugger {
                 let mut sizes = vec![];
                 for cf in cfs {
                     let mut size = 0;
-                    box_try!(self.engines.kv.c().scan_cf(
+                    box_try!(self.engines.kv.scan_cf(
                         cf.as_ref(),
                         start_key,
                         end_key,
@@ -265,16 +249,25 @@ impl Debugger {
     }
 
     /// Scan MVCC Infos for given range `[start, end)`.
-    pub fn scan_mvcc(&self, start: &[u8], end: &[u8], limit: u64) -> Result<MvccInfoIterator> {
-        if !start.starts_with(b"z") || (!end.is_empty() && !end.starts_with(b"z")) {
-            return Err(Error::InvalidArgument(
-                "start and end should start with \"z\"".to_owned(),
-            ));
-        }
+    pub fn scan_mvcc(
+        &self,
+        start: &[u8],
+        end: &[u8],
+        limit: u64,
+    ) -> Result<MvccInfoIterator<RocksEngineIterator>> {
         if end.is_empty() && limit == 0 {
             return Err(Error::InvalidArgument("no limit and to_key".to_owned()));
         }
-        MvccInfoIterator::new(&self.engines.kv, start, end, limit)
+        MvccInfoIterator::new(
+            |cf, opts| {
+                let kv = &self.engines.kv;
+                kv.iterator_cf_opt(cf, opts).map_err(|e| box_err!(e))
+            },
+            if start.is_empty() { None } else { Some(start) },
+            if end.is_empty() { None } else { Some(end) },
+            limit as usize,
+        )
+        .map_err(|e| box_err!(e))
     }
 
     /// Scan raw keys for given range `[start, end)` in given cf.
@@ -286,14 +279,14 @@ impl Debugger {
         cf: &str,
     ) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
         let db = &self.engines.kv;
-        let cf_handle = get_cf_handle(db, cf).unwrap();
-        let mut read_opt = ReadOptions::new();
-        read_opt.set_total_order_seek(true);
-        read_opt.set_iterate_lower_bound(start.to_vec());
-        if !end.is_empty() {
-            read_opt.set_iterate_upper_bound(end.to_vec());
-        }
-        let mut iter = db.iter_cf_opt(cf_handle, read_opt);
+        let end = if !end.is_empty() {
+            Some(KeyBuilder::from_vec(end.to_vec(), 0, 0))
+        } else {
+            None
+        };
+        let iter_opt =
+            IterOptions::new(Some(KeyBuilder::from_vec(start.to_vec(), 0, 0)), end, false);
+        let mut iter = box_try!(db.iterator_cf_opt(cf, iter_opt));
         if !iter.seek_to_first().unwrap() {
             return Ok(vec![]);
         }
@@ -336,12 +329,12 @@ impl Debugger {
     pub fn set_region_tombstone(&self, regions: Vec<Region>) -> Result<Vec<(u64, Error)>> {
         let store_id = self.get_store_id()?;
         let db = &self.engines.kv;
-        let mut wb = db.c().write_batch();
+        let mut wb = db.write_batch();
 
         let mut errors = Vec::with_capacity(regions.len());
         for region in regions {
             let region_id = region.get_id();
-            if let Err(e) = set_region_tombstone(db, store_id, region, &mut wb) {
+            if let Err(e) = set_region_tombstone(db.as_inner(), store_id, region, &mut wb) {
                 errors.push((region_id, e));
             }
         }
@@ -349,18 +342,18 @@ impl Debugger {
         if errors.is_empty() {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
-            box_try!(db.c().write_opt(&wb, &write_opts));
+            box_try!(wb.write_opt(&write_opts));
         }
         Ok(errors)
     }
 
     pub fn set_region_tombstone_by_id(&self, regions: Vec<u64>) -> Result<Vec<(u64, Error)>> {
         let db = &self.engines.kv;
-        let mut wb = db.c().write_batch();
+        let mut wb = db.write_batch();
         let mut errors = Vec::with_capacity(regions.len());
         for region_id in regions {
             let key = keys::region_state_key(region_id);
-            let region_state = match db.c().get_msg_cf::<RegionLocalState>(CF_RAFT, &key) {
+            let region_state = match db.get_msg_cf::<RegionLocalState>(CF_RAFT, &key) {
                 Ok(Some(state)) => state,
                 Ok(None) => {
                     let error = box_err!("{} region local state not exists", region_id);
@@ -374,7 +367,7 @@ impl Debugger {
                 }
             };
             if region_state.get_state() == PeerState::Tombstone {
-                v1!("skip because it's already tombstone");
+                info!("skip {} because it's already tombstone", region_id);
                 continue;
             }
             let region = &region_state.get_region();
@@ -383,7 +376,7 @@ impl Debugger {
 
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
-        db.c().write_opt(&wb, &write_opts).unwrap();
+        wb.write_opt(&write_opts).unwrap();
         Ok(errors)
     }
 
@@ -398,7 +391,7 @@ impl Debugger {
         for region in regions {
             let region_id = region.get_id();
             if let Err(e) = recover_mvcc_for_range(
-                db,
+                db.as_inner(),
                 region.get_start_key(),
                 region.get_end_key(),
                 read_only,
@@ -414,13 +407,16 @@ impl Debugger {
     pub fn recover_all(&self, threads: usize, read_only: bool) -> Result<()> {
         let db = self.engines.kv.clone();
 
-        v1!("Calculating split keys...");
-        let split_keys = divide_db(&db, threads).unwrap().into_iter().map(|k| {
-            let k = Key::from_encoded(keys::origin_key(&k).to_vec())
-                .truncate_ts()
-                .unwrap();
-            k.as_encoded().clone()
-        });
+        info!("Calculating split keys...");
+        let split_keys = divide_db(db.as_inner(), threads)
+            .unwrap()
+            .into_iter()
+            .map(|k| {
+                let k = Key::from_encoded(keys::origin_key(&k).to_vec())
+                    .truncate_ts()
+                    .unwrap();
+                k.as_encoded().clone()
+            });
 
         let mut range_borders = vec![b"".to_vec()];
         range_borders.extend(split_keys);
@@ -436,14 +432,23 @@ impl Debugger {
             let thread = ThreadBuilder::new()
                 .name(format!("mvcc-recover-thread-{}", thread_index))
                 .spawn(move || {
-                    v1!(
+                    tikv_alloc::add_thread_memory_accessor();
+                    info!(
                         "thread {}: started on range [{}, {})",
                         thread_index,
-                        hex::encode_upper(&start_key),
-                        hex::encode_upper(&end_key)
+                        log_wrappers::Value::key(&start_key),
+                        log_wrappers::Value::key(&end_key)
                     );
 
-                    recover_mvcc_for_range(&db, &start_key, &end_key, read_only, thread_index)
+                    let result = recover_mvcc_for_range(
+                        db.as_inner(),
+                        &start_key,
+                        &end_key,
+                        read_only,
+                        thread_index,
+                    );
+                    tikv_alloc::remove_thread_memory_accessor();
+                    result
                 })
                 .unwrap();
 
@@ -455,7 +460,7 @@ impl Debugger {
             .map(|h: JoinHandle<Result<()>>| h.join())
             .map(|r| {
                 if let Err(e) = &r {
-                    ve1!("{:?}", e);
+                    error!("{:?}", e);
                 }
                 r
             })
@@ -476,15 +481,14 @@ impl Debugger {
             Some(KeyBuilder::from_vec(from.clone(), 0, 0)),
             Some(KeyBuilder::from_vec(to, 0, 0)),
             false,
-        )
-        .build_read_opts();
-        let handle = box_try!(get_cf_handle(&self.engines.kv, CF_RAFT));
-        let mut iter = DBIterator::new_cf(Arc::clone(&self.engines.kv), handle, readopts);
+        );
+        let mut iter = box_try!(self.engines.kv.iterator_cf_opt(CF_RAFT, readopts));
         iter.seek(SeekKey::from(from.as_ref())).unwrap();
 
-        let fake_snap_worker = Worker::new("fake-snap-worker");
+        let fake_worker = Worker::new("fake-snap-worker");
+        let fake_snap_worker = fake_worker.lazy_build("fake-snap");
 
-        let check_value = |value: Vec<u8>| -> Result<()> {
+        let check_value = |value: &[u8]| -> Result<()> {
             let mut local_state = RegionLocalState::default();
             box_try!(local_state.merge_from_bytes(&value));
 
@@ -503,8 +507,8 @@ impl Debugger {
                 })?;
 
             let tag = format!("[region {}] {}", region.get_id(), peer_id);
-            let peer_storage = box_try!(PeerStorage::<RocksEngine, RocksEngine>::new(
-                self.engines.c(),
+            let peer_storage = box_try!(PeerStorage::<RocksEngine, ER>::new(
+                self.engines.clone(),
                 region,
                 fake_snap_worker.scheduler(),
                 peer_id,
@@ -530,15 +534,18 @@ impl Debugger {
             Ok(())
         };
 
-        for (key, value) in &mut iter {
+        while box_try!(iter.valid()) {
+            let (key, value) = (iter.key(), iter.value());
             if let Ok((region_id, suffix)) = keys::decode_region_meta_key(&key) {
                 if suffix != keys::REGION_STATE_SUFFIX {
+                    box_try!(iter.next());
                     continue;
                 }
                 if let Err(e) = check_value(value) {
                     res.push((region_id, e));
                 }
             }
+            box_try!(iter.next());
         }
         Ok(res)
     }
@@ -553,7 +560,7 @@ impl Debugger {
             let msg = format!("Store {} in the failed list", store_id);
             return Err(Error::Other(msg.into()));
         }
-        let mut wb = self.engines.kv.c().write_batch();
+        let mut wb = self.engines.kv.write_batch();
         let store_ids = HashSet::<u64>::from_iter(store_ids);
 
         {
@@ -590,7 +597,7 @@ impl Debugger {
                 let kv = &self.engines.kv;
                 for region_id in region_ids {
                     let key = keys::region_state_key(region_id);
-                    if let Some(value) = box_try!(kv.c().get_value_cf(CF_RAFT, &key)) {
+                    if let Some(value) = box_try!(kv.get_value_cf(CF_RAFT, &key)) {
                         box_try!(remove_stores(&key, &value, &mut wb));
                     } else {
                         let msg = format!("No such region {} on the store", region_id);
@@ -598,7 +605,7 @@ impl Debugger {
                     }
                 }
             } else {
-                box_try!(self.engines.kv.c().scan_cf(
+                box_try!(self.engines.kv.scan_cf(
                     CF_RAFT,
                     keys::REGION_META_MIN_KEY,
                     keys::REGION_META_MAX_KEY,
@@ -610,7 +617,7 @@ impl Debugger {
 
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
-        box_try!(self.engines.kv.c().write_opt(&wb, &write_opts));
+        box_try!(wb.write_opt(&write_opts));
         Ok(())
     }
 
@@ -619,14 +626,14 @@ impl Debugger {
         let kv = &self.engines.kv;
         let raft = &self.engines.raft;
 
-        let mut kv_wb = self.engines.kv.c().write_batch();
-        let mut raft_wb = self.engines.raft.c().write_batch();
+        let mut kv_wb = self.engines.kv.write_batch();
+        let mut raft_wb = self.engines.raft.log_batch(0);
 
         if region.get_start_key() >= region.get_end_key() && !region.get_end_key().is_empty() {
             return Err(box_err!("Bad region: {:?}", region));
         }
 
-        box_try!(self.engines.kv.c().scan_cf(
+        box_try!(self.engines.kv.scan_cf(
             CF_RAFT,
             keys::REGION_META_MIN_KEY,
             keys::REGION_META_MAX_KEY,
@@ -663,7 +670,7 @@ impl Debugger {
         region_state.set_state(PeerState::Normal);
         region_state.set_region(region);
         let key = keys::region_state_key(region_id);
-        if box_try!(kv.c().get_msg_cf::<RegionLocalState>(CF_RAFT, &key)).is_some() {
+        if box_try!(kv.get_msg_cf::<RegionLocalState>(CF_RAFT, &key)).is_some() {
             return Err(Error::Other(
                 "Store already has the RegionLocalState".into(),
             ));
@@ -672,29 +679,27 @@ impl Debugger {
 
         // RaftApplyState.
         let key = keys::apply_state_key(region_id);
-        if box_try!(kv.c().get_msg_cf::<RaftApplyState>(CF_RAFT, &key)).is_some() {
+        if box_try!(kv.get_msg_cf::<RaftApplyState>(CF_RAFT, &key)).is_some() {
             return Err(Error::Other("Store already has the RaftApplyState".into()));
         }
         box_try!(write_initial_apply_state(&mut kv_wb, region_id));
 
         // RaftLocalState.
-        let key = keys::raft_state_key(region_id);
-        if box_try!(raft.c().get_msg::<RaftLocalState>(&key)).is_some() {
+        if box_try!(raft.get_raft_state(region_id)).is_some() {
             return Err(Error::Other("Store already has the RaftLocalState".into()));
         }
         box_try!(write_initial_raft_state(&mut raft_wb, region_id));
 
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
-        box_try!(self.engines.kv.c().write_opt(&kv_wb, &write_opts));
-        box_try!(self.engines.kv.c().write_opt(&raft_wb, &write_opts));
+        box_try!(kv_wb.write_opt(&write_opts));
+        box_try!(self.engines.raft.consume(&mut raft_wb, true));
         Ok(())
     }
 
     pub fn get_store_id(&self) -> Result<u64> {
         let db = &self.engines.kv;
-        db.c()
-            .get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
+        db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
             .map_err(|e| box_err!(e))
             .and_then(|ident| match ident {
                 Some(ident) => Ok(ident.get_store_id()),
@@ -704,8 +709,7 @@ impl Debugger {
 
     pub fn get_cluster_id(&self) -> Result<u64> {
         let db = &self.engines.kv;
-        db.c()
-            .get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
+        db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
             .map_err(|e| box_err!(e))
             .and_then(|ident| match ident {
                 Some(ident) => Ok(ident.get_cluster_id()),
@@ -724,11 +728,11 @@ impl Debugger {
 
     fn get_region_state(&self, region_id: u64) -> Result<RegionLocalState> {
         let region_state_key = keys::region_state_key(region_id);
-        let region_state = box_try!(self
-            .engines
-            .kv
-            .c()
-            .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key));
+        let region_state = box_try!(
+            self.engines
+                .kv
+                .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
+        );
         match region_state {
             Some(v) => Ok(v),
             None => Err(Error::NotFound(format!("region {}", region_id))),
@@ -738,20 +742,12 @@ impl Debugger {
     pub fn get_region_properties(&self, region_id: u64) -> Result<Vec<(String, String)>> {
         let region_state = self.get_region_state(region_id)?;
         let region = region_state.get_region();
-        let db = &self.engines.kv;
+        let start = keys::enc_start_key(region);
+        let end = keys::enc_end_key(region);
 
-        let mut num_entries = 0;
-        let mut mvcc_properties = MvccProperties::new();
-        let start = keys::enc_start_key(&region);
-        let end = keys::enc_end_key(&region);
-        let collection = box_try!(db.c().get_range_properties_cf(CF_WRITE, &start, &end));
-        for (_, v) in collection.iter() {
-            num_entries += v.num_entries();
-            let mvcc = box_try!(MvccProperties::decode(&v.user_collected_properties()));
-            mvcc_properties.add(&mvcc);
-        }
+        let mut res = dump_mvcc_properties(self.engines.kv.as_inner(), &start, &end)?;
 
-        let middle_key = match box_try!(get_region_approximate_middle(db.c(), &region)) {
+        let middle_key = match box_try!(get_region_approximate_middle(&self.engines.kv, region)) {
             Some(data_key) => {
                 let mut key = keys::origin_key(&data_key);
                 box_try!(bytes::decode_bytes(&mut key, false))
@@ -759,41 +755,72 @@ impl Debugger {
             None => Vec::new(),
         };
 
-        let mut res: Vec<(String, String)> = [
-            ("num_files", collection.len() as u64),
-            ("num_entries", num_entries),
-            ("num_deletes", num_entries - mvcc_properties.num_versions),
-            ("mvcc.min_ts", mvcc_properties.min_ts.into_inner()),
-            ("mvcc.max_ts", mvcc_properties.max_ts.into_inner()),
-            ("mvcc.num_rows", mvcc_properties.num_rows),
-            ("mvcc.num_puts", mvcc_properties.num_puts),
-            ("mvcc.num_deletes", mvcc_properties.num_deletes),
-            ("mvcc.num_versions", mvcc_properties.num_versions),
-            ("mvcc.max_row_versions", mvcc_properties.max_row_versions),
-        ]
-        .iter()
-        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
-        .collect();
+        // Middle key of the range.
         res.push((
-            "middle_key_by_approximate_size".to_string(),
-            escape(&middle_key),
+            "middle_key_by_approximate_size".to_owned(),
+            hex::encode(&middle_key),
         ));
-        res.push((
-            "sst_files".to_string(),
-            collection
-                .iter()
-                .map(|(k, _)| {
-                    Path::new(&*k)
-                        .file_name()
-                        .map(|f| f.to_str().unwrap())
-                        .unwrap_or(&*k)
-                        .to_string()
-                })
-                .collect::<Vec<_>>()
-                .join(", "),
-        ));
+
         Ok(res)
     }
+
+    pub fn get_range_properties(&self, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>> {
+        dump_mvcc_properties(
+            self.engines.kv.as_inner(),
+            &keys::data_key(start),
+            &keys::data_end_key(end),
+        )
+    }
+}
+
+fn dump_mvcc_properties(db: &Arc<DB>, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>> {
+    let mut num_entries = 0; // number of Rocksdb K/V entries.
+
+    let collection = box_try!(db.c().get_range_properties_cf(CF_WRITE, &start, &end));
+    let num_files = collection.len();
+
+    let mut mvcc_properties = MvccProperties::new();
+    for (_, v) in collection.iter() {
+        num_entries += v.num_entries();
+        let mvcc = box_try!(RocksMvccProperties::decode(&v.user_collected_properties()));
+        mvcc_properties.add(&mvcc);
+    }
+
+    let sst_files = collection
+        .iter()
+        .map(|(k, _)| {
+            Path::new(&*k)
+                .file_name()
+                .map(|f| f.to_str().unwrap())
+                .unwrap_or(&*k)
+                .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let mut res: Vec<(String, String)> = [
+        ("mvcc.min_ts", mvcc_properties.min_ts.into_inner()),
+        ("mvcc.max_ts", mvcc_properties.max_ts.into_inner()),
+        ("mvcc.num_rows", mvcc_properties.num_rows),
+        ("mvcc.num_puts", mvcc_properties.num_puts),
+        ("mvcc.num_deletes", mvcc_properties.num_deletes),
+        ("mvcc.num_versions", mvcc_properties.num_versions),
+        ("mvcc.max_row_versions", mvcc_properties.max_row_versions),
+    ]
+    .iter()
+    .map(|(k, v)| ((*k).to_string(), v.to_string()))
+    .collect();
+
+    // Entries and delete marks of RocksDB.
+    let num_deletes = num_entries - mvcc_properties.num_versions;
+    res.push(("num_entries".to_owned(), num_entries.to_string()));
+    res.push(("num_deletes".to_owned(), num_deletes.to_string()));
+
+    // count and list of files.
+    res.push(("num_files".to_owned(), num_files.to_string()));
+    res.push(("sst_files".to_owned(), sst_files));
+
+    Ok(res)
 }
 
 fn recover_mvcc_for_range(
@@ -817,12 +844,12 @@ fn recover_mvcc_for_range(
         if !read_only {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
-            box_try!(db.c().write_opt(&wb, &write_opts));
+            box_try!(wb.write_opt(&write_opts));
         } else {
-            v1!("thread {}: skip write {} rows", thread_index, batch_size);
+            info!("thread {}: skip write {} rows", thread_index, batch_size);
         }
 
-        v1!(
+        info!(
             "thread {}: total fix default: {}, lock: {}, write: {}",
             thread_index,
             mvcc_checker.default_fix_count,
@@ -831,16 +858,16 @@ fn recover_mvcc_for_range(
         );
 
         if batch_size < wb_limit {
-            v1!("thread {} has finished working.", thread_index);
+            info!("thread {} has finished working.", thread_index);
             return Ok(());
         }
     }
 }
 
 pub struct MvccChecker {
-    lock_iter: DBIterator,
-    default_iter: DBIterator,
-    write_iter: DBIterator,
+    lock_iter: RocksEngineIterator,
+    default_iter: RocksEngineIterator,
+    write_iter: RocksEngineIterator,
     scan_count: usize,
     lock_fix_count: usize,
     default_fix_count: usize,
@@ -859,10 +886,8 @@ impl MvccChecker {
                 Some(KeyBuilder::from_vec(from, 0, 0)),
                 Some(KeyBuilder::from_vec(to, 0, 0)),
                 false,
-            )
-            .build_read_opts();
-            let handle = box_try!(get_cf_handle(db.as_ref(), cf));
-            let mut iter = DBIterator::new_cf(Arc::clone(&db), handle, readopts);
+            );
+            let mut iter = box_try!(db.c().iterator_cf_opt(cf, readopts));
             iter.seek(SeekKey::Start).unwrap();
             Ok(iter)
         };
@@ -879,7 +904,11 @@ impl MvccChecker {
         })
     }
 
-    fn min_key(key: Option<Vec<u8>>, iter: &DBIterator, f: fn(&[u8]) -> &[u8]) -> Option<Vec<u8>> {
+    fn min_key(
+        key: Option<Vec<u8>>,
+        iter: &RocksEngineIterator,
+        f: fn(&[u8]) -> &[u8],
+    ) -> Option<Vec<u8>> {
         let iter_key = if iter.valid().unwrap() {
             Some(f(keys::origin_key(iter.key())).to_vec())
         } else {
@@ -924,10 +953,9 @@ impl MvccChecker {
     fn check_mvcc_key(&mut self, wb: &mut RocksWriteBatch, key: &[u8]) -> Result<()> {
         self.scan_count += 1;
         if self.scan_count % 1_000_000 == 0 {
-            v1!(
+            info!(
                 "thread {}: scan {} rows",
-                self.thread_index,
-                self.scan_count
+                self.thread_index, self.scan_count
             );
         }
 
@@ -950,13 +978,22 @@ impl MvccChecker {
             // If lock exists, check whether the records in DEFAULT and WRITE
             // match it.
             if let Some(ref l) = lock {
-                // All write records' ts should be less than lock's ts.
+                // All write records's ts should be less than the for_update_ts (if the
+                // lock is from a pessimistic transaction) or the ts of the lock.
+                let (kind, check_ts) = if l.for_update_ts >= l.ts {
+                    ("for_update_ts", l.for_update_ts)
+                } else {
+                    ("ts", l.ts)
+                };
+
                 if let Some((commit_ts, _)) = write {
-                    if l.ts <= commit_ts {
-                        v1!(
-                            "thread {}: LOCK ts is less than WRITE ts, key: {}, lock_ts: {}, commit_ts: {}",
+                    if check_ts <= commit_ts {
+                        info!(
+                            "thread {}: LOCK {} is less than WRITE ts, key: {}, {}: {}, commit_ts: {}",
                             self.thread_index,
-                            hex::encode_upper(key),
+                            kind,
+                            log_wrappers::Value::key(key),
+                            kind,
                             l.ts,
                             commit_ts
                         );
@@ -975,10 +1012,10 @@ impl MvccChecker {
                             next_default = true;
                         }
                         _ => {
-                            v1!(
+                            info!(
                                 "thread {}: no corresponding DEFAULT record for LOCK, key: {}, lock_ts: {}",
                                 self.thread_index,
-                                hex::encode_upper(key),
+                                log_wrappers::Value::key(key),
                                 l.ts
                             );
                             self.delete(wb, CF_LOCK, key, None)?;
@@ -1015,10 +1052,10 @@ impl MvccChecker {
             }
 
             if next_default {
-                v1!(
+                info!(
                     "thread {}: orphan DEFAULT record, key: {}, start_ts: {}",
                     self.thread_index,
-                    hex::encode_upper(key),
+                    log_wrappers::Value::key(key),
                     default.unwrap()
                 );
                 self.delete(wb, CF_DEFAULT, key, default)?;
@@ -1027,10 +1064,10 @@ impl MvccChecker {
 
             if next_write {
                 if let Some((commit_ts, ref w)) = write {
-                    v1!(
+                    info!(
                         "thread {}: no corresponding DEFAULT record for WRITE, key: {}, start_ts: {}, commit_ts: {}",
                         self.thread_index,
-                        hex::encode_upper(key),
+                        log_wrappers::Value::key(key),
                         w.start_ts,
                         commit_ts
                     );
@@ -1104,187 +1141,6 @@ fn region_overlap(r1: &Region, r2: &Region) -> bool {
         && (start_key_2 < end_key_1 || end_key_1.is_empty())
 }
 
-pub struct MvccInfoIterator {
-    limit: u64,
-    count: u64,
-    lock_iter: DBIterator,
-    default_iter: DBIterator,
-    write_iter: DBIterator,
-}
-
-pub type Kv = (Vec<u8>, Vec<u8>);
-
-impl MvccInfoIterator {
-    fn new(db: &Arc<DB>, from: &[u8], to: &[u8], limit: u64) -> Result<Self> {
-        if !keys::validate_data_key(from) {
-            return Err(Error::InvalidArgument(format!(
-                "from non-mvcc area {:?}",
-                from
-            )));
-        }
-
-        let gen_iter = |cf: &str| -> Result<_> {
-            let to = if to.is_empty() {
-                None
-            } else {
-                Some(KeyBuilder::from_vec(to.to_vec(), 0, 0))
-            };
-            let readopts = IterOptions::new(None, to, false).build_read_opts();
-            let handle = box_try!(get_cf_handle(db.as_ref(), cf));
-            let mut iter = DBIterator::new_cf(Arc::clone(db), handle, readopts);
-            iter.seek(SeekKey::from(from)).unwrap();
-            Ok(iter)
-        };
-        Ok(MvccInfoIterator {
-            limit,
-            count: 0,
-            lock_iter: gen_iter(CF_LOCK)?,
-            default_iter: gen_iter(CF_DEFAULT)?,
-            write_iter: gen_iter(CF_WRITE)?,
-        })
-    }
-
-    fn next_lock(&mut self) -> Result<Option<(Vec<u8>, MvccLock)>> {
-        let mut iter = &mut self.lock_iter;
-        if let Some((key, value)) = <&mut DBIterator as Iterator>::next(&mut iter) {
-            let lock = box_try!(Lock::parse(&value));
-            let mut lock_info = MvccLock::default();
-            match lock.lock_type {
-                LockType::Put => lock_info.set_type(Op::Put),
-                LockType::Delete => lock_info.set_type(Op::Del),
-                LockType::Lock => lock_info.set_type(Op::Lock),
-                LockType::Pessimistic => lock_info.set_type(Op::PessimisticLock),
-            }
-            lock_info.set_start_ts(lock.ts.into_inner());
-            lock_info.set_primary(lock.primary);
-            lock_info.set_short_value(lock.short_value.unwrap_or_default());
-            return Ok(Some((key, lock_info)));
-        };
-        Ok(None)
-    }
-
-    fn next_default(&mut self) -> Result<Option<(Vec<u8>, Vec<MvccValue>)>> {
-        if let Some((prefix, vec_kv)) = Self::next_grouped(&mut self.default_iter) {
-            let mut values = Vec::with_capacity(vec_kv.len());
-            for (key, value) in vec_kv {
-                let mut value_info = MvccValue::default();
-                let start_ts = box_try!(Key::decode_ts_from(keys::origin_key(&key)));
-                value_info.set_start_ts(start_ts.into_inner());
-                value_info.set_value(value);
-                values.push(value_info);
-            }
-            return Ok(Some((prefix, values)));
-        }
-        Ok(None)
-    }
-
-    fn next_write(&mut self) -> Result<Option<(Vec<u8>, Vec<MvccWrite>)>> {
-        if let Some((prefix, vec_kv)) = Self::next_grouped(&mut self.write_iter) {
-            let mut writes = Vec::with_capacity(vec_kv.len());
-            for (key, value) in vec_kv {
-                let write = box_try!(WriteRef::parse(&value)).to_owned();
-                let mut write_info = MvccWrite::default();
-                match write.write_type {
-                    WriteType::Put => write_info.set_type(Op::Put),
-                    WriteType::Delete => write_info.set_type(Op::Del),
-                    WriteType::Lock => write_info.set_type(Op::Lock),
-                    WriteType::Rollback => write_info.set_type(Op::Rollback),
-                }
-                write_info.set_start_ts(write.start_ts.into_inner());
-                let commit_ts = box_try!(Key::decode_ts_from(keys::origin_key(&key)));
-                write_info.set_commit_ts(commit_ts.into_inner());
-                write_info.set_short_value(write.short_value.unwrap_or_default());
-                writes.push(write_info);
-            }
-            return Ok(Some((prefix, writes)));
-        }
-        Ok(None)
-    }
-
-    fn next_grouped(iter: &mut DBIterator) -> Option<(Vec<u8>, Vec<Kv>)> {
-        if iter.valid().unwrap() {
-            let prefix = Key::truncate_ts_for(iter.key()).unwrap().to_vec();
-            let mut kvs = vec![(iter.key().to_vec(), iter.value().to_vec())];
-            while iter.next().unwrap() && iter.key().starts_with(&prefix) {
-                kvs.push((iter.key().to_vec(), iter.value().to_vec()));
-            }
-            return Some((prefix, kvs));
-        }
-        None
-    }
-
-    fn next_item(&mut self) -> Result<Option<(Vec<u8>, MvccInfo)>> {
-        if self.limit != 0 && self.count >= self.limit {
-            return Ok(None);
-        }
-
-        let mut mvcc_info = MvccInfo::default();
-        let mut min_prefix = Vec::new();
-
-        let (lock_ok, writes_ok) = match (
-            self.lock_iter.valid().unwrap(),
-            self.write_iter.valid().unwrap(),
-        ) {
-            (false, false) => return Ok(None),
-            (true, true) => {
-                let prefix1 = self.lock_iter.key();
-                let prefix2 = box_try!(Key::truncate_ts_for(self.write_iter.key()));
-                match prefix1.cmp(prefix2) {
-                    Ordering::Less => (true, false),
-                    Ordering::Equal => (true, true),
-                    _ => (false, true),
-                }
-            }
-            valid_pair => valid_pair,
-        };
-
-        if lock_ok {
-            if let Some((prefix, lock)) = self.next_lock()? {
-                mvcc_info.set_lock(lock);
-                min_prefix = prefix;
-            }
-        }
-        if writes_ok {
-            if let Some((prefix, writes)) = self.next_write()? {
-                mvcc_info.set_writes(writes.into());
-                min_prefix = prefix;
-            }
-        }
-        if self.default_iter.valid().unwrap() {
-            match box_try!(Key::truncate_ts_for(self.default_iter.key())).cmp(&min_prefix) {
-                Ordering::Equal => {
-                    if let Some((_, values)) = self.next_default()? {
-                        mvcc_info.set_values(values.into());
-                    }
-                }
-                Ordering::Greater => {}
-                _ => {
-                    let err_msg = format!(
-                        "scan_mvcc CF_DEFAULT corrupt: want {}, got {}",
-                        hex::encode_upper(&min_prefix),
-                        hex::encode_upper(box_try!(Key::truncate_ts_for(self.default_iter.key())))
-                    );
-                    return Err(box_err!(err_msg));
-                }
-            }
-        }
-        self.count += 1;
-        Ok(Some((min_prefix, mvcc_info)))
-    }
-}
-
-impl Iterator for MvccInfoIterator {
-    type Item = Result<(Vec<u8>, MvccInfo)>;
-
-    fn next(&mut self) -> Option<Result<(Vec<u8>, MvccInfo)>> {
-        match self.next_item() {
-            Ok(Some(item)) => Some(Ok(item)),
-            Ok(None) => None,
-            Err(e) => Some(Err(e)),
-        }
-    }
-}
-
 fn validate_db_and_cf(db: DBType, cf: &str) -> Result<()> {
     match (db, cf) {
         (DBType::Kv, CF_DEFAULT)
@@ -1350,95 +1206,28 @@ fn set_region_tombstone(
 
 fn divide_db(db: &Arc<DB>, parts: usize) -> raftstore::Result<Vec<Vec<u8>>> {
     // Empty start and end key cover all range.
-    let mut region = Region::default();
-    region.mut_peers().push(Peer::default());
-    let default_cf_size = box_try!(get_region_approximate_keys_cf(
-        db.c(),
-        CF_DEFAULT,
-        &region,
-        0
-    ));
-    let write_cf_size = box_try!(get_region_approximate_keys_cf(db.c(), CF_WRITE, &region, 0));
-
-    let cf = if default_cf_size >= write_cf_size {
-        CF_DEFAULT
-    } else {
-        CF_WRITE
-    };
-
-    divide_db_cf(db, parts, cf)
-}
-
-fn divide_db_cf(db: &Arc<DB>, parts: usize, cf: &str) -> raftstore::Result<Vec<Vec<u8>>> {
     let start = keys::data_key(b"");
     let end = keys::data_end_key(b"");
-    let collection = db.c().get_range_properties_cf(cf, &start, &end)?;
-
-    let mut keys = Vec::new();
-    let mut found_keys_count = 0;
-    for (_, v) in collection.iter() {
-        let props = RangeProperties::decode(&v.user_collected_properties())?;
-        keys.extend(
-            props
-                .take_excluded_range(start.as_slice(), end.as_slice())
-                .into_iter()
-                .filter(|_| {
-                    found_keys_count += 1;
-                    found_keys_count % 100 == 0
-                })
-                .map(|(k, _)| k),
-        );
-    }
-
-    v1!(
-        "({} points found, {} points selected for dividing)",
-        found_keys_count,
-        keys.len()
-    );
-
-    if keys.is_empty() {
-        return Ok(vec![]);
-    }
-
-    // If there are too many keys, reduce its amount before sorting, or it may take too much
-    // time to sort the keys.
-    if keys.len() > 20000 {
-        let len = keys.len();
-        keys = keys.into_iter().step_by(len / 10000).collect();
-    }
-
-    keys.sort();
-    keys.dedup();
-
-    // If the keys are too few, return them directly.
-    if keys.len() < parts {
-        return Ok(keys);
-    }
-
-    // Find `parts - 1` keys which divides the whole range into `parts` parts evenly.
-    let mut res = Vec::with_capacity(parts - 1);
-    let section_len = (keys.len() as f64) / (parts as f64);
-    for i in 1..parts {
-        res.push(keys[(section_len * (i as f64)) as usize].clone())
-    }
-    Ok(res)
+    let range = Range::new(&start, &end);
+    Ok(box_try!(
+        RocksEngine::from_db(db.clone()).get_range_approximate_split_keys(range, parts - 1)
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
-    use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
+    use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
     use kvproto::metapb::{Peer, Region};
     use raft::eraftpb::EntryType;
     use tempfile::Builder;
 
     use super::*;
     use crate::storage::mvcc::{Lock, LockType};
-    use engine::rocks;
-    use engine::rocks::util::{new_engine_opt, CFOptions};
+    use engine_rocks::raw_util::{new_engine_opt, CFOptions};
     use engine_rocks::RocksEngine;
-    use engine_traits::{CFHandleExt, Mutable, SyncMutable};
+    use engine_traits::{Mutable, SyncMutable};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
     fn init_region_state(engine: &Arc<DB>, region_id: u64, stores: &[u64]) -> Region {
@@ -1534,11 +1323,11 @@ mod tests {
         }
     }
 
-    fn new_debugger() -> Debugger {
+    fn new_debugger() -> Debugger<RocksEngine> {
         let tmp = Builder::new().prefix("test_debug").tempdir().unwrap();
         let path = tmp.path().to_str().unwrap();
         let engine = Arc::new(
-            rocks::util::new_engine_opt(
+            engine_rocks::raw_util::new_engine_opt(
                 path,
                 DBOptions::new(),
                 vec![
@@ -1551,20 +1340,21 @@ mod tests {
             .unwrap(),
         );
 
-        let shared_block_cache = false;
-        let engines = Engines::new(Arc::clone(&engine), engine, shared_block_cache);
+        let engines = Engines::new(
+            RocksEngine::from_db(Arc::clone(&engine)),
+            RocksEngine::from_db(engine),
+        );
         Debugger::new(engines, ConfigController::default())
     }
 
-    impl Debugger {
+    impl Debugger<RocksEngine> {
         fn get_store_ident(&self) -> Result<StoreIdent> {
             let db = &self.engines.kv;
-            db.c()
-                .get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
+            db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
                 .map_err(|e| box_err!(e))
-                .and_then(|ident| match ident {
-                    Some(ident) => Ok(ident),
-                    None => Ok(StoreIdent::default()),
+                .map(|ident| match ident {
+                    Some(ident) => ident,
+                    None => StoreIdent::default(),
                 })
         }
 
@@ -1572,7 +1362,7 @@ mod tests {
             if let Ok(mut ident) = self.get_store_ident() {
                 ident.set_store_id(store_id);
                 let db = &self.engines.kv;
-                db.c().put_msg(keys::STORE_IDENT_KEY, &ident).unwrap();
+                db.put_msg(keys::STORE_IDENT_KEY, &ident).unwrap();
             }
         }
 
@@ -1580,7 +1370,7 @@ mod tests {
             if let Ok(mut ident) = self.get_store_ident() {
                 ident.set_cluster_id(cluster_id);
                 let db = &self.engines.kv;
-                db.c().put_msg(keys::STORE_IDENT_KEY, &ident).unwrap();
+                db.put_msg(keys::STORE_IDENT_KEY, &ident).unwrap();
             }
         }
     }
@@ -1591,7 +1381,7 @@ mod tests {
         let engine = &debugger.engines.kv;
         let (k, v) = (b"k", b"v");
         engine.put(k, v).unwrap();
-        assert_eq!(&*engine.get(k).unwrap().unwrap(), v);
+        assert_eq!(&*engine.get_value(k).unwrap().unwrap(), v);
 
         let got = debugger.get(DBType::Kv, CF_DEFAULT, k).unwrap();
         assert_eq!(&got, v);
@@ -1612,9 +1402,9 @@ mod tests {
         entry.set_term(1);
         entry.set_index(1);
         entry.set_entry_type(EntryType::EntryNormal);
-        entry.set_data(vec![42]);
-        engine.c().put_msg(&key, &entry).unwrap();
-        assert_eq!(engine.c().get_msg::<Entry>(&key).unwrap().unwrap(), entry);
+        entry.set_data(vec![42].into());
+        engine.put_msg(&key, &entry).unwrap();
+        assert_eq!(engine.get_msg::<Entry>(&key).unwrap().unwrap(), entry);
 
         assert_eq!(debugger.raft_log(region_id, log_index).unwrap(), entry);
         match debugger.raft_log(region_id + 1, log_index + 1) {
@@ -1633,13 +1423,9 @@ mod tests {
         let raft_state_key = keys::raft_state_key(region_id);
         let mut raft_state = RaftLocalState::default();
         raft_state.set_last_index(42);
-        raft_engine
-            .c()
-            .put_msg(&raft_state_key, &raft_state)
-            .unwrap();
+        raft_engine.put_msg(&raft_state_key, &raft_state).unwrap();
         assert_eq!(
             raft_engine
-                .c()
                 .get_msg::<RaftLocalState>(&raft_state_key)
                 .unwrap()
                 .unwrap(),
@@ -1650,12 +1436,10 @@ mod tests {
         let mut apply_state = RaftApplyState::default();
         apply_state.set_applied_index(42);
         kv_engine
-            .c()
             .put_msg_cf(CF_RAFT, &apply_state_key, &apply_state)
             .unwrap();
         assert_eq!(
             kv_engine
-                .c()
                 .get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key)
                 .unwrap()
                 .unwrap(),
@@ -1666,12 +1450,10 @@ mod tests {
         let mut region_state = RegionLocalState::default();
         region_state.set_state(PeerState::Tombstone);
         kv_engine
-            .c()
             .put_msg_cf(CF_RAFT, &region_state_key, &region_state)
             .unwrap();
         assert_eq!(
             kv_engine
-                .c()
                 .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
                 .unwrap()
                 .unwrap(),
@@ -1702,15 +1484,13 @@ mod tests {
         let mut state = RegionLocalState::default();
         state.set_region(region);
         engine
-            .c()
             .put_msg_cf(CF_RAFT, &region_state_key, &state)
             .unwrap();
 
         let cfs = vec![CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE];
         let (k, v) = (keys::data_key(b"k"), b"v");
         for cf in &cfs {
-            let cf_handle = engine.cf_handle(cf).unwrap();
-            engine.put_cf(cf_handle, k.as_slice(), v).unwrap();
+            engine.put_cf(cf, k.as_slice(), v).unwrap();
         }
 
         let sizes = debugger.region_size(region_id, cfs.clone()).unwrap();
@@ -1724,68 +1504,6 @@ mod tests {
     #[test]
     fn test_scan_mvcc() {
         let debugger = new_debugger();
-        let engine = &debugger.engines.kv;
-
-        let cf_default_data = vec![
-            (b"k1", b"v", 5.into()),
-            (b"k2", b"x", 10.into()),
-            (b"k3", b"y", 15.into()),
-        ];
-        for &(prefix, value, ts) in &cf_default_data {
-            let encoded_key = Key::from_raw(prefix).append_ts(ts);
-            let key = keys::data_key(encoded_key.as_encoded().as_slice());
-            engine.put(key.as_slice(), value).unwrap();
-        }
-
-        let lock_cf = engine.cf_handle(CF_LOCK).unwrap();
-        let cf_lock_data = vec![
-            (b"k1", LockType::Put, b"v", 5.into()),
-            (b"k4", LockType::Lock, b"x", 10.into()),
-            (b"k5", LockType::Delete, b"y", 15.into()),
-        ];
-        for &(prefix, tp, value, version) in &cf_lock_data {
-            let encoded_key = Key::from_raw(prefix);
-            let key = keys::data_key(encoded_key.as_encoded().as_slice());
-            let lock = Lock::new(
-                tp,
-                value.to_vec(),
-                version,
-                0,
-                None,
-                TimeStamp::zero(),
-                0,
-                TimeStamp::zero(),
-            );
-            let value = lock.to_bytes();
-            engine
-                .put_cf(lock_cf, key.as_slice(), value.as_slice())
-                .unwrap();
-        }
-
-        let write_cf = engine.cf_handle(CF_WRITE).unwrap();
-        let cf_write_data = vec![
-            (b"k2", WriteType::Put, 5.into(), 10.into()),
-            (b"k3", WriteType::Put, 15.into(), 20.into()),
-            (b"k6", WriteType::Lock, 25.into(), 30.into()),
-            (b"k7", WriteType::Rollback, 35.into(), 40.into()),
-        ];
-        for &(prefix, tp, start_ts, commit_ts) in &cf_write_data {
-            let encoded_key = Key::from_raw(prefix).append_ts(commit_ts);
-            let key = keys::data_key(encoded_key.as_encoded().as_slice());
-            let write = Write::new(tp, start_ts, None);
-            let value = write.as_ref().to_bytes();
-            engine
-                .put_cf(write_cf, key.as_slice(), value.as_slice())
-                .unwrap();
-        }
-
-        let mut count = 0;
-        for key_and_mvcc in debugger.scan_mvcc(b"z", &[], 10).unwrap() {
-            assert!(key_and_mvcc.is_ok());
-            count += 1;
-        }
-        assert_eq!(count, 7);
-
         // Test scan with bad start, end or limit.
         assert!(debugger.scan_mvcc(b"z", b"", 0).is_err());
         assert!(debugger.scan_mvcc(b"z", b"x", 3).is_err());
@@ -1798,21 +1516,21 @@ mod tests {
         let engine = &debugger.engines.kv;
 
         // region 1 with peers at stores 11, 12, 13.
-        let region_1 = init_region_state(engine, 1, &[11, 12, 13]);
+        let region_1 = init_region_state(engine.as_inner(), 1, &[11, 12, 13]);
         // Got the target region from pd, which doesn't contains the store.
         let mut target_region_1 = region_1.clone();
         target_region_1.mut_peers().remove(0);
         target_region_1.mut_region_epoch().set_conf_ver(100);
 
         // region 2 with peers at stores 11, 12, 13.
-        let region_2 = init_region_state(engine, 2, &[11, 12, 13]);
+        let region_2 = init_region_state(engine.as_inner(), 2, &[11, 12, 13]);
         // Got the target region from pd, which has different peer_id.
         let mut target_region_2 = region_2.clone();
         target_region_2.mut_peers()[0].set_id(100);
         target_region_2.mut_region_epoch().set_conf_ver(100);
 
         // region 3 with peers at stores 21, 22, 23.
-        let region_3 = init_region_state(engine, 3, &[21, 22, 23]);
+        let region_3 = init_region_state(engine.as_inner(), 3, &[21, 22, 23]);
         // Got the target region from pd but the peers are not changed.
         let mut target_region_3 = region_3;
         target_region_3.mut_region_epoch().set_conf_ver(100);
@@ -1826,15 +1544,21 @@ mod tests {
         let errors = debugger.set_region_tombstone(target_regions).unwrap();
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].0, 3);
-        assert_eq!(get_region_state(engine, 1).take_region(), region_1);
-        assert_eq!(get_region_state(engine, 2).take_region(), region_2);
+        assert_eq!(
+            get_region_state(engine.as_inner(), 1).take_region(),
+            region_1
+        );
+        assert_eq!(
+            get_region_state(engine.as_inner(), 2).take_region(),
+            region_2
+        );
 
         // After set_region_tombstone success, all region should be adjusted.
         let target_regions = vec![target_region_1, target_region_2];
         let errors = debugger.set_region_tombstone(target_regions).unwrap();
         assert!(errors.is_empty());
         for &region_id in &[1, 2] {
-            let state = get_region_state(engine, region_id).get_state();
+            let state = get_region_state(engine.as_inner(), region_id).get_state();
             assert_eq!(state, PeerState::Tombstone);
         }
     }
@@ -1850,19 +1574,19 @@ mod tests {
         assert!(!errors.is_empty());
 
         // region 1 with peers at stores 11, 12, 13.
-        init_region_state(engine, 1, &[11, 12, 13]);
-        let mut expected_state = get_region_state(engine, 1);
+        init_region_state(engine.as_inner(), 1, &[11, 12, 13]);
+        let mut expected_state = get_region_state(engine.as_inner(), 1);
         expected_state.set_state(PeerState::Tombstone);
 
         // tombstone region 1.
         let errors = debugger.set_region_tombstone_by_id(vec![1]).unwrap();
         assert!(errors.is_empty());
-        assert_eq!(get_region_state(engine, 1), expected_state);
+        assert_eq!(get_region_state(engine.as_inner(), 1), expected_state);
 
         // tombstone region 1 again.
         let errors = debugger.set_region_tombstone_by_id(vec![1]).unwrap();
         assert!(errors.is_empty());
-        assert_eq!(get_region_state(engine, 1), expected_state);
+        assert_eq!(get_region_state(engine.as_inner(), 1), expected_state);
     }
 
     #[test]
@@ -1881,9 +1605,9 @@ mod tests {
         };
 
         // region 1 with peers at stores 11, 12, 13 and 14.
-        init_region_state(engine, 1, &[11, 12, 13, 14]);
+        init_region_state(engine.as_inner(), 1, &[11, 12, 13, 14]);
         // region 2 with peers at stores 21, 22 and 23.
-        init_region_state(engine, 2, &[21, 22, 23]);
+        init_region_state(engine.as_inner(), 2, &[21, 22, 23]);
 
         // Only remove specified stores from region 1.
         debugger
@@ -1891,18 +1615,18 @@ mod tests {
             .unwrap();
 
         // 13 and 14 should be removed from region 1.
-        assert_eq!(get_region_stores(engine, 1), &[11, 12]);
+        assert_eq!(get_region_stores(engine.as_inner(), 1), &[11, 12]);
         // 21 and 23 shouldn't be removed from region 2.
-        assert_eq!(get_region_stores(engine, 2), &[21, 22, 23]);
+        assert_eq!(get_region_stores(engine.as_inner(), 2), &[21, 22, 23]);
 
         // Remove specified stores from all regions.
         debugger.remove_failed_stores(vec![11, 23], None).unwrap();
 
-        assert_eq!(get_region_stores(engine, 1), &[12]);
-        assert_eq!(get_region_stores(engine, 2), &[21, 22]);
+        assert_eq!(get_region_stores(engine.as_inner(), 1), &[12]);
+        assert_eq!(get_region_stores(engine.as_inner(), 2), &[21, 22]);
 
         // Should fail when the store itself is in the failed list.
-        init_region_state(engine, 3, &[100, 31, 32, 33]);
+        init_region_state(engine.as_inner(), 3, &[100, 31, 32, 33]);
         debugger.remove_failed_stores(vec![100], None).unwrap_err();
     }
 
@@ -1913,10 +1637,10 @@ mod tests {
         let raft_engine = &debugger.engines.raft;
         let store_id = 1; // It's a fake id.
 
-        let mut wb1 = raft_engine.c().write_batch();
+        let mut wb1 = raft_engine.write_batch();
         let cf1 = CF_DEFAULT;
 
-        let mut wb2 = kv_engine.c().write_batch();
+        let mut wb2 = kv_engine.write_batch();
         let cf2 = CF_RAFT;
 
         {
@@ -1930,11 +1654,10 @@ mod tests {
                     let peers = peers
                         .iter()
                         .enumerate()
-                        .map(|(i, &sid)| {
-                            let mut peer = Peer::default();
-                            peer.id = i as u64;
-                            peer.store_id = sid;
-                            peer
+                        .map(|(i, &sid)| Peer {
+                            id: i as u64,
+                            store_id: sid,
+                            ..Default::default()
                         })
                         .collect::<Vec<_>>();
                     region.set_peers(peers.into());
@@ -1974,11 +1697,8 @@ mod tests {
             mock_region_state(&mut wb2, 13, &[]);
         }
 
-        raft_engine
-            .c()
-            .write_opt(&wb1, &WriteOptions::new())
-            .unwrap();
-        kv_engine.c().write_opt(&wb2, &WriteOptions::new()).unwrap();
+        wb1.write_opt(&WriteOptions::new()).unwrap();
+        wb2.write_opt(&WriteOptions::new()).unwrap();
 
         let bad_regions = debugger.bad_regions().unwrap();
         assert_eq!(bad_regions.len(), 4);
@@ -1990,7 +1710,7 @@ mod tests {
     #[test]
     fn test_recreate_region() {
         let debugger = new_debugger();
-        let engine = RocksEngine::from_ref(&debugger.engines.kv);
+        let engine = &debugger.engines.kv;
 
         let metadata = vec![("", "g"), ("g", "m"), ("m", "")];
 
@@ -2010,11 +1730,7 @@ mod tests {
 
         let remove_region_state = |region_id: u64| {
             let key = keys::region_state_key(region_id);
-            let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
-            engine
-                .as_inner()
-                .delete_cf(cf_raft.as_inner(), &key)
-                .unwrap();
+            engine.delete_cf(CF_RAFT, &key).unwrap();
         };
 
         let mut region = Region::default();
@@ -2043,7 +1759,7 @@ mod tests {
         enum Expect {
             Keep,
             Remove,
-        };
+        }
         // test check CF_LOCK.
         default.extend(vec![
             // key, start_ts, check
@@ -2051,12 +1767,12 @@ mod tests {
             (b"k5", 100, Expect::Keep),
         ]);
         lock.extend(vec![
-            // key, start_ts, lock_type, short_value, check
-            (b"k1", 100, LockType::Put, false, Expect::Remove), // k1: remove orphan lock.
-            (b"k2", 100, LockType::Delete, false, Expect::Keep), // k2: Delete doesn't need default.
-            (b"k3", 100, LockType::Put, true, Expect::Keep), // k3: short value doesn't need default.
-            (b"k4", 100, LockType::Put, false, Expect::Keep), // k4: corresponding default exists.
-            (b"k5", 100, LockType::Put, false, Expect::Remove), // k5: duplicated lock and write.
+            // key, start_ts, for_update_ts, lock_type, short_value, check
+            (b"k1", 100, 0, LockType::Put, false, Expect::Remove), // k1: remove orphan lock.
+            (b"k2", 100, 0, LockType::Delete, false, Expect::Keep), // k2: Delete doesn't need default.
+            (b"k3", 100, 0, LockType::Put, true, Expect::Keep), // k3: short value doesn't need default.
+            (b"k4", 100, 0, LockType::Put, false, Expect::Keep), // k4: corresponding default exists.
+            (b"k5", 100, 0, LockType::Put, false, Expect::Remove), // k5: duplicated lock and write.
         ]);
         write.extend(vec![
             // key, start_ts, commit_ts, write_type, short_value, check
@@ -2089,8 +1805,8 @@ mod tests {
             (b"k7", 90, Expect::Remove), // orphan default.
         ]);
         lock.extend(vec![
-            // key, start_ts, lock_type, short_value, check
-            (b"k7", 100, LockType::Put, false, Expect::Remove), // duplicated lock and write.
+            // key, start_ts, for_update_ts, lock_type, short_value, check
+            (b"k7", 100, 0, LockType::Put, false, Expect::Remove), // duplicated lock and write.
         ]);
         write.extend(vec![
             // key, start_ts, commit_ts, write_type, short_value
@@ -2098,18 +1814,35 @@ mod tests {
             (b"k7", 96, 97, WriteType::Put, true, Expect::Keep),
         ]);
 
-        // Out of range.
+        // Locks from pessimistic transactions
         default.extend(vec![
             // key, start_ts
             (b"k8", 100, Expect::Keep),
+            (b"k9", 100, Expect::Keep),
         ]);
         lock.extend(vec![
-            // key, start_ts, lock_type, short_value, check
-            (b"k8", 101, LockType::Put, false, Expect::Keep),
+            // key, start_ts, for_update_ts, lock_type, short_value, check
+            (b"k8", 90, 105, LockType::Pessimistic, false, Expect::Remove), // newer writes exist
+            (b"k9", 90, 115, LockType::Put, true, Expect::Keep), // prewritten lock from a pessimistic txn
         ]);
         write.extend(vec![
             // key, start_ts, commit_ts, write_type, short_value
-            (b"k8", 102, 103, WriteType::Put, false, Expect::Keep),
+            (b"k8", 100, 110, WriteType::Put, false, Expect::Keep),
+            (b"k9", 100, 110, WriteType::Put, false, Expect::Keep),
+        ]);
+
+        // Out of range.
+        default.extend(vec![
+            // key, start_ts
+            (b"l0", 100, Expect::Keep),
+        ]);
+        lock.extend(vec![
+            // key, start_ts, for_update_ts, lock_type, short_value, check
+            (b"l0", 101, 0, LockType::Put, false, Expect::Keep),
+        ]);
+        write.extend(vec![
+            // key, start_ts, commit_ts, write_type, short_value
+            (b"l0", 102, 103, WriteType::Put, false, Expect::Keep),
         ]);
 
         let mut kv = vec![];
@@ -2121,7 +1854,7 @@ mod tests {
                 expect,
             ));
         }
-        for (key, ts, tp, short_value, expect) in lock {
+        for (key, ts, for_update_ts, tp, short_value, expect) in lock {
             let v = if short_value {
                 Some(b"v".to_vec())
             } else {
@@ -2133,7 +1866,7 @@ mod tests {
                 ts.into(),
                 0,
                 v,
-                TimeStamp::zero(),
+                for_update_ts.into(),
                 0,
                 TimeStamp::zero(),
             );
@@ -2169,12 +1902,12 @@ mod tests {
         for &(cf, ref k, ref v, _) in &kv {
             wb.put_cf(cf, &keys::data_key(k.as_encoded()), v).unwrap();
         }
-        db.c().write(&wb).unwrap();
+        wb.write().unwrap();
         // Fix problems.
-        let mut checker = MvccChecker::new(Arc::clone(&db), b"k", b"k8").unwrap();
+        let mut checker = MvccChecker::new(Arc::clone(&db), b"k", b"l").unwrap();
         let mut wb = db.c().write_batch();
         checker.check_mvcc(&mut wb, None).unwrap();
-        db.c().write(&wb).unwrap();
+        wb.write().unwrap();
         // Check result.
         for (cf, k, _, expect) in kv {
             let data = db
@@ -2212,13 +1945,13 @@ mod tests {
 
         let debugger = new_debugger();
 
-        let mut wb = debugger.engines.kv.c().write_batch();
+        let mut wb = debugger.engines.kv.write_batch();
         for key in keys {
             let data_key = keys::data_key(key);
             let value = key.to_vec();
             wb.put(&data_key, &value).unwrap();
         }
-        debugger.engines.kv.c().write(&wb).unwrap();
+        wb.write().unwrap();
 
         let check = |result: Result<_>, expected: &[&[u8]]| {
             assert_eq!(

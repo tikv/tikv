@@ -24,14 +24,18 @@
 //! platforms RocksDB is using the system malloc. On Linux C malloc is
 //! redirected to jemalloc.
 //!
-//! This crate accepts two cargo features:
+//! This crate accepts five cargo features:
 //!
 //! - mem-profiling - compiles jemalloc and this crate with profiling
 //!   capability
 //!
-//! - jemalloc - compiles jemallocator (default)
+//! - jemalloc - compiles tikv-jemallocator (default)
 //!
 //! - tcmalloc - compiles tcmalloc
+//!
+//! - mimalloc - compiles mimalloc
+//!
+//! - snmalloc - compiles snmalloc
 //!
 //! cfg `fuzzing` is defined by `run_libfuzzer` in `fuzz/cli.rs` and
 //! is passed to rustc directly with `--cfg`; in other words it's not
@@ -82,7 +86,12 @@
 #[macro_use]
 extern crate log;
 
+#[cfg(feature = "jemalloc")]
+#[macro_use]
+extern crate lazy_static;
+
 pub mod error;
+pub mod trace;
 
 #[cfg(not(all(unix, not(fuzzing), feature = "jemalloc")))]
 mod default;
@@ -99,10 +108,18 @@ mod imp;
 #[cfg(all(unix, not(fuzzing), feature = "mimalloc"))]
 #[path = "mimalloc.rs"]
 mod imp;
+#[cfg(all(unix, not(fuzzing), feature = "snmalloc"))]
+#[path = "snmalloc.rs"]
+mod imp;
 #[cfg(not(all(
     unix,
     not(fuzzing),
-    any(feature = "jemalloc", feature = "tcmalloc", feature = "mimalloc")
+    any(
+        feature = "jemalloc",
+        feature = "tcmalloc",
+        feature = "mimalloc",
+        feature = "snmalloc"
+    )
 )))]
 #[path = "system.rs"]
 mod imp;
