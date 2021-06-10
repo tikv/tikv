@@ -3331,7 +3331,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/gengliqi/raft-engine?branch=add-merge-batch#a76f6c85af99c63047cec98c7440611fc89023cd"
+source = "git+https://github.com/tikv/raft-engine?branch=master#8d559deaf53a3d1daf482f4523f71d33f4cd715f"
 dependencies = [
  "byteorder",
  "crc32fast",
