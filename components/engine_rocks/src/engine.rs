@@ -1,6 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::any::Any;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -103,11 +102,6 @@ impl KvEngine for RocksEngine {
 
     fn reset_statistics(&self) {
         self.db.reset_statistics();
-    }
-
-    fn bad_downcast<T: 'static>(&self) -> &T {
-        let e: &dyn Any = &self.db;
-        e.downcast_ref().expect("bad engine downcast")
     }
 }
 
