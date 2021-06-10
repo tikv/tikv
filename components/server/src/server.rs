@@ -975,30 +975,34 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             .unwrap_or_else(|e| fatal!("failed to start lock manager: {}", e));
 
         // Backup service.
-        let mut backup_worker = Box::new(self.background_worker.lazy_build("backup-endpoint"));
-        let backup_scheduler = backup_worker.scheduler();
-        let backup_service = backup::Service::new(backup_scheduler);
-        if servers
-            .server
-            .register_service(create_backup(backup_service))
-            .is_some()
-        {
-            fatal!("failed to register backup service");
-        }
+        if let Some(kv) = engines.engines.kv.bad_downcast::<RocksEngine>() {
+            let raw_rocks_engine = kv.as_inner().clone();
 
-        let backup_endpoint = backup::Endpoint::new(
-            servers.node.id(),
-            engines.engine.clone(),
-            self.region_info_accessor.clone(),
-            engines.engines.kv.as_inner().clone(),
-            self.config.backup.clone(),
-            self.concurrency_manager.clone(),
-        );
-        self.cfg_controller.as_mut().unwrap().register(
-            tikv::config::Module::Backup,
-            Box::new(backup_endpoint.get_config_manager()),
-        );
-        backup_worker.start(backup_endpoint);
+            let mut backup_worker = Box::new(self.background_worker.lazy_build("backup-endpoint"));
+            let backup_scheduler = backup_worker.scheduler();
+            let backup_service = backup::Service::new(backup_scheduler);
+            if servers
+                .server
+                .register_service(create_backup(backup_service))
+                .is_some()
+            {
+                fatal!("failed to register backup service");
+            }
+
+            let backup_endpoint = backup::Endpoint::new(
+                servers.node.id(),
+                engines.engine.clone(),
+                self.region_info_accessor.clone(),
+                raw_rocks_engine,
+                self.config.backup.clone(),
+                self.concurrency_manager.clone(),
+            );
+            self.cfg_controller.as_mut().unwrap().register(
+                tikv::config::Module::Backup,
+                Box::new(backup_endpoint.get_config_manager()),
+            );
+            backup_worker.start(backup_endpoint);
+        }
 
         let cdc_service = cdc::Service::new(
             servers.cdc_scheduler.clone(),
