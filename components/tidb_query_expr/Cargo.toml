@@ -8,6 +8,7 @@ description = "Vector expressions of query engine to run TiDB pushed down execut
 [features]
 default = ["protobuf-codec"]
 protobuf-codec = [
+  "protobuf/bytes",
   "codec/protobuf-codec",
   "tidb_query_common/protobuf-codec",
   "tidb_query_datatype/protobuf-codec",
