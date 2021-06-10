@@ -58,7 +58,7 @@ pub const JOB_STATUS_CANCELLED: usize = 3;
 pub const JOB_STATUS_FINISHED: usize = 4;
 pub const JOB_STATUS_FAILED: usize = 5;
 
-pub const ENTRY_MEM_SIZE: usize = mem::size_of::<Entry>();
+const ENTRY_MEM_SIZE: usize = mem::size_of::<Entry>();
 
 /// Possible status returned by `check_applying_snap`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -191,6 +191,12 @@ impl EntryCache {
                     mem_size_change -=
                         (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64;
                 }
+                if let Some(cached) = self.trace.back() {
+                    // Only committed entries can be traced, and only uncommitted entries
+                    // can be truncated. So there won't be any overlaps.
+                    let cached_last = cached.range.end - 1;
+                    assert!(cached_last < truncate_to as u64);
+                }
             } else if cache_last_index + 1 < first_index {
                 panic!(
                     "{} unexpected hole: {} < {}",
@@ -207,9 +213,7 @@ impl EntryCache {
 
         if let Some(mut compact_to) = (cache_len + entries_len).checked_sub(MAX_CACHE_CAPACITY) {
             compact_to = cmp::min(compact_to, cache_len);
-            for e in self.cache.drain(..compact_to) {
-                mem_size_change -= (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64;
-            }
+            self.compact_to(compact_to as u64);
         }
 
         for e in entries {

@@ -1,6 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use kvproto::{
+    encryptionpb::EncryptionMeta,
     kvrpcpb::LockInfo,
     metapb::{Peer, Region, RegionEpoch},
     raft_cmdpb::{self, RaftCmdRequest, ReadIndexRequest},
@@ -18,6 +19,8 @@ impl HeapSize for Region {
         let mut size = self.start_key.capacity() + self.end_key.capacity();
         size += mem::size_of::<RegionEpoch>();
         size += self.peers.capacity() * mem::size_of::<Peer>();
+        // There is still a `bytes` in `EncryptionMeta`. Ignore it becaure it could be shared.
+        size += mem::size_of::<EncryptionMeta>();
         size
     }
 }

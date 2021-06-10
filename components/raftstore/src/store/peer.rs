@@ -3861,6 +3861,7 @@ mod memtrace {
             + mem::size_of::<metapb::Peer>() * self.check_stale_peers.capacity()
             // 1 word for every item in `want_rollback_merge_peers`
             + 8 * self.want_rollback_merge_peers.capacity()
+            // Ignore more heap content in `raft::eraftpb::Message`.
             + self.pending_messages.len() * mem::size_of::<raft::eraftpb::Message>()
         }
     }

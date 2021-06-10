@@ -412,7 +412,11 @@ mod memtrace {
         S: Snapshot,
     {
         fn heap_size(&self) -> usize {
-            self.cmds_heap_size + Self::CMD_SIZE * self.cmds.capacity()
+            let mut size = self.cmds_heap_size + Self::CMD_SIZE * self.cmds.capacity();
+            if let Some(ref add) = self.addition_request {
+                size += add.heap_size();
+            }
+            size
         }
     }
 
@@ -423,7 +427,8 @@ mod memtrace {
         #[inline]
         fn heap_size(&self) -> usize {
             let mut size = self.reads.capacity() * mem::size_of::<ReadIndexRequest<S>>()
-                + 32 * self.contexts.len();
+                // For one Uuid and one usize.
+                + 24 * self.contexts.len();
             for read in &self.reads {
                 size += read.heap_size();
             }
