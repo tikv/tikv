@@ -6,23 +6,12 @@ edition = "2018"
 [features]
 default = ["protobuf-codec"]
 protobuf-codec = [
-<<<<<<< HEAD
-    "kvproto/protobuf-codec",
-    "grpcio/protobuf-codec",
-    "security/protobuf-codec",
-]
-prost-codec = [
-    "kvproto/prost-codec",
-    "grpcio/prost-codec",
-    "security/prost-codec",
-=======
   "kvproto/protobuf-codec",
   "grpcio/protobuf-codec",
 ]
 prost-codec = [
   "kvproto/prost-codec",
   "grpcio/prost-codec",
->>>>>>> a0a0ba0d9... statistics: fix resource report agent not supporting TLS (#10315)
 ]
 
 [dependencies]
