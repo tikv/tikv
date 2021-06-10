@@ -2343,8 +2343,9 @@ where
             }
             Ok(RequestPolicy::ReadIndex) => return self.read_index(ctx, req, err_resp, cb),
             Ok(RequestPolicy::ProposeNormal) => {
-                if disk::disk_full_precheck(0) || disk::is_disk_full() {
-                    Err(box_err!("disk full, all the business data write forbiden"))
+                let store_id = ctx.store_id();
+                if disk::disk_full_precheck(store_id) || disk::is_disk_full() {
+                    Err(Error::Timeout("disk full".to_owned()))
                 } else {
                     self.propose_normal(ctx, req)
                 }
@@ -3114,6 +3115,8 @@ where
         if self.is_applying_snapshot()
             || self.has_pending_snapshot()
             || msg.get_from() != self.leader_id()
+            // For followers whose disk is full.
+            || disk::disk_full_precheck(ctx.store_id()) || disk::is_disk_full()
         {
             info!(
                 "reject transferring leader";

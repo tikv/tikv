@@ -47,6 +47,7 @@ use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
 use tikv_util::{box_err, debug, error, info, thd_name, warn};
+
 type RecordPairVec = Vec<pdpb::RecordPair>;
 
 #[derive(Default, Debug, Clone)]
