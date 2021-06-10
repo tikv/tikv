@@ -478,12 +478,12 @@ mod tests {
 
     fn gen_rand_file<P: AsRef<Path>>(path: P, size: usize) -> u32 {
         let mut rng = thread_rng();
-        let s: String = iter::repeat(())
+        let s: Vec<u8> = iter::repeat(())
             .map(|()| rng.sample(Alphanumeric))
             .take(size)
             .collect();
-        write(path, s.as_bytes()).unwrap();
-        calc_crc32_bytes(s.as_bytes())
+        write(path, s.as_slice()).unwrap();
+        calc_crc32_bytes(s.as_slice())
     }
 
     #[test]
