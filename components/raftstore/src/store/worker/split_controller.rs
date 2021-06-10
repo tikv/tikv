@@ -79,7 +79,7 @@ where
     let mut key_ranges = vec![];
     let high_bound = *pre_sum.last().unwrap();
     for _ in 0..MAX_RETRY_TIME {
-        let d = rng.gen_range(0, high_bound + 1) as usize;
+        let d = rng.gen_range(0..high_bound + 1) as usize;
         let i = match pre_sum.binary_search(&d) {
             Ok(i) => i,
             Err(i) => i,
@@ -87,7 +87,7 @@ where
         if i < lists.len() {
             let list = get_mut(&mut lists[i]);
             if !list.is_empty() {
-                let j = rng.gen_range(0, list.len()) as usize;
+                let j = rng.gen_range(0..list.len()) as usize;
                 key_ranges.push(list.remove(j)); // Sampling without replacement
             }
         }
@@ -134,7 +134,7 @@ impl RegionInfo {
             if self.key_ranges.len() < self.sample_num {
                 self.key_ranges.push(key_range);
             } else {
-                let i = rand::thread_rng().gen_range(0, self.qps) as usize;
+                let i = rand::thread_rng().gen_range(0..self.qps) as usize;
                 if i < self.sample_num {
                     self.key_ranges[i] = key_range;
                 }
