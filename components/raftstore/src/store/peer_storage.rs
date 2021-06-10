@@ -110,8 +110,8 @@ pub fn last_index(state: &RaftLocalState) -> u64 {
 struct EntryCache {
     cache: VecDeque<Entry>,
     trace: VecDeque<CachedEntries>,
-    hit: Cell<i64>,
-    miss: Cell<i64>,
+    hit: Cell<u64>,
+    miss: Cell<u64>,
     #[cfg(test)]
     size_change_cb: Option<Box<dyn Fn(i64) + Send + 'static>>,
 }
@@ -1239,8 +1239,8 @@ where
         }
         if let Some(stats) = self.engines.raft.flush_stats() {
             RAFT_ENTRIES_CACHES_GAUGE.set(stats.cache_size as i64);
-            RAFT_ENTRY_FETCHES.hit.inc_by(stats.hit as i64);
-            RAFT_ENTRY_FETCHES.miss.inc_by(stats.miss as i64);
+            RAFT_ENTRY_FETCHES.hit.inc_by(stats.hit as u64);
+            RAFT_ENTRY_FETCHES.miss.inc_by(stats.miss as u64);
         }
     }
 
