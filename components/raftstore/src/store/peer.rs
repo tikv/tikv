@@ -1925,11 +1925,11 @@ where
                 committed_entries,
                 cbs,
             );
-            if needs_evict_entry_cache() {
-                self.mut_store().half_evict_cache();
-            }
-
             self.mut_store().trace_cached_entries(apply.entries.clone());
+            if needs_evict_entry_cache() {
+                // Compact all cached entries instead of half evict.
+                self.mut_store().full_evict_cache();
+            }
             ctx.apply_router
                 .schedule_task(self.region_id, ApplyTask::apply(apply));
         }

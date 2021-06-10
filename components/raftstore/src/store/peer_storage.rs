@@ -211,9 +211,10 @@ impl EntryCache {
             entries_len = entries.len();
         }
 
-        if let Some(mut compact_to) = (cache_len + entries_len).checked_sub(MAX_CACHE_CAPACITY) {
-            compact_to = cmp::min(compact_to, cache_len);
-            self.compact_to(compact_to as u64);
+        if cache_len + entries_len > MAX_CACHE_CAPACITY {
+            let offset = cache_len + entries_len - MAX_CACHE_CAPACITY - 1;
+            let compact_to = self.cache[offset].index + 1;
+            self.compact_to(compact_to);
         }
 
         for e in entries {
@@ -1150,7 +1151,7 @@ where
         // TODO: Wrap it as an engine::Error.
         ready_ctx
             .raft_wb_mut()
-            .cut_logs(region_id, last_index + 1, prev_last_index);
+            .cut_logs(region_id, last_index + 1, prev_last_index + 1);
 
         invoke_ctx.raft_state.set_last_index(last_index);
         invoke_ctx.last_term = last_term;
@@ -1219,6 +1220,21 @@ where
             RAFT_ENTRIES_CACHES_EVICT.inc();
             let cache = self.cache.as_mut().unwrap();
             let drain_to = cache.cache.len() / 2;
+            let idx = cache.cache[drain_to].index;
+            cache.compact_to(idx + 1);
+        }
+    }
+
+    pub fn full_evict_cache(&mut self) {
+        if self.engines.raft.has_builtin_entry_cache() {
+            // TODO: unify entry cache.
+            return;
+        }
+        let cache = self.cache.as_mut().unwrap();
+        if !cache.cache.is_empty() {
+            RAFT_ENTRIES_CACHES_EVICT.inc();
+            let cache = self.cache.as_mut().unwrap();
+            let drain_to = cache.cache.len() - 1;
             let idx = cache.cache[drain_to].index;
             cache.compact_to(idx + 1);
         }
