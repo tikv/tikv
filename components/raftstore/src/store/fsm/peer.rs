@@ -602,9 +602,11 @@ where
                     }
                 }
                 PeerMsg::Noop => {}
-                PeerMsg::Persisted((peer_id, number, ts)) => {
-                    self.on_persisted_msg(peer_id, number, ts)
-                }
+                PeerMsg::Persisted {
+                    peer_id,
+                    ready_number,
+                    send_time,
+                } => self.on_persisted_msg(peer_id, ready_number, send_time),
                 PeerMsg::UpdateReplicationMode => self.on_update_replication_mode(),
             }
             if self.fsm.batch_req_builder.get_batch_size() as usize
@@ -949,22 +951,22 @@ where
         }
     }
 
-    fn on_persisted_msg(&mut self, peer_id: u64, number: u64, ts: Instant) {
+    fn on_persisted_msg(&mut self, peer_id: u64, ready_number: u64, send_time: Instant) {
         if peer_id != self.fsm.peer_id() {
             error!(
                 "peer id not match";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
                 "persisted_peer_id" => peer_id,
-                "persisted_number" => number,
+                "persisted_number" => ready_number,
             );
             return;
         }
         self.ctx
             .raft_metrics
             .persisted_msg
-            .observe(duration_to_sec(ts.elapsed()));
-        if let Some(persist_snap_res) = self.fsm.peer.on_persist_ready(self.ctx, number) {
+            .observe(duration_to_sec(send_time.elapsed()));
+        if let Some(persist_snap_res) = self.fsm.peer.on_persist_ready(self.ctx, ready_number) {
             self.on_ready_apply_snapshot(persist_snap_res);
             if self.fsm.peer.pending_merge_state.is_some() {
                 // After applying a snapshot, merge is rollbacked implicitly.
@@ -3630,7 +3632,7 @@ where
 
         self.fsm.skip_gc_raft_log_ticks = 0;
         self.register_raft_gc_log_tick();
-        PEER_GC_RAFT_LOG_COUNTER.inc_by(total_gc_logs as i64);
+        PEER_GC_RAFT_LOG_COUNTER.inc_by(total_gc_logs);
     }
 
     fn register_entry_cache_evict_tick(&mut self) {

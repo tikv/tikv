@@ -191,7 +191,7 @@ macro_rules! do_sleep {
         std::thread::sleep($duration);
     };
     ($duration:expr, async) => {
-        tokio::time::delay_for($duration).await;
+        tokio::time::sleep($duration).await;
     };
     ($duration:expr, skewed_sync) => {
         use rand::Rng;
