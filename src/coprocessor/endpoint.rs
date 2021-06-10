@@ -9,6 +9,7 @@ use std::{borrow::Cow, time::Duration};
 use async_stream::try_stream;
 use futures::channel::mpsc;
 use futures::prelude::*;
+use tidb_query_common::execute_stats::ExecSummary;
 use tokio::sync::Semaphore;
 
 use kvproto::kvrpcpb::{self, IsolationLevel};
@@ -432,6 +433,9 @@ impl<E: Engine> Endpoint<E> {
 
         // There might be errors when handling requests. In this case, we still need its
         // execution metrics.
+        let mut exec_summary = ExecSummary::default();
+        handler.collect_scan_summary(&mut exec_summary);
+        tracker.collect_scan_process_time(exec_summary);
         let mut storage_stats = Statistics::default();
         handler.collect_scan_statistics(&mut storage_stats);
         tracker.collect_storage_statistics(storage_stats);
