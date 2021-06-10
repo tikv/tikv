@@ -1234,8 +1234,9 @@ where
         let msg_type = msg.get_message().get_msg_type();
         let store_id = self.ctx.store_id();
         if (disk::disk_full_precheck(store_id) || disk::is_disk_full())
-            && (msg_type == MessageType::MsgAppend || msg_type == MessageType::MsgTransferLeader)
+            && [MessageType::MsgAppend, MessageType::MsgTimeoutNow].contains(&msg_type)
         {
+            debug!("skip {:?} because of disk full", msg_type);
             return Err(Error::Timeout(String::from("disk full")));
         }
         if !self.validate_raft_msg(&msg) {

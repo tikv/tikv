@@ -665,7 +665,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                             my_store_id: store_id,
                         }));
                     }
-
                     if let Err(e) = ch.send_raft_msg(msg) {
                         return future::err(Error::from(e));
                     }
