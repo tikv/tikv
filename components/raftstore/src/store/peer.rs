@@ -2345,7 +2345,7 @@ where
             Ok(RequestPolicy::ProposeNormal) => {
                 let store_id = ctx.store_id();
                 if disk::disk_full_precheck(store_id) || disk::is_disk_full() {
-                    Err(box_err!("disk full, all the business data write forbiden"))
+                    Err(Error::Timeout("disk full".to_owned()))
                 } else {
                     self.propose_normal(ctx, req)
                 }

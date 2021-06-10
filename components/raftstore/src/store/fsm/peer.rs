@@ -1236,8 +1236,11 @@ where
         if (disk::disk_full_precheck(store_id) || disk::is_disk_full())
             && [MessageType::MsgAppend, MessageType::MsgTimeoutNow].contains(&msg_type)
         {
-            debug!("skip {:?} because of disk full", msg_type);
-            return Err(Error::Timeout(String::from("disk full")));
+            debug!(
+                "skip {:?} because of disk full", msg_type;
+                "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id()
+            );
+            return Err(Error::Timeout("disk full".to_owned()));
         }
         if !self.validate_raft_msg(&msg) {
             return Ok(());
