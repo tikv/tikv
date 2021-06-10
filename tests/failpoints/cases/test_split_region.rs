@@ -661,6 +661,8 @@ fn test_split_duplicated_batch() {
     must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
 }
 
+/// We depend on split-check task to update approximate size of region even if this region does not
+/// need to split.
 #[test]
 fn test_report_approximate_size_after_split_check() {
     let mut cluster = new_server_cluster(0, 3);
