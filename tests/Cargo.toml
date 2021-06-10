@@ -134,7 +134,7 @@ protobuf = "2.8"
 more-asserts = "0.2"
 raft = { version = "0.6.0-alpha", default-features = false }
 raftstore = { path = "../components/raftstore", default-features = false }
-rand = "0.7.3"
+rand = "0.8.3"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tempfile = "3.0"
@@ -160,11 +160,11 @@ time = "0.1"
 criterion = "0.3"
 criterion-cpu-time = "0.1"
 arrow = "0.10"
-rand_xorshift = "0.2"
+rand_xorshift = "0.3"
 engine_rocks = { path = "../components/engine_rocks", default-features = false }
 engine_traits = { path = "../components/engine_traits", default-features = false }
 external_storage_export = { path = "../components/external_storage/export", default-features = false }
-hyper = { version = "0.13", default-features = false, features = ["runtime"] }
+hyper = { version = "0.14", default-features = false, features = ["runtime"] }
 keys = { path = "../components/keys", default-features = false }
 profiler = { path = "../components/profiler" }
 panic_hook = { path = "../components/panic_hook" }
@@ -181,7 +181,7 @@ test_raftstore = { path = "../components/test_raftstore", default-features = fal
 test_pd = { path = "../components/test_pd", default-features = false }
 byteorder = "1.2"
 serde_json = "1.0"
-tokio = { version = "0.2", features = ["rt-threaded"] }
+tokio = { version = "1.5", features = ["rt-multi-thread"] }
 concurrency_manager = { path = "../components/concurrency_manager", default-features = false }
 file_system = { path = "../components/file_system" }
 resource_metering = { path = "../components/resource_metering" }

@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering::SeqCst;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Arc;
 use std::thread::JoinHandle;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use collections::HashMap;
 
@@ -28,20 +28,20 @@ pub struct RecorderHandle {
 pub struct RecorderHandleInner {
     join_handle: JoinHandle<()>,
     pause: Arc<AtomicBool>,
-    precision_seconds: Arc<AtomicU64>,
+    precision_ms: Arc<AtomicU64>,
 }
 
 impl RecorderHandle {
     pub fn new(
         join_handle: JoinHandle<()>,
         pause: Arc<AtomicBool>,
-        precision_seconds: Arc<AtomicU64>,
+        precision_ms: Arc<AtomicU64>,
     ) -> Self {
         Self {
             inner: Some(Arc::new(RecorderHandleInner {
                 join_handle,
                 pause,
-                precision_seconds,
+                precision_ms,
             })),
         }
     }
@@ -59,9 +59,9 @@ impl RecorderHandle {
         }
     }
 
-    pub fn set_precision_seconds(&self, value: u64) {
+    pub fn set_precision(&self, value: Duration) {
         if let Some(inner) = self.inner.as_ref() {
-            inner.precision_seconds.store(value, SeqCst);
+            inner.precision_ms.store(value.as_millis() as _, SeqCst);
         }
     }
 }
@@ -69,7 +69,7 @@ impl RecorderHandle {
 #[derive(Debug)]
 pub struct CpuRecords {
     pub begin_unix_time_secs: u64,
-    pub duration_secs: u64,
+    pub duration: Duration,
 
     // tag -> ms
     pub records: HashMap<ResourceMeteringTag, u64>,
@@ -82,7 +82,7 @@ impl Default for CpuRecords {
             .expect("Clock may have gone backwards");
         Self {
             begin_unix_time_secs: now_unix_time.as_secs(),
-            duration_secs: 0,
+            duration: Duration::default(),
             records: HashMap::default(),
         }
     }
