@@ -63,17 +63,16 @@ fn make_version_file(md5_sum: String, version: u32, tar_version_head_path: &str)
 }
 
 fn gen_ffi_code() {
-    const NOT_CHANGE_VERSION_ARG_NAME: &str = "not-change-version";
+    const OVERWRITE_VERSION: &str = "overwrite-version";
     let matches = App::new("RaftStore Proxy FFI Generator")
         .author("tongzhigao@pingcap.com")
         .arg(
-            Arg::with_name(NOT_CHANGE_VERSION_ARG_NAME)
-                .long(NOT_CHANGE_VERSION_ARG_NAME)
-                .help("Do not update version anyway"),
+            Arg::with_name(OVERWRITE_VERSION)
+                .long(OVERWRITE_VERSION)
+                .takes_value(true)
+                .help("overwrite version forcibly"),
         )
         .get_matches();
-
-    let not_change_version = matches.is_present(NOT_CHANGE_VERSION_ARG_NAME);
 
     let src_dir = "raftstore-proxy/ffi/src/RaftStoreProxyFFI";
     let tar_file = "components/raftstore/src/engine_store_ffi/interfaces.rs";
@@ -82,11 +81,12 @@ fn gen_ffi_code() {
     let (ori_md5_sum, ori_version) = read_version_file(version_cpp_file.as_str());
     println!("\nFFI src dir path is {}", src_dir);
     println!("Original version is {}", ori_version);
-    let new_version = if not_change_version {
-        println!("Do not update version anyway");
-        ori_version
-    } else {
-        ori_version + 1
+    let new_version = match matches.value_of(OVERWRITE_VERSION) {
+        Some(overwritten_version) => {
+            println!("Overwrite version to {}", overwritten_version);
+            overwritten_version.parse::<_>().unwrap()
+        }
+        None => ori_version + 1,
     };
 
     let (headers, md5_sum) = scan_ffi_src_head(src_dir);
@@ -96,12 +96,12 @@ fn gen_ffi_code() {
         for f in &headers {
             println!("    {}", f);
         }
-        if md5_sum == ori_md5_sum {
-            println!("Check md5 sum equal");
+        if md5_sum == ori_md5_sum && !matches.is_present(OVERWRITE_VERSION) {
+            println!("Check md5 sum equal & NOT overwrite version");
         } else {
             println!(
-                "Check md5 sum not equal, original is {}, current is {}, start to generate rust code with version {}",
-                ori_md5_sum, md5_sum, new_version
+                "Current md5 sum is {}, start to generate rust code with version {}",
+                md5_sum, new_version
             );
             make_version_file(md5_sum, new_version, version_cpp_file.as_str());
         }
