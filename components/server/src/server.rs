@@ -912,19 +912,25 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             fatal!("failed to register import service");
         }
 
-        // Debug service.
-        let debug_service = DebugService::new(
-            engines.engines.clone(),
-            servers.server.get_debug_thread_pool().clone(),
-            self.router.clone(),
-            self.cfg_controller.as_ref().unwrap().clone(),
-        );
-        if servers
-            .server
-            .register_service(create_debug(debug_service))
-            .is_some()
-        {
-            fatal!("failed to register debug service");
+        if let Some(kv) = engines.engines.kv.bad_downcast::<RocksEngine>() {
+            let engines = Engines {
+                kv: kv.clone(),
+                raft: engines.engines.raft.clone(),
+            };
+            // Debug service.
+            let debug_service = DebugService::new(
+                engines,
+                servers.server.get_debug_thread_pool().clone(),
+                self.router.clone(),
+                self.cfg_controller.as_ref().unwrap().clone(),
+            );
+            if servers
+                .server
+                .register_service(create_debug(debug_service))
+                .is_some()
+            {
+                fatal!("failed to register debug service");
+            }
         }
 
         // Create Diagnostics service
