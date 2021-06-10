@@ -87,7 +87,7 @@ mod tests {
         let avg = MovingAvgU32::new(105);
         let mut external_sum = 0;
         for _ in 0..100 {
-            let n: u32 = rng.gen_range(0, u32::MAX / 100);
+            let n: u32 = rng.gen_range(0..u32::MAX / 100);
             external_sum += n;
             avg.add(n);
             assert_eq!(avg.fetch(), external_sum / 105);

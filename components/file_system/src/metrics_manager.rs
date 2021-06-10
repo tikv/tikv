@@ -35,8 +35,8 @@ macro_rules! flush_io_bytes {
         let bytes = $fetcher.fetch($io_type);
         let delta_bytes = bytes - $last_fetch;
         $last_fetch = bytes;
-        IO_BYTES_VEC.$metrics.read.inc_by(delta_bytes.read as i64);
-        IO_BYTES_VEC.$metrics.write.inc_by(delta_bytes.write as i64);
+        IO_BYTES_VEC.$metrics.read.inc_by(delta_bytes.read);
+        IO_BYTES_VEC.$metrics.write.inc_by(delta_bytes.write);
     };
 }
 

@@ -20,17 +20,17 @@ prost-codec = [
 [dependencies]
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
 http = "0.2.0"
-hyper = "0.13.3"
-hyper-tls = "0.4.1"
+hyper = "0.14"
+hyper-tls = "0.5"
 kvproto = { rev = "7a046020d1c091638e1e8aba623c8c1e8962219d", git = "https://github.com/pingcap/kvproto.git", default-features = false }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 # better to not use slog-global, but pass in the logger
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
-tame-gcs = { version = "0.8.0", features = ["async-multipart"] }
-tame-oauth = "0.4.2"
+tame-gcs = { version = "0.10", features = ["async-multipart"] }
+tame-oauth = "0.4.7"
 cloud = { path = "../", default-features = false }
 tikv_util = { path = "../../tikv_util", default-features = false }
-tokio = { version = "0.2.13", features = ["time"] }
+tokio = { version = "1.5", features = ["time"] }
 url = "2.0"
 
 [dev-dependencies]
