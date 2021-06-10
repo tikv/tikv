@@ -37,7 +37,7 @@ use super::metrics::*;
 use super::worker::RegionTask;
 use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
 
-use crate::store::async_io::{AsyncWriteMsg, AsyncWriteTask, UnpersistedReady};
+use crate::store::async_io::{AsyncWriteMsg, AsyncWriteTask};
 
 // When we create a region peer, we should initialize its log term/index > 0,
 // so that we can force the follower peer to sync the snapshot first.
@@ -1430,7 +1430,7 @@ where
         let region_id = self.get_region_id();
         let mut ctx = InvokeContext::new(self);
 
-        let mut write_task = AsyncWriteTask::new(region_id, self.peer_id);
+        let mut write_task = AsyncWriteTask::new(region_id, self.peer_id, ready.number());
 
         let mut res = HandleReadyResult::SendIOTask;
         if !ready.snapshot().is_empty() {
@@ -1484,7 +1484,6 @@ where
         self.last_term = ctx.last_term;
 
         if write_task.has_data() {
-            write_task.ready = Some(UnpersistedReady::new(self.peer_id, ready.number()));
             write_task.messages = msgs;
             if let Err(e) = async_write_sender.send(AsyncWriteMsg::WriteTask(write_task)) {
                 // IO threads are destroyed after store threads during shutdown.

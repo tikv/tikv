@@ -10,6 +10,7 @@ publish = false
 default = ["protobuf-codec", "test-engines-rocksdb"]
 failpoints = ["fail/failpoints"]
 protobuf-codec = [
+  "protobuf/bytes",
   "batch-system/protobuf-codec",
   "concurrency_manager/protobuf-codec",
   "engine_test/protobuf-codec",
@@ -25,7 +26,7 @@ protobuf-codec = [
   "tikv_util/protobuf-codec",
   "txn_types/protobuf-codec",
   "file_system/protobuf-codec",
-  "protobuf/bytes",
+  "protobuf/bytes"
 ]
 prost-codec = [
   "prost",

@@ -265,7 +265,7 @@ impl Default for Config {
             local_read_batch_size: 1024,
             apply_batch_system: BatchSystemConfig::default(),
             store_batch_system: BatchSystemConfig::default(),
-            store_io_pool_size: 1,
+            store_io_pool_size: 2,
             future_poll_size: 1,
             hibernate_regions: true,
             dev_assert: false,
@@ -625,7 +625,6 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_io_pool_size"])
             .set((self.store_io_pool_size as i32).into());
-
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["future_poll_size"])
             .set(self.future_poll_size as f64);
