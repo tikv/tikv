@@ -48,10 +48,9 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
     ) -> Self {
-        let worker = Builder::new()
-            .threaded_scheduler()
+        let worker = Builder::new_multi_thread()
             .thread_name("advance-ts")
-            .core_threads(1)
+            .worker_threads(1)
             .build()
             .unwrap();
         Self {

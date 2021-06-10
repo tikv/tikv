@@ -495,7 +495,7 @@ where
                 GC_KEYS_COUNTER_STATIC
                     .get(*cf)
                     .get(*tag)
-                    .inc_by(*count as i64);
+                    .inc_by(*count as u64);
             }
         }
     }
@@ -620,7 +620,7 @@ where
                 info!("write GcTask::OrphanVersions success"; "id" => id);
                 GC_COMPACTION_FILTER_ORPHAN_VERSIONS
                     .with_label_values(&["cleaned"])
-                    .inc_by(wb.count() as i64);
+                    .inc_by(wb.count() as u64);
                 update_metrics(false);
             }
             #[cfg(any(test, feature = "testexport"))]

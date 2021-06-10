@@ -23,7 +23,7 @@ prost-codec = [
 async-speed-limit = "0.3"
 backtrace = "0.3.9"
 byteorder = "1.2"
-bytes = "0.5.3"
+bytes = "1.0"
 codec = { path = "../codec", default-features = false }
 configuration = { path = "../configuration" }
 chrono = "0.4"
@@ -43,9 +43,9 @@ log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug
 log_wrappers = { path = "../log_wrappers" }
 num_cpus = "1"
 openssl = "0.10"
-prometheus = { version = "0.10", features = ["nightly"] }
-rand = "0.7"
-rusoto_core = "0.45.0"
+prometheus = { version = "0.12", features = ["nightly"] }
+rand = "0.8"
+rusoto_core = "0.46.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
@@ -58,7 +58,7 @@ thiserror = "1.0"
 tikv_alloc = { path = "../tikv_alloc" }
 collections = { path = "../collections" }
 time = "0.1"
-tokio = { version = "0.2", features = ["rt-util", "rt-threaded"] }
+tokio = { version = "1.5", features = ["rt-multi-thread"] }
 tokio-executor = "0.1"
 tokio-timer = "0.2"
 url = "2"
