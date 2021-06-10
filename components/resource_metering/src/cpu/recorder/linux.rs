@@ -8,7 +8,7 @@ use crate::{ResourceMeteringTag, TagInfos};
 use std::cell::Cell;
 use std::fs::read_dir;
 use std::marker::PhantomData;
-use std::sync::atomic::Ordering::SeqCst;
+use std::sync::atomic::Ordering::{Relaxed, SeqCst};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64};
 use std::sync::Arc;
 use std::thread;
@@ -33,13 +33,13 @@ pub fn init_recorder() -> RecorderHandle {
 
             let pause = Arc::new(AtomicBool::new(config.enabled));
             let pause0 = pause.clone();
-            let precision_seconds = Arc::new(AtomicU64::new(config.precision_seconds));
-            let precision_seconds0 = precision_seconds.clone();
+            let precision_ms = Arc::new(AtomicU64::new(config.precision.0.as_millis() as _));
+            let precision_ms0 = precision_ms.clone();
 
             let join_handle = std::thread::Builder::new()
-                .name("req-cpu-recorder".to_owned())
+                .name("cpu-recorder".to_owned())
                 .spawn(move || {
-                    let mut recorder = CpuRecorder::new(pause, precision_seconds);
+                    let mut recorder = CpuRecorder::new(pause, precision_ms);
 
                     loop {
                         recorder.handle_pause();
@@ -55,7 +55,7 @@ pub fn init_recorder() -> RecorderHandle {
                     }
                 })
                 .expect("Failed to create recorder thread");
-            RecorderHandle::new(join_handle, pause0, precision_seconds0)
+            RecorderHandle::new(join_handle, pause0, precision_ms0)
         };
     }
     HANDLE.clone()
@@ -146,7 +146,7 @@ struct ThreadRegistrationMsg {
 
 struct CpuRecorder {
     pause: Arc<AtomicBool>,
-    precision_seconds: Arc<AtomicU64>,
+    precision_ms: Arc<AtomicU64>,
 
     thread_stats: HashMap<pid_t, ThreadStat>,
     current_window_records: CpuRecords,
@@ -164,12 +164,12 @@ struct ThreadStat {
 }
 
 impl CpuRecorder {
-    pub fn new(pause: Arc<AtomicBool>, precision_seconds: Arc<AtomicU64>) -> Self {
+    pub fn new(pause: Arc<AtomicBool>, precision_ms: Arc<AtomicU64>) -> Self {
         let now = Instant::now();
 
         Self {
             pause,
-            precision_seconds,
+            precision_ms,
 
             last_collect_instant: now,
             last_gc_instant: now,
@@ -314,12 +314,12 @@ impl CpuRecorder {
     }
 
     pub fn may_advance_window(&mut self) -> bool {
-        let duration_secs = self.last_collect_instant.elapsed().as_secs();
-        let need_advance = duration_secs >= self.precision_seconds.load(SeqCst);
+        let duration = self.last_collect_instant.elapsed();
+        let need_advance = duration.as_millis() >= self.precision_ms.load(Relaxed) as _;
 
         if need_advance {
             let mut records = std::mem::take(&mut self.current_window_records);
-            records.duration_secs = duration_secs;
+            records.duration = duration;
 
             if !records.records.is_empty() {
                 let records = Arc::new(records);
@@ -379,8 +379,6 @@ mod tests {
     use super::*;
     use crate::cpu::collector::register_collector;
 
-    use std::sync::atomic::AtomicBool;
-    use std::sync::atomic::Ordering::SeqCst;
     use std::sync::Mutex;
     use std::thread::JoinHandle;
 
@@ -445,6 +443,7 @@ mod tests {
 
             let handle = std::thread::spawn(|| {
                 let mut guard = None;
+                let thread_id = unsafe { libc::syscall(libc::SYS_gettid) as libc::pid_t };
 
                 for op in ops {
                     match op {
@@ -462,15 +461,22 @@ mod tests {
                             guard.take();
                         }
                         Operation::CpuHeavy(ms) => {
-                            let done = Arc::new(AtomicBool::new(false));
-                            let done1 = done.clone();
-                            std::thread::spawn(move || {
-                                std::thread::sleep(Duration::from_millis(ms));
-                                done.store(true, SeqCst);
-                            });
+                            let begin_stat = procinfo::pid::stat_task(*PID, thread_id).unwrap();
+                            let begin_ticks =
+                                (begin_stat.utime as u64).wrapping_add(begin_stat.stime as u64);
 
-                            while !done1.load(SeqCst) {
+                            loop {
                                 Self::heavy_job();
+                                let later_stat = procinfo::pid::stat_task(*PID, thread_id).unwrap();
+
+                                let later_ticks =
+                                    (later_stat.utime as u64).wrapping_add(later_stat.stime as u64);
+                                let delta_ms = later_ticks.wrapping_sub(begin_ticks) * 1_000
+                                    / (*CLK_TCK as u64);
+
+                                if delta_ms >= ms {
+                                    break;
+                                }
                             }
                         }
                         Operation::Sleep(ms) => {
@@ -638,6 +644,8 @@ mod tests {
 
             collector.check(merge(vec![expected0, expected1, expected2]));
         }
+
+        handle.pause();
     }
 
     impl DummyCollector {
@@ -661,7 +669,7 @@ mod tests {
                 let r = value.saturating_add(MAX_DRIFT);
                 if !(l <= expected_value && expected_value <= r) {
                     panic!(
-                        "tag {} cpu time expected {} got {}",
+                        "tag {} cpu time expected {} but got {}",
                         k, expected_value, value
                     );
                 }
