@@ -822,8 +822,12 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         // Start resource metering.
         let resource_metering_cpu_recorder = resource_metering::cpu::recorder::init_recorder();
-        let mut resource_metering_reporter_worker =
-            Box::new(LazyWorker::new("resource-metering-reporter"));
+        let mut resource_metering_reporter_worker = Box::new(
+            WorkerBuilder::new("resource-metering-reporter")
+                .pending_capacity(30)
+                .create()
+                .lazy_build("resource-metering-reporter"),
+        );
         let resource_metering_reporter_scheduler = resource_metering_reporter_worker.scheduler();
         cfg_controller.register(
             tikv::config::Module::ResourceMetering,
@@ -837,7 +841,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.config.resource_metering.clone(),
             resource_metering_reporter_scheduler,
             self.env.clone(),
-            self.security_mgr.clone(),
         );
         resource_metering_reporter_worker.start_with_timer(resource_metering_reporter);
         self.to_stop.push(resource_metering_reporter_worker);

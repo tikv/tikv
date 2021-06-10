@@ -3773,7 +3773,6 @@ dependencies = [
  "prometheus",
  "prometheus-static-metric",
  "rand 0.8.3",
- "security",
  "serde",
  "serde_derive",
  "slog",
