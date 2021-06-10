@@ -913,6 +913,13 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
 
         if let Some(kv) = engines.engines.kv.bad_downcast::<RocksEngine>() {
+            // FIXME: This is real ugly
+            let router = {
+                use std::any::Any;
+                let router: &dyn Any = &self.router;
+                let router: &RaftRouter<RocksEngine, ER> = router.downcast_ref().expect("rocks");
+                router.clone()
+            };
             let engines = Engines {
                 kv: kv.clone(),
                 raft: engines.engines.raft.clone(),
@@ -921,7 +928,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             let debug_service = DebugService::new(
                 engines,
                 servers.server.get_debug_thread_pool().clone(),
-                self.router.clone(),
+                router,
                 self.cfg_controller.as_ref().unwrap().clone(),
             );
             if servers
