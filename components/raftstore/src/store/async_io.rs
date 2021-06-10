@@ -163,6 +163,19 @@ where
                 ));
             }
         }
+        if last_index != 0 {
+            if self
+                .raft_state
+                .as_ref()
+                .map_or(true, |r| r.get_last_index() != last_index)
+            {
+                return Err(box_err!(
+                    "invalid raft state, last_index {}, raft_state {:?}",
+                    last_index,
+                    self.raft_state
+                ));
+            }
+        }
         Ok(())
     }
 }
@@ -323,7 +336,8 @@ where
     }
 
     fn run(&mut self) {
-        loop {
+        let mut stopped = false;
+        while !stopped {
             let loop_begin = Instant::now();
             let mut handle_begin = loop_begin;
 
@@ -344,11 +358,17 @@ where
                     match self.receiver.try_recv() {
                         Ok(msg) => msg,
                         Err(TryRecvError::Empty) => break,
-                        Err(TryRecvError::Disconnected) => return,
+                        Err(TryRecvError::Disconnected) => {
+                            stopped = true;
+                            break;
+                        }
                     }
                 };
                 match msg {
-                    AsyncWriteMsg::Shutdown => return,
+                    AsyncWriteMsg::Shutdown => {
+                        stopped = true;
+                        break;
+                    }
                     AsyncWriteMsg::WriteTask(task) => {
                         STORE_WRITE_TASK_WAIT_DURATION_HISTOGRAM
                             .observe(duration_to_sec(task.send_time.elapsed()));
@@ -523,8 +543,11 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use crate::store::{Config, Transport};
     use crate::Result;
+    use engine_rocks::RocksWriteBatch;
     use engine_test::kv::{new_engine, KvTestEngine};
     use engine_traits::{Mutable, Peekable, WriteBatchExt, ALL_CFS};
     use kvproto::raft_serverpb::RaftMessage;
@@ -552,6 +575,9 @@ mod tests {
         for (region_id, entries, state) in entries_state {
             for e in entries {
                 let key = keys::raft_log_key(region_id, e.get_index());
+                if let None = snapshot.get_msg::<Entry>(&key).unwrap() {
+                    println!("xxx??? {} {}", region_id, e.get_index());
+                }
                 let val = snapshot.get_msg::<Entry>(&key).unwrap().unwrap();
                 assert_eq!(val, e);
             }
@@ -611,6 +637,79 @@ mod tests {
         fn flush(&mut self) {}
     }
 
+    fn must_have_same_count_msg(msg_count: u32, msg_rx: &Receiver<RaftMessage>) {
+        let mut count = 0;
+        while msg_rx.try_recv().is_ok() {
+            count += 1;
+        }
+        assert_eq!(count, msg_count);
+    }
+
+    fn must_have_same_notifies(
+        notifies: Vec<(u64, (u64, u64))>,
+        notify_rx: &Receiver<(u64, (u64, u64))>,
+    ) {
+        let mut notify_set = HashSet::default();
+        for n in notifies {
+            notify_set.insert(n);
+        }
+        while let Ok(n) = notify_rx.try_recv() {
+            if !notify_set.remove(&n) {
+                panic!("{:?} not in expected notify", n);
+            }
+        }
+        assert!(
+            notify_set.is_empty(),
+            "remaining expected notify {:?} not exist",
+            notify_set
+        );
+    }
+
+    fn must_wait_same_notifies(
+        notifies: Vec<(u64, (u64, u64))>,
+        notify_rx: &Receiver<(u64, (u64, u64))>,
+    ) {
+        let mut notify_map = HashMap::default();
+        for (region_id, n) in notifies {
+            notify_map.insert(region_id, n);
+        }
+        let timer = Instant::now();
+        loop {
+            match notify_rx.recv() {
+                Ok((region_id, n)) => {
+                    if let Some(n2) = notify_map.get(&region_id) {
+                        if n == *n2 {
+                            notify_map.remove(&region_id);
+                            if notify_map.is_empty() {
+                                break;
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    panic!("recv error: {:?}", e);
+                }
+            }
+
+            if timer.elapsed() > Duration::from_secs(5) {
+                panic!("wait some notifies after 3 seconds")
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Help function for less code
+    /// Option must not be none
+    fn put_kv(wb: &mut Option<RocksWriteBatch>, key: &[u8], value: &[u8]) {
+        wb.as_mut().unwrap().put(key, value).unwrap();
+    }
+
+    /// Help function for less code
+    /// Option must not be none
+    fn delete_kv(wb: &mut Option<RocksWriteBatch>, key: &[u8]) {
+        wb.as_mut().unwrap().delete(key).unwrap();
+    }
+
     struct TestAsyncWriteWorker {
         worker: AsyncWriteWorker<KvTestEngine, KvTestEngine, TestTransport, TestNotifier>,
         msg_rx: Receiver<RaftMessage>,
@@ -639,30 +738,36 @@ mod tests {
                 notify_rx,
             }
         }
+    }
 
-        fn must_have_same_count_msg(&self, msg_count: u32) {
-            let mut count = 0;
-            while self.msg_rx.try_recv().is_ok() {
-                count += 1;
+    struct TestAsyncWriters {
+        writers: AsyncWriters<KvTestEngine, KvTestEngine>,
+        msg_rx: Receiver<RaftMessage>,
+        notify_rx: Receiver<(u64, (u64, u64))>,
+    }
+
+    impl TestAsyncWriters {
+        fn new(cfg: &Config, kv_engine: &KvTestEngine, raft_engine: &KvTestEngine) -> Self {
+            let (msg_tx, msg_rx) = channel();
+            let trans = TestTransport { tx: msg_tx };
+            let (notify_tx, notify_rx) = channel();
+            let notifier = TestNotifier { tx: notify_tx };
+            let mut writers = AsyncWriters::new();
+            writers
+                .spawn(1, kv_engine, raft_engine, &notifier, &trans, &cfg)
+                .unwrap();
+            Self {
+                writers,
+                msg_rx,
+                notify_rx,
             }
-            assert_eq!(count, msg_count);
         }
 
-        fn must_have_same_notifies(&self, notifies: Vec<(u64, (u64, u64))>) {
-            let mut notify_set = HashSet::default();
-            for n in notifies {
-                notify_set.insert(n);
-            }
-            while let Ok(n) = self.notify_rx.try_recv() {
-                if !notify_set.remove(&n) {
-                    panic!("{:?} not in expected nofity", n);
-                }
-            }
-            assert!(
-                notify_set.is_empty(),
-                "remaining expected notify {:?} not exist",
-                notify_set
-            );
+        fn async_write_sender(
+            &self,
+            id: usize,
+        ) -> &Sender<AsyncWriteMsg<KvTestEngine, KvTestEngine>> {
+            &self.writers.senders()[id]
         }
     }
 
@@ -674,19 +779,9 @@ mod tests {
 
         let mut task_1 = AsyncWriteTask::<KvTestEngine, KvTestEngine>::new(1, 1, 10);
         task_1.kv_wb = Some(kv_engine.write_batch());
-        task_1
-            .kv_wb
-            .as_mut()
-            .unwrap()
-            .put(b"kv_k1", b"kv_v1")
-            .unwrap();
+        put_kv(&mut task_1.kv_wb, b"kv_k1", b"kv_v1");
         task_1.raft_wb = Some(raft_engine.write_batch());
-        task_1
-            .raft_wb
-            .as_mut()
-            .unwrap()
-            .put(b"raft_k1", b"raft_v1")
-            .unwrap();
+        put_kv(&mut task_1.raft_wb, b"raft_k1", b"raft_v1");
         task_1.entries.append(&mut vec![
             new_entry(5, 5),
             new_entry(6, 5),
@@ -700,19 +795,9 @@ mod tests {
 
         let mut task_2 = AsyncWriteTask::<KvTestEngine, KvTestEngine>::new(2, 2, 15);
         task_2.kv_wb = Some(kv_engine.write_batch());
-        task_2
-            .kv_wb
-            .as_mut()
-            .unwrap()
-            .put(b"kv_k2", b"kv_v2")
-            .unwrap();
+        put_kv(&mut task_2.kv_wb, b"kv_k2", b"kv_v2");
         task_2.raft_wb = Some(raft_engine.write_batch());
-        task_2
-            .raft_wb
-            .as_mut()
-            .unwrap()
-            .put(b"raft_k2", b"raft_v2")
-            .unwrap();
+        put_kv(&mut task_2.raft_wb, b"raft_k2", b"raft_v2");
         task_2
             .entries
             .append(&mut vec![new_entry(20, 15), new_entry(21, 15)]);
@@ -725,20 +810,10 @@ mod tests {
 
         let mut task_3 = AsyncWriteTask::<KvTestEngine, KvTestEngine>::new(1, 1, 11);
         task_3.kv_wb = Some(kv_engine.write_batch());
-        task_3
-            .kv_wb
-            .as_mut()
-            .unwrap()
-            .put(b"kv_k3", b"kv_v3")
-            .unwrap();
+        put_kv(&mut task_3.kv_wb, b"kv_k3", b"kv_v3");
         task_3.raft_wb = Some(raft_engine.write_batch());
-        task_3
-            .raft_wb
-            .as_mut()
-            .unwrap()
-            .put(b"raft_k3", b"raft_v3")
-            .unwrap();
-        task_3.raft_wb.as_mut().unwrap().delete(b"raft_k1").unwrap();
+        put_kv(&mut task_3.raft_wb, b"raft_k3", b"raft_v3");
+        delete_kv(&mut task_3.raft_wb, b"raft_k1");
         task_3
             .entries
             .append(&mut vec![new_entry(6, 6), new_entry(7, 7)]);
@@ -762,6 +837,8 @@ mod tests {
         assert_eq!(snapshot.get_value(b"raft_k2").unwrap().unwrap(), b"raft_v2");
         assert_eq!(snapshot.get_value(b"raft_k3").unwrap().unwrap(), b"raft_v3");
 
+        must_have_same_notifies(vec![(1, (1, 11)), (2, (2, 15))], &t.notify_rx);
+
         must_have_entries_and_state(
             &raft_engine,
             vec![
@@ -778,7 +855,89 @@ mod tests {
             ],
         );
 
-        t.must_have_same_count_msg(5);
-        t.must_have_same_notifies(vec![(1, (1, 11)), (2, (2, 15))]);
+        must_have_same_count_msg(5, &t.msg_rx);
+    }
+
+    #[test]
+    fn test_basic_flow() {
+        let (_dir, kv_engine) = create_tmp_engine("async-io-basic-kv");
+        let (_dir, raft_engine) = create_tmp_engine("async-io-basic-raft");
+        let mut cfg = Config::default();
+        cfg.store_io_pool_size = 2;
+        let mut t = TestAsyncWriters::new(&cfg, &kv_engine, &raft_engine);
+
+        let mut task_1 = AsyncWriteTask::<KvTestEngine, KvTestEngine>::new(1, 1, 10);
+        task_1.kv_wb = Some(kv_engine.write_batch());
+        put_kv(&mut task_1.kv_wb, b"kv_k1", b"kv_v1");
+        task_1.raft_wb = Some(raft_engine.write_batch());
+        put_kv(&mut task_1.raft_wb, b"raft_k1", b"raft_v1");
+        task_1
+            .entries
+            .append(&mut vec![new_entry(5, 5), new_entry(6, 5), new_entry(7, 5)]);
+        task_1.raft_state = Some(new_raft_state(5, 234, 6, 7));
+        task_1
+            .messages
+            .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
+
+        t.async_write_sender(0)
+            .send(AsyncWriteMsg::WriteTask(task_1))
+            .unwrap();
+
+        let mut task_2 = AsyncWriteTask::<KvTestEngine, KvTestEngine>::new(2, 2, 20);
+        task_2.kv_wb = Some(kv_engine.write_batch());
+        put_kv(&mut task_2.kv_wb, b"kv_k2", b"kv_v2");
+        task_2.raft_wb = Some(raft_engine.write_batch());
+        put_kv(&mut task_2.raft_wb, b"raft_k2", b"raft_v2");
+        task_2
+            .entries
+            .append(&mut vec![new_entry(50, 12), new_entry(51, 13)]);
+        task_2.raft_state = Some(new_raft_state(13, 567, 49, 51));
+        task_2
+            .messages
+            .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
+
+        t.async_write_sender(1)
+            .send(AsyncWriteMsg::WriteTask(task_2))
+            .unwrap();
+
+        let mut task_3 = AsyncWriteTask::<KvTestEngine, KvTestEngine>::new(1, 1, 15);
+        task_3.kv_wb = Some(kv_engine.write_batch());
+        put_kv(&mut task_3.kv_wb, b"kv_k3", b"kv_v3");
+        delete_kv(&mut task_3.kv_wb, b"kv_k1");
+        task_3.raft_wb = Some(raft_engine.write_batch());
+        put_kv(&mut task_3.raft_wb, b"raft_k3", b"raft_v3");
+        delete_kv(&mut task_3.raft_wb, b"raft_k2");
+        task_3.entries.append(&mut vec![new_entry(6, 6)]);
+        task_3.cut_logs = Some((7, 8));
+        task_3.raft_state = Some(new_raft_state(6, 345, 6, 6));
+        task_3
+            .messages
+            .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
+
+        t.async_write_sender(0)
+            .send(AsyncWriteMsg::WriteTask(task_3))
+            .unwrap();
+
+        must_wait_same_notifies(vec![(1, (1, 15)), (2, (2, 20))], &t.notify_rx);
+
+        must_have_entries_and_state(
+            &raft_engine,
+            vec![
+                (
+                    1,
+                    vec![new_entry(5, 5), new_entry(6, 6)],
+                    new_raft_state(6, 345, 6, 6),
+                ),
+                (
+                    2,
+                    vec![new_entry(50, 12), new_entry(51, 13)],
+                    new_raft_state(13, 567, 49, 51),
+                ),
+            ],
+        );
+
+        must_have_same_count_msg(6, &t.msg_rx);
+
+        t.writers.shutdown();
     }
 }
