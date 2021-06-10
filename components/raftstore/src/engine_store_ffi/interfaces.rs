@@ -630,7 +630,7 @@ pub mod root {
                 ),
             >,
         }
-        pub const RAFT_STORE_PROXY_VERSION: u32 = 500000;
+        pub const RAFT_STORE_PROXY_VERSION: u32 = 501000;
         pub const RAFT_STORE_PROXY_MAGIC_NUMBER: u32 = 324508639;
     }
     pub type __builtin_va_list = [root::__va_list_tag; 1usize];
