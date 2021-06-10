@@ -24,11 +24,11 @@ fn test_pending_peers() {
     cluster.must_put(b"k1", b"v1");
 
     fail::cfg(region_worker_fp, "sleep(2000)").unwrap();
-    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    pd_client.must_add_peer(region_id, new_learner_peer(3, 3));
     sleep_ms(1000);
     let pending_peers = pd_client.get_pending_peers();
     // Region worker is not started, snapshot should not be applied yet.
-    assert_eq!(pending_peers[&3], new_peer(3, 3));
+    assert_eq!(pending_peers[&3], new_learner_peer(3, 3));
     // But it will be applied finally.
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
     sleep_ms(100);
@@ -40,7 +40,7 @@ fn test_pending_peers() {
 // dirty write.
 #[test]
 fn test_pending_snapshot() {
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = new_node_cluster(0, 4);
     configure_for_snapshot(&mut cluster);
     let election_timeout = configure_for_lease_read(&mut cluster, None, Some(15));
     let gc_limit = cluster.cfg.raft_store.raft_log_gc_count_limit;
@@ -56,12 +56,13 @@ fn test_pending_snapshot() {
 
     let region_id = cluster.run_conf_change();
     pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
     cluster.must_transfer_leader(region_id, new_peer(1, 1));
     cluster.must_put(b"k1", b"v1");
 
     fail::cfg(handle_snapshot_fp, "pause").unwrap();
-    pd_client.must_add_peer(region_id, new_peer(3, 3));
-    // Give some time for peer 3 to request snapshot.
+    pd_client.must_add_peer(region_id, new_learner_peer(4, 4));
+    // Give some time for peer 4 to request snapshot and make peer (1, 1) paused.
     sleep_ms(100);
 
     // Isolate peer 1 from rest of the cluster.

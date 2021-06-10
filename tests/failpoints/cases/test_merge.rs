@@ -58,8 +58,8 @@ fn test_node_merge_rollback() {
     let mut region = pd_client.get_region(b"k1").unwrap();
     // After split and prepare_merge, version becomes 1 + 2 = 3;
     assert_eq!(region.get_region_epoch().get_version(), 3);
-    // After ConfChange and prepare_merge, conf version becomes 1 + 2 = 3;
-    assert_eq!(region.get_region_epoch().get_conf_ver(), 3);
+    // After ConfChange(learner and then voter) and prepare_merge, conf version becomes 1 + 1 + 2 = 3;
+    assert_eq!(region.get_region_epoch().get_conf_ver(), 4);
     fail::remove(schedule_merge_fp);
     // Wait till rollback.
     cluster.must_put(b"k11", b"v11");
@@ -92,8 +92,8 @@ fn test_node_merge_rollback() {
     // Wait till rollback.
     cluster.must_put(b"k12", b"v12");
 
-    // After premerge and rollback, conf_ver becomes 3 + 1 = 4, version becomes 4 + 2 = 6;
-    region.mut_region_epoch().set_conf_ver(4);
+    // After premerge and rollback, conf_ver becomes 4 + 1 = 5, version becomes 4 + 2 = 6;
+    region.mut_region_epoch().set_conf_ver(5);
     region.mut_region_epoch().set_version(6);
     for i in 1..3 {
         must_get_equal(&cluster.get_engine(i), b"k12", b"v12");

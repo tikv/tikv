@@ -127,7 +127,7 @@ fn change_peer(change_type: ConfChangeType, peer: metapb::Peer) -> pdpb::ChangeP
 impl Operator {
     fn make_region_heartbeat_response(
         &self,
-        region_id: u64,
+        region: &metapb::Region,
         cluster: &Cluster,
     ) -> pdpb::RegionHeartbeatResponse {
         match *self {
@@ -150,7 +150,7 @@ impl Operator {
             Operator::MergeRegion {
                 target_region_id, ..
             } => {
-                if target_region_id == region_id {
+                if target_region_id == region.get_id() {
                     pdpb::RegionHeartbeatResponse::default()
                 } else {
                     let region = cluster.get_region_by_id(target_region_id).unwrap().unwrap();
@@ -570,15 +570,23 @@ impl Cluster {
             cmp::Ordering::Less => {
                 // find the first store which the region has not covered.
                 for store_id in self.stores.keys() {
-                    if region
+                    let replica = region
                         .get_peers()
                         .iter()
-                        .all(|x| x.get_store_id() != *store_id)
-                    {
-                        let peer = Either::Left(new_peer(*store_id, self.alloc_id().unwrap()));
-                        let policy = SchedulePolicy::Repeat(1);
-                        return Some(Operator::AddPeer { peer, policy });
-                    }
+                        .find(|p| p.get_store_id() == *store_id);
+                    let peer = match replica {
+                        None => new_learner_peer(*store_id, self.alloc_id().unwrap()),
+                        Some(p) => {
+                            if p.get_role() == PeerRole::Voter {
+                                continue;
+                            } else {
+                                new_peer(*store_id, p.get_id())
+                            }
+                        }
+                    };
+                    let peer = Either::Left(peer);
+                    let policy = SchedulePolicy::Repeat(1);
+                    return Some(Operator::AddPeer { peer, policy });
                 }
             }
             cmp::Ordering::Greater => {
@@ -639,7 +647,7 @@ impl Cluster {
             region_id, operator, leader, region
         );
 
-        let mut resp = operator.make_region_heartbeat_response(region.get_id(), self);
+        let mut resp = operator.make_region_heartbeat_response(&region, self);
         self.operators.insert(region_id, operator);
         resp.set_region_id(region_id);
         resp.set_region_epoch(region.take_region_epoch());
@@ -1031,6 +1039,12 @@ impl TestPdClient {
     }
 
     pub fn must_add_peer(&self, region_id: u64, peer: metapb::Peer) {
+        if peer.get_role() == PeerRole::Voter {
+            let mut learner = peer.clone();
+            learner.set_role(PeerRole::Learner);
+            self.add_peer(region_id, learner.clone());
+            self.must_have_peer(region_id, learner);
+        }
         self.add_peer(region_id, peer.clone());
         self.must_have_peer(region_id, peer);
     }
