@@ -1,6 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::KvEngine;
+use kvproto::kvrpcpb::ReadState;
 use kvproto::metapb::Region;
 use raft::StateRole;
 use raftstore::coprocessor::*;
@@ -25,6 +26,11 @@ impl<E: KvEngine> Observer<E> {
         coprocessor_host
             .registry
             .register_cmd_observer(1000, BoxCmdObserver::new(self.clone()));
+        // The `resolved-ts` cmd observer will `mem::take` the `Vec<(u64, ReadState)>`, use a low
+        // priority to let it be the last observer and avoid affecting other observers
+        coprocessor_host
+            .registry
+            .register_read_state_observer(1000, BoxReadStateObserver::new(self.clone()));
         coprocessor_host
             .registry
             .register_role_observer(100, BoxRoleObserver::new(self.clone()));
@@ -43,6 +49,18 @@ impl<E: KvEngine> Clone for Observer<E> {
 }
 
 impl<E: KvEngine> Coprocessor for Observer<E> {}
+
+impl<E: KvEngine> ReadStateObserver for Observer<E> {
+    fn on_receive_read_state(&self, read_states: &mut Vec<(u64, ReadState)>) {
+        // `Observer::on_receive_read_state` should only invoke if `read_states` is not empty
+        assert!(!read_states.is_empty());
+        if let Err(e) = self.scheduler.schedule(Task::AdvanceReadProgress {
+            read_states: std::mem::take(read_states),
+        }) {
+            info!("failed to schedule advance read_state task"; "err" => ?e);
+        }
+    }
+}
 
 impl<E: KvEngine> CmdObserver<E> for Observer<E> {
     fn on_flush_applied_cmd_batch(

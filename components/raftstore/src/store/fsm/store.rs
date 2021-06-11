@@ -2423,7 +2423,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                         // It is okay to skip the following checks, the `read_state` is guaranteed
                         // to be valid when it is published by the leader
                         if leader_info.has_read_state() {
-                            read_states.push(leader_info.take_read_state());
+                            read_states
+                                .push((leader_info.region_id, leader_info.take_read_state()));
                         }
                         if *term == leader_info.term
                             && *leader_id == leader_info.peer_id
@@ -2457,7 +2458,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             .flatten()
             .collect();
         cb(regions);
-        // TODO: send read_states to resolved ts worker
+
+        self.ctx
+            .coprocessor_host
+            .on_receive_read_state(&mut read_states);
     }
 
     fn on_get_store_safe_ts(&self, key_range: KeyRange, cb: Box<dyn FnOnce(u64) + Send>) {
@@ -2476,8 +2480,7 @@ fn get_range_safe_ts(meta: &StoreMeta, key_range: KeyRange) -> u64 {
             registry
                 .iter()
                 .map(|(_, rrp)| rrp.safe_ts())
-                // ts == 0 means the peer is uninitialized
-                .filter(|ts| *ts != 0)
+                .filter(|ts| *ts != 0) // ts == 0 means the peer is uninitialized
                 .min()
                 .unwrap_or(0)
         })
@@ -2495,8 +2498,7 @@ fn get_range_safe_ts(meta: &StoreMeta, key_range: KeyRange) -> u64 {
                 .map(|(_, id)| {
                     registry.get(id).unwrap().safe_ts()
                 })
-                // ts == 0 means the peer is uninitialized
-                .filter(|ts| *ts != 0)
+                .filter(|ts| *ts != 0) // ts == 0 means the peer is uninitialized
                 .min()
                 .unwrap_or(0)
         })

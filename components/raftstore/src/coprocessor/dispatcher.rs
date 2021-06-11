@@ -152,6 +152,11 @@ impl_box_observer!(
     ReadIndexObserver,
     WrappedReadIndexObserver
 );
+impl_box_observer!(
+    BoxReadStateObserver,
+    ReadStateObserver,
+    WrappedReadStateObserver
+);
 impl_box_observer_g!(BoxCmdObserver, CmdObserver, WrappedCmdObserver);
 impl_box_observer_g!(
     BoxConsistencyCheckObserver,
@@ -174,6 +179,7 @@ where
     region_change_observers: Vec<Entry<BoxRegionChangeObserver>>,
     cmd_observers: Vec<Entry<BoxCmdObserver<E>>>,
     read_index_observers: Vec<Entry<BoxReadIndexObserver>>,
+    read_state_observers: Vec<Entry<BoxReadStateObserver>>,
     // TODO: add endpoint
 }
 
@@ -189,6 +195,7 @@ impl<E: KvEngine> Default for Registry<E> {
             region_change_observers: Default::default(),
             cmd_observers: Default::default(),
             read_index_observers: Default::default(),
+            read_state_observers: Default::default(),
         }
     }
 }
@@ -249,6 +256,10 @@ impl<E: KvEngine> Registry<E> {
 
     pub fn register_read_index_observer(&mut self, priority: u32, rio: BoxReadIndexObserver) {
         push!(priority, rio, self.read_index_observers);
+    }
+
+    pub fn register_read_state_observer(&mut self, priority: u32, rio: BoxReadStateObserver) {
+        push!(priority, rio, self.read_state_observers);
     }
 }
 
@@ -527,6 +538,16 @@ impl<E: KvEngine> CoprocessorHost<E> {
     pub fn on_step_read_index(&self, msg: &mut eraftpb::Message) {
         for step_ob in &self.registry.read_index_observers {
             step_ob.observer.inner().on_step(msg);
+        }
+    }
+
+    pub fn on_receive_read_state(&self, read_states: &mut Vec<(u64, ReadState)>) {
+        // Some observer assert `read_states` is not empty
+        if read_states.is_empty() {
+            return;
+        }
+        for rs_ob in &self.registry.read_state_observers {
+            rs_ob.observer.inner().on_receive_read_state(read_states);
         }
     }
 
