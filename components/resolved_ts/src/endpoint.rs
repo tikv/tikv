@@ -398,7 +398,9 @@ where
     fn region_updated(&mut self, incoming_region: Region) {
         let region_id = incoming_region.get_id();
         if let Some(obs_region) = self.regions.get_mut(&region_id) {
-            if obs_region.meta.get_region_epoch() == incoming_region.get_region_epoch() {
+            if obs_region.meta.get_region_epoch().get_version()
+                == incoming_region.get_region_epoch().get_version()
+            {
                 // only peer list change, no need to re-register region
                 obs_region.meta = incoming_region;
                 return;
