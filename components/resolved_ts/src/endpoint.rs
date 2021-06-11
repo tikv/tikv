@@ -19,7 +19,7 @@ use raftstore::coprocessor::CmdBatch;
 use raftstore::coprocessor::{ObserveHandle, ObserveID};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::StoreMeta;
-use raftstore::store::util::{self, RegionReadProgress, RegionReadProgressRegister};
+use raftstore::store::util::{self, RegionReadProgress, RegionReadProgressRegistry};
 use raftstore::store::RegionSnapshot;
 use security::SecurityManager;
 use tikv::config::ResolvedTsConfig;
@@ -248,7 +248,7 @@ impl ObserveRegion {
 pub struct Endpoint<T, E: KvEngine, C> {
     cfg: ResolvedTsConfig,
     store_meta: Arc<Mutex<StoreMeta>>,
-    region_read_progress: RegionReadProgressRegister,
+    region_read_progress: RegionReadProgressRegistry,
     regions: HashMap<u64, ObserveRegion>,
     scanner_pool: ScannerPool<T, E>,
     scheduler: Scheduler<Task<E::Snapshot>>,
@@ -735,8 +735,8 @@ where
 {
     fn on_timeout(&mut self) {
         let (mut oldest_ts, mut oldest_region, mut zero_ts_count) = (u64::MAX, 0, 0);
-        self.region_read_progress.map(|register| {
-            for (region_id, read_progress) in register {
+        self.region_read_progress.map(|registry| {
+            for (region_id, read_progress) in registry {
                 let ts = read_progress.safe_ts();
                 if ts == 0 {
                     zero_ts_count += 1;

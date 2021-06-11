@@ -14,7 +14,7 @@ use kvproto::tikvpb::TikvClient;
 use pd_client::PdClient;
 use protobuf::Message;
 use raftstore::store::fsm::StoreMeta;
-use raftstore::store::util::RegionReadProgressRegister;
+use raftstore::store::util::RegionReadProgressRegistry;
 use security::SecurityManager;
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::Scheduler;
@@ -27,7 +27,7 @@ use crate::metrics::CHECK_LEADER_REQ_SIZE_HISTOGRAM;
 
 pub struct AdvanceTsWorker<E: KvEngine> {
     store_meta: Arc<Mutex<StoreMeta>>,
-    region_read_progress: RegionReadProgressRegister,
+    region_read_progress: RegionReadProgressRegistry,
     pd_client: Arc<dyn PdClient>,
     timer: SteadyTimer,
     worker: Runtime,
@@ -46,7 +46,7 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
         pd_client: Arc<dyn PdClient>,
         scheduler: Scheduler<Task<E::Snapshot>>,
         store_meta: Arc<Mutex<StoreMeta>>,
-        region_read_progress: RegionReadProgressRegister,
+        region_read_progress: RegionReadProgressRegistry,
         concurrency_manager: ConcurrencyManager,
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
@@ -133,7 +133,7 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
     async fn region_resolved_ts_store(
         regions: Vec<u64>,
         store_meta: Arc<Mutex<StoreMeta>>,
-        region_read_progress: RegionReadProgressRegister,
+        region_read_progress: RegionReadProgressRegistry,
         pd_client: Arc<dyn PdClient>,
         security_mgr: Arc<SecurityManager>,
         env: Arc<Environment>,

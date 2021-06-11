@@ -837,32 +837,32 @@ impl Display for MsgType<'_> {
 }
 
 #[derive(Clone, Default)]
-pub struct RegionReadProgressRegister {
-    register: Arc<Mutex<HashMap<u64, Arc<RegionReadProgress>>>>,
+pub struct RegionReadProgressRegistry {
+    registry: Arc<Mutex<HashMap<u64, Arc<RegionReadProgress>>>>,
 }
 
-impl RegionReadProgressRegister {
+impl RegionReadProgressRegistry {
     pub fn insert(
         &self,
         region_id: u64,
         read_progress: Arc<RegionReadProgress>,
     ) -> Option<Arc<RegionReadProgress>> {
-        self.register
+        self.registry
             .lock()
             .unwrap()
             .insert(region_id, read_progress)
     }
 
     pub fn remove(&self, region_id: &u64) -> Option<Arc<RegionReadProgress>> {
-        self.register.lock().unwrap().remove(region_id)
+        self.registry.lock().unwrap().remove(region_id)
     }
 
     pub fn get(&self, region_id: &u64) -> Option<Arc<RegionReadProgress>> {
-        self.register.lock().unwrap().get(region_id).cloned()
+        self.registry.lock().unwrap().get(region_id).cloned()
     }
 
     pub fn get_safe_ts(&self, region_id: &u64) -> Option<u64> {
-        self.register
+        self.registry
             .lock()
             .unwrap()
             .get(region_id)
@@ -871,9 +871,9 @@ impl RegionReadProgressRegister {
 
     // Update `safe_ts` with the provided `ReadState`
     pub fn advance_read_progress(&self, read_states: Vec<(u64, kvrpcpb::ReadState)>) {
-        let register = self.register.lock().unwrap();
+        let registry = self.registry.lock().unwrap();
         for (region_id, read_state) in read_states {
-            if let Some(rp) = register.get(&region_id) {
+            if let Some(rp) = registry.get(&region_id) {
                 rp.update_safe_ts(read_state.get_applied_index(), read_state.get_safe_ts());
             }
         }
@@ -881,10 +881,10 @@ impl RegionReadProgressRegister {
 
     // Get the `ReadState` of the requested regions
     pub fn get_read_state(&self, regions: &[u64]) -> HashMap<u64, kvrpcpb::ReadState> {
-        let register = self.register.lock().unwrap();
+        let registry = self.registry.lock().unwrap();
         let mut read_state_map = HashMap::with_capacity(regions.len());
         for region_id in regions {
-            if let Some(rrp) = register.get(region_id) {
+            if let Some(rrp) = registry.get(region_id) {
                 let rs = rrp.read_state();
                 let mut read_state = kvrpcpb::ReadState::default();
                 read_state.set_applied_index(rs.idx);
@@ -895,15 +895,15 @@ impl RegionReadProgressRegister {
         read_state_map
     }
 
-    /// Invoke the provided callback with the register, an internal lock will hold
+    /// Invoke the provided callback with the registry, an internal lock will hold
     /// while invoking the callback so it is important that *not* try to acquiring any
     /// lock inside the callback to avoid dead lock
     pub fn map<F, T>(&self, mut f: F) -> T
     where
         F: FnMut(&HashMap<u64, Arc<RegionReadProgress>>) -> T,
     {
-        let register = self.register.lock().unwrap();
-        f(&register)
+        let registry = self.registry.lock().unwrap();
+        f(&registry)
     }
 }
 

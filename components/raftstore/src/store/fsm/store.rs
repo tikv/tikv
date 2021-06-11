@@ -65,7 +65,7 @@ use crate::store::memory::*;
 use crate::store::metrics::*;
 use crate::store::peer_storage::{self, HandleRaftReadyContext};
 use crate::store::transport::Transport;
-use crate::store::util::{is_initial_msg, RegionReadProgressRegister};
+use crate::store::util::{is_initial_msg, RegionReadProgressRegistry};
 use crate::store::worker::{
     AutoSplitController, CleanupRunner, CleanupSSTRunner, CleanupSSTTask, CleanupTask,
     CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner,
@@ -126,7 +126,7 @@ pub struct StoreMeta {
     /// Used for reminding the source peer to switch to ready in `atomic_snap_regions`.
     pub destroyed_region_for_snap: HashMap<u64, bool>,
     /// region_id -> `RegionReadProgress`
-    pub region_read_progress: RegionReadProgressRegister,
+    pub region_read_progress: RegionReadProgressRegistry,
 }
 
 impl StoreMeta {
@@ -143,7 +143,7 @@ impl StoreMeta {
             targets_map: HashMap::default(),
             atomic_snap_regions: HashMap::default(),
             destroyed_region_for_snap: HashMap::default(),
-            region_read_progress: RegionReadProgressRegister::default(),
+            region_read_progress: RegionReadProgressRegistry::default(),
         }
     }
 
@@ -2472,8 +2472,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 fn get_range_safe_ts(meta: &StoreMeta, key_range: KeyRange) -> u64 {
     if key_range.get_start_key().is_empty() && key_range.get_end_key().is_empty() {
         // Fast path to get the min `safe_ts` of all regions in this store
-        meta.region_read_progress.map(|register| {
-            register
+        meta.region_read_progress.map(|registry| {
+            registry
                 .iter()
                 .map(|(_, rrp)| rrp.safe_ts())
                 // ts == 0 means the peer is uninitialized
@@ -2486,14 +2486,14 @@ fn get_range_safe_ts(meta: &StoreMeta, key_range: KeyRange) -> u64 {
             data_key(key_range.get_start_key()),
             data_end_key(key_range.get_end_key()),
         );
-        meta.region_read_progress.map(|register| {
+        meta.region_read_progress.map(|registry| {
             meta.region_ranges
                 // get overlapped regions
                 .range((Excluded(start_key.clone()), Unbounded))
                 .take_while(|(_, id)| end_key > enc_start_key(&meta.regions[id]))
                 // get the min `safe_ts`
                 .map(|(_, id)| {
-                    register.get(id).unwrap().safe_ts()
+                    registry.get(id).unwrap().safe_ts()
                 })
                 // ts == 0 means the peer is uninitialized
                 .filter(|ts| *ts != 0)
