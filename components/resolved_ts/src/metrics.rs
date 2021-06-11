@@ -25,6 +25,12 @@ lazy_static! {
         "The minimal (non-zero) resolved ts gap for observe regions"
     )
     .unwrap();
+    pub static ref RTS_RESOLVED_FAIL_ADVANCE_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_resolved_ts_fail_advance_count",
+        "The count of fail to advance resolved-ts",
+        &["reason"]
+    )
+    .unwrap();
     pub static ref RTS_SCAN_DURATION_HISTOGRAM: Histogram = register_histogram!(
         "tikv_resolved_ts_scan_duration_seconds",
         "Bucketed histogram of resolved-ts async scan duration",
@@ -61,12 +67,6 @@ lazy_static! {
         "tikv_resolved_ts_region_resolve_status",
         "The status of resolved-ts observe regions",
         &["type"]
-    )
-    .unwrap();
-    pub static ref RTS_RESOLVED_FAIL_ADVANCE_VEC: IntCounterVec = register_int_counter_vec!(
-        "tikv_resolved_fail_advance_count",
-        "The count of fail to advance resolved-ts",
-        &["reason"]
     )
     .unwrap();
 }

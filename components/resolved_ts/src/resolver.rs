@@ -143,7 +143,7 @@ impl Resolver {
         let new_resolved_ts = cmp::min(min_start_ts, min_ts);
 
         if self.resolved_ts >= new_resolved_ts {
-            let label = if has_lock { "has_lock" } else { "stale_pd_ts" };
+            let label = if has_lock { "has_lock" } else { "stale_ts" };
             RTS_RESOLVED_FAIL_ADVANCE_VEC
                 .with_label_values(&[label])
                 .inc();
