@@ -12,13 +12,17 @@ lazy_static! {
     pub static ref CHECK_LEADER_REQ_SIZE_HISTOGRAM: Histogram = register_histogram!(
         "tikv_check_leader_request_size_bytes",
         "Bucketed histogram of the check leader request size",
-        exponential_buckets(1.0, 2.0, 20).unwrap()
+        exponential_buckets(512.0, 2.0, 20).unwrap()
     )
     .unwrap();
-    pub static ref RESOLVED_TS_GAP_HISTOGRAM: Histogram = register_histogram!(
-        "tikv_resolved_ts_resolved_ts_gap_seconds",
-        "Bucketed histogram of the gap between resolved tso and current time",
-        exponential_buckets(0.001, 2.0, 24).unwrap()
+    pub static ref CHECK_LEADER_REQ_ITEM_COUNT: IntGauge = register_int_gauge!(
+        "tikv_check_leader_request_item_count",
+        "The number of region count in a check leader request"
+    )
+    .unwrap();
+    pub static ref RTS_MIN_RESOLVED_TS_GAP: IntGauge = register_int_gauge!(
+        "tikv_resolved_ts_min_resolved_ts_gap_seconds",
+        "The minimal (non-zero) resolved ts gap for observe regions"
     )
     .unwrap();
     pub static ref RTS_SCAN_DURATION_HISTOGRAM: Histogram = register_histogram!(
@@ -57,6 +61,12 @@ lazy_static! {
         "tikv_resolved_ts_region_resolve_status",
         "The status of resolved-ts observe regions",
         &["type"]
+    )
+    .unwrap();
+    pub static ref RTS_RESOLVED_FAIL_ADVANCE_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_resolved_fail_advance_count",
+        "The count of fail to advance resolved-ts",
+        &["reason"]
     )
     .unwrap();
 }
