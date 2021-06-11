@@ -1481,11 +1481,8 @@ where
         if util::is_epoch_stale(from_epoch, self.fsm.peer.region().get_region_epoch())
             && util::find_peer(self.fsm.peer.region(), from_store_id).is_none()
         {
-            self.ctx.handle_stale_msg(
-                msg,
-                self.fsm.peer.region().get_region_epoch().clone(),
-                None,
-            );
+            self.ctx
+                .handle_stale_msg(msg, self.fsm.peer.region().get_region_epoch().clone(), None);
             return true;
         }
 

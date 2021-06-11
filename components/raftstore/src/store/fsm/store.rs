@@ -1512,8 +1512,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 "msg_type" => ?msg_type,
             );
             if util::find_peer(region, from_store_id).is_none() {
-                self.ctx
-                    .handle_stale_msg(msg, region_epoch.clone(), None);
+                self.ctx.handle_stale_msg(msg, region_epoch.clone(), None);
             } else {
                 let mut need_gc_msg = util::is_vote_msg(msg.get_message());
                 if msg.has_extra_msg() {
@@ -1522,7 +1521,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                     need_gc_msg |=
                         msg.get_extra_msg().get_type() == ExtraMessageType::MsgCheckStalePeer;
                     // For backward compatibility
-                    need_gc_msg |= msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp;
+                    need_gc_msg |=
+                        msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp;
                 }
                 if need_gc_msg {
                     let mut send_msg = RaftMessage::default();
