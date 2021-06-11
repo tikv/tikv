@@ -30,7 +30,7 @@ use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{from_rocks_compression_type, get_env, RocksEngine};
 use engine_traits::{
-    compaction_job::CompactionJobInfo, CFOptionsExt, ColumnFamilyOptions, Engines, MiscExt,
+    compaction_job::CompactionJobInfo, ColumnFamilyOptions, Engines, MiscExt,
     RaftEngine, CF_DEFAULT, CF_LOCK, CF_WRITE, KvEngine,
 };
 use error_code::ErrorCodeExt;
@@ -1014,7 +1014,7 @@ impl<EK: KvEngine, ER: RaftEngine> TiKVServer<EK, ER> {
     fn init_metrics_flusher(
         &mut self,
         fetcher: BytesFetcher,
-        engines_info: Arc<EnginesResourceInfo>,
+        engines_info: Arc<EnginesResourceInfo<EK>>,
     ) {
         let mut engine_metrics =
             EngineMetricsManager::<EK, ER>::new(self.engines.as_ref().unwrap().engines.clone());
@@ -1199,7 +1199,7 @@ impl TiKVServer<RocksEngine, RocksEngine> {
     fn init_raw_engines(
         &mut self,
         limiter: Option<Arc<IORateLimiter>>,
-    ) -> (Engines<RocksEngine, RocksEngine>, Arc<EnginesResourceInfo>) {
+    ) -> (Engines<RocksEngine, RocksEngine>, Arc<EnginesResourceInfo<RocksEngine>>) {
         let env = get_env(self.encryption_key_manager.clone(), limiter).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
@@ -1253,7 +1253,7 @@ impl TiKVServer<RocksEngine, RaftLogEngine> {
         limiter: Option<Arc<IORateLimiter>>,
     ) -> (
         Engines<RocksEngine, RaftLogEngine>,
-        Arc<EnginesResourceInfo>,
+        Arc<EnginesResourceInfo<RocksEngine>>,
     ) {
         let env = get_env(self.encryption_key_manager.clone(), limiter).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
@@ -1422,18 +1422,18 @@ impl<EK: KvEngine, R: RaftEngine> EngineMetricsManager<EK, R> {
     }
 }
 
-pub struct EnginesResourceInfo {
-    kv_engine: RocksEngine,
+pub struct EnginesResourceInfo<EK: KvEngine> {
+    kv_engine: EK,
     raft_engine: Option<RocksEngine>,
     latest_normalized_pending_bytes: AtomicU32,
     normalized_pending_bytes_collector: MovingAvgU32,
 }
 
-impl EnginesResourceInfo {
+impl<EK: KvEngine> EnginesResourceInfo<EK> {
     const SCALE_FACTOR: u64 = 100;
 
     pub fn new(
-        kv_engine: RocksEngine,
+        kv_engine: EK,
         raft_engine: Option<RocksEngine>,
         max_samples_to_preserve: usize,
     ) -> Self {
@@ -1448,13 +1448,13 @@ impl EnginesResourceInfo {
     pub fn update(&self, _now: Instant) {
         let mut normalized_pending_bytes = 0;
 
-        fn fetch_engine_cf(engine: &RocksEngine, cf: &str, normalized_pending_bytes: &mut u32) {
+        fn fetch_engine_cf<EK: KvEngine>(engine: &EK, cf: &str, normalized_pending_bytes: &mut u32) {
             if let Ok(cf_opts) = engine.get_options_cf(cf) {
                 if let Ok(Some(b)) = engine.get_cf_compaction_pending_bytes(cf) {
                     if cf_opts.get_soft_pending_compaction_bytes_limit() > 0 {
                         *normalized_pending_bytes = std::cmp::max(
                             *normalized_pending_bytes,
-                            (b * EnginesResourceInfo::SCALE_FACTOR
+                            (b * EnginesResourceInfo::<EK>::SCALE_FACTOR
                                 / cf_opts.get_soft_pending_compaction_bytes_limit())
                                 as u32,
                         );
@@ -1479,7 +1479,7 @@ impl EnginesResourceInfo {
     }
 }
 
-impl IOBudgetAdjustor for EnginesResourceInfo {
+impl<EK: KvEngine> IOBudgetAdjustor for EnginesResourceInfo<EK> {
     fn adjust(&self, total_budgets: usize) -> usize {
         let score = self.latest_normalized_pending_bytes.load(Ordering::Relaxed) as f32
             / Self::SCALE_FACTOR as f32;
