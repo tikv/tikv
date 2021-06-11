@@ -1215,40 +1215,17 @@ impl<ER> CreateKvEngine<ER> for RocksEngine where ER: RaftEngine {
 
 impl<ER: RaftEngine> TiKVServer<RocksEngine, ER> {
     fn create_kv_engine(&self, env: Arc<engine_rocks::raw::Env>, block_cache: &Option<engine_rocks::raw::Cache>) -> RocksEngine {
-        let mut kv_db_opts = self.config.rocksdb.build_opt();
-        kv_db_opts.set_env(env);
-        kv_db_opts.add_event_listener(create_rocks_raftstore_compaction_listener(self.router.clone()));
-        let kv_cfs_opts = self.config.rocksdb.build_cf_opts(
-            &block_cache,
-            Some(&self.region_info_accessor),
-            self.config.storage.enable_ttl,
-        );
-        let db_path = self.store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
-        let kv_engine = engine_rocks::raw_util::new_engine_opt(
-            db_path.to_str().unwrap(),
-            kv_db_opts,
-            kv_cfs_opts,
-        )
-        .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
-
-        let mut kv_engine = RocksEngine::from_db(Arc::new(kv_engine));
-
-        let shared_block_cache = block_cache.is_some();
-        kv_engine.set_shared_block_cache(shared_block_cache);
-
-        kv_engine
+        RocksEngine::create_kv_engine(
+            &self.config,
+            &self.region_info_accessor,
+            &self.store_path,
+            &self.router,
+            env,
+            block_cache)
     }
 
     fn register_kv_config(&mut self, kv_engine: RocksEngine) {
-        let cfg_controller = self.cfg_controller.as_mut().unwrap();
-        cfg_controller.register(
-            tikv::config::Module::Rocksdb,
-            Box::new(DBConfigManger::new(
-                kv_engine,
-                DBType::Kv,
-                self.config.storage.block_cache.shared,
-            )),
-        );
+        <RocksEngine as CreateKvEngine<ER>>::register_kv_config(&kv_engine, &self.config, &mut self.cfg_controller)
     }
 }
 
