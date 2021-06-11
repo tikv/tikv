@@ -62,6 +62,10 @@ impl PeerClient {
             commit_ts,
         )
     }
+
+    fn must_kv_pessimistic_lock(&self, key: Vec<u8>, ts: u64) {
+        must_kv_pessimistic_lock(&self.cli, self.ctx.clone(), key, ts)
+    }
 }
 
 fn prepare_for_stale_read(leader: Peer) -> (Cluster<ServerCluster>, Arc<TestPdClient>, PeerClient) {
@@ -603,4 +607,29 @@ fn test_stale_read_after_rollback_merge() {
     source_client3.ctx.set_stale_read(true);
     // the `safe_ts` should resume updating after merge rollback so we can read `key1` with the newest ts
     source_client3.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), get_tso(&pd_client));
+}
+
+// Testing that the new leader should ignore the pessimistic lock that wrote by the previous
+// leader and keep updating the `safe_ts`
+#[test]
+fn test_new_leader_ignore_pessimistic_lock() {
+    let (mut cluster, pd_client, leader_client) = prepare_for_stale_read(new_peer(1, 1));
+
+    // Write (`key1`, `value1`)
+    leader_client.must_kv_write(
+        &pd_client,
+        vec![new_mutation(Op::Put, &b"key1"[..], &b"value1"[..])],
+        b"key1".to_vec(),
+    );
+
+    // Leave a pessimistic lock on the region
+    leader_client.must_kv_pessimistic_lock(b"key2".to_vec(), get_tso(&pd_client));
+
+    // Transfer to a new leader
+    cluster.must_transfer_leader(1, new_peer(2, 2));
+
+    let mut follower_client3 = PeerClient::new(&cluster, 1, new_peer(3, 3));
+    follower_client3.ctx.set_stale_read(true);
+    // The new leader should be able to update `safe_ts` so we can read `key1` with the newest ts
+    follower_client3.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), get_tso(&pd_client));
 }
