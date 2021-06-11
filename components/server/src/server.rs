@@ -1156,6 +1156,63 @@ impl<EK: KvEngine, ER: RaftEngine> TiKVServer<EK, ER> {
 
 }
 
+trait CreateKvEngine<ER>: KvEngine where ER: RaftEngine {
+    fn create_kv_engine(config: &TiKvConfig,
+                        region_info_accessor: &RegionInfoAccessor,
+                        store_path: &Path,
+                        router: &RaftRouter<Self, ER>,
+                        env: Arc<engine_rocks::raw::Env>, block_cache: &Option<engine_rocks::raw::Cache>) -> Self;
+
+    fn register_kv_config(&self,
+                          config: &TiKvConfig,
+                          cfg_controller: &mut Option<ConfigController>);
+}
+
+impl<ER> CreateKvEngine<ER> for RocksEngine where ER: RaftEngine {
+    fn create_kv_engine(config: &TiKvConfig,
+                        region_info_accessor: &RegionInfoAccessor,
+                        store_path: &Path,
+                        router: &RaftRouter<Self, ER>,
+                        env: Arc<engine_rocks::raw::Env>, block_cache: &Option<engine_rocks::raw::Cache>) -> Self {
+        let mut kv_db_opts = config.rocksdb.build_opt();
+        kv_db_opts.set_env(env);
+        kv_db_opts.add_event_listener(create_rocks_raftstore_compaction_listener(router.clone()));
+        let kv_cfs_opts = config.rocksdb.build_cf_opts(
+            &block_cache,
+            Some(region_info_accessor),
+            config.storage.enable_ttl,
+        );
+        let db_path = store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
+        let kv_engine = engine_rocks::raw_util::new_engine_opt(
+            db_path.to_str().unwrap(),
+            kv_db_opts,
+            kv_cfs_opts,
+        )
+        .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
+
+        let mut kv_engine = RocksEngine::from_db(Arc::new(kv_engine));
+
+        let shared_block_cache = block_cache.is_some();
+        kv_engine.set_shared_block_cache(shared_block_cache);
+
+        kv_engine
+    }
+
+    fn register_kv_config(&self,
+                          config: &TiKvConfig,
+                          cfg_controller: &mut Option<ConfigController>) {
+        let cfg_controller = cfg_controller.as_mut().unwrap();
+        cfg_controller.register(
+            tikv::config::Module::Rocksdb,
+            Box::new(DBConfigManger::new(
+                self.clone(),
+                DBType::Kv,
+                config.storage.block_cache.shared,
+            )),
+        );
+    }
+}
+
 impl<ER: RaftEngine> TiKVServer<RocksEngine, ER> {
     fn create_kv_engine(&self, env: Arc<engine_rocks::raw::Env>, block_cache: &Option<engine_rocks::raw::Cache>) -> RocksEngine {
         let mut kv_db_opts = self.config.rocksdb.build_opt();
