@@ -4,7 +4,11 @@ use std::ops::Deref;
 
 use engine_traits::{ReadOptions, CF_DEFAULT, CF_WRITE};
 use tikv::storage::{Cursor, CursorBuilder, ScanMode, Snapshot as EngineSnapshot, Statistics};
-use tikv_util::{lru::LruCache, time::Instant};
+use tikv_util::{
+    config::ReadableSize,
+    lru::{LruCache, SizePolicy},
+    time::Instant,
+};
 use txn_types::{Key, MutationType, OldValue, TimeStamp, Value, WriteRef, WriteType};
 
 use crate::metrics::*;
@@ -13,17 +17,45 @@ use crate::Result;
 pub(crate) type OldValueCallback =
     Box<dyn Fn(Key, TimeStamp, &mut OldValueCache) -> (Option<Vec<u8>>, Option<Statistics>) + Send>;
 
+#[derive(Default)]
+pub struct OldValueCacheSizePolicy(usize);
+
+impl SizePolicy<Key, (OldValue, Option<MutationType>)> for OldValueCacheSizePolicy {
+    fn current(&self) -> usize {
+        self.0
+    }
+
+    fn on_insert(&mut self, key: &Key, value: &(OldValue, Option<MutationType>)) {
+        self.0 +=
+            key.as_encoded().len() + value.0.size() + std::mem::size_of::<Option<MutationType>>();
+    }
+
+    fn on_remove(&mut self, key: &Key, value: &(OldValue, Option<MutationType>)) {
+        self.0 -=
+            key.as_encoded().len() + value.0.size() + std::mem::size_of::<Option<MutationType>>();
+    }
+
+    fn on_reset(&mut self, val: usize) {
+        self.0 = val;
+    }
+}
+
 pub struct OldValueCache {
-    pub cache: LruCache<Key, (OldValue, Option<MutationType>)>,
+    pub cache: LruCache<Key, (OldValue, Option<MutationType>), OldValueCacheSizePolicy>,
     pub access_count: usize,
     pub miss_count: usize,
     pub miss_none_count: usize,
 }
 
 impl OldValueCache {
-    pub fn new(size: usize) -> OldValueCache {
+    pub fn new(capacity: ReadableSize) -> OldValueCache {
+        CDC_OLD_VALUE_CACHE_MEMORY_QUOTA.set(capacity.0 as i64);
         OldValueCache {
-            cache: LruCache::with_capacity(size),
+            cache: LruCache::with_capacity_sample_and_trace(
+                capacity.0 as usize,
+                0,
+                OldValueCacheSizePolicy(0),
+            ),
             access_count: 0,
             miss_count: 0,
             miss_none_count: 0,
