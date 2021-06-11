@@ -1213,9 +1213,12 @@ impl<ER> CreateKvEngine<ER> for RocksEngine where ER: RaftEngine {
     }
 }
 
-impl<ER: RaftEngine> TiKVServer<RocksEngine, ER> {
-    fn create_kv_engine(&self, env: Arc<engine_rocks::raw::Env>, block_cache: &Option<engine_rocks::raw::Cache>) -> RocksEngine {
-        RocksEngine::create_kv_engine(
+impl<EK, ER> TiKVServer<EK, ER>
+where EK: KvEngine + CreateKvEngine<ER>,
+      ER: RaftEngine
+{
+    fn create_kv_engine(&self, env: Arc<engine_rocks::raw::Env>, block_cache: &Option<engine_rocks::raw::Cache>) -> EK {
+        EK::create_kv_engine(
             &self.config,
             &self.region_info_accessor,
             &self.store_path,
@@ -1224,8 +1227,8 @@ impl<ER: RaftEngine> TiKVServer<RocksEngine, ER> {
             block_cache)
     }
 
-    fn register_kv_config(&mut self, kv_engine: RocksEngine) {
-        <RocksEngine as CreateKvEngine<ER>>::register_kv_config(&kv_engine, &self.config, &mut self.cfg_controller)
+    fn register_kv_config(&mut self, kv_engine: EK) {
+        <EK as CreateKvEngine<ER>>::register_kv_config(&kv_engine, &self.config, &mut self.cfg_controller)
     }
 }
 
