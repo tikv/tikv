@@ -450,34 +450,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         .map(Arc::new);
     }
 
-    fn create_raftstore_compaction_listener(&self) -> engine_rocks::CompactionListener {
-        fn size_change_filter(info: &engine_rocks::RocksCompactionJobInfo) -> bool {
-            // When calculating region size, we only consider write and default
-            // column families.
-            let cf = info.cf_name();
-            if cf != CF_WRITE && cf != CF_DEFAULT {
-                return false;
-            }
-            // Compactions in level 0 and level 1 are very frequently.
-            if info.output_level() < 2 {
-                return false;
-            }
-
-            true
-        }
-
-        let ch = Mutex::new(self.router.clone());
-        let compacted_handler =
-            Box::new(move |compacted_event: engine_rocks::RocksCompactedEvent| {
-                let ch = ch.lock().unwrap();
-                let event = StoreMsg::CompactedEvent(compacted_event);
-                if let Err(e) = ch.send_control(event) {
-                    error_unknown!(?e; "send compaction finished event to raftstore failed");
-                }
-            });
-        engine_rocks::CompactionListener::new(compacted_handler, Some(size_change_filter))
-    }
-
     fn init_engines(&mut self, engines: Engines<RocksEngine, ER>) {
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
         let engine = RaftKv::new(
@@ -1207,7 +1179,7 @@ impl TiKVServer<RocksEngine> {
         // Create kv engine.
         let mut kv_db_opts = self.config.rocksdb.build_opt();
         kv_db_opts.set_env(env);
-        kv_db_opts.add_event_listener(self.create_raftstore_compaction_listener());
+        kv_db_opts.add_event_listener(create_rocks_raftstore_compaction_listener(self.router.clone()));
         let kv_cfs_opts = self.config.rocksdb.build_cf_opts(
             &block_cache,
             Some(&self.region_info_accessor),
@@ -1279,7 +1251,7 @@ impl TiKVServer<RaftLogEngine> {
         // Create kv engine.
         let mut kv_db_opts = self.config.rocksdb.build_opt();
         kv_db_opts.set_env(env);
-        kv_db_opts.add_event_listener(self.create_raftstore_compaction_listener());
+        kv_db_opts.add_event_listener(create_rocks_raftstore_compaction_listener(self.router.clone()));
         let kv_cfs_opts = self.config.rocksdb.build_cf_opts(
             &block_cache,
             Some(&self.region_info_accessor),
@@ -1533,4 +1505,32 @@ impl IOBudgetAdjustor for EnginesResourceInfo {
         let score = 0.5 + score / 2.0;
         (total_budgets as f32 * score) as usize
     }
+}
+
+fn create_rocks_raftstore_compaction_listener<ER: RaftEngine>(router: RaftRouter<RocksEngine, ER>) -> engine_rocks::CompactionListener {
+    fn size_change_filter(info: &engine_rocks::RocksCompactionJobInfo) -> bool {
+        // When calculating region size, we only consider write and default
+        // column families.
+        let cf = info.cf_name();
+        if cf != CF_WRITE && cf != CF_DEFAULT {
+            return false;
+        }
+        // Compactions in level 0 and level 1 are very frequently.
+        if info.output_level() < 2 {
+            return false;
+        }
+
+        true
+    }
+
+    let ch = Mutex::new(router);
+    let compacted_handler =
+        Box::new(move |compacted_event: engine_rocks::RocksCompactedEvent| {
+            let ch = ch.lock().unwrap();
+            let event = StoreMsg::CompactedEvent(compacted_event);
+            if let Err(e) = ch.send_control(event) {
+                error_unknown!(?e; "send compaction finished event to raftstore failed");
+            }
+        });
+    engine_rocks::CompactionListener::new(compacted_handler, Some(size_change_filter))
 }
