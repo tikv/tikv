@@ -8,12 +8,13 @@ use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use futures::compat::Future01CompatExt;
 use grpcio::{ChannelBuilder, Environment};
-use kvproto::kvrpcpb::{CheckLeaderRequest, LeaderInfo, ReadState};
+use kvproto::kvrpcpb::{CheckLeaderRequest, LeaderInfo};
 use kvproto::metapb::{PeerRole, Region};
 use kvproto::tikvpb::TikvClient;
 use pd_client::PdClient;
 use protobuf::Message;
 use raftstore::store::fsm::StoreMeta;
+use raftstore::store::util::RegionReadProgressRegister;
 use security::SecurityManager;
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::Scheduler;
@@ -26,6 +27,7 @@ use crate::metrics::CHECK_LEADER_REQ_SIZE_HISTOGRAM;
 
 pub struct AdvanceTsWorker<E: KvEngine> {
     store_meta: Arc<Mutex<StoreMeta>>,
+    region_read_progress: RegionReadProgressRegister,
     pd_client: Arc<dyn PdClient>,
     timer: SteadyTimer,
     worker: Runtime,
@@ -44,6 +46,7 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
         pd_client: Arc<dyn PdClient>,
         scheduler: Scheduler<Task<E::Snapshot>>,
         store_meta: Arc<Mutex<StoreMeta>>,
+        region_read_progress: RegionReadProgressRegister,
         concurrency_manager: ConcurrencyManager,
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
@@ -61,6 +64,7 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
             worker,
             timer: SteadyTimer::default(),
             store_meta,
+            region_read_progress,
             concurrency_manager,
             tikv_clients: Arc::new(Mutex::new(HashMap::default())),
         }
@@ -77,6 +81,7 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
         let security_mgr = self.security_mgr.clone();
         let store_meta = self.store_meta.clone();
         let tikv_clients = self.tikv_clients.clone();
+        let region_read_progress = self.region_read_progress.clone();
 
         let fut = async move {
             let _ = timeout.compat().await;
@@ -101,6 +106,7 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
             let regions = Self::region_resolved_ts_store(
                 regions,
                 store_meta,
+                region_read_progress,
                 pd_client,
                 security_mgr,
                 env,
@@ -127,6 +133,7 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
     async fn region_resolved_ts_store(
         regions: Vec<u64>,
         store_meta: Arc<Mutex<StoreMeta>>,
+        region_read_progress: RegionReadProgressRegister,
         pd_client: Arc<dyn PdClient>,
         security_mgr: Arc<SecurityManager>,
         env: Arc<Environment>,
@@ -142,6 +149,9 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
         let mut region_map: HashMap<u64, Region> = HashMap::default();
         // region_id -> peers id, record the responses
         let mut resp_map: HashMap<u64, Vec<u64>> = HashMap::default();
+        // region_id -> `read_state`, getting the `read_state` first to reduce
+        // the time of holding the `store_meta` mutex
+        let mut read_state_map = region_read_progress.get_read_state(&regions);
         {
             let meta = store_meta.lock().unwrap();
             let store_id = match meta.store_id {
@@ -158,12 +168,7 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
                         if leader_store_id.unwrap() != meta.store_id.unwrap() {
                             continue;
                         }
-                        let mut read_state = ReadState::default();
-                        if let Some(rrp) = meta.region_read_progress.get(&region_id) {
-                            let rs = rrp.read_state();
-                            read_state.set_applied_index(rs.idx);
-                            read_state.set_safe_ts(rs.ts);
-                        }
+                        let read_state = read_state_map.remove(&region_id);
                         for peer in region.get_peers() {
                             if peer.store_id == store_id && peer.id == *leader_id {
                                 resp_map.entry(region_id).or_default().push(store_id);
@@ -177,7 +182,9 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
                             leader_info.set_term(*term);
                             leader_info.set_region_id(region_id);
                             leader_info.set_region_epoch(region.get_region_epoch().clone());
-                            leader_info.set_read_state(read_state.clone());
+                            if let Some(rs) = &read_state {
+                                leader_info.set_read_state(rs.clone());
+                            }
                             store_map
                                 .entry(peer.store_id)
                                 .or_default()

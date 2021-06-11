@@ -11,13 +11,15 @@ use concurrency_manager::ConcurrencyManager;
 use configuration::{self, ConfigChange, ConfigManager, Configuration};
 use engine_traits::{KvEngine, Snapshot};
 use grpcio::Environment;
+use kvproto::kvrpcpb::ReadState;
 use kvproto::metapb::Region;
+use kvproto::raft_cmdpb::AdminCmdType;
 use pd_client::PdClient;
 use raftstore::coprocessor::CmdBatch;
 use raftstore::coprocessor::{ObserveHandle, ObserveID};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::StoreMeta;
-use raftstore::store::util::{self, RegionReadProgress};
+use raftstore::store::util::{self, RegionReadProgress, RegionReadProgressRegister};
 use raftstore::store::RegionSnapshot;
 use security::SecurityManager;
 use tikv::config::ResolvedTsConfig;
@@ -30,7 +32,6 @@ use crate::metrics::*;
 use crate::resolver::Resolver;
 use crate::scanner::{ScanEntry, ScanMode, ScanTask, ScannerPool};
 use crate::sinker::{CmdSinker, SinkCmd};
-use kvproto::raft_cmdpb::AdminCmdType;
 
 enum ResolverStatus {
     Pending {
@@ -247,6 +248,7 @@ impl ObserveRegion {
 pub struct Endpoint<T, E: KvEngine, C> {
     cfg: ResolvedTsConfig,
     store_meta: Arc<Mutex<StoreMeta>>,
+    region_read_progress: RegionReadProgressRegister,
     regions: HashMap<u64, ObserveRegion>,
     scanner_pool: ScannerPool<T, E>,
     scheduler: Scheduler<Task<E::Snapshot>>,
@@ -272,10 +274,12 @@ where
         security_mgr: Arc<SecurityManager>,
         sinker: C,
     ) -> Self {
+        let region_read_progress = store_meta.lock().unwrap().region_read_progress.clone();
         let advance_worker = AdvanceTsWorker::new(
             pd_client,
             scheduler.clone(),
             store_meta.clone(),
+            region_read_progress.clone(),
             concurrency_manager,
             env,
             security_mgr,
@@ -285,6 +289,7 @@ where
             cfg: cfg.clone(),
             scheduler,
             store_meta,
+            region_read_progress,
             advance_worker,
             scanner_pool,
             sinker,
@@ -299,18 +304,15 @@ where
         let region_id = region.get_id();
         assert!(self.regions.get(&region_id).is_none());
         let observe_region = {
-            let store_meta = self.store_meta.lock().unwrap();
-            if let Some(read_progress) = store_meta.region_read_progress.get(&region_id) {
+            if let Some(read_progress) = self.region_read_progress.get(&region_id) {
                 info!(
                     "register observe region";
-                    "store id" => ?store_meta.store_id.clone(),
                     "region" => ?region
                 );
-                ObserveRegion::new(region.clone(), Arc::clone(read_progress))
+                ObserveRegion::new(region.clone(), read_progress)
             } else {
                 warn!(
                     "try register unexit region";
-                    "store id" => ?store_meta.store_id.clone(),
                     "region" => ?region,
                 );
                 return;
@@ -571,6 +573,9 @@ pub enum Task<S: Snapshot> {
         regions: Vec<u64>,
         ts: TimeStamp,
     },
+    AdvanceReadProgress {
+        read_states: Vec<(u64, ReadState)>,
+    },
     ChangeLog {
         cmd_batch: Vec<CmdBatch>,
         snapshot: Option<RegionSnapshot<S>>,
@@ -624,6 +629,10 @@ impl<S: Snapshot> fmt::Debug for Task<S> {
                 .field("regions", &regions)
                 .field("ts", &ts)
                 .finish(),
+            Task::AdvanceReadProgress { ref read_states } => de
+                .field("name", &"advance_read_progress")
+                .field("read_state_num", &read_states.len())
+                .finish(),
             Task::ChangeLog { .. } => de.field("name", &"change_log").finish(),
             Task::ScanLocks {
                 ref region_id,
@@ -672,6 +681,9 @@ where
                 cause,
             } => self.re_register_region(region_id, observe_id, cause),
             Task::AdvanceResolvedTs { regions, ts } => self.advance_resolved_ts(regions, ts),
+            Task::AdvanceReadProgress { read_states } => {
+                self.region_read_progress.advance_read_progress(read_states)
+            }
             Task::ChangeLog {
                 cmd_batch,
                 snapshot,
@@ -723,9 +735,8 @@ where
 {
     fn on_timeout(&mut self) {
         let (mut oldest_ts, mut oldest_region, mut zero_ts_count) = (u64::MAX, 0, 0);
-        {
-            let meta = self.store_meta.lock().unwrap();
-            for (region_id, read_progress) in &meta.region_read_progress {
+        self.region_read_progress.map(|register| {
+            for (region_id, read_progress) in register {
                 let ts = read_progress.safe_ts();
                 if ts == 0 {
                     zero_ts_count += 1;
@@ -736,7 +747,7 @@ where
                     oldest_region = *region_id;
                 }
             }
-        }
+        });
         let mut lock_heap_size = 0;
         let (mut resolved_count, mut unresolved_count) = (0, 0);
         for observe_region in self.regions.values() {

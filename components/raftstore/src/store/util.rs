@@ -1,13 +1,13 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
 use std::option::Option;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 use std::{cmp, fmt, u64};
 
-use kvproto::kvrpcpb::KeyRange;
+use kvproto::kvrpcpb::{self, KeyRange};
 use kvproto::metapb::{self, PeerRole};
 use kvproto::raft_cmdpb::{AdminCmdType, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest};
 use kvproto::raft_serverpb::RaftMessage;
@@ -836,6 +836,77 @@ impl Display for MsgType<'_> {
     }
 }
 
+#[derive(Clone, Default)]
+pub struct RegionReadProgressRegister {
+    register: Arc<Mutex<HashMap<u64, Arc<RegionReadProgress>>>>,
+}
+
+impl RegionReadProgressRegister {
+    pub fn insert(
+        &self,
+        region_id: u64,
+        read_progress: Arc<RegionReadProgress>,
+    ) -> Option<Arc<RegionReadProgress>> {
+        self.register
+            .lock()
+            .unwrap()
+            .insert(region_id, read_progress)
+    }
+
+    pub fn remove(&self, region_id: &u64) -> Option<Arc<RegionReadProgress>> {
+        self.register.lock().unwrap().remove(region_id)
+    }
+
+    pub fn get(&self, region_id: &u64) -> Option<Arc<RegionReadProgress>> {
+        self.register.lock().unwrap().get(region_id).cloned()
+    }
+
+    pub fn get_safe_ts(&self, region_id: &u64) -> Option<u64> {
+        self.register
+            .lock()
+            .unwrap()
+            .get(region_id)
+            .map(|rp| rp.safe_ts())
+    }
+
+    // Update `safe_ts` with the provided `ReadState`
+    pub fn advance_read_progress(&self, read_states: Vec<(u64, kvrpcpb::ReadState)>) {
+        let register = self.register.lock().unwrap();
+        for (region_id, read_state) in read_states {
+            if let Some(rp) = register.get(&region_id) {
+                rp.update_safe_ts(read_state.get_applied_index(), read_state.get_safe_ts());
+            }
+        }
+    }
+
+    // Get the `ReadState` of the requested regions
+    pub fn get_read_state(&self, regions: &[u64]) -> HashMap<u64, kvrpcpb::ReadState> {
+        let register = self.register.lock().unwrap();
+        let mut read_state_map = HashMap::with_capacity(regions.len());
+        for region_id in regions {
+            if let Some(rrp) = register.get(region_id) {
+                let rs = rrp.read_state();
+                let mut read_state = kvrpcpb::ReadState::default();
+                read_state.set_applied_index(rs.idx);
+                read_state.set_safe_ts(rs.ts);
+                read_state_map.insert(*region_id, read_state);
+            }
+        }
+        read_state_map
+    }
+
+    /// Invoke the provided callback with the register, an internal lock will hold
+    /// while invoking the callback so it is important that *not* try to acquiring any
+    /// lock inside the callback to avoid dead lock
+    pub fn map<F, T>(&self, mut f: F) -> T
+    where
+        F: FnMut(&HashMap<u64, Arc<RegionReadProgress>>) -> T,
+    {
+        let register = self.register.lock().unwrap();
+        f(&register)
+    }
+}
+
 /// `RegionReadProgress` is used to keep track of the replica's `safe_ts`, the replica can handle a read
 /// request directly without requiring leader lease or read index iff `safe_ts` >= `read_ts` (the `read_ts`
 /// is usually stale i.e seconds ago).
@@ -859,8 +930,6 @@ pub struct RegionReadProgress {
     // The fast path to read `safe_ts` without acquiring the mutex
     // on `core`
     safe_ts: AtomicU64,
-    // `true` means stop updating `safe_ts` until `resume` is called
-    stopped: AtomicBool,
 }
 
 impl RegionReadProgress {
@@ -868,7 +937,6 @@ impl RegionReadProgress {
         RegionReadProgress {
             core: Mutex::new(RegionReadProgressCore::new(applied_index, cap, tag)),
             safe_ts: AtomicU64::from(0),
-            stopped: AtomicBool::from(false),
         }
     }
 
