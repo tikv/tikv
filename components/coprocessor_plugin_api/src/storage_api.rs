@@ -1,8 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use async_trait::async_trait;
-use std::fmt;
 use std::ops::Range;
+
+use crate::PluginResult;
 
 /// A raw key in the storage.
 pub type Key = Vec<u8>;
@@ -10,44 +11,6 @@ pub type Key = Vec<u8>;
 pub type Value = Vec<u8>;
 /// A pair of a raw key and its value.
 pub type KvPair = (Key, Value);
-
-/// Result returned by operations on [`RawStorage`].
-pub type StorageResult<T> = std::result::Result<T, StorageError>;
-
-/// Some information about the current region the coprocessor is running in.
-#[derive(Debug, Clone)]
-pub struct Region {
-    pub id: u64,
-    pub start_key: Key,
-    pub end_key: Key,
-    pub region_epoch: RegionEpoch,
-}
-
-#[derive(Debug, Clone)]
-pub struct RegionEpoch {
-    pub conf_ver: u64,
-    pub version: u64,
-}
-
-/// Errors when operating on [`RawStorage`].
-#[derive(Debug)]
-pub enum StorageError {
-    KeyNotInRegion {
-        key: Key,
-        region: Region,
-        start_key: Key,
-        end_key: Key,
-    },
-    OtherError(String),
-}
-
-impl fmt::Display for StorageError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Storage-related error: {:?}", self)
-    }
-}
-
-impl std::error::Error for StorageError {}
 
 /// Storage access for coprocessor plugins.
 ///
@@ -58,31 +21,31 @@ impl std::error::Error for StorageError {}
 pub trait RawStorage {
     /// Retrieves the value for a given key from the storage on the current node.
     /// Returns [`Option::None`] if the key is not present in the database.
-    async fn get(&self, key: Key) -> StorageResult<Option<Value>>;
+    async fn get(&self, key: Key) -> PluginResult<Option<Value>>;
 
     /// Same as [`RawStorage::get()`], but retrieves values for multiple keys at once.
-    async fn batch_get(&self, keys: Vec<Key>) -> StorageResult<Vec<KvPair>>;
+    async fn batch_get(&self, keys: Vec<Key>) -> PluginResult<Vec<KvPair>>;
 
     /// Same as [`RawStorage::get()`], but accepts a `key_range` such that values for keys in
     /// `[key_range.start, key_range.end)` are retrieved.
     /// The upper bound of the `key_range` is exclusive.
-    async fn scan(&self, key_range: Range<Key>) -> StorageResult<Vec<Value>>;
+    async fn scan(&self, key_range: Range<Key>) -> PluginResult<Vec<Value>>;
 
     /// Inserts a new key-value pair into the storage on the current node.
-    async fn put(&self, key: Key, value: Value) -> StorageResult<()>;
+    async fn put(&self, key: Key, value: Value) -> PluginResult<()>;
 
     /// Same as [`RawStorage::put()`], but inserts multiple key-value pairs at once.
-    async fn batch_put(&self, kv_pairs: Vec<KvPair>) -> StorageResult<()>;
+    async fn batch_put(&self, kv_pairs: Vec<KvPair>) -> PluginResult<()>;
 
     /// Deletes a key-value pair from the storage on the current node given a `key`.
     /// Returns [`Result::Ok]` if the key was successfully deleted.
-    async fn delete(&self, key: Key) -> StorageResult<()>;
+    async fn delete(&self, key: Key) -> PluginResult<()>;
 
     /// Same as [`RawStorage::delete()`], but deletes multiple key-value pairs at once.
-    async fn batch_delete(&self, keys: Vec<Key>) -> StorageResult<()>;
+    async fn batch_delete(&self, keys: Vec<Key>) -> PluginResult<()>;
 
     /// Same as [`RawStorage::delete()`], but deletes multiple key-values pairs at once
     /// given a `key_range`. All records with keys in `[key_range.start, key_range.end)`
     /// will be deleted. The upper bound of the `key_range` is exclusive.
-    async fn delete_range(&self, key_range: Range<Key>) -> StorageResult<()>;
+    async fn delete_range(&self, key_range: Range<Key>) -> PluginResult<()>;
 }

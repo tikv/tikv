@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::VecDeque;
-use std::{cmp, u64, usize};
+use std::{cmp, mem, u64, usize};
 
 use crate::store::fsm::apply;
 use crate::store::metrics::*;
@@ -14,8 +14,10 @@ use kvproto::kvrpcpb::LockInfo;
 use kvproto::raft_cmdpb::{self, RaftCmdRequest};
 use protobuf::Message;
 use tikv_util::codec::number::{NumberEncoder, MAX_VAR_U64_LEN};
+use tikv_util::memory::HeapSize;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::MustConsumeVec;
+use tikv_util::{box_err, debug};
 use time::Timespec;
 use uuid::Uuid;
 
@@ -27,7 +29,7 @@ where
 {
     pub id: Uuid,
     pub cmds: MustConsumeVec<(RaftCmdRequest, Callback<S>, Option<u64>)>,
-    pub renew_lease_time: Timespec,
+    pub propose_time: Timespec,
     pub read_index: Option<u64>,
     pub addition_request: Option<Box<raft_cmdpb::ReadIndexRequest>>,
     pub locked: Option<Box<LockInfo>>,
@@ -48,7 +50,7 @@ where
         id: Uuid,
         req: RaftCmdRequest,
         cb: Callback<S>,
-        renew_lease_time: Timespec,
+        propose_time: Timespec,
     ) -> Self {
         RAFT_READ_INDEX_PENDING_COUNT.inc();
         let mut cmds = MustConsumeVec::with_capacity("callback of index read", 1);
@@ -56,7 +58,7 @@ where
         ReadIndexRequest {
             id,
             cmds,
-            renew_lease_time,
+            propose_time,
             read_index: None,
             addition_request: None,
             locked: None,
@@ -70,10 +72,18 @@ where
     S: Snapshot,
 {
     fn drop(&mut self) {
-        let dur = (monotonic_raw_now() - self.renew_lease_time)
-            .to_std()
-            .unwrap();
+        let dur = (monotonic_raw_now() - self.propose_time).to_std().unwrap();
         RAFT_READ_INDEX_PENDING_DURATION.observe(duration_to_sec(dur));
+    }
+}
+
+impl<S> HeapSize for ReadIndexRequest<S>
+where
+    S: Snapshot,
+{
+    #[inline]
+    fn heap_size(&self) -> usize {
+        self.cmds.heap_size() + 8 * self.cmds.len() + self.addition_request.heap_size()
     }
 }
 
@@ -89,6 +99,7 @@ where
     contexts: HashMap<Uuid, usize>,
 
     retry_countdown: usize,
+    mem_size: usize,
 }
 
 impl<S> Default for ReadIndexQueue<S>
@@ -102,6 +113,7 @@ where
             handled_cnt: 0,
             contexts: HashMap::default(),
             retry_countdown: 0,
+            mem_size: 0,
         }
     }
 }
@@ -156,12 +168,14 @@ where
         self.contexts.clear();
         self.ready_cnt = 0;
         self.handled_cnt = 0;
+        self.mem_size = 0;
     }
 
     pub fn clear_uncommitted_on_role_change(&mut self, term: u64) {
         let mut removed = 0;
         for mut read in self.reads.drain(self.ready_cnt..) {
             removed += read.cmds.len();
+            self.mem_size -= read.heap_size();
             for (_, cb, _) in read.cmds.drain(..) {
                 apply::notify_stale_req(term, cb);
             }
@@ -177,6 +191,7 @@ where
             let offset = self.handled_cnt + self.reads.len();
             self.contexts.insert(read.id, offset);
         }
+        self.mem_size += read.heap_size();
         self.reads.push_back(read);
         self.retry_countdown = usize::MAX;
     }
@@ -305,6 +320,18 @@ where
     }
 }
 
+impl<S> HeapSize for ReadIndexQueue<S>
+where
+    S: Snapshot,
+{
+    #[inline]
+    fn heap_size(&self) -> usize {
+        self.mem_size
+            + self.reads.heap_size()
+            + self.contexts.len() * (mem::size_of::<Uuid>() + mem::size_of::<usize>())
+    }
+}
+
 const UUID_LEN: usize = 16;
 const REQUEST_FLAG: u8 = b'r';
 const LOCKED_FLAG: u8 = b'l';
@@ -381,6 +408,12 @@ impl ReadIndexContext {
             locked.write_to_vec(&mut b).unwrap();
         }
         b
+    }
+}
+
+impl HeapSize for ReadIndexContext {
+    fn heap_size(&self) -> usize {
+        self.request.heap_size() + self.locked.heap_size()
     }
 }
 

@@ -4,10 +4,20 @@ use std::iter::FromIterator;
 use std::path::Path;
 use std::sync::Arc;
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
-use std::{error, result};
+use std::{error::Error as StdError, result};
 
+use kvproto::debugpb::{self, Db as DBType};
+use kvproto::metapb::Region;
+use kvproto::raft_serverpb::*;
+use protobuf::Message;
+use raft::eraftpb::Entry;
+use raft::{self, RawNode};
+use thiserror::Error;
+
+use collections::HashSet;
 use engine_rocks::raw::{CompactOptions, DBBottommostLevelCompaction, DB};
 use engine_rocks::util::get_cf_handle;
+use engine_rocks::RocksMvccProperties;
 use engine_rocks::{Compat, RocksEngine, RocksEngineIterator, RocksWriteBatch};
 use engine_traits::{
     Engines, IterOptions, Iterable, Iterator as EngineIterator, Mutable, Peekable, RaftEngine,
@@ -15,17 +25,6 @@ use engine_traits::{
     WriteBatch, WriteOptions,
 };
 use engine_traits::{MvccProperties, Range, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use kvproto::debugpb::{self, Db as DBType};
-use kvproto::metapb::Region;
-use kvproto::raft_serverpb::*;
-use protobuf::Message;
-use raft::eraftpb::Entry;
-use raft::{self, RawNode};
-
-use crate::config::ConfigController;
-use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
-use collections::HashSet;
-use engine_rocks::RocksMvccProperties;
 use raftstore::coprocessor::get_region_approximate_middle;
 use raftstore::store::util as raftstore_util;
 use raftstore::store::PeerStorage;
@@ -36,25 +35,23 @@ use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Worker;
 use txn_types::Key;
 
+use crate::config::ConfigController;
+use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
+
 pub use crate::storage::mvcc::MvccInfoIterator;
 
 pub type Result<T> = result::Result<T, Error>;
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        InvalidArgument(msg: String) {
-            display("Invalid Argument {:?}", msg)
-        }
-        NotFound(msg: String) {
-            display("Not Found {:?}", msg)
-        }
-        Other(err: Box<dyn error::Error + Sync + Send>) {
-            from()
-            cause(err.as_ref())
-            display("{:?}", err)
-        }
-    }
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("Invalid Argument {0:?}")]
+    InvalidArgument(String),
+
+    #[error("Not Found {0:?}")]
+    NotFound(String),
+
+    #[error("{0:?}")]
+    Other(#[from] Box<dyn StdError + Sync + Send>),
 }
 
 /// Describes the meta information of a Region.
@@ -193,16 +190,18 @@ impl<ER: RaftEngine> Debugger<ER> {
         let raft_state = box_try!(self.engines.raft.get_raft_state(region_id));
 
         let apply_state_key = keys::apply_state_key(region_id);
-        let apply_state = box_try!(self
-            .engines
-            .kv
-            .get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key));
+        let apply_state = box_try!(
+            self.engines
+                .kv
+                .get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key)
+        );
 
         let region_state_key = keys::region_state_key(region_id);
-        let region_state = box_try!(self
-            .engines
-            .kv
-            .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key));
+        let region_state = box_try!(
+            self.engines
+                .kv
+                .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
+        );
 
         match (raft_state, apply_state, region_state) {
             (None, None, None) => Err(Error::NotFound(format!("info for region {}", region_id))),
@@ -368,7 +367,7 @@ impl<ER: RaftEngine> Debugger<ER> {
                 }
             };
             if region_state.get_state() == PeerState::Tombstone {
-                v1!("skip because it's already tombstone");
+                info!("skip {} because it's already tombstone", region_id);
                 continue;
             }
             let region = &region_state.get_region();
@@ -408,7 +407,7 @@ impl<ER: RaftEngine> Debugger<ER> {
     pub fn recover_all(&self, threads: usize, read_only: bool) -> Result<()> {
         let db = self.engines.kv.clone();
 
-        v1!("Calculating split keys...");
+        info!("Calculating split keys...");
         let split_keys = divide_db(db.as_inner(), threads)
             .unwrap()
             .into_iter()
@@ -434,7 +433,7 @@ impl<ER: RaftEngine> Debugger<ER> {
                 .name(format!("mvcc-recover-thread-{}", thread_index))
                 .spawn(move || {
                     tikv_alloc::add_thread_memory_accessor();
-                    v1!(
+                    info!(
                         "thread {}: started on range [{}, {})",
                         thread_index,
                         log_wrappers::Value::key(&start_key),
@@ -461,7 +460,7 @@ impl<ER: RaftEngine> Debugger<ER> {
             .map(|h: JoinHandle<Result<()>>| h.join())
             .map(|r| {
                 if let Err(e) = &r {
-                    ve1!("{:?}", e);
+                    error!("{:?}", e);
                 }
                 r
             })
@@ -729,10 +728,11 @@ impl<ER: RaftEngine> Debugger<ER> {
 
     fn get_region_state(&self, region_id: u64) -> Result<RegionLocalState> {
         let region_state_key = keys::region_state_key(region_id);
-        let region_state = box_try!(self
-            .engines
-            .kv
-            .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key));
+        let region_state = box_try!(
+            self.engines
+                .kv
+                .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
+        );
         match region_state {
             Some(v) => Ok(v),
             None => Err(Error::NotFound(format!("region {}", region_id))),
@@ -808,7 +808,7 @@ fn dump_mvcc_properties(db: &Arc<DB>, start: &[u8], end: &[u8]) -> Result<Vec<(S
         ("mvcc.max_row_versions", mvcc_properties.max_row_versions),
     ]
     .iter()
-    .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+    .map(|(k, v)| ((*k).to_string(), v.to_string()))
     .collect();
 
     // Entries and delete marks of RocksDB.
@@ -846,10 +846,10 @@ fn recover_mvcc_for_range(
             write_opts.set_sync(true);
             box_try!(wb.write_opt(&write_opts));
         } else {
-            v1!("thread {}: skip write {} rows", thread_index, batch_size);
+            info!("thread {}: skip write {} rows", thread_index, batch_size);
         }
 
-        v1!(
+        info!(
             "thread {}: total fix default: {}, lock: {}, write: {}",
             thread_index,
             mvcc_checker.default_fix_count,
@@ -858,7 +858,7 @@ fn recover_mvcc_for_range(
         );
 
         if batch_size < wb_limit {
-            v1!("thread {} has finished working.", thread_index);
+            info!("thread {} has finished working.", thread_index);
             return Ok(());
         }
     }
@@ -953,10 +953,9 @@ impl MvccChecker {
     fn check_mvcc_key(&mut self, wb: &mut RocksWriteBatch, key: &[u8]) -> Result<()> {
         self.scan_count += 1;
         if self.scan_count % 1_000_000 == 0 {
-            v1!(
+            info!(
                 "thread {}: scan {} rows",
-                self.thread_index,
-                self.scan_count
+                self.thread_index, self.scan_count
             );
         }
 
@@ -989,7 +988,7 @@ impl MvccChecker {
 
                 if let Some((commit_ts, _)) = write {
                     if check_ts <= commit_ts {
-                        v1!(
+                        info!(
                             "thread {}: LOCK {} is less than WRITE ts, key: {}, {}: {}, commit_ts: {}",
                             self.thread_index,
                             kind,
@@ -1013,7 +1012,7 @@ impl MvccChecker {
                             next_default = true;
                         }
                         _ => {
-                            v1!(
+                            info!(
                                 "thread {}: no corresponding DEFAULT record for LOCK, key: {}, lock_ts: {}",
                                 self.thread_index,
                                 log_wrappers::Value::key(key),
@@ -1053,7 +1052,7 @@ impl MvccChecker {
             }
 
             if next_default {
-                v1!(
+                info!(
                     "thread {}: orphan DEFAULT record, key: {}, start_ts: {}",
                     self.thread_index,
                     log_wrappers::Value::key(key),
@@ -1065,7 +1064,7 @@ impl MvccChecker {
 
             if next_write {
                 if let Some((commit_ts, ref w)) = write {
-                    v1!(
+                    info!(
                         "thread {}: no corresponding DEFAULT record for WRITE, key: {}, start_ts: {}, commit_ts: {}",
                         self.thread_index,
                         log_wrappers::Value::key(key),
@@ -1210,9 +1209,8 @@ fn divide_db(db: &Arc<DB>, parts: usize) -> raftstore::Result<Vec<Vec<u8>>> {
     let start = keys::data_key(b"");
     let end = keys::data_end_key(b"");
     let range = Range::new(&start, &end);
-    let region_id = 0;
     Ok(box_try!(
-        RocksEngine::from_db(db.clone()).divide_range(range, region_id, parts)
+        RocksEngine::from_db(db.clone()).get_range_approximate_split_keys(range, parts - 1)
     ))
 }
 
@@ -1404,7 +1402,7 @@ mod tests {
         entry.set_term(1);
         entry.set_index(1);
         entry.set_entry_type(EntryType::EntryNormal);
-        entry.set_data(vec![42]);
+        entry.set_data(vec![42].into());
         engine.put_msg(&key, &entry).unwrap();
         assert_eq!(engine.get_msg::<Entry>(&key).unwrap().unwrap(), entry);
 

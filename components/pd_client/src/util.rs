@@ -1,6 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::pin::Pin;
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::thread;
@@ -22,7 +23,7 @@ use collections::HashSet;
 use fail::fail_point;
 use grpcio::{
     CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
-    Error::RpcFailure, MetadataBuilder, Result as GrpcResult, RpcStatus, RpcStatusCode,
+    Error::RpcFailure, MetadataBuilder, Result as GrpcResult, RpcStatusCode,
 };
 use kvproto::pdpb::{
     ErrorType, GetMembersRequest, GetMembersResponse, Member, PdClient as PdClientStub,
@@ -87,6 +88,7 @@ pub struct Inner {
     members: GetMembersResponse,
     security_mgr: Arc<SecurityManager>,
     on_reconnect: Option<Box<dyn Fn() + Sync + Send + 'static>>,
+    pub pending_heartbeat: Arc<AtomicU64>,
 
     last_try_reconnect: Instant,
 }
@@ -171,6 +173,7 @@ impl Client {
                 target,
                 security_mgr,
                 on_reconnect: None,
+                pending_heartbeat: Arc::default(),
                 last_try_reconnect: Instant::now(),
             }),
             feature_gate: FeatureGate::default(),
@@ -648,9 +651,9 @@ impl PdConnector {
                     return Ok((Some((client, ep.clone(), resp)), false));
                 }
                 Err(Error::Grpc(e)) => {
-                    if let RpcFailure(RpcStatus { status, details: _ }) = e {
-                        if status == RpcStatusCode::UNAVAILABLE
-                            || status == RpcStatusCode::DEADLINE_EXCEEDED
+                    if let RpcFailure(ref status) = e {
+                        if status.code() == RpcStatusCode::UNAVAILABLE
+                            || status.code() == RpcStatusCode::DEADLINE_EXCEEDED
                         {
                             network_fail_num += 1;
                         }

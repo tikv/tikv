@@ -1,8 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use configuration::{ConfigChange, ConfigManager, Configuration};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tikv_util::config::VersionTrack;
+use tikv_util::info;
 
 const DEFAULT_DETECT_TIMES: u64 = 10;
 const DEFAULT_SAMPLE_THRESHOLD: u64 = 100;
@@ -15,9 +17,9 @@ const DEFAULT_SPLIT_BALANCE_SCORE: f64 = 0.25;
 // We get contained score by sample.contained/(sample.right+sample.left+sample.contained). It will be used to avoid to split regions requested by range.
 const DEFAULT_SPLIT_CONTAINED_SCORE: f64 = 0.5;
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
 pub struct SplitConfig {
     pub qps_threshold: usize,
     pub split_balance_score: f64,

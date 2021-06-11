@@ -56,7 +56,7 @@ pub struct Tracker {
 
     // Suspend time between processing two items
     //
-    // In a cooperative environment, a cop task may suspend itself at finishing an item,
+    // In a cooperative environment, a copr task may suspend itself at finishing an item,
     // and be resumed by the runtime later. That will raise a considerable suspend time.
     item_suspend_time: Duration,
     total_suspend_time: Duration,

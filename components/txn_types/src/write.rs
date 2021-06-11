@@ -218,10 +218,6 @@ impl Write {
             gc_fence: self.gc_fence,
         }
     }
-
-    pub fn may_have_old_value(&self) -> bool {
-        matches!(self.write_type, WriteType::Put | WriteType::Delete)
-    }
 }
 
 #[derive(PartialEq, Clone)]
@@ -461,13 +457,15 @@ mod tests {
     fn test_is_protected() {
         assert!(Write::new_rollback(1.into(), true).as_ref().is_protected());
         assert!(!Write::new_rollback(2.into(), false).as_ref().is_protected());
-        assert!(!Write::new(
-            WriteType::Put,
-            3.into(),
-            Some(PROTECTED_ROLLBACK_SHORT_VALUE.to_vec()),
-        )
-        .as_ref()
-        .is_protected());
+        assert!(
+            !Write::new(
+                WriteType::Put,
+                3.into(),
+                Some(PROTECTED_ROLLBACK_SHORT_VALUE.to_vec()),
+            )
+            .as_ref()
+            .is_protected()
+        );
     }
 
     #[test]

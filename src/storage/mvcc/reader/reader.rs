@@ -55,6 +55,11 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
     }
 
     #[inline(always)]
+    pub fn get_write(&mut self, key: &Key, ts: TimeStamp) -> Result<Option<Write>> {
+        self.reader.get_write(key, ts, Some(self.start_ts))
+    }
+
+    #[inline(always)]
     pub fn seek_write(&mut self, key: &Key, ts: TimeStamp) -> Result<Option<(TimeStamp, Write)>> {
         self.reader.seek_write(key, ts)
     }
@@ -65,8 +70,15 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
     }
 
     #[inline(always)]
-    pub fn get_old_value(&mut self, prev_write: Write) -> Result<OldValue> {
-        self.reader.get_old_value(self.start_ts, prev_write)
+    pub fn get_old_value(
+        &mut self,
+        key: &Key,
+        ts: TimeStamp,
+        prev_write_loaded: bool,
+        prev_write: Option<Write>,
+    ) -> Result<OldValue> {
+        self.reader
+            .get_old_value(key, ts, prev_write_loaded, prev_write)
     }
 
     #[inline(always)]
@@ -448,19 +460,54 @@ impl<S: EngineSnapshot> MvccReader<S> {
     /// Read the old value for key for CDC.
     /// `prev_write` stands for the previous write record of the key
     /// it must be read in the caller and be passed in for optimization
-    fn get_old_value(&mut self, start_ts: TimeStamp, prev_write: Write) -> Result<OldValue> {
-        if prev_write.may_have_old_value()
-            && prev_write
+    fn get_old_value(
+        &mut self,
+        key: &Key,
+        start_ts: TimeStamp,
+        prev_write_loaded: bool,
+        prev_write: Option<Write>,
+    ) -> Result<OldValue> {
+        if prev_write_loaded && prev_write.is_none() {
+            return Ok(OldValue::None);
+        }
+        if let Some(prev_write) = prev_write {
+            if !prev_write
                 .as_ref()
                 .check_gc_fence_as_latest_version(start_ts)
-        {
-            Ok(OldValue::Value {
-                short_value: prev_write.short_value,
-                start_ts: prev_write.start_ts,
-            })
-        } else {
-            Ok(OldValue::None)
+            {
+                return Ok(OldValue::None);
+            }
+
+            match prev_write.write_type {
+                WriteType::Put => {
+                    // For Put, there must be an old value either in its
+                    // short value or in the default CF.
+                    return Ok(match prev_write.short_value {
+                        Some(value) => OldValue::Value { value },
+                        None => OldValue::ValueTimeStamp {
+                            start_ts: prev_write.start_ts,
+                        },
+                    });
+                }
+                WriteType::Delete => {
+                    // For Delete, no old value.
+                    return Ok(OldValue::None);
+                }
+                // For Rollback and Lock, it's unknown whether there is a more
+                // previous valid write. Call `get_write` to get a valid
+                // previous write.
+                WriteType::Rollback | WriteType::Lock => (),
+            }
         }
+        Ok(match self.get_write(key, start_ts, Some(start_ts))? {
+            Some(write) => match write.short_value {
+                Some(value) => OldValue::Value { value },
+                None => OldValue::ValueTimeStamp {
+                    start_ts: write.start_ts,
+                },
+            },
+            None => OldValue::None,
+        })
     }
 }
 
@@ -501,6 +548,11 @@ pub mod tests {
                 db: Arc::clone(&db),
                 region: region.clone(),
             }
+        }
+
+        pub fn snapshot(&self) -> RegionSnapshot<RocksSnapshot> {
+            let db = self.db.c().clone();
+            RegionSnapshot::<RocksSnapshot>::from_raw(db, self.region.clone())
         }
 
         pub fn put(
@@ -563,8 +615,7 @@ pub mod tests {
         }
 
         pub fn prewrite(&mut self, m: Mutation, pk: &[u8], start_ts: impl Into<TimeStamp>) {
-            let snap =
-                RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
+            let snap = self.snapshot();
             let start_ts = start_ts.into();
             let cm = ConcurrencyManager::new(start_ts);
             let mut txn = MvccTxn::new(start_ts, cm);
@@ -588,8 +639,7 @@ pub mod tests {
             pk: &[u8],
             start_ts: impl Into<TimeStamp>,
         ) {
-            let snap =
-                RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
+            let snap = self.snapshot();
             let start_ts = start_ts.into();
             let cm = ConcurrencyManager::new(start_ts);
             let mut txn = MvccTxn::new(start_ts, cm);
@@ -614,8 +664,7 @@ pub mod tests {
             start_ts: impl Into<TimeStamp>,
             for_update_ts: impl Into<TimeStamp>,
         ) {
-            let snap =
-                RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
+            let snap = self.snapshot();
             let for_update_ts = for_update_ts.into();
             let cm = ConcurrencyManager::new(for_update_ts);
             let start_ts = start_ts.into();
@@ -631,6 +680,7 @@ pub mod tests {
                 for_update_ts,
                 false,
                 TimeStamp::zero(),
+                true,
             )
             .unwrap();
             self.write(txn.into_modifies());
@@ -642,8 +692,7 @@ pub mod tests {
             start_ts: impl Into<TimeStamp>,
             commit_ts: impl Into<TimeStamp>,
         ) {
-            let snap =
-                RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
+            let snap = self.snapshot();
             let start_ts = start_ts.into();
             let cm = ConcurrencyManager::new(start_ts);
             let mut txn = MvccTxn::new(start_ts, cm);
@@ -653,8 +702,7 @@ pub mod tests {
         }
 
         pub fn rollback(&mut self, pk: &[u8], start_ts: impl Into<TimeStamp>) {
-            let snap =
-                RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
+            let snap = self.snapshot();
             let start_ts = start_ts.into();
             let cm = ConcurrencyManager::new(start_ts);
             let mut txn = MvccTxn::new(start_ts, cm);
@@ -673,10 +721,7 @@ pub mod tests {
         pub fn gc(&mut self, pk: &[u8], safe_point: impl Into<TimeStamp> + Copy) {
             let cm = ConcurrencyManager::new(safe_point.into());
             loop {
-                let snap = RegionSnapshot::<RocksSnapshot>::from_raw(
-                    self.db.c().clone(),
-                    self.region.clone(),
-                );
+                let snap = self.snapshot();
                 let mut txn = MvccTxn::new(safe_point.into(), cm.clone());
                 let mut reader = MvccReader::new(snap, None, true);
                 gc(&mut txn, &mut reader, Key::from_raw(pk), safe_point.into()).unwrap();
@@ -976,10 +1021,12 @@ pub mod tests {
 
         let seek_old = reader.statistics.write.seek;
         let next_old = reader.statistics.write.next;
-        assert!(!reader
-            .get_txn_commit_record(&key, 30.into())
-            .unwrap()
-            .exist());
+        assert!(
+            !reader
+                .get_txn_commit_record(&key, 30.into())
+                .unwrap()
+                .exist()
+        );
         let seek_new = reader.statistics.write.seek;
         let next_new = reader.statistics.write.next;
 
@@ -1257,10 +1304,12 @@ pub mod tests {
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 18.into());
 
-        assert!(reader
-            .get_write(&Key::from_raw(b"j"), 100.into(), None)
-            .unwrap()
-            .is_none());
+        assert!(
+            reader
+                .get_write(&Key::from_raw(b"j"), 100.into(), None)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -1635,7 +1684,9 @@ pub mod tests {
             },
             // prev_write is Rollback, and there exists a more previous valid write
             Case {
-                expected: OldValue::None,
+                expected: OldValue::ValueTimeStamp {
+                    start_ts: TimeStamp::new(4),
+                },
 
                 written: vec![
                     (
@@ -1648,10 +1699,25 @@ pub mod tests {
                     ),
                 ],
             },
+            Case {
+                expected: OldValue::Value {
+                    value: b"v".to_vec(),
+                },
+
+                written: vec![
+                    (
+                        Write::new(WriteType::Put, TimeStamp::new(4), Some(b"v".to_vec())),
+                        TimeStamp::new(6),
+                    ),
+                    (
+                        Write::new(WriteType::Rollback, TimeStamp::new(5), None),
+                        TimeStamp::new(7),
+                    ),
+                ],
+            },
             // prev_write is Rollback, and there isn't a more previous valid write
             Case {
                 expected: OldValue::None,
-
                 written: vec![(
                     Write::new(WriteType::Rollback, TimeStamp::new(5), None),
                     TimeStamp::new(6),
@@ -1659,7 +1725,9 @@ pub mod tests {
             },
             // prev_write is Lock, and there exists a more previous valid write
             Case {
-                expected: OldValue::None,
+                expected: OldValue::ValueTimeStamp {
+                    start_ts: TimeStamp::new(3),
+                },
 
                 written: vec![
                     (
@@ -1675,7 +1743,6 @@ pub mod tests {
             // prev_write is Lock, and there isn't a more previous valid write
             Case {
                 expected: OldValue::None,
-
                 written: vec![(
                     Write::new(WriteType::Lock, TimeStamp::new(5), None),
                     TimeStamp::new(6),
@@ -1683,8 +1750,7 @@ pub mod tests {
             },
             // prev_write is not Rollback or Lock, check_gc_fence_as_latest_version is true
             Case {
-                expected: OldValue::Value {
-                    short_value: None,
+                expected: OldValue::ValueTimeStamp {
                     start_ts: TimeStamp::new(7),
                 },
                 written: vec![(
@@ -1702,8 +1768,37 @@ pub mod tests {
                     TimeStamp::new(5),
                 )],
             },
+            // prev_write is Delete, check_gc_fence_as_latest_version is true
+            Case {
+                expected: OldValue::None,
+                written: vec![
+                    (
+                        Write::new(WriteType::Put, TimeStamp::new(3), None),
+                        TimeStamp::new(6),
+                    ),
+                    (
+                        Write::new(WriteType::Delete, TimeStamp::new(7), None),
+                        TimeStamp::new(8),
+                    ),
+                ],
+            },
+            // prev_write is Delete, check_gc_fence_as_latest_version is false
+            Case {
+                expected: OldValue::None,
+                written: vec![
+                    (
+                        Write::new(WriteType::Put, TimeStamp::new(3), None),
+                        TimeStamp::new(6),
+                    ),
+                    (
+                        Write::new(WriteType::Delete, TimeStamp::new(7), None)
+                            .set_overlapped_rollback(true, Some(6.into())),
+                        TimeStamp::new(8),
+                    ),
+                ],
+            },
         ];
-        for case in cases {
+        for (i, case) in cases.into_iter().enumerate() {
             let engine = TestEngineBuilder::new().build().unwrap();
             let cm = ConcurrencyManager::new(42.into());
             let mut txn = MvccTxn::new(TimeStamp::new(10), cm.clone());
@@ -1721,13 +1816,70 @@ pub mod tests {
                 let prev_write = reader
                     .seek_write(&Key::from_raw(b"a"), case.written.last().unwrap().1)
                     .unwrap()
-                    .unwrap()
-                    .1;
+                    .map(|w| w.1);
+                let prev_write_loaded = true;
                 let result = reader
-                    .get_old_value(TimeStamp::new(25), prev_write)
+                    .get_old_value(
+                        &Key::from_raw(b"a"),
+                        TimeStamp::new(25),
+                        prev_write_loaded,
+                        prev_write,
+                    )
                     .unwrap();
-                assert_eq!(result, case.expected);
+                assert_eq!(result, case.expected, "case #{}", i);
             }
+        }
+
+        // Must return Oldvalue::None when prev_write_loaded is true and prev_write is None.
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut reader = MvccReader::new(snapshot, None, true);
+        let prev_write_loaded = true;
+        let prev_write = None;
+        let result = reader
+            .get_old_value(
+                &Key::from_raw(b"a"),
+                TimeStamp::new(25),
+                prev_write_loaded,
+                prev_write,
+            )
+            .unwrap();
+        assert_eq!(result, OldValue::None);
+    }
+
+    #[test]
+    fn test_reader_prefix_seek() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let builder = TestEngineBuilder::new().path(dir.path());
+        let db = builder.build().unwrap().kv_engine().get_sync_db();
+        let cf = engine_rocks::util::get_cf_handle(&db, CF_WRITE).unwrap();
+
+        let region = make_region(1, vec![], vec![]);
+        let mut engine = RegionEngine::new(&db, &region);
+
+        // Put some tombstones into the DB.
+        for i in 1..100 {
+            let commit_ts = (i * 2 + 1).into();
+            let mut k = vec![b'z'];
+            k.extend_from_slice(Key::from_raw(b"k1").append_ts(commit_ts).as_encoded());
+            use engine_rocks::raw::Writable;
+            engine.db.delete_cf(cf, &k).unwrap();
+        }
+        engine.flush();
+
+        #[allow(clippy::useless_vec)]
+        for (k, scan_mode, tombstones) in vec![
+            (b"k0", Some(ScanMode::Forward), 99),
+            (b"k0", None, 0),
+            (b"k1", Some(ScanMode::Forward), 99),
+            (b"k1", None, 99),
+            (b"k2", Some(ScanMode::Forward), 0),
+            (b"k2", None, 0),
+        ] {
+            let mut reader = MvccReader::new(engine.snapshot(), scan_mode, false);
+            let (k, ts) = (Key::from_raw(k), 199.into());
+            reader.seek_write(&k, ts).unwrap();
+            assert_eq!(reader.statistics.write.seek_tombstone, tombstones);
         }
     }
 }

@@ -8,25 +8,10 @@
 #![feature(box_patterns)]
 #![feature(vecdeque_binary_search)]
 
-#[macro_use]
-extern crate bitflags;
-#[macro_use(fail_point)]
-extern crate fail;
-#[macro_use]
-extern crate lazy_static;
-#[macro_use]
-extern crate prometheus;
-#[macro_use]
-extern crate quick_error;
-#[macro_use]
-extern crate serde_derive;
-#[macro_use]
-extern crate serde_with;
-#[macro_use]
-extern crate tikv_util;
-
 #[cfg(test)]
 extern crate test;
+#[macro_use]
+extern crate derivative;
 
 pub mod coprocessor;
 pub mod errors;
@@ -34,3 +19,17 @@ pub mod router;
 pub mod store;
 pub use self::coprocessor::{RegionInfo, RegionInfoAccessor, SeekRegionCallback};
 pub use self::errors::{DiscardReason, Error, Result};
+
+// With feature protobuf-codec, `bytes::Bytes` is generated for `bytes` in protobuf.
+#[cfg(feature = "protobuf-codec")]
+fn bytes_capacity(b: &bytes::Bytes) -> usize {
+    // NOTE: For deserialized raft messages, `len` equals capacity.
+    // This is used to report memory usage to metrics.
+    b.len()
+}
+
+// Currently `bytes::Bytes` are not available for prost-codec.
+#[cfg(feature = "prost-codec")]
+fn bytes_capacity(b: &Vec<u8>) -> usize {
+    b.capacity()
+}

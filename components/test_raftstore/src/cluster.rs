@@ -22,8 +22,10 @@ use encryption_export::DataKeyManager;
 use engine_rocks::raw::DB;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::{
-    CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, WriteBatch, WriteBatchExt, CF_RAFT,
+    CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, WriteBatch, WriteBatchExt,
+    CF_DEFAULT, CF_RAFT,
 };
+use file_system::IORateLimiter;
 use pd_client::PdClient;
 use raftstore::store::fsm::store::{StoreMeta, PENDING_MSG_CAP};
 use raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, RaftRouter};
@@ -68,6 +70,7 @@ pub trait Simulator {
     ) -> Result<()>;
     fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()>;
     fn get_snap_dir(&self, node_id: u64) -> String;
+    fn get_snap_mgr(&self, node_id: u64) -> &SnapManager;
     fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RocksEngine>>;
     fn add_send_filter(&mut self, node_id: u64, filter: Box<dyn Filter>);
     fn clear_send_filters(&mut self, node_id: u64);
@@ -130,6 +133,7 @@ pub struct Cluster<T: Simulator> {
     pub dbs: Vec<Engines<RocksEngine, RocksEngine>>,
     pub store_metas: HashMap<u64, Arc<Mutex<StoreMeta>>>,
     key_managers: Vec<Option<Arc<DataKeyManager>>>,
+    pub io_rate_limiter: Option<Arc<IORateLimiter>>,
     pub engines: HashMap<u64, Engines<RocksEngine, RocksEngine>>,
     key_managers_map: HashMap<u64, Option<Arc<DataKeyManager>>>,
     pub labels: HashMap<u64, HashMap<String, String>>,
@@ -155,6 +159,7 @@ impl<T: Simulator> Cluster<T> {
             dbs: vec![],
             store_metas: HashMap::default(),
             key_managers: vec![],
+            io_rate_limiter: None,
             engines: HashMap::default(),
             key_managers_map: HashMap::default(),
             labels: HashMap::default(),
@@ -165,7 +170,7 @@ impl<T: Simulator> Cluster<T> {
 
     // To destroy temp dir later.
     pub fn take_path(&mut self) -> Vec<TempDir> {
-        std::mem::replace(&mut self.paths, vec![])
+        std::mem::take(&mut self.paths)
     }
 
     pub fn id(&self) -> u64 {
@@ -193,13 +198,20 @@ impl<T: Simulator> Cluster<T> {
     }
 
     fn create_engine(&mut self, router: Option<RaftRouter<RocksEngine, RocksEngine>>) {
-        let (engines, key_manager, dir) = create_test_engine(router, &self.cfg);
+        let (engines, key_manager, dir) =
+            create_test_engine(router, self.io_rate_limiter.clone(), &self.cfg);
         self.dbs.push(engines);
         self.key_managers.push(key_manager);
         self.paths.push(dir);
     }
 
     pub fn create_engines(&mut self) {
+        self.io_rate_limiter = Some(Arc::new(
+            self.cfg
+                .storage
+                .io_rate_limit
+                .build(true /*enable_statistics*/),
+        ));
         for _ in 0..self.count {
             self.create_engine(None);
         }
@@ -241,7 +253,14 @@ impl<T: Simulator> Cluster<T> {
     pub fn compact_data(&self) {
         for engine in self.engines.values() {
             let db = &engine.kv;
-            db.compact_range("default", None, None, false, 1).unwrap();
+            db.compact_range(CF_DEFAULT, None, None, false, 1).unwrap();
+        }
+    }
+
+    pub fn flush_data(&self) {
+        for engine in self.engines.values() {
+            let db = &engine.kv;
+            db.flush_cf(CF_DEFAULT, true /*sync*/).unwrap();
         }
     }
 
@@ -749,7 +768,7 @@ impl<T: Simulator> Cluster<T> {
 
             let resp = match result {
                 e @ Err(Error::Timeout(_))
-                | e @ Err(Error::NotLeader(_, _))
+                | e @ Err(Error::NotLeader(..))
                 | e @ Err(Error::StaleCommand) => {
                     warn!("call command failed, retry it"; "err" => ?e);
                     sleep_ms(100);
@@ -811,7 +830,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
-        self.get_impl("default", key, false)
+        self.get_impl(CF_DEFAULT, key, false)
     }
 
     pub fn get_cf(&mut self, cf: &str, key: &[u8]) -> Option<Vec<u8>> {
@@ -819,7 +838,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn must_get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
-        self.get_impl("default", key, true)
+        self.get_impl(CF_DEFAULT, key, true)
     }
 
     fn get_impl(&mut self, cf: &str, key: &[u8], read_quorum: bool) -> Option<Vec<u8>> {
@@ -905,39 +924,41 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn must_put(&mut self, key: &[u8], value: &[u8]) {
-        self.must_put_cf("default", key, value);
+        self.must_put_cf(CF_DEFAULT, key, value);
     }
 
     pub fn must_put_cf(&mut self, cf: &str, key: &[u8], value: &[u8]) {
-        let resp = self.request(
-            key,
-            vec![new_put_cf_cmd(cf, key, value)],
-            false,
-            Duration::from_secs(5),
-        );
-        if resp.get_header().has_error() {
-            panic!("response {:?} has error", resp);
+        match self.batch_put(key, vec![new_put_cf_cmd(cf, key, value)]) {
+            Ok(resp) => {
+                assert_eq!(resp.get_responses().len(), 1);
+                assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Put);
+            }
+            Err(e) => {
+                panic!("has error: {:?}", e);
+            }
         }
-        assert_eq!(resp.get_responses().len(), 1);
-        assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Put);
     }
 
     pub fn put(&mut self, key: &[u8], value: &[u8]) -> result::Result<(), PbError> {
-        let resp = self.request(
-            key,
-            vec![new_put_cf_cmd("default", key, value)],
-            false,
-            Duration::from_secs(5),
-        );
+        self.batch_put(key, vec![new_put_cf_cmd(CF_DEFAULT, key, value)])
+            .map(|_| ())
+    }
+
+    pub fn batch_put(
+        &mut self,
+        region_key: &[u8],
+        reqs: Vec<Request>,
+    ) -> result::Result<RaftCmdResponse, PbError> {
+        let resp = self.request(region_key, reqs, false, Duration::from_secs(5));
         if resp.get_header().has_error() {
             Err(resp.get_header().get_error().clone())
         } else {
-            Ok(())
+            Ok(resp)
         }
     }
 
     pub fn must_delete(&mut self, key: &[u8]) {
-        self.must_delete_cf("default", key)
+        self.must_delete_cf(CF_DEFAULT, key)
     }
 
     pub fn must_delete_cf(&mut self, cf: &str, key: &[u8]) {
@@ -1187,6 +1208,10 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn get_snap_dir(&self, node_id: u64) -> String {
         self.sim.rl().get_snap_dir(node_id)
+    }
+
+    pub fn get_snap_mgr(&self, node_id: u64) -> SnapManager {
+        self.sim.rl().get_snap_mgr(node_id).clone()
     }
 
     pub fn clear_send_filters(&mut self) {

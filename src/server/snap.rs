@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt::{self, Display, Formatter};
+use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -19,11 +20,12 @@ use kvproto::tikvpb::TikvClient;
 use protobuf::Message;
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 
-use engine_rocks::RocksEngine;
+use engine_traits::KvEngine;
 use file_system::{IOType, WithIOType};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{GenericSnapshot, SnapEntry, SnapKey, SnapManager};
 use security::SecurityManager;
+use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::worker::Runnable;
 use tikv_util::DeferContext;
 
@@ -45,6 +47,8 @@ pub enum Task {
         msg: RaftMessage,
         cb: Callback,
     },
+    RefreshConfigEvent,
+    Validate(Box<dyn FnOnce(&Config) + Send>),
 }
 
 impl Display for Task {
@@ -54,6 +58,8 @@ impl Display for Task {
             Task::Send {
                 ref addr, ref msg, ..
             } => write!(f, "Send Snap[to: {}, snap: {:?}]", addr, msg),
+            Task::RefreshConfigEvent => write!(f, "Refresh configuration"),
+            Task::Validate(_) => write!(f, "Validate snap worker config"),
         }
     }
 }
@@ -93,7 +99,7 @@ impl Stream for SnapChunk {
     }
 }
 
-struct SendStat {
+pub struct SendStat {
     key: SnapKey,
     total_size: u64,
     elapsed: Duration,
@@ -102,7 +108,7 @@ struct SendStat {
 /// Send the snapshot to specified address.
 ///
 /// It will first send the normal raft snapshot message and then send the snapshot file.
-fn send_snap(
+pub fn send_snap(
     env: Arc<Environment>,
     mgr: SnapManager,
     security_mgr: Arc<SecurityManager>,
@@ -233,7 +239,7 @@ impl RecvSnapContext {
         })
     }
 
-    fn finish<R: RaftStoreRouter<RocksEngine>>(self, raft_router: R) -> Result<()> {
+    fn finish<R: RaftStoreRouter<impl KvEngine>>(self, raft_router: R) -> Result<()> {
         let key = self.key;
         if let Some(mut file) = self.file {
             info!("saving snapshot file"; "snap_key" => %key, "file" => file.path());
@@ -250,7 +256,7 @@ impl RecvSnapContext {
     }
 }
 
-fn recv_snap<R: RaftStoreRouter<RocksEngine> + 'static>(
+fn recv_snap<R: RaftStoreRouter<impl KvEngine> + 'static>(
     stream: RequestStream<SnapshotChunk>,
     sink: ClientStreamingSink<Done>,
     snap_mgr: SnapManager,
@@ -289,53 +295,91 @@ fn recv_snap<R: RaftStoreRouter<RocksEngine> + 'static>(
         match recv_task.await {
             Ok(()) => sink.success(Done::default()).await.map_err(Error::from),
             Err(e) => {
-                let status = RpcStatus::new(RpcStatusCode::UNKNOWN, Some(format!("{:?}", e)));
+                let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", e));
                 sink.fail(status).await.map_err(Error::from)
             }
         }
     }
 }
 
-pub struct Runner<R: RaftStoreRouter<RocksEngine> + 'static> {
+pub struct Runner<E, R>
+where
+    E: KvEngine,
+    R: RaftStoreRouter<E> + 'static,
+{
     env: Arc<Environment>,
     snap_mgr: SnapManager,
     pool: Runtime,
     raft_router: R,
     security_mgr: Arc<SecurityManager>,
-    cfg: Arc<Config>,
+    cfg_tracker: Tracker<Config>,
+    cfg: Config,
     sending_count: Arc<AtomicUsize>,
     recving_count: Arc<AtomicUsize>,
+    engine: PhantomData<E>,
 }
 
-impl<R: RaftStoreRouter<RocksEngine> + 'static> Runner<R> {
+impl<E, R> Runner<E, R>
+where
+    E: KvEngine,
+    R: RaftStoreRouter<E> + 'static,
+{
     pub fn new(
         env: Arc<Environment>,
         snap_mgr: SnapManager,
         r: R,
         security_mgr: Arc<SecurityManager>,
-        cfg: Arc<Config>,
-    ) -> Runner<R> {
-        Runner {
+        cfg: Arc<VersionTrack<Config>>,
+    ) -> Runner<E, R> {
+        let cfg_tracker = cfg.clone().tracker("snap-sender".to_owned());
+        let snap_worker = Runner {
             env,
             snap_mgr,
-            pool: RuntimeBuilder::new()
-                .threaded_scheduler()
+            pool: RuntimeBuilder::new_multi_thread()
                 .thread_name(thd_name!("snap-sender"))
-                .core_threads(DEFAULT_POOL_SIZE)
+                .worker_threads(DEFAULT_POOL_SIZE)
                 .on_thread_start(tikv_alloc::add_thread_memory_accessor)
                 .on_thread_stop(tikv_alloc::remove_thread_memory_accessor)
                 .build()
                 .unwrap(),
             raft_router: r,
             security_mgr,
-            cfg,
+            cfg_tracker,
+            cfg: cfg.value().clone(),
             sending_count: Arc::new(AtomicUsize::new(0)),
             recving_count: Arc::new(AtomicUsize::new(0)),
+            engine: PhantomData,
+        };
+        snap_worker
+    }
+
+    fn refresh_cfg(&mut self) {
+        if let Some(incoming) = self.cfg_tracker.any_new() {
+            let limit = if incoming.snap_max_write_bytes_per_sec.0 > 0 {
+                incoming.snap_max_write_bytes_per_sec.0 as f64
+            } else {
+                f64::INFINITY
+            };
+            let max_total_size = if incoming.snap_max_total_size.0 > 0 {
+                incoming.snap_max_total_size.0
+            } else {
+                u64::MAX
+            };
+            self.snap_mgr.set_speed_limit(limit);
+            self.snap_mgr.set_max_total_snap_size(max_total_size);
+            info!("refresh snapshot manager config"; 
+            "speed_limit"=> limit, 
+            "max_total_snap_size"=> max_total_size);
+            self.cfg = incoming.clone();
         }
     }
 }
 
-impl<R: RaftStoreRouter<RocksEngine> + 'static> Runnable for Runner<R> {
+impl<E, R> Runnable for Runner<E, R>
+where
+    E: KvEngine,
+    R: RaftStoreRouter<E> + 'static,
+{
     type Task = Task;
 
     fn run(&mut self, task: Task) {
@@ -344,12 +388,12 @@ impl<R: RaftStoreRouter<RocksEngine> + 'static> Runnable for Runner<R> {
                 let task_num = self.recving_count.load(Ordering::SeqCst);
                 if task_num >= self.cfg.concurrent_recv_snap_limit {
                     warn!("too many recving snapshot tasks, ignore");
-                    let status = RpcStatus::new(
+                    let status = RpcStatus::with_message(
                         RpcStatusCode::RESOURCE_EXHAUSTED,
-                        Some(format!(
+                        format!(
                             "the number of received snapshot tasks {} exceeded the limitation {}",
                             task_num, self.cfg.concurrent_recv_snap_limit
-                        )),
+                        ),
                     );
                     self.pool.spawn(sink.fail(status));
                     return;
@@ -388,7 +432,7 @@ impl<R: RaftStoreRouter<RocksEngine> + 'static> Runnable for Runner<R> {
                 let sending_count = Arc::clone(&self.sending_count);
                 sending_count.fetch_add(1, Ordering::SeqCst);
 
-                let send_task = send_snap(env, mgr, security_mgr, &self.cfg, &addr, msg);
+                let send_task = send_snap(env, mgr, security_mgr, &self.cfg.clone(), &addr, msg);
                 let task = async move {
                     let res = match send_task {
                         Err(e) => Err(e),
@@ -414,6 +458,12 @@ impl<R: RaftStoreRouter<RocksEngine> + 'static> Runnable for Runner<R> {
                 };
 
                 self.pool.spawn(task);
+            }
+            Task::RefreshConfigEvent => {
+                self.refresh_cfg();
+            }
+            Task::Validate(f) => {
+                f(&self.cfg);
             }
         }
     }

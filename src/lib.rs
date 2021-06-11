@@ -27,19 +27,16 @@
 #![feature(shrink_to)]
 #![feature(drain_filter)]
 #![feature(negative_impls)]
+#![feature(num_as_ne_bytes)]
 
 #[macro_use(fail_point)]
 extern crate fail;
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
-extern crate quick_error;
-#[macro_use]
 extern crate serde_derive;
 #[macro_use]
 extern crate more_asserts;
-#[macro_use]
-extern crate vlog;
 #[macro_use]
 extern crate tikv_util;
 

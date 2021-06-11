@@ -10,6 +10,7 @@ use engine_traits::{
     WriteBatchExt, ALL_CFS,
 };
 use rocksdb::Range as RocksRange;
+use tikv_util::box_try;
 use tikv_util::keybuilder::KeyBuilder;
 
 pub const MAX_DELETE_COUNT_BY_KEY: usize = 2048;
@@ -326,6 +327,36 @@ impl MiscExt for RocksEngine {
             &handle,
             level,
         ))
+    }
+
+    fn get_cf_num_immutable_mem_table(&self, cf: &str) -> Result<Option<u64>> {
+        let handle = util::get_cf_handle(self.as_inner(), cf)?;
+        Ok(crate::util::get_cf_num_immutable_mem_table(
+            self.as_inner(),
+            &handle,
+        ))
+    }
+
+    fn get_cf_compaction_pending_bytes(&self, cf: &str) -> Result<Option<u64>> {
+        let handle = util::get_cf_handle(self.as_inner(), cf)?;
+        Ok(crate::util::get_cf_compaction_pending_bytes(
+            self.as_inner(),
+            &handle,
+        ))
+    }
+
+    fn is_stalled_or_stopped(&self) -> bool {
+        const ROCKSDB_IS_WRITE_STALLED: &str = "rocksdb.is-write-stalled";
+        const ROCKSDB_IS_WRITE_STOPPED: &str = "rocksdb.is-write-stopped";
+        self.as_inner()
+            .get_property_int(ROCKSDB_IS_WRITE_STALLED)
+            .unwrap_or_default()
+            != 0
+            || self
+                .as_inner()
+                .get_property_int(ROCKSDB_IS_WRITE_STOPPED)
+                .unwrap_or_default()
+                != 0
     }
 }
 

@@ -15,6 +15,7 @@ use rocksdb::Range as RocksRange;
 use rocksdb::{CFHandle, SliceTransform, DB};
 use std::str::FromStr;
 use std::sync::Arc;
+use tikv_util::box_err;
 
 pub fn new_temp_engine(path: &tempfile::TempDir) -> Engines<RocksEngine, RocksEngine> {
     let raft_path = path.path().join(std::path::Path::new("raft"));
@@ -151,8 +152,13 @@ pub fn get_cf_num_blob_files_at_level(engine: &DB, handle: &CFHandle, level: usi
 }
 
 /// Gets the number of immutable mem-table of given column family.
-pub fn get_num_immutable_mem_table(engine: &DB, handle: &CFHandle) -> Option<u64> {
+pub fn get_cf_num_immutable_mem_table(engine: &DB, handle: &CFHandle) -> Option<u64> {
     engine.get_property_int_cf(handle, ROCKSDB_NUM_IMMUTABLE_MEM_TABLE)
+}
+
+/// Gets the amount of pending compaction bytes of given column family.
+pub fn get_cf_compaction_pending_bytes(engine: &DB, handle: &CFHandle) -> Option<u64> {
+    engine.get_property_int_cf(handle, ROCKSDB_PENDING_COMPACTION_BYTES)
 }
 
 pub struct FixedSuffixSliceTransform {

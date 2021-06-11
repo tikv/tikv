@@ -9,21 +9,20 @@ use engine_rocks::file_system::get_env as get_inspected_env;
 use engine_rocks::raw::DBOptions;
 use engine_rocks::raw_util::CFOptions;
 use engine_rocks::{RocksEngine as BaseRocksEngine, RocksEngineIterator};
-use engine_traits::{CfName, CF_DEFAULT};
+use engine_traits::CfName;
 use engine_traits::{
-    Engines, IterOptions, Iterable, Iterator, KvEngine, Mutable, Peekable, ReadOptions, SeekKey,
-    WriteBatch, WriteBatchExt,
+    Engines, IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions, SeekKey,
 };
+use file_system::IORateLimiter;
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
 use txn_types::{Key, Value};
 
-use tikv_util::escape;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
 use super::{
-    Callback, CbContext, Engine, Error, ErrorInner, ExtCallback, Iterator as EngineIterator,
-    Modify, Result, SnapContext, Snapshot, WriteData,
+    write_modifies, Callback, CbContext, Engine, Error, ErrorInner, ExtCallback,
+    Iterator as EngineIterator, Modify, Result, SnapContext, Snapshot, WriteData,
 };
 
 pub use engine_rocks::RocksSnapshot;
@@ -92,6 +91,7 @@ impl RocksEngine {
         cfs: &[CfName],
         cfs_opts: Option<Vec<CFOptions<'_>>>,
         shared_block_cache: bool,
+        io_rate_limiter: Option<Arc<IORateLimiter>>,
     ) -> Result<RocksEngine> {
         info!("RocksEngine: creating for path"; "path" => path);
         let (path, temp_dir) = match path {
@@ -103,7 +103,7 @@ impl RocksEngine {
         };
         let worker = Worker::new("engine-rocksdb");
         let mut db_opts = DBOptions::new();
-        let env = get_inspected_env(None).unwrap();
+        let env = get_inspected_env(None, io_rate_limiter).unwrap();
         db_opts.set_env(env);
         let db = Arc::new(engine_rocks::raw_util::new_engine(
             &path,
@@ -163,55 +163,6 @@ impl Debug for RocksEngine {
             self.core.lock().unwrap().temp_dir.is_some()
         )
     }
-}
-
-/// Write modifications into a `BaseRocksEngine` instance.
-pub fn write_modifies(kv_engine: &BaseRocksEngine, modifies: Vec<Modify>) -> Result<()> {
-    fail_point!("rockskv_write_modifies", |_| Err(box_err!("write failed")));
-
-    let mut wb = kv_engine.write_batch();
-    for rev in modifies {
-        let res = match rev {
-            Modify::Delete(cf, k) => {
-                if cf == CF_DEFAULT {
-                    trace!("RocksEngine: delete"; "key" => %k);
-                    wb.delete(k.as_encoded())
-                } else {
-                    trace!("RocksEngine: delete_cf"; "cf" => cf, "key" => %k);
-                    wb.delete_cf(cf, k.as_encoded())
-                }
-            }
-            Modify::Put(cf, k, v) => {
-                if cf == CF_DEFAULT {
-                    trace!("RocksEngine: put"; "key" => %k, "value" => escape(&v));
-                    wb.put(k.as_encoded(), &v)
-                } else {
-                    trace!("RocksEngine: put_cf"; "cf" => cf, "key" => %k, "value" => escape(&v));
-                    wb.put_cf(cf, k.as_encoded(), &v)
-                }
-            }
-            Modify::DeleteRange(cf, start_key, end_key, notify_only) => {
-                trace!(
-                    "RocksEngine: delete_range_cf";
-                    "cf" => cf,
-                    "start_key" => %start_key,
-                    "end_key" => %end_key,
-                    "notify_only" => notify_only,
-                );
-                if !notify_only {
-                    wb.delete_range_cf(cf, start_key.as_encoded(), end_key.as_encoded())
-                } else {
-                    Ok(())
-                }
-            }
-        };
-        // TODO: turn the error into an engine error.
-        if let Err(msg) = res {
-            return Err(box_err!("{}", msg));
-        }
-    }
-    wb.write()?;
-    Ok(())
 }
 
 impl Engine for RocksEngine {

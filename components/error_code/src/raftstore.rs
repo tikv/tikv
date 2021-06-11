@@ -24,6 +24,8 @@ define_error_codes!(
     EPOCH_NOT_MATCH => ("EpochNotMatch", "", ""),
     UNKNOWN => ("Unknown", "", ""),
     SERVER_IS_BUSY => ("ServerIsBusy", "", ""),
+    DATA_IS_NOT_READY => ("DataIsNotReady", "", ""),
+    DEADLINE_EXCEEDED => ("DeadlineExceeded", "", ""),
 
     SNAP_ABORT => ("SnapAbort", "", ""),
     SNAP_TOO_MANY => ("SnapTooMany", "", ""),
@@ -52,6 +54,8 @@ impl ErrorCodeExt for errorpb::Error {
             READ_INDEX_NOT_READY
         } else if self.has_proposal_in_merging_mode() {
             PROPOSAL_IN_MERGING_MODE
+        } else if self.has_data_is_not_ready() {
+            DATA_IS_NOT_READY
         } else {
             UNKNOWN
         }

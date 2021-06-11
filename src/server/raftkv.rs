@@ -1,27 +1,41 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::result;
-use std::{borrow::Cow, io::Error as IoError};
 use std::{
+    borrow::Cow,
     fmt::{self, Debug, Display, Formatter},
-    mem,
+    io::Error as IoError,
+    mem, result,
+    sync::Arc,
+    time::Duration,
 };
-use std::{sync::Arc, time::Duration};
 
-use bitflags::bitflags;
-use concurrency_manager::ConcurrencyManager;
-use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_traits::CF_DEFAULT;
-use engine_traits::{CfName, KvEngine};
-use engine_traits::{MvccProperties, MvccPropertiesExt};
-use kvproto::kvrpcpb::Context;
-use kvproto::raft_cmdpb::{
-    CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
-    RaftRequestHeader, Request, Response,
-};
-use kvproto::{errorpb, metapb};
 use raft::eraftpb::{self, MessageType};
-use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler};
+use thiserror::Error;
+
+use concurrency_manager::ConcurrencyManager;
+use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot, CF_DEFAULT};
+use kvproto::{
+    errorpb,
+    kvrpcpb::Context,
+    metapb,
+    raft_cmdpb::{
+        CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
+        RaftRequestHeader, Request, Response,
+    },
+};
+use raftstore::{
+    coprocessor::{
+        dispatcher::BoxReadIndexObserver, Coprocessor, CoprocessorHost, ReadIndexObserver,
+    },
+    errors::Error as RaftServerError,
+    router::{LocalReadRouter, RaftStoreRouter},
+    store::{
+        Callback as StoreCallback, ReadIndexContext, ReadResponse, RegionSnapshot, WriteResponse,
+    },
+};
+use tikv_util::codec::number::NumberEncoder;
+use tikv_util::time::Instant;
+use txn_types::{Key, TimeStamp, TxnExtraScheduler, WriteBatchFlags};
 
 use super::metrics::*;
 use crate::storage::kv::{
@@ -29,46 +43,26 @@ use crate::storage::kv::{
     ExtCallback, Modify, SnapContext, WriteData,
 };
 use crate::storage::{self, kv};
-use raftstore::{coprocessor::dispatcher::BoxReadIndexObserver, store::RegionSnapshot};
-use raftstore::{
-    coprocessor::Coprocessor,
-    router::{LocalReadRouter, RaftStoreRouter},
-};
-use raftstore::{
-    coprocessor::CoprocessorHost,
-    store::{Callback as StoreCallback, ReadIndexContext, ReadResponse, WriteResponse},
-};
-use raftstore::{coprocessor::ReadIndexObserver, errors::Error as RaftServerError};
-use tikv_util::time::Instant;
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        RequestFailed(e: errorpb::Error) {
-            from()
-            display("{}", e.get_message())
-        }
-        Io(e: IoError) {
-            from()
-            cause(e)
-            display("{}", e)
-        }
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("{}", .0.get_message())]
+    RequestFailed(errorpb::Error),
 
-        Server(e: RaftServerError) {
-            from()
-            cause(e)
-            display("{}", e)
-        }
-        InvalidResponse(reason: String) {
-            display("{}", reason)
-        }
-        InvalidRequest(reason: String) {
-            display("{}", reason)
-        }
-        Timeout(d: Duration) {
-            display("timeout after {:?}", d)
-        }
-    }
+    #[error("{0}")]
+    Io(#[from] IoError),
+
+    #[error("{0}")]
+    Server(#[from] RaftServerError),
+
+    #[error("{0}")]
+    InvalidResponse(String),
+
+    #[error("{0}")]
+    InvalidRequest(String),
+
+    #[error("timeout after {0:?}")]
+    Timeout(Duration),
 }
 
 fn get_status_kind_from_error(e: &Error) -> RequestStatusKind {
@@ -112,18 +106,22 @@ impl From<Error> for kv::Error {
 
 /// `RaftKv` is a storage engine base on `RaftStore`.
 #[derive(Clone)]
-pub struct RaftKv<S>
+pub struct RaftKv<E, S>
 where
-    S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
+    E: KvEngine,
+    S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
     router: S,
-    engine: RocksEngine,
+    engine: E,
     txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
 }
 
-pub enum CmdRes {
+pub enum CmdRes<S>
+where
+    S: Snapshot,
+{
     Resp(Vec<Response>),
-    Snap(RegionSnapshot<RocksSnapshot>),
+    Snap(RegionSnapshot<S>),
 }
 
 fn new_ctx(resp: &RaftCmdResponse) -> CbContext {
@@ -147,7 +145,13 @@ fn check_raft_cmd_response(resp: &mut RaftCmdResponse, req_cnt: usize) -> Result
     Ok(())
 }
 
-fn on_write_result(mut write_resp: WriteResponse, req_cnt: usize) -> (CbContext, Result<CmdRes>) {
+fn on_write_result<S>(
+    mut write_resp: WriteResponse,
+    req_cnt: usize,
+) -> (CbContext, Result<CmdRes<S>>)
+where
+    S: Snapshot,
+{
     let cb_ctx = new_ctx(&write_resp.response);
     if let Err(e) = check_raft_cmd_response(&mut write_resp.response, req_cnt) {
         return (cb_ctx, Err(e));
@@ -156,10 +160,13 @@ fn on_write_result(mut write_resp: WriteResponse, req_cnt: usize) -> (CbContext,
     (cb_ctx, Ok(CmdRes::Resp(resps.into())))
 }
 
-fn on_read_result(
-    mut read_resp: ReadResponse<RocksSnapshot>,
+fn on_read_result<S>(
+    mut read_resp: ReadResponse<S>,
     req_cnt: usize,
-) -> (CbContext, Result<CmdRes>) {
+) -> (CbContext, Result<CmdRes<S>>)
+where
+    S: Snapshot,
+{
     let mut cb_ctx = new_ctx(&read_resp.response);
     cb_ctx.txn_extra_op = read_resp.txn_extra_op;
     if let Err(e) = check_raft_cmd_response(&mut read_resp.response, req_cnt) {
@@ -173,12 +180,13 @@ fn on_read_result(
     }
 }
 
-impl<S> RaftKv<S>
+impl<E, S> RaftKv<E, S>
 where
-    S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
+    E: KvEngine,
+    S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
     /// Create a RaftKv using specified configuration.
-    pub fn new(router: S, engine: RocksEngine) -> RaftKv<S> {
+    pub fn new(router: S, engine: E) -> RaftKv<E, S> {
         RaftKv {
             router,
             engine,
@@ -207,9 +215,17 @@ where
         &self,
         ctx: SnapContext<'_>,
         req: Request,
-        cb: Callback<CmdRes>,
+        cb: Callback<CmdRes<E::Snapshot>>,
     ) -> Result<()> {
-        let header = self.new_request_header(&*ctx.pb_ctx);
+        let mut header = self.new_request_header(&*ctx.pb_ctx);
+        if ctx.pb_ctx.get_stale_read() && !ctx.start_ts.is_zero() {
+            let mut data = [0u8; 8];
+            (&mut data[..])
+                .encode_u64(ctx.start_ts.into_inner())
+                .unwrap();
+            header.set_flags(WriteBatchFlags::STALE_READ.bits());
+            header.set_flag_data(data.into());
+        }
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
         cmd.set_requests(vec![req].into());
@@ -228,9 +244,8 @@ where
     fn exec_write_requests(
         &self,
         ctx: &Context,
-        reqs: Vec<Request>,
-        txn_extra: TxnExtra,
-        write_cb: Callback<CmdRes>,
+        batch: WriteData,
+        write_cb: Callback<CmdRes<E::Snapshot>>,
         proposed_cb: Option<ExtCallback>,
         committed_cb: Option<ExtCallback>,
     ) -> Result<()> {
@@ -243,11 +258,7 @@ where
                     let region_id = ctx.get_region_id();
                     rid.and_then(|rid| {
                         let rid: u64 = rid.parse().unwrap();
-                        if rid == region_id {
-                            None
-                        } else {
-                            Some(())
-                        }
+                        if rid == region_id { None } else { Some(()) }
                     })
                     .ok_or_else(|| RaftServerError::RegionNotFound(region_id).into())
                 });
@@ -256,6 +267,8 @@ where
             raftkv_early_error_report_fp()?;
         }
 
+        let reqs = modifies_to_requests(batch.modifies);
+        let txn_extra = batch.extra;
         let len = reqs.len();
         let mut header = self.new_request_header(ctx);
         if txn_extra.one_pc {
@@ -272,19 +285,20 @@ where
             }
         }
 
-        self.router
-            .send_command(
-                cmd,
-                StoreCallback::write_ext(
-                    Box::new(move |resp| {
-                        let (cb_ctx, res) = on_write_result(resp, len);
-                        write_cb((cb_ctx, res.map_err(Error::into)));
-                    }),
-                    proposed_cb,
-                    committed_cb,
-                ),
-            )
-            .map_err(From::from)
+        let cb = StoreCallback::write_ext(
+            Box::new(move |resp| {
+                let (cb_ctx, res) = on_write_result(resp, len);
+                write_cb((cb_ctx, res.map_err(Error::into)));
+            }),
+            proposed_cb,
+            committed_cb,
+        );
+        if let Some(deadline) = batch.deadline {
+            self.router.send_command_with_deadline(cmd, cb, deadline)?;
+        } else {
+            self.router.send_command(cmd, cb)?;
+        }
+        Ok(())
     }
 }
 
@@ -295,32 +309,35 @@ fn invalid_resp_type(exp: CmdType, act: CmdType) -> Error {
     ))
 }
 
-impl<S> Display for RaftKv<S>
+impl<E, S> Display for RaftKv<E, S>
 where
-    S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
+    E: KvEngine,
+    S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RaftKv")
     }
 }
 
-impl<S> Debug for RaftKv<S>
+impl<E, S> Debug for RaftKv<E, S>
 where
-    S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
+    E: KvEngine,
+    S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RaftKv")
     }
 }
 
-impl<S> Engine for RaftKv<S>
+impl<E, S> Engine for RaftKv<E, S>
 where
-    S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
+    E: KvEngine,
+    S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
-    type Snap = RegionSnapshot<RocksSnapshot>;
-    type Local = RocksEngine;
+    type Snap = RegionSnapshot<E::Snapshot>;
+    type Local = E;
 
-    fn kv_engine(&self) -> RocksEngine {
+    fn kv_engine(&self) -> E {
         self.engine.clone()
     }
 
@@ -330,7 +347,7 @@ where
         region.set_end_key(end_key.to_owned());
         // Use a fake peer to avoid panic.
         region.mut_peers().push(Default::default());
-        Ok(RegionSnapshot::<RocksSnapshot>::from_raw(
+        Ok(RegionSnapshot::<E::Snapshot>::from_raw(
             self.engine.clone(),
             region,
         ))
@@ -380,14 +397,12 @@ where
             return Err(KvError::from(KvErrorInner::EmptyRequest));
         }
 
-        let reqs = modifies_to_requests(batch.modifies);
         ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
         let begin_instant = Instant::now_coarse();
 
         self.exec_write_requests(
             ctx,
-            reqs,
-            batch.extra,
+            batch,
             Box::new(move |(cb_ctx, res)| match res {
                 Ok(CmdRes::Resp(_)) => {
                     ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
@@ -424,7 +439,7 @@ where
 
         let mut req = Request::default();
         req.set_cmd_type(CmdType::Snap);
-        if !ctx.start_ts.is_zero() {
+        if !ctx.key_ranges.is_empty() && !ctx.start_ts.is_zero() {
             req.mut_read_index().set_start_ts(ctx.start_ts.into_inner());
             req.mut_read_index()
                 .set_key_ranges(mem::take(&mut ctx.key_ranges).into());
@@ -552,18 +567,8 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                         .observe(begin_instant.elapsed().as_secs_f64());
                 }
             }
-            msg.mut_entries()[0].set_data(rctx.to_bytes());
+            msg.mut_entries()[0].set_data(rctx.to_bytes().into());
         }
-    }
-}
-
-bitflags! {
-    /// Additional flags for a write batch.
-    /// They should be set in the `flags` field in `RaftRequestHeader`.
-    pub struct WriteBatchFlags: u64 {
-        /// Indicates this request is from a 1PC transaction.
-        /// It helps CDC recognize 1PC transactions and handle them correctly.
-        const ONE_PC = 0b00000001;
     }
 }
 
@@ -620,7 +625,7 @@ mod tests {
         m.set_msg_type(MessageType::MsgReadIndex);
         let uuid = Uuid::new_v4();
         let mut e = eraftpb::Entry::default();
-        e.set_data(uuid.as_bytes().to_vec());
+        e.set_data(uuid.as_bytes().to_vec().into());
         m.mut_entries().push(e);
 
         checker.on_step(&mut m);

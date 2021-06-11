@@ -14,7 +14,8 @@ use kvproto::kvrpcpb::LockInfo;
 use kvproto::raft_cmdpb::CmdType;
 use tikv_util::worker::{Builder as WorkerBuilder, Runnable, ScheduleError, Scheduler, Worker};
 
-use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, Lock, TimeStamp};
+use crate::storage::mvcc::{ErrorInner as MvccErrorInner, Lock, TimeStamp};
+use crate::storage::txn::Error as TxnError;
 use raftstore::coprocessor::{
     ApplySnapshotObserver, BoxApplySnapshotObserver, BoxQueryObserver, Cmd, Coprocessor,
     CoprocessorHost, ObserverContext, QueryObserver,
@@ -132,21 +133,23 @@ impl LockObserver {
     }
 
     fn send(&self, locks: Vec<(Key, Lock)>) {
-        let res = &mut self
-            .sender
-            .schedule(LockCollectorTask::ObservedLocks(locks));
-        // Wrap the fail point in a closure, so we can modify local variables without return.
         #[cfg(feature = "failpoints")]
-        {
-            let mut send_fp = || {
-                fail_point!("lock_observer_send", |_| {
-                    *res = Err(ScheduleError::Full(LockCollectorTask::ObservedLocks(
-                        vec![],
-                    )));
-                })
-            };
-            send_fp();
-        }
+        let injected_full = (|| {
+            fail_point!("lock_observer_send_full", |_| {
+                info!("[failpoint] injected lock observer channel full"; "locks" => ?locks);
+                true
+            });
+            false
+        })();
+        #[cfg(not(feature = "failpoints"))]
+        let injected_full = false;
+
+        let res = if injected_full {
+            Err(ScheduleError::Full(LockCollectorTask::ObservedLocks(locks)))
+        } else {
+            self.sender
+                .schedule(LockCollectorTask::ObservedLocks(locks))
+        };
 
         match res {
             Ok(()) => (),
@@ -154,6 +157,7 @@ impl LockObserver {
                 error!("lock observer failed to send locks because collector is stopped");
             }
             Err(ScheduleError::Full(_)) => {
+                fail_point!("lock_observer_before_mark_dirty_on_full");
                 self.state.mark_dirty();
                 warn!("cannot collect all applied lock because channel is full");
             }
@@ -164,7 +168,7 @@ impl LockObserver {
 impl Coprocessor for LockObserver {}
 
 impl QueryObserver for LockObserver {
-    fn post_apply_query(&self, _: &mut ObserverContext<'_>, cmd: &mut Cmd) {
+    fn post_apply_query(&self, _: &mut ObserverContext<'_>, cmd: &Cmd) {
         fail_point!("notify_lock_observer_query");
         let max_ts = self.state.load_max_ts();
         if max_ts.is_zero() {
@@ -235,7 +239,7 @@ impl ApplySnapshotObserver for LockObserver {
             .map(|(key, value)| {
                 Lock::parse(value)
                     .map(|lock| (key, lock))
-                    .map_err(|e| ErrorInner::Mvcc(e.into()).into())
+                    .map_err(|e| ErrorInner::Txn(TxnError::from_mvcc(e)).into())
             })
             .filter(|result| result.is_err() || result.as_ref().unwrap().1.ts <= max_ts)
             .map(|result| {
@@ -332,7 +336,7 @@ impl LockCollectorRunner {
             .map(|(k, l)| {
                 k.to_raw()
                     .map(|raw_key| l.clone().into_lock_info(raw_key))
-                    .map_err(|e| Error::from(MvccError::from(e)))
+                    .map_err(|e| Error::from(TxnError::from_mvcc(e)))
             })
             .collect();
 
@@ -434,7 +438,7 @@ impl AppliedLockCollector {
                 // `Lock::check_ts_conflict` can't be used here, because LockType::Lock
                 // can't be ignored in this case.
                 if lock.ts <= max_ts {
-                    Err(MvccError::from(MvccErrorInner::KeyIsLocked(
+                    Err(TxnError::from_mvcc(MvccErrorInner::KeyIsLocked(
                         lock.clone().into_lock_info(key.to_raw()?),
                     )))
                 } else {
@@ -686,7 +690,7 @@ mod tests {
             make_apply_request(b"1".to_vec(), b"1".to_vec(), CF_DEFAULT, CmdType::Put),
             make_apply_request(b"2".to_vec(), b"2".to_vec(), CF_LOCK, CmdType::Delete),
         ];
-        coprocessor_host.post_apply(&Region::default(), &mut make_raft_cmd(req));
+        coprocessor_host.post_apply(&Region::default(), &make_raft_cmd(req));
         expected_result.push(locks[0].clone());
         assert_eq!(
             get_collected_locks(&c, 100).unwrap(),
@@ -711,7 +715,7 @@ mod tests {
                 .filter(|l| l.get_lock_version() <= 100)
                 .cloned(),
         );
-        coprocessor_host.post_apply(&Region::default(), &mut make_raft_cmd(req.clone()));
+        coprocessor_host.post_apply(&Region::default(), &make_raft_cmd(req.clone()));
         assert_eq!(
             get_collected_locks(&c, 100).unwrap(),
             (expected_result, true)
@@ -721,7 +725,7 @@ mod tests {
         // dropped.
         start_collecting(&c, 110).unwrap();
         assert_eq!(get_collected_locks(&c, 110).unwrap(), (vec![], true));
-        coprocessor_host.post_apply(&Region::default(), &mut make_raft_cmd(req));
+        coprocessor_host.post_apply(&Region::default(), &make_raft_cmd(req));
         assert_eq!(get_collected_locks(&c, 110).unwrap(), (locks, true));
     }
 
@@ -817,7 +821,7 @@ mod tests {
         // The value is not a valid lock.
         let (k, v) = (Key::from_raw(b"k1").into_encoded(), b"v1".to_vec());
         let req = make_apply_request(k.clone(), v.clone(), CF_LOCK, CmdType::Put);
-        coprocessor_host.post_apply(&Region::default(), &mut make_raft_cmd(vec![req]));
+        coprocessor_host.post_apply(&Region::default(), &make_raft_cmd(vec![req]));
         assert_eq!(get_collected_locks(&c, 1).unwrap(), (vec![], false));
 
         // `is_clean` should be reset after invoking `start_collecting`.
@@ -843,8 +847,8 @@ mod tests {
         let batch_generate_locks = |count| {
             let (k, v) = lock_info_to_kv(lock.clone());
             let req = make_apply_request(k, v, CF_LOCK, CmdType::Put);
-            let mut raft_cmd = make_raft_cmd(vec![req; count]);
-            coprocessor_host.post_apply(&Region::default(), &mut raft_cmd);
+            let raft_cmd = make_raft_cmd(vec![req; count]);
+            coprocessor_host.post_apply(&Region::default(), &raft_cmd);
         };
 
         batch_generate_locks(MAX_COLLECT_SIZE - 1);

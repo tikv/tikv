@@ -39,6 +39,8 @@ ifeq ($(TCMALLOC),1)
 ENABLE_FEATURES += tcmalloc
 else ifeq ($(MIMALLOC),1)
 ENABLE_FEATURES += mimalloc
+else ifeq ($(SNMALLOC),1)
+ENABLE_FEATURES += snmalloc
 else ifeq ($(SYSTEM_ALLOC),1)
 # no feature needed for system allocator
 else
@@ -363,6 +365,6 @@ x-build-dist: export X_CARGO_CMD=build
 x-build-dist: export X_CARGO_FEATURES=${ENABLE_FEATURES}
 x-build-dist: export X_CARGO_RELEASE=1
 x-build-dist: export X_CARGO_CONFIG_FILE=${DIST_CONFIG}
-x-build-dist: export X_PACKAGE=cmd
+x-build-dist: export X_PACKAGE=tikv-server tikv-ctl
 x-build-dist:
 	bash scripts/run-cargo.sh

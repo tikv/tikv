@@ -5,7 +5,6 @@
 #![feature(proc_macro_hygiene)]
 #![feature(min_specialization)]
 #![feature(test)]
-#![feature(decl_macro)]
 #![feature(str_internals)]
 
 #[macro_use]
