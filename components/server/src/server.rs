@@ -1153,6 +1153,34 @@ impl<EK: KvEngine, ER: RaftEngine> TiKVServer<EK, ER> {
 
         self.to_stop.into_iter().for_each(|s| s.stop());
     }
+
+}
+
+impl<ER: RaftEngine> TiKVServer<RocksEngine, ER> {
+    fn create_kv_engine(&self, env: Arc<engine_rocks::raw::Env>, block_cache: &Option<engine_rocks::raw::Cache>) -> RocksEngine {
+        let mut kv_db_opts = self.config.rocksdb.build_opt();
+        kv_db_opts.set_env(env);
+        kv_db_opts.add_event_listener(create_rocks_raftstore_compaction_listener(self.router.clone()));
+        let kv_cfs_opts = self.config.rocksdb.build_cf_opts(
+            &block_cache,
+            Some(&self.region_info_accessor),
+            self.config.storage.enable_ttl,
+        );
+        let db_path = self.store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
+        let kv_engine = engine_rocks::raw_util::new_engine_opt(
+            db_path.to_str().unwrap(),
+            kv_db_opts,
+            kv_cfs_opts,
+        )
+        .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
+
+        let mut kv_engine = RocksEngine::from_db(Arc::new(kv_engine));
+
+        let shared_block_cache = block_cache.is_some();
+        kv_engine.set_shared_block_cache(shared_block_cache);
+
+        kv_engine
+    }
 }
 
 impl TiKVServer<RocksEngine, RocksEngine> {
@@ -1176,27 +1204,10 @@ impl TiKVServer<RocksEngine, RocksEngine> {
         )
         .unwrap_or_else(|s| fatal!("failed to create raft engine: {}", s));
 
-        // Create kv engine.
-        let mut kv_db_opts = self.config.rocksdb.build_opt();
-        kv_db_opts.set_env(env);
-        kv_db_opts.add_event_listener(create_rocks_raftstore_compaction_listener(self.router.clone()));
-        let kv_cfs_opts = self.config.rocksdb.build_cf_opts(
-            &block_cache,
-            Some(&self.region_info_accessor),
-            self.config.storage.enable_ttl,
-        );
-        let db_path = self.store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
-        let kv_engine = engine_rocks::raw_util::new_engine_opt(
-            db_path.to_str().unwrap(),
-            kv_db_opts,
-            kv_cfs_opts,
-        )
-        .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
+        let kv_engine = self.create_kv_engine(env, &block_cache);
 
-        let mut kv_engine = RocksEngine::from_db(Arc::new(kv_engine));
         let mut raft_engine = RocksEngine::from_db(Arc::new(raft_engine));
         let shared_block_cache = block_cache.is_some();
-        kv_engine.set_shared_block_cache(shared_block_cache);
         raft_engine.set_shared_block_cache(shared_block_cache);
         let engines = Engines::new(kv_engine, raft_engine);
 
@@ -1248,26 +1259,7 @@ impl TiKVServer<RocksEngine, RaftLogEngine> {
         // Try to dump and recover raft data.
         check_and_dump_raft_db(&self.config, &raft_engine, &env, 8);
 
-        // Create kv engine.
-        let mut kv_db_opts = self.config.rocksdb.build_opt();
-        kv_db_opts.set_env(env);
-        kv_db_opts.add_event_listener(create_rocks_raftstore_compaction_listener(self.router.clone()));
-        let kv_cfs_opts = self.config.rocksdb.build_cf_opts(
-            &block_cache,
-            Some(&self.region_info_accessor),
-            self.config.storage.enable_ttl,
-        );
-        let db_path = self.store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
-        let kv_engine = engine_rocks::raw_util::new_engine_opt(
-            db_path.to_str().unwrap(),
-            kv_db_opts,
-            kv_cfs_opts,
-        )
-        .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
-
-        let mut kv_engine = RocksEngine::from_db(Arc::new(kv_engine));
-        let shared_block_cache = block_cache.is_some();
-        kv_engine.set_shared_block_cache(shared_block_cache);
+        let kv_engine = self.create_kv_engine(env, &block_cache);
         let engines = Engines::new(kv_engine, raft_engine);
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
