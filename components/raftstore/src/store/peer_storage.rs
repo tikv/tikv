@@ -225,7 +225,7 @@ impl EntryCache {
         mem_size_change
     }
 
-    pub fn compact_to(&mut self, mut idx: u64) {
+    pub fn compact_to(&mut self, mut idx: u64) -> u64 {
         let mut mem_size_change = 0;
 
         // Clean cached entries which have been already sent to apply threads. For example,
@@ -252,7 +252,8 @@ impl EntryCache {
         let cache_first_idx = self.first_index().unwrap_or(u64::MAX);
         if cache_first_idx > idx {
             self.flush_mem_size_change(mem_size_change);
-            return;
+            assert!(mem_size_change <= 0);
+            return -mem_size_change as u64;
         }
 
         let cache_last_idx = self.cache.back().unwrap().get_index();
@@ -264,6 +265,8 @@ impl EntryCache {
 
         mem_size_change += self.shrink_if_necessary();
         self.flush_mem_size_change(mem_size_change);
+        assert!(mem_size_change <= 0);
+        -mem_size_change as u64
     }
 
     fn get_total_mem_size(&self) -> i64 {
@@ -1209,34 +1212,20 @@ where
         }
     }
 
-    /// Evict half of entries from the cache.
-    pub fn half_evict_cache(&mut self) {
+    /// Evict entries from the cache.
+    pub fn evict_cache(&mut self, half: bool) {
         if self.engines.raft.has_builtin_entry_cache() {
             // TODO: unify entry cache.
             return;
         }
         let cache = self.cache.as_mut().unwrap();
         if !cache.cache.is_empty() {
-            RAFT_ENTRIES_CACHES_EVICT.inc();
             let cache = self.cache.as_mut().unwrap();
-            let drain_to = cache.cache.len() / 2;
+            let cache_len = cache.cache.len();
+            let drain_to = if half { cache_len / 2 } else { cache_len - 1 };
             let idx = cache.cache[drain_to].index;
-            cache.compact_to(idx + 1);
-        }
-    }
-
-    pub fn full_evict_cache(&mut self) {
-        if self.engines.raft.has_builtin_entry_cache() {
-            // TODO: unify entry cache.
-            return;
-        }
-        let cache = self.cache.as_mut().unwrap();
-        if !cache.cache.is_empty() {
-            RAFT_ENTRIES_CACHES_EVICT.inc();
-            let cache = self.cache.as_mut().unwrap();
-            let drain_to = cache.cache.len() - 1;
-            let idx = cache.cache[drain_to].index;
-            cache.compact_to(idx + 1);
+            let mem_size_change = cache.compact_to(idx + 1);
+            RAFT_ENTRIES_EVICT_BYTES.inc_by(mem_size_change);
         }
     }
 

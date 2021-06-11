@@ -3504,7 +3504,7 @@ where
             .mut_store()
             .maybe_gc_cache(alive_cache_idx, applied_idx);
         if needs_evict_entry_cache() {
-            self.fsm.peer.mut_store().half_evict_cache();
+            self.fsm.peer.mut_store().evict_cache(true);
             if !self.fsm.peer.get_store().cache_is_empty() {
                 self.register_entry_cache_evict_tick();
             }
@@ -3566,7 +3566,7 @@ where
     fn on_entry_cache_evict_tick(&mut self) {
         fail_point!("on_entry_cache_evict_tick", |_| {});
         if needs_evict_entry_cache() {
-            self.fsm.peer.mut_store().half_evict_cache();
+            self.fsm.peer.mut_store().evict_cache(true);
         }
         if memory_usage_reaches_high_water() && !self.fsm.peer.get_store().cache_is_empty() {
             self.register_entry_cache_evict_tick();
