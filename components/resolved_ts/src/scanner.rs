@@ -230,10 +230,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
         let (locks, has_remaining) = reader.scan_locks(
             start,
             None,
-            |lock| match lock.lock_type {
-                LockType::Put | LockType::Delete => true,
-                _ => false,
-            },
+            |lock| matches!(lock.lock_type, LockType::Put | LockType::Delete),
             DEFAULT_SCAN_BATCH_SIZE,
         )?;
         Ok((locks, has_remaining))
