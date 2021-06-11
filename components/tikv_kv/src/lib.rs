@@ -119,6 +119,14 @@ impl WriteData {
     pub fn from_modifies(modifies: Vec<Modify>) -> Self {
         Self::new(modifies, TxnExtra::default())
     }
+
+    pub fn size(&self) -> usize {
+        let mut total = 0;
+        for m in &self.modifies {
+            total += m.size();
+        }
+        total
+    }
 }
 
 #[derive(Debug, Clone)]

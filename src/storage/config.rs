@@ -24,7 +24,7 @@ const MAX_SCHED_CONCURRENCY: usize = 2 * 1024 * 1024;
 // second, and it takes about 100ms to process the write requests
 // on average, in that situation the writing bytes estimated 10MB,
 // here we use 100MB as default value for tolerate 1s latency.
-const DEFAULT_SCHED_PENDING_WRITE_MB: u64 = 100;
+const DEFAULT_SCHED_PENDING_WRITE_MB: u64 = 200;
 
 const DEFAULT_RESERVED_SPACE_GB: u64 = 5;
 
@@ -83,7 +83,7 @@ impl Default for Config {
             disable_write_stall: true,
             pending_compaction_bytes_soft_limit: ReadableSize::gb(64).0,
             pending_compaction_bytes_hard_limit: ReadableSize::gb(1000).0,
-            memtables_threshold: 10,
+            memtables_threshold: 5,
             l0_files_threshold: 8,
         }
     }

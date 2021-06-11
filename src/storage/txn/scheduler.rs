@@ -230,7 +230,7 @@ impl<const CAP: usize> Smoother<CAP> {
     pub fn get_percentile_95(&mut self) -> u64 {
         let mut v = self.records.make_contiguous().to_vec();
         v.sort_by_key(|k| k.0);
-        v[((self.records.len() - 1) as f64 * 0.80) as usize].0
+        v[((self.records.len() - 1) as f64 * 0.90) as usize].0
     }
 
     // pub fn get_variance(&self) -> f64 {
@@ -312,7 +312,7 @@ impl<const CAP: usize> Smoother<CAP> {
 use engine_rocks::Info;
 
 struct CFFlowChecker {
-    last_num_memtables: Smoother<10>,
+    last_num_memtables: Smoother<60>,
     last_num_l0_files: u64,
     last_num_l0_files_from_flush: u64,
     long_term_num_l0_files: Smoother<60>,
@@ -324,6 +324,9 @@ struct CFFlowChecker {
     last_l0_bytes: u64,
     last_l0_bytes_time: Instant,
     short_term_l0_flow: Smoother<3>,
+
+    memtable_debt: f64,
+    init_speed: bool,
 }
 
 struct FlowChecker<E: Engine> {
@@ -333,6 +336,7 @@ struct FlowChecker<E: Engine> {
     l0_files_threshold: u64,
 
     cf_checkers: HashMap<String, CFFlowChecker>,
+    throttle_cf: Option<String>,
     factor: f64,
 
     start_control_time: Instant,
@@ -368,6 +372,8 @@ impl<E: Engine> FlowChecker<E> {
                     last_l0_bytes: 0,
                     last_l0_bytes_time: Instant::now_coarse(),
                     short_term_l0_flow: Smoother::new(),
+                    memtable_debt: 0.0,
+                    init_speed: false,
                 },
             );
         }
@@ -383,6 +389,7 @@ impl<E: Engine> FlowChecker<E> {
             limiter,
             recorder: Smoother::new(),
             cf_checkers,
+            throttle_cf: None,
             last_record_time: Instant::now_coarse(),
         }
     }
@@ -397,12 +404,12 @@ impl<E: Engine> FlowChecker<E> {
                     match l0_completed_receiver.recv_timeout(Duration::from_millis(ADJUST_DURATION))
                     {
                         Ok(Info::L0(cf, l0_bytes)) => {
+                            checker.adjust_memtables(&cf);
                             checker.check_long_term_l0_files(cf, l0_bytes)
                         }
                         Ok(Info::Flush(cf, flush_bytes)) => checker.check_l0_flow(cf, flush_bytes),
                         Err(RecvTimeoutError::Timeout) => {
                             checker.update_statistics();
-                            checker.adjust_memtables();
                             checker.adjust_pending_compaction_bytes();
                         }
                         Err(e) => {
@@ -466,21 +473,63 @@ impl<E: Engine> FlowChecker<E> {
         self.discard_ratio.store(ratio, Ordering::Relaxed);
     }
 
-    fn adjust_memtables(&mut self) {
-        for (cf, checker) in &mut self.cf_checkers {
-            let num_memtables = self
-                .engine
-                .kv_engine()
-                .get_cf_num_memtables(&cf)
-                .unwrap_or(None)
-                .unwrap_or(0);
-            SCHED_MEMTABLE_GAUGE
-                .with_label_values(&[&cf])
-                .set(num_memtables as i64);
-            checker.last_num_memtables.observe(num_memtables);
+    fn adjust_memtables(&mut self, cf: &String) {
+        let num_memtables = self
+            .engine
+            .kv_engine()
+            .get_cf_num_memtables(cf)
+            .unwrap_or(None)
+            .unwrap_or(0);
+        let checker = self.cf_checkers.get_mut(cf).unwrap();
+        SCHED_MEMTABLE_GAUGE
+            .with_label_values(&[cf])
+            .set(num_memtables as i64);
+        let prev = checker.last_num_memtables.get_recent();
+        checker.last_num_memtables.observe(num_memtables);
+        drop(checker);
+
+        for (_, c) in &self.cf_checkers {
+            if num_memtables < c.last_num_memtables.get_recent() {
+                return;
+            }
         }
-        // let is_throttled = self.limiter.speed_limit() != INFINITY;
-        // let should_throttle = self.last_num_memtables.get_avg() > self.memtables_threshold as f64;
+
+        let checker = self.cf_checkers.get_mut(cf).unwrap();
+        let is_throttled = self.limiter.speed_limit() != INFINITY;
+        let should_throttle = checker.last_num_memtables.get_avg() > self.memtables_threshold as f64;
+        let throttle = if !is_throttled {
+            if should_throttle {
+                SCHED_THROTTLE_ACTION_COUNTER
+                    .with_label_values(&[cf, "memtable_init"])
+                    .inc();
+                checker.init_speed = true;
+                self.recorder.get_percentile_95() as f64
+            } else {
+                INFINITY
+            }
+        } else if !should_throttle || checker.last_num_memtables.get_recent() < self.memtables_threshold {
+            // should not throttle_memtable
+            checker.memtable_debt = 0.0;
+            if checker.init_speed {
+                INFINITY
+            } else {
+                self.limiter.speed_limit() + checker.memtable_debt
+            }
+        } else { // should throttle
+            let diff = if checker.last_num_memtables.get_recent() > prev {
+                checker.memtable_debt += 1.0;
+                -1.0
+            } else if checker.last_num_memtables.get_recent() < prev {
+                checker.memtable_debt -= 1.0;
+                1.0
+            } else {
+                // keep, do nothing
+                0.0
+            };
+            self.limiter.speed_limit() + diff
+        };
+
+        self.update_speed_limit(throttle);
     }
 
     fn check_long_term_l0_files(&mut self, cf: String, l0_bytes: u64) {
@@ -490,24 +539,31 @@ impl<E: Engine> FlowChecker<E> {
             .get_cf_num_files_at_level(&cf, 0)
             .unwrap_or(None)
             .unwrap_or(0);
-        {
-            let checker = self.cf_checkers.get_mut(&cf).unwrap();
-            checker.last_l0_bytes += l0_bytes;
-            checker.long_term_num_l0_files.observe(num_l0_files);
-            checker.last_num_l0_files = num_l0_files;
-            SCHED_L0_GAUGE
-                .with_label_values(&[&cf])
-                .set(num_l0_files as i64);
-            SCHED_L0_AVG_GAUGE
-                .with_label_values(&[&cf])
-                .set(checker.long_term_num_l0_files.get_avg() as i64);
-        }
-
-        for (_, c) in &self.cf_checkers {
-            if num_l0_files < c.last_num_l0_files {
-                return;
+        let checker = self.cf_checkers.get_mut(&cf).unwrap();
+        checker.last_l0_bytes += l0_bytes;
+        checker.long_term_num_l0_files.observe(num_l0_files);
+        checker.last_num_l0_files = num_l0_files;
+        SCHED_L0_GAUGE
+            .with_label_values(&[&cf])
+            .set(num_l0_files as i64);
+        SCHED_L0_AVG_GAUGE
+            .with_label_values(&[&cf])
+            .set(checker.long_term_num_l0_files.get_avg() as i64);
+        SCHED_THROTTLE_ACTION_COUNTER
+            .with_label_values(&[&cf, "tick"])
+            .inc();
+        drop(checker);
+        
+        if let Some(throttle_cf) = self.throttle_cf.as_ref() {
+            if &cf != throttle_cf {
+                if num_l0_files > self.cf_checkers[throttle_cf].last_num_l0_files + 2 {
+                    self.throttle_cf = Some(cf.clone());
+                } else {
+                    return;
+                }
             }
         }
+      
         self.adjust_l0_files(cf);
     }
 
@@ -521,6 +577,7 @@ impl<E: Engine> FlowChecker<E> {
             SCHED_THROTTLE_ACTION_COUNTER
                 .with_label_values(&[&cf, "init"])
                 .inc();
+            self.throttle_cf = Some(cf.clone());
             self.recorder.get_percentile_95() as f64
         } else if is_throttled && should_throttle {
             match checker.long_term_num_l0_files.trend() {
@@ -551,7 +608,7 @@ impl<E: Engine> FlowChecker<E> {
             }
         } else if is_throttled && !should_throttle {
             if checker.long_term_num_l0_files.get_avg()
-                >= self.l0_files_threshold as f64 * 0.5 - 1.0
+                >= self.l0_files_threshold as f64 * 0.5
             {
                 SCHED_THROTTLE_ACTION_COUNTER
                     .with_label_values(&[&cf, "keep2"])
@@ -559,14 +616,14 @@ impl<E: Engine> FlowChecker<E> {
                 self.limiter.speed_limit()
             } else {
                 if checker.long_term_num_l0_files.get_recent() as f64
-                    >= self.l0_files_threshold as f64 * 0.5 - 1.0
+                    >= self.l0_files_threshold as f64 * 0.5
                 {
                     SCHED_THROTTLE_ACTION_COUNTER
                         .with_label_values(&[&cf, "keep3"])
                         .inc();
                     self.limiter.speed_limit()
-                } else if checker.last_num_l0_files_from_flush as f64
-                    >= self.l0_files_threshold as f64 * 0.5 - 1.0
+                } else if checker.last_num_l0_files_from_flush
+                    >= self.l0_files_threshold 
                 {
                     SCHED_THROTTLE_ACTION_COUNTER
                         .with_label_values(&[&cf, "keep4"])
@@ -591,6 +648,7 @@ impl<E: Engine> FlowChecker<E> {
             throttle = MIN_THROTTLE_SPEED;
         }
         if throttle > 1.5 * self.recorder.get_max() as f64 {
+            self.throttle_cf = None;
             throttle = INFINITY;
         }
         SCHED_THROTTLE_FLOW_GAUGE.set(if throttle == INFINITY {
@@ -640,9 +698,13 @@ impl<E: Engine> FlowChecker<E> {
             checker.last_l0_bytes = 0;
             checker.last_flush_bytes = 0;
 
-            for (_, c) in &self.cf_checkers {
-                if num_l0_files < c.last_num_l0_files {
-                    return;
+            if let Some(throttle_cf) = self.throttle_cf.as_ref() {
+                if &cf != throttle_cf {
+                    if num_l0_files > self.cf_checkers[throttle_cf].last_num_l0_files + 2 {
+                        self.throttle_cf = Some(cf.clone());
+                    } else {
+                        return;
+                    }
                 }
             }
 
@@ -657,7 +719,7 @@ impl<E: Engine> FlowChecker<E> {
                     let throttle = if self.limiter.speed_limit() == INFINITY {
                         self.recorder.get_percentile_95() as f64
                     } else {
-                        self.limiter.speed_limit() * (1.0 - 2.0 * LIMIT_DOWN_PERCENT)
+                        self.limiter.speed_limit() * (1.0 - LIMIT_DOWN_PERCENT)
                     };
                     self.update_speed_limit(throttle)
                 }
@@ -1158,12 +1220,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             .spawn(async move {
                 fail_point!("scheduler_async_snapshot_finish");
                 SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
-                {
-                    let _guard = self.control_mutex.lock().await;
-                    let delay = self.inner.flow_controller.consume(task.cmd.write_bytes());
-                    delay.await;
-                }
-
+             
                 let read_duration = Instant::now_coarse();
 
                 let region_id = task.cmd.ctx().get_region_id();
@@ -1174,12 +1231,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 if task.cmd.readonly() {
                     self.process_read(snapshot, task, &mut statistics);
                 } else {
-                    // Safety: `self.sched_pool` ensures a TLS engine exists.
-                    unsafe {
-                        with_tls_engine(|engine| {
-                            self.process_write(engine, snapshot, task, &mut statistics)
-                        });
-                    }
+                    self.process_write(snapshot, task, &mut statistics).await;
                 };
                 tls_collect_scan_details(tag.get_str(), &statistics);
                 slow_log!(
@@ -1212,7 +1264,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
     /// Processes a write command within a worker thread, then posts either a `WriteFinished`
     /// message if successful or a `FinishedWithErr` message back to the `Scheduler`.
-    fn process_write(self, engine: &E, snapshot: E::Snap, task: Task, statistics: &mut Statistics) {
+    async fn process_write(self, snapshot: E::Snap, task: Task, statistics: &mut Statistics) {
         fail_point!("txn_before_process_write");
         let tag = task.cmd.tag();
         let cid = task.cid;
@@ -1225,15 +1277,17 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             .load(Ordering::Relaxed);
         let pipelined = pipelined_pessimistic_lock && task.cmd.can_be_pipelined();
 
-        let context = WriteContext {
-            lock_mgr: &self.inner.lock_mgr,
-            concurrency_manager: self.inner.concurrency_manager.clone(),
-            extra_op: task.extra_op,
-            statistics,
-            async_apply_prewrite: self.inner.enable_async_apply_prewrite,
+        let res = {
+            let context = WriteContext {
+                lock_mgr: &self.inner.lock_mgr,
+                concurrency_manager: self.inner.concurrency_manager.clone(),
+                extra_op: task.extra_op,
+                statistics,
+                async_apply_prewrite: self.inner.enable_async_apply_prewrite,
+            };
+            task.cmd.process_write(snapshot, context)
         };
-
-        match task.cmd.process_write(snapshot, context) {
+        match res {
             // Initiates an async write operation on the storage engine, there'll be a `WriteFinished`
             // message when it finishes.
             Ok(WriteResult {
@@ -1345,17 +1399,27 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                             .unwrap()
                     });
 
-                    if let Err(e) = engine.async_write_ext(
-                        &ctx,
-                        to_be_write,
-                        engine_cb,
-                        proposed_cb,
-                        committed_cb,
-                    ) {
-                        SCHED_STAGE_COUNTER_VEC.get(tag).async_write_err.inc();
+                    {
+                        let _guard = self.control_mutex.lock().await;
+                        let delay = self.inner.flow_controller.consume(to_be_write.size());
+                        delay.await;
+                    }
+                    // Safety: `self.sched_pool` ensures a TLS engine exists.
+                    unsafe {
+                        with_tls_engine(|engine: &E| 
+                            if let Err(e) = engine.async_write_ext(
+                                &ctx,
+                                to_be_write,
+                                engine_cb,
+                                proposed_cb,
+                                committed_cb,
+                            ) {
+                                SCHED_STAGE_COUNTER_VEC.get(tag).async_write_err.inc();
 
-                        info!("engine async_write failed"; "cid" => cid, "err" => ?e);
-                        scheduler.finish_with_err(cid, e.into());
+                                info!("engine async_write failed"; "cid" => cid, "err" => ?e);
+                                scheduler.finish_with_err(cid, e.into());
+                            }
+                        )
                     }
                 }
             }
