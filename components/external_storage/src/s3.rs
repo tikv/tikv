@@ -2,6 +2,7 @@
 
 use std::io;
 use std::marker::PhantomData;
+use std::time::Duration;
 
 use futures_util::{
     future::FutureExt,
@@ -15,12 +16,15 @@ use rusoto_core::{
 };
 use rusoto_s3::*;
 use rusoto_util::new_client;
+use tokio::time::{delay_for, timeout};
 
 use super::{
     util::{block_on_external_io, error_stream, retry, RetryError},
     ExternalStorage,
 };
 use kvproto::backup::S3 as Config;
+
+const CONNECTION_TIMEOUT: Duration = Duration::from_secs(900);
 
 /// S3 compatible storage
 #[derive(Clone)]
@@ -178,50 +182,71 @@ impl<'client> S3Uploader<'client> {
 
     /// Starts a multipart upload process.
     async fn begin(&self) -> Result<String, RusotoError<CreateMultipartUploadError>> {
-        let output = self
-            .client
-            .create_multipart_upload(CreateMultipartUploadRequest {
-                bucket: self.bucket.clone(),
-                key: self.key.clone(),
-                acl: self.acl.clone(),
-                server_side_encryption: self.server_side_encryption.clone(),
-                ssekms_key_id: self.ssekms_key_id.clone(),
-                storage_class: self.storage_class.clone(),
-                ..Default::default()
-            })
-            .await?;
-        output.upload_id.ok_or_else(|| {
-            RusotoError::ParseError("missing upload-id from create_multipart_upload()".to_owned())
-        })
+        match timeout(
+            Self::get_timeout(),
+            self.client
+                .create_multipart_upload(CreateMultipartUploadRequest {
+                    bucket: self.bucket.clone(),
+                    key: self.key.clone(),
+                    acl: self.acl.clone(),
+                    server_side_encryption: self.server_side_encryption.clone(),
+                    ssekms_key_id: self.ssekms_key_id.clone(),
+                    storage_class: self.storage_class.clone(),
+                    ..Default::default()
+                }),
+        )
+        .await
+        {
+            Ok(output) => output?.upload_id.ok_or_else(|| {
+                RusotoError::ParseError(
+                    "missing upload-id from create_multipart_upload()".to_owned(),
+                )
+            }),
+            Err(_) => Err(RusotoError::ParseError(
+                "timeout after 15mins for begin in s3 storage".to_owned(),
+            )),
+        }
     }
 
     /// Completes a multipart upload process, asking S3 to join all parts into a single file.
     async fn complete(&self) -> Result<(), RusotoError<CompleteMultipartUploadError>> {
-        self.client
-            .complete_multipart_upload(CompleteMultipartUploadRequest {
-                bucket: self.bucket.clone(),
-                key: self.key.clone(),
-                upload_id: self.upload_id.clone(),
-                multipart_upload: Some(CompletedMultipartUpload {
-                    parts: Some(self.parts.clone()),
+        let res = timeout(
+            Self::get_timeout(),
+            self.client
+                .complete_multipart_upload(CompleteMultipartUploadRequest {
+                    bucket: self.bucket.clone(),
+                    key: self.key.clone(),
+                    upload_id: self.upload_id.clone(),
+                    multipart_upload: Some(CompletedMultipartUpload {
+                        parts: Some(self.parts.clone()),
+                    }),
+                    ..Default::default()
                 }),
-                ..Default::default()
-            })
-            .await?;
-        Ok(())
+        )
+        .await
+        .map_err(|_| {
+            RusotoError::ParseError("timeout after 15mins for complete in s3 storage".to_owned())
+        })?;
+        res.map(|_| ())
     }
 
     /// Aborts the multipart upload process, deletes all uploaded parts.
     async fn abort(&self) -> Result<(), RusotoError<AbortMultipartUploadError>> {
-        self.client
-            .abort_multipart_upload(AbortMultipartUploadRequest {
-                bucket: self.bucket.clone(),
-                key: self.key.clone(),
-                upload_id: self.upload_id.clone(),
-                ..Default::default()
-            })
-            .await?;
-        Ok(())
+        let res = timeout(
+            Self::get_timeout(),
+            self.client
+                .abort_multipart_upload(AbortMultipartUploadRequest {
+                    bucket: self.bucket.clone(),
+                    key: self.key.clone(),
+                    upload_id: self.upload_id.clone(),
+                    ..Default::default()
+                }),
+        )
+        .await
+        .map_err(|_| {
+            RusotoError::ParseError("timeout after 15mins for abort in s3 storage".to_owned())
+        })?;
+        res.map(|_| ())
     }
 
     /// Uploads a part of the file.
@@ -232,9 +257,9 @@ impl<'client> S3Uploader<'client> {
         part_number: i64,
         data: &[u8],
     ) -> Result<CompletedPart, RusotoError<UploadPartError>> {
-        let part = self
-            .client
-            .upload_part(UploadPartRequest {
+        match timeout(
+            Self::get_timeout(),
+            self.client.upload_part(UploadPartRequest {
                 bucket: self.bucket.clone(),
                 key: self.key.clone(),
                 upload_id: self.upload_id.clone(),
@@ -242,12 +267,18 @@ impl<'client> S3Uploader<'client> {
                 content_length: Some(data.len() as i64),
                 body: Some(data.to_vec().into()),
                 ..Default::default()
-            })
-            .await?;
-        Ok(CompletedPart {
-            e_tag: part.e_tag,
-            part_number: Some(part_number),
-        })
+            }),
+        )
+        .await
+        {
+            Ok(part) => Ok(CompletedPart {
+                e_tag: part?.e_tag,
+                part_number: Some(part_number),
+            }),
+            Err(_) => Err(RusotoError::ParseError(
+                "timeout after 15mins for upload part in s3 storage".to_owned(),
+            )),
+        }
     }
 
     /// Uploads a file atomically.
@@ -255,20 +286,50 @@ impl<'client> S3Uploader<'client> {
     /// This should be used only when the data is known to be short, and thus relatively cheap to
     /// retry the entire upload.
     async fn upload(&self, data: &[u8]) -> Result<(), RusotoError<PutObjectError>> {
-        self.client
-            .put_object(PutObjectRequest {
-                bucket: self.bucket.clone(),
-                key: self.key.clone(),
-                acl: self.acl.clone(),
-                server_side_encryption: self.server_side_encryption.clone(),
-                ssekms_key_id: self.ssekms_key_id.clone(),
-                storage_class: self.storage_class.clone(),
-                content_length: Some(data.len() as i64),
-                body: Some(data.to_vec().into()),
-                ..Default::default()
-            })
-            .await?;
-        Ok(())
+        let res = timeout(Self::get_timeout(), async {
+            let delay_duration = (|| {
+                fail_point!("s3_sleep_injected", |t| {
+                    let t = t.unwrap().parse::<u64>().unwrap();
+                    Duration::from_millis(t)
+                });
+                Duration::from_millis(0)
+            })();
+
+            if delay_duration > Duration::from_millis(0) {
+                delay_for(delay_duration).await;
+            }
+
+            fail_point!("s3_put_obj_err", |_| {
+                Err(RusotoError::ParseError("failed to put object".to_owned()))
+            });
+
+            self.client
+                .put_object(PutObjectRequest {
+                    bucket: self.bucket.clone(),
+                    key: self.key.clone(),
+                    acl: self.acl.clone(),
+                    server_side_encryption: self.server_side_encryption.clone(),
+                    ssekms_key_id: self.ssekms_key_id.clone(),
+                    storage_class: self.storage_class.clone(),
+                    content_length: Some(data.len() as i64),
+                    body: Some(data.to_vec().into()),
+                    ..Default::default()
+                })
+                .await
+        })
+        .await
+        .map_err(|_| {
+            RusotoError::ParseError("timeout after 15mins for upload in s3 storage".to_owned())
+        })?;
+        res.map(|_| ())
+    }
+
+    fn get_timeout() -> Duration {
+        fail_point!("s3_timeout_injected", |t| -> Duration {
+            let t = t.unwrap().parse::<u64>();
+            Duration::from_millis(t.unwrap())
+        });
+        CONNECTION_TIMEOUT
     }
 }
 
@@ -381,6 +442,46 @@ mod tests {
         let ret = block_on_external_io(reader.read_to_end(&mut buf));
         assert!(ret.unwrap() == 0);
         assert!(buf.is_empty());
+
+        // inject put error
+        let s3_put_obj_err_fp = "s3_put_obj_err";
+        fail::cfg(s3_put_obj_err_fp, "return").unwrap();
+        let resp = s.write(
+            "mykey",
+            Box::new(magic_contents.as_bytes()),
+            magic_contents.len() as u64,
+        );
+        fail::remove(s3_put_obj_err_fp);
+        assert!(resp.is_err());
+
+        // test timeout
+        let s3_timeout_injected_fp = "s3_timeout_injected";
+        let s3_sleep_injected_fp = "s3_sleep_injected";
+
+        // inject 100ms timeout
+        fail::cfg(s3_timeout_injected_fp, "return(100)").unwrap();
+        // inject 200ms delay
+        fail::cfg(s3_sleep_injected_fp, "return(200)").unwrap();
+        let resp = s.write(
+            "mykey",
+            Box::new(magic_contents.as_bytes()),
+            magic_contents.len() as u64,
+        );
+        fail::remove(s3_sleep_injected_fp);
+        // timeout occur due to delay 200ms
+        assert!(resp.is_err());
+
+        // inject 50ms delay
+        fail::cfg(s3_sleep_injected_fp, "return(50)").unwrap();
+        let resp = s.write(
+            "mykey",
+            Box::new(magic_contents.as_bytes()),
+            magic_contents.len() as u64,
+        );
+        fail::remove(s3_sleep_injected_fp);
+        fail::remove(s3_timeout_injected_fp);
+        // no timeout
+        assert!(resp.is_ok());
     }
 
     #[test]

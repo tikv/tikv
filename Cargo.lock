@@ -469,6 +469,7 @@ dependencies = [
  "test_util",
  "tikv",
  "tikv_util",
+ "time 0.1.42",
  "tokio-threadpool",
  "txn_types",
 ]
@@ -1222,6 +1223,7 @@ name = "external_storage"
 version = "0.0.1"
 dependencies = [
  "bytes 0.5.3",
+ "fail",
  "futures 0.3.8",
  "futures-executor",
  "futures-io",
@@ -4596,7 +4598,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "4.0.12"
+version = "4.0.13"
 dependencies = [
  "async-stream",
  "async-trait",
