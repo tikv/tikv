@@ -23,6 +23,7 @@ protobuf-codec = [
   "cdc/protobuf-codec",
   "concurrency_manager/protobuf-codec",
   "encryption_export/protobuf-codec",
+  "engine_panic/protobuf-codec",
   "engine_rocks/protobuf-codec",
   "engine_traits/protobuf-codec",
   "error_code/protobuf-codec",
@@ -44,6 +45,7 @@ prost-codec = [
   "cdc/prost-codec",
   "concurrency_manager/prost-codec",
   "encryption_export/prost-codec",
+  "engine_panic/prost-codec",
   "engine_rocks/prost-codec",
   "engine_traits/prost-codec",
   "error_code/prost-codec",
@@ -80,6 +82,7 @@ concurrency_manager = { path = "../concurrency_manager", default-features = fals
 crossbeam = "0.8"
 encryption = { path = "../encryption", default-features = false }
 encryption_export = { path = "../encryption/export", default-features = false }
+engine_panic = { path = "../engine_panic", default-features = false }
 engine_rocks = { path = "../engine_rocks", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 error_code = { path = "../error_code", default-features = false }

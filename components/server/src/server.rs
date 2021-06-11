@@ -119,8 +119,8 @@ pub fn run_tikv(config: TiKvConfig) {
     let _m = Monitor::default();
 
     macro_rules! run_impl {
-        ($ER: ty) => {{
-            let mut tikv = TiKVServer::<RocksEngine, $ER>::init(config);
+        ($EK: ty, $ER: ty) => {{
+            let mut tikv = TiKVServer::<$EK, $ER>::init(config);
 
             // Must be called after `TiKVServer::init`.
             let memory_limit = tikv.config.memory_usage_limit.0.unwrap().0;
@@ -147,10 +147,23 @@ pub fn run_tikv(config: TiKvConfig) {
         }};
     }
 
-    if !config.raft_engine.enable {
-        run_impl!(RocksEngine)
+    // Decide which combination of kv/raft engines to launch.
+    // Note that using an environment variable here is a temporary measure,
+    // and that the ability to launch with kv as PanicEngine mostly
+    // exists to prove that alternate engines can typecheck,
+    // while other engines are in development.
+    if std::env::var("TIKV_USE_PANIC_KV_ENGINE").ok().is_none() {
+        if !config.raft_engine.enable {
+            run_impl!(RocksEngine, RocksEngine)
+        } else {
+            run_impl!(RocksEngine, RaftLogEngine)
+        }
     } else {
-        run_impl!(RaftLogEngine)
+        if !config.raft_engine.enable {
+            run_impl!(engine_panic::PanicEngine, RocksEngine)
+        } else {
+            run_impl!(engine_panic::PanicEngine, RaftLogEngine)
+        }
     }
 }
 
@@ -1210,6 +1223,21 @@ impl<ER> CreateKvEngine<ER> for RocksEngine where ER: RaftEngine {
                 config.storage.block_cache.shared,
             )),
         );
+    }
+}
+
+impl<ER> CreateKvEngine<ER> for engine_panic::PanicEngine where ER: RaftEngine {
+    fn create_kv_engine(_config: &TiKvConfig,
+                        _region_info_accessor: &RegionInfoAccessor,
+                        _store_path: &Path,
+                        _router: &RaftRouter<Self, ER>,
+                        _env: Arc<engine_rocks::raw::Env>, _block_cache: &Option<engine_rocks::raw::Cache>) -> Self {
+        engine_panic::PanicEngine
+    }
+
+    fn register_kv_config(&self,
+                          _config: &TiKvConfig,
+                          _cfg_controller: &mut Option<ConfigController>) {
     }
 }
 
