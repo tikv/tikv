@@ -120,7 +120,7 @@ pub fn run_tikv(config: TiKvConfig) {
 
     macro_rules! run_impl {
         ($ER: ty) => {{
-            let mut tikv = TiKVServer::<$ER>::init(config);
+            let mut tikv = TiKVServer::<RocksEngine, $ER>::init(config);
 
             // Must be called after `TiKVServer::init`.
             let memory_limit = tikv.config.memory_usage_limit.0.unwrap().0;
@@ -162,22 +162,22 @@ const DEFAULT_ENGINE_METRICS_RESET_INTERVAL: Duration = Duration::from_millis(60
 const DEFAULT_STORAGE_STATS_INTERVAL: Duration = Duration::from_secs(1);
 
 /// A complete TiKV server.
-struct TiKVServer<ER: RaftEngine> {
+struct TiKVServer<EK: KvEngine, ER: RaftEngine> {
     config: TiKvConfig,
     cfg_controller: Option<ConfigController>,
     security_mgr: Arc<SecurityManager>,
     pd_client: Arc<RpcClient>,
-    router: RaftRouter<RocksEngine, ER>,
-    system: Option<RaftBatchSystem<RocksEngine, ER>>,
+    router: RaftRouter<EK, ER>,
+    system: Option<RaftBatchSystem<EK, ER>>,
     resolver: resolve::PdStoreAddrResolver,
     state: Arc<Mutex<GlobalReplicationState>>,
     store_path: PathBuf,
     snap_mgr: Option<SnapManager>, // Will be filled in `init_servers`.
     encryption_key_manager: Option<Arc<DataKeyManager>>,
-    engines: Option<TiKVEngines<RocksEngine, ER>>,
-    servers: Option<Servers<RocksEngine, ER>>,
+    engines: Option<TiKVEngines<EK, ER>>,
+    servers: Option<Servers<EK, ER>>,
     region_info_accessor: RegionInfoAccessor,
-    coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
+    coprocessor_host: Option<CoprocessorHost<EK>>,
     to_stop: Vec<Box<dyn Stop>>,
     lock_files: Vec<File>,
     concurrency_manager: ConcurrencyManager,
@@ -204,8 +204,8 @@ type LocalServer<EK, ER> =
     Server<RaftRouter<EK, ER>, resolve::PdStoreAddrResolver, LocalRaftKv<EK, ER>>;
 type LocalRaftKv<EK, ER> = RaftKv<EK, ServerRaftStoreRouter<EK, ER>>;
 
-impl<ER: RaftEngine> TiKVServer<ER> {
-    fn init(mut config: TiKvConfig) -> TiKVServer<ER> {
+impl<EK: KvEngine, ER: RaftEngine> TiKVServer<EK, ER> {
+    fn init(mut config: TiKvConfig) -> TiKVServer<EK, ER> {
         tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
         // It is okay use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only
@@ -450,7 +450,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         .map(Arc::new);
     }
 
-    fn init_engines(&mut self, engines: Engines<RocksEngine, ER>) {
+    fn init_engines(&mut self, engines: Engines<EK, ER>) {
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
         let engine = RaftKv::new(
             ServerRaftStoreRouter::new(
@@ -470,8 +470,8 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     fn init_gc_worker(
         &mut self,
     ) -> GcWorker<
-        RaftKv<RocksEngine, ServerRaftStoreRouter<RocksEngine, ER>>,
-        RaftRouter<RocksEngine, ER>,
+        RaftKv<EK, ServerRaftStoreRouter<EK, ER>>,
+        RaftRouter<EK, ER>,
     > {
         let engines = self.engines.as_ref().unwrap();
         let mut gc_worker = GcWorker::new(
@@ -1017,7 +1017,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         engines_info: Arc<EnginesResourceInfo>,
     ) {
         let mut engine_metrics =
-            EngineMetricsManager::<RocksEngine, ER>::new(self.engines.as_ref().unwrap().engines.clone());
+            EngineMetricsManager::<EK, ER>::new(self.engines.as_ref().unwrap().engines.clone());
         let mut io_metrics = IOMetricsManager::new(fetcher);
         self.background_worker
             .spawn_interval_task(DEFAULT_METRICS_FLUSH_INTERVAL, move || {
@@ -1155,7 +1155,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 }
 
-impl TiKVServer<RocksEngine> {
+impl TiKVServer<RocksEngine, RocksEngine> {
     fn init_raw_engines(
         &mut self,
         limiter: Option<Arc<IORateLimiter>>,
@@ -1230,7 +1230,7 @@ impl TiKVServer<RocksEngine> {
     }
 }
 
-impl TiKVServer<RaftLogEngine> {
+impl TiKVServer<RocksEngine, RaftLogEngine> {
     fn init_raw_engines(
         &mut self,
         limiter: Option<Arc<IORateLimiter>>,
