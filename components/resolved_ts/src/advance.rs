@@ -174,9 +174,6 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
                                 resp_map.entry(region_id).or_default().push(store_id);
                                 continue;
                             }
-                            if peer.get_role() == PeerRole::Learner {
-                                continue;
-                            }
                             let mut leader_info = LeaderInfo::default();
                             leader_info.set_peer_id(*leader_id);
                             leader_info.set_term(*term);
