@@ -279,9 +279,7 @@ impl Simulator for ServerCluster {
         let rts_worker = if cfg.resolved_ts.enable {
             // Resolved ts worker
             let mut rts_worker = LazyWorker::new("resolved-ts");
-            let mut rts_ob = resolved_ts::Observer::new(rts_worker.scheduler());
-            // Disable old value
-            rts_ob.disable_old_value();
+            let rts_ob = resolved_ts::Observer::new(rts_worker.scheduler());
             rts_ob.register_to(&mut coprocessor_host);
             // Resolved ts endpoint
             let rts_endpoint = resolved_ts::Endpoint::new(
@@ -355,10 +353,9 @@ impl Simulator for ServerCluster {
         let mut server = None;
         // Create Debug service.
         let debug_thread_pool = Arc::new(
-            TokioBuilder::new()
-                .threaded_scheduler()
+            TokioBuilder::new_multi_thread()
                 .thread_name(thd_name!("debugger"))
-                .core_threads(1)
+                .worker_threads(1)
                 .build()
                 .unwrap(),
         );

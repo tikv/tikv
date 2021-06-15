@@ -57,6 +57,7 @@ test-engines-panic = [
 tcmalloc = ["tikv/tcmalloc"]
 jemalloc = ["tikv/jemalloc"]
 mimalloc = ["tikv/mimalloc"]
+snmalloc = ["tikv/snmalloc"]
 portable = ["tikv/portable"]
 sse = ["tikv/sse"]
 mem-profiling = ["tikv/mem-profiling"]
@@ -70,18 +71,17 @@ engine_rocks = { path = "../engine_rocks", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 error_code = { path = "../error_code", default-features = false }
 external_storage_export = { path = "../external_storage/export", default-features = false }
-failure = "0.1"
 file_system = { path = "../file_system", default-features = false }
 futures = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
 grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"
 keys = { path = "../keys", default-features = false }
-kvproto = { rev = "73468940541b2e801cb5f9739cd0cf6465889e72", git = "https://github.com/pingcap/kvproto.git", default-features = false }
+kvproto = { rev = "7a046020d1c091638e1e8aba623c8c1e8962219d", git = "https://github.com/pingcap/kvproto.git", default-features = false }
 lazy_static = "1.3"
 log_wrappers = { path = "../log_wrappers" }
 pd_client = { path = "../pd_client", default-features = false }
-prometheus = { version = "0.10", default-features = false, features = ["nightly"] }
+prometheus = { version = "0.12", default-features = false, features = ["nightly"] }
 raft = { version = "0.6.0-alpha", default-features = false }
 raftstore = { path = "../raftstore", default-features = false }
 security = { path = "../security", default-features = false }
@@ -100,5 +100,5 @@ txn_types = { path = "../txn_types", default-features = false }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [dev-dependencies]
-rand = "0.7"
+rand = "0.8"
 tempfile = "3.0"

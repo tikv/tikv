@@ -42,6 +42,7 @@ use raft_log_engine::RaftLogEngine;
 use raftstore::coprocessor::{Config as CopConfig, RegionInfoAccessor};
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::{CompactionGuardGeneratorFactory, SplitConfig};
+use resource_metering::Config as ResourceMeteringConfig;
 use security::SecurityConfig;
 use tikv_util::config::{
     self, LogFormat, OptionReadableSize, ReadableDuration, ReadableSize, TomlWriter, GIB, MIB,
@@ -2212,21 +2213,54 @@ impl Default for BackupConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct CdcConfig {
     pub min_ts_interval: ReadableDuration,
-    pub old_value_cache_size: usize,
     pub hibernate_regions_compatible: bool,
+    pub incremental_scan_threads: usize,
+    pub incremental_scan_concurrency: usize,
     pub incremental_scan_speed_limit: ReadableSize,
+    pub sink_memory_quota: ReadableSize,
+    pub old_value_cache_memory_quota: ReadableSize,
+    // Deprecated! preserved for compatibility check.
+    #[doc(hidden)]
+    pub old_value_cache_size: usize,
 }
 
 impl Default for CdcConfig {
     fn default() -> Self {
         Self {
             min_ts_interval: ReadableDuration::secs(1),
-            old_value_cache_size: 1024,
             hibernate_regions_compatible: true,
+            // 4 threads for incremental scan.
+            incremental_scan_threads: 4,
+            // At most 6 concurrent running tasks.
+            incremental_scan_concurrency: 6,
             // TiCDC requires a SSD, the typical write speed of SSD
             // is more than 500MB/s, so 128MB/s is enough.
             incremental_scan_speed_limit: ReadableSize::mb(128),
+            // 512MB memory for CDC sink.
+            sink_memory_quota: ReadableSize::mb(512),
+            // 512MB memory for old value cache.
+            old_value_cache_memory_quota: ReadableSize::mb(512),
+            // Deprecated! preserved for compatibility check.
+            old_value_cache_size: 0,
         }
+    }
+}
+
+impl CdcConfig {
+    fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+        if self.min_ts_interval == ReadableDuration::secs(0) {
+            return Err("cdc.min-ts-interval can't be 0s".into());
+        }
+        if self.incremental_scan_threads == 0 {
+            return Err("cdc.incremental-scan-threads can't be 0".into());
+        }
+        if self.incremental_scan_concurrency < self.incremental_scan_threads {
+            return Err(
+                "cdc.incremental-scan-concurrency must be larger than cdc.incremental-scan-threads"
+                    .into(),
+            );
+        }
+        Ok(())
     }
 }
 
@@ -2366,6 +2400,9 @@ pub struct TiKvConfig {
 
     #[config(submodule)]
     pub resolved_ts: ResolvedTsConfig,
+
+    #[config(submodule)]
+    pub resource_metering: ResourceMeteringConfig,
 }
 
 impl Default for TiKvConfig {
@@ -2403,6 +2440,7 @@ impl Default for TiKvConfig {
             split: SplitConfig::default(),
             cdc: CdcConfig::default(),
             resolved_ts: ResolvedTsConfig::default(),
+            resource_metering: ResourceMeteringConfig::default(),
         }
     }
 }
@@ -2520,9 +2558,11 @@ impl TiKvConfig {
         self.security.validate()?;
         self.import.validate()?;
         self.backup.validate()?;
+        self.cdc.validate()?;
         self.pessimistic_txn.validate()?;
         self.gc.validate()?;
         self.resolved_ts.validate()?;
+        self.resource_metering.validate()?;
 
         let default_memory_usage_limit = Self::default_memory_usage_limit();
         if self.memory_usage_limit.0 == 0 {
@@ -3012,6 +3052,7 @@ pub enum Module {
     Split,
     CDC,
     ResolvedTs,
+    ResourceMetering,
     Unknown(String),
 }
 
@@ -3036,6 +3077,7 @@ impl From<&str> for Module {
             "gc" => Module::Gc,
             "cdc" => Module::CDC,
             "resolved_ts" => Module::ResolvedTs,
+            "resource_metering" => Module::ResourceMetering,
             n => Module::Unknown(n.to_owned()),
         }
     }
@@ -4063,5 +4105,51 @@ mod tests {
         cfg.coprocessor_v2.coprocessor_plugin_directory = None; // Default is `None`, which is represented by not setting the key.
 
         assert_eq!(cfg, default_cfg);
+    }
+
+    #[test]
+    fn test_cdc() {
+        let content = r#"
+            [cdc]
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+
+        // old-value-cache-size is deprecated, 0 must not report error.
+        let content = r#"
+            [cdc]
+            old-value-cache-size = 0
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+
+        let content = r#"
+            [cdc]
+            min-ts-interval = "0s"
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap_err();
+
+        let content = r#"
+            [cdc]
+            incremental-scan-threads = 0
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap_err();
+
+        let content = r#"
+            [cdc]
+            incremental-scan-concurrency = 0
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap_err();
+
+        let content = r#"
+            [cdc]
+            incremental-scan-concurrency = 1
+            incremental-scan-threads = 2
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap_err();
     }
 }

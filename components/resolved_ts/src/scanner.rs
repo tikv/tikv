@@ -18,9 +18,10 @@ use tikv::storage::mvcc::{DeltaScanner, MvccReader, ScannerBuilder};
 use tikv::storage::txn::{TxnEntry, TxnEntryScanner};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tokio::runtime::{Builder, Runtime};
-use txn_types::{Key, Lock, TimeStamp};
+use txn_types::{Key, Lock, LockType, TimeStamp};
 
 use crate::errors::{Error, Result};
+use crate::metrics::RTS_SCAN_DURATION_HISTOGRAM;
 
 const DEFAULT_SCAN_BATCH_SIZE: usize = 1024;
 const GET_SNAPSHOT_RETRY_TIME: u32 = 3;
@@ -65,10 +66,9 @@ pub struct ScannerPool<T, E> {
 impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
     pub fn new(count: usize, raft_router: T) -> Self {
         let workers = Arc::new(
-            Builder::new()
-                .threaded_scheduler()
+            Builder::new_multi_thread()
                 .thread_name("inc-scan")
-                .core_threads(count)
+                .worker_threads(count)
                 .build()
                 .unwrap(),
         );
@@ -98,6 +98,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                     return;
                 }
             };
+            let start = Instant::now();
             let apply_index = snap.get_apply_index().unwrap();
             let mut entries = vec![];
             match task.mode {
@@ -165,6 +166,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                 }
             }
             entries.push(ScanEntry::None);
+            RTS_SCAN_DURATION_HISTOGRAM.observe(start.elapsed().as_secs_f64());
             (task.send_entries)(entries, apply_index);
         };
         self.workers.spawn(fut);
@@ -225,8 +227,12 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
         start: Option<&Key>,
         _checkpoint_ts: TimeStamp,
     ) -> Result<(Vec<(Key, Lock)>, bool)> {
-        let (locks, has_remaining) =
-            reader.scan_locks(start, None, |_| true, DEFAULT_SCAN_BATCH_SIZE)?;
+        let (locks, has_remaining) = reader.scan_locks(
+            start,
+            None,
+            |lock| matches!(lock.lock_type, LockType::Put | LockType::Delete),
+            DEFAULT_SCAN_BATCH_SIZE,
+        )?;
         Ok((locks, has_remaining))
     }
 

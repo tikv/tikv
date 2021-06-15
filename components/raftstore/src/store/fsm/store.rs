@@ -92,6 +92,7 @@ const MAX_LOG_BATCH_SIZE: usize = 16 * 1024 * 1024; // 16MB
 
 pub const PENDING_MSG_CAP: usize = 100;
 const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
+const ENTRY_CACHE_EVICT_TICK_DURATION: Duration = Duration::from_secs(1);
 
 pub struct StoreInfo<E> {
     pub engine: E,
@@ -440,6 +441,8 @@ where
             self.cfg.raft_base_tick_interval.0;
         self.tick_batch[PeerTicks::RAFT_LOG_GC.bits() as usize].wait_duration =
             self.cfg.raft_log_gc_tick_interval.0;
+        self.tick_batch[PeerTicks::ENTRY_CACHE_EVICT.bits() as usize].wait_duration =
+            ENTRY_CACHE_EVICT_TICK_DURATION;
         self.tick_batch[PeerTicks::PD_HEARTBEAT.bits() as usize].wait_duration =
             self.cfg.pd_heartbeat_tick_interval.0;
         self.tick_batch[PeerTicks::SPLIT_REGION_CHECK.bits() as usize].wait_duration =
@@ -2586,7 +2589,7 @@ mod tests {
             region.set_start_key(kr.get_start_key().to_vec());
             region.set_end_key(kr.get_end_key().to_vec());
             region.set_peers(vec![kvproto::metapb::Peer::default()].into());
-            let rrp = RegionReadProgress::new(1, 1);
+            let rrp = RegionReadProgress::new(1, 1, "".to_owned());
             rrp.update_safe_ts(1, safe_ts);
             assert_eq!(rrp.safe_ts(), safe_ts);
             meta.region_ranges.insert(enc_end_key(&region), id);

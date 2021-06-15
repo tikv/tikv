@@ -116,8 +116,7 @@ where
             }
         };
         // `UnboundedReceiver` never returns an error.
-        tokio::runtime::Builder::new()
-            .basic_scheduler()
+        tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap()
             .block_on(handle.run_until(task));

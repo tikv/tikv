@@ -702,7 +702,7 @@ mod tests {
         let mut collector = RangePropertiesCollector::default();
         let mut extra_value_size: u64 = 0;
         for &(k, vlen) in &cases {
-            if handles.contains(&k) || rng.gen_range(0, 2) == 0 {
+            if handles.contains(&k) || rng.gen_range(0..2) == 0 {
                 let v = vec![0; vlen as usize - extra_value_size as usize];
                 extra_value_size = 0;
                 collector.add(k.as_bytes(), &v, DBEntryType::Put, 0, 0);

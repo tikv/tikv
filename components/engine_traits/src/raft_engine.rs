@@ -4,14 +4,7 @@ use crate::*;
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::Entry;
 
-pub trait RaftEngine: Clone + Sync + Send + 'static {
-    type LogBatch: RaftLogBatch;
-
-    fn log_batch(&self, capacity: usize) -> Self::LogBatch;
-
-    /// Synchronize the Raft engine.
-    fn sync(&self) -> Result<()>;
-
+pub trait RaftEngineReadOnly: Sync + Send + 'static {
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>>;
 
     fn get_entry(&self, raft_group_id: u64, index: u64) -> Result<Option<Entry>>;
@@ -25,6 +18,15 @@ pub trait RaftEngine: Clone + Sync + Send + 'static {
         max_size: Option<usize>,
         to: &mut Vec<Entry>,
     ) -> Result<usize>;
+}
+
+pub trait RaftEngine: RaftEngineReadOnly + Clone + Sync + Send + 'static {
+    type LogBatch: RaftLogBatch;
+
+    fn log_batch(&self, capacity: usize) -> Self::LogBatch;
+
+    /// Synchronize the Raft engine.
+    fn sync(&self) -> Result<()>;
 
     /// Consume the write batch by moving the content into the engine itself
     /// and return written bytes.

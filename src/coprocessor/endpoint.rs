@@ -9,6 +9,7 @@ use std::{borrow::Cow, time::Duration};
 use async_stream::try_stream;
 use futures::channel::mpsc;
 use futures::prelude::*;
+use tidb_query_common::execute_stats::ExecSummary;
 use tokio::sync::Semaphore;
 
 use kvproto::kvrpcpb::{self, IsolationLevel};
@@ -32,6 +33,7 @@ use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::PerfLevel;
+use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
 use txn_types::Lock;
 
 /// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
@@ -427,6 +429,9 @@ impl<E: Engine> Endpoint<E> {
 
         // There might be errors when handling requests. In this case, we still need its
         // execution metrics.
+        let mut exec_summary = ExecSummary::default();
+        handler.collect_scan_summary(&mut exec_summary);
+        tracker.collect_scan_process_time(exec_summary);
         let mut storage_stats = Statistics::default();
         handler.collect_scan_statistics(&mut storage_stats);
         tracker.collect_storage_statistics(storage_stats);
@@ -435,7 +440,7 @@ impl<E: Engine> Endpoint<E> {
 
         let mut resp = match result {
             Ok(resp) => {
-                COPR_RESP_SIZE.inc_by(resp.data.len() as i64);
+                COPR_RESP_SIZE.inc_by(resp.data.len() as u64);
                 resp
             }
             Err(e) => make_error_response(e),
@@ -456,13 +461,15 @@ impl<E: Engine> Endpoint<E> {
     ) -> impl Future<Output = Result<coppb::Response>> {
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx.build_task_id();
+        let resource_tag = ResourceMeteringTag::from_rpc_context(&req_ctx.context);
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
 
         let res = self
             .read_pool
             .spawn_handle(
-                Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder),
+                Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder)
+                    .in_resource_metering_tag(resource_tag),
                 priority,
                 task_id,
             )
@@ -503,7 +510,7 @@ impl<E: Engine> Endpoint<E> {
     ) -> impl futures::stream::Stream<Item = Result<coppb::Response>> {
         try_stream! {
             let _permit = if let Some(semaphore) = semaphore.as_ref() {
-                Some(semaphore.acquire().await)
+                Some(semaphore.acquire().await.expect("the semaphore never be closed"))
             } else {
                 None
             };
@@ -554,7 +561,7 @@ impl<E: Engine> Endpoint<E> {
                     },
                     Ok((None, _)) => break,
                     Ok((Some(mut resp), finished)) => {
-                        COPR_RESP_SIZE.inc_by(resp.data.len() as i64);
+                        COPR_RESP_SIZE.inc_by(resp.data.len() as u64);
                         resp.set_exec_details(exec_details);
                         resp.set_exec_details_v2(exec_details_v2);
                         yield resp;
