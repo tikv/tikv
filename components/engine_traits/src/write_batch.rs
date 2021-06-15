@@ -81,7 +81,7 @@ pub trait Mutable: Send {
 /// save point, and pops the save point from the stack.
 pub trait WriteBatch<E: WriteBatchExt + Sized>: Mutable {
     /// Create a WriteBatch with a given command capacity
-    fn with_capacity(e: &E, max_batch_size: usize, cap: usize) -> Self;
+    fn with_capacity(e: &E, cap: usize) -> Self;
 
     /// Commit the WriteBatch to disk with the given options
     fn write_opt(&self, opts: &WriteOptions) -> Result<()>;

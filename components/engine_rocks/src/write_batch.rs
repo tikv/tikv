@@ -67,7 +67,7 @@ impl RocksWriteBatch {
 }
 
 impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatch {
-    fn with_capacity(e: &RocksEngine, _: usize, cap: usize) -> RocksWriteBatch {
+    fn with_capacity(e: &RocksEngine, cap: usize) -> RocksWriteBatch {
         e.write_batch_with_cap(cap)
     }
 
@@ -156,21 +156,17 @@ pub struct RocksWriteBatchVec {
     save_points: Vec<usize>,
     index: usize,
     cur_batch_size: usize,
-    max_batch_count: usize,
 }
 
 impl RocksWriteBatchVec {
-    pub fn new(db: Arc<DB>, max_batch_size: usize, cap: usize) -> RocksWriteBatchVec {
+    pub fn new(db: Arc<DB>, cap: usize) -> RocksWriteBatchVec {
         let wb = RawWriteBatch::with_capacity(cap);
-        let max_batch_count =
-            std::cmp::max(WRITE_BATCH_MAX_BATCH, max_batch_size / WRITE_BATCH_LIMIT);
         RocksWriteBatchVec {
             db,
             wbs: vec![wb],
             save_points: vec![],
             index: 0,
             cur_batch_size: 0,
-            max_batch_count,
         }
     }
 
@@ -201,8 +197,8 @@ impl RocksWriteBatchVec {
 }
 
 impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatchVec {
-    fn with_capacity(e: &RocksEngine, max_batch_size: usize, cap: usize) -> RocksWriteBatchVec {
-        RocksWriteBatchVec::new(e.as_inner().clone(), max_batch_size, cap)
+    fn with_capacity(e: &RocksEngine, cap: usize) -> RocksWriteBatchVec {
+        RocksWriteBatchVec::new(e.as_inner().clone(), cap)
     }
 
     fn write_opt(&self, opts: &WriteOptions) -> Result<()> {
@@ -231,7 +227,7 @@ impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatchVec {
     }
 
     fn should_write_to_engine(&self) -> bool {
-        self.index >= self.max_batch_count
+        self.index >= WRITE_BATCH_MAX_BATCH
     }
 
     fn clear(&mut self) {

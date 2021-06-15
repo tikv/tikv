@@ -250,7 +250,6 @@ impl Default for Config {
             local_read_batch_size: 1024,
             apply_batch_system: BatchSystemConfig::default(),
             store_batch_system: BatchSystemConfig {
-                max_batch_size: Some(128),
                 ..Default::default()
             },
             future_poll_size: 1,
@@ -410,28 +409,12 @@ impl Config {
         if self.apply_batch_system.pool_size == 0 {
             return Err(box_err!("apply-pool-size should be greater than 0"));
         }
-        if let Some(size) = self.apply_batch_system.max_batch_size {
-            if size == 0 {
-                return Err(box_err!("apply-max-batch-size should be greater than 0"));
-            }
-        } else {
-            self.apply_batch_system.max_batch_size = Some(256);
-        }
         if self.store_batch_system.pool_size == 0 {
             return Err(box_err!("store-pool-size should be greater than 0"));
         }
         if self.store_batch_system.low_priority_pool_size > 0 {
             // The store thread pool doesn't need a low-priority thread currently.
             self.store_batch_system.low_priority_pool_size = 0;
-        }
-        if let Some(size) = self.store_batch_system.max_batch_size {
-            if size == 0 {
-                return Err(box_err!("store-max-batch-size should be greater than 0"));
-            }
-        } else if self.hibernate_regions {
-            self.store_batch_system.max_batch_size = Some(256);
-        } else {
-            self.store_batch_system.max_batch_size = Some(1024);
         }
         if self.future_poll_size == 0 {
             return Err(box_err!("future-poll-size should be greater than 0."));
@@ -593,15 +576,12 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["local_read_batch_size"])
             .set(self.local_read_batch_size as f64);
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["apply_max_batch_size"])
-            .set(self.apply_batch_system.max_batch_size() as f64);
+        // CONFIG_RAFTSTORE_GAUGE
+        //     .with_label_values(&["apply_max_batch_size"])
+        //     .set(self.apply_batch_system.max_batch_size() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["apply_pool_size"])
             .set(self.apply_batch_system.pool_size as f64);
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["store_max_batch_size"])
-            .set(self.store_batch_system.max_batch_size() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_pool_size"])
             .set(self.store_batch_system.pool_size as f64);
@@ -740,40 +720,12 @@ mod tests {
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();
-        cfg.apply_batch_system.max_batch_size = Some(0);
-        assert!(cfg.validate().is_err());
-
-        cfg = Config::new();
         cfg.apply_batch_system.pool_size = 0;
-        assert!(cfg.validate().is_err());
-
-        cfg = Config::new();
-        cfg.store_batch_system.max_batch_size = Some(0);
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();
         cfg.store_batch_system.pool_size = 0;
         assert!(cfg.validate().is_err());
-
-        cfg = Config::new();
-        cfg.hibernate_regions = true;
-        assert!(cfg.validate().is_ok());
-        assert_eq!(cfg.store_batch_system.max_batch_size, Some(256));
-        assert_eq!(cfg.apply_batch_system.max_batch_size, Some(256));
-
-        cfg = Config::new();
-        cfg.hibernate_regions = false;
-        assert!(cfg.validate().is_ok());
-        assert_eq!(cfg.store_batch_system.max_batch_size, Some(1024));
-        assert_eq!(cfg.apply_batch_system.max_batch_size, Some(256));
-
-        cfg = Config::new();
-        cfg.hibernate_regions = true;
-        cfg.store_batch_system.max_batch_size = Some(123);
-        cfg.apply_batch_system.max_batch_size = Some(234);
-        assert!(cfg.validate().is_ok());
-        assert_eq!(cfg.store_batch_system.max_batch_size, Some(123));
-        assert_eq!(cfg.apply_batch_system.max_batch_size, Some(234));
 
         cfg = Config::new();
         cfg.future_poll_size = 0;

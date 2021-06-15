@@ -24,7 +24,7 @@ impl WriteBatchExt for PanicEngine {
 pub struct PanicWriteBatch;
 
 impl WriteBatch<PanicEngine> for PanicWriteBatch {
-    fn with_capacity(_: &PanicEngine, _: usize, _: usize) -> Self {
+    fn with_capacity(_: &PanicEngine, _: usize) -> Self {
         panic!()
     }
 

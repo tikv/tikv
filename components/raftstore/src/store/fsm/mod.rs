@@ -5,7 +5,6 @@
 //! stores. They are mixed for now, will be separated in the future.
 
 pub mod apply;
-mod batch_strategy;
 mod metrics;
 mod peer;
 pub mod store;

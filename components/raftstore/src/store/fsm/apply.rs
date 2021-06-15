@@ -12,7 +12,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use std::vec::Drain;
 use std::{cmp, usize};
 
@@ -55,8 +54,9 @@ use tikv_util::{Either, MustConsumeVec};
 use time::Timespec;
 use uuid::Builder as UuidBuilder;
 
-use super::batch_strategy::BatchStrategy;
-use crate::coprocessor::{Cmd, CoprocessorHost, ObserveHandle};
+use crate::coprocessor::{
+    Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle, ObserveLevel,
+};
 use crate::store::fsm::RaftPollerBuilder;
 use crate::store::memory::*;
 use crate::store::metrics::*;
@@ -77,8 +77,7 @@ use super::metrics::*;
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
-const DEFAULT_BATCH_SIZE: usize = 256;
-const MAX_BATCH_SIZE: usize = 256 * 64;
+const MAX_BATCH_SIZE: usize = 256;
 
 pub struct PendingCmd<S>
 where
@@ -387,12 +386,8 @@ where
 
     // Whether synchronize WAL is preferred.
     sync_log_hint: bool,
-    // Whether to use the delete range API instead of deleting one by one.
-    use_delete_range: bool,
 
     perf_context: EK::PerfContext,
-
-    yield_duration: Duration,
 
     store_id: u64,
     /// region_id -> (peer_id, is_splitting)
@@ -409,13 +404,11 @@ where
 
     /// The priority of this Handler.
     priority: Priority,
-    /// Whether to yield high-latency operation to low-priority handler.
-    yield_high_latency_operation: bool,
 
-    batch_strategy: BatchStrategy,
-    last_process_wait_time: f64,
     /// The ssts waiting to be ingested in `write_to_db`.
     pending_ssts: Vec<SstMeta>,
+
+    cfg: Config,
 }
 
 impl<EK, W> ApplyContext<EK, W>
@@ -438,8 +431,7 @@ where
     ) -> ApplyContext<EK, W> {
         // If `enable_multi_batch_write` was set true, we create `RocksWriteBatchVec`.
         // Otherwise create `RocksWriteBatch`.
-        let kv_wb = W::with_capacity(&engine, DEFAULT_BATCH_SIZE, DEFAULT_APPLY_WB_SIZE);
-        let batch_strategy = BatchStrategy::new(DEFAULT_BATCH_SIZE, MAX_BATCH_SIZE);
+        let kv_wb = W::with_capacity(&engine, DEFAULT_APPLY_WB_SIZE);
 
         ApplyContext {
             tag,
@@ -458,16 +450,12 @@ where
             committed_count: 0,
             sync_log_hint: false,
             exec_ctx: None,
-            use_delete_range: cfg.use_delete_range,
+            cfg: cfg.clone(),
             perf_context: engine.get_perf_context(cfg.perf_level, PerfContextKind::RaftstoreApply),
-            yield_duration: cfg.apply_yield_duration.0,
             delete_ssts: vec![],
             store_id,
             pending_create_peers,
             priority,
-            yield_high_latency_operation: cfg.apply_batch_system.low_priority_pool_size > 0,
-            batch_strategy,
-            last_process_wait_time: 0.0,
             pending_ssts: vec![],
         }
     }
@@ -535,11 +523,7 @@ where
             if data_size > APPLY_WB_SHRINK_SIZE {
                 // Control the memory usage for the WriteBatch. Whether it's `RocksWriteBatch` or
                 // `RocksWriteBatchVec` depends on the `enable_multi_batch_write` configuration.
-                self.kv_wb = W::with_capacity(
-                    &self.engine,
-                    self.batch_strategy.get_batch_size(),
-                    DEFAULT_APPLY_WB_SIZE,
-                );
+                self.kv_wb = W::with_capacity(&self.engine, DEFAULT_APPLY_WB_SIZE);
             } else {
                 // Clear data, reuse the WriteBatch, this can reduce memory allocations and deallocations.
                 self.kv_wb_mut().clear();
@@ -638,6 +622,7 @@ where
             self.tag,
             self.committed_count
         );
+        self.committed_count = 0;
         is_synced
     }
 }
@@ -1055,7 +1040,9 @@ where
         if !data.is_empty() {
             let cmd = util::parse_data_at(data, index, &self.tag);
 
-            if apply_ctx.yield_high_latency_operation && has_high_latency_operation(&cmd) {
+            if apply_ctx.cfg.apply_batch_system.low_priority_pool_size > 0
+                && has_high_latency_operation(&cmd)
+            {
                 self.priority = Priority::Low;
             }
             let mut has_unflushed_data =
@@ -1065,7 +1052,7 @@ where
             {
                 apply_ctx.commit(self);
                 if let Some(start) = self.handle_start.as_ref() {
-                    if start.elapsed() >= apply_ctx.yield_duration {
+                    if start.elapsed() >= apply_ctx.cfg.apply_yield_duration.0 {
                         return ApplyResult::Yield;
                     }
                 }
@@ -1443,9 +1430,12 @@ where
             let mut resp = match cmd_type {
                 CmdType::Put => self.handle_put(ctx.kv_wb_mut(), req),
                 CmdType::Delete => self.handle_delete(ctx.kv_wb_mut(), req),
-                CmdType::DeleteRange => {
-                    self.handle_delete_range(&ctx.engine, req, &mut ranges, ctx.use_delete_range)
-                }
+                CmdType::DeleteRange => self.handle_delete_range(
+                    &ctx.engine,
+                    req,
+                    &mut ranges,
+                    ctx.cfg.use_delete_range,
+                ),
                 CmdType::IngestSst => self.handle_ingest_sst(ctx, req, &mut ssts),
                 // Readonly commands are handled in raftstore directly.
                 // Don't panic here in case there are old entries need to be applied.
@@ -3515,8 +3505,7 @@ where
         loop {
             match drainer.next() {
                 Some(Msg::Apply { start, apply }) => {
-                    let t = start.elapsed_secs();
-                    apply_ctx.last_process_wait_time = t;
+                    APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(start.elapsed_secs());
                     // If there is any apply task, we change this fsm to normal-priority.
                     // When it meets a ingest-request or a delete-range request, it will change to
                     // low-priority.
@@ -3645,14 +3634,7 @@ where
                 _ => {}
             }
         }
-        self.apply_ctx.committed_count = 0;
-        let max_batch_size = self.apply_ctx.batch_strategy.get_batch_size();
         self.apply_ctx.perf_context.start_observe();
-        self.apply_ctx.kv_wb = W::with_capacity(
-            &self.apply_ctx.engine,
-            max_batch_size,
-            DEFAULT_APPLY_WB_SIZE,
-        );
     }
 
     /// There is no control fsm in apply poller.
@@ -3728,12 +3710,6 @@ where
         if let Some(e) = self.trace_event.take() {
             MEMTRACE_APPLYS.trace(e);
         }
-
-        APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(self.apply_ctx.last_process_wait_time);
-        self.apply_ctx.batch_strategy.optimize_current_batch_limit(
-            self.apply_ctx.committed_count,
-            self.apply_ctx.last_process_wait_time,
-        )
     }
 
     fn get_priority(&self) -> Priority {
@@ -3741,7 +3717,7 @@ where
     }
 
     fn reach_process_limit(&self) -> bool {
-        self.apply_ctx.committed_count > self.apply_ctx.batch_strategy.get_batch_size()
+        self.apply_ctx.committed_count > MAX_BATCH_SIZE
     }
 }
 
