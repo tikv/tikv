@@ -30,7 +30,14 @@ use tikv::storage::txn::{
 use tikv::storage::Statistics;
 use tikv_util::impl_display_as_debug;
 use tikv_util::time::Limiter;
+<<<<<<< HEAD
 use tikv_util::worker::{Runnable, RunnableWithTimer};
+=======
+use tikv_util::worker::Runnable;
+use tikv_util::{
+    box_err, debug, defer, error, error_unknown, impl_display_as_debug, info, thd_name, warn,
+};
+>>>>>>> 4869f2c3a... backup: do not recycle backup threads (#10288)
 use txn_types::{Key, Lock, TimeStamp};
 use yatp::task::callback::{Handle, TaskCell};
 use yatp::ThreadPool;
@@ -41,9 +48,6 @@ use crate::Error;
 use crate::*;
 
 const BACKUP_BATCH_LIMIT: usize = 1024;
-
-// if thread pool has been idle for such long time, we will shutdown it.
-const IDLE_THREADPOOL_DURATION: u64 = 30 * 60 * 1000; // 30 mins
 
 #[derive(Clone)]
 struct Request {
@@ -435,7 +439,6 @@ impl ConfigManager {
 pub struct Endpoint<E: Engine, R: RegionInfoProvider + Clone + 'static> {
     store_id: u64,
     pool: RefCell<ControlThreadPool>,
-    pool_idle_threshold: u64,
     db: Arc<DB>,
     config_manager: ConfigManager,
     concurrency_manager: ConcurrencyManager,
@@ -554,7 +557,6 @@ impl<R: RegionInfoProvider> Progress<R> {
 struct ControlThreadPool {
     size: usize,
     workers: Option<Arc<ThreadPool<TaskCell>>>,
-    last_active: Instant,
 }
 
 impl ControlThreadPool {
@@ -562,7 +564,6 @@ impl ControlThreadPool {
         ControlThreadPool {
             size: 0,
             workers: None,
-            last_active: Instant::now(),
         }
     }
 
@@ -598,22 +599,6 @@ impl ControlThreadPool {
         self.size = new_size;
         BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64);
     }
-
-    fn heartbeat(&mut self) {
-        self.last_active = Instant::now();
-    }
-
-    /// Shutdown the thread pool if it has been idle for a long time.
-    fn check_active(&mut self, idle_threshold: Duration) {
-        if self.last_active.elapsed() >= idle_threshold {
-            self.size = 0;
-            if let Some(w) = self.workers.take() {
-                let start = Instant::now();
-                drop(w);
-                slow_log!(start.elapsed(), "backup thread pool shutdown too long");
-            }
-        }
-    }
 }
 
 impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
@@ -630,7 +615,6 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             engine,
             region_info,
             pool: RefCell::new(ControlThreadPool::new()),
-            pool_idle_threshold: IDLE_THREADPOOL_DURATION,
             db,
             config_manager: ConfigManager(Arc::new(RwLock::new(config))),
             concurrency_manager,
@@ -844,18 +828,6 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Runnable for Endpoint<E
         }
         info!("run backup task"; "task" => %task);
         self.handle_backup_task(task);
-        self.pool.borrow_mut().heartbeat();
-    }
-}
-
-impl<E: Engine, R: RegionInfoProvider + Clone + 'static> RunnableWithTimer for Endpoint<E, R> {
-    fn on_timeout(&mut self) {
-        let pool_idle_duration = Duration::from_millis(self.pool_idle_threshold);
-        self.pool.borrow_mut().check_active(pool_idle_duration);
-    }
-
-    fn get_interval(&self) -> Duration {
-        Duration::from_millis(self.pool_idle_threshold)
     }
 }
 
@@ -938,8 +910,8 @@ fn to_sst_compression_type(ct: CompressionType) -> Option<SstCompressionType> {
 
 #[cfg(test)]
 pub mod tests {
+    use std::fs;
     use std::path::{Path, PathBuf};
-    use std::{fs, thread};
 
     use engine_traits::MiscExt;
     use external_storage::{make_local_backend, make_noop_backend};
@@ -956,7 +928,6 @@ pub mod tests {
     use tikv::storage::txn::tests::{must_commit, must_prewrite_put};
     use tikv::storage::{RocksEngine, TestEngineBuilder};
     use tikv_util::config::ReadableSize;
-    use tikv_util::worker::Worker;
     use txn_types::SHORT_VALUE_MAX_LEN;
 
     use super::*;
@@ -1496,6 +1467,7 @@ pub mod tests {
         endpoint.handle_backup_task(task);
         assert!(endpoint.pool.borrow().size == 3);
     }
+<<<<<<< HEAD
 
     pub struct EndpointWrapper<E: Engine, R: RegionInfoProvider + Clone + 'static> {
         inner: Arc<Mutex<Endpoint<E, R>>>,
@@ -1566,4 +1538,6 @@ pub mod tests {
         assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 0);
     }
     // TODO: region err in txn(engine(request))
+=======
+>>>>>>> 4869f2c3a... backup: do not recycle backup threads (#10288)
 }
