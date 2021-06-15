@@ -156,11 +156,10 @@ pub struct RocksWriteBatchVec {
     save_points: Vec<usize>,
     index: usize,
     cur_batch_size: usize,
-    batch_size_limit: usize,
 }
 
 impl RocksWriteBatchVec {
-    pub fn new(db: Arc<DB>, batch_size_limit: usize, cap: usize) -> RocksWriteBatchVec {
+    pub fn new(db: Arc<DB>, cap: usize) -> RocksWriteBatchVec {
         let wb = RawWriteBatch::with_capacity(cap);
         RocksWriteBatchVec {
             db,
@@ -168,7 +167,6 @@ impl RocksWriteBatchVec {
             save_points: vec![],
             index: 0,
             cur_batch_size: 0,
-            batch_size_limit,
         }
     }
 
@@ -187,7 +185,7 @@ impl RocksWriteBatchVec {
     /// `check_switch_batch` will split a large WriteBatch into many smaller ones. This is to avoid
     /// a large WriteBatch blocking write_thread too long.
     fn check_switch_batch(&mut self) {
-        if self.batch_size_limit > 0 && self.cur_batch_size >= self.batch_size_limit {
+        if self.cur_batch_size >= WRITE_BATCH_LIMIT {
             self.index += 1;
             self.cur_batch_size = 0;
             if self.index >= self.wbs.len() {
@@ -200,7 +198,7 @@ impl RocksWriteBatchVec {
 
 impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatchVec {
     fn with_capacity(e: &RocksEngine, cap: usize) -> RocksWriteBatchVec {
-        RocksWriteBatchVec::new(e.as_inner().clone(), WRITE_BATCH_LIMIT, cap)
+        RocksWriteBatchVec::new(e.as_inner().clone(), cap)
     }
 
     fn write_opt(&self, opts: &WriteOptions) -> Result<()> {
@@ -221,7 +219,7 @@ impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatchVec {
     }
 
     fn count(&self) -> usize {
-        self.cur_batch_size + self.index * self.batch_size_limit
+        self.cur_batch_size + self.index * WRITE_BATCH_LIMIT
     }
 
     fn is_empty(&self) -> bool {

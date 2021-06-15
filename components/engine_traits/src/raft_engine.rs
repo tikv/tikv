@@ -92,6 +92,8 @@ pub trait RaftLogBatch: Send {
     fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()>;
 
     fn is_empty(&self) -> bool;
+
+    fn size(&self) -> usize;
 }
 
 #[derive(Clone, Copy, Default)]

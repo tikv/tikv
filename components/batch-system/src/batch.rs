@@ -237,6 +237,10 @@ pub trait PollHandler<N, C> {
     /// This function is called at the end of every round.
     fn end(&mut self, batch: &mut [Box<N>]);
 
+    /// The messages which will be persisted in disk or written to engine. We shall control
+    /// the batch size of it to make batch-system balance.
+    fn reach_process_limit(&self) -> bool;
+
     /// This function is called when batch system is going to sleep.
     fn pause(&mut self) {}
 
@@ -251,7 +255,6 @@ struct Poller<N: Fsm, C: Fsm, Handler> {
     router: Router<N, C, NormalScheduler<N, C>, ControlScheduler<N, C>>,
     fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
     handler: Handler,
-    max_batch_size: usize,
     reschedule_duration: Duration,
 }
 
@@ -282,19 +285,16 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
 
     // Poll for readiness and forward to handler. Remove stale peer if necessary.
     fn poll(&mut self) {
-        let mut batch = Batch::with_capacity(self.max_batch_size);
-        let mut reschedule_fsms = Vec::with_capacity(self.max_batch_size);
+        const MAX_FSM_ONCE_POLL: usize = 10240;
+        let mut batch = Batch::with_capacity(MAX_FSM_ONCE_POLL);
+        let mut reschedule_fsms = Vec::with_capacity(MAX_FSM_ONCE_POLL);
 
         // Fetch batch after every round is finished. It's helpful to protect regions
         // from becoming hungry if some regions are hot points. Since we fetch new fsm every time
         // calling `poll`, we do not need to configure a large value for `self.max_batch_size`.
         let mut run = true;
         while run && self.fetch_fsm(&mut batch) {
-            // If there is some region wait to be deal, we must deal with it even if it has overhead
-            // max size of batch. It's helpful to protect regions from becoming hungry
-            // if some regions are hot points.
-            let max_batch_size = std::cmp::max(self.max_batch_size, batch.normals.len());
-            self.handler.begin(max_batch_size);
+            self.handler.begin(MAX_FSM_ONCE_POLL);
 
             if batch.control.is_some() {
                 let len = self.handler.handle_control(batch.control.as_mut().unwrap());
@@ -329,7 +329,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 }
             }
             let mut fsm_cnt = batch.normals.len();
-            while batch.normals.len() < max_batch_size {
+            while batch.normals.len() < MAX_FSM_ONCE_POLL && !self.handler.reach_process_limit() {
                 if let Ok(fsm) = self.fsm_receiver.try_recv() {
                     run = batch.push(fsm);
                 }
@@ -381,7 +381,6 @@ pub struct BatchSystem<N: Fsm, C: Fsm> {
     receiver: channel::Receiver<FsmTypes<N, C>>,
     low_receiver: channel::Receiver<FsmTypes<N, C>>,
     pool_size: usize,
-    max_batch_size: usize,
     workers: Vec<JoinHandle<()>>,
     reschedule_duration: Duration,
     low_priority_pool_size: usize,
@@ -410,7 +409,6 @@ where
             router: self.router.clone(),
             fsm_receiver: receiver,
             handler,
-            max_batch_size: self.max_batch_size,
             reschedule_duration: self.reschedule_duration,
         };
         let t = thread::Builder::new()
@@ -500,7 +498,6 @@ pub fn create_system<N: Fsm, C: Fsm>(
         receiver: rx,
         low_receiver: rx2,
         pool_size: cfg.pool_size,
-        max_batch_size: cfg.max_batch_size(),
         reschedule_duration: cfg.reschedule_duration.0,
         workers: vec![],
         low_priority_pool_size: cfg.low_priority_pool_size,

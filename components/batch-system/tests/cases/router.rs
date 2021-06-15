@@ -49,7 +49,7 @@ fn test_basic() {
     // Control mailbox should be connected.
     router
         .send_control(Message::Callback(Box::new(
-            move |_: &Handler, _: &mut Runner| {
+            move |_: &Handler, _: &mut Runner, _: &HandleMetrics| {
                 let (sender, mut runner) = Runner::new(10);
                 let (tx1, rx1) = mpsc::unbounded();
                 runner.sender = Some(tx1);
@@ -70,9 +70,11 @@ fn test_basic() {
     router
         .send(
             1,
-            Message::Callback(Box::new(move |_: &Handler, _: &mut Runner| {
-                rx.recv_timeout(Duration::from_secs(100)).unwrap();
-            })),
+            Message::Callback(Box::new(
+                move |_: &Handler, _: &mut Runner, _: &HandleMetrics| {
+                    rx.recv_timeout(Duration::from_secs(100)).unwrap();
+                },
+            )),
         )
         .unwrap();
     let counter = Arc::default();
@@ -91,9 +93,11 @@ fn test_basic() {
     router
         .force_send(
             1,
-            Message::Callback(Box::new(move |_: &Handler, _: &mut Runner| {
-                tx.send(1).unwrap();
-            })),
+            Message::Callback(Box::new(
+                move |_: &Handler, _: &mut Runner, _: &HandleMetrics| {
+                    tx.send(1).unwrap();
+                },
+            )),
         )
         .unwrap();
     rx.recv_timeout(Duration::from_secs(100)).unwrap();

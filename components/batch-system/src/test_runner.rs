@@ -12,6 +12,8 @@ use tikv_util::mpsc;
 pub enum Message {
     /// `Runner` will do simple calculation for the given times.
     Loop(usize),
+    /// `Runner` will cost little time for the given messages.
+    HeartBeat,
     /// `Runner` will call the callback directly.
     Callback(Box<dyn FnOnce(&Handler, &mut Runner) + Send + 'static>),
 }
@@ -72,12 +74,14 @@ pub struct HandleMetrics {
     pub begin: usize,
     pub control: usize,
     pub normal: usize,
+    pub processed_count: usize,
 }
 
 pub struct Handler {
     local: HandleMetrics,
     metrics: Arc<Mutex<HandleMetrics>>,
     priority: Priority,
+    max_processed_count: usize,
 }
 
 impl Handler {
@@ -90,6 +94,7 @@ impl Handler {
                         r.res *= count;
                         r.res %= count + 1;
                     }
+                    self.local.processed_count += 1;
                 }
                 Ok(Message::Callback(cb)) => cb(self, r),
                 Err(_) => break,
@@ -123,6 +128,10 @@ impl PollHandler<Runner, Runner> for Handler {
         *c += self.local;
         self.local = HandleMetrics::default();
     }
+
+    fn reach_process_limit(&self) -> bool {
+        self.local.processed_count > self.max_processed_count
+    }
 }
 
 pub struct Builder {
@@ -145,6 +154,7 @@ impl HandlerBuilder<Runner, Runner> for Builder {
             local: HandleMetrics::default(),
             metrics: self.metrics.clone(),
             priority,
+            max_processed_count: 128,
         }
     }
 }

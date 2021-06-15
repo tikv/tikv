@@ -546,11 +546,9 @@ where
                     }
                 }
                 PeerMsg::RaftCommand(cmd) => {
-                    self.ctx
-                        .raft_metrics
-                        .propose
-                        .request_wait_time
-                        .observe(duration_to_sec(cmd.send_time.elapsed()) as f64);
+                    let f = duration_to_sec(cmd.send_time.elapsed());
+                    self.ctx.last_process_wait_time = f;
+                    self.ctx.raft_metrics.propose.request_wait_time.observe(f);
                     if let Some(Err(e)) = cmd.deadline.map(|deadline| deadline.check()) {
                         cmd.callback.invoke_with_response(new_error(e.into()));
                         continue;
