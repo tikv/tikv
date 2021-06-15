@@ -153,7 +153,7 @@ pub fn run_tikv(config: TiKvConfig) {
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
-const DEFAULT_METRICS_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
+const DEFAULT_METRICS_FLUSH_INTERVAL: Duration = Duration::from_millis(1_000);
 const DEFAULT_ENGINE_METRICS_RESET_INTERVAL: Duration = Duration::from_millis(60_000);
 
 /// A complete TiKV server.
