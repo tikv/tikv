@@ -821,29 +821,25 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
 
         // Start resource metering.
-        let resource_metering_cpu_recorder = resource_metering::cpu::recorder::init_recorder();
-        let mut resource_metering_reporter_worker = Box::new(
+        let mut rm_reporter_worker = Box::new(
             WorkerBuilder::new("resource-metering-reporter")
                 .pending_capacity(30)
                 .create()
                 .lazy_build("resource-metering-reporter"),
         );
-        let resource_metering_reporter_scheduler = resource_metering_reporter_worker.scheduler();
-        cfg_controller.register(
-            tikv::config::Module::ResourceMetering,
-            Box::new(resource_metering::ConfigManager::new(
-                self.config.resource_metering.clone(),
-                resource_metering_reporter_scheduler.clone(),
-                resource_metering_cpu_recorder,
-            )),
-        );
-        let resource_metering_reporter = resource_metering::reporter::ResourceMeteringReporter::new(
-            self.config.resource_metering.clone(),
-            resource_metering_reporter_scheduler,
+        let rm_reporter = resource_metering::ResourceMeteringReporter::new(
+            rm_reporter_worker.scheduler(),
             self.env.clone(),
         );
-        resource_metering_reporter_worker.start_with_timer(resource_metering_reporter);
-        self.to_stop.push(resource_metering_reporter_worker);
+        let mut rm_cfg_mgr_builder = resource_metering::ConfigManagerBuilder::new();
+        rm_reporter.register_config_change(&mut rm_cfg_mgr_builder);
+        resource_metering::CpuRecorderHandle::register_config_change(&mut rm_cfg_mgr_builder);
+        cfg_controller.register(
+            tikv::config::Module::ResourceMetering,
+            Box::new(rm_cfg_mgr_builder.build()),
+        );
+        rm_reporter_worker.start_with_timer(rm_reporter);
+        self.to_stop.push(rm_reporter_worker);
 
         self.servers = Some(Servers {
             lock_mgr,

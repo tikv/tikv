@@ -1,8 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::config::{Config, ConfigManagerBuilder};
 use crate::cpu::collector::{register_collector, Collector, CollectorHandle};
-use crate::cpu::recorder::CpuRecords;
-use crate::Config;
+use crate::cpu::recorder::records::CpuRecords;
 
 use std::fmt::{self, Display, Formatter};
 use std::sync::atomic::AtomicBool;
@@ -13,8 +13,10 @@ use collections::HashMap;
 use futures::SinkExt;
 use grpcio::{CallOption, ChannelBuilder, Environment, WriteFlags};
 use kvproto::resource_usage_agent::{ReportCpuTimeRequest, ResourceUsageAgentClient};
+use tikv_util::config::ReadableDuration;
 use tikv_util::time::Duration;
 use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
+use tikv_util::{defer, warn};
 
 pub struct CpuRecordsCollector {
     scheduler: Scheduler<Task>,
@@ -33,18 +35,30 @@ impl Collector for CpuRecordsCollector {
 }
 
 pub enum Task {
-    ConfigChange(Config),
+    ChangeAgentAddr(String),
+    ChangeEnabled(bool),
+    ChangeReportInterval(ReadableDuration),
+    ChangeMaxResourceGroups(usize),
     CpuRecords(Arc<CpuRecords>),
 }
 
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Task::ConfigChange(_) => {
-                write!(f, "ConfigChange")?;
+            Task::ChangeAgentAddr(_) => {
+                write!(f, "ChangeAgentAddr")?;
             }
             Task::CpuRecords(_) => {
                 write!(f, "CpuRecords")?;
+            }
+            Task::ChangeEnabled(_) => {
+                write!(f, "ChangeEnabled")?;
+            }
+            Task::ChangeReportInterval(_) => {
+                write!(f, "ChangeReportInterval")?;
+            }
+            Task::ChangeMaxResourceGroups(_) => {
+                write!(f, "ChangeMaxResourceGroups")?;
             }
         }
 
@@ -53,7 +67,11 @@ impl Display for Task {
 }
 
 pub struct ResourceMeteringReporter {
-    config: Config,
+    enabled: bool,
+    agent_addr: String,
+    report_interval: Duration,
+    max_resource_groups: usize,
+
     env: Arc<Environment>,
 
     scheduler: Scheduler<Task>,
@@ -71,9 +89,13 @@ pub struct ResourceMeteringReporter {
 }
 
 impl ResourceMeteringReporter {
-    pub fn new(config: Config, scheduler: Scheduler<Task>, env: Arc<Environment>) -> Self {
+    pub fn new(scheduler: Scheduler<Task>, env: Arc<Environment>) -> Self {
+        let config = Config::default();
         Self {
-            config,
+            enabled: config.enabled,
+            agent_addr: config.agent_address,
+            report_interval: config.report_agent_interval.0,
+            max_resource_groups: config.max_resource_groups,
             env,
             scheduler,
             client: None,
@@ -85,12 +107,12 @@ impl ResourceMeteringReporter {
         }
     }
 
-    pub fn init_client(&mut self, addr: &str) {
+    pub fn init_client(&mut self) {
         let channel = {
             let cb = ChannelBuilder::new(self.env.clone())
                 .keepalive_time(Duration::from_secs(10))
                 .keepalive_timeout(Duration::from_secs(3));
-            cb.connect(addr)
+            cb.connect(&self.agent_addr)
         };
         self.client = Some(ResourceUsageAgentClient::new(channel));
         if self.cpu_records_collector.is_none() {
@@ -99,6 +121,34 @@ impl ResourceMeteringReporter {
             )));
         }
     }
+
+    pub fn register_config_change(&self, cfg_mgr_builder: &mut ConfigManagerBuilder) {
+        let scheduler = self.scheduler.clone();
+        cfg_mgr_builder.on_change_enabled(move |enabled| {
+            scheduler.schedule(Task::ChangeEnabled(enabled)).ok();
+        });
+
+        let scheduler = self.scheduler.clone();
+        cfg_mgr_builder.on_change_agent_address(move |addr| {
+            scheduler
+                .schedule(Task::ChangeAgentAddr(addr.to_owned()))
+                .ok();
+        });
+
+        let scheduler = self.scheduler.clone();
+        cfg_mgr_builder.on_change_report_agent_interval(move |interval| {
+            scheduler
+                .schedule(Task::ChangeReportInterval(interval))
+                .ok();
+        });
+
+        let scheduler = self.scheduler.clone();
+        cfg_mgr_builder.on_change_max_resource_groups(move |limit| {
+            scheduler
+                .schedule(Task::ChangeMaxResourceGroups(limit))
+                .ok();
+        });
+    }
 }
 
 impl Runnable for ResourceMeteringReporter {
@@ -106,18 +156,6 @@ impl Runnable for ResourceMeteringReporter {
 
     fn run(&mut self, task: Self::Task) {
         match task {
-            Task::ConfigChange(new_config) => {
-                if !new_config.should_report() {
-                    self.client.take();
-                    self.cpu_records_collector.take();
-                } else if new_config.agent_address != self.config.agent_address
-                    || new_config.enabled != self.config.enabled
-                {
-                    self.init_client(&new_config.agent_address);
-                }
-
-                self.config = new_config;
-            }
             Task::CpuRecords(records) => {
                 let timestamp_secs = records.begin_unix_time_secs;
 
@@ -145,17 +183,15 @@ impl Runnable for ResourceMeteringReporter {
                     }
                 }
 
-                if self.records.len() > self.config.max_resource_groups {
+                if self.records.len() > self.max_resource_groups {
                     self.find_top_k.clear();
                     for (_, _, total) in self.records.values() {
                         self.find_top_k.push(*total);
                     }
-                    pdqselect::select_by(
-                        &mut self.find_top_k,
-                        self.config.max_resource_groups,
-                        |a, b| b.cmp(a),
-                    );
-                    let kth = self.find_top_k[self.config.max_resource_groups];
+                    pdqselect::select_by(&mut self.find_top_k, self.max_resource_groups, |a, b| {
+                        b.cmp(a)
+                    });
+                    let kth = self.find_top_k[self.max_resource_groups];
                     let others = &mut self.others;
                     self.records
                         .drain_filter(|_, (_, _, total)| *total < kth)
@@ -168,6 +204,30 @@ impl Runnable for ResourceMeteringReporter {
                                 })
                         });
                 }
+            }
+            Task::ChangeEnabled(enabled) => {
+                self.enabled = enabled;
+                if !self.enabled {
+                    self.client.take();
+                    self.cpu_records_collector.take();
+                } else if !self.agent_addr.is_empty() {
+                    self.init_client();
+                }
+            }
+            Task::ChangeAgentAddr(addr) => {
+                self.agent_addr = addr;
+                if self.agent_addr.is_empty() {
+                    self.client.take();
+                    self.cpu_records_collector.take();
+                } else if self.enabled {
+                    self.init_client();
+                }
+            }
+            Task::ChangeReportInterval(interval) => {
+                self.report_interval = interval.0;
+            }
+            Task::ChangeMaxResourceGroups(limit) => {
+                self.max_resource_groups = limit;
             }
         }
     }
@@ -235,6 +295,6 @@ impl RunnableWithTimer for ResourceMeteringReporter {
     }
 
     fn get_interval(&self) -> Duration {
-        self.config.report_agent_interval.0
+        self.report_interval
     }
 }

@@ -42,7 +42,7 @@ use raft_log_engine::RaftLogEngine;
 use raftstore::coprocessor::{Config as CopConfig, RegionInfoAccessor};
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::{CompactionGuardGeneratorFactory, SplitConfig};
-use resource_metering::Config as ResourceMeteringConfig;
+use resource_metering::config::Config as ResourceMeteringConfig;
 use security::SecurityConfig;
 use tikv_util::config::{
     self, LogFormat, OptionReadableSize, ReadableDuration, ReadableSize, TomlWriter, GIB, MIB,

@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::ResourceMeteringTag;
+use crate::tag::ResourceMeteringTag;
 
 use std::pin::Pin;
 use std::task::{Context, Poll};
