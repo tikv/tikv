@@ -413,9 +413,11 @@ where
             max_batch_size: self.max_batch_size,
             reschedule_duration: self.reschedule_duration,
         };
+        let props = tikv_util::thread_group::current_properties();
         let t = thread::Builder::new()
             .name(name)
             .spawn(move || {
+                tikv_util::thread_group::set_properties(props);
                 set_io_type(IOType::ForegroundWrite);
                 poller.poll();
             })

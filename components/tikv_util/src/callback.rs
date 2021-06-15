@@ -45,7 +45,9 @@ where
     fn drop(&mut self) {
         if let (Some(callback), Some(arg_on_drop)) = (self.callback.take(), self.arg_on_drop.take())
         {
-            callback(arg_on_drop());
+            if !crate::thread_group::is_shutdown().unwrap_or(false) {
+                callback(arg_on_drop());
+            }
         }
     }
 }
