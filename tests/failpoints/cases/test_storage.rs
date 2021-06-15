@@ -1193,7 +1193,7 @@ fn test_mvcc_concurrent_commit_and_rollback_at_shutdown() {
     rollback_req.start_version = rollback_start_version;
     rollback_req.mut_keys().push(k.clone());
     let _rollback_resp = client
-        .kv_batch_rollback_async(&rollback_req.clone())
+        .kv_batch_rollback_async(&rollback_req)
         .unwrap();
 
     // Sleep some time to make sure both commit and rollback are queued in latch.
@@ -1221,8 +1221,8 @@ fn test_mvcc_concurrent_commit_and_rollback_at_shutdown() {
     ts += 1;
     let get_version = ts;
     let mut get_req = GetRequest::default();
-    get_req.set_context(ctx.clone());
-    get_req.key = k.clone();
+    get_req.set_context(ctx);
+    get_req.key = k;
     get_req.version = get_version;
     let get_resp = client.kv_get(&get_req).unwrap();
     assert!(
