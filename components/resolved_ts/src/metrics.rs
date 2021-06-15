@@ -15,9 +15,10 @@ lazy_static! {
         exponential_buckets(512.0, 2.0, 20).unwrap()
     )
     .unwrap();
-    pub static ref CHECK_LEADER_REQ_ITEM_COUNT: IntGauge = register_int_gauge!(
+    pub static ref CHECK_LEADER_REQ_ITEM_COUNT_HISTOGRAM: Histogram = register_histogram!(
         "tikv_check_leader_request_item_count",
-        "The number of region count in a check leader request"
+        "The number of region info in a check leader request",
+        exponential_buckets(1.0, 2.0, 20).unwrap()
     )
     .unwrap();
     pub static ref RTS_MIN_RESOLVED_TS_GAP: IntGauge = register_int_gauge!(
