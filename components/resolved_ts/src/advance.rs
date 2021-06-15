@@ -198,7 +198,7 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
             let pd_client = pd_client.clone();
             let security_mgr = security_mgr.clone();
             let region_num = regions.len();
-            CHECK_LEADER_REQ_SIZE_HISTOGRAM.observe(leader_info_size * region_num as f64);
+            CHECK_LEADER_REQ_SIZE_HISTOGRAM.observe((leader_info_size * region_num) as f64);
             CHECK_LEADER_REQ_ITEM_COUNT_HISTOGRAM.observe(region_num as f64);
             async move {
                 if cdc_clients.lock().unwrap().get(&store_id).is_none() {
