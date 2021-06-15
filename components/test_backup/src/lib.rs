@@ -339,7 +339,7 @@ impl TestSuite {
     }
 }
 
-// Extrat CF name from sst name.
+// Extract CF name from sst name.
 pub fn name_to_cf(name: &str) -> CfName {
     if name.contains(CF_DEFAULT) {
         CF_DEFAULT
