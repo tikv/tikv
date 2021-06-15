@@ -511,7 +511,7 @@ mod tests {
             },
         );
         let s = S3Storage::with_request_dispatcher(&config, dispatcher).unwrap();
-        s.put(
+        s.write(
             "key2",
             Box::new(magic_contents.as_bytes()),
             magic_contents.len() as u64,
