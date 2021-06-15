@@ -19,8 +19,8 @@ lazy_static! {
             applys,
             entry_cache,
             (raft_router, [alive, leak]),
-            (apply_router, [alive, leak])
-            raft_message,
+            (apply_router, [alive, leak]),
+            raft_message
         ]
     );
     pub static ref MEMTRACE_PEERS: Arc<dyn MemoryTrace + Send + Sync> =
