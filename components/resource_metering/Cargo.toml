@@ -43,6 +43,6 @@ procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b7
 rand = "0.8"
 
 [[test]]
-name = "test-cpu-recorder-linux"
-path = "tests/cpu_recorder_linux.rs"
+name = "test-cpu-recorder"
+path = "tests/cpu_recorder.rs"
 required-features = ["failpoints"]
