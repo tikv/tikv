@@ -1,11 +1,13 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use pin_project::pin_project;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
+
+use futures::future::FutureExt;
+use pin_project::pin_project;
 use tokio::sync::{Semaphore, SemaphorePermit};
 
 use crate::coprocessor::metrics::*;
@@ -20,7 +22,13 @@ pub fn limit_concurrency<'a, F: Future + 'a>(
     semaphore: &'a Semaphore,
     time_limit_without_permit: Duration,
 ) -> impl Future<Output = F::Output> + 'a {
-    ConcurrencyLimiter::new(semaphore.acquire(), fut, time_limit_without_permit)
+    ConcurrencyLimiter::new(
+        semaphore
+            .acquire()
+            .map(|permit| permit.expect("the semaphore never be closed")),
+        fut,
+        time_limit_without_permit,
+    )
 }
 
 #[pin_project]
@@ -120,9 +128,9 @@ mod tests {
     use std::sync::Arc;
     use std::thread;
     use tokio::task::yield_now;
-    use tokio::time::{delay_for, timeout};
+    use tokio::time::{sleep, timeout};
 
-    #[tokio::test(basic_scheduler)]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_limit_concurrency() {
         async fn work(iter: i32) {
             for i in 0..iter {
@@ -155,7 +163,7 @@ mod tests {
             )
             .fuse();
 
-        delay_for(Duration::from_millis(100)).await;
+        sleep(Duration::from_millis(100)).await;
         let smp2 = smp.clone();
         let mut t2 =
             tokio::spawn(
@@ -163,7 +171,8 @@ mod tests {
             )
             .fuse();
 
-        let mut deadline = delay_for(Duration::from_millis(1500)).fuse();
+        let deadline = sleep(Duration::from_millis(1500)).fuse();
+        futures::pin_mut!(deadline);
         let mut t1_finished = false;
         loop {
             futures_util::select! {

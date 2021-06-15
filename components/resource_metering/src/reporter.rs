@@ -5,13 +5,14 @@ use crate::cpu::recorder::CpuRecords;
 use crate::Config;
 
 use std::fmt::{self, Display, Formatter};
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering::SeqCst;
 use std::sync::Arc;
 
 use collections::HashMap;
 use futures::SinkExt;
 use grpcio::{CallOption, ChannelBuilder, Environment, WriteFlags};
 use kvproto::resource_usage_agent::{ReportCpuTimeRequest, ResourceUsageAgentClient};
-use security::SecurityManager;
 use tikv_util::time::Duration;
 use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
 
@@ -53,37 +54,33 @@ impl Display for Task {
 
 pub struct ResourceMeteringReporter {
     config: Config,
-
     env: Arc<Environment>,
-    security_mgr: Arc<SecurityManager>,
 
     scheduler: Scheduler<Task>,
 
     // TODO: mock client for testing
     client: Option<ResourceUsageAgentClient>,
+    reporting: Arc<AtomicBool>,
     cpu_records_collector: Option<CollectorHandle>,
 
     // resource_tag -> ([timestamp_secs], [cpu_time_ms], total_cpu_time_ms)
     records: HashMap<Vec<u8>, (Vec<u64>, Vec<u32>, u32)>,
-
+    // timestamp_secs -> cpu_time_ms
+    others: HashMap<u64, u32>,
     find_top_k: Vec<u32>,
 }
 
 impl ResourceMeteringReporter {
-    pub fn new(
-        config: Config,
-        scheduler: Scheduler<Task>,
-        env: Arc<Environment>,
-        security_mgr: Arc<SecurityManager>,
-    ) -> Self {
+    pub fn new(config: Config, scheduler: Scheduler<Task>, env: Arc<Environment>) -> Self {
         Self {
             config,
             env,
-            security_mgr,
             scheduler,
             client: None,
+            reporting: Arc::new(AtomicBool::new(false)),
             cpu_records_collector: None,
             records: HashMap::default(),
+            others: HashMap::default(),
             find_top_k: Vec::default(),
         }
     }
@@ -93,7 +90,7 @@ impl ResourceMeteringReporter {
             let cb = ChannelBuilder::new(self.env.clone())
                 .keepalive_time(Duration::from_secs(10))
                 .keepalive_timeout(Duration::from_secs(3));
-            self.security_mgr.connect(cb, addr)
+            cb.connect(addr)
         };
         self.client = Some(ResourceUsageAgentClient::new(channel));
         if self.cpu_records_collector.is_none() {
@@ -159,7 +156,17 @@ impl Runnable for ResourceMeteringReporter {
                         |a, b| b.cmp(a),
                     );
                     let kth = self.find_top_k[self.config.max_resource_groups];
-                    self.records.retain(|_, (_, _, total)| *total >= kth);
+                    let others = &mut self.others;
+                    self.records
+                        .drain_filter(|_, (_, _, total)| *total < kth)
+                        .for_each(|(_, (secs_list, cpu_time_list, _))| {
+                            secs_list
+                                .into_iter()
+                                .zip(cpu_time_list.into_iter())
+                                .for_each(|(secs, cpu_time)| {
+                                    *others.entry(secs).or_insert(0) += cpu_time
+                                })
+                        });
                 }
             }
         }
@@ -174,15 +181,26 @@ impl Runnable for ResourceMeteringReporter {
 impl RunnableWithTimer for ResourceMeteringReporter {
     fn on_timeout(&mut self) {
         if self.records.is_empty() {
+            assert!(self.others.is_empty());
             return;
         }
 
         let records = std::mem::take(&mut self.records);
+        let others = std::mem::take(&mut self.others);
+
+        if self.reporting.load(SeqCst) {
+            return;
+        }
+
         if let Some(client) = self.client.as_ref() {
             match client.report_cpu_time_opt(CallOption::default().timeout(Duration::from_secs(2)))
             {
                 Ok((mut tx, rx)) => {
+                    self.reporting.store(true, SeqCst);
+                    let reporting = self.reporting.clone();
                     client.spawn(async move {
+                        defer!(reporting.store(false, SeqCst));
+
                         for (tag, (timestamp_list, cpu_time_ms_list, _)) in records {
                             let mut req = ReportCpuTimeRequest::default();
                             req.set_resource_group_tag(tag);
@@ -192,6 +210,17 @@ impl RunnableWithTimer for ResourceMeteringReporter {
                                 return;
                             }
                         }
+
+                        // others
+                        let timestamp_list = others.keys().cloned().collect::<Vec<_>>();
+                        let cpu_time_ms_list = others.values().cloned().collect::<Vec<_>>();
+                        let mut req = ReportCpuTimeRequest::default();
+                        req.set_record_list_timestamp_sec(timestamp_list);
+                        req.set_record_list_cpu_time_ms(cpu_time_ms_list);
+                        if tx.send((req, WriteFlags::default())).await.is_err() {
+                            return;
+                        }
+
                         if tx.close().await.is_err() {
                             return;
                         }
@@ -206,6 +235,6 @@ impl RunnableWithTimer for ResourceMeteringReporter {
     }
 
     fn get_interval(&self) -> Duration {
-        Duration::from_secs(self.config.report_agent_interval_seconds)
+        self.config.report_agent_interval.0
     }
 }
