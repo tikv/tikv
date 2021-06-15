@@ -32,6 +32,7 @@ use fail::fail_point;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{PeerRole, Region, RegionEpoch};
+use kvproto::pdpb::QueryKind;
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
     RaftCmdRequest, RaftCmdResponse, Request, Response,
@@ -71,7 +72,7 @@ use crate::store::util::{
     ConfChangeKind, KeysInfoFormatter,
 };
 use crate::store::{cmd_resp, util, Config, RegionSnapshot, RegionTask};
-use crate::{Error, Result};
+use crate::{store::QueryStats, Error, Result};
 
 use super::metrics::*;
 
@@ -1432,9 +1433,22 @@ where
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = match cmd_type {
-                CmdType::Put => self.handle_put(ctx.kv_wb_mut(), req),
-                CmdType::Delete => self.handle_delete(ctx.kv_wb_mut(), req),
+                CmdType::Put => {
+                    self.metrics
+                        .written_query_stats
+                        .add_query_num(QueryKind::Put, 1);
+                    self.handle_put(ctx.kv_wb_mut(), req)
+                }
+                CmdType::Delete => {
+                    self.metrics
+                        .written_query_stats
+                        .add_query_num(QueryKind::Delete, 1);
+                    self.handle_delete(ctx.kv_wb_mut(), req)
+                }
                 CmdType::DeleteRange => {
+                    self.metrics
+                        .written_query_stats
+                        .add_query_num(QueryKind::DeleteRange, 1);
                     self.handle_delete_range(&ctx.engine, req, &mut ranges, ctx.use_delete_range)
                 }
                 CmdType::IngestSst => self.handle_ingest_sst(ctx, req, &mut ssts),
@@ -3089,6 +3103,7 @@ pub struct ApplyMetrics {
 
     pub written_bytes: u64,
     pub written_keys: u64,
+    pub written_query_stats: QueryStats,
     pub lock_cf_written_bytes: u64,
 }
 
