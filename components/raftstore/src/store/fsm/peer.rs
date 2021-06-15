@@ -536,7 +536,8 @@ where
     pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK>>) {
         for m in msgs.drain(..) {
             match m {
-                PeerMsg::RaftMessage(msg) => {
+                PeerMsg::RaftMessage { heap_size, msg } => {
+                    MEMTRACE_RAFT_MESSAGE.trace(TraceEvent::Sub(heap_size));
                     if let Err(e) = self.on_raft_message(msg) {
                         error!(%e;
                             "handle raft message err";
@@ -1521,12 +1522,15 @@ where
                             "peer_id" => self.fsm.peer_id(),
                             "target_peer" => ?target,
                         );
+
+                        let store_msg = StoreMsg::RaftMessage {
+                            // The cloned message shares the same heap content with the original
+                            // message, so `heap_size` is 0.
+                            heap_size: 0,
+                            msg: msg.clone(),
+                        };
                         if self.handle_destroy_peer(job) {
-                            if let Err(e) = self
-                                .ctx
-                                .router
-                                .send_control(StoreMsg::RaftMessage(msg.clone()))
-                            {
+                            if let Err(e) = self.ctx.router.send_control(store_msg) {
                                 info!(
                                     "failed to send back store message, are we shutting down?";
                                     "region_id" => self.fsm.region_id(),
@@ -2411,11 +2415,8 @@ where
                     .pending_msgs
                     .swap_remove_front(|m| m.get_to_peer() == &meta_peer)
                 {
-                    if let Err(e) = self
-                        .ctx
-                        .router
-                        .force_send(new_region_id, PeerMsg::RaftMessage(msg))
-                    {
+                    let peer_msg = PeerMsg::RaftMessage { heap_size: 0, msg };
+                    if let Err(e) = self.ctx.router.force_send(new_region_id, peer_msg) {
                         warn!("handle first requset failed"; "region_id" => region_id, "error" => ?e);
                     }
                 }

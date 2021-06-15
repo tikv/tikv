@@ -47,6 +47,7 @@ use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
 use tikv_util::{box_err, box_try, debug, error, info, slow_log, warn};
 use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
 
+use crate::bytes_capacity;
 use crate::coprocessor::split_observer::SplitObserver;
 use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
 use crate::store::config::Config;
@@ -238,25 +239,41 @@ where
 {
     pub fn send_raft_message(
         &self,
-        mut msg: RaftMessage,
+        msg: RaftMessage,
     ) -> std::result::Result<(), TrySendError<RaftMessage>> {
         let id = msg.get_region_id();
-        match self.try_send(id, PeerMsg::RaftMessage(msg)) {
-            Either::Left(Ok(())) => return Ok(()),
-            Either::Left(Err(TrySendError::Full(PeerMsg::RaftMessage(m)))) => {
-                return Err(TrySendError::Full(m));
-            }
-            Either::Left(Err(TrySendError::Disconnected(PeerMsg::RaftMessage(m)))) => {
-                return Err(TrySendError::Disconnected(m));
-            }
-            Either::Right(PeerMsg::RaftMessage(m)) => msg = m,
-            _ => unreachable!(),
+
+        let mut heap_size = 0;
+        for e in msg.get_message().get_entries() {
+            heap_size += bytes_capacity(&e.data) + bytes_capacity(&e.context);
         }
-        match self.send_control(StoreMsg::RaftMessage(msg)) {
-            Ok(()) => Ok(()),
-            Err(TrySendError::Full(StoreMsg::RaftMessage(m))) => Err(TrySendError::Full(m)),
-            Err(TrySendError::Disconnected(StoreMsg::RaftMessage(m))) => {
-                Err(TrySendError::Disconnected(m))
+        let peer_msg = PeerMsg::RaftMessage { heap_size, msg };
+        let event = TraceEvent::Add(heap_size);
+
+        let store_msg = match self.try_send(id, peer_msg) {
+            Either::Left(Ok(())) => {
+                MEMTRACE_RAFT_MESSAGE.trace(event);
+                return Ok(());
+            }
+            Either::Left(Err(TrySendError::Full(PeerMsg::RaftMessage { msg, .. }))) => {
+                return Err(TrySendError::Full(msg));
+            }
+            Either::Left(Err(TrySendError::Disconnected(PeerMsg::RaftMessage { msg, .. }))) => {
+                return Err(TrySendError::Disconnected(msg));
+            }
+            Either::Right(peer_msg) => StoreMsg::from_peer_msg(peer_msg),
+            _ => unreachable!(),
+        };
+        match self.send_control(store_msg) {
+            Ok(()) => {
+                MEMTRACE_RAFT_MESSAGE.trace(event);
+                Ok(())
+            }
+            Err(TrySendError::Full(StoreMsg::RaftMessage { msg, .. })) => {
+                Err(TrySendError::Full(msg))
+            }
+            Err(TrySendError::Disconnected(StoreMsg::RaftMessage { msg, .. })) => {
+                Err(TrySendError::Disconnected(msg))
             }
             _ => unreachable!(),
         }
@@ -604,8 +621,8 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
         for m in msgs.drain(..) {
             match m {
                 StoreMsg::Tick(tick) => self.on_tick(tick),
-                StoreMsg::RaftMessage(msg) => {
-                    if let Err(e) = self.on_raft_message(msg) {
+                StoreMsg::RaftMessage { heap_size, msg } => {
+                    if let Err(e) = self.on_raft_message(heap_size, msg) {
                         error!(?e;
                             "handle raft message failed";
                             "store_id" => self.fsm.store.id,
@@ -1574,16 +1591,23 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         Ok(CheckMsgStatus::NewPeer)
     }
 
-    fn on_raft_message(&mut self, mut msg: RaftMessage) -> Result<()> {
+    fn on_raft_message(&mut self, heap_size: usize, mut msg: RaftMessage) -> Result<()> {
         let region_id = msg.get_region_id();
-        match self.ctx.router.send(region_id, PeerMsg::RaftMessage(msg)) {
-            Ok(()) | Err(TrySendError::Full(_)) => return Ok(()),
-            Err(TrySendError::Disconnected(_)) if self.ctx.router.is_shutdown() => return Ok(()),
-            Err(TrySendError::Disconnected(PeerMsg::RaftMessage(m))) => msg = m,
-            e => panic!(
-                "[store {}] [region {}] unexpected redirect error: {:?}",
-                self.fsm.store.id, region_id, e
-            ),
+        let peer_msg = PeerMsg::RaftMessage { heap_size, msg };
+        match self.ctx.router.send(region_id, peer_msg) {
+            Ok(()) => return Ok(()),
+            Err(TrySendError::Full(_)) => {
+                MEMTRACE_RAFT_MESSAGE.trace(TraceEvent::Sub(heap_size));
+                return Ok(());
+            }
+            Err(TrySendError::Disconnected(_)) if self.ctx.router.is_shutdown() => {
+                MEMTRACE_RAFT_MESSAGE.trace(TraceEvent::Sub(heap_size));
+                return Ok(());
+            }
+            Err(TrySendError::Disconnected(peer_msg)) => {
+                msg = peer_msg.into_raft_message();
+                MEMTRACE_RAFT_MESSAGE.trace(TraceEvent::Sub(heap_size));
+            }
         }
 
         debug!(
@@ -1628,8 +1652,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                     &msg,
                     check_msg_status == CheckMsgStatus::NewPeerFirst,
                 )? {
-                    // Peer created, send the message again
-                    let _ = self.ctx.router.send(region_id, PeerMsg::RaftMessage(msg));
+                    // Peer created, send the message again.
+                    // Ignore heap size so that we can also ignore the send result.
+                    let peer_msg = PeerMsg::RaftMessage { heap_size: 0, msg };
+                    let _ = self.ctx.router.send(region_id, peer_msg);
                     return Ok(());
                 }
                 // Can't create peer, see if we should keep this message
@@ -1649,11 +1675,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 store_meta.pending_msgs.push(msg);
             } else {
                 drop(store_meta);
-                if let Err(e) = self
-                    .ctx
-                    .router
-                    .force_send(region_id, PeerMsg::RaftMessage(msg))
-                {
+                let peer_msg = PeerMsg::RaftMessage { heap_size: 0, msg };
+                if let Err(e) = self.ctx.router.force_send(region_id, peer_msg) {
                     warn!("handle first request failed"; "region_id" => region_id, "error" => ?e);
                 }
             }
