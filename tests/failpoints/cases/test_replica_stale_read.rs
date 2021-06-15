@@ -479,6 +479,33 @@ fn test_stale_read_while_region_merge() {
     follower_client2.must_kv_read_equal(b"key5".to_vec(), b"value2".to_vec(), get_tso(&pd_client));
 }
 
+// Testing that after region merge, the `safe_ts` could be advanced even without any incoming write
+#[test]
+fn test_stale_read_after_merge() {
+    let (mut cluster, pd_client, _) =
+        prepare_for_stale_read_before_run(new_peer(1, 1), Some(Box::new(configure_for_merge)));
+
+    cluster.must_split(&cluster.get_region(&[]), b"key3");
+    let source = pd_client.get_region(b"key1").unwrap();
+    let target = pd_client.get_region(b"key5").unwrap();
+
+    cluster.must_transfer_leader(target.get_id(), new_peer(1, 1));
+    let target_leader = PeerClient::new(&cluster, target.get_id(), new_peer(1, 1));
+    // Write `(key5, value1)`
+    target_leader.must_kv_write(
+        &pd_client,
+        vec![new_mutation(Op::Put, &b"key5"[..], &b"value1"[..])],
+        b"key5".to_vec(),
+    );
+
+    pd_client.must_merge(source.get_id(), target.get_id());
+
+    let mut follower_client2 = PeerClient::new(&cluster, target.get_id(), new_peer(2, 2));
+    follower_client2.ctx.set_stale_read(true);
+    // We can read `(key5, value1)` with the newest ts
+    follower_client2.must_kv_read_equal(b"key5".to_vec(), b"value1".to_vec(), get_tso(&pd_client));
+}
+
 // Testing that during the merge, the leader of the source region won't not update the
 // `safe_ts` since it can't know when the merge is completed and whether there are new
 // kv write into its key range
