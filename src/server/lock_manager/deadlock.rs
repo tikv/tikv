@@ -891,9 +891,9 @@ where
         sink: DuplexSink<DeadlockResponse>,
     ) {
         if !self.is_leader() {
-            let status = RpcStatus::new(
+            let status = RpcStatus::with_message(
                 RpcStatusCode::FAILED_PRECONDITION,
-                Some("I'm not the leader of deadlock detector".to_string()),
+                "I'm not the leader of deadlock detector".to_string(),
             );
             spawn_local(sink.fail(status).map_err(|_| ()));
             ERROR_COUNTER_METRICS.not_leader.inc();
@@ -1021,9 +1021,9 @@ impl Deadlock for Service {
     ) {
         let (cb, f) = paired_future_callback();
         if !self.waiter_mgr_scheduler.dump_wait_table(cb) {
-            let status = RpcStatus::new(
+            let status = RpcStatus::with_message(
                 RpcStatusCode::RESOURCE_EXHAUSTED,
-                Some("waiter manager has stopped".to_owned()),
+                "waiter manager has stopped".to_owned(),
             );
             ctx.spawn(sink.fail(status).map(|_| ()))
         } else {
@@ -1049,9 +1049,9 @@ impl Deadlock for Service {
         let task = Task::DetectRpc { stream, sink };
         if let Err(Stopped(Task::DetectRpc { sink, .. })) = self.detector_scheduler.0.schedule(task)
         {
-            let status = RpcStatus::new(
+            let status = RpcStatus::with_message(
                 RpcStatusCode::RESOURCE_EXHAUSTED,
-                Some("deadlock detector has stopped".to_owned()),
+                "deadlock detector has stopped".to_owned(),
             );
             ctx.spawn(sink.fail(status).map(|_| ()));
         }

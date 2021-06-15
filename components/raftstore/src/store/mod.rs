@@ -3,6 +3,7 @@
 pub mod cmd_resp;
 pub mod config;
 pub mod fsm;
+pub mod memory;
 pub mod msg;
 pub mod transport;
 
@@ -13,7 +14,6 @@ mod bootstrap;
 mod compaction_guard;
 mod hibernate_state;
 mod local_metrics;
-mod memory;
 mod metrics;
 mod peer;
 mod peer_storage;
@@ -31,6 +31,7 @@ pub use self::compaction_guard::CompactionGuardGeneratorFactory;
 pub use self::config::Config;
 pub use self::fsm::{DestroyPeerJob, RaftRouter, StoreInfo};
 pub use self::hibernate_state::{GroupState, HibernateState};
+pub use self::memory::*;
 pub use self::msg::{
     Callback, CasualMessage, ExtCallback, MergeResultKind, PeerMsg, PeerTicks, RaftCommand,
     ReadCallback, ReadResponse, SignificantMsg, StoreMsg, StoreTick, WriteCallback, WriteResponse,

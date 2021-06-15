@@ -578,7 +578,6 @@ where
                             return;
                         }
 
-                        // TODO: the follower should not handle read request while applying snapshot
                         // Getting the snapshot
                         let response = self.execute(&req, &delegate.region, None, read_id);
 
@@ -696,20 +695,20 @@ const METRICS_FLUSH_INTERVAL: u64 = 15_000; // 15s
 
 #[derive(Clone)]
 struct ReadMetrics {
-    local_executed_requests: i64,
-    local_executed_snapshot_cache_hit: i64,
+    local_executed_requests: u64,
+    local_executed_snapshot_cache_hit: u64,
     // TODO: record rejected_by_read_quorum.
-    rejected_by_store_id_mismatch: i64,
-    rejected_by_peer_id_mismatch: i64,
-    rejected_by_term_mismatch: i64,
-    rejected_by_lease_expire: i64,
-    rejected_by_no_region: i64,
-    rejected_by_no_lease: i64,
-    rejected_by_epoch: i64,
-    rejected_by_appiled_term: i64,
-    rejected_by_channel_full: i64,
-    rejected_by_cache_miss: i64,
-    rejected_by_safe_timestamp: i64,
+    rejected_by_store_id_mismatch: u64,
+    rejected_by_peer_id_mismatch: u64,
+    rejected_by_term_mismatch: u64,
+    rejected_by_lease_expire: u64,
+    rejected_by_no_region: u64,
+    rejected_by_no_lease: u64,
+    rejected_by_epoch: u64,
+    rejected_by_appiled_term: u64,
+    rejected_by_channel_full: u64,
+    rejected_by_cache_miss: u64,
+    rejected_by_safe_timestamp: u64,
 
     last_flush_time: Instant,
 }
@@ -916,7 +915,7 @@ mod tests {
         region1.set_region_epoch(epoch13.clone());
         let term6 = 6;
         let mut lease = Lease::new(Duration::seconds(1)); // 1s is long enough.
-        let read_progress = Arc::new(RegionReadProgress::new(1, 1));
+        let read_progress = Arc::new(RegionReadProgress::new(1, 1, "".to_owned()));
 
         let mut cmd = RaftCmdRequest::default();
         let mut header = RaftRequestHeader::default();
@@ -1193,7 +1192,7 @@ mod tests {
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
                 max_ts_sync_status: Arc::new(AtomicU64::new(0)),
                 track_ver: TrackVer::new(),
-                read_progress: Arc::new(RegionReadProgress::new(0, 0)),
+                read_progress: Arc::new(RegionReadProgress::new(0, 0, "".to_owned())),
             };
             meta.readers.insert(1, read_delegate);
         }

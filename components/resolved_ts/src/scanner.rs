@@ -2,8 +2,10 @@
 
 use std::marker::PhantomData;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use engine_traits::KvEngine;
+use futures::compat::Future01CompatExt;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::Region;
 use raftstore::coprocessor::{ObserveHandle, ObserveID};
@@ -14,12 +16,16 @@ use raftstore::store::RegionSnapshot;
 use tikv::storage::kv::{ScanMode as MvccScanMode, Snapshot};
 use tikv::storage::mvcc::{DeltaScanner, MvccReader, ScannerBuilder};
 use tikv::storage::txn::{TxnEntry, TxnEntryScanner};
+use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tokio::runtime::{Builder, Runtime};
-use txn_types::{Key, Lock, TimeStamp};
+use txn_types::{Key, Lock, LockType, TimeStamp};
 
 use crate::errors::{Error, Result};
+use crate::metrics::RTS_SCAN_DURATION_HISTOGRAM;
 
 const DEFAULT_SCAN_BATCH_SIZE: usize = 1024;
+const GET_SNAPSHOT_RETRY_TIME: u32 = 3;
+const GET_SNAPSHOT_RETRY_BACKOFF_STEP: Duration = Duration::from_millis(25);
 
 pub type BeforeStartCallback = Box<dyn Fn() + Send>;
 pub type OnErrorCallback = Box<dyn Fn(ObserveID, Region, Error) + Send>;
@@ -40,7 +46,6 @@ pub struct ScanTask {
     pub checkpoint_ts: TimeStamp,
     pub is_cancelled: IsCancelledCallback,
     pub send_entries: OnEntriesCallback,
-    pub before_start: Option<BeforeStartCallback>,
     pub on_error: Option<OnErrorCallback>,
 }
 
@@ -61,10 +66,9 @@ pub struct ScannerPool<T, E> {
 impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
     pub fn new(count: usize, raft_router: T) -> Self {
         let workers = Arc::new(
-            Builder::new()
-                .threaded_scheduler()
+            Builder::new_multi_thread()
                 .thread_name("inc-scan")
-                .core_threads(count)
+                .worker_threads(count)
                 .build()
                 .unwrap(),
         );
@@ -94,6 +98,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                     return;
                 }
             };
+            let start = Instant::now();
             let apply_index = snap.get_apply_index().unwrap();
             let mut entries = vec![];
             match task.mode {
@@ -161,6 +166,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                 }
             }
             entries.push(ScanEntry::None);
+            RTS_SCAN_DURATION_HISTOGRAM.observe(start.elapsed().as_secs_f64());
             (task.send_entries)(entries, apply_index);
         };
         self.workers.spawn(fut);
@@ -170,27 +176,50 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
         task: &mut ScanTask,
         raft_router: T,
     ) -> Result<RegionSnapshot<E::Snapshot>> {
-        let (cb, fut) = tikv_util::future::paired_future_callback();
-        let before_start = task.before_start.take();
-        let change_cmd = ChangeObserver::from_rts(task.region.id, task.handle.clone());
-        raft_router.significant_send(
-            task.region.id,
-            SignificantMsg::CaptureChange {
-                cmd: change_cmd,
-                region_epoch: task.region.get_region_epoch().clone(),
-                callback: Callback::Read(Box::new(move |resp| {
-                    if let Some(f) = before_start {
-                        f();
-                    }
-                    cb(resp)
-                })),
-            },
-        )?;
-        let mut resp = box_try!(fut.await);
-        if resp.response.get_header().has_error() {
-            return Err(Error::request(resp.response.take_header().take_error()));
+        let mut last_err = None;
+        for retry_times in 0..=GET_SNAPSHOT_RETRY_TIME {
+            if retry_times != 0 {
+                if let Err(e) = GLOBAL_TIMER_HANDLE
+                    .delay(Instant::now() + retry_times * GET_SNAPSHOT_RETRY_BACKOFF_STEP)
+                    .compat()
+                    .await
+                {
+                    error!("failed to backoff"; "err" => ?e);
+                }
+                if (task.is_cancelled)() {
+                    return Err(Error::Other("scan task cancelled".into()));
+                }
+            }
+            let (cb, fut) = tikv_util::future::paired_future_callback();
+            let change_cmd = ChangeObserver::from_rts(task.region.id, task.handle.clone());
+            raft_router.significant_send(
+                task.region.id,
+                SignificantMsg::CaptureChange {
+                    cmd: change_cmd,
+                    region_epoch: task.region.get_region_epoch().clone(),
+                    callback: Callback::Read(Box::new(cb)),
+                },
+            )?;
+            let mut resp = box_try!(fut.await);
+            if resp.response.get_header().has_error() {
+                let err = resp.response.take_header().take_error();
+                // These two errors can't handled by retrying since the epoch and observe id is unchanged
+                if err.has_epoch_not_match() || err.get_message().contains("stale observe id") {
+                    return Err(Error::request(err));
+                }
+                last_err = Some(err)
+            } else {
+                return Ok(resp.snapshot.unwrap());
+            }
         }
-        Ok(resp.snapshot.unwrap())
+        Err(Error::Other(
+            format!(
+                "backoff timeout after {} try, last error: {:?}",
+                GET_SNAPSHOT_RETRY_TIME,
+                last_err.unwrap()
+            )
+            .into(),
+        ))
     }
 
     fn scan_locks<S: Snapshot>(
@@ -198,8 +227,12 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
         start: Option<&Key>,
         _checkpoint_ts: TimeStamp,
     ) -> Result<(Vec<(Key, Lock)>, bool)> {
-        let (locks, has_remaining) =
-            reader.scan_locks(start, None, |_| true, DEFAULT_SCAN_BATCH_SIZE)?;
+        let (locks, has_remaining) = reader.scan_locks(
+            start,
+            None,
+            |lock| matches!(lock.lock_type, LockType::Put | LockType::Delete),
+            DEFAULT_SCAN_BATCH_SIZE,
+        )?;
         Ok((locks, has_remaining))
     }
 

@@ -42,7 +42,7 @@ mod tests {
     use std::{thread, time::Duration};
     use tokio::task::yield_now;
 
-    #[tokio::test(basic_scheduler)]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_deadline_checker() {
         async fn work(iter: i32) {
             for i in 0..iter {

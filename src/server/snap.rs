@@ -295,7 +295,7 @@ fn recv_snap<R: RaftStoreRouter<impl KvEngine> + 'static>(
         match recv_task.await {
             Ok(()) => sink.success(Done::default()).await.map_err(Error::from),
             Err(e) => {
-                let status = RpcStatus::new(RpcStatusCode::UNKNOWN, Some(format!("{:?}", e)));
+                let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", e));
                 sink.fail(status).await.map_err(Error::from)
             }
         }
@@ -335,10 +335,9 @@ where
         let snap_worker = Runner {
             env,
             snap_mgr,
-            pool: RuntimeBuilder::new()
-                .threaded_scheduler()
+            pool: RuntimeBuilder::new_multi_thread()
                 .thread_name(thd_name!("snap-sender"))
-                .core_threads(DEFAULT_POOL_SIZE)
+                .worker_threads(DEFAULT_POOL_SIZE)
                 .on_thread_start(tikv_alloc::add_thread_memory_accessor)
                 .on_thread_stop(tikv_alloc::remove_thread_memory_accessor)
                 .build()
@@ -389,12 +388,12 @@ where
                 let task_num = self.recving_count.load(Ordering::SeqCst);
                 if task_num >= self.cfg.concurrent_recv_snap_limit {
                     warn!("too many recving snapshot tasks, ignore");
-                    let status = RpcStatus::new(
+                    let status = RpcStatus::with_message(
                         RpcStatusCode::RESOURCE_EXHAUSTED,
-                        Some(format!(
+                        format!(
                             "the number of received snapshot tasks {} exceeded the limitation {}",
                             task_num, self.cfg.concurrent_recv_snap_limit
-                        )),
+                        ),
                     );
                     self.pool.spawn(sink.fail(status));
                     return;

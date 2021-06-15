@@ -110,18 +110,7 @@ struct ServerMeta {
     raw_router: RaftRouter<RocksEngine, RocksEngine>,
     raw_apply_router: ApplyRouter<RocksEngine>,
     gc_worker: GcWorker<RaftKv<RocksEngine, SimulateStoreTransport>, SimulateStoreTransport>,
-    resolved_ts_worker: ResolvedTsWorker,
-}
-
-struct ResolvedTsWorker {
-    endpoint: Option<
-        resolved_ts::Endpoint<
-            ServerRaftStoreRouter<RocksEngine, RocksEngine>,
-            RocksEngine,
-            resolved_ts::DummySinker<RocksSnapshot>,
-        >,
-    >,
-    worker: LazyWorker<resolved_ts::Task<RocksSnapshot>>,
+    rts_worker: Option<LazyWorker<resolved_ts::Task<RocksSnapshot>>>,
 }
 
 type PendingServices = Vec<Box<dyn Fn() -> Service>>;
@@ -208,14 +197,6 @@ impl ServerCluster {
     pub fn get_concurrency_manager(&self, node_id: u64) -> ConcurrencyManager {
         self.concurrency_managers.get(&node_id).unwrap().clone()
     }
-
-    pub fn start_resolved_ts_worker(&mut self) {
-        for (_, meta) in self.metas.iter_mut() {
-            if let Some(endpoint) = meta.resolved_ts_worker.endpoint.take() {
-                meta.resolved_ts_worker.worker.start(endpoint);
-            }
-        }
-    }
 }
 
 impl Simulator for ServerCluster {
@@ -295,30 +276,28 @@ impl Simulator for ServerCluster {
             .start_observe_lock_apply(&mut coprocessor_host, concurrency_manager.clone())
             .unwrap();
 
-        // Resolved ts worker
-        let resolved_ts_worker = LazyWorker::new("resolved-ts");
-        let resolved_ts_scheduler = resolved_ts_worker.scheduler();
-        let mut resolved_ts_ob = resolved_ts::Observer::new(resolved_ts_scheduler.clone());
-        // Disable old value
-        resolved_ts_ob.disable_old_value();
-        resolved_ts_ob.register_to(&mut coprocessor_host);
-
-        // Resolved ts endpoint
-        let resolved_ts_endpoint = resolved_ts::Endpoint::new(
-            &cfg.cdc,
-            resolved_ts_scheduler,
-            raft_router.clone(),
-            store_meta.clone(),
-            self.pd_client.clone(),
-            concurrency_manager.clone(),
-            self.env.clone(),
-            self.security_mgr.clone(),
-            resolved_ts::DummySinker::new(),
-        );
-
-        let resolved_ts_worker = ResolvedTsWorker {
-            endpoint: Some(resolved_ts_endpoint),
-            worker: resolved_ts_worker,
+        let rts_worker = if cfg.resolved_ts.enable {
+            // Resolved ts worker
+            let mut rts_worker = LazyWorker::new("resolved-ts");
+            let rts_ob = resolved_ts::Observer::new(rts_worker.scheduler());
+            rts_ob.register_to(&mut coprocessor_host);
+            // Resolved ts endpoint
+            let rts_endpoint = resolved_ts::Endpoint::new(
+                &cfg.resolved_ts,
+                rts_worker.scheduler(),
+                raft_router.clone(),
+                store_meta.clone(),
+                self.pd_client.clone(),
+                concurrency_manager.clone(),
+                self.env.clone(),
+                self.security_mgr.clone(),
+                resolved_ts::DummySinker::new(),
+            );
+            // Start the worker
+            rts_worker.start(rts_endpoint);
+            Some(rts_worker)
+        } else {
+            None
         };
 
         let mut lock_mgr = LockManager::new(cfg.pessimistic_txn.pipelined);
@@ -374,10 +353,9 @@ impl Simulator for ServerCluster {
         let mut server = None;
         // Create Debug service.
         let debug_thread_pool = Arc::new(
-            TokioBuilder::new()
-                .threaded_scheduler()
+            TokioBuilder::new_multi_thread()
                 .thread_name(thd_name!("debugger"))
-                .core_threads(1)
+                .worker_threads(1)
                 .build()
                 .unwrap(),
         );
@@ -502,7 +480,7 @@ impl Simulator for ServerCluster {
                 sim_router,
                 sim_trans: simulate_trans,
                 gc_worker,
-                resolved_ts_worker,
+                rts_worker,
             },
         );
         self.addrs.insert(node_id, format!("{}", addr));
@@ -529,8 +507,8 @@ impl Simulator for ServerCluster {
             meta.server.stop().unwrap();
             meta.node.stop();
             // resolved ts worker started, let's stop it
-            if meta.resolved_ts_worker.endpoint.is_none() {
-                meta.resolved_ts_worker.worker.stop_worker();
+            if let Some(worker) = meta.rts_worker {
+                worker.stop_worker();
             }
         }
     }

@@ -85,6 +85,7 @@ use kvproto::kvrpcpb::{
 use kvproto::pdpb::QueryKind;
 use raftstore::store::util::build_key_range;
 use rand::prelude::*;
+use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
 use std::{
     borrow::Cow,
     iter,
@@ -318,6 +319,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
+        let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
         let concurrency_manager = self.concurrency_manager.clone();
 
         let res = self.read_pool.spawn_handle(
@@ -384,7 +386,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                     Ok((result?, statistics, perf_statistics.delta()))
                 }
-            },
+            }
+            .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
         );
@@ -421,8 +424,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let mut req_snaps = vec![];
 
                 for (mut req, id) in requests.into_iter().zip(ids) {
-                    let region_id = req.get_context().get_region_id();
-                    let peer = req.get_context().get_peer();
+                    let mut ctx = req.take_context();
+                    let region_id = ctx.get_region_id();
+                    let peer = ctx.get_peer();
                     tls_collect_query(
                         region_id,
                         peer,
@@ -433,7 +437,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     );
                     let key = Key::from_raw(req.get_key());
                     let start_ts = req.get_version().into();
-                    let mut ctx = req.take_context();
                     let isolation_level = ctx.get_isolation_level();
                     let fill_cache = !ctx.get_not_fill_cache();
                     let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
@@ -461,6 +464,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         }
                     };
 
+                    let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
                     let snap = Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx));
                     req_snaps.push((
                         snap,
@@ -471,6 +475,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         bypass_locks,
                         region_id,
                         id,
+                        resource_tag,
                     ));
                 }
                 Self::with_tls_engine(|engine| engine.release_snapshot());
@@ -484,9 +489,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         bypass_locks,
                         region_id,
                         id,
+                        resource_tag,
                     ) = req_snap;
                     match snap.await {
                         Ok(snapshot) => {
+                            let _g = resource_tag.attach();
                             match PointGetterBuilder::new(snapshot, start_ts)
                                 .fill_cache(fill_cache)
                                 .isolation_level(isolation_level)
@@ -544,6 +551,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
+        let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
         let concurrency_manager = self.concurrency_manager.clone();
 
         let res = self.read_pool.spawn_handle(
@@ -623,7 +631,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                     Ok((result?, statistics, perf_statistics.delta()))
                 }
-            },
+            }
+            .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
         );
@@ -653,6 +662,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
+        let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
         let concurrency_manager = self.concurrency_manager.clone();
 
         let res = self.read_pool.spawn_handle(
@@ -764,7 +774,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             .collect()
                     })
                 }
-            },
+            }
+            .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
         );
@@ -786,6 +797,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::scan_lock;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
+        let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
         let concurrency_manager = self.concurrency_manager.clone();
         // Do not allow replica read for scan_lock.
         ctx.set_replica_read(false);
@@ -886,7 +898,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                     Ok(locks)
                 }
-            },
+            }
+            .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
         );

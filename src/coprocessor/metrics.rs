@@ -279,7 +279,7 @@ macro_rules! tls_flush_perf_stats {
         COPR_ROCKSDB_PERF_COUNTER_STATIC
             .get($tag)
             .$stat
-            .inc_by($local_stats.0.$stat as i64);
+            .inc_by($local_stats.0.$stat as u64);
     };
 }
 
@@ -324,7 +324,7 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
                         .get(req_tag)
                         .get((*cf).into())
                         .get((*tag).into())
-                        .inc_by(*count as i64);
+                        .inc_by(*count as u64);
                 }
             }
         }
