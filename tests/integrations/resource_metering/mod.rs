@@ -10,6 +10,11 @@ mod linux {
     #[test]
     fn test() {
         let mut ts = test_suite::TestSuite::new();
-        test_dynamic_config::case(&mut ts);
+
+        // Dynamic config
+        test_dynamic_config::case_enable(&mut ts);
+        test_dynamic_config::case_report_interval(&mut ts);
+        test_dynamic_config::case_max_resource_groups(&mut ts);
+        test_dynamic_config::case_precision(&mut ts);
     }
 }
