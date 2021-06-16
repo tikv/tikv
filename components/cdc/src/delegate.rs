@@ -295,7 +295,7 @@ impl Delegate {
 
     fn error_event(&self, err: Error) -> EventError {
         let mut err_event = EventError::default();
-        let mut err = err.extract_error_header();
+        let mut err = err.extract_region_error();
         if err.has_not_leader() {
             let not_leader = err.take_not_leader();
             err_event.set_not_leader(not_leader);
@@ -554,7 +554,7 @@ impl Delegate {
                         for (tag, count) in cf_details.iter() {
                             CDC_OLD_VALUE_SCAN_DETAILS
                                 .with_label_values(&[*cf, *tag])
-                                .inc_by(*count as i64);
+                                .inc_by(*count as u64);
                         }
                     }
                 }

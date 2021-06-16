@@ -82,6 +82,7 @@ use futures::prelude::*;
 use kvproto::kvrpcpb::{
     CommandPri, Context, GetRequest, IsolationLevel, KeyRange, LockInfo, RawGetRequest,
 };
+use kvproto::pdpb::QueryKind;
 use raftstore::store::util::build_key_range;
 use rand::prelude::*;
 use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
@@ -323,12 +324,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let res = self.read_pool.spawn_handle(
             async move {
-                tls_collect_qps(
+                tls_collect_query(
                     ctx.get_region_id(),
                     ctx.get_peer(),
                     key.as_encoded(),
                     key.as_encoded(),
                     false,
+                    QueryKind::Get,
                 );
 
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
@@ -425,7 +427,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let mut ctx = req.take_context();
                     let region_id = ctx.get_region_id();
                     let peer = ctx.get_peer();
-                    tls_collect_qps(region_id, peer, &req.get_key(), &req.get_key(), false);
+                    tls_collect_query(
+                        region_id,
+                        peer,
+                        &req.get_key(),
+                        &req.get_key(),
+                        false,
+                        QueryKind::Get,
+                    );
                     let key = Key::from_raw(req.get_key());
                     let start_ts = req.get_version().into();
                     let isolation_level = ctx.get_isolation_level();
@@ -551,7 +560,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 for key in &keys {
                     key_ranges.push(build_key_range(key.as_encoded(), key.as_encoded(), false));
                 }
-                tls_collect_qps_batch(ctx.get_region_id(), ctx.get_peer(), key_ranges);
+                tls_collect_query_batch(
+                    ctx.get_region_id(),
+                    ctx.get_peer(),
+                    key_ranges,
+                    QueryKind::Get,
+                );
 
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
@@ -658,12 +672,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         Some(k) => k.as_encoded().as_slice(),
                         None => &[],
                     };
-                    tls_collect_qps(
+                    tls_collect_query(
                         ctx.get_region_id(),
                         ctx.get_peer(),
                         start_key.as_encoded(),
                         end_key,
                         reverse_scan,
+                        QueryKind::Scan,
                     );
                 }
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
@@ -794,12 +809,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         Some(k) => k.as_encoded().as_slice(),
                         None => &[],
                     };
-                    tls_collect_qps(
+                    tls_collect_query(
                         ctx.get_region_id(),
                         ctx.get_peer(),
                         start_key.as_encoded(),
                         end_key,
                         false,
+                        QueryKind::Scan,
                     );
                 }
 
@@ -984,7 +1000,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let res = self.read_pool.spawn_handle(
             async move {
-                tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &key, &key, false);
+                tls_collect_query(
+                    ctx.get_region_id(),
+                    ctx.get_peer(),
+                    &key,
+                    &key,
+                    false,
+                    QueryKind::Get,
+                );
 
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
@@ -1044,7 +1067,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let key = get.key.to_owned();
                     let region_id = get.get_context().get_region_id();
                     let peer = get.get_context().get_peer();
-                    tls_collect_qps(region_id, peer, &key, &key, false);
+                    tls_collect_query(region_id, peer, &key, &key, false, QueryKind::Get);
                 }
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
@@ -1133,7 +1156,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 for key in &keys {
                     key_ranges.push(build_key_range(key, key, false));
                 }
-                tls_collect_qps_batch(ctx.get_region_id(), ctx.get_peer(), key_ranges);
+                tls_collect_query_batch(
+                    ctx.get_region_id(),
+                    ctx.get_peer(),
+                    key_ranges,
+                    QueryKind::Get,
+                );
 
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
@@ -1363,12 +1391,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let res = self.read_pool.spawn_handle(
             async move {
                 {
-                    tls_collect_qps(
+                    tls_collect_query(
                         ctx.get_region_id(),
                         ctx.get_peer(),
                         &start_key,
                         end_key.as_ref().unwrap_or(&vec![]),
                         reverse_scan,
+                        QueryKind::Scan,
                     );
                 }
 
@@ -1526,7 +1555,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             reverse_scan,
                         ));
                     }
-                    tls_collect_qps_batch(ctx.get_region_id(), ctx.get_peer(), key_ranges);
+                    tls_collect_query_batch(
+                        ctx.get_region_id(),
+                        ctx.get_peer(),
+                        key_ranges,
+                        QueryKind::Scan,
+                    );
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
                         .get(CMD)
@@ -1565,7 +1599,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let res = self.read_pool.spawn_handle(
             async move {
-                tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &key, &key, false);
+                tls_collect_query(
+                    ctx.get_region_id(),
+                    ctx.get_peer(),
+                    &key,
+                    &key,
+                    false,
+                    QueryKind::Get,
+                );
 
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
