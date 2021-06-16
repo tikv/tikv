@@ -529,7 +529,7 @@ where
             match m {
                 PeerMsg::RaftMessage { heap_size, msg } => {
                     MEMTRACE_RAFT_MESSAGE.trace(TraceEvent::Sub(heap_size));
-                    if let Err(e) = self.on_raft_message(msg) {
+                    if let Err(e) = self.on_raft_message(heap_size, msg) {
                         error!(%e;
                             "handle raft message err";
                             "region_id" => self.fsm.region_id(),
@@ -1213,7 +1213,7 @@ where
         }
     }
 
-    fn on_raft_message(&mut self, mut msg: RaftMessage) -> Result<()> {
+    fn on_raft_message(&mut self, heap_size: usize, mut msg: RaftMessage) -> Result<()> {
         debug!(
             "handle raft message";
             "region_id" => self.region_id(),
@@ -1286,6 +1286,7 @@ where
         self.fsm.peer.insert_peer_cache(msg.take_from_peer());
 
         let result = self.fsm.peer.step(self.ctx, msg.take_message());
+        MEMTRACE_RAFT_ENTRIES.trace(TraceEvent::Add(heap_size));
 
         if is_snapshot {
             if !self.fsm.peer.has_pending_snapshot() {
