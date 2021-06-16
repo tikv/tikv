@@ -2,7 +2,6 @@
 
 use fail::fail_point;
 use lazy_static::lazy_static;
-use memory_trace_macros::MemoryTraceHelper;
 use std::sync::Arc;
 use tikv_alloc::{
     mem_trace,
@@ -23,12 +22,17 @@ lazy_static! {
             raft_message
         ]
     );
+    /// Memory usage for raft peers fsms.
     pub static ref MEMTRACE_PEERS: Arc<dyn MemoryTrace + Send + Sync> =
         MEMTRACE_ROOT.sub_trace(Id::Name("peers"));
+
+    /// Memory usage for apply fsms.
     pub static ref MEMTRACE_APPLYS: Arc<dyn MemoryTrace + Send + Sync> =
         MEMTRACE_ROOT.sub_trace(Id::Name("applys"));
+
     pub static ref MEMTRACE_ENTRY_CACHE: Arc<dyn MemoryTrace + Send + Sync> =
         MEMTRACE_ROOT.sub_trace(Id::Name("entry_cache"));
+
     pub static ref MEMTRACE_RAFT_ROUTER_ALIVE: Arc<dyn MemoryTrace + Send + Sync> = MEMTRACE_ROOT
         .sub_trace(Id::Name("raft_router"))
         .sub_trace(Id::Name("alive"));
@@ -45,19 +49,6 @@ lazy_static! {
     /// Heap size trace for received raft messages.
     pub static ref MEMTRACE_RAFT_MESSAGE: Arc<dyn MemoryTrace + Send + Sync> =
         MEMTRACE_ROOT.sub_trace(Id::Name("raft_message"));
-}
-
-#[derive(MemoryTraceHelper, Default)]
-pub struct PeerMemoryTrace {
-    pub raft_machine: usize,
-    pub proposals: usize,
-    pub rest: usize,
-}
-
-#[derive(MemoryTraceHelper, Default, Debug)]
-pub struct ApplyMemoryTrace {
-    pub pending_cmds: usize,
-    pub rest: usize,
 }
 
 pub fn needs_evict_entry_cache() -> bool {
