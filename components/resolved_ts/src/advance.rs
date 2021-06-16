@@ -180,12 +180,17 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
             }
             region_map.insert(region_id, peer_list);
         }
+        // Approximate `LeaderInfo` size
+        let leader_info_size = store_map
+            .values()
+            .next()
+            .map_or(0, |regions| regions[0].compute_size());
         let stores = store_map.into_iter().map(|(store_id, regions)| {
             let cdc_clients = cdc_clients.clone();
             let env = env.clone();
             let pd_client = pd_client.clone();
             let security_mgr = security_mgr.clone();
-            let region_num = regions.len();
+            let region_num = regions.len() as u32;
             CHECK_LEADER_REQ_SIZE_HISTOGRAM.observe((leader_info_size * region_num) as f64);
             CHECK_LEADER_REQ_ITEM_COUNT_HISTOGRAM.observe(region_num as f64);
             async move {
