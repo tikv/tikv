@@ -761,10 +761,9 @@ where
         RTS_MIN_RESOLVED_TS_REGION.set(oldest_region as i64);
         RTS_MIN_RESOLVED_TS.set(oldest_ts as i64);
         RTS_ZERO_RESOLVED_TS.set(zero_ts_count as i64);
-        RESOLVED_TS_GAP_HISTOGRAM.observe(
-            (TimeStamp::physical_now().saturating_sub(TimeStamp::from(oldest_ts).physical()))
-                as f64
-                / 1000f64,
+        RTS_MIN_RESOLVED_TS_GAP.set(
+            TimeStamp::physical_now().saturating_sub(TimeStamp::from(oldest_ts).physical()) as i64
+                / 1000i64,
         );
         RTS_LOCK_HEAP_BYTES_GAUGE.set(lock_heap_size as i64);
         RTS_REGION_RESOLVE_STATUS_GAUGE_VEC

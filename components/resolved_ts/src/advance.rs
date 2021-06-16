@@ -23,7 +23,7 @@ use txn_types::TimeStamp;
 
 use crate::endpoint::Task;
 use crate::errors::Result;
-use crate::metrics::CHECK_LEADER_REQ_SIZE_HISTOGRAM;
+use crate::metrics::{CHECK_LEADER_REQ_ITEM_COUNT_HISTOGRAM, CHECK_LEADER_REQ_SIZE_HISTOGRAM};
 
 pub struct AdvanceTsWorker<E: KvEngine> {
     store_meta: Arc<Mutex<StoreMeta>>,
@@ -185,6 +185,9 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
             let env = env.clone();
             let pd_client = pd_client.clone();
             let security_mgr = security_mgr.clone();
+            let region_num = regions.len();
+            CHECK_LEADER_REQ_SIZE_HISTOGRAM.observe((leader_info_size * region_num) as f64);
+            CHECK_LEADER_REQ_ITEM_COUNT_HISTOGRAM.observe(region_num as f64);
             async move {
                 if cdc_clients.lock().unwrap().get(&store_id).is_none() {
                     let store = box_try!(pd_client.get_store_async(store_id).await);
@@ -199,8 +202,6 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
                 let mut req = CheckLeaderRequest::default();
                 req.set_regions(regions.into());
                 req.set_ts(min_ts.into_inner());
-                // TODO: maybe should compute request size by len * `LeaderInfo::compute_size`
-                CHECK_LEADER_REQ_SIZE_HISTOGRAM.observe(req.compute_size() as f64);
                 let res = box_try!(client.check_leader_async(&req)).await;
                 let resp = box_try!(res);
                 Result::Ok((store_id, resp))
