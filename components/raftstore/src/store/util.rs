@@ -7,8 +7,8 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 use std::{cmp, fmt, u64};
 
-use kvproto::kvrpcpb::{self, KeyRange};
-use kvproto::metapb::{self, PeerRole};
+use kvproto::kvrpcpb::{self, KeyRange, LeaderInfo};
+use kvproto::metapb::{self, Peer, PeerRole, Region, RegionEpoch};
 use kvproto::raft_cmdpb::{AdminCmdType, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest};
 use kvproto::raft_serverpb::RaftMessage;
 use protobuf::{self, Message};
@@ -305,6 +305,14 @@ pub fn compare_region_epoch(
     }
 
     Ok(())
+}
+
+pub fn region_epoch_equal(
+    from_epoch: &metapb::RegionEpoch,
+    current_epoch: &metapb::RegionEpoch,
+) -> bool {
+    from_epoch.get_conf_ver() == current_epoch.get_conf_ver()
+        && from_epoch.get_version() == current_epoch.get_version()
 }
 
 #[inline]
@@ -836,12 +844,18 @@ impl Display for MsgType<'_> {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct RegionReadProgressRegistry {
     registry: Arc<Mutex<HashMap<u64, Arc<RegionReadProgress>>>>,
 }
 
 impl RegionReadProgressRegistry {
+    pub fn new() -> RegionReadProgressRegistry {
+        RegionReadProgressRegistry {
+            registry: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
     pub fn insert(
         &self,
         region_id: u64,
@@ -869,30 +883,35 @@ impl RegionReadProgressRegistry {
             .map(|rp| rp.safe_ts())
     }
 
-    // Update `safe_ts` with the provided `ReadState`
-    pub fn advance_read_progress(&self, read_states: Vec<(u64, kvrpcpb::ReadState)>) {
+    // Update `safe_ts` with the provided `LeaderInfo`
+    pub fn handle_check_leaders(&self, leaders: Vec<LeaderInfo>) -> Vec<u64> {
+        let mut regions = Vec::with_capacity(leaders.len());
         let registry = self.registry.lock().unwrap();
-        for (region_id, read_state) in read_states {
+        for leader_info in leaders {
+            let region_id = leader_info.get_region_id();
             if let Some(rp) = registry.get(&region_id) {
-                rp.update_safe_ts(read_state.get_applied_index(), read_state.get_safe_ts());
+                if rp.handle_check_leader(leader_info) {
+                    regions.push(region_id);
+                }
             }
         }
+        regions.shrink_to_fit();
+        regions
     }
 
-    // Get the `ReadState` of the requested regions
-    pub fn get_read_state(&self, regions: &[u64]) -> HashMap<u64, kvrpcpb::ReadState> {
+    // Get the `LeaderInfo` of the requested regions
+    pub fn dump_leader_infos(
+        &self,
+        regions: &[u64],
+    ) -> HashMap<u64, (Vec<Peer>, kvrpcpb::LeaderInfo)> {
         let registry = self.registry.lock().unwrap();
-        let mut read_state_map = HashMap::with_capacity(regions.len());
+        let mut info_map = HashMap::with_capacity(regions.len());
         for region_id in regions {
             if let Some(rrp) = registry.get(region_id) {
-                let rs = rrp.read_state();
-                let mut read_state = kvrpcpb::ReadState::default();
-                read_state.set_applied_index(rs.idx);
-                read_state.set_safe_ts(rs.ts);
-                read_state_map.insert(*region_id, read_state);
+                info_map.insert(*region_id, rrp.dump_leader_info());
             }
         }
-        read_state_map
+        info_map
     }
 
     /// Invoke the provided callback with the registry, an internal lock will hold
@@ -922,7 +941,7 @@ impl RegionReadProgressRegistry {
 /// For the followers, the item is sync periodically from the leader through the `CheckLeader` rpc.
 ///
 /// The intend is to make the item's `safe ts` larger (more up to date) and `apply index` smaller (require less data)
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct RegionReadProgress {
     // `core` used to keep track and update `safe_ts`, it should
     // not be accessed outside to avoid dead lock
@@ -933,9 +952,9 @@ pub struct RegionReadProgress {
 }
 
 impl RegionReadProgress {
-    pub fn new(applied_index: u64, cap: usize, tag: String) -> RegionReadProgress {
+    pub fn new(region: &Region, applied_index: u64, cap: usize, tag: String) -> RegionReadProgress {
         RegionReadProgress {
-            core: Mutex::new(RegionReadProgressCore::new(applied_index, cap, tag)),
+            core: Mutex::new(RegionReadProgressCore::new(region, applied_index, cap, tag)),
             safe_ts: AtomicU64::from(0),
         }
     }
@@ -950,10 +969,19 @@ impl RegionReadProgress {
     }
 
     pub fn update_safe_ts(&self, apply_index: u64, ts: u64) {
+        let mut core = self.core.lock().unwrap();
+        self.update_safe_ts_internal(&mut core, apply_index, ts);
+    }
+
+    fn update_safe_ts_internal(
+        &self,
+        core: &mut RegionReadProgressCore,
+        apply_index: u64,
+        ts: u64,
+    ) {
         if apply_index == 0 || ts == 0 {
             return;
         }
-        let mut core = self.core.lock().unwrap();
         if core.discard {
             return;
         }
@@ -971,6 +999,25 @@ impl RegionReadProgress {
                 self.safe_ts.store(ts, AtomicOrdering::Release);
             }
         }
+    }
+
+    pub fn update_leader_info(&self, peer_id: u64, term: u64, region: &Region) {
+        let mut core = self.core.lock().unwrap();
+        core.leader_info.leader_id = peer_id;
+        core.leader_info.leader_term = term;
+        if !region_epoch_equal(region.get_region_epoch(), &core.leader_info.epoch) {
+            core.leader_info.epoch = region.get_region_epoch().clone();
+            core.leader_info.peers = region.get_peers().to_vec();
+        }
+    }
+
+    pub fn handle_check_leader(&self, mut leader_info: LeaderInfo) -> bool {
+        let mut core = self.core.lock().unwrap();
+        if leader_info.has_read_state() {
+            let rs = leader_info.take_read_state();
+            self.update_safe_ts_internal(&mut core, rs.get_applied_index(), rs.get_safe_ts());
+        }
+        core.check_leader(&leader_info)
     }
 
     /// Reset `safe_ts` to 0 and stop updating it
@@ -996,13 +1043,25 @@ impl RegionReadProgress {
             .store(core.read_state.ts, AtomicOrdering::Release);
     }
 
-    // Get the latest `read_state`
-    pub fn read_state(&self) -> ReadState {
+    // Dump the `LeaderInfo`
+    fn dump_leader_info(&self) -> (Vec<Peer>, kvrpcpb::LeaderInfo) {
+        let mut leader_info = kvrpcpb::LeaderInfo::default();
         let core = self.core.lock().unwrap();
-        core.pending_items
-            .back()
-            .unwrap_or(&core.read_state)
-            .clone()
+        let read_state = {
+            // Get the latest `read_state`
+            let ReadState { idx, ts } = core.pending_items.back().unwrap_or(&core.read_state);
+            let mut rs = kvrpcpb::ReadState::default();
+            rs.set_applied_index(*idx);
+            rs.set_safe_ts(*ts);
+            rs
+        };
+        let li = &core.leader_info;
+        leader_info.set_peer_id(li.leader_id);
+        leader_info.set_term(li.leader_term);
+        leader_info.set_region_id(core.region_id);
+        leader_info.set_region_epoch(li.epoch.clone());
+        leader_info.set_read_state(read_state);
+        (li.peers.clone(), leader_info)
     }
 
     pub fn safe_ts(&self) -> u64 {
@@ -1010,13 +1069,16 @@ impl RegionReadProgress {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 struct RegionReadProgressCore {
     tag: String,
+    region_id: u64,
     applied_index: u64,
     // A wraper of `(apply_index, safe_ts)` item, where the `read_state.ts` is the peer's current `safe_ts`
     // and the `read_state.idx` is the smallest `apply_index` required for that `safe_ts`
     read_state: ReadState,
+    // The local peer's acknowledge about the leader
+    leader_info: LocalLeaderInfo,
     // `pending_items` is a *sorted* list of `(apply_index, safe_ts)` item
     pending_items: VecDeque<ReadState>,
     // After the region commit merged, the region's key range is extended and the region's `safe_ts`
@@ -1036,12 +1098,34 @@ pub struct ReadState {
     pub ts: u64,
 }
 
+/// The local peer's acknowledge about the leader
+#[derive(Debug)]
+pub struct LocalLeaderInfo {
+    leader_id: u64,
+    leader_term: u64,
+    epoch: RegionEpoch,
+    peers: Vec<Peer>,
+}
+
+impl LocalLeaderInfo {
+    fn new(region: &Region) -> LocalLeaderInfo {
+        LocalLeaderInfo {
+            leader_id: raft::INVALID_ID,
+            leader_term: 0,
+            epoch: region.get_region_epoch().clone(),
+            peers: region.get_peers().to_vec(),
+        }
+    }
+}
+
 impl RegionReadProgressCore {
-    fn new(applied_index: u64, cap: usize, tag: String) -> RegionReadProgressCore {
+    fn new(region: &Region, applied_index: u64, cap: usize, tag: String) -> RegionReadProgressCore {
         RegionReadProgressCore {
             tag,
+            region_id: region.get_id(),
             applied_index,
             read_state: ReadState::default(),
+            leader_info: LocalLeaderInfo::new(region),
             pending_items: VecDeque::with_capacity(cap),
             last_merge_index: 0,
             pause: false,
@@ -1129,6 +1213,12 @@ impl RegionReadProgressCore {
         }
         self.push_back(ReadState { idx, ts });
         None
+    }
+
+    fn check_leader(&self, leader: &LeaderInfo) -> bool {
+        self.leader_info.leader_term == leader.term
+            && self.leader_info.leader_id == leader.peer_id
+            && region_epoch_equal(&self.leader_info.epoch, leader.get_region_epoch())
     }
 
     fn push_back(&mut self, item: ReadState) {
@@ -1771,7 +1861,7 @@ mod tests {
         }
 
         let cap = 10;
-        let rrp = RegionReadProgress::new(10, cap, "".to_owned());
+        let rrp = RegionReadProgress::new(&Default::default(), 10, cap, "".to_owned());
         for i in 1..=20 {
             rrp.update_safe_ts(i, i);
         }

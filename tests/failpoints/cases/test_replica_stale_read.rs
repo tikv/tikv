@@ -363,11 +363,7 @@ fn test_stale_read_while_applying_snapshot() {
     follower_client2.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), k1_commit_ts);
 
     // Stop replicate data to follower 2
-    cluster.add_send_filter(CloneFilterFactory(
-        RegionPacketFilter::new(1, 2)
-            .direction(Direction::Recv)
-            .msg_type(MessageType::MsgAppend),
-    ));
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
 
     // Prewrite on `key3` but not commit yet
     let k2_prewrite_ts = get_tso(&pd_client);

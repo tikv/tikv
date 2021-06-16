@@ -7,7 +7,6 @@ use std::sync::Arc;
 use std::vec::IntoIter;
 
 use engine_traits::CfName;
-use kvproto::kvrpcpb::ReadState;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request};
@@ -26,8 +25,8 @@ pub use self::config::{Config, ConsistencyCheckMethod};
 pub use self::consistency_check::{ConsistencyCheckObserver, Raw as RawConsistencyCheckObserver};
 pub use self::dispatcher::{
     BoxAdminObserver, BoxApplySnapshotObserver, BoxCmdObserver, BoxConsistencyCheckObserver,
-    BoxQueryObserver, BoxReadStateObserver, BoxRegionChangeObserver, BoxRoleObserver,
-    BoxSplitCheckObserver, CoprocessorHost, Registry,
+    BoxQueryObserver, BoxRegionChangeObserver, BoxRoleObserver, BoxSplitCheckObserver,
+    CoprocessorHost, Registry,
 };
 pub use self::error::{Error, Result};
 pub use self::region_info_accessor::{
@@ -346,11 +345,6 @@ pub trait CmdObserver<E>: Coprocessor {
 pub trait ReadIndexObserver: Coprocessor {
     // Hook to call when stepping in raft and the message is a read index message.
     fn on_step(&self, _msg: &mut eraftpb::Message) {}
-}
-
-pub trait ReadStateObserver: Coprocessor {
-    // Hook to call when receive `ReadState` from leader
-    fn on_receive_read_state(&self, _read_states: &mut Vec<(u64, ReadState)>) {}
 }
 
 #[cfg(test)]

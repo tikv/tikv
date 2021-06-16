@@ -21,8 +21,6 @@ use fail::fail_point;
 use futures::compat::Future01CompatExt;
 use futures::FutureExt;
 use kvproto::import_sstpb::SstMeta;
-use kvproto::kvrpcpb::KeyRange;
-use kvproto::kvrpcpb::LeaderInfo;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
@@ -67,9 +65,10 @@ use crate::store::peer_storage::{self, HandleRaftReadyContext};
 use crate::store::transport::Transport;
 use crate::store::util::{is_initial_msg, RegionReadProgressRegistry};
 use crate::store::worker::{
-    AutoSplitController, CleanupRunner, CleanupSSTRunner, CleanupSSTTask, CleanupTask,
-    CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner,
-    RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RegionRunner, RegionTask, SplitCheckTask,
+    AutoSplitController, CheckLeaderRunner, CheckLeaderTask, CleanupRunner, CleanupSSTRunner,
+    CleanupSSTTask, CleanupTask, CompactRunner, CompactTask, ConsistencyCheckRunner,
+    ConsistencyCheckTask, PdRunner, RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RegionRunner,
+    RegionTask, SplitCheckTask,
 };
 use crate::store::PdTask;
 use crate::store::PeerTicks;
@@ -143,7 +142,7 @@ impl StoreMeta {
             targets_map: HashMap::default(),
             atomic_snap_regions: HashMap::default(),
             destroyed_region_for_snap: HashMap::default(),
-            region_read_progress: RegionReadProgressRegistry::default(),
+            region_read_progress: RegionReadProgressRegistry::new(),
         }
     }
 
@@ -353,6 +352,7 @@ where
     pub cleanup_scheduler: Scheduler<CleanupTask>,
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+    pub check_leader_scheduler: Scheduler<CheckLeaderTask>,
     pub apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
     pub importer: Arc<SSTImporter>,
@@ -623,9 +623,23 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     self.on_store_unreachable(store_id);
                 }
                 StoreMsg::Start { store } => self.start(store),
-                StoreMsg::CheckLeader { leaders, cb } => self.on_check_leader(leaders, cb),
+                StoreMsg::CheckLeader { leaders, cb } => {
+                    if let Err(e) = self
+                        .ctx
+                        .check_leader_scheduler
+                        .schedule(CheckLeaderTask::CheckLeader { leaders, cb })
+                    {
+                        error!("fail to send CheckLeader task"; "err" => ?e);
+                    }
+                }
                 StoreMsg::GetStoreSafeTS { key_range, cb } => {
-                    self.on_get_store_safe_ts(key_range, cb)
+                    if let Err(e) = self
+                        .ctx
+                        .check_leader_scheduler
+                        .schedule(CheckLeaderTask::GetStoreTs { key_range, cb })
+                    {
+                        error!("fail to send GetStoreTs task"; "err" => ?e);
+                    }
                 }
                 #[cfg(any(test, feature = "testexport"))]
                 StoreMsg::Validate(f) => f(&self.ctx.cfg),
@@ -922,6 +936,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     cleanup_scheduler: Scheduler<CleanupTask>,
     raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+    check_leader_scheduler: Scheduler<CheckLeaderTask>,
     apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
     pub importer: Arc<SSTImporter>,
@@ -1125,6 +1140,7 @@ where
             router: self.router.clone(),
             cleanup_scheduler: self.cleanup_scheduler.clone(),
             raftlog_gc_scheduler: self.raftlog_gc_scheduler.clone(),
+            check_leader_scheduler: self.check_leader_scheduler.clone(),
             importer: self.importer.clone(),
             store_meta: self.store_meta.clone(),
             pending_create_peers: self.pending_create_peers.clone(),
@@ -1264,6 +1280,10 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let consistency_check_scheduler = workers
             .background_worker
             .start("consistency-check", consistency_check_runner);
+        let check_leader_runner = CheckLeaderRunner::new(store_meta.clone());
+        let check_leader_scheduler = workers
+            .background_worker
+            .start("check-leader", check_leader_runner);
 
         let mut builder = RaftPollerBuilder {
             cfg,
@@ -1276,6 +1296,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             consistency_check_scheduler,
             cleanup_scheduler,
             raftlog_gc_scheduler,
+            check_leader_scheduler,
             apply_router: self.apply_router.clone(),
             trans,
             coprocessor_host,
@@ -2411,103 +2432,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         let _ = scheduler.schedule(RaftlogGcTask::Purge);
         self.register_raft_engine_purge_tick();
     }
-
-    fn on_check_leader(&self, leaders: Vec<LeaderInfo>, cb: Box<dyn FnOnce(Vec<u64>) + Send>) {
-        let mut read_states = Vec::new();
-        let meta = self.ctx.store_meta.lock().unwrap();
-        let regions = leaders
-            .into_iter()
-            .map(|mut leader_info| {
-                if let Some((term, leader_id)) = meta.leaders.get(&leader_info.region_id) {
-                    if let Some(region) = meta.regions.get(&leader_info.region_id) {
-                        // It is okay to skip the following checks, the `read_state` is guaranteed
-                        // to be valid when it is published by the leader
-                        if leader_info.has_read_state() {
-                            read_states
-                                .push((leader_info.region_id, leader_info.take_read_state()));
-                        }
-                        if *term == leader_info.term
-                            && *leader_id == leader_info.peer_id
-                            && util::compare_region_epoch(
-                                leader_info.get_region_epoch(),
-                                region,
-                                true,
-                                true,
-                                false,
-                            )
-                            .is_ok()
-                        {
-                            return Some(leader_info.region_id);
-                        }
-                        debug!("check leader failed";
-                            "leader_info" => ?leader_info,
-                            "current_leader" => leader_id,
-                            "current_term" => term,
-                            "current_region" => ?region,
-                            "store_id" => self.fsm.store.id,
-                        );
-                        return None;
-                    }
-                }
-                debug!("check leader failed, meta not found";
-                    "leader_info" => ?leader_info,
-                    "store_id" => self.fsm.store.id,
-                );
-                None
-            })
-            .flatten()
-            .collect();
-        cb(regions);
-
-        self.ctx
-            .coprocessor_host
-            .on_receive_read_state(&mut read_states);
-    }
-
-    fn on_get_store_safe_ts(&self, key_range: KeyRange, cb: Box<dyn FnOnce(u64) + Send>) {
-        // `store_safe_ts` won't be accessed frequently (like per-request or per-transaction),
-        // so it is okay getting `store_safe_ts` from `store_meta` (behide a mutex)
-        let meta = self.ctx.store_meta.lock().unwrap();
-        cb(get_range_safe_ts(&meta, key_range));
-    }
-}
-
-// Get the minimal `safe_ts` from regions overlap with the key range [`start_key`, `end_key`)
-fn get_range_safe_ts(meta: &StoreMeta, key_range: KeyRange) -> u64 {
-    if key_range.get_start_key().is_empty() && key_range.get_end_key().is_empty() {
-        // Fast path to get the min `safe_ts` of all regions in this store
-        meta.region_read_progress.map(|registry| {
-            registry
-                .iter()
-                .map(|(_, rrp)| rrp.safe_ts())
-                .filter(|ts| *ts != 0) // ts == 0 means the peer is uninitialized
-                .min()
-                .unwrap_or(0)
-        })
-    } else {
-        let (start_key, end_key) = (
-            data_key(key_range.get_start_key()),
-            data_end_key(key_range.get_end_key()),
-        );
-        meta.region_read_progress.map(|registry| {
-            meta.region_ranges
-                // get overlapped regions
-                .range((Excluded(start_key.clone()), Unbounded))
-                .take_while(|(_, id)| end_key > enc_start_key(&meta.regions[id]))
-                // get the min `safe_ts`
-                .map(|(_, id)| {
-                    registry.get(id).unwrap().safe_ts()
-                })
-                .filter(|ts| *ts != 0) // ts == 0 means the peer is uninitialized
-                .min()
-                .unwrap_or(0)
-        })
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::store::util::RegionReadProgress;
     use engine_rocks::RangeOffsets;
     use engine_rocks::RangeProperties;
     use engine_rocks::RocksCompactedEvent;
@@ -2560,51 +2488,5 @@ mod tests {
         let declined_bytes = event.calc_ranges_declined_bytes(&region_ranges, 1024);
         let expected_declined_bytes = vec![(2, 8192), (3, 4096)];
         assert_eq!(declined_bytes, expected_declined_bytes);
-    }
-
-    #[test]
-    fn test_get_range_min_safe_ts() {
-        fn add_region(meta: &mut StoreMeta, id: u64, kr: KeyRange, safe_ts: u64) {
-            let mut region = Region::default();
-            region.set_id(id);
-            region.set_start_key(kr.get_start_key().to_vec());
-            region.set_end_key(kr.get_end_key().to_vec());
-            region.set_peers(vec![kvproto::metapb::Peer::default()].into());
-            let rrp = RegionReadProgress::new(1, 1, "".to_owned());
-            rrp.update_safe_ts(1, safe_ts);
-            assert_eq!(rrp.safe_ts(), safe_ts);
-            meta.region_ranges.insert(enc_end_key(&region), id);
-            meta.regions.insert(id, region);
-            meta.region_read_progress.insert(id, Arc::new(rrp));
-        }
-
-        fn key_range(start_key: &[u8], end_key: &[u8]) -> KeyRange {
-            let mut kr = KeyRange::default();
-            kr.set_start_key(start_key.to_vec());
-            kr.set_end_key(end_key.to_vec());
-            kr
-        }
-
-        let mut meta = StoreMeta::new(0);
-        assert_eq!(0, get_range_safe_ts(&meta, key_range(b"", b"")));
-        add_region(&mut meta, 1, key_range(b"", b"k1"), 100);
-        assert_eq!(100, get_range_safe_ts(&meta, key_range(b"", b"")));
-        assert_eq!(0, get_range_safe_ts(&meta, key_range(b"k1", b"")));
-
-        add_region(&mut meta, 2, key_range(b"k5", b"k6"), 80);
-        add_region(&mut meta, 3, key_range(b"k6", b"k9"), 70);
-        add_region(&mut meta, 4, key_range(b"k9", b""), 90);
-        add_region(&mut meta, 5, key_range(b"k9", b""), 0);
-        assert_eq!(70, get_range_safe_ts(&meta, key_range(b"", b"")));
-        assert_eq!(80, get_range_safe_ts(&meta, key_range(b"", b"k6")));
-        assert_eq!(90, get_range_safe_ts(&meta, key_range(b"k99", b"")));
-        assert_eq!(70, get_range_safe_ts(&meta, key_range(b"k5", b"k99")));
-        assert_eq!(70, get_range_safe_ts(&meta, key_range(b"k", b"k9")));
-        assert_eq!(80, get_range_safe_ts(&meta, key_range(b"k4", b"k6")));
-        assert_eq!(100, get_range_safe_ts(&meta, key_range(b"", b"k1")));
-        assert_eq!(90, get_range_safe_ts(&meta, key_range(b"k9", b"")));
-        assert_eq!(80, get_range_safe_ts(&meta, key_range(b"k5", b"k6")));
-        assert_eq!(0, get_range_safe_ts(&meta, key_range(b"k1", b"k4")));
-        assert_eq!(0, get_range_safe_ts(&meta, key_range(b"k2", b"k3")));
     }
 }

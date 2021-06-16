@@ -11,7 +11,6 @@ use concurrency_manager::ConcurrencyManager;
 use configuration::{self, ConfigChange, ConfigManager, Configuration};
 use engine_traits::{KvEngine, Snapshot};
 use grpcio::Environment;
-use kvproto::kvrpcpb::ReadState;
 use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::AdminCmdType;
 use pd_client::PdClient;
@@ -575,9 +574,6 @@ pub enum Task<S: Snapshot> {
         regions: Vec<u64>,
         ts: TimeStamp,
     },
-    AdvanceReadProgress {
-        read_states: Vec<(u64, ReadState)>,
-    },
     ChangeLog {
         cmd_batch: Vec<CmdBatch>,
         snapshot: Option<RegionSnapshot<S>>,
@@ -631,10 +627,6 @@ impl<S: Snapshot> fmt::Debug for Task<S> {
                 .field("regions", &regions)
                 .field("ts", &ts)
                 .finish(),
-            Task::AdvanceReadProgress { ref read_states } => de
-                .field("name", &"advance_read_progress")
-                .field("read_state_num", &read_states.len())
-                .finish(),
             Task::ChangeLog { .. } => de.field("name", &"change_log").finish(),
             Task::ScanLocks {
                 ref region_id,
@@ -683,9 +675,6 @@ where
                 cause,
             } => self.re_register_region(region_id, observe_id, cause),
             Task::AdvanceResolvedTs { regions, ts } => self.advance_resolved_ts(regions, ts),
-            Task::AdvanceReadProgress { read_states } => {
-                self.region_read_progress.advance_read_progress(read_states)
-            }
             Task::ChangeLog {
                 cmd_batch,
                 snapshot,
