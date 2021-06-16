@@ -110,7 +110,7 @@ impl FixtureBuilder {
         let mut rng: XorShiftRng = SeedableRng::seed_from_u64(SEED_1);
         let mut col = Vec::with_capacity(self.rows);
         for _ in 0..self.rows {
-            col.push(Datum::F64(rng.gen_range(-1e50, 1e50)));
+            col.push(Datum::F64(rng.gen_range(-1e50..1e50)));
         }
         self.columns.push(col);
         self.field_types.push(FieldTypeTp::Double.into());
@@ -164,14 +164,14 @@ impl FixtureBuilder {
         let mut dec_str = String::new();
         for _ in 0..self.rows {
             dec_str.clear();
-            let number_of_int_digits = rng.gen_range(1, 30);
-            let number_of_frac_digits = rng.gen_range(1, 20);
+            let number_of_int_digits = rng.gen_range(1..30);
+            let number_of_frac_digits = rng.gen_range(1..20);
             for _ in 0..number_of_int_digits {
-                dec_str.push(std::char::from_digit(rng.gen_range(0, 10), 10).unwrap());
+                dec_str.push(std::char::from_digit(rng.gen_range(0..10), 10).unwrap());
             }
             dec_str.push('.');
             for _ in 0..number_of_frac_digits {
-                dec_str.push(std::char::from_digit(rng.gen_range(0, 10), 10).unwrap());
+                dec_str.push(std::char::from_digit(rng.gen_range(0..10), 10).unwrap());
             }
             col.push(Datum::Dec(Decimal::from_str(&dec_str).unwrap()));
         }
@@ -215,11 +215,11 @@ impl FixtureBuilder {
         let mut rng: XorShiftRng = SeedableRng::seed_from_u64(SEED_3);
         let mut col = Vec::with_capacity(self.rows);
         for _ in 0..self.rows {
-            let str: String = std::iter::repeat(())
+            let bytes: Vec<u8> = std::iter::repeat(())
                 .map(|_| rng.sample(rand::distributions::Alphanumeric))
                 .take(len)
                 .collect();
-            col.push(Datum::Bytes(str.into_bytes()));
+            col.push(Datum::Bytes(bytes));
         }
         self.columns.push(col);
         self.field_types.push(FieldTypeTp::VarChar.into());

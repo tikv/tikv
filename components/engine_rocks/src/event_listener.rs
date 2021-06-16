@@ -52,7 +52,7 @@ impl rocksdb::EventListener for RocksEventListener {
             .observe(info.elapsed_micros() as f64 / 1_000_000.0);
         STORE_ENGINE_COMPACTION_NUM_CORRUPT_KEYS_VEC
             .with_label_values(&[&self.db_name, info.cf_name()])
-            .inc_by(info.num_corrupt_keys() as i64);
+            .inc_by(info.num_corrupt_keys());
         STORE_ENGINE_COMPACTION_REASON_VEC
             .with_label_values(&[
                 &self.db_name,

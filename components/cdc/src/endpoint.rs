@@ -264,17 +264,15 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         security_mgr: Arc<SecurityManager>,
         sink_memory_quota: MemoryQuota,
     ) -> Endpoint<T> {
-        let workers = Builder::new()
-            .threaded_scheduler()
+        let workers = Builder::new_multi_thread()
             .thread_name("cdcwkr")
-            .core_threads(cfg.incremental_scan_threads)
+            .worker_threads(cfg.incremental_scan_threads)
             .build()
             .unwrap();
         let scan_concurrency_semaphore = Arc::new(Semaphore::new(cfg.incremental_scan_concurrency));
-        let tso_worker = Builder::new()
-            .threaded_scheduler()
+        let tso_worker = Builder::new_multi_thread()
             .thread_name("tso")
-            .core_threads(1)
+            .worker_threads(1)
             .build()
             .unwrap();
         CDC_SINK_CAP.set(sink_memory_quota.cap() as i64);
@@ -1446,10 +1444,9 @@ mod tests {
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
         let (sink, drain) = crate::channel::channel(buffer, quota);
 
-        let pool = Builder::new()
-            .threaded_scheduler()
+        let pool = Builder::new_multi_thread()
             .thread_name("test-initializer-worker")
-            .core_threads(4)
+            .worker_threads(4)
             .build()
             .unwrap();
         let downstream_state = Arc::new(AtomicCell::new(DownstreamState::Normal));
