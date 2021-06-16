@@ -47,6 +47,7 @@ mod misc;
 mod read_consistency;
 mod scenario_writes;
 mod snapshot_basic;
+mod sst;
 mod write_batch;
 
 /// The engine / tempdir pair used in all tests
