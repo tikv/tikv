@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use crossbeam::channel::Sender;
+use fail::fail_point;
 use futures::prelude::*;
 use grpcio::{
     ChannelBuilder, ClientStreamingSink, Environment, RequestStream, RpcContext, Server,
@@ -14,11 +15,11 @@ use kvproto::resource_usage_agent::{
 
 #[derive(Clone)]
 pub struct MockAgentServer {
-    tx: Sender<ReportCpuTimeRequest>,
+    tx: Sender<Vec<ReportCpuTimeRequest>>,
 }
 
 impl MockAgentServer {
-    pub fn new(tx: Sender<ReportCpuTimeRequest>) -> Self {
+    pub fn new(tx: Sender<Vec<ReportCpuTimeRequest>>) -> Self {
         Self { tx }
     }
 
@@ -45,11 +46,14 @@ impl ResourceUsageAgent for MockAgentServer {
         mut stream: RequestStream<ReportCpuTimeRequest>,
         sink: ClientStreamingSink<ReportCpuTimeResponse>,
     ) {
+        fail_point!("mock-agent");
         let tx = self.tx.clone();
         let f = async move {
+            let mut res = vec![];
             while let Some(req) = stream.try_next().await? {
-                tx.send(req).unwrap();
+                res.push(req);
             }
+            tx.send(res).unwrap();
             sink.success(ReportCpuTimeResponse::default()).await?;
 
             Ok(())
