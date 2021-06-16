@@ -920,6 +920,18 @@ pub fn kv_pessimistic_lock(
     for_update_ts: u64,
     return_values: bool,
 ) -> PessimisticLockResponse {
+    kv_pessimistic_lock_with_ttl(client, ctx, keys, ts, for_update_ts, return_values, 20)
+}
+
+pub fn kv_pessimistic_lock_with_ttl(
+    client: &TikvClient,
+    ctx: Context,
+    keys: Vec<Vec<u8>>,
+    ts: u64,
+    for_update_ts: u64,
+    return_values: bool,
+    ttl: u64,
+) -> PessimisticLockResponse {
     let mut req = PessimisticLockRequest::default();
     req.set_context(ctx);
     let primary = keys[0].clone();
@@ -934,7 +946,7 @@ pub fn kv_pessimistic_lock(
     req.primary_lock = primary;
     req.start_version = ts;
     req.for_update_ts = for_update_ts;
-    req.lock_ttl = 20;
+    req.lock_ttl = ttl;
     req.is_first_lock = false;
     req.return_values = return_values;
     client.kv_pessimistic_lock(&req).unwrap()

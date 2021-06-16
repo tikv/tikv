@@ -49,10 +49,10 @@ futures = { version = "0.3", features = ["thread-pool"] }
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
 grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored"] }
 keys = { path = "../keys", default-features = false }
-kvproto = { rev = "7a046020d1c091638e1e8aba623c8c1e8962219d", git = "https://github.com/pingcap/kvproto.git", default-features = false }
+kvproto = { rev = "dda0a102bc6ac7371e1f99cd2797825aa210b4a0", git = "https://github.com/pingcap/kvproto.git", default-features = false }
 lazy_static = "1.3"
 log_wrappers = { path = "../log_wrappers" }
-prometheus = { version = "0.10", default-features = false }
+prometheus = { version = "0.12", default-features = false }
 serde = "1.0"
 serde_derive = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
@@ -60,7 +60,7 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 thiserror = "1.0"
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util", default-features = false }
-tokio = { version = "0.2.13", features = ["time", "rt-threaded", "macros"] }
+tokio = { version = "1.5", features = ["time", "rt-multi-thread", "macros"] }
 txn_types = { path = "../txn_types", default-features = false }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 

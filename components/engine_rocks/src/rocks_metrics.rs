@@ -9,8 +9,6 @@ use prometheus_static_metric::*;
 use rocksdb::{
     DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType, HistogramData, DB,
 };
-use std::i64;
-use tikv_util::warn;
 
 make_auto_flush_static_metric! {
     pub label_enum TickerName {
@@ -108,14 +106,6 @@ make_auto_flush_static_metric! {
 }
 
 pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
-    let v = value as i64;
-    if v < 0 {
-        warn!("engine ticker is overflow";
-            "ticker" => ?t, "value" => value
-        );
-        return;
-    }
-
     let name_enum = match name {
         "kv" => TickerName::kv,
         "raft" => TickerName::raft,
@@ -127,449 +117,499 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
             STORE_ENGINE_CACHE_EFFICIENCY
                 .get(name_enum)
                 .block_cache_miss
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::BlockCacheHit => {
             STORE_ENGINE_CACHE_EFFICIENCY
                 .get(name_enum)
                 .block_cache_hit
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::BlockCacheAdd => {
             STORE_ENGINE_CACHE_EFFICIENCY
                 .get(name_enum)
                 .block_cache_add
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::BlockCacheAddFailures => {
             STORE_ENGINE_CACHE_EFFICIENCY
                 .get(name_enum)
                 .block_cache_add_failures
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::BlockCacheIndexMiss => {
             STORE_ENGINE_CACHE_EFFICIENCY
                 .get(name_enum)
                 .block_cache_index_miss
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::BlockCacheIndexHit => {
             STORE_ENGINE_CACHE_EFFICIENCY
                 .get(name_enum)
                 .block_cache_index_hit
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::BlockCacheIndexAdd => {
             STORE_ENGINE_CACHE_EFFICIENCY
                 .get(name_enum)
                 .block_cache_index_add
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::BlockCacheIndexBytesInsert => {
             STORE_ENGINE_CACHE_EFFICIENCY
                 .get(name_enum)
                 .block_cache_index_bytes_insert
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::BlockCacheIndexBytesEvict => {
             STORE_ENGINE_CACHE_EFFICIENCY
                 .get(name_enum)
                 .block_cache_index_bytes_evict
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::BlockCacheFilterMiss => {
             STORE_ENGINE_CACHE_EFFICIENCY
                 .get(name_enum)
                 .block_cache_filter_miss
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::BlockCacheFilterHit => {
             STORE_ENGINE_CACHE_EFFICIENCY
                 .get(name_enum)
                 .block_cache_filter_hit
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::BlockCacheFilterAdd => {
             STORE_ENGINE_CACHE_EFFICIENCY
                 .get(name_enum)
                 .block_cache_filter_add
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::BlockCacheFilterBytesInsert => {
             STORE_ENGINE_CACHE_EFFICIENCY
                 .get(name_enum)
                 .block_cache_filter_bytes_insert
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::BlockCacheFilterBytesEvict => {
             STORE_ENGINE_CACHE_EFFICIENCY
                 .get(name_enum)
                 .block_cache_filter_bytes_evict
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::BlockCacheDataMiss => {
             STORE_ENGINE_CACHE_EFFICIENCY
                 .get(name_enum)
                 .block_cache_data_miss
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::BlockCacheDataHit => {
             STORE_ENGINE_CACHE_EFFICIENCY
                 .get(name_enum)
                 .block_cache_data_hit
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::BlockCacheDataAdd => {
             STORE_ENGINE_CACHE_EFFICIENCY
                 .get(name_enum)
                 .block_cache_data_add
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::BlockCacheDataBytesInsert => {
             STORE_ENGINE_CACHE_EFFICIENCY
                 .get(name_enum)
                 .block_cache_data_bytes_insert
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::BlockCacheBytesRead => {
             STORE_ENGINE_FLOW
                 .get(name_enum)
                 .block_cache_byte_read
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::BlockCacheBytesWrite => {
             STORE_ENGINE_FLOW
                 .get(name_enum)
                 .block_cache_byte_write
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::BloomFilterUseful => {
             STORE_ENGINE_BLOOM_EFFICIENCY
                 .get(name_enum)
                 .bloom_useful
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::MemtableHit => {
             STORE_ENGINE_MEMTABLE_EFFICIENCY
                 .get(name_enum)
                 .memtable_hit
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::MemtableMiss => {
             STORE_ENGINE_MEMTABLE_EFFICIENCY
                 .get(name_enum)
                 .memtable_miss
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::GetHitL0 => {
-            STORE_ENGINE_GET_SERVED.get(name_enum).get_hit_l0.inc_by(v);
+            STORE_ENGINE_GET_SERVED
+                .get(name_enum)
+                .get_hit_l0
+                .inc_by(value);
         }
         TickerType::GetHitL1 => {
-            STORE_ENGINE_GET_SERVED.get(name_enum).get_hit_l1.inc_by(v);
+            STORE_ENGINE_GET_SERVED
+                .get(name_enum)
+                .get_hit_l1
+                .inc_by(value);
         }
         TickerType::GetHitL2AndUp => {
             STORE_ENGINE_GET_SERVED
                 .get(name_enum)
                 .get_hit_l2_and_up
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::CompactionKeyDropNewerEntry => {
             STORE_ENGINE_COMPACTION_DROP
                 .get(name_enum)
                 .compaction_key_drop_newer_entry
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::CompactionKeyDropObsolete => {
             STORE_ENGINE_COMPACTION_DROP
                 .get(name_enum)
                 .compaction_key_drop_obsolete
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::CompactionKeyDropRangeDel => {
             STORE_ENGINE_COMPACTION_DROP
                 .get(name_enum)
                 .compaction_key_drop_range_del
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::CompactionRangeDelDropObsolete => {
             STORE_ENGINE_COMPACTION_DROP
                 .get(name_enum)
                 .range_del_drop_obsolete
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::CompactionOptimizedDelDropObsolete => {
             STORE_ENGINE_COMPACTION_DROP
                 .get(name_enum)
                 .optimized_del_drop_obsolete
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::NumberKeysWritten => {
-            STORE_ENGINE_FLOW.get(name_enum).keys_written.inc_by(v);
+            STORE_ENGINE_FLOW.get(name_enum).keys_written.inc_by(value);
         }
         TickerType::NumberKeysRead => {
-            STORE_ENGINE_FLOW.get(name_enum).keys_read.inc_by(v);
+            STORE_ENGINE_FLOW.get(name_enum).keys_read.inc_by(value);
         }
         TickerType::NumberKeysUpdated => {
-            STORE_ENGINE_FLOW.get(name_enum).keys_updated.inc_by(v);
+            STORE_ENGINE_FLOW.get(name_enum).keys_updated.inc_by(value);
         }
         TickerType::BytesWritten => {
-            STORE_ENGINE_FLOW.get(name_enum).bytes_written.inc_by(v);
+            STORE_ENGINE_FLOW.get(name_enum).bytes_written.inc_by(value);
         }
         TickerType::BytesRead => {
-            STORE_ENGINE_FLOW.get(name_enum).bytes_read.inc_by(v);
+            STORE_ENGINE_FLOW.get(name_enum).bytes_read.inc_by(value);
         }
         TickerType::NumberDbSeek => {
-            STORE_ENGINE_LOCATE.get(name_enum).number_db_seek.inc_by(v);
+            STORE_ENGINE_LOCATE
+                .get(name_enum)
+                .number_db_seek
+                .inc_by(value);
         }
         TickerType::NumberDbNext => {
-            STORE_ENGINE_LOCATE.get(name_enum).number_db_next.inc_by(v);
+            STORE_ENGINE_LOCATE
+                .get(name_enum)
+                .number_db_next
+                .inc_by(value);
         }
         TickerType::NumberDbPrev => {
-            STORE_ENGINE_LOCATE.get(name_enum).number_db_prev.inc_by(v);
+            STORE_ENGINE_LOCATE
+                .get(name_enum)
+                .number_db_prev
+                .inc_by(value);
         }
         TickerType::NumberDbSeekFound => {
             STORE_ENGINE_LOCATE
                 .get(name_enum)
                 .number_db_seek_found
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::NumberDbNextFound => {
             STORE_ENGINE_LOCATE
                 .get(name_enum)
                 .number_db_next_found
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::NumberDbPrevFound => {
             STORE_ENGINE_LOCATE
                 .get(name_enum)
                 .number_db_prev_found
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::IterBytesRead => {
-            STORE_ENGINE_FLOW.get(name_enum).iter_bytes_read.inc_by(v);
+            STORE_ENGINE_FLOW
+                .get(name_enum)
+                .iter_bytes_read
+                .inc_by(value);
         }
         TickerType::NoFileCloses => {
             STORE_ENGINE_FILE_STATUS
                 .get(name_enum)
                 .no_file_closes
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::NoFileOpens => {
             STORE_ENGINE_FILE_STATUS
                 .get(name_enum)
                 .no_file_opens
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::NoFileErrors => {
             STORE_ENGINE_FILE_STATUS
                 .get(name_enum)
                 .no_file_errors
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::StallMicros => {
-            STORE_ENGINE_STALL_MICROS.get(name_enum).inc_by(v);
+            STORE_ENGINE_STALL_MICROS.get(name_enum).inc_by(value);
         }
         TickerType::BloomFilterPrefixChecked => {
             STORE_ENGINE_BLOOM_EFFICIENCY
                 .get(name_enum)
                 .bloom_prefix_checked
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::BloomFilterPrefixUseful => {
             STORE_ENGINE_BLOOM_EFFICIENCY
                 .get(name_enum)
                 .bloom_prefix_useful
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::WalFileSynced => {
-            STORE_ENGINE_WAL_FILE_SYNCED.get(name_enum).inc_by(v);
+            STORE_ENGINE_WAL_FILE_SYNCED.get(name_enum).inc_by(value);
         }
         TickerType::WalFileBytes => {
-            STORE_ENGINE_FLOW.get(name_enum).wal_file_bytes.inc_by(v);
+            STORE_ENGINE_FLOW
+                .get(name_enum)
+                .wal_file_bytes
+                .inc_by(value);
         }
         TickerType::WriteDoneBySelf => {
             STORE_ENGINE_WRITE_SERVED
                 .get(name_enum)
                 .write_done_by_self
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::WriteDoneByOther => {
             STORE_ENGINE_WRITE_SERVED
                 .get(name_enum)
                 .write_done_by_other
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::WriteTimedout => {
             STORE_ENGINE_WRITE_SERVED
                 .get(name_enum)
                 .write_timeout
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::WriteWithWal => {
             STORE_ENGINE_WRITE_SERVED
                 .get(name_enum)
                 .write_with_wal
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::CompactReadBytes => {
             STORE_ENGINE_COMPACTION_FLOW
                 .get(name_enum)
                 .bytes_read
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::CompactWriteBytes => {
             STORE_ENGINE_COMPACTION_FLOW
                 .get(name_enum)
                 .bytes_written
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::FlushWriteBytes => {
-            STORE_ENGINE_FLOW.get(name_enum).flush_write_bytes.inc_by(v);
+            STORE_ENGINE_FLOW
+                .get(name_enum)
+                .flush_write_bytes
+                .inc_by(value);
         }
         TickerType::ReadAmpEstimateUsefulBytes => {
             STORE_ENGINE_READ_AMP_FLOW
                 .get(name_enum)
                 .read_amp_estimate_useful_bytes
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::ReadAmpTotalReadBytes => {
             STORE_ENGINE_READ_AMP_FLOW
                 .get(name_enum)
                 .read_amp_total_read_bytes
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::TitanNumGet => {
             STORE_ENGINE_BLOB_LOCATE
                 .get(name_enum)
                 .number_blob_get
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::TitanNumSeek => {
             STORE_ENGINE_BLOB_LOCATE
                 .get(name_enum)
                 .number_blob_seek
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::TitanNumNext => {
             STORE_ENGINE_BLOB_LOCATE
                 .get(name_enum)
                 .number_blob_next
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::TitanNumPrev => {
             STORE_ENGINE_BLOB_LOCATE
                 .get(name_enum)
                 .number_blob_prev
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::TitanBlobFileNumKeysWritten => {
-            STORE_ENGINE_BLOB_FLOW.get(name_enum).keys_written.inc_by(v);
+            STORE_ENGINE_BLOB_FLOW
+                .get(name_enum)
+                .keys_written
+                .inc_by(value);
         }
         TickerType::TitanBlobFileNumKeysRead => {
-            STORE_ENGINE_BLOB_FLOW.get(name_enum).keys_read.inc_by(v);
+            STORE_ENGINE_BLOB_FLOW
+                .get(name_enum)
+                .keys_read
+                .inc_by(value);
         }
         TickerType::TitanBlobFileBytesWritten => {
             STORE_ENGINE_BLOB_FLOW
                 .get(name_enum)
                 .bytes_written
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::TitanBlobFileBytesRead => {
-            STORE_ENGINE_BLOB_FLOW.get(name_enum).bytes_read.inc_by(v);
+            STORE_ENGINE_BLOB_FLOW
+                .get(name_enum)
+                .bytes_read
+                .inc_by(value);
         }
-        TickerType::TitanBlobFileSynced => STORE_ENGINE_BLOB_FILE_SYNCED.get(name_enum).inc_by(v),
+        TickerType::TitanBlobFileSynced => {
+            STORE_ENGINE_BLOB_FILE_SYNCED.get(name_enum).inc_by(value)
+        }
         TickerType::TitanGcNumFiles => {
             STORE_ENGINE_BLOB_GC_FILE
                 .get(name_enum)
                 .gc_input_files_count
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::TitanGcNumNewFiles => {
             STORE_ENGINE_BLOB_GC_FILE
                 .get(name_enum)
                 .gc_output_files_count
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::TitanGcNumKeysOverwritten => {
             STORE_ENGINE_BLOB_GC_FLOW
                 .get(name_enum)
                 .keys_overwritten
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::TitanGcNumKeysRelocated => {
             STORE_ENGINE_BLOB_GC_FLOW
                 .get(name_enum)
                 .keys_relocated
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::TitanGcBytesOverwritten => {
             STORE_ENGINE_BLOB_GC_FLOW
                 .get(name_enum)
                 .bytes_overwritten
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::TitanGcBytesRelocated => {
             STORE_ENGINE_BLOB_GC_FLOW
                 .get(name_enum)
                 .bytes_relocated
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::TitanGcBytesWritten => {
             STORE_ENGINE_BLOB_GC_FLOW
                 .get(name_enum)
                 .bytes_written
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::TitanGcBytesRead => {
             STORE_ENGINE_BLOB_GC_FLOW
                 .get(name_enum)
                 .bytes_read
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::TitanBlobCacheHit => {
             STORE_ENGINE_BLOB_CACHE_EFFICIENCY
                 .get(name_enum)
                 .blob_cache_hit
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::TitanBlobCacheMiss => {
             STORE_ENGINE_BLOB_CACHE_EFFICIENCY
                 .get(name_enum)
                 .blob_cache_miss
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::TitanGcNoNeed => {
-            STORE_ENGINE_BLOB_GC_ACTION.get(name_enum).no_need.inc_by(v);
+            STORE_ENGINE_BLOB_GC_ACTION
+                .get(name_enum)
+                .no_need
+                .inc_by(value);
         }
         TickerType::TitanGcRemain => {
-            STORE_ENGINE_BLOB_GC_ACTION.get(name_enum).remain.inc_by(v);
+            STORE_ENGINE_BLOB_GC_ACTION
+                .get(name_enum)
+                .remain
+                .inc_by(value);
         }
         TickerType::TitanGcDiscardable => {
             STORE_ENGINE_BLOB_GC_ACTION
                 .get(name_enum)
                 .discardable
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::TitanGcSample => {
-            STORE_ENGINE_BLOB_GC_ACTION.get(name_enum).sample.inc_by(v);
+            STORE_ENGINE_BLOB_GC_ACTION
+                .get(name_enum)
+                .sample
+                .inc_by(value);
         }
         TickerType::TitanGcSmallFile => {
             STORE_ENGINE_BLOB_GC_ACTION
                 .get(name_enum)
                 .small_file
-                .inc_by(v);
+                .inc_by(value);
         }
         TickerType::TitanGcFailure => {
-            STORE_ENGINE_BLOB_GC_ACTION.get(name_enum).failure.inc_by(v);
+            STORE_ENGINE_BLOB_GC_ACTION
+                .get(name_enum)
+                .failure
+                .inc_by(value);
         }
         TickerType::TitanGcSuccess => {
-            STORE_ENGINE_BLOB_GC_ACTION.get(name_enum).success.inc_by(v);
+            STORE_ENGINE_BLOB_GC_ACTION
+                .get(name_enum)
+                .success
+                .inc_by(value);
         }
         TickerType::TitanGcTriggerNext => {
             STORE_ENGINE_BLOB_GC_ACTION
                 .get(name_enum)
                 .trigger_next
-                .inc_by(v);
+                .inc_by(value);
         }
         _ => {}
     }

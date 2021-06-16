@@ -3176,6 +3176,10 @@ where
         self.ctx.store_stat.lock_cf_bytes_written += metrics.lock_cf_written_bytes;
         self.ctx.store_stat.engine_total_bytes_written += metrics.written_bytes;
         self.ctx.store_stat.engine_total_keys_written += metrics.written_keys;
+        self.ctx
+            .store_stat
+            .engine_total_query_stats
+            .add_query_stats(&metrics.written_query_stats.0);
     }
 
     /// Check if a request is valid if it has valid prepare_merge/commit_merge proposal.
@@ -3566,7 +3570,7 @@ where
 
         self.fsm.skip_gc_raft_log_ticks = 0;
         self.register_raft_gc_log_tick();
-        PEER_GC_RAFT_LOG_COUNTER.inc_by(total_gc_logs as i64);
+        PEER_GC_RAFT_LOG_COUNTER.inc_by(total_gc_logs);
     }
 
     fn register_entry_cache_evict_tick(&mut self) {
@@ -3612,6 +3616,7 @@ where
             return;
         }
 
+        fail_point!("on_split_region_check_tick");
         self.register_split_region_check_tick();
 
         // To avoid frequent scan, we only add new scan tasks if all previous tasks
@@ -3768,6 +3773,7 @@ where
         self.fsm.peer.has_calculated_region_size = true;
         self.register_split_region_check_tick();
         self.register_pd_heartbeat_tick();
+        fail_point!("on_approximate_region_size");
     }
 
     fn on_approximate_region_keys(&mut self, keys: u64) {
