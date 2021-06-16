@@ -391,6 +391,13 @@ impl<T> MustConsumeVec<T> {
             v: Vec::with_capacity(cap),
         }
     }
+
+    pub fn take(&mut self) -> Self {
+        MustConsumeVec {
+            tag: self.tag,
+            v: std::mem::take(&mut self.v),
+        }
+    }
 }
 
 impl<T> Deref for MustConsumeVec<T> {

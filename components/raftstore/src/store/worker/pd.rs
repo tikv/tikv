@@ -29,6 +29,7 @@ use raft::eraftpb::ConfChangeType;
 use crate::store::cmd_resp::new_error;
 use crate::store::metrics::*;
 use crate::store::util::{is_epoch_stale, ConfChangeKind, KeysInfoFormatter};
+use crate::store::worker::query_stats::QueryStats;
 use crate::store::worker::split_controller::{SplitInfo, TOP_N};
 use crate::store::worker::{AutoSplitController, ReadStats};
 use crate::store::{
@@ -87,6 +88,7 @@ pub struct HeartbeatTask {
     pub pending_peers: Vec<metapb::Peer>,
     pub written_bytes: u64,
     pub written_keys: u64,
+    pub written_query_stats: QueryStats,
     pub approximate_size: u64,
     pub approximate_keys: u64,
     pub replication_status: Option<RegionReplicationStatus>,
@@ -152,8 +154,10 @@ where
 pub struct StoreStat {
     pub engine_total_bytes_read: u64,
     pub engine_total_keys_read: u64,
+    pub engine_total_query_num: QueryStats,
     pub engine_last_total_bytes_read: u64,
     pub engine_last_total_keys_read: u64,
+    pub engine_last_query_num: QueryStats,
     pub last_report_ts: UnixSecs,
 
     pub region_bytes_read: LocalHistogram,
@@ -179,6 +183,8 @@ impl Default for StoreStat {
             engine_total_keys_read: 0,
             engine_last_total_bytes_read: 0,
             engine_last_total_keys_read: 0,
+            engine_total_query_num: QueryStats::default(),
+            engine_last_query_num: QueryStats::default(),
 
             store_cpu_usages: RecordPairVec::default(),
             store_read_io_rates: RecordPairVec::default(),
@@ -191,15 +197,19 @@ impl Default for StoreStat {
 pub struct PeerStat {
     pub read_bytes: u64,
     pub read_keys: u64,
+    pub read_query_stats: QueryStats,
     // last_region_report_attributes records the state of the last region heartbeat
     pub last_region_report_read_bytes: u64,
     pub last_region_report_read_keys: u64,
+    pub last_region_report_read_query_stats: QueryStats,
     pub last_region_report_written_bytes: u64,
     pub last_region_report_written_keys: u64,
+    pub last_region_report_written_query_stats: QueryStats,
     pub last_region_report_ts: UnixSecs,
     // last_store_report_attributes records the state of the last store heartbeat
     pub last_store_report_read_bytes: u64,
     pub last_store_report_read_keys: u64,
+    pub last_store_report_query_stats: QueryStats,
     pub approximate_keys: u64,
     pub approximate_size: u64,
 }
@@ -428,6 +438,7 @@ where
 }
 
 const HOTSPOT_KEY_RATE_THRESHOLD: u64 = 128;
+const HOTSPOT_QUERY_RATE_THRESHOLD: u64 = 128;
 const HOTSPOT_BYTE_RATE_THRESHOLD: u64 = 8 * 1024;
 
 // TODO: support dyamic configure threshold in future
@@ -443,6 +454,13 @@ fn hotspot_byte_report_threshold() -> u64 {
     fail_point!("mock_hotspot_threshold", |_| { 0 });
 
     HOTSPOT_BYTE_RATE_THRESHOLD * 10
+}
+
+fn hotspot_query_num_report_threshold() -> u64 {
+    #[cfg(feature = "failpoints")]
+    fail_point!("mock_hotspot_threshold", |_| { 0 });
+
+    HOTSPOT_QUERY_RATE_THRESHOLD * 10
 }
 
 pub struct Runner<EK, ER, T>
@@ -686,11 +704,18 @@ where
         for (region_id, region_peer) in &mut self.region_peers {
             let read_bytes = region_peer.read_bytes - region_peer.last_store_report_read_bytes;
             let read_keys = region_peer.read_keys - region_peer.last_store_report_read_keys;
+            let read_query_stats = region_peer
+                .read_query_stats
+                .sub_query_stats(&region_peer.last_store_report_query_stats);
             region_peer.last_store_report_read_bytes = region_peer.read_bytes;
             region_peer.last_store_report_read_keys = region_peer.read_keys;
+            region_peer
+                .last_store_report_query_stats
+                .fill_query_stats(&region_peer.read_query_stats);
             // TODO: select hotspot peer by binaray heap in future
             if read_bytes < hotspot_byte_report_threshold()
                 && read_keys < hotspot_key_report_threshold()
+                && read_query_stats.get_read_query_num() < hotspot_query_num_report_threshold()
             {
                 continue;
             }
@@ -698,6 +723,7 @@ where
             peer_stat.set_region_id(*region_id);
             peer_stat.set_read_bytes(read_bytes);
             peer_stat.set_read_keys(read_keys);
+            peer_stat.set_query_stats(read_query_stats.0);
             stats.peer_stats.push(peer_stat);
         }
 
@@ -728,6 +754,15 @@ where
             self.store_stat.engine_total_keys_read - self.store_stat.engine_last_total_keys_read,
         );
 
+        self.store_stat
+            .engine_total_query_num
+            .add_query_stats(stats.get_query_stats()); // add write query stat
+        let res = self
+            .store_stat
+            .engine_total_query_num
+            .sub_query_stats(&self.store_stat.engine_last_query_num);
+        stats.set_query_stats(res.0);
+
         stats.set_cpu_usages(self.store_stat.store_cpu_usages.clone().into());
         stats.set_read_io_rates(self.store_stat.store_read_io_rates.clone().into());
         stats.set_write_io_rates(self.store_stat.store_write_io_rates.clone().into());
@@ -737,6 +772,9 @@ where
         stats.set_interval(interval);
         self.store_stat.engine_last_total_bytes_read = self.store_stat.engine_total_bytes_read;
         self.store_stat.engine_last_total_keys_read = self.store_stat.engine_total_keys_read;
+        self.store_stat
+            .engine_last_query_num
+            .fill_query_stats(&self.store_stat.engine_total_query_num);
         self.store_stat.last_report_ts = UnixSecs::now();
         self.store_stat.region_bytes_written.flush();
         self.store_stat.region_keys_written.flush();
@@ -959,6 +997,12 @@ where
             peer_stat.read_keys += region_info.flow.read_keys as u64;
             self.store_stat.engine_total_bytes_read += region_info.flow.read_bytes as u64;
             self.store_stat.engine_total_keys_read += region_info.flow.read_keys as u64;
+            peer_stat
+                .read_query_stats
+                .add_query_stats(&region_info.query_stats.0);
+            self.store_stat
+                .engine_total_query_num
+                .add_query_stats(&region_info.query_stats.0);
         }
         if !read_stats.region_infos.is_empty() {
             if let Some(sender) = self.stats_monitor.get_sender() {
@@ -1149,6 +1193,7 @@ where
                     written_bytes_delta,
                     written_keys_delta,
                     last_report_ts,
+                    query_stats,
                 ) = {
                     let peer_stat = self
                         .region_peers
@@ -1156,6 +1201,7 @@ where
                         .or_insert_with(PeerStat::default);
                     peer_stat.approximate_size = hb_task.approximate_size;
                     peer_stat.approximate_keys = hb_task.approximate_keys;
+
                     let read_bytes_delta =
                         peer_stat.read_bytes - peer_stat.last_region_report_read_bytes;
                     let read_keys_delta =
@@ -1164,12 +1210,23 @@ where
                         hb_task.written_bytes - peer_stat.last_region_report_written_bytes;
                     let written_keys_delta =
                         hb_task.written_keys - peer_stat.last_region_report_written_keys;
+                    let written_query_stats_delta = hb_task
+                        .written_query_stats
+                        .sub_query_stats(&peer_stat.last_region_report_written_query_stats);
+                    let mut query_stats = peer_stat
+                        .read_query_stats
+                        .sub_query_stats(&peer_stat.last_region_report_read_query_stats);
+                    query_stats.add_query_stats(&written_query_stats_delta.0); // add write info
                     let mut last_report_ts = peer_stat.last_region_report_ts;
                     peer_stat.last_region_report_written_bytes = hb_task.written_bytes;
                     peer_stat.last_region_report_written_keys = hb_task.written_keys;
+                    peer_stat.last_region_report_written_query_stats = hb_task.written_query_stats;
                     peer_stat.last_region_report_read_bytes = peer_stat.read_bytes;
                     peer_stat.last_region_report_read_keys = peer_stat.read_keys;
+                    peer_stat.last_region_report_read_query_stats =
+                        peer_stat.read_query_stats.clone();
                     peer_stat.last_region_report_ts = UnixSecs::now();
+
                     if last_report_ts.is_zero() {
                         last_report_ts = self.start_ts;
                     }
@@ -1179,6 +1236,7 @@ where
                         written_bytes_delta,
                         written_keys_delta,
                         last_report_ts,
+                        query_stats.0,
                     )
                 };
                 self.handle_heartbeat(
@@ -1192,6 +1250,7 @@ where
                         written_keys: written_keys_delta,
                         read_bytes: read_bytes_delta,
                         read_keys: read_keys_delta,
+                        query_stats,
                         approximate_size: hb_task.approximate_size,
                         approximate_keys: hb_task.approximate_keys,
                         last_report_ts,
