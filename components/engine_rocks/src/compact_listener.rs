@@ -240,6 +240,20 @@ impl EventListener for CompactionListener {
             .send(Info::Flush(info.cf_name().to_owned(), total));
     }
 
+    fn on_external_file_ingested(&self, info: &IngestionInfo) {
+        // we can regard ingestion in L0 as a flush
+        if info.picked_level() == 0 {
+            let mut total = 0;
+            let p = info.table_properties();
+            total += p.data_size() + p.index_size() + p.filter_size();
+            let _ = self
+                .l0_completed_sender
+                .lock()
+                .unwrap()
+                .send(Info::Flush(info.cf_name().to_owned(), total));
+        }
+    }
+
     fn on_compaction_completed(&self, info: &RawCompactionJobInfo) {
         let info = &RocksCompactionJobInfo::from_raw(info);
         if info.status().is_err() {

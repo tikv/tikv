@@ -300,6 +300,11 @@ lazy_static! {
         "The speed of write flow."
     )
     .unwrap();
+       pub static ref SCHED_TARGET_FLOW_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_scheduler_target_flow",
+        "The speed of write flow."
+    )
+    .unwrap();
     pub static ref SCHED_THROTTLE_FLOW_GAUGE: IntGauge = register_int_gauge!(
         "tikv_scheduler_throttle_flow",
         "The speed of throttle flow."
