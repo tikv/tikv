@@ -158,7 +158,7 @@ impl Runnable for ResourceMeteringReporter {
                     let kth = self.find_top_k[self.config.max_resource_groups];
                     let others = &mut self.others;
                     self.records
-                        .drain_filter(|_, (_, _, total)| *total < kth)
+                        .drain_filter(|_, (_, _, total)| *total <= kth)
                         .for_each(|(_, (secs_list, cpu_time_list, _))| {
                             secs_list
                                 .into_iter()

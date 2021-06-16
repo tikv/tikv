@@ -152,7 +152,7 @@ impl TestSuite {
         }
     }
 
-    pub fn execute_ops(&mut self, tags: Vec<impl Into<String>>) {
+    pub fn submit_requests(&mut self, tags: Vec<impl Into<String>>) {
         self.rt
             .spawn(futures::future::join_all(tags.into_iter().map(|tag| {
                 let mut ctx = Context::default();
@@ -167,20 +167,20 @@ impl TestSuite {
     }
 
     pub fn fetch_reported_cpu_time(&self) -> HashMap<String, (Vec<u64>, Vec<u32>)> {
-        self.rx
-            .try_iter()
-            .map(|r| {
-                (
-                    String::from_utf8_lossy(
-                        (!r.get_resource_group_tag().is_empty())
-                            .then(|| r.resource_group_tag.split_at(TEST_TAG_PREFIX.len()).1)
-                            .unwrap_or(b""),
-                    )
-                    .into_owned(),
-                    (r.record_list_timestamp_sec, r.record_list_cpu_time_ms),
-                )
-            })
-            .collect()
+        let mut res = HashMap::new();
+        self.rx.try_iter().for_each(|r| {
+            let tag = String::from_utf8_lossy(
+                (!r.get_resource_group_tag().is_empty())
+                    .then(|| r.resource_group_tag.split_at(TEST_TAG_PREFIX.len()).1)
+                    .unwrap_or(b""),
+            )
+            .into_owned();
+            let (ts, cpu_time) = res.entry(tag).or_insert((vec![], vec![]));
+            ts.extend(&r.record_list_timestamp_sec);
+            cpu_time.extend(&r.record_list_cpu_time_ms);
+        });
+
+        res
     }
 
     pub fn reset(&mut self) {
