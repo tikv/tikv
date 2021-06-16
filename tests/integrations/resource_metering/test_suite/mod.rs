@@ -6,6 +6,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crossbeam::channel::{unbounded, Receiver, Sender};
+use futures::channel::oneshot;
+use futures::{select, FutureExt};
 use grpcio::{Environment, Server};
 use kvproto::kvrpcpb::Context;
 use kvproto::resource_usage_agent::ReportCpuTimeRequest;
@@ -29,11 +31,13 @@ pub struct TestSuite {
     reporter: Option<Box<LazyWorker<Task>>>,
     cfg_controller: ConfigController,
 
-    tx: Sender<ReportCpuTimeRequest>,
-    rx: Receiver<ReportCpuTimeRequest>,
+    tx: Sender<Vec<ReportCpuTimeRequest>>,
+    rx: Receiver<Vec<ReportCpuTimeRequest>>,
 
     env: Arc<Environment>,
     rt: Runtime,
+    cancel_workload: Option<oneshot::Sender<()>>,
+    wait_for_cancel: Option<oneshot::Receiver<()>>,
 
     _dir: TempDir,
 }
@@ -85,15 +89,9 @@ impl TestSuite {
             rx,
             env,
             rt,
+            cancel_workload: None,
+            wait_for_cancel: None,
             _dir: dir,
-        }
-    }
-
-    pub fn cfg_failpoint_op_duration(&self, ms: u64) {
-        if ms == 0 {
-            fail::remove("storage::get");
-        } else {
-            fail::cfg("storage::get", &format!("delay({})", ms)).unwrap();
         }
     }
 
@@ -152,41 +150,78 @@ impl TestSuite {
         }
     }
 
-    pub fn submit_requests(&mut self, tags: Vec<impl Into<String>>) {
-        self.rt
-            .spawn(futures::future::join_all(tags.into_iter().map(|tag| {
-                let mut ctx = Context::default();
-                ctx.set_resource_group_tag({
-                    let mut t = Vec::from(TEST_TAG_PREFIX);
-                    let tag = tag.into();
-                    t.extend_from_slice(tag.as_bytes());
-                    t
-                });
-                self.storage.get(ctx, Key::from_raw(b""), TimeStamp::new(0))
-            })));
+    pub fn setup_workload(&mut self, tags: Vec<impl Into<String>>) {
+        assert!(self.cancel_workload.is_none(), "Workload has been set");
+        let (cancel_tx, mut cancel_rx) = oneshot::channel();
+        let (wait_tx, wait_rx) = oneshot::channel();
+        self.cancel_workload = Some(cancel_tx);
+        self.wait_for_cancel = Some(wait_rx);
+        let tags = tags.into_iter().map(|s| s.into()).collect::<Vec<_>>();
+        let storage = self.storage.clone();
+        self.rt.spawn(async move {
+            loop {
+                let mut workload = futures::future::join_all(tags.iter().map(|tag| {
+                    let mut ctx = Context::default();
+                    ctx.set_resource_group_tag({
+                        let mut t = Vec::from(TEST_TAG_PREFIX);
+                        let tag = tag.clone();
+                        t.extend_from_slice(tag.as_bytes());
+                        t
+                    });
+                    storage.get(ctx, Key::from_raw(b""), TimeStamp::new(0))
+                }))
+                .fuse();
+
+                select! {
+                    _ = workload => {}
+                    _ = cancel_rx => break,
+                }
+            }
+
+            wait_tx.send(()).unwrap();
+        });
+    }
+
+    pub fn cancel_workload(&mut self) {
+        if let Some(tx) = self.cancel_workload.take() {
+            tx.send(()).unwrap();
+            self.rt
+                .block_on(self.wait_for_cancel.take().unwrap())
+                .unwrap();
+        }
     }
 
     pub fn fetch_reported_cpu_time(&self) -> HashMap<String, (Vec<u64>, Vec<u32>)> {
         let mut res = HashMap::new();
-        self.rx.try_iter().for_each(|r| {
-            let tag = String::from_utf8_lossy(
-                (!r.get_resource_group_tag().is_empty())
-                    .then(|| r.resource_group_tag.split_at(TEST_TAG_PREFIX.len()).1)
-                    .unwrap_or(b""),
-            )
-            .into_owned();
-            let (ts, cpu_time) = res.entry(tag).or_insert((vec![], vec![]));
-            ts.extend(&r.record_list_timestamp_sec);
-            cpu_time.extend(&r.record_list_cpu_time_ms);
-        });
+        self.rx
+            .try_iter()
+            .flat_map(|r| r.into_iter())
+            .for_each(|r| {
+                let tag = String::from_utf8_lossy(
+                    (!r.get_resource_group_tag().is_empty())
+                        .then(|| r.resource_group_tag.split_at(TEST_TAG_PREFIX.len()).1)
+                        .unwrap_or(b""),
+                )
+                .into_owned();
+                let (ts, cpu_time) = res.entry(tag).or_insert((vec![], vec![]));
+                ts.extend(&r.record_list_timestamp_sec);
+                cpu_time.extend(&r.record_list_cpu_time_ms);
+            });
 
         res
     }
 
+    pub fn flush_agent(&self) {
+        let _ = self
+            .rx
+            .recv_timeout(self.get_current_cfg().report_agent_interval.0);
+    }
+
     pub fn reset(&mut self) {
-        self.cfg_failpoint_op_duration(0);
         self.cfg_enabled(false);
         self.cfg_agent_address("");
+        self.cancel_workload();
+        self.flush_agent();
         self.cfg_precision("1s");
         self.cfg_report_agent_interval("5s");
         self.cfg_max_resource_groups(5000);

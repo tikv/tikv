@@ -367,7 +367,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         false,
                     );
 
-                    fail_point!("storage::get");
                     let result = snap_store
                         .get(&key, &mut statistics)
                         // map storage::txn::Error -> storage::Error
