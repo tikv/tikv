@@ -72,11 +72,7 @@ use crate::store::util::{
     ConfChangeKind, KeysInfoFormatter,
 };
 use crate::store::{cmd_resp, util, Config, RegionSnapshot, RegionTask};
-<<<<<<< HEAD
-use crate::{Error, Result};
-=======
-use crate::{bytes_capacity, store::QueryStats, Error, Result};
->>>>>>> 8188bb845... raftstore: unify memory trace and count dangle entries (#10334)
+use crate::{bytes_capacity, Error, Result};
 
 use super::metrics::*;
 
