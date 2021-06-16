@@ -57,7 +57,6 @@ use tikv::{
     server::raftkv::ReplicaReadLockChecker,
 };
 use tikv_util::config::VersionTrack;
-use tikv_util::thread_group::GroupProperties;
 use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker};
 use tikv_util::HandyRwLock;
@@ -112,7 +111,6 @@ struct ServerMeta {
     raw_apply_router: ApplyRouter<RocksEngine>,
     gc_worker: GcWorker<RaftKv<RocksEngine, SimulateStoreTransport>, SimulateStoreTransport>,
     rts_worker: Option<LazyWorker<resolved_ts::Task<RocksSnapshot>>>,
-    group_properties: GroupProperties,
 }
 
 type PendingServices = Vec<Box<dyn Fn() -> Service>>;
@@ -212,8 +210,6 @@ impl Simulator for ServerCluster {
         router: RaftRouter<RocksEngine, RocksEngine>,
         system: RaftBatchSystem<RocksEngine, RocksEngine>,
     ) -> ServerResult<u64> {
-        let props = GroupProperties::default();
-        tikv_util::thread_group::set_properties(Some(props.clone()));
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
             let p = Builder::new().prefix("test_cluster").tempdir().unwrap();
             (p.path().to_str().unwrap().to_owned(), Some(p))
@@ -485,7 +481,6 @@ impl Simulator for ServerCluster {
                 sim_trans: simulate_trans,
                 gc_worker,
                 rts_worker,
-                group_properties: props,
             },
         );
         self.addrs.insert(node_id, format!("{}", addr));
@@ -509,7 +504,6 @@ impl Simulator for ServerCluster {
 
     fn stop_node(&mut self, node_id: u64) {
         if let Some(mut meta) = self.metas.remove(&node_id) {
-            meta.group_properties.mark_shutdown();
             meta.server.stop().unwrap();
             meta.node.stop();
             // resolved ts worker started, let's stop it

@@ -376,7 +376,7 @@ impl<S: Snapshot> CmdEpochChecker<S> {
 
 impl<S: Snapshot> Drop for CmdEpochChecker<S> {
     fn drop(&mut self) {
-        if tikv_util::thread_group::is_shutdown().unwrap_or(false) {
+        if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
             for mut state in self.proposed_admin_cmd.drain(..) {
                 state.cbs.clear();
             }

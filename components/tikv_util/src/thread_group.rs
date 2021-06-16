@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 #[derive(Default)]
 struct GroupPropertiesInner {
-    pub shutdown: AtomicBool,
+    shutdown: AtomicBool,
 }
 
 #[derive(Default, Clone)]
@@ -38,11 +38,15 @@ pub fn set_properties(props: Option<GroupProperties>) {
 }
 
 /// Checks if the system is shutdown.
-pub fn is_shutdown() -> Option<bool> {
+pub fn is_shutdown(ensure_set: bool) -> bool {
     PROPERTIES.with(|p| {
-        p.borrow()
-            .as_ref()
-            .map(|props| props.inner.shutdown.load(Ordering::SeqCst))
+        if let Some(props) = &*p.borrow() {
+            props.inner.shutdown.load(Ordering::SeqCst)
+        } else if ensure_set && !std::thread::panicking() {
+            panic!("group properties is not set");
+        } else {
+            false
+        }
     })
 }
 

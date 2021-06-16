@@ -3577,7 +3577,7 @@ where
     EK: KvEngine,
 {
     fn drop(&mut self) {
-        if tikv_util::thread_group::is_shutdown().unwrap_or(false) {
+        if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
             self.delegate.clear_all_commands_silently()
         } else {
             self.delegate.clear_all_commands_as_stale();
@@ -3836,7 +3836,7 @@ where
                         "target region is not found, drop proposals";
                         "region_id" => region_id
                     );
-                    if !tikv_util::thread_group::is_shutdown().unwrap_or(false) {
+                    if !tikv_util::thread_group::is_shutdown(!cfg!(test)) {
                         for p in apply.cbs.drain(..) {
                             let cmd = PendingCmd::<EK::Snapshot>::new(p.index, p.term, p.cb);
                             notify_region_removed(apply.region_id, apply.peer_id, cmd);
