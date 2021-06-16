@@ -27,7 +27,7 @@ use kvproto::raft_serverpb::{
 };
 use kvproto::replication_modepb::{DrAutoSyncState, ReplicationMode};
 use protobuf::Message;
-use raft::eraftpb::{ConfChangeType, MessageType};
+use raft::eraftpb::{ConfChangeType, EntryType, MessageType};
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 use raft::{Ready, StateRole};
 use tikv_alloc::trace::TraceEvent;
@@ -1233,15 +1233,40 @@ where
 
         let msg_type = msg.get_message().get_msg_type();
         let store_id = self.ctx.store_id();
-        if (disk::disk_full_precheck(store_id) || disk::is_disk_full())
-            && [MessageType::MsgAppend, MessageType::MsgTimeoutNow].contains(&msg_type)
-        {
-            debug!(
-                "skip {:?} because of disk full", msg_type;
-                "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id()
-            );
-            return Err(Error::Timeout("disk full".to_owned()));
+        // if (disk::disk_full_precheck(store_id) || disk::is_disk_full())
+        //     && [MessageType::MsgAppend, MessageType::MsgTimeoutNow].contains(&msg_type)
+        // {
+        //     debug!(
+        //         "skip {:?} because of disk full", msg_type;
+        //         "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id()
+        //     );
+        //     return Err(Error::Timeout("disk full".to_owned()));
+        // }
+
+        if disk::disk_full_precheck(store_id) || disk::is_disk_full() {
+            let mut flag = false;
+            if MessageType::MsgAppend == msg_type {
+                let entries = msg.get_message().get_entries();
+                for i in entries {
+                    let entry_type = i.get_entry_type();
+                    if EntryType::EntryNormal == entry_type && !i.get_data().is_empty() {
+                        flag = true;
+                        break;
+                    }
+                }
+            } else if MessageType::MsgTimeoutNow == msg_type {
+                flag = true;
+            }
+
+            if flag {
+                debug!(
+                    "skip {:?} because of disk full", msg_type;
+                    "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id()
+                );
+                return Err(Error::Timeout("disk full".to_owned()));
+            }
         }
+
         if !self.validate_raft_msg(&msg) {
             return Ok(());
         }

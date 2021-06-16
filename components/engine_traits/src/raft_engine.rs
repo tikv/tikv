@@ -80,6 +80,10 @@ pub trait RaftEngine: RaftEngineReadOnly + Clone + Sync + Send + 'static {
     fn stop(&self) {}
 
     fn dump_stats(&self) -> Result<String>;
+
+    fn get_engine_size(&self) -> Result<u64> {
+        Ok(0)
+    }
 }
 
 pub trait RaftLogBatch: Send {

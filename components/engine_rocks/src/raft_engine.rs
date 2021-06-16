@@ -221,6 +221,10 @@ impl RaftEngine for RocksEngine {
     fn dump_stats(&self) -> Result<String> {
         MiscExt::dump_stats(self)
     }
+
+    fn get_engine_size(&self) -> Result<u64> {
+        MiscExt::get_engine_used_size(self)
+    }
 }
 
 impl RaftLogBatch for RocksWriteBatch {

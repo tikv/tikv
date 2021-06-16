@@ -22,18 +22,19 @@ use std::{
         Arc, Mutex,
     },
     time::{Duration, Instant},
+    u64,
 };
 
 use cdc::MemoryQuota;
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{
-    encryption::get_env as get_encrypted_env, file_system::get_env as get_inspected_env, util,
+    encryption::get_env as get_encrypted_env, file_system::get_env as get_inspected_env,
     RocksEngine,
 };
 use engine_traits::{
     compaction_job::CompactionJobInfo, CFOptionsExt, ColumnFamilyOptions, Engines, MiscExt,
-    RaftEngine, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    RaftEngine, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
 use file_system::{
@@ -1016,9 +1017,16 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn init_storage_stats_task(&self, engines: Engines<RocksEngine, ER>) {
+        // currently only for RocksEngine.
+        if self.config.raft_engine.enable {
+            warn!("disk space occupancy monitoring currently only supports rocksdb");
+            return;
+        }
+
         let config_disk_capacity: u64 = self.config.raft_store.capacity.0;
         let store_path = self.store_path.clone();
         let snap_mgr = self.snap_mgr.clone().unwrap();
+        //TODO wal size ignore?
         self.background_worker
             .spawn_interval_task(DEFAULT_STORAGE_STATS_INTERVAL, move || {
                 if disk::get_disk_reserved() == 0 {
@@ -1038,13 +1046,17 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 let disk_cap = disk_stats.total_space();
                 let snap_size = snap_mgr.get_total_snap_size().unwrap();
 
-                let mut kv_size: u64 = 0;
-                for cf in ALL_CFS {
-                    let handle = util::get_cf_handle(engines.kv.as_inner(), cf).unwrap();
-                    kv_size += util::get_engine_cf_used_size(engines.kv.as_inner(), handle);
-                }
+                let kv_size = engines
+                    .kv
+                    .get_engine_used_size()
+                    .expect("get kv engine size");
 
-                let used_size = snap_size + kv_size;
+                let raft_size = engines
+                    .raft
+                    .get_engine_size()
+                    .expect("get raft engine size");
+
+                let used_size = snap_size + kv_size + raft_size;
                 let capacity = if config_disk_capacity == 0 || disk_cap < config_disk_capacity {
                     disk_cap
                 } else {
@@ -1060,7 +1072,11 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                         available, snap_size, kv_size, capacity
                     );
                     disk::set_disk_full();
-                } else {
+                } else if disk::is_disk_full() {
+                    warn!(
+                        "disk normalized, available={},snap={},engine={},capacity={}",
+                        available, snap_size, kv_size, capacity
+                    );
                     disk::clear_disk_full();
                 }
             })
