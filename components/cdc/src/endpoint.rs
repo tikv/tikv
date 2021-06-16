@@ -292,12 +292,8 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             .core_threads(1)
             .build()
             .unwrap();
-<<<<<<< HEAD
-=======
-        CDC_SINK_CAP.set(sink_memory_quota.cap() as i64);
         CDC_OLD_VALUE_CACHE_MEMORY_QUOTA.set(cfg.old_value_cache_memory_quota.0 as i64);
-        let old_value_cache = OldValueCache::new(cfg.old_value_cache_memory_quota);
->>>>>>> 193c84298... cdc: change old value cache to memory-bounded (#10252)
+        let old_value_cache = OldValueCache::new(cfg.old_value_cache_memory_quota.0 as usize);
         let speed_limter = Limiter::new(if cfg.incremental_scan_speed_limit.0 > 0 {
             cfg.incremental_scan_speed_limit.0 as f64
         } else {
@@ -310,8 +306,6 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         let max_scan_batch_bytes = 16 * 1024;
         // Assume 1KB per entry.
         let max_scan_batch_size = 1024;
-        CDC_OLD_VALUE_CACHE_CAP.set(cfg.old_value_cache_size as i64);
-        let old_value_cache = OldValueCache::new(cfg.old_value_cache_size);
         let ep = Endpoint {
             env,
             security_mgr,
