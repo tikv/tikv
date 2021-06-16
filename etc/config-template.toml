@@ -49,6 +49,9 @@
 ## explicitly, in which case it will be set to 75% of total available system memory.
 ## Considering the behavior of `block-cache.capacity`, it means 25% memory is reserved for
 ## OS page cache.
+##
+## It's still unnecessary to configure it for deploying multiple TiKV nodes on a single
+## physical machine. It will be calculated as `5/3 * block-cache.capacity`.
 # memory-usage-limit = "0B"
 
 ## Configurations for the single thread pool serving read requests.
