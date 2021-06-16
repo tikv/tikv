@@ -257,13 +257,6 @@ impl RaftLogBatch for RocksWriteBatch {
     }
 
     fn cut_logs(&mut self, raft_group_id: u64, from: u64, to: u64) {
-        {
-            let mut ctx = RAFT_LOG_GC_CONTEXT.write().unwrap();
-            if ctx.gc_on_compaction {
-                ctx.apply_idxs.insert(raft_group_id, to);
-                return;
-            }
-        }
         for index in from..to {
             let key = keys::raft_log_key(raft_group_id, index);
             self.delete(&key).unwrap();
