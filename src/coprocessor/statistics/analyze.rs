@@ -448,7 +448,7 @@ impl RowSampleCollector {
         &mut self,
         columns_val: &[Vec<u8>],
         collation_keys_val: &[Vec<u8>],
-        columns_info: &Vec<tipb::ColumnInfo>,
+        columns_info: &[tipb::ColumnInfo],
         column_groups: &[tipb::AnalyzeColumnGroup],
     ) {
         let col_len = columns_val.len();
@@ -485,7 +485,7 @@ impl RowSampleCollector {
         &mut self,
         columns_val: Vec<Vec<u8>>,
         collation_keys_val: Vec<Vec<u8>>,
-        columns_info: &Vec<tipb::ColumnInfo>,
+        columns_info: &[tipb::ColumnInfo],
     ) {
         for i in 0..columns_val.len() {
             if columns_val[i][0] == NIL_FLAG {
