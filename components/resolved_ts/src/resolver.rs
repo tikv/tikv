@@ -7,6 +7,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use txn_types::TimeStamp;
 
+use crate::metrics::RTS_RESOLVED_FAIL_ADVANCE_VEC;
+
 // Resolver resolves timestamps that guarantee no more commit will happen before
 // the timestamp.
 pub struct Resolver {
@@ -139,6 +141,13 @@ impl Resolver {
 
         // No more commit happens before the ts.
         let new_resolved_ts = cmp::min(min_start_ts, min_ts);
+
+        if self.resolved_ts >= new_resolved_ts {
+            let label = if has_lock { "has_lock" } else { "stale_ts" };
+            RTS_RESOLVED_FAIL_ADVANCE_VEC
+                .with_label_values(&[label])
+                .inc();
+        }
 
         // Resolved ts never decrease.
         self.resolved_ts = cmp::max(self.resolved_ts, new_resolved_ts);
