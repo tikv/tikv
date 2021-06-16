@@ -26491,7 +26491,7 @@
               "expr": "sum(rate(tikv_thread_cpu_seconds_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", name=~\"inc_scan.*\"}[1m])) by (instance)",
               "format": "time_series",
               "intervalFactor": 2,
-              "legendFormat": "{{instance}}-tso",
+              "legendFormat": "{{instance}}-scan",
               "metric": "tikv_thread_cpu_seconds_total",
               "refId": "A",
               "step": 4
