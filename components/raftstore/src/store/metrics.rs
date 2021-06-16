@@ -506,9 +506,9 @@ lazy_static! {
         "Total memory size of raft entries caches."
         ).unwrap();
 
-    pub static ref RAFT_ENTRIES_CACHES_EVICT: IntCounter = register_int_counter!(
-        "tikv_raft_entries_caches_evict",
-        "Cache evict counter"
+    pub static ref RAFT_ENTRIES_EVICT_BYTES: IntCounter = register_int_counter!(
+        "tikv_raft_entries_evict_bytes",
+        "Cache evict bytes."
     ).unwrap();
 
     pub static ref COMPACTION_GUARD_ACTION_COUNTER_VEC: IntCounterVec =
