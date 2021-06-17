@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use lazy_static::lazy_static;
 use prometheus::*;
 use prometheus_static_metric::*;
 
@@ -139,6 +140,11 @@ make_auto_flush_static_metric! {
         skip_partition,
     }
 
+    pub label_enum SendStatus {
+        accept,
+        drop,
+    }
+
     pub struct RaftEventDuration : LocalHistogram {
         "type" => RaftEventDurationType
     }
@@ -173,6 +179,7 @@ make_auto_flush_static_metric! {
 
     pub struct MessageCounterVec : LocalIntCounter {
         "type" => MessageCounterType,
+        "status" => SendStatus,
     }
 
     pub struct RaftDropedVec : LocalIntCounter {
@@ -189,6 +196,15 @@ make_auto_flush_static_metric! {
     pub struct CompactionGuardActionVec: LocalIntCounter {
         "cf" => CfNames,
         "type" => CompactionGuardAction,
+    }
+}
+
+make_static_metric! {
+    pub struct HibernatedPeerStateGauge: IntGauge {
+        "state" => {
+            awaken,
+            hibernated,
+        },
     }
 }
 
@@ -217,7 +233,12 @@ lazy_static! {
             "Bucketed histogram of peer appending log duration",
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
-
+    pub static ref CHECK_LEADER_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_resolved_ts_check_leader_duration_seconds",
+            "Bucketed histogram of handling check leader request duration",
+            exponential_buckets(0.005, 2.0, 20).unwrap()
+        ).unwrap();
     pub static ref PEER_COMMIT_LOG_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_commit_log_duration_seconds",
@@ -252,7 +273,7 @@ lazy_static! {
         register_int_counter_vec!(
             "tikv_raftstore_raft_sent_message_total",
             "Total number of raft ready sent messages.",
-            &["type"]
+            &["type", "status"]
         ).unwrap();
     pub static ref STORE_RAFT_SENT_MESSAGE_COUNTER: MessageCounterVec =
         auto_flush_from!(STORE_RAFT_SENT_MESSAGE_COUNTER_VEC, MessageCounterVec);
@@ -473,22 +494,22 @@ lazy_static! {
         &["order"]
         ).unwrap();
 
+    pub static ref LOAD_BASE_SPLIT_EVENT: IntCounterVec =
+        register_int_counter_vec!(
+            "tikv_load_base_split_event",
+            "Load base split event.",
+            &["type"]
+        ).unwrap();
+
     pub static ref RAFT_ENTRIES_CACHES_GAUGE: IntGauge = register_int_gauge!(
         "tikv_raft_entries_caches",
         "Total memory size of raft entries caches."
         ).unwrap();
 
-    pub static ref APPLY_PENDING_BYTES_GAUGE: IntGauge = register_int_gauge!(
-        "tikv_raftstore_apply_pending_bytes",
-        "The bytes pending in the channel of apply FSMs."
-    )
-    .unwrap();
-
-    pub static ref APPLY_PENDING_ENTRIES_GAUGE: IntGauge = register_int_gauge!(
-            "tikv_raftstore_apply_pending_entries",
-            "The number of pending entries in the channel of apply FSMs."
-    )
-    .unwrap();
+    pub static ref RAFT_ENTRIES_EVICT_BYTES: IntCounter = register_int_counter!(
+        "tikv_raft_entries_evict_bytes",
+        "Cache evict bytes."
+    ).unwrap();
 
     pub static ref COMPACTION_GUARD_ACTION_COUNTER_VEC: IntCounterVec =
         register_int_counter_vec!(
@@ -498,4 +519,18 @@ lazy_static! {
         ).unwrap();
     pub static ref COMPACTION_GUARD_ACTION_COUNTER: CompactionGuardActionVec =
         auto_flush_from!(COMPACTION_GUARD_ACTION_COUNTER_VEC, CompactionGuardActionVec);
+
+    pub static ref RAFT_PEER_PENDING_DURATION: Histogram =
+    register_histogram!(
+        "tikv_raftstore_peer_pending_duration_seconds",
+        "Bucketed histogram of region peer pending duration.",
+        exponential_buckets(0.1, 1.5, 30).unwrap()  // 0.1s ~ 5.3 hours
+    ).unwrap();
+
+    pub static ref HIBERNATED_PEER_STATE_GAUGE: HibernatedPeerStateGauge = register_static_int_gauge_vec!(
+        HibernatedPeerStateGauge,
+        "tikv_raftstore_hibernated_peer_state",
+        "Number of peers in hibernated state.",
+        &["state"],
+    ).unwrap();
 }

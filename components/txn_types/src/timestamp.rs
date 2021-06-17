@@ -3,6 +3,7 @@
 use collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct TimeStamp(u64);
@@ -33,19 +34,23 @@ impl TimeStamp {
     }
 
     pub fn next(self) -> TimeStamp {
+        assert!(self.0 < u64::MAX);
         TimeStamp(self.0 + 1)
     }
 
     pub fn prev(self) -> TimeStamp {
+        assert!(self.0 > 0);
         TimeStamp(self.0 - 1)
     }
 
     pub fn incr(&mut self) -> &mut TimeStamp {
+        assert!(self.0 < u64::MAX);
         self.0 += 1;
         self
     }
 
     pub fn decr(&mut self) -> &mut TimeStamp {
+        assert!(self.0 > 0);
         self.0 -= 1;
         self
     }
@@ -55,11 +60,18 @@ impl TimeStamp {
     }
 
     pub fn is_max(self) -> bool {
-        self.0 == std::u64::MAX
+        self.0 == u64::MAX
     }
 
     pub fn into_inner(self) -> u64 {
         self.0
+    }
+
+    pub fn physical_now() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
     }
 }
 

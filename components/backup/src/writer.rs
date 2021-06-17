@@ -7,14 +7,14 @@ use engine_rocks::raw::DB;
 use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
 use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
 use engine_traits::{ExternalSstFileInfo, SstCompressionType, SstWriter, SstWriterBuilder};
-use external_storage::ExternalStorage;
+use external_storage_export::ExternalStorage;
 use file_system::Sha256Reader;
 use futures_util::io::AllowStdIo;
 use kvproto::backup::File;
 use kvproto::metapb::Region;
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv::storage::txn::TxnEntry;
-use tikv_util::{self, box_err, time::Limiter};
+use tikv_util::{self, box_err, error, time::Limiter};
 use txn_types::KvPair;
 
 use crate::metrics::*;
@@ -407,8 +407,8 @@ mod tests {
             .build()
             .unwrap();
         let db = rocks.get_rocksdb();
-        let backend = external_storage::make_local_backend(temp.path());
-        let storage = external_storage::create_storage(&backend).unwrap();
+        let backend = external_storage_export::make_local_backend(temp.path());
+        let storage = external_storage_export::create_storage(&backend).unwrap();
 
         // Test empty file.
         let mut r = kvproto::metapb::Region::default();

@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::sync::atomic::*;
 
 use futures::channel::mpsc;
@@ -5,6 +7,7 @@ use futures::{FutureExt, SinkExt, StreamExt, TryFutureExt};
 use grpcio::{self, *};
 use kvproto::backup::*;
 use tikv_util::worker::*;
+use tikv_util::{error, info};
 
 use super::Task;
 
@@ -35,12 +38,12 @@ impl Backup for Service {
             Ok((task, c)) => {
                 cancel = Some(c);
                 self.scheduler.schedule(task).map_err(|e| {
-                    RpcStatus::new(RpcStatusCode::INVALID_ARGUMENT, Some(format!("{:?}", e)))
+                    RpcStatus::with_message(RpcStatusCode::INVALID_ARGUMENT, format!("{:?}", e))
                 })
             }
-            Err(e) => Err(RpcStatus::new(
+            Err(e) => Err(RpcStatus::with_message(
                 RpcStatusCode::UNKNOWN,
-                Some(format!("{:?}", e)),
+                format!("{:?}", e),
             )),
         } {
             error!("backup task initiate failed"; "error" => ?status);
@@ -83,7 +86,7 @@ mod tests {
 
     use super::*;
     use crate::endpoint::tests::*;
-    use external_storage::make_local_backend;
+    use external_storage_export::make_local_backend;
     use tikv::storage::txn::tests::{must_commit, must_prewrite_put};
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
     use txn_types::TimeStamp;

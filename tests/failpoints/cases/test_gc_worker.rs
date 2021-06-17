@@ -1,13 +1,27 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
+use std::thread;
 use std::time::Duration;
 
 use collections::HashMap;
+use engine_traits::Peekable;
 use grpcio::{ChannelBuilder, Environment};
-use kvproto::{kvrpcpb::*, tikvpb::TikvClient};
+use keys::data_key;
+use kvproto::{kvrpcpb::*, metapb::Region, tikvpb::TikvClient};
+use raftstore::coprocessor::{
+    RegionInfo, RegionInfoCallback, RegionInfoProvider, Result as CopResult, SeekRegionCallback,
+};
 use test_raftstore::*;
+use tikv::server::gc_worker::{
+    AutoGcConfig, GcSafePointProvider, GcTask, Result as GcWorkerResult, TestGCRunner,
+};
+use tikv::storage::kv::TestEngineBuilder;
+use tikv::storage::mvcc::tests::must_get_none;
+use tikv::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
 use tikv_util::HandyRwLock;
+use txn_types::{Key, TimeStamp};
 
 // In theory, raft can propose conf change as long as there is no pending one. Replicas
 // don't apply logs synchronously, so it's possible the old leader is removed before the new
@@ -92,7 +106,7 @@ fn test_observer_send_error() {
     );
     assert_eq!(must_check_lock_observer(&client, max_ts, true).len(), 1);
 
-    let observer_send_fp = "lock_observer_send";
+    let observer_send_fp = "lock_observer_send_full";
     fail::cfg(observer_send_fp, "return").unwrap();
     must_kv_prewrite(
         &client,
@@ -279,4 +293,137 @@ fn test_collect_applying_locks() {
     // Must observe the applying lock even through we can't use scan to get it.
     assert_eq!(locks.len(), 1);
     assert_eq!(locks[0].get_key(), b"k1");
+}
+
+// Test write CF's compaction filter can call `orphan_versions_handler` correctly.
+#[test]
+fn test_error_in_compaction_filter() {
+    let engine = TestEngineBuilder::new().build().unwrap();
+    let raw_engine = engine.get_rocksdb();
+
+    let large_value = vec![b'x'; 300];
+    must_prewrite_put(&engine, b"zkey", &large_value, b"zkey", 101);
+    must_commit(&engine, b"zkey", 101, 102);
+    must_prewrite_put(&engine, b"zkey", &large_value, b"zkey", 103);
+    must_commit(&engine, b"zkey", 103, 104);
+    must_prewrite_delete(&engine, b"zkey", b"zkey", 105);
+    must_commit(&engine, b"zkey", 105, 106);
+
+    let fp = "write_compaction_filter_flush_write_batch";
+    fail::cfg(fp, "return").unwrap();
+
+    let mut gc_runner = TestGCRunner::new(200);
+    gc_runner.gc(&raw_engine);
+
+    match gc_runner.gc_receiver.try_next().unwrap().unwrap().unwrap() {
+        GcTask::OrphanVersions { wb, .. } => assert_eq!(wb.as_inner().count(), 2),
+        GcTask::GcKeys { .. } => {}
+        _ => unreachable!(),
+    }
+
+    // Although versions on default CF is not cleaned, write CF is GCed correctly.
+    must_get_none(&engine, b"zkey", 102);
+    must_get_none(&engine, b"zkey", 104);
+
+    fail::remove(fp);
+}
+
+// Test GC worker can receive and handle orphan versions emit from write CF's compaction filter
+// correctly.
+#[test]
+fn test_orphan_versions_from_compaction_filter() {
+    let (cluster, leader, ctx) = must_new_and_configure_cluster(|cluster| {
+        cluster.cfg.gc.enable_compaction_filter = true;
+        cluster.cfg.gc.compaction_filter_skip_version_check = true;
+        cluster.pd_client.disable_default_operator();
+    });
+
+    let env = Arc::new(Environment::new(1));
+    let leader_store = leader.get_store_id();
+    let channel = ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader_store));
+    let client = TikvClient::new(channel);
+
+    init_compaction_filter(&cluster, leader_store);
+    let engine = cluster.engines.get(&leader_store).unwrap();
+
+    let pk = b"k1".to_vec();
+    let large_value = vec![b'x'; 300];
+    for &start_ts in &[10, 20, 30, 40] {
+        let commit_ts = start_ts + 5;
+        let op = if start_ts < 40 { Op::Put } else { Op::Del };
+        let muts = vec![new_mutation(op, b"k1", &large_value)];
+        must_kv_prewrite(&client, ctx.clone(), muts, pk.clone(), start_ts);
+        let keys = vec![pk.clone()];
+        must_kv_commit(&client, ctx.clone(), keys, start_ts, commit_ts, commit_ts);
+        if start_ts < 40 {
+            let key = Key::from_raw(b"k1").append_ts(start_ts.into());
+            let key = data_key(key.as_encoded());
+            assert!(engine.kv.get_value(&key).unwrap().is_some());
+        }
+    }
+
+    let fp = "write_compaction_filter_flush_write_batch";
+    fail::cfg(fp, "return").unwrap();
+
+    let mut gc_runner = TestGCRunner::new(100);
+    gc_runner.gc_scheduler = cluster.sim.rl().get_gc_worker(1).scheduler();
+    gc_runner.gc(&engine.kv);
+
+    'IterKeys: for &start_ts in &[10, 20, 30] {
+        let key = Key::from_raw(b"k1").append_ts(start_ts.into());
+        let key = data_key(key.as_encoded());
+        for _ in 0..100 {
+            if engine.kv.get_value(&key).unwrap().is_some() {
+                thread::sleep(Duration::from_millis(20));
+                continue;
+            }
+            continue 'IterKeys;
+        }
+        panic!("orphan versions should already been cleaned by GC worker");
+    }
+
+    fail::remove(fp);
+}
+
+// Call `start_auto_gc` like `cmd/src/server.rs` does. It will combine compaction filter and GC
+// worker so that GC worker can help to process orphan versions on default CF.
+fn init_compaction_filter(cluster: &Cluster<ServerCluster>, store_id: u64) {
+    #[derive(Clone)]
+    struct MockSafePointProvider;
+    impl GcSafePointProvider for MockSafePointProvider {
+        fn get_safe_point(&self) -> GcWorkerResult<TimeStamp> {
+            Ok(TimeStamp::from(0))
+        }
+    }
+
+    #[derive(Clone)]
+    struct MockRegionInfoProvider;
+    impl RegionInfoProvider for MockRegionInfoProvider {
+        fn seek_region(&self, _: &[u8], _: SeekRegionCallback) -> CopResult<()> {
+            Ok(())
+        }
+        fn find_region_by_id(
+            &self,
+            _: u64,
+            _: RegionInfoCallback<Option<RegionInfo>>,
+        ) -> CopResult<()> {
+            Ok(())
+        }
+        fn get_regions_in_range(
+            &self,
+            _start_key: &[u8],
+            _end_key: &[u8],
+        ) -> CopResult<Vec<Region>> {
+            Ok(vec![])
+        }
+    }
+
+    let sim = cluster.sim.rl();
+    let gc_worker = sim.get_gc_worker(store_id);
+    gc_worker
+        .start_auto_gc(
+            AutoGcConfig::new(MockSafePointProvider, MockRegionInfoProvider, 1),
+            Arc::new(AtomicU64::new(0)),
+        )
+        .unwrap();
 }

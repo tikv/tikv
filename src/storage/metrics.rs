@@ -13,6 +13,7 @@ use crate::storage::kv::{FlowStatsReporter, Statistics};
 use collections::HashMap;
 use kvproto::kvrpcpb::KeyRange;
 use kvproto::metapb;
+use kvproto::pdpb::QueryKind;
 use raftstore::store::util::build_key_range;
 use raftstore::store::ReadStats;
 
@@ -41,7 +42,7 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
                         .get(cmd)
                         .get((*cf).into())
                         .get((*tag).into())
-                        .inc_by(*count as i64);
+                        .inc_by(*count as u64);
                 }
             }
         }
@@ -76,25 +77,32 @@ pub fn tls_collect_read_flow(region_id: u64, statistics: &Statistics) {
     });
 }
 
-pub fn tls_collect_qps(
+pub fn tls_collect_query(
     region_id: u64,
     peer: &metapb::Peer,
     start_key: &[u8],
     end_key: &[u8],
     reverse_scan: bool,
+    kind: QueryKind,
 ) {
     TLS_STORAGE_METRICS.with(|m| {
         let mut m = m.borrow_mut();
         let key_range = build_key_range(start_key, end_key, reverse_scan);
-        m.local_read_stats.add_qps(region_id, peer, key_range);
+        m.local_read_stats
+            .add_query_num(region_id, peer, key_range, kind);
     });
 }
 
-pub fn tls_collect_qps_batch(region_id: u64, peer: &metapb::Peer, key_ranges: Vec<KeyRange>) {
+pub fn tls_collect_query_batch(
+    region_id: u64,
+    peer: &metapb::Peer,
+    key_ranges: Vec<KeyRange>,
+    kind: QueryKind,
+) {
     TLS_STORAGE_METRICS.with(|m| {
         let mut m = m.borrow_mut();
         m.local_read_stats
-            .add_qps_batch(region_id, peer, key_ranges);
+            .add_query_num_batch(region_id, peer, key_ranges, kind);
     });
 }
 
@@ -130,6 +138,9 @@ make_auto_flush_static_metric! {
         raw_delete,
         raw_delete_range,
         raw_batch_delete,
+        raw_get_key_ttl,
+        raw_compare_and_swap,
+        raw_atomic_store,
     }
 
     pub label_enum CommandStageKind {
@@ -177,6 +188,12 @@ make_auto_flush_static_metric! {
         prev_tombstone,
         seek_tombstone,
         seek_for_prev_tombstone,
+        ttl_tombstone,
+    }
+
+    pub label_enum CheckMemLockResult {
+        locked,
+        unlocked,
     }
 
     pub struct CommandScanDetails: LocalIntCounter {
@@ -221,6 +238,11 @@ make_auto_flush_static_metric! {
     pub struct SchedCommandPriCounterVec: LocalIntCounter {
         "priority" => CommandPriority,
     }
+
+    pub struct CheckMemLockHistogramVec: LocalHistogram {
+        "type" => CommandKind,
+        "result" => CheckMemLockResult,
+    }
 }
 
 impl From<ServerGcKeysCF> for GcKeysCF {
@@ -247,6 +269,7 @@ impl From<ServerGcKeysDetail> for GcKeysDetail {
             ServerGcKeysDetail::prev_tombstone => GcKeysDetail::prev_tombstone,
             ServerGcKeysDetail::seek_tombstone => GcKeysDetail::seek_tombstone,
             ServerGcKeysDetail::seek_for_prev_tombstone => GcKeysDetail::seek_for_prev_tombstone,
+            ServerGcKeysDetail::ttl_tombstone => GcKeysDetail::ttl_tombstone,
         }
     }
 }
@@ -361,4 +384,13 @@ lazy_static! {
         "Counter of request exceed bound"
     )
     .unwrap();
+    pub static ref CHECK_MEM_LOCK_DURATION_HISTOGRAM: HistogramVec = register_histogram_vec!(
+        "tikv_storage_check_mem_lock_duration_seconds",
+        "Histogram of the duration of checking memory locks",
+        &["type", "result"],
+        exponential_buckets(1e-6f64, 4f64, 10).unwrap() // 1us ~ 262ms
+    )
+    .unwrap();
+    pub static ref CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC: CheckMemLockHistogramVec =
+        auto_flush_from!(CHECK_MEM_LOCK_DURATION_HISTOGRAM, CheckMemLockHistogramVec);
 }

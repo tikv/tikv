@@ -5,9 +5,11 @@ use std::ffi::CString;
 use crate::{coprocessor::RegionInfoProvider, Error, Result};
 use engine_traits::{
     CfName, SstPartitioner, SstPartitionerContext, SstPartitionerFactory, SstPartitionerRequest,
-    SstPartitionerResult, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_VER_DEFAULT, CF_WRITE,
+    SstPartitionerResult, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use keys::data_end_key;
+use lazy_static::lazy_static;
+use tikv_util::warn;
 
 use super::metrics::*;
 
@@ -30,12 +32,11 @@ impl<P: RegionInfoProvider> CompactionGuardGeneratorFactory<P> {
             CF_LOCK => CfNames::lock,
             CF_WRITE => CfNames::write,
             CF_RAFT => CfNames::raft,
-            CF_VER_DEFAULT => CfNames::ver_default,
             _ => {
                 return Err(Error::Other(From::from(format!(
                     "fail to enable compaction guard, unrecognized cf name: {}",
                     cf
-                ))))
+                ))));
             }
         };
         Ok(CompactionGuardGeneratorFactory {
@@ -48,7 +49,7 @@ impl<P: RegionInfoProvider> CompactionGuardGeneratorFactory<P> {
 
 // Update to implement engine_traits::SstPartitionerFactory instead once we move to use abstracted
 // ColumnFamilyOptions in src/config.rs.
-impl<P: RegionInfoProvider + Clone + Sync> SstPartitionerFactory
+impl<P: RegionInfoProvider + Clone + 'static> SstPartitionerFactory
     for CompactionGuardGeneratorFactory<P>
 {
     type Partitioner = CompactionGuardGenerator<P>;

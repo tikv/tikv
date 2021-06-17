@@ -8,7 +8,7 @@ TiKV has many dependent repositories. If you need any help or mentoring getting 
 
 ## Building and setting up a development workspace
 
-TiKV is mostly written in Rust, but has components written in C++ (RocksDB) and Go (gRPC). We are currently using the Rust nightly toolchain. To provide consistency, we use linters and automated formatting tools.
+TiKV is mostly written in Rust, but has components written in C++ (RocksDB, gRPC). We are currently using the Rust nightly toolchain. To provide consistency, we use linters and automated formatting tools.
 
 ### Prerequisites
 
@@ -19,6 +19,7 @@ To build TiKV you'll need to at least have the following installed:
 * `make` - Build tool (run common workflows)
 * `cmake` - Build tool (required for gRPC)
 * `awk` - Pattern scanning/processing language
+* C++ compiler - gcc 4.9+ (required for gRPC)
 
 If you are targeting platforms other than x86_64 linux, you'll also need:
 
@@ -129,7 +130,7 @@ This is a rough outline of what a contributor's workflow looks like:
   * If there are conflicts, you can rebase (or merge) and resolve them locally. Then force push to your PR branch.
     You do not need to get re-review just for resolving conflicts, but you should request re-review if there are significant changes.
 - Our CI system automatically tests all pull requests.
-- Our bot will merge your PR. It can be summoned by commenting `/merge` or adding the `S: CanMerge` label (requires tests to pass and two approvals. You might have to ask your reviewer to do this).
+- Our [bot](https://github.com/ti-chi-bot) will merge your PR. It can be summoned by commenting `/merge` (requires tests to pass and two approvals. You might have to ask your reviewer to do this).
 
 See [Rustdoc of TiKV](https://tikv.github.io) for TiKV code documentation.
 
@@ -213,4 +214,11 @@ type = "kms"
 region = "us-west-2"
 endpoint = "http://localhost:4566"
 key-id = "KMS key id"
+```
+
+When you run TiKV, make sure to set the localstack credentials
+
+```
+export AWS_ACCESS_KEY_ID=test
+export AWS_SECRET_ACCESS_KEY=test
 ```

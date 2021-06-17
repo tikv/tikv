@@ -12,6 +12,8 @@ use super::metrics::*;
 use crate::coprocessor::*;
 use crate::storage::Statistics;
 
+use txn_types::Key;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum TrackerState {
     /// The tracker is initialized.
@@ -54,7 +56,7 @@ pub struct Tracker {
 
     // Suspend time between processing two items
     //
-    // In a cooperative environment, a cop task may suspend itself at finishing an item,
+    // In a cooperative environment, a copr task may suspend itself at finishing an item,
     // and be resumed by the runtime later. That will raise a considerable suspend time.
     item_suspend_time: Duration,
     total_suspend_time: Duration,
@@ -64,6 +66,7 @@ pub struct Tracker {
     total_storage_stats: Statistics,
     total_perf_stats: PerfStatisticsDelta, // Accumulated perf statistics
     slow_log_threshold: Duration,
+    scan_process_time_ms: u64,
 
     // Request info, used to print slow log.
     pub req_ctx: ReqContext,
@@ -89,6 +92,7 @@ impl Tracker {
             total_process_time: Duration::default(),
             total_storage_stats: Statistics::default(),
             total_perf_stats: PerfStatisticsDelta::default(),
+            scan_process_time_ms: 0,
             slow_log_threshold,
             req_ctx,
         }
@@ -161,6 +165,10 @@ impl Tracker {
         self.total_storage_stats.add(&storage_stats);
     }
 
+    pub fn collect_scan_process_time(&mut self, exec_summary: ExecSummary) {
+        self.scan_process_time_ms = (exec_summary.time_processed_ns / 1000000) as u64;
+    }
+
     /// Get current item's ExecDetail according to previous collected metrics.
     /// TiDB asks for ExecDetail to be printed in its log.
     /// WARN: TRY BEST NOT TO USE THIS FUNCTION.
@@ -190,6 +198,7 @@ impl Tracker {
         let mut td = kvrpcpb::TimeDetail::default();
         td.set_process_wall_time_ms(time::duration_to_ms(measure) as i64);
         td.set_wait_wall_time_ms(time::duration_to_ms(self.wait_time) as i64);
+        td.set_kv_read_wall_time_ms(self.scan_process_time_ms as i64);
         exec_details.set_time_detail(td.clone());
 
         let detail = self.total_storage_stats.scan_detail();
@@ -328,7 +337,13 @@ impl Tracker {
             false
         };
 
-        tls_collect_qps(region_id, peer, start_key, end_key, reverse_scan);
+        tls_collect_query(
+            region_id,
+            peer,
+            Key::from_raw(start_key).as_encoded(),
+            Key::from_raw(end_key).as_encoded(),
+            reverse_scan,
+        );
         self.current_stage = TrackerState::Tracked;
     }
 }

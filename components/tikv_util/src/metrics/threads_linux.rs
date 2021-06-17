@@ -6,6 +6,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use collections::HashMap;
+use lazy_static::lazy_static;
 use libc::{self, pid_t};
 use prometheus::core::{Collector, Desc};
 use prometheus::{self, proto, CounterVec, IntCounterVec, IntGaugeVec, Opts};
@@ -170,7 +171,7 @@ impl Collector for ThreadsCollector {
                         .get_metric_with_label_values(&[&name, &format!("{}", tid)])
                         .unwrap();
                     let voluntary_past = voluntary_total.get();
-                    let voluntary_delta = voluntary_ctxt_switches as i64 - voluntary_past;
+                    let voluntary_delta = voluntary_ctxt_switches - voluntary_past;
                     if voluntary_delta > 0 {
                         voluntary_total.inc_by(voluntary_delta);
                     }
@@ -182,7 +183,7 @@ impl Collector for ThreadsCollector {
                         .get_metric_with_label_values(&[&name, &format!("{}", tid)])
                         .unwrap();
                     let nonvoluntary_past = nonvoluntary_total.get();
-                    let nonvoluntary_delta = nonvoluntary_ctxt_switches as i64 - nonvoluntary_past;
+                    let nonvoluntary_delta = nonvoluntary_ctxt_switches - nonvoluntary_past;
                     if nonvoluntary_delta > 0 {
                         nonvoluntary_total.inc_by(nonvoluntary_delta);
                     }

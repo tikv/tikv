@@ -1,5 +1,7 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use super::timestamp::TimeStamp;
-use crate::Write;
+use bitflags::bitflags;
 use byteorder::{ByteOrder, NativeEndian};
 use collections::HashMap;
 use kvproto::kvrpcpb;
@@ -212,6 +214,12 @@ impl Key {
     pub fn gen_hash(&self) -> u64 {
         farmhash::fingerprint64(&self.to_raw().unwrap())
     }
+
+    #[allow(clippy::len_without_is_empty)]
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
 }
 
 impl Clone for Key {
@@ -243,12 +251,6 @@ pub enum MutationType {
     Lock,
     Insert,
     Other,
-}
-
-impl MutationType {
-    pub fn may_have_old_value(&self) -> bool {
-        matches!(self, MutationType::Put | MutationType::Delete)
-    }
 }
 
 /// A row mutation.
@@ -327,13 +329,14 @@ impl From<kvrpcpb::Mutation> for Mutation {
 #[derive(Debug, Clone, PartialEq)]
 pub enum OldValue {
     /// A real `OldValue`
-    Value {
-        short_value: Option<Value>,
-        start_ts: TimeStamp,
-    },
+    Value { value: Value },
+    /// A timestamp of an old value in case a value is not inlined in Write
+    ValueTimeStamp { start_ts: TimeStamp },
     /// `None` means we don't found a previous value
     None,
-    /// `Unspecified` means the user doesn't care about the previous value
+    /// `Unspecified` means one of the following:
+    ///   - The user doesn't care about the previous value
+    ///   - We don't sure if there is a previous value
     Unspecified,
 }
 
@@ -343,36 +346,17 @@ impl Default for OldValue {
     }
 }
 
-impl From<Option<Write>> for OldValue {
-    fn from(write: Option<Write>) -> Self {
-        match write {
-            Some(w) => OldValue::Value {
-                short_value: w.short_value,
-                start_ts: w.start_ts,
-            },
-            None => OldValue::None,
-        }
-    }
-}
-
 impl OldValue {
-    pub fn specified(&self) -> bool {
+    pub fn valid(&self) -> bool {
         !matches!(self, OldValue::Unspecified)
-    }
-
-    pub fn exists(&self) -> bool {
-        matches!(self, OldValue::Value { .. })
     }
 
     pub fn size(&self) -> usize {
         let value_size = match self {
-            OldValue::Value {
-                short_value: Some(v),
-                ..
-            } => v.len(),
+            OldValue::Value { value } => value.len(),
             _ => 0,
         };
-        value_size + std::mem::size_of::<TimeStamp>()
+        value_size + std::mem::size_of::<OldValue>()
     }
 }
 
@@ -380,7 +364,7 @@ impl OldValue {
 // key with current ts -> (short value of the prev txn, start ts of the prev txn).
 // The value of the map will be None when the mutation is `Insert`.
 // MutationType is the type of mutation of the current write.
-pub type OldValues = HashMap<Key, (OldValue, MutationType)>;
+pub type OldValues = HashMap<Key, (OldValue, Option<MutationType>)>;
 
 // Extra data fields filled by kvrpcpb::ExtraOp.
 #[derive(Default, Debug, Clone)]
@@ -401,9 +385,63 @@ pub trait TxnExtraScheduler: Send + Sync {
     fn schedule(&self, txn_extra: TxnExtra);
 }
 
+bitflags! {
+    /// Additional flags for a write batch.
+    /// They should be set in the `flags` field in `RaftRequestHeader`.
+    pub struct WriteBatchFlags: u64 {
+        /// Indicates this request is from a 1PC transaction.
+        /// It helps CDC recognize 1PC transactions and handle them correctly.
+        const ONE_PC = 0b00000001;
+        /// Indicates this request is from a stale read-only transaction.
+        const STALE_READ = 0b00000010;
+    }
+}
+
+impl WriteBatchFlags {
+    /// Convert from underlying bit representation
+    /// panic if it contains bits that do not correspond to a flag
+    pub fn from_bits_check(bits: u64) -> WriteBatchFlags {
+        match WriteBatchFlags::from_bits(bits) {
+            None => panic!("unrecognized flags: {:b}", bits),
+            // zero or more flags
+            Some(f) => f,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_flags() {
+        assert!(WriteBatchFlags::from_bits_check(0).is_empty());
+        assert_eq!(
+            WriteBatchFlags::from_bits_check(WriteBatchFlags::ONE_PC.bits()),
+            WriteBatchFlags::ONE_PC
+        );
+        assert_eq!(
+            WriteBatchFlags::from_bits_check(WriteBatchFlags::STALE_READ.bits()),
+            WriteBatchFlags::STALE_READ
+        );
+    }
+
+    #[test]
+    fn test_flags_panic() {
+        for _ in 0..100 {
+            assert!(
+                panic_hook::recover_safe(|| {
+                    // r must be an invalid flags if it is not zero
+                    let r = rand::random::<u64>() & !WriteBatchFlags::all().bits();
+                    WriteBatchFlags::from_bits_check(r);
+                    if r == 0 {
+                        panic!("panic for zero");
+                    }
+                })
+                .is_err()
+            );
+        }
+    }
 
     #[test]
     fn test_is_user_key_eq() {
@@ -504,6 +542,19 @@ mod tests {
             let mut longer_raw = raw.to_vec();
             longer_raw.push(0);
             assert!(!encoded.is_encoded_from(&longer_raw));
+        }
+    }
+
+    #[test]
+    fn test_old_value_valid() {
+        let cases = vec![
+            (OldValue::Unspecified, false),
+            (OldValue::None, true),
+            (OldValue::Value { value: vec![] }, true),
+            (OldValue::ValueTimeStamp { start_ts: 0.into() }, true),
+        ];
+        for (old_value, v) in cases {
+            assert_eq!(old_value.valid(), v);
         }
     }
 }

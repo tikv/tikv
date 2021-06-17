@@ -4,6 +4,7 @@ use collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
+use fail::fail_point;
 use kvproto::metapb::{Peer, Region, Store, StoreState};
 use kvproto::pdpb::*;
 
@@ -113,6 +114,7 @@ impl PdMocker for Service {
     }
 
     fn alloc_id(&self, _: &AllocIdRequest) -> Option<Result<AllocIdResponse>> {
+        fail_point!("connect_leader", |_| None);
         let mut resp = AllocIdResponse::default();
         resp.set_header(Service::header());
 

@@ -1,6 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::encryptionpb::EncryptionMethod;
+use configuration::Configuration;
+use kvproto::encryptionpb::{EncryptionMethod, MasterKeyKms};
+use serde_derive::{Deserialize, Serialize};
 use tikv_util::config::ReadableDuration;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
@@ -51,6 +53,19 @@ pub struct KmsConfig {
     pub key_id: String,
     pub region: String,
     pub endpoint: String,
+    pub vendor: String,
+}
+
+impl KmsConfig {
+    pub fn into_proto(self) -> MasterKeyKms {
+        MasterKeyKms {
+            key_id: self.key_id,
+            region: self.region,
+            endpoint: self.endpoint,
+            vendor: self.vendor,
+            ..MasterKeyKms::default()
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -154,6 +169,7 @@ mod tests {
                     key_id: "key_id".to_owned(),
                     region: "region".to_owned(),
                     endpoint: "endpoint".to_owned(),
+                    vendor: "".to_owned(),
                 },
             },
             previous_master_key: MasterKeyConfig::Plaintext,

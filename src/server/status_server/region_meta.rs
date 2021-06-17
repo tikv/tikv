@@ -2,7 +2,7 @@
 
 use kvproto::metapb::PeerRole;
 use raft::{Progress, ProgressState, StateRole};
-use raftstore::store::AbstractPeer;
+use raftstore::store::{AbstractPeer, GroupState};
 use std::collections::HashMap;
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
@@ -180,6 +180,7 @@ pub struct RaftApplyState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegionMeta {
     pub id: u64,
+    pub group_state: GroupState,
     pub start_key: Vec<u8>,
     pub end_key: Vec<u8>,
     pub epoch: Epoch,
@@ -208,6 +209,7 @@ impl RegionMeta {
 
         Self {
             id: region.get_id(),
+            group_state: abstract_peer.group_state(),
             start_key: start_key.to_owned(),
             end_key: end_key.to_owned(),
             epoch: Epoch {

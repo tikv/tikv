@@ -1,20 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
-#![feature(min_specialization)]
-
-#[macro_use]
-extern crate lazy_static;
-#[macro_use]
-extern crate quick_error;
-#[macro_use]
-extern crate serde_derive;
-extern crate kvproto;
-#[macro_use(fail_point)]
-extern crate fail;
-
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
-#[macro_use]
-extern crate tikv_util;
 
 mod client;
 mod feature_gate;
@@ -27,8 +13,8 @@ pub use self::client::{DummyPdClient, RpcClient};
 pub use self::config::Config;
 pub use self::errors::{Error, Result};
 pub use self::feature_gate::{Feature, FeatureGate};
-pub use self::util::validate_endpoints;
-pub use self::util::RECONNECT_INTERVAL_SEC;
+pub use self::util::PdConnector;
+pub use self::util::REQUEST_RECONNECT_INTERVAL;
 
 use std::ops::Deref;
 
@@ -36,6 +22,7 @@ use futures::future::BoxFuture;
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationStatus};
+use pdpb::QueryStats;
 use tikv_util::time::UnixSecs;
 use txn_types::TimeStamp;
 
@@ -50,6 +37,7 @@ pub struct RegionStat {
     pub written_keys: u64,
     pub read_bytes: u64,
     pub read_keys: u64,
+    pub query_stats: QueryStats,
     pub approximate_size: u64,
     pub approximate_keys: u64,
     pub last_report_ts: UnixSecs,
@@ -270,7 +258,7 @@ pub trait PdClient: Send + Sync {
 
     /// Gets the internal `FeatureGate`.
     fn feature_gate(&self) -> &FeatureGate {
-        todo!()
+        unimplemented!()
     }
 }
 

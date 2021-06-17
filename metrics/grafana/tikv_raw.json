@@ -105,7 +105,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "histogram_quantile(0.99, sum(rate(tikv_scheduler_command_duration_seconds_bucket{instance=~\"$instance\", type=~\"$command\"}[1m])) by (le))",
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_scheduler_command_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=~\"$command\"}[1m])) by (le))",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "99%",
@@ -114,14 +114,14 @@
               "type": "timeserie"
             },
             {
-              "expr": "histogram_quantile(0.95, sum(rate(tikv_scheduler_command_duration_seconds_bucket{instance=~\"$instance\", type=~\"$command\"}[1m])) by (le))",
+              "expr": "histogram_quantile(0.95, sum(rate(tikv_scheduler_command_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=~\"$command\"}[1m])) by (le))",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "95%",
               "refId": "B"
             },
             {
-              "expr": "sum(rate(tikv_scheduler_command_duration_seconds_sum{instance=~\"$instance\", type=~\"$command\"}[1m])) / sum(rate(tikv_scheduler_command_duration_seconds_count{instance=~\"$instance\", type=~\"$command\"}[1m])) ",
+              "expr": "sum(rate(tikv_scheduler_command_duration_seconds_sum{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=~\"$command\"}[1m])) / sum(rate(tikv_scheduler_command_duration_seconds_count{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=~\"$command\"}[1m])) ",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "avg",
@@ -215,7 +215,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "histogram_quantile(0.99, sum(rate(tikv_scheduler_processing_read_duration_seconds_bucket{instance=~\"$instance\", type=~\"$command\"}[1m])) by (le))",
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_scheduler_processing_read_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=~\"$command\"}[1m])) by (le))",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "99%",
@@ -224,14 +224,14 @@
               "type": "timeserie"
             },
             {
-              "expr": "histogram_quantile(0.95, sum(rate(tikv_scheduler_processing_read_duration_seconds_bucket{instance=~\"$instance\", type=~\"$command\"}[1m])) by (le))",
+              "expr": "histogram_quantile(0.95, sum(rate(tikv_scheduler_processing_read_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=~\"$command\"}[1m])) by (le))",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "95%",
               "refId": "B"
             },
             {
-              "expr": "sum(rate(tikv_scheduler_processing_read_duration_seconds_sum{instance=~\"$instance\", type=~\"$command\"}[1m])) / sum(rate(tikv_scheduler_processing_read_duration_seconds_count{instance=~\"$instance\", type=~\"$command\"}[1m]))",
+              "expr": "sum(rate(tikv_scheduler_processing_read_duration_seconds_sum{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=~\"$command\"}[1m])) / sum(rate(tikv_scheduler_processing_read_duration_seconds_count{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=~\"$command\"}[1m]))",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "avg",
@@ -293,16 +293,41 @@
     "list": [
       {
         "allValue": null,
+        "current": {
+        },
+        "datasource": "${DS_TEST-CLUSTER}",
+        "hide": 2,
+        "includeAll": false,
+        "label": "tidb_cluster",
+        "multi": false,
+        "name": "tidb_cluster",
+        "options": [
+
+        ],
+        "query": "label_values(tikv_engine_block_cache_size_bytes, tidb_cluster)",
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "tagValuesQuery": "",
+        "tags": [
+
+        ],
+        "tagsQuery": "",
+        "type": "query",
+        "useTags": false
+      },
+      {
+        "allValue": null,
         "current": {},
         "datasource": "${DS_TEST-CLUSTER}",
-        "definition": "label_values(tikv_storage_command_total, type)",
+        "definition": "label_values(tikv_storage_command_total{tidb_cluster=\"$tidb_cluster\"}, type)",
         "hide": 0,
         "includeAll": true,
         "label": "command",
         "multi": true,
         "name": "command",
         "options": [],
-        "query": "label_values(tikv_storage_command_total, type)",
+        "query": "label_values(tikv_storage_command_total{tidb_cluster=\"$tidb_cluster\"}, type)",
         "refresh": 1,
         "regex": "raw_get|raw_scan|raw_batch_get|raw_batch_scan",
         "skipUrlSync": false,
@@ -317,14 +342,14 @@
         "allValue": null,
         "current": {},
         "datasource": "${DS_TEST-CLUSTER}",
-        "definition": "label_values(tikv_engine_size_bytes, instance)",
+        "definition": "label_values(tikv_engine_size_bytes{tidb_cluster=\"$tidb_cluster\"}, instance)",
         "hide": 0,
         "includeAll": true,
         "label": "instance",
         "multi": true,
         "name": "instance",
         "options": [],
-        "query": "label_values(tikv_engine_size_bytes, instance)",
+        "query": "label_values(tikv_engine_size_bytes{tidb_cluster=\"$tidb_cluster\"}, instance)",
         "refresh": 1,
         "regex": "",
         "skipUrlSync": false,

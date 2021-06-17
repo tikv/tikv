@@ -14,6 +14,7 @@ use engine_rocks::raw::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
 use engine_traits::config::PerfLevel;
+use file_system::{IOPriority, IORateLimitMode};
 use kvproto::encryptionpb::EncryptionMethod;
 use pd_client::Config as PdConfig;
 use raftstore::coprocessor::{Config as CopConfig, ConsistencyCheckMethod};
@@ -25,7 +26,7 @@ use tikv::server::config::GrpcCompressionType;
 use tikv::server::gc_worker::GcConfig;
 use tikv::server::lock_manager::Config as PessimisticTxnConfig;
 use tikv::server::Config as ServerConfig;
-use tikv::storage::config::{BlockCacheConfig, Config as StorageConfig};
+use tikv::storage::config::{BlockCacheConfig, Config as StorageConfig, IORateLimitConfig};
 use tikv_util::config::{LogFormat, OptionReadableSize, ReadableDuration, ReadableSize};
 
 mod dynamic;
@@ -59,6 +60,9 @@ fn test_serde_custom_tikv_config() {
     value.log_format = LogFormat::Json;
     value.slow_log_file = "slow_foo".to_owned();
     value.slow_log_threshold = ReadableDuration::secs(1);
+    value.abort_on_panic = true;
+    value.memory_usage_limit = ReadableSize::gb(10);
+    value.memory_usage_high_water = 0.65;
     value.server = ServerConfig {
         cluster_id: 0, // KEEP IT ZERO, it is skipped by serde.
         addr: "example.com:443".to_owned(),
@@ -68,6 +72,9 @@ fn test_serde_custom_tikv_config() {
         advertise_status_addr: "example.com:443".to_owned(),
         status_thread_pool_size: 1,
         max_grpc_send_msg_len: 6 * (1 << 20),
+        raft_client_grpc_send_msg_buffer: 1234 * 1024,
+        raft_client_queue_size: 1234,
+        raft_msg_max_batch_size: 123,
         concurrent_send_snap_limit: 4,
         concurrent_recv_snap_limit: 4,
         grpc_compression_type: GrpcCompressionType::Gzip,
@@ -97,6 +104,7 @@ fn test_serde_custom_tikv_config() {
         background_thread_count: 999,
         raft_client_backoff_step: ReadableDuration::secs(1),
         end_point_slow_log_threshold: ReadableDuration::secs(1),
+        forward_max_connections_per_address: 5,
     };
     value.readpool = ReadPoolConfig {
         unified: UnifiedReadPoolConfig {
@@ -132,11 +140,11 @@ fn test_serde_custom_tikv_config() {
         job: "tikv_1".to_owned(),
     };
     let mut apply_batch_system = BatchSystemConfig::default();
-    apply_batch_system.max_batch_size = 22;
+    apply_batch_system.max_batch_size = Some(22);
     apply_batch_system.pool_size = 4;
     apply_batch_system.reschedule_duration = ReadableDuration::secs(3);
     let mut store_batch_system = BatchSystemConfig::default();
-    store_batch_system.max_batch_size = 21;
+    store_batch_system.max_batch_size = Some(21);
     store_batch_system.pool_size = 3;
     store_batch_system.reschedule_duration = ReadableDuration::secs(2);
     value.raft_store = RaftstoreConfig {
@@ -497,56 +505,6 @@ fn test_serde_custom_tikv_config() {
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
         },
-        ver_defaultcf: VersionCfConfig {
-            block_size: ReadableSize::kb(12),
-            block_cache_size: ReadableSize::gb(12),
-            disable_block_cache: false,
-            cache_index_and_filter_blocks: false,
-            pin_l0_filter_and_index_blocks: false,
-            use_bloom_filter: false,
-            optimize_filters_for_hits: false,
-            whole_key_filtering: true,
-            bloom_filter_bits_per_key: 123,
-            block_based_bloom_filter: true,
-            read_amp_bytes_per_bit: 0,
-            compression_per_level: [
-                DBCompressionType::No,
-                DBCompressionType::No,
-                DBCompressionType::Zstd,
-                DBCompressionType::Zstd,
-                DBCompressionType::No,
-                DBCompressionType::Zstd,
-                DBCompressionType::Lz4,
-            ],
-            write_buffer_size: ReadableSize::mb(1),
-            max_write_buffer_number: 12,
-            min_write_buffer_number_to_merge: 12,
-            max_bytes_for_level_base: ReadableSize::kb(12),
-            target_file_size_base: ReadableSize::kb(123),
-            level0_file_num_compaction_trigger: 123,
-            level0_slowdown_writes_trigger: 123,
-            level0_stop_writes_trigger: 123,
-            max_compaction_bytes: ReadableSize::gb(1),
-            compaction_pri: CompactionPriority::MinOverlappingRatio,
-            dynamic_level_bytes: true,
-            num_levels: 4,
-            max_bytes_for_level_multiplier: 8,
-            compaction_style: DBCompactionStyle::Universal,
-            disable_auto_compactions: true,
-            soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
-            hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
-            force_consistency_checks: true,
-            titan: titan_cf_config.clone(),
-            prop_size_index_distance: 4000000,
-            prop_keys_index_distance: 40000,
-            enable_doubly_skiplist: false,
-            enable_compaction_guard: true,
-            compaction_guard_min_output_file_size: ReadableSize::mb(12),
-            compaction_guard_max_output_file_size: ReadableSize::mb(34),
-            bottommost_level_compression: DBCompressionType::Zstd,
-            bottommost_zstd_compression_dict_size: 0,
-            bottommost_zstd_compression_sample_size: 0,
-        },
         titan: titan_db_config.clone(),
     };
     value.raftdb = RaftDbConfig {
@@ -639,6 +597,8 @@ fn test_serde_custom_tikv_config() {
         scheduler_pending_write_threshold: ReadableSize::kb(123),
         reserve_space: ReadableSize::gb(10),
         enable_async_apply_prewrite: true,
+        enable_ttl: true,
+        ttl_check_poll_interval: ReadableDuration::hours(0),
         block_cache: BlockCacheConfig {
             shared: true,
             capacity: OptionReadableSize(Some(ReadableSize::gb(40))),
@@ -646,6 +606,22 @@ fn test_serde_custom_tikv_config() {
             strict_capacity_limit: true,
             high_pri_pool_ratio: 0.8,
             memory_allocator: Some(String::from("nodump")),
+        },
+        io_rate_limit: IORateLimitConfig {
+            max_bytes_per_sec: ReadableSize::mb(1000),
+            mode: IORateLimitMode::AllIo,
+            strict: true,
+            foreground_read_priority: IOPriority::Low,
+            foreground_write_priority: IOPriority::Low,
+            flush_priority: IOPriority::Low,
+            level_zero_compaction_priority: IOPriority::Low,
+            compaction_priority: IOPriority::High,
+            replication_priority: IOPriority::Low,
+            load_balance_priority: IOPriority::Low,
+            gc_priority: IOPriority::High,
+            import_priority: IOPriority::High,
+            export_priority: IOPriority::High,
+            other_priority: IOPriority::Low,
         },
     };
     value.coprocessor = CopConfig {
@@ -696,7 +672,7 @@ fn test_serde_custom_tikv_config() {
         ratio_threshold: 1.2,
         batch_keys: 256,
         max_write_bytes_per_sec: ReadableSize::mb(10),
-        enable_compaction_filter: true,
+        enable_compaction_filter: false,
         compaction_filter_skip_version_check: true,
     };
     value.pessimistic_txn = PessimisticTxnConfig {
@@ -708,6 +684,16 @@ fn test_serde_custom_tikv_config() {
         min_ts_interval: ReadableDuration::secs(4),
         old_value_cache_size: 512,
         hibernate_regions_compatible: false,
+        incremental_scan_threads: 3,
+        incremental_scan_concurrency: 4,
+        incremental_scan_speed_limit: ReadableSize(7),
+        old_value_cache_memory_quota: ReadableSize::mb(14),
+        sink_memory_quota: ReadableSize::mb(7),
+    };
+    value.resolved_ts = ResolvedTsConfig {
+        enable: true,
+        advance_ts_interval: ReadableDuration::secs(5),
+        scan_lock_pool_size: 1,
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");

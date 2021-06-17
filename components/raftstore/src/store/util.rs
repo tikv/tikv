@@ -1,12 +1,12 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::VecDeque;
 use std::fmt::Display;
 use std::option::Option;
-use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
-use std::sync::Arc;
-use std::{fmt, u64};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
+use std::sync::{Arc, Mutex};
+use std::{cmp, fmt, u64};
 
-use collections::HashMap;
 use kvproto::kvrpcpb::KeyRange;
 use kvproto::metapb::{self, PeerRole};
 use kvproto::raft_cmdpb::{AdminCmdType, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest};
@@ -16,6 +16,7 @@ use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
 use raft::INVALID_INDEX;
 use raft_proto::ConfChangeI;
 use tikv_util::time::monotonic_raw_now;
+use tikv_util::{box_err, debug, info};
 use time::{Duration, Timespec};
 
 use super::peer_storage;
@@ -196,36 +197,36 @@ impl AdminCmdEpochState {
     }
 }
 
-lazy_static! {
-    /// WARNING: the existing settings in `ADMIN_CMD_EPOCH_MAP` **MUST NOT** be changed!!!
-    /// Changing any admin cmd's `AdminCmdEpochState` or the epoch-change behavior during applying
-    /// will break upgrade compatibility and correctness dependency of `CmdEpochChecker`.
-    /// Please remember it is very difficult to fix the issues arising from not following this rule.
-    ///
-    /// If you really want to change an admin cmd behavior, please add a new admin cmd and **do not**
-    /// delete the old one.
-    pub static ref ADMIN_CMD_EPOCH_MAP: HashMap<AdminCmdType, AdminCmdEpochState> = [
-        (AdminCmdType::InvalidAdmin, AdminCmdEpochState::new(false, false, false, false)),
-        (AdminCmdType::CompactLog, AdminCmdEpochState::new(false, false, false, false)),
-        (AdminCmdType::ComputeHash, AdminCmdEpochState::new(false, false, false, false)),
-        (AdminCmdType::VerifyHash, AdminCmdEpochState::new(false, false, false, false)),
+/// WARNING: the existing settings below **MUST NOT** be changed!!!
+/// Changing any admin cmd's `AdminCmdEpochState` or the epoch-change behavior during applying
+/// will break upgrade compatibility and correctness dependency of `CmdEpochChecker`.
+/// Please remember it is very difficult to fix the issues arising from not following this rule.
+///
+/// If you really want to change an admin cmd behavior, please add a new admin cmd and **DO NOT**
+/// delete the old one.
+pub fn admin_cmd_epoch_lookup(admin_cmp_type: AdminCmdType) -> AdminCmdEpochState {
+    match admin_cmp_type {
+        AdminCmdType::InvalidAdmin => AdminCmdEpochState::new(false, false, false, false),
+        AdminCmdType::CompactLog => AdminCmdEpochState::new(false, false, false, false),
+        AdminCmdType::ComputeHash => AdminCmdEpochState::new(false, false, false, false),
+        AdminCmdType::VerifyHash => AdminCmdEpochState::new(false, false, false, false),
         // Change peer
-        (AdminCmdType::ChangePeer, AdminCmdEpochState::new(false, true, false, true)),
-        (AdminCmdType::ChangePeerV2, AdminCmdEpochState::new(false, true, false, true)),
+        AdminCmdType::ChangePeer => AdminCmdEpochState::new(false, true, false, true),
+        AdminCmdType::ChangePeerV2 => AdminCmdEpochState::new(false, true, false, true),
         // Split
-        (AdminCmdType::Split, AdminCmdEpochState::new(true, true, true, false)),
-        (AdminCmdType::BatchSplit, AdminCmdEpochState::new(true, true, true, false)),
+        AdminCmdType::Split => AdminCmdEpochState::new(true, true, true, false),
+        AdminCmdType::BatchSplit => AdminCmdEpochState::new(true, true, true, false),
         // Merge
-        (AdminCmdType::PrepareMerge, AdminCmdEpochState::new(true, true, true, true)),
-        (AdminCmdType::CommitMerge, AdminCmdEpochState::new(true, true, true, false)),
-        (AdminCmdType::RollbackMerge, AdminCmdEpochState::new(true, true, true, false)),
+        AdminCmdType::PrepareMerge => AdminCmdEpochState::new(true, true, true, true),
+        AdminCmdType::CommitMerge => AdminCmdEpochState::new(true, true, true, false),
+        AdminCmdType::RollbackMerge => AdminCmdEpochState::new(true, true, true, false),
         // Transfer leader
-        (AdminCmdType::TransferLeader, AdminCmdEpochState::new(true, true, false, false)),
-    ].iter().copied().collect();
+        AdminCmdType::TransferLeader => AdminCmdEpochState::new(true, true, false, false),
+    }
 }
 
 /// WARNING: `NORMAL_REQ_CHECK_VER` and `NORMAL_REQ_CHECK_CONF_VER` **MUST NOT** be changed.
-/// The reason is the same as `ADMIN_CMD_EPOCH_MAP`.
+/// The reason is the same as `admin_cmd_epoch_lookup`.
 pub static NORMAL_REQ_CHECK_VER: bool = true;
 pub static NORMAL_REQ_CHECK_CONF_VER: bool = false;
 
@@ -238,9 +239,7 @@ pub fn check_region_epoch(
         // for get/set/delete, we don't care conf_version.
         (NORMAL_REQ_CHECK_VER, NORMAL_REQ_CHECK_CONF_VER)
     } else {
-        let epoch_state = *ADMIN_CMD_EPOCH_MAP
-            .get(&req.get_admin_request().get_cmd_type())
-            .unwrap();
+        let epoch_state = admin_cmd_epoch_lookup(req.get_admin_request().get_cmd_type());
         (epoch_state.check_ver, epoch_state.check_conf_ver)
     };
 
@@ -314,7 +313,10 @@ pub fn check_store_id(req: &RaftCmdRequest, store_id: u64) -> Result<()> {
     if peer.get_store_id() == store_id {
         Ok(())
     } else {
-        Err(Error::StoreNotMatch(peer.get_store_id(), store_id))
+        Err(Error::StoreNotMatch {
+            to_store_id: peer.get_store_id(),
+            my_store_id: store_id,
+        })
     }
 }
 
@@ -636,7 +638,7 @@ fn timespec_to_u64(ts: Timespec) -> u64 {
 ///
 /// If nsec is negative or GE than 1_000_000_000(nano seconds pre second).
 #[inline]
-fn u64_to_timespec(u: u64) -> Timespec {
+pub(crate) fn u64_to_timespec(u: u64) -> Timespec {
     let sec = u >> TIMESPEC_SEC_SHIFT;
     let nsec = (u & TIMESPEC_NSEC_MASK) << TIMESPEC_NSEC_SHIFT;
     Timespec::new(sec as i64, nsec as i32)
@@ -714,11 +716,11 @@ pub struct KeysInfoFormatter<
 >(pub I);
 
 impl<
-        'a,
-        I: std::iter::DoubleEndedIterator<Item = &'a Vec<u8>>
-            + std::iter::ExactSizeIterator<Item = &'a Vec<u8>>
-            + Clone,
-    > fmt::Display for KeysInfoFormatter<'a, I>
+    'a,
+    I: std::iter::DoubleEndedIterator<Item = &'a Vec<u8>>
+        + std::iter::ExactSizeIterator<Item = &'a Vec<u8>>
+        + Clone,
+> fmt::Display for KeysInfoFormatter<'a, I>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut it = self.0.clone();
@@ -783,7 +785,7 @@ impl<'a> ChangePeerI for &'a ChangePeerRequest {
         let mut cc = eraftpb::ConfChange::default();
         cc.set_change_type(self.get_change_type());
         cc.set_node_id(self.get_peer().get_id());
-        cc.set_context(ctx);
+        cc.set_context(ctx.into());
         cc
     }
 }
@@ -817,7 +819,7 @@ impl<'a> ChangePeerI for &'a ChangePeerV2Request {
             cc.set_transition(eraftpb::ConfChangeTransition::Explicit);
         }
         cc.set_changes(changes.into());
-        cc.set_context(ctx);
+        cc.set_context(ctx.into());
         cc
     }
 }
@@ -831,6 +833,248 @@ impl Display for MsgType<'_> {
         } else {
             write!(f, "{:?}", self.0.get_extra_msg().get_type())
         }
+    }
+}
+
+/// `RegionReadProgress` is used to keep track of the replica's `safe_ts`, the replica can handle a read
+/// request directly without requiring leader lease or read index iff `safe_ts` >= `read_ts` (the `read_ts`
+/// is usually stale i.e seconds ago).
+///
+/// `safe_ts` is updated by the `(apply index, safe ts)` item:
+/// ```
+/// if self.applied_index >= item.apply_index {
+///     self.safe_ts = max(self.safe_ts, item.safe_ts)
+/// }
+/// ```
+///
+/// For the leader, the `(apply index, safe ts)` item is publish by the `resolved-ts` worker periodically.
+/// For the followers, the item is sync periodically from the leader through the `CheckLeader` rpc.
+///
+/// The intend is to make the item's `safe ts` larger (more up to date) and `apply index` smaller (require less data)
+#[derive(Default, Debug)]
+pub struct RegionReadProgress {
+    // `core` used to keep track and update `safe_ts`, it should
+    // not be accessed outside to avoid dead lock
+    core: Mutex<RegionReadProgressCore>,
+    // The fast path to read `safe_ts` without acquiring the mutex
+    // on `core`
+    safe_ts: AtomicU64,
+    // `true` means stop updating `safe_ts` until `resume` is called
+    stopped: AtomicBool,
+}
+
+impl RegionReadProgress {
+    pub fn new(applied_index: u64, cap: usize, tag: String) -> RegionReadProgress {
+        RegionReadProgress {
+            core: Mutex::new(RegionReadProgressCore::new(applied_index, cap, tag)),
+            safe_ts: AtomicU64::from(0),
+            stopped: AtomicBool::from(false),
+        }
+    }
+
+    pub fn update_applied(&self, applied: u64) {
+        let mut core = self.core.lock().unwrap();
+        if let Some(ts) = core.update_applied(applied) {
+            if !core.pause {
+                self.safe_ts.store(ts, AtomicOrdering::Release);
+            }
+        }
+    }
+
+    pub fn update_safe_ts(&self, apply_index: u64, ts: u64) {
+        if apply_index == 0 || ts == 0 {
+            return;
+        }
+        let mut core = self.core.lock().unwrap();
+        if core.discard {
+            return;
+        }
+        if let Some(ts) = core.update_safe_ts(apply_index, ts) {
+            if !core.pause {
+                self.safe_ts.store(ts, AtomicOrdering::Release);
+            }
+        }
+    }
+
+    pub fn merge_safe_ts(&self, source_safe_ts: u64, merge_index: u64) {
+        let mut core = self.core.lock().unwrap();
+        if let Some(ts) = core.merge_safe_ts(source_safe_ts, merge_index) {
+            if !core.pause {
+                self.safe_ts.store(ts, AtomicOrdering::Release);
+            }
+        }
+    }
+
+    /// Reset `safe_ts` to 0 and stop updating it
+    pub fn pause(&self) {
+        let mut core = self.core.lock().unwrap();
+        core.pause = true;
+        self.safe_ts.store(0, AtomicOrdering::Release);
+    }
+
+    /// Discard incoming `read_state` item and stop updating `safe_ts`
+    pub fn discard(&self) {
+        let mut core = self.core.lock().unwrap();
+        core.pause = true;
+        core.discard = true;
+    }
+
+    /// Reset `safe_ts` and resume updating it
+    pub fn resume(&self) {
+        let mut core = self.core.lock().unwrap();
+        core.pause = false;
+        core.discard = false;
+        self.safe_ts
+            .store(core.read_state.ts, AtomicOrdering::Release);
+    }
+
+    // Get the latest `read_state`
+    pub fn read_state(&self) -> ReadState {
+        let core = self.core.lock().unwrap();
+        core.pending_items
+            .back()
+            .unwrap_or(&core.read_state)
+            .clone()
+    }
+
+    pub fn safe_ts(&self) -> u64 {
+        self.safe_ts.load(AtomicOrdering::Acquire)
+    }
+}
+
+#[derive(Default, Debug)]
+struct RegionReadProgressCore {
+    tag: String,
+    applied_index: u64,
+    // A wraper of `(apply_index, safe_ts)` item, where the `read_state.ts` is the peer's current `safe_ts`
+    // and the `read_state.idx` is the smallest `apply_index` required for that `safe_ts`
+    read_state: ReadState,
+    // `pending_items` is a *sorted* list of `(apply_index, safe_ts)` item
+    pending_items: VecDeque<ReadState>,
+    // After the region commit merged, the region's key range is extended and the region's `safe_ts`
+    // should reset to `min(source_safe_ts, target_safe_ts)`, and start reject stale `read_state` item
+    // with index smaller than `last_merge_index` to avoid `safe_ts` undo the decrease
+    last_merge_index: u64,
+    // Stop update `safe_ts`
+    pause: bool,
+    // Discard incoming `(idx, ts)`
+    discard: bool,
+}
+
+// A helpful wraper of `(apply_index, safe_ts)` item
+#[derive(Clone, Debug, Default)]
+pub struct ReadState {
+    pub idx: u64,
+    pub ts: u64,
+}
+
+impl RegionReadProgressCore {
+    fn new(applied_index: u64, cap: usize, tag: String) -> RegionReadProgressCore {
+        RegionReadProgressCore {
+            tag,
+            applied_index,
+            read_state: ReadState::default(),
+            pending_items: VecDeque::with_capacity(cap),
+            last_merge_index: 0,
+            pause: false,
+            discard: false,
+        }
+    }
+
+    // Reset target region's `safe_ts` to min(`source_safe_ts`, `safe_ts`)
+    fn merge_safe_ts(&mut self, source_safe_ts: u64, merge_index: u64) -> Option<u64> {
+        // Consume all pending items before `merge_index`
+        self.update_applied(merge_index);
+        // Update `last_merge_index`
+        self.last_merge_index = merge_index;
+        // Reset target region's `safe_ts`
+        let target_safe_ts = self.read_state.ts;
+        self.read_state.ts = cmp::min(source_safe_ts, target_safe_ts);
+        info!(
+            "reset safe_ts due to merge";
+            "tag" => &self.tag,
+            "source_safe_ts" => source_safe_ts,
+            "target_safe_ts" => target_safe_ts,
+            "safe_ts" => self.read_state.ts,
+        );
+        if self.read_state.ts != target_safe_ts {
+            Some(self.read_state.ts)
+        } else {
+            None
+        }
+    }
+
+    // Return the `safe_ts` if it is updated
+    fn update_applied(&mut self, applied: u64) -> Option<u64> {
+        // The apply index should not decrease
+        assert!(applied >= self.applied_index);
+        self.applied_index = applied;
+        // Consume pending items with `apply_index` less or equal to `self.applied_index`
+        let mut to_update = self.read_state.clone();
+        while let Some(item) = self.pending_items.pop_front() {
+            if self.applied_index < item.idx {
+                self.pending_items.push_front(item);
+                break;
+            }
+            if to_update.ts < item.ts {
+                to_update = item;
+            }
+        }
+        if self.read_state.ts < to_update.ts {
+            self.read_state = to_update;
+            Some(self.read_state.ts)
+        } else {
+            None
+        }
+    }
+
+    // Return the `safe_ts` if it is updated
+    fn update_safe_ts(&mut self, idx: u64, ts: u64) -> Option<u64> {
+        // Discard stale item with `apply_index` before `last_merge_index`
+        // in order to prevent the stale item makes the `safe_ts` larger again
+        if idx < self.last_merge_index {
+            return None;
+        }
+        // The peer has enough data, try update `safe_ts` directly
+        if self.applied_index >= idx {
+            let mut updated_ts = None;
+            if self.read_state.ts < ts {
+                self.read_state = ReadState { idx, ts };
+                updated_ts = Some(ts);
+            }
+            return updated_ts;
+        }
+        // The peer doesn't has enough data, keep the item for future use
+        if let Some(prev_item) = self.pending_items.back_mut() {
+            // Discard the item if it has a smaller `safe_ts`
+            if prev_item.ts >= ts {
+                return None;
+            }
+            // Discard the item if it has a smaller `apply_index`
+            if prev_item.idx >= idx {
+                // Instead of dropping the incoming item, try use it to update
+                // the last one, update the last item's `safe_ts` if the incoming
+                // item require a less or equal `apply_index` with a larger `safe_ts`
+                prev_item.ts = ts;
+                return None;
+            }
+        }
+        self.push_back(ReadState { idx, ts });
+        None
+    }
+
+    fn push_back(&mut self, item: ReadState) {
+        if self.pending_items.len() >= self.pending_items.capacity() {
+            // Stepping by one to evently remove pending items, so the follower can keep
+            // the old items and use them to update the `safe_ts` even when the follower
+            // not catch up new enough data
+            let mut keep = false;
+            self.pending_items.retain(|_| {
+                keep = !keep;
+                keep
+            });
+        }
+        self.pending_items.push_back(item);
     }
 }
 
@@ -1059,10 +1303,12 @@ mod tests {
                 ));
                 assert!(learner.iter().all(|id| cs.get_learners().contains(id)));
                 assert!(incomming.iter().all(|id| cs.get_voters().contains(id)));
-                assert!(demoting
-                    .iter()
-                    .all(|id| cs.get_voters_outgoing().contains(id)
-                        && cs.get_learners_next().contains(id)));
+                assert!(
+                    demoting
+                        .iter()
+                        .all(|id| cs.get_voters_outgoing().contains(id)
+                            && cs.get_learners_next().contains(id))
+                );
             }
         }
     }
@@ -1450,11 +1696,58 @@ mod tests {
     }
 
     #[test]
-    fn test_admin_cmd_epoch_map_include_all_cmd_type() {
-        #[cfg(feature = "protobuf-codec")]
-        use protobuf::ProtobufEnum;
-        for cmd_type in AdminCmdType::values() {
-            assert!(ADMIN_CMD_EPOCH_MAP.contains_key(cmd_type));
+    fn test_region_read_progress() {
+        // Return the number of the pending (index, ts) item
+        fn pending_items_num(rrp: &RegionReadProgress) -> usize {
+            rrp.core.lock().unwrap().pending_items.len()
         }
+
+        let cap = 10;
+        let rrp = RegionReadProgress::new(10, cap, "".to_owned());
+        for i in 1..=20 {
+            rrp.update_safe_ts(i, i);
+        }
+        // `safe_ts` update according to its `applied_index`
+        assert_eq!(rrp.safe_ts(), 10);
+        assert_eq!(pending_items_num(&rrp), 10);
+
+        rrp.update_applied(20);
+        assert_eq!(rrp.safe_ts(), 20);
+        assert_eq!(pending_items_num(&rrp), 0);
+
+        for i in 100..200 {
+            rrp.update_safe_ts(i, i);
+        }
+        assert_eq!(rrp.safe_ts(), 20);
+        // the number of pending item should not exceed `cap`
+        assert!(pending_items_num(&rrp) <= cap);
+
+        // `applied_index` large than all pending items will clear all pending items
+        rrp.update_applied(200);
+        assert_eq!(rrp.safe_ts(), 199);
+        assert_eq!(pending_items_num(&rrp), 0);
+
+        // pending item can be updated instead of adding a new one
+        rrp.update_safe_ts(300, 300);
+        assert_eq!(pending_items_num(&rrp), 1);
+        rrp.update_safe_ts(200, 400);
+        assert_eq!(pending_items_num(&rrp), 1);
+        rrp.update_safe_ts(300, 500);
+        assert_eq!(pending_items_num(&rrp), 1);
+        rrp.update_safe_ts(301, 600);
+        assert_eq!(pending_items_num(&rrp), 2);
+        // `safe_ts` will update to 500 instead of 300
+        rrp.update_applied(300);
+        assert_eq!(rrp.safe_ts(), 500);
+        rrp.update_applied(301);
+        assert_eq!(rrp.safe_ts(), 600);
+        assert_eq!(pending_items_num(&rrp), 0);
+
+        // stale item will be ignored
+        rrp.update_safe_ts(300, 500);
+        rrp.update_safe_ts(301, 600);
+        rrp.update_safe_ts(400, 0);
+        rrp.update_safe_ts(0, 700);
+        assert_eq!(pending_items_num(&rrp), 0);
     }
 }

@@ -3,10 +3,8 @@
 mod backward;
 mod forward;
 
-use engine_traits::{CfName, IterOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use keys::DATA_PREFIX_KEY;
+use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
-use tikv_util::keybuilder::KeyBuilder;
 use txn_types::{Key, TimeStamp, TsSet, Value, Write, WriteRef, WriteType};
 
 use self::backward::BackwardKvScanner;
@@ -355,20 +353,15 @@ pub fn has_data_in_range<S: Snapshot>(
     right: &Key,
     statistic: &mut CfStatistics,
 ) -> Result<bool> {
-    let iter_opt = IterOptions::new(
-        None,
-        Some(KeyBuilder::from_slice(
-            right.as_encoded(),
-            DATA_PREFIX_KEY.len(),
-            0,
-        )),
-        true,
-    )
-    .set_max_skippable_internal_keys(100);
-    let mut iter = snapshot.iter_cf(cf, iter_opt, ScanMode::Forward)?;
-    match iter.seek(left, statistic) {
+    let mut cursor = CursorBuilder::new(&snapshot, cf)
+        .range(None, Some(right.clone()))
+        .scan_mode(ScanMode::Forward)
+        .fill_cache(true)
+        .max_skippable_internal_keys(100)
+        .build()?;
+    match cursor.seek(left, statistic) {
         Ok(valid) => {
-            if valid && iter.key(statistic) < right.as_encoded().as_slice() {
+            if valid && cursor.key(statistic) < right.as_encoded().as_slice() {
                 return Ok(true);
             }
         }

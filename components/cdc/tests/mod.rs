@@ -20,7 +20,7 @@ use tikv_util::worker::LazyWorker;
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
 
-use cdc::{CdcObserver, Task};
+use cdc::{CdcObserver, MemoryQuota, Task};
 static INIT: Once = Once::new();
 
 pub fn init() {
@@ -55,7 +55,7 @@ pub fn new_event_feed(
         let mut events;
         {
             let mut event_feed = event_feed_wrap_clone.lock().unwrap();
-            events = (*event_feed).take();
+            events = event_feed.take();
         }
         let events_rx = if let Some(events_rx) = events.as_mut() {
             events_rx
@@ -75,7 +75,7 @@ pub fn new_event_feed(
         if !keep_resolved_ts && change_data_event.has_resolved_ts() {
             continue;
         }
-        tikv_util::info!("receive event {:?}", change_data_event);
+        tikv_util::info!("cdc receive event {:?}", change_data_event);
         break change_data_event;
     };
     (
@@ -124,8 +124,13 @@ impl TestSuite {
                 .entry(id)
                 .or_default()
                 .push(Box::new(move || {
-                    create_change_data(cdc::Service::new(scheduler.clone()))
+                    let memory_quota = MemoryQuota::new(usize::MAX);
+                    create_change_data(cdc::Service::new(scheduler.clone(), memory_quota))
                 }));
+            sim.txn_extra_schedulers.insert(
+                id,
+                Arc::new(cdc::CdcTxnExtraScheduler::new(worker.scheduler().clone())),
+            );
             let scheduler = worker.scheduler();
             let cdc_ob = cdc::CdcObserver::new(scheduler.clone());
             obs.insert(id, cdc_ob.clone());
@@ -154,9 +159,10 @@ impl TestSuite {
                 cm.clone(),
                 env,
                 sim.security_mgr.clone(),
+                MemoryQuota::new(usize::MAX),
             );
             cdc_endpoint.set_min_ts_interval(Duration::from_millis(100));
-            cdc_endpoint.set_scan_batch_size(2);
+            cdc_endpoint.set_max_scan_batch_size(2);
             concurrency_managers.insert(*id, cm);
             worker.start(cdc_endpoint);
         }
@@ -173,8 +179,8 @@ impl TestSuite {
     }
 
     pub fn stop(mut self) {
-        for (_, mut worker) in self.endpoints {
-            worker.stop();
+        for (_, worker) in self.endpoints.drain() {
+            worker.stop_worker();
         }
         self.cluster.shutdown();
     }

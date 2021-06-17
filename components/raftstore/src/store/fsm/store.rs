@@ -4,22 +4,27 @@ use std::cmp::{Ord, Ordering as CmpOrdering};
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::ops::Deref;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{mem, u64};
 
-use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
+use batch_system::{
+    BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler, Priority,
+};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::PerfContext;
 use engine_traits::PerfContextKind;
 use engine_traits::{Engines, KvEngine, Mutable, WriteBatch, WriteBatchExt, WriteOptions};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use fail::fail_point;
 use futures::compat::Future01CompatExt;
 use futures::FutureExt;
 use kvproto::import_sstpb::SstMeta;
+use kvproto::kvrpcpb::KeyRange;
 use kvproto::kvrpcpb::LeaderInfo;
 use kvproto::metapb::{self, Region, RegionEpoch};
+use kvproto::pdpb::QueryStats;
 use kvproto::pdpb::StoreStats;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
 use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState};
@@ -34,11 +39,13 @@ use engine_traits::{RaftEngine, RaftLogBatch};
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use pd_client::{FeatureGate, PdClient};
 use sst_importer::SSTImporter;
+use tikv_alloc::trace::TraceEvent;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
+use tikv_util::{box_err, box_try, debug, error, info, slow_log, warn};
 use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
 
 use crate::coprocessor::split_observer::SplitObserver;
@@ -55,10 +62,11 @@ use crate::store::fsm::{
     CollectedReady,
 };
 use crate::store::local_metrics::RaftMetrics;
+use crate::store::memory::*;
 use crate::store::metrics::*;
 use crate::store::peer_storage::{self, HandleRaftReadyContext};
 use crate::store::transport::Transport;
-use crate::store::util::is_initial_msg;
+use crate::store::util::{is_initial_msg, RegionReadProgress};
 use crate::store::worker::{
     AutoSplitController, CleanupRunner, CleanupSSTRunner, CleanupSSTTask, CleanupTask,
     CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner,
@@ -80,6 +88,7 @@ const KV_WB_SHRINK_SIZE: usize = 256 * 1024;
 const RAFT_WB_SHRINK_SIZE: usize = 1024 * 1024;
 pub const PENDING_MSG_CAP: usize = 100;
 const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
+const ENTRY_CACHE_EVICT_TICK_DURATION: Duration = Duration::from_secs(1);
 
 pub struct StoreInfo<E> {
     pub engine: E,
@@ -117,6 +126,8 @@ pub struct StoreMeta {
     /// source_region_id -> need_atomic
     /// Used for reminding the source peer to switch to ready in `atomic_snap_regions`.
     pub destroyed_region_for_snap: HashMap<u64, bool>,
+
+    pub region_read_progress: HashMap<u64, Arc<RegionReadProgress>>,
 }
 
 impl StoreMeta {
@@ -133,6 +144,7 @@ impl StoreMeta {
             targets_map: HashMap::default(),
             atomic_snap_regions: HashMap::default(),
             destroyed_region_for_snap: HashMap::default(),
+            region_read_progress: HashMap::default(),
         }
     }
 
@@ -159,6 +171,17 @@ where
     ER: RaftEngine,
 {
     pub router: BatchRouter<PeerFsm<EK, ER>, StoreFsm<EK>>,
+}
+
+impl<EK, ER> Drop for RaftRouter<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    fn drop(&mut self) {
+        MEMTRACE_RAFT_ROUTER_ALIVE.trace(TraceEvent::Reset(0));
+        MEMTRACE_RAFT_ROUTER_LEAK.trace(TraceEvent::Reset(0));
+    }
 }
 
 impl<EK, ER> Clone for RaftRouter<EK, ER>
@@ -272,6 +295,32 @@ where
             PeerMsg::SignificantMsg(SignificantMsg::StoreResolved { store_id, group_id })
         })
     }
+
+    pub fn register(&self, region_id: u64, mailbox: BasicMailbox<PeerFsm<EK, ER>>) {
+        self.router.register(region_id, mailbox);
+        self.update_trace();
+    }
+
+    pub fn register_all(&self, mailboxes: Vec<(u64, BasicMailbox<PeerFsm<EK, ER>>)>) {
+        self.router.register_all(mailboxes);
+        self.update_trace();
+    }
+
+    pub fn close(&self, region_id: u64) {
+        self.router.close(region_id);
+        self.update_trace();
+    }
+
+    pub fn clear_cache(&self) {
+        self.router.clear_cache();
+        self.update_trace();
+    }
+
+    fn update_trace(&self) {
+        let router_trace = self.router.trace();
+        MEMTRACE_RAFT_ROUTER_ALIVE.trace(TraceEvent::Reset(router_trace.alive));
+        MEMTRACE_RAFT_ROUTER_LEAK.trace(TraceEvent::Reset(router_trace.leak));
+    }
 }
 
 #[derive(Default)]
@@ -322,7 +371,6 @@ where
     pub pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
     pub raft_metrics: RaftMetrics,
     pub snap_mgr: SnapManager,
-    pub applying_snap_count: Arc<AtomicUsize>,
     pub coprocessor_host: CoprocessorHost<EK>,
     pub timer: SteadyTimer,
     pub trans: T,
@@ -387,6 +435,8 @@ where
             self.cfg.raft_base_tick_interval.0;
         self.tick_batch[PeerTicks::RAFT_LOG_GC.bits() as usize].wait_duration =
             self.cfg.raft_log_gc_tick_interval.0;
+        self.tick_batch[PeerTicks::ENTRY_CACHE_EVICT.bits() as usize].wait_duration =
+            ENTRY_CACHE_EVICT_TICK_DURATION;
         self.tick_batch[PeerTicks::PD_HEARTBEAT.bits() as usize].wait_duration =
             self.cfg.pd_heartbeat_tick_interval.0;
         self.tick_batch[PeerTicks::SPLIT_REGION_CHECK.bits() as usize].wait_duration =
@@ -575,6 +625,9 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 }
                 StoreMsg::Start { store } => self.start(store),
                 StoreMsg::CheckLeader { leaders, cb } => self.on_check_leader(leaders, cb),
+                StoreMsg::GetStoreSafeTS { key_range, cb } => {
+                    self.on_get_store_safe_ts(key_range, cb)
+                }
                 #[cfg(any(test, feature = "testexport"))]
                 StoreMsg::Validate(f) => f(&self.ctx.cfg),
                 StoreMsg::UpdateReplicationMode(status) => self.on_update_replication_mode(status),
@@ -610,6 +663,8 @@ pub struct RaftPoller<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: 'stat
     poll_ctx: PollContext<EK, ER, T>,
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
+
+    trace_event: TraceEvent,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
@@ -707,7 +762,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
             if self.poll_ctx.tick_batch[idx].ticks.is_empty() {
                 continue;
             }
-            let peer_ticks = std::mem::replace(&mut self.poll_ctx.tick_batch[idx].ticks, vec![]);
+            let peer_ticks = std::mem::take(&mut self.poll_ctx.tick_batch[idx].ticks);
             let f = self
                 .poll_ctx
                 .timer
@@ -843,6 +898,11 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             .observe(duration_to_sec(self.timer.elapsed()) as f64);
         self.poll_ctx.raft_metrics.flush();
         self.poll_ctx.store_stat.flush();
+
+        for peer in peers {
+            peer.update_memory_trace(&mut self.trace_event);
+        }
+        MEMTRACE_PEERS.trace(mem::take(&mut self.trace_event));
     }
 
     fn pause(&mut self) {
@@ -871,7 +931,6 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     trans: T,
     global_stat: GlobalStoreStat,
     pub engines: Engines<EK, ER>,
-    applying_snap_count: Arc<AtomicUsize>,
     global_replication_state: Arc<Mutex<GlobalReplicationState>>,
     feature_gate: FeatureGate,
 }
@@ -944,6 +1003,8 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
             }
             meta.region_ranges.insert(enc_end_key(region), region_id);
             meta.regions.insert(region_id, region.clone());
+            meta.region_read_progress
+                .insert(region_id, peer.peer.read_progress.clone());
             // No need to check duplicated here, because we use region id as the key
             // in DB.
             region_peers.push((tx, peer));
@@ -977,6 +1038,8 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
             peer.schedule_applying_snapshot();
             meta.region_ranges
                 .insert(enc_end_key(&region), region.get_id());
+            meta.region_read_progress
+                .insert(region.get_id(), peer.peer.read_progress.clone());
             meta.regions.insert(region.get_id(), region);
             region_peers.push((tx, peer));
         }
@@ -1048,7 +1111,7 @@ where
 {
     type Handler = RaftPoller<EK, ER, T>;
 
-    fn build(&mut self) -> RaftPoller<EK, ER, T> {
+    fn build(&mut self, _: Priority) -> RaftPoller<EK, ER, T> {
         let mut ctx = PollContext {
             processed_fsm_count: 0,
             cfg: self.cfg.value().clone(),
@@ -1066,7 +1129,6 @@ where
             pending_create_peers: self.pending_create_peers.clone(),
             raft_metrics: RaftMetrics::default(),
             snap_mgr: self.snap_mgr.clone(),
-            applying_snap_count: self.applying_snap_count.clone(),
             coprocessor_host: self.coprocessor_host.clone(),
             timer: SteadyTimer::default(),
             trans: self.trans.clone(),
@@ -1100,6 +1162,7 @@ where
             messages_per_tick: ctx.cfg.messages_per_tick,
             poll_ctx: ctx,
             cfg_tracker: self.cfg.clone().tracker(tag),
+            trace_event: TraceEvent::default(),
         }
     }
 }
@@ -1217,12 +1280,11 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             trans,
             coprocessor_host,
             importer,
-            snap_mgr: mgr,
+            snap_mgr: mgr.clone(),
             global_replication_state,
             global_stat: GlobalStoreStat::default(),
             store_meta,
             pending_create_peers: Arc::new(Mutex::new(HashMap::default())),
-            applying_snap_count: Arc::new(AtomicUsize::new(0)),
             feature_gate: pd_client.feature_gate().clone(),
         };
         let region_peers = builder.init()?;
@@ -1234,6 +1296,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 builder,
                 auto_split_controller,
                 concurrency_manager,
+                mgr,
                 pd_client,
             )?;
         } else {
@@ -1243,6 +1306,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 builder,
                 auto_split_controller,
                 concurrency_manager,
+                mgr,
                 pd_client,
             )?;
         }
@@ -1256,6 +1320,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         builder: RaftPollerBuilder<EK, ER, T>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
+        snap_mgr: SnapManager,
         pd_client: Arc<C>,
     ) -> Result<()> {
         let cfg = builder.cfg.value().clone();
@@ -1292,7 +1357,10 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let mut address = Vec::with_capacity(region_peers.len());
         for (tx, fsm) in region_peers {
             address.push(fsm.region_id());
-            mailboxes.push((fsm.region_id(), BasicMailbox::new(tx, fsm)));
+            mailboxes.push((
+                fsm.region_id(),
+                BasicMailbox::new(tx, fsm, self.router.state_cnt().clone()),
+            ));
         }
         self.router.register_all(mailboxes);
 
@@ -1317,6 +1385,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             cfg.pd_store_heartbeat_tick_interval.0,
             auto_split_controller,
             concurrency_manager,
+            snap_mgr,
         );
         box_try!(workers.pd_worker.start(pd_runner));
 
@@ -1324,6 +1393,8 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             warn!("set thread priority for raftstore failed"; "error" => ?e);
         }
         self.workers = Some(workers);
+        // This router will not be accessed again, free all caches.
+        self.router.clear_cache();
         Ok(())
     }
 
@@ -1705,7 +1776,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                         "source_region" => ?exist_region,
                     );
                     if self.ctx.cfg.dev_assert {
-                        panic!("something is wrong, maybe PD do not ensure all target peers exist before merging");
+                        panic!(
+                            "something is wrong, maybe PD do not ensure all target peers exist before merging"
+                        );
                     }
                 }
                 continue;
@@ -1764,8 +1837,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         // snapshot is applied.
         meta.regions
             .insert(region_id, peer.get_peer().region().to_owned());
+        meta.region_read_progress
+            .insert(region_id, peer.peer.read_progress.clone());
 
-        let mailbox = BasicMailbox::new(tx, peer);
+        let mailbox = BasicMailbox::new(tx, peer, self.ctx.router.state_cnt().clone());
         self.ctx.router.register(region_id, mailbox);
         self.ctx
             .router
@@ -1901,8 +1976,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     fn store_heartbeat_pd(&mut self) {
         let mut stats = StoreStats::default();
 
-        let used_size = self.ctx.snap_mgr.get_total_snap_size();
-        stats.set_used_size(used_size);
         stats.set_store_id(self.ctx.store_id());
         {
             let meta = self.ctx.store_meta.lock().unwrap();
@@ -1918,12 +1991,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
             .with_label_values(&["receiving"])
             .set(snap_stats.receiving_count as i64);
-
-        let apply_snapshot_count = self.ctx.applying_snap_count.load(Ordering::SeqCst);
-        stats.set_applying_snap_count(apply_snapshot_count as u32);
-        STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
-            .with_label_values(&["applying"])
-            .set(apply_snapshot_count as i64);
 
         stats.set_start_time(self.fsm.store.start_time.unwrap().sec as u32);
 
@@ -1950,6 +2017,30 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 .is_busy
                 .swap(false, Ordering::SeqCst),
         );
+
+        let mut query_stats = QueryStats::default();
+        query_stats.set_put(
+            self.ctx
+                .global_stat
+                .stat
+                .engine_total_query_put
+                .swap(0, Ordering::SeqCst),
+        );
+        query_stats.set_delete(
+            self.ctx
+                .global_stat
+                .stat
+                .engine_total_query_delete
+                .swap(0, Ordering::SeqCst),
+        );
+        query_stats.set_delete_range(
+            self.ctx
+                .global_stat
+                .stat
+                .engine_total_query_delete_range
+                .swap(0, Ordering::SeqCst),
+        );
+        stats.set_query_stats(query_stats);
 
         let store_info = StoreInfo {
             engine: self.ctx.engines.kv.clone(),
@@ -2001,11 +2092,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                         "snaps" => ?snaps,
                     );
                     for (key, is_sending) in snaps {
-                        let snap = if is_sending {
-                            self.ctx.snap_mgr.get_snapshot_for_sending(&key)?
-                        } else {
-                            self.ctx.snap_mgr.get_snapshot_for_applying(&key)?
-                        };
+                        let snap = self.ctx.snap_mgr.get_snapshot_for_gc(&key, is_sending)?;
                         self.ctx
                             .snap_mgr
                             .delete_snapshot(&key, snap.as_ref(), false);
@@ -2350,6 +2437,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     }
 
     fn on_check_leader(&self, leaders: Vec<LeaderInfo>, cb: Box<dyn FnOnce(Vec<u64>) + Send>) {
+        let timer = TiInstant::now_coarse();
         let meta = self.ctx.store_meta.lock().unwrap();
         let regions = leaders
             .into_iter()
@@ -2367,6 +2455,22 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                             )
                             .is_ok()
                         {
+                            if leader_info.has_read_state() {
+                                // TODO: instead of `store_meta`, using another fine grained mutex to protect
+                                // `region_read_progress`
+                                if let Some(pr) =
+                                    meta.region_read_progress.get(&leader_info.region_id)
+                                {
+                                    // TODO: `update_safe_ts` reqiure to acquire a mutex, although the mutex
+                                    // won't be contended, but acquiring a large amount of uncontended mutexs
+                                    // could still be time consuming, should move this operation to other thread
+                                    // to avoid blocking `raftstore` threads
+                                    pr.update_safe_ts(
+                                        leader_info.get_read_state().get_applied_index(),
+                                        leader_info.get_read_state().get_safe_ts(),
+                                    );
+                                }
+                            }
                             return Some(leader_info.region_id);
                         }
                         debug!("check leader failed";
@@ -2385,9 +2489,51 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 );
                 None
             })
-            .filter_map(|r| r)
+            .flatten()
             .collect();
         cb(regions);
+
+        self.ctx
+            .raft_metrics
+            .check_leader
+            .observe(duration_to_sec(timer.elapsed()) as f64);
+    }
+
+    fn on_get_store_safe_ts(&self, key_range: KeyRange, cb: Box<dyn FnOnce(u64) + Send>) {
+        // `store_safe_ts` won't be accessed frequently (like per-request or per-transaction),
+        // so it is okay getting `store_safe_ts` from `store_meta` (behide a mutex)
+        let meta = self.ctx.store_meta.lock().unwrap();
+        cb(get_range_safe_ts(&meta, key_range));
+    }
+}
+
+// Get the minimal `safe_ts` from regions overlap with the key range [`start_key`, `end_key`)
+fn get_range_safe_ts(meta: &StoreMeta, key_range: KeyRange) -> u64 {
+    if key_range.get_start_key().is_empty() && key_range.get_end_key().is_empty() {
+        // Fast path to get the min `safe_ts` of all regions in this store
+        meta.region_read_progress
+            .iter()
+            .map(|(_, rrp)| rrp.safe_ts())
+            .min()
+            .unwrap_or(0)
+    } else {
+        let (start_key, end_key) = (
+            data_key(key_range.get_start_key()),
+            data_end_key(key_range.get_end_key()),
+        );
+        meta.region_ranges
+            // get overlapped regions
+            .range((Excluded(start_key), Unbounded))
+            .take_while(|(_, id)| end_key > enc_start_key(&meta.regions[id]))
+            // get the min `safe_ts`
+            .map(|(_, id)| {
+                meta.region_read_progress
+                    .get(id)
+                    .unwrap()
+                    .safe_ts()
+            })
+            .min()
+            .unwrap_or(0)
     }
 }
 
@@ -2445,5 +2591,50 @@ mod tests {
         let declined_bytes = event.calc_ranges_declined_bytes(&region_ranges, 1024);
         let expected_declined_bytes = vec![(2, 8192), (3, 4096)];
         assert_eq!(declined_bytes, expected_declined_bytes);
+    }
+
+    #[test]
+    fn test_get_range_min_safe_ts() {
+        fn add_region(meta: &mut StoreMeta, id: u64, kr: KeyRange, safe_ts: u64) {
+            let mut region = Region::default();
+            region.set_id(id);
+            region.set_start_key(kr.get_start_key().to_vec());
+            region.set_end_key(kr.get_end_key().to_vec());
+            region.set_peers(vec![kvproto::metapb::Peer::default()].into());
+            let rrp = RegionReadProgress::new(1, 1, "".to_owned());
+            rrp.update_safe_ts(1, safe_ts);
+            assert_eq!(rrp.safe_ts(), safe_ts);
+            meta.region_ranges.insert(enc_end_key(&region), id);
+            meta.regions.insert(id, region);
+            meta.region_read_progress.insert(id, Arc::new(rrp));
+        }
+
+        fn key_range(start_key: &[u8], end_key: &[u8]) -> KeyRange {
+            let mut kr = KeyRange::default();
+            kr.set_start_key(start_key.to_vec());
+            kr.set_end_key(end_key.to_vec());
+            kr
+        }
+
+        let mut meta = StoreMeta::new(0);
+        assert_eq!(0, get_range_safe_ts(&meta, key_range(b"", b"")));
+        add_region(&mut meta, 1, key_range(b"", b"k1"), 100);
+        assert_eq!(100, get_range_safe_ts(&meta, key_range(b"", b"")));
+        assert_eq!(0, get_range_safe_ts(&meta, key_range(b"k1", b"")));
+
+        add_region(&mut meta, 2, key_range(b"k5", b"k6"), 80);
+        add_region(&mut meta, 3, key_range(b"k6", b"k9"), 70);
+        add_region(&mut meta, 4, key_range(b"k9", b""), 90);
+        assert_eq!(70, get_range_safe_ts(&meta, key_range(b"", b"")));
+        assert_eq!(80, get_range_safe_ts(&meta, key_range(b"", b"k6")));
+        assert_eq!(90, get_range_safe_ts(&meta, key_range(b"k99", b"")));
+        assert_eq!(70, get_range_safe_ts(&meta, key_range(b"k5", b"k99")));
+        assert_eq!(70, get_range_safe_ts(&meta, key_range(b"k", b"k9")));
+        assert_eq!(80, get_range_safe_ts(&meta, key_range(b"k4", b"k6")));
+        assert_eq!(100, get_range_safe_ts(&meta, key_range(b"", b"k1")));
+        assert_eq!(90, get_range_safe_ts(&meta, key_range(b"k9", b"")));
+        assert_eq!(80, get_range_safe_ts(&meta, key_range(b"k5", b"k6")));
+        assert_eq!(0, get_range_safe_ts(&meta, key_range(b"k1", b"k4")));
+        assert_eq!(0, get_range_safe_ts(&meta, key_range(b"k2", b"k3")));
     }
 }

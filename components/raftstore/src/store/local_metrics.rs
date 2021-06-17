@@ -23,145 +23,94 @@ impl RaftReadyMetrics {
     fn flush(&mut self) {
         // reset all buffered metrics once they have been added
         if self.message > 0 {
-            STORE_RAFT_READY_COUNTER.message.inc_by(self.message as i64);
+            STORE_RAFT_READY_COUNTER.message.inc_by(self.message);
             self.message = 0;
         }
         if self.commit > 0 {
-            STORE_RAFT_READY_COUNTER.commit.inc_by(self.commit as i64);
+            STORE_RAFT_READY_COUNTER.commit.inc_by(self.commit);
             self.commit = 0;
         }
         if self.append > 0 {
-            STORE_RAFT_READY_COUNTER.append.inc_by(self.append as i64);
+            STORE_RAFT_READY_COUNTER.append.inc_by(self.append);
             self.append = 0;
         }
         if self.snapshot > 0 {
-            STORE_RAFT_READY_COUNTER
-                .snapshot
-                .inc_by(self.snapshot as i64);
+            STORE_RAFT_READY_COUNTER.snapshot.inc_by(self.snapshot);
             self.snapshot = 0;
         }
         if self.pending_region > 0 {
             STORE_RAFT_READY_COUNTER
                 .pending_region
-                .inc_by(self.pending_region as i64);
+                .inc_by(self.pending_region);
             self.pending_region = 0;
         }
         if self.has_ready_region > 0 {
             STORE_RAFT_READY_COUNTER
                 .has_ready_region
-                .inc_by(self.has_ready_region as i64);
+                .inc_by(self.has_ready_region);
             self.has_ready_region = 0;
         }
     }
 }
 
-/// The buffered metrics counters for raft message.
-#[derive(Debug, Default, Clone)]
-pub struct RaftMessageMetrics {
-    pub append: u64,
-    pub append_resp: u64,
-    pub prevote: u64,
-    pub prevote_resp: u64,
-    pub vote: u64,
-    pub vote_resp: u64,
-    pub snapshot: u64,
-    pub request_snapshot: u64,
-    pub heartbeat: u64,
-    pub heartbeat_resp: u64,
-    pub transfer_leader: u64,
-    pub timeout_now: u64,
-    pub read_index: u64,
-    pub read_index_resp: u64,
+pub type SendStatus = [u64; 2];
+
+macro_rules! flush_send_status {
+    ($metrics:ident, $self:ident) => {{
+        if $self.$metrics[0] > 0 {
+            STORE_RAFT_SENT_MESSAGE_COUNTER
+                .$metrics
+                .drop
+                .inc_by($self.$metrics[0]);
+            $self.$metrics[0] = 0;
+        }
+        if $self.$metrics[1] > 0 {
+            STORE_RAFT_SENT_MESSAGE_COUNTER
+                .$metrics
+                .accept
+                .inc_by($self.$metrics[1]);
+            $self.$metrics[1] = 0;
+        }
+    }};
 }
 
-impl RaftMessageMetrics {
+/// The buffered metrics counters for raft message.
+#[derive(Debug, Default, Clone)]
+pub struct RaftSendMessageMetrics {
+    pub append: SendStatus,
+    pub append_resp: SendStatus,
+    pub prevote: SendStatus,
+    pub prevote_resp: SendStatus,
+    pub vote: SendStatus,
+    pub vote_resp: SendStatus,
+    pub snapshot: SendStatus,
+    pub request_snapshot: SendStatus,
+    pub heartbeat: SendStatus,
+    pub heartbeat_resp: SendStatus,
+    pub transfer_leader: SendStatus,
+    pub timeout_now: SendStatus,
+    pub read_index: SendStatus,
+    pub read_index_resp: SendStatus,
+}
+
+impl RaftSendMessageMetrics {
     /// Flushes all metrics
     fn flush(&mut self) {
         // reset all buffered metrics once they have been added
-        if self.append > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER
-                .append
-                .inc_by(self.append as i64);
-            self.append = 0;
-        }
-        if self.append_resp > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER
-                .append_resp
-                .inc_by(self.append_resp as i64);
-            self.append_resp = 0;
-        }
-        if self.prevote > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER
-                .prevote
-                .inc_by(self.prevote as i64);
-            self.prevote = 0;
-        }
-        if self.prevote_resp > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER
-                .prevote_resp
-                .inc_by(self.prevote_resp as i64);
-            self.prevote_resp = 0;
-        }
-        if self.vote > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER
-                .vote
-                .inc_by(self.vote as i64);
-            self.vote = 0;
-        }
-        if self.vote_resp > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER
-                .vote_resp
-                .inc_by(self.vote_resp as i64);
-            self.vote_resp = 0;
-        }
-        if self.snapshot > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER
-                .snapshot
-                .inc_by(self.snapshot as i64);
-            self.snapshot = 0;
-        }
-        if self.request_snapshot > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER
-                .request_snapshot
-                .inc_by(self.request_snapshot as i64);
-            self.request_snapshot = 0;
-        }
-        if self.heartbeat > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER
-                .heartbeat
-                .inc_by(self.heartbeat as i64);
-            self.heartbeat = 0;
-        }
-        if self.heartbeat_resp > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER
-                .heartbeat_resp
-                .inc_by(self.heartbeat_resp as i64);
-            self.heartbeat_resp = 0;
-        }
-        if self.transfer_leader > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER
-                .transfer_leader
-                .inc_by(self.transfer_leader as i64);
-            self.transfer_leader = 0;
-        }
-        if self.timeout_now > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER
-                .timeout_now
-                .inc_by(self.timeout_now as i64);
-            self.timeout_now = 0;
-        }
-        if self.read_index > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER
-                .read_index
-                .inc_by(self.read_index as i64);
-            self.read_index = 0;
-        }
-        if self.read_index_resp > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER
-                .read_index_resp
-                .inc_by(self.read_index_resp as i64);
-            self.read_index_resp = 0;
-        }
+        flush_send_status!(append, self);
+        flush_send_status!(append_resp, self);
+        flush_send_status!(prevote, self);
+        flush_send_status!(prevote_resp, self);
+        flush_send_status!(vote, self);
+        flush_send_status!(vote_resp, self);
+        flush_send_status!(snapshot, self);
+        flush_send_status!(request_snapshot, self);
+        flush_send_status!(heartbeat, self);
+        flush_send_status!(heartbeat_resp, self);
+        flush_send_status!(transfer_leader, self);
+        flush_send_status!(timeout_now, self);
+        flush_send_status!(read_index, self);
+        flush_send_status!(read_index_resp, self);
     }
 }
 
@@ -182,49 +131,49 @@ impl RaftMessageDropMetrics {
         if self.mismatch_store_id > 0 {
             STORE_RAFT_DROPPED_MESSAGE_COUNTER
                 .mismatch_store_id
-                .inc_by(self.mismatch_store_id as i64);
+                .inc_by(self.mismatch_store_id);
             self.mismatch_store_id = 0;
         }
         if self.mismatch_region_epoch > 0 {
             STORE_RAFT_DROPPED_MESSAGE_COUNTER
                 .mismatch_region_epoch
-                .inc_by(self.mismatch_region_epoch as i64);
+                .inc_by(self.mismatch_region_epoch);
             self.mismatch_region_epoch = 0;
         }
         if self.stale_msg > 0 {
             STORE_RAFT_DROPPED_MESSAGE_COUNTER
                 .stale_msg
-                .inc_by(self.stale_msg as i64);
+                .inc_by(self.stale_msg);
             self.stale_msg = 0;
         }
         if self.region_overlap > 0 {
             STORE_RAFT_DROPPED_MESSAGE_COUNTER
                 .region_overlap
-                .inc_by(self.region_overlap as i64);
+                .inc_by(self.region_overlap);
             self.region_overlap = 0;
         }
         if self.region_no_peer > 0 {
             STORE_RAFT_DROPPED_MESSAGE_COUNTER
                 .region_no_peer
-                .inc_by(self.region_no_peer as i64);
+                .inc_by(self.region_no_peer);
             self.region_no_peer = 0;
         }
         if self.region_tombstone_peer > 0 {
             STORE_RAFT_DROPPED_MESSAGE_COUNTER
                 .region_tombstone_peer
-                .inc_by(self.region_tombstone_peer as i64);
+                .inc_by(self.region_tombstone_peer);
             self.region_tombstone_peer = 0;
         }
         if self.region_nonexistent > 0 {
             STORE_RAFT_DROPPED_MESSAGE_COUNTER
                 .region_nonexistent
-                .inc_by(self.region_nonexistent as i64);
+                .inc_by(self.region_nonexistent);
             self.region_nonexistent = 0;
         }
         if self.applying_snap > 0 {
             STORE_RAFT_DROPPED_MESSAGE_COUNTER
                 .applying_snap
-                .inc_by(self.applying_snap as i64);
+                .inc_by(self.applying_snap);
             self.applying_snap = 0;
         }
     }
@@ -265,45 +214,39 @@ impl RaftProposeMetrics {
     fn flush(&mut self) {
         // reset all buffered metrics once they have been added
         if self.all > 0 {
-            PEER_PROPOSAL_COUNTER.all.inc_by(self.all as i64);
+            PEER_PROPOSAL_COUNTER.all.inc_by(self.all);
             self.all = 0;
         }
         if self.local_read > 0 {
-            PEER_PROPOSAL_COUNTER
-                .local_read
-                .inc_by(self.local_read as i64);
+            PEER_PROPOSAL_COUNTER.local_read.inc_by(self.local_read);
             self.local_read = 0;
         }
         if self.read_index > 0 {
-            PEER_PROPOSAL_COUNTER
-                .read_index
-                .inc_by(self.read_index as i64);
+            PEER_PROPOSAL_COUNTER.read_index.inc_by(self.read_index);
             self.read_index = 0;
         }
         if self.unsafe_read_index > 0 {
             PEER_PROPOSAL_COUNTER
                 .unsafe_read_index
-                .inc_by(self.unsafe_read_index as i64);
+                .inc_by(self.unsafe_read_index);
             self.unsafe_read_index = 0;
         }
         if self.normal > 0 {
-            PEER_PROPOSAL_COUNTER.normal.inc_by(self.normal as i64);
+            PEER_PROPOSAL_COUNTER.normal.inc_by(self.normal);
             self.normal = 0;
         }
         if self.transfer_leader > 0 {
             PEER_PROPOSAL_COUNTER
                 .transfer_leader
-                .inc_by(self.transfer_leader as i64);
+                .inc_by(self.transfer_leader);
             self.transfer_leader = 0;
         }
         if self.conf_change > 0 {
-            PEER_PROPOSAL_COUNTER
-                .conf_change
-                .inc_by(self.conf_change as i64);
+            PEER_PROPOSAL_COUNTER.conf_change.inc_by(self.conf_change);
             self.conf_change = 0;
         }
         if self.batch > 0 {
-            PEER_PROPOSAL_COUNTER.batch.inc_by(self.batch as i64);
+            PEER_PROPOSAL_COUNTER.batch.inc_by(self.batch as u64);
             self.batch = 0;
         }
         self.request_wait_time.flush();
@@ -345,55 +288,55 @@ impl RaftInvalidProposeMetrics {
         if self.mismatch_store_id > 0 {
             RAFT_INVALID_PROPOSAL_COUNTER
                 .mismatch_store_id
-                .inc_by(self.mismatch_store_id as i64);
+                .inc_by(self.mismatch_store_id);
             self.mismatch_store_id = 0;
         }
         if self.region_not_found > 0 {
             RAFT_INVALID_PROPOSAL_COUNTER
                 .region_not_found
-                .inc_by(self.region_not_found as i64);
+                .inc_by(self.region_not_found);
             self.region_not_found = 0;
         }
         if self.not_leader > 0 {
             RAFT_INVALID_PROPOSAL_COUNTER
                 .not_leader
-                .inc_by(self.not_leader as i64);
+                .inc_by(self.not_leader);
             self.not_leader = 0;
         }
         if self.mismatch_peer_id > 0 {
             RAFT_INVALID_PROPOSAL_COUNTER
                 .mismatch_peer_id
-                .inc_by(self.mismatch_peer_id as i64);
+                .inc_by(self.mismatch_peer_id);
             self.mismatch_peer_id = 0;
         }
         if self.stale_command > 0 {
             RAFT_INVALID_PROPOSAL_COUNTER
                 .stale_command
-                .inc_by(self.stale_command as i64);
+                .inc_by(self.stale_command);
             self.stale_command = 0;
         }
         if self.epoch_not_match > 0 {
             RAFT_INVALID_PROPOSAL_COUNTER
                 .epoch_not_match
-                .inc_by(self.epoch_not_match as i64);
+                .inc_by(self.epoch_not_match);
             self.epoch_not_match = 0;
         }
         if self.read_index_no_leader > 0 {
             RAFT_INVALID_PROPOSAL_COUNTER
                 .read_index_no_leader
-                .inc_by(self.read_index_no_leader as i64);
+                .inc_by(self.read_index_no_leader);
             self.read_index_no_leader = 0;
         }
         if self.region_not_initialized > 0 {
             RAFT_INVALID_PROPOSAL_COUNTER
                 .region_not_initialized
-                .inc_by(self.region_not_initialized as i64);
+                .inc_by(self.region_not_initialized);
             self.region_not_initialized = 0;
         }
         if self.is_applying_snapshot > 0 {
             RAFT_INVALID_PROPOSAL_COUNTER
                 .is_applying_snapshot
-                .inc_by(self.is_applying_snapshot as i64);
+                .inc_by(self.is_applying_snapshot);
             self.is_applying_snapshot = 0;
         }
     }
@@ -402,12 +345,13 @@ impl RaftInvalidProposeMetrics {
 #[derive(Clone)]
 pub struct RaftMetrics {
     pub ready: RaftReadyMetrics,
-    pub message: RaftMessageMetrics,
+    pub send_message: RaftSendMessageMetrics,
     pub message_dropped: RaftMessageDropMetrics,
     pub propose: RaftProposeMetrics,
     pub process_ready: LocalHistogram,
     pub append_log: LocalHistogram,
     pub commit_log: LocalHistogram,
+    pub check_leader: LocalHistogram,
     pub leader_missing: Arc<Mutex<HashSet<u64>>>,
     pub invalid_proposal: RaftInvalidProposeMetrics,
 }
@@ -416,7 +360,7 @@ impl Default for RaftMetrics {
     fn default() -> RaftMetrics {
         RaftMetrics {
             ready: Default::default(),
-            message: Default::default(),
+            send_message: Default::default(),
             message_dropped: Default::default(),
             propose: Default::default(),
             process_ready: PEER_RAFT_PROCESS_DURATION
@@ -424,6 +368,7 @@ impl Default for RaftMetrics {
                 .local(),
             append_log: PEER_APPEND_LOG_HISTOGRAM.local(),
             commit_log: PEER_COMMIT_LOG_HISTOGRAM.local(),
+            check_leader: CHECK_LEADER_DURATION_HISTOGRAM.local(),
             leader_missing: Arc::default(),
             invalid_proposal: Default::default(),
         }
@@ -434,11 +379,12 @@ impl RaftMetrics {
     /// Flushs all metrics
     pub fn flush(&mut self) {
         self.ready.flush();
-        self.message.flush();
+        self.send_message.flush();
         self.propose.flush();
         self.process_ready.flush();
         self.append_log.flush();
         self.commit_log.flush();
+        self.check_leader.flush();
         self.message_dropped.flush();
         self.invalid_proposal.flush();
         let mut missing = self.leader_missing.lock().unwrap();

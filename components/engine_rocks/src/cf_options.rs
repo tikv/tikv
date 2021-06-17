@@ -6,6 +6,7 @@ use crate::{db_options::RocksTitanDBOptions, sst_partitioner::RocksSstPartitione
 use engine_traits::{CFOptionsExt, Result};
 use engine_traits::{ColumnFamilyOptions, SstPartitionerFactory};
 use rocksdb::ColumnFamilyOptions as RawCFOptions;
+use tikv_util::box_err;
 
 impl CFOptionsExt for RocksEngine {
     type ColumnFamilyOptions = RocksColumnFamilyOptions;
@@ -47,6 +48,10 @@ impl ColumnFamilyOptions for RocksColumnFamilyOptions {
 
     fn new() -> Self {
         RocksColumnFamilyOptions::from_raw(RawCFOptions::new())
+    }
+
+    fn get_max_write_buffer_number(&self) -> u32 {
+        self.0.get_max_write_buffer_number()
     }
 
     fn get_level_zero_slowdown_writes_trigger(&self) -> u32 {

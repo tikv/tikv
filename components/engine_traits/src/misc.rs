@@ -52,9 +52,10 @@ pub trait MiscExt: CFNamesExt {
     ///      so you shouldn't expect to be able to read data from the range using existing snapshots
     ///      any more.
     ///
-    /// Ref: https://github.com/facebook/rocksdb/wiki/Delete-A-Range-Of-Keys
+    /// Ref: <https://github.com/facebook/rocksdb/wiki/Delete-A-Range-Of-Keys>
     fn roughly_cleanup_ranges(&self, ranges: &[(Vec<u8>, Vec<u8>)]) -> Result<()>;
 
+    /// The path to the directory on the filesystem where the database is stored
     fn path(&self) -> &str;
 
     fn sync_wal(&self) -> Result<()>;
@@ -81,4 +82,10 @@ pub trait MiscExt: CFNamesExt {
     ) -> Result<Option<(u64, u64)>>;
 
     fn get_cf_num_files_at_level(&self, cf: &str, level: usize) -> Result<Option<u64>>;
+
+    fn get_cf_num_immutable_mem_table(&self, cf: &str) -> Result<Option<u64>>;
+
+    fn get_cf_compaction_pending_bytes(&self, cf: &str) -> Result<Option<u64>>;
+
+    fn is_stalled_or_stopped(&self) -> bool;
 }

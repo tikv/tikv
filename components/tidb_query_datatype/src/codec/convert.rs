@@ -120,6 +120,13 @@ impl<'a> ConvertTo<Bytes> for JsonRef<'a> {
     }
 }
 
+impl<'a> ConvertTo<Bytes> for EnumRef<'a> {
+    #[inline]
+    fn convert(&self, _: &mut EvalContext) -> Result<Bytes> {
+        Ok(self.to_string().into_bytes())
+    }
+}
+
 /// Returns the max u64 values of different mysql types
 ///
 /// # Panics
@@ -279,7 +286,7 @@ impl ToInt for f64 {
     /// It handles overflows using `ctx` so that the caller would not handle it anymore.
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
         #![allow(clippy::float_cmp)]
-        let val = (*self).round();
+        let val = self.round();
         let lower_bound = integer_signed_lower_bound(tp);
         if val < lower_bound as f64 {
             ctx.handle_overflow_err(overflow(val, tp))?;
@@ -290,12 +297,10 @@ impl ToInt for f64 {
         let ub_f64 = upper_bound as f64;
         // according to https://github.com/pingcap/tidb/pull/5247
         if val >= ub_f64 {
-            if val == ub_f64 {
-                return Ok(upper_bound);
-            } else {
+            if val != ub_f64 {
                 ctx.handle_overflow_err(overflow(val, tp))?;
-                return Ok(upper_bound);
             }
+            return Ok(upper_bound);
         }
         Ok(val as i64)
     }
@@ -308,7 +313,7 @@ impl ToInt for f64 {
     /// It handles overflows using `ctx` so that the caller would not handle it anymore.
     #[allow(clippy::float_cmp)]
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
-        let val = (*self).round();
+        let val = self.round();
         if val < 0f64 {
             ctx.handle_overflow_err(overflow(val, tp))?;
             if ctx.should_clip_to_zero() {
@@ -460,7 +465,7 @@ impl ToInt for DateTime {
 impl ToInt for Duration {
     #[inline]
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
-        let dur = (*self).round_frac(DEFAULT_FSP)?;
+        let dur = self.round_frac(DEFAULT_FSP)?;
         let dec: Decimal = dur.convert(ctx)?;
         let val = dec.as_i64_with_ctx(ctx)?;
         val.to_int(ctx, tp)
@@ -468,7 +473,7 @@ impl ToInt for Duration {
 
     #[inline]
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
-        let dur = (*self).round_frac(DEFAULT_FSP)?;
+        let dur = self.round_frac(DEFAULT_FSP)?;
         let dec: Decimal = dur.convert(ctx)?;
         decimal_as_u64(ctx, dec, tp)
     }
@@ -791,7 +796,8 @@ impl ConvertTo<f64> for &[u8] {
     ///
     /// Port from TiDB's types.StrToFloat
     fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
-        let s = str::from_utf8(self)?.trim();
+        let s = get_valid_utf8_prefix(ctx, self)?;
+        let s = s.trim();
         let vs = get_valid_float_prefix(ctx, s)?;
         let val = vs
             .parse::<f64>()
@@ -1943,6 +1949,38 @@ mod tests {
     }
 
     #[test]
+    fn test_bytes_to_f64_invalid_utf8() {
+        let tests: Vec<(&'static [u8], Option<f64>)> = vec![
+            // 'a' + invalid_char
+            (&[0x61, 0xf7], Some(0.0)),
+            (&[0xf7, 0x61], Some(0.0)),
+            // '0' '1'
+            (&[0x30, 0x31], Some(1.0)),
+            // '0' '1' 'a'
+            (&[0x30, 0x31, 0x61], Some(1.0)),
+        ];
+
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING)));
+        for (i, (v, expect)) in tests.iter().enumerate() {
+            let ff: Result<f64> = v.convert(&mut ctx);
+            match expect {
+                Some(val) => {
+                    assert_eq!(ff.unwrap(), *val);
+                }
+                None => {
+                    assert!(
+                        ff.is_err(),
+                        "index: {}, {:?} should not be converted, but got: {:?}",
+                        i,
+                        v,
+                        ff
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_get_valid_float_prefix() {
         let cases = vec![
             ("-100", "-100"),
@@ -2576,9 +2614,9 @@ mod tests {
             // check origin_flen and origin_decimal
             let (f, d) = input.prec_and_frac();
             let log = format!(
-                    "input: {}, origin_flen: {}, origin_decimal: {}, actual flen: {}, actual decimal: {}",
-                    input, origin_flen, origin_decimal, f, d
-                );
+                "input: {}, origin_flen: {}, origin_decimal: {}, actual flen: {}, actual decimal: {}",
+                input, origin_flen, origin_decimal, f, d
+            );
             assert_eq!(f, origin_flen, "{}", log);
             assert_eq!(d, origin_decimal, "{}", log);
 
@@ -2637,7 +2675,7 @@ mod tests {
                         assert!(r.is_ok(), "{}", log);
                         assert_eq!(&r.unwrap(), d, "{}", log);
                     }
-                    Err(Error::Eval(_, _)) => {
+                    Err(Error::Eval(..)) => {
                         if let Error::Eval(_, d) = r.err().unwrap() {
                             assert_eq!(d, ERR_M_BIGGER_THAN_D, "{}", log);
                         } else {

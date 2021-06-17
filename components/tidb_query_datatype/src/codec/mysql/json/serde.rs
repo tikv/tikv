@@ -2,6 +2,7 @@
 
 use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::ser::{Error as SerError, Serialize, SerializeMap, SerializeTuple, Serializer};
+use serde_json::Serializer as JsonSerializer;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
@@ -11,9 +12,62 @@ use std::{f64, str};
 use super::{Json, JsonRef, JsonType};
 use crate::codec::Error;
 
+/// MySQL formatter follows the implementation in TiDB
+/// https://github.com/pingcap/tidb/blob/master/types/json/binary.go
+/// We add a space after `,` and `:`.
+#[derive(Clone, Debug)]
+pub struct MySQLFormatter {}
+
+impl serde_json::ser::Formatter for MySQLFormatter {
+    #[inline]
+    fn begin_object_value<W>(&mut self, writer: &mut W) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        writer.write_all(b": ")
+    }
+
+    #[inline]
+    fn begin_array_value<W>(&mut self, writer: &mut W, first: bool) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        if first {
+            Ok(())
+        } else {
+            writer.write_all(b", ")
+        }
+    }
+
+    #[inline]
+    fn begin_object_key<W>(&mut self, writer: &mut W, first: bool) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        if first {
+            Ok(())
+        } else {
+            writer.write_all(b", ")
+        }
+    }
+}
+
+impl MySQLFormatter {
+    pub fn new() -> Self {
+        MySQLFormatter {}
+    }
+}
+
 impl<'a> ToString for JsonRef<'a> {
+    /// This function is a simple combination and rewrite of serde_json's `to_writer_pretty`
     fn to_string(&self) -> String {
-        serde_json::to_string(self).unwrap()
+        let mut writer = Vec::with_capacity(128);
+        let mut ser = JsonSerializer::with_formatter(&mut writer, MySQLFormatter::new());
+        self.serialize(&mut ser).unwrap();
+        unsafe {
+            // serde_json will not emit invalid UTF-8
+            String::from_utf8_unchecked(writer)
+        }
     }
 }
 
@@ -59,7 +113,7 @@ impl<'a> Serialize for JsonRef<'a> {
 
 impl ToString for Json {
     fn to_string(&self) -> String {
-        serde_json::to_string(&self.as_ref()).unwrap()
+        self.as_ref().to_string()
     }
 }
 
@@ -168,7 +222,7 @@ mod tests {
         let jstr1 = r#"{"a": [1, "2", {"aa": "bb"}, 4.0, null], "c": null,"b": true}"#;
         let j1: Json = jstr1.parse().unwrap();
         let jstr2 = j1.to_string();
-        let expect_str = r#"{"a":[1,"2",{"aa":"bb"},4.0,null],"b":true,"c":null}"#;
+        let expect_str = r#"{"a": [1, "2", {"aa": "bb"}, 4.0, null], "b": true, "c": null}"#;
         assert_eq!(jstr2, expect_str);
     }
 

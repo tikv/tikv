@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::compat::Future01CompatExt;
+use futures::compat::Stream01CompatExt;
 use futures::future::{self, FutureExt};
 use futures::stream::StreamExt;
 
@@ -307,6 +308,7 @@ impl Worker {
     pub fn new<S: Into<String>>(name: S) -> Worker {
         Builder::new(name).create()
     }
+
     pub fn start<R: Runnable + 'static, S: Into<String>>(
         &self,
         name: S,
@@ -337,6 +339,20 @@ impl Worker {
             self.pending_capacity,
             metrics_pending_task_count,
         )
+    }
+
+    pub fn spawn_interval_task<F>(&self, interval: Duration, mut func: F)
+    where
+        F: FnMut() + Send + 'static,
+    {
+        let mut interval = GLOBAL_TIMER_HANDLE
+            .interval(std::time::Instant::now(), interval)
+            .compat();
+        self.remote.spawn(async move {
+            while let Some(Ok(_)) = interval.next().await {
+                func();
+            }
+        });
     }
 
     fn delay_notify<T: Display + Send + 'static>(tx: UnboundedSender<Msg<T>>, timeout: Duration) {
@@ -428,6 +444,7 @@ impl Worker {
                     }
                     Msg::Timeout => {
                         handle.inner.on_timeout();
+                        let timeout = handle.inner.get_interval();
                         Self::delay_notify(tx.clone(), timeout);
                     }
                 }

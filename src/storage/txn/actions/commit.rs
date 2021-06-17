@@ -2,33 +2,34 @@
 
 use crate::storage::mvcc::{
     metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
-    ErrorInner, LockType, MvccTxn, ReleasedLock, Result as MvccResult,
+    ErrorInner, LockType, MvccTxn, ReleasedLock, Result as MvccResult, SnapshotReader,
 };
 use crate::storage::Snapshot;
 use txn_types::{Key, TimeStamp, Write, WriteType};
 
 pub fn commit<S: Snapshot>(
-    txn: &mut MvccTxn<S>,
+    txn: &mut MvccTxn,
+    reader: &mut SnapshotReader<S>,
     key: Key,
     commit_ts: TimeStamp,
 ) -> MvccResult<Option<ReleasedLock>> {
     fail_point!("commit", |err| Err(
-        crate::storage::mvcc::txn::make_txn_error(err, &key, txn.start_ts,).into()
+        crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts,).into()
     ));
 
-    let mut lock = match txn.reader.load_lock(&key)? {
-        Some(mut lock) if lock.ts == txn.start_ts => {
+    let mut lock = match reader.load_lock(&key)? {
+        Some(mut lock) if lock.ts == reader.start_ts => {
             // A lock with larger min_commit_ts than current commit_ts can't be committed
             if commit_ts < lock.min_commit_ts {
                 info!(
                     "trying to commit with smaller commit_ts than min_commit_ts";
                     "key" => %key,
-                    "start_ts" => txn.start_ts,
+                    "start_ts" => reader.start_ts,
                     "commit_ts" => commit_ts,
                     "min_commit_ts" => lock.min_commit_ts,
                 );
                 return Err(ErrorInner::CommitTsExpired {
-                    start_ts: txn.start_ts,
+                    start_ts: reader.start_ts,
                     commit_ts,
                     key: key.into_raw()?,
                     min_commit_ts: lock.min_commit_ts,
@@ -45,7 +46,7 @@ pub fn commit<S: Snapshot>(
                 warn!(
                     "commit a pessimistic lock with Lock type";
                     "key" => %key,
-                    "start_ts" => txn.start_ts,
+                    "start_ts" => reader.start_ts,
                     "commit_ts" => commit_ts,
                 );
                 // Commit with WriteType::Lock.
@@ -54,7 +55,7 @@ pub fn commit<S: Snapshot>(
             lock
         }
         _ => {
-            return match txn.reader.get_txn_commit_record(&key, txn.start_ts)?.info() {
+            return match reader.get_txn_commit_record(&key)?.info() {
                 Some((_, WriteType::Rollback)) | None => {
                     MVCC_CONFLICT_COUNTER.commit_lock_not_found.inc();
                     // None: related Rollback has been collapsed.
@@ -62,11 +63,11 @@ pub fn commit<S: Snapshot>(
                     info!(
                         "txn conflict (lock not found)";
                         "key" => %key,
-                        "start_ts" => txn.start_ts,
+                        "start_ts" => reader.start_ts,
                         "commit_ts" => commit_ts,
                     );
                     Err(ErrorInner::TxnLockNotFound {
-                        start_ts: txn.start_ts,
+                        start_ts: reader.start_ts,
                         commit_ts,
                         key: key.into_raw()?,
                     }
@@ -84,7 +85,7 @@ pub fn commit<S: Snapshot>(
     };
     let mut write = Write::new(
         WriteType::from_lock_type(lock.lock_type).unwrap(),
-        txn.start_ts,
+        reader.start_ts,
         lock.short_value.take(),
     );
 
@@ -129,8 +130,9 @@ pub mod tests {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let start_ts = start_ts.into();
         let cm = ConcurrencyManager::new(start_ts);
-        let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
-        commit(&mut txn, Key::from_raw(key), commit_ts.into()).unwrap();
+        let mut txn = MvccTxn::new(start_ts, cm);
+        let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+        commit(&mut txn, &mut reader, Key::from_raw(key), commit_ts.into()).unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
 
@@ -143,8 +145,9 @@ pub mod tests {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let start_ts = start_ts.into();
         let cm = ConcurrencyManager::new(start_ts);
-        let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
-        assert!(commit(&mut txn, Key::from_raw(key), commit_ts.into()).is_err());
+        let mut txn = MvccTxn::new(start_ts, cm);
+        let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+        assert!(commit(&mut txn, &mut reader, Key::from_raw(key), commit_ts.into()).is_err());
     }
 
     #[cfg(test)]
@@ -185,7 +188,7 @@ pub mod tests {
         must_prewrite_put(&engine, k, v, k, 5);
         // start_ts not match
         must_err(&engine, k, 4, 5);
-        must_rollback(&engine, k, 5);
+        must_rollback(&engine, k, 5, false);
         // commit after rollback
         must_err(&engine, k, 5, 6);
     }

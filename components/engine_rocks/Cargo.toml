@@ -7,6 +7,7 @@ publish = false
 [features]
 default = ["protobuf-codec"]
 protobuf-codec = [
+  "protobuf/bytes",
   "encryption/protobuf-codec",
   "engine_traits/protobuf-codec",
   "keys/protobuf-codec",
@@ -14,6 +15,7 @@ protobuf-codec = [
   "raft/protobuf-codec",
   "tikv_util/protobuf-codec",
   "txn_types/protobuf-codec",
+  "file_system/protobuf-codec",
 ]
 prost-codec = [
   "encryption/prost-codec",
@@ -23,20 +25,33 @@ prost-codec = [
   "raft/prost-codec",
   "tikv_util/prost-codec",
   "txn_types/prost-codec",
+  "file_system/prost-codec",
 ]
 jemalloc = ["rocksdb/jemalloc"]
 portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
 failpoints = ["fail/failpoints"]
 
+# Disables runtime checks of invariants required by RocksDB that are redundant
+# with assertions inside RocksDB itself. This makes it possible to test those
+# invariants in Rust tests, resulting an a panic instead of an abort, at the
+# expense of an extra branch. This feature exists to mark those extra branches.
+# The checks _can_ be disabled by enabling this feature, though it may not
+# result in any real performance improvement to do so, and it will break
+# the test suite.
+#
+# Probably these checks should be in the rust-rocksdb crate itself, in order
+# to ensure the bindings are safe, but until that is done, they are here.
+nortcheck = []
+
 [dependencies]
 encryption = { path = "../encryption", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
-file_system = { path = "../file_system" }
+file_system = { path = "../file_system", default-features = false }
 keys = { path = "../keys", default-features = false }
 num_cpus = "1"
-prometheus = { version = "0.10", features = ["nightly"] }
-prometheus-static-metric = "0.4"
+prometheus = { version = "0.12", features = ["nightly"] }
+prometheus-static-metric = "0.5"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tikv_alloc = { path = "../tikv_alloc" }
@@ -50,7 +65,7 @@ configuration = { path = "../configuration" }
 tempfile = "3.0"
 serde = "1.0"
 serde_derive = "1.0"
-kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+kvproto = { rev = "dda0a102bc6ac7371e1f99cd2797825aa210b4a0", git = "https://github.com/pingcap/kvproto.git", default-features = false }
 raft = { version = "0.6.0-alpha", default-features = false }
 protobuf = "2"
 fail = "0.4"
@@ -61,6 +76,5 @@ package = "rocksdb"
 features = ["encryption", "static_libcpp"]
 
 [dev-dependencies]
-kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
-rand = "0.7"
+rand = "0.8"
 toml = "0.5"

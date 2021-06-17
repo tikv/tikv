@@ -60,7 +60,7 @@ impl BinaryLiteral {
     }
 
     /// Parses hexadecimal string literal.
-    /// See https://dev.mysql.com/doc/refman/5.7/en/hexadecimal-literals.html
+    /// See <https://dev.mysql.com/doc/refman/5.7/en/hexadecimal-literals.html>
     pub fn from_hex_str(s: &str) -> Result<Self> {
         if s.is_empty() {
             return Err(box_err!(
@@ -100,7 +100,7 @@ impl BinaryLiteral {
 
     /// Parses bit string.
     /// The string format can be b'val', B'val' or 0bval, val must be 0 or 1.
-    /// See https://dev.mysql.com/doc/refman/5.7/en/bit-value-literals.html
+    /// See <https://dev.mysql.com/doc/refman/5.7/en/bit-value-literals.html>
     pub fn from_bit_str(s: &str) -> Result<Self> {
         if s.is_empty() {
             return Err(box_err!("invalid empty string for parsing bit type"));
@@ -374,12 +374,36 @@ mod tests {
             ("0b111111111", vec![0x1, 0xFF], false),
             ("b'111111111'", vec![0x1, 0xFF], false),
             ("B'111111111'", vec![0x1, 0xFF], false),
-            ("0b1101000011001010110110001101100011011110010000001110111011011110111001001101100011001000010000001100110011011110110111100100000011000100110000101110010", b"hello world foo bar".to_vec(), false),
-            ("b'1101000011001010110110001101100011011110010000001110111011011110111001001101100011001000010000001100110011011110110111100100000011000100110000101110010'", b"hello world foo bar".to_vec(), false),
-            ("B'1101000011001010110110001101100011011110010000001110111011011110111001001101100011001000010000001100110011011110110111100100000011000100110000101110010'", b"hello world foo bar".to_vec(), false),
-            ("0b01101000011001010110110001101100011011110010000001110111011011110111001001101100011001000010000001100110011011110110111100100000011000100110000101110010", b"hello world foo bar".to_vec(), false),
-            ("b'01101000011001010110110001101100011011110010000001110111011011110111001001101100011001000010000001100110011011110110111100100000011000100110000101110010'", b"hello world foo bar".to_vec(), false),
-            ("B'01101000011001010110110001101100011011110010000001110111011011110111001001101100011001000010000001100110011011110110111100100000011000100110000101110010'", b"hello world foo bar".to_vec(), false),
+            (
+                "0b1101000011001010110110001101100011011110010000001110111011011110111001001101100011001000010000001100110011011110110111100100000011000100110000101110010",
+                b"hello world foo bar".to_vec(),
+                false,
+            ),
+            (
+                "b'1101000011001010110110001101100011011110010000001110111011011110111001001101100011001000010000001100110011011110110111100100000011000100110000101110010'",
+                b"hello world foo bar".to_vec(),
+                false,
+            ),
+            (
+                "B'1101000011001010110110001101100011011110010000001110111011011110111001001101100011001000010000001100110011011110110111100100000011000100110000101110010'",
+                b"hello world foo bar".to_vec(),
+                false,
+            ),
+            (
+                "0b01101000011001010110110001101100011011110010000001110111011011110111001001101100011001000010000001100110011011110110111100100000011000100110000101110010",
+                b"hello world foo bar".to_vec(),
+                false,
+            ),
+            (
+                "b'01101000011001010110110001101100011011110010000001110111011011110111001001101100011001000010000001100110011011110110111100100000011000100110000101110010'",
+                b"hello world foo bar".to_vec(),
+                false,
+            ),
+            (
+                "B'01101000011001010110110001101100011011110010000001110111011011110111001001101100011001000010000001100110011011110110111100100000011000100110000101110010'",
+                b"hello world foo bar".to_vec(),
+                false,
+            ),
         ];
 
         for (input, exptected, err) in cs {
@@ -435,10 +459,12 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (s, expected, err) in cs {
             if err {
-                assert!(BinaryLiteral::from_hex_str(s)
-                    .unwrap()
-                    .to_uint(&mut ctx)
-                    .is_err());
+                assert!(
+                    BinaryLiteral::from_hex_str(s)
+                        .unwrap()
+                        .to_uint(&mut ctx)
+                        .is_err()
+                );
             } else {
                 let lit = BinaryLiteral::from_hex_str(s).unwrap();
                 assert_eq!(lit.to_uint(&mut ctx).unwrap(), expected)

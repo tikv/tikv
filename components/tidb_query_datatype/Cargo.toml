@@ -8,6 +8,7 @@ description = "Data type of a query engine to run TiDB pushed down executors"
 [features]
 default = ["protobuf-codec"]
 protobuf-codec = [
+  "protobuf/bytes",
   "codec/protobuf-codec",
   "error_code/protobuf-codec",
   "kvproto/protobuf-codec",
@@ -32,9 +33,8 @@ chrono = "0.4"
 chrono-tz = "0.5.1"
 codec = { path = "../codec", default-features = false }
 error_code = { path = "../error_code", default-features = false }
-failure = "0.1"
 hex = "0.4"
-kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+kvproto = { rev = "dda0a102bc6ac7371e1f99cd2797825aa210b4a0", git = "https://github.com/pingcap/kvproto.git", default-features = false }
 lazy_static = "1.3"
 match_template = { path = "../match_template" }
 nom = { version = "5.1.0", default-features = false, features = ["std"] }
@@ -43,12 +43,12 @@ num-traits = "0.2"
 num-derive = "0.3"
 ordered-float = "1.0"
 protobuf = "2"
-quick-error = "1.2.3"
 regex = "1.1"
 serde = "1.0"
 serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+thiserror = "1.0"
 tikv_util = { path = "../tikv_util", default-features = false }
 collections = { path = "../collections" }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }

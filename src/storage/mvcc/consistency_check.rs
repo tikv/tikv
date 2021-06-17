@@ -446,7 +446,7 @@ mod tests {
         must_prewrite_put(&engine, b"zBBBBB", b"value", b"PRIMARY", 200);
         must_commit(&engine, b"zBBBBB", 200, 201);
         must_prewrite_put(&engine, b"zDDDDD", b"value", b"PRIMARY", 200);
-        must_rollback(&engine, b"zDDDDD", 200);
+        must_rollback(&engine, b"zDDDDD", 200, false);
         must_prewrite_put(&engine, b"zFFFFF", b"value", b"PRIMARY", 200);
         must_prewrite_delete(&engine, b"zGGGGG", b"PRIMARY", 200);
 

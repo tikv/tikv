@@ -51,7 +51,7 @@ pub fn dummy_scheduler<T: Display>() -> Scheduler<T> {
 }
 
 impl<T: Display> Scheduler<T> {
-    fn new<S: Into<Arc<str>>>(name: S, sender: UnboundedSender<Option<T>>) -> Scheduler<T> {
+    pub fn new<S: Into<Arc<str>>>(name: S, sender: UnboundedSender<Option<T>>) -> Scheduler<T> {
         let name = name.into();
         Scheduler {
             metrics_pending_task_count: WORKER_PENDING_TASK_VEC.with_label_values(&[&name]),
@@ -116,8 +116,7 @@ where
             }
         };
         // `UnboundedReceiver` never returns an error.
-        tokio::runtime::Builder::new()
-            .basic_scheduler()
+        tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap()
             .block_on(handle.run_until(task));

@@ -4,15 +4,15 @@ use crate::server::metrics::*;
 use crate::server::snap::Task as SnapTask;
 use crate::server::{self, Config, StoreAddrResolver};
 use collections::{HashMap, HashSet};
-use crossbeam::queue::{ArrayQueue, PushError};
-use engine_rocks::RocksEngine;
+use crossbeam::queue::ArrayQueue;
+use engine_traits::KvEngine;
 use futures::channel::oneshot;
 use futures::compat::Future01CompatExt;
 use futures::task::{Context, Poll, Waker};
 use futures::{Future, Sink};
 use grpcio::{
-    ChannelBuilder, ClientCStreamReceiver, ClientCStreamSender, Environment, RpcStatus,
-    RpcStatusCode, WriteFlags,
+    ChannelBuilder, ClientCStreamReceiver, ClientCStreamSender, Environment, RpcStatusCode,
+    WriteFlags,
 };
 use kvproto::raft_serverpb::{Done, RaftMessage};
 use kvproto::tikvpb::{BatchRaftMessage, TikvClient};
@@ -22,6 +22,7 @@ use raftstore::router::RaftStoreRouter;
 use security::SecurityManager;
 use std::collections::VecDeque;
 use std::ffi::CString;
+use std::marker::PhantomData;
 use std::marker::Unpin;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -33,12 +34,6 @@ use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Scheduler;
 use yatp::task::future::TaskCell;
 use yatp::ThreadPool;
-
-// When merge raft messages into a batch message, leave a buffer.
-const GRPC_SEND_MSG_BUF: usize = 64 * 1024;
-const QUEUE_CAPACITY: usize = 4096;
-
-const RAFT_MSG_MAX_BATCH_SIZE: usize = 128;
 
 static CONN_ID: AtomicI32 = AtomicI32::new(0);
 
@@ -74,7 +69,7 @@ impl Queue {
         if self.connected.load(Ordering::Relaxed) {
             match self.buf.push(msg) {
                 Ok(()) => (),
-                Err(PushError(_)) => return Err(DiscardReason::Full),
+                Err(_) => return Err(DiscardReason::Full),
             }
         } else {
             return Err(DiscardReason::Disconnected);
@@ -108,7 +103,7 @@ impl Queue {
 
     /// Gets message from the head of the queue.
     fn try_pop(&self) -> Option<RaftMessage> {
-        self.buf.pop().ok()
+        self.buf.pop()
     }
 
     /// Same as `try_pop` but register interest on readiness when `None` is returned.
@@ -117,19 +112,13 @@ impl Queue {
     /// it will register current polling task for notifications.
     #[inline]
     fn pop(&self, ctx: &Context) -> Option<RaftMessage> {
-        match self.buf.pop() {
-            Ok(msg) => Some(msg),
-            Err(_) => {
-                {
-                    let mut waker = self.waker.lock().unwrap();
-                    *waker = Some(ctx.waker().clone());
-                }
-                match self.buf.pop() {
-                    Ok(msg) => Some(msg),
-                    Err(_) => None,
-                }
+        self.buf.pop().or_else(|| {
+            {
+                let mut waker = self.waker.lock().unwrap();
+                *waker = Some(ctx.waker().clone());
             }
-        }
+            self.buf.pop()
+        })
     }
 }
 
@@ -151,8 +140,6 @@ trait Buffer {
         &mut self,
         sender: &mut ClientCStreamSender<Self::OutputMessage>,
     ) -> grpcio::Result<()>;
-    /// Clears all messages and invoke hook before dropping.
-    fn clear(&mut self, hook: impl FnMut(&RaftMessage));
 }
 
 /// A buffer for BatchRaftMessage.
@@ -191,8 +178,9 @@ impl Buffer for BatchMessageBuffer {
         // To avoid building too large batch, we limit each batch's size. Since `msg_size`
         // is estimated, `GRPC_SEND_MSG_BUF` is reserved for errors.
         if self.size > 0
-            && (self.size + msg_size + GRPC_SEND_MSG_BUF >= self.cfg.max_grpc_send_msg_len as usize
-                || self.batch.get_msgs().len() >= RAFT_MSG_MAX_BATCH_SIZE)
+            && (self.size + msg_size + self.cfg.raft_client_grpc_send_msg_buffer
+                >= self.cfg.max_grpc_send_msg_len as usize
+                || self.batch.get_msgs().len() >= self.cfg.raft_msg_max_batch_size)
         {
             self.overflowing = Some(msg);
             return;
@@ -219,19 +207,6 @@ impl Buffer for BatchMessageBuffer {
             self.push(more);
         }
         res
-    }
-
-    #[inline]
-    fn clear(&mut self, mut hook: impl FnMut(&RaftMessage)) {
-        for msg in self.batch.get_msgs() {
-            hook(msg);
-        }
-        self.batch.mut_msgs().clear();
-
-        if let Some(ref msg) = self.overflowing {
-            hook(msg);
-        }
-        self.overflowing.take();
     }
 }
 
@@ -277,25 +252,22 @@ impl Buffer for MessageBuffer {
             Ok(())
         }
     }
-
-    #[inline]
-    fn clear(&mut self, mut hook: impl FnMut(&RaftMessage)) {
-        for msg in &self.batch {
-            hook(msg);
-        }
-        self.batch.clear();
-    }
 }
 
 /// Reporter reports whether a snapshot is sent successfully.
-struct SnapshotReporter<T> {
+struct SnapshotReporter<T, E> {
     raft_router: T,
+    engine: PhantomData<E>,
     region_id: u64,
     to_peer_id: u64,
     to_store_id: u64,
 }
 
-impl<T: RaftStoreRouter<RocksEngine> + 'static> SnapshotReporter<T> {
+impl<T, E> SnapshotReporter<T, E>
+where
+    T: RaftStoreRouter<E> + 'static,
+    E: KvEngine,
+{
     pub fn report(&self, status: SnapshotStatus) {
         debug!(
             "send snapshot";
@@ -325,9 +297,10 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static> SnapshotReporter<T> {
     }
 }
 
-fn report_unreachable<R>(router: &R, msg: &RaftMessage)
+fn report_unreachable<R, E>(router: &R, msg: &RaftMessage)
 where
-    R: RaftStoreRouter<RocksEngine>,
+    R: RaftStoreRouter<E>,
+    E: KvEngine,
 {
     let to_peer = msg.get_to_peer();
     if msg.get_message().has_snapshot() {
@@ -350,15 +323,15 @@ where
 }
 
 fn grpc_error_is_unimplemented(e: &grpcio::Error) -> bool {
-    if let grpcio::Error::RpcFailure(RpcStatus { ref status, .. }) = e {
-        let x = *status == RpcStatusCode::UNIMPLEMENTED;
-        return x;
+    if let grpcio::Error::RpcFailure(ref status) = e {
+        status.code() == RpcStatusCode::UNIMPLEMENTED
+    } else {
+        false
     }
-    false
 }
 
 /// Struct tracks the lifetime of a `raft` or `batch_raft` RPC.
-struct RaftCall<R, M, B> {
+struct RaftCall<R, M, B, E> {
     sender: ClientCStreamSender<M>,
     receiver: ClientCStreamReceiver<Done>,
     queue: Arc<Queue>,
@@ -368,20 +341,23 @@ struct RaftCall<R, M, B> {
     lifetime: Option<oneshot::Sender<()>>,
     store_id: u64,
     addr: String,
+    engine: PhantomData<E>,
 }
 
-impl<R, M, B> RaftCall<R, M, B>
+impl<R, M, B, E> RaftCall<R, M, B, E>
 where
-    R: RaftStoreRouter<RocksEngine> + 'static,
+    R: RaftStoreRouter<E> + 'static,
     B: Buffer<OutputMessage = M>,
+    E: KvEngine,
 {
-    fn new_snapshot_reporter(&self, msg: &RaftMessage) -> SnapshotReporter<R> {
+    fn new_snapshot_reporter(&self, msg: &RaftMessage) -> SnapshotReporter<R, E> {
         let region_id = msg.get_region_id();
         let to_peer_id = msg.get_to_peer().get_id();
         let to_store_id = msg.get_to_peer().get_store_id();
 
         SnapshotReporter {
             raft_router: self.router.clone(),
+            engine: PhantomData,
             region_id,
             to_peer_id,
             to_store_id,
@@ -445,10 +421,11 @@ where
     }
 }
 
-impl<R, M, B> Future for RaftCall<R, M, B>
+impl<R, M, B, E> Future for RaftCall<R, M, B, E>
 where
-    R: RaftStoreRouter<RocksEngine> + Unpin + 'static,
+    R: RaftStoreRouter<E> + Unpin + 'static,
     B: Buffer<OutputMessage = M> + Unpin,
+    E: KvEngine,
 {
     type Output = ();
 
@@ -530,16 +507,18 @@ impl<S, R> ConnectionBuilder<S, R> {
 
 /// StreamBackEnd watches lifetime of a connection and handles reconnecting,
 /// spawn new RPC.
-struct StreamBackEnd<S, R> {
+struct StreamBackEnd<S, R, E> {
     store_id: u64,
     queue: Arc<Queue>,
     builder: ConnectionBuilder<S, R>,
+    engine: PhantomData<E>,
 }
 
-impl<S, R> StreamBackEnd<S, R>
+impl<S, R, E> StreamBackEnd<S, R, E>
 where
     S: StoreAddrResolver,
-    R: RaftStoreRouter<RocksEngine> + Unpin + 'static,
+    R: RaftStoreRouter<E> + Unpin + 'static,
+    E: KvEngine,
 {
     fn resolve(&self) -> impl Future<Output = server::Result<String>> {
         let (tx, rx) = oneshot::channel();
@@ -576,12 +555,15 @@ where
         }
     }
 
-    fn clear_pending_message(&self) {
+    fn clear_pending_message(&self, reason: &str) {
         let len = self.queue.len();
         for _ in 0..len {
             let msg = self.queue.try_pop().unwrap();
             report_unreachable(&self.builder.router, &msg)
         }
+        REPORT_FAILURE_MSG_COUNTER
+            .with_label_values(&[reason, &self.store_id.to_string()])
+            .inc_by(len as u64);
     }
 
     fn connect(&self, addr: &str) -> TikvClient {
@@ -615,6 +597,7 @@ where
             lifetime: Some(tx),
             store_id: self.store_id,
             addr,
+            engine: PhantomData::<E>,
         };
         // TODO: verify it will be notified if client is dropped while env still alive.
         client.spawn(call);
@@ -634,6 +617,7 @@ where
             lifetime: Some(tx),
             store_id: self.store_id,
             addr,
+            engine: PhantomData::<E>,
         };
         client.spawn(call);
         rx
@@ -653,7 +637,7 @@ async fn maybe_backoff(cfg: &Config, last_wake_time: &mut Instant, retry_times: 
         return;
     }
     if let Err(e) = GLOBAL_TIMER_HANDLE.delay(now + timeout).compat().await {
-        error!(?e; "failed to backoff");
+        error_unknown!(?e; "failed to backoff");
     }
     *last_wake_time = Instant::now();
 }
@@ -668,13 +652,14 @@ async fn maybe_backoff(cfg: &Config, last_wake_time: &mut Instant, retry_times: 
 /// 4. fallback to legacy API if incompatible
 ///
 /// Every failure during the process should trigger retry automatically.
-async fn start<S, R>(
-    back_end: StreamBackEnd<S, R>,
+async fn start<S, R, E>(
+    back_end: StreamBackEnd<S, R, E>,
     conn_id: usize,
     pool: Arc<Mutex<ConnectionPool>>,
 ) where
     S: StoreAddrResolver + Send,
-    R: RaftStoreRouter<RocksEngine> + Unpin + Send + 'static,
+    R: RaftStoreRouter<E> + Unpin + Send + 'static,
+    E: KvEngine,
 {
     let mut last_wake_time = Instant::now();
     let mut retry_times = 0;
@@ -690,8 +675,8 @@ async fn start<S, R>(
             }
             Err(e) => {
                 RESOLVE_STORE_COUNTER.with_label_values(&["failed"]).inc();
-                back_end.clear_pending_message();
-                error!(?e; "resolve store address failed"; "store_id" => back_end.store_id,);
+                back_end.clear_pending_message("resolve");
+                error_unknown!(?e; "resolve store address failed"; "store_id" => back_end.store_id,);
                 // TOMBSTONE
                 if format!("{}", e).contains("has been removed") {
                     let mut pool = pool.lock().unwrap();
@@ -722,7 +707,12 @@ async fn start<S, R>(
                 error!("connection abort"; "store_id" => back_end.store_id, "addr" => addr);
                 if retry_times > 1 {
                     // Clears pending messages to avoid consuming high memory when one node is shutdown.
-                    back_end.clear_pending_message();
+                    back_end.clear_pending_message("unreachable");
+                } else {
+                    // At least report failure in metrics.
+                    REPORT_FAILURE_MSG_COUNTER
+                        .with_label_values(&["unreachable", &back_end.store_id.to_string()])
+                        .inc_by(1);
                 }
                 back_end
                     .builder
@@ -750,6 +740,8 @@ struct CachedQueue {
     /// it will be marked to true. And all dirty queues are expected to be
     /// notified during flushing.
     dirty: bool,
+    /// Mark if the connection is full.
+    full: bool,
 }
 
 /// A raft client that can manages connections correctly.
@@ -764,20 +756,24 @@ struct CachedQueue {
 /// }
 /// raft_client.flush();
 /// ```
-pub struct RaftClient<S, R> {
+pub struct RaftClient<S, R, E> {
     pool: Arc<Mutex<ConnectionPool>>,
     cache: LruCache<(u64, usize), CachedQueue>,
     need_flush: Vec<(u64, usize)>,
+    full_stores: Vec<(u64, usize)>,
     future_pool: Arc<ThreadPool<TaskCell>>,
     builder: ConnectionBuilder<S, R>,
+    engine: PhantomData<E>,
+    last_hash: (u64, u64),
 }
 
-impl<S, R> RaftClient<S, R>
+impl<S, R, E> RaftClient<S, R, E>
 where
     S: StoreAddrResolver + Send + 'static,
-    R: RaftStoreRouter<RocksEngine> + Unpin + Send + 'static,
+    R: RaftStoreRouter<E> + Unpin + Send + 'static,
+    E: KvEngine,
 {
-    pub fn new(builder: ConnectionBuilder<S, R>) -> RaftClient<S, R> {
+    pub fn new(builder: ConnectionBuilder<S, R>) -> RaftClient<S, R, E> {
         let future_pool = Arc::new(
             yatp::Builder::new(thd_name!("raft-stream"))
                 .max_thread_count(1)
@@ -787,8 +783,11 @@ where
             pool: Arc::default(),
             cache: LruCache::with_capacity_and_sample(0, 7),
             need_flush: vec![],
+            full_stores: vec![],
             future_pool,
             builder,
+            engine: PhantomData::<E>,
+            last_hash: (0, 0),
         }
     }
 
@@ -800,25 +799,30 @@ where
         let (s, pool_len) = {
             let mut pool = self.pool.lock().unwrap();
             if pool.tombstone_stores.contains(&store_id) {
+                let pool_len = pool.connections.len();
+                drop(pool);
+                self.cache.resize(pool_len);
                 return false;
             }
-            (
-                pool.connections
-                    .entry((store_id, conn_id))
-                    .or_insert_with(|| {
-                        let queue = Arc::new(Queue::with_capacity(QUEUE_CAPACITY));
-                        let back_end = StreamBackEnd {
-                            store_id,
-                            queue: queue.clone(),
-                            builder: self.builder.clone(),
-                        };
-                        self.future_pool
-                            .spawn(start(back_end, conn_id, self.pool.clone()));
-                        queue
-                    })
-                    .clone(),
-                pool.connections.len(),
-            )
+            let conn = pool
+                .connections
+                .entry((store_id, conn_id))
+                .or_insert_with(|| {
+                    let queue = Arc::new(Queue::with_capacity(
+                        self.builder.cfg.raft_client_queue_size,
+                    ));
+                    let back_end = StreamBackEnd {
+                        store_id,
+                        queue: queue.clone(),
+                        builder: self.builder.clone(),
+                        engine: PhantomData::<E>,
+                    };
+                    self.future_pool
+                        .spawn(start(back_end, conn_id, self.pool.clone()));
+                    queue
+                })
+                .clone();
+            (conn, pool.connections.len())
         };
         self.cache.resize(pool_len);
         self.cache.insert(
@@ -826,6 +830,7 @@ where
             CachedQueue {
                 queue: s,
                 dirty: false,
+                full: false,
             },
         );
         true
@@ -838,7 +843,18 @@ where
     /// are sent out.
     pub fn send(&mut self, msg: RaftMessage) -> result::Result<(), DiscardReason> {
         let store_id = msg.get_to_peer().store_id;
-        let conn_id = (msg.region_id % self.builder.cfg.grpc_raft_conn_num as u64) as usize;
+        let conn_id = if self.builder.cfg.grpc_raft_conn_num == 1 {
+            0
+        } else {
+            if self.last_hash.0 == 0 || msg.region_id != self.last_hash.0 {
+                self.last_hash = (
+                    msg.region_id,
+                    seahash::hash(msg.region_id.as_ne_bytes())
+                        % self.builder.cfg.grpc_raft_conn_num as u64,
+                );
+            };
+            self.last_hash.1 as usize
+        };
         #[allow(unused_mut)]
         let mut transport_on_send_store_fp = || {
             fail_point!(
@@ -873,6 +889,10 @@ where
                     Err(DiscardReason::Full) => {
                         s.queue.notify();
                         s.dirty = false;
+                        if !s.full {
+                            s.full = true;
+                            self.full_stores.push((store_id, conn_id));
+                        }
                         return Err(DiscardReason::Full);
                     }
                     Err(DiscardReason::Disconnected) => break,
@@ -888,11 +908,31 @@ where
     }
 
     pub fn need_flush(&self) -> bool {
-        !self.need_flush.is_empty()
+        !self.need_flush.is_empty() || !self.full_stores.is_empty()
+    }
+
+    fn flush_full_metrics(&mut self) {
+        if self.full_stores.is_empty() {
+            return;
+        }
+
+        for id in &self.full_stores {
+            if let Some(s) = self.cache.get_mut(id) {
+                s.full = false;
+            }
+            REPORT_FAILURE_MSG_COUNTER
+                .with_label_values(&["full", &id.0.to_string()])
+                .inc();
+        }
+        self.full_stores.clear();
+        if self.full_stores.capacity() > 2048 {
+            self.full_stores.shrink_to(512);
+        }
     }
 
     /// Flushes all buffered messages.
     pub fn flush(&mut self) {
+        self.flush_full_metrics();
         if self.need_flush.is_empty() {
             return;
         }
@@ -916,7 +956,7 @@ where
     }
 }
 
-impl<S, R> Clone for RaftClient<S, R>
+impl<S, R, E> Clone for RaftClient<S, R, E>
 where
     S: Clone,
     R: Clone,
@@ -926,8 +966,11 @@ where
             pool: self.pool.clone(),
             cache: LruCache::with_capacity_and_sample(0, 7),
             need_flush: vec![],
+            full_stores: vec![],
             future_pool: self.future_pool.clone(),
             builder: self.builder.clone(),
+            engine: PhantomData::<E>,
+            last_hash: (0, 0),
         }
     }
 }

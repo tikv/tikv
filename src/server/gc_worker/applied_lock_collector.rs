@@ -7,13 +7,15 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use txn_types::Key;
 
+use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
 use engine_traits::{CfName, CF_LOCK};
 use kvproto::kvrpcpb::LockInfo;
 use kvproto::raft_cmdpb::CmdType;
 use tikv_util::worker::{Builder as WorkerBuilder, Runnable, ScheduleError, Scheduler, Worker};
 
-use crate::storage::mvcc::{Error as MvccError, Lock, TimeStamp};
+use crate::storage::mvcc::{ErrorInner as MvccErrorInner, Lock, TimeStamp};
+use crate::storage::txn::Error as TxnError;
 use raftstore::coprocessor::{
     ApplySnapshotObserver, BoxApplySnapshotObserver, BoxQueryObserver, Cmd, Coprocessor,
     CoprocessorHost, ObserverContext, QueryObserver,
@@ -131,21 +133,23 @@ impl LockObserver {
     }
 
     fn send(&self, locks: Vec<(Key, Lock)>) {
-        let res = &mut self
-            .sender
-            .schedule(LockCollectorTask::ObservedLocks(locks));
-        // Wrap the fail point in a closure, so we can modify local variables without return.
         #[cfg(feature = "failpoints")]
-        {
-            let mut send_fp = || {
-                fail_point!("lock_observer_send", |_| {
-                    *res = Err(ScheduleError::Full(LockCollectorTask::ObservedLocks(
-                        vec![],
-                    )));
-                })
-            };
-            send_fp();
-        }
+        let injected_full = (|| {
+            fail_point!("lock_observer_send_full", |_| {
+                info!("[failpoint] injected lock observer channel full"; "locks" => ?locks);
+                true
+            });
+            false
+        })();
+        #[cfg(not(feature = "failpoints"))]
+        let injected_full = false;
+
+        let res = if injected_full {
+            Err(ScheduleError::Full(LockCollectorTask::ObservedLocks(locks)))
+        } else {
+            self.sender
+                .schedule(LockCollectorTask::ObservedLocks(locks))
+        };
 
         match res {
             Ok(()) => (),
@@ -153,6 +157,7 @@ impl LockObserver {
                 error!("lock observer failed to send locks because collector is stopped");
             }
             Err(ScheduleError::Full(_)) => {
+                fail_point!("lock_observer_before_mark_dirty_on_full");
                 self.state.mark_dirty();
                 warn!("cannot collect all applied lock because channel is full");
             }
@@ -163,7 +168,7 @@ impl LockObserver {
 impl Coprocessor for LockObserver {}
 
 impl QueryObserver for LockObserver {
-    fn post_apply_query(&self, _: &mut ObserverContext<'_>, cmd: &mut Cmd) {
+    fn post_apply_query(&self, _: &mut ObserverContext<'_>, cmd: &Cmd) {
         fail_point!("notify_lock_observer_query");
         let max_ts = self.state.load_max_ts();
         if max_ts.is_zero() {
@@ -234,7 +239,7 @@ impl ApplySnapshotObserver for LockObserver {
             .map(|(key, value)| {
                 Lock::parse(value)
                     .map(|lock| (key, lock))
-                    .map_err(|e| ErrorInner::Mvcc(e.into()).into())
+                    .map_err(|e| ErrorInner::Txn(TxnError::from_mvcc(e)).into())
             })
             .filter(|result| result.is_err() || result.as_ref().unwrap().1.ts <= max_ts)
             .map(|result| {
@@ -331,7 +336,7 @@ impl LockCollectorRunner {
             .map(|(k, l)| {
                 k.to_raw()
                     .map(|raw_key| l.clone().into_lock_info(raw_key))
-                    .map_err(|e| Error::from(MvccError::from(e)))
+                    .map_err(|e| Error::from(TxnError::from_mvcc(e)))
             })
             .collect();
 
@@ -382,10 +387,14 @@ impl Runnable for LockCollectorRunner {
 pub struct AppliedLockCollector {
     worker: Mutex<Worker>,
     scheduler: Scheduler<LockCollectorTask>,
+    concurrency_manager: ConcurrencyManager,
 }
 
 impl AppliedLockCollector {
-    pub fn new(coprocessor_host: &mut CoprocessorHost<RocksEngine>) -> Result<Self> {
+    pub fn new(
+        coprocessor_host: &mut CoprocessorHost<RocksEngine>,
+        concurrency_manager: ConcurrencyManager,
+    ) -> Result<Self> {
         let worker = Mutex::new(WorkerBuilder::new("lock-collector").create());
 
         let state = Arc::new(LockObserverState::default());
@@ -397,7 +406,11 @@ impl AppliedLockCollector {
 
         // Start the worker
 
-        Ok(Self { worker, scheduler })
+        Ok(Self {
+            worker,
+            scheduler,
+            concurrency_manager,
+        })
     }
 
     pub fn stop(&self) {
@@ -407,6 +420,31 @@ impl AppliedLockCollector {
     /// Starts collecting applied locks whose `start_ts` <= `max_ts`. Only one `max_ts` is valid
     /// at one time.
     pub fn start_collecting(&self, max_ts: TimeStamp, callback: Callback<()>) -> Result<()> {
+        // Before starting collecting, check the concurrency manager to avoid later prewrite
+        // requests uses a min_commit_ts less than the safepoint.
+        // `max_ts` here is the safepoint of the current round of GC.
+        // Ths is similar to that we update max_ts and check memory lock when handling other
+        // transactional read requests. However this is done at start_collecting instead of
+        // physical_scan_locks. The reason is that, to fully scan a TiKV store, it might needs more
+        // than one physical_scan_lock requests. However memory lock needs to be checked before
+        // scanning the locks, and we can't know the `end_key` of the scan range at that time. As
+        // a result, each physical_scan_lock request will cause scanning memory lock from the
+        // start_key to the very-end of the TiKV node, which is a waste. But since we always start
+        // collecting applied locks before physical scan lock, so a better idea is to check the
+        // memory lock before physical_scan_lock.
+        self.concurrency_manager.update_max_ts(max_ts);
+        self.concurrency_manager
+            .read_range_check(None, None, |key, lock| {
+                // `Lock::check_ts_conflict` can't be used here, because LockType::Lock
+                // can't be ignored in this case.
+                if lock.ts <= max_ts {
+                    Err(TxnError::from_mvcc(MvccErrorInner::KeyIsLocked(
+                        lock.clone().into_lock_info(key.to_raw()?),
+                    )))
+                } else {
+                    Ok(())
+                }
+            })?;
         self.scheduler
             .schedule(LockCollectorTask::StartCollecting { max_ts, callback })
             .map_err(|e| box_err!("failed to schedule task: {:?}", e))
@@ -446,6 +484,7 @@ impl Drop for AppliedLockCollector {
 mod tests {
     use super::*;
     use engine_traits::CF_DEFAULT;
+    use futures::executor::block_on;
     use kvproto::kvrpcpb::Op;
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{
@@ -501,15 +540,16 @@ mod tests {
 
     fn new_test_collector() -> (AppliedLockCollector, CoprocessorHost<RocksEngine>) {
         let mut coprocessor_host = CoprocessorHost::default();
-        let collector = AppliedLockCollector::new(&mut coprocessor_host).unwrap();
+        let collector =
+            AppliedLockCollector::new(&mut coprocessor_host, ConcurrencyManager::new(1.into()))
+                .unwrap();
         (collector, coprocessor_host)
     }
 
     fn start_collecting(c: &AppliedLockCollector, max_ts: u64) -> Result<()> {
         let (tx, rx) = channel();
         c.start_collecting(max_ts.into(), Box::new(move |r| tx.send(r).unwrap()))
-            .unwrap();
-        rx.recv().unwrap()
+            .and_then(move |()| rx.recv().unwrap())
     }
 
     fn get_collected_locks(c: &AppliedLockCollector, max_ts: u64) -> Result<(Vec<LockInfo>, bool)> {
@@ -535,6 +575,7 @@ mod tests {
 
         // Started.
         start_collecting(&c, 2).unwrap();
+        assert_eq!(c.concurrency_manager.max_ts(), 2.into());
         get_collected_locks(&c, 2).unwrap();
         stop_collecting(&c, 2).unwrap();
         // Stopped.
@@ -544,9 +585,11 @@ mod tests {
         // When start_collecting is invoked with a larger ts, the later one will ovewrite the
         // previous one.
         start_collecting(&c, 3).unwrap();
+        assert_eq!(c.concurrency_manager.max_ts(), 3.into());
         get_collected_locks(&c, 3).unwrap();
         get_collected_locks(&c, 4).unwrap_err();
         start_collecting(&c, 4).unwrap();
+        assert_eq!(c.concurrency_manager.max_ts(), 4.into());
         get_collected_locks(&c, 3).unwrap_err();
         get_collected_locks(&c, 4).unwrap();
         // Do not allow aborting previous observing with a smaller max_ts.
@@ -557,6 +600,52 @@ mod tests {
         stop_collecting(&c, 3).unwrap_err();
         stop_collecting(&c, 5).unwrap_err();
         stop_collecting(&c, 4).unwrap();
+    }
+
+    #[test]
+    fn test_check_memlock_on_start() {
+        let (c, _) = new_test_collector();
+        let cm = c.concurrency_manager.clone();
+
+        let mem_lock = |k: &[u8], ts: u64, lock_type| {
+            let key = Key::from_raw(k);
+            let guard = block_on(cm.lock_key(&key));
+            guard.with_lock(|lock| {
+                *lock = Some(txn_types::Lock::new(
+                    lock_type,
+                    k.to_vec(),
+                    ts.into(),
+                    100,
+                    None,
+                    0.into(),
+                    1,
+                    20.into(),
+                ));
+            });
+            guard
+        };
+
+        let guard = mem_lock(b"a", 100, LockType::Put);
+        start_collecting(&c, 90).unwrap();
+        stop_collecting(&c, 90).unwrap();
+        start_collecting(&c, 100).unwrap_err();
+        // Use get_collected_locks to check it's not collecting.
+        get_collected_locks(&c, 100).unwrap_err();
+        start_collecting(&c, 110).unwrap_err();
+        get_collected_locks(&c, 110).unwrap_err();
+        drop(guard);
+
+        let guard = mem_lock(b"b", 100, LockType::Lock);
+        start_collecting(&c, 90).unwrap();
+        stop_collecting(&c, 90).unwrap();
+        start_collecting(&c, 100).unwrap_err();
+        get_collected_locks(&c, 100).unwrap_err();
+        start_collecting(&c, 110).unwrap_err();
+        get_collected_locks(&c, 110).unwrap_err();
+        drop(guard);
+
+        start_collecting(&c, 200).unwrap();
+        stop_collecting(&c, 200).unwrap();
     }
 
     #[test]
@@ -601,7 +690,7 @@ mod tests {
             make_apply_request(b"1".to_vec(), b"1".to_vec(), CF_DEFAULT, CmdType::Put),
             make_apply_request(b"2".to_vec(), b"2".to_vec(), CF_LOCK, CmdType::Delete),
         ];
-        coprocessor_host.post_apply(&Region::default(), &mut make_raft_cmd(req));
+        coprocessor_host.post_apply(&Region::default(), &make_raft_cmd(req));
         expected_result.push(locks[0].clone());
         assert_eq!(
             get_collected_locks(&c, 100).unwrap(),
@@ -626,7 +715,7 @@ mod tests {
                 .filter(|l| l.get_lock_version() <= 100)
                 .cloned(),
         );
-        coprocessor_host.post_apply(&Region::default(), &mut make_raft_cmd(req.clone()));
+        coprocessor_host.post_apply(&Region::default(), &make_raft_cmd(req.clone()));
         assert_eq!(
             get_collected_locks(&c, 100).unwrap(),
             (expected_result, true)
@@ -636,7 +725,7 @@ mod tests {
         // dropped.
         start_collecting(&c, 110).unwrap();
         assert_eq!(get_collected_locks(&c, 110).unwrap(), (vec![], true));
-        coprocessor_host.post_apply(&Region::default(), &mut make_raft_cmd(req));
+        coprocessor_host.post_apply(&Region::default(), &make_raft_cmd(req));
         assert_eq!(get_collected_locks(&c, 110).unwrap(), (locks, true));
     }
 
@@ -732,7 +821,7 @@ mod tests {
         // The value is not a valid lock.
         let (k, v) = (Key::from_raw(b"k1").into_encoded(), b"v1".to_vec());
         let req = make_apply_request(k.clone(), v.clone(), CF_LOCK, CmdType::Put);
-        coprocessor_host.post_apply(&Region::default(), &mut make_raft_cmd(vec![req]));
+        coprocessor_host.post_apply(&Region::default(), &make_raft_cmd(vec![req]));
         assert_eq!(get_collected_locks(&c, 1).unwrap(), (vec![], false));
 
         // `is_clean` should be reset after invoking `start_collecting`.
@@ -758,8 +847,8 @@ mod tests {
         let batch_generate_locks = |count| {
             let (k, v) = lock_info_to_kv(lock.clone());
             let req = make_apply_request(k, v, CF_LOCK, CmdType::Put);
-            let mut raft_cmd = make_raft_cmd(vec![req; count]);
-            coprocessor_host.post_apply(&Region::default(), &mut raft_cmd);
+            let raft_cmd = make_raft_cmd(vec![req; count]);
+            coprocessor_host.post_apply(&Region::default(), &raft_cmd);
         };
 
         batch_generate_locks(MAX_COLLECT_SIZE - 1);

@@ -2,15 +2,18 @@
 
 //! Storage configuration.
 
+use crate::server::ttl::TTLCheckerTask;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration, Result as CfgResult};
 use engine_rocks::raw::{Cache, LRUCacheOptions, MemoryAllocator};
 use engine_rocks::RocksEngine;
 use engine_traits::{CFOptionsExt, ColumnFamilyOptions, CF_DEFAULT};
+use file_system::{get_io_rate_limiter, IOPriority, IORateLimitMode, IORateLimiter, IOType};
 use libc::c_int;
 use std::error::Error;
-use tikv_util::config::{self, OptionReadableSize, ReadableSize};
-use tikv_util::sys::sys_quota::SysQuota;
+use tikv_util::config::{self, OptionReadableSize, ReadableDuration, ReadableSize};
+use tikv_util::sys::SysQuota;
+use tikv_util::worker::Scheduler;
 
 pub const DEFAULT_DATA_DIR: &str = "./";
 const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
@@ -25,9 +28,6 @@ const MAX_SCHED_CONCURRENCY: usize = 2 * 1024 * 1024;
 const DEFAULT_SCHED_PENDING_WRITE_MB: u64 = 100;
 
 const DEFAULT_RESERVED_SPACE_GB: u64 = 5;
-// 20GB for reserved space is enough because size of one compaction is limited,
-// generally less than 2GB.
-pub const MAX_RESERVED_SPACE_GB: u64 = 20;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
 #[serde(default)]
@@ -51,13 +51,19 @@ pub struct Config {
     pub reserve_space: ReadableSize,
     #[config(skip)]
     pub enable_async_apply_prewrite: bool,
+    #[config(skip)]
+    pub enable_ttl: bool,
+    /// Interval to check TTL for all SSTs,
+    pub ttl_check_poll_interval: ReadableDuration,
     #[config(submodule)]
     pub block_cache: BlockCacheConfig,
+    #[config(submodule)]
+    pub io_rate_limit: IORateLimitConfig,
 }
 
 impl Default for Config {
     fn default() -> Config {
-        let cpu_num = SysQuota::new().cpu_cores_quota();
+        let cpu_num = SysQuota::cpu_cores_quota();
         Config {
             data_dir: DEFAULT_DATA_DIR.to_owned(),
             gc_ratio_threshold: DEFAULT_GC_RATIO_THRESHOLD,
@@ -67,7 +73,10 @@ impl Default for Config {
             scheduler_pending_write_threshold: ReadableSize::mb(DEFAULT_SCHED_PENDING_WRITE_MB),
             reserve_space: ReadableSize::gb(DEFAULT_RESERVED_SPACE_GB),
             enable_async_apply_prewrite: false,
+            enable_ttl: false,
+            ttl_check_poll_interval: ReadableDuration::hours(12),
             block_cache: BlockCacheConfig::default(),
+            io_rate_limit: IORateLimitConfig::default(),
         }
     }
 }
@@ -78,32 +87,33 @@ impl Config {
             self.data_dir = config::canonicalize_path(&self.data_dir)?
         }
         if self.scheduler_concurrency > MAX_SCHED_CONCURRENCY {
-            warn!("TiKV has optimized latch since v4.0, so it is not necessary to set large schedule \
+            warn!(
+                "TiKV has optimized latch since v4.0, so it is not necessary to set large schedule \
                 concurrency. To save memory, change it from {:?} to {:?}",
-                  self.scheduler_concurrency, MAX_SCHED_CONCURRENCY);
+                self.scheduler_concurrency, MAX_SCHED_CONCURRENCY
+            );
             self.scheduler_concurrency = MAX_SCHED_CONCURRENCY;
         }
-        if self.reserve_space.0 > ReadableSize::gb(MAX_RESERVED_SPACE_GB).0 {
-            self.reserve_space = ReadableSize::gb(MAX_RESERVED_SPACE_GB);
-            warn!(
-                "reserve-space is too large, sanitized to {:?}",
-                self.reserve_space
-            );
-        }
-        Ok(())
+        self.io_rate_limit.validate()
     }
 }
 
 pub struct StorageConfigManger {
     kvdb: RocksEngine,
     shared_block_cache: bool,
+    ttl_checker_scheduler: Scheduler<TTLCheckerTask>,
 }
 
 impl StorageConfigManger {
-    pub fn new(kvdb: RocksEngine, shared_block_cache: bool) -> StorageConfigManger {
+    pub fn new(
+        kvdb: RocksEngine,
+        shared_block_cache: bool,
+        ttl_checker_scheduler: Scheduler<TTLCheckerTask>,
+    ) -> StorageConfigManger {
         StorageConfigManger {
             kvdb,
             shared_block_cache,
+            ttl_checker_scheduler,
         }
     }
 }
@@ -128,6 +138,21 @@ impl ConfigManager for StorageConfigManger {
                         .with_label_values(&[CF_DEFAULT, "block_cache_size"])
                         .set(size.0 as f64);
                 }
+            }
+        } else if let Some(v) = change.remove("ttl_check_poll_interval") {
+            let interval: ReadableDuration = v.into();
+            self.ttl_checker_scheduler
+                .schedule(TTLCheckerTask::UpdatePollInterval(interval.into()))
+                .unwrap();
+        }
+        if let Some(ConfigValue::Module(mut io_rate_limit)) = change.remove("io_rate_limit") {
+            let limiter = match get_io_rate_limiter() {
+                None => return Err("IO rate limiter is not present".into()),
+                Some(limiter) => limiter,
+            };
+            if let Some(limit) = io_rate_limit.remove("max_bytes_per_sec") {
+                let limit: ReadableSize = limit.into();
+                limiter.set_io_rate_limit(limit.0 as usize);
             }
         }
         Ok(())
@@ -171,7 +196,7 @@ impl BlockCacheConfig {
         }
         let capacity = match self.capacity.0 {
             None => {
-                let total_mem = SysQuota::new().memory_limit_in_bytes();
+                let total_mem = SysQuota::memory_limit_in_bytes();
                 ((total_mem as f64) * 0.45) as usize
             }
             Some(c) => c.0 as usize,
@@ -196,7 +221,10 @@ impl BlockCacheConfig {
                         return Some(allocator);
                     }
                     Err(e) => {
-                        warn!("Create jemalloc nodump allocator for block cache failed: {}, continue with default allocator", e);
+                        warn!(
+                            "Create jemalloc nodump allocator for block cache failed: {}, continue with default allocator",
+                            e
+                        );
                     }
                 },
                 "" => {}
@@ -209,5 +237,113 @@ impl BlockCacheConfig {
             }
         };
         None
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct IORateLimitConfig {
+    pub max_bytes_per_sec: ReadableSize,
+    #[config(skip)]
+    pub mode: IORateLimitMode,
+    /// When this flag is off, high-priority IOs are counted but not limited. Default
+    /// set to false because the optimal throughput target provided by user might not be
+    /// the maximum available bandwidth. For multi-tenancy use case, this flag should be
+    /// turned on.
+    #[config(skip)]
+    pub strict: bool,
+    #[config(skip)]
+    pub foreground_read_priority: IOPriority,
+    #[config(skip)]
+    pub foreground_write_priority: IOPriority,
+    #[config(skip)]
+    pub flush_priority: IOPriority,
+    #[config(skip)]
+    pub level_zero_compaction_priority: IOPriority,
+    #[config(skip)]
+    pub compaction_priority: IOPriority,
+    #[config(skip)]
+    pub replication_priority: IOPriority,
+    #[config(skip)]
+    pub load_balance_priority: IOPriority,
+    #[config(skip)]
+    pub gc_priority: IOPriority,
+    #[config(skip)]
+    pub import_priority: IOPriority,
+    #[config(skip)]
+    pub export_priority: IOPriority,
+    #[config(skip)]
+    pub other_priority: IOPriority,
+}
+
+impl Default for IORateLimitConfig {
+    fn default() -> IORateLimitConfig {
+        IORateLimitConfig {
+            max_bytes_per_sec: ReadableSize::mb(0),
+            mode: IORateLimitMode::WriteOnly,
+            strict: false,
+            foreground_read_priority: IOPriority::High,
+            foreground_write_priority: IOPriority::High,
+            flush_priority: IOPriority::High,
+            level_zero_compaction_priority: IOPriority::Medium,
+            compaction_priority: IOPriority::Low,
+            replication_priority: IOPriority::High,
+            load_balance_priority: IOPriority::High,
+            gc_priority: IOPriority::High,
+            import_priority: IOPriority::Low,
+            export_priority: IOPriority::Low,
+            other_priority: IOPriority::High,
+        }
+    }
+}
+
+impl IORateLimitConfig {
+    pub fn build(&self, enable_statistics: bool) -> IORateLimiter {
+        let mut limiter = IORateLimiter::new(self.mode, self.strict, enable_statistics);
+        limiter.set_io_rate_limit(self.max_bytes_per_sec.0 as usize);
+        limiter.set_io_priority(IOType::ForegroundRead, self.foreground_read_priority);
+        limiter.set_io_priority(IOType::ForegroundWrite, self.foreground_write_priority);
+        limiter.set_io_priority(IOType::Flush, self.flush_priority);
+        limiter.set_io_priority(
+            IOType::LevelZeroCompaction,
+            self.level_zero_compaction_priority,
+        );
+        limiter.set_io_priority(IOType::Compaction, self.compaction_priority);
+        limiter.set_io_priority(IOType::Replication, self.replication_priority);
+        limiter.set_io_priority(IOType::LoadBalance, self.load_balance_priority);
+        limiter.set_io_priority(IOType::Gc, self.gc_priority);
+        limiter.set_io_priority(IOType::Import, self.import_priority);
+        limiter.set_io_priority(IOType::Export, self.export_priority);
+        limiter.set_io_priority(IOType::Other, self.other_priority);
+        limiter
+    }
+
+    fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+        if self.other_priority != IOPriority::High {
+            warn!(
+                "Occasionally some critical IO operations are tagged as IOType::Other, \
+                  e.g. IOs are fired from unmanaged threads, thread-local type storage exceeds \
+                  capacity. To be on the safe side, change priority for IOType::Other from \
+                  {:?} to {:?}",
+                self.other_priority,
+                IOPriority::High
+            );
+            self.other_priority = IOPriority::High;
+        }
+        if self.gc_priority != self.foreground_write_priority {
+            warn!(
+                "GC writes are merged with foreground writes. To avoid priority inversion, change \
+                  priority for IOType::Gc from {:?} to {:?}",
+                self.gc_priority, self.foreground_write_priority,
+            );
+            self.gc_priority = self.foreground_write_priority;
+        }
+        if self.mode != IORateLimitMode::WriteOnly {
+            return Err(
+                "storage.io-rate-limit.mode other than write-only is not supported.".into(),
+            );
+        }
+        Ok(())
     }
 }

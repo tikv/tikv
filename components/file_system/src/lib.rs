@@ -1,21 +1,27 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(test)]
-#![feature(core_intrinsics)]
-extern crate test;
+#![feature(duration_consts_2)]
 
 #[macro_use]
 extern crate lazy_static;
+extern crate test;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
 mod file;
 mod iosnoop;
+mod metrics;
+mod metrics_manager;
 mod rate_limiter;
 
 pub use file::{File, OpenOptions};
-pub use iosnoop::{flush_io_metrics, get_io_type, init_io_snooper, set_io_type, IOContext};
-pub use rate_limiter::{get_io_rate_limiter, set_io_rate_limiter, BytesRecorder, IORateLimiter};
+pub use iosnoop::{get_io_type, init_io_snooper, set_io_type};
+pub use metrics_manager::{BytesFetcher, MetricsManager};
+pub use rate_limiter::{
+    get_io_rate_limiter, set_io_rate_limiter, IOBudgetAdjustor, IORateLimitMode, IORateLimiter,
+    IORateLimiterStatistics,
+};
 
 pub use std::fs::{
     canonicalize, create_dir, create_dir_all, hard_link, metadata, read_dir, read_link, remove_dir,
@@ -25,34 +31,38 @@ pub use std::fs::{
 
 use std::io::{self, ErrorKind, Read, Write};
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use openssl::error::ErrorStack;
 use openssl::hash::{self, Hasher, MessageDigest};
-use variant_count::VariantCount;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use strum::EnumCount;
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IOOp {
     Read,
     Write,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, VariantCount)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumCount)]
 pub enum IOType {
-    Other,
+    Other = 0,
     // Including coprocessor and storage read.
-    ForegroundRead,
+    ForegroundRead = 1,
     // Including scheduler worker, raftstore and apply. Scheduler worker only
     // does read related works, but it's on the path of foreground write, so
     // account it as foreground-write instead of foreground-read.
-    ForegroundWrite,
-    Flush,
-    Compaction,
-    Replication,
-    LoadBalance,
-    Import,
-    Export,
+    ForegroundWrite = 2,
+    Flush = 3,
+    LevelZeroCompaction = 4,
+    Compaction = 5,
+    Replication = 6,
+    LoadBalance = 7,
+    Gc = 8,
+    Import = 9,
+    Export = 10,
 }
 
 pub struct WithIOType {
@@ -70,6 +80,103 @@ impl WithIOType {
 impl Drop for WithIOType {
     fn drop(&mut self) {
         set_io_type(self.previous_io_type);
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct IOBytes {
+    read: u64,
+    write: u64,
+}
+
+impl Default for IOBytes {
+    fn default() -> Self {
+        IOBytes { read: 0, write: 0 }
+    }
+}
+
+impl std::ops::Sub for IOBytes {
+    type Output = Self;
+
+    fn sub(self, other: Self) -> Self::Output {
+        Self {
+            read: self.read.saturating_sub(other.read),
+            write: self.write.saturating_sub(other.write),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Copy, EnumCount)]
+pub enum IOPriority {
+    Low = 0,
+    Medium = 1,
+    High = 2,
+}
+
+impl IOPriority {
+    pub fn as_str(&self) -> &str {
+        match *self {
+            IOPriority::Low => "low",
+            IOPriority::Medium => "medium",
+            IOPriority::High => "high",
+        }
+    }
+}
+
+impl std::str::FromStr for IOPriority {
+    type Err = String;
+    fn from_str(s: &str) -> Result<IOPriority, String> {
+        match s {
+            "low" => Ok(IOPriority::Low),
+            "medium" => Ok(IOPriority::Medium),
+            "high" => Ok(IOPriority::High),
+            s => Err(format!("expect: low, medium or high, got: {:?}", s)),
+        }
+    }
+}
+
+impl Serialize for IOPriority {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for IOPriority {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        use serde::de::{Error, Unexpected, Visitor};
+        struct StrVistor;
+        impl<'de> Visitor<'de> for StrVistor {
+            type Value = IOPriority;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(formatter, "a IO priority")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<IOPriority, E>
+            where
+                E: Error,
+            {
+                let p = match IOPriority::from_str(&*value.trim().to_lowercase()) {
+                    Ok(p) => p,
+                    _ => {
+                        return Err(E::invalid_value(
+                            Unexpected::Other(&"invalid IO priority".to_string()),
+                            &self,
+                        ));
+                    }
+                };
+                Ok(p)
+            }
+        }
+
+        deserializer.deserialize_str(StrVistor)
     }
 }
 
@@ -371,12 +478,12 @@ mod tests {
 
     fn gen_rand_file<P: AsRef<Path>>(path: P, size: usize) -> u32 {
         let mut rng = thread_rng();
-        let s: String = iter::repeat(())
+        let s: Vec<u8> = iter::repeat(())
             .map(|()| rng.sample(Alphanumeric))
             .take(size)
             .collect();
-        write(path, s.as_bytes()).unwrap();
-        calc_crc32_bytes(s.as_bytes())
+        write(path, s.as_slice()).unwrap();
+        calc_crc32_bytes(s.as_slice())
     }
 
     #[test]
