@@ -20,6 +20,7 @@ pub mod metrics;
 mod observer;
 mod service;
 
+pub use channel::MemoryQuota;
 pub use endpoint::{CdcTxnExtraScheduler, Endpoint, Task, Validate};
 pub use errors::{Error, Result};
 pub use observer::CdcObserver;
