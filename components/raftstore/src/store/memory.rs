@@ -56,7 +56,7 @@ pub fn needs_evict_entry_cache() -> bool {
         // * system=8G,  memory_usage_limit=6G,  evict=1.2G
         // * system=16G, memory_usage_limit=12G, evict=2.4G
         // * system=32G, memory_usage_limit=24G, evict=4.8G
-        if ec_usage > GIB && (ec_usage > usage / 5 || usage <= 5 * GIB) {
+        if ec_usage > GIB && ec_usage > usage / 5 {
             return true;
         }
     }
