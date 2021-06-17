@@ -58,7 +58,7 @@ fn test_cdc_congest() {
     mutation.set_op(Op::Put);
     mutation.key = k.clone().into_bytes();
     mutation.value = v;
-    suite.must_kv_prewrite(1, vec![mutation], k.clone().into_bytes(), start_ts);
+    suite.must_kv_prewrite(1, vec![mutation], k.into_bytes(), start_ts);
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1, "{:?}", events);
     match events.pop().unwrap().event.unwrap() {
@@ -78,7 +78,7 @@ fn test_cdc_congest() {
     mutation.set_op(Op::Put);
     mutation.key = k.clone().into_bytes();
     mutation.value = v;
-    suite.must_kv_prewrite(1, vec![mutation], k.clone().into_bytes(), start_ts);
+    suite.must_kv_prewrite(1, vec![mutation], k.into_bytes(), start_ts);
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1, "{:?}", events);
     match events.pop().unwrap().event.unwrap() {

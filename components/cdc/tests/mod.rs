@@ -112,7 +112,7 @@ impl TestSuiteBuilder {
 
     pub fn build(self) -> TestSuite {
         init();
-        let memory_quota = self.memory_quota.unwrap_or_else(|| usize::MAX);
+        let memory_quota = self.memory_quota.unwrap_or(usize::MAX);
         let mut cluster = self.cluster.unwrap();
         let count = cluster.count;
         let pd_cli = cluster.pd_client.clone();
