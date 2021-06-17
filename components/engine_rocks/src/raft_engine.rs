@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::{RocksEngine, RocksWriteBatch};
+use crate::{util, RocksEngine, RocksWriteBatch};
 
 use engine_traits::{
     Error, Iterable, KvEngine, MiscExt, Mutable, Peekable, RaftEngine, RaftEngineReadOnly,
@@ -223,7 +223,10 @@ impl RaftEngine for RocksEngine {
     }
 
     fn get_engine_size(&self) -> Result<u64> {
-        MiscExt::get_engine_used_size(self)
+        let handle = util::get_cf_handle(self.as_inner(), CF_DEFAULT)?;
+        let used_size = util::get_engine_cf_used_size(self.as_inner(), handle);
+
+        Ok(used_size)
     }
 }
 
