@@ -2559,7 +2559,17 @@ impl TiKvConfig {
         self.resolved_ts.validate()?;
         self.resource_metering.validate()?;
 
-        if self.memory_usage_limit.0.is_none() {
+        if let Some(memory_usage_limit) = self.memory_usage_limit.0 {
+            let total = SysQuota::memory_limit_in_bytes();
+            if memory_usage_limit.0 > total {
+                // Explicitly exceeds system memory capacity is not allowed.
+                return Err(format!(
+                    "memory_usage_limit is greater than system memory capacity {}",
+                    total
+                )
+                .into());
+            }
+        } else {
             // Adjust `memory_usage_limit` if necessary.
             if self.storage.block_cache.shared {
                 if let Some(cap) = self.storage.block_cache.capacity.0 {
@@ -3900,17 +3910,20 @@ mod tests {
 
         // Test validating memory_usage_limit when it's greater than max.
         cfg.memory_usage_limit.0 = Some(ReadableSize(SysQuota::memory_limit_in_bytes() * 2));
-        assert!(cfg.validate().is_ok());
-        assert_eq!(
-            cfg.memory_usage_limit.0.unwrap(),
-            ReadableSize(SysQuota::memory_limit_in_bytes()),
-        );
+        assert!(cfg.validate().is_err());
 
         // Test memory_usage_limit is based on block cache size if it's not configured.
         cfg.memory_usage_limit = OptionReadableSize(None);
         cfg.storage.block_cache.capacity.0 = Some(ReadableSize(3 * GIB));
         assert!(cfg.validate().is_ok());
         assert_eq!(cfg.memory_usage_limit.0.unwrap(), ReadableSize(5 * GIB));
+
+        // Test memory_usage_limit will fallback to system memory capacity with huge block cache.
+        cfg.memory_usage_limit = OptionReadableSize(None);
+        let system = SysQuota::memory_limit_in_bytes();
+        cfg.storage.block_cache.capacity.0 = Some(ReadableSize(system * 3 / 4));
+        assert!(cfg.validate().is_ok());
+        assert_eq!(cfg.memory_usage_limit.0.unwrap(), ReadableSize(system));
     }
 
     #[test]
