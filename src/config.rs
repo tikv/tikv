@@ -2603,7 +2603,7 @@ impl TiKvConfig {
         let default = Self::suggested_memory_usage_limit();
         if limit.0 > default.0 {
             warn!(
-                "memory_usage_limit:{:?} > default:{:?}, maybe page cache isn't enough",
+                "memory_usage_limit:{:?} > recommanded:{:?}, maybe page cache isn't enough",
                 limit, default,
             );
         }
