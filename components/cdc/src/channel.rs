@@ -322,6 +322,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn test_congest() {
         let mut e = kvproto::cdcpb::Event::default();
         e.region_id = 1;
@@ -339,6 +340,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn test_force_send() {
         let mut e = kvproto::cdcpb::Event::default();
         e.region_id = 1;
@@ -362,6 +364,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn test_channel_memory_leak() {
         let mut e = kvproto::cdcpb::Event::default();
         e.region_id = 1;
