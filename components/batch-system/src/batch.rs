@@ -18,7 +18,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use tikv_util::mpsc;
 use tikv_util::time::Instant;
-use tikv_util::{debug, error, info, thd_name, warn};
+use tikv_util::{debug, error, info, safe_panic, thd_name, warn};
 
 /// A unify type for FSMs so that they can be sent to channel easily.
 enum FsmTypes<N, C> {
@@ -465,9 +465,7 @@ where
             }
         }
         if let Some(e) = last_error {
-            if !thread::panicking() {
-                panic!("failed to join worker thread: {:?}", e);
-            }
+            safe_panic!("failed to join worker thread: {:?}", e);
         }
         info!("batch system {} is stopped.", name_prefix);
     }

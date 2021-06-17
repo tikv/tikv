@@ -42,8 +42,9 @@ pub fn is_shutdown(ensure_set: bool) -> bool {
     PROPERTIES.with(|p| {
         if let Some(props) = &*p.borrow() {
             props.inner.shutdown.load(Ordering::SeqCst)
-        } else if ensure_set && !std::thread::panicking() {
-            panic!("group properties is not set");
+        } else if ensure_set {
+            safe_panic!("group properties is not set");
+            false
         } else {
             false
         }

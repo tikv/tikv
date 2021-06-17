@@ -328,11 +328,7 @@ impl<T: Simulator> Cluster<T> {
         self.group_props[&node_id].mark_shutdown();
         match self.sim.write() {
             Ok(mut sim) => sim.stop_node(node_id),
-            Err(_) => {
-                if !thread::panicking() {
-                    panic!("failed to acquire write lock.")
-                }
-            }
+            Err(_) => safe_panic!("failed to acquire write lock."),
         }
         self.pd_client.shutdown_store(node_id);
         debug!("node {} stopped", node_id);
@@ -703,12 +699,9 @@ impl<T: Simulator> Cluster<T> {
         match self.sim.read() {
             Ok(s) => keys = s.get_node_ids(),
             Err(_) => {
-                if thread::panicking() {
-                    // Leave the resource to avoid double panic.
-                    return;
-                } else {
-                    panic!("failed to acquire read lock");
-                }
+                safe_panic!("failed to acquire read lock");
+                // Leave the resource to avoid double panic.
+                return;
             }
         }
         for id in keys {
