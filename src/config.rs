@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! Configuration for the entire server.
+//! OnlineConfig for the entire server.
 //!
 //! TiKV is configured through the `TiKvConfig` type, which is in turn
 //! made up of many other configuration types.
@@ -16,7 +16,6 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::usize;
 
-use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration, Result as CfgResult};
 use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel};
 use engine_rocks::properties::MvccPropertiesCollectorFactory;
 use engine_rocks::raw::{
@@ -36,6 +35,7 @@ use engine_rocks::{
 use engine_traits::{CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use keys::region_raft_prefix_len;
+use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig, Result as CfgResult};
 use pd_client::Config as PdConfig;
 use raft_log_engine::RaftEngineConfig as RawRaftEngineConfig;
 use raft_log_engine::RaftLogEngine;
@@ -88,34 +88,34 @@ fn memory_limit_for_cf(is_raft_db: bool, cf: &str, total_mem: u64) -> ReadableSi
     ReadableSize::mb(size as u64 / MIB)
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct TitanCfConfig {
-    #[config(skip)]
+    #[online_config(skip)]
     pub min_blob_size: ReadableSize,
-    #[config(skip)]
+    #[online_config(skip)]
     pub blob_file_compression: CompressionType,
-    #[config(skip)]
+    #[online_config(skip)]
     pub blob_cache_size: ReadableSize,
-    #[config(skip)]
+    #[online_config(skip)]
     pub min_gc_batch_size: ReadableSize,
-    #[config(skip)]
+    #[online_config(skip)]
     pub max_gc_batch_size: ReadableSize,
-    #[config(skip)]
+    #[online_config(skip)]
     pub discardable_ratio: f64,
-    #[config(skip)]
+    #[online_config(skip)]
     pub sample_ratio: f64,
-    #[config(skip)]
+    #[online_config(skip)]
     pub merge_small_file_threshold: ReadableSize,
     pub blob_run_mode: BlobRunMode,
-    #[config(skip)]
+    #[online_config(skip)]
     pub level_merge: bool,
-    #[config(skip)]
+    #[online_config(skip)]
     pub range_merge: bool,
-    #[config(skip)]
+    #[online_config(skip)]
     pub max_sorted_runs: i32,
-    #[config(skip)]
+    #[online_config(skip)]
     pub gc_merge_rewrite: bool,
 }
 
@@ -220,37 +220,37 @@ fn get_background_job_limits(defaults: &BackgroundJobLimits) -> BackgroundJobLim
 
 macro_rules! cf_config {
     ($name:ident) => {
-        #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
+        #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
         #[serde(default)]
         #[serde(rename_all = "kebab-case")]
         pub struct $name {
-            #[config(skip)]
+            #[online_config(skip)]
             pub block_size: ReadableSize,
             pub block_cache_size: ReadableSize,
-            #[config(skip)]
+            #[online_config(skip)]
             pub disable_block_cache: bool,
-            #[config(skip)]
+            #[online_config(skip)]
             pub cache_index_and_filter_blocks: bool,
-            #[config(skip)]
+            #[online_config(skip)]
             pub pin_l0_filter_and_index_blocks: bool,
-            #[config(skip)]
+            #[online_config(skip)]
             pub use_bloom_filter: bool,
-            #[config(skip)]
+            #[online_config(skip)]
             pub optimize_filters_for_hits: bool,
-            #[config(skip)]
+            #[online_config(skip)]
             pub whole_key_filtering: bool,
-            #[config(skip)]
+            #[online_config(skip)]
             pub bloom_filter_bits_per_key: i32,
-            #[config(skip)]
+            #[online_config(skip)]
             pub block_based_bloom_filter: bool,
-            #[config(skip)]
+            #[online_config(skip)]
             pub read_amp_bytes_per_bit: u32,
             #[serde(with = "rocks_config::compression_type_level_serde")]
-            #[config(skip)]
+            #[online_config(skip)]
             pub compression_per_level: [DBCompressionType; 7],
             pub write_buffer_size: ReadableSize,
             pub max_write_buffer_number: i32,
-            #[config(skip)]
+            #[online_config(skip)]
             pub min_write_buffer_number_to_merge: i32,
             pub max_bytes_for_level_base: ReadableSize,
             pub target_file_size_base: ReadableSize,
@@ -259,41 +259,41 @@ macro_rules! cf_config {
             pub level0_stop_writes_trigger: i32,
             pub max_compaction_bytes: ReadableSize,
             #[serde(with = "rocks_config::compaction_pri_serde")]
-            #[config(skip)]
+            #[online_config(skip)]
             pub compaction_pri: CompactionPriority,
-            #[config(skip)]
+            #[online_config(skip)]
             pub dynamic_level_bytes: bool,
-            #[config(skip)]
+            #[online_config(skip)]
             pub num_levels: i32,
             pub max_bytes_for_level_multiplier: i32,
             #[serde(with = "rocks_config::compaction_style_serde")]
-            #[config(skip)]
+            #[online_config(skip)]
             pub compaction_style: DBCompactionStyle,
             pub disable_auto_compactions: bool,
             pub soft_pending_compaction_bytes_limit: ReadableSize,
             pub hard_pending_compaction_bytes_limit: ReadableSize,
-            #[config(skip)]
+            #[online_config(skip)]
             pub force_consistency_checks: bool,
-            #[config(skip)]
+            #[online_config(skip)]
             pub prop_size_index_distance: u64,
-            #[config(skip)]
+            #[online_config(skip)]
             pub prop_keys_index_distance: u64,
-            #[config(skip)]
+            #[online_config(skip)]
             pub enable_doubly_skiplist: bool,
-            #[config(skip)]
+            #[online_config(skip)]
             pub enable_compaction_guard: bool,
-            #[config(skip)]
+            #[online_config(skip)]
             pub compaction_guard_min_output_file_size: ReadableSize,
-            #[config(skip)]
+            #[online_config(skip)]
             pub compaction_guard_max_output_file_size: ReadableSize,
             #[serde(with = "rocks_config::compression_type_serde")]
-            #[config(skip)]
+            #[online_config(skip)]
             pub bottommost_level_compression: DBCompressionType,
-            #[config(skip)]
+            #[online_config(skip)]
             pub bottommost_zstd_compression_dict_size: i32,
-            #[config(skip)]
+            #[online_config(skip)]
             pub bottommost_zstd_compression_sample_size: i32,
-            #[config(submodule)]
+            #[online_config(submodule)]
             pub titan: TitanCfConfig,
         }
 
@@ -878,76 +878,76 @@ impl TitanDBConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct DbConfig {
-    #[config(skip)]
+    #[online_config(skip)]
     pub info_log_level: LogLevel,
     #[serde(with = "rocks_config::recovery_mode_serde")]
-    #[config(skip)]
+    #[online_config(skip)]
     pub wal_recovery_mode: DBRecoveryMode,
-    #[config(skip)]
+    #[online_config(skip)]
     pub wal_dir: String,
-    #[config(skip)]
+    #[online_config(skip)]
     pub wal_ttl_seconds: u64,
-    #[config(skip)]
+    #[online_config(skip)]
     pub wal_size_limit: ReadableSize,
     pub max_total_wal_size: ReadableSize,
     pub max_background_jobs: i32,
     pub max_background_flushes: i32,
-    #[config(skip)]
+    #[online_config(skip)]
     pub max_manifest_file_size: ReadableSize,
-    #[config(skip)]
+    #[online_config(skip)]
     pub create_if_missing: bool,
     pub max_open_files: i32,
-    #[config(skip)]
+    #[online_config(skip)]
     pub enable_statistics: bool,
-    #[config(skip)]
+    #[online_config(skip)]
     pub stats_dump_period: ReadableDuration,
     pub compaction_readahead_size: ReadableSize,
-    #[config(skip)]
+    #[online_config(skip)]
     pub info_log_max_size: ReadableSize,
-    #[config(skip)]
+    #[online_config(skip)]
     pub info_log_roll_time: ReadableDuration,
-    #[config(skip)]
+    #[online_config(skip)]
     pub info_log_keep_log_file_num: u64,
-    #[config(skip)]
+    #[online_config(skip)]
     pub info_log_dir: String,
     pub rate_bytes_per_sec: ReadableSize,
-    #[config(skip)]
+    #[online_config(skip)]
     pub rate_limiter_refill_period: ReadableDuration,
     #[serde(with = "rocks_config::rate_limiter_mode_serde")]
-    #[config(skip)]
+    #[online_config(skip)]
     pub rate_limiter_mode: DBRateLimiterMode,
     // deprecated. use rate_limiter_auto_tuned.
-    #[config(skip)]
+    #[online_config(skip)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
     pub auto_tuned: Option<bool>,
     pub rate_limiter_auto_tuned: bool,
     pub bytes_per_sync: ReadableSize,
     pub wal_bytes_per_sync: ReadableSize,
-    #[config(skip)]
+    #[online_config(skip)]
     pub max_sub_compactions: u32,
     pub writable_file_max_buffer_size: ReadableSize,
-    #[config(skip)]
+    #[online_config(skip)]
     pub use_direct_io_for_flush_and_compaction: bool,
-    #[config(skip)]
+    #[online_config(skip)]
     pub enable_pipelined_write: bool,
-    #[config(skip)]
+    #[online_config(skip)]
     pub enable_multi_batch_write: bool,
-    #[config(skip)]
+    #[online_config(skip)]
     pub enable_unordered_write: bool,
-    #[config(submodule)]
+    #[online_config(submodule)]
     pub defaultcf: DefaultCfConfig,
-    #[config(submodule)]
+    #[online_config(submodule)]
     pub writecf: WriteCfConfig,
-    #[config(submodule)]
+    #[online_config(submodule)]
     pub lockcf: LockCfConfig,
-    #[config(submodule)]
+    #[online_config(submodule)]
     pub raftcf: RaftCfConfig,
-    #[config(skip)]
+    #[online_config(skip)]
     pub titan: TitanDBConfig,
 }
 
@@ -1192,58 +1192,58 @@ impl RaftDefaultCfConfig {
 // When construct Options, options.env is set to same singleton Env::Default() object.
 // So total max_background_jobs = max(rocksdb.max_background_jobs, raftdb.max_background_jobs)
 // But each instance will limit their background jobs according to their own max_background_jobs
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct RaftDbConfig {
     #[serde(with = "rocks_config::recovery_mode_serde")]
-    #[config(skip)]
+    #[online_config(skip)]
     pub wal_recovery_mode: DBRecoveryMode,
-    #[config(skip)]
+    #[online_config(skip)]
     pub wal_dir: String,
-    #[config(skip)]
+    #[online_config(skip)]
     pub wal_ttl_seconds: u64,
-    #[config(skip)]
+    #[online_config(skip)]
     pub wal_size_limit: ReadableSize,
     pub max_total_wal_size: ReadableSize,
     pub max_background_jobs: i32,
     pub max_background_flushes: i32,
-    #[config(skip)]
+    #[online_config(skip)]
     pub max_manifest_file_size: ReadableSize,
-    #[config(skip)]
+    #[online_config(skip)]
     pub create_if_missing: bool,
     pub max_open_files: i32,
-    #[config(skip)]
+    #[online_config(skip)]
     pub enable_statistics: bool,
-    #[config(skip)]
+    #[online_config(skip)]
     pub stats_dump_period: ReadableDuration,
     pub compaction_readahead_size: ReadableSize,
-    #[config(skip)]
+    #[online_config(skip)]
     pub info_log_max_size: ReadableSize,
-    #[config(skip)]
+    #[online_config(skip)]
     pub info_log_roll_time: ReadableDuration,
-    #[config(skip)]
+    #[online_config(skip)]
     pub info_log_keep_log_file_num: u64,
-    #[config(skip)]
+    #[online_config(skip)]
     pub info_log_dir: String,
-    #[config(skip)]
+    #[online_config(skip)]
     pub info_log_level: LogLevel,
-    #[config(skip)]
+    #[online_config(skip)]
     pub max_sub_compactions: u32,
     pub writable_file_max_buffer_size: ReadableSize,
-    #[config(skip)]
+    #[online_config(skip)]
     pub use_direct_io_for_flush_and_compaction: bool,
-    #[config(skip)]
+    #[online_config(skip)]
     pub enable_pipelined_write: bool,
-    #[config(skip)]
+    #[online_config(skip)]
     pub enable_unordered_write: bool,
-    #[config(skip)]
+    #[online_config(skip)]
     pub allow_concurrent_memtable_write: bool,
     pub bytes_per_sync: ReadableSize,
     pub wal_bytes_per_sync: ReadableSize,
-    #[config(submodule)]
+    #[online_config(submodule)]
     pub defaultcf: RaftDefaultCfConfig,
-    #[config(skip)]
+    #[online_config(skip)]
     pub titan: TitanDBConfig,
 }
 
@@ -2174,7 +2174,7 @@ mod readpool_tests {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct BackupConfig {
@@ -2264,14 +2264,14 @@ impl CdcConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct ResolvedTsConfig {
-    #[config(skip)]
+    #[online_config(skip)]
     pub enable: bool,
     pub advance_ts_interval: ReadableDuration,
-    #[config(skip)]
+    #[online_config(skip)]
     pub scan_lock_pool_size: usize,
 }
 
@@ -2297,111 +2297,111 @@ impl Default for ResolvedTsConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[config(hidden)]
+    #[online_config(hidden)]
     pub cfg_path: String,
 
-    #[config(skip)]
+    #[online_config(skip)]
     #[serde(with = "log_level_serde")]
     pub log_level: slog::Level,
 
-    #[config(skip)]
+    #[online_config(skip)]
     pub log_file: String,
 
-    #[config(skip)]
+    #[online_config(skip)]
     pub log_format: LogFormat,
 
-    #[config(skip)]
+    #[online_config(skip)]
     pub slow_log_file: String,
 
-    #[config(skip)]
+    #[online_config(skip)]
     pub slow_log_threshold: ReadableDuration,
 
-    #[config(skip)]
+    #[online_config(skip)]
     pub log_rotation_timespan: ReadableDuration,
 
-    #[config(skip)]
+    #[online_config(skip)]
     pub log_rotation_size: ReadableSize,
 
-    #[config(hidden)]
+    #[online_config(hidden)]
     pub panic_when_unexpected_key_or_data: bool,
 
-    #[config(skip)]
+    #[online_config(skip)]
     pub enable_io_snoop: bool,
 
-    #[config(skip)]
+    #[online_config(skip)]
     pub abort_on_panic: bool,
 
-    #[config(skip)]
+    #[online_config(skip)]
     pub memory_usage_limit: ReadableSize,
 
-    #[config(skip)]
+    #[online_config(skip)]
     pub memory_usage_high_water: f64,
 
-    #[config(skip)]
+    #[online_config(skip)]
     pub readpool: ReadPoolConfig,
 
-    #[config(submodule)]
+    #[online_config(submodule)]
     pub server: ServerConfig,
 
-    #[config(submodule)]
+    #[online_config(submodule)]
     pub storage: StorageConfig,
 
-    #[config(skip)]
+    #[online_config(skip)]
     pub pd: PdConfig,
 
-    #[config(hidden)]
+    #[online_config(hidden)]
     pub metric: MetricConfig,
 
-    #[config(submodule)]
+    #[online_config(submodule)]
     #[serde(rename = "raftstore")]
     pub raft_store: RaftstoreConfig,
 
-    #[config(submodule)]
+    #[online_config(submodule)]
     pub coprocessor: CopConfig,
 
-    #[config(skip)]
+    #[online_config(skip)]
     pub coprocessor_v2: CoprocessorV2Config,
 
-    #[config(submodule)]
+    #[online_config(submodule)]
     pub rocksdb: DbConfig,
 
-    #[config(submodule)]
+    #[online_config(submodule)]
     pub raftdb: RaftDbConfig,
 
-    #[config(skip)]
+    #[online_config(skip)]
     pub raft_engine: RaftEngineConfig,
 
-    #[config(skip)]
+    #[online_config(skip)]
     pub security: SecurityConfig,
 
-    #[config(skip)]
+    #[online_config(skip)]
     pub import: ImportConfig,
 
-    #[config(submodule)]
+    #[online_config(submodule)]
     pub backup: BackupConfig,
 
-    #[config(submodule)]
+    #[online_config(submodule)]
     pub pessimistic_txn: PessimisticTxnConfig,
 
-    #[config(submodule)]
+    #[online_config(submodule)]
     pub gc: GcConfig,
 
-    #[config(submodule)]
+    #[online_config(submodule)]
     pub split: SplitConfig,
 
-    #[config(skip)]
+    #[online_config(skip)]
     pub cdc: CdcConfig,
 
-    #[config(submodule)]
+    #[online_config(submodule)]
     pub resolved_ts: ResolvedTsConfig,
 
-    #[config(submodule)]
+    #[online_config(submodule)]
     pub resource_metering: ResourceMeteringConfig,
 }
 
@@ -3486,7 +3486,7 @@ mod tests {
 
         pub struct TestConfigManager(channel::Sender<ConfigChange>);
         impl ConfigManager for TestConfigManager {
-            fn dispatch(&mut self, change: ConfigChange) -> configuration::Result<()> {
+            fn dispatch(&mut self, change: ConfigChange) -> online_config::Result<()> {
                 self.0.send(change).unwrap();
                 Ok(())
             }

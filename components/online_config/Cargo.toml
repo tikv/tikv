@@ -1,14 +1,11 @@
 [package]
-name = "configuration"
+name = "online_config"
 version = "0.1.0"
 edition = "2018"
 publish = false
 
-[lib]
-name = "configuration"
-
 [dependencies]
-configuration_derive = { path = "./configuration_derive" }
+online_config_derive = { path = "./online_config_derive" }
 serde = { version = "1.0", features = ["derive"] }
 
 [dev-dependencies]
