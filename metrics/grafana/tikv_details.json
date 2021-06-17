@@ -3669,8 +3669,6 @@
             "min": false,
             "rightSide": true,
             "show": true,
-            "sort": "current",
-            "sortDesc": true,
             "total": false,
             "values": true
           },
@@ -6164,7 +6162,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 47
+            "y": 47 
           },
           "id": 62,
           "legend": {
@@ -6927,11 +6925,11 @@
               "step": 4
             },
             {
+              "refId": "B",
               "expr": "tikv_pd_pending_heartbeat_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}",
-              "format": "time_series",
               "intervalFactor": 1,
-              "legendFormat": "pending",
-              "refId": "B"
+              "format": "time_series",
+              "legendFormat": "pending"
             }
           ],
           "thresholds": [],
@@ -7182,7 +7180,6 @@
             "alignAsTable": true,
             "avg": false,
             "current": true,
-            "hideZero": true,
             "max": true,
             "min": false,
             "rightSide": true,
@@ -7191,7 +7188,8 @@
             "sort": "current",
             "sortDesc": true,
             "total": false,
-            "values": true
+            "values": true,
+            "hideZero": true
           },
           "lines": true,
           "linewidth": 1,
@@ -7267,7 +7265,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 7
+        "y": 6
       },
       "id": 5265,
       "panels": [
@@ -8254,7 +8252,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 8
+        "y": 7
       },
       "id": 2748,
       "panels": [
@@ -8746,7 +8744,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 9
+        "y": 8
       },
       "id": 2749,
       "panels": [
@@ -9210,7 +9208,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 10
+        "y": 9
       },
       "id": 2750,
       "panels": [
@@ -9804,7 +9802,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 11
+        "y": 10
       },
       "id": 2751,
       "panels": [
@@ -10723,7 +10721,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 12
+        "y": 11
       },
       "id": 2752,
       "panels": [
@@ -11351,7 +11349,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 13
+        "y": 12
       },
       "id": 2753,
       "panels": [
@@ -11468,7 +11466,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 14
+        "y": 13
       },
       "id": 4200,
       "panels": [
@@ -11748,7 +11746,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 15
+        "y": 14
       },
       "id": 2754,
       "panels": [
@@ -12094,7 +12092,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 16
+        "y": 15
       },
       "id": 2755,
       "panels": [
@@ -12549,7 +12547,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 17
+        "y": 16
       },
       "id": 2756,
       "panels": [
@@ -13592,18 +13590,6 @@
           }
         },
         {
-          "cards": {
-            "cardPadding": null,
-            "cardRound": null
-          },
-          "color": {
-            "cardColor": "#b4ff00",
-            "colorScale": "sqrt",
-            "colorScheme": "interpolateSpectral",
-            "exponent": 0.5,
-            "mode": "spectrum"
-          },
-          "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
           "description": "The time consumed on checking memory locks",
           "gridPos": {
@@ -13612,25 +13598,8 @@
             "x": 0,
             "y": 109
           },
-          "heatmap": {},
-          "hideZeroBuckets": true,
-          "highlightCards": true,
           "id": 7236,
-          "legend": {
-            "show": false
-          },
           "links": [],
-          "repeat": null,
-          "repeatDirection": null,
-          "repeatedByRow": true,
-          "reverseYBuckets": false,
-          "scopedVars": {
-            "command": {
-              "selected": false,
-              "text": "acquire_pessimistic_lock",
-              "value": "acquire_pessimistic_lock"
-            }
-          },
           "targets": [
             {
               "expr": "sum(delta(tikv_storage_check_mem_lock_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"$command\"}[1m])) by (le)",
@@ -13645,28 +13614,50 @@
           "timeFrom": null,
           "timeShift": null,
           "title": "Check memory locks duration",
+          "type": "heatmap",
+          "repeatedByRow": true,
+          "heatmap": {},
+          "cards": {
+            "cardPadding": null,
+            "cardRound": null
+          },
+          "color": {
+            "mode": "spectrum",
+            "cardColor": "#b4ff00",
+            "colorScale": "sqrt",
+            "exponent": 0.5,
+            "colorScheme": "interpolateSpectral"
+          },
+          "legend": {
+            "show": false
+          },
+          "dataFormat": "tsbuckets",
+          "yBucketBound": "upper",
+          "reverseYBuckets": false,
+          "xAxis": {
+            "show": true
+          },
+          "yAxis": {
+            "show": true,
+            "format": "s",
+            "decimals": 0,
+            "logBase": 1,
+            "splitFactor": null,
+            "min": null,
+            "max": null
+          },
+          "xBucketSize": null,
+          "xBucketNumber": null,
+          "yBucketSize": null,
+          "yBucketNumber": null,
           "tooltip": {
             "show": true,
             "showHistogram": false
           },
-          "type": "heatmap",
-          "xAxis": {
-            "show": true
-          },
-          "xBucketNumber": null,
-          "xBucketSize": null,
-          "yAxis": {
-            "decimals": 0,
-            "format": "s",
-            "logBase": 1,
-            "max": null,
-            "min": null,
-            "show": true,
-            "splitFactor": null
-          },
-          "yBucketBound": "upper",
-          "yBucketNumber": null,
-          "yBucketSize": null
+          "highlightCards": true,
+          "hideZeroBuckets": true,
+          "repeat": null,
+          "repeatDirection": null
         }
       ],
       "repeat": "command",
@@ -13679,7 +13670,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 18
+        "y": 17
       },
       "id": 2758,
       "panels": [
@@ -15004,7 +14995,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 19
+        "y": 18
       },
       "id": 2759,
       "panels": [
@@ -15613,7 +15604,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 20
+        "y": 19
       },
       "id": 2760,
       "panels": [
@@ -16024,7 +16015,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 21
+        "y": 20
       },
       "id": 2757,
       "panels": [
@@ -16823,7 +16814,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 22
+        "y": 21
       },
       "id": 3197,
       "panels": [
@@ -17916,7 +17907,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 23
+        "y": 22
       },
       "id": 2761,
       "panels": [
@@ -18312,7 +18303,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 24
+        "y": 23
       },
       "id": 2762,
       "panels": [
@@ -22601,7 +22592,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 25
+        "y": 24
       },
       "id": 3301,
       "panels": [
@@ -22943,13 +22934,6 @@
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
-          "scopedVars": {
-            "titan_db": {
-              "selected": false,
-              "text": "kv",
-              "value": "kv"
-            }
-          },
           "seriesOverrides": [],
           "spaceLength": 10,
           "stack": false,
@@ -25616,7 +25600,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 26
+        "y": 25
       },
       "id": 2820,
       "panels": [
@@ -26344,7 +26328,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 27
+        "y": 26
       },
       "id": 8389,
       "panels": [
@@ -27420,7 +27404,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 28
+        "y": 27
       },
       "id": 2763,
       "panels": [
@@ -27524,7 +27508,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 29
+        "y": 28
       },
       "id": 3922,
       "panels": [
@@ -29908,7 +29892,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 30
+        "y": 29
       },
       "id": 4466,
       "panels": [
@@ -30485,7 +30469,6 @@
         "allValue": null,
         "current": {},
         "datasource": "${DS_TEST-CLUSTER}",
-        "definition": "",
         "hide": 2,
         "includeAll": false,
         "label": "tidb_cluster",
@@ -30495,7 +30478,6 @@
         "query": "label_values(tikv_engine_block_cache_size_bytes, tidb_cluster)",
         "refresh": 2,
         "regex": "",
-        "skipUrlSync": false,
         "sort": 1,
         "tagValuesQuery": "",
         "tags": [],
