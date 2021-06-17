@@ -527,6 +527,10 @@ pub fn async_read_index_on_peer<T: Simulator>(
     rx
 }
 
+// pub fn force_timeout_peer<T: Simulator>(cluster: &mut Cluster<T>, peer: metapb::Peer) {
+
+// }
+
 pub fn must_get_value(resp: &RaftCmdResponse) -> Vec<u8> {
     if resp.get_header().has_error() {
         panic!("failed to read {:?}", resp);
