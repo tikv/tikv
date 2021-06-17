@@ -94,10 +94,9 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
         // A helper thread (or pool) for transport layer.
         let stats_pool = if cfg.value().stats_concurrency > 0 {
             Some(
-                RuntimeBuilder::new()
-                    .threaded_scheduler()
+                RuntimeBuilder::new_multi_thread()
                     .thread_name(STATS_THREAD_PREFIX)
-                    .core_threads(cfg.value().stats_concurrency)
+                    .worker_threads(cfg.value().stats_concurrency)
                     .build()
                     .unwrap(),
             )
@@ -494,10 +493,9 @@ mod tests {
         );
         let copr_v2 = coprocessor_v2::Endpoint::new(&coprocessor_v2::Config::default());
         let debug_thread_pool = Arc::new(
-            TokioBuilder::new()
-                .threaded_scheduler()
+            TokioBuilder::new_multi_thread()
                 .thread_name(thd_name!("debugger"))
-                .core_threads(1)
+                .worker_threads(1)
                 .build()
                 .unwrap(),
         );
