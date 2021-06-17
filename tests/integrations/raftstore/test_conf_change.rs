@@ -766,7 +766,6 @@ fn test_server_transfer_leader_safe() {
 #[test]
 fn test_conf_change_remove_leader() {
     let mut cluster = new_node_cluster(0, 3);
-    cluster.cfg.raft_store.allow_remove_leader = false;
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();

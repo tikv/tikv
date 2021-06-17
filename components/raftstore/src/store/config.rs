@@ -138,8 +138,6 @@ pub struct Config {
     #[config(hidden)]
     pub right_derive_when_split: bool,
 
-    pub allow_remove_leader: bool,
-
     /// Max log gap allowed to propose merge.
     #[config(hidden)]
     pub merge_max_log_gap: u64,
@@ -242,7 +240,6 @@ impl Default for Config {
             report_region_flow_interval: ReadableDuration::minutes(1),
             raft_store_max_leader_lease: ReadableDuration::secs(9),
             right_derive_when_split: true,
-            allow_remove_leader: false,
             merge_max_log_gap: 10,
             merge_check_tick_interval: ReadableDuration::secs(2),
             use_delete_range: false,
@@ -570,9 +567,6 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["right_derive_when_split"])
             .set((self.right_derive_when_split as i32).into());
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["allow_remove_leader"])
-            .set((self.allow_remove_leader as i32).into());
 
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["merge_max_log_gap"])

@@ -2402,11 +2402,8 @@ where
     /// propose these conf change requests.
     /// It's safe iff at least the quorum of the Raft group is still healthy
     /// right after all conf change is applied.
-    /// If 'allow_remove_leader' is false then the peer to be removed should
-    /// not be the leader.
-    fn check_conf_change<T>(
+    fn check_conf_change(
         &mut self,
-        ctx: &mut PollContext<EK, ER, T>,
         change_peers: &[ChangePeerRequest],
         cc: &impl ConfChangeI,
     ) -> Result<()> {
@@ -2465,7 +2462,6 @@ where
                     // In Joint confchange, the leader is allowed to be DemotingVoter
                     || (kind == ConfChangeKind::Simple
                         && change_type == ConfChangeType::AddLearnerNode))
-                && !ctx.cfg.allow_remove_leader
             {
                 return Err(box_err!(
                     "{} ignore remove leader or demote leader",
@@ -3225,7 +3221,7 @@ where
         let cc = change_peer.to_confchange(data);
         let changes = change_peer.get_change_peers();
 
-        self.check_conf_change(ctx, changes.as_ref(), &cc)?;
+        self.check_conf_change(changes.as_ref(), &cc)?;
 
         ctx.raft_metrics.propose.conf_change += 1;
         // TODO: use local histogram metrics
