@@ -2,7 +2,7 @@
 
 use crossbeam::channel;
 use engine_rocks::{Compat, RocksEngine};
-use engine_traits::{Peekable, RaftEngine, CF_RAFT};
+use engine_traits::{Peekable, RaftEngineReadOnly, CF_RAFT};
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use raft::eraftpb::MessageType;
 use std::sync::atomic::AtomicBool;
@@ -514,7 +514,7 @@ fn test_read_index_after_transfer_leader() {
     cluster.sim.wl().clear_recv_filters(2);
 
     let router = cluster.sim.wl().get_router(2).unwrap();
-    for raft_msg in mem::replace(dropped_msgs.lock().unwrap().as_mut(), vec![]) {
+    for raft_msg in std::mem::replace(dropped_msgs.lock().unwrap().as_mut(), vec![]) {
         router.send_raft_message(raft_msg).unwrap();
     }
 
