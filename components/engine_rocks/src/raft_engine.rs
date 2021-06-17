@@ -3,6 +3,8 @@
 use crate::{RocksEngine, RocksWriteBatch};
 use lazy_static::lazy_static;
 use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock};
 
 use engine_traits::{
@@ -16,17 +18,10 @@ use tikv_util::{box_err, box_try};
 
 const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
 
-pub struct RaftLogGcContext {
-    pub gc_on_compaction: bool,
-    pub apply_idxs: HashMap<u64, u64>,
-}
-
 lazy_static! {
-    pub static ref RAFT_LOG_GC_CONTEXT: Arc<RwLock<RaftLogGcContext>> =
-        Arc::new(RwLock::new(RaftLogGcContext {
-            gc_on_compaction: false,
-            apply_idxs: HashMap::new(),
-        }));
+    pub static ref RAFT_LOG_GC_ON_COMPACTION: AtomicBool = AtomicBool::new(false);
+    pub static ref RAFT_LOG_GC_INDEXES: Arc<RwLock<HashMap<u64, u64>>> =
+        Arc::new(RwLock::new(HashMap::new()));
 }
 
 impl RaftEngineReadOnly for RocksEngine {
@@ -189,12 +184,10 @@ impl RaftEngine for RocksEngine {
 
     // Always returns Ok(0) when using compaction filter.
     fn gc(&self, raft_group_id: u64, mut from: u64, to: u64) -> Result<usize> {
-        {
-            let mut ctx = RAFT_LOG_GC_CONTEXT.write().unwrap();
-            if ctx.gc_on_compaction {
-                ctx.apply_idxs.insert(raft_group_id, to);
-                return Ok(0);
-            }
+        if RAFT_LOG_GC_ON_COMPACTION.load(Ordering::Acquire) {
+            let mut indexes = RAFT_LOG_GC_INDEXES.write().unwrap();
+            indexes.insert(raft_group_id, to);
+            return Ok(0);
         }
         if from >= to {
             return Ok(0);

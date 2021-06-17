@@ -1086,8 +1086,7 @@ impl TiKVServer<RocksEngine> {
         )
         .unwrap_or_else(|s| fatal!("failed to create raft engine: {}", s));
         if config_raftdb.gc_on_compaction {
-            let mut ctx = engine_rocks::RAFT_LOG_GC_CONTEXT.write().unwrap();
-            ctx.gc_on_compaction = true;
+            engine_rocks::RAFT_LOG_GC_ON_COMPACTION.store(true, Ordering::Release);
         }
 
         // Create kv engine.

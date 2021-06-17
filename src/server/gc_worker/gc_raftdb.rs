@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_rocks::raw::{new_compaction_filter_raw, CompactionFilter, CompactionFilterFactory};
-use engine_rocks::RAFT_LOG_GC_CONTEXT;
+use engine_rocks::RAFT_LOG_GC_INDEXES;
 use std::{collections::HashMap, ffi::CString};
 
 pub struct RaftLogCompactionFilterFactory {}
@@ -13,8 +13,8 @@ impl CompactionFilterFactory for RaftLogCompactionFilterFactory {
         &self,
         _: &engine_rocks::raw::CompactionFilterContext,
     ) -> *mut engine_rocks::raw::DBCompactionFilter {
-        let ctx = RAFT_LOG_GC_CONTEXT.read().unwrap();
-        let filter = Box::new(RaftLogCompactionFilter::new(ctx.apply_idxs.clone()));
+        let indexes = RAFT_LOG_GC_INDEXES.read().unwrap();
+        let filter = Box::new(RaftLogCompactionFilter::new(indexes.clone()));
         let name = CString::new("").unwrap();
         unsafe { new_compaction_filter_raw(name, filter) }
     }
