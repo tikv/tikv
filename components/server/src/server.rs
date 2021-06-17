@@ -1016,12 +1016,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn init_storage_stats_task(&self, engines: Engines<RocksEngine, ER>) {
-        // currently only for RocksEngine.
-        if self.config.raft_engine.enable {
-            warn!("disk space occupancy monitoring currently only supports rocksdb");
-            return;
-        }
-
         let config_disk_capacity: u64 = self.config.raft_store.capacity.0;
         let store_path = self.store_path.clone();
         let snap_mgr = self.snap_mgr.clone().unwrap();
@@ -1063,7 +1057,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 };
 
                 let mut available = capacity.checked_sub(used_size).unwrap_or_default();
-                // We only care about rocksdb SST file size, so we should check disk available here.
                 available = cmp::min(available, disk_stats.available_space());
                 if available <= disk::get_disk_reserved() {
                     warn!(
@@ -1072,7 +1065,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                     );
                     disk::set_disk_full();
                 } else if disk::is_disk_full() {
-                    warn!(
+                    info!(
                         "disk normalized, available={},snap={},engine={},capacity={}",
                         available, snap_size, kv_size, capacity
                     );
