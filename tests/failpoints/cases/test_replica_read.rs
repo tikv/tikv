@@ -514,7 +514,7 @@ fn test_read_index_after_transfer_leader() {
     cluster.sim.wl().clear_recv_filters(2);
 
     let router = cluster.sim.wl().get_router(2).unwrap();
-    for raft_msg in std::mem::replace(dropped_msgs.lock().unwrap().as_mut(), vec![]) {
+    for raft_msg in std::mem::take(&mut *dropped_msgs.lock().unwrap()) {
         router.send_raft_message(raft_msg).unwrap();
     }
 
