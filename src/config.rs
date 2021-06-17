@@ -515,7 +515,7 @@ cf_config!(DefaultCfConfig);
 
 impl Default for DefaultCfConfig {
     fn default() -> DefaultCfConfig {
-        let total_mem = TiKvConfig::default_memory_usage_limit().0;
+        let total_mem = SysQuota::memory_limit_in_bytes();
 
         DefaultCfConfig {
             block_size: ReadableSize::kb(64),
@@ -604,7 +604,7 @@ cf_config!(WriteCfConfig);
 
 impl Default for WriteCfConfig {
     fn default() -> WriteCfConfig {
-        let total_mem = TiKvConfig::default_memory_usage_limit().0;
+        let total_mem = SysQuota::memory_limit_in_bytes();
 
         // Setting blob_run_mode=read_only effectively disable Titan.
         let titan = TitanCfConfig {
@@ -702,7 +702,7 @@ cf_config!(LockCfConfig);
 
 impl Default for LockCfConfig {
     fn default() -> LockCfConfig {
-        let total_mem = TiKvConfig::default_memory_usage_limit().0;
+        let total_mem = SysQuota::memory_limit_in_bytes();
 
         // Setting blob_run_mode=read_only effectively disable Titan.
         let titan = TitanCfConfig {
@@ -1118,7 +1118,7 @@ cf_config!(RaftDefaultCfConfig);
 
 impl Default for RaftDefaultCfConfig {
     fn default() -> RaftDefaultCfConfig {
-        let total_mem = TiKvConfig::default_memory_usage_limit().0;
+        let total_mem = SysQuota::memory_limit_in_bytes();
 
         RaftDefaultCfConfig {
             block_size: ReadableSize::kb(64),
@@ -2577,7 +2577,7 @@ impl TiKvConfig {
                     self.memory_usage_limit.0 = Some(ReadableSize(limit));
                 } else {
                     self.memory_usage_limit =
-                        OptionReadableSize(Some(Self::default_memory_usage_limit()));
+                        OptionReadableSize(Some(Self::suggested_memory_usage_limit()));
                 }
             } else {
                 let cap = self.rocksdb.defaultcf.block_cache_size.0
@@ -2600,7 +2600,7 @@ impl TiKvConfig {
             limit = total;
         }
 
-        let default = Self::default_memory_usage_limit();
+        let default = Self::suggested_memory_usage_limit();
         if limit.0 > default.0 {
             warn!(
                 "memory_usage_limit:{:?} > default:{:?}, maybe page cache isn't enough",
@@ -2835,7 +2835,7 @@ impl TiKvConfig {
         Ok((cfg, tmp))
     }
 
-    fn default_memory_usage_limit() -> ReadableSize {
+    fn suggested_memory_usage_limit() -> ReadableSize {
         let total = SysQuota::memory_limit_in_bytes();
         // Reserve some space for page cache. The
         ReadableSize((total as f64 * MEMORY_USAGE_LIMIT_RATE) as u64)
