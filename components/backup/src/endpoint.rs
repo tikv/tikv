@@ -30,14 +30,7 @@ use tikv::storage::txn::{
 use tikv::storage::Statistics;
 use tikv_util::impl_display_as_debug;
 use tikv_util::time::Limiter;
-<<<<<<< HEAD
-use tikv_util::worker::{Runnable, RunnableWithTimer};
-=======
 use tikv_util::worker::Runnable;
-use tikv_util::{
-    box_err, debug, defer, error, error_unknown, impl_display_as_debug, info, thd_name, warn,
-};
->>>>>>> 4869f2c3a... backup: do not recycle backup threads (#10288)
 use txn_types::{Key, Lock, TimeStamp};
 use yatp::task::callback::{Handle, TaskCell};
 use yatp::ThreadPool;
@@ -1467,77 +1460,4 @@ pub mod tests {
         endpoint.handle_backup_task(task);
         assert!(endpoint.pool.borrow().size == 3);
     }
-<<<<<<< HEAD
-
-    pub struct EndpointWrapper<E: Engine, R: RegionInfoProvider + Clone + 'static> {
-        inner: Arc<Mutex<Endpoint<E, R>>>,
-    }
-    impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Runnable for EndpointWrapper<E, R> {
-        type Task = Task;
-
-        fn run(&mut self, task: Task) {
-            self.inner.lock().unwrap().run(task);
-        }
-    }
-
-    impl<E: Engine, R: RegionInfoProvider + Clone + 'static> RunnableWithTimer
-        for EndpointWrapper<E, R>
-    {
-        fn on_timeout(&mut self) {
-            self.inner.lock().unwrap().on_timeout();
-        }
-
-        fn get_interval(&self) -> Duration {
-            self.inner.lock().unwrap().get_interval()
-        }
-    }
-
-    #[test]
-    fn test_thread_pool_shutdown_when_idle() {
-        let (_, mut endpoint) = new_endpoint();
-
-        // set the idle threshold to 100ms
-        endpoint.pool_idle_threshold = 100;
-        let endpoint = Arc::new(Mutex::new(endpoint));
-        let worker = Worker::new("endpoint");
-        let scheduler = {
-            let inner = endpoint.clone();
-            worker.start_with_timer("endpoint", EndpointWrapper { inner })
-        };
-
-        let mut req = BackupRequest::default();
-        req.set_start_key(vec![]);
-        req.set_end_key(vec![]);
-        req.set_start_version(1);
-        req.set_end_version(1);
-        req.set_storage_backend(make_noop_backend());
-
-        endpoint
-            .lock()
-            .unwrap()
-            .get_config_manager()
-            .set_num_threads(10);
-
-        let (tx, resp_rx) = unbounded();
-        let (task, _) = Task::new(req, tx).unwrap();
-
-        // if not task arrive after create the thread pool is empty
-        assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 0);
-
-        scheduler.schedule(task).unwrap();
-        // wait until the task finish
-        let _ = block_on(resp_rx.into_future());
-        assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 10);
-
-        // thread pool not yet shutdown
-        thread::sleep(Duration::from_millis(50));
-        assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 10);
-
-        // thread pool shutdown if not task arrive more than 100ms
-        thread::sleep(Duration::from_millis(160));
-        assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 0);
-    }
-    // TODO: region err in txn(engine(request))
-=======
->>>>>>> 4869f2c3a... backup: do not recycle backup threads (#10288)
 }
