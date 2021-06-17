@@ -2732,7 +2732,8 @@ where
                             .get(0)
                             .map(|req| req.has_read_index())
                             .unwrap_or_default();
-
+                        // A read index request or a read with addition request always needs the response of
+                        // checking memory lock for async commit, so we cannot apply the optimization here
                         if !is_read_index_request
                             && read.addition_request.is_none()
                             && read.propose_time + max_lease > now
