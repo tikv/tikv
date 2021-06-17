@@ -958,7 +958,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             tikv::config::Module::Backup,
             Box::new(backup_endpoint.get_config_manager()),
         );
-        backup_worker.start_with_timer(backup_endpoint);
+        backup_worker.start(backup_endpoint);
 
         let cdc_service = cdc::Service::new(
             servers.cdc_scheduler.clone(),
