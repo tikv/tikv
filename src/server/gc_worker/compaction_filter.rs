@@ -37,7 +37,7 @@ const DEFAULT_DELETE_BATCH_COUNT: usize = 128;
 const COMPACTION_FILTER_GC_FEATURE: Feature = Feature::require(5, 0, 0);
 
 // Global context to create a compaction filter for write CF. It's necessary as these fields are
-// not available when construcing `WriteCompactionFilterFactory`.
+// not available when constructing `WriteCompactionFilterFactory`.
 struct GcContext {
     db: RocksEngine,
     store_id: u64,
