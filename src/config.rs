@@ -2258,6 +2258,7 @@ pub struct CdcConfig {
     pub incremental_scan_threads: usize,
     pub incremental_scan_concurrency: usize,
     pub incremental_scan_speed_limit: ReadableSize,
+    pub sink_memory_quota: ReadableSize,
     pub old_value_cache_memory_quota: ReadableSize,
     // Deprecated! preserved for compatibility check.
     #[doc(hidden)]
@@ -2276,6 +2277,8 @@ impl Default for CdcConfig {
             // TiCDC requires a SSD, the typical write speed of SSD
             // is more than 500MB/s, so 128MB/s is enough.
             incremental_scan_speed_limit: ReadableSize::mb(128),
+            // 512MB memory for CDC sink.
+            sink_memory_quota: ReadableSize::mb(512),
             // 512MB memory for old value cache.
             old_value_cache_memory_quota: ReadableSize::mb(512),
             // Deprecated! preserved for compatibility check.
@@ -2286,9 +2289,6 @@ impl Default for CdcConfig {
 
 impl CdcConfig {
     fn validate(&mut self) -> Result<(), Box<dyn Error>> {
-        if self.old_value_cache_size == 0 {
-            return Err("cdc.old-value-cache-size can't be 0".into());
-        }
         if self.min_ts_interval == ReadableDuration::secs(0) {
             return Err("cdc.min-ts-interval can't be 0s".into());
         }
