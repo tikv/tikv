@@ -5,7 +5,7 @@
 use super::tempdir;
 use engine_traits::SeekKey;
 use engine_traits::Iterator;
-use engine_traits::{SstExt, SstWriterBuilder, SstWriter, SstReader};
+use engine_traits::{SstExt, SstWriterBuilder, SstWriter, SstReader, ExternalSstFileInfo};
 use engine_traits::Result;
 use engine_test::kv::KvTestEngine;
 
@@ -28,6 +28,21 @@ fn basic() -> Result<()> {
     let value = iter.value();
     assert_eq!(b"k1", key);
     assert_eq!(b"v1", value);
+
+    Ok(())
+}
+
+#[test]
+fn file_path() -> Result<()> {
+    let tempdir = tempdir();
+    let ref sst_path = tempdir.path().join("test-data.sst").to_string_lossy().to_string();
+    let sst_builder = <KvTestEngine as SstExt>::SstWriterBuilder::new();
+    let mut sst_writer = sst_builder
+        .build(sst_path)?;
+
+    sst_writer.put(b"k1", b"v1")?;
+    let info = sst_writer.finish()?;
+    assert_eq!(info.file_path().to_str(), Some(sst_path.as_str()));
 
     Ok(())
 }
