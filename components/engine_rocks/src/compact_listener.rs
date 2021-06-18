@@ -9,7 +9,7 @@ use collections::hash_set_with_capacity;
 use engine_traits::CompactedEvent;
 use engine_traits::CompactionJobInfo;
 use rocksdb::{
-    CompactionJobInfo as RawCompactionJobInfo, CompactionReason, FlushJobInfo,
+    CompactionJobInfo as RawCompactionJobInfo, CompactionReason, FlushJobInfo, IngestionInfo,
     TablePropertiesCollectionView,
 };
 use std::collections::BTreeMap;
@@ -206,6 +206,7 @@ use std::sync::Mutex;
 pub enum Info {
     L0(String, u64),
     Flush(String, u64),
+    Compaction(String),
 }
 
 pub struct CompactionListener {
@@ -280,6 +281,13 @@ impl EventListener for CompactionListener {
                 .unwrap()
                 .send(Info::L0(info.cf_name().to_owned(), read_bytes));
         }
+
+        let _ = self
+            .l0_completed_sender
+            .lock()
+            .unwrap()
+            .send(Info::Compaction(info.cf_name().to_owned()));
+
         if let Some(ref f) = self.filter {
             if !f(info) {
                 return;

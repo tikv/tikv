@@ -38,7 +38,7 @@ use kvproto::kvrpcpb::{CommandPri, ExtraOp};
 use rand::Rng;
 use tikv_util::{
     callback::must_call,
-    time::{Consume, Instant, Limiter},
+    time::{duration_to_sec, Consume, Instant, Limiter},
 };
 use txn_types::TimeStamp;
 
@@ -261,6 +261,37 @@ impl<const CAP: usize> Smoother<CAP> {
     //     cd
     // }
 
+    pub fn slope(&self) -> f64 {
+        if self.records.len() <= 1 {
+            return 0.0;
+        }
+
+        let half = self.records.len() / 2;
+        let mut left = 0.0;
+        let mut right = 0.0;
+        for (i, r) in self.records.iter().enumerate() {
+            if i + 1 < half {
+                left += r.0 as f64;
+            } else if i + 1 > half {
+                right += r.0 as f64;
+            } else {
+                if self.records.len() % 2 == 0 {
+                    left += r.0 as f64;
+                } else {
+                    continue;
+                }
+            }
+        }
+        let elapsed = duration_to_sec(
+            self.records
+                .back()
+                .unwrap()
+                .1
+                .duration_since(self.records.front().unwrap().1),
+        );
+        (right - left) / half as f64 / (elapsed / 2.0)
+    }
+
     pub fn trend(&self) -> Trend {
         if self.records.len() == 0 {
             return Trend::NoTrend;
@@ -316,7 +347,7 @@ struct CFFlowChecker {
     last_num_l0_files: u64,
     last_num_l0_files_from_flush: u64,
     long_term_num_l0_files: Smoother<60>,
-    long_term_pending_bytes: Smoother<600>,
+    long_term_pending_bytes: Smoother<120>,
 
     last_flush_bytes_time: Instant,
     last_flush_bytes: u64,
@@ -412,10 +443,8 @@ impl<E: Engine> FlowChecker<E> {
                             checker.check_long_term_l0_files(cf, l0_bytes)
                         }
                         Ok(Info::Flush(cf, flush_bytes)) => checker.check_l0_flow(cf, flush_bytes),
-                        Err(RecvTimeoutError::Timeout) => {
-                            checker.update_statistics();
-                            checker.adjust_pending_compaction_bytes();
-                        }
+                        Ok(Info::Compaction(cf)) => checker.adjust_pending_compaction_bytes(cf),
+                        Err(RecvTimeoutError::Timeout) => checker.update_statistics(),
                         Err(e) => {
                             error!("failed to receive compaction info {:?}", e);
                         }
@@ -442,35 +471,58 @@ impl<E: Engine> FlowChecker<E> {
         self.limiter.reset_statistics();
     }
 
-    fn adjust_pending_compaction_bytes(&mut self) {
-        let mut pending_compaction_bytes = 0.0;
-        for (cf, checker) in &mut self.cf_checkers {
-            let num = self
-                .engine
-                .kv_engine()
-                .get_cf_pending_compaction_bytes(&cf)
-                .unwrap_or(None)
-                .unwrap_or(0);
-            checker.long_term_pending_bytes.observe(num);
-            if pending_compaction_bytes < checker.long_term_pending_bytes.get_avg() {
-                pending_compaction_bytes = checker.long_term_pending_bytes.get_avg();
+    fn adjust_pending_compaction_bytes(&mut self, cf: String) {
+        let num = (self
+            .engine
+            .kv_engine()
+            .get_cf_pending_compaction_bytes(&cf)
+            .unwrap_or(None)
+            .unwrap_or(0) as f64)
+            .log2();
+        let checker = self.cf_checkers.get_mut(&cf).unwrap();
+        checker
+            .long_term_pending_bytes
+            .observe((num * RATIO_PRECISION) as u64);
+        SCHED_PENDING_BYTES_GAUGE
+            .with_label_values(&[&cf])
+            .set(checker.long_term_pending_bytes.get_avg() as i64);
+        let pending_compaction_bytes = checker.long_term_pending_bytes.get_avg() / RATIO_PRECISION;
+        drop(checker);
+
+        for (_, checker) in &self.cf_checkers {
+            if num < (checker.long_term_pending_bytes.get_recent() as f64) / RATIO_PRECISION {
+                return;
             }
         }
+        let hard = (self.pending_compaction_bytes_hard_limit as f64).log2();
+        let soft = (self.pending_compaction_bytes_soft_limit as f64).log2();
 
-        let ratio = if pending_compaction_bytes < self.pending_compaction_bytes_soft_limit as f64 {
+        let ratio = if pending_compaction_bytes < soft {
             0
         } else {
-            let x = 5.0
-                - 10.0
-                    / (self.pending_compaction_bytes_hard_limit
-                        - self.pending_compaction_bytes_soft_limit) as f64
-                    * (pending_compaction_bytes - self.pending_compaction_bytes_soft_limit as f64);
+            let checker = self.cf_checkers.get_mut(&cf).unwrap();
+            // let x = 10.0
+            //     - 10.0
+            //         / ((self.pending_compaction_bytes_hard_limit as f64).log2()
+            //             - (self.pending_compaction_bytes_soft_limit as f64).log2())
+            //         * (pending_compaction_bytes - (self.pending_compaction_bytes_soft_limit as f64).log2());
+            // let new_ratio = 1.0 / (1.0 + x.exp());
+            let kp = (pending_compaction_bytes - soft) / (hard - soft);
+            let mut kd = -10.0 * checker.long_term_pending_bytes.slope();
 
-            let new_ratio = 1.0 / (1.0 + x.exp());
+            SCHED_KD_GAUGE.set(kd as i64);
+            SCHED_KP_GAUGE.set((kp * RATIO_PRECISION) as i64);
+
+            if kd > 0.1 {
+                kd = 0.1;
+            } else if kd < -0.1 {
+                kd = -0.1;
+            }
+
+            let new_ratio = kp + kd;
             let old_ratio = self.discard_ratio.load(Ordering::Relaxed);
             (if old_ratio != 0 {
                 self.factor * (old_ratio as f64 / RATIO_PRECISION) + (1.0 - self.factor) * new_ratio
-                // * (1.0 + self.start_control_time.elapsed().as_secs() as f64 / 100.0))
             } else {
                 self.start_control_time = Instant::now_coarse();
                 new_ratio
@@ -567,7 +619,7 @@ impl<E: Engine> FlowChecker<E> {
 
         if let Some(throttle_cf) = self.throttle_cf.as_ref() {
             if &cf != throttle_cf {
-                if num_l0_files > self.cf_checkers[throttle_cf].last_num_l0_files + 2 {
+                if num_l0_files > self.cf_checkers[throttle_cf].last_num_l0_files + 4 {
                     self.throttle_cf = Some(cf.clone());
                 } else {
                     return;

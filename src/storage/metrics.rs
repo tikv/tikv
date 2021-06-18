@@ -359,6 +359,22 @@ lazy_static! {
         "The discard ratio."
     )
     .unwrap();
+    pub static ref SCHED_KD_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_scheduler_kd",
+        "The discard ratio."
+    )
+    .unwrap();
+    pub static ref SCHED_KP_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_scheduler_kp",
+        "The discard ratio."
+    )
+    .unwrap();
+     pub static ref SCHED_PENDING_BYTES_GAUGE: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_scheduler_pending_bytes",
+        "The discard ratio.",
+        &["type"]
+    )
+    .unwrap();
     pub static ref SCHED_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_scheduler_command_duration_seconds",
         "Bucketed histogram of command execution",
