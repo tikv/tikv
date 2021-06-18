@@ -2642,9 +2642,6 @@ where
                     let commit_index = self.get_store().commit_index();
                     if let Some(read) = self.pending_reads.back_mut() {
                         let max_lease = poll_ctx.cfg.raft_store_max_leader_lease();
-<<<<<<< HEAD
-                        if read.renew_lease_time + max_lease > renew_lease_time {
-=======
                         let is_read_index_request = req
                             .get_requests()
                             .get(0)
@@ -2654,11 +2651,10 @@ where
                         // checking memory lock for async commit, so we cannot apply the optimization here
                         if !is_read_index_request
                             && read.addition_request.is_none()
-                            && read.propose_time + max_lease > now
+                            && read.renew_lease_time + max_lease > renew_lease_time
                         {
                             // A read request proposed in the current lease is found; combine the new
                             // read request to that previous one, so that no proposing needed.
->>>>>>> 13a59e0bf... raftstore: don't share read index for replica reads on leader (#10376)
                             read.push_command(req, cb, commit_index);
                             return false;
                         }
