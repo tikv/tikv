@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::fmt::Write;
 use std::path::Path;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
@@ -772,29 +773,27 @@ pub fn put_cf_till_size<T: Simulator>(
 ) -> Vec<u8> {
     assert!(limit > 0);
     let mut len = 0;
-    let mut last_len = 0;
     let mut rng = rand::thread_rng();
-    let mut key = vec![];
+    let mut key = String::new();
+    let mut value = vec![0; 64];
     while len < limit {
-        let key_id = range.next().unwrap();
-        let key_str = format!("{:09}", key_id);
-        key = key_str.into_bytes();
-        let mut value = vec![0; 64];
-        rng.fill_bytes(&mut value);
-        cluster.must_put_cf(cf, &key, &value);
-        // plus 1 for the extra encoding prefix
-        len += key.len() as u64 + 1;
-        len += value.len() as u64;
-        // Flush memtable to SST periodically, to make approximate size more accurate.
-        if len - last_len >= 1000 {
-            cluster.must_flush_cf(cf, true);
-            last_len = len;
+        let batch_size = std::cmp::min(4 * 1024, limit - len);
+        let mut reqs = vec![];
+        for _ in 0..batch_size / 74 + 1 {
+            key.clear();
+            let key_id = range.next().unwrap();
+            write!(&mut key, "{:09}", key_id).unwrap();
+            rng.fill_bytes(&mut value);
+            // plus 1 for the extra encoding prefix
+            len += key.len() as u64 + 1;
+            len += value.len() as u64;
+            reqs.push(new_put_cf_cmd(cf, key.as_bytes(), &value));
         }
+        cluster.batch_put(key.as_bytes(), reqs).unwrap();
+        // Flush memtable to SST periodically, to make approximate size more accurate.
+        cluster.must_flush_cf(cf, true);
     }
-    // Approximate size of memtable is inaccurate for small data,
-    // we flush it to SST so we can use the size properties instead.
-    cluster.must_flush_cf(cf, true);
-    key
+    key.into_bytes()
 }
 
 pub fn new_mutation(op: Op, k: &[u8], v: &[u8]) -> Mutation {
