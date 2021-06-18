@@ -63,6 +63,11 @@ use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR};
 
 pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
 
+/// By default, block cache size will be set to 45% of system memory.
+pub const BLOCK_CACHE_RATE: f64 = 0.45;
+/// By default, TiKV will try to limit memory usage to 75% of system memory.
+pub const MEMORY_USAGE_LIMIT_RATE: f64 = 0.75;
+
 const LOCKCF_MIN_MEM: usize = 256 * MIB as usize;
 const LOCKCF_MAX_MEM: usize = GIB as usize;
 const RAFT_MIN_MEM: usize = 256 * MIB as usize;
@@ -510,7 +515,7 @@ cf_config!(DefaultCfConfig);
 
 impl Default for DefaultCfConfig {
     fn default() -> DefaultCfConfig {
-        let total_mem = TiKvConfig::default_memory_usage_limit().0;
+        let total_mem = SysQuota::memory_limit_in_bytes();
 
         DefaultCfConfig {
             block_size: ReadableSize::kb(64),
@@ -599,7 +604,7 @@ cf_config!(WriteCfConfig);
 
 impl Default for WriteCfConfig {
     fn default() -> WriteCfConfig {
-        let total_mem = TiKvConfig::default_memory_usage_limit().0;
+        let total_mem = SysQuota::memory_limit_in_bytes();
 
         // Setting blob_run_mode=read_only effectively disable Titan.
         let titan = TitanCfConfig {
@@ -697,7 +702,7 @@ cf_config!(LockCfConfig);
 
 impl Default for LockCfConfig {
     fn default() -> LockCfConfig {
-        let total_mem = TiKvConfig::default_memory_usage_limit().0;
+        let total_mem = SysQuota::memory_limit_in_bytes();
 
         // Setting blob_run_mode=read_only effectively disable Titan.
         let titan = TitanCfConfig {
@@ -1101,13 +1106,6 @@ impl DbConfig {
         Ok(())
     }
 
-    fn adjust_memory_usage_limit(&mut self, limit: ReadableSize) {
-        assert!(limit.0 > 0);
-        self.defaultcf.block_cache_size = memory_limit_for_cf(false, CF_DEFAULT, limit.0);
-        self.writecf.block_cache_size = memory_limit_for_cf(false, CF_WRITE, limit.0);
-        self.lockcf.block_cache_size = memory_limit_for_cf(false, CF_LOCK, limit.0);
-    }
-
     fn write_into_metrics(&self) {
         write_into_metrics!(self.defaultcf, CF_DEFAULT, CONFIG_ROCKSDB_GAUGE);
         write_into_metrics!(self.lockcf, CF_LOCK, CONFIG_ROCKSDB_GAUGE);
@@ -1120,7 +1118,7 @@ cf_config!(RaftDefaultCfConfig);
 
 impl Default for RaftDefaultCfConfig {
     fn default() -> RaftDefaultCfConfig {
-        let total_mem = TiKvConfig::default_memory_usage_limit().0;
+        let total_mem = SysQuota::memory_limit_in_bytes();
 
         RaftDefaultCfConfig {
             block_size: ReadableSize::kb(64),
@@ -1361,11 +1359,6 @@ impl RaftDbConfig {
             }
         }
         Ok(())
-    }
-
-    pub fn adjust_memory_usage_limit(&mut self, limit: ReadableSize) {
-        assert!(limit.0 > 0);
-        self.defaultcf.block_cache_size = memory_limit_for_cf(true, CF_DEFAULT, limit.0);
     }
 }
 
@@ -2351,9 +2344,11 @@ pub struct TiKvConfig {
     #[config(skip)]
     pub abort_on_panic: bool,
 
+    #[doc(hidden)]
     #[config(skip)]
-    pub memory_usage_limit: ReadableSize,
+    pub memory_usage_limit: OptionReadableSize,
 
+    #[doc(hidden)]
     #[config(skip)]
     pub memory_usage_high_water: f64,
 
@@ -2433,8 +2428,8 @@ impl Default for TiKvConfig {
             panic_when_unexpected_key_or_data: false,
             enable_io_snoop: true,
             abort_on_panic: false,
-            memory_usage_limit: ReadableSize(0),
-            memory_usage_high_water: 0.8,
+            memory_usage_limit: OptionReadableSize(None),
+            memory_usage_high_water: 0.9,
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
@@ -2578,26 +2573,53 @@ impl TiKvConfig {
         self.resolved_ts.validate()?;
         self.resource_metering.validate()?;
 
-        let default_memory_usage_limit = Self::default_memory_usage_limit();
-        if self.memory_usage_limit.0 == 0 {
-            self.memory_usage_limit = default_memory_usage_limit;
-            return Ok(());
+        if let Some(memory_usage_limit) = self.memory_usage_limit.0 {
+            let total = SysQuota::memory_limit_in_bytes();
+            if memory_usage_limit.0 > total {
+                // Explicitly exceeds system memory capacity is not allowed.
+                return Err(format!(
+                    "memory_usage_limit is greater than system memory capacity {}",
+                    total
+                )
+                .into());
+            }
+        } else {
+            // Adjust `memory_usage_limit` if necessary.
+            if self.storage.block_cache.shared {
+                if let Some(cap) = self.storage.block_cache.capacity.0 {
+                    let limit = (cap.0 as f64 / BLOCK_CACHE_RATE * MEMORY_USAGE_LIMIT_RATE) as u64;
+                    self.memory_usage_limit.0 = Some(ReadableSize(limit));
+                } else {
+                    self.memory_usage_limit =
+                        OptionReadableSize(Some(Self::suggested_memory_usage_limit()));
+                }
+            } else {
+                let cap = self.rocksdb.defaultcf.block_cache_size.0
+                    + self.rocksdb.writecf.block_cache_size.0
+                    + self.rocksdb.lockcf.block_cache_size.0
+                    + self.raftdb.defaultcf.block_cache_size.0;
+                let limit = (cap as f64 / BLOCK_CACHE_RATE * MEMORY_USAGE_LIMIT_RATE) as u64;
+                self.memory_usage_limit.0 = Some(ReadableSize(limit));
+            }
         }
-        match self.memory_usage_limit.0.cmp(&default_memory_usage_limit.0) {
-            cmp::Ordering::Less => {
-                self.rocksdb
-                    .adjust_memory_usage_limit(self.memory_usage_limit);
-                self.raftdb
-                    .adjust_memory_usage_limit(self.memory_usage_limit);
-            }
-            cmp::Ordering::Greater => {
-                warn!(
-                    "memory_usage_limit {:?} is greater than total {:?}, fallback to total",
-                    self.memory_usage_limit, default_memory_usage_limit
-                );
-                self.memory_usage_limit = default_memory_usage_limit;
-            }
-            _ => {}
+
+        let mut limit = self.memory_usage_limit.0.unwrap();
+        let total = ReadableSize(SysQuota::memory_limit_in_bytes());
+        if limit.0 > total.0 {
+            warn!(
+                "memory_usage_limit:{:?} > total:{:?}, fallback to total",
+                limit, total,
+            );
+            self.memory_usage_limit.0 = Some(total);
+            limit = total;
+        }
+
+        let default = Self::suggested_memory_usage_limit();
+        if limit.0 > default.0 {
+            warn!(
+                "memory_usage_limit:{:?} > recommanded:{:?}, maybe page cache isn't enough",
+                limit, default,
+            );
         }
 
         Ok(())
@@ -2827,10 +2849,10 @@ impl TiKvConfig {
         Ok((cfg, tmp))
     }
 
-    fn default_memory_usage_limit() -> ReadableSize {
-        // TODO: is it necessary to reserve some space?
+    fn suggested_memory_usage_limit() -> ReadableSize {
         let total = SysQuota::memory_limit_in_bytes();
-        ReadableSize(total)
+        // Reserve some space for page cache. The
+        ReadableSize((total as f64 * MEMORY_USAGE_LIMIT_RATE) as u64)
     }
 }
 
@@ -3199,7 +3221,6 @@ mod tests {
     use slog::Level;
     use std::sync::Arc;
     use std::time::Duration;
-    use tikv_util::config::MIB;
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
 
     #[test]
@@ -3902,31 +3923,21 @@ mod tests {
         );
 
         // Test validating memory_usage_limit when it's greater than max.
-        cfg.memory_usage_limit.0 *= 2;
-        assert!(cfg.validate().is_ok());
-        assert_eq!(
-            cfg.memory_usage_limit,
-            TiKvConfig::default_memory_usage_limit()
-        );
+        cfg.memory_usage_limit.0 = Some(ReadableSize(SysQuota::memory_limit_in_bytes() * 2));
+        assert!(cfg.validate().is_err());
 
-        let get_cf_cache_size = |cfg: &TiKvConfig| {
-            (
-                cfg.rocksdb.defaultcf.block_cache_size.0,
-                cfg.rocksdb.writecf.block_cache_size.0,
-                cfg.rocksdb.lockcf.block_cache_size.0,
-                cfg.rocksdb.raftcf.block_cache_size.0,
-                cfg.raftdb.defaultcf.block_cache_size.0,
-            )
-        };
-        let (c1, c2, c3, c4, c5) = get_cf_cache_size(&cfg);
-        cfg.memory_usage_limit.0 /= 2;
+        // Test memory_usage_limit is based on block cache size if it's not configured.
+        cfg.memory_usage_limit = OptionReadableSize(None);
+        cfg.storage.block_cache.capacity.0 = Some(ReadableSize(3 * GIB));
         assert!(cfg.validate().is_ok());
-        let (c6, c7, c8, c9, ca) = get_cf_cache_size(&cfg);
-        assert_le!(c1.checked_sub(c6 * 2).unwrap_or_default(), MIB);
-        assert_le!(c2.checked_sub(c7 * 2).unwrap_or_default(), MIB);
-        assert_le!(c3.checked_sub(c8 * 2).unwrap_or_default(), MIB);
-        assert_le!(c4.checked_sub(c9 * 2).unwrap_or_default(), MIB);
-        assert_le!(c5.checked_sub(ca * 2).unwrap_or_default(), MIB);
+        assert_eq!(cfg.memory_usage_limit.0.unwrap(), ReadableSize(5 * GIB));
+
+        // Test memory_usage_limit will fallback to system memory capacity with huge block cache.
+        cfg.memory_usage_limit = OptionReadableSize(None);
+        let system = SysQuota::memory_limit_in_bytes();
+        cfg.storage.block_cache.capacity.0 = Some(ReadableSize(system * 3 / 4));
+        assert!(cfg.validate().is_ok());
+        assert_eq!(cfg.memory_usage_limit.0.unwrap(), ReadableSize(system));
     }
 
     #[test]
@@ -4116,6 +4127,7 @@ mod tests {
         // Other special cases.
         cfg.pd.retry_max_count = default_cfg.pd.retry_max_count; // Both -1 and isize::MAX are the same.
         cfg.storage.block_cache.capacity = OptionReadableSize(None); // Either `None` and a value is computed or `Some(_)` fixed value.
+        cfg.memory_usage_limit = OptionReadableSize(None);
         cfg.coprocessor_v2.coprocessor_plugin_directory = None; // Default is `None`, which is represented by not setting the key.
 
         assert_eq!(cfg, default_cfg);
