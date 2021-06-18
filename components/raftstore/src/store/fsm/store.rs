@@ -1405,6 +1405,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         // Wait all workers finish.
         let handle = workers.pd_worker.stop();
         self.apply_system.shutdown();
+        fail_point!("after_shutdown_apply");
         self.system.shutdown();
         if let Some(h) = handle {
             h.join().unwrap();
