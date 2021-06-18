@@ -427,10 +427,17 @@ impl<E: Engine> Debugger<E> {
             let start_key = range_borders[thread_index].clone();
             let end_key = range_borders[thread_index + 1].clone();
 
+            let props = tikv_util::thread_group::current_properties();
             let thread = ThreadBuilder::new()
                 .name(format!("mvcc-recover-thread-{}", thread_index))
                 .spawn(move || {
+<<<<<<< HEAD
                     v1!(
+=======
+                    tikv_util::thread_group::set_properties(props);
+                    tikv_alloc::add_thread_memory_accessor();
+                    info!(
+>>>>>>> bfc3c47d3... raftstore: skip clearing callback when shutdown (#10364)
                         "thread {}: started on range [{}, {})",
                         thread_index,
                         hex::encode_upper(&start_key),

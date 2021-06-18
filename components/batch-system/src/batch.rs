@@ -12,6 +12,11 @@ use crossbeam::channel::{self, SendError, TryRecvError};
 use std::borrow::Cow;
 use std::thread::{self, JoinHandle};
 use tikv_util::mpsc;
+<<<<<<< HEAD
+=======
+use tikv_util::time::Instant;
+use tikv_util::{debug, error, info, safe_panic, thd_name, warn};
+>>>>>>> bfc3c47d3... raftstore: skip clearing callback when shutdown (#10364)
 
 /// A unify type for FSMs so that they can be sent to channel easily.
 enum FsmTypes<N, C> {
@@ -389,6 +394,38 @@ where
         &self.router
     }
 
+<<<<<<< HEAD
+=======
+    fn start_poller<B>(&mut self, name: String, priority: Priority, builder: &mut B)
+    where
+        B: HandlerBuilder<N, C>,
+        B::Handler: Send + 'static,
+    {
+        let handler = builder.build(priority);
+        let receiver = match priority {
+            Priority::Normal => self.receiver.clone(),
+            Priority::Low => self.low_receiver.clone(),
+        };
+        let mut poller = Poller {
+            router: self.router.clone(),
+            fsm_receiver: receiver,
+            handler,
+            max_batch_size: self.max_batch_size,
+            reschedule_duration: self.reschedule_duration,
+        };
+        let props = tikv_util::thread_group::current_properties();
+        let t = thread::Builder::new()
+            .name(name)
+            .spawn(move || {
+                tikv_util::thread_group::set_properties(props);
+                set_io_type(IOType::ForegroundWrite);
+                poller.poll();
+            })
+            .unwrap();
+        self.workers.push(t);
+    }
+
+>>>>>>> bfc3c47d3... raftstore: skip clearing callback when shutdown (#10364)
     /// Start the batch system.
     pub fn spawn<B>(&mut self, name_prefix: String, mut builder: B)
     where
@@ -422,7 +459,17 @@ where
         self.router.broadcast_shutdown();
         for h in self.workers.drain(..) {
             debug!("waiting for {}", h.thread().name().unwrap());
+<<<<<<< HEAD
             h.join().unwrap();
+=======
+            if let Err(e) = h.join() {
+                error!("failed to join worker thread: {:?}", e);
+                last_error = Some(e);
+            }
+        }
+        if let Some(e) = last_error {
+            safe_panic!("failed to join worker thread: {:?}", e);
+>>>>>>> bfc3c47d3... raftstore: skip clearing callback when shutdown (#10364)
         }
         info!("batch system {} is stopped.", name_prefix);
     }

@@ -59,7 +59,11 @@ pub mod metrics;
 pub mod mpsc;
 pub mod security;
 pub mod sys;
+<<<<<<< HEAD
 pub mod threadpool;
+=======
+pub mod thread_group;
+>>>>>>> bfc3c47d3... raftstore: skip clearing callback when shutdown (#10364)
 pub mod time;
 pub mod timer;
 pub mod worker;

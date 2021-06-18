@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cmp;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -967,6 +968,24 @@ impl TestPdClient {
         self.cluster.wl().set_gc_safe_point(safe_point);
     }
 
+<<<<<<< HEAD
+=======
+    pub fn trigger_tso_failure(&self) {
+        self.trigger_tso_failure.store(true, Ordering::SeqCst);
+    }
+
+    pub fn shutdown_store(&self, store_id: u64) {
+        match self.cluster.write() {
+            Ok(mut c) => {
+                c.stores.remove(&store_id);
+            }
+            Err(e) => {
+                safe_panic!("failed to acquire write lock: {:?}", e)
+            }
+        }
+    }
+
+>>>>>>> bfc3c47d3... raftstore: skip clearing callback when shutdown (#10364)
     pub fn ignore_merge_target_integrity(&self) {
         self.cluster.wl().check_merge_target_integrity = false;
     }

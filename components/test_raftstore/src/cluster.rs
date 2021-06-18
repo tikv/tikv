@@ -25,8 +25,12 @@ use tikv::raftstore::store::transport::CasualRouter;
 use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
 use tikv::server::Result as ServerResult;
+<<<<<<< HEAD
 use tikv::storage::DEFAULT_ROCKSDB_SUB_DIR;
 use tikv_util::collections::{HashMap, HashSet};
+=======
+use tikv_util::thread_group::GroupProperties;
+>>>>>>> bfc3c47d3... raftstore: skip clearing callback when shutdown (#10364)
 use tikv_util::HandyRwLock;
 
 use super::*;
@@ -97,8 +101,19 @@ pub struct Cluster<T: Simulator> {
     count: usize,
 
     pub paths: Vec<TempDir>,
+<<<<<<< HEAD
     pub dbs: Vec<Engines>,
     pub engines: HashMap<u64, Engines>,
+=======
+    pub dbs: Vec<Engines<RocksEngine, RocksEngine>>,
+    pub store_metas: HashMap<u64, Arc<Mutex<StoreMeta>>>,
+    key_managers: Vec<Option<Arc<DataKeyManager>>>,
+    pub io_rate_limiter: Option<Arc<IORateLimiter>>,
+    pub engines: HashMap<u64, Engines<RocksEngine, RocksEngine>>,
+    key_managers_map: HashMap<u64, Option<Arc<DataKeyManager>>>,
+    pub labels: HashMap<u64, HashMap<String, String>>,
+    group_props: HashMap<u64, GroupProperties>,
+>>>>>>> bfc3c47d3... raftstore: skip clearing callback when shutdown (#10364)
 
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
@@ -120,6 +135,12 @@ impl<T: Simulator> Cluster<T> {
             dbs: vec![],
             count,
             engines: HashMap::default(),
+<<<<<<< HEAD
+=======
+            key_managers_map: HashMap::default(),
+            labels: HashMap::default(),
+            group_props: HashMap::default(),
+>>>>>>> bfc3c47d3... raftstore: skip clearing callback when shutdown (#10364)
             sim,
             pd_client,
         }
@@ -170,10 +191,33 @@ impl<T: Simulator> Cluster<T> {
         let mut sim = self.sim.wl();
         for _ in 0..self.count - self.engines.len() {
             let (router, system) = create_raft_batch_system(&self.cfg.raft_store);
+<<<<<<< HEAD
             let (engines, path) = create_test_engine(None, router.clone(), &self.cfg);
             self.dbs.push(engines.clone());
             self.paths.push(path.unwrap());
             let node_id = sim.run_node(0, self.cfg.clone(), engines.clone(), router, system)?;
+=======
+            self.create_engine(Some(router.clone()));
+
+            let engines = self.dbs.last().unwrap().clone();
+            let key_mgr = self.key_managers.last().unwrap().clone();
+            let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
+
+            let props = GroupProperties::default();
+            tikv_util::thread_group::set_properties(Some(props.clone()));
+
+            let mut sim = self.sim.wl();
+            let node_id = sim.run_node(
+                0,
+                self.cfg.clone(),
+                engines.clone(),
+                store_meta.clone(),
+                key_mgr.clone(),
+                router,
+                system,
+            )?;
+            self.group_props.insert(node_id, props);
+>>>>>>> bfc3c47d3... raftstore: skip clearing callback when shutdown (#10364)
             self.engines.insert(node_id, engines);
         }
         Ok(())
@@ -211,6 +255,26 @@ impl<T: Simulator> Cluster<T> {
         debug!("starting node {}", node_id);
         let engines = self.engines[&node_id].clone();
         let (router, system) = create_raft_batch_system(&self.cfg.raft_store);
+<<<<<<< HEAD
+=======
+        let mut cfg = self.cfg.clone();
+        if let Some(labels) = self.labels.get(&node_id) {
+            cfg.server.labels = labels.to_owned();
+        }
+        let store_meta = match self.store_metas.entry(node_id) {
+            Entry::Occupied(o) => {
+                let mut meta = o.get().lock().unwrap();
+                *meta = StoreMeta::new(PENDING_MSG_CAP);
+                o.get().clone()
+            }
+            Entry::Vacant(v) => v
+                .insert(Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP))))
+                .clone(),
+        };
+        let props = GroupProperties::default();
+        self.group_props.insert(node_id, props.clone());
+        tikv_util::thread_group::set_properties(Some(props));
+>>>>>>> bfc3c47d3... raftstore: skip clearing callback when shutdown (#10364)
         debug!("calling run node"; "node_id" => node_id);
         // FIXME: rocksdb event listeners may not work, because we change the router.
         self.sim
@@ -222,7 +286,16 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn stop_node(&mut self, node_id: u64) {
         debug!("stopping node {}", node_id);
+<<<<<<< HEAD
         self.sim.wl().stop_node(node_id);
+=======
+        self.group_props[&node_id].mark_shutdown();
+        match self.sim.write() {
+            Ok(mut sim) => sim.stop_node(node_id),
+            Err(_) => safe_panic!("failed to acquire write lock."),
+        }
+        self.pd_client.shutdown_store(node_id);
+>>>>>>> bfc3c47d3... raftstore: skip clearing callback when shutdown (#10364)
         debug!("node {} stopped", node_id);
     }
 
@@ -523,9 +596,16 @@ impl<T: Simulator> Cluster<T> {
         let keys;
         match self.sim.try_read() {
             Ok(s) => keys = s.get_node_ids(),
+<<<<<<< HEAD
             Err(sync::TryLockError::Poisoned(e)) => {
                 let s = e.into_inner();
                 keys = s.get_node_ids();
+=======
+            Err(_) => {
+                safe_panic!("failed to acquire read lock");
+                // Leave the resource to avoid double panic.
+                return;
+>>>>>>> bfc3c47d3... raftstore: skip clearing callback when shutdown (#10364)
             }
             Err(sync::TryLockError::WouldBlock) => unreachable!(),
         }

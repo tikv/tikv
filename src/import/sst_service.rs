@@ -42,11 +42,28 @@ impl<Router: RaftStoreRouter> ImportSSTService<Router> {
         router: Router,
         engine: Arc<DB>,
         importer: Arc<SSTImporter>,
+<<<<<<< HEAD
     ) -> ImportSSTService<Router> {
         let threads = Builder::new()
             .name_prefix("sst-importer")
             .pool_size(cfg.num_threads)
             .create();
+=======
+    ) -> ImportSSTService<E, Router> {
+        let props = tikv_util::thread_group::current_properties();
+        let threads = ThreadPoolBuilder::new()
+            .pool_size(cfg.num_threads)
+            .name_prefix("sst-importer")
+            .after_start(move |_| {
+                tikv_util::thread_group::set_properties(props.clone());
+                tikv_alloc::add_thread_memory_accessor();
+                set_io_type(IOType::Import);
+            })
+            .before_stop(move |_| tikv_alloc::remove_thread_memory_accessor())
+            .create()
+            .unwrap();
+        importer.start_switch_mode_check(&threads, engine.clone());
+>>>>>>> bfc3c47d3... raftstore: skip clearing callback when shutdown (#10364)
         ImportSSTService {
             cfg,
             router,

@@ -9,6 +9,7 @@ use tikv::coprocessor::{readpool_impl, Endpoint};
 use tikv::server::Config;
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::{Engine, TestEngineBuilder};
+use tikv_util::thread_group::GroupProperties;
 
 #[derive(Clone)]
 pub struct ProductTable(Table);
@@ -78,9 +79,20 @@ pub fn init_data_with_details<E: Engine>(
         store.commit_with_ctx(ctx);
     }
 
+<<<<<<< HEAD
     let pool = readpool_impl::build_read_pool_for_test(store.get_engine());
     let cop = Endpoint::new(cfg, pool);
     (store, cop)
+=======
+    tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
+    let pool = ReadPool::from(readpool_impl::build_read_pool_for_test(
+        &CoprReadPoolConfig::default_for_test(),
+        store.get_engine(),
+    ));
+    let cm = ConcurrencyManager::new(1.into());
+    let copr = Endpoint::new(cfg, pool.handle(), cm, PerfLevel::EnableCount);
+    (store, copr)
+>>>>>>> bfc3c47d3... raftstore: skip clearing callback when shutdown (#10364)
 }
 
 pub fn init_data_with_commit(

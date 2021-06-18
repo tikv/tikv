@@ -85,9 +85,15 @@ lazy_static! {
 
 fn start_global_timer() -> Handle {
     let (tx, rx) = mpsc::channel();
+    let props = crate::thread_group::current_properties();
     Builder::new()
         .name(thd_name!("timer"))
         .spawn(move || {
+<<<<<<< HEAD
+=======
+            crate::thread_group::set_properties(props);
+            tikv_alloc::add_thread_memory_accessor();
+>>>>>>> bfc3c47d3... raftstore: skip clearing callback when shutdown (#10364)
             let mut timer = tokio_timer::Timer::default();
             tx.send(timer.handle()).unwrap();
             loop {

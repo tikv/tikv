@@ -99,11 +99,18 @@ impl Monitor {
         D: Fn() + Send + 'static,
         N: Fn() -> SystemTime + Send + 'static,
     {
+        let props = crate::thread_group::current_properties();
         let (tx, rx) = mpsc::channel();
         let h = Builder::new()
             .name(thd_name!("time-monitor"))
             .spawn(move || {
+<<<<<<< HEAD
                 while let Err(_) = rx.try_recv() {
+=======
+                crate::thread_group::set_properties(props);
+                tikv_alloc::add_thread_memory_accessor();
+                while rx.try_recv().is_err() {
+>>>>>>> bfc3c47d3... raftstore: skip clearing callback when shutdown (#10364)
                     let before = now();
                     thread::sleep(Duration::from_millis(DEFAULT_WAIT_MS));
 
