@@ -291,8 +291,8 @@ impl Default for IORateLimitConfig {
             replication_priority: IOPriority::High,
             load_balance_priority: IOPriority::High,
             gc_priority: IOPriority::High,
-            import_priority: IOPriority::Low,
-            export_priority: IOPriority::Low,
+            import_priority: IOPriority::Medium,
+            export_priority: IOPriority::Medium,
             other_priority: IOPriority::High,
         }
     }
