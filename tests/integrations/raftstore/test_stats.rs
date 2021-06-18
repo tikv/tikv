@@ -399,16 +399,20 @@ fn check_query_num_read(
     kind: QueryKind,
     expect: u64,
 ) -> bool {
-    for _ in 0..100 {
-        let hot_peers = cluster.pd_client.get_store_hotspots(store_id).unwrap();
-        let peer_stat = hot_peers.get(&region_id).unwrap();
-        let query_stat = peer_stat.get_query_stats();
-        if QueryStats::get_query_num(query_stat, kind) == expect {
-            return true;
-        }
+    let start = std::time::SystemTime::now();
+    loop {
         sleep_ms(10);
+        if let Some(hot_peers) = cluster.pd_client.get_store_hotspots(store_id) {
+            let peer_stat = hot_peers.get(&region_id).unwrap();
+            let query_stat = peer_stat.get_query_stats();
+            if QueryStats::get_query_num(query_stat, kind) == expect {
+                return true;
+            }
+        }
+        if start.elapsed().unwrap().as_secs() > 5 {
+            return false;
+        }
     }
-    return false;
 }
 
 fn check_query_num_write(
