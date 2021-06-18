@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! OnlineConfig for the entire server.
+//! Configuration for the entire server.
 //!
 //! TiKV is configured through the `TiKvConfig` type, which is in turn
 //! made up of many other configuration types.
