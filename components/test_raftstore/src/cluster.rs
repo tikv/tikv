@@ -726,8 +726,8 @@ impl<T: Simulator> Cluster<T> {
         }
 
         // If command is stale, leadership may have changed.
-        // Or epoch not match, it can be introduced by wrong leader.
-        if err.has_stale_command() || err.has_epoch_not_match() {
+        // EpochNotMatch is not checked as leadership is checked first in raftstore.
+        if err.has_stale_command() {
             self.reset_leader_of_region(region_id);
             return true;
         }
