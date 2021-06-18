@@ -777,7 +777,7 @@ pub fn put_cf_till_size<T: Simulator>(
     let mut key = String::new();
     let mut value = vec![0; 64];
     while len < limit {
-        let batch_size = std::cmp::min(4 * 1024, limit - len);
+        let batch_size = std::cmp::min(1024, limit - len);
         let mut reqs = vec![];
         for _ in 0..batch_size / 74 + 1 {
             key.clear();
