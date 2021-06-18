@@ -39,7 +39,7 @@ use tokio::sync::oneshot::{self, Receiver, Sender};
 use tokio_openssl::SslStream;
 
 use collections::HashMap;
-use configuration::Configuration;
+use online_config::OnlineConfig;
 use pd_client::{RpcClient, REQUEST_RECONNECT_INTERVAL};
 use security::{self, SecurityConfig};
 use tikv_alloc::error::ProfError;
@@ -1039,8 +1039,8 @@ mod tests {
     use crate::config::{ConfigController, TiKvConfig};
     use crate::server::status_server::{LogLevelRequest, StatusServer};
     use collections::HashSet;
-    use configuration::Configuration;
     use engine_test::kv::KvTestEngine;
+    use online_config::OnlineConfig;
     use raftstore::store::transport::CasualRouter;
     use raftstore::store::CasualMessage;
     use security::SecurityConfig;

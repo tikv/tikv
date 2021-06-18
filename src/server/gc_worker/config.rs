@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use configuration::{ConfigChange, ConfigManager, Configuration};
+use online_config::{ConfigChange, ConfigManager, OnlineConfig};
 use tikv_util::config::{ReadableSize, VersionTrack};
 
 const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
@@ -10,7 +10,7 @@ pub const DEFAULT_GC_BATCH_KEYS: usize = 512;
 // No limit
 const DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC: u64 = 0;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct GcConfig {

@@ -26,7 +26,7 @@ prometheus-static-metric = "0.5"
 kvproto = { rev = "dda0a102bc6ac7371e1f99cd2797825aa210b4a0", git = "https://github.com/pingcap/kvproto.git", default-features = false }
 tikv_util = { path = "../tikv_util" }
 grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored"] }
-configuration = { path = "../configuration" }
+online_config = { path = "../online_config" }
 serde = "1.0"
 serde_derive = "1.0"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
