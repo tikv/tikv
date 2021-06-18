@@ -2438,6 +2438,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     }
 
     fn on_check_leader(&self, leaders: Vec<LeaderInfo>, cb: Box<dyn FnOnce(Vec<u64>) + Send>) {
+        let timer = TiInstant::now_coarse();
         let meta = self.ctx.store_meta.lock().unwrap();
         let regions = leaders
             .into_iter()
@@ -2492,6 +2493,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             .flatten()
             .collect();
         cb(regions);
+
+        self.ctx
+            .raft_metrics
+            .check_leader
+            .observe(duration_to_sec(timer.elapsed()) as f64);
     }
 
     fn on_get_store_safe_ts(&self, key_range: KeyRange, cb: Box<dyn FnOnce(u64) + Send>) {

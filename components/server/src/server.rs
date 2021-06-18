@@ -115,9 +115,6 @@ pub fn run_tikv(config: TiKvConfig) {
     SysQuota::log_quota();
     CPU_CORES_QUOTA_GAUGE.set(SysQuota::cpu_cores_quota());
 
-    let high_water = (config.memory_usage_high_water * config.memory_usage_limit.0 as f64) as u64;
-    register_memory_usage_high_water(high_water);
-
     // Do some prepare works before start.
     pre_start();
 
@@ -126,6 +123,12 @@ pub fn run_tikv(config: TiKvConfig) {
     macro_rules! run_impl {
         ($ER: ty) => {{
             let mut tikv = TiKVServer::<$ER>::init(config);
+
+            // Must be called after `TiKVServer::init`.
+            let memory_limit = tikv.config.memory_usage_limit.0.unwrap().0;
+            let high_water = (tikv.config.memory_usage_high_water * memory_limit as f64) as u64;
+            register_memory_usage_high_water(high_water);
+
             tikv.check_conflict_addr();
             tikv.init_fs();
             tikv.init_yatp();
