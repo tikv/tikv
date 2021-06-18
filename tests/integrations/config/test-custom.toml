@@ -165,7 +165,6 @@ consistency-check-interval = "12s"
 report-region-flow-interval = "12m"
 raft-store-max-leader-lease = "12s"
 right-derive-when-split = false
-allow-remove-leader = true
 merge-max-log-gap = 3
 merge-check-tick-interval = "11s"
 use-delete-range = true
