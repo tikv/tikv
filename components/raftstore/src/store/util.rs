@@ -1032,7 +1032,7 @@ impl RegionReadProgressCore {
     fn update_safe_ts(&mut self, idx: u64, ts: u64) -> Option<u64> {
         // Discard stale item with `apply_index` before `last_merge_index`
         // in order to prevent the stale item makes the `safe_ts` larger again
-        if idx <= self.last_merge_index {
+        if idx < self.last_merge_index {
             return None;
         }
         // The peer has enough data, try update `safe_ts` directly

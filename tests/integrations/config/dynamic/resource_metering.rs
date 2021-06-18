@@ -6,6 +6,7 @@ use resource_metering::cpu::recorder::RecorderHandle;
 use resource_metering::reporter::Task;
 use resource_metering::ConfigManager;
 use tikv::config::{ConfigController, Module, TiKvConfig};
+use tikv_util::config::ReadableDuration;
 use tikv_util::worker::{LazyWorker, Runnable};
 
 pub struct MockResourceMeteringReporter {
@@ -63,13 +64,10 @@ fn test_update_resource_metering_agent_config() {
             "resource-metering.agent-address".to_owned(),
             "localhost:8888".to_owned(),
         );
+        m.insert("resource-metering.precision".to_owned(), "20s".to_owned());
         m.insert(
-            "resource-metering.precision-seconds".to_owned(),
-            "20".to_owned(),
-        );
-        m.insert(
-            "resource-metering.report-agent-interval-seconds".to_owned(),
-            "80".to_owned(),
+            "resource-metering.report-agent-interval".to_owned(),
+            "80s".to_owned(),
         );
         m.insert(
             "resource-metering.max-resource-groups".to_owned(),
@@ -82,8 +80,8 @@ fn test_update_resource_metering_agent_config() {
     let new_config = cfg_controller.get_current().resource_metering;
     assert!(new_config.enabled);
     assert_eq!(new_config.agent_address, "localhost:8888".to_string());
-    assert_eq!(new_config.precision_seconds, 20);
-    assert_eq!(new_config.report_agent_interval_seconds, 80);
+    assert_eq!(new_config.precision, ReadableDuration::secs(20));
+    assert_eq!(new_config.report_agent_interval, ReadableDuration::secs(80));
     assert_eq!(new_config.max_resource_groups, 3000);
 
     let task = rx.recv().unwrap();

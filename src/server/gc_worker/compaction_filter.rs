@@ -37,7 +37,7 @@ const DEFAULT_DELETE_BATCH_COUNT: usize = 128;
 const COMPACTION_FILTER_GC_FEATURE: Feature = Feature::require(5, 0, 0);
 
 // Global context to create a compaction filter for write CF. It's necessary as these fields are
-// not available when construcing `WriteCompactionFilterFactory`.
+// not available when constructing `WriteCompactionFilterFactory`.
 struct GcContext {
     db: RocksEngine,
     store_id: u64,
@@ -464,11 +464,11 @@ impl WriteCompactionFilter {
     }
 
     fn flush_metrics(&self) {
-        GC_COMPACTION_FILTERED.inc_by(self.total_filtered as i64);
-        GC_COMPACTION_MVCC_ROLLBACK.inc_by(self.mvcc_rollback_and_locks as i64);
+        GC_COMPACTION_FILTERED.inc_by(self.total_filtered as u64);
+        GC_COMPACTION_MVCC_ROLLBACK.inc_by(self.mvcc_rollback_and_locks as u64);
         GC_COMPACTION_FILTER_ORPHAN_VERSIONS
             .with_label_values(&["generated"])
-            .inc_by(self.orphan_versions as i64);
+            .inc_by(self.orphan_versions as u64);
         if let Some((versions, filtered)) = STATS.with(|stats| {
             stats.versions.update(|x| x + self.total_versions);
             stats.filtered.update(|x| x + self.total_filtered);

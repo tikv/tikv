@@ -24,6 +24,7 @@ use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::KeyRange;
 use kvproto::kvrpcpb::LeaderInfo;
 use kvproto::metapb::{self, Region, RegionEpoch};
+use kvproto::pdpb::QueryStats;
 use kvproto::pdpb::StoreStats;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
 use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState};
@@ -473,7 +474,6 @@ where
         &mut self,
         msg: &RaftMessage,
         cur_epoch: RegionEpoch,
-        need_gc: bool,
         target_region: Option<metapb::Region>,
     ) {
         let region_id = msg.get_region_id();
@@ -481,23 +481,14 @@ where
         let to_peer = msg.get_to_peer();
         let msg_type = msg.get_message().get_msg_type();
 
-        if !need_gc {
-            info!(
-                "raft message is stale, ignore it";
-                "region_id" => region_id,
-                "current_region_epoch" => ?cur_epoch,
-                "msg_type" => ?msg_type,
-            );
-            self.raft_metrics.message_dropped.stale_msg += 1;
-            return;
-        }
-
         info!(
             "raft message is stale, tell to gc";
             "region_id" => region_id,
             "current_region_epoch" => ?cur_epoch,
             "msg_type" => ?msg_type,
         );
+
+        self.raft_metrics.message_dropped.stale_msg += 1;
 
         let mut gc_msg = RaftMessage::default();
         gc_msg.set_region_id(region_id);
@@ -662,6 +653,8 @@ pub struct RaftPoller<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: 'stat
     poll_ctx: PollContext<EK, ER, T>,
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
+
+    trace_event: TraceEvent,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
@@ -723,15 +716,6 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
                 PeerFsmDelegate::new(&mut peers[ready.batch_offset], &mut self.poll_ctx)
                     .post_raft_ready_append(ready);
             }
-        }
-        let mut trace_event = None;
-        for peer in peers {
-            if let Some(event) = peer.update_memory_trace(&self.poll_ctx.cfg) {
-                trace_event = Some(trace_event.map_or(event, |e| e + event));
-            }
-        }
-        if let Some(e) = trace_event {
-            MEMTRACE_PEERS.trace(e);
         }
         let dur = self.timer.elapsed();
         if !self.poll_ctx.store_stat.is_busy {
@@ -904,6 +888,11 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             .observe(duration_to_sec(self.timer.elapsed()) as f64);
         self.poll_ctx.raft_metrics.flush();
         self.poll_ctx.store_stat.flush();
+
+        for peer in peers {
+            peer.update_memory_trace(&mut self.trace_event);
+        }
+        MEMTRACE_PEERS.trace(mem::take(&mut self.trace_event));
     }
 
     fn pause(&mut self) {
@@ -1163,6 +1152,7 @@ where
             messages_per_tick: ctx.cfg.messages_per_tick,
             poll_ctx: ctx,
             cfg_tracker: self.cfg.clone().tracker(tag),
+            trace_event: TraceEvent::default(),
         }
     }
 }
@@ -1406,6 +1396,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         // Wait all workers finish.
         let handle = workers.pd_worker.stop();
         self.apply_system.shutdown();
+        fail_point!("after_shutdown_apply");
         self.system.shutdown();
         if let Some(h) = handle {
             h.join().unwrap();
@@ -1508,7 +1499,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 None
             };
             self.ctx
-                .handle_stale_msg(msg, region_epoch.clone(), true, merge_target);
+                .handle_stale_msg(msg, region_epoch.clone(), merge_target);
             return Ok(CheckMsgStatus::DropMsg);
         }
         // The region in this peer is already destroyed
@@ -1521,33 +1512,34 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 "current_region_epoch" => ?region_epoch,
                 "msg_type" => ?msg_type,
             );
-            let mut need_gc_msg = util::is_vote_msg(msg.get_message());
-            if msg.has_extra_msg() {
-                // A learner can't vote so it sends the check-stale-peer msg to others to find out whether
-                // it is removed due to conf change or merge.
-                need_gc_msg |=
-                    msg.get_extra_msg().get_type() == ExtraMessageType::MsgCheckStalePeer;
-                // For backward compatibility
-                need_gc_msg |= msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp;
-            }
-            let not_exist = util::find_peer(region, from_store_id).is_none();
-            self.ctx
-                .handle_stale_msg(msg, region_epoch.clone(), need_gc_msg && not_exist, None);
-
-            if need_gc_msg && !not_exist {
-                let mut send_msg = RaftMessage::default();
-                send_msg.set_region_id(region_id);
-                send_msg.set_from_peer(msg.get_to_peer().clone());
-                send_msg.set_to_peer(msg.get_from_peer().clone());
-                send_msg.set_region_epoch(region_epoch.clone());
-                let extra_msg = send_msg.mut_extra_msg();
-                extra_msg.set_type(ExtraMessageType::MsgCheckStalePeerResponse);
-                extra_msg.set_check_peers(region.get_peers().into());
-                if let Err(e) = self.ctx.trans.send(send_msg) {
-                    error!(?e;
-                        "send check stale peer response message failed";
-                        "region_id" => region_id,
-                    );
+            if util::find_peer(region, from_store_id).is_none() {
+                self.ctx.handle_stale_msg(msg, region_epoch.clone(), None);
+            } else {
+                let mut need_gc_msg = util::is_vote_msg(msg.get_message());
+                if msg.has_extra_msg() {
+                    // A learner can't vote so it sends the check-stale-peer msg to others to find out whether
+                    // it is removed due to conf change or merge.
+                    need_gc_msg |=
+                        msg.get_extra_msg().get_type() == ExtraMessageType::MsgCheckStalePeer;
+                    // For backward compatibility
+                    need_gc_msg |=
+                        msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp;
+                }
+                if need_gc_msg {
+                    let mut send_msg = RaftMessage::default();
+                    send_msg.set_region_id(region_id);
+                    send_msg.set_from_peer(msg.get_to_peer().clone());
+                    send_msg.set_to_peer(msg.get_from_peer().clone());
+                    send_msg.set_region_epoch(region_epoch.clone());
+                    let extra_msg = send_msg.mut_extra_msg();
+                    extra_msg.set_type(ExtraMessageType::MsgCheckStalePeerResponse);
+                    extra_msg.set_check_peers(region.get_peers().into());
+                    if let Err(e) = self.ctx.trans.send(send_msg) {
+                        error!(?e;
+                            "send check stale peer response message failed";
+                            "region_id" => region_id,
+                        );
+                    }
                 }
             }
 
@@ -2018,6 +2010,30 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 .swap(false, Ordering::SeqCst),
         );
 
+        let mut query_stats = QueryStats::default();
+        query_stats.set_put(
+            self.ctx
+                .global_stat
+                .stat
+                .engine_total_query_put
+                .swap(0, Ordering::SeqCst),
+        );
+        query_stats.set_delete(
+            self.ctx
+                .global_stat
+                .stat
+                .engine_total_query_delete
+                .swap(0, Ordering::SeqCst),
+        );
+        query_stats.set_delete_range(
+            self.ctx
+                .global_stat
+                .stat
+                .engine_total_query_delete_range
+                .swap(0, Ordering::SeqCst),
+        );
+        stats.set_query_stats(query_stats);
+
         let store_info = StoreInfo {
             engine: self.ctx.engines.kv.clone(),
             capacity: self.ctx.cfg.capacity.0,
@@ -2413,6 +2429,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     }
 
     fn on_check_leader(&self, leaders: Vec<LeaderInfo>, cb: Box<dyn FnOnce(Vec<u64>) + Send>) {
+        let timer = TiInstant::now_coarse();
         let meta = self.ctx.store_meta.lock().unwrap();
         let regions = leaders
             .into_iter()
@@ -2467,6 +2484,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             .flatten()
             .collect();
         cb(regions);
+
+        self.ctx
+            .raft_metrics
+            .check_leader
+            .observe(duration_to_sec(timer.elapsed()) as f64);
     }
 
     fn on_get_store_safe_ts(&self, key_range: KeyRange, cb: Box<dyn FnOnce(u64) + Send>) {

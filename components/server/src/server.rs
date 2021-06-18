@@ -90,6 +90,7 @@ use tikv_util::{
     config::{ensure_dir_exist, VersionTrack},
     math::MovingAvgU32,
     sys::{register_memory_usage_high_water, SysQuota},
+    thread_group::GroupProperties,
     time::Monitor,
     worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker, Worker},
 };
@@ -114,9 +115,6 @@ pub fn run_tikv(config: TiKvConfig) {
     SysQuota::log_quota();
     CPU_CORES_QUOTA_GAUGE.set(SysQuota::cpu_cores_quota());
 
-    let high_water = (config.memory_usage_high_water * config.memory_usage_limit.0 as f64) as u64;
-    register_memory_usage_high_water(high_water);
-
     // Do some prepare works before start.
     pre_start();
 
@@ -125,6 +123,12 @@ pub fn run_tikv(config: TiKvConfig) {
     macro_rules! run_impl {
         ($ER: ty) => {{
             let mut tikv = TiKVServer::<$ER>::init(config);
+
+            // Must be called after `TiKVServer::init`.
+            let memory_limit = tikv.config.memory_usage_limit.0.unwrap().0;
+            let high_water = (tikv.config.memory_usage_high_water * memory_limit as f64) as u64;
+            register_memory_usage_high_water(high_water);
+
             tikv.check_conflict_addr();
             tikv.init_fs();
             tikv.init_yatp();
@@ -196,6 +200,7 @@ struct Servers<ER: RaftEngine> {
 
 impl<ER: RaftEngine> TiKVServer<ER> {
     fn init(mut config: TiKvConfig) -> TiKVServer<ER> {
+        tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
         // It is okay use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only
         // used during startup process.
@@ -563,12 +568,15 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         };
 
         // The `DebugService` and `DiagnosticsService` will share the same thread pool
+        let props = tikv_util::thread_group::current_properties();
         let debug_thread_pool = Arc::new(
-            Builder::new()
-                .threaded_scheduler()
+            Builder::new_multi_thread()
                 .thread_name(thd_name!("debugger"))
-                .core_threads(1)
-                .on_thread_start(tikv_alloc::add_thread_memory_accessor)
+                .worker_threads(1)
+                .on_thread_start(move || {
+                    tikv_alloc::add_thread_memory_accessor();
+                    tikv_util::thread_group::set_properties(props.clone());
+                })
                 .on_thread_stop(tikv_alloc::remove_thread_memory_accessor)
                 .build()
                 .unwrap(),
@@ -823,8 +831,12 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         // Start resource metering.
         let resource_metering_cpu_recorder = resource_metering::cpu::recorder::init_recorder();
-        let mut resource_metering_reporter_worker =
-            Box::new(LazyWorker::new("resource-metering-reporter"));
+        let mut resource_metering_reporter_worker = Box::new(
+            WorkerBuilder::new("resource-metering-reporter")
+                .pending_capacity(30)
+                .create()
+                .lazy_build("resource-metering-reporter"),
+        );
         let resource_metering_reporter_scheduler = resource_metering_reporter_worker.scheduler();
         cfg_controller.register(
             tikv::config::Module::ResourceMetering,
@@ -838,7 +850,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.config.resource_metering.clone(),
             resource_metering_reporter_scheduler,
             self.env.clone(),
-            self.security_mgr.clone(),
         );
         resource_metering_reporter_worker.start_with_timer(resource_metering_reporter);
         self.to_stop.push(resource_metering_reporter_worker);
@@ -947,7 +958,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             tikv::config::Module::Backup,
             Box::new(backup_endpoint.get_config_manager()),
         );
-        backup_worker.start_with_timer(backup_endpoint);
+        backup_worker.start(backup_endpoint);
 
         let cdc_service = cdc::Service::new(
             servers.cdc_scheduler.clone(),
@@ -1046,6 +1057,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn stop(self) {
+        tikv_util::thread_group::mark_shutdown();
         let mut servers = self.servers.unwrap();
         servers
             .server

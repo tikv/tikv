@@ -110,8 +110,8 @@ pub fn last_index(state: &RaftLocalState) -> u64 {
 struct EntryCache {
     cache: VecDeque<Entry>,
     trace: VecDeque<CachedEntries>,
-    hit: Cell<i64>,
-    miss: Cell<i64>,
+    hit: Cell<u64>,
+    miss: Cell<u64>,
     #[cfg(test)]
     size_change_cb: Option<Box<dyn Fn(i64) + Send + 'static>>,
 }
@@ -187,9 +187,16 @@ impl EntryCache {
                 let truncate_to = cache_len
                     .checked_sub((cache_last_index - first_index + 1) as usize)
                     .unwrap_or_default();
+                let trunc_to_idx = self.cache[truncate_to].index;
                 for e in self.cache.drain(truncate_to..) {
                     mem_size_change -=
                         (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64;
+                }
+                if let Some(cached) = self.trace.back() {
+                    // Only committed entries can be traced, and only uncommitted entries
+                    // can be truncated. So there won't be any overlaps.
+                    let cached_last = cached.range.end - 1;
+                    assert!(cached_last < trunc_to_idx);
                 }
             } else if cache_last_index + 1 < first_index {
                 panic!(
@@ -205,11 +212,10 @@ impl EntryCache {
             entries_len = entries.len();
         }
 
-        if let Some(mut compact_to) = (cache_len + entries_len).checked_sub(MAX_CACHE_CAPACITY) {
-            compact_to = cmp::min(compact_to, cache_len);
-            for e in self.cache.drain(..compact_to) {
-                mem_size_change -= (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64;
-            }
+        if cache_len + entries_len > MAX_CACHE_CAPACITY {
+            let offset = cache_len + entries_len - MAX_CACHE_CAPACITY - 1;
+            let compact_to = self.cache[offset].index + 1;
+            self.compact_to(compact_to);
         }
 
         for e in entries {
@@ -220,7 +226,7 @@ impl EntryCache {
         mem_size_change
     }
 
-    pub fn compact_to(&mut self, mut idx: u64) {
+    pub fn compact_to(&mut self, mut idx: u64) -> u64 {
         let mut mem_size_change = 0;
 
         // Clean cached entries which have been already sent to apply threads. For example,
@@ -237,7 +243,8 @@ impl EntryCache {
                 }
                 break;
             }
-            *cached_entries.entries.lock().unwrap() = Default::default();
+            let (_, dangle_size) = cached_entries.take_entries();
+            mem_size_change -= dangle_size as i64;
             idx = cmp::max(cached_entries.range.end - 1, idx);
         }
         let new_trace_cap = self.trace.capacity();
@@ -246,7 +253,8 @@ impl EntryCache {
         let cache_first_idx = self.first_index().unwrap_or(u64::MAX);
         if cache_first_idx > idx {
             self.flush_mem_size_change(mem_size_change);
-            return;
+            assert!(mem_size_change <= 0);
+            return -mem_size_change as u64;
         }
 
         let cache_last_idx = self.cache.back().unwrap().get_index();
@@ -258,6 +266,8 @@ impl EntryCache {
 
         mem_size_change += self.shrink_if_necessary();
         self.flush_mem_size_change(mem_size_change);
+        assert!(mem_size_change <= 0);
+        -mem_size_change as u64
     }
 
     fn get_total_mem_size(&self) -> i64 {
@@ -306,11 +316,40 @@ impl EntryCache {
     }
 
     fn trace_cached_entries(&mut self, entries: CachedEntries) {
+        let dangle_size = {
+            let mut guard = entries.entries.lock().unwrap();
+
+            let last_idx = guard.0.last().map(|e| e.index).unwrap();
+            let cache_front = match self.cache.front().map(|e| e.index) {
+                Some(i) => i,
+                None => u64::MAX,
+            };
+
+            let dangle_range = if last_idx < cache_front {
+                // All entries are not in entry cache.
+                0..guard.0.len()
+            } else if let Ok(i) = guard.0.binary_search_by(|e| e.index.cmp(&cache_front)) {
+                // Some entries are in entry cache.
+                0..i
+            } else {
+                // All entries are in entry cache.
+                0..0
+            };
+
+            let mut size = 0;
+            for e in &guard.0[dangle_range] {
+                size += bytes_capacity(&e.data) + bytes_capacity(&e.context);
+            }
+            guard.1 = size;
+            size
+        };
+
         let old_capacity = self.trace.capacity();
         self.trace.push_back(entries);
         let new_capacity = self.trace.capacity();
         let diff = Self::get_trace_vec_mem_size_change(new_capacity, old_capacity);
-        self.flush_mem_size_change(diff);
+
+        self.flush_mem_size_change(diff + dangle_size as i64);
     }
 
     fn shrink_if_necessary(&mut self) -> i64 {
@@ -1116,7 +1155,7 @@ where
         // TODO: Wrap it as an engine::Error.
         ready_ctx
             .raft_wb_mut()
-            .cut_logs(region_id, last_index + 1, prev_last_index);
+            .cut_logs(region_id, last_index + 1, prev_last_index + 1);
 
         invoke_ctx.raft_state.set_last_index(last_index);
         invoke_ctx.last_term = last_term;
@@ -1174,19 +1213,20 @@ where
         }
     }
 
-    /// Evict half of entries from the cache.
-    pub fn half_evict_cache(&mut self) {
+    /// Evict entries from the cache.
+    pub fn evict_cache(&mut self, half: bool) {
         if self.engines.raft.has_builtin_entry_cache() {
             // TODO: unify entry cache.
             return;
         }
         let cache = self.cache.as_mut().unwrap();
         if !cache.cache.is_empty() {
-            RAFT_ENTRIES_CACHES_EVICT.inc();
             let cache = self.cache.as_mut().unwrap();
-            let drain_to = cache.cache.len() / 2;
+            let cache_len = cache.cache.len();
+            let drain_to = if half { cache_len / 2 } else { cache_len - 1 };
             let idx = cache.cache[drain_to].index;
-            cache.compact_to(idx + 1);
+            let mem_size_change = cache.compact_to(idx + 1);
+            RAFT_ENTRIES_EVICT_BYTES.inc_by(mem_size_change);
         }
     }
 
@@ -1205,8 +1245,8 @@ where
         }
         if let Some(stats) = self.engines.raft.flush_stats() {
             RAFT_ENTRIES_CACHES_GAUGE.set(stats.cache_size as i64);
-            RAFT_ENTRY_FETCHES.hit.inc_by(stats.hit as i64);
-            RAFT_ENTRY_FETCHES.miss.inc_by(stats.miss as i64);
+            RAFT_ENTRY_FETCHES.hit.inc_by(stats.hit as u64);
+            RAFT_ENTRY_FETCHES.miss.inc_by(stats.miss as u64);
         }
     }
 
@@ -1776,7 +1816,8 @@ pub fn write_peer_state<T: Mutable>(
 #[derive(Clone)]
 pub struct CachedEntries {
     pub range: Range<u64>,
-    entries: Arc<Mutex<Vec<Entry>>>,
+    // Entries and dangle size for them. `dangle` means not in entry cache.
+    entries: Arc<Mutex<(Vec<Entry>, usize)>>,
 }
 
 impl CachedEntries {
@@ -1786,12 +1827,13 @@ impl CachedEntries {
         let end = entries.last().map(|x| x.index).unwrap() + 1;
         let range = Range { start, end };
         CachedEntries {
-            entries: Arc::new(Mutex::new(entries)),
+            entries: Arc::new(Mutex::new((entries, 0))),
             range,
         }
     }
 
-    pub fn take_entries(&self) -> Vec<Entry> {
+    /// Take cached entries and dangle size for them. `dangle` means not in entry cache.
+    pub fn take_entries(&self) -> (Vec<Entry>, usize) {
         mem::take(&mut *self.entries.lock().unwrap())
     }
 }
@@ -2484,18 +2526,54 @@ mod tests {
 
     #[test]
     fn test_storage_cache_size_change() {
+        let new_padded_entry = |index: u64, term: u64, pad_len: usize| {
+            let mut e = new_entry(index, term);
+            e.data = vec![b'x'; pad_len].into();
+            e
+        };
+
+        // Test the initial data structure size.
         let (tx, rx) = mpsc::sync_channel(8);
         let mut cache = EntryCache::new_with_cb(move |c: i64| tx.send(c).unwrap());
         assert_eq!(rx.try_recv().unwrap(), 896);
 
-        cache.append("", &[new_entry(1, 1), new_entry(2, 1)]);
+        cache.append(
+            "",
+            &[new_padded_entry(101, 1, 1), new_padded_entry(102, 1, 2)],
+        );
+        assert_eq!(rx.try_recv().unwrap(), 3);
+
+        // Test size change for one overlapped entry.
+        cache.append("", &[new_padded_entry(102, 2, 3)]);
+        assert_eq!(rx.try_recv().unwrap(), 1);
+
+        // Test size change for all overlapped entries.
+        cache.append(
+            "",
+            &[new_padded_entry(101, 3, 4), new_padded_entry(102, 3, 5)],
+        );
+        assert_eq!(rx.try_recv().unwrap(), 5);
+
+        cache.append("", &[new_padded_entry(103, 3, 6)]);
+        assert_eq!(rx.try_recv().unwrap(), 6);
+
+        // Test trace a dangle entry.
+        let cached_entries = CachedEntries::new(vec![new_padded_entry(100, 1, 1)]);
+        cache.trace_cached_entries(cached_entries);
+        assert_eq!(rx.try_recv().unwrap(), 1);
+
+        // Test trace an entry which is still in cache.
+        let cached_entries = CachedEntries::new(vec![new_padded_entry(102, 3, 5)]);
+        cache.trace_cached_entries(cached_entries);
         assert_eq!(rx.try_recv().unwrap(), 0);
 
-        cache.append("", &[new_entry(2, 2)]);
-        assert_eq!(rx.try_recv().unwrap(), 0);
+        // Test compare `cached_last` with `trunc_to_idx` in `EntryCache::append_impl`.
+        cache.append("", &[new_padded_entry(103, 4, 7)]);
+        assert_eq!(rx.try_recv().unwrap(), 1);
 
-        cache.append("", &[new_entry(1, 2), new_entry(2, 2)]);
-        assert_eq!(rx.try_recv().unwrap(), 0);
+        // Test compact all entries and traced dangle entries.
+        cache.compact_to(104);
+        assert_eq!(rx.try_recv().unwrap(), -17);
 
         drop(cache);
         assert_eq!(rx.try_recv().unwrap(), -896);
