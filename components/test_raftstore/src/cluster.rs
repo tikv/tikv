@@ -932,30 +932,32 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn must_put_cf(&mut self, cf: &str, key: &[u8], value: &[u8]) {
-        let resp = self.request(
-            key,
-            vec![new_put_cf_cmd(cf, key, value)],
-            false,
-            Duration::from_secs(5),
-        );
-        if resp.get_header().has_error() {
-            panic!("response {:?} has error", resp);
+        match self.batch_put(key, vec![new_put_cf_cmd(cf, key, value)]) {
+            Ok(resp) => {
+                assert_eq!(resp.get_responses().len(), 1);
+                assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Put);
+            }
+            Err(e) => {
+                panic!("has error: {:?}", e);
+            }
         }
-        assert_eq!(resp.get_responses().len(), 1);
-        assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Put);
     }
 
     pub fn put(&mut self, key: &[u8], value: &[u8]) -> result::Result<(), PbError> {
-        let resp = self.request(
-            key,
-            vec![new_put_cf_cmd(CF_DEFAULT, key, value)],
-            false,
-            Duration::from_secs(5),
-        );
+        self.batch_put(key, vec![new_put_cf_cmd(CF_DEFAULT, key, value)])
+            .map(|_| ())
+    }
+
+    pub fn batch_put(
+        &mut self,
+        region_key: &[u8],
+        reqs: Vec<Request>,
+    ) -> result::Result<RaftCmdResponse, PbError> {
+        let resp = self.request(region_key, reqs, false, Duration::from_secs(5));
         if resp.get_header().has_error() {
             Err(resp.get_header().get_error().clone())
         } else {
-            Ok(())
+            Ok(resp)
         }
     }
 
