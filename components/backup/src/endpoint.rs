@@ -9,7 +9,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::{borrow::Cow, time::*};
 
 use concurrency_manager::ConcurrencyManager;
-use configuration::Configuration;
 use engine_rocks::raw::DB;
 use engine_traits::{name_to_cf, CfName, SstCompressionType};
 use external_storage_export::{create_storage, ExternalStorage};
@@ -18,6 +17,7 @@ use futures::channel::mpsc::*;
 use kvproto::backup::*;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use kvproto::metapb::*;
+use online_config::OnlineConfig;
 use raft::StateRole;
 use raftstore::coprocessor::RegionInfoProvider;
 use raftstore::store::util::find_peer;
@@ -414,8 +414,8 @@ impl BackupRange {
 #[derive(Clone)]
 pub struct ConfigManager(Arc<RwLock<BackupConfig>>);
 
-impl configuration::ConfigManager for ConfigManager {
-    fn dispatch(&mut self, change: configuration::ConfigChange) -> configuration::Result<()> {
+impl online_config::ConfigManager for ConfigManager {
+    fn dispatch(&mut self, change: online_config::ConfigChange) -> online_config::Result<()> {
         self.0.write().unwrap().update(change);
         Ok(())
     }
