@@ -8,11 +8,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use concurrency_manager::ConcurrencyManager;
-use configuration::{self, ConfigChange, ConfigManager, Configuration};
 use engine_traits::{KvEngine, Snapshot};
 use grpcio::Environment;
 use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::AdminCmdType;
+use online_config::{self, ConfigChange, ConfigManager, OnlineConfig};
 use pd_client::PdClient;
 use raftstore::coprocessor::CmdBatch;
 use raftstore::coprocessor::{ObserveHandle, ObserveID};
@@ -708,7 +708,7 @@ impl<S: Snapshot> ResolvedTsConfigManager<S> {
 }
 
 impl<S: Snapshot> ConfigManager for ResolvedTsConfigManager<S> {
-    fn dispatch(&mut self, change: ConfigChange) -> configuration::Result<()> {
+    fn dispatch(&mut self, change: ConfigChange) -> online_config::Result<()> {
         if let Err(e) = self.0.schedule(Task::ChangeConfig { change }) {
             error!("failed to schedule ChangeConfig task"; "err" => ?e);
         }

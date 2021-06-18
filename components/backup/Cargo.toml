@@ -65,7 +65,7 @@ failpoints = ["tikv/failpoints"]
 
 [dependencies]
 concurrency_manager = { path = "../concurrency_manager", default-features = false }
-configuration = { path = "../configuration" }
+online_config = { path = "../online_config" }
 crc64fast = "0.1"
 engine_rocks = { path = "../engine_rocks", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }

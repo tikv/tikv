@@ -28,7 +28,7 @@ async-trait = "0.1"
 byteorder = "1.2"
 bytes = "1.0"
 crossbeam = "0.8"
-configuration = { path = "../configuration" }
+online_config = { path = "../online_config" }
 crc32fast = "1.2"
 derive_more = "0.99.3"
 engine_traits = { path = "../engine_traits", default-features = false }
