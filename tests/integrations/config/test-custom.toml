@@ -619,8 +619,8 @@ hibernate-regions-compatible = false
 incremental-scan-threads = 3
 incremental-scan-concurrency = 4
 incremental-scan-speed-limit = 7
-sink-memory-quota = "7MB"
 old-value-cache-memory-quota = "14MB"
+sink-memory-quota = "7MB"
 
 [split]
 detect-times = 10
