@@ -573,16 +573,11 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             Builder::new()
                 .threaded_scheduler()
                 .thread_name(thd_name!("debugger"))
-<<<<<<< HEAD
                 .core_threads(1)
-                .on_thread_start(tikv_alloc::add_thread_memory_accessor)
-=======
-                .worker_threads(1)
                 .on_thread_start(move || {
                     tikv_alloc::add_thread_memory_accessor();
                     tikv_util::thread_group::set_properties(props.clone());
                 })
->>>>>>> bfc3c47d3... raftstore: skip clearing callback when shutdown (#10364)
                 .on_thread_stop(tikv_alloc::remove_thread_memory_accessor)
                 .build()
                 .unwrap(),
