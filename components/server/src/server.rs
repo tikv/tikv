@@ -90,6 +90,7 @@ use tikv_util::{
     config::{ensure_dir_exist, VersionTrack},
     math::MovingAvgU32,
     sys::{register_memory_usage_high_water, SysQuota},
+    thread_group::GroupProperties,
     time::Monitor,
     worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker, Worker},
 };
@@ -199,6 +200,7 @@ struct Servers<ER: RaftEngine> {
 
 impl<ER: RaftEngine> TiKVServer<ER> {
     fn init(mut config: TiKvConfig) -> TiKVServer<ER> {
+        tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
         // It is okay use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only
         // used during startup process.
@@ -566,11 +568,15 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         };
 
         // The `DebugService` and `DiagnosticsService` will share the same thread pool
+        let props = tikv_util::thread_group::current_properties();
         let debug_thread_pool = Arc::new(
             Builder::new_multi_thread()
                 .thread_name(thd_name!("debugger"))
                 .worker_threads(1)
-                .on_thread_start(tikv_alloc::add_thread_memory_accessor)
+                .on_thread_start(move || {
+                    tikv_alloc::add_thread_memory_accessor();
+                    tikv_util::thread_group::set_properties(props.clone());
+                })
                 .on_thread_stop(tikv_alloc::remove_thread_memory_accessor)
                 .build()
                 .unwrap(),
@@ -1051,6 +1057,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn stop(self) {
+        tikv_util::thread_group::mark_shutdown();
         let mut servers = self.servers.unwrap();
         servers
             .server
