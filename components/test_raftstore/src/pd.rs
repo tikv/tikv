@@ -1,11 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cmp;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
-use std::{cmp, thread};
 
 use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures::compat::Future01CompatExt;
@@ -128,7 +128,7 @@ impl Operator {
     fn make_region_heartbeat_response(
         &self,
         region_id: u64,
-        cluster: &Cluster,
+        cluster: &PdCluster,
     ) -> pdpb::RegionHeartbeatResponse {
         match *self {
             Operator::AddPeer { ref peer, .. } => {
@@ -200,7 +200,7 @@ impl Operator {
 
     fn try_finished(
         &mut self,
-        cluster: &Cluster,
+        cluster: &PdCluster,
         region: &metapb::Region,
         leader: &metapb::Peer,
     ) -> bool {
@@ -282,7 +282,7 @@ impl Operator {
     }
 }
 
-struct Cluster {
+struct PdCluster {
     meta: metapb::Cluster,
     stores: HashMap<u64, Store>,
     regions: BTreeMap<Key, metapb::Region>,
@@ -316,13 +316,13 @@ struct Cluster {
     pub check_merge_target_integrity: bool,
 }
 
-impl Cluster {
-    fn new(cluster_id: u64) -> Cluster {
+impl PdCluster {
+    fn new(cluster_id: u64) -> PdCluster {
         let mut meta = metapb::Cluster::default();
         meta.set_id(cluster_id);
         meta.set_max_peer_count(5);
 
-        Cluster {
+        PdCluster {
             meta,
             stores: HashMap::default(),
             regions: BTreeMap::new(),
@@ -678,6 +678,7 @@ impl Cluster {
         if let Some(status) = replication_status {
             self.region_replication_status.insert(region.id, status);
         }
+        fail_point!("test_raftstore::pd::region_heartbeat");
 
         self.handle_heartbeat(region, leader)
     }
@@ -724,7 +725,7 @@ pub fn bootstrap_with_first_region(pd_client: Arc<TestPdClient>) -> Result<()> {
 
 pub struct TestPdClient {
     cluster_id: u64,
-    cluster: Arc<RwLock<Cluster>>,
+    cluster: Arc<RwLock<PdCluster>>,
     timer: Handle,
     is_incompatible: bool,
     tso: AtomicU64,
@@ -739,7 +740,7 @@ impl TestPdClient {
         feature_gate.set_version("999.0.0").unwrap();
         TestPdClient {
             cluster_id,
-            cluster: Arc::new(RwLock::new(Cluster::new(cluster_id))),
+            cluster: Arc::new(RwLock::new(PdCluster::new(cluster_id))),
             timer: GLOBAL_TIMER_HANDLE.clone(),
             is_incompatible,
             tso: AtomicU64::new(1),
@@ -1211,9 +1212,7 @@ impl TestPdClient {
                 c.stores.remove(&store_id);
             }
             Err(e) => {
-                if !thread::panicking() {
-                    panic!("failed to acquire write lock: {:?}", e)
-                }
+                safe_panic!("failed to acquire write lock: {:?}", e)
             }
         }
     }
