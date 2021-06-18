@@ -2,6 +2,7 @@
 
 //! Storage configuration.
 
+use crate::config::BLOCK_CACHE_RATE;
 use crate::server::ttl::TTLCheckerTask;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration, Result as CfgResult};
@@ -197,7 +198,7 @@ impl BlockCacheConfig {
         let capacity = match self.capacity.0 {
             None => {
                 let total_mem = SysQuota::memory_limit_in_bytes();
-                ((total_mem as f64) * 0.45) as usize
+                ((total_mem as f64) * BLOCK_CACHE_RATE) as usize
             }
             Some(c) => c.0 as usize,
         };
