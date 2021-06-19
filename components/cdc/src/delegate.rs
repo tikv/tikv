@@ -35,8 +35,8 @@ use tikv_util::time::Instant;
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteRef, WriteType};
 
 use crate::channel::{SendError, Sink};
-use crate::endpoint::{OldValueCache, OldValueCallback};
 use crate::metrics::*;
+use crate::old_value::{OldValueCache, OldValueCallback};
 use crate::service::{CdcEvent, ConnID};
 use crate::{Error, Result};
 
