@@ -34,6 +34,7 @@ use raftstore::store::*;
 use raftstore::{Error, Result};
 use tikv::config::TiKvConfig;
 use tikv::server::Result as ServerResult;
+use tikv_util::thread_group::GroupProperties;
 use tikv_util::HandyRwLock;
 
 use super::*;
@@ -137,6 +138,7 @@ pub struct Cluster<T: Simulator> {
     pub engines: HashMap<u64, Engines<RocksEngine, RocksEngine>>,
     key_managers_map: HashMap<u64, Option<Arc<DataKeyManager>>>,
     pub labels: HashMap<u64, HashMap<String, String>>,
+    group_props: HashMap<u64, GroupProperties>,
 
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
@@ -163,6 +165,7 @@ impl<T: Simulator> Cluster<T> {
             engines: HashMap::default(),
             key_managers_map: HashMap::default(),
             labels: HashMap::default(),
+            group_props: HashMap::default(),
             sim,
             pd_client,
         }
@@ -206,9 +209,12 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn create_engines(&mut self) {
-        self.io_rate_limiter = Some(Arc::new(IORateLimiter::new(
-            0, true, /*enable_statistics*/
-        )));
+        self.io_rate_limiter = Some(Arc::new(
+            self.cfg
+                .storage
+                .io_rate_limit
+                .build(true /*enable_statistics*/),
+        ));
         for _ in 0..self.count {
             self.create_engine(None);
         }
@@ -230,6 +236,9 @@ impl<T: Simulator> Cluster<T> {
             let key_mgr = self.key_managers.last().unwrap().clone();
             let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
 
+            let props = GroupProperties::default();
+            tikv_util::thread_group::set_properties(Some(props.clone()));
+
             let mut sim = self.sim.wl();
             let node_id = sim.run_node(
                 0,
@@ -240,6 +249,7 @@ impl<T: Simulator> Cluster<T> {
                 router,
                 system,
             )?;
+            self.group_props.insert(node_id, props);
             self.engines.insert(node_id, engines);
             self.store_metas.insert(node_id, store_meta);
             self.key_managers_map.insert(node_id, key_mgr);
@@ -301,6 +311,9 @@ impl<T: Simulator> Cluster<T> {
                 .insert(Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP))))
                 .clone(),
         };
+        let props = GroupProperties::default();
+        self.group_props.insert(node_id, props.clone());
+        tikv_util::thread_group::set_properties(Some(props));
         debug!("calling run node"; "node_id" => node_id);
         // FIXME: rocksdb event listeners may not work, because we change the router.
         self.sim
@@ -312,13 +325,10 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn stop_node(&mut self, node_id: u64) {
         debug!("stopping node {}", node_id);
+        self.group_props[&node_id].mark_shutdown();
         match self.sim.write() {
             Ok(mut sim) => sim.stop_node(node_id),
-            Err(_) => {
-                if !thread::panicking() {
-                    panic!("failed to acquire write lock.")
-                }
-            }
+            Err(_) => safe_panic!("failed to acquire write lock."),
         }
         self.pd_client.shutdown_store(node_id);
         debug!("node {} stopped", node_id);
@@ -689,12 +699,9 @@ impl<T: Simulator> Cluster<T> {
         match self.sim.read() {
             Ok(s) => keys = s.get_node_ids(),
             Err(_) => {
-                if thread::panicking() {
-                    // Leave the resource to avoid double panic.
-                    return;
-                } else {
-                    panic!("failed to acquire read lock");
-                }
+                safe_panic!("failed to acquire read lock");
+                // Leave the resource to avoid double panic.
+                return;
             }
         }
         for id in keys {
@@ -925,30 +932,32 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn must_put_cf(&mut self, cf: &str, key: &[u8], value: &[u8]) {
-        let resp = self.request(
-            key,
-            vec![new_put_cf_cmd(cf, key, value)],
-            false,
-            Duration::from_secs(5),
-        );
-        if resp.get_header().has_error() {
-            panic!("response {:?} has error", resp);
+        match self.batch_put(key, vec![new_put_cf_cmd(cf, key, value)]) {
+            Ok(resp) => {
+                assert_eq!(resp.get_responses().len(), 1);
+                assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Put);
+            }
+            Err(e) => {
+                panic!("has error: {:?}", e);
+            }
         }
-        assert_eq!(resp.get_responses().len(), 1);
-        assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Put);
     }
 
     pub fn put(&mut self, key: &[u8], value: &[u8]) -> result::Result<(), PbError> {
-        let resp = self.request(
-            key,
-            vec![new_put_cf_cmd(CF_DEFAULT, key, value)],
-            false,
-            Duration::from_secs(5),
-        );
+        self.batch_put(key, vec![new_put_cf_cmd(CF_DEFAULT, key, value)])
+            .map(|_| ())
+    }
+
+    pub fn batch_put(
+        &mut self,
+        region_key: &[u8],
+        reqs: Vec<Request>,
+    ) -> result::Result<RaftCmdResponse, PbError> {
+        let resp = self.request(region_key, reqs, false, Duration::from_secs(5));
         if resp.get_header().has_error() {
             Err(resp.get_header().get_error().clone())
         } else {
-            Ok(())
+            Ok(resp)
         }
     }
 

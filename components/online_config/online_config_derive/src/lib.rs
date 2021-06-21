@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! This crate provides a macro that can be used to generate code to
-//! implement `Configuration` trait
+//! implement `OnlineConfig` trait
 
 extern crate proc_macro;
 
@@ -14,7 +14,7 @@ use syn::punctuated::Punctuated;
 use syn::token::Comma;
 use syn::*;
 
-#[proc_macro_derive(Configuration, attributes(config))]
+#[proc_macro_derive(OnlineConfig, attributes(online_config))]
 pub fn config(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     match generate_token(parse_macro_input!(input as DeriveInput)) {
         Ok(res) => res.into(),
@@ -26,7 +26,7 @@ fn generate_token(ast: DeriveInput) -> std::result::Result<TokenStream, Error> {
     let name = &ast.ident;
     check_generics(&ast.generics, name.span())?;
 
-    let creat_name = Ident::new("configuration", Span::call_site());
+    let creat_name = Ident::new("online_config", Span::call_site());
     let encoder_name = Ident::new(
         {
             // Avoid naming conflict
@@ -53,7 +53,7 @@ fn generate_token(ast: DeriveInput) -> std::result::Result<TokenStream, Error> {
     )?;
 
     Ok(quote! {
-        impl<#encoder_lt> #creat_name::Configuration<#encoder_lt> for #name {
+        impl<#encoder_lt> #creat_name::OnlineConfig<#encoder_lt> for #name {
             type Encoder = #encoder_name<#encoder_lt>;
             #update_fn
             #diff_fn
@@ -68,7 +68,7 @@ fn check_generics(g: &Generics, sp: Span) -> Result<()> {
     if !g.params.is_empty() || g.where_clause.is_some() {
         return Err(Error::new(
             sp,
-            "can not derive Configuration on struct with generics type",
+            "can not derive OnlineConfig on struct with generics type",
         ));
     }
     Ok(())
@@ -87,7 +87,7 @@ fn get_struct_fields(
     } else {
         Err(Error::new(
             span,
-            "expect derive Configuration on struct with named fields!",
+            "expect derive OnlineConfig on struct with named fields!",
         ))
     }
 }
@@ -119,7 +119,7 @@ fn encoder(
         field.ty = {
             let ty = &field.ty;
             if submodule {
-                Type::Verbatim(quote! { <#ty as #creat_name::Configuration<#lt>>::Encoder })
+                Type::Verbatim(quote! { <#ty as #creat_name::OnlineConfig<#lt>>::Encoder })
             } else {
                 Type::Verbatim(quote! { &#lt #ty })
             }
@@ -174,7 +174,7 @@ fn update(fields: &Punctuated<Field, Comma>, creat_name: &Ident) -> Result<Token
         let f = if submodule {
             quote! {
                 if let Some(#creat_name::ConfigValue::Module(v)) = #incoming.remove(#name_lit) {
-                    #creat_name::Configuration::update(&mut self.#name, v);
+                    #creat_name::OnlineConfig::update(&mut self.#name, v);
                 }
             }
         } else {
@@ -207,7 +207,7 @@ fn diff(fields: &Punctuated<Field, Comma>, creat_name: &Ident) -> Result<TokenSt
         let f = if submodule {
             quote! {
                 {
-                    let diff = #creat_name::Configuration::diff(&self.#name, &#incoming.#name);
+                    let diff = #creat_name::OnlineConfig::diff(&self.#name, &#incoming.#name);
                     if diff.len() != 0 {
                         #diff_ident.insert(#name_lit.to_owned(), #creat_name::ConfigValue::from(diff));
                     }
@@ -245,7 +245,7 @@ fn typed(fields: &Punctuated<Field, Comma>, creat_name: &Ident) -> Result<TokenS
         let f = if submodule {
             quote! {
                 {
-                    let typed = #creat_name::Configuration::typed(&self.#name);
+                    let typed = #creat_name::OnlineConfig::typed(&self.#name);
                     #typed_ident.insert(#name_lit.to_owned(), #creat_name::ConfigValue::from(typed));
                 }
             }
@@ -272,7 +272,7 @@ fn typed(fields: &Punctuated<Field, Comma>, creat_name: &Ident) -> Result<TokenS
 fn get_config_attrs(attrs: &[Attribute]) -> Result<(bool, bool, bool)> {
     let (mut skip, mut hidden, mut submodule) = (false, false, false);
     for attr in attrs {
-        if !is_attr("config", &attr) {
+        if !is_attr("online_config", &attr) {
             continue;
         }
         match attr.parse_args::<Ident>()? {
@@ -282,7 +282,7 @@ fn get_config_attrs(attrs: &[Attribute]) -> Result<(bool, bool, bool)> {
             name => {
                 return Err(Error::new(
                     name.span(),
-                    "expect #[config(skip)], #[config(hidden)] or #[config(submodule)]",
+                    "expect #[online_config(skip)], #[online_config(hidden)] or #[online_config(submodule)]",
                 ));
             }
         }

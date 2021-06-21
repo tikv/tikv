@@ -13,6 +13,7 @@ use tikv::read_pool::ReadPool;
 use tikv::server::Config;
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::{Engine, TestEngineBuilder};
+use tikv_util::thread_group::GroupProperties;
 
 #[derive(Clone)]
 pub struct ProductTable(Table);
@@ -82,13 +83,14 @@ pub fn init_data_with_details<E: Engine>(
         store.commit_with_ctx(ctx);
     }
 
+    tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
     let pool = ReadPool::from(readpool_impl::build_read_pool_for_test(
         &CoprReadPoolConfig::default_for_test(),
         store.get_engine(),
     ));
     let cm = ConcurrencyManager::new(1.into());
-    let cop = Endpoint::new(cfg, pool.handle(), cm, PerfLevel::EnableCount);
-    (store, cop)
+    let copr = Endpoint::new(cfg, pool.handle(), cm, PerfLevel::EnableCount);
+    (store, copr)
 }
 
 pub fn init_data_with_commit(

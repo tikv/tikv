@@ -1,15 +1,15 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use coprocessor_plugin_api::{allocator::HostAllocatorPtr, *};
+use coprocessor_plugin_api::{allocator::HostAllocatorPtr, util::*, *};
 use libloading::{Error as DylibError, Library, Symbol};
 use notify::{DebouncedEvent, RecursiveMode, Watcher};
 use semver::Version;
-use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, RwLock};
 use std::thread;
 use std::time::Duration;
+use std::{collections::HashMap, ops::Range};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -422,12 +422,12 @@ impl LoadedPlugin {
 impl CoprocessorPlugin for LoadedPlugin {
     fn on_raw_coprocessor_request(
         &self,
-        region: &Region,
-        request: &RawRequest,
+        ranges: Vec<Range<Key>>,
+        request: RawRequest,
         storage: &dyn RawStorage,
-    ) -> Result<RawResponse, PluginError> {
+    ) -> PluginResult<RawResponse> {
         self.plugin
-            .on_raw_coprocessor_request(region, request, storage)
+            .on_raw_coprocessor_request(ranges, request, storage)
     }
 }
 
@@ -449,18 +449,15 @@ fn is_library_file<P: AsRef<Path>>(path: P) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coprocessor_plugin_api::pkgname_to_libname;
-    use std::sync::Once;
-
-    static INIT: Once = Once::new();
-    static EXAMPLE_PLUGIN: &[u8] = include_bytes!(env!("CARGO_DYLIB_FILE_EXAMPLE_PLUGIN"));
+    use coprocessor_plugin_api::util::pkgname_to_libname;
 
     fn initialize_library() -> PathBuf {
-        let lib_path = std::env::temp_dir().join(&pkgname_to_libname("example-plugin"));
-        INIT.call_once(|| {
-            std::fs::write(&lib_path, EXAMPLE_PLUGIN).unwrap();
-        });
-        lib_path
+        Path::new(if cfg!(debug_assertions) {
+            "target/debug/deps"
+        } else {
+            "target/release/deps"
+        })
+        .join(pkgname_to_libname("example-plugin"))
     }
 
     #[test]

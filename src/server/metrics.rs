@@ -49,7 +49,7 @@ make_auto_flush_static_metric! {
         remove_lock_observer,
         coprocessor,
         coprocessor_stream,
-        coprocessor_v2,
+        raw_coprocessor,
         mvcc_get_by_key,
         mvcc_get_by_start_ts,
         split_region,
@@ -377,6 +377,14 @@ lazy_static! {
         "Total CPU cores quota for TiKV server"
     )
     .unwrap();
+    pub static ref MEM_TRACE_SUM_GAUGE: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_server_mem_trace_sum",
+        "The sum of memory trace for TiKV server",
+        &["name"]
+    )
+    .unwrap();
+    pub static ref MEMORY_USAGE_GAUGE: IntGauge =
+        register_int_gauge!("tikv_server_memory_usage", "Memory usage for the instance").unwrap();
 }
 
 make_auto_flush_static_metric! {

@@ -1,26 +1,27 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 use std::io;
+use std::time::Duration;
 
-use rusoto_core::{
-    request::DispatchSignedRequest,
-    {ByteStream, RusotoError},
-};
-use rusoto_credential::{ProvideAwsCredentials, StaticProvider};
-use rusoto_s3::{util::AddressingStyle, *};
-use tokio::time::{delay_for, timeout};
-
-use crate::util;
-use cloud::blob::{none_to_empty, BlobConfig, BlobStorage, BucketConf, StringNonEmpty};
 use fail::fail_point;
 use futures_util::{
     future::FutureExt,
     io::{AsyncRead, AsyncReadExt},
     stream::TryStreamExt,
 };
+use rusoto_core::{
+    request::DispatchSignedRequest,
+    {ByteStream, RusotoError},
+};
+use rusoto_credential::{ProvideAwsCredentials, StaticProvider};
+use rusoto_s3::{util::AddressingStyle, *};
+use tokio::time::{sleep, timeout};
+
+use cloud::blob::{none_to_empty, BlobConfig, BlobStorage, BucketConf, StringNonEmpty};
 pub use kvproto::backup::{Bucket as InputBucket, CloudDynamic, S3 as InputConfig};
-use std::time::Duration;
 use tikv_util::debug;
 use tikv_util::stream::{block_on_external_io, error_stream, retry};
+
+use crate::util;
 
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(900);
 pub const STORAGE_VENDOR_NAME_AWS: &str = "aws";
@@ -104,7 +105,7 @@ impl Config {
             bucket: StringNonEmpty::required_field(input.bucket, "bucket")?,
             prefix: StringNonEmpty::opt(input.prefix),
             storage_class: storage_class.clone(),
-            region: None,
+            region: StringNonEmpty::opt(input.region),
         };
         let access_key_pair = match StringNonEmpty::opt(input.access_key) {
             None => None,
@@ -406,7 +407,7 @@ impl<'client> S3Uploader<'client> {
             let delay_duration = Duration::from_millis(0);
 
             if delay_duration > Duration::from_millis(0) {
-                delay_for(delay_duration).await;
+                sleep(delay_duration).await;
             }
 
             #[cfg(feature = "failpoints")]
@@ -691,10 +692,16 @@ mod tests {
         let mut input = InputConfig::default();
         input.set_bucket("bucket".to_owned());
         input.set_prefix("backup 02/prefix/".to_owned());
+        input.set_region("us-west-2".to_owned());
         let c1 = Config::from_input(input.clone()).unwrap();
         let c2 = Config::from_cloud_dynamic(&cloud_dynamic_from_input(input)).unwrap();
         assert_eq!(c1.bucket.bucket, c2.bucket.bucket);
         assert_eq!(c1.bucket.prefix, c2.bucket.prefix);
+        assert_eq!(c1.bucket.region, c2.bucket.region);
+        assert_eq!(
+            c1.bucket.region,
+            StringNonEmpty::opt("us-west-2".to_owned())
+        );
     }
 
     fn cloud_dynamic_from_input(mut s3: InputConfig) -> CloudDynamic {

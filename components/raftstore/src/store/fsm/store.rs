@@ -24,6 +24,7 @@ use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::KeyRange;
 use kvproto::kvrpcpb::LeaderInfo;
 use kvproto::metapb::{self, Region, RegionEpoch};
+use kvproto::pdpb::QueryStats;
 use kvproto::pdpb::StoreStats;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
 use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState};
@@ -38,6 +39,7 @@ use engine_traits::{RaftEngine, RaftLogBatch};
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use pd_client::{FeatureGate, PdClient};
 use sst_importer::SSTImporter;
+use tikv_alloc::trace::TraceEvent;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant as TiInstant};
@@ -60,6 +62,7 @@ use crate::store::fsm::{
     CollectedReady,
 };
 use crate::store::local_metrics::RaftMetrics;
+use crate::store::memory::*;
 use crate::store::metrics::*;
 use crate::store::peer_storage::{self, HandleRaftReadyContext};
 use crate::store::transport::Transport;
@@ -85,6 +88,7 @@ const KV_WB_SHRINK_SIZE: usize = 256 * 1024;
 const RAFT_WB_SHRINK_SIZE: usize = 1024 * 1024;
 pub const PENDING_MSG_CAP: usize = 100;
 const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
+const ENTRY_CACHE_EVICT_TICK_DURATION: Duration = Duration::from_secs(1);
 
 pub struct StoreInfo<E> {
     pub engine: E,
@@ -167,6 +171,17 @@ where
     ER: RaftEngine,
 {
     pub router: BatchRouter<PeerFsm<EK, ER>, StoreFsm<EK>>,
+}
+
+impl<EK, ER> Drop for RaftRouter<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    fn drop(&mut self) {
+        MEMTRACE_RAFT_ROUTER_ALIVE.trace(TraceEvent::Reset(0));
+        MEMTRACE_RAFT_ROUTER_LEAK.trace(TraceEvent::Reset(0));
+    }
 }
 
 impl<EK, ER> Clone for RaftRouter<EK, ER>
@@ -279,6 +294,32 @@ where
         self.broadcast_normal(|| {
             PeerMsg::SignificantMsg(SignificantMsg::StoreResolved { store_id, group_id })
         })
+    }
+
+    pub fn register(&self, region_id: u64, mailbox: BasicMailbox<PeerFsm<EK, ER>>) {
+        self.router.register(region_id, mailbox);
+        self.update_trace();
+    }
+
+    pub fn register_all(&self, mailboxes: Vec<(u64, BasicMailbox<PeerFsm<EK, ER>>)>) {
+        self.router.register_all(mailboxes);
+        self.update_trace();
+    }
+
+    pub fn close(&self, region_id: u64) {
+        self.router.close(region_id);
+        self.update_trace();
+    }
+
+    pub fn clear_cache(&self) {
+        self.router.clear_cache();
+        self.update_trace();
+    }
+
+    fn update_trace(&self) {
+        let router_trace = self.router.trace();
+        MEMTRACE_RAFT_ROUTER_ALIVE.trace(TraceEvent::Reset(router_trace.alive));
+        MEMTRACE_RAFT_ROUTER_LEAK.trace(TraceEvent::Reset(router_trace.leak));
     }
 }
 
@@ -394,6 +435,8 @@ where
             self.cfg.raft_base_tick_interval.0;
         self.tick_batch[PeerTicks::RAFT_LOG_GC.bits() as usize].wait_duration =
             self.cfg.raft_log_gc_tick_interval.0;
+        self.tick_batch[PeerTicks::ENTRY_CACHE_EVICT.bits() as usize].wait_duration =
+            ENTRY_CACHE_EVICT_TICK_DURATION;
         self.tick_batch[PeerTicks::PD_HEARTBEAT.bits() as usize].wait_duration =
             self.cfg.pd_heartbeat_tick_interval.0;
         self.tick_batch[PeerTicks::SPLIT_REGION_CHECK.bits() as usize].wait_duration =
@@ -431,7 +474,6 @@ where
         &mut self,
         msg: &RaftMessage,
         cur_epoch: RegionEpoch,
-        need_gc: bool,
         target_region: Option<metapb::Region>,
     ) {
         let region_id = msg.get_region_id();
@@ -439,23 +481,14 @@ where
         let to_peer = msg.get_to_peer();
         let msg_type = msg.get_message().get_msg_type();
 
-        if !need_gc {
-            info!(
-                "raft message is stale, ignore it";
-                "region_id" => region_id,
-                "current_region_epoch" => ?cur_epoch,
-                "msg_type" => ?msg_type,
-            );
-            self.raft_metrics.message_dropped.stale_msg += 1;
-            return;
-        }
-
         info!(
             "raft message is stale, tell to gc";
             "region_id" => region_id,
             "current_region_epoch" => ?cur_epoch,
             "msg_type" => ?msg_type,
         );
+
+        self.raft_metrics.message_dropped.stale_msg += 1;
 
         let mut gc_msg = RaftMessage::default();
         gc_msg.set_region_id(region_id);
@@ -620,6 +653,8 @@ pub struct RaftPoller<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: 'stat
     poll_ctx: PollContext<EK, ER, T>,
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
+
+    trace_event: TraceEvent,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
@@ -853,6 +888,11 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             .observe(duration_to_sec(self.timer.elapsed()) as f64);
         self.poll_ctx.raft_metrics.flush();
         self.poll_ctx.store_stat.flush();
+
+        for peer in peers {
+            peer.update_memory_trace(&mut self.trace_event);
+        }
+        MEMTRACE_PEERS.trace(mem::take(&mut self.trace_event));
     }
 
     fn pause(&mut self) {
@@ -1112,6 +1152,7 @@ where
             messages_per_tick: ctx.cfg.messages_per_tick,
             poll_ctx: ctx,
             cfg_tracker: self.cfg.clone().tracker(tag),
+            trace_event: TraceEvent::default(),
         }
     }
 }
@@ -1306,7 +1347,10 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let mut address = Vec::with_capacity(region_peers.len());
         for (tx, fsm) in region_peers {
             address.push(fsm.region_id());
-            mailboxes.push((fsm.region_id(), BasicMailbox::new(tx, fsm)));
+            mailboxes.push((
+                fsm.region_id(),
+                BasicMailbox::new(tx, fsm, self.router.state_cnt().clone()),
+            ));
         }
         self.router.register_all(mailboxes);
 
@@ -1352,6 +1396,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         // Wait all workers finish.
         let handle = workers.pd_worker.stop();
         self.apply_system.shutdown();
+        fail_point!("after_shutdown_apply");
         self.system.shutdown();
         if let Some(h) = handle {
             h.join().unwrap();
@@ -1454,7 +1499,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 None
             };
             self.ctx
-                .handle_stale_msg(msg, region_epoch.clone(), true, merge_target);
+                .handle_stale_msg(msg, region_epoch.clone(), merge_target);
             return Ok(CheckMsgStatus::DropMsg);
         }
         // The region in this peer is already destroyed
@@ -1467,33 +1512,34 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 "current_region_epoch" => ?region_epoch,
                 "msg_type" => ?msg_type,
             );
-            let mut need_gc_msg = util::is_vote_msg(msg.get_message());
-            if msg.has_extra_msg() {
-                // A learner can't vote so it sends the check-stale-peer msg to others to find out whether
-                // it is removed due to conf change or merge.
-                need_gc_msg |=
-                    msg.get_extra_msg().get_type() == ExtraMessageType::MsgCheckStalePeer;
-                // For backward compatibility
-                need_gc_msg |= msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp;
-            }
-            let not_exist = util::find_peer(region, from_store_id).is_none();
-            self.ctx
-                .handle_stale_msg(msg, region_epoch.clone(), need_gc_msg && not_exist, None);
-
-            if need_gc_msg && !not_exist {
-                let mut send_msg = RaftMessage::default();
-                send_msg.set_region_id(region_id);
-                send_msg.set_from_peer(msg.get_to_peer().clone());
-                send_msg.set_to_peer(msg.get_from_peer().clone());
-                send_msg.set_region_epoch(region_epoch.clone());
-                let extra_msg = send_msg.mut_extra_msg();
-                extra_msg.set_type(ExtraMessageType::MsgCheckStalePeerResponse);
-                extra_msg.set_check_peers(region.get_peers().into());
-                if let Err(e) = self.ctx.trans.send(send_msg) {
-                    error!(?e;
-                        "send check stale peer response message failed";
-                        "region_id" => region_id,
-                    );
+            if util::find_peer(region, from_store_id).is_none() {
+                self.ctx.handle_stale_msg(msg, region_epoch.clone(), None);
+            } else {
+                let mut need_gc_msg = util::is_vote_msg(msg.get_message());
+                if msg.has_extra_msg() {
+                    // A learner can't vote so it sends the check-stale-peer msg to others to find out whether
+                    // it is removed due to conf change or merge.
+                    need_gc_msg |=
+                        msg.get_extra_msg().get_type() == ExtraMessageType::MsgCheckStalePeer;
+                    // For backward compatibility
+                    need_gc_msg |=
+                        msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp;
+                }
+                if need_gc_msg {
+                    let mut send_msg = RaftMessage::default();
+                    send_msg.set_region_id(region_id);
+                    send_msg.set_from_peer(msg.get_to_peer().clone());
+                    send_msg.set_to_peer(msg.get_from_peer().clone());
+                    send_msg.set_region_epoch(region_epoch.clone());
+                    let extra_msg = send_msg.mut_extra_msg();
+                    extra_msg.set_type(ExtraMessageType::MsgCheckStalePeerResponse);
+                    extra_msg.set_check_peers(region.get_peers().into());
+                    if let Err(e) = self.ctx.trans.send(send_msg) {
+                        error!(?e;
+                            "send check stale peer response message failed";
+                            "region_id" => region_id,
+                        );
+                    }
                 }
             }
 
@@ -1786,7 +1832,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         meta.region_read_progress
             .insert(region_id, peer.peer.read_progress.clone());
 
-        let mailbox = BasicMailbox::new(tx, peer);
+        let mailbox = BasicMailbox::new(tx, peer, self.ctx.router.state_cnt().clone());
         self.ctx.router.register(region_id, mailbox);
         self.ctx
             .router
@@ -1963,6 +2009,30 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 .is_busy
                 .swap(false, Ordering::SeqCst),
         );
+
+        let mut query_stats = QueryStats::default();
+        query_stats.set_put(
+            self.ctx
+                .global_stat
+                .stat
+                .engine_total_query_put
+                .swap(0, Ordering::SeqCst),
+        );
+        query_stats.set_delete(
+            self.ctx
+                .global_stat
+                .stat
+                .engine_total_query_delete
+                .swap(0, Ordering::SeqCst),
+        );
+        query_stats.set_delete_range(
+            self.ctx
+                .global_stat
+                .stat
+                .engine_total_query_delete_range
+                .swap(0, Ordering::SeqCst),
+        );
+        stats.set_query_stats(query_stats);
 
         let store_info = StoreInfo {
             engine: self.ctx.engines.kv.clone(),
@@ -2359,6 +2429,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     }
 
     fn on_check_leader(&self, leaders: Vec<LeaderInfo>, cb: Box<dyn FnOnce(Vec<u64>) + Send>) {
+        let timer = TiInstant::now_coarse();
         let meta = self.ctx.store_meta.lock().unwrap();
         let regions = leaders
             .into_iter()
@@ -2413,6 +2484,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             .flatten()
             .collect();
         cb(regions);
+
+        self.ctx
+            .raft_metrics
+            .check_leader
+            .observe(duration_to_sec(timer.elapsed()) as f64);
     }
 
     fn on_get_store_safe_ts(&self, key_range: KeyRange, cb: Box<dyn FnOnce(u64) + Send>) {
@@ -2517,7 +2593,7 @@ mod tests {
             region.set_start_key(kr.get_start_key().to_vec());
             region.set_end_key(kr.get_end_key().to_vec());
             region.set_peers(vec![kvproto::metapb::Peer::default()].into());
-            let rrp = RegionReadProgress::new(1, 1);
+            let rrp = RegionReadProgress::new(1, 1, "".to_owned());
             rrp.update_safe_ts(1, safe_ts);
             assert_eq!(rrp.safe_ts(), safe_ts);
             meta.region_ranges.insert(enc_end_key(&region), id);

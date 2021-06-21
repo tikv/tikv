@@ -676,7 +676,7 @@ fn test_debug_get() {
     req.set_key(b"foo".to_vec());
     match debug_client.get(&req).unwrap_err() {
         Error::RpcFailure(status) => {
-            assert_eq!(status.status, RpcStatusCode::NOT_FOUND);
+            assert_eq!(status.code(), RpcStatusCode::NOT_FOUND);
         }
         _ => panic!("expect NotFound"),
     }
@@ -694,7 +694,7 @@ fn test_debug_raft_log() {
     entry.set_term(1);
     entry.set_index(1);
     entry.set_entry_type(eraftpb::EntryType::EntryNormal);
-    entry.set_data(vec![42]);
+    entry.set_data(vec![42].into());
     engine.c().put_msg(&key, &entry).unwrap();
     assert_eq!(
         engine.c().get_msg::<eraftpb::Entry>(&key).unwrap().unwrap(),
@@ -713,7 +713,7 @@ fn test_debug_raft_log() {
     req.set_log_index(region_id + 1);
     match debug_client.raft_log(&req).unwrap_err() {
         Error::RpcFailure(status) => {
-            assert_eq!(status.status, RpcStatusCode::NOT_FOUND);
+            assert_eq!(status.code(), RpcStatusCode::NOT_FOUND);
         }
         _ => panic!("expect NotFound"),
     }
@@ -786,7 +786,7 @@ fn test_debug_region_info() {
     req.set_region_id(region_id + 1);
     match debug_client.region_info(&req).unwrap_err() {
         Error::RpcFailure(status) => {
-            assert_eq!(status.status, RpcStatusCode::NOT_FOUND);
+            assert_eq!(status.code(), RpcStatusCode::NOT_FOUND);
         }
         _ => panic!("expect NotFound"),
     }
@@ -836,7 +836,7 @@ fn test_debug_region_size() {
     req.set_region_id(region_id + 1);
     match debug_client.region_size(&req).unwrap_err() {
         Error::RpcFailure(status) => {
-            assert_eq!(status.status, RpcStatusCode::NOT_FOUND);
+            assert_eq!(status.code(), RpcStatusCode::NOT_FOUND);
         }
         _ => panic!("expect NotFound"),
     }
@@ -1658,7 +1658,7 @@ fn test_forwarding_reconnect() {
     assert!(elapsed < timeout, "{:?}", elapsed);
     // Because leader server is shutdown, reconnecting has to be timeout.
     match res {
-        Err(grpcio::Error::RpcFailure(s)) => assert_eq!(s.status, RpcStatusCode::CANCELLED),
+        Err(grpcio::Error::RpcFailure(s)) => assert_eq!(s.code(), RpcStatusCode::CANCELLED),
         _ => panic!("unexpected result {:?}", res),
     }
 
@@ -1689,24 +1689,32 @@ fn test_health_check() {
 }
 
 #[test]
-fn test_wait_chain_api() {
+fn test_get_lock_wait_info_api() {
     let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
     let client2 = client.clone();
 
     let mut ctx1 = ctx.clone();
     ctx1.set_resource_group_tag(b"resource_group_tag1".to_vec());
     must_kv_pessimistic_lock(&client, ctx1, b"a".to_vec(), 20);
+    let mut ctx2 = ctx.clone();
     let handle = thread::spawn(move || {
-        let mut ctx2 = ctx.clone();
         ctx2.set_resource_group_tag(b"resource_group_tag2".to_vec());
-        kv_pessimistic_lock(&client2, ctx2, vec![b"a".to_vec()], 30, 30, false);
+        kv_pessimistic_lock_with_ttl(&client2, ctx2, vec![b"a".to_vec()], 30, 30, false, 1000);
     });
-    thread::sleep(Duration::from_millis(10));
-    // lock_ttl is 20ms, so the lock should be in waiting state here.
-    let req = GetLockWaitInfoRequest::default();
-    let resp = client.get_lock_wait_info(&req).unwrap();
-    let entries = resp.entries.to_vec();
 
+    let mut entries = None;
+    for _retry in 0..100 {
+        thread::sleep(Duration::from_millis(10));
+        // The lock should be in waiting state here.
+        let req = GetLockWaitInfoRequest::default();
+        let resp = client.get_lock_wait_info(&req).unwrap();
+        if resp.entries.len() != 0 {
+            entries = Some(resp.entries.to_vec());
+            break;
+        }
+    }
+
+    let entries = entries.unwrap();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].txn, 30);
     assert_eq!(entries[0].wait_for_txn, 20);
@@ -1715,5 +1723,6 @@ fn test_wait_chain_api() {
         entries[0].resource_group_tag,
         b"resource_group_tag2".to_vec()
     );
+    must_kv_pessimistic_rollback(&client, ctx, b"a".to_vec(), 20);
     handle.join().unwrap();
 }

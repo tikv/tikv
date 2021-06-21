@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::VecDeque;
-use std::{cmp, u64, usize};
+use std::{cmp, mem, u64, usize};
 
 use crate::store::fsm::apply;
 use crate::store::metrics::*;
@@ -14,6 +14,7 @@ use kvproto::kvrpcpb::LockInfo;
 use kvproto::raft_cmdpb::{self, RaftCmdRequest};
 use protobuf::Message;
 use tikv_util::codec::number::{NumberEncoder, MAX_VAR_U64_LEN};
+use tikv_util::memory::HeapSize;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::MustConsumeVec;
 use tikv_util::{box_err, debug};
@@ -27,21 +28,26 @@ where
     S: Snapshot,
 {
     pub id: Uuid,
-    pub cmds: MustConsumeVec<(RaftCmdRequest, Callback<S>, Option<u64>)>,
+    cmds: MustConsumeVec<(RaftCmdRequest, Callback<S>, Option<u64>)>,
     pub propose_time: Timespec,
     pub read_index: Option<u64>,
     pub addition_request: Option<Box<raft_cmdpb::ReadIndexRequest>>,
     pub locked: Option<Box<LockInfo>>,
     // `true` means it's in `ReadIndexQueue::reads`.
     in_contexts: bool,
+
+    cmds_heap_size: usize,
 }
 
 impl<S> ReadIndexRequest<S>
 where
     S: Snapshot,
 {
+    const CMD_SIZE: usize = mem::size_of::<(RaftCmdRequest, Callback<S>, Option<u64>)>();
+
     pub fn push_command(&mut self, req: RaftCmdRequest, cb: Callback<S>, read_index: u64) {
         RAFT_READ_INDEX_PENDING_COUNT.inc();
+        self.cmds_heap_size += req.heap_size();
         self.cmds.push((req, cb, Some(read_index)));
     }
 
@@ -52,6 +58,10 @@ where
         propose_time: Timespec,
     ) -> Self {
         RAFT_READ_INDEX_PENDING_COUNT.inc();
+
+        // Ignore heap allocations for `Callback`.
+        let cmds_heap_size = req.heap_size();
+
         let mut cmds = MustConsumeVec::with_capacity("callback of index read", 1);
         cmds.push((req, cb, None));
         ReadIndexRequest {
@@ -62,7 +72,17 @@ where
             addition_request: None,
             locked: None,
             in_contexts: false,
+            cmds_heap_size,
         }
+    }
+
+    pub fn cmds(&self) -> &[(RaftCmdRequest, Callback<S>, Option<u64>)] {
+        &*self.cmds
+    }
+
+    pub fn take_cmds(&mut self) -> MustConsumeVec<(RaftCmdRequest, Callback<S>, Option<u64>)> {
+        self.cmds_heap_size = 0;
+        self.cmds.take()
     }
 }
 
@@ -250,7 +270,7 @@ where
         }
     }
 
-    pub fn fold(&mut self, min_changed_offset: usize, max_changed_offset: usize) {
+    fn fold(&mut self, min_changed_offset: usize, max_changed_offset: usize) {
         let mut r_idx = self.reads[max_changed_offset].read_index.unwrap();
         let mut check_offset = max_changed_offset - 1;
         loop {
@@ -380,6 +400,40 @@ impl ReadIndexContext {
             locked.write_to_vec(&mut b).unwrap();
         }
         b
+    }
+}
+
+mod memtrace {
+    use super::*;
+    use tikv_util::memory::HeapSize;
+
+    impl<S> HeapSize for ReadIndexRequest<S>
+    where
+        S: Snapshot,
+    {
+        fn heap_size(&self) -> usize {
+            let mut size = self.cmds_heap_size + Self::CMD_SIZE * self.cmds.capacity();
+            if let Some(ref add) = self.addition_request {
+                size += add.heap_size();
+            }
+            size
+        }
+    }
+
+    impl<S> HeapSize for ReadIndexQueue<S>
+    where
+        S: Snapshot,
+    {
+        #[inline]
+        fn heap_size(&self) -> usize {
+            let mut size = self.reads.capacity() * mem::size_of::<ReadIndexRequest<S>>()
+                // For one Uuid and one usize.
+                + 24 * self.contexts.len();
+            for read in &self.reads {
+                size += read.heap_size();
+            }
+            size
+        }
     }
 }
 

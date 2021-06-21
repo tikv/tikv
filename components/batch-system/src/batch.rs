@@ -12,11 +12,13 @@ use crate::router::Router;
 use crossbeam::channel::{self, SendError};
 use file_system::{set_io_type, IOType};
 use std::borrow::Cow;
+use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use tikv_util::mpsc;
 use tikv_util::time::Instant;
-use tikv_util::{debug, error, info, thd_name, warn};
+use tikv_util::{debug, error, info, safe_panic, thd_name, warn};
 
 /// A unify type for FSMs so that they can be sent to channel easily.
 enum FsmTypes<N, C> {
@@ -411,9 +413,11 @@ where
             max_batch_size: self.max_batch_size,
             reschedule_duration: self.reschedule_duration,
         };
+        let props = tikv_util::thread_group::current_properties();
         let t = thread::Builder::new()
             .name(name)
             .spawn(move || {
+                tikv_util::thread_group::set_properties(props);
                 set_io_type(IOType::ForegroundWrite);
                 poller.poll();
             })
@@ -461,9 +465,7 @@ where
             }
         }
         if let Some(e) = last_error {
-            if !thread::panicking() {
-                panic!("failed to join worker thread: {:?}", e);
-            }
+            safe_panic!("failed to join worker thread: {:?}", e);
         }
         info!("batch system {} is stopped.", name_prefix);
     }
@@ -479,7 +481,8 @@ pub fn create_system<N: Fsm, C: Fsm>(
     sender: mpsc::LooseBoundedSender<C::Message>,
     controller: Box<C>,
 ) -> (BatchRouter<N, C>, BatchSystem<N, C>) {
-    let control_box = BasicMailbox::new(sender, controller);
+    let state_cnt = Arc::new(AtomicUsize::new(0));
+    let control_box = BasicMailbox::new(sender, controller, state_cnt.clone());
     let (tx, rx) = channel::unbounded();
     let (tx2, rx2) = channel::unbounded();
     let normal_scheduler = NormalScheduler {
@@ -490,7 +493,7 @@ pub fn create_system<N: Fsm, C: Fsm>(
         sender: tx,
         low_sender: tx2,
     };
-    let router = Router::new(control_box, normal_scheduler, control_scheduler);
+    let router = Router::new(control_box, normal_scheduler, control_scheduler, state_cnt);
     let system = BatchSystem {
         name_prefix: None,
         router: router.clone(),

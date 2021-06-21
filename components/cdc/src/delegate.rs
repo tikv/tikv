@@ -107,7 +107,7 @@ impl Downstream {
     }
 
     /// Sink events to the downstream.
-    pub fn sink_event(&self, mut event: Event) -> Result<()> {
+    pub fn sink_event(&self, mut event: Event, force: bool) -> Result<()> {
         event.set_request_id(self.req_id);
         if self.sink.is_none() {
             info!("cdc drop event, no sink";
@@ -115,7 +115,7 @@ impl Downstream {
             return Err(Error::Sink(SendError::Disconnected));
         }
         let sink = self.sink.as_ref().unwrap();
-        match sink.unbounded_send(CdcEvent::Event(event)) {
+        match sink.unbounded_send(CdcEvent::Event(event), force) {
             Ok(_) => Ok(()),
             Err(SendError::Disconnected) => {
                 debug!("cdc send event failed, disconnected";
@@ -135,7 +135,9 @@ impl Downstream {
         let mut change_data_event = Event::default();
         change_data_event.event = Some(Event_oneof_event::Error(err_event));
         change_data_event.region_id = region_id;
-        self.sink_event(change_data_event)
+        // Try it's best to send error events.
+        let force_send = true;
+        self.sink_event(change_data_event, force_send)
     }
 
     pub fn set_sink(&mut self, sink: Sink) {
@@ -293,7 +295,7 @@ impl Delegate {
 
     fn error_event(&self, err: Error) -> EventError {
         let mut err_event = EventError::default();
-        let mut err = err.extract_error_header();
+        let mut err = err.extract_region_error();
         if err.has_not_leader() {
             let not_leader = err.take_not_leader();
             err_event.set_not_leader(not_leader);
@@ -351,7 +353,6 @@ impl Delegate {
     where
         F: Fn(&Downstream) -> Result<()>,
     {
-        // fn broadcast(&self, change_data_event: Event, normal_only: bool) {
         let downstreams = self.downstreams();
         assert!(
             !downstreams.is_empty(),
@@ -553,7 +554,7 @@ impl Delegate {
                         for (tag, count) in cf_details.iter() {
                             CDC_OLD_VALUE_SCAN_DETAILS
                                 .with_label_values(&[*cf, *tag])
-                                .inc_by(*count as i64);
+                                .inc_by(*count as u64);
                         }
                     }
                 }
@@ -607,7 +608,9 @@ impl Delegate {
                     }
                 }
             }
-            downstream.sink_event(event)
+            // Do not force send for real time change data events.
+            let force_send = false;
+            downstream.sink_event(event, force_send)
         };
         match self.broadcast(send) {
             Ok(()) => Ok(()),
@@ -880,7 +883,8 @@ mod tests {
         region.mut_region_epoch().set_conf_ver(2);
         let region_epoch = region.get_region_epoch().clone();
 
-        let (sink, drain) = crate::channel::canal(1);
+        let quota = crate::channel::MemoryQuota::new(usize::MAX);
+        let (sink, mut drain) = crate::channel::channel(1, quota);
         let rx = drain.drain();
         let request_id = 123;
         let mut downstream =

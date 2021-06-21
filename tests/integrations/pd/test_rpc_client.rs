@@ -99,10 +99,9 @@ fn test_rpc_client() {
         prev_id = alloc_id;
     }
 
-    let poller = Builder::new()
-        .threaded_scheduler()
+    let poller = Builder::new_multi_thread()
         .thread_name(thd_name!("poller"))
-        .core_threads(1)
+        .worker_threads(1)
         .build()
         .unwrap();
     let (tx, rx) = mpsc::channel();
@@ -149,9 +148,9 @@ fn test_connect_follower() {
     let res = format!("{}", client1.alloc_id().unwrap_err());
     let err = format!(
         "{}",
-        PdError::Grpc(GrpcError::RpcFailure(RpcStatus::new(
+        PdError::Grpc(GrpcError::RpcFailure(RpcStatus::with_message(
             RpcStatusCode::UNAVAILABLE,
-            Some("".to_string()),
+            "".to_string(),
         )))
     );
     assert_eq!(res, err);
@@ -165,9 +164,9 @@ fn test_connect_follower() {
     let res = format!("{}", client.alloc_id().unwrap_err());
     let err = format!(
         "{}",
-        PdError::Grpc(GrpcError::RpcFailure(RpcStatus::new(
+        PdError::Grpc(GrpcError::RpcFailure(RpcStatus::with_message(
             RpcStatusCode::UNAVAILABLE,
-            Some(leader_addr),
+            leader_addr,
         )))
     );
     assert_eq!(res, err);
@@ -443,10 +442,9 @@ fn test_region_heartbeat_on_leader_change() {
     let eps = server.bind_addrs();
 
     let client = new_client(eps, None);
-    let poller = Builder::new()
-        .threaded_scheduler()
+    let poller = Builder::new_multi_thread()
         .thread_name(thd_name!("poller"))
-        .core_threads(1)
+        .worker_threads(1)
         .build()
         .unwrap();
     let (tx, rx) = mpsc::channel();

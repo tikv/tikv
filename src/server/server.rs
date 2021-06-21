@@ -25,13 +25,13 @@ use raftstore::router::RaftStoreRouter;
 use raftstore::store::SnapManager;
 use security::SecurityManager;
 use tikv_util::config::VersionTrack;
-use tikv_util::sys::record_global_memory_usage;
+use tikv_util::sys::{get_global_memory_usage, record_global_memory_usage};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::{LazyWorker, Scheduler, Worker};
 use tikv_util::Either;
 
 use super::load_statistics::*;
-use super::metrics::SERVER_INFO_GAUGE_VEC;
+use super::metrics::{MEMORY_USAGE_GAUGE, SERVER_INFO_GAUGE_VEC};
 use super::raft_client::{ConnectionBuilder, RaftClient};
 use super::resolve::StoreAddrResolver;
 use super::service::*;
@@ -81,8 +81,8 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
         cfg: &Arc<VersionTrack<Config>>,
         security_mgr: &Arc<SecurityManager>,
         storage: Storage<E, L>,
-        cop: Endpoint<E>,
-        coprv2: coprocessor_v2::Endpoint,
+        copr: Endpoint<E>,
+        copr_v2: coprocessor_v2::Endpoint,
         raft_router: T,
         resolver: S,
         snap_mgr: SnapManager,
@@ -94,10 +94,9 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
         // A helper thread (or pool) for transport layer.
         let stats_pool = if cfg.value().stats_concurrency > 0 {
             Some(
-                RuntimeBuilder::new()
-                    .threaded_scheduler()
+                RuntimeBuilder::new_multi_thread()
                     .thread_name(STATS_THREAD_PREFIX)
-                    .core_threads(cfg.value().stats_concurrency)
+                    .worker_threads(cfg.value().stats_concurrency)
                     .build()
                     .unwrap(),
             )
@@ -115,8 +114,8 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             store_id,
             storage,
             gc_worker,
-            cop,
-            coprv2,
+            copr,
+            copr_v2,
             raft_router.clone(),
             lazy_worker.scheduler(),
             Arc::clone(&grpc_thread_load),
@@ -266,6 +265,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             p.spawn(async move {
                 while let Some(Ok(_)) = delay.next().await {
                     record_global_memory_usage();
+                    MEMORY_USAGE_GAUGE.set(get_global_memory_usage() as i64);
                 }
             });
         };
@@ -485,18 +485,17 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             storage.get_engine(),
         ));
-        let cop = coprocessor::Endpoint::new(
+        let copr = coprocessor::Endpoint::new(
             &cfg.value().clone(),
             cop_read_pool.handle(),
             storage.get_concurrency_manager(),
             PerfLevel::EnableCount,
         );
-        let coprv2 = coprocessor_v2::Endpoint::new(&coprocessor_v2::Config::default());
+        let copr_v2 = coprocessor_v2::Endpoint::new(&coprocessor_v2::Config::default());
         let debug_thread_pool = Arc::new(
-            TokioBuilder::new()
-                .threaded_scheduler()
+            TokioBuilder::new_multi_thread()
                 .thread_name(thd_name!("debugger"))
-                .core_threads(1)
+                .worker_threads(1)
                 .build()
                 .unwrap(),
         );
@@ -507,8 +506,8 @@ mod tests {
             &cfg,
             &security_mgr,
             storage,
-            cop,
-            coprv2,
+            copr,
+            copr_v2,
             router.clone(),
             MockResolver {
                 quick_fail: Arc::clone(&quick_fail),

@@ -18,6 +18,7 @@
 
 use std::fmt::{self, Display};
 use std::num::NonZeroU64;
+use std::ops::Add;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
@@ -33,6 +34,13 @@ pub enum Id {
 }
 
 impl Id {
+    pub fn name(&self) -> String {
+        match self {
+            Id::Name(s) => s.to_string(),
+            Id::Number(n) => n.to_string(),
+        }
+    }
+
     pub fn readable_name(&self) -> String {
         match self {
             Id::Name(s) => {
@@ -75,11 +83,39 @@ impl Display for Id {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TraceEvent {
     Add(usize),
     Sub(usize),
     Reset(usize),
+}
+
+impl Default for TraceEvent {
+    fn default() -> Self {
+        TraceEvent::Add(0)
+    }
+}
+
+impl Add for TraceEvent {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
+        match (self, other) {
+            (TraceEvent::Add(l), TraceEvent::Add(r)) => TraceEvent::Add(l + r),
+            (TraceEvent::Sub(l), TraceEvent::Sub(r)) => TraceEvent::Sub(l + r),
+            (TraceEvent::Add(l), TraceEvent::Sub(r)) | (TraceEvent::Sub(r), TraceEvent::Add(l)) => {
+                if l > r {
+                    TraceEvent::Add(l - r)
+                } else {
+                    TraceEvent::Sub(r - l)
+                }
+            }
+            // `r` should be smaller than `v` which it's promised by caller.
+            (TraceEvent::Reset(v), TraceEvent::Sub(r)) => TraceEvent::Reset(v - r),
+            (TraceEvent::Reset(v), TraceEvent::Add(r)) => TraceEvent::Reset(v + r),
+            (_, e @ TraceEvent::Reset(_)) => e,
+        }
+    }
 }
 
 pub trait MemoryTrace {
@@ -88,6 +124,8 @@ pub trait MemoryTrace {
     fn sub_trace(&self, id: Id) -> Arc<dyn MemoryTrace + Send + Sync>;
     fn add_sub_trace(&mut self, id: Id, trace: Arc<dyn MemoryTrace + Send + Sync>);
     fn sum(&self) -> usize;
+    fn name(&self) -> String;
+    fn get_children_ids(&self) -> Vec<Id>;
 }
 
 pub struct MemoryTraceNode {
@@ -142,6 +180,18 @@ impl MemoryTrace for MemoryTraceNode {
         let sum: usize = self.children.values().map(|c| c.sum()).sum();
         sum + self.trace.load(Ordering::Relaxed)
     }
+
+    fn name(&self) -> String {
+        self.id.name()
+    }
+
+    fn get_children_ids(&self) -> Vec<Id> {
+        let mut ids = vec![];
+        for id in self.children.keys() {
+            ids.push(*id);
+        }
+        ids
+    }
 }
 
 pub struct MemoryTraceSnapshot {
@@ -195,6 +245,14 @@ mod tests {
     };
 
     #[test]
+    fn test_id_name() {
+        let id = Id::Name("test_id");
+        assert_eq!(id.name(), "test_id");
+        let id = Id::Number(100);
+        assert_eq!(id.name(), "100");
+    }
+
+    #[test]
     fn test_id_readable_name() {
         let id = Id::Name("test_id");
         assert_eq!(id.readable_name(), "test id");
@@ -217,5 +275,33 @@ mod tests {
             .sub_trace(Id::Name("mid2"))
             .trace(TraceEvent::Add(100));
         assert_eq!(111, trace.sum());
+    }
+
+    #[test]
+    fn test_trace_event_add() {
+        assert_eq!(TraceEvent::Add(1) + TraceEvent::Add(1), TraceEvent::Add(2));
+        assert_eq!(TraceEvent::Sub(1) + TraceEvent::Sub(1), TraceEvent::Sub(2));
+        assert_eq!(TraceEvent::Add(1) + TraceEvent::Sub(1), TraceEvent::Sub(0));
+        assert_eq!(TraceEvent::Sub(1) + TraceEvent::Add(1), TraceEvent::Sub(0));
+        assert_eq!(TraceEvent::Add(1) + TraceEvent::Sub(2), TraceEvent::Sub(1));
+        assert_eq!(TraceEvent::Sub(2) + TraceEvent::Add(1), TraceEvent::Sub(1));
+        assert_eq!(TraceEvent::Sub(2) + TraceEvent::Add(3), TraceEvent::Add(1));
+
+        assert_eq!(
+            TraceEvent::Add(1) + TraceEvent::Reset(3),
+            TraceEvent::Reset(3)
+        );
+        assert_eq!(
+            TraceEvent::Sub(1) + TraceEvent::Reset(3),
+            TraceEvent::Reset(3)
+        );
+        assert_eq!(
+            TraceEvent::Reset(3) + TraceEvent::Add(1),
+            TraceEvent::Reset(4)
+        );
+        assert_eq!(
+            TraceEvent::Reset(3) + TraceEvent::Sub(1),
+            TraceEvent::Reset(2)
+        );
     }
 }

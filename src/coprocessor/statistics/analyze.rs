@@ -353,6 +353,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
 
             for logical_row in &result.logical_rows {
                 let mut column_vals: Vec<Vec<u8>> = Vec::new();
+                let mut collation_key_vals: Vec<Vec<u8>> = Vec::new();
                 for i in 0..self.columns_info.len() {
                     let mut val = vec![];
                     columns_slice[i].encode(
@@ -368,24 +369,30 @@ impl<S: Snapshot> RowSampleBuilder<S> {
                                     let mut mut_val = &val[..];
                                     let decoded_val = table::decode_col_value(&mut mut_val, &mut EvalContext::default(), &self.columns_info[i])?;
                                     if decoded_val == Datum::Null {
-                                        val
+                                        val.clone()
                                     } else {
                                         // Only if the `decoded_val` is Datum::Null, `decoded_val` is a Ok(None).
                                         // So it is safe the unwrap the Ok value.
                                         let decoded_sorted_val = TT::sort_key(&decoded_val.as_string()?.unwrap().into_owned())?;
-                                        encode_value(&mut EvalContext::default(), &[Datum::Bytes(decoded_sorted_val)])?
+                                        decoded_sorted_val
                                     }
                                 }
                             }
                         };
-                        column_vals.push(sorted_val);
-                        continue;
+                        collation_key_vals.push(sorted_val);
+                    } else {
+                        collation_key_vals.push(Vec::new());
                     }
                     column_vals.push(val);
                 }
                 collector.count += 1;
-                collector.collect_column_group(&column_vals, &self.column_groups);
-                collector.collect_column(column_vals);
+                collector.collect_column_group(
+                    &column_vals,
+                    &collation_key_vals,
+                    &self.columns_info,
+                    &self.column_groups,
+                );
+                collector.collect_column(column_vals, collation_key_vals, &self.columns_info);
             }
         }
         Ok(AnalyzeSamplingResult::new(collector))
@@ -440,6 +447,8 @@ impl RowSampleCollector {
     pub fn collect_column_group(
         &mut self,
         columns_val: &[Vec<u8>],
+        collation_keys_val: &[Vec<u8>],
+        columns_info: &[tipb::ColumnInfo],
         column_groups: &[tipb::AnalyzeColumnGroup],
     ) {
         let col_len = columns_val.len();
@@ -447,11 +456,12 @@ impl RowSampleCollector {
             self.row_buf.clear();
             let offsets = column_groups[i].get_column_offsets();
             let mut has_null = true;
-            for j in 0..offsets.len() {
-                if columns_val[j][0] != NIL_FLAG {
-                    has_null = false
+            for j in offsets {
+                if columns_val[*j as usize][0] == NIL_FLAG {
+                    continue;
                 }
-                self.total_sizes[col_len + i] += columns_val[i].len() as i64
+                has_null = false;
+                self.total_sizes[col_len + i] += columns_val[*j as usize].len() as i64
             }
             // We only maintain the null count for single column case.
             if has_null && offsets.len() == 1 {
@@ -459,20 +469,34 @@ impl RowSampleCollector {
                 continue;
             }
             // Use a in place murmur3 to replace this memory copy.
-            for j in 0..offsets.len() {
-                self.row_buf.extend_from_slice(&columns_val[j]);
+            for j in offsets {
+                if columns_info[*j as usize].as_accessor().is_string_like() {
+                    self.row_buf
+                        .extend_from_slice(&collation_keys_val[*j as usize]);
+                } else {
+                    self.row_buf.extend_from_slice(&columns_val[*j as usize]);
+                }
             }
             self.fm_sketches[col_len + i].insert(&self.row_buf);
         }
     }
 
-    pub fn collect_column(&mut self, columns_val: Vec<Vec<u8>>) {
+    pub fn collect_column(
+        &mut self,
+        columns_val: Vec<Vec<u8>>,
+        collation_keys_val: Vec<Vec<u8>>,
+        columns_info: &[tipb::ColumnInfo],
+    ) {
         for i in 0..columns_val.len() {
             if columns_val[i][0] == NIL_FLAG {
                 self.null_count[i] += 1;
                 continue;
             }
-            self.fm_sketches[i].insert(&columns_val[i]);
+            if columns_info[i].as_accessor().is_string_like() {
+                self.fm_sketches[i].insert(&collation_keys_val[i]);
+            } else {
+                self.fm_sketches[i].insert(&columns_val[i]);
+            }
             self.total_sizes[i] += columns_val[i].len() as i64;
         }
         self.sampling(columns_val);

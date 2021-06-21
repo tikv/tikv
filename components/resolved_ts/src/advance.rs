@@ -11,10 +11,9 @@ use grpcio::{ChannelBuilder, Environment};
 use kvproto::kvrpcpb::{CheckLeaderRequest, LeaderInfo, ReadState};
 use kvproto::metapb::{PeerRole, Region};
 use kvproto::tikvpb::TikvClient;
-use pd_client::{Feature, PdClient};
-use raftstore::router::RaftStoreRouter;
+use pd_client::PdClient;
+use protobuf::Message;
 use raftstore::store::fsm::StoreMeta;
-use raftstore::store::msg::{Callback, SignificantMsg};
 use security::SecurityManager;
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::Scheduler;
@@ -23,44 +22,35 @@ use txn_types::TimeStamp;
 
 use crate::endpoint::Task;
 use crate::errors::Result;
-use crate::metrics::RESOLVED_TS_ADVANCE_METHOD;
+use crate::metrics::{CHECK_LEADER_REQ_ITEM_COUNT_HISTOGRAM, CHECK_LEADER_REQ_SIZE_HISTOGRAM};
 
-const FEATURE_RESOLVED_TS_STORE: Feature = Feature::require(5, 0, 0);
-
-pub struct AdvanceTsWorker<T, E: KvEngine> {
+pub struct AdvanceTsWorker<E: KvEngine> {
     store_meta: Arc<Mutex<StoreMeta>>,
     pd_client: Arc<dyn PdClient>,
     timer: SteadyTimer,
     worker: Runtime,
-    raft_router: T,
-    advance_ts_interval: Duration,
     scheduler: Scheduler<Task<E::Snapshot>>,
     /// The concurrency manager for transactions. It's needed for CDC to check locks when
     /// calculating resolved_ts.
     concurrency_manager: ConcurrencyManager,
-    hibernate_regions_compatible: bool,
     // store_id -> client
     tikv_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
     env: Arc<Environment>,
     security_mgr: Arc<SecurityManager>,
 }
 
-impl<T, E: KvEngine> AdvanceTsWorker<T, E> {
+impl<E: KvEngine> AdvanceTsWorker<E> {
     pub fn new(
         pd_client: Arc<dyn PdClient>,
         scheduler: Scheduler<Task<E::Snapshot>>,
-        raft_router: T,
         store_meta: Arc<Mutex<StoreMeta>>,
         concurrency_manager: ConcurrencyManager,
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
-        advance_ts_interval: Duration,
-        hibernate_regions_compatible: bool,
     ) -> Self {
-        let worker = Builder::new()
-            .threaded_scheduler()
+        let worker = Builder::new_multi_thread()
             .thread_name("advance-ts")
-            .core_threads(1)
+            .worker_threads(1)
             .build()
             .unwrap();
         Self {
@@ -70,32 +60,27 @@ impl<T, E: KvEngine> AdvanceTsWorker<T, E> {
             pd_client,
             worker,
             timer: SteadyTimer::default(),
-            raft_router,
             store_meta,
             concurrency_manager,
-            advance_ts_interval,
-            hibernate_regions_compatible,
             tikv_clients: Arc::new(Mutex::new(HashMap::default())),
         }
     }
 }
 
-impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
-    pub fn register_advance_event(&self, regions: Vec<u64>) {
-        let timeout = self.timer.delay(self.advance_ts_interval);
+impl<E: KvEngine> AdvanceTsWorker<E> {
+    pub fn register_advance_event(&self, advance_ts_interval: Duration, regions: Vec<u64>) {
+        let timeout = self.timer.delay(advance_ts_interval);
         let pd_client = self.pd_client.clone();
         let scheduler = self.scheduler.clone();
-        let raft_router = self.raft_router.clone();
         let cm: ConcurrencyManager = self.concurrency_manager.clone();
         let env = self.env.clone();
         let security_mgr = self.security_mgr.clone();
         let store_meta = self.store_meta.clone();
         let tikv_clients = self.tikv_clients.clone();
-        let hibernate_regions_compatible = self.hibernate_regions_compatible;
 
         let fut = async move {
             let _ = timeout.compat().await;
-            // Ignore get tso errors since we will retry every `min_ts_interval`.
+            // Ignore get tso errors since we will retry every `advance_ts_interval`.
             let mut min_ts = pd_client.get_tso().await.unwrap_or_default();
 
             // Sync with concurrency manager so that it can work correctly when optimizations
@@ -113,25 +98,16 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
                 info!("failed to schedule register advance event"; "err" => ?e);
             }
 
-            let gate = pd_client.feature_gate();
-
-            let regions =
-                if hibernate_regions_compatible && gate.can_enable(FEATURE_RESOLVED_TS_STORE) {
-                    RESOLVED_TS_ADVANCE_METHOD.set(1);
-                    Self::region_resolved_ts_store(
-                        regions,
-                        store_meta,
-                        pd_client,
-                        security_mgr,
-                        env,
-                        tikv_clients,
-                        min_ts,
-                    )
-                    .await
-                } else {
-                    RESOLVED_TS_ADVANCE_METHOD.set(0);
-                    Self::region_resolved_ts_raft(regions, raft_router, min_ts).await
-                };
+            let regions = Self::region_resolved_ts_store(
+                regions,
+                store_meta,
+                pd_client,
+                security_mgr,
+                env,
+                tikv_clients,
+                min_ts,
+            )
+            .await;
 
             if !regions.is_empty() {
                 if let Err(e) = scheduler.schedule(Task::AdvanceResolvedTs {
@@ -143,45 +119,6 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
             }
         };
         self.worker.spawn(fut);
-    }
-
-    // Confirms leadership of region peer before trying to advance resolved ts.
-    // This function sends a raft read command to raftstore to inspect leadership.
-    async fn region_resolved_ts_raft(
-        regions: Vec<u64>,
-        raft_router: T,
-        min_ts: TimeStamp,
-    ) -> Vec<u64> {
-        // TODO: send a message to raftstore would consume too much cpu time,
-        // try to handle it outside raftstore.
-        let regions: Vec<_> = regions
-            .into_iter()
-            .map(|region_id| {
-                let raft_router_clone = raft_router.clone();
-                async move {
-                    let (tx, rx) = tokio::sync::oneshot::channel();
-                    if let Err(e) = raft_router_clone.significant_send(
-                        region_id,
-                        SignificantMsg::LeaderCallback(Callback::Read(Box::new(move |resp| {
-                            let resp = if resp.response.get_header().has_error() {
-                                None
-                            } else {
-                                Some(region_id)
-                            };
-                            if tx.send(resp).is_err() {
-                                error!("resolved-ts send tso response failed"; "region_id" => region_id);
-                            }
-                        }))),
-                    ) {
-                        warn!("resolved-ts send LeaderCallback failed"; "err" => ?e, "min_ts" => min_ts);
-                        return None;
-                    }
-                    rx.await.unwrap_or(None)
-                }
-            })
-            .collect();
-        let resps = futures::future::join_all(regions).await;
-        resps.into_iter().flatten().collect::<Vec<u64>>()
     }
 
     // Confirms leadership of region peer before trying to advance resolved ts.
@@ -205,6 +142,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
         let mut region_map: HashMap<u64, Region> = HashMap::default();
         // region_id -> peers id, record the responses
         let mut resp_map: HashMap<u64, Vec<u64>> = HashMap::default();
+        let mut leader_info_size = 0;
         {
             let meta = store_meta.lock().unwrap();
             let store_id = match meta.store_id {
@@ -241,6 +179,9 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
                             leader_info.set_region_id(region_id);
                             leader_info.set_region_epoch(region.get_region_epoch().clone());
                             leader_info.set_read_state(read_state.clone());
+                            if leader_info_size == 0 {
+                                leader_info_size = leader_info.compute_size() as usize;
+                            }
                             store_map
                                 .entry(peer.store_id)
                                 .or_default()
@@ -256,6 +197,9 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
             let env = env.clone();
             let pd_client = pd_client.clone();
             let security_mgr = security_mgr.clone();
+            let region_num = regions.len();
+            CHECK_LEADER_REQ_SIZE_HISTOGRAM.observe((leader_info_size * region_num) as f64);
+            CHECK_LEADER_REQ_ITEM_COUNT_HISTOGRAM.observe(region_num as f64);
             async move {
                 if cdc_clients.lock().unwrap().get(&store_id).is_none() {
                     let store = box_try!(pd_client.get_store_async(store_id).await);
@@ -300,7 +244,12 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
                 if region_has_quorum(&region_map[&region_id], &stores) {
                     Some(region_id)
                 } else {
-                    debug!("resolved-ts cannot get quorum for resolved ts"; "region_id" => region_id, "stores" => ?stores, "region" => ?&region_map[&region_id]);
+                    debug!(
+                        "resolved-ts cannot get quorum for resolved ts";
+                        "region_id" => region_id,
+                        "stores" => ?stores,
+                        "region" => ?&region_map[&region_id]
+                    );
                     None
                 }
             })

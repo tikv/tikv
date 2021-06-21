@@ -25,6 +25,7 @@ define_error_codes!(
     UNKNOWN => ("Unknown", "", ""),
     SERVER_IS_BUSY => ("ServerIsBusy", "", ""),
     DATA_IS_NOT_READY => ("DataIsNotReady", "", ""),
+    DEADLINE_EXCEEDED => ("DeadlineExceeded", "", ""),
 
     SNAP_ABORT => ("SnapAbort", "", ""),
     SNAP_TOO_MANY => ("SnapTooMany", "", ""),

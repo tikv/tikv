@@ -14,6 +14,7 @@ use engine_rocks::raw::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
 use engine_traits::config::PerfLevel;
+use file_system::{IOPriority, IORateLimitMode};
 use kvproto::encryptionpb::EncryptionMethod;
 use pd_client::Config as PdConfig;
 use raftstore::coprocessor::{Config as CopConfig, ConsistencyCheckMethod};
@@ -25,7 +26,7 @@ use tikv::server::config::GrpcCompressionType;
 use tikv::server::gc_worker::GcConfig;
 use tikv::server::lock_manager::Config as PessimisticTxnConfig;
 use tikv::server::Config as ServerConfig;
-use tikv::storage::config::{BlockCacheConfig, Config as StorageConfig};
+use tikv::storage::config::{BlockCacheConfig, Config as StorageConfig, IORateLimitConfig};
 use tikv_util::config::{LogFormat, OptionReadableSize, ReadableDuration, ReadableSize};
 
 mod dynamic;
@@ -60,7 +61,7 @@ fn test_serde_custom_tikv_config() {
     value.slow_log_file = "slow_foo".to_owned();
     value.slow_log_threshold = ReadableDuration::secs(1);
     value.abort_on_panic = true;
-    value.memory_usage_limit = ReadableSize::gb(10);
+    value.memory_usage_limit = OptionReadableSize(Some(ReadableSize::gb(10)));
     value.memory_usage_high_water = 0.65;
     value.server = ServerConfig {
         cluster_id: 0, // KEEP IT ZERO, it is skipped by serde.
@@ -71,6 +72,9 @@ fn test_serde_custom_tikv_config() {
         advertise_status_addr: "example.com:443".to_owned(),
         status_thread_pool_size: 1,
         max_grpc_send_msg_len: 6 * (1 << 20),
+        raft_client_grpc_send_msg_buffer: 1234 * 1024,
+        raft_client_queue_size: 1234,
+        raft_msg_max_batch_size: 123,
         concurrent_send_snap_limit: 4,
         concurrent_recv_snap_limit: 4,
         grpc_compression_type: GrpcCompressionType::Gzip,
@@ -603,6 +607,22 @@ fn test_serde_custom_tikv_config() {
             high_pri_pool_ratio: 0.8,
             memory_allocator: Some(String::from("nodump")),
         },
+        io_rate_limit: IORateLimitConfig {
+            max_bytes_per_sec: ReadableSize::mb(1000),
+            mode: IORateLimitMode::AllIo,
+            strict: true,
+            foreground_read_priority: IOPriority::Low,
+            foreground_write_priority: IOPriority::Low,
+            flush_priority: IOPriority::Low,
+            level_zero_compaction_priority: IOPriority::Low,
+            compaction_priority: IOPriority::High,
+            replication_priority: IOPriority::Low,
+            load_balance_priority: IOPriority::Low,
+            gc_priority: IOPriority::High,
+            import_priority: IOPriority::High,
+            export_priority: IOPriority::High,
+            other_priority: IOPriority::Low,
+        },
     };
     value.coprocessor = CopConfig {
         split_region_on_table: false,
@@ -664,8 +684,16 @@ fn test_serde_custom_tikv_config() {
         min_ts_interval: ReadableDuration::secs(4),
         old_value_cache_size: 512,
         hibernate_regions_compatible: false,
-        scan_lock_pool_size: 1,
+        incremental_scan_threads: 3,
+        incremental_scan_concurrency: 4,
         incremental_scan_speed_limit: ReadableSize(7),
+        old_value_cache_memory_quota: ReadableSize::mb(14),
+        sink_memory_quota: ReadableSize::mb(7),
+    };
+    value.resolved_ts = ResolvedTsConfig {
+        enable: true,
+        advance_ts_interval: ReadableDuration::secs(5),
+        scan_lock_pool_size: 1,
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");

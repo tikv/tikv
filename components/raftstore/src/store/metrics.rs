@@ -199,6 +199,15 @@ make_auto_flush_static_metric! {
     }
 }
 
+make_static_metric! {
+    pub struct HibernatedPeerStateGauge: IntGauge {
+        "state" => {
+            awaken,
+            hibernated,
+        },
+    }
+}
+
 lazy_static! {
     pub static ref PEER_PROPOSAL_COUNTER_VEC: IntCounterVec =
         register_int_counter_vec!(
@@ -224,7 +233,12 @@ lazy_static! {
             "Bucketed histogram of peer appending log duration",
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
-
+    pub static ref CHECK_LEADER_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_resolved_ts_check_leader_duration_seconds",
+            "Bucketed histogram of handling check leader request duration",
+            exponential_buckets(0.005, 2.0, 20).unwrap()
+        ).unwrap();
     pub static ref PEER_COMMIT_LOG_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_commit_log_duration_seconds",
@@ -492,17 +506,10 @@ lazy_static! {
         "Total memory size of raft entries caches."
         ).unwrap();
 
-    pub static ref APPLY_PENDING_BYTES_GAUGE: IntGauge = register_int_gauge!(
-        "tikv_raftstore_apply_pending_bytes",
-        "The bytes pending in the channel of apply FSMs."
-    )
-    .unwrap();
-
-    pub static ref APPLY_PENDING_ENTRIES_GAUGE: IntGauge = register_int_gauge!(
-            "tikv_raftstore_apply_pending_entries",
-            "The number of pending entries in the channel of apply FSMs."
-    )
-    .unwrap();
+    pub static ref RAFT_ENTRIES_EVICT_BYTES: IntCounter = register_int_counter!(
+        "tikv_raft_entries_evict_bytes",
+        "Cache evict bytes."
+    ).unwrap();
 
     pub static ref COMPACTION_GUARD_ACTION_COUNTER_VEC: IntCounterVec =
         register_int_counter_vec!(
@@ -518,5 +525,12 @@ lazy_static! {
         "tikv_raftstore_peer_pending_duration_seconds",
         "Bucketed histogram of region peer pending duration.",
         exponential_buckets(0.1, 1.5, 30).unwrap()  // 0.1s ~ 5.3 hours
+    ).unwrap();
+
+    pub static ref HIBERNATED_PEER_STATE_GAUGE: HibernatedPeerStateGauge = register_static_int_gauge_vec!(
+        HibernatedPeerStateGauge,
+        "tikv_raftstore_hibernated_peer_state",
+        "Number of peers in hibernated state.",
+        &["state"],
     ).unwrap();
 }

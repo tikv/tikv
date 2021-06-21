@@ -8,7 +8,7 @@ use grpcio::CompressionAlgorithms;
 use regex::Regex;
 
 use collections::HashMap;
-use configuration::{ConfigChange, ConfigManager, Configuration};
+use online_config::{ConfigChange, ConfigManager, OnlineConfig};
 use tikv_util::config::{self, ReadableDuration, ReadableSize, VersionTrack};
 use tikv_util::sys::SysQuota;
 use tikv_util::worker::Scheduler;
@@ -54,119 +54,127 @@ pub enum GrpcCompressionType {
     Gzip,
 }
 
-/// Configuration for the `server` module.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
+/// OnlineConfig for the `server` module.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     #[serde(skip)]
-    #[config(skip)]
+    #[online_config(skip)]
     pub cluster_id: u64,
 
     // Server listening address.
-    #[config(skip)]
+    #[online_config(skip)]
     pub addr: String,
 
     // Server advertise listening address for outer communication.
     // If not set, we will use listening address instead.
-    #[config(skip)]
+    #[online_config(skip)]
     pub advertise_addr: String,
 
     // These are related to TiKV status.
-    #[config(skip)]
+    #[online_config(skip)]
     pub status_addr: String,
 
     // Status server's advertise listening address for outer communication.
     // If not set, the status server's listening address will be used.
-    #[config(skip)]
+    #[online_config(skip)]
     pub advertise_status_addr: String,
 
-    #[config(skip)]
+    #[online_config(skip)]
     pub status_thread_pool_size: usize,
 
-    #[config(skip)]
+    #[online_config(skip)]
     pub max_grpc_send_msg_len: i32,
 
+    // When merge raft messages into a batch message, leave a buffer.
+    pub raft_client_grpc_send_msg_buffer: usize,
+
+    #[online_config(skip)]
+    pub raft_client_queue_size: usize,
+
+    pub raft_msg_max_batch_size: usize,
+
     // TODO: use CompressionAlgorithms instead once it supports traits like Clone etc.
-    #[config(skip)]
+    #[online_config(skip)]
     pub grpc_compression_type: GrpcCompressionType,
-    #[config(skip)]
+    #[online_config(skip)]
     pub grpc_concurrency: usize,
-    #[config(skip)]
+    #[online_config(skip)]
     pub grpc_concurrent_stream: i32,
-    #[config(skip)]
+    #[online_config(skip)]
     pub grpc_raft_conn_num: usize,
-    #[config(skip)]
+    #[online_config(skip)]
     pub grpc_memory_pool_quota: ReadableSize,
-    #[config(skip)]
+    #[online_config(skip)]
     pub grpc_stream_initial_window_size: ReadableSize,
-    #[config(skip)]
+    #[online_config(skip)]
     pub grpc_keepalive_time: ReadableDuration,
-    #[config(skip)]
+    #[online_config(skip)]
     pub grpc_keepalive_timeout: ReadableDuration,
     /// How many snapshots can be sent concurrently.
     pub concurrent_send_snap_limit: usize,
     /// How many snapshots can be recv concurrently.
     pub concurrent_recv_snap_limit: usize,
-    #[config(skip)]
+    #[online_config(skip)]
     pub end_point_recursion_limit: u32,
-    #[config(skip)]
+    #[online_config(skip)]
     pub end_point_stream_channel_size: usize,
-    #[config(skip)]
+    #[online_config(skip)]
     pub end_point_batch_row_limit: usize,
-    #[config(skip)]
+    #[online_config(skip)]
     pub end_point_stream_batch_row_limit: usize,
-    #[config(skip)]
+    #[online_config(skip)]
     pub end_point_enable_batch_if_possible: bool,
-    #[config(skip)]
+    #[online_config(skip)]
     pub end_point_request_max_handle_duration: ReadableDuration,
-    #[config(skip)]
+    #[online_config(skip)]
     pub end_point_max_concurrency: usize,
     pub snap_max_write_bytes_per_sec: ReadableSize,
     pub snap_max_total_size: ReadableSize,
-    #[config(skip)]
+    #[online_config(skip)]
     pub stats_concurrency: usize,
-    #[config(skip)]
+    #[online_config(skip)]
     pub heavy_load_threshold: usize,
-    #[config(skip)]
+    #[online_config(skip)]
     pub heavy_load_wait_duration: ReadableDuration,
-    #[config(skip)]
+    #[online_config(skip)]
     pub enable_request_batch: bool,
-    #[config(skip)]
+    #[online_config(skip)]
     pub background_thread_count: usize,
     // If handle time is larger than the threshold, it will print slow log in end point.
-    #[config(skip)]
+    #[online_config(skip)]
     pub end_point_slow_log_threshold: ReadableDuration,
     /// Max connections per address for forwarding request.
-    #[config(skip)]
+    #[online_config(skip)]
     pub forward_max_connections_per_address: usize,
 
     // Test only.
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[config(skip)]
+    #[online_config(skip)]
     pub raft_client_backoff_step: ReadableDuration,
 
     // Server labels to specify some attributes about this server.
-    #[config(skip)]
+    #[online_config(skip)]
     pub labels: HashMap<String, String>,
 
     // deprecated. use readpool.coprocessor.xx_concurrency.
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[config(skip)]
+    #[online_config(skip)]
     pub end_point_concurrency: Option<usize>,
 
     // deprecated. use readpool.coprocessor.stack_size.
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[config(skip)]
+    #[online_config(skip)]
     pub end_point_stack_size: Option<ReadableSize>,
 
     // deprecated. use readpool.coprocessor.max_tasks_per_worker_xx.
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[config(skip)]
+    #[online_config(skip)]
     pub end_point_max_tasks: Option<usize>,
 }
 
@@ -183,6 +191,9 @@ impl Default for Config {
             advertise_status_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
             status_thread_pool_size: 1,
             max_grpc_send_msg_len: DEFAULT_MAX_GRPC_SEND_MSG_LEN,
+            raft_client_grpc_send_msg_buffer: 512 * 1024,
+            raft_client_queue_size: 8192,
+            raft_msg_max_batch_size: 128,
             grpc_compression_type: GrpcCompressionType::None,
             grpc_concurrency: DEFAULT_GRPC_CONCURRENCY,
             grpc_concurrent_stream: DEFAULT_GRPC_CONCURRENT_STREAM,

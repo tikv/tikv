@@ -45,11 +45,23 @@
 ## being filled up.
 # abort-on-panic = false
 
-## Memory usage limit for the TiKV instance. Set it to 0 means the total of system memory
-## is available to TiKV.
+## Memory usage limit for the TiKV instance. Generally it's unnecessary to configure it
+## explicitly, in which case it will be set to 75% of total available system memory.
+## Considering the behavior of `block-cache.capacity`, it means 25% memory is reserved for
+## OS page cache.
+##
+## It's still unnecessary to configure it for deploying multiple TiKV nodes on a single
+## physical machine. It will be calculated as `5/3 * block-cache.capacity`.
+##
+## For different system memory capacity, the default memory quota will be:
+## * system=8G    block-cache=3.6G    memory-usage-limit=6G   page-cache=2G.
+## * system=16G   block-cache=7.2G    memory-usage-limit=12G  page-cache=4G
+## * system=32G   block-cache=14.4G   memory-usage-limit=24G  page-cache=8G
+##
+## So how can `memory-usage-limit` influence TiKV? When a TiKV's memory usage almost reaches
+## this threshold, it can squeeze some internal components (e.g. evicting cached Raft entries)
+## to release memory.
 # memory-usage-limit = "0B"
-## TiKV can oppress itself if memory usage ratio reaches `memory-usage-high-water`.
-# memory-usage-high-water = 0.8
 
 ## Configurations for the single thread pool serving read requests.
 [readpool.unified]
@@ -243,7 +255,24 @@
 ##
 ## To deploy multiple TiKV nodes on a single physical machine, configure this parameter explicitly.
 ## Otherwise, the OOM problem might occur in TiKV.
+##
+## If it's not set, 45% of available system memory will be used.
 # capacity = "1GB"
+
+[storage.io-rate-limit]
+## Maximum I/O bytes that this server can write to or read from disk (determined by mode)
+## in one second. Internally it prefers throttling background operations over foreground
+## ones. This value should be set to the disk's optimal IO bandwidth, e.g. maximum IO
+## bandwidth specified by cloud disk vendors.
+##
+## When set to zero, disk IO operations are not limited.
+# max-bytes-per-sec = "0MB"
+
+## Determine which types of IO operations are counted and restrained below threshold.
+## Three different modes are: write-only, read-only, all-io.
+##
+## Only write-only mode is supported for now.
+# mode = "write-only"
 
 [pd]
 ## PD endpoints.
