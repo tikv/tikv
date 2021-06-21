@@ -296,7 +296,6 @@ impl<S: Snapshot> PointGetter<S> {
                         }
                         None => {
                             let start_ts = write.start_ts;
-                            // Value is carried in `default`.
                             let value = self.load_data_from_default_cf(start_ts, user_key)?;
                             self.statistics.processed_size += user_key.raw_len() + value.len();
                             return Ok(Some(value));
