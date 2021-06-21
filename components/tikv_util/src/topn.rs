@@ -25,12 +25,9 @@ impl<T: Ord> TopN<T> {
             return;
         }
         let p = &self.heap.peek().unwrap().0;
-        match item.cmp(p) {
-            Ordering::Greater => {
-                self.heap.pop();
-                self.heap.push(Reverse(item))
-            }
-            _ => {}
+        if item.cmp(p) == Ordering::Greater {
+            self.heap.pop();
+            self.heap.push(Reverse(item))
         }
     }
 
