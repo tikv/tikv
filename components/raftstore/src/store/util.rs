@@ -938,6 +938,9 @@ impl RegionReadProgressRegistry {
 /// For the followers, the item is sync periodically from the leader through the `CheckLeader` rpc.
 ///
 /// The intend is to make the item's `safe ts` larger (more up to date) and `apply index` smaller (require less data)
+//
+/// TODO: the name `RegionReadProgress` is conflict with the leader lease's `ReadProgress`, shoule change it to another
+/// more proper name
 #[derive(Debug)]
 pub struct RegionReadProgress {
     // `core` used to keep track and update `safe_ts`, it should
