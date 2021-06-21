@@ -362,7 +362,10 @@ where
         defer!({
             self.mgr.deregister(&snap_key, &SnapEntry::Applying);
         });
-        let mut s = box_try!(self.mgr.get_snapshot_for_applying_to_engine(&snap_key));
+        let mut s = box_try!(
+            self.mgr
+                .get_snapshot_for_applying_to_engine::<EK>(&snap_key)
+        );
         if !s.exists() {
             return Err(box_err!("missing snapshot file {}", s.path()));
         }
