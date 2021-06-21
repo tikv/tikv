@@ -145,9 +145,10 @@ mod tests {
         assert_eq!(0, runner.get_range_safe_ts(key_range(b"k1", b"")));
 
         add_region(&meta, 2, key_range(b"k5", b"k6"), 80);
-        add_region(&meta, 3, key_range(b"k6", b"k9"), 70);
+        add_region(&meta, 3, key_range(b"k6", b"k8"), 70);
+        // The zero ts will be ignore
+        add_region(&meta, 5, key_range(b"k8", b"k9"), 0);
         add_region(&meta, 4, key_range(b"k9", b""), 90);
-        add_region(&meta, 5, key_range(b"k9", b""), 0);
         assert_eq!(70, runner.get_range_safe_ts(key_range(b"", b"")));
         assert_eq!(80, runner.get_range_safe_ts(key_range(b"", b"k6")));
         assert_eq!(90, runner.get_range_safe_ts(key_range(b"k99", b"")));
