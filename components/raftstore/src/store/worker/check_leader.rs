@@ -16,10 +16,12 @@ pub struct Runner {
 }
 
 pub enum Task {
+    // Check if the provided `LeaderInfo`s are same as ours local `LeaderInfo`
     CheckLeader {
         leaders: Vec<LeaderInfo>,
         cb: Box<dyn FnOnce(Vec<u64>) + Send>,
     },
+    // Get the minimal `safe_ts` from regions overlap with the key range [`start_key`, `end_key`)
     GetStoreTs {
         key_range: KeyRange,
         cb: Box<dyn FnOnce(u64) + Send>,

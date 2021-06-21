@@ -66,10 +66,9 @@ use crate::store::peer_storage::{self, HandleRaftReadyContext};
 use crate::store::transport::Transport;
 use crate::store::util::{is_initial_msg, RegionReadProgressRegistry};
 use crate::store::worker::{
-    AutoSplitController, CheckLeaderRunner, CheckLeaderTask, CleanupRunner, CleanupSSTRunner,
-    CleanupSSTTask, CleanupTask, CompactRunner, CompactTask, ConsistencyCheckRunner,
-    ConsistencyCheckTask, PdRunner, RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RegionRunner,
-    RegionTask, SplitCheckTask,
+    AutoSplitController, CleanupRunner, CleanupSSTRunner, CleanupSSTTask, CleanupTask,
+    CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner,
+    RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RegionRunner, RegionTask, SplitCheckTask,
 };
 use crate::store::PdTask;
 use crate::store::PeerTicks;
@@ -353,7 +352,6 @@ where
     pub cleanup_scheduler: Scheduler<CleanupTask>,
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
-    pub check_leader_scheduler: Scheduler<CheckLeaderTask>,
     pub apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
     pub importer: Arc<SSTImporter>,
@@ -614,24 +612,6 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     self.on_store_unreachable(store_id);
                 }
                 StoreMsg::Start { store } => self.start(store),
-                StoreMsg::CheckLeader { leaders, cb } => {
-                    if let Err(e) = self
-                        .ctx
-                        .check_leader_scheduler
-                        .schedule(CheckLeaderTask::CheckLeader { leaders, cb })
-                    {
-                        error!("fail to send CheckLeader task"; "err" => ?e);
-                    }
-                }
-                StoreMsg::GetStoreSafeTS { key_range, cb } => {
-                    if let Err(e) = self
-                        .ctx
-                        .check_leader_scheduler
-                        .schedule(CheckLeaderTask::GetStoreTs { key_range, cb })
-                    {
-                        error!("fail to send GetStoreTs task"; "err" => ?e);
-                    }
-                }
                 #[cfg(any(test, feature = "testexport"))]
                 StoreMsg::Validate(f) => f(&self.ctx.cfg),
                 StoreMsg::UpdateReplicationMode(status) => self.on_update_replication_mode(status),
@@ -925,7 +905,6 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     cleanup_scheduler: Scheduler<CleanupTask>,
     raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
-    check_leader_scheduler: Scheduler<CheckLeaderTask>,
     apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
     pub importer: Arc<SSTImporter>,
@@ -1129,7 +1108,6 @@ where
             router: self.router.clone(),
             cleanup_scheduler: self.cleanup_scheduler.clone(),
             raftlog_gc_scheduler: self.raftlog_gc_scheduler.clone(),
-            check_leader_scheduler: self.check_leader_scheduler.clone(),
             importer: self.importer.clone(),
             store_meta: self.store_meta.clone(),
             pending_create_peers: self.pending_create_peers.clone(),
@@ -1270,10 +1248,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let consistency_check_scheduler = workers
             .background_worker
             .start("consistency-check", consistency_check_runner);
-        let check_leader_runner = CheckLeaderRunner::new(store_meta.clone());
-        let check_leader_scheduler = workers
-            .background_worker
-            .start("check-leader", check_leader_runner);
 
         let mut builder = RaftPollerBuilder {
             cfg,
@@ -1286,7 +1260,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             consistency_check_scheduler,
             cleanup_scheduler,
             raftlog_gc_scheduler,
-            check_leader_scheduler,
             apply_router: self.apply_router.clone(),
             trans,
             coprocessor_host,
