@@ -30,7 +30,7 @@ impl<T: Ord> TopN<T> {
                 self.heap.pop();
                 self.heap.push(Reverse(item))
             }
-            _ => {},
+            _ => {}
         }
     }
 
