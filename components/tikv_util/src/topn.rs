@@ -30,22 +30,19 @@ impl<T: Ord> TopN<T> {
                 self.heap.pop();
                 self.heap.push(Reverse(item))
             }
-            _ => return,
+            _ => {},
         }
     }
 
     pub fn pop(&mut self) -> Option<T> {
-        match self.heap.pop() {
-            Some(Reverse(x)) => Some(x),
-            None => None,
-        }
+        self.heap.pop().map(|Reverse(x)| x)
     }
 
     pub fn len(&self) -> usize {
         self.heap.len()
     }
 
-    pub fn empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.heap.is_empty()
     }
 
