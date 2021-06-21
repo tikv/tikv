@@ -1,4 +1,4 @@
-// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::store::fsm::store::StoreMeta;
 use crate::store::util::RegionReadProgressRegistry;
