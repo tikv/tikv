@@ -149,9 +149,13 @@ impl<T: Display + Send + 'static> Worker<T> {
         }
 
         let rx = receiver.take().unwrap();
+        let props = crate::thread_group::current_properties();
         let h = Builder::new()
             .name(thd_name!(self.scheduler.name.as_ref()))
-            .spawn(move || poll(runner, rx))?;
+            .spawn(move || {
+                crate::thread_group::set_properties(props);
+                poll(runner, rx)
+            })?;
 
         self.handle = Some(h);
         Ok(())
