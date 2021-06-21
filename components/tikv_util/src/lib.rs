@@ -29,6 +29,7 @@ pub mod future;
 pub mod macros;
 pub mod callback;
 pub mod deadline;
+pub mod topn;
 pub mod keybuilder;
 pub mod logger;
 pub mod lru;

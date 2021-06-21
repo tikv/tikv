@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering as CmpOrdering;
-use std::collections::BinaryHeap;
 use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{
@@ -49,6 +48,7 @@ use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
 use tikv_util::{box_err, debug, error, info, thd_name, warn};
+use tikv_util::topn::TopN;
 
 type RecordPairVec = Vec<pdpb::RecordPair>;
 
@@ -491,14 +491,14 @@ fn hotspot_key_report_threshold() -> u64 {
 
 fn hotspot_byte_report_threshold() -> u64 {
     #[cfg(feature = "failpoints")]
-    fail_point!("mock_hotspot_threshold", |_| { 0 });
+    fail_point!("mock_hotspot_capacity", |_| { 0 });
 
     HOTSPOT_BYTE_RATE_THRESHOLD * 10
 }
 
 fn hotspot_report_capacity() -> usize {
     #[cfg(feature = "failpoints")]
-    fail_point!("mock_hotspot_capacity", |_| { 0 });
+    fail_point!("mock_hotspot_threshold", |_| { 1 });
 
     HOTSPOT_REPORT_CAPACITY
 }
@@ -748,7 +748,8 @@ where
             Ok(stats) => stats,
         };
 
-        let mut topn_report = BinaryHeap::with_capacity(hotspot_report_capacity());
+        let cap = hotspot_report_capacity();
+        let mut topn_report = TopN::new(cap);
 
         for (region_id, region_peer) in &mut self.region_peers {
             let read_bytes = region_peer.read_bytes - region_peer.last_store_report_read_bytes;
@@ -777,7 +778,14 @@ where
             topn_report.push(read_stat);
         }
 
-        for item in topn_report.into_vec() {
+        let report_vec = topn_report.into_vec();
+
+        #[cfg(feature = "failpoints")]
+        if report_vec.len() > cap {
+            fail_point!("on_report_vec_too_large");
+        }
+
+        for item in report_vec {
             let mut peer_stat = pdpb::PeerStat::default();
             peer_stat.set_region_id(item.region_id);
             peer_stat.set_read_bytes(item.report_read_bytes);
