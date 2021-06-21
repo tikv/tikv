@@ -46,9 +46,9 @@ use pd_client::{Error, PdClient, RegionStat};
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+use tikv_util::topn::TopN;
 use tikv_util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
 use tikv_util::{box_err, debug, error, info, thd_name, warn};
-use tikv_util::topn::TopN;
 
 type RecordPairVec = Vec<pdpb::RecordPair>;
 

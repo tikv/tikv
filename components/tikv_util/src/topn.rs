@@ -49,15 +49,14 @@ impl<T: Ord> TopN<T> {
         self.heap.is_empty()
     }
 
-    pub fn peek(&self) -> Option<&T>{
+    pub fn peek(&self) -> Option<&T> {
         self.heap.peek().map(|Reverse(x)| x)
     }
 
-    pub fn into_vec(self) -> Vec<T>{
+    pub fn into_vec(self) -> Vec<T> {
         self.heap.into_iter().map(|it| it.0).collect()
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -73,10 +72,10 @@ mod tests {
         fix_topn.push(5);
         fix_topn.push(4);
         assert_eq!(fix_topn.len(), 5);
-        assert_eq!(fix_topn.pop().unwrap(),2);
-        assert_eq!(fix_topn.pop().unwrap(),3);
-        assert_eq!(fix_topn.pop().unwrap(),4);
-        assert_eq!(fix_topn.pop().unwrap(),5);
-        assert_eq!(fix_topn.pop().unwrap(),6);
+        assert_eq!(fix_topn.pop().unwrap(), 2);
+        assert_eq!(fix_topn.pop().unwrap(), 3);
+        assert_eq!(fix_topn.pop().unwrap(), 4);
+        assert_eq!(fix_topn.pop().unwrap(), 5);
+        assert_eq!(fix_topn.pop().unwrap(), 6);
     }
 }
