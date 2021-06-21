@@ -160,13 +160,8 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
         for (region_id, (peer_list, leader_info)) in info_map {
             let leader_id = leader_info.get_peer_id();
             // Check if the leader in this store
-            match find_store_id(&peer_list, leader_id) {
-                None => continue,
-                Some(id) => {
-                    if id != store_id {
-                        continue;
-                    }
-                }
+            if find_store_id(&peer_list, leader_id) != Some(store_id) {
+                continue;
             }
             for peer in &peer_list {
                 if peer.store_id == store_id && peer.id == leader_id {

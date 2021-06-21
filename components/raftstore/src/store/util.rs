@@ -307,7 +307,7 @@ pub fn compare_region_epoch(
     Ok(())
 }
 
-pub fn region_epoch_equal(
+pub fn is_region_epoch_equal(
     from_epoch: &metapb::RegionEpoch,
     current_epoch: &metapb::RegionEpoch,
 ) -> bool {
@@ -896,16 +896,11 @@ impl RegionReadProgressRegistry {
                 }
             }
         }
-        drop(registry);
-        regions.shrink_to_fit();
         regions
     }
 
     // Get the `LeaderInfo` of the requested regions
-    pub fn dump_leader_infos(
-        &self,
-        regions: &[u64],
-    ) -> HashMap<u64, (Vec<Peer>, kvrpcpb::LeaderInfo)> {
+    pub fn dump_leader_infos(&self, regions: &[u64]) -> HashMap<u64, (Vec<Peer>, LeaderInfo)> {
         let registry = self.registry.lock().unwrap();
         let mut info_map = HashMap::with_capacity(regions.len());
         for region_id in regions {
@@ -913,8 +908,6 @@ impl RegionReadProgressRegistry {
                 info_map.insert(*region_id, rrp.dump_leader_info());
             }
         }
-        drop(registry);
-        info_map.shrink_to_fit();
         info_map
     }
 
@@ -1016,12 +1009,12 @@ impl RegionReadProgress {
         // whether the provided `LeaderInfo` is same as ours
         core.leader_info.leader_term == leader_info.term
             && core.leader_info.leader_id == leader_info.peer_id
-            && region_epoch_equal(&core.leader_info.epoch, leader_info.get_region_epoch())
+            && is_region_epoch_equal(&core.leader_info.epoch, leader_info.get_region_epoch())
     }
 
     // Dump the `LeaderInfo` and the peer list
-    fn dump_leader_info(&self) -> (Vec<Peer>, kvrpcpb::LeaderInfo) {
-        let mut leader_info = kvrpcpb::LeaderInfo::default();
+    fn dump_leader_info(&self) -> (Vec<Peer>, LeaderInfo) {
+        let mut leader_info = LeaderInfo::default();
         let core = self.core.lock().unwrap();
         let read_state = {
             // Get the latest `read_state`
@@ -1044,7 +1037,7 @@ impl RegionReadProgress {
         let mut core = self.core.lock().unwrap();
         core.leader_info.leader_id = peer_id;
         core.leader_info.leader_term = term;
-        if !region_epoch_equal(region.get_region_epoch(), &core.leader_info.epoch) {
+        if !is_region_epoch_equal(region.get_region_epoch(), &core.leader_info.epoch) {
             core.leader_info.epoch = region.get_region_epoch().clone();
             core.leader_info.peers = region.get_peers().to_vec();
         }

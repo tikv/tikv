@@ -896,6 +896,8 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 Some(id) => id,
                 None => return vec![],
             };
+            // TODO: should using `RegionReadProgressRegistry` to dump leader info like `resolved-ts`
+            // to reduce the time holding the `store_meta` mutex
             for (region_id, _) in regions {
                 if let Some(region) = meta.regions.get(&region_id) {
                     if let Some((term, leader_id)) = meta.leaders.get(&region_id) {
