@@ -3387,18 +3387,11 @@ where
     EK: KvEngine,
 {
     fn drop(&mut self) {
-<<<<<<< HEAD
-        self.delegate.clear_all_commands_as_stale();
-=======
         if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
             self.delegate.clear_all_commands_silently()
         } else {
             self.delegate.clear_all_commands_as_stale();
         }
-        let mut event = TraceEvent::default();
-        self.delegate.update_memory_trace(&mut event);
-        MEMTRACE_APPLYS.trace(event);
->>>>>>> bfc3c47d3... raftstore: skip clearing callback when shutdown (#10364)
     }
 }
 

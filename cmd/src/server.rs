@@ -79,13 +79,8 @@ use tikv::{
 use tikv_util::{
     check_environment_variables,
     config::{ensure_dir_exist, VersionTrack},
-<<<<<<< HEAD:cmd/src/server.rs
     sys::sys_quota::SysQuota,
-=======
-    math::MovingAvgU32,
-    sys::{register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
->>>>>>> bfc3c47d3... raftstore: skip clearing callback when shutdown (#10364):components/server/src/server.rs
     time::Monitor,
     timer::GLOBAL_TIMER_HANDLE,
     worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker, Worker},
@@ -551,16 +546,11 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             Builder::new()
                 .threaded_scheduler()
                 .thread_name(thd_name!("debugger"))
-<<<<<<< HEAD:cmd/src/server.rs
                 .core_threads(1)
-                .on_thread_start(tikv_alloc::add_thread_memory_accessor)
-=======
-                .worker_threads(1)
                 .on_thread_start(move || {
                     tikv_alloc::add_thread_memory_accessor();
                     tikv_util::thread_group::set_properties(props.clone());
                 })
->>>>>>> bfc3c47d3... raftstore: skip clearing callback when shutdown (#10364):components/server/src/server.rs
                 .on_thread_stop(tikv_alloc::remove_thread_memory_accessor)
                 .build()
                 .unwrap(),
