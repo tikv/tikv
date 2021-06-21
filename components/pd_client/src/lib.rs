@@ -22,6 +22,7 @@ use futures::future::BoxFuture;
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationStatus};
+use pdpb::QueryStats;
 use tikv_util::time::UnixSecs;
 use txn_types::TimeStamp;
 
@@ -36,6 +37,7 @@ pub struct RegionStat {
     pub written_keys: u64,
     pub read_bytes: u64,
     pub read_keys: u64,
+    pub query_stats: QueryStats,
     pub approximate_size: u64,
     pub approximate_keys: u64,
     pub last_report_ts: UnixSecs,

@@ -271,9 +271,11 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static> GcManager<S, R> {
 
         let (tx, rx) = mpsc::channel();
         self.gc_manager_ctx.set_stop_signal_receiver(rx);
+        let props = tikv_util::thread_group::current_properties();
         let res: Result<_> = ThreadBuilder::new()
             .name(thd_name!("gc-manager"))
             .spawn(move || {
+                tikv_util::thread_group::set_properties(props);
                 tikv_alloc::add_thread_memory_accessor();
                 self.run();
                 tikv_alloc::remove_thread_memory_accessor();

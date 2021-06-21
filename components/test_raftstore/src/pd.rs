@@ -1,11 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cmp;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
-use std::{cmp, thread};
 
 use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures::compat::Future01CompatExt;
@@ -26,6 +26,7 @@ use fail::fail_point;
 use keys::{self, data_key, enc_end_key, enc_start_key};
 use pd_client::{Error, FeatureGate, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result};
 use raftstore::store::util::{check_key_in_region, find_peer, is_learner};
+use raftstore::store::QueryStats;
 use raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
 use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -1212,9 +1213,7 @@ impl TestPdClient {
                 c.stores.remove(&store_id);
             }
             Err(e) => {
-                if !thread::panicking() {
-                    panic!("failed to acquire write lock: {:?}", e)
-                }
+                safe_panic!("failed to acquire write lock: {:?}", e)
             }
         }
     }
@@ -1497,8 +1496,12 @@ impl PdClient for TestPdClient {
                 .or_insert_with(pdpb::PeerStat::default);
             let read_keys = peer_stat.get_read_keys() + peer_stat_sum.get_read_keys();
             let read_bytes = peer_stat.get_read_bytes() + peer_stat_sum.get_read_bytes();
+            let mut read_query_stats = QueryStats::default();
+            read_query_stats.add_query_stats(peer_stat.get_query_stats());
+            read_query_stats.add_query_stats(peer_stat_sum.get_query_stats());
             peer_stat_sum.set_read_keys(read_keys);
             peer_stat_sum.set_read_bytes(read_bytes);
+            peer_stat_sum.set_query_stats(read_query_stats.0);
             peer_stat_sum.set_region_id(region_id);
         }
 

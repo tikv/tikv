@@ -90,6 +90,12 @@ pub enum TraceEvent {
     Reset(usize),
 }
 
+impl Default for TraceEvent {
+    fn default() -> Self {
+        TraceEvent::Add(0)
+    }
+}
+
 impl Add for TraceEvent {
     type Output = Self;
 
@@ -279,6 +285,7 @@ mod tests {
         assert_eq!(TraceEvent::Sub(1) + TraceEvent::Add(1), TraceEvent::Sub(0));
         assert_eq!(TraceEvent::Add(1) + TraceEvent::Sub(2), TraceEvent::Sub(1));
         assert_eq!(TraceEvent::Sub(2) + TraceEvent::Add(1), TraceEvent::Sub(1));
+        assert_eq!(TraceEvent::Sub(2) + TraceEvent::Add(3), TraceEvent::Add(1));
 
         assert_eq!(
             TraceEvent::Add(1) + TraceEvent::Reset(3),

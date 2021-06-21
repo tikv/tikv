@@ -119,10 +119,12 @@ impl Monitor {
         D: Fn() + Send + 'static,
         N: Fn() -> SystemTime + Send + 'static,
     {
+        let props = crate::thread_group::current_properties();
         let (tx, rx) = mpsc::channel();
         let h = Builder::new()
             .name(thd_name!("time-monitor"))
             .spawn(move || {
+                crate::thread_group::set_properties(props);
                 tikv_alloc::add_thread_memory_accessor();
                 while rx.try_recv().is_err() {
                     let before = now();
