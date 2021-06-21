@@ -1014,7 +1014,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let ts = request.get_ts();
         let leaders = request.take_regions().into();
         let (cb, resp) = paired_future_callback();
-        // let ch = self.ch.clone();
         let check_leader_scheduler = self.check_leader_scheduler.clone();
         let task = async move {
             check_leader_scheduler
