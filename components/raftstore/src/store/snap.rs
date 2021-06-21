@@ -742,8 +742,6 @@ impl Snapshot {
         Ok(())
     }
 
-    // TODO: It's very hard to handle key manager correctly without lock `SnapManager`.
-    // Let's do it later.
     fn delete(&self) {
         debug!(
             "deleting snapshot file";
@@ -1453,6 +1451,7 @@ impl SnapManagerCore {
             return false;
         }
         snap.delete();
+        // FIXME: clean `EncryptionKeyManager` correctly.
         true
     }
 
