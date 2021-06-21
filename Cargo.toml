@@ -364,4 +364,4 @@ overflow-checks = false
 rpath = false
 
 [patch.'https://github.com/pingcap/kvproto.git']
-kvproto = { git = "https://github.com/zhongzc/kvproto.git", rev = "503d8d2d9ea4fce91a660fbf157f7e6f7392da7e", default-features = false }
+kvproto = { git = "https://github.com/zhongzc/kvproto.git", rev = "56e6249a4d4383169123dcf8ea78ced2551e36a0", default-features = false }

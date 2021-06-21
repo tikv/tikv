@@ -226,11 +226,21 @@ fn test_scan_detail() {
     };
 
     let reqs = vec![
-        DAGSelect::from(&product).build(),
-        DAGSelect::from_index(&product, &product["name"]).build(),
+        (
+            DAGSelect::from(&product).build(),
+            (19 /* Key size: 't' + table_id + '_r' + int handle */ +
+            18/* Value size: col_id1 + int + col_id2 + bytes + col_id3 + int*/)
+                * 4,
+        ),
+        (
+            DAGSelect::from_index(&product, &product["name"]).build(),
+            (56 /* Index key size */ +
+            1/* Value size */)
+                * 4,
+        ),
     ];
 
-    for mut req in reqs {
+    for (mut req, data_size) in reqs {
         req.mut_context().set_record_scan_stat(true);
         req.mut_context().set_record_time_stat(true);
 
@@ -246,6 +256,7 @@ fn test_scan_detail() {
         let scan_detail_v2 = resp.get_exec_details_v2().get_scan_detail_v2();
         assert_eq!(scan_detail_v2.get_total_versions(), 5);
         assert_eq!(scan_detail_v2.get_processed_versions(), 4);
+        assert_eq!(scan_detail_v2.get_processed_versions_size(), data_size);
     }
 }
 
@@ -959,6 +970,12 @@ fn test_del_select() {
     let scan_detail_v2 = resp.get_exec_details_v2().get_scan_detail_v2();
     assert_eq!(scan_detail_v2.get_total_versions(), 8);
     assert_eq!(scan_detail_v2.get_processed_versions(), 5);
+    assert_eq!(
+        scan_detail_v2.get_processed_versions_size(),
+        (37 /* Index key size */ +
+       1/* Value size */)
+            * 5
+    );
 }
 
 #[test]

@@ -180,6 +180,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
 
             if let Some(v) = result? {
                 self.statistics.write.processed_keys += 1;
+                self.statistics.processed_size += current_user_key.raw_len() + v.len();
                 return Ok(Some((current_user_key, v)));
             }
         }
@@ -578,6 +579,7 @@ mod tests {
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, 0);
         assert_eq!(statistics.write.seek_for_prev, 1);
+        assert_eq!(statistics.processed_size, 2);
 
         // Before get key [9]:
         // 4 4 5 5 5 5 5 6 7 7 7 7 7 8 8 8 8 8 9 9 9 9 9 10 10
@@ -606,6 +608,7 @@ mod tests {
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, 0);
         assert_eq!(statistics.write.seek_for_prev, 0);
+        assert_eq!(statistics.processed_size, 2);
 
         // Before get key [8]:
         // 4 4 5 5 5 5 5 6 7 7 7 7 7 8 8 8 8 8 9 9 9 9 9 10 10
@@ -643,6 +646,7 @@ mod tests {
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, 1);
         assert_eq!(statistics.write.seek_for_prev, 0);
+        assert_eq!(statistics.processed_size, 2);
 
         // Before get key [7]:
         // 4 4 5 5 5 5 5 6 7 7 7 7 7 8 8 8 8 8 9 9 9 9 9 10 10
@@ -678,6 +682,7 @@ mod tests {
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, 1);
         assert_eq!(statistics.write.seek_for_prev, 0);
+        assert_eq!(statistics.processed_size, 2);
 
         // Before get key [5]:
         // 4 4 5 5 5 5 5 6 7 7 7 7 7 8 8 8 8 8 9 9 9 9 9 10 10
@@ -713,6 +718,7 @@ mod tests {
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, 1);
         assert_eq!(statistics.write.seek_for_prev, 0);
+        assert_eq!(statistics.processed_size, 2);
 
         // Scan end.
         assert_eq!(scanner.next().unwrap(), None);
@@ -721,6 +727,7 @@ mod tests {
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, 0);
         assert_eq!(statistics.write.seek_for_prev, 0);
+        assert_eq!(statistics.processed_size, 0);
     }
 
     /// Check whether everything works as usual when `BackwardKvScanner::reverse_get()` goes
@@ -780,6 +787,7 @@ mod tests {
         assert_eq!(statistics.write.seek_for_prev, 0);
         assert_eq!(statistics.write.next, 0);
         assert_eq!(statistics.write.prev, 1);
+        assert_eq!(statistics.processed_size, 6);
 
         // Use N/2 prev and reach out of bound:
         //   b_1 b_0 c_8
@@ -790,6 +798,7 @@ mod tests {
         assert_eq!(statistics.write.seek_for_prev, 0);
         assert_eq!(statistics.write.next, 0);
         assert_eq!(statistics.write.prev, (REVERSE_SEEK_BOUND / 2) as usize);
+        assert_eq!(statistics.processed_size, 0);
 
         // Cursor remains invalid, so nothing should happen.
         assert_eq!(scanner.next().unwrap(), None);
@@ -798,6 +807,7 @@ mod tests {
         assert_eq!(statistics.write.seek_for_prev, 0);
         assert_eq!(statistics.write.next, 0);
         assert_eq!(statistics.write.prev, 0);
+        assert_eq!(statistics.processed_size, 0);
     }
 
     /// Check whether everything works as usual when `BackwardKvScanner::reverse_get()` goes
@@ -859,6 +869,7 @@ mod tests {
         assert_eq!(statistics.write.seek_for_prev, 0);
         assert_eq!(statistics.write.next, 0);
         assert_eq!(statistics.write.prev, 1);
+        assert_eq!(statistics.processed_size, 8);
 
         // Use N/2+1 prev and reach out of bound:
         //   b_2 b_1 b_0 c_8
@@ -872,6 +883,7 @@ mod tests {
         assert_eq!(statistics.write.seek_for_prev, 0);
         assert_eq!(statistics.write.next, 0);
         assert_eq!(statistics.write.prev, (REVERSE_SEEK_BOUND / 2 + 1) as usize);
+        assert_eq!(statistics.processed_size, 8);
 
         // Cursor remains invalid, so nothing should happen.
         assert_eq!(scanner.next().unwrap(), None);
@@ -880,6 +892,7 @@ mod tests {
         assert_eq!(statistics.write.seek_for_prev, 0);
         assert_eq!(statistics.write.next, 0);
         assert_eq!(statistics.write.prev, 0);
+        assert_eq!(statistics.processed_size, 0);
     }
 
     /// Check whether everything works as usual when
@@ -926,6 +939,7 @@ mod tests {
         assert_eq!(statistics.write.seek_for_prev, 0);
         assert_eq!(statistics.write.next, 0);
         assert_eq!(statistics.write.prev, 1);
+        assert_eq!(statistics.processed_size, 6);
 
         // Before:
         //   b_2 b_1 c_1
@@ -943,6 +957,7 @@ mod tests {
         assert_eq!(statistics.write.seek_for_prev, 0);
         assert_eq!(statistics.write.next, 0);
         assert_eq!(statistics.write.prev, (SEEK_BOUND / 2) as usize);
+        assert_eq!(statistics.processed_size, 2);
 
         // Next we should get nothing.
         assert_eq!(scanner.next().unwrap(), None);
@@ -951,6 +966,7 @@ mod tests {
         assert_eq!(statistics.write.seek_for_prev, 0);
         assert_eq!(statistics.write.next, 0);
         assert_eq!(statistics.write.prev, 0);
+        assert_eq!(statistics.processed_size, 0);
     }
 
     /// Check whether everything works as usual when
@@ -997,6 +1013,7 @@ mod tests {
         assert_eq!(statistics.write.seek_for_prev, 0);
         assert_eq!(statistics.write.next, 0);
         assert_eq!(statistics.write.prev, 1);
+        assert_eq!(statistics.processed_size, 6);
 
         // Before:
         //   b_5 b_4 b_3 b_2 b_1 c_1
@@ -1020,6 +1037,7 @@ mod tests {
         assert_eq!(statistics.write.seek_for_prev, 1);
         assert_eq!(statistics.write.next, 0);
         assert_eq!(statistics.write.prev, SEEK_BOUND as usize);
+        assert_eq!(statistics.processed_size, 2);
 
         // Next we should get nothing.
         assert_eq!(scanner.next().unwrap(), None);
@@ -1028,6 +1046,7 @@ mod tests {
         assert_eq!(statistics.write.seek_for_prev, 0);
         assert_eq!(statistics.write.next, 0);
         assert_eq!(statistics.write.prev, 0);
+        assert_eq!(statistics.processed_size, 0);
     }
 
     /// Check whether everything works as usual when
@@ -1076,6 +1095,7 @@ mod tests {
         assert_eq!(statistics.write.seek_for_prev, 0);
         assert_eq!(statistics.write.next, 0);
         assert_eq!(statistics.write.prev, 1);
+        assert_eq!(statistics.processed_size, 6);
 
         // Before:
         //   b_11 b_10 b_9 b_8 b_7 b_6 b_5 b_4 b_3 b_2 b_1 c_1
@@ -1105,6 +1125,7 @@ mod tests {
             statistics.write.prev,
             (REVERSE_SEEK_BOUND - 1 + SEEK_BOUND - 1) as usize
         );
+        assert_eq!(statistics.processed_size, 2);
 
         // Next we should get nothing.
         assert_eq!(scanner.next().unwrap(), None);
@@ -1113,6 +1134,7 @@ mod tests {
         assert_eq!(statistics.write.seek_for_prev, 0);
         assert_eq!(statistics.write.next, 0);
         assert_eq!(statistics.write.prev, 0);
+        assert_eq!(statistics.processed_size, 0);
     }
 
     /// Range is left open right closed.
@@ -1151,6 +1173,7 @@ mod tests {
             Some((Key::from_raw(&[3u8]), vec![3u8]))
         );
         assert_eq!(scanner.next().unwrap(), None);
+        assert_eq!(scanner.take_statistics().processed_size, 4);
 
         // Test left bound not specified.
         let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), true)
@@ -1166,6 +1189,7 @@ mod tests {
             Some((Key::from_raw(&[1u8]), vec![1u8]))
         );
         assert_eq!(scanner.next().unwrap(), None);
+        assert_eq!(scanner.take_statistics().processed_size, 4);
 
         // Test right bound not specified.
         let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), true)
@@ -1181,6 +1205,7 @@ mod tests {
             Some((Key::from_raw(&[5u8]), vec![5u8]))
         );
         assert_eq!(scanner.next().unwrap(), None);
+        assert_eq!(scanner.take_statistics().processed_size, 4);
 
         // Test both bound not specified.
         let mut scanner = ScannerBuilder::new(snapshot, 10.into(), true)
@@ -1212,6 +1237,7 @@ mod tests {
             Some((Key::from_raw(&[1u8]), vec![1u8]))
         );
         assert_eq!(scanner.next().unwrap(), None);
+        assert_eq!(scanner.take_statistics().processed_size, 12);
     }
 
     #[test]
@@ -1254,6 +1280,7 @@ mod tests {
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.lock.prev, 15);
         assert_eq!(statistics.write.prev, 1);
+        assert_eq!(scanner.take_statistics().processed_size, 0);
     }
 
     #[test]

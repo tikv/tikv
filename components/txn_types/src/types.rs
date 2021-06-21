@@ -210,6 +210,11 @@ impl Key {
         bytes::is_encoded_from(&self.0, raw_key, false)
     }
 
+    /// Returns length of the key in raw representation
+    pub fn raw_len(&self) -> usize {
+        bytes::unchecked_decoded_len(&self.0, false)
+    }
+
     /// TiDB uses the same hash algorithm.
     pub fn gen_hash(&self) -> u64 {
         farmhash::fingerprint64(&self.to_raw().unwrap())
