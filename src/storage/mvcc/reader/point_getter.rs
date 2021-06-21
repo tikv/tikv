@@ -582,6 +582,7 @@ mod tests {
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 1, 0, 0);
         assert_eq!(s.processed_size, 0);
+
         // Get a key that does not exist
         must_get_none(&mut getter, b"z");
         let s = getter.take_statistics();
