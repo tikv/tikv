@@ -47,14 +47,16 @@ pub mod root {
     impl<T> ::std::cmp::Eq for __BindgenUnionField<T> {}
     #[allow(unused_imports)]
     use self::super::root;
-    pub const _LIBCPP_VERSION: u32 = 8000;
+    pub const _LIBCPP_HAS_MERGED_TYPEINFO_NAMES_DEFAULT: u32 = 1;
+    pub const _LIBCPP_VERSION: u32 = 10000;
     pub const _LIBCPP_ABI_VERSION: u32 = 1;
     pub const _LIBCPP_STD_VER: u32 = 11;
     pub const _LIBCPP_OBJECT_FORMAT_MACHO: u32 = 1;
-    pub const _LIBCPP_CLANG_VER: u32 = 0;
     pub const _LIBCPP_HIDE_FROM_ABI_PER_TU: u32 = 1;
+    pub const _LIBCPP_DEBUG_LEVEL: u32 = 0;
     pub const _LIBCPP_LOCALE__L_EXTENSIONS: u32 = 1;
     pub const _LIBCPP_HAS_CATOPEN: u32 = 1;
+    pub const __STDCPP_THREADS__: u32 = 1;
     pub const __WORDSIZE: u32 = 64;
     pub const __DARWIN_ONLY_64_BIT_INO_T: u32 = 0;
     pub const __DARWIN_ONLY_VERS_1050: u32 = 0;
