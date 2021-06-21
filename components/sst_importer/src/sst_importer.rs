@@ -66,6 +66,11 @@ impl SSTImporter {
         path.save
     }
 
+    pub fn get_tmp_path(&self, meta: &SstMeta) -> PathBuf {
+        let path = self.dir.join(meta).unwrap();
+        path.temp
+    }
+
     pub fn create(&self, meta: &SstMeta) -> Result<ImportFile> {
         match self.dir.create(meta, self.key_manager.clone()) {
             Ok(f) => {
@@ -1285,7 +1290,7 @@ mod tests {
         let sst_writer = <TestEngine as SstExt>::SstWriterBuilder::new()
             .set_db(&db)
             .set_cf(name_to_cf(meta.get_cf_name()).unwrap())
-            .build(importer.get_path(meta).to_str().unwrap())
+            .build(importer.get_tmp_path(meta).to_str().unwrap())
             .unwrap();
         Ok(sst_writer)
     }
