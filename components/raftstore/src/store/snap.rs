@@ -1288,7 +1288,7 @@ impl SnapManager {
         Ok(Box::new(f))
     }
 
-    fn get_concrete_snapshot_for_applying(&self, key: &SnapKey) -> RaftStoreResult<Box<Snapshot>> {
+    pub fn get_snapshot_for_applying(&self, key: &SnapKey) -> RaftStoreResult<Box<Snapshot>> {
         let _lock = self.core.registry.rl();
         let base = &self.core.base;
         let s = Snapshot::new_for_applying(base, key, &self.core)?;
@@ -1299,17 +1299,6 @@ impl SnapManager {
             ))));
         }
         Ok(Box::new(s))
-    }
-
-    pub fn get_snapshot_for_applying(&self, key: &SnapKey) -> RaftStoreResult<Box<Snapshot>> {
-        Ok(self.get_concrete_snapshot_for_applying(key)?)
-    }
-
-    pub fn get_snapshot_for_applying_to_engine<EK: KvEngine>(
-        &self,
-        key: &SnapKey,
-    ) -> RaftStoreResult<Box<Snapshot>> {
-        Ok(self.get_concrete_snapshot_for_applying(key)?)
     }
 
     /// Get the approximate size of snap file exists in snap directory.
@@ -2310,7 +2299,7 @@ pub mod tests {
         assert_eq!(mgr.get_total_snap_size().unwrap(), 0);
     }
 
-    fn check_registry_around_deregister(mgr: SnapManager, key: &SnapKey, entry: &SnapEntry) {
+    fn check_registry_around_deregister(mgr: &SnapManager, key: &SnapKey, entry: &SnapEntry) {
         let snap_keys = mgr.list_idle_snap().unwrap();
         assert!(snap_keys.is_empty());
         assert!(mgr.has_registered(key));
@@ -2352,7 +2341,7 @@ pub mod tests {
             .unwrap();
         let v = snap_data.write_to_bytes().unwrap();
 
-        check_registry_around_deregister(src_mgr.clone(), &key, &SnapEntry::Generating);
+        check_registry_around_deregister(&src_mgr, &key, &SnapEntry::Generating);
 
         // Ensure the snapshot being sent will not be deleted on GC.
         src_mgr.register(key.clone(), SnapEntry::Sending);
@@ -2374,8 +2363,8 @@ pub mod tests {
         assert_eq!(n, expected_size);
         s3.save().unwrap();
 
-        check_registry_around_deregister(src_mgr.clone(), &key, &SnapEntry::Sending);
-        check_registry_around_deregister(dst_mgr.clone(), &key, &SnapEntry::Receiving);
+        check_registry_around_deregister(&src_mgr, &key, &SnapEntry::Sending);
+        check_registry_around_deregister(&dst_mgr, &key, &SnapEntry::Receiving);
 
         // Ensure the snapshot to be applied will not be deleted on GC.
         let mut snap_keys = dst_mgr.list_idle_snap().unwrap();
