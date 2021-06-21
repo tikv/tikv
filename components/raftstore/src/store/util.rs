@@ -896,6 +896,7 @@ impl RegionReadProgressRegistry {
                 }
             }
         }
+        drop(registry);
         regions.shrink_to_fit();
         regions
     }
@@ -912,6 +913,7 @@ impl RegionReadProgressRegistry {
                 info_map.insert(*region_id, rrp.dump_leader_info());
             }
         }
+        drop(registry);
         info_map.shrink_to_fit();
         info_map
     }
@@ -919,9 +921,9 @@ impl RegionReadProgressRegistry {
     /// Invoke the provided callback with the registry, an internal lock will hold
     /// while invoking the callback so it is important that *not* try to acquiring any
     /// lock inside the callback to avoid dead lock
-    pub fn map<F, T>(&self, mut f: F) -> T
+    pub fn map<F, T>(&self, f: F) -> T
     where
-        F: FnMut(&HashMap<u64, Arc<RegionReadProgress>>) -> T,
+        F: FnOnce(&HashMap<u64, Arc<RegionReadProgress>>) -> T,
     {
         let registry = self.registry.lock().unwrap();
         f(&registry)

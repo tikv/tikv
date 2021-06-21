@@ -66,19 +66,19 @@ impl Runner {
                 .unwrap_or(0)
             })
         } else {
+            let (start_key, end_key) = (
+                data_key(key_range.get_start_key()),
+                data_end_key(key_range.get_end_key()),
+            );
             // `store_safe_ts` won't be accessed frequently (like per-request or per-transaction),
             // also this branch won't entry because the request key range is empty currently (in v5.1)
             // keep this branch for robustness and future use, so it is okay getting `store_safe_ts`
             // from `store_meta` (behide a mutex)
             let meta = self.store_meta.lock().unwrap();
-            let (start_key, end_key) = (
-                data_key(key_range.get_start_key()),
-                data_end_key(key_range.get_end_key()),
-            );
             meta.region_read_progress.map(|registry| {
                 meta.region_ranges
                 // get overlapped regions
-                .range((Excluded(start_key.clone()), Unbounded))
+                .range((Excluded(start_key), Unbounded))
                 .take_while(|(_, id)| end_key > enc_start_key(&meta.regions[id]))
                 // get the min `safe_ts`
                 .map(|(_, id)| {
