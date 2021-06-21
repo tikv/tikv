@@ -736,7 +736,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     } = lock_info;
                     let diag_ctx = DiagnosticContext {
                         key,
-                        resource_group_tag: ctx.get_resourgsce_group_tag().into(),
+                        resource_group_tag: ctx.get_resource_group_tag().into(),
                     };
                     scheduler.on_wait_for_lock(
                         cid,
