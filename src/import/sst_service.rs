@@ -14,6 +14,7 @@ use futures03::future::FutureExt;
 use futures03::TryStreamExt;
 use std::collections::HashSet;
 
+use engine_traits::{KvEngine, CF_WRITE};
 use grpcio::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use kvproto::errorpb;
 
@@ -28,6 +29,7 @@ use kvproto::raft_cmdpb::*;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use engine_rocks::RocksEngine;
 use engine_traits::{SstExt, SstWriterBuilder};
+use raftstore::router::RaftStoreRouter;
 use raftstore::store::Callback;
 use security::{check_common_name, SecurityManager};
 
@@ -212,15 +214,7 @@ where
             // Records how long the download task waits to be scheduled.
             sst_importer::metrics::IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["queue"])
-                .observe(start.saturating_elapsed().as_secs_f64());
-            // SST writer must not be opened in gRPC threads, because it may be
-            // blocked for a long time due to IO, especially, when encryption at rest
-            // is enabled, and it leads to gRPC keepalive timeout.
-            let sst_writer = <RocksEngine as SstExt>::SstWriterBuilder::new()
-                .set_db(RocksEngine::from_ref(&engine))
-                .set_cf(name_to_cf(req.get_sst().get_cf_name()).unwrap())
-                .build(importer.get_path(req.get_sst()).to_str().unwrap())
-                .unwrap();
+                .observe(start.elapsed().as_secs_f64());
 
             // FIXME: download() should be an async fn, to allow BR to cancel
             // a download task.
@@ -232,7 +226,7 @@ where
                 req.get_name(),
                 req.get_rewrite_rule(),
                 limiter,
-                sst_writer,
+                engine,
             );
             let mut resp = DownloadResponse::default();
             match res {
