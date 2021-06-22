@@ -59,44 +59,26 @@ impl SplitObserver {
         ctx: &mut ObserverContext<'_>,
         splits: &mut Vec<SplitRequest>,
     ) -> Result<(), String> {
-        let (mut i, mut j) = (0, 0);
-        let mut last_valid_key: Option<Vec<u8>> = None;
-        let region = ctx.region();
-        while i < splits.len() {
-            let k = i;
-            i += 1;
-            {
-                let split = &mut splits[k];
+        let mut ajusted_splits = std::mem::replace(splits, Vec::new())
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, mut split)| {
                 let key = split.take_split_key();
                 let key = strip_timestamp_if_exists(key);
-
-                if !is_valid_split_key(&key, k, region) {
-                    continue;
+                if is_valid_split_key(&key, i, ctx.region()) {
+                    split.set_split_key(key);
+                    Some(split)
+                } else {
+                    None
                 }
+            })
+            .collect::<Vec<_>>();
 
-                if last_valid_key.as_ref().map_or(false, |k| *k >= key) {
-                    warn!(
-                        "skip invalid split key: key should not larger than previous";
-                        "region_id" => region.get_id(),
-                        "key" => log_wrappers::Value::key(&key),
-                        "previous" => log_wrappers::Value::key(last_valid_key.as_ref().unwrap()),
-                        "index" => k,
-                    );
-                    continue;
-                }
-                last_valid_key = Some(key.clone());
+        // Make sure that the split keys are sorted.
+        ajusted_splits.sort_unstable_by(|l, r| l.get_split_key().cmp(r.get_split_key()));
 
-                split.set_split_key(key)
-            }
-            if k != j {
-                splits.swap(k, j);
-            }
-            j += 1;
-        }
-        if j == 0 {
-            return Err("no valid key found for split.".to_owned());
-        }
-        splits.truncate(j);
+        // Rewrite the splitest
+        std::mem::swap(splits, &mut ajusted_splits);
         Ok(())
     }
 }
