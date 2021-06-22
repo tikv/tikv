@@ -778,14 +778,7 @@ where
             topn_report.push(read_stat);
         }
 
-        let report_vec = topn_report.into_vec();
-
-        #[cfg(feature = "failpoints")]
-        if report_vec.len() > cap {
-            fail_point!("on_report_vec_too_large");
-        }
-
-        for item in report_vec {
+        for item in topn_report.into_iter() {
             let mut peer_stat = pdpb::PeerStat::default();
             peer_stat.set_region_id(item.region_id);
             peer_stat.set_read_bytes(item.report_read_bytes);
