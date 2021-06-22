@@ -178,8 +178,12 @@ pub struct Statistics {
     pub data: CfStatistics,
 
     // Number of bytes of user key-value pairs.
-    // Note that a value comes from either write cf (due to it's a short value) or data cf, we can't
-    // embed this field into `CfStatistics`.
+    //
+    // A user key in mem-comparable format doesn't contain timestamp but some markers and
+    // paddings, so its size is still a little bit greater than the one at client view.
+    //
+    // Note that a value comes from either write cf (due to it's a short value) or default cf, we
+    // can't embed this `processed_size` field into `CfStatistics`.
     pub processed_size: usize,
 }
 

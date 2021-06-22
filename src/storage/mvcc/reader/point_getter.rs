@@ -291,13 +291,13 @@ impl<S: Snapshot> PointGetter<S> {
                     match write.short_value {
                         Some(value) => {
                             // Value is carried in `write`.
-                            self.statistics.processed_size += user_key.raw_len() + value.len();
+                            self.statistics.processed_size += user_key.len() + value.len();
                             return Ok(Some(value.to_vec()));
                         }
                         None => {
                             let start_ts = write.start_ts;
                             let value = self.load_data_from_default_cf(start_ts, user_key)?;
-                            self.statistics.processed_size += user_key.raw_len() + value.len();
+                            self.statistics.processed_size += user_key.len() + value.len();
                             return Ok(Some(value));
                         }
                     }
@@ -569,12 +569,12 @@ mod tests {
         let s = getter.take_statistics();
         // We have to check every version
         assert_seek_next_prev(&s.write, 1, 40, 0);
-        assert_eq!(s.processed_size, 264);
+        assert_eq!(s.processed_size, 269);
         // Get again
         must_get_value(&mut getter, b"foo2", b"foo2v");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 1, 40, 0);
-        assert_eq!(s.processed_size, 264);
+        assert_eq!(s.processed_size, 269);
 
         // Get a smaller key
         must_get_none(&mut getter, b"foo1");
@@ -592,12 +592,12 @@ mod tests {
         must_get_value(&mut getter, b"zz", b"zzv");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 1, 0, 0);
-        assert_eq!(s.processed_size, 260);
+        assert_eq!(s.processed_size, 267);
         // Get again
         must_get_value(&mut getter, b"zz", b"zzv");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 1, 0, 0);
-        assert_eq!(s.processed_size, 260);
+        assert_eq!(s.processed_size, 267);
     }
 
     #[test]
@@ -668,7 +668,7 @@ mod tests {
         must_get_value(&mut getter, b"foo", b"bar");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 1, 0, 0);
-        assert_eq!(s.processed_size, 6);
+        assert_eq!(s.processed_size, 12);
     }
 
     /// Some ts larger than get ts
@@ -681,12 +681,12 @@ mod tests {
         must_get_value(&mut getter, b"bar", b"barv");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 1, 0, 0);
-        assert_eq!(s.processed_size, 262);
+        assert_eq!(s.processed_size, 268);
 
         must_get_value(&mut getter, b"bar", b"barv");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 1, 0, 0);
-        assert_eq!(s.processed_size, 262);
+        assert_eq!(s.processed_size, 268);
 
         must_get_none(&mut getter, b"bo");
         let s = getter.take_statistics();
@@ -701,7 +701,7 @@ mod tests {
         must_get_value(&mut getter, b"foo1", b"foo1");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 1, 0, 0);
-        assert_eq!(s.processed_size, 264);
+        assert_eq!(s.processed_size, 269);
 
         must_get_none(&mut getter, b"zz");
         let s = getter.take_statistics();
@@ -711,12 +711,12 @@ mod tests {
         must_get_value(&mut getter, b"foo1", b"foo1");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 1, 0, 0);
-        assert_eq!(s.processed_size, 264);
+        assert_eq!(s.processed_size, 269);
 
         must_get_value(&mut getter, b"bar", b"barv");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 1, 0, 0);
-        assert_eq!(s.processed_size, 262);
+        assert_eq!(s.processed_size, 268);
     }
 
     /// All ts larger than get ts
@@ -767,7 +767,7 @@ mod tests {
         must_get_none(&mut getter, b"foo2");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 7, 0, 0);
-        assert_eq!(s.processed_size, 546);
+        assert_eq!(s.processed_size, 568);
 
         let mut getter = new_multi_point_getter(&engine, 4.into());
         must_get_none(&mut getter, b"a");
@@ -778,7 +778,7 @@ mod tests {
         must_get_none(&mut getter, b"zz");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 3, 0, 0);
-        assert_eq!(s.processed_size, 264);
+        assert_eq!(s.processed_size, 269);
     }
 
     /// Single Point Getter can only get once.

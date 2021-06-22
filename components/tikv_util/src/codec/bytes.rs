@@ -278,20 +278,6 @@ pub fn decode_bytes_in_place(data: &mut Vec<u8>, desc: bool) -> Result<()> {
     }
 }
 
-// Returns the decoded key length of the given encoded key which is assumed valid without actually
-// decoding it.
-pub fn unchecked_decoded_len(encoded: &[u8], desc: bool) -> usize {
-    let group_cnt = encoded.len() / (ENC_GROUP_SIZE + 1);
-    let last_group_marker = encoded[(group_cnt * (ENC_GROUP_SIZE + 1)) - 1];
-    let last_group_size = ENC_GROUP_SIZE
-        - if desc {
-            last_group_marker as usize
-        } else {
-            (ENC_MARKER - last_group_marker) as usize
-        };
-    (group_cnt - 1) * ENC_GROUP_SIZE + last_group_size
-}
-
 /// Returns whether `encoded` bytes is encoded from `raw`. Returns `false` if `encoded` is invalid.
 pub fn is_encoded_from(encoded: &[u8], raw: &[u8], desc: bool) -> bool {
     let check_single_chunk = |encoded: &[u8], raw: &[u8]| {
@@ -407,9 +393,7 @@ mod tests {
 
         for (source, mut asc, mut desc) in pairs {
             assert_eq!(encode_bytes(&source), asc);
-            assert_eq!(unchecked_decoded_len(&asc, false), source.len());
             assert_eq!(encode_bytes_desc(&source), desc);
-            assert_eq!(unchecked_decoded_len(&desc, true), source.len());
 
             // apppend timestamp, the timestamp bytes should not affect decode result
             asc.encode_u64_desc(0).unwrap();
@@ -418,7 +402,6 @@ mod tests {
                 let asc_offset = asc.as_ptr() as usize;
                 let mut asc_input = asc.as_slice();
                 assert_eq!(source, decode_bytes(&mut asc_input, false).unwrap());
-                assert_eq!(unchecked_decoded_len(&asc, false), source.len());
                 assert_eq!(
                     asc_input.as_ptr() as usize - asc_offset,
                     asc.len() - number::U64_SIZE
@@ -431,7 +414,6 @@ mod tests {
                 let desc_offset = desc.as_ptr() as usize;
                 let mut desc_input = desc.as_slice();
                 assert_eq!(source, decode_bytes(&mut desc_input, true).unwrap());
-                assert_eq!(unchecked_decoded_len(&desc, true), source.len());
                 assert_eq!(
                     desc_input.as_ptr() as usize - desc_offset,
                     desc.len() - number::U64_SIZE
@@ -670,15 +652,6 @@ mod tests {
     }
 
     #[bench]
-    fn bench_decoded_len(b: &mut Bencher) {
-        let key = [b'x'; 10000];
-        let encoded = encode_bytes(&key);
-        b.iter(|| {
-            unchecked_decoded_len(&encoded, false);
-        });
-    }
-
-    #[bench]
     fn bench_decode_small(b: &mut Bencher) {
         let key = [b'x'; 30];
         let encoded = encode_bytes(&key);
@@ -695,15 +668,6 @@ mod tests {
         b.iter(|| {
             let mut encoded = encoded.clone();
             decode_bytes_in_place(&mut encoded, false).unwrap();
-        });
-    }
-
-    #[bench]
-    fn bench_decoded_len_small(b: &mut Bencher) {
-        let key = [b'x'; 30];
-        let encoded = encode_bytes(&key);
-        b.iter(|| {
-            unchecked_decoded_len(&encoded, false);
         });
     }
 

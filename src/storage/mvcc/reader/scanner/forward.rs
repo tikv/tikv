@@ -415,7 +415,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
         cursors.move_write_cursor_to_next_user_key(&current_user_key, statistics)?;
         Ok(match value {
             Some(v) => {
-                statistics.processed_size += current_user_key.raw_len() + v.len();
+                statistics.processed_size += current_user_key.len() + v.len();
                 HandleRes::Return((current_user_key, v))
             }
             _ => HandleRes::Skip(current_user_key),
@@ -1045,7 +1045,7 @@ mod latest_kv_tests {
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, 1);
-        assert_eq!(statistics.processed_size, 6);
+        assert_eq!(statistics.processed_size, 14);
 
         // Use 5 next and reach out of bound:
         //   a_7 b_4 b_3 b_2 b_1 b_0
@@ -1113,7 +1113,7 @@ mod latest_kv_tests {
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, 1);
-        assert_eq!(statistics.processed_size, 8);
+        assert_eq!(statistics.processed_size, 16);
 
         // Before:
         //   a_8 b_2 b_1 b_0
@@ -1129,7 +1129,7 @@ mod latest_kv_tests {
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, (SEEK_BOUND / 2 + 1) as usize);
-        assert_eq!(statistics.processed_size, 8);
+        assert_eq!(statistics.processed_size, 16);
 
         // Next we should get nothing.
         assert_eq!(scanner.next().unwrap(), None);
@@ -1189,7 +1189,7 @@ mod latest_kv_tests {
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, 1);
-        assert_eq!(statistics.processed_size, 8);
+        assert_eq!(statistics.processed_size, 16);
 
         // Before:
         //   a_8 b_4 b_3 b_2 b_1
@@ -1208,7 +1208,7 @@ mod latest_kv_tests {
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, (SEEK_BOUND - 1) as usize);
-        assert_eq!(statistics.processed_size, 8);
+        assert_eq!(statistics.processed_size, 16);
 
         // Next we should get nothing.
         assert_eq!(scanner.next().unwrap(), None);
@@ -1254,7 +1254,7 @@ mod latest_kv_tests {
             Some((Key::from_raw(&[4u8]), vec![4u8]))
         );
         assert_eq!(scanner.next().unwrap(), None);
-        assert_eq!(scanner.take_statistics().processed_size, 4);
+        assert_eq!(scanner.take_statistics().processed_size, 20);
 
         // Test left bound not specified.
         let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
@@ -1270,7 +1270,7 @@ mod latest_kv_tests {
             Some((Key::from_raw(&[2u8]), vec![2u8]))
         );
         assert_eq!(scanner.next().unwrap(), None);
-        assert_eq!(scanner.take_statistics().processed_size, 4);
+        assert_eq!(scanner.take_statistics().processed_size, 20);
 
         // Test right bound not specified.
         let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
@@ -1286,7 +1286,7 @@ mod latest_kv_tests {
             Some((Key::from_raw(&[6u8]), vec![6u8]))
         );
         assert_eq!(scanner.next().unwrap(), None);
-        assert_eq!(scanner.take_statistics().processed_size, 4);
+        assert_eq!(scanner.take_statistics().processed_size, 20);
 
         // Test both bound not specified.
         let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
@@ -1318,7 +1318,7 @@ mod latest_kv_tests {
             Some((Key::from_raw(&[6u8]), vec![6u8]))
         );
         assert_eq!(scanner.next().unwrap(), None);
-        assert_eq!(scanner.take_statistics().processed_size, 12);
+        assert_eq!(scanner.take_statistics().processed_size, 60);
     }
 
     #[test]
