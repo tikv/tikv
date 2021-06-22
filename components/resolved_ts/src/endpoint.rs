@@ -12,11 +12,7 @@ use configuration::{self, ConfigChange, ConfigManager, Configuration};
 use engine_traits::{KvEngine, Snapshot};
 use grpcio::Environment;
 use kvproto::metapb::Region;
-<<<<<<< HEAD
-=======
 use kvproto::raft_cmdpb::AdminCmdType;
-use online_config::{self, ConfigChange, ConfigManager, OnlineConfig};
->>>>>>> 6aafdae55... resolved_ts: fix high tail latency cause by time-consuming operation in raftstore  (#10354)
 use pd_client::PdClient;
 use raftstore::coprocessor::CmdBatch;
 use raftstore::coprocessor::{ObserveHandle, ObserveID};
