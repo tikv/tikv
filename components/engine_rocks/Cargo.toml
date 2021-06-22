@@ -61,7 +61,7 @@ txn_types = { path = "../txn_types", default-features = false}
 lazy_static = "1.4.0"
 log_wrappers = { path = "../log_wrappers" }
 time = "0.1"
-configuration = { path = "../configuration" }
+online_config = { path = "../online_config" }
 tempfile = "3.0"
 serde = "1.0"
 serde_derive = "1.0"
