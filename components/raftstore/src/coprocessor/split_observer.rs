@@ -74,12 +74,17 @@ impl SplitObserver {
             })
             .collect::<Vec<_>>();
 
-        // Make sure that the split keys are sorted.
-        ajusted_splits.sort_unstable_by(|l, r| l.get_split_key().cmp(r.get_split_key()));
+        // Make sure that the split keys are sorted and unique.
+        ajusted_splits.sort_by(|l, r| l.get_split_key().cmp(r.get_split_key()));
+        ajusted_splits.dedup();
 
-        // Rewrite the splites
-        std::mem::swap(splits, &mut ajusted_splits);
-        Ok(())
+        if ajusted_splits.is_empty() {
+            Err("no valid key found for split.".to_owned())
+        } else {
+            // Rewrite the splites.
+            std::mem::swap(splits, &mut ajusted_splits);
+            Ok(())
+        }
     }
 }
 
