@@ -23,8 +23,6 @@ pub use rate_limiter::{
     IORateLimiterStatistics,
 };
 
-use online_config::ConfigValue;
-
 pub use std::fs::{
     canonicalize, create_dir, create_dir_all, hard_link, metadata, read_dir, read_link, remove_dir,
     remove_dir_all, remove_file, rename, set_permissions, symlink_metadata, DirBuilder, DirEntry,
@@ -36,6 +34,7 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
+use online_config::ConfigValue;
 use openssl::error::ErrorStack;
 use openssl::hash::{self, Hasher, MessageDigest};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -144,7 +143,7 @@ impl IOPriority {
         }
     }
 
-    pub fn unsafe_from_u32(i: u32) -> Self {
+    fn unsafe_from_u32(i: u32) -> Self {
         unsafe { std::mem::transmute(i) }
     }
 }

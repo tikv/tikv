@@ -712,7 +712,7 @@ mod tests {
         };
         assert!(
             stats.fetch(IOType::ForegroundWrite, IOOp::Write) as f64
-                > bytes_per_sec as f64 * duration.as_secs_f64()
+                > bytes_per_sec as f64 * duration.as_secs_f64() * 1.5
         );
     }
 
