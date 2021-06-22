@@ -34,7 +34,8 @@ use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
 use raftstore::store::SnapManager;
 use raftstore::store::{
-    AutoSplitController, Callback, LocalReader, SnapManagerBuilder, SplitCheckRunner,
+    AutoSplitController, Callback, CheckLeaderRunner, LocalReader, SnapManagerBuilder,
+    SplitCheckRunner,
 };
 use raftstore::Result;
 use security::SecurityManager;
@@ -300,6 +301,9 @@ impl Simulator for ServerCluster {
             None
         };
 
+        let check_leader_runner = CheckLeaderRunner::new(store_meta.clone());
+        let check_leader_scheduler = bg_worker.start("check-leader", check_leader_runner);
+
         let mut lock_mgr = LockManager::new(cfg.pessimistic_txn.pipelined);
         let store = create_raft_storage(
             engine,
@@ -395,6 +399,7 @@ impl Simulator for ServerCluster {
                 resolver.clone(),
                 snap_mgr.clone(),
                 gc_worker.clone(),
+                check_leader_scheduler.clone(),
                 self.env.clone(),
                 None,
                 debug_thread_pool.clone(),
