@@ -49,7 +49,7 @@ fn is_valid_split_key(key: &[u8], index: usize, region: &Region) -> bool {
 }
 
 /// `SplitObserver` adjusts the split key so that it won't separate
-/// multiple MVCC versions of a key into two region.
+/// multiple MVCC versions of a key into two regions.
 #[derive(Clone)]
 pub struct SplitObserver;
 
@@ -81,7 +81,7 @@ impl SplitObserver {
         if ajusted_splits.is_empty() {
             Err("no valid key found for split.".to_owned())
         } else {
-            // Rewrite the splites.
+            // Rewrite the splits.
             std::mem::swap(splits, &mut ajusted_splits);
             Ok(())
         }
