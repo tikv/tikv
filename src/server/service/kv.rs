@@ -626,6 +626,10 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 let to_store_id = msg.get_to_peer().get_store_id();
                 if to_store_id != store_id {
                     warn!("store not match"; "self" => store_id, "given" => to_store_id);
+                    return future::err(Error::from(RaftStoreError::StoreNotMatch {
+                        to_store_id,
+                        my_store_id: store_id,
+                    }));
                 } else if let Err(e) = ch.send_raft_msg(msg) {
                     warn!("dispatch raft msg from gRPC to raftstore fail"; "err" => ?e);
                 }
@@ -663,6 +667,10 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                     let to_store_id = msg.get_to_peer().get_store_id();
                     if to_store_id != store_id {
                         warn!("store not match"; "self" => store_id, "given" => to_store_id);
+                        return future::err(Error::from(RaftStoreError::StoreNotMatch {
+                            to_store_id,
+                            my_store_id: store_id,
+                        }));
                     } else if let Err(e) = ch.send_raft_msg(msg) {
                         warn!("dispatch raft msg from gRPC to raftstore fail"; "err" => ?e);
                     }
