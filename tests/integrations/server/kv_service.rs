@@ -294,6 +294,11 @@ fn test_mvcc_basic() {
     let get_resp = client.kv_get(&get_req).unwrap();
     assert!(!get_resp.has_region_error());
     assert!(!get_resp.has_error());
+    assert!(get_resp.get_exec_details_v2().has_time_detail());
+    let scan_detail_v2 = get_resp.get_exec_details_v2().get_scan_detail_v2();
+    assert_eq!(scan_detail_v2.get_total_versions(), 1);
+    assert_eq!(scan_detail_v2.get_processed_versions(), 1);
+    assert!(scan_detail_v2.get_processed_versions_size() > 0);
     assert_eq!(get_resp.value, v);
 
     // Scan
@@ -321,6 +326,11 @@ fn test_mvcc_basic() {
     batch_get_req.set_keys(vec![k.clone()].into_iter().collect());
     batch_get_req.version = batch_get_version;
     let batch_get_resp = client.kv_batch_get(&batch_get_req).unwrap();
+    assert!(batch_get_resp.get_exec_details_v2().has_time_detail());
+    let scan_detail_v2 = batch_get_resp.get_exec_details_v2().get_scan_detail_v2();
+    assert_eq!(scan_detail_v2.get_total_versions(), 1);
+    assert_eq!(scan_detail_v2.get_processed_versions(), 1);
+    assert!(scan_detail_v2.get_processed_versions_size() > 0);
     assert_eq!(batch_get_resp.pairs.len(), 1);
     for kv in batch_get_resp.pairs.into_iter() {
         assert!(!kv.has_error());
