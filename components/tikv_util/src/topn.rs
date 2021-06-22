@@ -11,9 +11,7 @@ pub struct TopN<T> {
     heap: BinaryHeap<Reverse<T>>,
 }
 
-
 impl<T: Ord> TopN<T> {
-
     /// Create a `TopN` with fixed capacity.
     pub fn new(capacity: usize) -> TopN<T> {
         TopN {
@@ -69,21 +67,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_0_capacity(){
+    fn test_0_capacity() {
         let mut cap_0_topn = TopN::new(0);
         cap_0_topn.push(1);
-        assert_eq!(cap_0_topn.pop(),None);
-        assert_eq!(cap_0_topn.len(),0);
-        assert_eq!(cap_0_topn.is_empty(),true);
+        assert_eq!(cap_0_topn.pop(), None);
+        assert_eq!(cap_0_topn.len(), 0);
+        assert_eq!(cap_0_topn.is_empty(), true);
     }
 
     #[test]
     fn test_1_capactiy() {
         let mut cap_0_topn = TopN::new(1);
         cap_0_topn.push(1);
-        assert_eq!(cap_0_topn.peek(),Some(&1));
-        assert_eq!(cap_0_topn.len(),1);
-        assert_eq!(cap_0_topn.is_empty(),false);
+        assert_eq!(cap_0_topn.peek(), Some(&1));
+        assert_eq!(cap_0_topn.len(), 1);
+        assert_eq!(cap_0_topn.is_empty(), false);
     }
 
     #[test]

@@ -216,40 +216,37 @@ pub struct PeerStat {
     pub approximate_size: u64,
 }
 
-#[derive(Default)]
-pub struct PeerReportReadStat {
+#[derive(Default, Clone)]
+struct PeerReportReadStat {
     pub region_id: u64,
-    pub report_read_bytes: u64,
-    pub report_read_keys: u64,
-    pub report_query_stats: QueryStats,
+    pub read_keys: u64,
+    pub read_bytes: u64,
+    pub read_query_stats: QueryStats,
 }
 
-impl Ord for PeerReportReadStat {
+#[derive(Default, Clone)]
+struct PeerCmpReadStat {
+    pub region_id: u64,
+    pub report_stat: u64,
+}
+
+impl Ord for PeerCmpReadStat {
     fn cmp(&self, other: &Self) -> CmpOrdering {
-        match self.report_read_bytes.cmp(&other.report_read_bytes) {
-            CmpOrdering::Equal => self.report_read_keys.cmp(&other.report_read_keys),
-            x => x,
-        }
+        self.report_stat.cmp(&other.report_stat)
     }
 }
 
-impl Eq for PeerReportReadStat {}
+impl Eq for PeerCmpReadStat {}
 
-impl PartialEq for PeerReportReadStat {
+impl PartialEq for PeerCmpReadStat {
     fn eq(&self, other: &Self) -> bool {
-        self.report_read_bytes == other.report_read_bytes
-            && self.report_read_keys == other.report_read_keys
-            && self.report_query_stats.eq(&other.report_query_stats)
+        self.report_stat == other.report_stat
     }
 }
 
-// TODO: support PartialOrd for QueryStats
-impl PartialOrd for PeerReportReadStat {
+impl PartialOrd for PeerCmpReadStat {
     fn partial_cmp(&self, other: &Self) -> Option<CmpOrdering> {
-        match self.report_read_bytes.cmp(&other.report_read_bytes) {
-            CmpOrdering::Equal => Some(self.report_read_keys.cmp(&other.report_read_keys)),
-            x => Some(x),
-        }
+        Some(self.report_stat.cmp(&other.report_stat))
     }
 }
 
@@ -494,13 +491,6 @@ fn hotspot_byte_report_threshold() -> u64 {
     fail_point!("mock_hotspot_capacity", |_| { 0 });
 
     HOTSPOT_BYTE_RATE_THRESHOLD * 10
-}
-
-fn hotspot_report_capacity() -> usize {
-    #[cfg(feature = "failpoints")]
-    fail_point!("mock_hotspot_threshold", |_| { 1 });
-
-    HOTSPOT_REPORT_CAPACITY
 }
 
 fn hotspot_query_num_report_threshold() -> u64 {
@@ -748,9 +738,7 @@ where
             Ok(stats) => stats,
         };
 
-        let cap = hotspot_report_capacity();
-        let mut topn_report = TopN::new(cap);
-
+        let mut report_peers = HashMap::default();
         for (region_id, region_peer) in &mut self.region_peers {
             let read_bytes = region_peer.read_bytes - region_peer.last_store_report_read_bytes;
             let read_keys = region_peer.read_keys - region_peer.last_store_report_read_keys;
@@ -772,20 +760,13 @@ where
             }
             let mut read_stat = PeerReportReadStat::default();
             read_stat.region_id = *region_id;
-            read_stat.report_read_bytes = read_bytes;
-            read_stat.report_read_keys = read_keys;
-            read_stat.report_query_stats = read_query_stats;
-            topn_report.push(read_stat);
+            read_stat.read_keys = read_keys;
+            read_stat.read_bytes = read_bytes;
+            read_stat.read_query_stats = read_query_stats;
+            report_peers.insert(*region_id, read_stat);
         }
 
-        for item in topn_report.into_iter() {
-            let mut peer_stat = pdpb::PeerStat::default();
-            peer_stat.set_region_id(item.region_id);
-            peer_stat.set_read_bytes(item.report_read_bytes);
-            peer_stat.set_read_keys(item.report_read_keys);
-            peer_stat.set_query_stats(item.report_query_stats.0);
-            stats.peer_stats.push(peer_stat);
-        }
+        stats = collect_report_read_peer_stats(HOTSPOT_REPORT_CAPACITY, report_peers, stats);
 
         let disk_cap = disk_stats.total_space();
         let capacity = if store_info.capacity == 0 || disk_cap < store_info.capacity {
@@ -1473,10 +1454,77 @@ fn send_destroy_peer_message<EK, ER>(
     }
 }
 
+fn collect_report_read_peer_stats(
+    capacity: usize,
+    report_read_stats: HashMap<u64, PeerReportReadStat>,
+    mut stats: pdpb::StoreStats,
+) -> pdpb::StoreStats {
+    if report_read_stats.len() < capacity * 3 {
+        for (_, read_stat) in report_read_stats {
+            let mut peer_stat = pdpb::PeerStat::default();
+            peer_stat.set_region_id(read_stat.region_id);
+            peer_stat.set_read_bytes(read_stat.read_bytes);
+            peer_stat.set_read_keys(read_stat.read_keys);
+            peer_stat.set_query_stats(read_stat.read_query_stats.0);
+            stats.peer_stats.push(peer_stat);
+        }
+        return stats;
+    }
+    let mut peer_stats = HashMap::default();
+    let mut keys_topn_report = TopN::new(capacity);
+    let mut bytes_topn_report = TopN::new(capacity);
+    let mut stats_topn_report = TopN::new(capacity);
+    for read_stat in report_read_stats.values() {
+        let mut cmp_stat = PeerCmpReadStat::default();
+        cmp_stat.region_id = read_stat.region_id;
+        let mut key_cmp_stat = cmp_stat.clone();
+        key_cmp_stat.report_stat = read_stat.read_keys;
+        keys_topn_report.push(key_cmp_stat);
+        let mut byte_cmp_stat = cmp_stat.clone();
+        byte_cmp_stat.report_stat = read_stat.read_bytes;
+        bytes_topn_report.push(byte_cmp_stat);
+        let mut query_cmp_stat = cmp_stat.clone();
+        query_cmp_stat.report_stat = read_stat.read_query_stats.get_read_query_num();
+        stats_topn_report.push(query_cmp_stat);
+    }
+
+    keys_topn_report.into_iter().for_each(|x| {
+        if let Some(report_stat) = report_read_stats.get(&x.region_id) {
+            peer_stats.insert(x.region_id, report_stat.clone());
+            {}
+        }
+    });
+
+    bytes_topn_report.into_iter().for_each(|x| {
+        if let Some(report_stat) = report_read_stats.get(&x.region_id) {
+            peer_stats.insert(x.region_id, report_stat.clone());
+            {}
+        }
+    });
+
+    stats_topn_report.into_iter().for_each(|x| {
+        if let Some(report_stat) = report_read_stats.get(&x.region_id) {
+            peer_stats.insert(x.region_id, report_stat.clone());
+            {}
+        }
+    });
+
+    for (_, report_stat) in peer_stats {
+        let mut peer_stat = pdpb::PeerStat::default();
+        peer_stat.set_region_id(report_stat.region_id);
+        peer_stat.set_read_bytes(report_stat.read_bytes);
+        peer_stat.set_read_keys(report_stat.read_keys);
+        peer_stat.set_query_stats(report_stat.read_query_stats.0);
+        stats.peer_stats.push(peer_stat);
+    }
+    stats
+}
+
 #[cfg(not(target_os = "macos"))]
 #[cfg(test)]
 mod tests {
     use engine_test::kv::KvTestEngine;
+    use kvproto::pdpb::QueryKind;
     use std::sync::Mutex;
     use std::time::Instant;
     use tikv_util::worker::FutureWorker;
@@ -1562,5 +1610,26 @@ mod tests {
         assert!(total_cpu_usages > 90);
 
         pd_worker.stop();
+    }
+
+    #[test]
+    fn test_collect_report_peers() {
+        let mut report_stats = HashMap::default();
+        for i in 1..5 {
+            let mut stat = PeerReportReadStat::default();
+            stat.region_id = i;
+            stat.read_keys = i;
+            stat.read_bytes = 6 - i;
+            let mut query_stat = QueryStats::default();
+            if i == 3 {
+                query_stat.add_query_num(QueryKind::Get, 6);
+            } else {
+                query_stat.add_query_num(QueryKind::Get, 0);
+            }
+            report_stats.insert(i, stat);
+        }
+        let mut store_stats = pdpb::StoreStats::default();
+        store_stats = collect_report_read_peer_stats(1, report_stats, store_stats);
+        assert_eq!(store_stats.peer_stats.len(), 3)
     }
 }

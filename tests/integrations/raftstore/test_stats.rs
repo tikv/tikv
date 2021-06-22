@@ -94,7 +94,6 @@ fn test_node_simple_store_stats() {
 
 #[test]
 fn test_store_heartbeat_report_hotspots() {
-    fail::cfg("mock_hotspot_capacity", "return(1)").unwrap();
     fail::cfg("mock_hotspot_threshold", "return(0)").unwrap();
     fail::cfg("mock_tick_interval", "return(0)").unwrap();
     fail::cfg("on_report_vec_too_large", "panic").unwrap();
@@ -143,7 +142,6 @@ fn test_store_heartbeat_report_hotspots() {
     fail::remove("mock_hotspot_capacity");
     fail::remove("mock_tick_interval");
     fail::remove("mock_hotspot_threshold");
-    fail::remove("on_report_vec_too_large");
 }
 
 type Query = dyn Fn(Context, &Cluster<ServerCluster>, TikvClient, u64, u64, Vec<u8>);
