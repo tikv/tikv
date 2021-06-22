@@ -57,7 +57,7 @@ impl Runner {
     fn get_range_safe_ts(&self, key_range: KeyRange) -> u64 {
         if key_range.get_start_key().is_empty() && key_range.get_end_key().is_empty() {
             // Fast path to get the min `safe_ts` of all regions in this store
-            self.region_read_progress.map(|registry| {
+            self.region_read_progress.with(|registry| {
                 registry
                 .iter()
                 .map(|(_, rrp)| rrp.safe_ts())
@@ -75,7 +75,7 @@ impl Runner {
             // keep this branch for robustness and future use, so it is okay getting `store_safe_ts`
             // from `store_meta` (behide a mutex)
             let meta = self.store_meta.lock().unwrap();
-            meta.region_read_progress.map(|registry| {
+            meta.region_read_progress.with(|registry| {
                 meta.region_ranges
                 // get overlapped regions
                 .range((Excluded(start_key), Unbounded))

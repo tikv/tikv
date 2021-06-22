@@ -914,7 +914,7 @@ impl RegionReadProgressRegistry {
     /// Invoke the provided callback with the registry, an internal lock will hold
     /// while invoking the callback so it is important that *not* try to acquiring any
     /// lock inside the callback to avoid dead lock
-    pub fn map<F, T>(&self, f: F) -> T
+    pub fn with<F, T>(&self, f: F) -> T
     where
         F: FnOnce(&HashMap<u64, Arc<RegionReadProgress>>) -> T,
     {

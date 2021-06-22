@@ -726,7 +726,7 @@ where
 {
     fn on_timeout(&mut self) {
         let (mut oldest_ts, mut oldest_region, mut zero_ts_count) = (u64::MAX, 0, 0);
-        self.region_read_progress.map(|registry| {
+        self.region_read_progress.with(|registry| {
             for (region_id, read_progress) in registry {
                 let ts = read_progress.safe_ts();
                 if ts == 0 {
