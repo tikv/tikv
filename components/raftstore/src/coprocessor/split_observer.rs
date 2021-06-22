@@ -77,7 +77,7 @@ impl SplitObserver {
         // Make sure that the split keys are sorted.
         ajusted_splits.sort_unstable_by(|l, r| l.get_split_key().cmp(r.get_split_key()));
 
-        // Rewrite the splitest
+        // Rewrite the splites
         std::mem::swap(splits, &mut ajusted_splits);
         Ok(())
     }
