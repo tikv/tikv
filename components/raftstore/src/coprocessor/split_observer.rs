@@ -59,7 +59,7 @@ impl SplitObserver {
         ctx: &mut ObserverContext<'_>,
         splits: &mut Vec<SplitRequest>,
     ) -> Result<(), String> {
-        let mut ajusted_splits = std::mem::replace(splits, Vec::new())
+        let mut ajusted_splits = std::mem::take(splits)
             .into_iter()
             .enumerate()
             .filter_map(|(i, mut split)| {
