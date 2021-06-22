@@ -247,9 +247,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let latest_ts = block_on(pd_client.get_tso()).expect("failed to get timestamp from PD");
         let concurrency_manager = ConcurrencyManager::new(latest_ts);
 
-        let disk_reserved = config.storage.reserve_space.0;
-        disk::set_disk_reserved(disk_reserved);
-
         TiKVServer {
             config,
             cfg_controller: Some(cfg_controller),
@@ -413,6 +410,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         if self.config.raft_store.capacity.0 > 0 {
             capacity = cmp::min(capacity, self.config.raft_store.capacity.0);
         }
+        //TODO after disk full readonly impl, such file should be removed.
         file_system::reserve_space_for_recover(
             &self.config.storage.data_dir,
             if self.config.storage.reserve_space.0 == 0 {
@@ -1028,12 +1026,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let config_disk_capacity: u64 = self.config.raft_store.capacity.0;
         let store_path = self.store_path.clone();
         let snap_mgr = self.snap_mgr.clone().unwrap();
+        let disk_reserved = self.config.storage.reserve_space.0;
+        if disk_reserved == 0 {
+            info!("disk space checker not enabled");
+            return;
+        }
         //TODO wal size ignore?
         self.background_worker
             .spawn_interval_task(DEFAULT_STORAGE_STATS_INTERVAL, move || {
-                if disk::get_disk_reserved() == 0 {
-                    return;
-                }
                 let disk_stats = match fs2::statvfs(&store_path) {
                     Err(e) => {
                         error!(
@@ -1067,7 +1067,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
                 let mut available = capacity.checked_sub(used_size).unwrap_or_default();
                 available = cmp::min(available, disk_stats.available_space());
-                if available <= disk::get_disk_reserved() {
+                if available <= disk_reserved {
                     warn!(
                         "disk full, available={},snap={},engine={},capacity={}",
                         available, snap_size, kv_size, capacity

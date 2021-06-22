@@ -12,7 +12,18 @@ fn assert_disk_full(resp: &RaftCmdResponse) {
     assert!(msg.contains("disk full"));
 }
 
-fn test_unallowed_leader_behaviors(cluster: &mut Cluster<ServerCluster>) {
+#[test]
+fn test_disk_full_unallowed_leader_behaviors() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.pd_client.disable_default_operator();
+    cluster.run();
+
+    // To ensure all replicas are not pending.
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
     cluster.must_transfer_leader(1, new_peer(1, 1));
     fail::cfg("disk_full_peer_1", "return").unwrap();
 
@@ -39,7 +50,18 @@ fn test_unallowed_leader_behaviors(cluster: &mut Cluster<ServerCluster>) {
     fail::remove("disk_full_peer_1");
 }
 
-fn test_allowed_leader_behaviors(cluster: &mut Cluster<ServerCluster>) {
+#[test]
+fn test_disk_full_allowed_leader_behaviors() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.pd_client.disable_default_operator();
+    cluster.run();
+
+    // To ensure all replicas are not pending.
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
     cluster.must_transfer_leader(1, new_peer(1, 1));
     fail::cfg("disk_full_peer_1", "return").unwrap();
 
@@ -62,7 +84,18 @@ fn test_allowed_leader_behaviors(cluster: &mut Cluster<ServerCluster>) {
     fail::remove("disk_full_peer_1");
 }
 
-fn test_follower_behaviors(cluster: &mut Cluster<ServerCluster>) {
+#[test]
+fn test_disk_full_follower_behaviors() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.pd_client.disable_default_operator();
+    cluster.run();
+
+    // To ensure all replicas are not pending.
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
     cluster.must_transfer_leader(1, new_peer(1, 1));
     fail::cfg("disk_full_peer_2", "return").unwrap();
 
@@ -91,21 +124,4 @@ fn test_follower_behaviors(cluster: &mut Cluster<ServerCluster>) {
     cluster.must_transfer_leader(1, new_peer(3, 3));
 
     fail::remove("disk_full_peer_2");
-}
-
-#[test]
-fn test_disk_full() {
-    let mut cluster = new_server_cluster(0, 3);
-    cluster.pd_client.disable_default_operator();
-    cluster.run();
-
-    // To ensure all replicas are not pending.
-    cluster.must_put(b"k1", b"v1");
-    must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
-    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
-    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
-
-    test_unallowed_leader_behaviors(&mut cluster);
-    test_allowed_leader_behaviors(&mut cluster);
-    test_follower_behaviors(&mut cluster);
 }
