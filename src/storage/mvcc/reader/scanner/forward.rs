@@ -47,6 +47,9 @@ pub trait ScanPolicy<S: Snapshot> {
         cursors: &mut Cursors<S>,
         statistics: &mut Statistics,
     ) -> Result<HandleRes<Self::Output>>;
+
+    /// Returns the size of the specified output.
+    fn output_size(&mut self, output: &Self::Output) -> usize;
 }
 
 pub enum HandleRes<T> {
@@ -275,6 +278,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                         &mut self.statistics,
                     )? {
                         self.statistics.write.processed_keys += 1;
+                        self.statistics.processed_size += self.scan_policy.output_size(&output);
                         return Ok(Some(output));
                     }
                 }
@@ -414,12 +418,13 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
         };
         cursors.move_write_cursor_to_next_user_key(&current_user_key, statistics)?;
         Ok(match value {
-            Some(v) => {
-                statistics.processed_size += current_user_key.len() + v.len();
-                HandleRes::Return((current_user_key, v))
-            }
+            Some(v) => HandleRes::Return((current_user_key, v)),
             _ => HandleRes::Skip(current_user_key),
         })
+    }
+
+    fn output_size(&mut self, output: &Self::Output) -> usize {
+        output.0.len() + output.1.len()
     }
 }
 
@@ -532,6 +537,10 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
             Some(entry) => HandleRes::Return(entry),
             _ => HandleRes::Skip(current_user_key),
         })
+    }
+
+    fn output_size(&mut self, output: &Self::Output) -> usize {
+        output.size()
     }
 }
 
@@ -738,6 +747,10 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
 
             return res;
         }
+    }
+
+    fn output_size(&mut self, output: &Self::Output) -> usize {
+        output.size()
     }
 }
 
