@@ -1249,7 +1249,7 @@ pub struct RaftDbConfig {
     pub wal_bytes_per_sync: ReadableSize,
     #[config(skip)]
     pub gc_on_compaction: bool,
-    #[config(submodule)]
+    #[online_config(submodule)]
     pub defaultcf: RaftDefaultCfConfig,
     #[config(skip)]
     pub titan: TitanDBConfig,
