@@ -347,7 +347,7 @@ struct CFFlowChecker {
     last_num_l0_files: u64,
     last_num_l0_files_from_flush: u64,
     long_term_num_l0_files: Smoother<60>,
-    long_term_pending_bytes: Smoother<120>,
+    long_term_pending_bytes: Smoother<60>,
 
     last_flush_bytes_time: Instant,
     last_flush_bytes: u64,
@@ -501,12 +501,6 @@ impl<E: Engine> FlowChecker<E> {
             0
         } else {
             let checker = self.cf_checkers.get_mut(&cf).unwrap();
-            // let x = 10.0
-            //     - 10.0
-            //         / ((self.pending_compaction_bytes_hard_limit as f64).log2()
-            //             - (self.pending_compaction_bytes_soft_limit as f64).log2())
-            //         * (pending_compaction_bytes - (self.pending_compaction_bytes_soft_limit as f64).log2());
-            // let new_ratio = 1.0 / (1.0 + x.exp());
             let kp = (pending_compaction_bytes - soft) / (hard - soft);
             let mut kd = -10.0 * checker.long_term_pending_bytes.slope();
 
@@ -519,7 +513,7 @@ impl<E: Engine> FlowChecker<E> {
                 kd = -0.1;
             }
 
-            let new_ratio = kp + kd;
+            let new_ratio = kp; // +kd
             let old_ratio = self.discard_ratio.load(Ordering::Relaxed);
             (if old_ratio != 0 {
                 self.factor * (old_ratio as f64 / RATIO_PRECISION) + (1.0 - self.factor) * new_ratio
