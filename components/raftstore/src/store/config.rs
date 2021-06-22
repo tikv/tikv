@@ -164,7 +164,7 @@ pub struct Config {
 
     #[online_config(skip)]
     pub future_poll_size: usize,
-    #[config(skip)]
+    #[online_config(skip)]
     pub hibernate_regions: bool,
     #[doc(hidden)]
     #[online_config(hidden)]
