@@ -367,11 +367,7 @@ fn test_stale_read_while_applying_snapshot() {
     follower_client2.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), k1_commit_ts);
 
     // Stop replicate data to follower 2
-    cluster.add_send_filter(CloneFilterFactory(
-        RegionPacketFilter::new(1, 2)
-            .direction(Direction::Recv)
-            .msg_type(MessageType::MsgAppend),
-    ));
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
 
     // Prewrite on `key3` but not commit yet
     let k2_prewrite_ts = get_tso(&pd_client);
@@ -632,4 +628,26 @@ fn test_new_leader_ignore_pessimistic_lock() {
     follower_client3.ctx.set_stale_read(true);
     // The new leader should be able to update `safe_ts` so we can read `key1` with the newest ts
     follower_client3.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), get_tso(&pd_client));
+}
+
+// Testing that we perform stale read on learner
+#[test]
+fn test_stale_read_on_learner() {
+    let (cluster, pd_client, leader_client) = prepare_for_stale_read(new_peer(1, 1));
+
+    // Write `(key1, value1)`
+    leader_client.must_kv_write(
+        &pd_client,
+        vec![new_mutation(Op::Put, &b"key1"[..], &b"value1"[..])],
+        b"key1".to_vec(),
+    );
+
+    // Replace peer 2 with learner
+    pd_client.must_remove_peer(1, new_peer(2, 2));
+    pd_client.must_add_peer(1, new_learner_peer(2, 4));
+    let mut learner_client2 = PeerClient::new(&cluster, 1, new_learner_peer(2, 4));
+    learner_client2.ctx.set_stale_read(true);
+
+    // We can read on the learner with the newst ts
+    learner_client2.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), get_tso(&pd_client));
 }
