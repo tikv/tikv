@@ -6,7 +6,11 @@ use std::sync::{Arc, Mutex};
 
 use collections::HashSet;
 
+<<<<<<< HEAD
 use engine_traits::{name_to_cf, KvEngine, CF_DEFAULT, CF_WRITE};
+=======
+use engine_traits::{KvEngine, CF_WRITE};
+>>>>>>> 124c8d5e3... sst_importer: fix the file exists issue in link file (#10416)
 use file_system::{set_io_type, IOType};
 use futures::executor::{ThreadPool, ThreadPoolBuilder};
 use futures::{TryFutureExt, TryStreamExt};
@@ -23,7 +27,6 @@ use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::*;
 
 use crate::server::CONFIG_ROCKSDB_GAUGE;
-use engine_traits::{SstExt, SstWriterBuilder};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::Callback;
 use sst_importer::send_rpc_response;
@@ -302,15 +305,6 @@ where
                 .with_label_values(&["queue"])
                 .observe(start.elapsed().as_secs_f64());
 
-            // SST writer must not be opened in gRPC threads, because it may be
-            // blocked for a long time due to IO, especially, when encryption at rest
-            // is enabled, and it leads to gRPC keepalive timeout.
-            let sst_writer = <E as SstExt>::SstWriterBuilder::new()
-                .set_db(&engine)
-                .set_cf(name_to_cf(req.get_sst().get_cf_name()).unwrap())
-                .build(importer.get_path(req.get_sst()).to_str().unwrap())
-                .unwrap();
-
             // FIXME: download() should be an async fn, to allow BR to cancel
             // a download task.
             // Unfortunately, this currently can't happen because the S3Storage
@@ -321,7 +315,7 @@ where
                 req.get_name(),
                 req.get_rewrite_rule(),
                 limiter,
-                sst_writer,
+                engine,
             );
             let mut resp = DownloadResponse::default();
             match res {
