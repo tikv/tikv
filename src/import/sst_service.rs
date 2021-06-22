@@ -6,11 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use collections::HashSet;
 
-<<<<<<< HEAD
-use engine_traits::{name_to_cf, KvEngine, CF_DEFAULT, CF_WRITE};
-=======
-use engine_traits::{KvEngine, CF_WRITE};
->>>>>>> 124c8d5e3... sst_importer: fix the file exists issue in link file (#10416)
+use engine_traits::{KvEngine, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IOType};
 use futures::executor::{ThreadPool, ThreadPoolBuilder};
 use futures::{TryFutureExt, TryStreamExt};

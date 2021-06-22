@@ -221,13 +221,9 @@ impl SSTImporter {
         engine: E,
     ) -> Result<Option<Range>> {
         let path = self.dir.join(meta)?;
-<<<<<<< HEAD
         let url = url_of_backend(backend);
 
         {
-=======
-        let url = {
->>>>>>> 124c8d5e3... sst_importer: fix the file exists issue in link file (#10416)
             let start_read = Instant::now();
 
             // prepare to download the file from the external_storage
@@ -1789,13 +1785,8 @@ mod tests {
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
         let importer = SSTImporter::new(&cfg, &importer_dir, None).unwrap();
-<<<<<<< HEAD
-        let sst_writer = create_sst_writer_with_db(&importer, &meta).unwrap();
         let backend = external_storage::make_local_backend(ext_sst_dir.path());
-=======
         let db = create_sst_test_engine().unwrap();
-        let backend = external_storage_export::make_local_backend(ext_sst_dir.path());
->>>>>>> 124c8d5e3... sst_importer: fix the file exists issue in link file (#10416)
 
         let result = importer.download::<TestEngine>(
             &meta,
