@@ -14,7 +14,7 @@ use rand::Rng;
 use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
 use tidb_query_common::storage::Range;
 use tidb_query_datatype::codec::datum::{
-    encode_value, split_datum, Datum, DURATION_FLAG, INT_FLAG, NIL_FLAG, UINT_FLAG,
+    encode_value, split_datum, Datum, DatumDecoder, DURATION_FLAG, INT_FLAG, NIL_FLAG, UINT_FLAG,
 };
 use tidb_query_datatype::codec::table;
 use tidb_query_datatype::def::Collation;
@@ -739,22 +739,9 @@ impl<S: Snapshot> SampleBuilder<S> {
                     // These are the only 3 cases we need to care about according to TiDB's tablecodec.EncodeValue() and
                     //   TiKV's V1CompatibleEncoder::write_v2_as_datum().
                     val = match val[0] {
-                        INT_FLAG | UINT_FLAG => {
+                        INT_FLAG | UINT_FLAG | DURATION_FLAG => {
                             let mut mut_val = &val[..];
-                            let decoded_val = table::decode_col_value(
-                                &mut mut_val,
-                                &mut EvalContext::default(),
-                                &columns_info[i],
-                            )?;
-                            encode_value(&mut EvalContext::default(), &[decoded_val])?
-                        }
-                        DURATION_FLAG => {
-                            let mut mut_val = &val[..];
-                            let decoded_val = table::decode_col_value(
-                                &mut mut_val,
-                                &mut EvalContext::default(),
-                                &columns_info[i],
-                            )?;
+                            let decoded_val = mut_val.read_datum()?;
                             let flattened =
                                 table::flatten(&mut EvalContext::default(), decoded_val)?;
                             encode_value(&mut EvalContext::default(), &[flattened])?
