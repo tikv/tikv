@@ -1,85 +1,92 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::{AdminObserver, Coprocessor, ObserverContext, Result as CopResult};
-use tikv_util::codec::bytes::{self, encode_bytes};
+use tikv_util::codec::bytes;
 use tikv_util::{box_err, box_try, error, warn};
 
 use crate::store::util;
+use crate::Error;
 use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest};
-use std::result::Result as StdResult;
+
+fn strip_timestamp_if_exists(mut key: Vec<u8>) -> Vec<u8> {
+    let mut slice = key.as_slice();
+    let strip_len = match bytes::decode_bytes(&mut slice, false) {
+        // It is an encoded key and the slice points to the remaining unparsable
+        // part which most likely is timestamp. Note that the key can be a raw key
+        // in valid encoded form, but treat it as a encoded key anyway.
+        Ok(_) => slice.len(),
+        // It must be a raw key so no need to strip.
+        Err(_) => 0,
+    };
+    key.truncate(key.len() - strip_len);
+    key
+}
+
+fn is_valid_split_key(key: &[u8], index: usize, region: &Region) -> bool {
+    if key.is_empty() {
+        warn!(
+            "skip invalid split key: key is empty";
+            "region_id" => region.get_id(),
+            "index" => index,
+        );
+        return false;
+    }
+
+    if let Err(Error::KeyNotInRegion(..)) = util::check_key_in_region_exclusive(&key, region) {
+        warn!(
+            "skip invalid split key: key is not in region";
+            "key" => log_wrappers::Value::key(&key),
+            "region_id" => region.get_id(),
+            "start_key" => log_wrappers::Value::key(&region.get_start_key()),
+            "end_key" => log_wrappers::Value::key(&region.get_end_key()),
+            "index" => index,
+        );
+        return false;
+    }
+
+    true
+}
 
 /// `SplitObserver` adjusts the split key so that it won't separate
-/// the data of a row into two region. It adjusts the key according
-/// to the key format of `TiDB`.
+/// multiple MVCC versions of a key into two region.
 #[derive(Clone)]
 pub struct SplitObserver;
 
-type Result<T> = StdResult<T, String>;
-
 impl SplitObserver {
-    fn adjust_key(&self, region: &Region, key: Vec<u8>) -> Result<Vec<u8>> {
-        if key.is_empty() {
-            return Err("key is empty".to_owned());
-        }
-
-        let key = match bytes::decode_bytes(&mut key.as_slice(), false) {
-            Ok(x) => x,
-            // It's a raw key, skip it.
-            Err(_) => return Ok(key),
-        };
-
-        let key = encode_bytes(&key);
-        match util::check_key_in_region_exclusive(&key, region) {
-            Ok(()) => Ok(key),
-            Err(_) => Err(format!(
-                "key {} should be in ({}, {})",
-                log_wrappers::Value::key(&key),
-                log_wrappers::Value::key(&region.get_start_key()),
-                log_wrappers::Value::key(&region.get_end_key()),
-            )),
-        }
-    }
-
     fn on_split(
         &self,
         ctx: &mut ObserverContext<'_>,
         splits: &mut Vec<SplitRequest>,
-    ) -> Result<()> {
+    ) -> Result<(), String> {
         let (mut i, mut j) = (0, 0);
         let mut last_valid_key: Option<Vec<u8>> = None;
-        let region_id = ctx.region().get_id();
+        let region = ctx.region();
         while i < splits.len() {
             let k = i;
             i += 1;
             {
                 let split = &mut splits[k];
                 let key = split.take_split_key();
-                match self.adjust_key(ctx.region(), key) {
-                    Ok(key) => {
-                        if last_valid_key.as_ref().map_or(false, |k| *k >= key) {
-                            warn!(
-                                "key is not larger than previous, skip.";
-                                "region_id" => region_id,
-                                "key" => log_wrappers::Value::key(&key),
-                                "previous" => log_wrappers::Value::key(last_valid_key.as_ref().unwrap()),
-                                "index" => k,
-                            );
-                            continue;
-                        }
-                        last_valid_key = Some(key.clone());
-                        split.set_split_key(key)
-                    }
-                    Err(e) => {
-                        warn!(
-                            "invalid key, skip";
-                            "region_id" => region_id,
-                            "index" => k,
-                            "err" => ?e,
-                        );
-                        continue;
-                    }
+                let key = strip_timestamp_if_exists(key);
+
+                if !is_valid_split_key(&key, k, region) {
+                    continue;
                 }
+
+                if last_valid_key.as_ref().map_or(false, |k| *k >= key) {
+                    warn!(
+                        "skip invalid split key: key should not larger than previous";
+                        "region_id" => region.get_id(),
+                        "key" => log_wrappers::Value::key(&key),
+                        "previous" => log_wrappers::Value::key(last_valid_key.as_ref().unwrap()),
+                        "index" => k,
+                    );
+                    continue;
+                }
+                last_valid_key = Some(key.clone());
+
+                split.set_split_key(key)
             }
             if k != j {
                 splits.swap(k, j);
@@ -161,11 +168,11 @@ mod tests {
     use tidb_query_datatype::expr::EvalContext;
     use tikv_util::codec::bytes::encode_bytes;
 
-    fn new_split_request(key: &[u8]) -> AdminRequest {
+    fn new_split_request(key: Vec<u8>) -> AdminRequest {
         let mut req = AdminRequest::default();
         req.set_cmd_type(AdminCmdType::Split);
         let mut split_req = SplitRequest::default();
-        split_req.set_split_key(key.to_vec());
+        split_req.set_split_key(key);
         req.set_split(split_req);
         req
     }
@@ -236,7 +243,7 @@ mod tests {
         assert!(resp.is_ok());
         assert!(!req.has_split(), "only split req should be handle.");
 
-        req = new_split_request(b"test");
+        req = new_split_request(new_row_key(1, 2, 0));
         // For compatible reason, split should supported too.
         assert!(observer.pre_propose_admin(&mut ctx, &mut req).is_ok());
 
