@@ -322,7 +322,12 @@ impl TestSuite {
     pub fn region_resolved_ts(&mut self, region_id: u64) -> Option<TimeStamp> {
         let leader = self.cluster.leader_of_region(region_id)?;
         let meta = self.cluster.store_metas[&leader.store_id].lock().unwrap();
-        Some(meta.region_read_progress[&region_id].safe_ts().into())
+        Some(
+            meta.region_read_progress
+                .get_safe_ts(&region_id)
+                .unwrap()
+                .into(),
+        )
     }
 
     pub fn must_get_rts(&mut self, region_id: u64, rts: TimeStamp) {

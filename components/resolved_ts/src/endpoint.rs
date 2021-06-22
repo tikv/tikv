@@ -11,13 +11,14 @@ use concurrency_manager::ConcurrencyManager;
 use engine_traits::{KvEngine, Snapshot};
 use grpcio::Environment;
 use kvproto::metapb::Region;
+use kvproto::raft_cmdpb::AdminCmdType;
 use online_config::{self, ConfigChange, ConfigManager, OnlineConfig};
 use pd_client::PdClient;
 use raftstore::coprocessor::CmdBatch;
 use raftstore::coprocessor::{ObserveHandle, ObserveID};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::StoreMeta;
-use raftstore::store::util::{self, RegionReadProgress};
+use raftstore::store::util::{self, RegionReadProgress, RegionReadProgressRegistry};
 use raftstore::store::RegionSnapshot;
 use security::SecurityManager;
 use tikv::config::ResolvedTsConfig;
@@ -30,7 +31,6 @@ use crate::metrics::*;
 use crate::resolver::Resolver;
 use crate::scanner::{ScanEntry, ScanMode, ScanTask, ScannerPool};
 use crate::sinker::{CmdSinker, SinkCmd};
-use kvproto::raft_cmdpb::AdminCmdType;
 
 enum ResolverStatus {
     Pending {
@@ -247,6 +247,7 @@ impl ObserveRegion {
 pub struct Endpoint<T, E: KvEngine, C> {
     cfg: ResolvedTsConfig,
     store_meta: Arc<Mutex<StoreMeta>>,
+    region_read_progress: RegionReadProgressRegistry,
     regions: HashMap<u64, ObserveRegion>,
     scanner_pool: ScannerPool<T, E>,
     scheduler: Scheduler<Task<E::Snapshot>>,
@@ -272,10 +273,12 @@ where
         security_mgr: Arc<SecurityManager>,
         sinker: C,
     ) -> Self {
+        let region_read_progress = store_meta.lock().unwrap().region_read_progress.clone();
         let advance_worker = AdvanceTsWorker::new(
             pd_client,
             scheduler.clone(),
             store_meta.clone(),
+            region_read_progress.clone(),
             concurrency_manager,
             env,
             security_mgr,
@@ -285,6 +288,7 @@ where
             cfg: cfg.clone(),
             scheduler,
             store_meta,
+            region_read_progress,
             advance_worker,
             scanner_pool,
             sinker,
@@ -299,18 +303,15 @@ where
         let region_id = region.get_id();
         assert!(self.regions.get(&region_id).is_none());
         let observe_region = {
-            let store_meta = self.store_meta.lock().unwrap();
-            if let Some(read_progress) = store_meta.region_read_progress.get(&region_id) {
+            if let Some(read_progress) = self.region_read_progress.get(&region_id) {
                 info!(
                     "register observe region";
-                    "store id" => ?store_meta.store_id.clone(),
                     "region" => ?region
                 );
-                ObserveRegion::new(region.clone(), Arc::clone(read_progress))
+                ObserveRegion::new(region.clone(), read_progress)
             } else {
                 warn!(
                     "try register unexit region";
-                    "store id" => ?store_meta.store_id.clone(),
                     "region" => ?region,
                 );
                 return;
@@ -396,7 +397,9 @@ where
     fn region_updated(&mut self, incoming_region: Region) {
         let region_id = incoming_region.get_id();
         if let Some(obs_region) = self.regions.get_mut(&region_id) {
-            if obs_region.meta.get_region_epoch() == incoming_region.get_region_epoch() {
+            if obs_region.meta.get_region_epoch().get_version()
+                == incoming_region.get_region_epoch().get_version()
+            {
                 // only peer list change, no need to re-register region
                 obs_region.meta = incoming_region;
                 return;
@@ -723,9 +726,8 @@ where
 {
     fn on_timeout(&mut self) {
         let (mut oldest_ts, mut oldest_region, mut zero_ts_count) = (u64::MAX, 0, 0);
-        {
-            let meta = self.store_meta.lock().unwrap();
-            for (region_id, read_progress) in &meta.region_read_progress {
+        self.region_read_progress.with(|registry| {
+            for (region_id, read_progress) in registry {
                 let ts = read_progress.safe_ts();
                 if ts == 0 {
                     zero_ts_count += 1;
@@ -736,7 +738,7 @@ where
                     oldest_region = *region_id;
                 }
             }
-        }
+        });
         let mut lock_heap_size = 0;
         let (mut resolved_count, mut unresolved_count) = (0, 0);
         for observe_region in self.regions.values() {

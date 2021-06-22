@@ -619,6 +619,7 @@ where
             cmd_epoch_checker: Default::default(),
             last_unpersisted_number: 0,
             read_progress: Arc::new(RegionReadProgress::new(
+                region,
                 applied_index,
                 REGION_READ_PROGRESS_CAP,
                 tag,
@@ -982,6 +983,10 @@ where
         // Always update read delegate's region to avoid stale region info after a follower
         // becoming a leader.
         self.maybe_update_read_progress(reader, progress);
+
+        // Update leader info
+        self.read_progress
+            .update_leader_info(self.leader_id(), self.term(), self.region());
 
         if !self.pending_remove {
             host.on_region_changed(self.region(), RegionChangeEvent::Update, self.get_role());
@@ -1499,6 +1504,10 @@ where
             "term" => term,
             "peer_id" => self.peer_id(),
         );
+
+        self.read_progress
+            .update_leader_info(leader_id, term, self.region());
+
         let mut meta = ctx.store_meta.lock().unwrap();
         meta.leaders.insert(self.region_id, (term, leader_id));
     }
