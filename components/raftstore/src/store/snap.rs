@@ -758,6 +758,10 @@ impl Snapshot {
 
             // Delete cf files.
             delete_file_if_exist(&cf_file.path).unwrap();
+            if let Some(ref mgr) = self.mgr.encryption_key_manager {
+                let path = cf_file.path.to_str().unwrap();
+                mgr.delete_file(path).unwrap();
+            }
         }
         delete_file_if_exist(&self.meta_file.path).unwrap();
         if self.hold_tmp_files {
@@ -1039,18 +1043,8 @@ impl Write for Snapshot {
 
 impl Drop for Snapshot {
     fn drop(&mut self) {
-        // cleanup if some of the cf files and meta file is partly written
-        if self
-            .cf_files
-            .iter()
-            .any(|cf_file| file_exists(&cf_file.tmp_path))
-            || file_exists(&self.meta_file.tmp_path)
-        {
-            self.delete();
-            return;
-        }
-        // cleanup if data corruption happens and any file goes missing
-        if !self.exists() {
+        // Cleanup if the snapshot is not built or received successfully.
+        if self.hold_tmp_files {
             self.delete();
         }
     }
@@ -1451,7 +1445,6 @@ impl SnapManagerCore {
             return false;
         }
         snap.delete();
-        // FIXME: clean `EncryptionKeyManager` correctly.
         true
     }
 
@@ -1463,6 +1456,13 @@ impl SnapManagerCore {
             let dst = cf_file.path.to_str().unwrap();
             // It's ok that the cf file is moved but machine fails before `mgr.rename_file`
             // because without metadata file, saved cf files are nothing.
+            while let Err(e) = mgr.link_file(src, dst) {
+                if e.kind() == ErrorKind::AlreadyExists {
+                    mgr.delete_file(dst)?;
+                    continue;
+                }
+                return Err(e.into());
+            }
             mgr.link_file(src, dst)?;
             mgr.delete_file(src)?;
         }
