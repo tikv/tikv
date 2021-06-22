@@ -1,10 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_rocks::raw::{
-    new_compaction_filter_raw, CompactionFilter, CompactionFilterDecision, CompactionFilterFactory,
-    CompactionFilterValueType,
+use super::raft_engine::RAFT_LOG_GC_INDEXES;
+use super::raw::{
+    new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
+    CompactionFilterFactory, CompactionFilterValueType, DBCompactionFilter,
 };
-use engine_rocks::RAFT_LOG_GC_INDEXES;
 use std::{collections::HashMap, ffi::CString};
 use tikv_util::debug;
 
@@ -15,8 +15,8 @@ impl RaftLogCompactionFilterFactory {}
 impl CompactionFilterFactory for RaftLogCompactionFilterFactory {
     fn create_compaction_filter(
         &self,
-        _: &engine_rocks::raw::CompactionFilterContext,
-    ) -> *mut engine_rocks::raw::DBCompactionFilter {
+        _context: &CompactionFilterContext,
+    ) -> *mut DBCompactionFilter {
         let filter = Box::new(RaftLogCompactionFilter::new());
         let name = CString::new("raft_log_gc_compaction_filter").unwrap();
         unsafe { new_compaction_filter_raw(name, filter) }
