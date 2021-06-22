@@ -625,20 +625,16 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 RAFT_MESSAGE_RECV_COUNTER.inc();
                 let to_store_id = msg.get_to_peer().get_store_id();
                 if to_store_id != store_id {
-                    future::err(Error::from(RaftStoreError::StoreNotMatch {
-                        to_store_id,
-                        my_store_id: store_id,
-                    }))
-                } else {
-                    let ret = ch.send_raft_msg(msg).map_err(Error::from);
-                    future::ready(ret)
+                    warn!("store not match"; "self" => store_id, "given" => to_store_id);
+                } else if let Err(e) = ch.send_raft_msg(msg) {
+                    warn!("dispatch raft msg from gRPC to raftstore fail"; "err" => ?e);
                 }
+                future::ok(())
             });
             let status = match res.await {
                 Err(e) => {
-                    let msg = format!("{:?}", e);
-                    error!("dispatch raft msg from gRPC to raftstore fail"; "err" => %msg);
-                    RpcStatus::with_message(RpcStatusCode::UNKNOWN, msg)
+                    error!("receiving raft msg from gRPC fail"; "err" => ?e);
+                    RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", e))
                 }
                 Ok(_) => RpcStatus::new(RpcStatusCode::UNKNOWN),
             };
@@ -666,22 +662,17 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 for msg in msgs.take_msgs().into_iter() {
                     let to_store_id = msg.get_to_peer().get_store_id();
                     if to_store_id != store_id {
-                        return future::err(Error::from(RaftStoreError::StoreNotMatch {
-                            to_store_id,
-                            my_store_id: store_id,
-                        }));
-                    }
-                    if let Err(e) = ch.send_raft_msg(msg) {
-                        return future::err(Error::from(e));
+                        warn!("store not match"; "self" => store_id, "given" => to_store_id);
+                    } else if let Err(e) = ch.send_raft_msg(msg) {
+                        warn!("dispatch raft msg from gRPC to raftstore fail"; "err" => ?e);
                     }
                 }
                 future::ok(())
             });
             let status = match res.await {
                 Err(e) => {
-                    let msg = format!("{:?}", e);
-                    error!("dispatch raft msg from gRPC to raftstore fail"; "err" => %msg);
-                    RpcStatus::with_message(RpcStatusCode::UNKNOWN, msg)
+                    error!("receiving raft msg from gRPC fail"; "err" => ?e);
+                    RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", e))
                 }
                 Ok(_) => RpcStatus::new(RpcStatusCode::UNKNOWN),
             };
