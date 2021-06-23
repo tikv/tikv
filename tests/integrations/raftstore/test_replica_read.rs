@@ -387,7 +387,7 @@ fn test_split_isolation() {
     let mut cluster = new_node_cluster(0, 2);
     // Use long election timeout and short lease.
     configure_for_hibernate(&mut cluster);
-    configure_for_lease_read(&mut cluster, Some(200), Some(10));
+    configure_for_lease_read(&mut cluster, Some(50), Some(20));
     cluster.cfg.raft_store.raft_log_gc_count_limit = 11;
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
