@@ -75,4 +75,78 @@ impl CompactionFilter for RaftLogCompactionFilter {
     }
 }
 
-// TODO(MrCroxx): add tests.
+#[cfg(test)]
+mod tests {
+
+    use std::collections::HashMap;
+
+    use crate::RaftLogCompactionFilterFactory;
+
+    use crate::raft_engine::RAFT_LOG_GC_INDEXES;
+    use crate::raw::{ColumnFamilyOptions, CompactionFilterFactory, DBOptions, Writable, DB};
+    use std::ffi::CString;
+
+    #[test]
+    fn test_raft_log_gc_compaction_filter() {
+        // init db & cf
+        let mut cf_opts = ColumnFamilyOptions::default();
+        let name = CString::new("test_raft_log_gc_compaction_filter_factory").unwrap();
+        let factory =
+            Box::new(RaftLogCompactionFilterFactory {}) as Box<dyn CompactionFilterFactory>;
+        cf_opts
+            .set_compaction_filter_factory(name, factory)
+            .unwrap();
+        cf_opts.set_disable_auto_compactions(true);
+        let mut opts = DBOptions::new();
+        opts.create_if_missing(true);
+        let path = tempfile::Builder::new()
+            .prefix("test_factory_context_keys")
+            .tempdir()
+            .unwrap();
+        let mut db = DB::open(opts, path.path().to_str().unwrap()).unwrap();
+        db.create_cf(("test", cf_opts)).unwrap();
+        let cfh = db.cf_handle("test").unwrap();
+
+        // insert test data to db.cf
+        let map: HashMap<u64, u64> = [(1, 100), (3, 100), (5, 100)].iter().cloned().collect();
+        for rid in map.keys() {
+            for idx in 0..map.get(rid).unwrap_or(&0).to_owned() {
+                db.put_cf(
+                    cfh,
+                    &keys::raft_log_key(rid.to_owned(), idx.to_owned()),
+                    format!("VALUE-FOR-TEST").as_bytes(),
+                )
+                .unwrap();
+                db.put_cf(
+                    cfh,
+                    &keys::raft_state_key(rid.to_owned()),
+                    format!("VALUE-FOR-TEST").as_bytes(),
+                )
+                .unwrap();
+            }
+        }
+
+        // update test gc point
+        let mut indexes = RAFT_LOG_GC_INDEXES.write().unwrap();
+        indexes.insert(1, 50);
+        indexes.insert(2, 50);
+        indexes.insert(5, 200);
+        drop(indexes);
+        db.flush(true).unwrap();
+
+        // trigger compact
+        db.compact_range_cf(cfh, None, None);
+
+        // check gc
+        for rid in map.keys() {
+            for idx in 0..map.get(rid).unwrap_or(&0).to_owned() {
+                let lk = keys::raft_log_key(rid.to_owned(), idx.to_owned());
+                let sk = keys::raft_state_key(rid.to_owned());
+                if let Some(_) = db.get_cf(cfh, &lk).unwrap() {
+                    assert!(idx <= map.get(&rid).unwrap_or(&0).to_owned());
+                }
+                assert!(!db.get_cf(cfh, &sk).unwrap().is_none());
+            }
+        }
+    }
+}
