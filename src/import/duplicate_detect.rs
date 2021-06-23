@@ -9,10 +9,12 @@ use tikv_util::keybuilder::KeyBuilder;
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 
 #[cfg(test)]
-const MAX_SCAN_BATCH_SIZE: usize = 256;
+const MAX_SCAN_BATCH_COUNT: usize = 256;
 
 #[cfg(not(test))]
-const MAX_SCAN_BATCH_SIZE: usize = 4096;
+const MAX_SCAN_BATCH_COUNT: usize = 4096;
+
+const MAX_SCAN_BATCH_SIZE: usize = 1024 * 1024; // 1MB
 
 pub struct DuplicateDetector<S: Snapshot> {
     snapshot: S,
@@ -55,6 +57,7 @@ impl<S: Snapshot> DuplicateDetector<S> {
         let mut last_value = Vec::with_capacity(256);
         let mut last_commit_ts = TimeStamp::zero();
         let mut first_duplicate = true;
+        let mut batch_size = 0;
         while self.iter.valid().map_err(from_kv_error)? {
             let key = self.iter.key();
             let (user_key, commit_ts) = Key::split_on_ts_for(key)?;
@@ -72,13 +75,19 @@ impl<S: Snapshot> DuplicateDetector<S> {
                 }
                 WriteType::Put => {
                     if !last_key.is_empty() && user_key.eq(&last_key) {
+                        batch_size += user_key.len();
                         if first_duplicate {
-                            // println!("last value lenth: {}, ts: {:?}", last_value.len(), last_commit_ts);
+                            batch_size += last_key.len();
                             if self.key_only {
                                 ret.push(self.make_kv_pair(&last_key, None, last_commit_ts)?);
                             } else {
                                 let last_write =
                                     WriteRef::parse(&last_value).map_err(from_txn_types_error)?;
+                                batch_size += last_write
+                                    .short_value
+                                    .as_ref()
+                                    .map(|v| v.len())
+                                    .unwrap_or(0);
                                 ret.push(self.make_kv_pair(
                                     &last_key,
                                     Some(last_write),
@@ -86,12 +95,16 @@ impl<S: Snapshot> DuplicateDetector<S> {
                                 )?);
                             }
                         }
-                        // println!("value lenth: {}, ts: {:?}", value.len(), commit_ts);
-                        let w = if self.key_only { None } else { Some(write) };
+                        let w = if self.key_only {
+                            None
+                        } else {
+                            batch_size += write.short_value.as_ref().map(|v| v.len()).unwrap_or(0);
+                            Some(write)
+                        };
                         ret.push(self.make_kv_pair(&user_key, w, commit_ts)?);
                         first_duplicate = false;
                     } else {
-                        if ret.len() >= MAX_SCAN_BATCH_SIZE {
+                        if ret.len() >= MAX_SCAN_BATCH_COUNT || batch_size >= MAX_SCAN_BATCH_SIZE {
                             return Ok(Some(ret));
                         }
                         first_duplicate = true;
@@ -111,7 +124,7 @@ impl<S: Snapshot> DuplicateDetector<S> {
         if ret.is_empty() {
             return Ok(None);
         }
-        return Ok(Some(ret));
+        Ok(Some(ret))
     }
 
     fn make_kv_pair<'a>(
@@ -277,7 +290,7 @@ mod tests {
             }
         });
         let mut base = 0;
-        while let Some(mut resp) = detector.try_next().unwrap() {
+        while let Some(resp) = detector.try_next().unwrap() {
             let data: Vec<(Vec<u8>, Vec<u8>, u64)> = resp
                 .into_iter()
                 .map(|mut p| (p.take_key(), p.take_value(), p.get_commit_ts()))

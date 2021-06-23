@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use collections::HashSet;
 
 use super::make_rpc_error;
-use engine_traits::{name_to_cf, KvEngine, CF_WRITE};
+use engine_traits::{KvEngine, CF_WRITE};
 use file_system::{set_io_type, IOType};
 use futures::executor::{ThreadPool, ThreadPoolBuilder};
 use futures::sink::SinkExt;
