@@ -159,11 +159,7 @@ pub struct Config {
 
     #[config(skip)]
     pub future_poll_size: usize,
-<<<<<<< HEAD
-    #[config(hidden)]
-=======
-    #[online_config(skip)]
->>>>>>> 4eb9ad46b... Fix wrong tikv_raftstore_hibernated_peer_state metric (#10420)
+    #[config(skip)]
     pub hibernate_regions: bool,
     #[doc(hidden)]
     #[config(hidden)]
