@@ -5,35 +5,17 @@ use std::mem;
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
-<<<<<<< HEAD
 use rand::rngs::ThreadRng;
 use rand::{thread_rng, Rng};
-use tidb_query::codec::datum::{encode_value, Datum, NIL_FLAG};
+use tidb_query::codec::datum::{
+    encode_value, Datum, DatumDecoder, DURATION_FLAG, INT_FLAG, NIL_FLAG, UINT_FLAG,
+};
 use tidb_query::codec::table;
 use tidb_query::executor::{Executor, IndexScanExecutor, ScanExecutor, TableScanExecutor};
 use tidb_query::expr::EvalContext;
 use tidb_query_datatype::def::field_type::FieldTypeAccessor;
 use tidb_query_datatype::Collation;
 use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType, TableScan};
-=======
-use rand::rngs::StdRng;
-use rand::Rng;
-use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
-use tidb_query_common::storage::Range;
-use tidb_query_datatype::codec::datum::{
-    encode_value, split_datum, Datum, DatumDecoder, DURATION_FLAG, INT_FLAG, NIL_FLAG, UINT_FLAG,
-};
-use tidb_query_datatype::codec::table;
-use tidb_query_datatype::def::Collation;
-use tidb_query_datatype::expr::{EvalConfig, EvalContext};
-use tidb_query_datatype::FieldTypeAccessor;
-use tidb_query_executors::{
-    interface::BatchExecutor, runner::MAX_TIME_SLICE, BatchTableScanExecutor,
-};
-use tidb_query_expr::BATCH_MAX_SIZE;
-use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
-use yatp::task::future::reschedule;
->>>>>>> 338aabfc2... copr: make CM Sketch built with the same encoding as what TiDB assumes (#10418)
 
 use super::cmsketch::CmSketch;
 use super::fmsketch::FmSketch;
@@ -249,7 +231,27 @@ impl<S: Snapshot> SampleBuilder<S> {
                     pk_builder.append(&v);
                 }
             }
-<<<<<<< HEAD
+
+            // This is a workaround for different encoding methods used by TiDB and TiKV for CM Sketch.
+            // We need this because we must ensure we are using the same encoding method when we are querying values from
+            //   CM Sketch (in TiDB) and inserting values into CM Sketch (here).
+            // We are inserting raw bytes from TableScanExecutor into CM Sketch here and query CM Sketch using bytes
+            //   encoded by tablecodec.EncodeValue() in TiDB. Their results are different after row format becomes ver 2.
+            //
+            // Here we (1) convert INT bytes to VAR_INT bytes, (2) convert UINT bytes to VAR_UINT bytes,
+            //   and (3) "flatten" the duration value from DURATION bytes into i64 value, then convert it to VAR_INT bytes.
+            // These are the only 3 cases we need to care about according to TiDB's tablecodec.EncodeValue() and
+            //   TiKV's V1CompatibleEncoder::write_v2_as_datum().
+            val = match val[0] {
+                INT_FLAG | UINT_FLAG | DURATION_FLAG => {
+                    let mut mut_val = &val[..];
+                    let decoded_val = mut_val.read_datum()?;
+                    let flattened = table::flatten(&mut EvalContext::default(), decoded_val)?;
+                    encode_value(&mut EvalContext::default(), &[flattened])?
+                }
+                _ => val,
+            };
+
             for (i, (collector, val)) in collectors.iter_mut().zip(cols_iter).enumerate() {
                 if self.cols_info[i].as_accessor().is_string_like() {
                     let sorted_val = match_template_collator! {
@@ -262,109 +264,6 @@ impl<S: Snapshot> SampleBuilder<S> {
                                 } else {
                                     let decoded_sorted_val = TT::sort_key(&decoded_val.as_string()?.unwrap().into_owned())?;
                                     encode_value(&mut EvalContext::default(), &[Datum::Bytes(decoded_sorted_val)]).unwrap()
-=======
-
-            if self.analyze_common_handle {
-                // cur_val recording the current value's data and its counts when iterating index's rows.
-                // Once we met a new value, the old value will be pushed into the topn_heap to maintain the
-                // top-n information.
-                let mut cur_val: (u32, Vec<u8>) = (0, vec![]);
-                let mut topn_heap = BinaryHeap::new();
-                for logical_row in &result.logical_rows {
-                    let mut data = vec![];
-                    for i in 0..self.common_handle_col_ids.len() {
-                        let mut handle_col_val = vec![];
-                        columns_slice[i].encode(
-                            *logical_row,
-                            &columns_info[i],
-                            &mut EvalContext::default(),
-                            &mut handle_col_val,
-                        )?;
-                        data.extend_from_slice(&handle_col_val);
-                        if let Some(common_handle_cms) = common_handle_cms.as_mut() {
-                            common_handle_cms.insert(&data);
-                        }
-                    }
-                    common_handle_fms.insert(&data);
-                    if self.stats_version == ANALYZE_VERSION_V2 {
-                        common_handle_hist.append(&data, true);
-                        if cur_val.1 == data {
-                            cur_val.0 += 1;
-                        } else {
-                            if cur_val.0 > 0 {
-                                topn_heap.push(Reverse(cur_val));
-                            }
-                            if topn_heap.len() > self.top_n_size {
-                                topn_heap.pop();
-                            }
-                            cur_val = (1, data);
-                        }
-                    } else {
-                        common_handle_hist.append(&data, false)
-                    }
-                }
-                if self.stats_version == ANALYZE_VERSION_V2 {
-                    if cur_val.0 > 0 {
-                        topn_heap.push(Reverse(cur_val));
-                        if topn_heap.len() > self.top_n_size {
-                            topn_heap.pop();
-                        }
-                    }
-                    if let Some(c) = common_handle_cms.as_mut() {
-                        for heap_item in topn_heap {
-                            c.sub(&(heap_item.0).1, (heap_item.0).0);
-                            c.push_to_top_n((heap_item.0).1, (heap_item.0).0 as u64);
-                        }
-                    }
-                }
-            }
-
-            for (i, collector) in collectors.iter_mut().enumerate() {
-                for logical_row in &result.logical_rows {
-                    let mut val = vec![];
-                    columns_slice[i].encode(
-                        *logical_row,
-                        &columns_info[i],
-                        &mut EvalContext::default(),
-                        &mut val,
-                    )?;
-
-                    // This is a workaround for different encoding methods used by TiDB and TiKV for CM Sketch.
-                    // We need this because we must ensure we are using the same encoding method when we are querying values from
-                    //   CM Sketch (in TiDB) and inserting values into CM Sketch (here).
-                    // We are inserting raw bytes from TableScanExecutor into CM Sketch here and query CM Sketch using bytes
-                    //   encoded by tablecodec.EncodeValue() in TiDB. Their results are different after row format becomes ver 2.
-                    //
-                    // Here we (1) convert INT bytes to VAR_INT bytes, (2) convert UINT bytes to VAR_UINT bytes,
-                    //   and (3) "flatten" the duration value from DURATION bytes into i64 value, then convert it to VAR_INT bytes.
-                    // These are the only 3 cases we need to care about according to TiDB's tablecodec.EncodeValue() and
-                    //   TiKV's V1CompatibleEncoder::write_v2_as_datum().
-                    val = match val[0] {
-                        INT_FLAG | UINT_FLAG | DURATION_FLAG => {
-                            let mut mut_val = &val[..];
-                            let decoded_val = mut_val.read_datum()?;
-                            let flattened =
-                                table::flatten(&mut EvalContext::default(), decoded_val)?;
-                            encode_value(&mut EvalContext::default(), &[flattened])?
-                        }
-                        _ => val,
-                    };
-
-                    if columns_info[i].as_accessor().is_string_like() {
-                        let sorted_val = match_template_collator! {
-                            TT, match columns_info[i].as_accessor().collation()? {
-                                Collation::TT => {
-                                    let mut mut_val = &val[..];
-                                    let decoded_val = table::decode_col_value(&mut mut_val, &mut EvalContext::default(), &columns_info[i])?;
-                                    if decoded_val == Datum::Null {
-                                        val
-                                    } else {
-                                        // Only if the `decoded_val` is Datum::Null, `decoded_val` is a Ok(None).
-                                        // So it is safe the unwrap the Ok value.
-                                        let decoded_sorted_val = TT::sort_key(&decoded_val.as_string()?.unwrap().into_owned())?;
-                                        encode_value(&mut EvalContext::default(), &[Datum::Bytes(decoded_sorted_val)])?
-                                    }
->>>>>>> 338aabfc2... copr: make CM Sketch built with the same encoding as what TiDB assumes (#10418)
                                 }
                             }
                         }
