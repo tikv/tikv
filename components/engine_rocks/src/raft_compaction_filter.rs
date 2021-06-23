@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::raft_engine::RAFT_LOG_GC_INDEXES;
-use super::raw::{
+use crate::raft_engine::RAFT_LOG_GC_INDEXES;
+use crate::raw::{
     new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
     CompactionFilterFactory, CompactionFilterValueType, DBCompactionFilter,
 };
@@ -68,7 +68,7 @@ impl CompactionFilter for RaftLogCompactionFilter {
             }
         };
 
-        if idx > gc_point {
+        if idx >= gc_point {
             return CompactionFilterDecision::Keep;
         }
         CompactionFilterDecision::Remove
