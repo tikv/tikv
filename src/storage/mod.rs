@@ -120,7 +120,7 @@ pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 /// encoding and appending timestamp.
 pub struct Storage<E: Engine, L: LockManager> {
     // TODO: Too many Arcs, would be slow when clone.
-    engine: E,
+    pub engine: E,
 
     sched: TxnScheduler<E, L>,
 
