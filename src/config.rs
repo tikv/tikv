@@ -1183,7 +1183,7 @@ impl RaftDefaultCfConfig {
             .unwrap();
         cf_opts.set_titandb_options(&self.titan.build_opts());
         if gc_on_compaction {
-            info!("enable raft log compaction filter";);
+            debug!("enable raft log compaction filter";);
             cf_opts
                 .set_compaction_filter_factory(
                     "raft_log_compaction_filter_factory",
