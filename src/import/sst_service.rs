@@ -597,7 +597,7 @@ where
             Some(request.take_end_key())
         };
         let key_only = request.get_key_only();
-        let snap_res = Self::async_snapshot(router.clone(), make_request_header(context));
+        let snap_res = Self::async_snapshot(router, make_request_header(context));
         let handle_task = async move {
             let res = snap_res.await;
             let snapshot = match res {
@@ -614,10 +614,15 @@ where
                             IMPORT_RPC_DURATION
                                 .with_label_values(&[label, "ok"])
                                 .observe(timer.elapsed_secs());
-                            let _ = sink.close().await;
                         }
-                        _ => {}
+                        Err(e) => {
+                            warn!(
+                                "connection send message fail";
+                                "err" => %e
+                            );
+                        }
                     }
+                    let _ = sink.close().await;
                     return;
                 }
             };
