@@ -1,13 +1,15 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::{AdminObserver, Coprocessor, ObserverContext, Result as CopResult};
+use itertools::Itertools;
+
+use kvproto::metapb::Region;
+use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest};
 use tikv_util::codec::bytes;
 use tikv_util::{box_err, box_try, error, warn};
 
+use super::{AdminObserver, Coprocessor, ObserverContext, Result as CopResult};
 use crate::store::util;
 use crate::Error;
-use kvproto::metapb::Region;
-use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest};
 
 fn strip_timestamp_if_exists(mut key: Vec<u8>) -> Vec<u8> {
     let mut slice = key.as_slice();
@@ -65,18 +67,28 @@ impl SplitObserver {
             .filter_map(|(i, mut split)| {
                 let key = split.take_split_key();
                 let key = strip_timestamp_if_exists(key);
-                if is_valid_split_key(&key, i, ctx.region()) {
-                    split.set_split_key(key);
+                if is_valid_split_key(&key, i, ctx.region) {
+                    split.split_key = key;
                     Some(split)
                 } else {
                     None
                 }
             })
+            .coalesce(|prev, curr| {
+                // Make sure that the split keys are sorted and unique.
+                if prev.split_key < curr.split_key {
+                    Err((prev, curr))
+                } else {
+                    warn!(
+                        "skip invalid split key: key should not be larger than the previous.";
+                        "region_id" => ctx.region.id,
+                        "key" => log_wrappers::Value::key(&curr.split_key),
+                        "previous" => log_wrappers::Value::key(&prev.split_key),
+                    );
+                    Ok(prev)
+                }
+            })
             .collect::<Vec<_>>();
-
-        // Make sure that the split keys are sorted and unique.
-        ajusted_splits.sort_by(|l, r| l.get_split_key().cmp(r.get_split_key()));
-        ajusted_splits.dedup();
 
         if ajusted_splits.is_empty() {
             Err("no valid key found for split.".to_owned())
