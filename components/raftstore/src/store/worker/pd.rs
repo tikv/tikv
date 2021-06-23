@@ -488,7 +488,7 @@ fn hotspot_key_report_threshold() -> u64 {
 
 fn hotspot_byte_report_threshold() -> u64 {
     #[cfg(feature = "failpoints")]
-    fail_point!("mock_hotspot_capacity", |_| { 0 });
+    fail_point!("mock_hotspot_threshold", |_| { 0 });
 
     HOTSPOT_BYTE_RATE_THRESHOLD * 10
 }
@@ -750,8 +750,6 @@ where
             region_peer
                 .last_store_report_query_stats
                 .fill_query_stats(&region_peer.read_query_stats);
-            // TODO: select hotspot peer by binaray heap in future
-
             if read_bytes < hotspot_byte_report_threshold()
                 && read_keys < hotspot_key_report_threshold()
                 && read_query_stats.get_read_query_num() < hotspot_query_num_report_threshold()
