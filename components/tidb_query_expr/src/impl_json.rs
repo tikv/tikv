@@ -156,57 +156,7 @@ pub fn json_merge(args: &[Option<JsonRef>]) -> Result<Option<Json>> {
     Ok(Some(Json::merge(jsons)?))
 }
 
-<<<<<<< HEAD
-#[rpn_fn(nullable)]
-=======
-#[rpn_fn(writer)]
-#[inline]
-fn json_quote(input: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
-    Ok(writer.write(quote(input)?))
-}
-
-fn quote(bytes: BytesRef) -> Result<Option<Bytes>> {
-    let mut result = Vec::with_capacity(bytes.len() * 2 + 2);
-    result.push(b'\"');
-    for byte in bytes.iter() {
-        if *byte == b'\"' || *byte == b'\\' {
-            result.push(b'\\');
-            result.push(*byte)
-        } else if *byte == b'\x07' {
-            // \a alert
-            result.push(b'\\');
-            result.push(b'a');
-        } else if *byte == b'\x08' {
-            // \b backspace
-            result.push(b'\\');
-            result.push(b'b')
-        } else if *byte == b'\x0c' {
-            // \f form feed
-            result.push(b'\\');
-            result.push(b'f')
-        } else if *byte == b'\n' {
-            result.push(b'\\');
-            result.push(b'n');
-        } else if *byte == b'\r' {
-            result.push(b'\\');
-            result.push(b'r');
-        } else if *byte == b'\t' {
-            result.push(b'\\');
-            result.push(b't')
-        } else if *byte == b'\x0b' {
-            // \v vertical tab
-            result.push(b'\\');
-            result.push(b'v')
-        } else {
-            result.push(*byte)
-        }
-    }
-    result.push(b'\"');
-    Ok(Some(result))
-}
-
 #[rpn_fn]
->>>>>>> 2fb71587a... copr:  fix the wrong arguments type of json_unquote (#10177)
 #[inline]
 fn json_unquote(arg: BytesRef) -> Result<Option<Bytes>> {
     let tmp_str = std::str::from_utf8(arg)?;
