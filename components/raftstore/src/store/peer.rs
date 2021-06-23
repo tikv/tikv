@@ -57,6 +57,7 @@ use crate::{Error, Result};
 use collections::{HashMap, HashSet};
 use pd_client::INVALID_ID;
 use tikv_util::codec::number::decode_u64;
+use tikv_util::sys::disk;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::time::{Instant as UtilInstant, ThreadReadId};
 use tikv_util::worker::{FutureScheduler, Scheduler};
@@ -2350,7 +2351,14 @@ where
                 return false;
             }
             Ok(RequestPolicy::ReadIndex) => return self.read_index(ctx, req, err_resp, cb),
-            Ok(RequestPolicy::ProposeNormal) => self.propose_normal(ctx, req),
+            Ok(RequestPolicy::ProposeNormal) => {
+                let store_id = ctx.store_id();
+                if disk::disk_full_precheck(store_id) || ctx.is_disk_full {
+                    Err(Error::Timeout("disk full".to_owned()))
+                } else {
+                    self.propose_normal(ctx, req)
+                }
+            }
             Ok(RequestPolicy::ProposeTransferLeader) => {
                 return self.propose_transfer_leader(ctx, req, cb);
             }
@@ -3126,6 +3134,8 @@ where
         if self.is_applying_snapshot()
             || self.has_pending_snapshot()
             || msg.get_from() != self.leader_id()
+            // For followers whose disk is full.
+            || disk::disk_full_precheck(ctx.store_id()) || ctx.is_disk_full
         {
             info!(
                 "reject transferring leader";
