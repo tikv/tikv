@@ -365,6 +365,21 @@ pub fn new_pd_merge_region(target_region: metapb::Region) -> RegionHeartbeatResp
     resp
 }
 
+#[derive(Default)]
+struct CallbackLeakDetector {
+    called: bool,
+}
+
+impl Drop for CallbackLeakDetector {
+    fn drop(&mut self) {
+        if self.called {
+            return;
+        }
+        let bt = backtrace::Backtrace::new();
+        warn!("callback is dropped"; "backtrace" => ?bt);
+    }
+}
+
 pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback<RocksSnapshot>, mpsc::Receiver<RaftCmdResponse>) {
     let mut is_read;
     let mut is_write;
@@ -382,13 +397,16 @@ pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback<RocksSnapshot>, mpsc::Receiver
     assert!(is_read ^ is_write, "Invalid RaftCmdRequest: {:?}", cmd);
 
     let (tx, rx) = mpsc::channel();
+    let mut detector = CallbackLeakDetector::default();
     let cb = if is_read {
         Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
+            detector.called = true;
             // we don't care error actually.
             let _ = tx.send(resp.response);
         }))
     } else {
         Callback::write(Box::new(move |resp: WriteResponse| {
+            detector.called = true;
             // we don't care error actually.
             let _ = tx.send(resp.response);
         }))

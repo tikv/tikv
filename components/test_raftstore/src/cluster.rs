@@ -121,7 +121,7 @@ pub trait Simulator {
             }
         }
         rx.recv_timeout(timeout)
-            .map_err(|_| Error::Timeout(format!("request timeout for {:?}", timeout)))
+            .map_err(|e| Error::Timeout(format!("request timeout for {:?}: {:?}", timeout, e)))
     }
 }
 
