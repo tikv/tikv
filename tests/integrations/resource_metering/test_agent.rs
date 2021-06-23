@@ -2,10 +2,11 @@
 
 use super::test_suite::TestSuite;
 
+use std::iter;
 use std::thread::sleep;
 use std::time::Duration;
 
-use rand::seq::SliceRandom;
+use rand::prelude::*;
 use test_util::alloc_port;
 
 const ONE_SEC: Duration = Duration::from_secs(1);
@@ -18,10 +19,11 @@ pub fn case_alter_agent_addr(test_suite: &mut TestSuite) {
     test_suite.cfg_max_resource_groups(5);
 
     // Workload
-    // [req-{1..5} * 3, req-{6..10} * 1]
-    let mut wl = (1..=10)
-        .chain(1..=5)
-        .chain(1..=5)
+    // [req-{1..5} * 10, req-{6..10} * 1]
+    let mut wl = iter::repeat(1..=5)
+        .take(10)
+        .flatten()
+        .chain(6..=10)
         .map(|n| format!("req-{}", n))
         .collect::<Vec<_>>();
     wl.shuffle(&mut rand::thread_rng());
@@ -75,10 +77,11 @@ pub fn case_agent_blocking(test_suite: &mut TestSuite) {
     test_suite.cfg_agent_address(format!("127.0.0.1:{}", port));
 
     // Workload
-    // [req-{1..5} * 3, req-{6..10} * 1]
-    let mut wl = (1..=10)
-        .chain(1..=5)
-        .chain(1..=5)
+    // [req-{1..5} * 10, req-{6..10} * 1]
+    let mut wl = iter::repeat(1..=5)
+        .take(10)
+        .flatten()
+        .chain(6..=10)
         .map(|n| format!("req-{}", n))
         .collect::<Vec<_>>();
     wl.shuffle(&mut rand::thread_rng());
@@ -104,11 +107,12 @@ pub fn case_agent_blocking(test_suite: &mut TestSuite) {
     assert!(test_suite.fetch_reported_cpu_time().is_empty());
 
     // Workload
-    // [req-{1..5} * 1, req-{6..10} * 3]
+    // [req-{1..5} * 1, req-{6..10} * 10]
     test_suite.cancel_workload();
-    let mut wl = (1..=10)
-        .chain(6..=10)
-        .chain(6..=10)
+    let mut wl = iter::repeat(6..=10)
+        .take(10)
+        .flatten()
+        .chain(1..=5)
         .map(|n| format!("req-{}", n))
         .collect::<Vec<_>>();
     wl.shuffle(&mut rand::thread_rng());
@@ -138,10 +142,11 @@ pub fn case_agent_shutdown(test_suite: &mut TestSuite) {
     test_suite.cfg_agent_address(format!("127.0.0.1:{}", port));
 
     // Workload
-    // [req-{1..5} * 3, req-{6..10} * 1]
-    let mut wl = (1..=10)
-        .chain(1..=5)
-        .chain(1..=5)
+    // [req-{1..5} * 10, req-{6..10} * 1]
+    let mut wl = iter::repeat(1..=5)
+        .take(10)
+        .flatten()
+        .chain(6..=10)
         .map(|n| format!("req-{}", n))
         .collect::<Vec<_>>();
     wl.shuffle(&mut rand::thread_rng());
@@ -167,11 +172,12 @@ pub fn case_agent_shutdown(test_suite: &mut TestSuite) {
     assert!(test_suite.fetch_reported_cpu_time().is_empty());
 
     // Workload
-    // [req-{1..5} * 1, req-{6..10} * 3]
+    // [req-{1..5} * 1, req-{6..10} * 10]
     test_suite.cancel_workload();
-    let mut wl = (1..=10)
-        .chain(6..=10)
-        .chain(6..=10)
+    let mut wl = iter::repeat(6..=10)
+        .take(10)
+        .flatten()
+        .chain(1..=5)
         .map(|n| format!("req-{}", n))
         .collect::<Vec<_>>();
     wl.shuffle(&mut rand::thread_rng());
