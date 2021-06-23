@@ -13,7 +13,9 @@ use rand::rngs::StdRng;
 use rand::Rng;
 use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
 use tidb_query_common::storage::Range;
-use tidb_query_datatype::codec::datum::{encode_value, split_datum, Datum, NIL_FLAG};
+use tidb_query_datatype::codec::datum::{
+    encode_value, split_datum, Datum, DatumDecoder, DURATION_FLAG, INT_FLAG, NIL_FLAG, UINT_FLAG,
+};
 use tidb_query_datatype::codec::table;
 use tidb_query_datatype::def::Collation;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
@@ -725,6 +727,28 @@ impl<S: Snapshot> SampleBuilder<S> {
                         &mut EvalContext::default(),
                         &mut val,
                     )?;
+
+                    // This is a workaround for different encoding methods used by TiDB and TiKV for CM Sketch.
+                    // We need this because we must ensure we are using the same encoding method when we are querying values from
+                    //   CM Sketch (in TiDB) and inserting values into CM Sketch (here).
+                    // We are inserting raw bytes from TableScanExecutor into CM Sketch here and query CM Sketch using bytes
+                    //   encoded by tablecodec.EncodeValue() in TiDB. Their results are different after row format becomes ver 2.
+                    //
+                    // Here we (1) convert INT bytes to VAR_INT bytes, (2) convert UINT bytes to VAR_UINT bytes,
+                    //   and (3) "flatten" the duration value from DURATION bytes into i64 value, then convert it to VAR_INT bytes.
+                    // These are the only 3 cases we need to care about according to TiDB's tablecodec.EncodeValue() and
+                    //   TiKV's V1CompatibleEncoder::write_v2_as_datum().
+                    val = match val[0] {
+                        INT_FLAG | UINT_FLAG | DURATION_FLAG => {
+                            let mut mut_val = &val[..];
+                            let decoded_val = mut_val.read_datum()?;
+                            let flattened =
+                                table::flatten(&mut EvalContext::default(), decoded_val)?;
+                            encode_value(&mut EvalContext::default(), &[flattened])?
+                        }
+                        _ => val,
+                    };
+
                     if columns_info[i].as_accessor().is_string_like() {
                         let sorted_val = match_template_collator! {
                             TT, match columns_info[i].as_accessor().collation()? {
