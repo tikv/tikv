@@ -1235,7 +1235,7 @@ where
         let msg_type = msg.get_message().get_msg_type();
         let store_id = self.ctx.store_id();
 
-        if disk::disk_full_precheck(store_id) || disk::is_disk_full() {
+        if disk::disk_full_precheck(store_id) || self.ctx.is_disk_full {
             let mut flag = false;
             if MessageType::MsgAppend == msg_type {
                 let entries = msg.get_message().get_entries();
