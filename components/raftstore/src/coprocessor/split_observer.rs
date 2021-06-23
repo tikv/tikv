@@ -61,7 +61,7 @@ impl SplitObserver {
         ctx: &mut ObserverContext<'_>,
         splits: &mut Vec<SplitRequest>,
     ) -> Result<(), String> {
-        let mut ajusted_splits = std::mem::take(splits)
+        let ajusted_splits = std::mem::take(splits)
             .into_iter()
             .enumerate()
             .filter_map(|(i, mut split)| {
@@ -94,7 +94,7 @@ impl SplitObserver {
             Err("no valid key found for split.".to_owned())
         } else {
             // Rewrite the splits.
-            std::mem::swap(splits, &mut ajusted_splits);
+            *splits = ajusted_splits;
             Ok(())
         }
     }
