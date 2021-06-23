@@ -54,6 +54,7 @@ impl Reporter {
     pub fn collect(
         &self,
         trace_context: &TraceContext,
+        span_id_prefix: u32,
         collector: Option<Collector>,
     ) -> Option<Vec<Span>> {
         if let Some(collector) = collector {
@@ -75,8 +76,8 @@ impl Reporter {
                     } else {
                         rand::random()
                     },
-                    trace_context.get_root_parent_span_id(),
-                    trace_context.get_span_id_prefix(),
+                    trace_context.get_parent_span_id(),
+                    span_id_prefix,
                     &spans,
                 );
             }
@@ -118,7 +119,7 @@ impl Reporter {
 }
 
 pub trait Subscriber: Send + Sync + 'static {
-    fn report(&self, trace_id: u64, root_parent_span_id: u64, span_id_prefix: u32, spans: &[Span]);
+    fn report(&self, trace_id: u64, parent_span_id: u64, span_id_prefix: u32, spans: &[Span]);
 }
 
 pub struct JaegerSubscriber {
@@ -133,11 +134,11 @@ impl JaegerSubscriber {
 }
 
 impl Subscriber for JaegerSubscriber {
-    fn report(&self, trace_id: u64, root_parent_span_id: u64, span_id_prefix: u32, spans: &[Span]) {
+    fn report(&self, trace_id: u64, parent_span_id: u64, span_id_prefix: u32, spans: &[Span]) {
         if let Ok(bytes) = trace::Reporter::encode(
             "TiKV".to_owned(),
             trace_id,
-            root_parent_span_id,
+            parent_span_id,
             span_id_prefix,
             &spans,
         ) {

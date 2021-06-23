@@ -215,7 +215,7 @@ protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "65
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
 
 [patch.'https://github.com/pingcap/kvproto.git']
-kvproto = { git = "https://github.com/zhongzc/kvproto.git", rev = "089c2b11cc0e8640fdd66f15b5cb6876ea6b3dde", default-features = false }
+kvproto = { git = "https://github.com/zhongzc/kvproto.git", rev = "55582f22f9cff4c193c03d5708795fc623cc507c", default-features = false }
 
 [workspace]
 # See https://github.com/rust-lang/rfcs/blob/master/text/2957-cargo-features2.md

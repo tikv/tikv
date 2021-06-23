@@ -23,20 +23,23 @@ macro_rules! trace_and_report {
                 return;
             }
 
-            if let Some(spans) = reporter.collect(&trace_context, collector) {
+            let span_id_prefix = rand::random::<u32>();
+            if let Some(spans) = reporter.collect(&trace_context, span_id_prefix, collector) {
                 let trace_detail = resp.mut_meta().mut_trace_detail();
                 let span_sets = trace_detail.mut_span_sets();
                 let span_set = span_sets.push_default();
                 span_set.set_node_type(kvproto::kvrpcpb::TraceDetailNodeType::TiKv);
-                span_set.set_root_parent_span_id(trace_context.get_root_parent_span_id());
                 span_set.set_trace_id(trace_context.get_trace_id());
-                span_set.set_span_id_prefix(trace_context.get_span_id_prefix());
 
                 let pb_spans = span_set.mut_spans();
                 for span in spans {
                     let pb_span = pb_spans.push_default();
-                    pb_span.set_id(span.id);
-                    pb_span.set_parent_id(span.parent_id);
+                    pb_span.set_id(((span_id_prefix as u64) << 32) | (span.id as u64));
+                    pb_span.set_parent_id(if span.parent_id == 0 {
+                        trace_context.get_parent_span_id()
+                    } else {
+                        ((span_id_prefix as u64) << 32) | (span.parent_id as u64)
+                    });
                     pb_span.set_begin_unix_time_ns(span.begin_unix_time_ns);
                     pb_span.set_duration_ns(span.duration_ns);
                     pb_span.set_event(span.event.to_owned());
