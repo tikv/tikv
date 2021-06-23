@@ -114,13 +114,13 @@ mod tests {
                 db.put_cf(
                     cfh,
                     &keys::raft_log_key(rid.to_owned(), idx.to_owned()),
-                    format!("VALUE-FOR-TEST").as_bytes(),
+                    "VALUE-FOR-TEST".as_bytes(),
                 )
                 .unwrap();
                 db.put_cf(
                     cfh,
                     &keys::raft_state_key(rid.to_owned()),
-                    format!("VALUE-FOR-TEST").as_bytes(),
+                    "VALUE-FOR-TEST".as_bytes(),
                 )
                 .unwrap();
             }
@@ -142,8 +142,8 @@ mod tests {
             for idx in 0..map.get(rid).unwrap_or(&0).to_owned() {
                 let lk = keys::raft_log_key(rid.to_owned(), idx.to_owned());
                 let sk = keys::raft_state_key(rid.to_owned());
-                if let Some(_) = db.get_cf(cfh, &lk).unwrap() {
-                    assert!(idx <= map.get(&rid).unwrap_or(&0).to_owned());
+                if db.get_cf(cfh, &lk).unwrap().is_some() {
+                    assert!(idx <= *map.get(&rid).unwrap_or(&0));
                 }
                 assert!(!db.get_cf(cfh, &sk).unwrap().is_none());
             }
