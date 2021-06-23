@@ -96,7 +96,6 @@ fn test_node_simple_store_stats() {
 fn test_store_heartbeat_report_hotspots() {
     fail::cfg("mock_hotspot_threshold", "return(0)").unwrap();
     fail::cfg("mock_tick_interval", "return(0)").unwrap();
-    fail::cfg("on_report_vec_too_large", "panic").unwrap();
     let (mut cluster, client, _) = must_new_and_configure_cluster_and_kv_client(|cluster| {
         cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(10);
     });
@@ -139,7 +138,6 @@ fn test_store_heartbeat_report_hotspots() {
     let peer_stat = hot_peers.get(&left.id).unwrap();
     assert!(peer_stat.get_read_keys() > 0);
     assert!(peer_stat.get_read_bytes() > 0);
-    fail::remove("mock_hotspot_capacity");
     fail::remove("mock_tick_interval");
     fail::remove("mock_hotspot_threshold");
 }
