@@ -1096,6 +1096,7 @@ impl TiKVServer<RocksEngine> {
         )
         .unwrap_or_else(|s| fatal!("failed to create raft engine: {}", s));
         if config_raftdb.gc_on_compaction {
+            debug!("enable raft log gc on compaction";);
             engine_rocks::RAFT_LOG_GC_ON_COMPACTION.store(true, Ordering::Release);
         }
 
