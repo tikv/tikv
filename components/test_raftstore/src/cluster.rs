@@ -32,6 +32,7 @@ use raftstore::store::*;
 use raftstore::{Error, Result};
 use tikv::config::TiKvConfig;
 use tikv::server::Result as ServerResult;
+use tikv_util::thread_group::GroupProperties;
 use tikv_util::HandyRwLock;
 
 use super::*;
@@ -133,6 +134,7 @@ pub struct Cluster<T: Simulator> {
     pub engines: HashMap<u64, Engines<RocksEngine, RocksEngine>>,
     key_managers_map: HashMap<u64, Option<Arc<DataKeyManager>>>,
     pub labels: HashMap<u64, HashMap<String, String>>,
+    group_props: HashMap<u64, GroupProperties>,
 
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
@@ -158,6 +160,7 @@ impl<T: Simulator> Cluster<T> {
             engines: HashMap::default(),
             key_managers_map: HashMap::default(),
             labels: HashMap::default(),
+            group_props: HashMap::default(),
             sim,
             pd_client,
         }
@@ -221,6 +224,9 @@ impl<T: Simulator> Cluster<T> {
             let key_mgr = self.key_managers.last().unwrap().clone();
             let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
 
+            let props = GroupProperties::default();
+            tikv_util::thread_group::set_properties(Some(props.clone()));
+
             let mut sim = self.sim.wl();
             let node_id = sim.run_node(
                 0,
@@ -231,6 +237,7 @@ impl<T: Simulator> Cluster<T> {
                 router,
                 system,
             )?;
+            self.group_props.insert(node_id, props);
             self.engines.insert(node_id, engines);
             self.store_metas.insert(node_id, store_meta);
             self.key_managers_map.insert(node_id, key_mgr);
@@ -285,6 +292,9 @@ impl<T: Simulator> Cluster<T> {
                 .insert(Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP))))
                 .clone(),
         };
+        let props = GroupProperties::default();
+        self.group_props.insert(node_id, props.clone());
+        tikv_util::thread_group::set_properties(Some(props));
         debug!("calling run node"; "node_id" => node_id);
         // FIXME: rocksdb event listeners may not work, because we change the router.
         self.sim
@@ -296,13 +306,10 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn stop_node(&mut self, node_id: u64) {
         debug!("stopping node {}", node_id);
+        self.group_props[&node_id].mark_shutdown();
         match self.sim.write() {
             Ok(mut sim) => sim.stop_node(node_id),
-            Err(_) => {
-                if !thread::panicking() {
-                    panic!("failed to acquire write lock.")
-                }
-            }
+            Err(_) => safe_panic!("failed to acquire write lock."),
         }
         self.pd_client.shutdown_store(node_id);
         debug!("node {} stopped", node_id);
@@ -673,12 +680,9 @@ impl<T: Simulator> Cluster<T> {
         match self.sim.read() {
             Ok(s) => keys = s.get_node_ids(),
             Err(_) => {
-                if thread::panicking() {
-                    // Leave the resource to avoid double panic.
-                    return;
-                } else {
-                    panic!("failed to acquire read lock");
-                }
+                safe_panic!("failed to acquire read lock");
+                // Leave the resource to avoid double panic.
+                return;
             }
         }
         for id in keys {
