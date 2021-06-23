@@ -790,7 +790,8 @@ pub fn put_cf_till_size<T: Simulator>(
             reqs.push(new_put_cf_cmd(cf, key.as_bytes(), &value));
         }
         cluster.batch_put(key.as_bytes(), reqs).unwrap();
-        // Flush memtable to SST periodically, to make approximate size more accurate.
+        // Approximate size of memtable is inaccurate for small data,
+        // we flush it to SST so we can use the size properties instead.
         cluster.must_flush_cf(cf, true);
     }
     key.into_bytes()
