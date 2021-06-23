@@ -857,6 +857,12 @@
 # info-log-dir = ""
 # info-log-level = "info"
 
+## This config enables compaction filter to gc old raft log entries.
+## Instead of writing tombstone when deleting raft log, compaction filter will drop old log entries
+## during compaction.
+## This config can obviously reduce the write flow and compaction flow of raftdb.
+# gc-on-compaction = true
+
 [raftdb.defaultcf]
 ## Recommend to set it the same as `rocksdb.defaultcf.compression-per-level`.
 # compression-per-level = ["no", "no", "lz4", "lz4", "lz4", "zstd", "zstd"]
