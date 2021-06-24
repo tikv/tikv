@@ -493,7 +493,7 @@ mod tests {
     use super::*;
 
     #[test]
-    // #[ignore] // CI gets 0 as stats.
+    #[ignore] // CI gets 0 as stats.
     fn test_thread_stat_io() {
         let name = "testthreadio";
         let (tx, rx) = sync::mpsc::channel();
@@ -578,7 +578,7 @@ mod tests {
     }
 
     #[test]
-    // #[ignore] // CI gets 0 as stats.
+    #[ignore] // CI gets 0 as stats.
     fn test_thread_io_statistics() {
         let s1 = "testio123";
         let s2 = "test45678";
