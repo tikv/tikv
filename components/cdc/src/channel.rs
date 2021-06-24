@@ -130,20 +130,38 @@ impl Sink {
         if bytes != 0 && !self.memory_quota.alloc(bytes) {
             return Err(SendError::Congested);
         }
-        self.unbounded_sender
-            .unbounded_send((event, bytes))
-            .map_err(SendError::from)
+        match self.unbounded_sender.unbounded_send((event, bytes)) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                // Free quota if send fails.
+                self.memory_quota.free(bytes);
+                Err(SendError::from(e))
+            }
+        }
     }
 
     pub async fn send_all(&mut self, events: Vec<CdcEvent>) -> Result<(), SendError> {
+        // Allocate quota in advance.
+        let mut total_bytes = 0;
+        for event in &events {
+            total_bytes += event.size();
+        }
+        if !self.memory_quota.alloc(total_bytes as _) {
+            return Err(SendError::Congested);
+        }
         for event in events {
             let bytes = event.size() as usize;
-            if !self.memory_quota.alloc(bytes) {
-                return Err(SendError::Congested);
+            if let Err(e) = self.bounded_sender.feed((event, bytes)).await {
+                // Free quota if send fails.
+                self.memory_quota.free(total_bytes as _);
+                return Err(SendError::from(e));
             }
-            self.bounded_sender.feed((event, bytes)).await?;
         }
-        self.bounded_sender.flush().await?;
+        if let Err(e) = self.bounded_sender.flush().await {
+            // Free quota if send fails.
+            self.memory_quota.free(total_bytes as _);
+            return Err(SendError::from(e));
+        }
         Ok(())
     }
 }
@@ -204,11 +222,13 @@ impl Drop for Drain {
         self.unbounded_receiver.close();
         let start = Instant::now();
         let mut drain = Box::pin(async {
+            let memory_quota = self.memory_quota.clone();
             let mut total_bytes = 0;
-            while let Some((_, bytes)) = self.drain().next().await {
+            let mut drain = self.drain();
+            while let Some((_, bytes)) = drain.next().await {
                 total_bytes += bytes;
             }
-            self.memory_quota.free(total_bytes);
+            memory_quota.free(total_bytes);
         });
         block_on(&mut drain);
         let takes = start.elapsed();
@@ -301,23 +321,24 @@ mod tests {
 
     #[test]
     fn test_nonblocking_batch() {
-        let runtime = tokio::runtime::Runtime::new().unwrap();
         let force_send = false;
-        let (mut send, mut drain) =
-            new_test_cancal(CDC_MSG_MAX_BATCH_SIZE * 2, usize::MAX, force_send);
-        let (mut tx, mut rx) = unbounded();
-        runtime.spawn(async move {
-            drain.forward(&mut tx).await.unwrap();
-        });
         for count in 1..CDC_EVENT_MAX_BATCH_SIZE + CDC_EVENT_MAX_BATCH_SIZE / 2 {
+            let (mut send, mut drain) =
+                new_test_cancal(CDC_MSG_MAX_BATCH_SIZE * 2, usize::MAX, force_send);
             for _ in 0..count {
                 send(CdcEvent::Event(Default::default())).unwrap();
             }
-            recv_timeout(&mut rx, Duration::from_millis(100)).unwrap();
-        }
+            drop(send);
 
-        if recv_timeout(&mut rx, Duration::from_millis(100)).is_ok() {
-            panic!("expect to be timeout");
+            // Forward `drain` after `send` is dropped so that all items should be batched.
+            let (mut tx, mut rx) = unbounded();
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            runtime.spawn(async move {
+                drain.forward(&mut tx).await.unwrap();
+            });
+            let timeout = Duration::from_millis(100);
+            assert!(recv_timeout(&mut rx, timeout).unwrap().is_some());
+            assert!(recv_timeout(&mut rx, timeout).unwrap().is_none());
         }
     }
 
@@ -386,7 +407,7 @@ mod tests {
             let memory_quota = rx.memory_quota.clone();
             assert_eq!(memory_quota.alloc(event.size() as _), false,);
             drop(rx);
-            assert_eq!(memory_quota.alloc(1024), true,);
+            assert_eq!(memory_quota.alloc(1024), true);
         }
         // Make sure memory quota is freed when tx is dropped before rx.
         {
@@ -404,7 +425,19 @@ mod tests {
             assert_eq!(memory_quota.alloc(event.size() as _), false,);
             drop(send);
             drop(rx);
-            assert_eq!(memory_quota.alloc(1024), true,);
+            assert_eq!(memory_quota.alloc(1024), true);
+        }
+        // Make sure sending message to a closed channel does not leak memory quota.
+        {
+            let (mut send, rx) = new_test_cancal(buffer as _, max_pending_bytes as _, force_send);
+            let memory_quota = rx.memory_quota.clone();
+            assert_eq!(memory_quota.in_use(), 0);
+            drop(rx);
+            for _ in 0..max_pending_bytes {
+                send(CdcEvent::Event(e.clone())).unwrap_err();
+            }
+            assert_eq!(memory_quota.in_use(), 0);
+            assert_eq!(memory_quota.alloc(1024), true);
         }
     }
 }

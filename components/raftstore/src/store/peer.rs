@@ -57,6 +57,7 @@ use crate::{Error, Result};
 use collections::{HashMap, HashSet};
 use pd_client::INVALID_ID;
 use tikv_util::codec::number::decode_u64;
+use tikv_util::sys::disk;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::time::{Instant as UtilInstant, ThreadReadId};
 use tikv_util::worker::{FutureScheduler, Scheduler};
@@ -618,6 +619,7 @@ where
             cmd_epoch_checker: Default::default(),
             last_unpersisted_number: 0,
             read_progress: Arc::new(RegionReadProgress::new(
+                region,
                 applied_index,
                 REGION_READ_PROGRESS_CAP,
                 tag,
@@ -981,6 +983,10 @@ where
         // Always update read delegate's region to avoid stale region info after a follower
         // becoming a leader.
         self.maybe_update_read_progress(reader, progress);
+
+        // Update leader info
+        self.read_progress
+            .update_leader_info(self.leader_id(), self.term(), self.region());
 
         if !self.pending_remove {
             host.on_region_changed(self.region(), RegionChangeEvent::Update, self.get_role());
@@ -1498,6 +1504,10 @@ where
             "term" => term,
             "peer_id" => self.peer_id(),
         );
+
+        self.read_progress
+            .update_leader_info(leader_id, term, self.region());
+
         let mut meta = ctx.store_meta.lock().unwrap();
         meta.leaders.insert(self.region_id, (term, leader_id));
     }
@@ -2341,7 +2351,14 @@ where
                 return false;
             }
             Ok(RequestPolicy::ReadIndex) => return self.read_index(ctx, req, err_resp, cb),
-            Ok(RequestPolicy::ProposeNormal) => self.propose_normal(ctx, req),
+            Ok(RequestPolicy::ProposeNormal) => {
+                let store_id = ctx.store_id();
+                if disk::disk_full_precheck(store_id) || ctx.is_disk_full {
+                    Err(Error::Timeout("disk full".to_owned()))
+                } else {
+                    self.propose_normal(ctx, req)
+                }
+            }
             Ok(RequestPolicy::ProposeTransferLeader) => {
                 return self.propose_transfer_leader(ctx, req, cb);
             }
@@ -3117,6 +3134,8 @@ where
         if self.is_applying_snapshot()
             || self.has_pending_snapshot()
             || msg.get_from() != self.leader_id()
+            // For followers whose disk is full.
+            || disk::disk_full_precheck(ctx.store_id()) || ctx.is_disk_full
         {
             info!(
                 "reject transferring leader";
