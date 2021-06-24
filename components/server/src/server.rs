@@ -22,6 +22,7 @@ use std::{
         Arc, Mutex,
     },
     time::{Duration, Instant},
+    u64,
 };
 
 use cdc::MemoryQuota;
@@ -60,7 +61,7 @@ use raftstore::{
         fsm,
         fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_MSG_CAP},
         memory::MEMTRACE_ROOT,
-        AutoSplitController, CheckLeaderRunner, GlobalReplicationState, LocalReader,
+        AutoSplitController, CheckLeaderRunner, GlobalReplicationState, LocalReader, SnapManager,
         SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMsg,
     },
 };
@@ -89,7 +90,7 @@ use tikv_util::{
     check_environment_variables,
     config::{ensure_dir_exist, VersionTrack},
     math::MovingAvgU32,
-    sys::{register_memory_usage_high_water, SysQuota},
+    sys::{disk, register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
     time::Monitor,
     worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker, Worker},
@@ -136,10 +137,11 @@ pub fn run_tikv(config: TiKvConfig) {
             let (limiter, fetcher) = tikv.init_io_utility();
             let (engines, engines_info) = tikv.init_raw_engines(Some(limiter.clone()));
             limiter.set_low_priority_io_adjustor_if_needed(Some(engines_info.clone()));
-            tikv.init_engines(engines);
+            tikv.init_engines(engines.clone());
             let server_config = tikv.init_servers();
             tikv.register_services();
             tikv.init_metrics_flusher(fetcher, engines_info);
+            tikv.init_storage_stats_task(engines);
             tikv.run_server(server_config);
             tikv.run_status_server();
 
@@ -159,6 +161,7 @@ const RESERVED_OPEN_FDS: u64 = 1000;
 
 const DEFAULT_METRICS_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
 const DEFAULT_ENGINE_METRICS_RESET_INTERVAL: Duration = Duration::from_millis(60_000);
+const DEFAULT_STORAGE_STATS_INTERVAL: Duration = Duration::from_secs(1);
 
 /// A complete TiKV server.
 struct TiKVServer<ER: RaftEngine> {
@@ -171,6 +174,7 @@ struct TiKVServer<ER: RaftEngine> {
     resolver: resolve::PdStoreAddrResolver,
     state: Arc<Mutex<GlobalReplicationState>>,
     store_path: PathBuf,
+    snap_mgr: Option<SnapManager>, // Will be filled in `init_servers`.
     encryption_key_manager: Option<Arc<DataKeyManager>>,
     engines: Option<TiKVEngines<ER>>,
     servers: Option<Servers<ER>>,
@@ -253,6 +257,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             resolver,
             state,
             store_path,
+            snap_mgr: None,
             encryption_key_manager: None,
             engines: None,
             servers: None,
@@ -405,6 +410,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         if self.config.raft_store.capacity.0 > 0 {
             capacity = cmp::min(capacity, self.config.raft_store.capacity.0);
         }
+        //TODO after disk full readonly impl, such file should be removed.
         file_system::reserve_space_for_recover(
             &self.config.storage.data_dir,
             if self.config.storage.reserve_space.0 == 0 {
@@ -681,6 +687,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         node.try_bootstrap_store(engines.engines.clone())
             .unwrap_or_else(|e| fatal!("failed to bootstrap node id: {}", e));
 
+        self.snap_mgr = Some(snap_mgr.clone());
         // Create server
         let server = Server::new(
             node.id(),
@@ -1019,6 +1026,67 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 engines_info.update(now);
                 mem_trace_metrics.flush(now);
             });
+    }
+
+    fn init_storage_stats_task(&self, engines: Engines<RocksEngine, ER>) {
+        let config_disk_capacity: u64 = self.config.raft_store.capacity.0;
+        let store_path = self.store_path.clone();
+        let snap_mgr = self.snap_mgr.clone().unwrap();
+        let disk_reserved = self.config.storage.reserve_space.0;
+        if disk_reserved == 0 {
+            info!("disk space checker not enabled");
+            return;
+        }
+        //TODO wal size ignore?
+        self.background_worker
+            .spawn_interval_task(DEFAULT_STORAGE_STATS_INTERVAL, move || {
+                let disk_stats = match fs2::statvfs(&store_path) {
+                    Err(e) => {
+                        error!(
+                            "get disk stat for kv store failed";
+                            "kv path" => store_path.to_str(),
+                            "err" => ?e
+                        );
+                        return;
+                    }
+                    Ok(stats) => stats,
+                };
+                let disk_cap = disk_stats.total_space();
+                let snap_size = snap_mgr.get_total_snap_size().unwrap();
+
+                let kv_size = engines
+                    .kv
+                    .get_engine_used_size()
+                    .expect("get kv engine size");
+
+                let raft_size = engines
+                    .raft
+                    .get_engine_size()
+                    .expect("get raft engine size");
+
+                let used_size = snap_size + kv_size + raft_size;
+                let capacity = if config_disk_capacity == 0 || disk_cap < config_disk_capacity {
+                    disk_cap
+                } else {
+                    config_disk_capacity
+                };
+
+                let mut available = capacity.checked_sub(used_size).unwrap_or_default();
+                available = cmp::min(available, disk_stats.available_space());
+                if available <= disk_reserved {
+                    warn!(
+                        "disk full, available={},snap={},engine={},capacity={}",
+                        available, snap_size, kv_size, capacity
+                    );
+                    disk::set_disk_full();
+                } else if disk::is_disk_full() {
+                    info!(
+                        "disk normalized, available={},snap={},engine={},capacity={}",
+                        available, snap_size, kv_size, capacity
+                    );
+                    disk::clear_disk_full();
+                }
+            })
     }
 
     fn run_server(&mut self, server_config: Arc<VersionTrack<ServerConfig>>) {
