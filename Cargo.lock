@@ -3404,6 +3404,7 @@ dependencies = [
  "futures 0.3.15",
  "futures-util",
  "into_other",
+ "itertools 0.10.0",
  "keys",
  "kvproto",
  "lazy_static",

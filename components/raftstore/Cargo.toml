@@ -76,6 +76,7 @@ fs2 = "0.4"
 futures = "0.3"
 futures-util = { version = "0.3.1", default-features = false, features = ["io"] }
 into_other = { path = "../into_other",  default-features = false }
+itertools = "0.10"
 keys = { path = "../keys", default-features = false }
 kvproto = { rev = "706fcaf286c8dd07ef59349c089f53289a32ce4c", git = "https://github.com/pingcap/kvproto.git", default-features = false }
 lazy_static = "1.3"
