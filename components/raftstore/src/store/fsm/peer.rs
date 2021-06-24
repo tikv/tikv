@@ -27,11 +27,11 @@ use kvproto::raft_serverpb::{
 };
 use kvproto::replication_modepb::{DrAutoSyncState, ReplicationMode};
 use protobuf::Message;
-use raft::eraftpb::{ConfChangeType, Entry, MessageType};
+use raft::eraftpb::{ConfChangeType, Entry, EntryType, MessageType};
 use raft::{self, Progress, ReadState, Ready, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT};
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
-use tikv_util::sys::memory_usage_reaches_high_water;
+use tikv_util::sys::{disk, memory_usage_reaches_high_water};
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
 use tikv_util::{box_err, debug, error, info, trace, warn};
@@ -254,6 +254,7 @@ where
         let mut region = metapb::Region::default();
         region.set_id(region_id);
 
+        HIBERNATED_PEER_STATE_GAUGE.awaken.inc();
         let (tx, rx) = mpsc::loose_bounded(cfg.notify_capacity);
         Ok((
             tx,
@@ -1231,6 +1232,33 @@ where
             "from_peer_id" => msg.get_from_peer().get_id(),
             "to_peer_id" => msg.get_to_peer().get_id(),
         );
+
+        let msg_type = msg.get_message().get_msg_type();
+        let store_id = self.ctx.store_id();
+
+        if disk::disk_full_precheck(store_id) || self.ctx.is_disk_full {
+            let mut flag = false;
+            if MessageType::MsgAppend == msg_type {
+                let entries = msg.get_message().get_entries();
+                for i in entries {
+                    let entry_type = i.get_entry_type();
+                    if EntryType::EntryNormal == entry_type && !i.get_data().is_empty() {
+                        flag = true;
+                        break;
+                    }
+                }
+            } else if MessageType::MsgTimeoutNow == msg_type {
+                flag = true;
+            }
+
+            if flag {
+                debug!(
+                    "skip {:?} because of disk full", msg_type;
+                    "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id()
+                );
+                return Err(Error::Timeout("disk full".to_owned()));
+            }
+        }
 
         if !self.validate_raft_msg(&msg) {
             return Ok(());

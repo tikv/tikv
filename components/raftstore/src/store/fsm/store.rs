@@ -40,6 +40,7 @@ use sst_importer::SSTImporter;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
+use tikv_util::sys::disk;
 use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
@@ -386,6 +387,7 @@ where
     pub perf_context: EK::PerfContext,
     pub tick_batch: Vec<PeerTickBatch>,
     pub node_start_time: Option<TiInstant>,
+    pub is_disk_full: bool,
 }
 
 impl<EK, ER, T> HandleRaftReadyContext<EK::WriteBatch, ER::LogBatch> for PollContext<EK, ER, T>
@@ -771,6 +773,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         self.poll_ctx.pending_count = 0;
         self.poll_ctx.sync_log = false;
         self.poll_ctx.has_ready = false;
+        self.poll_ctx.is_disk_full = disk::is_disk_full();
         self.timer = TiInstant::now_coarse();
         // update config
         self.poll_ctx.perf_context.start_observe();
@@ -1134,6 +1137,7 @@ where
             tick_batch: vec![PeerTickBatch::default(); 256],
             node_start_time: Some(TiInstant::now_coarse()),
             feature_gate: self.feature_gate.clone(),
+            is_disk_full: false,
         };
         ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());
