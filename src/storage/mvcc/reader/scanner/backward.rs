@@ -1044,7 +1044,6 @@ mod tests {
         assert_eq!(statistics.write.seek_for_prev, 0);
         assert_eq!(statistics.write.next, 0);
         assert_eq!(statistics.write.prev, 1);
-        assert_eq!(statistics.processed_size, 14);
         assert_eq!(
             statistics.processed_size,
             Key::from_raw(b"c").len() + b"value".len()
@@ -1166,7 +1165,6 @@ mod tests {
             statistics.write.prev,
             (REVERSE_SEEK_BOUND - 1 + SEEK_BOUND - 1) as usize
         );
-        assert_eq!(statistics.processed_size, 10);
         assert_eq!(
             statistics.processed_size,
             Key::from_raw(b"b").len() + vec![(REVERSE_SEEK_BOUND + 1) as u8].len()

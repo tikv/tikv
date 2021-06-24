@@ -614,7 +614,6 @@ mod tests {
             s.processed_size,
             Key::from_raw(b"zz").len() + b"zz".len() + "v".repeat(SHORT_VALUE_MAX_LEN + 1).len()
         );
-        assert_eq!(s.processed_size, 267);
     }
 
     #[test]
