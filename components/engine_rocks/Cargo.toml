@@ -72,7 +72,7 @@ fail = "0.4"
 
 [dependencies.rocksdb]
 git = "https://github.com/hunterlxt/rust-rocksdb.git"
-branch = "sst_dump"
+branch = "xt/sst-dump"
 package = "rocksdb"
 features = ["encryption", "static_libcpp"]
 
