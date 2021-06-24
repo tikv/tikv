@@ -141,7 +141,7 @@ pub fn run_tikv(config: TiKvConfig) {
 const RESERVED_OPEN_FDS: u64 = 1000;
 
 const DEFAULT_METRICS_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
-use engine_rocks::Info;
+use engine_rocks::FlowInfo;
 /// A complete TiKV server.
 struct TiKVServer<ER: RaftEngine> {
     config: TiKvConfig,
@@ -149,7 +149,7 @@ struct TiKVServer<ER: RaftEngine> {
     security_mgr: Arc<SecurityManager>,
     pd_client: Arc<RpcClient>,
     router: RaftRouter<RocksEngine, ER>,
-    l0_completed_receiver: Option<mpsc::Receiver<Info>>,
+    flow_info_receiver: Option<mpsc::Receiver<FlowInfo>>,
     system: Option<RaftBatchSystem<RocksEngine, ER>>,
     resolver: resolve::PdStoreAddrResolver,
     state: Arc<Mutex<GlobalReplicationState>>,
@@ -244,7 +244,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             concurrency_manager,
             env,
             background_worker,
-            l0_completed_receiver: None,
+            flow_info_receiver: None,
         }
     }
 
@@ -414,7 +414,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         .map(Arc::new);
     }
 
-    fn create_raftstore_compaction_listener(&mut self) -> engine_rocks::CompactionListener {
+    fn create_raftstore_compaction_listener(&self) -> engine_rocks::CompactionListener {
         fn size_change_filter(info: &engine_rocks::RocksCompactionJobInfo) -> bool {
             // When calculating region size, we only consider write and default
             // column families.
@@ -439,10 +439,13 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                     error_unknown!(?e; "send compaction finished event to raftstore failed");
                 }
             });
+        engine_rocks::CompactionListener::new(compacted_handler, Some(size_change_filter))
+    }
 
+    fn create_flow_listener(&mut self) -> engine_rocks::FlowListener {
         let (tx, rx) = mpsc::channel();
-        self.l0_completed_receiver = Some(rx);
-        engine_rocks::CompactionListener::new(compacted_handler, Some(size_change_filter), tx)
+        self.flow_info_receiver = Some(rx);
+        engine_rocks::FlowListener::new(tx)
     }
 
     fn init_engines(&mut self, engines: Engines<RocksEngine, ER>) {
@@ -569,7 +572,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             lock_mgr.clone(),
             self.concurrency_manager.clone(),
             lock_mgr.get_pipelined(),
-            self.l0_completed_receiver.take(),
+            self.flow_info_receiver.take(),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 
@@ -972,6 +975,9 @@ impl TiKVServer<RocksEngine> {
         let mut kv_db_opts = self.config.rocksdb.build_opt();
         kv_db_opts.set_env(env);
         kv_db_opts.add_event_listener(self.create_raftstore_compaction_listener());
+        if self.config.storage.disable_write_stall {
+            kv_db_opts.add_event_listener(self.create_flow_listener());
+        }
         let kv_cfs_opts = self.config.rocksdb.build_cf_opts(
             &block_cache,
             Some(&self.region_info_accessor),

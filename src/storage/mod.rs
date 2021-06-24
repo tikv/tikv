@@ -190,7 +190,7 @@ macro_rules! check_key_size {
     };
 }
 
-use engine_rocks::Info;
+use engine_rocks::FlowInfo;
 
 impl<E: Engine, L: LockManager> Storage<E, L> {
     /// Create a `Storage` from given engine.
@@ -201,7 +201,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         lock_mgr: L,
         concurrency_manager: ConcurrencyManager,
         pipelined_pessimistic_lock: Arc<atomic::AtomicBool>,
-        l0_completed_receiver: Option<std::sync::mpsc::Receiver<Info>>,
+        flow_info_receiver: Option<std::sync::mpsc::Receiver<FlowInfo>>,
     ) -> Result<Self> {
         let sched = TxnScheduler::new(
             engine.clone(),
@@ -209,7 +209,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             concurrency_manager.clone(),
             config,
             pipelined_pessimistic_lock,
-            l0_completed_receiver,
+            flow_info_receiver,
         );
 
         info!("Storage started.");

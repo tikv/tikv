@@ -608,7 +608,6 @@ pub fn create_test_engine(
     let mut kv_db_opt = cfg.rocksdb.build_opt();
     kv_db_opt.set_env(env.clone());
 
-    let (tx, rx) = mpsc::channel();
     if let Some(router) = router {
         let router = Mutex::new(router);
         let compacted_handler = Box::new(move |event| {
@@ -621,7 +620,6 @@ pub fn create_test_engine(
         kv_db_opt.add_event_listener(CompactionListener::new(
             compacted_handler,
             Some(dummpy_filter),
-            tx,
         ));
     }
 
