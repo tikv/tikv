@@ -1058,7 +1058,10 @@ mod latest_kv_tests {
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, 1);
-        assert_eq!(statistics.processed_size, 14);
+        assert_eq!(
+            statistics.processed_size,
+            Key::from_raw(b"a").len() + b"value".len()
+        );
 
         // Use 5 next and reach out of bound:
         //   a_7 b_4 b_3 b_2 b_1 b_0
@@ -1126,7 +1129,10 @@ mod latest_kv_tests {
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, 1);
-        assert_eq!(statistics.processed_size, 16);
+        assert_eq!(
+            statistics.processed_size,
+            Key::from_raw(b"a").len() + b"a_value".len()
+        );
 
         // Before:
         //   a_8 b_2 b_1 b_0
@@ -1142,7 +1148,10 @@ mod latest_kv_tests {
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, (SEEK_BOUND / 2 + 1) as usize);
-        assert_eq!(statistics.processed_size, 16);
+        assert_eq!(
+            statistics.processed_size,
+            Key::from_raw(b"b").len() + b"b_value".len()
+        );
 
         // Next we should get nothing.
         assert_eq!(scanner.next().unwrap(), None);
@@ -1202,7 +1211,10 @@ mod latest_kv_tests {
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, 1);
-        assert_eq!(statistics.processed_size, 16);
+        assert_eq!(
+            statistics.processed_size,
+            Key::from_raw(b"a").len() + b"a_value".len()
+        );
 
         // Before:
         //   a_8 b_4 b_3 b_2 b_1
@@ -1221,7 +1233,10 @@ mod latest_kv_tests {
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, (SEEK_BOUND - 1) as usize);
-        assert_eq!(statistics.processed_size, 16);
+        assert_eq!(
+            statistics.processed_size,
+            Key::from_raw(b"b").len() + b"b_value".len()
+        );
 
         // Next we should get nothing.
         assert_eq!(scanner.next().unwrap(), None);
@@ -1267,7 +1282,13 @@ mod latest_kv_tests {
             Some((Key::from_raw(&[4u8]), vec![4u8]))
         );
         assert_eq!(scanner.next().unwrap(), None);
-        assert_eq!(scanner.take_statistics().processed_size, 20);
+        assert_eq!(
+            scanner.take_statistics().processed_size,
+            Key::from_raw(&[3u8]).len()
+                + vec![3u8].len()
+                + Key::from_raw(&[4u8]).len()
+                + vec![4u8].len()
+        );
 
         // Test left bound not specified.
         let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
@@ -1283,7 +1304,13 @@ mod latest_kv_tests {
             Some((Key::from_raw(&[2u8]), vec![2u8]))
         );
         assert_eq!(scanner.next().unwrap(), None);
-        assert_eq!(scanner.take_statistics().processed_size, 20);
+        assert_eq!(
+            scanner.take_statistics().processed_size,
+            Key::from_raw(&[1u8]).len()
+                + vec![1u8].len()
+                + Key::from_raw(&[2u8]).len()
+                + vec![2u8].len()
+        );
 
         // Test right bound not specified.
         let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
@@ -1299,7 +1326,13 @@ mod latest_kv_tests {
             Some((Key::from_raw(&[6u8]), vec![6u8]))
         );
         assert_eq!(scanner.next().unwrap(), None);
-        assert_eq!(scanner.take_statistics().processed_size, 20);
+        assert_eq!(
+            scanner.take_statistics().processed_size,
+            Key::from_raw(&[5u8]).len()
+                + vec![5u8].len()
+                + Key::from_raw(&[6u8]).len()
+                + vec![6u8].len()
+        );
 
         // Test both bound not specified.
         let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
@@ -1331,7 +1364,12 @@ mod latest_kv_tests {
             Some((Key::from_raw(&[6u8]), vec![6u8]))
         );
         assert_eq!(scanner.next().unwrap(), None);
-        assert_eq!(scanner.take_statistics().processed_size, 60);
+        assert_eq!(
+            scanner.take_statistics().processed_size,
+            (1u8..=6u8)
+                .map(|k| Key::from_raw(&[k]).len() + vec![k].len())
+                .sum::<usize>()
+        );
     }
 
     #[test]
@@ -1416,11 +1454,12 @@ mod latest_entry_tests {
             .start_ts(7.into())
             .commit_ts(7.into())
             .build_commit(WriteType::Put, true);
+        let size = entry.size();
         assert_eq!(scanner.next_entry().unwrap(), Some(entry),);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, 1);
-        assert_eq!(statistics.processed_size, 26);
+        assert_eq!(statistics.processed_size, size);
 
         // Use 5 next and reach out of bound:
         //   a_7 b_4 b_3 b_2 b_1 b_0
@@ -1488,11 +1527,12 @@ mod latest_entry_tests {
             .start_ts(16.into())
             .commit_ts(16.into())
             .build_commit(WriteType::Put, true);
+        let size = entry.size();
         assert_eq!(scanner.next_entry().unwrap(), Some(entry),);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, 1);
-        assert_eq!(statistics.processed_size, 28);
+        assert_eq!(statistics.processed_size, size);
 
         // Before:
         //   a_8 b_2 b_1 b_0
@@ -1507,11 +1547,12 @@ mod latest_entry_tests {
             .start_ts(4.into())
             .commit_ts(4.into())
             .build_commit(WriteType::Put, true);
+        let size = entry.size();
         assert_eq!(scanner.next_entry().unwrap(), Some(entry),);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, (SEEK_BOUND / 2 + 1) as usize);
-        assert_eq!(statistics.processed_size, 28);
+        assert_eq!(statistics.processed_size, size);
 
         // Next we should get nothing.
         assert_eq!(scanner.next_entry().unwrap(), None);
@@ -1570,11 +1611,12 @@ mod latest_entry_tests {
             .start_ts(16.into())
             .commit_ts(16.into())
             .build_commit(WriteType::Put, true);
+        let size = entry.size();
         assert_eq!(scanner.next_entry().unwrap(), Some(entry));
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, 1);
-        assert_eq!(statistics.processed_size, 28);
+        assert_eq!(statistics.processed_size, size);
 
         // Before:
         //   a_8 b_4 b_3 b_2 b_1
@@ -1592,11 +1634,12 @@ mod latest_entry_tests {
             .start_ts(8.into())
             .commit_ts(8.into())
             .build_commit(WriteType::Put, true);
+        let size = entry.size();
         assert_eq!(scanner.next_entry().unwrap(), Some(entry),);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, (SEEK_BOUND - 1) as usize);
-        assert_eq!(statistics.processed_size, 28);
+        assert_eq!(statistics.processed_size, size);
 
         // Next we should get nothing.
         assert_eq!(scanner.next_entry().unwrap(), None);
@@ -1847,11 +1890,12 @@ mod delta_entry_tests {
             .start_ts(7.into())
             .commit_ts(7.into())
             .build_commit(WriteType::Put, true);
+        let size = entry.size();
         assert_eq!(scanner.next_entry().unwrap(), Some(entry),);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, 1);
-        assert_eq!(statistics.processed_size, 26);
+        assert_eq!(statistics.processed_size, size);
 
         // Use 5 next and reach out of bound:
         //   a_7 b_4 b_3 b_2 b_1 b_0
@@ -1918,11 +1962,12 @@ mod delta_entry_tests {
             .start_ts(16.into())
             .commit_ts(16.into())
             .build_commit(WriteType::Put, true);
+        let size = entry.size();
         assert_eq!(scanner.next_entry().unwrap(), Some(entry),);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, 1);
-        assert_eq!(statistics.processed_size, 28);
+        assert_eq!(statistics.processed_size, size);
 
         // Before:
         //   a_8 b_2 b_1 b_0
@@ -1937,11 +1982,12 @@ mod delta_entry_tests {
             .start_ts(4.into())
             .commit_ts(4.into())
             .build_commit(WriteType::Put, true);
+        let size = entry.size();
         assert_eq!(scanner.next_entry().unwrap(), Some(entry),);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, 1);
-        assert_eq!(statistics.processed_size, 28);
+        assert_eq!(statistics.processed_size, size);
 
         // Next we should get nothing.
         assert_eq!(scanner.next_entry().unwrap(), None);
@@ -2002,11 +2048,12 @@ mod delta_entry_tests {
             .start_ts(16.into())
             .commit_ts(16.into())
             .build_commit(WriteType::Put, true);
+        let size = entry.size();
         assert_eq!(scanner.next_entry().unwrap(), Some(entry));
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, 1);
-        assert_eq!(statistics.processed_size, 28);
+        assert_eq!(statistics.processed_size, size);
 
         // Before:
         //   a_8 b_4 b_3 b_2 b_1
@@ -2024,11 +2071,12 @@ mod delta_entry_tests {
             .start_ts(9.into())
             .commit_ts(9.into())
             .build_commit(WriteType::Put, true);
+        let size = entry.size();
         assert_eq!(scanner.next_entry().unwrap(), Some(entry),);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, 1);
-        assert_eq!(statistics.processed_size, 28);
+        assert_eq!(statistics.processed_size, size);
 
         // Next we should get nothing.
         assert_eq!(scanner.next_entry().unwrap(), None);

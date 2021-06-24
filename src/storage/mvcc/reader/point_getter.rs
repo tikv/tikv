@@ -569,12 +569,22 @@ mod tests {
         let s = getter.take_statistics();
         // We have to check every version
         assert_seek_next_prev(&s.write, 1, 40, 0);
-        assert_eq!(s.processed_size, 269);
+        assert_eq!(
+            s.processed_size,
+            Key::from_raw(b"foo2").len()
+                + b"foo2".len()
+                + "v".repeat(SHORT_VALUE_MAX_LEN + 1).len()
+        );
         // Get again
         must_get_value(&mut getter, b"foo2", b"foo2v");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 1, 40, 0);
-        assert_eq!(s.processed_size, 269);
+        assert_eq!(
+            s.processed_size,
+            Key::from_raw(b"foo2").len()
+                + b"foo2".len()
+                + "v".repeat(SHORT_VALUE_MAX_LEN + 1).len()
+        );
 
         // Get a smaller key
         must_get_none(&mut getter, b"foo1");
@@ -592,11 +602,18 @@ mod tests {
         must_get_value(&mut getter, b"zz", b"zzv");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 1, 0, 0);
-        assert_eq!(s.processed_size, 267);
+        assert_eq!(
+            s.processed_size,
+            Key::from_raw(b"zz").len() + b"zz".len() + "v".repeat(SHORT_VALUE_MAX_LEN + 1).len()
+        );
         // Get again
         must_get_value(&mut getter, b"zz", b"zzv");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 1, 0, 0);
+        assert_eq!(
+            s.processed_size,
+            Key::from_raw(b"zz").len() + b"zz".len() + "v".repeat(SHORT_VALUE_MAX_LEN + 1).len()
+        );
         assert_eq!(s.processed_size, 267);
     }
 
@@ -668,7 +685,7 @@ mod tests {
         must_get_value(&mut getter, b"foo", b"bar");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 1, 0, 0);
-        assert_eq!(s.processed_size, 12);
+        assert_eq!(s.processed_size, Key::from_raw(b"foo").len() + b"bar".len());
     }
 
     /// Some ts larger than get ts
@@ -681,12 +698,18 @@ mod tests {
         must_get_value(&mut getter, b"bar", b"barv");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 1, 0, 0);
-        assert_eq!(s.processed_size, 268);
+        assert_eq!(
+            s.processed_size,
+            Key::from_raw(b"bar").len() + b"bar".len() + "v".repeat(SHORT_VALUE_MAX_LEN + 1).len()
+        );
 
         must_get_value(&mut getter, b"bar", b"barv");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 1, 0, 0);
-        assert_eq!(s.processed_size, 268);
+        assert_eq!(
+            s.processed_size,
+            Key::from_raw(b"bar").len() + b"bar".len() + "v".repeat(SHORT_VALUE_MAX_LEN + 1).len()
+        );
 
         must_get_none(&mut getter, b"bo");
         let s = getter.take_statistics();
@@ -701,7 +724,12 @@ mod tests {
         must_get_value(&mut getter, b"foo1", b"foo1");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 1, 0, 0);
-        assert_eq!(s.processed_size, 269);
+        assert_eq!(
+            s.processed_size,
+            Key::from_raw(b"foo1").len()
+                + b"foo1".len()
+                + "v".repeat(SHORT_VALUE_MAX_LEN + 1).len()
+        );
 
         must_get_none(&mut getter, b"zz");
         let s = getter.take_statistics();
@@ -711,12 +739,20 @@ mod tests {
         must_get_value(&mut getter, b"foo1", b"foo1");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 1, 0, 0);
-        assert_eq!(s.processed_size, 269);
+        assert_eq!(
+            s.processed_size,
+            Key::from_raw(b"foo1").len()
+                + b"foo1".len()
+                + "v".repeat(SHORT_VALUE_MAX_LEN + 1).len()
+        );
 
         must_get_value(&mut getter, b"bar", b"barv");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 1, 0, 0);
-        assert_eq!(s.processed_size, 268);
+        assert_eq!(
+            s.processed_size,
+            Key::from_raw(b"bar").len() + b"bar".len() + "v".repeat(SHORT_VALUE_MAX_LEN + 1).len()
+        );
     }
 
     /// All ts larger than get ts
@@ -767,7 +803,14 @@ mod tests {
         must_get_none(&mut getter, b"foo2");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 7, 0, 0);
-        assert_eq!(s.processed_size, 568);
+        assert_eq!(
+            s.processed_size,
+            (Key::from_raw(b"bar").len() + b"barval".len()) * 2
+                + (Key::from_raw(b"foo1").len()
+                    + b"foo1".len()
+                    + "v".repeat(SHORT_VALUE_MAX_LEN + 1).len())
+                    * 2
+        );
 
         let mut getter = new_multi_point_getter(&engine, 4.into());
         must_get_none(&mut getter, b"a");
@@ -778,7 +821,12 @@ mod tests {
         must_get_none(&mut getter, b"zz");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 3, 0, 0);
-        assert_eq!(s.processed_size, 269);
+        assert_eq!(
+            s.processed_size,
+            Key::from_raw(b"foo1").len()
+                + b"foo1".len()
+                + "v".repeat(SHORT_VALUE_MAX_LEN + 1).len()
+        );
     }
 
     /// Single Point Getter can only get once.
