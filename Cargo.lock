@@ -3393,6 +3393,7 @@ dependencies = [
  "crossbeam",
  "derivative",
  "encryption",
+ "encryption_export",
  "engine_panic",
  "engine_rocks",
  "engine_test",
@@ -4754,6 +4755,7 @@ dependencies = [
 name = "test_raftstore"
 version = "0.0.1"
 dependencies = [
+ "backtrace",
  "collections",
  "concurrency_manager",
  "crossbeam",
