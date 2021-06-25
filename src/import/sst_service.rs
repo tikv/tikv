@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use collections::HashSet;
 
-use engine_traits::{name_to_cf, KvEngine, CF_DEFAULT, CF_WRITE};
+use engine_traits::{KvEngine, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IOType};
 use futures::executor::{ThreadPool, ThreadPoolBuilder};
 use futures::{TryFutureExt, TryStreamExt};
@@ -23,7 +23,6 @@ use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::*;
 
 use crate::server::CONFIG_ROCKSDB_GAUGE;
-use engine_traits::{SstExt, SstWriterBuilder};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::Callback;
 use sst_importer::send_rpc_response;
@@ -64,10 +63,12 @@ where
         engine: E,
         importer: Arc<SSTImporter>,
     ) -> ImportSSTService<E, Router> {
+        let props = tikv_util::thread_group::current_properties();
         let threads = ThreadPoolBuilder::new()
             .pool_size(cfg.num_threads)
             .name_prefix("sst-importer")
             .after_start(move |_| {
+                tikv_util::thread_group::set_properties(props.clone());
                 tikv_alloc::add_thread_memory_accessor();
                 set_io_type(IOType::Import);
             })
@@ -302,15 +303,6 @@ where
                 .with_label_values(&["queue"])
                 .observe(start.elapsed().as_secs_f64());
 
-            // SST writer must not be opened in gRPC threads, because it may be
-            // blocked for a long time due to IO, especially, when encryption at rest
-            // is enabled, and it leads to gRPC keepalive timeout.
-            let sst_writer = <E as SstExt>::SstWriterBuilder::new()
-                .set_db(&engine)
-                .set_cf(name_to_cf(req.get_sst().get_cf_name()).unwrap())
-                .build(importer.get_path(req.get_sst()).to_str().unwrap())
-                .unwrap();
-
             // FIXME: download() should be an async fn, to allow BR to cancel
             // a download task.
             // Unfortunately, this currently can't happen because the S3Storage
@@ -321,7 +313,7 @@ where
                 req.get_name(),
                 req.get_rewrite_rule(),
                 limiter,
-                sst_writer,
+                engine,
             );
             let mut resp = DownloadResponse::default();
             match res {

@@ -85,9 +85,11 @@ lazy_static! {
 
 fn start_global_timer() -> Handle {
     let (tx, rx) = mpsc::channel();
+    let props = crate::thread_group::current_properties();
     Builder::new()
         .name(thd_name!("timer"))
         .spawn(move || {
+            crate::thread_group::set_properties(props);
             tikv_alloc::add_thread_memory_accessor();
             let mut timer = tokio_timer::Timer::default();
             tx.send(timer.handle()).unwrap();
