@@ -71,9 +71,14 @@ impl Default for BTreeEngine {
 
 impl Engine for BTreeEngine {
     type Snap = BTreeEngineSnapshot;
-    type Local = PanicEngine;
+    type Kv = PanicEngine;
+    type Raft = PanicEngine;
 
     fn kv_engine(&self) -> PanicEngine {
+        unimplemented!();
+    }
+
+    fn raft_engine(&self) -> PanicEngine {
         unimplemented!();
     }
 

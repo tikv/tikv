@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::{RocksEngine, RocksWriteBatch};
+use crate::{RocksEngine, RocksWriteBatch, ROCKSDB_PENDING_COMPACTION_BYTES};
 
 use engine_traits::{Error, RaftEngine, RaftLogBatch, Result};
 use engine_traits::{
@@ -219,6 +219,12 @@ impl RaftEngine for RocksEngine {
 
     fn dump_stats(&self) -> Result<String> {
         MiscExt::dump_stats(self)
+    }
+
+    fn get_pending_compaction_bytes(&self) -> u64 {
+        self.as_inner()
+            .get_property_int(ROCKSDB_PENDING_COMPACTION_BYTES)
+            .unwrap_or(0)
     }
 }
 

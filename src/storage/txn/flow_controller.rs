@@ -10,7 +10,7 @@ use std::time::Duration;
 use std::u64;
 
 use collections::HashMap;
-use engine_traits::{CFNamesExt, MiscExt};
+use engine_traits::{CFNamesExt, MiscExt, RaftEngine};
 use rand::Rng;
 use tikv_util::time::{duration_to_sec, Consume, Instant, Limiter};
 
@@ -98,15 +98,17 @@ struct Smoother<const CAP: usize> {
     square_total: u64,
 }
 
-impl<const CAP: usize> Smoother<CAP> {
-    pub fn new() -> Self {
+impl<const CAP: usize> Default for Smoother<CAP> {
+    fn default() -> Self {
         Self {
             records: VecDeque::with_capacity(CAP),
             total: 0,
             square_total: 0,
         }
     }
+}
 
+impl<const CAP: usize> Smoother<CAP> {
     pub fn observe(&mut self, record: u64) {
         if self.records.len() == CAP {
             let v = self.records.pop_front().unwrap().0;
@@ -292,6 +294,26 @@ struct CFFlowChecker {
     init_speed: bool,
 }
 
+impl Default for CFFlowChecker {
+    fn default() -> Self {
+        Self {
+            last_num_memtables: Smoother::default(),
+            long_term_pending_bytes: Smoother::default(),
+            long_term_num_l0_files: Smoother::default(),
+            last_num_l0_files: 0,
+            last_num_l0_files_from_flush: 0,
+            last_flush_bytes: 0,
+            last_flush_bytes_time: Instant::now_coarse(),
+            short_term_flush_flow: Smoother::default(),
+            last_l0_bytes: 0,
+            last_l0_bytes_time: Instant::now_coarse(),
+            short_term_l0_flow: Smoother::default(),
+            memtable_debt: 0.0,
+            init_speed: false,
+        }
+    }
+}
+
 struct FlowChecker<E: Engine> {
     pending_compaction_bytes_soft_limit: u64,
     pending_compaction_bytes_hard_limit: u64,
@@ -300,12 +322,12 @@ struct FlowChecker<E: Engine> {
 
     cf_checkers: HashMap<String, CFFlowChecker>,
     throttle_cf: Option<String>,
+    discard_ratio: Arc<AtomicU64>,
     target_flow: Option<f64>,
     last_target_file: u64,
     factor: f64,
 
-    start_control_time: Instant,
-    discard_ratio: Arc<AtomicU64>,
+    raft_checker: CFFlowChecker,
 
     engine: E,
     recorder: Smoother<30>,
@@ -323,25 +345,9 @@ impl<E: Engine> FlowChecker<E> {
         let mut cf_checkers = map![];
 
         for cf in engine.kv_engine().cf_names() {
-            cf_checkers.insert(
-                cf.to_owned(),
-                CFFlowChecker {
-                    last_num_memtables: Smoother::new(),
-                    long_term_pending_bytes: Smoother::new(),
-                    long_term_num_l0_files: Smoother::new(),
-                    last_num_l0_files: 0,
-                    last_num_l0_files_from_flush: 0,
-                    last_flush_bytes: 0,
-                    last_flush_bytes_time: Instant::now_coarse(),
-                    short_term_flush_flow: Smoother::new(),
-                    last_l0_bytes: 0,
-                    last_l0_bytes_time: Instant::now_coarse(),
-                    short_term_l0_flow: Smoother::new(),
-                    memtable_debt: 0.0,
-                    init_speed: false,
-                },
-            );
+            cf_checkers.insert(cf.to_owned(), CFFlowChecker::default());
         }
+
         Self {
             pending_compaction_bytes_soft_limit: config.pending_compaction_bytes_soft_limit,
             pending_compaction_bytes_hard_limit: config.pending_compaction_bytes_hard_limit,
@@ -350,10 +356,10 @@ impl<E: Engine> FlowChecker<E> {
             engine,
             factor: EMA_FACTOR,
             discard_ratio,
-            start_control_time: Instant::now_coarse(),
             limiter,
-            recorder: Smoother::new(),
+            recorder: Smoother::default(),
             cf_checkers,
+            raft_checker: CFFlowChecker::default(),
             throttle_cf: None,
             target_flow: None,
             last_target_file: 0,
@@ -379,6 +385,7 @@ impl<E: Engine> FlowChecker<E> {
                         Ok(FlowInfo::Compaction(cf)) => checker.adjust_pending_compaction_bytes(cf),
                         Err(RecvTimeoutError::Timeout) => {
                             // checker.tick_l0();
+                            checker.check_raft_pending_compaction_bytes();
                             checker.update_statistics();
                         }
                         Err(e) => {
@@ -407,7 +414,43 @@ impl<E: Engine> FlowChecker<E> {
         self.limiter.reset_statistics();
     }
 
+    fn check_raft_pending_compaction_bytes(&mut self) -> bool {
+        let num = (self.engine.raft_engine().get_pending_compaction_bytes() as f64).log2();
+        self.raft_checker
+            .long_term_pending_bytes
+            .observe((num * RATIO_PRECISION) as u64);
+        SCHED_PENDING_BYTES_GAUGE
+            .with_label_values(&["raft_db"])
+            .set(self.raft_checker.long_term_pending_bytes.get_avg() as i64);
+        let pending_compaction_bytes =
+            self.raft_checker.long_term_pending_bytes.get_avg() / RATIO_PRECISION;
+
+        let hard = (self.pending_compaction_bytes_hard_limit as f64).log2();
+        let soft = (self.pending_compaction_bytes_soft_limit as f64).log2();
+
+        if pending_compaction_bytes < soft {
+            false
+        } else {
+            let new_ratio = (pending_compaction_bytes - soft) / (hard - soft);
+            let old_ratio = self.discard_ratio.load(Ordering::Relaxed);
+            let ratio = (if old_ratio != 0 {
+                self.factor * (old_ratio as f64 / RATIO_PRECISION) + (1.0 - self.factor) * new_ratio
+            } else {
+                new_ratio
+            } * RATIO_PRECISION) as u64;
+
+            SCHED_DISCARD_RATIO_GAUGE.set(ratio as i64);
+            self.discard_ratio.store(ratio, Ordering::Relaxed);
+            true
+        }
+    }
+
     fn adjust_pending_compaction_bytes(&mut self, cf: String) {
+        // raftdb has higher priority
+        if self.check_raft_pending_compaction_bytes() {
+            return;
+        }
+
         let num = (self
             .engine
             .kv_engine()
@@ -433,10 +476,10 @@ impl<E: Engine> FlowChecker<E> {
         let hard = (self.pending_compaction_bytes_hard_limit as f64).log2();
         let soft = (self.pending_compaction_bytes_soft_limit as f64).log2();
 
+        let checker = self.cf_checkers.get_mut(&cf).unwrap();
         let ratio = if pending_compaction_bytes < soft {
             0
         } else {
-            let checker = self.cf_checkers.get_mut(&cf).unwrap();
             let kp = (pending_compaction_bytes - soft) / (hard - soft);
             let mut kd = -10.0 * checker.long_term_pending_bytes.slope();
 
@@ -454,7 +497,6 @@ impl<E: Engine> FlowChecker<E> {
             (if old_ratio != 0 {
                 self.factor * (old_ratio as f64 / RATIO_PRECISION) + (1.0 - self.factor) * new_ratio
             } else {
-                self.start_control_time = Instant::now_coarse();
                 new_ratio
             } * RATIO_PRECISION) as u64
         };
@@ -750,6 +792,7 @@ impl<E: Engine> FlowChecker<E> {
                     if self.cf_checkers[&cf].short_term_flush_flow.get_avg() > target_flow {
                         self.down_flow(cf);
                     } else if num_l0_files > self.last_target_file + 3 {
+                        // TODO: make target flow to be a EMA
                         self.target_flow = Some(self.cf_checkers[&cf].short_term_l0_flow.get_avg());
                         self.last_target_file = num_l0_files;
                         SCHED_THROTTLE_ACTION_COUNTER

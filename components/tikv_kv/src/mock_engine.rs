@@ -137,10 +137,15 @@ fn check_expected_write(
 
 impl Engine for MockEngine {
     type Snap = <RocksEngine as Engine>::Snap;
-    type Local = <RocksEngine as Engine>::Local;
+    type Kv = <RocksEngine as Engine>::Kv;
+    type Raft = <RocksEngine as Engine>::Raft;
 
-    fn kv_engine(&self) -> Self::Local {
+    fn kv_engine(&self) -> Self::Kv {
         self.base.kv_engine()
+    }
+
+    fn raft_engine(&self) -> Self::Raft {
+        self.base.raft_engine()
     }
 
     fn snapshot_on_kv_engine(&self, start_key: &[u8], end_key: &[u8]) -> Result<Self::Snap> {

@@ -35,17 +35,18 @@ use engine_rocks::FlowInfo;
 
 /// Creates a new storage engine which is backed by the Raft consensus
 /// protocol.
-pub fn create_raft_storage<S>(
-    engine: RaftKv<S>,
+pub fn create_raft_storage<S, R>(
+    engine: RaftKv<S, R>,
     cfg: &StorageConfig,
     read_pool: ReadPoolHandle,
     lock_mgr: LockManager,
     concurrency_manager: ConcurrencyManager,
     pipelined_pessimistic_lock: Arc<AtomicBool>,
     flow_info_receiver: Option<std::sync::mpsc::Receiver<FlowInfo>>,
-) -> Result<Storage<RaftKv<S>, LockManager>>
+) -> Result<Storage<RaftKv<S, R>, LockManager>>
 where
     S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
+    R: RaftEngine,
 {
     let store = Storage::from_engine(
         engine,

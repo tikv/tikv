@@ -34,7 +34,7 @@ use std::{error, ptr, result};
 
 use engine_traits::util::append_expire_ts;
 use engine_traits::{CfName, CF_DEFAULT};
-use engine_traits::{IterOptions, KvEngine as LocalEngine, MvccProperties, ReadOptions};
+use engine_traits::{IterOptions, KvEngine, MvccProperties, RaftEngine, ReadOptions};
 use futures::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ExtraOp as TxnExtraOp, KeyRange};
@@ -156,10 +156,12 @@ impl<'a> Default for SnapContext<'a> {
 /// Engine defines the common behaviour for a storage engine type.
 pub trait Engine: Send + Clone + 'static {
     type Snap: Snapshot;
-    type Local: LocalEngine;
+    type Kv: KvEngine;
+    type Raft: RaftEngine;
 
-    /// Local storage engine.
-    fn kv_engine(&self) -> Self::Local;
+    fn kv_engine(&self) -> Self::Kv;
+
+    fn raft_engine(&self) -> Self::Raft;
 
     fn snapshot_on_kv_engine(&self, start_key: &[u8], end_key: &[u8]) -> Result<Self::Snap>;
 

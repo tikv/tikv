@@ -169,7 +169,7 @@ struct TiKVServer<ER: RaftEngine> {
 struct TiKVEngines<ER: RaftEngine> {
     engines: Engines<RocksEngine, ER>,
     store_meta: Arc<Mutex<StoreMeta>>,
-    engine: RaftKv<ServerRaftStoreRouter<RocksEngine, ER>>,
+    engine: RaftKv<ServerRaftStoreRouter<RocksEngine, ER>, ER>,
 }
 
 struct Servers<ER: RaftEngine> {
@@ -456,6 +456,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 LocalReader::new(engines.kv.clone(), store_meta.clone(), self.router.clone()),
             ),
             engines.kv.clone(),
+            engines.raft.clone(),
         );
 
         self.engines = Some(TiKVEngines {
@@ -467,7 +468,8 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
     fn init_gc_worker(
         &mut self,
-    ) -> GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine, ER>>, RaftRouter<RocksEngine, ER>> {
+    ) -> GcWorker<RaftKv<ServerRaftStoreRouter<RocksEngine, ER>, ER>, RaftRouter<RocksEngine, ER>>
+    {
         let engines = self.engines.as_ref().unwrap();
         let mut gc_worker = GcWorker::new(
             engines.engine.clone(),
