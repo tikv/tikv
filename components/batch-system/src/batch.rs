@@ -16,6 +16,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use tikv_util::mpsc;
 use tikv_util::time::Instant;
+use tikv_util::{debug, error, info, safe_panic, thd_name, warn};
 
 /// A unify type for FSMs so that they can be sent to channel easily.
 enum FsmTypes<N, C> {
@@ -383,7 +384,9 @@ where
         B: HandlerBuilder<N, C>,
         B::Handler: Send + 'static,
     {
+        let props = tikv_util::thread_group::current_properties();
         for i in 0..self.pool_size {
+            let props = props.clone();
             let handler = builder.build();
             let mut poller = Poller {
                 router: self.router.clone(),
@@ -395,6 +398,7 @@ where
             let t = thread::Builder::new()
                 .name(thd_name!(format!("{}-{}", name_prefix, i)))
                 .spawn(move || {
+                    tikv_util::thread_group::set_properties(props);
                     set_io_type(IOType::ForegroundWrite);
                     poller.poll()
                 })
@@ -421,9 +425,7 @@ where
             }
         }
         if let Some(e) = last_error {
-            if !thread::panicking() {
-                panic!("failed to join worker thread: {:?}", e);
-            }
+            safe_panic!("failed to join worker thread: {:?}", e);
         }
         info!("batch system {} is stopped.", name_prefix);
     }
