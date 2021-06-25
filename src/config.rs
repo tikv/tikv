@@ -2254,20 +2254,21 @@ impl Default for BackupConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct CdcConfig {
     pub min_ts_interval: ReadableDuration,
-    pub old_value_cache_size: usize,
     pub hibernate_regions_compatible: bool,
     pub incremental_scan_threads: usize,
     pub incremental_scan_concurrency: usize,
     pub incremental_scan_speed_limit: ReadableSize,
     pub sink_memory_quota: ReadableSize,
+    pub old_value_cache_memory_quota: ReadableSize,
+    // Deprecated! preserved for compatibility check.
+    #[doc(hidden)]
+    pub old_value_cache_size: usize,
 }
 
 impl Default for CdcConfig {
     fn default() -> Self {
         Self {
             min_ts_interval: ReadableDuration::secs(1),
-            // Assumes 1KB per entry, 131072 (128 * 1024) takes about 128MB.
-            old_value_cache_size: 131072,
             hibernate_regions_compatible: true,
             // 4 threads for incremental scan.
             incremental_scan_threads: 4,
@@ -2278,15 +2279,16 @@ impl Default for CdcConfig {
             incremental_scan_speed_limit: ReadableSize::mb(128),
             // 512MB memory for CDC sink.
             sink_memory_quota: ReadableSize::mb(512),
+            // 512MB memory for old value cache.
+            old_value_cache_memory_quota: ReadableSize::mb(512),
+            // Deprecated! preserved for compatibility check.
+            old_value_cache_size: 0,
         }
     }
 }
 
 impl CdcConfig {
     fn validate(&mut self) -> Result<(), Box<dyn Error>> {
-        if self.old_value_cache_size == 0 {
-            return Err("cdc.old-value-cache-size can't be 0".into());
-        }
         if self.min_ts_interval == ReadableDuration::secs(0) {
             return Err("cdc.min-ts-interval can't be 0s".into());
         }
@@ -3762,7 +3764,7 @@ mod tests {
             old-value-cache-size = 0
         "#;
         let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
-        cfg.validate().unwrap_err();
+        cfg.validate().unwrap();
 
         let content = r#"
             [cdc]

@@ -365,9 +365,15 @@ impl<S: Snapshot> CmdEpochChecker<S> {
 
 impl<S: Snapshot> Drop for CmdEpochChecker<S> {
     fn drop(&mut self) {
-        for state in self.proposed_admin_cmd.drain(..) {
-            for cb in state.cbs {
-                apply::notify_stale_req(self.term, cb);
+        if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
+            for mut state in self.proposed_admin_cmd.drain(..) {
+                state.cbs.clear();
+            }
+        } else {
+            for state in self.proposed_admin_cmd.drain(..) {
+                for cb in state.cbs {
+                    apply::notify_stale_req(self.term, cb);
+                }
             }
         }
     }
@@ -1794,6 +1800,12 @@ where
         ctx: &mut PollContext<EK, ER, T>,
         committed_entries: Vec<Entry>,
     ) {
+        fail_point!(
+            "before_leader_handle_committed_entries",
+            self.is_leader(),
+            |_| ()
+        );
+
         assert!(
             !self.is_applying_snapshot(),
             "{} is applying snapshot when it is ready to handle committed entries",
@@ -2642,7 +2654,19 @@ where
                     let commit_index = self.get_store().commit_index();
                     if let Some(read) = self.pending_reads.back_mut() {
                         let max_lease = poll_ctx.cfg.raft_store_max_leader_lease();
-                        if read.renew_lease_time + max_lease > renew_lease_time {
+                        let is_read_index_request = req
+                            .get_requests()
+                            .get(0)
+                            .map(|req| req.has_read_index())
+                            .unwrap_or_default();
+                        // A read index request or a read with addition request always needs the response of
+                        // checking memory lock for async commit, so we cannot apply the optimization here
+                        if !is_read_index_request
+                            && read.addition_request.is_none()
+                            && read.renew_lease_time + max_lease > renew_lease_time
+                        {
+                            // A read request proposed in the current lease is found; combine the new
+                            // read request to that previous one, so that no proposing needed.
                             read.push_command(req, cb, commit_index);
                             return false;
                         }
