@@ -424,14 +424,14 @@ impl PriorityBasedIORateLimiter {
 /// An instance of `IORateLimiter` can be safely shared between threads.
 pub struct IORateLimiter {
     mode: IORateLimitMode,
-    priority_map: [AtomicU32; IOType::COUNT],
+    priority_map: [CachePadded<AtomicU32>; IOType::COUNT],
     throughput_limiter: Arc<PriorityBasedIORateLimiter>,
     stats: Option<Arc<IORateLimiterStatistics>>,
 }
 
 impl IORateLimiter {
     pub fn new(mode: IORateLimitMode, strict: bool, enable_statistics: bool) -> Self {
-        let priority_map: [AtomicU32; IOType::COUNT] = Default::default();
+        let priority_map: [CachePadded<AtomicU32>; IOType::COUNT] = Default::default();
         for i in 0..IOType::COUNT {
             priority_map[i].store(IOPriority::High as u32, Ordering::Relaxed);
         }
