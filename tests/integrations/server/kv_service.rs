@@ -1705,7 +1705,7 @@ fn test_get_lock_wait_info_api() {
 
     let mut ctx1 = ctx.clone();
     ctx1.set_resource_group_tag(b"resource_group_tag1".to_vec());
-    must_kv_pessimistic_lock(&client, ctx1, b"a".to_vec(), 20);
+    kv_pessimistic_lock_with_ttl(&client, ctx1, vec![b"a".to_vec()], 20, 20, false, 1000);
     let mut ctx2 = ctx.clone();
     let handle = thread::spawn(move || {
         ctx2.set_resource_group_tag(b"resource_group_tag2".to_vec());
