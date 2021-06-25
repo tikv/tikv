@@ -61,7 +61,20 @@ impl MemoryQuota {
         }
     }
     fn free(&self, bytes: usize) {
-        self.in_use.fetch_sub(bytes, Ordering::Release);
+        let mut in_use_bytes = self.in_use.load(Ordering::Relaxed);
+        loop {
+            // Saturating at the numeric bounds instead of overflowing.
+            let new_in_use_bytes = in_use_bytes - std::cmp::min(bytes, in_use_bytes);
+            match self.in_use.compare_exchange(
+                in_use_bytes,
+                new_in_use_bytes,
+                Ordering::Acquire,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return,
+                Err(current) => in_use_bytes = current,
+            }
+        }
     }
 }
 
@@ -442,6 +455,12 @@ mod tests {
             }
             assert_eq!(memory_quota.in_use(), 0);
             assert_eq!(memory_quota.alloc(1024), true);
+
+            // Freeing bytes should not cause overflow.
+            memory_quota.free(1024);
+            assert_eq!(memory_quota.in_use(), 0);
+            memory_quota.free(1024);
+            assert_eq!(memory_quota.in_use(), 0);
         }
     }
 }
