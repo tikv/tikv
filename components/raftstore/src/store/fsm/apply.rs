@@ -15,7 +15,10 @@ use std::time::Duration;
 use std::vec::Drain;
 use std::{cmp, usize};
 
-use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
+use batch_system::{
+    BasicMailbox, BatchRouter, BatchSystem, Fsm, HandleResult, HandlerBuilder, PollHandler,
+    TrackedFsm,
+};
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::PerfContext;
@@ -3446,7 +3449,10 @@ where
         unimplemented!()
     }
 
-    fn handle_normal(&mut self, normal: &mut ApplyFsm<EK>) -> Option<usize> {
+    fn handle_normal(
+        &mut self,
+        normal: &mut impl TrackedFsm<Target = ApplyFsm<EK>>,
+    ) -> HandleResult {
         let mut expected_msg_count = None;
         normal.delegate.handle_start = Some(Instant::now_coarse());
         if normal.delegate.yield_state.is_some() {
@@ -3461,22 +3467,22 @@ where
                 // Yield due to applying CommitMerge, this fsm can be released if its
                 // channel msg count equals to expected_msg_count because it will receive
                 // a new message if its source region has applied all needed logs.
-                return expected_msg_count;
+                return expected_msg_count.into();
             } else if normal.delegate.yield_state.is_some() {
                 // Yield due to other reasons, this fsm must not be released because
                 // it's possible that no new message will be sent to itself.
                 // The remaining messages will be handled in next rounds.
-                return None;
+                return HandleResult::KeepProcessing;
             }
             expected_msg_count = None;
         }
         fail_point!("before_handle_normal_3", normal.delegate.id() == 3, |_| {
-            None
+            HandleResult::KeepProcessing
         });
         fail_point!(
             "before_handle_normal_1003",
             normal.delegate.id() == 1003,
-            |_| { None }
+            |_| { HandleResult::KeepProcessing }
         );
         while self.msg_buf.len() < self.messages_per_tick {
             match normal.receiver.try_recv() {
@@ -3500,14 +3506,16 @@ where
             // Let it continue to run next time.
             expected_msg_count = None;
         }
-        expected_msg_count
+        expected_msg_count.into()
     }
 
-    fn end(&mut self, fsms: &mut [Box<ApplyFsm<EK>>]) {
+    fn end(&mut self, fsms: &mut [Option<impl TrackedFsm<Target = ApplyFsm<EK>>>]) {
         let is_synced = self.apply_ctx.flush();
         if is_synced {
             for fsm in fsms {
-                fsm.delegate.last_sync_apply_index = fsm.delegate.apply_state.get_applied_index();
+                if let Some(f) = fsm {
+                    f.delegate.last_sync_apply_index = f.delegate.apply_state.get_applied_index();
+                }
             }
         }
     }
@@ -3966,7 +3974,7 @@ mod tests {
             store_id: 1,
             pending_create_peers,
         };
-        system.spawn("test-basic".to_owned(), builder);
+        system.spawn("test-basic".to_owned(), builder, false);
 
         let mut reg = Registration {
             id: 1,
@@ -4309,7 +4317,7 @@ mod tests {
             store_id: 1,
             pending_create_peers,
         };
-        system.spawn("test-handle-raft".to_owned(), builder);
+        system.spawn("test-handle-raft".to_owned(), builder, false);
 
         let peer_id = 3;
         let mut reg = Registration {
@@ -4630,7 +4638,7 @@ mod tests {
             store_id: 1,
             pending_create_peers,
         };
-        system.spawn("test-handle-raft".to_owned(), builder);
+        system.spawn("test-handle-raft".to_owned(), builder, false);
 
         let peer_id = 3;
         let mut reg = Registration {
@@ -4912,7 +4920,7 @@ mod tests {
             store_id: 2,
             pending_create_peers,
         };
-        system.spawn("test-split".to_owned(), builder);
+        system.spawn("test-split".to_owned(), builder, false);
 
         router.schedule_task(1, Msg::Registration(reg.clone()));
         let enabled = Arc::new(AtomicBool::new(true));

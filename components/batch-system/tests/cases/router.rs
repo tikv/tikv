@@ -31,7 +31,7 @@ fn test_basic() {
     let (router, mut system) =
         batch_system::create_system(&Config::default(), control_tx, control_fsm);
     let builder = Builder::new();
-    system.spawn("test".to_owned(), builder);
+    system.spawn("test".to_owned(), builder, false);
 
     // Missing mailbox should report error.
     match router.force_send(1, unreachable()) {
