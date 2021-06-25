@@ -27,11 +27,11 @@ use kvproto::raft_serverpb::{
 };
 use kvproto::replication_modepb::{DrAutoSyncState, ReplicationMode};
 use protobuf::Message;
-use raft::eraftpb::{ConfChangeType, Entry, MessageType};
+use raft::eraftpb::{ConfChangeType, Entry, EntryType, MessageType};
 use raft::{self, Progress, ReadState, Ready, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT};
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
-use tikv_util::sys::memory_usage_reaches_high_water;
+use tikv_util::sys::{disk, memory_usage_reaches_high_water};
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
 use tikv_util::{box_err, debug, error, info, trace, warn};
@@ -254,6 +254,7 @@ where
         let mut region = metapb::Region::default();
         region.set_id(region_id);
 
+        HIBERNATED_PEER_STATE_GAUGE.awaken.inc();
         let (tx, rx) = mpsc::loose_bounded(cfg.notify_capacity);
         Ok((
             tx,
@@ -573,6 +574,16 @@ where
                 }
                 PeerMsg::Noop => {}
                 PeerMsg::UpdateReplicationMode => self.on_update_replication_mode(),
+                PeerMsg::Destroy(peer_id) => {
+                    if self.fsm.peer.peer_id() == peer_id {
+                        match self.fsm.peer.maybe_destroy(&self.ctx) {
+                            None => self.ctx.raft_metrics.message_dropped.applying_snap += 1,
+                            Some(job) => {
+                                self.handle_destroy_peer(job);
+                            }
+                        }
+                    }
+                }
             }
         }
         // Propose batch request which may be still waiting for more raft-command
@@ -1223,6 +1234,33 @@ where
             "to_peer_id" => msg.get_to_peer().get_id(),
         );
 
+        let msg_type = msg.get_message().get_msg_type();
+        let store_id = self.ctx.store_id();
+
+        if disk::disk_full_precheck(store_id) || self.ctx.is_disk_full {
+            let mut flag = false;
+            if MessageType::MsgAppend == msg_type {
+                let entries = msg.get_message().get_entries();
+                for i in entries {
+                    let entry_type = i.get_entry_type();
+                    if EntryType::EntryNormal == entry_type && !i.get_data().is_empty() {
+                        flag = true;
+                        break;
+                    }
+                }
+            } else if MessageType::MsgTimeoutNow == msg_type {
+                flag = true;
+            }
+
+            if flag {
+                debug!(
+                    "skip {:?} because of disk full", msg_type;
+                    "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id()
+                );
+                return Err(Error::Timeout("disk full".to_owned()));
+            }
+        }
+
         if !self.validate_raft_msg(&msg) {
             return Ok(());
         }
@@ -1474,22 +1512,8 @@ where
         if util::is_epoch_stale(from_epoch, self.fsm.peer.region().get_region_epoch())
             && util::find_peer(self.fsm.peer.region(), from_store_id).is_none()
         {
-            let mut need_gc_msg = util::is_vote_msg(msg.get_message());
-            if msg.has_extra_msg() {
-                // A learner can't vote so it sends the check-stale-peer msg to others to find out whether
-                // it is removed due to conf change or merge.
-                need_gc_msg |=
-                    msg.get_extra_msg().get_type() == ExtraMessageType::MsgCheckStalePeer;
-                // For backward compatibility
-                need_gc_msg |= msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp;
-            }
-            // The message is stale and not in current region.
-            self.ctx.handle_stale_msg(
-                msg,
-                self.fsm.peer.region().get_region_epoch().clone(),
-                need_gc_msg,
-                None,
-            );
+            self.ctx
+                .handle_stale_msg(msg, self.fsm.peer.region().get_region_epoch().clone(), None);
             return true;
         }
 
@@ -1646,12 +1670,13 @@ where
             "peer_id" => self.fsm.peer_id(),
             "to_peer" => ?msg.get_to_peer(),
         );
-        match self.fsm.peer.maybe_destroy(&self.ctx) {
-            None => self.ctx.raft_metrics.message_dropped.applying_snap += 1,
-            Some(job) => {
-                self.handle_destroy_peer(job);
-            }
-        }
+
+        // Destroy peer in next round in order to apply more committed entries if any.
+        // It depends on the implementation that msgs which are handled in this round have already fetched.
+        let _ = self
+            .ctx
+            .router
+            .force_send(self.fsm.region_id(), PeerMsg::Destroy(self.fsm.peer_id()));
     }
 
     // Returns `Vec<(u64, bool)>` indicated (source_region_id, merge_to_this_peer) if the `msg`
@@ -3093,10 +3118,15 @@ where
         {
             panic!("{} unexpected region {:?}", self.fsm.peer.tag, r);
         }
-        let prev = meta.regions.insert(region.get_id(), region);
+        let prev = meta.regions.insert(region.get_id(), region.clone());
         assert_eq!(prev, Some(prev_region));
-
         drop(meta);
+
+        self.fsm.peer.read_progress.update_leader_info(
+            self.fsm.peer.leader_id(),
+            self.fsm.peer.term(),
+            &region,
+        );
 
         for r in &apply_result.destroyed_regions {
             if let Err(e) = self.ctx.router.force_send(

@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use configuration::{ConfigChange, Configuration};
+use online_config::{ConfigChange, OnlineConfig};
 use raftstore::store::Config as RaftstoreConfig;
 use std::collections::HashMap;
 use std::fs::File;
@@ -51,7 +51,7 @@ fn test_update_config() {
 
 #[test]
 fn test_dispatch_change() {
-    use configuration::ConfigManager;
+    use online_config::ConfigManager;
     use std::error::Error;
     use std::result::Result;
 

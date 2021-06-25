@@ -2,7 +2,7 @@
 
 use super::deadlock::Scheduler as DeadlockScheduler;
 use super::waiter_manager::Scheduler as WaiterMgrScheduler;
-use configuration::{ConfigChange, ConfigManager, Configuration};
+use online_config::{ConfigChange, ConfigManager, OnlineConfig};
 use serde::de::{Deserialize, Deserializer, IntoDeserializer};
 
 use std::error::Error;
@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tikv_util::config::ReadableDuration;
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {

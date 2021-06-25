@@ -27,6 +27,6 @@ engine_traits = { path = "../engine_traits", default-features = false }
 tikv_alloc = { path = "../tikv_alloc" }
 # FIXME: Remove this dep from the engine_traits interface
 tikv_util = { path = "../tikv_util", default-features = false }
-kvproto = { rev = "dda0a102bc6ac7371e1f99cd2797825aa210b4a0", git = "https://github.com/pingcap/kvproto.git", default-features = false }
+kvproto = { rev = "706fcaf286c8dd07ef59349c089f53289a32ce4c", git = "https://github.com/pingcap/kvproto.git", default-features = false }
 raft = { version = "0.6.0-alpha", default-features = false }
 txn_types = { path = "../txn_types", default-features = false }

@@ -25,7 +25,7 @@ backtrace = "0.3.9"
 byteorder = "1.2"
 bytes = "1.0"
 codec = { path = "../codec", default-features = false }
-configuration = { path = "../configuration" }
+online_config = { path = "../online_config" }
 chrono = "0.4"
 crc32fast = "1.2"
 crossbeam = "0.8"
@@ -62,7 +62,7 @@ tokio = { version = "1.5", features = ["rt-multi-thread"] }
 tokio-executor = "0.1"
 tokio-timer = "0.2"
 url = "2"
-kvproto = { rev = "dda0a102bc6ac7371e1f99cd2797825aa210b4a0", git = "https://github.com/pingcap/kvproto.git", default-features = false }
+kvproto = { rev = "706fcaf286c8dd07ef59349c089f53289a32ce4c", git = "https://github.com/pingcap/kvproto.git", default-features = false }
 protobuf = "2"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 

@@ -52,6 +52,15 @@
 ##
 ## It's still unnecessary to configure it for deploying multiple TiKV nodes on a single
 ## physical machine. It will be calculated as `5/3 * block-cache.capacity`.
+##
+## For different system memory capacity, the default memory quota will be:
+## * system=8G    block-cache=3.6G    memory-usage-limit=6G   page-cache=2G.
+## * system=16G   block-cache=7.2G    memory-usage-limit=12G  page-cache=4G
+## * system=32G   block-cache=14.4G   memory-usage-limit=24G  page-cache=8G
+##
+## So how can `memory-usage-limit` influence TiKV? When a TiKV's memory usage almost reaches
+## this threshold, it can squeeze some internal components (e.g. evicting cached Raft entries)
+## to release memory.
 # memory-usage-limit = "0B"
 
 ## Configurations for the single thread pool serving read requests.

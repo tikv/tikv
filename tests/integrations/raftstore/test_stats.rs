@@ -277,7 +277,7 @@ fn test_query_stats() {
 
 fn test_query_num(query: Box<Query>) {
     let (cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
-        cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(10);
+        cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
         cluster.cfg.storage.enable_ttl = true;
     });
     let (k, v) = (b"key".to_vec(), b"v2".to_vec());
@@ -399,16 +399,20 @@ fn check_query_num_read(
     kind: QueryKind,
     expect: u64,
 ) -> bool {
-    for _ in 0..100 {
-        let hot_peers = cluster.pd_client.get_store_hotspots(store_id).unwrap();
-        let peer_stat = hot_peers.get(&region_id).unwrap();
-        let query_stat = peer_stat.get_query_stats();
-        if QueryStats::get_query_num(query_stat, kind) == expect {
-            return true;
-        }
+    let start = std::time::SystemTime::now();
+    loop {
         sleep_ms(10);
+        if let Some(hot_peers) = cluster.pd_client.get_store_hotspots(store_id) {
+            let peer_stat = hot_peers.get(&region_id).unwrap();
+            let query_stat = peer_stat.get_query_stats();
+            if QueryStats::get_query_num(query_stat, kind) == expect {
+                return true;
+            }
+        }
+        if start.elapsed().unwrap().as_secs() > 5 {
+            return false;
+        }
     }
-    return false;
 }
 
 fn check_query_num_write(
@@ -417,19 +421,16 @@ fn check_query_num_write(
     kind: QueryKind,
     expect: u64,
 ) -> bool {
-    for _ in 0..100 {
-        if QueryStats::get_query_num(
-            cluster
-                .pd_client
-                .get_store_stats(store_id)
-                .unwrap()
-                .get_query_stats(),
-            kind,
-        ) == expect
-        {
-            return true;
-        }
+    let start = std::time::SystemTime::now();
+    loop {
         sleep_ms(10);
+        if let Some(hb) = cluster.pd_client.get_store_stats(store_id) {
+            if QueryStats::get_query_num(hb.get_query_stats(), kind) >= expect {
+                return true;
+            }
+        }
+        if start.elapsed().unwrap().as_secs() > 5 {
+            return false;
+        }
     }
-    return false;
 }
