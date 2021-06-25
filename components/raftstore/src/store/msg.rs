@@ -424,12 +424,17 @@ impl<S: Snapshot> RaftCommand<S> {
     }
 }
 
+pub struct InspectedRaftMessage {
+    pub heap_size: usize,
+    pub msg: RaftMessage,
+}
+
 /// Message that can be sent to a peer.
 pub enum PeerMsg<EK: KvEngine> {
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target
     /// peer doesn't exist.
-    RaftMessage { heap_size: usize, msg: RaftMessage },
+    RaftMessage(InspectedRaftMessage),
     /// Raft command is the command that is expected to be proposed by the
     /// leader of the target raft group. If it's failed to be sent, callback
     /// usually needs to be called before dropping in case of resource leak.
@@ -457,19 +462,10 @@ pub enum PeerMsg<EK: KvEngine> {
     Destroy(u64),
 }
 
-impl<EK: KvEngine> PeerMsg<EK> {
-    pub fn into_raft_message(self) -> RaftMessage {
-        match self {
-            PeerMsg::RaftMessage { msg, .. } => msg,
-            _ => unreachable!(),
-        }
-    }
-}
-
 impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PeerMsg::RaftMessage { .. } => write!(fmt, "Raft Message"),
+            PeerMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
             PeerMsg::RaftCommand(_) => write!(fmt, "Raft Command"),
             PeerMsg::Tick(tick) => write! {
                 fmt,
@@ -492,10 +488,7 @@ pub enum StoreMsg<EK>
 where
     EK: KvEngine,
 {
-    RaftMessage {
-        heap_size: usize,
-        msg: RaftMessage,
-    },
+    RaftMessage(InspectedRaftMessage),
 
     ValidateSSTResult {
         invalid_ssts: Vec<SstMeta>,
@@ -524,22 +517,13 @@ where
     UpdateReplicationMode(ReplicationStatus),
 }
 
-impl<EK: KvEngine> StoreMsg<EK> {
-    pub fn from_peer_msg(peer_msg: PeerMsg<EK>) -> Self {
-        match peer_msg {
-            PeerMsg::RaftMessage { heap_size, msg } => StoreMsg::RaftMessage { heap_size, msg },
-            _ => unreachable!(),
-        }
-    }
-}
-
 impl<EK> fmt::Debug for StoreMsg<EK>
 where
     EK: KvEngine,
 {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
-            StoreMsg::RaftMessage { .. } => write!(fmt, "Raft Message"),
+            StoreMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
             StoreMsg::StoreUnreachable { store_id } => {
                 write!(fmt, "Store {}  is unreachable", store_id)
             }

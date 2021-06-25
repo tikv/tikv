@@ -48,7 +48,7 @@ lazy_static! {
         .sub_trace(Id::Name("leak"));
 
     /// Heap size trace for received raft messages.
-    pub static ref MEMTRACE_RAFT_MESSAGE: Arc<dyn MemoryTrace + Send + Sync> =
+    pub static ref MEMTRACE_RAFT_MESSAGES: Arc<dyn MemoryTrace + Send + Sync> =
         MEMTRACE_ROOT.sub_trace(Id::Name("raft_message"));
 
     /// Heap size trace for appended raft entries.
