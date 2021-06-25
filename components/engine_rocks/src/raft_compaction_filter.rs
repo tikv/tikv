@@ -1,11 +1,11 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::raft_engine::RAFT_LOG_GC_INDEXES;
+use crate::raft_engine::{RAFT_LOG_GC_INDEXES, RAFT_LOG_GC_ON_COMPACTION};
 use crate::raw::{
     new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
     CompactionFilterFactory, CompactionFilterValueType, DBCompactionFilter,
 };
-use std::{collections::HashMap, ffi::CString};
+use std::ffi::CString;
 use tikv_util::debug;
 
 pub struct RaftLogCompactionFilterFactory {}
@@ -17,20 +17,27 @@ impl CompactionFilterFactory for RaftLogCompactionFilterFactory {
         &self,
         _context: &CompactionFilterContext,
     ) -> *mut DBCompactionFilter {
-        let filter = Box::new(RaftLogCompactionFilter::new());
+        let filter = Box::new(RaftLogCompactionFilter::new(
+            RAFT_LOG_GC_ON_COMPACTION.load(std::sync::atomic::Ordering::Acquire),
+        ));
         let name = CString::new("raft_log_gc_compaction_filter").unwrap();
         unsafe { new_compaction_filter_raw(name, filter) }
     }
 }
 
 struct RaftLogCompactionFilter {
-    map: HashMap<u64, u64>,
+    enabled: bool,
+    last_region: u64,
+    gc_point: u64,
 }
 
 impl RaftLogCompactionFilter {
-    fn new() -> Self {
+    fn new(enabled: bool) -> Self {
         RaftLogCompactionFilter {
-            map: HashMap::new(),
+            enabled,
+            // for region id will NEVER be 0
+            last_region: 0,
+            gc_point: 0,
         }
     }
 }
@@ -44,10 +51,13 @@ impl CompactionFilter for RaftLogCompactionFilter {
         _value: &[u8],
         value_type: CompactionFilterValueType,
     ) -> CompactionFilterDecision {
+        if !self.enabled {
+            return CompactionFilterDecision::Keep;
+        }
         if value_type != CompactionFilterValueType::Value {
             return CompactionFilterDecision::Keep;
         }
-        let (rid, idx) = match keys::decode_raft_log_key(key) {
+        let (current_region, current_index) = match keys::decode_raft_log_key(key) {
             Ok((rid, idx)) => (rid, idx),
             Err(_) => {
                 debug!(
@@ -58,20 +68,16 @@ impl CompactionFilter for RaftLogCompactionFilter {
             }
         };
 
-        let gc_point = match self.map.get(&rid) {
-            Some(v) => v.to_owned(),
-            None => {
-                let indexes = RAFT_LOG_GC_INDEXES.read().unwrap();
-                let gc_point = indexes.get(&rid).unwrap_or(&0).to_owned();
-                self.map.insert(rid, gc_point);
-                gc_point
-            }
-        };
-
-        if idx >= gc_point {
-            return CompactionFilterDecision::Keep;
+        if current_region != self.last_region {
+            self.last_region = current_region;
+            let indexes = RAFT_LOG_GC_INDEXES.read().unwrap();
+            self.gc_point = indexes.get(&current_region).unwrap_or(&0).to_owned();
         }
-        CompactionFilterDecision::Remove
+
+        if current_index < self.gc_point {
+            return CompactionFilterDecision::Remove;
+        }
+        CompactionFilterDecision::Keep
     }
 }
 
@@ -108,29 +114,33 @@ mod tests {
         let cfh = db.cf_handle("test").unwrap();
 
         // insert test data to db.cf
-        let map: HashMap<u64, u64> = [(1, 100), (3, 100), (5, 100)].iter().cloned().collect();
-        for rid in map.keys() {
-            for idx in 0..map.get(rid).unwrap_or(&0).to_owned() {
+        const LOG_NUM: u64 = 100;
+        let map: HashMap<u64, u64> = [(1, LOG_NUM), (3, LOG_NUM), (5, LOG_NUM)]
+            .iter()
+            .cloned()
+            .collect();
+        for (rid, num) in map.iter() {
+            for idx in 0..*num {
                 db.put_cf(
                     cfh,
-                    &keys::raft_log_key(rid.to_owned(), idx.to_owned()),
-                    "VALUE-FOR-TEST".as_bytes(),
-                )
-                .unwrap();
-                db.put_cf(
-                    cfh,
-                    &keys::raft_state_key(rid.to_owned()),
+                    &keys::raft_log_key(*rid, idx),
                     "VALUE-FOR-TEST".as_bytes(),
                 )
                 .unwrap();
             }
+            db.put_cf(
+                cfh,
+                &keys::raft_state_key(*rid),
+                "VALUE-FOR-TEST".as_bytes(),
+            )
+            .unwrap();
         }
 
         // update test gc point
         let mut indexes = RAFT_LOG_GC_INDEXES.write().unwrap();
-        indexes.insert(1, 50);
-        indexes.insert(2, 50);
-        indexes.insert(5, 200);
+        indexes.insert(1, LOG_NUM / 2);
+        indexes.insert(2, LOG_NUM / 2);
+        indexes.insert(5, LOG_NUM * 2);
         drop(indexes);
         db.flush(true).unwrap();
 
@@ -138,15 +148,21 @@ mod tests {
         db.compact_range_cf(cfh, None, None);
 
         // check gc
-        for rid in map.keys() {
-            for idx in 0..map.get(rid).unwrap_or(&0).to_owned() {
-                let lk = keys::raft_log_key(rid.to_owned(), idx.to_owned());
-                let sk = keys::raft_state_key(rid.to_owned());
-                if db.get_cf(cfh, &lk).unwrap().is_some() {
-                    assert!(idx <= *map.get(&rid).unwrap_or(&0));
+        for (rid, num) in map.iter() {
+            let indexes = RAFT_LOG_GC_INDEXES.read().unwrap();
+            let gc_point = *indexes.get(&rid).unwrap_or(&0);
+            drop(indexes);
+            for idx in 0..*num {
+                let lk = keys::raft_log_key(*rid, idx);
+                let r = db.get_cf(cfh, &lk).unwrap();
+                if idx < gc_point {
+                    assert!(r.is_none());
+                } else {
+                    assert!(r.is_some());
                 }
-                assert!(!db.get_cf(cfh, &sk).unwrap().is_none());
             }
+            let sk = keys::raft_state_key(*rid);
+            assert!(db.get_cf(cfh, &sk).unwrap().is_some());
         }
     }
 }
