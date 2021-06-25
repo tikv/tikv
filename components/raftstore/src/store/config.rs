@@ -7,10 +7,10 @@ use time::Duration as TimeDuration;
 
 use crate::{coprocessor, Result};
 use batch_system::Config as BatchSystemConfig;
-use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration};
 use engine_traits::config as engine_config;
 use engine_traits::PerfLevel;
 use lazy_static::lazy_static;
+use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig};
 use prometheus::register_gauge_vec;
 use serde::{Deserialize, Serialize};
 use serde_with::with_prefix;
@@ -28,34 +28,34 @@ lazy_static! {
 
 with_prefix!(prefix_apply "apply-");
 with_prefix!(prefix_store "store-");
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     // minimizes disruption when a partitioned node rejoins the cluster by using a two phase election.
-    #[config(skip)]
+    #[online_config(skip)]
     pub prevote: bool,
-    #[config(skip)]
+    #[online_config(skip)]
     pub raftdb_path: String,
 
     // store capacity. 0 means no limit.
-    #[config(skip)]
+    #[online_config(skip)]
     pub capacity: ReadableSize,
 
     // raft_base_tick_interval is a base tick interval (ms).
-    #[config(hidden)]
+    #[online_config(hidden)]
     pub raft_base_tick_interval: ReadableDuration,
-    #[config(hidden)]
+    #[online_config(hidden)]
     pub raft_heartbeat_ticks: usize,
-    #[config(hidden)]
+    #[online_config(hidden)]
     pub raft_election_timeout_ticks: usize,
-    #[config(hidden)]
+    #[online_config(hidden)]
     pub raft_min_election_timeout_ticks: usize,
-    #[config(hidden)]
+    #[online_config(hidden)]
     pub raft_max_election_timeout_ticks: usize,
-    #[config(hidden)]
+    #[online_config(hidden)]
     pub raft_max_size_per_msg: ReadableSize,
-    #[config(hidden)]
+    #[online_config(hidden)]
     pub raft_max_inflight_msgs: usize,
     // When the entry exceed the max size, reject to propose it.
     pub raft_entry_max_size: ReadableSize,
@@ -72,7 +72,7 @@ pub struct Config {
     // Old Raft logs could be reserved if `raft_log_gc_threshold` is not reached.
     // GC them after ticks `raft_log_reserve_max_ticks` times.
     #[doc(hidden)]
-    #[config(hidden)]
+    #[online_config(hidden)]
     pub raft_log_reserve_max_ticks: usize,
     // Old logs in Raft engine needs to be purged peridically.
     pub raft_engine_purge_interval: ReadableDuration,
@@ -102,7 +102,7 @@ pub struct Config {
     pub lock_cf_compact_interval: ReadableDuration,
     pub lock_cf_compact_bytes_threshold: ReadableSize,
 
-    #[config(skip)]
+    #[online_config(skip)]
     pub notify_capacity: usize,
     pub messages_per_tick: usize,
 
@@ -119,34 +119,34 @@ pub struct Config {
     pub abnormal_leader_missing_duration: ReadableDuration,
     pub peer_stale_state_check_interval: ReadableDuration,
 
-    #[config(hidden)]
+    #[online_config(hidden)]
     pub leader_transfer_max_log_lag: u64,
 
-    #[config(skip)]
+    #[online_config(skip)]
     pub snap_apply_batch_size: ReadableSize,
 
     // Interval (ms) to check region whether the data is consistent.
     pub consistency_check_interval: ReadableDuration,
 
-    #[config(hidden)]
+    #[online_config(hidden)]
     pub report_region_flow_interval: ReadableDuration,
 
     // The lease provided by a successfully proposed and applied entry.
     pub raft_store_max_leader_lease: ReadableDuration,
 
     // Right region derive origin region id when split.
-    #[config(hidden)]
+    #[online_config(hidden)]
     pub right_derive_when_split: bool,
 
     pub allow_remove_leader: bool,
 
     /// Max log gap allowed to propose merge.
-    #[config(hidden)]
+    #[online_config(hidden)]
     pub merge_max_log_gap: u64,
     /// Interval to re-propose merge.
     pub merge_check_tick_interval: ReadableDuration,
 
-    #[config(hidden)]
+    #[online_config(hidden)]
     pub use_delete_range: bool,
 
     pub cleanup_import_sst_interval: ReadableDuration,
@@ -154,56 +154,56 @@ pub struct Config {
     /// Maximum size of every local read task batch.
     pub local_read_batch_size: u64,
 
-    #[config(skip)]
+    #[online_config(skip)]
     #[serde(flatten, with = "prefix_apply")]
     pub apply_batch_system: BatchSystemConfig,
 
-    #[config(skip)]
+    #[online_config(skip)]
     #[serde(flatten, with = "prefix_store")]
     pub store_batch_system: BatchSystemConfig,
 
-    #[config(skip)]
+    #[online_config(skip)]
     pub store_io_pool_size: usize,
 
-    #[config(skip)]
+    #[online_config(skip)]
     pub future_poll_size: usize,
-    #[config(hidden)]
+    #[online_config(skip)]
     pub hibernate_regions: bool,
     #[doc(hidden)]
-    #[config(hidden)]
+    #[online_config(hidden)]
     pub dev_assert: bool,
-    #[config(hidden)]
+    #[online_config(hidden)]
     pub apply_yield_duration: ReadableDuration,
 
     #[serde(with = "engine_config::perf_level_serde")]
-    #[config(skip)]
+    #[online_config(skip)]
     pub perf_level: PerfLevel,
 
     pub cmd_batch: bool,
 
-    #[config(skip)]
+    #[online_config(skip)]
     pub trigger_ready_size: ReadableSize,
 
-    #[config(skip)]
+    #[online_config(skip)]
     pub trigger_write_size: ReadableSize,
 
-    #[config(skip)]
+    #[online_config(skip)]
     pub store_waterfall_metrics: bool,
 
     // Deprecated! These configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[config(skip)]
+    #[online_config(skip)]
     pub region_max_size: ReadableSize,
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[config(skip)]
+    #[online_config(skip)]
     pub region_split_size: ReadableSize,
     // Deprecated! The time to clean stale peer safely can be decided based on RocksDB snapshot sequence number.
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[config(skip)]
+    #[online_config(skip)]
     pub clean_stale_peer_delay: ReadableDuration,
 }
 

@@ -204,7 +204,6 @@ version = "0.0.1"
 dependencies = [
  "collections",
  "concurrency_manager",
- "configuration",
  "crc64fast",
  "engine_rocks",
  "engine_traits",
@@ -219,6 +218,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "log_wrappers",
+ "online_config",
  "pd_client",
  "prometheus",
  "raft",
@@ -616,25 +616,6 @@ dependencies = [
  "tikv_alloc",
  "tokio",
  "txn_types",
-]
-
-[[package]]
-name = "configuration"
-version = "0.1.0"
-dependencies = [
- "configuration_derive",
- "serde",
- "serde_derive",
- "toml",
-]
-
-[[package]]
-name = "configuration_derive"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]
@@ -1038,7 +1019,6 @@ dependencies = [
  "async-trait",
  "byteorder",
  "bytes 1.0.1",
- "configuration",
  "crc32fast",
  "crossbeam",
  "derive_more",
@@ -1052,6 +1032,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "matches",
+ "online_config",
  "openssl",
  "prometheus",
  "protobuf",
@@ -1107,7 +1088,6 @@ name = "engine_rocks"
 version = "0.0.1"
 dependencies = [
  "collections",
- "configuration",
  "encryption",
  "engine_traits",
  "fail",
@@ -1117,6 +1097,7 @@ dependencies = [
  "lazy_static",
  "log_wrappers",
  "num_cpus",
+ "online_config",
  "prometheus",
  "prometheus-static-metric",
  "protobuf",
@@ -2114,7 +2095,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?rev=7a046020d1c091638e1e8aba623c8c1e8962219d#7a046020d1c091638e1e8aba623c8c1e8962219d"
+source = "git+https://github.com/pingcap/kvproto.git?rev=dda0a102bc6ac7371e1f99cd2797825aa210b4a0#dda0a102bc6ac7371e1f99cd2797825aa210b4a0"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -2709,6 +2690,25 @@ name = "once_cell"
 version = "1.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "af8b08b04175473088b46763e51ee54da5f9a164bc162f615b91bc179dbf15a3"
+
+[[package]]
+name = "online_config"
+version = "0.1.0"
+dependencies = [
+ "online_config_derive",
+ "serde",
+ "serde_derive",
+ "toml",
+]
+
+[[package]]
+name = "online_config_derive"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "oorandom"
@@ -3363,11 +3363,11 @@ dependencies = [
 name = "raft_log_engine"
 version = "0.0.1"
 dependencies = [
- "configuration",
  "engine_traits",
  "kvproto",
  "lazy_static",
  "num_cpus",
+ "online_config",
  "protobuf",
  "raft",
  "raft-engine",
@@ -3389,7 +3389,6 @@ dependencies = [
  "bytes 1.0.1",
  "collections",
  "concurrency_manager",
- "configuration",
  "crc32fast",
  "crossbeam",
  "derivative",
@@ -3411,6 +3410,7 @@ dependencies = [
  "log",
  "log_wrappers",
  "memory_trace_macros",
+ "online_config",
  "openssl",
  "panic_hook",
  "pd_client",
@@ -3723,7 +3723,6 @@ version = "0.0.1"
 dependencies = [
  "collections",
  "concurrency_manager",
- "configuration",
  "crossbeam",
  "engine_rocks",
  "engine_traits",
@@ -3734,6 +3733,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "log_wrappers",
+ "online_config",
  "panic_hook",
  "pd_client",
  "prometheus",
@@ -3760,7 +3760,6 @@ name = "resource_metering"
 version = "0.0.1"
 dependencies = [
  "collections",
- "configuration",
  "crossbeam",
  "futures 0.3.15",
  "grpcio",
@@ -3768,6 +3767,7 @@ dependencies = [
  "lazy_static",
  "libc 0.2.86",
  "log",
+ "online_config",
  "pdqselect",
  "pin-project",
  "procinfo",
@@ -4843,7 +4843,6 @@ dependencies = [
  "cdc",
  "collections",
  "concurrency_manager",
- "configuration",
  "crc64fast",
  "criterion",
  "criterion-cpu-time",
@@ -4864,6 +4863,7 @@ dependencies = [
  "kvproto",
  "log_wrappers",
  "more-asserts",
+ "online_config",
  "panic_hook",
  "paste 1.0.4",
  "pd_client",
@@ -5099,7 +5099,6 @@ dependencies = [
  "codec",
  "collections",
  "concurrency_manager",
- "configuration",
  "coprocessor_plugin_api",
  "crc32fast",
  "crc64fast",
@@ -5142,6 +5141,7 @@ dependencies = [
  "nom 5.1.0",
  "notify",
  "num_cpus",
+ "online_config",
  "openssl",
  "panic_hook",
  "parking_lot",
@@ -5351,7 +5351,6 @@ dependencies = [
  "chrono",
  "codec",
  "collections",
- "configuration",
  "crc32fast",
  "crossbeam",
  "derive_more",
@@ -5370,6 +5369,7 @@ dependencies = [
  "log_wrappers",
  "nix 0.11.1",
  "num_cpus",
+ "online_config",
  "openssl",
  "page_size",
  "panic_hook",
