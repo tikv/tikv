@@ -88,7 +88,7 @@ mod tests {
 
     use crate::RaftLogCompactionFilterFactory;
 
-    use crate::raft_engine::RAFT_LOG_GC_INDEXES;
+    use crate::raft_engine::{RAFT_LOG_GC_INDEXES, RAFT_LOG_GC_ON_COMPACTION};
     use crate::raw::{ColumnFamilyOptions, CompactionFilterFactory, DBOptions, Writable, DB};
     use std::ffi::CString;
 
@@ -137,6 +137,7 @@ mod tests {
         }
 
         // update test gc point
+        RAFT_LOG_GC_ON_COMPACTION.store(true, std::sync::atomic::Ordering::Release);
         let mut indexes = RAFT_LOG_GC_INDEXES.write().unwrap();
         indexes.insert(1, LOG_NUM / 2);
         indexes.insert(2, LOG_NUM / 2);
