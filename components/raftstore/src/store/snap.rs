@@ -716,6 +716,10 @@ impl Snapshot {
                 self.mgr.rename_tmp_cf_file_for_send(cf_file)?;
             } else {
                 delete_file_if_exist(&cf_file.tmp_path).unwrap();
+                if let Some(ref mgr) = self.mgr.encryption_key_manager {
+                    let src = cf_file.tmp_path.to_str().unwrap();
+                    mgr.delete_file(src)?;
+                }
             }
 
             SNAPSHOT_CF_KV_COUNT
@@ -1203,8 +1207,11 @@ impl SnapManager {
         self.core.registry.rl().contains_key(key)
     }
 
-    // NOTE: it calculates snapshot size by scanning the base directory.
-    // Don't call it in raftstore thread until the size limitation mechanism gets refactored.
+    /// Get a `Snapshot` can be used for `build`. Concurrent calls are allowed
+    /// because only one caller can lock temporary disk files.
+    ///
+    /// NOTE: it calculates snapshot size by scanning the base directory.
+    /// Don't call it in raftstore thread until the size limitation mechanism gets refactored.
     pub fn get_snapshot_for_building(&self, key: &SnapKey) -> RaftStoreResult<Box<Snapshot>> {
         let mut old_snaps = None;
         while self.get_total_snap_size()? > self.max_total_snap_size() {
@@ -1267,6 +1274,8 @@ impl SnapManager {
         Ok(Box::new(s))
     }
 
+    /// Get a `Snapshot` can be used for writting and then `save`. Concurrent calls
+    /// are allowed because only one caller can lock temporary disk files.
     pub fn get_snapshot_for_receiving(
         &self,
         key: &SnapKey,
