@@ -92,6 +92,10 @@ impl RaftEngine for PanicEngine {
     fn dump_stats(&self) -> Result<String> {
         panic!()
     }
+
+    fn get_engine_size(&self) -> Result<u64> {
+        panic!()
+    }
 }
 
 impl RaftLogBatch for PanicWriteBatch {
