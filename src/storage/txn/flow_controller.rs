@@ -20,7 +20,7 @@ use crate::storage::Engine;
 
 const ADJUST_DURATION: u64 = 1000; // 1000ms
 const RATIO_PRECISION: f64 = 10000000.0;
-const EMA_FACTOR: f64 = 0.1;
+const EMA_FACTOR: f64 = 0.6;
 const LIMIT_UP_PERCENT: f64 = 0.04; // 4%
 const LIMIT_DOWN_PERCENT: f64 = 0.02; // 2%
 const MIN_THROTTLE_SPEED: f64 = 16.0 * 1024.0; // 16KB
@@ -323,8 +323,8 @@ struct FlowChecker<E: Engine> {
     cf_checkers: HashMap<String, CFFlowChecker>,
     throttle_cf: Option<String>,
     discard_ratio: Arc<AtomicU64>,
-    target_flow: Option<f64>,
-    last_target_file: u64,
+    target_flow: f64,
+    last_target_file: Option<u64>,
     factor: f64,
 
     raft_checker: CFFlowChecker,
@@ -361,8 +361,8 @@ impl<E: Engine> FlowChecker<E> {
             cf_checkers,
             raft_checker: CFFlowChecker::default(),
             throttle_cf: None,
-            target_flow: None,
-            last_target_file: 0,
+            target_flow: 0.0,
+            last_target_file: None,
             last_record_time: Instant::now_coarse(),
         }
     }
@@ -385,7 +385,6 @@ impl<E: Engine> FlowChecker<E> {
                         Ok(FlowInfo::Compaction(cf)) => checker.adjust_pending_compaction_bytes(cf),
                         Err(RecvTimeoutError::Timeout) => {
                             // checker.tick_l0();
-                            checker.check_raft_pending_compaction_bytes();
                             checker.update_statistics();
                         }
                         Err(e) => {
@@ -399,11 +398,7 @@ impl<E: Engine> FlowChecker<E> {
     }
 
     fn update_statistics(&mut self) {
-        if let Some(target_flow) = self.target_flow {
-            SCHED_TARGET_FLOW_GAUGE.set(target_flow as i64);
-        } else {
-            SCHED_TARGET_FLOW_GAUGE.set(0);
-        }
+        SCHED_TARGET_FLOW_GAUGE.set(self.target_flow as i64);
         let rate =
             self.limiter.total_bytes_consumed() as f64 / self.last_record_time.elapsed_secs();
         if self.limiter.total_bytes_consumed() != 0 {
@@ -718,7 +713,7 @@ impl<E: Engine> FlowChecker<E> {
         }
         if throttle > 1.5 * self.recorder.get_max() as f64 {
             self.throttle_cf = None;
-            self.target_flow = None;
+            self.last_target_file = None;
             throttle = INFINITY;
         }
         SCHED_THROTTLE_FLOW_GAUGE.set(if throttle == INFINITY {
@@ -779,22 +774,23 @@ impl<E: Engine> FlowChecker<E> {
             }
 
             if num_l0_files > self.l0_files_threshold {
-                if let Some(target_flow) = self.target_flow {
-                    if self.cf_checkers[&cf].short_term_l0_flow.get_avg() > target_flow {
-                        self.target_flow = Some(self.cf_checkers[&cf].short_term_l0_flow.get_avg());
+                if self.last_target_file.is_some() {
+                    if self.cf_checkers[&cf].short_term_l0_flow.get_avg() > self.target_flow {
+                        self.target_flow = self.cf_checkers[&cf].short_term_l0_flow.get_avg();
                         SCHED_THROTTLE_ACTION_COUNTER
                             .with_label_values(&[&cf, "refresh2_flow"])
                             .inc();
                     }
                 }
 
-                if let Some(target_flow) = self.target_flow {
-                    if self.cf_checkers[&cf].short_term_flush_flow.get_avg() > target_flow {
+                if let Some(last_target_file) = self.last_target_file {
+                    if self.cf_checkers[&cf].short_term_flush_flow.get_avg() > self.target_flow {
                         self.down_flow(cf);
-                    } else if num_l0_files > self.last_target_file + 3 {
-                        // TODO: make target flow to be a EMA
-                        self.target_flow = Some(self.cf_checkers[&cf].short_term_l0_flow.get_avg());
-                        self.last_target_file = num_l0_files;
+                    } else if num_l0_files > last_target_file + 3 {
+                        self.target_flow = self.target_flow * self.factor
+                            + (1.0 - self.factor)
+                                * self.cf_checkers[&cf].short_term_l0_flow.get_avg();
+                        self.last_target_file = Some(num_l0_files);
                         SCHED_THROTTLE_ACTION_COUNTER
                             .with_label_values(&[&cf, "refresh1_flow"])
                             .inc();
@@ -807,8 +803,9 @@ impl<E: Engine> FlowChecker<E> {
                 } else if self.cf_checkers[&cf].short_term_flush_flow.get_avg()
                     > self.cf_checkers[&cf].short_term_l0_flow.get_avg()
                 {
-                    self.target_flow = Some(self.cf_checkers[&cf].short_term_l0_flow.get_avg());
-                    self.last_target_file = num_l0_files;
+                    self.target_flow = self.target_flow * self.factor
+                        + (1.0 - self.factor) * self.cf_checkers[&cf].short_term_l0_flow.get_avg();
+                    self.last_target_file = Some(num_l0_files);
                     self.down_flow(cf);
                 } else {
                     SCHED_THROTTLE_ACTION_COUNTER
@@ -816,9 +813,9 @@ impl<E: Engine> FlowChecker<E> {
                         .inc();
                 }
             } else {
-                if let Some(target_flow) = self.target_flow {
-                    if self.cf_checkers[&cf].short_term_l0_flow.get_avg() > target_flow {
-                        self.target_flow = None;
+                if self.last_target_file.is_some() {
+                    if self.cf_checkers[&cf].short_term_l0_flow.get_avg() > self.target_flow {
+                        self.last_target_file = None;
                     }
                 }
             }
