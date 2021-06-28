@@ -217,14 +217,6 @@ pub struct PeerStat {
 }
 
 #[derive(Default, Clone)]
-struct PeerReportReadStat {
-    pub region_id: u64,
-    pub read_keys: u64,
-    pub read_bytes: u64,
-    pub read_query_stats: QueryStats,
-}
-
-#[derive(Default, Clone)]
 struct PeerCmpReadStat {
     pub region_id: u64,
     pub report_stat: u64,
@@ -756,11 +748,11 @@ where
             {
                 continue;
             }
-            let mut read_stat = PeerReportReadStat::default();
-            read_stat.region_id = *region_id;
-            read_stat.read_keys = read_keys;
-            read_stat.read_bytes = read_bytes;
-            read_stat.read_query_stats = read_query_stats;
+            let mut read_stat = pdpb::PeerStat::default();
+            read_stat.set_region_id(*region_id);
+            read_stat.set_read_keys(read_keys);
+            read_stat.set_read_bytes(read_bytes);
+            read_stat.set_query_stats(read_query_stats.0);
             report_peers.insert(*region_id, read_stat);
         }
 
@@ -1454,7 +1446,7 @@ fn send_destroy_peer_message<EK, ER>(
 
 fn collect_report_read_peer_stats(
     capacity: usize,
-    mut report_read_stats: HashMap<u64, PeerReportReadStat>,
+    mut report_read_stats: HashMap<u64, pdpb::PeerStat>,
     mut stats: pdpb::StoreStats,
 ) -> pdpb::StoreStats {
     if report_read_stats.len() < capacity * 3 {
@@ -1463,7 +1455,7 @@ fn collect_report_read_peer_stats(
             peer_stat.set_region_id(read_stat.region_id);
             peer_stat.set_read_bytes(read_stat.read_bytes);
             peer_stat.set_read_keys(read_stat.read_keys);
-            peer_stat.set_query_stats(read_stat.read_query_stats.0);
+            peer_stat.set_query_stats(read_stat.get_query_stats().clone());
             stats.peer_stats.push(peer_stat);
         }
         return stats;
@@ -1482,7 +1474,7 @@ fn collect_report_read_peer_stats(
         byte_cmp_stat.report_stat = read_stat.read_bytes;
         bytes_topn_report.push(byte_cmp_stat);
         let mut query_cmp_stat = cmp_stat.clone();
-        query_cmp_stat.report_stat = read_stat.read_query_stats.get_read_query_num();
+        query_cmp_stat.report_stat = get_read_query_num(read_stat.get_query_stats());
         stats_topn_report.push(query_cmp_stat);
     }
 
@@ -1505,14 +1497,13 @@ fn collect_report_read_peer_stats(
     }
 
     for (_, report_stat) in peer_stats {
-        let mut peer_stat = pdpb::PeerStat::default();
-        peer_stat.set_region_id(report_stat.region_id);
-        peer_stat.set_read_bytes(report_stat.read_bytes);
-        peer_stat.set_read_keys(report_stat.read_keys);
-        peer_stat.set_query_stats(report_stat.read_query_stats.0);
-        stats.peer_stats.push(peer_stat);
+        stats.peer_stats.push(report_stat);
     }
     stats
+}
+
+fn get_read_query_num(stat: &pdpb::QueryStats) -> u64 {
+    stat.get_get() + stat.get_coprocessor() + stat.get_scan()
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -1611,8 +1602,10 @@ mod tests {
     fn test_collect_report_peers() {
         let mut report_stats = HashMap::default();
         for i in 1..5 {
-            let mut stat = PeerReportReadStat::default();
-            stat.region_id = i;
+            let mut stat = pdpb::PeerStat::default();
+            stat.set_region_id(i);
+            stat.set_read_keys(i);
+            stat.set_read_bytes(6 - i);
             stat.read_keys = i;
             stat.read_bytes = 6 - i;
             let mut query_stat = QueryStats::default();
@@ -1621,6 +1614,7 @@ mod tests {
             } else {
                 query_stat.add_query_num(QueryKind::Get, 0);
             }
+            stat.set_query_stats(query_stat.0);
             report_stats.insert(i, stat);
         }
         let mut store_stats = pdpb::StoreStats::default();
