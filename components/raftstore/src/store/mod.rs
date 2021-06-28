@@ -50,14 +50,15 @@ pub use self::replication_mode::{GlobalReplicationState, StoreGroup};
 pub use self::snap::{
     check_abort, copy_snapshot,
     snap_io::{apply_sst_cf_file, build_sst_cf_file},
-    ApplyOptions, Error as SnapError, GenericSnapshot, SnapEntry, SnapKey, SnapManager,
-    SnapManagerBuilder, Snapshot, SnapshotStatistics,
+    ApplyOptions, Error as SnapError, SnapEntry, SnapKey, SnapManager, SnapManagerBuilder,
+    Snapshot, SnapshotStatistics,
 };
 pub use self::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
-pub use self::util::RegionReadProgress;
+pub use self::util::{RegionReadProgress, RegionReadProgressRegistry};
 pub use self::worker::{
     AutoSplitController, FlowStatistics, FlowStatsReporter, PdTask, QueryStats, ReadDelegate,
     ReadStats, SplitConfig, SplitConfigManager, TrackVer,
 };
+pub use self::worker::{CheckLeaderRunner, CheckLeaderTask};
 pub use self::worker::{KeyEntry, LocalReader, RegionTask};
 pub use self::worker::{SplitCheckRunner, SplitCheckTask};

@@ -43,6 +43,7 @@ use futures::FutureExt;
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
 use tikv_util::metrics::ThreadInfoStatistics;
+use tikv_util::sys::disk;
 use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
@@ -358,10 +359,12 @@ where
         self.sender = Some(sender);
 
         let scheduler = self.scheduler.clone();
+        let props = tikv_util::thread_group::current_properties();
 
         let h = Builder::new()
             .name(thd_name!("stats-monitor"))
             .spawn(move || {
+                tikv_util::thread_group::set_properties(props);
                 tikv_alloc::add_thread_memory_accessor();
                 let mut thread_stats = ThreadInfoStatistics::new();
                 while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(collect_interval) {
@@ -740,6 +743,10 @@ where
         let mut available = capacity.checked_sub(used_size).unwrap_or_default();
         // We only care about rocksdb SST file size, so we should check disk available here.
         available = cmp::min(available, disk_stats.available_space());
+
+        if disk::is_disk_full() {
+            available = 0;
+        }
         if available == 0 {
             warn!("no available space");
         }

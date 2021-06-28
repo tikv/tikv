@@ -7,7 +7,7 @@ use std::time::Instant;
 use bitflags::bitflags;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
 use kvproto::import_sstpb::SstMeta;
-use kvproto::kvrpcpb::{ExtraOp as TxnExtraOp, KeyRange, LeaderInfo};
+use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
@@ -438,7 +438,9 @@ pub enum PeerMsg<EK: KvEngine> {
     /// that the raft node will not work anymore.
     Tick(PeerTicks),
     /// Result of applying committed entries. The message can't be lost.
-    ApplyRes { res: ApplyTaskRes<EK::Snapshot> },
+    ApplyRes {
+        res: ApplyTaskRes<EK::Snapshot>,
+    },
     /// Message that can't be lost but rarely created. If they are lost, real bad
     /// things happen like some peers will be considered dead in the group.
     SignificantMsg(SignificantMsg<EK::Snapshot>),
@@ -452,6 +454,7 @@ pub enum PeerMsg<EK: KvEngine> {
     HeartbeatPd,
     /// Asks region to change replication mode.
     UpdateReplicationMode,
+    Destroy(u64),
 }
 
 impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
@@ -471,6 +474,7 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
             PeerMsg::CasualMessage(msg) => write!(fmt, "CasualMessage {:?}", msg),
             PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
             PeerMsg::UpdateReplicationMode => write!(fmt, "UpdateReplicationMode"),
+            PeerMsg::Destroy(peer_id) => write!(fmt, "Destroy {}", peer_id),
         }
     }
 }
@@ -501,15 +505,6 @@ where
     Start {
         store: metapb::Store,
     },
-    CheckLeader {
-        leaders: Vec<LeaderInfo>,
-        cb: Box<dyn FnOnce(Vec<u64>) + Send>,
-    },
-    // Get the minimal `safe_ts` from regions overlap with the key range [`start_key`, `end_key`)
-    GetStoreSafeTS {
-        key_range: KeyRange,
-        cb: Box<dyn FnOnce(u64) + Send>,
-    },
     /// Message only used for test.
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
@@ -539,10 +534,6 @@ where
             ),
             StoreMsg::Tick(tick) => write!(fmt, "StoreTick {:?}", tick),
             StoreMsg::Start { ref store } => write!(fmt, "Start store {:?}", store),
-            StoreMsg::CheckLeader { ref leaders, .. } => write!(fmt, "CheckLeader {:?}", leaders),
-            StoreMsg::GetStoreSafeTS { ref key_range, .. } => {
-                write!(fmt, "GetStoreSafeTS {:?}", key_range)
-            }
             #[cfg(any(test, feature = "testexport"))]
             StoreMsg::Validate(_) => write!(fmt, "Validate config"),
             StoreMsg::UpdateReplicationMode(_) => write!(fmt, "UpdateReplicationMode"),

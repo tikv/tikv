@@ -11,7 +11,7 @@ use crate::reporter::Task;
 
 use std::sync::Arc;
 
-use configuration::{ConfigChange, Configuration};
+use online_config::{ConfigChange, OnlineConfig};
 use serde_derive::{Deserialize, Serialize};
 use tikv_util::config::ReadableDuration;
 use tikv_util::worker::Scheduler;
@@ -61,7 +61,7 @@ const MAX_PRECISION: ReadableDuration = ReadableDuration::hours(1);
 const MAX_MAX_RESOURCE_GROUPS: usize = 5_000;
 const MIN_REPORT_AGENT_INTERVAL: ReadableDuration = ReadableDuration::secs(5);
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
@@ -147,7 +147,7 @@ impl ConfigManager {
     }
 }
 
-impl configuration::ConfigManager for ConfigManager {
+impl online_config::ConfigManager for ConfigManager {
     fn dispatch(
         &mut self,
         change: ConfigChange,
