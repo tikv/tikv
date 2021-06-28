@@ -14,18 +14,21 @@ use test_raftstore::sleep_ms;
 fn test_resolved_ts_basic() {
     let mut suite = TestSuite::new(1);
     let region = suite.cluster.get_region(&[]);
-    let (k, v) = (b"k1", b"v");
-    suite.cluster.must_put(k, v);
-    suite.cluster.must_put_cf("write", k, v);
-    suite.cluster.must_put_cf("lock", k, v);
+
     // Prewrite
+    let (k, v) = (b"k1", b"v");
     let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Put);
     mutation.key = k.to_vec();
     mutation.value = v.to_vec();
     suite.must_kv_prewrite(region.id, vec![mutation], k.to_vec(), start_ts);
-    suite.must_get_rts(region.id, start_ts);
+
+    // The `resolved-ts` won't be updated due to there is lock on the region,
+    // the `resolved-ts` may not be the `start_ts` of the lock if the `resolved-ts`
+    // is updated with a newer ts before the prewrite request come, but still the
+    // `resolved-ts` won't be updated
+    let rts = suite.region_resolved_ts(region.id).unwrap();
 
     // Split region
     suite.cluster.must_split(&region, k);
@@ -34,13 +37,13 @@ fn test_resolved_ts_basic() {
     let current_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     // Resolved ts of region1 should be advanced
     suite.must_get_rts_ge(r1.id, current_ts);
-    // Resolved ts of region2 should be equal to start ts
-    suite.must_get_rts(r2.id, start_ts);
+    // Resolved ts of region2 should be equal to rts
+    suite.must_get_rts(r2.id, rts);
 
     // Merge region2 to region1
     suite.cluster.must_try_merge(r2.id, r1.id);
-    // Resolved ts of region1 should be equal to start ts
-    suite.must_get_rts(r1.id, start_ts);
+    // Resolved ts of region1 should be equal to rts
+    suite.must_get_rts(r1.id, rts);
 
     // Commit
     let commit_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
@@ -85,4 +88,6 @@ fn test_dynamic_change_advance_ts_interval() {
         region.id,
         block_on(suite.cluster.pd_client.get_tso()).unwrap(),
     );
+
+    suite.stop();
 }
