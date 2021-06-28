@@ -2,6 +2,19 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [5.0.3] - 2021-06-30
++ Improvements
+  + Fix wrong tikv_raftstore_hibernated_peer_state metric [#10431](https://github.com/tikv/tikv/pull/10431)
+  + Copr: fix the wrong arguments type of json_unquote [#10424](https://github.com/tikv/tikv/pull/10424)
+  + Fix the issue that br reports file already exists error when TDE enabled during restoration. [#10421](https://github.com/tikv/tikv/pull/10421)
+  + This bug does not affects existing releases. [#10417](https://github.com/tikv/tikv/pull/10417)
+  + Raftstore: reply to stale peer with tombstone message everytime [#10401](https://github.com/tikv/tikv/pull/10401)
+  + Raftstore: skip clearing callback when shutdown [#10396](https://github.com/tikv/tikv/pull/10396)
+  + Fix a bug that share read index for replica reads on a leader [#10391](https://github.com/tikv/tikv/pull/10391)
+  + Copr: fix wrong function cast double to double [#10388](https://github.com/tikv/tikv/pull/10388)
+  + Cdc: change old value cache to memory-bounded [#10313](https://github.com/tikv/tikv/pull/10313)
+  + Limit CDC sink memory consumption. [#10305](https://github.com/tikv/tikv/pull/10305)
+
 ## [5.0.2] - 2021-06-09
 + Improvements
   + Enable hibernate regions by default (i.e. `raftstore.hibernate-regions = true`). [#10266](https://github.com/tikv/tikv/pull/10266)
