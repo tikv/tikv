@@ -1486,7 +1486,6 @@ fn collect_report_read_peer_stats(
         stats_topn_report.push(query_cmp_stat);
     }
 
-
     for x in keys_topn_report {
         if let Some(report_stat) = report_read_stats.remove(&x.region_id) {
             peer_stats.insert(x.region_id, report_stat);
