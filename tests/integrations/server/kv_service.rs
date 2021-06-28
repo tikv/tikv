@@ -29,6 +29,7 @@ use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::{fsm::store::StoreMeta, AutoSplitController, SnapManager};
 use test_raftstore::*;
 use tikv::coprocessor::REQ_TYPE_DAG;
+use tikv::import::Config as ImportConfig;
 use tikv::import::SSTImporter;
 use tikv::server;
 use tikv::server::gc_worker::sync_gc;
@@ -50,9 +51,9 @@ fn test_rawkv() {
     cas_req.key = k.clone();
     cas_req.value = v0.clone();
     cas_req.previous_not_exist = true;
-    let resp = client.raw_compare_and_set(&cas_req).unwrap();
+    let resp = client.raw_compare_and_swap(&cas_req).unwrap();
     assert!(!resp.has_region_error());
-    assert!(!resp.get_not_equal());
+    assert!(resp.get_succeed());
 
     // Raw get
     let mut get_req = RawGetRequest::default();
@@ -64,8 +65,8 @@ fn test_rawkv() {
     cas_req.value = v1.clone();
     cas_req.previous_not_exist = false;
     cas_req.previous_value = v0;
-    let resp = client.raw_compare_and_set(&cas_req).unwrap();
-    assert!(!resp.get_not_equal());
+    let resp = client.raw_compare_and_swap(&cas_req).unwrap();
+    assert!(resp.get_succeed());
     let get_resp = client.raw_get(&get_req).unwrap();
     assert_eq!(get_resp.value, v1);
 
@@ -127,9 +128,9 @@ fn test_rawkv_ttl() {
     cas_req.value = v0.clone();
     cas_req.previous_not_exist = false;
     cas_req.previous_value = v1.clone();
-    let resp = client.raw_compare_and_set(&cas_req).unwrap();
+    let resp = client.raw_compare_and_swap(&cas_req).unwrap();
     assert!(!resp.has_region_error());
-    assert!(resp.get_not_equal());
+    assert!(!resp.get_succeed());
 
     let mut cas_req = RawCasRequest::default();
     cas_req.set_context(ctx.clone());
@@ -138,9 +139,9 @@ fn test_rawkv_ttl() {
     cas_req.previous_not_exist = true;
     cas_req.previous_value = vec![];
     cas_req.ttl = 100;
-    let resp = client.raw_compare_and_set(&cas_req).unwrap();
+    let resp = client.raw_compare_and_swap(&cas_req).unwrap();
     assert!(!resp.has_region_error());
-    assert!(!resp.get_not_equal());
+    assert!(resp.get_succeed());
     // Raw get
     let mut get_req = RawGetRequest::default();
     get_req.set_context(ctx.clone());
@@ -154,8 +155,8 @@ fn test_rawkv_ttl() {
     cas_req.previous_not_exist = false;
     cas_req.previous_value = v0;
     cas_req.ttl = 140;
-    let resp = client.raw_compare_and_set(&cas_req).unwrap();
-    assert!(!resp.get_not_equal());
+    let resp = client.raw_compare_and_swap(&cas_req).unwrap();
+    assert!(resp.get_succeed());
     let get_resp = client.raw_get(&get_req).unwrap();
     assert_eq!(get_resp.value, v1);
 
@@ -930,10 +931,10 @@ fn test_double_run_node() {
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
     let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap());
-    let coprocessor_host = CoprocessorHost::new(router);
+    let coprocessor_host = CoprocessorHost::new(router, raftstore::coprocessor::Config::default());
     let importer = {
         let dir = Path::new(engines.kv.path()).join("import-sst");
-        Arc::new(SSTImporter::new(dir, None).unwrap())
+        Arc::new(SSTImporter::new(&ImportConfig::default(), dir, None).unwrap())
     };
     let (split_check_scheduler, _) = dummy_scheduler();
 
@@ -1275,7 +1276,7 @@ fn test_prewrite_check_max_commit_ts() {
     assert_eq!(resp.get_min_commit_ts(), 101);
 
     let mut req = PrewriteRequest::default();
-    req.set_context(ctx);
+    req.set_context(ctx.clone());
     req.set_primary_lock(b"k2".to_vec());
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Put);
@@ -1283,11 +1284,39 @@ fn test_prewrite_check_max_commit_ts() {
     mutation.set_value(b"v2".to_vec());
     req.mut_mutations().push(mutation);
     req.set_start_version(20);
+    req.set_min_commit_ts(21);
     req.set_max_commit_ts(50);
     req.set_lock_ttl(20000);
     req.set_use_async_commit(true);
-    let resp = client.kv_prewrite(&req).unwrap();
-    assert_eq!(resp.get_min_commit_ts(), 0);
+    // Test the idempotency of prewrite when falling back to 2PC.
+    for _ in 0..2 {
+        let resp = client.kv_prewrite(&req).unwrap();
+        assert_eq!(resp.get_min_commit_ts(), 0);
+        assert_eq!(resp.get_one_pc_commit_ts(), 0);
+    }
+
+    // 1PC
+    let mut req = PrewriteRequest::default();
+    req.set_context(ctx);
+    req.set_primary_lock(b"k3".to_vec());
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(b"k3".to_vec());
+    mutation.set_value(b"v3".to_vec());
+    req.mut_mutations().push(mutation);
+    req.set_start_version(20);
+    req.set_min_commit_ts(21);
+    req.set_max_commit_ts(50);
+    req.set_lock_ttl(20000);
+    req.set_use_async_commit(true);
+    req.set_try_one_pc(true);
+    // Test the idempotency of prewrite when falling back to 2PC.
+    for _ in 0..2 {
+        let resp = client.kv_prewrite(&req).unwrap();
+        assert_eq!(resp.get_min_commit_ts(), 0);
+        assert_eq!(resp.get_one_pc_commit_ts(), 0);
+    }
+
     // There shouldn't be locks remaining in the lock table.
     assert!(cm.read_range_check(None, None, |_, _| Err(())).is_ok());
 }

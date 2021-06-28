@@ -114,7 +114,7 @@ portable = ["tikv/portable"]
 fail = "0.4"
 batch-system = { path = "../components/batch-system", default-features = false }
 crc64fast = "0.1"
-crossbeam = "0.7.2"
+crossbeam = "0.8"
 configuration = { path = "../components/configuration", default-features = false }
 encryption = { path = "../components/encryption", default-features = false }
 cdc = { path = "../components/cdc", default-features = false }
@@ -122,7 +122,7 @@ futures = "0.3"
 grpcio = { version = "0.8",  default-features = false, features = ["openssl-vendored"] }
 grpcio-health = { version = "0.8", default-features = false }
 log_wrappers = { path = "../components/log_wrappers" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-5.0", default-features = false }
 paste = "1.0"
 pd_client = { path = "../components/pd_client", default-features = false }
 protobuf = "2.8"
@@ -182,4 +182,4 @@ file_system = { path = "../components/file_system" }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 criterion-perf-events = "0.1"
-perfcnt = "0.6"
+perfcnt = "0.7"

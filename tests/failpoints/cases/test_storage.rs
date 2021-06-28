@@ -1,18 +1,21 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc::channel, mpsc::RecvTimeoutError, Arc, Mutex};
+use std::sync::{mpsc::channel, mpsc::RecvTimeoutError, Arc};
 use std::thread;
 use std::time::Duration;
 
 use grpcio::*;
-use kvproto::kvrpcpb::{self, Context, Op, PrewriteRequest, RawPutRequest};
+use kvproto::kvrpcpb::{
+    self, BatchRollbackRequest, CommitRequest, Context, GetRequest, Op, PrewriteRequest,
+    RawPutRequest,
+};
 use kvproto::tikvpb::TikvClient;
 
 use collections::HashMap;
 use errors::{extract_key_error, extract_region_error};
 use futures::executor::block_on;
-use test_raftstore::{must_get_equal, must_get_none, new_peer, new_server_cluster};
+use test_raftstore::*;
 use tikv::storage::kv::{Error as KvError, ErrorInner as KvErrorInner, SnapContext};
 use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner};
@@ -20,7 +23,7 @@ use tikv::storage::{self, test_util::*, *};
 use tikv_util::future::paired_future_callback;
 use tikv_util::HandyRwLock;
 use txn_types::Key;
-use txn_types::{Mutation, TimeStamp};
+use txn_types::{Mutation, OldValues, TimeStamp};
 
 #[test]
 fn test_scheduler_leader_change_twice() {
@@ -522,6 +525,7 @@ fn test_async_apply_prewrite_impl<E: Engine>(
                     None,
                     false,
                     0.into(),
+                    OldValues::default(),
                     ctx.clone(),
                 ),
                 Box::new(move |r| tx.send(r).unwrap()),
@@ -858,6 +862,7 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine>(
                     None,
                     false,
                     0.into(),
+                    OldValues::default(),
                     ctx.clone(),
                 ),
                 Box::new(move |r| tx.send(r).unwrap()),
@@ -996,10 +1001,8 @@ fn test_atomic_cas_lock_by_latch() {
 
     let latch_acquire_success_fp = "txn_scheduler_acquire_success";
     let latch_acquire_fail_fp = "txn_scheduler_acquire_fail";
-    let pending_cas_fp = "txn_commands_compare_and_set";
+    let pending_cas_fp = "txn_commands_compare_and_swap";
     let wakeup_latch_fp = "txn_scheduler_try_to_wake_up";
-    let (cas_tx, cas_rx) = channel();
-    let cas_rx = Mutex::new(Some(cas_rx));
     let acquire_flag = Arc::new(AtomicBool::new(false));
     let acquire_flag1 = acquire_flag.clone();
     let acquire_flag_fail = Arc::new(AtomicBool::new(false));
@@ -1007,12 +1010,7 @@ fn test_atomic_cas_lock_by_latch() {
     let wakeup_latch_flag = Arc::new(AtomicBool::new(false));
     let wakeup1 = wakeup_latch_flag.clone();
 
-    fail::cfg_callback(pending_cas_fp, move || {
-        if let Some(rx) = cas_rx.lock().unwrap().take() {
-            rx.recv().unwrap();
-        }
-    })
-    .unwrap();
+    fail::cfg(pending_cas_fp, "pause").unwrap();
     fail::cfg_callback(latch_acquire_success_fp, move || {
         acquire_flag1.store(true, Ordering::Release);
     })
@@ -1027,7 +1025,7 @@ fn test_atomic_cas_lock_by_latch() {
     .unwrap();
     let (cb, f1) = paired_future_callback();
     storage
-        .raw_compare_and_set_atomic(
+        .raw_compare_and_swap_atomic(
             ctx.clone(),
             "".to_string(),
             b"key".to_vec(),
@@ -1042,7 +1040,7 @@ fn test_atomic_cas_lock_by_latch() {
     acquire_flag.store(false, Ordering::Release);
     let (cb, f2) = paired_future_callback();
     storage
-        .raw_compare_and_set_atomic(
+        .raw_compare_and_swap_atomic(
             ctx.clone(),
             "".to_string(),
             b"key".to_vec(),
@@ -1054,12 +1052,102 @@ fn test_atomic_cas_lock_by_latch() {
         .unwrap();
     assert!(acquire_flag_fail.load(Ordering::Acquire));
     assert!(!acquire_flag.load(Ordering::Acquire));
-    cas_tx.send(()).unwrap();
+    fail::remove(pending_cas_fp);
     let _ = block_on(f1).unwrap();
-    let (ret, _) = block_on(f2).unwrap().unwrap();
+    let (prev_val, succeed) = block_on(f2).unwrap().unwrap();
     assert!(wakeup_latch_flag.load(Ordering::Acquire));
-    assert!(ret.is_none());
+    assert!(succeed);
+    assert_eq!(prev_val, Some(b"v1".to_vec()));
     let f = storage.raw_get(ctx, "".to_string(), b"key".to_vec());
     let ret = block_on(f).unwrap().unwrap();
     assert_eq!(b"v2".to_vec(), ret);
+}
+
+/// Checks if concurrent transaction works correctly during shutdown.
+///
+/// During shutdown, all pending writes will fail with error so its latch will be released.
+/// Then other writes in the latch queue will be continued to be processed, which can break
+/// the correctness of latch: underlying command result is always determined, it should be
+/// either always success written or never be written.
+#[test]
+fn test_mvcc_concurrent_commit_and_rollback_at_shutdown() {
+    let (mut cluster, mut client, mut ctx) = must_new_cluster_and_kv_client_mul(3);
+    let k = b"key".to_vec();
+    // Use big value to force it in default cf.
+    let v = vec![0; 10240];
+
+    let mut ts = 0;
+
+    // Prewrite
+    ts += 1;
+    let prewrite_start_version = ts;
+    let mut mutation = kvrpcpb::Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(k.clone());
+    mutation.set_value(v.clone());
+    must_kv_prewrite(
+        &client,
+        ctx.clone(),
+        vec![mutation],
+        k.clone(),
+        prewrite_start_version,
+    );
+
+    // So all following operation will not be committed by this leader.
+    let leader_fp = "before_leader_handle_committed_entries";
+    fail::cfg(leader_fp, "pause").unwrap();
+
+    // Commit
+    ts += 1;
+    let commit_version = ts;
+    let mut commit_req = CommitRequest::default();
+    commit_req.set_context(ctx.clone());
+    commit_req.start_version = prewrite_start_version;
+    commit_req.mut_keys().push(k.clone());
+    commit_req.commit_version = commit_version;
+    let _commit_resp = client.kv_commit_async(&commit_req).unwrap();
+
+    // Rollback
+    let rollback_start_version = prewrite_start_version;
+    let mut rollback_req = BatchRollbackRequest::default();
+    rollback_req.set_context(ctx.clone());
+    rollback_req.start_version = rollback_start_version;
+    rollback_req.mut_keys().push(k.clone());
+    let _rollback_resp = client.kv_batch_rollback_async(&rollback_req).unwrap();
+
+    // Sleep some time to make sure both commit and rollback are queued in latch.
+    thread::sleep(Duration::from_millis(100));
+    let shutdown_fp = "after_shutdown_apply";
+    fail::cfg_callback(shutdown_fp, move || {
+        fail::remove(leader_fp);
+        // Sleep some time to ensure all logs can be replicated.
+        thread::sleep(Duration::from_millis(300));
+    })
+    .unwrap();
+    let mut leader = cluster.leader_of_region(1).unwrap();
+    cluster.stop_node(leader.get_store_id());
+
+    // So a new leader should be elected.
+    cluster.must_put(b"k2", b"v2");
+    leader = cluster.leader_of_region(1).unwrap();
+    ctx.set_peer(leader.clone());
+    let env = Arc::new(Environment::new(1));
+    let channel =
+        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
+    client = TikvClient::new(channel);
+
+    // The first request is commit, the second is rollback, the first one should succeed.
+    ts += 1;
+    let get_version = ts;
+    let mut get_req = GetRequest::default();
+    get_req.set_context(ctx);
+    get_req.key = k;
+    get_req.version = get_version;
+    let get_resp = client.kv_get(&get_req).unwrap();
+    assert!(
+        !get_resp.has_region_error() && !get_resp.has_error(),
+        "{:?}",
+        get_resp
+    );
+    assert_eq!(get_resp.value, v);
 }

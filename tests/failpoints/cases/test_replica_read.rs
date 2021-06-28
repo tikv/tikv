@@ -475,3 +475,92 @@ fn test_replica_read_after_transfer_leader() {
     let exp_value = resp.get_responses()[0].get_get().get_value();
     assert_eq!(exp_value, b"v2");
 }
+
+// This test is for reproducing the bug that some replica reads was sent to a leader and shared a same
+// read index because of the optimization on leader.
+#[test]
+fn test_read_index_after_transfer_leader() {
+    let mut cluster = new_node_cluster(0, 3);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    configure_for_lease_read(&mut cluster, Some(50), Some(100));
+    // Setup cluster and check all peers have data.
+    let region_id = cluster.run_conf_change();
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    cluster.must_transfer_leader(region_id, new_peer(2, 2));
+    cluster.must_put(b"k1", b"v1");
+    for i in 1..=3 {
+        must_get_equal(&cluster.get_engine(i), b"k1", b"v1");
+    }
+    // Add a recv filter for holding up raft messages.
+    let dropped_msgs = Arc::new(Mutex::new(Vec::new()));
+    let filter = Box::new(
+        RegionPacketFilter::new(region_id, 2)
+            .direction(Direction::Recv)
+            .skip(MessageType::MsgTransferLeader)
+            .reserve_dropped(Arc::clone(&dropped_msgs)),
+    );
+    cluster.sim.wl().add_recv_filter(2, filter);
+    // Send 10 read index requests to peer 2 which is a follower.
+    let mut responses = Vec::with_capacity(10);
+    let region = cluster.get_region(b"k1");
+    for _ in 0..10 {
+        let resp =
+            async_read_index_on_peer(&mut cluster, new_peer(2, 2), region.clone(), b"k1", true);
+        responses.push(resp);
+    }
+    // Try to split the region to change the peer into `splitting` state then can not handle read requests.
+    cluster.split_region(&region, b"k2", raftstore::store::Callback::None);
+    // Wait the split command be sent.
+    sleep_ms(100);
+    // Filter all heartbeat and append responses to advance read index.
+    let msgs = std::mem::take(&mut *dropped_msgs.lock().unwrap());
+    let heartbeat_msgs = msgs.iter().filter(|msg| {
+        let msg_type = msg.get_message().get_msg_type();
+        matches!(msg_type, MessageType::MsgHeartbeatResponse)
+    });
+    let append_msgs = msgs.iter().filter(|msg| {
+        let msg_type = msg.get_message().get_msg_type();
+        matches!(msg_type, MessageType::MsgAppendResponse)
+    });
+    // Transfer leader to peer 1, peer 2 should not change role since we added a recv filter.
+    cluster.transfer_leader(region_id, new_peer(1, 1));
+    // Pause before collecting peer messages to make sure all messages can be handled in one batch.
+    let on_peer_collect_message_2 = "on_peer_collect_message_2";
+    fail::cfg(on_peer_collect_message_2, "pause").unwrap();
+    // Pause apply worker to stop the split command so peer 2 would keep in `splitting` state.
+    let on_handle_apply_2 = "on_handle_apply_2";
+    fail::cfg(on_handle_apply_2, "pause").unwrap();
+    // Send heartbeat and append responses to advance read index.
+    let router = cluster.sim.wl().get_router(2).unwrap();
+    for msg in append_msgs {
+        router.send_raft_message(msg.clone()).unwrap();
+    }
+    for msg in heartbeat_msgs {
+        router.send_raft_message(msg.clone()).unwrap();
+    }
+    fail::remove(on_peer_collect_message_2);
+    // Wait for read index has been advanced.
+    sleep_ms(100);
+    // Filter and send vote message, peer 2 would step down to follower and try to handle read requests
+    // as a follower.
+    let msgs = std::mem::take(&mut *dropped_msgs.lock().unwrap());
+    let vote_msgs = msgs.iter().filter(|msg| {
+        let msg_type = msg.get_message().get_msg_type();
+        matches!(
+            msg_type,
+            MessageType::MsgRequestVote | MessageType::MsgRequestPreVote
+        )
+    });
+    for msg in vote_msgs {
+        router.send_raft_message(msg.clone()).unwrap();
+    }
+
+    for resp in responses {
+        resp.recv_timeout(Duration::from_millis(200)).unwrap();
+    }
+
+    cluster.sim.wl().clear_recv_filters(2);
+    fail::remove(on_handle_apply_2);
+}

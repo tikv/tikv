@@ -4,11 +4,13 @@ use std::io::Error as IoError;
 use std::{error, result};
 
 use engine_traits::Error as EngineTraitsError;
-use kvproto::errorpb::Error as ErrorHeader;
+use kvproto::errorpb;
 use tikv::storage::kv::{Error as EngineError, ErrorInner as EngineErrorInner};
 use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 use txn_types::Error as TxnTypesError;
+
+use crate::channel::SendError;
 
 /// The error type for cdc.
 #[derive(Debug, Fail)]
@@ -26,9 +28,13 @@ pub enum Error {
     #[fail(display = "Mvcc error {}", _0)]
     Mvcc(MvccError),
     #[fail(display = "Request error {:?}", _0)]
-    Request(ErrorHeader),
+    Request(errorpb::Error),
     #[fail(display = "Engine traits error {}", _0)]
     EngineTraits(EngineTraitsError),
+    #[fail(display = "Resolver Builder has disconnected")]
+    ResolverBuilderConnExited,
+    #[fail(display = "Sink send error {:?}", _0)]
+    Sink(SendError),
 }
 
 macro_rules! impl_from {
@@ -52,12 +58,27 @@ impl_from! {
     MvccError => Mvcc,
     TxnTypesError => Mvcc,
     EngineTraitsError => EngineTraits,
+    SendError => Sink,
 }
 
 pub type Result<T> = result::Result<T, Error>;
 
 impl Error {
-    pub fn extract_error_header(self) -> ErrorHeader {
+    pub fn has_region_error(&self) -> bool {
+        matches!(
+            self,
+            Error::Engine(EngineError(box EngineErrorInner::Request(_)))
+                | Error::Txn(TxnError(box TxnErrorInner::Engine(EngineError(
+                    box EngineErrorInner::Request(_),
+                ))))
+                | Error::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+                    box MvccErrorInner::Engine(EngineError(box EngineErrorInner::Request(_))),
+                ))))
+                | Error::Request(_)
+        )
+    }
+
+    pub fn extract_region_error(self) -> errorpb::Error {
         match self {
             Error::Engine(EngineError(box EngineErrorInner::Request(e)))
             | Error::Txn(TxnError(box TxnErrorInner::Engine(EngineError(
@@ -67,8 +88,9 @@ impl Error {
                 box MvccErrorInner::Engine(EngineError(box EngineErrorInner::Request(e))),
             ))))
             | Error::Request(e) => e,
+            // TODO: it should be None, add more cdc errors.
             other => {
-                let mut e = ErrorHeader::default();
+                let mut e = errorpb::Error::default();
                 e.set_message(format!("{:?}", other));
                 e
             }

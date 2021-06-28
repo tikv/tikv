@@ -6,6 +6,7 @@ slow-log-threshold = "1s"
 log-rotation-timespan = "1d"
 panic-when-unexpected-key-or-data = true
 enable-io-snoop = false
+abort-on-panic = true
 
 [readpool.unified]
 min-thread-count = 5
@@ -615,6 +616,11 @@ pipelined = false
 min-ts-interval = "4s"
 old-value-cache-size = 512
 hibernate-regions-compatible = false
+incremental-scan-threads = 3
+incremental-scan-concurrency = 4
+incremental-scan-speed-limit = 7
+old-value-cache-memory-quota = "14MB"
+sink-memory-quota = "7MB"
 
 [split]
 detect-times = 10

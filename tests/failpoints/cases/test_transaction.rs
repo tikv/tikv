@@ -312,3 +312,94 @@ fn test_max_commit_ts_error() {
     assert!(l1.use_async_commit);
     assert!(!l2.use_async_commit);
 }
+
+#[test]
+fn test_exceed_max_commit_ts_in_the_middle_of_prewrite() {
+    let engine = TestEngineBuilder::new().build().unwrap();
+    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+        engine,
+        DummyLockManager {},
+    )
+    .build()
+    .unwrap();
+    let cm = storage.get_concurrency_manager();
+
+    let (prewrite_tx, prewrite_rx) = channel();
+    // Pause between getting max ts and store the lock in memory
+    fail::cfg("before-set-lock-in-memory", "pause").unwrap();
+
+    cm.update_max_ts(40.into());
+    let mutations = vec![
+        Mutation::Put((Key::from_raw(b"k1"), b"v".to_vec())),
+        Mutation::Put((Key::from_raw(b"k2"), b"v".to_vec())),
+    ];
+    storage
+        .sched_txn_command(
+            commands::Prewrite::new(
+                mutations.clone(),
+                b"k1".to_vec(),
+                10.into(),
+                20000,
+                false,
+                2,
+                11.into(),
+                50.into(),
+                Some(vec![]),
+                false,
+                Context::default(),
+            ),
+            Box::new(move |res| {
+                prewrite_tx.send(res).unwrap();
+            }),
+        )
+        .unwrap();
+    // sleep a while so the first key gets max ts.
+    thread::sleep(Duration::from_millis(200));
+
+    cm.update_max_ts(51.into());
+    fail::remove("before-set-lock-in-memory");
+    let res = prewrite_rx.recv().unwrap().unwrap();
+    assert!(res.min_commit_ts.is_zero());
+    assert!(res.one_pc_commit_ts.is_zero());
+
+    let locks = block_on(storage.scan_lock(
+        Context::default(),
+        20.into(),
+        Some(Key::from_raw(b"k1")),
+        None,
+        2,
+    ))
+    .unwrap();
+    assert_eq!(locks.len(), 2);
+    assert_eq!(locks[0].get_key(), b"k1");
+    assert!(locks[0].get_use_async_commit());
+    assert_eq!(locks[0].get_min_commit_ts(), 41);
+    assert_eq!(locks[1].get_key(), b"k2");
+    assert!(!locks[1].get_use_async_commit());
+
+    // Send a duplicated request to test the idempotency of prewrite when falling back to 2PC.
+    let (prewrite_tx, prewrite_rx) = channel();
+    storage
+        .sched_txn_command(
+            commands::Prewrite::new(
+                mutations,
+                b"k1".to_vec(),
+                10.into(),
+                20000,
+                false,
+                2,
+                11.into(),
+                50.into(),
+                Some(vec![]),
+                false,
+                Context::default(),
+            ),
+            Box::new(move |res| {
+                prewrite_tx.send(res).unwrap();
+            }),
+        )
+        .unwrap();
+    let res = prewrite_rx.recv().unwrap().unwrap();
+    assert!(res.min_commit_ts.is_zero());
+    assert!(res.one_pc_commit_ts.is_zero());
+}

@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use futures::executor::ThreadPool;
 use futures_util::io::{AsyncRead, AsyncReadExt};
 use kvproto::backup::StorageBackend;
 #[cfg(feature = "prost-codec")]
@@ -25,8 +26,8 @@ use engine_rocks::{
     RocksSstReader,
 };
 use engine_traits::{
-    EncryptionKeyManager, IngestExternalFileOptions, Iterator, KvEngine, SeekKey, SstReader,
-    SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
+    name_to_cf, EncryptionKeyManager, IngestExternalFileOptions, Iterator, KvEngine, SSTMetaInfo,
+    SeekKey, SstExt, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 };
 use external_storage::{create_storage, url_of_backend};
 use file_system::{sync_dir, File, OpenOptions};
@@ -34,24 +35,34 @@ use tikv_util::stream::{block_on_external_io, READ_BUF_SIZE};
 use tikv_util::time::Limiter;
 use txn_types::{is_short_value, Key, TimeStamp, Write as KvWrite, WriteRef, WriteType};
 
+use super::Config;
 use super::{Error, Result};
+use crate::import_mode::{ImportModeSwitcher, RocksDBMetricsFn};
 use crate::metrics::*;
 
 /// SSTImporter manages SST files that are waiting for ingesting.
 pub struct SSTImporter {
     dir: ImportDir,
     key_manager: Option<Arc<DataKeyManager>>,
+    switcher: ImportModeSwitcher,
 }
 
 impl SSTImporter {
     pub fn new<P: AsRef<Path>>(
+        cfg: &Config,
         root: P,
         key_manager: Option<Arc<DataKeyManager>>,
     ) -> Result<SSTImporter> {
+        let switcher = ImportModeSwitcher::new(cfg);
         Ok(SSTImporter {
             dir: ImportDir::new(root)?,
             key_manager,
+            switcher,
         })
+    }
+
+    pub fn start_switch_mode_check<E: KvEngine>(&self, executor: &ThreadPool, db: E) {
+        self.switcher.start(executor, db);
     }
 
     pub fn get_path(&self, meta: &SstMeta) -> PathBuf {
@@ -85,11 +96,11 @@ impl SSTImporter {
         }
     }
 
-    pub fn ingest<E: KvEngine>(&self, meta: &SstMeta, engine: &E) -> Result<()> {
-        match self.dir.ingest(meta, engine, self.key_manager.as_deref()) {
-            Ok(_) => {
-                info!("ingest"; "meta" => ?meta);
-                Ok(())
+    pub fn ingest<E: KvEngine>(&self, meta: &SstMeta, engine: &E) -> Result<SSTMetaInfo> {
+        match self.dir.ingest(meta, engine, self.key_manager.clone()) {
+            Ok(meta_info) => {
+                info!("ingest"; "meta" => ?meta_info);
+                Ok(meta_info)
             }
             Err(e) => {
                 error!(%e; "ingest failed"; "meta" => ?meta, );
@@ -125,7 +136,7 @@ impl SSTImporter {
         name: &str,
         rewrite_rule: &RewriteRule,
         speed_limiter: Limiter,
-        sst_writer: E::SstWriter,
+        engine: E,
     ) -> Result<Option<Range>> {
         debug!("download start";
             "meta" => ?meta,
@@ -134,7 +145,7 @@ impl SSTImporter {
             "rewrite_rule" => ?rewrite_rule,
             "speed_limit" => speed_limiter.speed_limit(),
         );
-        match self.do_download::<E>(meta, backend, name, rewrite_rule, speed_limiter, sst_writer) {
+        match self.do_download::<E>(meta, backend, name, rewrite_rule, speed_limiter, engine) {
             Ok(r) => {
                 info!("download"; "meta" => ?meta, "name" => name, "range" => ?r);
                 Ok(r)
@@ -144,6 +155,18 @@ impl SSTImporter {
                 Err(e)
             }
         }
+    }
+
+    pub fn enter_normal_mode<E: KvEngine>(&self, db: E, mf: RocksDBMetricsFn) -> Result<bool> {
+        self.switcher.enter_normal_mode(&db, mf)
+    }
+
+    pub fn enter_import_mode<E: KvEngine>(&self, db: E, mf: RocksDBMetricsFn) -> Result<bool> {
+        self.switcher.enter_import_mode(&db, mf)
+    }
+
+    pub fn get_mode(&self) -> SwitchMode {
+        self.switcher.get_mode()
     }
 
     async fn read_external_storage_into_file(
@@ -195,7 +218,7 @@ impl SSTImporter {
         name: &str,
         rewrite_rule: &RewriteRule,
         speed_limiter: Limiter,
-        mut sst_writer: E::SstWriter,
+        engine: E,
     ) -> Result<Option<Range>> {
         let path = self.dir.join(meta)?;
         let url = url_of_backend(backend);
@@ -359,6 +382,15 @@ impl SSTImporter {
             Bound::Included(s) => iter.seek(SeekKey::Key(&keys::data_key(&s)))?,
             Bound::Excluded(_) => unreachable!(),
         };
+        // SST writer must not be opened in gRPC threads, because it may be
+        // blocked for a long time due to IO, especially, when encryption at rest
+        // is enabled, and it leads to gRPC keepalive timeout.
+        let mut sst_writer = <E as SstExt>::SstWriterBuilder::new()
+            .set_db(&engine)
+            .set_cf(name_to_cf(meta.get_cf_name()).unwrap())
+            .build(path.save.to_str().unwrap())
+            .unwrap();
+
         while iter.valid()? {
             let old_key = keys::origin_key(iter.key());
             if is_after_end_bound(&old_key, &range_end) {
@@ -661,13 +693,24 @@ impl ImportDir {
         &self,
         meta: &SstMeta,
         engine: &E,
-        key_manager: Option<&DataKeyManager>,
-    ) -> Result<()> {
+        key_manager: Option<Arc<DataKeyManager>>,
+    ) -> Result<SSTMetaInfo> {
         let start = Instant::now();
         let path = self.join(meta)?;
         let cf = meta.get_cf_name();
-        super::prepare_sst_for_ingestion(&path.save, &path.clone, key_manager)?;
+
+        // now validate the SST file.
+        let path_str = path.save.to_str().unwrap();
+        let env = get_encrypted_env(key_manager.clone(), None /*base_env*/)?;
+        let env = get_inspected_env(Some(env))?;
+
+        let sst_reader = RocksSstReader::open_with_env(&path_str, Some(env))?;
+        sst_reader.verify_checksum()?;
+        let meta_info = sst_reader.sst_meta_info(meta.to_owned());
+
+        super::prepare_sst_for_ingestion(&path.save, &path.clone, key_manager.as_deref())?;
         let length = meta.get_length();
+
         // TODO check the length and crc32 of ingested file.
         engine.reset_global_seq(cf, &path.clone)?;
         IMPORTER_INGEST_BYTES.observe(length as _);
@@ -679,7 +722,7 @@ impl ImportDir {
         IMPORTER_INGEST_DURATION
             .with_label_values(&["ingest"])
             .observe(start.elapsed().as_secs_f64());
-        Ok(())
+        Ok(meta_info)
     }
 
     fn list_ssts(&self) -> Result<Vec<SstMeta>> {
@@ -923,12 +966,11 @@ mod tests {
     use std::f64::INFINITY;
 
     use engine_traits::{
-        collect, name_to_cf, EncryptionMethod, Iterable, Iterator, SeekKey, CF_DEFAULT, DATA_CFS,
+        collect, EncryptionMethod, Iterable, Iterator, SeekKey, CF_DEFAULT, DATA_CFS,
     };
-    use engine_traits::{Error as TraitError, SstWriterBuilder, TablePropertiesExt};
+    use engine_traits::{Error as TraitError, TablePropertiesExt};
     use engine_traits::{
-        ExternalSstFileInfo, SstExt, TableProperties, TablePropertiesCollection,
-        UserCollectedProperties,
+        ExternalSstFileInfo, TableProperties, TablePropertiesCollection, UserCollectedProperties,
     };
     use tempfile::Builder;
     use test_sst_importer::{
@@ -994,7 +1036,7 @@ mod tests {
             f.append(&data).unwrap();
             f.finish().unwrap();
 
-            dir.ingest(&meta, &db, key_manager.as_deref()).unwrap();
+            dir.ingest(&meta, &db, key_manager.clone()).unwrap();
             check_db_range(&db, range);
 
             ingested.push(meta);
@@ -1279,19 +1321,11 @@ mod tests {
         rule
     }
 
-    fn create_sst_writer_with_db(
-        importer: &SSTImporter,
-        meta: &SstMeta,
-    ) -> Result<<TestEngine as SstExt>::SstWriter> {
+    fn create_sst_test_engine() -> Result<TestEngine> {
         let temp_dir = Builder::new().prefix("test_import_dir").tempdir().unwrap();
         let db_path = temp_dir.path().join("db");
         let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
-        let sst_writer = <TestEngine as SstExt>::SstWriterBuilder::new()
-            .set_db(&db)
-            .set_cf(name_to_cf(meta.get_cf_name()).unwrap())
-            .build(importer.get_path(meta).to_str().unwrap())
-            .unwrap();
-        Ok(sst_writer)
+        Ok(db)
     }
 
     #[test]
@@ -1335,8 +1369,9 @@ mod tests {
 
         // performs the download.
         let importer_dir = tempfile::tempdir().unwrap();
-        let importer = SSTImporter::new(&importer_dir, None).unwrap();
-        let sst_writer = create_sst_writer_with_db(&importer, &meta).unwrap();
+        let cfg = Config::default();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None).unwrap();
+        let db = create_sst_test_engine().unwrap();
 
         let range = importer
             .download::<TestEngine>(
@@ -1345,7 +1380,7 @@ mod tests {
                 "sample.sst",
                 &RewriteRule::default(),
                 Limiter::new(INFINITY),
-                sst_writer,
+                db,
             )
             .unwrap()
             .unwrap();
@@ -1360,7 +1395,60 @@ mod tests {
         assert_eq!(sst_file_metadata.len(), meta.get_length());
 
         // verifies the SST content is correct.
-        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap());
+        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
+        sst_reader.verify_checksum().unwrap();
+        let mut iter = sst_reader.iter();
+        iter.seek(SeekKey::Start).unwrap();
+        assert_eq!(
+            collect(iter),
+            vec![
+                (b"zt123_r01".to_vec(), b"abc".to_vec()),
+                (b"zt123_r04".to_vec(), b"xyz".to_vec()),
+                (b"zt123_r07".to_vec(), b"pqrst".to_vec()),
+                (b"zt123_r13".to_vec(), b"www".to_vec()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_download_sst_no_key_rewrite_with_encrypted() {
+        // creates a sample SST file.
+        let (_ext_sst_dir, backend, meta) = create_sample_external_sst_file().unwrap();
+
+        // performs the download.
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let (temp_dir, key_manager) = new_key_manager_for_test();
+        let importer = SSTImporter::new(&cfg, &importer_dir, Some(key_manager.clone())).unwrap();
+
+        let db_path = temp_dir.path().join("db");
+        let env = get_encrypted_env(Some(key_manager), None /*base_env*/).unwrap();
+        // ensure encrypted enabled
+        let db = new_test_engine_with_env(db_path.to_str().unwrap(), DATA_CFS, env.clone());
+
+        let range = importer
+            .download::<TestEngine>(
+                &meta,
+                &backend,
+                "sample.sst",
+                &RewriteRule::default(),
+                Limiter::new(INFINITY),
+                db,
+            )
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(range.get_start(), b"t123_r01");
+        assert_eq!(range.get_end(), b"t123_r13");
+
+        // verifies that the file is saved to the correct place.
+        let sst_file_path = importer.dir.join(&meta).unwrap().save;
+        let sst_file_metadata = sst_file_path.metadata().unwrap();
+        assert!(sst_file_metadata.is_file());
+        assert_eq!(sst_file_metadata.len(), meta.get_length());
+
+        // verifies the SST content is correct.
+        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), Some(env));
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
         iter.seek(SeekKey::Start).unwrap();
@@ -1382,8 +1470,9 @@ mod tests {
 
         // performs the download.
         let importer_dir = tempfile::tempdir().unwrap();
-        let importer = SSTImporter::new(&importer_dir, None).unwrap();
-        let sst_writer = create_sst_writer_with_db(&importer, &meta).unwrap();
+        let cfg = Config::default();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None).unwrap();
+        let db = create_sst_test_engine().unwrap();
 
         let range = importer
             .download::<TestEngine>(
@@ -1392,7 +1481,7 @@ mod tests {
                 "sample.sst",
                 &new_rewrite_rule(b"t123", b"t567", 0),
                 Limiter::new(INFINITY),
-                sst_writer,
+                db,
             )
             .unwrap()
             .unwrap();
@@ -1406,7 +1495,7 @@ mod tests {
         assert!(sst_file_path.is_file());
 
         // verifies the SST content is correct.
-        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap());
+        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
         iter.seek(SeekKey::Start).unwrap();
@@ -1425,11 +1514,12 @@ mod tests {
     fn test_download_sst_with_key_rewrite_ts_default() {
         // performs the download.
         let importer_dir = tempfile::tempdir().unwrap();
-        let importer = SSTImporter::new(&importer_dir, None).unwrap();
+        let cfg = Config::default();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None).unwrap();
 
         // creates a sample SST file.
         let (_ext_sst_dir, backend, meta) = create_sample_external_sst_file_txn_default().unwrap();
-        let sst_writer = create_sst_writer_with_db(&importer, &meta).unwrap();
+        let db = create_sst_test_engine().unwrap();
 
         let _ = importer
             .download::<TestEngine>(
@@ -1438,7 +1528,7 @@ mod tests {
                 "sample_default.sst",
                 &new_rewrite_rule(b"", b"", 16),
                 Limiter::new(INFINITY),
-                sst_writer,
+                db,
             )
             .unwrap()
             .unwrap();
@@ -1449,7 +1539,7 @@ mod tests {
         assert!(sst_file_path.is_file());
 
         // verifies the SST content is correct.
-        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap());
+        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
         iter.seek(SeekKey::Start).unwrap();
@@ -1467,11 +1557,12 @@ mod tests {
     fn test_download_sst_with_key_rewrite_ts_write() {
         // performs the download.
         let importer_dir = tempfile::tempdir().unwrap();
-        let importer = SSTImporter::new(&importer_dir, None).unwrap();
+        let cfg = Config::default();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None).unwrap();
 
         // creates a sample SST file.
         let (_ext_sst_dir, backend, meta) = create_sample_external_sst_file_txn_write().unwrap();
-        let sst_writer = create_sst_writer_with_db(&importer, &meta).unwrap();
+        let db = create_sst_test_engine().unwrap();
 
         let _ = importer
             .download::<TestEngine>(
@@ -1480,7 +1571,7 @@ mod tests {
                 "sample_write.sst",
                 &new_rewrite_rule(b"", b"", 16),
                 Limiter::new(INFINITY),
-                sst_writer,
+                db,
             )
             .unwrap()
             .unwrap();
@@ -1491,7 +1582,7 @@ mod tests {
         assert!(sst_file_path.is_file());
 
         // verifies the SST content is correct.
-        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap());
+        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
         iter.seek(SeekKey::Start).unwrap();
@@ -1531,8 +1622,9 @@ mod tests {
 
             // performs the download.
             let importer_dir = tempfile::tempdir().unwrap();
-            let importer = SSTImporter::new(&importer_dir, None).unwrap();
-            let sst_writer = create_sst_writer_with_db(&importer, &meta).unwrap();
+            let cfg = Config::default();
+            let importer = SSTImporter::new(&cfg, &importer_dir, None).unwrap();
+            let db = create_sst_test_engine().unwrap();
 
             let range = importer
                 .download::<TestEngine>(
@@ -1541,7 +1633,7 @@ mod tests {
                     "sample.sst",
                     &new_rewrite_rule(b"t123", b"t9102", 0),
                     Limiter::new(INFINITY),
-                    sst_writer,
+                    db,
                 )
                 .unwrap()
                 .unwrap();
@@ -1555,7 +1647,16 @@ mod tests {
 
             meta.set_length(0); // disable validation.
             meta.set_crc32(0);
-            importer.ingest(&meta, &db).unwrap();
+            let resp = importer.ingest(&meta, &db).unwrap();
+            // key1 = "zt9102_r01", value1 = "abc", len = 13
+            // key2 = "zt9102_r04", value2 = "xyz", len = 13
+            // key3 = "zt9102_r07", value3 = "pqrst", len = 15
+            // key4 = "zt9102_r13", value4 = "www", len = 13
+            // total_bytes = (13 + 13 + 15 + 13) + 4 * 8 = 86
+            // don't no why each key has extra 8 byte length in raw_key_size(), but it seems tolerable.
+            // https://docs.rs/rocks/0.1.0/rocks/table_properties/struct.TableProperties.html#method.raw_key_size
+            assert_eq!(resp.total_bytes, 86);
+            assert_eq!(resp.total_kvs, 4);
 
             // verifies the DB content is correct.
             let mut iter = db.iterator_cf(cf).unwrap();
@@ -1591,8 +1692,9 @@ mod tests {
     fn test_download_sst_partial_range() {
         let (_ext_sst_dir, backend, mut meta) = create_sample_external_sst_file().unwrap();
         let importer_dir = tempfile::tempdir().unwrap();
-        let importer = SSTImporter::new(&importer_dir, None).unwrap();
-        let sst_writer = create_sst_writer_with_db(&importer, &meta).unwrap();
+        let cfg = Config::default();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None).unwrap();
+        let db = create_sst_test_engine().unwrap();
         // note: the range doesn't contain the DATA_PREFIX 'z'.
         meta.mut_range().set_start(b"t123_r02".to_vec());
         meta.mut_range().set_end(b"t123_r12".to_vec());
@@ -1604,7 +1706,7 @@ mod tests {
                 "sample.sst",
                 &RewriteRule::default(),
                 Limiter::new(INFINITY),
-                sst_writer,
+                db,
             )
             .unwrap()
             .unwrap();
@@ -1618,7 +1720,7 @@ mod tests {
         assert!(sst_file_path.is_file());
 
         // verifies the SST content is correct.
-        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap());
+        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
         iter.seek(SeekKey::Start).unwrap();
@@ -1635,8 +1737,9 @@ mod tests {
     fn test_download_sst_partial_range_with_key_rewrite() {
         let (_ext_sst_dir, backend, mut meta) = create_sample_external_sst_file().unwrap();
         let importer_dir = tempfile::tempdir().unwrap();
-        let importer = SSTImporter::new(&importer_dir, None).unwrap();
-        let sst_writer = create_sst_writer_with_db(&importer, &meta).unwrap();
+        let cfg = Config::default();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None).unwrap();
+        let db = create_sst_test_engine().unwrap();
         meta.mut_range().set_start(b"t5_r02".to_vec());
         meta.mut_range().set_end(b"t5_r12".to_vec());
 
@@ -1647,7 +1750,7 @@ mod tests {
                 "sample.sst",
                 &new_rewrite_rule(b"t123", b"t5", 0),
                 Limiter::new(INFINITY),
-                sst_writer,
+                db,
             )
             .unwrap()
             .unwrap();
@@ -1660,7 +1763,7 @@ mod tests {
         assert!(sst_file_path.is_file());
 
         // verifies the SST content is correct.
-        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap());
+        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
         iter.seek(SeekKey::Start).unwrap();
@@ -1680,9 +1783,10 @@ mod tests {
         let mut meta = SstMeta::default();
         meta.set_uuid(vec![0u8; 16]);
         let importer_dir = tempfile::tempdir().unwrap();
-        let importer = SSTImporter::new(&importer_dir, None).unwrap();
-        let sst_writer = create_sst_writer_with_db(&importer, &meta).unwrap();
+        let cfg = Config::default();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None).unwrap();
         let backend = external_storage::make_local_backend(ext_sst_dir.path());
+        let db = create_sst_test_engine().unwrap();
 
         let result = importer.download::<TestEngine>(
             &meta,
@@ -1690,7 +1794,7 @@ mod tests {
             "sample.sst",
             &RewriteRule::default(),
             Limiter::new(INFINITY),
-            sst_writer,
+            db,
         );
         match &result {
             Err(Error::EngineTraits(TraitError::Engine(msg))) if msg.starts_with("Corruption:") => {
@@ -1703,8 +1807,9 @@ mod tests {
     fn test_download_sst_empty() {
         let (_ext_sst_dir, backend, mut meta) = create_sample_external_sst_file().unwrap();
         let importer_dir = tempfile::tempdir().unwrap();
-        let importer = SSTImporter::new(&importer_dir, None).unwrap();
-        let sst_writer = create_sst_writer_with_db(&importer, &meta).unwrap();
+        let cfg = Config::default();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None).unwrap();
+        let db = create_sst_test_engine().unwrap();
         meta.mut_range().set_start(vec![b'x']);
         meta.mut_range().set_end(vec![b'y']);
 
@@ -1714,7 +1819,7 @@ mod tests {
             "sample.sst",
             &RewriteRule::default(),
             Limiter::new(INFINITY),
-            sst_writer,
+            db,
         );
 
         match result {
@@ -1727,8 +1832,9 @@ mod tests {
     fn test_download_sst_wrong_key_prefix() {
         let (_ext_sst_dir, backend, meta) = create_sample_external_sst_file().unwrap();
         let importer_dir = tempfile::tempdir().unwrap();
-        let importer = SSTImporter::new(&importer_dir, None).unwrap();
-        let sst_writer = create_sst_writer_with_db(&importer, &meta).unwrap();
+        let cfg = Config::default();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None).unwrap();
+        let db = create_sst_test_engine().unwrap();
 
         let result = importer.download::<TestEngine>(
             &meta,
@@ -1736,7 +1842,7 @@ mod tests {
             "sample.sst",
             &new_rewrite_rule(b"xxx", b"yyy", 0),
             Limiter::new(INFINITY),
-            sst_writer,
+            db,
         );
 
         match &result {
@@ -1754,7 +1860,8 @@ mod tests {
         meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
 
         let importer_dir = tempfile::tempdir().unwrap();
-        let importer = SSTImporter::new(&importer_dir, None).unwrap();
+        let cfg = Config::default();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None).unwrap();
         let db_path = importer_dir.path().join("db");
         let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
 
@@ -1800,8 +1907,9 @@ mod tests {
 
         // performs the download.
         let importer_dir = tempfile::tempdir().unwrap();
-        let importer = SSTImporter::new(&importer_dir, None).unwrap();
-        let sst_writer = create_sst_writer_with_db(&importer, &meta).unwrap();
+        let cfg = Config::default();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None).unwrap();
+        let db = create_sst_test_engine().unwrap();
 
         let range = importer
             .download::<TestEngine>(
@@ -1810,7 +1918,7 @@ mod tests {
                 "sample.sst",
                 &RewriteRule::default(),
                 Limiter::new(INFINITY),
-                sst_writer,
+                db,
             )
             .unwrap()
             .unwrap();
@@ -1825,7 +1933,7 @@ mod tests {
         assert_eq!(sst_file_metadata.len(), meta.get_length());
 
         // verifies the SST content is correct.
-        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap());
+        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
         iter.seek(SeekKey::Start).unwrap();
@@ -1851,8 +1959,9 @@ mod tests {
 
         // performs the download.
         let importer_dir = tempfile::tempdir().unwrap();
-        let importer = SSTImporter::new(&importer_dir, None).unwrap();
-        let sst_writer = create_sst_writer_with_db(&importer, &meta).unwrap();
+        let cfg = Config::default();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None).unwrap();
+        let db = create_sst_test_engine().unwrap();
 
         let range = importer
             .download::<TestEngine>(
@@ -1861,7 +1970,7 @@ mod tests {
                 "sample.sst",
                 &RewriteRule::default(),
                 Limiter::new(INFINITY),
-                sst_writer,
+                db,
             )
             .unwrap()
             .unwrap();
@@ -1875,7 +1984,7 @@ mod tests {
         assert!(sst_file_metadata.is_file());
 
         // verifies the SST content is correct.
-        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap());
+        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
         iter.seek(SeekKey::Start).unwrap();
@@ -1898,8 +2007,9 @@ mod tests {
 
         // performs the download.
         let importer_dir = tempfile::tempdir().unwrap();
-        let importer = SSTImporter::new(&importer_dir, None).unwrap();
-        let sst_writer = create_sst_writer_with_db(&importer, &meta).unwrap();
+        let cfg = Config::default();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None).unwrap();
+        let db = create_sst_test_engine().unwrap();
 
         let range = importer
             .download::<TestEngine>(
@@ -1908,7 +2018,7 @@ mod tests {
                 "sample.sst",
                 &RewriteRule::default(),
                 Limiter::new(INFINITY),
-                sst_writer,
+                db,
             )
             .unwrap()
             .unwrap();
@@ -1922,7 +2032,7 @@ mod tests {
         assert!(sst_file_metadata.is_file());
 
         // verifies the SST content is correct.
-        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap());
+        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
         iter.seek(SeekKey::Start).unwrap();

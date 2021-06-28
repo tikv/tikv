@@ -8,15 +8,21 @@ extern crate failure;
 extern crate fail;
 #[macro_use]
 extern crate tikv_util;
+#[cfg(test)]
+#[macro_use]
+extern crate assert_matches;
 
+mod channel;
 mod delegate;
 mod endpoint;
 mod errors;
-mod metrics;
+pub mod metrics;
 mod observer;
+mod old_value;
 mod service;
 
-pub use endpoint::{CdcTxnExtraScheduler, Endpoint, Task};
+pub use channel::MemoryQuota;
+pub use endpoint::{CdcTxnExtraScheduler, Endpoint, Task, Validate};
 pub use errors::{Error, Result};
 pub use observer::CdcObserver;
 pub use service::Service;

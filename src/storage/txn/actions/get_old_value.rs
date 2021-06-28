@@ -1,8 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::mvcc::{seek_for_valid_write, MvccTxn, Result as MvccResult};
+use crate::storage::mvcc::{MvccTxn, Result as MvccResult};
 use crate::storage::Snapshot;
-use txn_types::{Key, OldValue, Write};
+use txn_types::{Key, OldValue, TimeStamp, Write, WriteType};
 
 /// Read the old value for key for CDC.
 /// `prev_write` stands for the previous write record of the key
@@ -10,45 +10,52 @@ use txn_types::{Key, OldValue, Write};
 pub fn get_old_value<S: Snapshot>(
     txn: &mut MvccTxn<S>,
     key: &Key,
+    start_ts: TimeStamp,
+    prev_write_loaded: bool,
     prev_write: Option<Write>,
 ) -> MvccResult<OldValue> {
-    // Precondition:
-    debug_assert!(if let Some(w) = &prev_write {
-        let cursor = txn.reader.write_cursor.as_ref().unwrap();
-        let key_under_cursor =
-            Key::from_encoded(cursor.key(&mut txn.reader.statistics.write).to_vec())
-                .truncate_ts()
-                .unwrap();
-        let write_under_cursor =
-            txn_types::WriteRef::parse(cursor.value(&mut txn.reader.statistics.write))
-                .unwrap()
-                .to_owned();
-        key.clone() == key_under_cursor && w.clone() == write_under_cursor
-    } else {
-        true
-    });
-    match prev_write {
-        Some(w) if !w.may_have_old_value() => {
-            let write_cursor = txn.reader.write_cursor.as_mut().unwrap();
-            // Skip the current write record.
-            write_cursor.next(&mut txn.reader.statistics.write);
-            let write = seek_for_valid_write(
-                write_cursor,
-                key,
-                txn.start_ts,
-                txn.start_ts,
-                &mut txn.reader.statistics,
-            )?;
-            Ok(write.into())
-        }
-        Some(w) if w.as_ref().check_gc_fence_as_latest_version(txn.start_ts) => {
-            Ok(OldValue::Value {
-                short_value: w.short_value,
-                start_ts: w.start_ts,
-            })
-        }
-        _ => Ok(OldValue::None),
+    if prev_write_loaded && prev_write.is_none() {
+        return Ok(OldValue::None);
     }
+    let reader = &mut txn.reader;
+    if let Some(prev_write) = prev_write {
+        if !prev_write
+            .as_ref()
+            .check_gc_fence_as_latest_version(start_ts)
+        {
+            return Ok(OldValue::None);
+        }
+
+        match prev_write.write_type {
+            WriteType::Put => {
+                // For Put, there must be an old value either in its
+                // short value or in the default CF.
+                return Ok(match prev_write.short_value {
+                    Some(value) => OldValue::Value { value },
+                    None => OldValue::ValueTimeStamp {
+                        start_ts: prev_write.start_ts,
+                    },
+                });
+            }
+            WriteType::Delete => {
+                // For Delete, no old value.
+                return Ok(OldValue::None);
+            }
+            // For Rollback and Lock, it's unknown whether there is a more
+            // previous valid write. Call `get_write` to get a valid
+            // previous write.
+            WriteType::Rollback | WriteType::Lock => (),
+        }
+    }
+    Ok(match reader.get_write(key, start_ts, Some(start_ts))? {
+        Some(write) => match write.short_value {
+            Some(value) => OldValue::Value { value },
+            None => OldValue::ValueTimeStamp {
+                start_ts: write.start_ts,
+            },
+        },
+        None => OldValue::None,
+    })
 }
 
 #[cfg(test)]
@@ -79,8 +86,7 @@ mod tests {
             },
             // prev_write is Rollback, and there exists a more previous valid write
             Case {
-                expected: OldValue::Value {
-                    short_value: None,
+                expected: OldValue::ValueTimeStamp {
                     start_ts: TimeStamp::new(4),
                 },
 
@@ -95,10 +101,25 @@ mod tests {
                     ),
                 ],
             },
+            Case {
+                expected: OldValue::Value {
+                    value: b"v".to_vec(),
+                },
+
+                written: vec![
+                    (
+                        Write::new(WriteType::Put, TimeStamp::new(4), Some(b"v".to_vec())),
+                        TimeStamp::new(6),
+                    ),
+                    (
+                        Write::new(WriteType::Rollback, TimeStamp::new(5), None),
+                        TimeStamp::new(7),
+                    ),
+                ],
+            },
             // prev_write is Rollback, and there isn't a more previous valid write
             Case {
                 expected: OldValue::None,
-
                 written: vec![(
                     Write::new(WriteType::Rollback, TimeStamp::new(5), None),
                     TimeStamp::new(6),
@@ -106,8 +127,7 @@ mod tests {
             },
             // prev_write is Lock, and there exists a more previous valid write
             Case {
-                expected: OldValue::Value {
-                    short_value: None,
+                expected: OldValue::ValueTimeStamp {
                     start_ts: TimeStamp::new(3),
                 },
 
@@ -125,7 +145,6 @@ mod tests {
             // prev_write is Lock, and there isn't a more previous valid write
             Case {
                 expected: OldValue::None,
-
                 written: vec![(
                     Write::new(WriteType::Lock, TimeStamp::new(5), None),
                     TimeStamp::new(6),
@@ -133,8 +152,7 @@ mod tests {
             },
             // prev_write is not Rollback or Lock, check_gc_fence_as_latest_version is true
             Case {
-                expected: OldValue::Value {
-                    short_value: None,
+                expected: OldValue::ValueTimeStamp {
                     start_ts: TimeStamp::new(7),
                 },
                 written: vec![(
@@ -152,8 +170,37 @@ mod tests {
                     TimeStamp::new(5),
                 )],
             },
+            // prev_write is Delete, check_gc_fence_as_latest_version is true
+            Case {
+                expected: OldValue::None,
+                written: vec![
+                    (
+                        Write::new(WriteType::Put, TimeStamp::new(3), None),
+                        TimeStamp::new(6),
+                    ),
+                    (
+                        Write::new(WriteType::Delete, TimeStamp::new(7), None),
+                        TimeStamp::new(8),
+                    ),
+                ],
+            },
+            // prev_write is Delete, check_gc_fence_as_latest_version is false
+            Case {
+                expected: OldValue::None,
+                written: vec![
+                    (
+                        Write::new(WriteType::Put, TimeStamp::new(3), None),
+                        TimeStamp::new(6),
+                    ),
+                    (
+                        Write::new(WriteType::Delete, TimeStamp::new(7), None)
+                            .set_overlapped_rollback(true, Some(6.into())),
+                        TimeStamp::new(8),
+                    ),
+                ],
+            },
         ];
-        for case in cases {
+        for (i, case) in cases.into_iter().enumerate() {
             let engine = TestEngineBuilder::new().build().unwrap();
             let cm = ConcurrencyManager::new(42.into());
             let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -168,19 +215,39 @@ mod tests {
             write(&engine, &Context::default(), txn.into_modifies());
             let snapshot = engine.snapshot(Default::default()).unwrap();
             let mut txn = MvccTxn::new(snapshot, TimeStamp::new(25), true, cm);
-            let prev_write = if case.written.is_empty() {
-                None
-            } else {
-                Some(
-                    txn.reader
-                        .seek_write(&Key::from_raw(b"a"), case.written.last().unwrap().1)
-                        .unwrap()
-                        .unwrap()
-                        .1,
+            if !case.written.is_empty() {
+                let prev_write = txn
+                    .reader
+                    .seek_write(&Key::from_raw(b"a"), case.written.last().unwrap().1)
+                    .unwrap()
+                    .map(|w| w.1);
+                let prev_write_loaded = true;
+                let result = get_old_value(
+                    &mut txn,
+                    &Key::from_raw(b"a"),
+                    TimeStamp::new(25),
+                    prev_write_loaded,
+                    prev_write,
                 )
-            };
-            let result = get_old_value(&mut txn, &Key::from_raw(b"a"), prev_write).unwrap();
-            assert_eq!(result, case.expected);
+                .unwrap();
+                assert_eq!(result, case.expected, "case #{}", i);
+            }
         }
+        // Must return Oldvalue::None when prev_write_loaded is true and prev_write is None.
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let cm = ConcurrencyManager::new(42.into());
+        let mut txn = MvccTxn::new(snapshot, TimeStamp::new(10), true, cm);
+        let prev_write_loaded = true;
+        let prev_write = None;
+        let result = get_old_value(
+            &mut txn,
+            &Key::from_raw(b"a"),
+            TimeStamp::new(25),
+            prev_write_loaded,
+            prev_write,
+        )
+        .unwrap();
+        assert_eq!(result, OldValue::None);
     }
 }
