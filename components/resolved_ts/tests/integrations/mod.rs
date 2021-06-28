@@ -7,6 +7,8 @@ pub use testsuite::*;
 use futures::executor::block_on;
 use kvproto::kvrpcpb::*;
 use pd_client::PdClient;
+use std::time::Duration;
+use test_raftstore::sleep_ms;
 
 #[test]
 fn test_resolved_ts_basic() {
@@ -48,4 +50,39 @@ fn test_resolved_ts_basic() {
     suite.must_get_rts_ge(r1.id, current_ts);
 
     suite.stop();
+}
+
+#[test]
+fn test_dynamic_change_advance_ts_interval() {
+    let mut suite = TestSuite::new(1);
+    let region = suite.cluster.get_region(&[]);
+
+    // `reolved-ts` should update with the interval of 10ms
+    suite.must_get_rts_ge(
+        region.id,
+        block_on(suite.cluster.pd_client.get_tso()).unwrap(),
+    );
+
+    // change the interval to 10min
+    suite.must_change_advance_ts_interval(1, Duration::from_secs(600));
+    // sleep to wait for previous update task finish
+    sleep_ms(200);
+
+    // `resolved-ts` should not be updated
+    for _ in 0..10 {
+        if let Some(ts) = suite.region_resolved_ts(region.id) {
+            if block_on(suite.cluster.pd_client.get_tso()).unwrap() <= ts {
+                panic!("unexpect update");
+            }
+        }
+        sleep_ms(10)
+    }
+
+    // change the interval to 10ms
+    suite.must_change_advance_ts_interval(1, Duration::from_millis(10));
+    // `resolved-ts` should be updated immediately
+    suite.must_get_rts_ge(
+        region.id,
+        block_on(suite.cluster.pd_client.get_tso()).unwrap(),
+    );
 }
