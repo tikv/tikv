@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt::{self, Display, Formatter};
+use std::io::{Read, Write};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -22,7 +23,7 @@ use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 use engine_rocks::RocksEngine;
 use file_system::{IOType, WithIOType};
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::{GenericSnapshot, SnapEntry, SnapKey, SnapManager};
+use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
 use security::SecurityManager;
 use tikv_util::worker::Runnable;
 use tikv_util::DeferContext;
@@ -60,7 +61,7 @@ impl Display for Task {
 
 struct SnapChunk {
     first: Option<SnapshotChunk>,
-    snap: Box<dyn GenericSnapshot>,
+    snap: Box<Snapshot>,
     remain_bytes: usize,
 }
 
@@ -164,7 +165,7 @@ fn send_snap(
         match recv_result {
             Ok(_) => {
                 fail_point!("snapshot_delete_after_send");
-                chunks.snap.delete();
+                mgr.delete_snapshot(&key, &*chunks.snap, true);
                 // TODO: improve it after rustc resolves the bug.
                 // Call `info` in the closure directly will cause rustc
                 // panic with `Cannot create local mono-item for DefId`.
@@ -182,7 +183,7 @@ fn send_snap(
 
 struct RecvSnapContext {
     key: SnapKey,
-    file: Option<Box<dyn GenericSnapshot>>,
+    file: Option<Box<Snapshot>>,
     raft_msg: RaftMessage,
     _with_io_type: WithIOType,
 }
@@ -272,7 +273,8 @@ fn recv_snap<R: RaftStoreRouter<RocksEngine> + 'static>(
             if data.is_empty() {
                 return Err(box_err!("{} receive chunk with empty data", context.key));
             }
-            if let Err(e) = context.file.as_mut().unwrap().write_all(&data) {
+            let f = context.file.as_mut().unwrap();
+            if let Err(e) = Write::write_all(&mut *f, &data) {
                 let key = &context.key;
                 let path = context.file.as_mut().unwrap().path();
                 let e = box_err!("{} failed to write snapshot file {}: {}", key, path, e);

@@ -3514,6 +3514,7 @@ dependencies = [
  "crc32fast",
  "crossbeam 0.8.0",
  "encryption",
+ "encryption_export",
  "engine_panic",
  "engine_rocks",
  "engine_test",
