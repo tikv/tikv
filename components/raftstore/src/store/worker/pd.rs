@@ -1454,7 +1454,7 @@ fn send_destroy_peer_message<EK, ER>(
 
 fn collect_report_read_peer_stats(
     capacity: usize,
-    report_read_stats: HashMap<u64, PeerReportReadStat>,
+    mut report_read_stats: HashMap<u64, PeerReportReadStat>,
     mut stats: pdpb::StoreStats,
 ) -> pdpb::StoreStats {
     if report_read_stats.len() < capacity * 3 {
@@ -1486,26 +1486,24 @@ fn collect_report_read_peer_stats(
         stats_topn_report.push(query_cmp_stat);
     }
 
-    keys_topn_report.into_iter().for_each(|x| {
-        if let Some(report_stat) = report_read_stats.get(&x.region_id) {
-            peer_stats.insert(x.region_id, report_stat.clone());
-            {}
-        }
-    });
 
-    bytes_topn_report.into_iter().for_each(|x| {
-        if let Some(report_stat) = report_read_stats.get(&x.region_id) {
-            peer_stats.insert(x.region_id, report_stat.clone());
-            {}
+    for x in keys_topn_report {
+        if let Some(report_stat) = report_read_stats.remove(&x.region_id) {
+            peer_stats.insert(x.region_id, report_stat);
         }
-    });
+    }
 
-    stats_topn_report.into_iter().for_each(|x| {
-        if let Some(report_stat) = report_read_stats.get(&x.region_id) {
-            peer_stats.insert(x.region_id, report_stat.clone());
-            {}
+    for x in bytes_topn_report {
+        if let Some(report_stat) = report_read_stats.remove(&x.region_id) {
+            peer_stats.insert(x.region_id, report_stat);
         }
-    });
+    }
+
+    for x in stats_topn_report {
+        if let Some(report_stat) = report_read_stats.remove(&x.region_id) {
+            peer_stats.insert(x.region_id, report_stat);
+        }
+    }
 
     for (_, report_stat) in peer_stats {
         let mut peer_stat = pdpb::PeerStat::default();
