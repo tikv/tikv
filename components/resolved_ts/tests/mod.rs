@@ -351,6 +351,7 @@ impl TestSuite {
             }
             sleep_ms(100)
         }
+        panic!("fail to get same ts after 50 trys");
     }
 
     pub fn must_get_rts_ge(&mut self, region_id: u64, rts: TimeStamp) {
@@ -362,5 +363,6 @@ impl TestSuite {
             }
             sleep_ms(100)
         }
+        panic!("fail to get greater ts after 50 trys");
     }
 }
