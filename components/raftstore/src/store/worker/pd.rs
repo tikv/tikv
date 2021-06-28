@@ -1451,12 +1451,7 @@ fn collect_report_read_peer_stats(
 ) -> pdpb::StoreStats {
     if report_read_stats.len() < capacity * 3 {
         for (_, read_stat) in report_read_stats {
-            let mut peer_stat = pdpb::PeerStat::default();
-            peer_stat.set_region_id(read_stat.region_id);
-            peer_stat.set_read_bytes(read_stat.read_bytes);
-            peer_stat.set_read_keys(read_stat.read_keys);
-            peer_stat.set_query_stats(read_stat.get_query_stats().clone());
-            stats.peer_stats.push(peer_stat);
+            stats.peer_stats.push(read_stat);
         }
         return stats;
     }
@@ -1480,7 +1475,7 @@ fn collect_report_read_peer_stats(
 
     for x in keys_topn_report {
         if let Some(report_stat) = report_read_stats.remove(&x.region_id) {
-            peer_stats.insert(x.region_id, report_stat);
+            stats.peer_stats.push(report_stat);
         }
     }
 
