@@ -69,7 +69,7 @@ semver = "0.10"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 thiserror = "1.0"
-tikv = { path = "../../", default-features = false }
+tikv = { path = "../..", default-features = false }
 tikv_util = { path = "../tikv_util", default-features = false }
 collections = { path = "../collections" }
 tokio = { version = "1.5", features = ["rt-multi-thread"]}
