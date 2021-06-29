@@ -48,11 +48,6 @@ endif
 ifeq ($(shell uname -s),Darwin)
 ROCKSDB_SYS_PORTABLE=0
 RUST_TEST_THREADS ?= 2
-OPENSSL_VENDOR=0
-endif
-
-ifneq ($(OPENSSL_VENDOR),0)
-ENABLE_FEATURES += openssl-vendor
 endif
 
 # Disable SSE on ARM
@@ -133,7 +128,7 @@ export CARGO_BUILD_PIPELINING=true
 .PHONY: fail_release prof_release release unportable_release
 
 
-default: debug
+default: release
 
 clean:
 	cargo clean

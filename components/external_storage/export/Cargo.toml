@@ -71,7 +71,7 @@ aws = { optional = true, path = "../../cloud/aws", default-features = false }
 cloud = { path = "../../cloud", default_features = false }
 lazy_static = { optional = true, version = "1.3" }
 gcp = { optional = true, path = "../../cloud/gcp", default-features = false }
-grpcio = { optional = true, version = "0.9",  default-features = false }
+grpcio = { optional = true, version = "0.9",  default-features = false, features = ["openssl-vendored"] }
 encryption = { path = "../../encryption", default-features = false }
 external_storage = { path = "../", default-features = false }
 ffi-support = { optional = true, version = "0.4.2" }
