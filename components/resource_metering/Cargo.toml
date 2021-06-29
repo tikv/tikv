@@ -20,9 +20,15 @@ collections = { path = "../collections" }
 libc = "0.2"
 crossbeam = "0.8"
 pin-project = "1.0"
+<<<<<<< HEAD
 prometheus = { version = "0.10", features = ["nightly"] }
 prometheus-static-metric = "0.4"
 kvproto = { rev = "7a046020d1c091638e1e8aba623c8c1e8962219d", git = "https://github.com/pingcap/kvproto.git", default-features = false }
+=======
+prometheus = { version = "0.12", features = ["nightly"] }
+prometheus-static-metric = "0.5"
+kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+>>>>>>> 586ed074e... Remove commit of kvproto for every Cargo.toml (#10478)
 tikv_util = { path = "../tikv_util" }
 grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored"] }
 configuration = { path = "../configuration" }

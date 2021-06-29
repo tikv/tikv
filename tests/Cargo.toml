@@ -124,7 +124,11 @@ futures = "0.3"
 grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored"] }
 grpcio-health = { version = "0.9", default-features = false }
 log_wrappers = { path = "../components/log_wrappers" }
+<<<<<<< HEAD
 kvproto = { rev = "7a046020d1c091638e1e8aba623c8c1e8962219d", git = "https://github.com/pingcap/kvproto.git", default-features = false }
+=======
+kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+>>>>>>> 586ed074e... Remove commit of kvproto for every Cargo.toml (#10478)
 paste = "1.0"
 pd_client = { path = "../components/pd_client", default-features = false }
 protobuf = "2.8"
