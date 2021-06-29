@@ -2095,7 +2095,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/lhy1024/kvproto.git?rev=dda0a102bc6ac7371e1f99cd2797825aa210b4a0#dda0a102bc6ac7371e1f99cd2797825aa210b4a0"
+source = "git+https://github.com/pingcap/kvproto.git?rev=706fcaf286c8dd07ef59349c089f53289a32ce4c#706fcaf286c8dd07ef59349c089f53289a32ce4c"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -3393,6 +3393,7 @@ dependencies = [
  "crossbeam",
  "derivative",
  "encryption",
+ "encryption_export",
  "engine_panic",
  "engine_rocks",
  "engine_test",
@@ -3404,6 +3405,7 @@ dependencies = [
  "futures 0.3.15",
  "futures-util",
  "into_other",
+ "itertools 0.10.0",
  "keys",
  "kvproto",
  "lazy_static",
@@ -4754,6 +4756,7 @@ dependencies = [
 name = "test_raftstore"
 version = "0.0.1"
 dependencies = [
+ "backtrace",
  "collections",
  "concurrency_manager",
  "crossbeam",
