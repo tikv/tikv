@@ -6,108 +6,108 @@ pub mod cpu_time;
 mod cgroup;
 
 // re-export some traits for ease of use
+use crate::config::{ReadableSize, KIB};
+use fail::fail_point;
+#[cfg(target_os = "linux")]
+use lazy_static::lazy_static;
+use std::sync::atomic::{AtomicU64, Ordering};
+use sysinfo::RefreshKind;
 pub use sysinfo::{DiskExt, NetworkExt, ProcessExt, ProcessorExt, SystemExt};
 
-use crate::config::ReadableSize;
-use lazy_static::lazy_static;
-use std::sync::Mutex;
+pub const HIGH_PRI: i32 = -1;
+const CPU_CORES_QUOTA_ENV_VAR_KEY: &str = "TIKV_CPU_CORES_QUOTA";
 
-lazy_static! {
-    pub static ref SYS_INFO: Mutex<sysinfo::System> = Mutex::new(sysinfo::System::new());
-}
+static GLOBAL_MEMORY_USAGE: AtomicU64 = AtomicU64::new(0);
+static MEMORY_USAGE_HIGH_WATER: AtomicU64 = AtomicU64::new(u64::MAX);
 
 #[cfg(target_os = "linux")]
-pub mod sys_quota {
-    use super::super::config::KB;
-    use super::{cgroup::CGroupSys, SystemExt, SYS_INFO};
+lazy_static! {
+    static ref SELF_CGROUP: cgroup::CGroupSys = cgroup::CGroupSys::default();
+}
 
-    pub struct SysQuota {
-        cgroup: CGroupSys,
+pub struct SysQuota;
+impl SysQuota {
+    #[cfg(target_os = "linux")]
+    pub fn cpu_cores_quota() -> f64 {
+        let mut cpu_num = num_cpus::get() as f64;
+        let cpuset_cores = SELF_CGROUP.cpuset_cores().len() as f64;
+        let cpu_quota = SELF_CGROUP.cpu_cores_quota().unwrap_or(0.);
+
+        if cpuset_cores != 0. {
+            cpu_num = cpu_num.min(cpuset_cores);
+        }
+
+        if cpu_quota != 0. {
+            cpu_num = cpu_num.min(cpu_quota);
+        }
+
+        limit_cpu_cores_quota_by_env_var(cpu_num)
     }
 
-    impl SysQuota {
-        pub fn new() -> Self {
-            Self {
-                cgroup: CGroupSys::default(),
-            }
-        }
+    #[cfg(not(target_os = "linux"))]
+    pub fn cpu_cores_quota() -> f64 {
+        let cpu_num = num_cpus::get() as f64;
+        limit_cpu_cores_quota_by_env_var(cpu_num)
+    }
 
-        pub fn cpu_cores_quota(&self) -> f64 {
-            let mut cpu_num = num_cpus::get() as f64;
-            let cpuset_cores = self.cgroup.cpuset_cores().len() as f64;
-            let cpu_quota = self.cgroup.cpu_cores_quota().unwrap_or(0.);
-
-            if cpuset_cores != 0. {
-                cpu_num = cpu_num.min(cpuset_cores);
-            }
-
-            if cpu_quota != 0. {
-                cpu_num = cpu_num.min(cpu_quota);
-            }
-
-            super::limit_cpu_cores_quota_by_env_var(cpu_num)
-        }
-
-        pub fn memory_limit_in_bytes(&self) -> u64 {
-            let total_mem = {
-                let mut system = SYS_INFO.lock().unwrap();
-                system.refresh_memory();
-                system.get_total_memory() * KB
-            };
-            let cgroup_memory_limits = self.cgroup.memory_limit_in_bytes();
-            if cgroup_memory_limits <= 0 {
-                total_mem
-            } else {
-                std::cmp::min(total_mem, cgroup_memory_limits as u64)
-            }
-        }
-
-        pub fn log_quota(&self) {
-            info!(
-                "memory limit in bytes: {}, cpu cores quota: {}",
-                self.memory_limit_in_bytes(),
-                self.cpu_cores_quota()
-            );
+    #[cfg(target_os = "linux")]
+    pub fn memory_limit_in_bytes() -> u64 {
+        let total_mem = Self::sysinfo_memory_limit_in_bytes();
+        let cgroup_memory_limit = SELF_CGROUP.memory_limit_in_bytes();
+        if cgroup_memory_limit <= 0 {
+            total_mem
+        } else {
+            std::cmp::min(total_mem, cgroup_memory_limit as u64)
         }
     }
+
+    #[cfg(not(target_os = "linux"))]
+    pub fn memory_limit_in_bytes() -> u64 {
+        Self::sysinfo_memory_limit_in_bytes()
+    }
+
+    pub fn log_quota() {
+        info!(
+            "memory limit in bytes: {}, cpu cores quota: {}",
+            Self::memory_limit_in_bytes(),
+            Self::cpu_cores_quota()
+        );
+    }
+
+    fn sysinfo_memory_limit_in_bytes() -> u64 {
+        let system = sysinfo::System::new_with_specifics(RefreshKind::new().with_memory());
+        system.get_total_memory() * KIB
+    }
+}
+
+/// Get the current global memory usage in bytes. Users need to call `record_global_memory_usage`
+/// to refresh it periodically.
+pub fn get_global_memory_usage() -> u64 {
+    GLOBAL_MEMORY_USAGE.load(Ordering::Acquire)
+}
+
+/// Record the current global memory usage of the process.
+#[cfg(target_os = "linux")]
+pub fn record_global_memory_usage() {
+    let s = procinfo::pid::statm_self().unwrap();
+    let usage = s.resident * page_size::get();
+    GLOBAL_MEMORY_USAGE.store(usage as u64, Ordering::Release);
 }
 
 #[cfg(not(target_os = "linux"))]
-pub mod sys_quota {
-    use super::super::config::KB;
-    use super::{SystemExt, SYS_INFO};
-
-    pub struct SysQuota {}
-
-    impl SysQuota {
-        pub fn new() -> Self {
-            Self {}
-        }
-
-        pub fn cpu_cores_quota(&self) -> f64 {
-            let cpu_num = num_cpus::get() as f64;
-            super::limit_cpu_cores_quota_by_env_var(cpu_num)
-        }
-
-        pub fn memory_limit_in_bytes(&self) -> u64 {
-            let mut system = SYS_INFO.lock().unwrap();
-            system.refresh_memory();
-            system.get_total_memory() * KB
-        }
-
-        pub fn log_quota(&self) {
-            info!(
-                "memory limit in bytes: {}, cpu cores quota: {}",
-                self.memory_limit_in_bytes(),
-                self.cpu_cores_quota()
-            );
-        }
-    }
+pub fn record_global_memory_usage() {
+    GLOBAL_MEMORY_USAGE.store(0, Ordering::Release);
 }
 
-pub const HIGH_PRI: i32 = -1;
+/// Register the high water mark so that `memory_usage_reaches_high_water` is available.
+pub fn register_memory_usage_high_water(mark: u64) {
+    MEMORY_USAGE_HIGH_WATER.store(mark, Ordering::Release);
+}
 
-const CPU_CORES_QUOTA_ENV_VAR_KEY: &str = "TIKV_CPU_CORES_QUOTA";
+pub fn memory_usage_reaches_high_water() -> bool {
+    fail_point!("memory_usage_reaches_high_water", |_| true);
+    get_global_memory_usage() >= MEMORY_USAGE_HIGH_WATER.load(Ordering::Acquire)
+}
 
 fn limit_cpu_cores_quota_by_env_var(quota: f64) -> f64 {
     match std::env::var(CPU_CORES_QUOTA_ENV_VAR_KEY)

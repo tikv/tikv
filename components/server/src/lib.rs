@@ -7,8 +7,9 @@ extern crate tikv_util;
 
 #[macro_use]
 mod setup;
-pub mod dump;
+pub mod memory;
 mod proxy;
+pub mod raft_engine_switch;
 mod server;
 
 fn proxy_version_info() -> String {

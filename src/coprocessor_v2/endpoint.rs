@@ -1,10 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use coprocessor_plugin_api::{CoprocessorPlugin, PluginError, RawResponse, Region, RegionEpoch};
-use kvproto::coprocessor_v2 as coprv2pb;
+use coprocessor_plugin_api::*;
+use kvproto::kvrpcpb;
+use semver::VersionReq;
 use std::future::Future;
+use std::ops::Not;
 use std::sync::Arc;
 
+use super::config::Config;
 use super::plugin_registry::PluginRegistry;
 use super::raw_storage_impl::RawStorageImpl;
 use crate::storage::{self, lock_manager::LockManager, Engine, Storage};
@@ -23,9 +26,21 @@ pub struct Endpoint {
 impl tikv_util::AssertSend for Endpoint {}
 
 impl Endpoint {
-    pub fn new() -> Self {
+    pub fn new(copr_cfg: &Config) -> Self {
+        let mut plugin_registry = PluginRegistry::new();
+
+        // Enable hot-reloading of plugins if the user configured a directory.
+        if let Some(plugin_directory) = &copr_cfg.coprocessor_plugin_directory {
+            let r = plugin_registry.start_hot_reloading(plugin_directory);
+            if let Err(err) = r {
+                warn!("unable to start hot-reloading for coprocessor plugins.";
+                    "coprocessor_directory" => plugin_directory.display(),
+                    "error" => ?err);
+            }
+        }
+
         Self {
-            plugin_registry: Arc::new(PluginRegistry::new()),
+            plugin_registry: Arc::new(plugin_registry),
         }
     }
 
@@ -37,16 +52,16 @@ impl Endpoint {
     pub fn handle_request<E: Engine, L: LockManager>(
         &self,
         storage: &Storage<E, L>,
-        req: coprv2pb::RawCoprocessorRequest,
-    ) -> impl Future<Output = coprv2pb::RawCoprocessorResponse> {
-        let mut response = coprv2pb::RawCoprocessorResponse::default();
+        req: kvrpcpb::RawCoprocessorRequest,
+    ) -> impl Future<Output = kvrpcpb::RawCoprocessorResponse> {
+        let mut response = kvrpcpb::RawCoprocessorResponse::default();
 
         let coprocessor_result = self.handle_request_impl(storage, req);
 
         match coprocessor_result {
             Ok(data) => response.set_data(data),
             Err(CoprocessorError::RegionError(region_err)) => response.set_region_error(region_err),
-            Err(CoprocessorError::Other(o)) => response.set_other_error(o),
+            Err(CoprocessorError::Other(o)) => response.set_error(o),
         }
 
         std::future::ready(response)
@@ -56,7 +71,7 @@ impl Endpoint {
     fn handle_request_impl<E: Engine, L: LockManager>(
         &self,
         storage: &Storage<E, L>,
-        req: coprv2pb::RawCoprocessorRequest,
+        mut req: kvrpcpb::RawCoprocessorRequest,
     ) -> Result<RawResponse, CoprocessorError> {
         let plugin = self
             .plugin_registry
@@ -68,16 +83,31 @@ impl Endpoint {
                 ))
             })?;
 
-        let raw_storage_api = RawStorageImpl::new(req.get_context(), storage);
-        let region = Region {
-            id: req.get_context().get_region_id(),
-            region_epoch: RegionEpoch {
-                conf_ver: req.get_context().get_region_epoch().get_conf_ver(),
-                version: req.get_context().get_region_epoch().get_version(),
-            },
-        };
+        // Check whether the found plugin satisfies the version constraint.
+        let version_req = VersionReq::parse(&req.copr_version_req)
+            .map_err(|e| CoprocessorError::Other(format!("{}", e)))?;
+        let plugin_version = plugin.version();
+        version_req
+            .matches(&plugin_version)
+            .not()
+            .then(|| {})
+            .ok_or_else(|| {
+                CoprocessorError::Other(format!(
+                    "The plugin '{}' with version '{}' does not satisfy the version constraint '{}'",
+                    plugin.name(),
+                    plugin_version,
+                    version_req,
+                ))
+            })?;
 
-        let plugin_result = plugin.on_raw_coprocessor_request(&region, &req.data, &raw_storage_api);
+        let raw_storage_api = RawStorageImpl::new(req.take_context(), storage);
+        let ranges = req
+            .take_ranges()
+            .into_iter()
+            .map(|range| range.start_key..range.end_key)
+            .collect();
+
+        let plugin_result = plugin.on_raw_coprocessor_request(ranges, req.data, &raw_storage_api);
 
         plugin_result.map_err(|err| {
             if let Some(region_err) = extract_region_error(&err) {
@@ -91,11 +121,9 @@ impl Endpoint {
 
 fn extract_region_error(error: &PluginError) -> Option<kvproto::errorpb::Error> {
     match error {
-        PluginError::StorageError(storage_err) => match storage_err {
-            coprocessor_plugin_api::StorageError::Other(other_err) => other_err
-                .downcast_ref::<storage::Result<()>>()
-                .and_then(|e| storage::errors::extract_region_error::<()>(e)),
-            _ => None,
-        },
+        PluginError::Other(other_err) => other_err
+            .downcast_ref::<storage::Result<()>>()
+            .and_then(|e| storage::errors::extract_region_error::<()>(e)),
+        _ => None,
     }
 }

@@ -32,7 +32,8 @@ use txn_types::{Key, TimeStamp};
 
 use crate::server::metrics::*;
 use crate::storage::kv::{Engine, ScanMode, Statistics};
-use crate::storage::mvcc::{Error as MvccError, GcInfo, MvccReader, MvccTxn};
+use crate::storage::mvcc::{GcInfo, MvccReader, MvccTxn};
+use crate::storage::txn::Error as TxnError;
 
 use super::applied_lock_collector::{AppliedLockCollector, Callback as LockCollectorCallback};
 use super::config::{GcConfig, GcWorkerConfigManager};
@@ -228,7 +229,7 @@ where
         txn: &mut MvccTxn,
         reader: &mut MvccReader<E::Snap>,
     ) -> Result<()> {
-        let next_gc_info = gc(txn, reader, key.clone(), safe_point)?;
+        let next_gc_info = gc(txn, reader, key.clone(), safe_point).map_err(TxnError::from_mvcc)?;
         gc_info.found_versions += next_gc_info.found_versions;
         gc_info.deleted_versions += next_gc_info.deleted_versions;
         gc_info.is_completed = next_gc_info.is_completed;
@@ -267,7 +268,9 @@ where
         let mut next_key = Some(Key::from_encoded_slice(start_key));
         while next_key.is_some() {
             // Scans at most `GcConfig.batch_keys` keys.
-            let (keys, updated_next_key) = reader.scan_keys(next_key, self.cfg.batch_keys)?;
+            let (keys, updated_next_key) = reader
+                .scan_keys(next_key, self.cfg.batch_keys)
+                .map_err(TxnError::from_mvcc)?;
             next_key = updated_next_key;
 
             if keys.is_empty() {
@@ -472,11 +475,13 @@ where
             .snapshot_on_kv_engine(start_key.as_encoded(), &[])
             .unwrap();
         let mut reader = MvccReader::new(snap, Some(ScanMode::Forward), false);
-        let (locks, _) = reader.scan_locks(Some(start_key), None, |l| l.ts <= max_ts, limit)?;
+        let (locks, _) = reader
+            .scan_locks(Some(start_key), None, |l| l.ts <= max_ts, limit)
+            .map_err(TxnError::from_mvcc)?;
 
         let mut lock_infos = Vec::with_capacity(locks.len());
         for (key, lock) in locks {
-            let raw_key = key.into_raw().map_err(MvccError::from)?;
+            let raw_key = key.into_raw().map_err(TxnError::from_mvcc)?;
             lock_infos.push(lock.into_lock_info(raw_key));
         }
         Ok(lock_infos)

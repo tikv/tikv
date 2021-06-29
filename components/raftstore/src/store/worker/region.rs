@@ -3,7 +3,7 @@
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{self, Display, Formatter};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::SyncSender;
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
@@ -49,6 +49,7 @@ pub enum Task<S> {
         last_applied_index_term: u64,
         last_applied_state: RaftApplyState,
         kv_snap: S,
+        canceled: Arc<AtomicBool>,
         notifier: SyncSender<RaftSnapshot>,
         for_balance: bool,
     },
@@ -282,10 +283,17 @@ where
         last_applied_index_term: u64,
         last_applied_state: RaftApplyState,
         kv_snap: EK::Snapshot,
+        canceled: Arc<AtomicBool>,
         notifier: SyncSender<RaftSnapshot>,
         for_balance: bool,
     ) {
+        fail_point!("before_region_gen_snap", |_| ());
         SNAP_COUNTER.generate.all.inc();
+        if canceled.load(Ordering::Relaxed) {
+            info!("generate snap is canceled"; "region_id" => region_id);
+            return;
+        }
+
         let start = tikv_util::time::Instant::now();
         let _io_type_guard = WithIOType::new(if for_balance {
             IOType::LoadBalance
@@ -729,6 +737,7 @@ where
                 last_applied_index_term,
                 last_applied_state,
                 kv_snap,
+                canceled,
                 notifier,
                 for_balance,
             } => {
@@ -743,6 +752,7 @@ where
                         last_applied_index_term,
                         last_applied_state,
                         kv_snap,
+                        canceled,
                         notifier,
                         for_balance,
                     );
@@ -848,8 +858,7 @@ mod tests {
     use tempfile::Builder;
     use tikv_util::worker::{LazyWorker, Worker};
 
-    use super::PendingDeleteRanges;
-    use super::Task;
+    use super::*;
 
     fn insert_range(
         pending_delete_ranges: &mut PendingDeleteRanges,
@@ -1070,6 +1079,7 @@ mod tests {
                     kv_snap: engine.kv.snapshot(),
                     last_applied_index_term: entry.get_term(),
                     last_applied_state: apply_state,
+                    canceled: Arc::new(AtomicBool::new(false)),
                     notifier: tx,
                     for_balance: false,
                 })

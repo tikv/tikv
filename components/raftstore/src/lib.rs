@@ -10,6 +10,8 @@
 
 #[cfg(test)]
 extern crate test;
+#[macro_use]
+extern crate derivative;
 
 pub mod coprocessor;
 pub mod errors;
@@ -18,3 +20,17 @@ pub mod store;
 pub use self::coprocessor::{RegionInfo, RegionInfoAccessor, SeekRegionCallback};
 pub use self::errors::{DiscardReason, Error, Result};
 pub mod engine_store_ffi;
+
+// With feature protobuf-codec, `bytes::Bytes` is generated for `bytes` in protobuf.
+#[cfg(feature = "protobuf-codec")]
+fn bytes_capacity(b: &bytes::Bytes) -> usize {
+    // NOTE: For deserialized raft messages, `len` equals capacity.
+    // This is used to report memory usage to metrics.
+    b.len()
+}
+
+// Currently `bytes::Bytes` are not available for prost-codec.
+#[cfg(feature = "prost-codec")]
+fn bytes_capacity(b: &Vec<u8>) -> usize {
+    b.capacity()
+}

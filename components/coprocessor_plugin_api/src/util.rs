@@ -3,19 +3,24 @@
 use super::allocator::HostAllocatorPtr;
 use super::plugin_api::CoprocessorPlugin;
 
-/// Name of the exported constructor function for the plugin in the `dylib`.
+/// Name of the exported constructor with signature [`PluginConstructorSignature`] for the plugin.
 pub static PLUGIN_CONSTRUCTOR_SYMBOL: &[u8] = b"_plugin_create";
-/// Name of the exported function to get build information about the plugin.
+/// Name of the exported function with signature [`PluginGetBuildInfoSignature`] to get build
+/// information about the plugin.
 pub static PLUGIN_GET_BUILD_INFO_SYMBOL: &[u8] = b"_plugin_get_build_info";
+/// Name of the exported function with signature [`PluginGetPluginInfoSignature`] to get some
+/// information about the plugin.
+pub static PLUGIN_GET_PLUGIN_INFO_SYMBOL: &[u8] = b"_plugin_get_plugin_info";
 
-/// Type signature of the exported constructor function for the plugin in the `dylib`.
-/// See also [`PLUGIN_CONSTRUCTOR_SYMBOL`].
+/// Type signature of the exported function with symbol [`PLUGIN_CONSTRUCTOR_SYMBOL`].
 pub type PluginConstructorSignature =
     unsafe fn(host_allocator: HostAllocatorPtr) -> *mut dyn CoprocessorPlugin;
 
-/// Type signature of the exported function to get build information about the plugin.
-/// See also [`PLUGIN_GET_BUILD_INFO_SYMBOL`].
+/// Type signature of the exported function with symbol [`PLUGIN_GET_BUILD_INFO_SYMBOL`].
 pub type PluginGetBuildInfoSignature = extern "C" fn() -> BuildInfo;
+
+/// Type signature of the exported function with symbol [`PLUGIN_GET_PLUGIN_INFO_SYMBOL`].
+pub type PluginGetPluginInfoSignature = extern "C" fn() -> PluginInfo;
 
 /// Automatically collected build information about the plugin that is exposed from the library.
 ///
@@ -42,7 +47,24 @@ impl BuildInfo {
     }
 }
 
+/// Information about the plugin, like its name and version.
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginInfo {
+    /// The name of the plugin.
+    pub name: &'static str,
+    /// The version string of the plugin. Should follow semantic versioning.
+    pub version: &'static str,
+}
+
 /// Declare a plugin for the library so that it can be loaded by TiKV.
+///
+/// The macro has three different versions:
+/// * `declare_plugin!(plugin_name, plugin_version, plugin_ctor)` which gives you full control.
+/// * `declare_plugin!(plugin_name, plugin_ctor)` automatically fetches the version from `Cargo.toml`.
+/// * `declare_plugin!(plugin_ctor)` automatically fetches plugin name and version from `Cargo.toml`.
+///
+/// The types of `plugin_name` and `plugin_version` have to be `&'static str` literals.
 ///
 /// # Notes
 /// This works by automatically generating an `extern "C"` function with a
@@ -55,14 +77,32 @@ impl BuildInfo {
 #[macro_export]
 macro_rules! declare_plugin {
     ($plugin_ctor:expr) => {
+        declare_plugin!(
+            env!("CARGO_PKG_NAME"),
+            env!("CARGO_PKG_VERSION"),
+            $plugin_ctor
+        );
+    };
+    ($plugin_name:expr, $plugin_ctor:expr) => {
+        declare_plugin!($plugin_name, env!("CARGO_PKG_VERSION"), $plugin_ctor);
+    };
+    ($plugin_name:expr, $plugin_version:expr, $plugin_ctor:expr) => {
         #[cfg(not(test))]
         #[global_allocator]
         static HOST_ALLOCATOR: $crate::allocator::HostAllocator =
             $crate::allocator::HostAllocator::new();
 
         #[no_mangle]
-        pub unsafe extern "C" fn _plugin_get_build_info() -> $crate::BuildInfo {
-            $crate::BuildInfo::get()
+        pub unsafe extern "C" fn _plugin_get_build_info() -> $crate::util::BuildInfo {
+            $crate::util::BuildInfo::get()
+        }
+
+        #[no_mangle]
+        pub unsafe extern "C" fn _plugin_get_plugin_info() -> $crate::util::PluginInfo {
+            $crate::util::PluginInfo {
+                name: $plugin_name,
+                version: $plugin_version,
+            }
         }
 
         #[no_mangle]
@@ -92,7 +132,6 @@ macro_rules! declare_plugin {
 ///
 /// *Note: Depending on artifacts of other crates will be easier with
 /// [this RFC](https://github.com/rust-lang/cargo/issues/9096).*
-#[doc(hidden)]
 pub fn pkgname_to_libname(pkgname: &str) -> String {
     let pkgname = pkgname.to_string().replace("-", "_");
     if cfg!(target_os = "windows") {

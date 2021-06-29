@@ -384,9 +384,7 @@ fn test_cdc_scan() {
     mutation.value = v.clone();
     suite.must_kv_prewrite(1, vec![mutation], k.clone(), start_ts2);
 
-    let mut req = suite.new_changedata_request(1);
-    let req_id = 1u64;
-    req.set_request_id(req_id);
+    let req = suite.new_changedata_request(1);
     let (mut req_tx, event_feed_wrap, receive_event) =
         new_event_feed(suite.get_region_cdc_client(1));
     block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
@@ -395,9 +393,7 @@ fn test_cdc_scan() {
         events.extend(receive_event(false).events.into_iter());
     }
     assert_eq!(events.len(), 2, "{:?}", events);
-    let event = events.remove(0);
-    assert_eq!(event.request_id, req_id);
-    match event.event.unwrap() {
+    match events.remove(0).event.unwrap() {
         // Batch size is set to 2.
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 2, "{:?}", es);
@@ -416,9 +412,7 @@ fn test_cdc_scan() {
         }
         other => panic!("unknown event {:?}", other),
     }
-    let event = events.pop().unwrap();
-    assert_eq!(event.request_id, req_id);
-    match event.event.unwrap() {
+    match events.pop().unwrap().event.unwrap() {
         // Then it outputs Initialized event.
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 1, "{:?}", es);
@@ -442,7 +436,6 @@ fn test_cdc_scan() {
     suite.must_kv_prewrite(1, vec![mutation], k.clone(), start_ts3);
 
     let mut req = suite.new_changedata_request(1);
-    req.set_request_id(req_id);
     req.checkpoint_ts = checkpoint_ts.into_inner();
     let (mut req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
     event_feed_wrap.replace(Some(resp_rx));
@@ -452,9 +445,7 @@ fn test_cdc_scan() {
         events.extend(receive_event(false).events.to_vec());
     }
     assert_eq!(events.len(), 2, "{:?}", events);
-    let event = events.remove(0);
-    assert_eq!(event.request_id, req_id);
-    match event.event.unwrap() {
+    match events.remove(0).event.unwrap() {
         // Batch size is set to 2.
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 2, "{:?}", es);
@@ -476,9 +467,7 @@ fn test_cdc_scan() {
         other => panic!("unknown event {:?}", other),
     }
     assert_eq!(events.len(), 1, "{:?}", events);
-    let event = events.pop().unwrap();
-    assert_eq!(event.request_id, req_id);
-    match event.event.unwrap() {
+    match events.pop().unwrap().event.unwrap() {
         // Then it outputs Initialized event.
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 1, "{:?}", es);
@@ -607,29 +596,21 @@ fn test_region_split() {
 
     // Make sure resolved ts can be advanced normally.
     let mut counter = 0;
-    let mut counter_1 = 0;
     let mut previous_ts = 0;
-    let mut previous_ts_1 = 0;
     loop {
         // Even if there is no write,
         // resolved ts should be advanced regularly.
         let event = receive_event(true);
         if let Some(resolved_ts) = event.resolved_ts.as_ref() {
-            for region_id in resolved_ts.regions.clone() {
-                if region_id == region.id {
-                    assert!(resolved_ts.ts >= previous_ts);
-                    previous_ts = resolved_ts.ts;
-                    counter += 1;
-                } else if region_id == region1.id {
-                    assert!(resolved_ts.ts >= previous_ts_1);
-                    previous_ts_1 = resolved_ts.ts;
-                    counter_1 += 1;
-                } else {
-                    panic!("unknown region_id {:?}", region_id);
-                }
-            }
+            assert!(resolved_ts.ts >= previous_ts);
+            assert!(
+                resolved_ts.regions == vec![region.id, region1.id]
+                    || resolved_ts.regions == vec![region1.id, region.id]
+            );
+            previous_ts = resolved_ts.ts;
+            counter += 1;
         }
-        if counter > 5 && counter_1 > 5 {
+        if counter > 5 {
             break;
         }
     }
@@ -702,10 +683,6 @@ fn test_cdc_batch_size_limit() {
     block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1, "{:?}", events.len());
-    while events.len() < 3 {
-        events.extend(receive_event(false).events.into_iter());
-    }
-    assert_eq!(events.len(), 3, "{:?}", events.len());
     match events.remove(0).event.unwrap() {
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 1);
@@ -715,29 +692,27 @@ fn test_cdc_batch_size_limit() {
         }
         other => panic!("unknown event {:?}", other),
     }
-    match events.remove(0).event.unwrap() {
-        Event_oneof_event::Entries(es) => {
-            assert!(es.entries.len() == 1);
-            let e = &es.entries[0];
-            assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", e.get_type());
-            assert_eq!(e.key, b"k2", "{:?}", e.key);
+    // For the rest 2 events, Committed and Initialized.
+    let mut entries = vec![];
+    while entries.len() < 2 {
+        match receive_event(false).events.remove(0).event.unwrap() {
+            Event_oneof_event::Entries(es) => {
+                entries.extend(es.entries.into_iter());
+            }
+            other => panic!("unknown event {:?}", other),
         }
-        other => panic!("unknown event {:?}", other),
     }
-    match events.pop().unwrap().event.unwrap() {
-        // Then it outputs Initialized event.
-        Event_oneof_event::Entries(es) => {
-            assert!(es.entries.len() == 1);
-            let e = &es.entries[0];
-            assert_eq!(
-                e.get_type(),
-                EventLogType::Initialized,
-                "{:?}",
-                e.get_type()
-            );
-        }
-        other => panic!("unknown event {:?}", other),
-    }
+    assert_eq!(entries.len(), 2, "{:?}", entries);
+    let e = &entries[0];
+    assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", e.get_type());
+    assert_eq!(e.key, b"k2", "{:?}", e.key);
+    let e = &entries[1];
+    assert_eq!(
+        e.get_type(),
+        EventLogType::Initialized,
+        "{:?}",
+        e.get_type()
+    );
 
     // Prewrite
     let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
@@ -834,7 +809,8 @@ fn test_old_value_basic() {
     suite.must_kv_prewrite(1, vec![m6], k1.clone(), ts10);
     let ts11 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.must_kv_commit(1, vec![k1.clone()], ts10, ts11);
-    // Delete value
+    // Delete value in pessimistic txn.
+    // In pessimistic txn, CDC must use for_update_ts to read the old value.
     let mut m7 = Mutation::default();
     m7.set_op(Op::PessimisticLock);
     m7.key = k1.clone();
@@ -2019,8 +1995,7 @@ fn test_cdc_write_rollback_when_no_lock() {
 
 #[test]
 fn test_resolved_ts_cluster_upgrading() {
-    let mut cluster = new_server_cluster(0, 3);
-    cluster.cfg.cdc.hibernate_regions_compatible = true;
+    let cluster = new_server_cluster(0, 3);
     cluster.pd_client.disable_default_operator();
     unsafe {
         cluster

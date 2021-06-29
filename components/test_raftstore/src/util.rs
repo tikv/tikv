@@ -35,6 +35,8 @@ use engine_rocks::{
 use engine_rocks::{CompactionListener, RocksCompactionJobInfo};
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::{Engines, Iterable, Peekable};
+use file_system::IORateLimiter;
+use futures::executor::block_on;
 use raftstore::store::fsm::RaftRouter;
 use raftstore::store::*;
 use raftstore::Result;
@@ -46,6 +48,7 @@ use txn_types::Key;
 
 use super::*;
 
+use crate::pd_client::PdClient;
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_RAFT};
 pub use raftstore::store::util::{find_peer, new_learner_peer, new_peer};
 use tikv_util::time::ThreadReadId;
@@ -586,6 +589,7 @@ fn dummpy_filter(_: &RocksCompactionJobInfo) -> bool {
 pub fn create_test_engine(
     // TODO: pass it in for all cases.
     router: Option<RaftRouter<RocksEngine, RocksEngine>>,
+    limiter: Option<Arc<IORateLimiter>>,
     cfg: &TiKvConfig,
 ) -> (
     Engines<RocksEngine, RocksEngine>,
@@ -599,7 +603,7 @@ pub fn create_test_engine(
             .map(Arc::new);
 
     let env = get_encrypted_env(key_manager.clone(), None).unwrap();
-    let env = get_inspected_env(Some(env)).unwrap();
+    let env = get_inspected_env(Some(env), limiter).unwrap();
     let cache = cfg.storage.block_cache.build_shared_cache();
 
     let kv_path = dir.path().join(DEFAULT_ROCKSDB_SUB_DIR);
@@ -799,6 +803,63 @@ pub fn new_mutation(op: Op, k: &[u8], v: &[u8]) -> Mutation {
     mutation.set_key(k.to_vec());
     mutation.set_value(v.to_vec());
     mutation
+}
+
+pub fn must_kv_write(
+    pd_client: &TestPdClient,
+    client: &TikvClient,
+    ctx: Context,
+    kvs: Vec<Mutation>,
+    pk: Vec<u8>,
+) -> u64 {
+    let keys: Vec<_> = kvs.iter().map(|m| m.get_key().to_vec()).collect();
+    let start_ts = block_on(pd_client.get_tso()).unwrap();
+    must_kv_prewrite(client, ctx.clone(), kvs, pk, start_ts.into_inner());
+    let commit_ts = block_on(pd_client.get_tso()).unwrap();
+    must_kv_commit(
+        client,
+        ctx,
+        keys,
+        start_ts.into_inner(),
+        commit_ts.into_inner(),
+        commit_ts.into_inner(),
+    );
+    commit_ts.into_inner()
+}
+
+pub fn must_kv_read_equal(client: &TikvClient, ctx: Context, key: Vec<u8>, val: Vec<u8>, ts: u64) {
+    let mut get_req = GetRequest::default();
+    get_req.set_context(ctx);
+    get_req.set_key(key);
+    get_req.set_version(ts);
+
+    for _ in 1..250 {
+        let mut get_resp = client.kv_get(&get_req).unwrap();
+        if get_resp.has_region_error() || get_resp.has_error() || get_resp.get_not_found() {
+            thread::sleep(Duration::from_millis(20));
+        } else if get_resp.take_value() == val {
+            return;
+        }
+    }
+
+    // Last try
+    let mut get_resp = client.kv_get(&get_req).unwrap();
+    assert!(
+        !get_resp.has_region_error(),
+        "{:?}",
+        get_resp.get_region_error()
+    );
+    assert!(!get_resp.has_error(), "{:?}", get_resp.get_error());
+    assert!(!get_resp.get_not_found());
+    assert_eq!(get_resp.take_value(), val);
+}
+
+pub fn kv_read(client: &TikvClient, ctx: Context, key: Vec<u8>, ts: u64) -> GetResponse {
+    let mut get_req = GetRequest::default();
+    get_req.set_context(ctx);
+    get_req.set_key(key);
+    get_req.set_version(ts);
+    client.kv_get(&get_req).unwrap()
 }
 
 pub fn must_kv_prewrite(

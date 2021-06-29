@@ -1,19 +1,23 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use self::metrics::*;
-use crate::config::UnifiedReadPoolConfig;
-use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter};
-use file_system::{set_io_type, IOType};
+use std::future::Future;
+use std::sync::{Arc, Mutex};
+
 use futures::channel::oneshot;
 use futures::future::TryFutureExt;
 use kvproto::kvrpcpb::CommandPri;
 use prometheus::IntGauge;
-use std::future::Future;
-use std::sync::{Arc, Mutex};
-use tikv_util::yatp_pool::{self, FuturePool, PoolTicker, YatpPoolBuilder};
+use thiserror::Error;
+use yatp::pool::Remote;
 use yatp::queue::Extras;
 use yatp::task::future::TaskCell;
-use yatp::Remote;
+
+use file_system::{set_io_type, IOType};
+use tikv_util::yatp_pool::{self, FuturePool, PoolTicker, YatpPoolBuilder};
+
+use self::metrics::*;
+use crate::config::UnifiedReadPoolConfig;
+use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter};
 
 pub enum ReadPool {
     FuturePools {
@@ -25,6 +29,7 @@ pub enum ReadPool {
         pool: yatp::ThreadPool<TaskCell>,
         running_tasks: IntGauge,
         max_tasks: usize,
+        pool_size: usize,
     },
 }
 
@@ -44,10 +49,12 @@ impl ReadPool {
                 pool,
                 running_tasks,
                 max_tasks,
+                pool_size,
             } => ReadPoolHandle::Yatp {
                 remote: pool.remote().clone(),
                 running_tasks: running_tasks.clone(),
                 max_tasks: *max_tasks,
+                pool_size: *pool_size,
             },
         }
     }
@@ -64,6 +71,7 @@ pub enum ReadPoolHandle {
         remote: Remote<TaskCell>,
         running_tasks: IntGauge,
         max_tasks: usize,
+        pool_size: usize,
     },
 }
 
@@ -90,6 +98,7 @@ impl ReadPoolHandle {
                 remote,
                 running_tasks,
                 max_tasks,
+                ..
             } => {
                 let running_tasks = running_tasks.clone();
                 // Note that the running task number limit is not strict.
@@ -100,6 +109,7 @@ impl ReadPoolHandle {
                     return Err(ReadPoolError::UnifiedReadPoolFull);
                 }
 
+                running_tasks.inc();
                 let fixed_level = match priority {
                     CommandPri::High => Some(0),
                     CommandPri::Normal => None,
@@ -108,7 +118,6 @@ impl ReadPoolHandle {
                 let extras = Extras::new_multilevel(task_id, fixed_level);
                 let task_cell = TaskCell::new(
                     async move {
-                        running_tasks.inc();
                         f.await;
                         running_tasks.dec();
                     },
@@ -142,6 +151,31 @@ impl ReadPoolHandle {
         async move {
             res?;
             rx.map_err(ReadPoolError::from).await
+        }
+    }
+
+    pub fn get_normal_pool_size(&self) -> usize {
+        match self {
+            ReadPoolHandle::FuturePools {
+                read_pool_normal, ..
+            } => read_pool_normal.get_pool_size(),
+            ReadPoolHandle::Yatp { pool_size, .. } => *pool_size,
+        }
+    }
+
+    pub fn get_queue_size_per_worker(&self) -> usize {
+        match self {
+            ReadPoolHandle::FuturePools {
+                read_pool_normal, ..
+            } => {
+                read_pool_normal.get_running_task_count() as usize
+                    / read_pool_normal.get_pool_size()
+            }
+            ReadPoolHandle::Yatp {
+                running_tasks,
+                pool_size,
+                ..
+            } => running_tasks.get() as usize / *pool_size,
         }
     }
 }
@@ -208,6 +242,7 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
         max_tasks: config
             .max_tasks_per_worker
             .saturating_mul(config.max_thread_count),
+        pool_size: config.max_thread_count,
     }
 }
 
@@ -225,23 +260,16 @@ impl From<Vec<FuturePool>> for ReadPool {
     }
 }
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum ReadPoolError {
-        FuturePoolFull(err: yatp_pool::Full) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        UnifiedReadPoolFull {
-            display("Unified read pool is full")
-        }
-        Canceled(err: oneshot::Canceled) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-    }
+#[derive(Debug, Error)]
+pub enum ReadPoolError {
+    #[error("{0}")]
+    FuturePoolFull(#[from] yatp_pool::Full),
+
+    #[error("Unified read pool is full")]
+    UnifiedReadPoolFull,
+
+    #[error("{0}")]
+    Canceled(#[from] oneshot::Canceled),
 }
 
 mod metrics {

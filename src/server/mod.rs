@@ -20,10 +20,10 @@ pub mod status_server;
 pub mod transport;
 pub mod ttl;
 
-pub use self::config::{Config, DEFAULT_CLUSTER_ID, DEFAULT_LISTENING_ADDR};
+pub use self::config::{Config, ServerConfigManager, DEFAULT_CLUSTER_ID, DEFAULT_LISTENING_ADDR};
 pub use self::errors::{Error, Result};
 pub use self::metrics::CONFIG_ROCKSDB_GAUGE;
-pub use self::metrics::CPU_CORES_QUOTA_GAUGE;
+pub use self::metrics::{CPU_CORES_QUOTA_GAUGE, MEM_TRACE_SUM_GAUGE};
 pub use self::node::{create_raft_storage, Node};
 pub use self::proxy::{build_forward_option, get_target_address, Proxy};
 pub use self::raft_client::{ConnectionBuilder, RaftClient};

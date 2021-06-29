@@ -1,25 +1,41 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::result;
-use std::{borrow::Cow, io::Error as IoError};
 use std::{
+    borrow::Cow,
     fmt::{self, Debug, Display, Formatter},
-    mem,
+    io::Error as IoError,
+    mem, result,
+    sync::Arc,
+    time::Duration,
 };
-use std::{sync::Arc, time::Duration};
+
+use raft::eraftpb::{self, MessageType};
+use thiserror::Error;
 
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::CF_DEFAULT;
-use engine_traits::{CfName, KvEngine};
-use engine_traits::{MvccProperties, Snapshot};
-use kvproto::kvrpcpb::Context;
-use kvproto::raft_cmdpb::{
-    CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
-    RaftRequestHeader, Request, Response,
+use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot, CF_DEFAULT};
+use kvproto::{
+    errorpb,
+    kvrpcpb::Context,
+    metapb,
+    raft_cmdpb::{
+        CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
+        RaftRequestHeader, Request, Response,
+    },
 };
-use kvproto::{errorpb, metapb};
-use raft::eraftpb::{self, MessageType};
-use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler};
+use raftstore::{
+    coprocessor::{
+        dispatcher::BoxReadIndexObserver, Coprocessor, CoprocessorHost, ReadIndexObserver,
+    },
+    errors::Error as RaftServerError,
+    router::{LocalReadRouter, RaftStoreRouter},
+    store::{
+        Callback as StoreCallback, ReadIndexContext, ReadResponse, RegionSnapshot, WriteResponse,
+    },
+};
+use tikv_util::codec::number::NumberEncoder;
+use tikv_util::time::Instant;
+use txn_types::{Key, TimeStamp, TxnExtraScheduler, WriteBatchFlags};
 
 use super::metrics::*;
 use crate::storage::kv::{
@@ -27,48 +43,26 @@ use crate::storage::kv::{
     ExtCallback, Modify, SnapContext, WriteData,
 };
 use crate::storage::{self, kv};
-use raftstore::{coprocessor::dispatcher::BoxReadIndexObserver, store::RegionSnapshot};
-use raftstore::{
-    coprocessor::Coprocessor,
-    router::{LocalReadRouter, RaftStoreRouter},
-};
-use raftstore::{
-    coprocessor::CoprocessorHost,
-    store::{Callback as StoreCallback, ReadIndexContext, ReadResponse, WriteResponse},
-};
-use raftstore::{coprocessor::ReadIndexObserver, errors::Error as RaftServerError};
-use tikv_util::codec::number::NumberEncoder;
-use tikv_util::time::Instant;
-use txn_types::WriteBatchFlags;
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        RequestFailed(e: errorpb::Error) {
-            from()
-            display("{}", e.get_message())
-        }
-        Io(e: IoError) {
-            from()
-            cause(e)
-            display("{}", e)
-        }
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("{}", .0.get_message())]
+    RequestFailed(errorpb::Error),
 
-        Server(e: RaftServerError) {
-            from()
-            cause(e)
-            display("{}", e)
-        }
-        InvalidResponse(reason: String) {
-            display("{}", reason)
-        }
-        InvalidRequest(reason: String) {
-            display("{}", reason)
-        }
-        Timeout(d: Duration) {
-            display("timeout after {:?}", d)
-        }
-    }
+    #[error("{0}")]
+    Io(#[from] IoError),
+
+    #[error("{0}")]
+    Server(#[from] RaftServerError),
+
+    #[error("{0}")]
+    InvalidResponse(String),
+
+    #[error("{0}")]
+    InvalidRequest(String),
+
+    #[error("timeout after {0:?}")]
+    Timeout(Duration),
 }
 
 fn get_status_kind_from_error(e: &Error) -> RequestStatusKind {
@@ -250,8 +244,7 @@ where
     fn exec_write_requests(
         &self,
         ctx: &Context,
-        reqs: Vec<Request>,
-        txn_extra: TxnExtra,
+        batch: WriteData,
         write_cb: Callback<CmdRes<E::Snapshot>>,
         proposed_cb: Option<ExtCallback>,
         committed_cb: Option<ExtCallback>,
@@ -274,6 +267,8 @@ where
             raftkv_early_error_report_fp()?;
         }
 
+        let reqs = modifies_to_requests(batch.modifies);
+        let txn_extra = batch.extra;
         let len = reqs.len();
         let mut header = self.new_request_header(ctx);
         if txn_extra.one_pc {
@@ -290,19 +285,20 @@ where
             }
         }
 
-        self.router
-            .send_command(
-                cmd,
-                StoreCallback::write_ext(
-                    Box::new(move |resp| {
-                        let (cb_ctx, res) = on_write_result(resp, len);
-                        write_cb((cb_ctx, res.map_err(Error::into)));
-                    }),
-                    proposed_cb,
-                    committed_cb,
-                ),
-            )
-            .map_err(From::from)
+        let cb = StoreCallback::write_ext(
+            Box::new(move |resp| {
+                let (cb_ctx, res) = on_write_result(resp, len);
+                write_cb((cb_ctx, res.map_err(Error::into)));
+            }),
+            proposed_cb,
+            committed_cb,
+        );
+        if let Some(deadline) = batch.deadline {
+            self.router.send_command_with_deadline(cmd, cb, deadline)?;
+        } else {
+            self.router.send_command(cmd, cb)?;
+        }
+        Ok(())
     }
 }
 
@@ -401,14 +397,12 @@ where
             return Err(KvError::from(KvErrorInner::EmptyRequest));
         }
 
-        let reqs = modifies_to_requests(batch.modifies);
         ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
         let begin_instant = Instant::now_coarse();
 
         self.exec_write_requests(
             ctx,
-            reqs,
-            batch.extra,
+            batch,
             Box::new(move |(cb_ctx, res)| match res {
                 Ok(CmdRes::Resp(_)) => {
                     ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
@@ -573,7 +567,7 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                         .observe(begin_instant.elapsed().as_secs_f64());
                 }
             }
-            msg.mut_entries()[0].set_data(rctx.to_bytes());
+            msg.mut_entries()[0].set_data(rctx.to_bytes().into());
         }
     }
 }
@@ -631,7 +625,7 @@ mod tests {
         m.set_msg_type(MessageType::MsgReadIndex);
         let uuid = Uuid::new_v4();
         let mut e = eraftpb::Entry::default();
-        e.set_data(uuid.as_bytes().to_vec());
+        e.set_data(uuid.as_bytes().to_vec().into());
         m.mut_entries().push(e);
 
         checker.on_step(&mut m);

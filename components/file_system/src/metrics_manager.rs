@@ -6,7 +6,7 @@ use std::time::Instant;
 use strum::EnumCount;
 
 use crate::iosnoop::{fetch_io_bytes, flush_io_latency_metrics};
-use crate::metrics::IO_BYTES_VEC;
+use crate::metrics::{tls_flush, IO_BYTES_VEC};
 use crate::IOBytes;
 use crate::IORateLimiterStatistics;
 use crate::{IOOp, IOType};
@@ -54,6 +54,7 @@ impl MetricsManager {
     }
 
     pub fn flush(&mut self, _now: Instant) {
+        tls_flush();
         flush_io_latency_metrics();
         flush_io_bytes!(
             self.fetcher,
@@ -84,6 +85,12 @@ impl MetricsManager {
             compaction,
             IOType::Compaction,
             self.last_fetch[IOType::Compaction as usize]
+        );
+        flush_io_bytes!(
+            self.fetcher,
+            level_zero_compaction,
+            IOType::LevelZeroCompaction,
+            self.last_fetch[IOType::LevelZeroCompaction as usize]
         );
         flush_io_bytes!(
             self.fetcher,

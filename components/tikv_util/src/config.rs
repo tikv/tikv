@@ -34,14 +34,14 @@ pub enum ConfigError {
 }
 
 const UNIT: u64 = 1;
-const DATA_MAGNITUDE: u64 = 1024;
-pub const KB: u64 = UNIT * DATA_MAGNITUDE;
-pub const MB: u64 = KB * DATA_MAGNITUDE;
-pub const GB: u64 = MB * DATA_MAGNITUDE;
 
-// Make sure it will not overflow.
-const TB: u64 = (GB as u64) * (DATA_MAGNITUDE as u64);
-const PB: u64 = (TB as u64) * (DATA_MAGNITUDE as u64);
+const BINARY_DATA_MAGNITUDE: u64 = 1024;
+pub const B: u64 = UNIT;
+pub const KIB: u64 = UNIT * BINARY_DATA_MAGNITUDE;
+pub const MIB: u64 = KIB * BINARY_DATA_MAGNITUDE;
+pub const GIB: u64 = MIB * BINARY_DATA_MAGNITUDE;
+pub const TIB: u64 = GIB * BINARY_DATA_MAGNITUDE;
+pub const PIB: u64 = TIB * BINARY_DATA_MAGNITUDE;
 
 const TIME_MAGNITUDE_1: u64 = 1000;
 const TIME_MAGNITUDE_2: u64 = 60;
@@ -116,19 +116,19 @@ impl From<ConfigValue> for OptionReadableSize {
 
 impl ReadableSize {
     pub const fn kb(count: u64) -> ReadableSize {
-        ReadableSize(count * KB)
+        ReadableSize(count * KIB)
     }
 
     pub const fn mb(count: u64) -> ReadableSize {
-        ReadableSize(count * MB)
+        ReadableSize(count * MIB)
     }
 
     pub const fn gb(count: u64) -> ReadableSize {
-        ReadableSize(count * GB)
+        ReadableSize(count * GIB)
     }
 
     pub const fn as_mb(self) -> u64 {
-        self.0 / MB
+        self.0 / MIB
     }
 }
 
@@ -165,16 +165,16 @@ impl Serialize for ReadableSize {
         let mut buffer = String::new();
         if size == 0 {
             write!(buffer, "{}KiB", size).unwrap();
-        } else if size % PB == 0 {
-            write!(buffer, "{}PiB", size / PB).unwrap();
-        } else if size % TB == 0 {
-            write!(buffer, "{}TiB", size / TB).unwrap();
-        } else if size % GB as u64 == 0 {
-            write!(buffer, "{}GiB", size / GB).unwrap();
-        } else if size % MB as u64 == 0 {
-            write!(buffer, "{}MiB", size / MB).unwrap();
-        } else if size % KB as u64 == 0 {
-            write!(buffer, "{}KiB", size / KB).unwrap();
+        } else if size % PIB == 0 {
+            write!(buffer, "{}PiB", size / PIB).unwrap();
+        } else if size % TIB == 0 {
+            write!(buffer, "{}TiB", size / TIB).unwrap();
+        } else if size % GIB as u64 == 0 {
+            write!(buffer, "{}GiB", size / GIB).unwrap();
+        } else if size % MIB as u64 == 0 {
+            write!(buffer, "{}MiB", size / MIB).unwrap();
+        } else if size % KIB as u64 == 0 {
+            write!(buffer, "{}KiB", size / KIB).unwrap();
         } else {
             return serializer.serialize_u64(size);
         }
@@ -185,6 +185,7 @@ impl Serialize for ReadableSize {
 impl FromStr for ReadableSize {
     type Err = String;
 
+    // This method parses value in binary unit.
     fn from_str(s: &str) -> Result<ReadableSize, String> {
         let size_str = s.trim();
         if size_str.is_empty() {
@@ -199,18 +200,18 @@ impl FromStr for ReadableSize {
         let size_len = size_str
             .to_string()
             .chars()
-            .take_while(|c| char::is_ascii_digit(c) || *c == '.')
+            .take_while(|c| char::is_ascii_digit(c) || ['.', 'e', 'E', '-', '+'].contains(c))
             .count();
 
         // unit: alphabetic characters
         let (size, unit) = size_str.split_at(size_len);
 
         let unit = match unit.trim() {
-            "K" | "KB" | "KiB" => KB,
-            "M" | "MB" | "MiB" => MB,
-            "G" | "GB" | "GiB" => GB,
-            "T" | "TB" | "TiB" => TB,
-            "P" | "PB" | "PiB" => PB,
+            "K" | "KB" | "KiB" => KIB,
+            "M" | "MB" | "MiB" => MIB,
+            "G" | "GB" | "GiB" => GIB,
+            "T" | "TB" | "TiB" => TIB,
+            "P" | "PB" | "PiB" => PIB,
             "B" | "" => UNIT,
             _ => {
                 return Err(format!(
@@ -457,17 +458,98 @@ impl<'de> Deserialize<'de> for ReadableDuration {
     }
 }
 
+fn canonicalize_fallback<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
+    fn normalize(path: &Path) -> PathBuf {
+        use std::path::Component;
+        let mut components = path.components().peekable();
+        let mut ret = PathBuf::new();
+
+        while let Some(c @ (Component::Prefix(..) | Component::RootDir)) =
+            components.peek().cloned()
+        {
+            components.next();
+            ret.push(c.as_os_str());
+        }
+
+        for component in components {
+            match component {
+                Component::Prefix(..) | Component::RootDir => unreachable!(),
+                Component::CurDir => {}
+                c @ Component::ParentDir => {
+                    if !ret.pop() {
+                        ret.push(c.as_os_str());
+                    }
+                }
+                Component::Normal(c) => ret.push(c),
+            }
+        }
+        ret
+    }
+    fn try_canonicalize_normalized_path(path: &Path) -> std::io::Result<PathBuf> {
+        use std::path::Component;
+        let mut components = path.components().peekable();
+        let mut should_canonicalize = true;
+        let mut ret = if path.is_relative() {
+            Path::new(".").canonicalize()?
+        } else {
+            PathBuf::new()
+        };
+
+        while let Some(c @ (Component::Prefix(..) | Component::RootDir)) =
+            components.peek().cloned()
+        {
+            components.next();
+            ret.push(c.as_os_str());
+        }
+        // normalize() will only preserve leading ParentDir.
+        while let Some(Component::ParentDir) = components.peek().cloned() {
+            components.next();
+            ret.pop();
+        }
+
+        for component in components {
+            match component {
+                Component::Normal(c) => {
+                    ret.push(c);
+                    // We try to canonicalize a longest path based on fs info.
+                    if should_canonicalize {
+                        match ret.as_path().canonicalize() {
+                            Ok(path) => {
+                                ret = path;
+                            }
+                            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                                should_canonicalize = false;
+                            }
+                            other => return other,
+                        }
+                    }
+                }
+                Component::Prefix(..)
+                | Component::RootDir
+                | Component::ParentDir
+                | Component::CurDir => unreachable!(),
+            }
+        }
+        Ok(ret)
+    }
+    try_canonicalize_normalized_path(&normalize(path.as_ref()))
+}
+
+/// Normalizes the path and canonicalizes its longest physically existing sub-path.
+fn canonicalize_imp<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
+    match path.as_ref().canonicalize() {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => canonicalize_fallback(path),
+        other => other,
+    }
+}
+
 pub fn canonicalize_path(path: &str) -> Result<String, Box<dyn Error>> {
     canonicalize_sub_path(path, "")
 }
 
 pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<dyn Error>> {
     let path = Path::new(path);
-    let mut path = match path.canonicalize() {
-        Ok(path) => path,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => PathBuf::from(path),
-        Err(e) => return Err(Box::new(e) as Box<dyn Error>),
-    };
+    let mut path = canonicalize_imp(path)?;
     if !sub_path.is_empty() {
         path = path.join(Path::new(sub_path));
     }
@@ -478,7 +560,7 @@ pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<d
 }
 
 pub fn canonicalize_log_dir(path: &str, filename: &str) -> Result<String, Box<dyn Error>> {
-    let mut path = Path::new(path).canonicalize()?;
+    let mut path = canonicalize_imp(Path::new(path))?;
     if path.is_file() {
         return Ok(format!("{}", path.display()));
     }
@@ -1191,8 +1273,8 @@ mod tests {
         assert_eq!(s.0, 2 * 1024 * 1024 * 1024);
         assert_eq!(s.as_mb(), 2048);
 
-        assert_eq!((ReadableSize::mb(2) / 2).0, MB);
-        assert_eq!((ReadableSize::mb(1) / 2).0, 512 * KB);
+        assert_eq!((ReadableSize::mb(2) / 2).0, MIB);
+        assert_eq!((ReadableSize::mb(1) / 2).0, 512 * KIB);
         assert_eq!(ReadableSize::mb(2) / ReadableSize::kb(1), 2048);
     }
 
@@ -1205,11 +1287,11 @@ mod tests {
 
         let legal_cases = vec![
             (0, "0KiB"),
-            (2 * KB, "2KiB"),
-            (4 * MB, "4MiB"),
-            (5 * GB, "5GiB"),
-            (7 * TB, "7TiB"),
-            (11 * PB, "11PiB"),
+            (2 * KIB, "2KiB"),
+            (4 * MIB, "4MiB"),
+            (5 * GIB, "5GiB"),
+            (7 * TIB, "7TiB"),
+            (11 * PIB, "11PiB"),
         ];
         for (size, exp) in legal_cases {
             let c = SizeHolder {
@@ -1231,30 +1313,39 @@ mod tests {
         assert_eq!(res_size.s.0, c.s.0);
 
         let decode_cases = vec![
-            (" 0.5 PB", PB / 2),
-            ("0.5 TB", TB / 2),
-            ("0.5GB ", GB / 2),
-            ("0.5MB", MB / 2),
-            ("0.5KB", KB / 2),
-            ("0.5P", PB / 2),
-            ("0.5T", TB / 2),
-            ("0.5G", GB / 2),
-            ("0.5M", MB / 2),
-            ("0.5K", KB / 2),
+            (" 0.5 PB", PIB / 2),
+            ("0.5 TB", TIB / 2),
+            ("0.5GB ", GIB / 2),
+            ("0.5MB", MIB / 2),
+            ("0.5KB", KIB / 2),
+            ("0.5P", PIB / 2),
+            ("0.5T", TIB / 2),
+            ("0.5G", GIB / 2),
+            ("0.5M", MIB / 2),
+            ("0.5K", KIB / 2),
             ("23", 23),
             ("1", 1),
-            ("1024B", KB),
+            ("1024B", KIB),
             // units with binary prefixes
-            (" 0.5 PiB", PB / 2),
-            ("1PiB", PB),
-            ("0.5 TiB", TB / 2),
-            ("2 TiB", TB * 2),
-            ("0.5GiB ", GB / 2),
-            ("787GiB ", GB * 787),
-            ("0.5MiB", MB / 2),
-            ("3MiB", MB * 3),
-            ("0.5KiB", KB / 2),
-            ("1 KiB", KB),
+            (" 0.5 PiB", PIB / 2),
+            ("1PiB", PIB),
+            ("0.5 TiB", TIB / 2),
+            ("2 TiB", TIB * 2),
+            ("0.5GiB ", GIB / 2),
+            ("787GiB ", GIB * 787),
+            ("0.5MiB", MIB / 2),
+            ("3MiB", MIB * 3),
+            ("0.5KiB", KIB / 2),
+            ("1 KiB", KIB),
+            // scientific notation
+            ("0.5e6 B", B * 500000),
+            ("0.5E6 B", B * 500000),
+            ("1e6B", B * 1000000),
+            ("8E6B", B * 8000000),
+            ("8e7", B * 80000000),
+            ("1e-1MB", MIB / 10),
+            ("1e+1MB", MIB * 10),
+            ("0e+10MB", 0),
         ];
         for (src, exp) in decode_cases {
             let src = format!("s = {:?}", src);
@@ -1353,15 +1444,51 @@ mod tests {
             tmp_dir.canonicalize().unwrap().join("test1.dump")
         );
 
-        let path2 = format!("{}", tmp_dir.to_path_buf().join("test2").display());
-        assert!(canonicalize_path(&path2).is_ok());
-        ensure_dir_exist(&path2).unwrap();
-        let res_path2 = canonicalize_path(&path2).unwrap();
-        assert_eq!(
-            Path::new(&res_path2),
-            Path::new(&path2).canonicalize().unwrap()
-        );
+        let cases = vec![".", "/../../", "./../"];
+        for case in &cases {
+            assert_eq!(
+                Path::new(&canonicalize_fallback(case).unwrap()),
+                Path::new(case).canonicalize().unwrap(),
+            );
+        }
 
+        // canonicalize a path containing symlink and non-existing nodes
+        ensure_dir_exist(&format!("{}", tmp_dir.to_path_buf().join("dir").display())).unwrap();
+        let nodes: &[&str] = if cfg!(target_os = "linux") {
+            std::os::unix::fs::symlink(
+                &tmp_dir.to_path_buf().join("dir"),
+                &tmp_dir.to_path_buf().join("symlink"),
+            )
+            .unwrap();
+            &["non_existing", "dir", "symlink"]
+        } else {
+            &["non_existing", "dir"]
+        };
+        for first in nodes {
+            for second in nodes {
+                let path = format!(
+                    "{}/{}/../{}/non_existing",
+                    tmp_dir.to_str().unwrap(),
+                    first,
+                    second
+                );
+                let res_path = canonicalize_path(&path).unwrap();
+                // resolve to second/non_existing
+                if *second == "non_existing" {
+                    assert_eq!(
+                        Path::new(&res_path),
+                        tmp_dir.to_path_buf().join("non_existing/non_existing")
+                    );
+                } else {
+                    assert_eq!(
+                        Path::new(&res_path),
+                        tmp_dir.to_path_buf().join("dir/non_existing")
+                    );
+                }
+            }
+        }
+
+        // canonicalize a file
         let path2 = format!("{}", tmp_dir.to_path_buf().join("test2.dump").display());
         {
             File::create(&path2).unwrap();

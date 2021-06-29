@@ -6,6 +6,9 @@ slow-log-threshold = "1s"
 log-rotation-timespan = "1d"
 panic-when-unexpected-key-or-data = true
 enable-io-snoop = false
+abort-on-panic = true
+memory-usage-limit = "10GB"
+memory-usage-high-water= 0.65
 
 [readpool.unified]
 min-thread-count = 5
@@ -89,6 +92,22 @@ num-shard-bits = 10
 strict-capacity-limit = true
 high-pri-pool-ratio = 0.8
 memory-allocator = "nodump"
+
+[storage.io-rate-limit]
+max-bytes-per-sec = "1000MB"
+mode = "all-io"
+strict = true
+foreground-read-priority = "low"
+foreground-write-priority = "low"
+flush-priority = "low"
+level-zero-compaction-priority = "low"
+compaction-priority = "high"
+replication-priority = "low"
+load-balance-priority = "low"
+gc-priority = "high"
+import-priority = "high"
+export-priority = "high"
+other-priority = "low"
 
 [pd]
 endpoints = [
@@ -554,6 +573,12 @@ pipelined = false
 min-ts-interval = "4s"
 old-value-cache-size = 512
 hibernate-regions-compatible = false
+incremental-scan-speed-limit = 7
+sink-memory-quota = "7MB"
+
+[resolved-ts]
+enable = true
+advance-ts-interval = "5s"
 scan-lock-pool-size = 1
 
 [split]

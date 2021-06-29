@@ -18,7 +18,10 @@ use std::{
     fs::{self, File},
     net::SocketAddr,
     path::{Path, PathBuf},
-    sync::{atomic::AtomicU64, Arc, Mutex},
+    sync::{
+        atomic::{AtomicU32, AtomicU64, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant},
 };
 
@@ -28,15 +31,17 @@ use engine_rocks::{
     encryption::get_env as get_encrypted_env, file_system::get_env as get_inspected_env,
     RocksEngine,
 };
-use engine_traits::{compaction_job::CompactionJobInfo, Engines, RaftEngine, CF_DEFAULT, CF_WRITE};
+use engine_traits::{
+    compaction_job::CompactionJobInfo, CFOptionsExt, ColumnFamilyOptions, Engines, MiscExt,
+    RaftEngine, CF_DEFAULT, CF_LOCK, CF_WRITE,
+};
 use error_code::ErrorCodeExt;
 use file_system::{
-    set_io_rate_limiter, BytesFetcher, IORateLimiter, MetricsManager as IOMetricsManager,
+    set_io_rate_limiter, BytesFetcher, IOBudgetAdjustor, IORateLimiter,
+    MetricsManager as IOMetricsManager,
 };
 use fs2::FileExt;
-use futures::compat::Stream01CompatExt;
 use futures::executor::block_on;
-use futures::stream::StreamExt;
 use grpcio::{EnvBuilder, Environment};
 use kvproto::{
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
@@ -53,6 +58,7 @@ use raftstore::{
         config::RaftstoreConfigManager,
         fsm,
         fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_MSG_CAP},
+        memory::MEMTRACE_ROOT,
         AutoSplitController, GlobalReplicationState, LocalReader, SnapManagerBuilder,
         SplitCheckRunner, SplitConfigManager, StoreMsg,
     },
@@ -67,6 +73,7 @@ use tikv::{
     server::raftkv::ReplicaReadLockChecker,
     server::{
         config::Config as ServerConfig,
+        config::ServerConfigManager,
         create_raft_storage,
         gc_worker::GcWorker,
         lock_manager::HackedLockManager as LockManager,
@@ -81,15 +88,15 @@ use tikv::{
 use tikv_util::{
     check_environment_variables,
     config::{ensure_dir_exist, VersionTrack},
-    sys::sys_quota::SysQuota,
+    math::MovingAvgU32,
+    sys::{register_memory_usage_high_water, SysQuota},
     time::Monitor,
-    timer::GLOBAL_TIMER_HANDLE,
     worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker, Worker},
 };
 use tokio::runtime::Builder;
 
-use crate::setup::*;
-
+use crate::raft_engine_switch::{check_and_dump_raft_db, check_and_dump_raft_engine};
+use crate::{memory::*, setup::*};
 use raftstore::engine_store_ffi::{
     get_engine_store_server_helper, EngineStoreServerStatus, RaftProxyStatus, RaftStoreProxy,
     RaftStoreProxyFFIHelper, ReadIndexClient,
@@ -108,8 +115,11 @@ pub unsafe fn run_tikv(config: TiKvConfig) {
     crate::log_proxy_info();
 
     // Print resource quota.
-    SysQuota::new().log_quota();
-    CPU_CORES_QUOTA_GAUGE.set(SysQuota::new().cpu_cores_quota());
+    SysQuota::log_quota();
+    CPU_CORES_QUOTA_GAUGE.set(SysQuota::cpu_cores_quota());
+
+    let high_water = (config.memory_usage_high_water * config.memory_usage_limit.0 as f64) as u64;
+    register_memory_usage_high_water(high_water);
 
     // Do some prepare works before start.
     pre_start();
@@ -119,7 +129,6 @@ pub unsafe fn run_tikv(config: TiKvConfig) {
     macro_rules! run_impl {
         ($ER: ty) => {{
             let mut tikv = TiKVServer::<$ER>::init(config);
-            let fetcher = tikv.init_io_utility();
             tikv.check_conflict_addr();
             tikv.init_fs();
             tikv.init_yatp();
@@ -151,11 +160,13 @@ pub unsafe fn run_tikv(config: TiKvConfig) {
             }
 
             info!("engine-store server is started");
-            let engines = tikv.init_raw_engines();
+            let (limiter, fetcher) = tikv.init_io_utility();
+            let (engines, engines_info) = tikv.init_raw_engines(Some(limiter.clone()));
+            limiter.set_low_priority_io_adjustor_if_needed(Some(engines_info.clone()));
             tikv.init_engines(engines);
             let server_config = tikv.init_servers();
             tikv.register_services();
-            tikv.init_metrics_flusher(fetcher);
+            tikv.init_metrics_flusher(fetcher, engines_info);
             tikv.run_server(server_config);
             tikv.run_status_server();
 
@@ -199,6 +210,7 @@ pub unsafe fn run_tikv(config: TiKvConfig) {
 const RESERVED_OPEN_FDS: u64 = 1000;
 
 const DEFAULT_METRICS_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
+const DEFAULT_ENGINE_METRICS_RESET_INTERVAL: Duration = Duration::from_millis(60_000);
 
 /// A complete TiKV server.
 struct TiKVServer<ER: RaftEngine> {
@@ -315,16 +327,24 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     /// - If the max open file descriptor limit is not high enough to support
     ///   the main database and the raft database.
     fn init_config(mut config: TiKvConfig) -> ConfigController {
+        validate_and_persist_config(&mut config, true);
+
         ensure_dir_exist(&config.storage.data_dir).unwrap();
+        if !config.rocksdb.wal_dir.is_empty() {
+            ensure_dir_exist(&config.rocksdb.wal_dir).unwrap();
+        }
         if config.raft_engine.enable {
             ensure_dir_exist(&config.raft_engine.config().dir).unwrap();
         } else {
             ensure_dir_exist(&config.raft_store.raftdb_path).unwrap();
+            if !config.raftdb.wal_dir.is_empty() {
+                ensure_dir_exist(&config.raftdb.wal_dir).unwrap();
+            }
         }
-        validate_and_persist_config(&mut config, true);
+
         check_system_config(&config);
 
-        tikv_util::set_panic_hook(false, &config.storage.data_dir);
+        tikv_util::set_panic_hook(config.abort_on_panic, &config.storage.data_dir);
 
         info!(
             "using config";
@@ -417,7 +437,11 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         if tikv_util::panic_mark_file_exists(&self.config.storage.data_dir) {
             fatal!(
-                "panic_mark_file {} exists, there must be something wrong with the db.",
+                "panic_mark_file {} exists, there must be something wrong with the db. \
+                     Do not remove the panic_mark_file and force the TiKV node to restart. \
+                     Please contact TiKV maintainers to investigate the issue. \
+                     If needed, use scale in and scale out to replace the TiKV node. \
+                     https://docs.pingcap.com/tidb/stable/scale-tidb-using-tiup",
                 tikv_util::panic_mark_file_path(&self.config.storage.data_dir).display()
             );
         }
@@ -541,7 +565,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         gc_worker
     }
 
-    fn init_servers(&mut self) -> Arc<ServerConfig> {
+    fn init_servers(&mut self) -> Arc<VersionTrack<ServerConfig>> {
         let gc_worker = self.init_gc_worker();
         let mut ttl_checker = Box::new(LazyWorker::new("ttl-checker"));
         let ttl_scheduler = ttl_checker.scheduler();
@@ -638,7 +662,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             cop_read_pools.handle()
         };
 
-        let server_config = Arc::new(self.config.server.clone());
+        let server_config = Arc::new(VersionTrack::new(self.config.server.clone()));
 
         self.config
             .raft_store
@@ -647,7 +671,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let raft_store = Arc::new(VersionTrack::new(self.config.raft_store.clone()));
         let mut node = Node::new(
             self.system.take().unwrap(),
-            &server_config,
+            &server_config.value().clone(),
             raft_store.clone(),
             self.pd_client.clone(),
             self.state.clone(),
@@ -663,12 +687,12 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             &self.security_mgr,
             storage,
             coprocessor::Endpoint::new(
-                &server_config,
+                &server_config.value(),
                 cop_read_pool_handle,
                 self.concurrency_manager.clone(),
                 engine_rocks::raw_util::to_raw_perf_level(self.config.coprocessor.perf_level),
             ),
-            coprocessor_v2::Endpoint::new(),
+            coprocessor_v2::Endpoint::new(&self.config.coprocessor_v2),
             self.router.clone(),
             self.resolver.clone(),
             snap_mgr.clone(),
@@ -678,10 +702,23 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             debug_thread_pool,
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
+        cfg_controller.register(
+            tikv::config::Module::Server,
+            Box::new(ServerConfigManager::new(
+                server.get_snap_worker_scheduler(),
+                server_config.clone(),
+            )),
+        );
 
         let import_path = self.store_path.join("import");
-        let importer =
-            Arc::new(SSTImporter::new(import_path, self.encryption_key_manager.clone()).unwrap());
+        let importer = Arc::new(
+            SSTImporter::new(
+                &self.config.import,
+                import_path,
+                self.encryption_key_manager.clone(),
+            )
+            .unwrap(),
+        );
 
         let split_check_runner = SplitCheckRunner::new(
             engines.engines.kv.clone(),
@@ -793,39 +830,49 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
     }
 
-    fn init_io_utility(&mut self) -> BytesFetcher {
+    fn init_io_utility(&mut self) -> (Arc<IORateLimiter>, BytesFetcher) {
         let io_snooper_on = self.config.enable_io_snoop
             && file_system::init_io_snooper()
                 .map_err(|e| error_unknown!(%e; "failed to init io snooper"))
                 .is_ok();
-        let (fetcher, limiter) = if io_snooper_on {
-            (BytesFetcher::FromIOSnooper(), IORateLimiter::new(0, false))
+        let limiter = Arc::new(
+            self.config
+                .storage
+                .io_rate_limit
+                .build(!io_snooper_on /*enable_statistics*/),
+        );
+        let fetcher = if io_snooper_on {
+            BytesFetcher::FromIOSnooper()
         } else {
-            let limiter = IORateLimiter::new(0, true);
-            (BytesFetcher::FromRateLimiter(limiter.statistics()), limiter)
+            BytesFetcher::FromRateLimiter(limiter.statistics().unwrap())
         };
-        set_io_rate_limiter(Some(Arc::new(limiter)));
-        fetcher
+        // Set up IO limiter even when rate limit is disabled, so that rate limits can be
+        // dynamically applied later on.
+        set_io_rate_limiter(Some(limiter.clone()));
+        (limiter, fetcher)
     }
 
-    fn init_metrics_flusher(&mut self, fetcher: BytesFetcher) {
-        let handle = self.background_worker.clone_raw_handle();
-        let mut interval = GLOBAL_TIMER_HANDLE
-            .interval(Instant::now(), DEFAULT_METRICS_FLUSH_INTERVAL)
-            .compat();
+    fn init_metrics_flusher(
+        &mut self,
+        fetcher: BytesFetcher,
+        engines_info: Arc<EnginesResourceInfo>,
+    ) {
         let mut engine_metrics =
             EngineMetricsManager::new(self.engines.as_ref().unwrap().engines.clone());
         let mut io_metrics = IOMetricsManager::new(fetcher);
-        handle.spawn(async move {
-            while let Some(Ok(_)) = interval.next().await {
+        let mut mem_trace_metrics = MemoryTraceManager::default();
+        mem_trace_metrics.register_provider((&*MEMTRACE_ROOT).to_owned());
+        self.background_worker
+            .spawn_interval_task(DEFAULT_METRICS_FLUSH_INTERVAL, move || {
                 let now = Instant::now();
                 engine_metrics.flush(now);
                 io_metrics.flush(now);
-            }
-        });
+                engines_info.update(now);
+                mem_trace_metrics.flush(now);
+            });
     }
 
-    fn run_server(&mut self, server_config: Arc<ServerConfig>) {
+    fn run_server(&mut self, server_config: Arc<VersionTrack<ServerConfig>>) {
         let server = self.servers.as_mut().unwrap();
         server
             .server
@@ -883,10 +930,13 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 }
 
 impl TiKVServer<RocksEngine> {
-    fn init_raw_engines(&mut self) -> Engines<RocksEngine, RocksEngine> {
+    fn init_raw_engines(
+        &mut self,
+        limiter: Option<Arc<IORateLimiter>>,
+    ) -> (Engines<RocksEngine, RocksEngine>, Arc<EnginesResourceInfo>) {
         let env =
             get_encrypted_env(self.encryption_key_manager.clone(), None /*base_env*/).unwrap();
-        let env = get_inspected_env(Some(env)).unwrap();
+        let env = get_inspected_env(Some(env), limiter).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         // Create raft engine.
@@ -926,6 +976,8 @@ impl TiKVServer<RocksEngine> {
         raft_engine.set_shared_block_cache(shared_block_cache);
         let engines = Engines::new(kv_engine, raft_engine);
 
+        check_and_dump_raft_engine(&self.config, &engines.raft, 8);
+
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
             tikv::config::Module::Rocksdb,
@@ -944,15 +996,27 @@ impl TiKVServer<RocksEngine> {
             )),
         );
 
-        engines
+        let engines_info = Arc::new(EnginesResourceInfo::new(
+            engines.kv.clone(),
+            Some(engines.raft.clone()),
+            180, /*max_samples_to_preserve*/
+        ));
+
+        (engines, engines_info)
     }
 }
 
 impl TiKVServer<RaftLogEngine> {
-    fn init_raw_engines(&mut self) -> Engines<RocksEngine, RaftLogEngine> {
+    fn init_raw_engines(
+        &mut self,
+        limiter: Option<Arc<IORateLimiter>>,
+    ) -> (
+        Engines<RocksEngine, RaftLogEngine>,
+        Arc<EnginesResourceInfo>,
+    ) {
         let env =
             get_encrypted_env(self.encryption_key_manager.clone(), None /*base_env*/).unwrap();
-        let env = get_inspected_env(Some(env)).unwrap();
+        let env = get_inspected_env(Some(env), limiter).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         // Create raft engine.
@@ -960,12 +1024,7 @@ impl TiKVServer<RaftLogEngine> {
         let raft_engine = RaftLogEngine::new(raft_config);
 
         // Try to dump and recover raft data.
-        crate::dump::check_and_dump_raft_db(
-            &self.config.raft_store.raftdb_path,
-            &raft_engine,
-            env.clone(),
-            8,
-        );
+        check_and_dump_raft_db(&self.config, &raft_engine, &env, 8);
 
         // Create kv engine.
         let mut kv_db_opts = self.config.rocksdb.build_opt();
@@ -999,7 +1058,13 @@ impl TiKVServer<RaftLogEngine> {
             )),
         );
 
-        engines
+        let engines_info = Arc::new(EnginesResourceInfo::new(
+            engines.kv.clone(),
+            None, /*raft_engine*/
+            180,  /*max_samples_to_preserve*/
+        ));
+
+        (engines, engines_info)
     }
 }
 
@@ -1121,8 +1186,6 @@ impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
     }
 }
 
-const DEFAULT_ENGINE_METRICS_RESET_INTERVAL: Duration = Duration::from_millis(60_000);
-
 pub struct EngineMetricsManager<R: RaftEngine> {
     engines: Engines<RocksEngine, R>,
     last_reset: Instant,
@@ -1144,5 +1207,80 @@ impl<R: RaftEngine> EngineMetricsManager<R> {
             self.engines.raft.reset_statistics();
             self.last_reset = now;
         }
+    }
+}
+
+pub struct EnginesResourceInfo {
+    kv_engine: RocksEngine,
+    raft_engine: Option<RocksEngine>,
+    latest_normalized_pending_bytes: AtomicU32,
+    normalized_pending_bytes_collector: MovingAvgU32,
+}
+
+impl EnginesResourceInfo {
+    const SCALE_FACTOR: u64 = 100;
+
+    pub fn new(
+        kv_engine: RocksEngine,
+        raft_engine: Option<RocksEngine>,
+        max_samples_to_preserve: usize,
+    ) -> Self {
+        EnginesResourceInfo {
+            kv_engine,
+            raft_engine,
+            latest_normalized_pending_bytes: AtomicU32::new(0),
+            normalized_pending_bytes_collector: MovingAvgU32::new(max_samples_to_preserve),
+        }
+    }
+
+    pub fn update(&self, _now: Instant) {
+        let mut normalized_pending_bytes = 0;
+
+        fn fetch_engine_cf(engine: &RocksEngine, cf: &str, normalized_pending_bytes: &mut u32) {
+            if let Ok(cf_opts) = engine.get_options_cf(cf) {
+                if let Ok(Some(b)) = engine.get_cf_compaction_pending_bytes(cf) {
+                    if cf_opts.get_soft_pending_compaction_bytes_limit() > 0 {
+                        *normalized_pending_bytes = std::cmp::max(
+                            *normalized_pending_bytes,
+                            (b * EnginesResourceInfo::SCALE_FACTOR
+                                / cf_opts.get_soft_pending_compaction_bytes_limit())
+                                as u32,
+                        );
+                    }
+                }
+            }
+        }
+
+        if let Some(raft_engine) = &self.raft_engine {
+            fetch_engine_cf(raft_engine, CF_DEFAULT, &mut normalized_pending_bytes);
+        }
+        for cf in &[CF_DEFAULT, CF_WRITE, CF_LOCK] {
+            fetch_engine_cf(&self.kv_engine, cf, &mut normalized_pending_bytes);
+        }
+        let (_, avg) = self
+            .normalized_pending_bytes_collector
+            .add(normalized_pending_bytes);
+        self.latest_normalized_pending_bytes.store(
+            std::cmp::max(normalized_pending_bytes, avg),
+            Ordering::Relaxed,
+        );
+    }
+}
+
+impl IOBudgetAdjustor for EnginesResourceInfo {
+    fn adjust(&self, total_budgets: usize) -> usize {
+        let score = self.latest_normalized_pending_bytes.load(Ordering::Relaxed) as f32
+            / Self::SCALE_FACTOR as f32;
+        // Two reasons for adding `sqrt` on top:
+        // 1) In theory the convergence point is independent of the value of pending
+        //    bytes (as long as backlog generating rate equals consuming rate, which is
+        //    determined by compaction budgets), a convex helps reach that point while
+        //    maintaining low level of pending bytes.
+        // 2) Variance of compaction pending bytes grows with its magnitude, a filter
+        //    with decreasing derivative can help balance such trend.
+        let score = score.sqrt();
+        // The target global write flow slides between Bandwidth / 2 and Bandwidth.
+        let score = 0.5 + score / 2.0;
+        (total_budgets as f32 * score) as usize
     }
 }
