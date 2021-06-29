@@ -23,6 +23,7 @@ mem-profiling = ["tikv_alloc/mem-profiling"]
 failpoints = [
   "fail/failpoints",
   "raftstore/failpoints",
+  "tikv_util/failpoints",
   "engine_rocks/failpoints"
 ]
 cloud-aws = [

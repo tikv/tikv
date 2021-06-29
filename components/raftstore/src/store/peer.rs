@@ -57,6 +57,7 @@ use crate::{Error, Result};
 use collections::{HashMap, HashSet};
 use pd_client::INVALID_ID;
 use tikv_util::codec::number::decode_u64;
+use tikv_util::sys::disk;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::time::{Instant as UtilInstant, ThreadReadId};
 use tikv_util::worker::{FutureScheduler, Scheduler};
@@ -2036,10 +2037,20 @@ where
                 continue;
             }
             if !replica_read {
-                if read_index.is_none() {
-                    // Actually, the read_index is none if and only if it's the first one in read.cmds.
-                    // Starting from the second, all the following ones' read_index is not none.
-                    read_index = read.read_index;
+                match (read_index, read.read_index) {
+                    (Some(local_responsed_index), Some(batch_index)) => {
+                        // `read_index` could be less than `read.read_index` because the former is
+                        // filled with `committed index` when proposed, and the latter is filled
+                        // after a read-index procedure finished.
+                        read_index = Some(cmp::max(local_responsed_index, batch_index));
+                    }
+                    (None, _) => {
+                        // Actually, the read_index is none if and only if it's the first one in
+                        // read.cmds. Starting from the second, all the following ones' read_index
+                        // is not none.
+                        read_index = read.read_index;
+                    }
+                    _ => {}
                 }
                 cb.invoke_read(self.handle_read(ctx, req, true, read_index));
                 continue;
@@ -2350,7 +2361,14 @@ where
                 return false;
             }
             Ok(RequestPolicy::ReadIndex) => return self.read_index(ctx, req, err_resp, cb),
-            Ok(RequestPolicy::ProposeNormal) => self.propose_normal(ctx, req),
+            Ok(RequestPolicy::ProposeNormal) => {
+                let store_id = ctx.store_id();
+                if disk::disk_full_precheck(store_id) || ctx.is_disk_full {
+                    Err(Error::Timeout("disk full".to_owned()))
+                } else {
+                    self.propose_normal(ctx, req)
+                }
+            }
             Ok(RequestPolicy::ProposeTransferLeader) => {
                 return self.propose_transfer_leader(ctx, req, cb);
             }
@@ -3126,6 +3144,8 @@ where
         if self.is_applying_snapshot()
             || self.has_pending_snapshot()
             || msg.get_from() != self.leader_id()
+            // For followers whose disk is full.
+            || disk::disk_full_precheck(ctx.store_id()) || ctx.is_disk_full
         {
             info!(
                 "reject transferring leader";

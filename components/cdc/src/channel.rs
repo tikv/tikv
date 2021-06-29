@@ -61,7 +61,20 @@ impl MemoryQuota {
         }
     }
     fn free(&self, bytes: usize) {
-        self.in_use.fetch_sub(bytes, Ordering::Release);
+        let mut in_use_bytes = self.in_use.load(Ordering::Relaxed);
+        loop {
+            // Saturating at the numeric bounds instead of overflowing.
+            let new_in_use_bytes = in_use_bytes - std::cmp::min(bytes, in_use_bytes);
+            match self.in_use.compare_exchange(
+                in_use_bytes,
+                new_in_use_bytes,
+                Ordering::Acquire,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return,
+                Err(current) => in_use_bytes = current,
+            }
+        }
     }
 }
 
@@ -321,23 +334,24 @@ mod tests {
 
     #[test]
     fn test_nonblocking_batch() {
-        let runtime = tokio::runtime::Runtime::new().unwrap();
         let force_send = false;
-        let (mut send, mut drain) =
-            new_test_cancal(CDC_MSG_MAX_BATCH_SIZE * 2, usize::MAX, force_send);
-        let (mut tx, mut rx) = unbounded();
-        runtime.spawn(async move {
-            drain.forward(&mut tx).await.unwrap();
-        });
         for count in 1..CDC_EVENT_MAX_BATCH_SIZE + CDC_EVENT_MAX_BATCH_SIZE / 2 {
+            let (mut send, mut drain) =
+                new_test_cancal(CDC_MSG_MAX_BATCH_SIZE * 2, usize::MAX, force_send);
             for _ in 0..count {
                 send(CdcEvent::Event(Default::default())).unwrap();
             }
-            recv_timeout(&mut rx, Duration::from_millis(100)).unwrap();
-        }
+            drop(send);
 
-        if recv_timeout(&mut rx, Duration::from_millis(100)).is_ok() {
-            panic!("expect to be timeout");
+            // Forward `drain` after `send` is dropped so that all items should be batched.
+            let (mut tx, mut rx) = unbounded();
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            runtime.spawn(async move {
+                drain.forward(&mut tx).await.unwrap();
+            });
+            let timeout = Duration::from_millis(100);
+            assert!(recv_timeout(&mut rx, timeout).unwrap().is_some());
+            assert!(recv_timeout(&mut rx, timeout).unwrap().is_none());
         }
     }
 
@@ -437,6 +451,12 @@ mod tests {
             }
             assert_eq!(memory_quota.in_use(), 0);
             assert_eq!(memory_quota.alloc(1024), true);
+
+            // Freeing bytes should not cause overflow.
+            memory_quota.free(1024);
+            assert_eq!(memory_quota.in_use(), 0);
+            memory_quota.free(1024);
+            assert_eq!(memory_quota.in_use(), 0);
         }
     }
 }
