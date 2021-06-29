@@ -1455,7 +1455,6 @@ fn collect_report_read_peer_stats(
         }
         return stats;
     }
-    let mut peer_stats = HashMap::default();
     let mut keys_topn_report = TopN::new(capacity);
     let mut bytes_topn_report = TopN::new(capacity);
     let mut stats_topn_report = TopN::new(capacity);
@@ -1481,18 +1480,14 @@ fn collect_report_read_peer_stats(
 
     for x in bytes_topn_report {
         if let Some(report_stat) = report_read_stats.remove(&x.region_id) {
-            peer_stats.insert(x.region_id, report_stat);
+            stats.peer_stats.push(report_stat);
         }
     }
 
     for x in stats_topn_report {
         if let Some(report_stat) = report_read_stats.remove(&x.region_id) {
-            peer_stats.insert(x.region_id, report_stat);
+            stats.peer_stats.push(report_stat);
         }
-    }
-
-    for (_, report_stat) in peer_stats {
-        stats.peer_stats.push(report_stat);
     }
     stats
 }
