@@ -10,7 +10,7 @@ use engine_traits::{KvEngine, CF_WRITE};
 use file_system::{set_io_type, IOType};
 use futures::executor::{ThreadPool, ThreadPoolBuilder};
 use futures::{TryFutureExt, TryStreamExt};
-use grpcio::{ClientStreamingSink, RequestStream, ServerStreamingSink, RpcContext, UnarySink};
+use grpcio::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use kvproto::errorpb;
 
 #[cfg(feature = "prost-codec")]
@@ -553,15 +553,6 @@ where
 
         self.threads.spawn_ok(buf_driver);
         self.threads.spawn_ok(handle_task);
-    }
-
-    fn duplicate_detect(
-        &mut self,
-        _ctx: RpcContext<'_>,
-        _request: DuplicateDetectRequest,
-        _sink: ServerStreamingSink<DuplicateDetectResponse>,
-    ) {
-        unimplemented!();
     }
 }
 
