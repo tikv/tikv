@@ -1320,6 +1320,16 @@ impl PeerStorage {
         self.schedule_applying_snapshot();
         let prev_region = self.region().clone();
         self.set_region(snap_region);
+        if self.truncated_index() == self.applied_index() {
+            self.applied_index_term = self.truncated_term();
+        } else {
+            panic!(
+                "{} applied index should be equal to truncated index after snapshot: {} != {}",
+                self.tag,
+                self.applied_index(),
+                self.truncated_index()
+            );
+        }
 
         Some(ApplySnapResult {
             prev_region,
