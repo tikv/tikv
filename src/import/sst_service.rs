@@ -589,12 +589,3 @@ fn pb_error_inc(type_: &str, e: &errorpb::Error) {
 
     IMPORTER_ERROR_VEC.with_label_values(&[type_, label]).inc();
 }
-
-fn make_request_header(mut context: Context) -> RaftRequestHeader {
-    let region_id = context.get_region_id();
-    let mut header = RaftRequestHeader::default();
-    header.set_peer(context.take_peer());
-    header.set_region_id(region_id);
-    header.set_region_epoch(context.take_region_epoch());
-    header
-}
