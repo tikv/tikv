@@ -457,18 +457,20 @@ fn test_split_not_to_split_existing_different_uninitialied_peer() {
     let r1 = cluster.run_conf_change();
     assert_eq!(r1, 1);
 
-    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k0", b"v0");
     pd_client.must_add_peer(r1, new_peer(3, 3));
-    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
 
     let before_check_snapshot_1_2_fp = "before_check_snapshot_1_2";
     fail::cfg(before_check_snapshot_1_2_fp, "pause").unwrap();
 
     pd_client.must_add_peer(r1, new_peer(2, 2));
 
-    // Wait for region 1 sending heartbeat and snapshot to store 2.
+    cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k2", b"v2");
-    must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
+
+    // Wait for region 1 sending heartbeat and snapshot to store 2
+    sleep_ms(200);
 
     cluster.add_send_filter(IsolationFilterFactory::new(2));
 
