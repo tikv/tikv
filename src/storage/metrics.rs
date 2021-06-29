@@ -297,81 +297,77 @@ lazy_static! {
     .unwrap();
     pub static ref SCHED_WRITE_FLOW_GAUGE: IntGauge = register_int_gauge!(
         "tikv_scheduler_write_flow",
-        "The speed of write flow."
-    )
-    .unwrap();
-       pub static ref SCHED_TARGET_FLOW_GAUGE: IntGauge = register_int_gauge!(
-        "tikv_scheduler_target_flow",
-        "The speed of write flow."
+        "The write flow passed through at scheduler level."
     )
     .unwrap();
     pub static ref SCHED_THROTTLE_FLOW_GAUGE: IntGauge = register_int_gauge!(
         "tikv_scheduler_throttle_flow",
-        "The speed of throttle flow."
+        "The throttled write flow at scheduler level."
     )
     .unwrap();
+       pub static ref SCHED_L0_TARGET_FLOW_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_scheduler_l0_target_flow",
+        "The target flow of L0."
+    )
+    .unwrap();
+    
     pub static ref SCHED_MEMTABLE_GAUGE: IntGaugeVec = register_int_gauge_vec!(
         "tikv_scheduler_memtable",
-        "The speed of throttle flow.",
+        "The number of memtables.",
         &["cf"]
     )
     .unwrap();
     pub static ref SCHED_L0_GAUGE: IntGaugeVec = register_int_gauge_vec!(
         "tikv_scheduler_l0",
-        "The speed of throttle flow.",
+        "The number of l0 files.",
         &["cf"]
     )
     .unwrap();
     pub static ref SCHED_FLUSH_L0_GAUGE: IntGaugeVec = register_int_gauge_vec!(
         "tikv_scheduler_flush_l0",
-        "The speed of throttle flow.",
+        "The number of l0 files after flush.",
         &["cf"]
     )
     .unwrap();
     pub static ref SCHED_L0_AVG_GAUGE: IntGaugeVec = register_int_gauge_vec!(
         "tikv_scheduler_l0_avg",
-        "The speed of throttle flow.",
+        "The number of average l0 files.",
         &["cf"]
     )
     .unwrap();
     pub static ref SCHED_FLUSH_FLOW_GAUGE: IntGaugeVec = register_int_gauge_vec!(
         "tikv_scheduler_flush_flow",
-        "The speed of throttle flow.",
+        "The speed of flush flow.",
         &["cf"]
     )
     .unwrap();
     pub static ref SCHED_L0_FLOW_GAUGE: IntGaugeVec = register_int_gauge_vec!(
         "tikv_scheduler_l0_flow",
-        "The speed of throttle flow.",
+        "The speed of l0 compaction flow.",
         &["cf"]
     )
     .unwrap();
     pub static ref SCHED_THROTTLE_ACTION_COUNTER: IntCounterVec = {
         register_int_counter_vec!(
             "tikv_scheduler_throttle_action_total",
-            "Total number of commands on each stage.",
+            "Total number of actions for flow control.",
             &["cf", "type"]
         )
         .unwrap()
     };
     pub static ref SCHED_DISCARD_RATIO_GAUGE: IntGauge = register_int_gauge!(
         "tikv_scheduler_discard_ratio",
-        "The discard ratio."
+        "The discard ratio for flow control."
     )
     .unwrap();
-    pub static ref SCHED_KD_GAUGE: IntGauge = register_int_gauge!(
-        "tikv_scheduler_kd",
-        "The discard ratio."
-    )
-    .unwrap();
-    pub static ref SCHED_KP_GAUGE: IntGauge = register_int_gauge!(
-        "tikv_scheduler_kp",
-        "The discard ratio."
-    )
-    .unwrap();
-     pub static ref SCHED_PENDING_BYTES_GAUGE: IntGaugeVec = register_int_gauge_vec!(
-        "tikv_scheduler_pending_bytes",
-        "The discard ratio.",
+    pub static ref SCHED_THROTTLE_CF_GAUGE: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_scheduler_throttle_cf",
+        "The CF being throttled.",
+        &["cf"]
+    ).unwrap();
+    pub static ref SCHED_PENDING_COMPACTION_BYTES_GAUGE: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_scheduler_pending_compaction_bytes",
+        "The number of pending compaction bytes.",
         &["type"]
     )
     .unwrap();

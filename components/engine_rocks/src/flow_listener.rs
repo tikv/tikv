@@ -7,6 +7,7 @@ use std::sync::Mutex;
 
 pub enum FlowInfo {
     L0(String, u64),
+    L0Intra(String),
     Flush(String, u64),
     Compaction(String),
 }
@@ -54,25 +55,34 @@ impl EventListener for FlowListener {
             return;
         }
 
-        if info.base_input_level() == 0 && info.output_level() != 0 {
-            let index = info.input_file_count() - info.num_input_files_at_output_level();
-            let props = info.table_properties();
-            let mut read_bytes = 0;
-            for i in 0..index {
-                let file = info.input_file_at(i);
-                for (file_name, prop) in props.iter() {
-                    if file_name == file.to_str().unwrap() {
-                        read_bytes += prop.data_size() + prop.index_size() + prop.filter_size();
-                        break;
+        if info.base_input_level() == 0 {
+            // L0 intra compaction
+            if info.output_level() == 0 {
+                let _ = self
+                    .flow_info_sender
+                    .lock()
+                    .unwrap()
+                    .send(FlowInfo::L0Intra(info.cf_name().to_owned()));
+            } else {
+                let index = info.input_file_count() - info.num_input_files_at_output_level();
+                let props = info.table_properties();
+                let mut read_bytes = 0;
+                for i in 0..index {
+                    let file = info.input_file_at(i);
+                    for (file_name, prop) in props.iter() {
+                        if file_name == file.to_str().unwrap() {
+                            read_bytes += prop.data_size() + prop.index_size() + prop.filter_size();
+                            break;
+                        }
                     }
                 }
-            }
 
-            let _ = self
-                .flow_info_sender
-                .lock()
-                .unwrap()
-                .send(FlowInfo::L0(info.cf_name().to_owned(), read_bytes));
+                let _ = self
+                    .flow_info_sender
+                    .lock()
+                    .unwrap()
+                    .send(FlowInfo::L0(info.cf_name().to_owned(), read_bytes));
+            }
         }
 
         let _ = self
