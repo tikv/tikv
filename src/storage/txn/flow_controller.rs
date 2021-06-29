@@ -699,7 +699,7 @@ impl<E: Engine> FlowChecker<E> {
                     self.limiter.speed_limit()
                 } else {
                     SCHED_THROTTLE_ACTION_COUNTER
-                        .with_label_values(&[&cf, "up"])
+                        .with_label_values(&[&cf, "up2"])
                         .inc();
                     self.limiter.speed_limit() * (1.0 + 5.0 * LIMIT_UP_PERCENT)
                 };
@@ -871,9 +871,7 @@ impl<E: Engine> FlowChecker<E> {
                     if self.cf_checkers[&cf].short_term_flush_flow.get_avg() > self.l0_target_flow {
                         self.down_flow(cf);
                     } else if num_l0_files > last_target_file + 3 {
-                        self.l0_target_flow = self.l0_target_flow * self.factor
-                            + (1.0 - self.factor)
-                                * self.cf_checkers[&cf].short_term_l0_flow.get_avg();
+                        self.l0_target_flow = self.cf_checkers[&cf].short_term_l0_flow.get_avg();
                         self.last_target_file = Some(num_l0_files);
                         SCHED_THROTTLE_ACTION_COUNTER
                             .with_label_values(&[&cf, "refresh_down_flow"])
@@ -887,8 +885,7 @@ impl<E: Engine> FlowChecker<E> {
                 } else if self.cf_checkers[&cf].short_term_flush_flow.get_avg()
                     > self.cf_checkers[&cf].short_term_l0_flow.get_avg()
                 {
-                    self.l0_target_flow = self.l0_target_flow * self.factor
-                        + (1.0 - self.factor) * self.cf_checkers[&cf].short_term_l0_flow.get_avg();
+                    self.l0_target_flow = self.cf_checkers[&cf].short_term_l0_flow.get_avg();
                     self.last_target_file = Some(num_l0_files);
                     self.down_flow(cf);
                 } else {
