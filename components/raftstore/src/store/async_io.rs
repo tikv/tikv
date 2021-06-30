@@ -304,7 +304,7 @@ where
     notifier: N,
     trans: T,
     wb: AsyncWriteBatch<EK, ER>,
-    trigger_write_size: usize,
+    raft_write_size_limit: usize,
     message_metrics: RaftSendMessageMetrics,
     perf_context: EK::PerfContext,
 }
@@ -338,7 +338,7 @@ where
             notifier,
             trans,
             wb,
-            trigger_write_size: config.trigger_write_size.0 as usize,
+            raft_write_size_limit: config.raft_write_size_limit.0 as usize,
             message_metrics: Default::default(),
             perf_context,
         }
@@ -351,7 +351,7 @@ where
             let mut handle_begin = loop_begin;
 
             let mut first_time = true;
-            while self.wb.get_raft_size() < self.trigger_write_size {
+            while self.wb.get_raft_size() < self.raft_write_size_limit {
                 let msg = if first_time {
                     match self.receiver.recv() {
                         Ok(msg) => {

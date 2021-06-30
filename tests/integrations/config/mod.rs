@@ -208,7 +208,7 @@ fn test_serde_custom_tikv_config() {
         dev_assert: true,
         apply_yield_duration: ReadableDuration::millis(333),
         perf_level: PerfLevel::EnableTime,
-        trigger_write_size: ReadableSize::mb(34),
+        raft_write_size_limit: ReadableSize::mb(34),
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {

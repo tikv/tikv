@@ -179,8 +179,9 @@ pub struct Config {
     #[online_config(skip)]
     pub perf_level: PerfLevel,
 
+    // When the size of raft db writebatch exceeds this value, write will be triggered.
     #[online_config(skip)]
-    pub trigger_write_size: ReadableSize,
+    pub raft_write_size_limit: ReadableSize,
 
     // Deprecated! These configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
@@ -263,7 +264,7 @@ impl Default for Config {
             dev_assert: false,
             apply_yield_duration: ReadableDuration::millis(500),
             perf_level: PerfLevel::Disable,
-            trigger_write_size: ReadableSize::mb(1),
+            raft_write_size_limit: ReadableSize::mb(1),
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
@@ -630,8 +631,8 @@ impl Config {
             .with_label_values(&["hibernate_regions"])
             .set((self.hibernate_regions as i32).into());
         CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["trigger_write_size"])
-            .set(self.trigger_write_size.0 as f64);
+            .with_label_values(&["raft_write_size_limit"])
+            .set(self.raft_write_size_limit.0 as f64);
     }
 
     fn write_change_into_metrics(change: ConfigChange) {
