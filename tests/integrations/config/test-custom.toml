@@ -183,7 +183,7 @@ future-poll-size = 2
 hibernate-regions = false
 dev-assert = true
 perf-level = 5
-trigger-write-size = "34MB"
+raft-write-size-limit = "34MB"
 
 [coprocessor]
 split-region-on-table = false
