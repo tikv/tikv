@@ -716,9 +716,7 @@ impl EncryptionKeyManager for DataKeyManager {
     }
 
     fn link_file(&self, src_fname: &str, dst_fname: &str) -> IoResult<()> {
-        let _ = self.dicts.link_file(src_fname, dst_fname)?;
-        // For now we ignore file not found.
-        // TODO: propagate it back up as an Option.
+        self.dicts.link_file(src_fname, dst_fname)?;
         Ok(())
     }
 }

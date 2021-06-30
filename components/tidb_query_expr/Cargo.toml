@@ -8,6 +8,7 @@ description = "Vector expressions of query engine to run TiDB pushed down execut
 [features]
 default = ["protobuf-codec"]
 protobuf-codec = [
+  "protobuf/bytes",
   "codec/protobuf-codec",
   "tidb_query_common/protobuf-codec",
   "tidb_query_datatype/protobuf-codec",
@@ -23,10 +24,10 @@ prost-codec = [
 ]
 
 [dependencies]
-rand = "0.7.3"
+rand = "0.8.3"
 safemem = { version = "0.3", default-features = false }
 time = "0.1"
-base64 = "0.12"
+base64 = "0.13"
 bstr = "0.2.8"
 byteorder = "1.2"
 codec = { path = "../codec", default-features = false }

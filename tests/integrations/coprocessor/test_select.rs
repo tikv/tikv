@@ -246,6 +246,7 @@ fn test_scan_detail() {
         let scan_detail_v2 = resp.get_exec_details_v2().get_scan_detail_v2();
         assert_eq!(scan_detail_v2.get_total_versions(), 5);
         assert_eq!(scan_detail_v2.get_processed_versions(), 4);
+        assert!(scan_detail_v2.get_processed_versions_size() > 0);
     }
 }
 
@@ -959,6 +960,7 @@ fn test_del_select() {
     let scan_detail_v2 = resp.get_exec_details_v2().get_scan_detail_v2();
     assert_eq!(scan_detail_v2.get_total_versions(), 8);
     assert_eq!(scan_detail_v2.get_processed_versions(), 5);
+    assert!(scan_detail_v2.get_processed_versions_size() > 0);
 }
 
 #[test]

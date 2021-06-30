@@ -4,7 +4,7 @@ use std::error::Error;
 use std::fmt::{self, Write};
 use std::fs;
 use std::net::{SocketAddrV4, SocketAddrV6};
-use std::ops::{Div, Mul};
+use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign};
 use std::path::{Path, PathBuf};
 use std::str::{self, FromStr};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -17,7 +17,7 @@ use thiserror::Error;
 
 use super::time::Instant;
 use crate::slow_log;
-use configuration::ConfigValue;
+use online_config::ConfigValue;
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
@@ -80,7 +80,7 @@ impl From<ConfigValue> for ReadableSize {
 
 /// This trivial type is needed, because we can't define the `From<Option<ReadableSize>>`
 /// and `Into<Option<ReadableSize>>` trait for `ConfigValue` which is needed to derive
-/// `Configuration` trait for `BlockCacheConfig`
+/// `OnlineConfig` trait for `BlockCacheConfig`
 #[derive(Clone, Debug, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(from = "Option<ReadableSize>")]
 #[serde(into = "Option<ReadableSize>")]
@@ -272,8 +272,64 @@ impl<'de> Deserialize<'de> for ReadableSize {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Ord, PartialOrd)]
 pub struct ReadableDuration(pub Duration);
+
+impl Add for ReadableDuration {
+    type Output = ReadableDuration;
+
+    fn add(self, rhs: ReadableDuration) -> ReadableDuration {
+        Self(self.0 + rhs.0)
+    }
+}
+
+impl AddAssign for ReadableDuration {
+    fn add_assign(&mut self, rhs: ReadableDuration) {
+        *self = *self + rhs;
+    }
+}
+
+impl Sub for ReadableDuration {
+    type Output = ReadableDuration;
+
+    fn sub(self, rhs: ReadableDuration) -> ReadableDuration {
+        Self(self.0 - rhs.0)
+    }
+}
+
+impl SubAssign for ReadableDuration {
+    fn sub_assign(&mut self, rhs: ReadableDuration) {
+        *self = *self - rhs;
+    }
+}
+
+impl Mul<u32> for ReadableDuration {
+    type Output = ReadableDuration;
+
+    fn mul(self, rhs: u32) -> Self::Output {
+        Self(self.0 * rhs)
+    }
+}
+
+impl MulAssign<u32> for ReadableDuration {
+    fn mul_assign(&mut self, rhs: u32) {
+        *self = *self * rhs;
+    }
+}
+
+impl Div<u32> for ReadableDuration {
+    type Output = ReadableDuration;
+
+    fn div(self, rhs: u32) -> ReadableDuration {
+        Self(self.0 / rhs)
+    }
+}
+
+impl DivAssign<u32> for ReadableDuration {
+    fn div_assign(&mut self, rhs: u32) {
+        *self = *self / rhs;
+    }
+}
 
 impl From<ReadableDuration> for Duration {
     fn from(readable: ReadableDuration) -> Duration {
@@ -349,26 +405,23 @@ impl FromStr for ReadableDuration {
 }
 
 impl ReadableDuration {
-    pub fn secs(secs: u64) -> ReadableDuration {
-        ReadableDuration(Duration::new(secs, 0))
+    pub const fn secs(secs: u64) -> ReadableDuration {
+        ReadableDuration(Duration::from_secs(secs))
     }
 
-    pub fn millis(millis: u64) -> ReadableDuration {
-        ReadableDuration(Duration::new(
-            millis / 1000,
-            (millis % 1000) as u32 * 1_000_000,
-        ))
+    pub const fn millis(millis: u64) -> ReadableDuration {
+        ReadableDuration(Duration::from_millis(millis))
     }
 
-    pub fn minutes(minutes: u64) -> ReadableDuration {
+    pub const fn minutes(minutes: u64) -> ReadableDuration {
         ReadableDuration::secs(minutes * 60)
     }
 
-    pub fn hours(hours: u64) -> ReadableDuration {
+    pub const fn hours(hours: u64) -> ReadableDuration {
         ReadableDuration::minutes(hours * 60)
     }
 
-    pub fn days(days: u64) -> ReadableDuration {
+    pub const fn days(days: u64) -> ReadableDuration {
         ReadableDuration::hours(days * 24)
     }
 

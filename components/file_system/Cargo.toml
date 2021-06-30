@@ -24,14 +24,14 @@ libc = "0.2"
 nix = "0.19"
 openssl = "0.10"
 parking_lot = "0.11"
-prometheus = { version = "0.10", features = ["nightly"] }
-prometheus-static-metric = "0.4"
-rand = "0.7.3"
+prometheus = { version = "0.12", features = ["nightly"] }
+prometheus-static-metric = "0.5"
+rand = "0.8"
 serde = "1.0"
 strum = { version = "0.20", features = ["derive"] }
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util", default-features = false }
-tokio = { version = "0.2", features = ["time"] }
+tokio = { version = "1.5", features = ["time"] }
 
 [dev-dependencies]
 tempfile = "3.0"

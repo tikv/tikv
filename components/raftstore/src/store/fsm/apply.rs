@@ -55,6 +55,7 @@ use tikv_util::{Either, MustConsumeVec};
 use time::Timespec;
 use uuid::Builder as UuidBuilder;
 
+use self::memtrace::*;
 use crate::coprocessor::{
     Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle, ObserveLevel,
 };
@@ -71,7 +72,7 @@ use crate::store::util::{
     ConfChangeKind, KeysInfoFormatter,
 };
 use crate::store::{cmd_resp, util, Config, RegionSnapshot, RegionTask};
-use crate::{Error, Result};
+use crate::{bytes_capacity, store::QueryStats, Error, Result};
 
 use super::metrics::*;
 use crate::engine_store_ffi::{
@@ -185,16 +186,6 @@ where
     // TODO: seems we don't need to separate conf change from normal entries.
     fn set_conf_change(&mut self, cmd: PendingCmd<S>) {
         self.conf_change = Some(cmd);
-    }
-}
-
-impl<S> HeapSize for PendingCmdQueue<S>
-where
-    S: Snapshot,
-{
-    #[inline]
-    fn heap_size(&self) -> usize {
-        self.normals.heap_size()
     }
 }
 
@@ -487,6 +478,7 @@ where
         if persistent {
             self.write_to_db();
             self.prepare_for(delegate);
+            delegate.last_flush_applied_index = delegate.apply_state.get_applied_index()
         }
         self.kv_wb_last_bytes = self.kv_wb().data_size() as u64;
         self.kv_wb_last_keys = self.kv_wb().count() as u64;
@@ -758,8 +750,8 @@ where
     /// are all handled.
     pending_msgs: Vec<Msg<EK>>,
 
-    /// Approximate size of current buffer.
-    approximate_size: usize,
+    /// Cache heap size for itself.
+    heap_size: Option<usize>,
 }
 
 impl<EK> Debug for YieldState<EK>
@@ -779,21 +771,6 @@ impl Debug for WaitSourceMergeState {
         f.debug_struct("WaitSourceMergeState")
             .field("logs_up_to_date", &self.logs_up_to_date)
             .finish()
-    }
-}
-
-impl<EK> HeapSize for YieldState<EK>
-where
-    EK: KvEngine,
-{
-    fn heap_size(&self) -> usize {
-        // TODO: impl HeapSize for Entry.
-        let mut size = self.pending_entries.capacity() * mem::size_of::<Entry>()
-            + self.pending_msgs.heap_size();
-        for e in &self.pending_entries {
-            size += e.get_data().len() + e.get_context().len();
-        }
-        size
     }
 }
 
@@ -866,8 +843,8 @@ where
     apply_state: RaftApplyState,
     /// The term of the raft log at applied index.
     applied_index_term: u64,
-    /// The latest synced apply index.
-    last_sync_apply_index: u64,
+    /// The latest flushed applied index.
+    last_flush_applied_index: u64,
 
     /// Info about cmd observer.
     observe_info: CmdObserveInfo,
@@ -898,7 +875,7 @@ where
             tag: format!("[region {}] {}", reg.region.get_id(), reg.id),
             region: reg.region,
             pending_remove: false,
-            last_sync_apply_index: reg.apply_state.get_applied_index(),
+            last_flush_applied_index: reg.apply_state.get_applied_index(),
             apply_state: reg.apply_state,
             applied_index_term: reg.applied_index_term,
             term: reg.term,
@@ -985,7 +962,7 @@ where
                     self.yield_state = Some(YieldState {
                         pending_entries,
                         pending_msgs: Vec::default(),
-                        approximate_size: 0,
+                        heap_size: None,
                     });
                     if let ApplyResult::WaitMergeSource(logs_up_to_date) = res {
                         self.wait_merge_state = Some(WaitSourceMergeState { logs_up_to_date });
@@ -1346,13 +1323,19 @@ where
     fn destroy<W: WriteBatch<EK>>(&mut self, apply_ctx: &mut ApplyContext<EK, W>) {
         self.stopped = true;
         apply_ctx.router.close(self.region_id());
-        MEMTRACE_APPLYS.trace(TraceEvent::Sub(self.trace.sum()));
         for cmd in self.pending_cmds.normals.drain(..) {
             notify_region_removed(self.region.get_id(), self.id, cmd);
         }
         if let Some(cmd) = self.pending_cmds.conf_change.take() {
             notify_region_removed(self.region.get_id(), self.id, cmd);
         }
+        self.yield_state = None;
+
+        let mut event = TraceEvent::default();
+        if let Some(e) = self.trace.reset(ApplyMemoryTrace::default()) {
+            event = event + e;
+        }
+        MEMTRACE_APPLYS.trace(event);
     }
 
     fn clear_all_commands_as_stale(&mut self) {
@@ -1362,6 +1345,15 @@ where
         }
         if let Some(cmd) = self.pending_cmds.conf_change.take() {
             notify_stale_command(region_id, peer_id, self.term, cmd);
+        }
+    }
+
+    fn clear_all_commands_silently(&mut self) {
+        for mut cmd in self.pending_cmds.normals.drain(..) {
+            cmd.cb.take();
+        }
+        if let Some(mut cmd) = self.pending_cmds.conf_change.take() {
+            cmd.cb.take();
         }
     }
 
@@ -1806,39 +1798,6 @@ where
                 ctx.exec_ctx.as_ref().unwrap().term,
             ),
         )
-    }
-
-    fn handle_ingest_sst(
-        &mut self,
-        importer: &Arc<SSTImporter>,
-        engine: &EK,
-        req: &Request,
-        ssts: &mut Vec<SSTMetaInfo>,
-    ) -> Result<Response> {
-        let sst = req.get_ingest_sst().get_sst();
-
-        if let Err(e) = check_sst_for_ingestion(sst, &self.region) {
-            error!(?e;
-                 "ingest fail";
-                 "region_id" => self.region_id(),
-                 "peer_id" => self.id(),
-                 "sst" => ?sst,
-                 "region" => ?&self.region,
-            );
-            // This file is not valid, we can delete it here.
-            let _ = importer.delete(sst);
-            return Err(e);
-        }
-
-        match importer.ingest(sst, engine) {
-            Ok(meta_info) => ssts.push(meta_info),
-            Err(e) => {
-                // If this failed, it means that the file is corrupted or something
-                // is wrong with the engine, but we can do nothing about that.
-                panic!("{} ingest {:?}: {:?}", self.tag, sst, e);
-            }
-        };
-        Ok(Response::default())
     }
 }
 
@@ -2885,6 +2844,26 @@ where
             }),
         ))
     }
+
+    fn update_memory_trace(&mut self, event: &mut TraceEvent) {
+        let pending_cmds = self.pending_cmds.heap_size();
+        let merge_yield = if let Some(ref mut state) = self.yield_state {
+            if state.heap_size.is_none() {
+                state.heap_size = Some(state.heap_size());
+            }
+            state.heap_size.unwrap()
+        } else {
+            0
+        };
+
+        let task = ApplyMemoryTrace {
+            pending_cmds,
+            merge_yield,
+        };
+        if let Some(e) = self.trace.reset(task) {
+            *event = *event + e;
+        }
+    }
 }
 
 pub fn is_conf_change_cmd(msg: &RaftCmdRequest) -> bool {
@@ -3047,18 +3026,6 @@ pub struct CatchUpLogs {
     /// But due to the FIFO natural of channel, we need a flag to check if it's
     /// ready when polling.
     pub logs_up_to_date: Arc<AtomicU64>,
-}
-
-impl HeapSize for CatchUpLogs {
-    fn heap_size(&self) -> usize {
-        // CommitMergeRequest includes a Region in the heap.
-        // 8 represents the atomic number.
-        let mut size: usize = mem::size_of::<Region>() + 8;
-        for e in &self.merge.entries {
-            size += e.context.len() + e.data.len() + mem::size_of::<Entry>();
-        }
-        size
-    }
 }
 
 pub struct GenSnapTask {
@@ -3226,23 +3193,6 @@ where
     }
 }
 
-impl<EK> HeapSize for Msg<EK>
-where
-    EK: KvEngine,
-{
-    #[inline]
-    fn heap_size(&self) -> usize {
-        match self {
-            Msg::Apply { .. } => 0, // It's already counted when building.
-            Msg::Registration(r) => r.region.heap_size(),
-            Msg::LogsUpToDate(l) => l.heap_size(),
-            Msg::Snapshot(_) | Msg::Destroy(_) | Msg::Noop | Msg::Change { .. } => 0,
-            #[cfg(any(test, feature = "testexport"))]
-            Msg::Validate(..) => 0,
-        }
-    }
-}
-
 #[derive(Default, Clone, Debug, PartialEq)]
 pub struct ApplyMetrics {
     /// an inaccurate difference in region size since last reset.
@@ -3252,6 +3202,7 @@ pub struct ApplyMetrics {
 
     pub written_bytes: u64,
     pub written_keys: u64,
+    pub written_query_stats: QueryStats,
     pub lock_cf_written_bytes: u64,
 }
 
@@ -3348,7 +3299,11 @@ where
             return;
         }
 
-        let mut entries = apply.entries.take_entries();
+        let (mut entries, dangle_size) = apply.entries.take_entries();
+        if dangle_size > 0 {
+            MEMTRACE_ENTRY_CACHE.trace(TraceEvent::Sub(dangle_size));
+            RAFT_ENTRIES_CACHES_GAUGE.sub(dangle_size as i64);
+        }
         if entries.is_empty() {
             let rid = self.delegate.region_id();
             let StdRange { start, end } = apply.entries.range;
@@ -3535,7 +3490,7 @@ where
             .apply_res
             .iter()
             .any(|res| res.region_id == self.delegate.region_id())
-            && self.delegate.last_sync_apply_index != applied_index;
+            && self.delegate.last_flush_applied_index != applied_index;
         #[cfg(feature = "failpoint")]
         (|| fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true }))();
         if need_sync {
@@ -3550,9 +3505,7 @@ where
             );
 
             apply_ctx.flush();
-            // For now, it's more like last_flush_apply_index.
-            // TODO: Update it only when `flush()` returns true.
-            self.delegate.last_sync_apply_index = applied_index;
+            self.delegate.last_flush_applied_index = applied_index;
         }
 
         if let Err(e) = snap_task.generate_and_schedule_snapshot::<EK>(
@@ -3666,7 +3619,7 @@ where
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
         msgs: &mut Vec<Msg<EK>>,
-    ) -> Option<TraceEvent> {
+    ) {
         let mut drainer = msgs.drain(..);
         loop {
             match drainer.next() {
@@ -3700,17 +3653,6 @@ where
                 None => break,
             }
         }
-        let s = self.delegate.yield_state.as_mut().map_or(0, |s| {
-            if s.approximate_size == 0 {
-                s.approximate_size = s.heap_size();
-            }
-            s.approximate_size
-        });
-        let trace = ApplyMemoryTrace {
-            pending_cmds: self.delegate.pending_cmds.heap_size(),
-            rest: s + mem::size_of::<Self>(),
-        };
-        self.delegate.trace.reset(trace)
     }
 }
 
@@ -3752,7 +3694,14 @@ where
     EK: KvEngine,
 {
     fn drop(&mut self) {
-        self.delegate.clear_all_commands_as_stale();
+        if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
+            self.delegate.clear_all_commands_silently()
+        } else {
+            self.delegate.clear_all_commands_as_stale();
+        }
+        let mut event = TraceEvent::default();
+        self.delegate.update_memory_trace(&mut event);
+        MEMTRACE_APPLYS.trace(event);
     }
 }
 
@@ -3778,7 +3727,8 @@ where
     apply_ctx: ApplyContext<EK, W>,
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
-    trace_event: Option<TraceEvent>,
+
+    trace_event: TraceEvent,
 }
 
 impl<EK, W> PollHandler<ApplyFsm<EK>, ControlFsm> for ApplyPoller<EK, W>
@@ -3854,9 +3804,8 @@ where
                 }
             }
         }
-        if let Some(trace_event) = normal.handle_tasks(&mut self.apply_ctx, &mut self.msg_buf) {
-            self.trace_event = Some(self.trace_event.map_or(trace_event, |e| e + trace_event));
-        }
+
+        normal.handle_tasks(&mut self.apply_ctx, &mut self.msg_buf);
 
         if normal.delegate.wait_merge_state.is_some() {
             // Check it again immediately as catching up logs can be very fast.
@@ -3869,15 +3818,12 @@ where
     }
 
     fn end(&mut self, fsms: &mut [Box<ApplyFsm<EK>>]) {
-        let is_synced = self.apply_ctx.flush();
-        if is_synced {
-            for fsm in fsms {
-                fsm.delegate.last_sync_apply_index = fsm.delegate.apply_state.get_applied_index();
-            }
+        self.apply_ctx.flush();
+        for fsm in fsms {
+            fsm.delegate.last_flush_applied_index = fsm.delegate.apply_state.get_applied_index();
+            fsm.delegate.update_memory_trace(&mut self.trace_event);
         }
-        if let Some(e) = self.trace_event.take() {
-            MEMTRACE_APPLYS.trace(e);
-        }
+        MEMTRACE_APPLYS.trace(mem::take(&mut self.trace_event));
     }
 
     fn get_priority(&self) -> Priority {
@@ -3950,7 +3896,7 @@ where
             ),
             messages_per_tick: cfg.messages_per_tick,
             cfg_tracker: self.cfg.clone().tracker(self.tag.clone()),
-            trace_event: None,
+            trace_event: Default::default(),
         }
     }
 }
@@ -4007,9 +3953,22 @@ where
                         "target region is not found, drop proposals";
                         "region_id" => region_id
                     );
-                    for p in apply.cbs.drain(..) {
-                        let cmd = PendingCmd::<EK::Snapshot>::new(p.index, p.term, p.cb);
-                        notify_region_removed(apply.region_id, apply.peer_id, cmd);
+                    // Invoking callback can release txn latch, if it's still leader, following
+                    // command may not read the writes of previous commands and break ACID. If
+                    // it's still leader, there are two possibility that mailbox is closed:
+                    // 1. The process is shutting down.
+                    // 2. The leader is destroyed. A leader won't propose to destroy itself, so
+                    //     it should either destroyed by older leaders or newer leaders. Leader
+                    //     won't respond to read until it has applied to current term, so no
+                    //     command will be proposed until command from older leaders have applied,
+                    //     which will then stop it from accepting proposals. If the command is
+                    //     proposed by new leader, then it won't be able to propose new proposals.
+                    // So only shutdown needs to be checked here.
+                    if !tikv_util::thread_group::is_shutdown(!cfg!(test)) {
+                        for p in apply.cbs.drain(..) {
+                            let cmd = PendingCmd::<EK::Snapshot>::new(p.index, p.term, p.cb);
+                            notify_region_removed(apply.region_id, apply.peer_id, cmd);
+                        }
                     }
                     return;
                 }
@@ -4126,6 +4085,79 @@ pub fn create_apply_batch_system<EK: KvEngine>(
     let (router, system) =
         batch_system::create_system(&cfg.apply_batch_system, tx, Box::new(ControlFsm));
     (ApplyRouter { router }, ApplyBatchSystem { system })
+}
+
+mod memtrace {
+    use super::*;
+    use memory_trace_macros::MemoryTraceHelper;
+
+    #[derive(MemoryTraceHelper, Default, Debug)]
+    pub struct ApplyMemoryTrace {
+        pub pending_cmds: usize,
+        pub merge_yield: usize,
+    }
+
+    impl<S> HeapSize for PendingCmdQueue<S>
+    where
+        S: Snapshot,
+    {
+        fn heap_size(&self) -> usize {
+            // Some fields of `PendingCmd` are on stack, but ignore them because they are just
+            // some small boxed closures.
+            self.normals.capacity() * mem::size_of::<PendingCmd<S>>()
+        }
+    }
+
+    impl<EK> HeapSize for YieldState<EK>
+    where
+        EK: KvEngine,
+    {
+        fn heap_size(&self) -> usize {
+            let mut size = self.pending_entries.capacity() * mem::size_of::<Entry>();
+            for e in &self.pending_entries {
+                size += bytes_capacity(&e.data) + bytes_capacity(&e.context);
+            }
+
+            size += self.pending_msgs.capacity() * mem::size_of::<Msg<EK>>();
+            for msg in &self.pending_msgs {
+                size += msg.heap_size();
+            }
+
+            size
+        }
+    }
+
+    impl<EK> HeapSize for Msg<EK>
+    where
+        EK: KvEngine,
+    {
+        /// Only consider large fields in `Msg`.
+        fn heap_size(&self) -> usize {
+            match self {
+                Msg::LogsUpToDate(l) => l.heap_size(),
+                // For entries in `Msg::Apply`, heap size is already updated when fetching them
+                // from `raft::Storage`. So use `0` here.
+                Msg::Apply { .. } => 0,
+                Msg::Registration(_)
+                | Msg::Snapshot(_)
+                | Msg::Destroy(_)
+                | Msg::Noop
+                | Msg::Change { .. } => 0,
+                #[cfg(any(test, feature = "testexport"))]
+                Msg::Validate(..) => 0,
+            }
+        }
+    }
+
+    impl HeapSize for CatchUpLogs {
+        fn heap_size(&self) -> usize {
+            let mut size: usize = 0;
+            for e in &self.merge.entries {
+                size += bytes_capacity(&e.data) + bytes_capacity(&e.context);
+            }
+            size
+        }
+    }
 }
 
 #[cfg(test)]
@@ -4288,6 +4320,33 @@ mod tests {
         let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
         assert_eq!(should_write_to_engine(&cmd), true);
+    }
+
+    #[test]
+    fn test_has_high_latency_operation() {
+        // Normal command
+        let mut req = Request::default();
+        req.set_cmd_type(CmdType::Put);
+        req.set_put(PutRequest::default());
+        let mut cmd = RaftCmdRequest::default();
+        cmd.mut_requests().push(req);
+        assert_eq!(has_high_latency_operation(&cmd), false);
+
+        // IngestSst command
+        let mut req = Request::default();
+        req.set_cmd_type(CmdType::IngestSst);
+        req.set_ingest_sst(IngestSstRequest::default());
+        let mut cmd = RaftCmdRequest::default();
+        cmd.mut_requests().push(req);
+        assert_eq!(has_high_latency_operation(&cmd), true);
+
+        // DeleteRange command
+        let mut req = Request::default();
+        req.set_cmd_type(CmdType::DeleteRange);
+        req.set_delete_range(DeleteRangeRequest::default());
+        let mut cmd = RaftCmdRequest::default();
+        cmd.mut_requests().push(req);
+        assert_eq!(has_high_latency_operation(&cmd), true);
     }
 
     fn validate<F, E>(router: &ApplyRouter<E>, region_id: u64, validate: F)
@@ -4501,7 +4560,7 @@ mod tests {
             assert_eq!(delegate.apply_state.get_applied_index(), 5);
             assert_eq!(
                 delegate.apply_state.get_applied_index(),
-                delegate.last_sync_apply_index
+                delegate.last_flush_applied_index
             );
         });
 
@@ -4926,11 +4985,15 @@ mod tests {
         assert!(engine.get_value(&dk_k1).unwrap().is_none());
         assert!(engine.get_value(&dk_k2).unwrap().is_none());
         assert!(engine.get_value(&dk_k3).unwrap().is_none());
-        // The region will be rescheduled from normal-priority handler to
-        // low-priority, so the first apple_res.exec_res should be empty.
+
+        // The region was rescheduled from normal-priority handler to
+        // low-priority handler, so the first apple_res.exec_res should be empty.
         let apply_res = fetch_apply_res(&rx);
         assert!(apply_res.exec_res.is_empty());
-        fetch_apply_res(&rx);
+        // The entry should be applied now.
+        let apply_res = fetch_apply_res(&rx);
+        assert_eq!(apply_res.applied_index_term, 3);
+        assert_eq!(apply_res.apply_state.get_applied_index(), 8);
 
         // UploadSST
         let sst_path = import_dir.path().join("test.sst");
@@ -4998,10 +5061,21 @@ mod tests {
         check_db_range(&engine, sst_range);
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(resp.get_header().has_error());
+
+        // The region was rescheduled to normal-priority handler because of
+        // nomral put command, so the first apple_res.exec_res should be empty.
+        let apply_res = fetch_apply_res(&rx);
+        assert!(apply_res.exec_res.is_empty());
+        // The region was rescheduled low-priority becasuee of ingest command,
+        // only put entry has been applied;
+        let apply_res = fetch_apply_res(&rx);
+        assert_eq!(apply_res.applied_index_term, 3);
+        assert_eq!(apply_res.apply_state.get_applied_index(), 9);
+        // The region will yield after timeout.
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.applied_index_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 10);
-        // The region will yield after timeout.
+        // The third entry should be applied now.
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.applied_index_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 11);
@@ -5023,12 +5097,189 @@ mod tests {
             capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         }
         let index = write_batch_max_keys + 11;
+        // The region was rescheduled to normal-priority handler. Discard the first apply_res.
+        fetch_apply_res(&rx);
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.apply_state.get_applied_index(), index as u64);
         assert_eq!(obs.pre_query_count.load(Ordering::SeqCst), index);
         assert_eq!(obs.post_query_count.load(Ordering::SeqCst), index);
 
         system.shutdown();
+    }
+
+    #[test]
+    fn test_handle_ingest_sst() {
+        let (_path, engine) = create_tmp_engine("test-ingest");
+        let (import_dir, importer) = create_tmp_importer("test-ingest");
+        let obs = ApplyObserver::default();
+        let mut host = CoprocessorHost::<KvTestEngine>::default();
+        host.registry
+            .register_query_observer(1, BoxQueryObserver::new(obs));
+
+        let (tx, rx) = mpsc::channel();
+        let (region_scheduler, _) = dummy_scheduler();
+        let sender = Box::new(TestNotifier { tx });
+        let cfg = {
+            let mut cfg = Config::default();
+            cfg.apply_batch_system.pool_size = 1;
+            cfg.apply_batch_system.low_priority_pool_size = 0;
+            Arc::new(VersionTrack::new(cfg))
+        };
+        let (router, mut system) = create_apply_batch_system(&cfg.value());
+        let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
+        let builder = super::Builder::<KvTestEngine, KvTestWriteBatch> {
+            tag: "test-store".to_owned(),
+            cfg,
+            sender,
+            region_scheduler,
+            coprocessor_host: host,
+            importer: importer.clone(),
+            engine: engine.clone(),
+            router: router.clone(),
+            _phantom: Default::default(),
+            store_id: 1,
+            pending_create_peers,
+        };
+        system.spawn("test-ingest".to_owned(), builder);
+
+        let mut reg = Registration {
+            id: 1,
+            ..Default::default()
+        };
+        reg.region.set_id(1);
+        reg.region.mut_peers().push(new_peer(1, 1));
+        reg.region.set_start_key(b"k1".to_vec());
+        reg.region.set_end_key(b"k2".to_vec());
+        reg.region.mut_region_epoch().set_conf_ver(1);
+        reg.region.mut_region_epoch().set_version(3);
+        router.schedule_task(1, Msg::Registration(reg));
+
+        // Test whether put commands and ingest commands are applied to engine in a correct order.
+        // We will generate 5 entries which are put, ingest, put, ingest, put respectively. For a same key,
+        // it can exist in multiple entries or in a single entries. We will test all all the possible
+        // keys exsiting combinations.
+        let mut keys = Vec::new();
+        let keys_count = 1 << 5;
+        for i in 0..keys_count {
+            keys.push(format!("k1/{:02}", i).as_bytes().to_vec());
+        }
+        let mut expected_vals = Vec::new();
+        expected_vals.resize(keys_count, Vec::new());
+
+        let entry1 = {
+            let mut entry = EntryBuilder::new(1, 1);
+            for i in 0..keys_count {
+                if (i & 1) > 0 {
+                    entry = entry.put(&keys[i], b"1");
+                    expected_vals[i] = b"1".to_vec();
+                }
+            }
+            entry.epoch(1, 3).build()
+        };
+        let entry2 = {
+            let mut kvs: Vec<(&[u8], &[u8])> = Vec::new();
+            for i in 0..keys_count {
+                if (i & 2) > 0 {
+                    kvs.push((&keys[i], b"2"));
+                    expected_vals[i] = b"2".to_vec();
+                }
+            }
+            let sst_path = import_dir.path().join("test.sst");
+            let (mut meta, data) = gen_sst_file_with_kvs(&sst_path, &kvs);
+            meta.set_region_id(1);
+            meta.mut_region_epoch().set_conf_ver(1);
+            meta.mut_region_epoch().set_version(3);
+            let mut file = importer.create(&meta).unwrap();
+            file.append(&data).unwrap();
+            file.finish().unwrap();
+            EntryBuilder::new(2, 1)
+                .ingest_sst(&meta)
+                .epoch(1, 3)
+                .build()
+        };
+        let entry3 = {
+            let mut entry = EntryBuilder::new(3, 1);
+            for i in 0..keys_count {
+                if (i & 4) > 0 {
+                    entry = entry.put(&keys[i], b"3");
+                    expected_vals[i] = b"3".to_vec();
+                }
+            }
+            entry.epoch(1, 3).build()
+        };
+        let entry4 = {
+            let mut kvs: Vec<(&[u8], &[u8])> = Vec::new();
+            for i in 0..keys_count {
+                if (i & 8) > 0 {
+                    kvs.push((&keys[i], b"4"));
+                    expected_vals[i] = b"4".to_vec();
+                }
+            }
+            let sst_path = import_dir.path().join("test2.sst");
+            let (mut meta, data) = gen_sst_file_with_kvs(&sst_path, &kvs);
+            meta.set_region_id(1);
+            meta.mut_region_epoch().set_conf_ver(1);
+            meta.mut_region_epoch().set_version(3);
+            let mut file = importer.create(&meta).unwrap();
+            file.append(&data).unwrap();
+            file.finish().unwrap();
+            EntryBuilder::new(4, 1)
+                .ingest_sst(&meta)
+                .epoch(1, 3)
+                .build()
+        };
+        let entry5 = {
+            let mut entry = EntryBuilder::new(5, 1);
+            for i in 0..keys_count {
+                if (i & 16) > 0 {
+                    entry = entry.put(&keys[i], b"5");
+                    expected_vals[i] = b"5".to_vec();
+                }
+            }
+            entry.epoch(1, 3).build()
+        };
+
+        let (capture_tx, capture_rx) = mpsc::channel();
+        router.schedule_task(
+            1,
+            Msg::apply(apply(
+                1,
+                1,
+                1,
+                vec![entry1, entry2, entry3],
+                vec![
+                    cb(1, 1, capture_tx.clone()),
+                    cb(2, 1, capture_tx.clone()),
+                    cb(3, 1, capture_tx.clone()),
+                ],
+            )),
+        );
+        router.schedule_task(
+            1,
+            Msg::apply(apply(
+                1,
+                1,
+                1,
+                vec![entry4, entry5],
+                vec![cb(4, 1, capture_tx.clone()), cb(5, 1, capture_tx)],
+            )),
+        );
+        for _ in 0..3 {
+            let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            assert!(!resp.get_header().has_error(), "{:?}", resp);
+        }
+        fetch_apply_res(&rx);
+        for _ in 0..2 {
+            let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            assert!(!resp.get_header().has_error(), "{:?}", resp);
+        }
+        fetch_apply_res(&rx);
+
+        // Verify the engine keys.
+        for i in 1..keys_count {
+            let dk = keys::data_key(&keys[i]);
+            assert_eq!(engine.get_value(&dk).unwrap().unwrap(), &expected_vals[i]);
+        }
     }
 
     #[test]

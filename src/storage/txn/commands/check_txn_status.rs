@@ -97,8 +97,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
                 self.force_sync_commit,
                 self.resolving_pessimistic_lock,
             )?,
-            // The rollback must be protected, see more on
-            // [issue #7364](https://github.com/tikv/tikv/issues/7364)
             l => (
                 check_txn_status_missing_lock(
                     &mut txn,

@@ -22,7 +22,7 @@ use crate::storage::lock_manager::LockManager;
 use crate::storage::{Engine, Storage};
 use engine_rocks::RocksEngine;
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::SnapManager;
+use raftstore::store::{CheckLeaderTask, SnapManager};
 use security::SecurityManager;
 use tikv_util::config::VersionTrack;
 use tikv_util::sys::{get_global_memory_usage, record_global_memory_usage};
@@ -87,6 +87,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
         resolver: S,
         snap_mgr: SnapManager,
         gc_worker: GcWorker<E, T>,
+        check_leader_scheduler: Scheduler<CheckLeaderTask>,
         env: Arc<Environment>,
         yatp_read_pool: Option<ReadPool>,
         debug_thread_pool: Arc<Runtime>,
@@ -94,10 +95,9 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
         // A helper thread (or pool) for transport layer.
         let stats_pool = if cfg.value().stats_concurrency > 0 {
             Some(
-                RuntimeBuilder::new()
-                    .threaded_scheduler()
+                RuntimeBuilder::new_multi_thread()
                     .thread_name(STATS_THREAD_PREFIX)
-                    .core_threads(cfg.value().stats_concurrency)
+                    .worker_threads(cfg.value().stats_concurrency)
                     .build()
                     .unwrap(),
             )
@@ -119,6 +119,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             copr_v2,
             raft_router.clone(),
             lazy_worker.scheduler(),
+            check_leader_scheduler,
             Arc::clone(&grpc_thread_load),
             cfg.value().enable_request_batch,
             proxy,
@@ -483,15 +484,15 @@ mod tests {
         );
         let copr_v2 = coprocessor_v2::Endpoint::new(&coprocessor_v2::Config::default());
         let debug_thread_pool = Arc::new(
-            TokioBuilder::new()
-                .threaded_scheduler()
+            TokioBuilder::new_multi_thread()
                 .thread_name(thd_name!("debugger"))
-                .core_threads(1)
+                .worker_threads(1)
                 .build()
                 .unwrap(),
         );
         let mock_store_id = 5;
         let addr = Arc::new(Mutex::new(None));
+        let (check_leader_scheduler, _) = tikv_util::worker::dummy_scheduler();
         let mut server = Server::new(
             mock_store_id,
             &cfg,
@@ -506,6 +507,7 @@ mod tests {
             },
             SnapManager::new(""),
             gc_worker,
+            check_leader_scheduler,
             env,
             None,
             debug_thread_pool,

@@ -61,7 +61,7 @@ fn test_serde_custom_tikv_config() {
     value.slow_log_file = "slow_foo".to_owned();
     value.slow_log_threshold = ReadableDuration::secs(1);
     value.abort_on_panic = true;
-    value.memory_usage_limit = ReadableSize::gb(10);
+    value.memory_usage_limit = OptionReadableSize(Some(ReadableSize::gb(10)));
     value.memory_usage_high_water = 0.65;
     value.server = ServerConfig {
         cluster_id: 0, // KEEP IT ZERO, it is skipped by serde.
@@ -72,6 +72,9 @@ fn test_serde_custom_tikv_config() {
         advertise_status_addr: "example.com:443".to_owned(),
         status_thread_pool_size: 1,
         max_grpc_send_msg_len: 6 * (1 << 20),
+        raft_client_grpc_send_msg_buffer: 1234 * 1024,
+        raft_client_queue_size: 1234,
+        raft_msg_max_batch_size: 123,
         concurrent_send_snap_limit: 4,
         concurrent_recv_snap_limit: 4,
         grpc_compression_type: GrpcCompressionType::Gzip,
@@ -681,7 +684,10 @@ fn test_serde_custom_tikv_config() {
         min_ts_interval: ReadableDuration::secs(4),
         old_value_cache_size: 512,
         hibernate_regions_compatible: false,
+        incremental_scan_threads: 3,
+        incremental_scan_concurrency: 4,
         incremental_scan_speed_limit: ReadableSize(7),
+        old_value_cache_memory_quota: ReadableSize::mb(14),
         sink_memory_quota: ReadableSize::mb(7),
     };
     value.resolved_ts = ResolvedTsConfig {

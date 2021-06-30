@@ -23,9 +23,7 @@ use crate::store::peer_storage::{
 };
 use crate::store::snap::{plain_file_used, Error, PreHandledSnapshot, Result, SNAPSHOT_CFS};
 use crate::store::transport::CasualRouter;
-use crate::store::{
-    self, check_abort, CasualMessage, GenericSnapshot, SnapEntry, SnapKey, SnapManager,
-};
+use crate::store::{self, check_abort, CasualMessage, SnapEntry, SnapKey, SnapManager};
 use yatp::pool::{Builder, ThreadPool};
 use yatp::task::future::TaskCell;
 
@@ -331,7 +329,7 @@ where
         let term = apply_state.get_truncated_state().get_term();
         let idx = apply_state.get_truncated_state().get_index();
         let snap_key = SnapKey::new(region_id, term, idx);
-        let s = box_try!(self.mgr.get_concrete_snapshot_for_applying(&snap_key));
+        let s = box_try!(self.mgr.get_snapshot_for_applying(&snap_key));
         if !s.exists() {
             return Err(box_err!("missing snapshot file {}", s.path()));
         }
@@ -422,7 +420,7 @@ where
                 "apply data to engine-store";
                 "region_id" => region_id,
             );
-            let s = box_try!(self.mgr.get_concrete_snapshot_for_applying(&snap_key));
+            let s = box_try!(self.mgr.get_snapshot_for_applying(&snap_key));
             if !s.exists() {
                 return Err(box_err!("missing snapshot file {}", s.path()));
             }

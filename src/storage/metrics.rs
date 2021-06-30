@@ -13,6 +13,7 @@ use crate::storage::kv::{FlowStatsReporter, Statistics};
 use collections::HashMap;
 use kvproto::kvrpcpb::KeyRange;
 use kvproto::metapb;
+use kvproto::pdpb::QueryKind;
 use raftstore::store::util::build_key_range;
 use raftstore::store::ReadStats;
 
@@ -41,7 +42,7 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
                         .get(cmd)
                         .get((*cf).into())
                         .get((*tag).into())
-                        .inc_by(*count as i64);
+                        .inc_by(*count as u64);
                 }
             }
         }
@@ -76,25 +77,32 @@ pub fn tls_collect_read_flow(region_id: u64, statistics: &Statistics) {
     });
 }
 
-pub fn tls_collect_qps(
+pub fn tls_collect_query(
     region_id: u64,
     peer: &metapb::Peer,
     start_key: &[u8],
     end_key: &[u8],
     reverse_scan: bool,
+    kind: QueryKind,
 ) {
     TLS_STORAGE_METRICS.with(|m| {
         let mut m = m.borrow_mut();
         let key_range = build_key_range(start_key, end_key, reverse_scan);
-        m.local_read_stats.add_qps(region_id, peer, key_range);
+        m.local_read_stats
+            .add_query_num(region_id, peer, key_range, kind);
     });
 }
 
-pub fn tls_collect_qps_batch(region_id: u64, peer: &metapb::Peer, key_ranges: Vec<KeyRange>) {
+pub fn tls_collect_query_batch(
+    region_id: u64,
+    peer: &metapb::Peer,
+    key_ranges: Vec<KeyRange>,
+    kind: QueryKind,
+) {
     TLS_STORAGE_METRICS.with(|m| {
         let mut m = m.borrow_mut();
         m.local_read_stats
-            .add_qps_batch(region_id, peer, key_ranges);
+            .add_query_num_batch(region_id, peer, key_ranges, kind);
     });
 }
 
