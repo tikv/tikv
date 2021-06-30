@@ -172,17 +172,6 @@ where
     pub router: BatchRouter<PeerFsm<EK, ER>, StoreFsm<EK>>,
 }
 
-impl<EK, ER> Drop for RaftRouter<EK, ER>
-where
-    EK: KvEngine,
-    ER: RaftEngine,
-{
-    fn drop(&mut self) {
-        MEMTRACE_RAFT_ROUTER_ALIVE.trace(TraceEvent::Reset(0));
-        MEMTRACE_RAFT_ROUTER_LEAK.trace(TraceEvent::Reset(0));
-    }
-}
-
 impl<EK, ER> Clone for RaftRouter<EK, ER>
 where
     EK: KvEngine,
@@ -312,7 +301,6 @@ where
 
     pub fn clear_cache(&self) {
         self.router.clear_cache();
-        self.update_trace();
     }
 
     fn update_trace(&self) {
@@ -1393,9 +1381,17 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let mut workers = self.workers.take().unwrap();
         // Wait all workers finish.
         let handle = workers.pd_worker.stop();
+
         self.apply_system.shutdown();
+        MEMTRACE_APPLY_ROUTER_ALIVE.trace(TraceEvent::Reset(0));
+        MEMTRACE_APPLY_ROUTER_LEAK.trace(TraceEvent::Reset(0));
+
         fail_point!("after_shutdown_apply");
+
         self.system.shutdown();
+        MEMTRACE_RAFT_ROUTER_ALIVE.trace(TraceEvent::Reset(0));
+        MEMTRACE_RAFT_ROUTER_LEAK.trace(TraceEvent::Reset(0));
+
         if let Some(h) = handle {
             h.join().unwrap();
         }
