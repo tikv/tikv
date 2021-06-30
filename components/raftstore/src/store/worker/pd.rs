@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cmp::Ordering as CmpOrdering;
 use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{
@@ -46,6 +47,7 @@ use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::sys::disk;
 use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+use tikv_util::topn::TopN;
 use tikv_util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
 use tikv_util::{box_err, debug, error, info, thd_name, warn};
 
@@ -213,6 +215,32 @@ pub struct PeerStat {
     pub last_store_report_query_stats: QueryStats,
     pub approximate_keys: u64,
     pub approximate_size: u64,
+}
+
+#[derive(Default, Clone)]
+struct PeerCmpReadStat {
+    pub region_id: u64,
+    pub report_stat: u64,
+}
+
+impl Ord for PeerCmpReadStat {
+    fn cmp(&self, other: &Self) -> CmpOrdering {
+        self.report_stat.cmp(&other.report_stat)
+    }
+}
+
+impl Eq for PeerCmpReadStat {}
+
+impl PartialEq for PeerCmpReadStat {
+    fn eq(&self, other: &Self) -> bool {
+        self.report_stat == other.report_stat
+    }
+}
+
+impl PartialOrd for PeerCmpReadStat {
+    fn partial_cmp(&self, other: &Self) -> Option<CmpOrdering> {
+        Some(self.report_stat.cmp(&other.report_stat))
+    }
 }
 
 impl<E> Display for Task<E>
@@ -441,6 +469,7 @@ where
 const HOTSPOT_KEY_RATE_THRESHOLD: u64 = 128;
 const HOTSPOT_QUERY_RATE_THRESHOLD: u64 = 128;
 const HOTSPOT_BYTE_RATE_THRESHOLD: u64 = 8 * 1024;
+const HOTSPOT_REPORT_CAPACITY: usize = 1000;
 
 // TODO: support dyamic configure threshold in future
 fn hotspot_key_report_threshold() -> u64 {
@@ -702,6 +731,7 @@ where
             Ok(stats) => stats,
         };
 
+        let mut report_peers = HashMap::default();
         for (region_id, region_peer) in &mut self.region_peers {
             let read_bytes = region_peer.read_bytes - region_peer.last_store_report_read_bytes;
             let read_keys = region_peer.read_keys - region_peer.last_store_report_read_keys;
@@ -713,20 +743,21 @@ where
             region_peer
                 .last_store_report_query_stats
                 .fill_query_stats(&region_peer.read_query_stats);
-            // TODO: select hotspot peer by binaray heap in future
             if read_bytes < hotspot_byte_report_threshold()
                 && read_keys < hotspot_key_report_threshold()
                 && read_query_stats.get_read_query_num() < hotspot_query_num_report_threshold()
             {
                 continue;
             }
-            let mut peer_stat = pdpb::PeerStat::default();
-            peer_stat.set_region_id(*region_id);
-            peer_stat.set_read_bytes(read_bytes);
-            peer_stat.set_read_keys(read_keys);
-            peer_stat.set_query_stats(read_query_stats.0);
-            stats.peer_stats.push(peer_stat);
+            let mut read_stat = pdpb::PeerStat::default();
+            read_stat.set_region_id(*region_id);
+            read_stat.set_read_keys(read_keys);
+            read_stat.set_read_bytes(read_bytes);
+            read_stat.set_query_stats(read_query_stats.0);
+            report_peers.insert(*region_id, read_stat);
         }
+
+        stats = collect_report_read_peer_stats(HOTSPOT_REPORT_CAPACITY, report_peers, stats);
 
         let disk_cap = disk_stats.total_space();
         let capacity = if store_info.capacity == 0 || disk_cap < store_info.capacity {
@@ -1418,10 +1449,63 @@ fn send_destroy_peer_message<EK, ER>(
     }
 }
 
+fn collect_report_read_peer_stats(
+    capacity: usize,
+    mut report_read_stats: HashMap<u64, pdpb::PeerStat>,
+    mut stats: pdpb::StoreStats,
+) -> pdpb::StoreStats {
+    if report_read_stats.len() < capacity * 3 {
+        for (_, read_stat) in report_read_stats {
+            stats.peer_stats.push(read_stat);
+        }
+        return stats;
+    }
+    let mut keys_topn_report = TopN::new(capacity);
+    let mut bytes_topn_report = TopN::new(capacity);
+    let mut stats_topn_report = TopN::new(capacity);
+    for read_stat in report_read_stats.values() {
+        let mut cmp_stat = PeerCmpReadStat::default();
+        cmp_stat.region_id = read_stat.region_id;
+        let mut key_cmp_stat = cmp_stat.clone();
+        key_cmp_stat.report_stat = read_stat.read_keys;
+        keys_topn_report.push(key_cmp_stat);
+        let mut byte_cmp_stat = cmp_stat.clone();
+        byte_cmp_stat.report_stat = read_stat.read_bytes;
+        bytes_topn_report.push(byte_cmp_stat);
+        let mut query_cmp_stat = cmp_stat.clone();
+        query_cmp_stat.report_stat = get_read_query_num(read_stat.get_query_stats());
+        stats_topn_report.push(query_cmp_stat);
+    }
+
+    for x in keys_topn_report {
+        if let Some(report_stat) = report_read_stats.remove(&x.region_id) {
+            stats.peer_stats.push(report_stat);
+        }
+    }
+
+    for x in bytes_topn_report {
+        if let Some(report_stat) = report_read_stats.remove(&x.region_id) {
+            stats.peer_stats.push(report_stat);
+        }
+    }
+
+    for x in stats_topn_report {
+        if let Some(report_stat) = report_read_stats.remove(&x.region_id) {
+            stats.peer_stats.push(report_stat);
+        }
+    }
+    stats
+}
+
+fn get_read_query_num(stat: &pdpb::QueryStats) -> u64 {
+    stat.get_get() + stat.get_coprocessor() + stat.get_scan()
+}
+
 #[cfg(not(target_os = "macos"))]
 #[cfg(test)]
 mod tests {
     use engine_test::kv::KvTestEngine;
+    use kvproto::pdpb::QueryKind;
     use std::sync::Mutex;
     use std::time::Instant;
     use tikv_util::worker::FutureWorker;
@@ -1507,5 +1591,29 @@ mod tests {
         assert!(total_cpu_usages > 90);
 
         pd_worker.stop();
+    }
+
+    #[test]
+    fn test_collect_report_peers() {
+        let mut report_stats = HashMap::default();
+        for i in 1..5 {
+            let mut stat = pdpb::PeerStat::default();
+            stat.set_region_id(i);
+            stat.set_read_keys(i);
+            stat.set_read_bytes(6 - i);
+            stat.read_keys = i;
+            stat.read_bytes = 6 - i;
+            let mut query_stat = QueryStats::default();
+            if i == 3 {
+                query_stat.add_query_num(QueryKind::Get, 6);
+            } else {
+                query_stat.add_query_num(QueryKind::Get, 0);
+            }
+            stat.set_query_stats(query_stat.0);
+            report_stats.insert(i, stat);
+        }
+        let mut store_stats = pdpb::StoreStats::default();
+        store_stats = collect_report_read_peer_stats(1, report_stats, store_stats);
+        assert_eq!(store_stats.peer_stats.len(), 3)
     }
 }
