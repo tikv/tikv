@@ -12,13 +12,8 @@ use std::sync::Mutex;
 use std::thread;
 
 use log::{self, SetLoggerError};
-<<<<<<< HEAD
 use slog::{self, Drain, FnValue, Key, OwnedKVList, PushFnValue, Record, KV};
-use slog_async::{Async, OverflowStrategy};
-=======
-use slog::{self, slog_o, Drain, FnValue, Key, OwnedKVList, PushFnValue, Record, KV};
 use slog_async::{Async, AsyncGuard, OverflowStrategy};
->>>>>>> 8f8e351d0... log: ensure panic output is flushed to the log (#10213)
 use slog_term::{Decorator, PlainDecorator, RecordDecorator};
 
 use self::file_log::{RotateBySize, RotateByTime, RotatingFileLogger, RotatingFileLoggerBuilder};
