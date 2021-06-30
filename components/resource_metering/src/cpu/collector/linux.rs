@@ -4,7 +4,6 @@ use crate::cpu::collector::{Collector, CollectorId};
 
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::Arc;
 
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use lazy_static::lazy_static;
@@ -26,10 +25,7 @@ pub(crate) enum CollectorRegistrationMsg {
 }
 
 pub fn register_collector(collector: Box<dyn Collector>) -> CollectorHandle {
-    lazy_static! {
-        static ref NEXT_COLLECTOR_ID: Arc<AtomicU64> = Arc::new(AtomicU64::new(1));
-    }
-
+    static NEXT_COLLECTOR_ID: AtomicU64 = AtomicU64::new(1);
     let id = CollectorId(NEXT_COLLECTOR_ID.fetch_add(1, Relaxed));
     COLLECTOR_REGISTRATION_CHANNEL
         .0

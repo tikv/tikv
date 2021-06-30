@@ -197,6 +197,11 @@ impl RaftEngine for RaftLogEngine {
         // Raft engine won't dump anything.
         Ok("".to_owned())
     }
+
+    fn get_engine_size(&self) -> Result<u64> {
+        //TODO impl this when RaftLogEngine is ready to go online.
+        Ok(0)
+    }
 }
 
 fn transfer_error(e: RaftEngineError) -> engine_traits::Error {

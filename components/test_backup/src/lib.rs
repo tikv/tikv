@@ -1,11 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::*;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
+use std::{cmp, fs};
 
 use futures::channel::mpsc as future_mpsc;
 use grpcio::{ChannelBuilder, Environment};
@@ -202,19 +202,32 @@ impl TestSuite {
     }
 
     pub fn must_kv_put(&mut self, key_count: usize, versions: usize) {
+        let mut batch = Vec::with_capacity(1024);
+        let mut keys = Vec::with_capacity(1024);
+        // Write 50 times to include more different ts.
+        let batch_size = cmp::min(cmp::max(key_count / 50, 1), 1024);
         for _ in 0..versions {
-            for i in 0..key_count {
-                let (k, v) = (format!("key_{}", i), format!("value_{}", i));
-                // Prewrite
+            let mut j = 0;
+            while j < key_count {
                 let start_ts = self.alloc_ts();
-                let mut mutation = Mutation::default();
-                mutation.set_op(Op::Put);
-                mutation.key = k.clone().into_bytes();
-                mutation.value = v.clone().into_bytes();
-                self.must_kv_prewrite(vec![mutation], k.clone().into_bytes(), start_ts);
+                let limit = cmp::min(key_count, j + batch_size);
+                batch.clear();
+                keys.clear();
+                for i in j..limit {
+                    let (k, v) = (format!("key_{}", i), format!("value_{}", i));
+                    keys.push(k.clone().into_bytes());
+                    // Prewrite
+                    let mut mutation = Mutation::default();
+                    mutation.set_op(Op::Put);
+                    mutation.key = k.clone().into_bytes();
+                    mutation.value = v.clone().into_bytes();
+                    batch.push(mutation);
+                }
+                self.must_kv_prewrite(batch.split_off(0), keys[0].clone(), start_ts);
                 // Commit
                 let commit_ts = self.alloc_ts();
-                self.must_kv_commit(vec![k.clone().into_bytes()], start_ts, commit_ts);
+                self.must_kv_commit(keys.split_off(0), start_ts, commit_ts);
+                j = limit;
             }
         }
     }
@@ -339,7 +352,7 @@ impl TestSuite {
     }
 }
 
-// Extrat CF name from sst name.
+// Extract CF name from sst name.
 pub fn name_to_cf(name: &str) -> CfName {
     if name.contains(CF_DEFAULT) {
         CF_DEFAULT

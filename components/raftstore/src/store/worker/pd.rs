@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cmp::Ordering as CmpOrdering;
 use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{
@@ -29,6 +30,7 @@ use raft::eraftpb::ConfChangeType;
 use crate::store::cmd_resp::new_error;
 use crate::store::metrics::*;
 use crate::store::util::{is_epoch_stale, ConfChangeKind, KeysInfoFormatter};
+use crate::store::worker::query_stats::QueryStats;
 use crate::store::worker::split_controller::{SplitInfo, TOP_N};
 use crate::store::worker::{AutoSplitController, ReadStats};
 use crate::store::{
@@ -42,8 +44,10 @@ use futures::FutureExt;
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
 use tikv_util::metrics::ThreadInfoStatistics;
+use tikv_util::sys::disk;
 use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+use tikv_util::topn::TopN;
 use tikv_util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
 use tikv_util::{box_err, debug, error, info, thd_name, warn};
 
@@ -87,6 +91,7 @@ pub struct HeartbeatTask {
     pub pending_peers: Vec<metapb::Peer>,
     pub written_bytes: u64,
     pub written_keys: u64,
+    pub written_query_stats: QueryStats,
     pub approximate_size: u64,
     pub approximate_keys: u64,
     pub replication_status: Option<RegionReplicationStatus>,
@@ -152,8 +157,10 @@ where
 pub struct StoreStat {
     pub engine_total_bytes_read: u64,
     pub engine_total_keys_read: u64,
+    pub engine_total_query_num: QueryStats,
     pub engine_last_total_bytes_read: u64,
     pub engine_last_total_keys_read: u64,
+    pub engine_last_query_num: QueryStats,
     pub last_report_ts: UnixSecs,
 
     pub region_bytes_read: LocalHistogram,
@@ -179,6 +186,8 @@ impl Default for StoreStat {
             engine_total_keys_read: 0,
             engine_last_total_bytes_read: 0,
             engine_last_total_keys_read: 0,
+            engine_total_query_num: QueryStats::default(),
+            engine_last_query_num: QueryStats::default(),
 
             store_cpu_usages: RecordPairVec::default(),
             store_read_io_rates: RecordPairVec::default(),
@@ -191,17 +200,47 @@ impl Default for StoreStat {
 pub struct PeerStat {
     pub read_bytes: u64,
     pub read_keys: u64,
+    pub read_query_stats: QueryStats,
     // last_region_report_attributes records the state of the last region heartbeat
     pub last_region_report_read_bytes: u64,
     pub last_region_report_read_keys: u64,
+    pub last_region_report_read_query_stats: QueryStats,
     pub last_region_report_written_bytes: u64,
     pub last_region_report_written_keys: u64,
+    pub last_region_report_written_query_stats: QueryStats,
     pub last_region_report_ts: UnixSecs,
     // last_store_report_attributes records the state of the last store heartbeat
     pub last_store_report_read_bytes: u64,
     pub last_store_report_read_keys: u64,
+    pub last_store_report_query_stats: QueryStats,
     pub approximate_keys: u64,
     pub approximate_size: u64,
+}
+
+#[derive(Default, Clone)]
+struct PeerCmpReadStat {
+    pub region_id: u64,
+    pub report_stat: u64,
+}
+
+impl Ord for PeerCmpReadStat {
+    fn cmp(&self, other: &Self) -> CmpOrdering {
+        self.report_stat.cmp(&other.report_stat)
+    }
+}
+
+impl Eq for PeerCmpReadStat {}
+
+impl PartialEq for PeerCmpReadStat {
+    fn eq(&self, other: &Self) -> bool {
+        self.report_stat == other.report_stat
+    }
+}
+
+impl PartialOrd for PeerCmpReadStat {
+    fn partial_cmp(&self, other: &Self) -> Option<CmpOrdering> {
+        Some(self.report_stat.cmp(&other.report_stat))
+    }
 }
 
 impl<E> Display for Task<E>
@@ -348,10 +387,12 @@ where
         self.sender = Some(sender);
 
         let scheduler = self.scheduler.clone();
+        let props = tikv_util::thread_group::current_properties();
 
         let h = Builder::new()
             .name(thd_name!("stats-monitor"))
             .spawn(move || {
+                tikv_util::thread_group::set_properties(props);
                 tikv_alloc::add_thread_memory_accessor();
                 let mut thread_stats = ThreadInfoStatistics::new();
                 while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(collect_interval) {
@@ -426,7 +467,9 @@ where
 }
 
 const HOTSPOT_KEY_RATE_THRESHOLD: u64 = 128;
+const HOTSPOT_QUERY_RATE_THRESHOLD: u64 = 128;
 const HOTSPOT_BYTE_RATE_THRESHOLD: u64 = 8 * 1024;
+const HOTSPOT_REPORT_CAPACITY: usize = 1000;
 
 // TODO: support dyamic configure threshold in future
 fn hotspot_key_report_threshold() -> u64 {
@@ -441,6 +484,13 @@ fn hotspot_byte_report_threshold() -> u64 {
     fail_point!("mock_hotspot_threshold", |_| { 0 });
 
     HOTSPOT_BYTE_RATE_THRESHOLD * 10
+}
+
+fn hotspot_query_num_report_threshold() -> u64 {
+    #[cfg(feature = "failpoints")]
+    fail_point!("mock_hotspot_threshold", |_| { 0 });
+
+    HOTSPOT_QUERY_RATE_THRESHOLD * 10
 }
 
 pub struct Runner<EK, ER, T>
@@ -681,23 +731,33 @@ where
             Ok(stats) => stats,
         };
 
+        let mut report_peers = HashMap::default();
         for (region_id, region_peer) in &mut self.region_peers {
             let read_bytes = region_peer.read_bytes - region_peer.last_store_report_read_bytes;
             let read_keys = region_peer.read_keys - region_peer.last_store_report_read_keys;
+            let read_query_stats = region_peer
+                .read_query_stats
+                .sub_query_stats(&region_peer.last_store_report_query_stats);
             region_peer.last_store_report_read_bytes = region_peer.read_bytes;
             region_peer.last_store_report_read_keys = region_peer.read_keys;
-            // TODO: select hotspot peer by binaray heap in future
+            region_peer
+                .last_store_report_query_stats
+                .fill_query_stats(&region_peer.read_query_stats);
             if read_bytes < hotspot_byte_report_threshold()
                 && read_keys < hotspot_key_report_threshold()
+                && read_query_stats.get_read_query_num() < hotspot_query_num_report_threshold()
             {
                 continue;
             }
-            let mut peer_stat = pdpb::PeerStat::default();
-            peer_stat.set_region_id(*region_id);
-            peer_stat.set_read_bytes(read_bytes);
-            peer_stat.set_read_keys(read_keys);
-            stats.peer_stats.push(peer_stat);
+            let mut read_stat = pdpb::PeerStat::default();
+            read_stat.set_region_id(*region_id);
+            read_stat.set_read_keys(read_keys);
+            read_stat.set_read_bytes(read_bytes);
+            read_stat.set_query_stats(read_query_stats.0);
+            report_peers.insert(*region_id, read_stat);
         }
+
+        stats = collect_report_read_peer_stats(HOTSPOT_REPORT_CAPACITY, report_peers, stats);
 
         let disk_cap = disk_stats.total_space();
         let capacity = if store_info.capacity == 0 || disk_cap < store_info.capacity {
@@ -714,6 +774,10 @@ where
         let mut available = capacity.checked_sub(used_size).unwrap_or_default();
         // We only care about rocksdb SST file size, so we should check disk available here.
         available = cmp::min(available, disk_stats.available_space());
+
+        if disk::is_disk_full() {
+            available = 0;
+        }
         if available == 0 {
             warn!("no available space");
         }
@@ -726,6 +790,15 @@ where
             self.store_stat.engine_total_keys_read - self.store_stat.engine_last_total_keys_read,
         );
 
+        self.store_stat
+            .engine_total_query_num
+            .add_query_stats(stats.get_query_stats()); // add write query stat
+        let res = self
+            .store_stat
+            .engine_total_query_num
+            .sub_query_stats(&self.store_stat.engine_last_query_num);
+        stats.set_query_stats(res.0);
+
         stats.set_cpu_usages(self.store_stat.store_cpu_usages.clone().into());
         stats.set_read_io_rates(self.store_stat.store_read_io_rates.clone().into());
         stats.set_write_io_rates(self.store_stat.store_write_io_rates.clone().into());
@@ -735,6 +808,9 @@ where
         stats.set_interval(interval);
         self.store_stat.engine_last_total_bytes_read = self.store_stat.engine_total_bytes_read;
         self.store_stat.engine_last_total_keys_read = self.store_stat.engine_total_keys_read;
+        self.store_stat
+            .engine_last_query_num
+            .fill_query_stats(&self.store_stat.engine_total_query_num);
         self.store_stat.last_report_ts = UnixSecs::now();
         self.store_stat.region_bytes_written.flush();
         self.store_stat.region_keys_written.flush();
@@ -957,6 +1033,12 @@ where
             peer_stat.read_keys += region_info.flow.read_keys as u64;
             self.store_stat.engine_total_bytes_read += region_info.flow.read_bytes as u64;
             self.store_stat.engine_total_keys_read += region_info.flow.read_keys as u64;
+            peer_stat
+                .read_query_stats
+                .add_query_stats(&region_info.query_stats.0);
+            self.store_stat
+                .engine_total_query_num
+                .add_query_stats(&region_info.query_stats.0);
         }
         if !read_stats.region_infos.is_empty() {
             if let Some(sender) = self.stats_monitor.get_sender() {
@@ -1147,6 +1229,7 @@ where
                     written_bytes_delta,
                     written_keys_delta,
                     last_report_ts,
+                    query_stats,
                 ) = {
                     let peer_stat = self
                         .region_peers
@@ -1154,6 +1237,7 @@ where
                         .or_insert_with(PeerStat::default);
                     peer_stat.approximate_size = hb_task.approximate_size;
                     peer_stat.approximate_keys = hb_task.approximate_keys;
+
                     let read_bytes_delta =
                         peer_stat.read_bytes - peer_stat.last_region_report_read_bytes;
                     let read_keys_delta =
@@ -1162,12 +1246,23 @@ where
                         hb_task.written_bytes - peer_stat.last_region_report_written_bytes;
                     let written_keys_delta =
                         hb_task.written_keys - peer_stat.last_region_report_written_keys;
+                    let written_query_stats_delta = hb_task
+                        .written_query_stats
+                        .sub_query_stats(&peer_stat.last_region_report_written_query_stats);
+                    let mut query_stats = peer_stat
+                        .read_query_stats
+                        .sub_query_stats(&peer_stat.last_region_report_read_query_stats);
+                    query_stats.add_query_stats(&written_query_stats_delta.0); // add write info
                     let mut last_report_ts = peer_stat.last_region_report_ts;
                     peer_stat.last_region_report_written_bytes = hb_task.written_bytes;
                     peer_stat.last_region_report_written_keys = hb_task.written_keys;
+                    peer_stat.last_region_report_written_query_stats = hb_task.written_query_stats;
                     peer_stat.last_region_report_read_bytes = peer_stat.read_bytes;
                     peer_stat.last_region_report_read_keys = peer_stat.read_keys;
+                    peer_stat.last_region_report_read_query_stats =
+                        peer_stat.read_query_stats.clone();
                     peer_stat.last_region_report_ts = UnixSecs::now();
+
                     if last_report_ts.is_zero() {
                         last_report_ts = self.start_ts;
                     }
@@ -1177,6 +1272,7 @@ where
                         written_bytes_delta,
                         written_keys_delta,
                         last_report_ts,
+                        query_stats.0,
                     )
                 };
                 self.handle_heartbeat(
@@ -1190,6 +1286,7 @@ where
                         written_keys: written_keys_delta,
                         read_bytes: read_bytes_delta,
                         read_keys: read_keys_delta,
+                        query_stats,
                         approximate_size: hb_task.approximate_size,
                         approximate_keys: hb_task.approximate_keys,
                         last_report_ts,
@@ -1352,10 +1449,63 @@ fn send_destroy_peer_message<EK, ER>(
     }
 }
 
+fn collect_report_read_peer_stats(
+    capacity: usize,
+    mut report_read_stats: HashMap<u64, pdpb::PeerStat>,
+    mut stats: pdpb::StoreStats,
+) -> pdpb::StoreStats {
+    if report_read_stats.len() < capacity * 3 {
+        for (_, read_stat) in report_read_stats {
+            stats.peer_stats.push(read_stat);
+        }
+        return stats;
+    }
+    let mut keys_topn_report = TopN::new(capacity);
+    let mut bytes_topn_report = TopN::new(capacity);
+    let mut stats_topn_report = TopN::new(capacity);
+    for read_stat in report_read_stats.values() {
+        let mut cmp_stat = PeerCmpReadStat::default();
+        cmp_stat.region_id = read_stat.region_id;
+        let mut key_cmp_stat = cmp_stat.clone();
+        key_cmp_stat.report_stat = read_stat.read_keys;
+        keys_topn_report.push(key_cmp_stat);
+        let mut byte_cmp_stat = cmp_stat.clone();
+        byte_cmp_stat.report_stat = read_stat.read_bytes;
+        bytes_topn_report.push(byte_cmp_stat);
+        let mut query_cmp_stat = cmp_stat.clone();
+        query_cmp_stat.report_stat = get_read_query_num(read_stat.get_query_stats());
+        stats_topn_report.push(query_cmp_stat);
+    }
+
+    for x in keys_topn_report {
+        if let Some(report_stat) = report_read_stats.remove(&x.region_id) {
+            stats.peer_stats.push(report_stat);
+        }
+    }
+
+    for x in bytes_topn_report {
+        if let Some(report_stat) = report_read_stats.remove(&x.region_id) {
+            stats.peer_stats.push(report_stat);
+        }
+    }
+
+    for x in stats_topn_report {
+        if let Some(report_stat) = report_read_stats.remove(&x.region_id) {
+            stats.peer_stats.push(report_stat);
+        }
+    }
+    stats
+}
+
+fn get_read_query_num(stat: &pdpb::QueryStats) -> u64 {
+    stat.get_get() + stat.get_coprocessor() + stat.get_scan()
+}
+
 #[cfg(not(target_os = "macos"))]
 #[cfg(test)]
 mod tests {
     use engine_test::kv::KvTestEngine;
+    use kvproto::pdpb::QueryKind;
     use std::sync::Mutex;
     use std::time::Instant;
     use tikv_util::worker::FutureWorker;
@@ -1441,5 +1591,29 @@ mod tests {
         assert!(total_cpu_usages > 90);
 
         pd_worker.stop();
+    }
+
+    #[test]
+    fn test_collect_report_peers() {
+        let mut report_stats = HashMap::default();
+        for i in 1..5 {
+            let mut stat = pdpb::PeerStat::default();
+            stat.set_region_id(i);
+            stat.set_read_keys(i);
+            stat.set_read_bytes(6 - i);
+            stat.read_keys = i;
+            stat.read_bytes = 6 - i;
+            let mut query_stat = QueryStats::default();
+            if i == 3 {
+                query_stat.add_query_num(QueryKind::Get, 6);
+            } else {
+                query_stat.add_query_num(QueryKind::Get, 0);
+            }
+            stat.set_query_stats(query_stat.0);
+            report_stats.insert(i, stat);
+        }
+        let mut store_stats = pdpb::StoreStats::default();
+        store_stats = collect_report_read_peer_stats(1, report_stats, store_stats);
+        assert_eq!(store_stats.peer_stats.len(), 3)
     }
 }
