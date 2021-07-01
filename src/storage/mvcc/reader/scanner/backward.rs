@@ -450,6 +450,7 @@ mod tests {
     };
     use crate::storage::Scanner;
     use engine_traits::{CF_LOCK, CF_WRITE};
+    use futures_executor::block_on;
     use kvproto::kvrpcpb::Context;
 
     #[test]
@@ -1366,8 +1367,7 @@ mod tests {
             .range(None, None)
             .build()
             .unwrap();
-        let result: Vec<_> = scanner
-            .scan(100, 0)
+        let result: Vec<_> = block_on(scanner.scan(100, 0))
             .unwrap()
             .into_iter()
             .map(|result| result.unwrap())

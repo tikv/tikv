@@ -1013,6 +1013,7 @@ mod latest_kv_tests {
     use crate::storage::txn::tests::*;
     use crate::storage::Scanner;
     use engine_traits::{CF_LOCK, CF_WRITE};
+    use futures_executor::block_on;
     use kvproto::kvrpcpb::Context;
 
     /// Check whether everything works as usual when `ForwardKvScanner::get()` goes out of bound.
@@ -1387,8 +1388,7 @@ mod latest_kv_tests {
             .range(None, None)
             .build()
             .unwrap();
-        let result: Vec<_> = scanner
-            .scan(100, 0)
+        let result: Vec<_> = block_on(scanner.scan(100, 0))
             .unwrap()
             .into_iter()
             .map(|result| result.unwrap())

@@ -5,9 +5,11 @@ use std::sync::{Arc, Mutex};
 
 use futures::channel::oneshot;
 use futures::future::TryFutureExt;
-use kvproto::kvrpcpb::CommandPri;
+use kvproto::kvrpcpb::{CommandPri, Context};
 use prometheus::IntGauge;
+use rand::prelude::*;
 use thiserror::Error;
+use txn_types::TimeStamp;
 use yatp::pool::Remote;
 use yatp::queue::Extras;
 use yatp::task::future::TaskCell;
@@ -260,6 +262,27 @@ impl From<Vec<FuturePool>> for ReadPool {
     }
 }
 
+pub fn build_task_id(start_ts: TimeStamp, context: &Context) -> u64 {
+    const ID_SHIFT: u32 = 16;
+    const MASK: u64 = u64::MAX >> ID_SHIFT;
+    const MAX_TS: u64 = u64::MAX;
+    let base = match start_ts.into_inner() {
+        0 | MAX_TS => thread_rng().next_u64(),
+        start_ts => start_ts,
+    };
+    let task_id: u64 = context.get_task_id();
+    if task_id > 0 {
+        // It is assumed that the lower bits of task IDs in a single transaction
+        // tend to be different. So if task_id is provided, we concatenate the
+        // low 16 bits of the task_id and the low 48 bits of the start_ts to build
+        // the final task id.
+        (task_id << (64 - ID_SHIFT)) | (base & MASK)
+    } else {
+        // Otherwise we use the start_ts as the task_id.
+        base
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum ReadPoolError {
     #[error("{0}")]
@@ -299,6 +322,17 @@ mod tests {
 
     impl FlowStatsReporter for DummyReporter {
         fn report_read_stats(&self, _read_stats: ReadStats) {}
+    }
+
+    #[test]
+    fn test_build_task_id() {
+        let mut ctx = Context::default();
+        let start_ts: TimeStamp = 0x05C6_1BFA_2648_324A.into();
+        ctx.set_task_id(1);
+        assert_eq!(build_task_id(start_ts, &ctx), 0x0001_1BFA_2648_324A);
+
+        ctx.set_task_id(0);
+        assert_eq!(build_task_id(start_ts, &ctx), start_ts.into_inner());
     }
 
     #[test]

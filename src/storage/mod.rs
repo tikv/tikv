@@ -60,7 +60,7 @@ pub use self::{
     types::{PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallback, TxnStatus},
 };
 
-use crate::read_pool::{ReadPool, ReadPoolHandle};
+use crate::read_pool::{build_task_id, ReadPool, ReadPoolHandle};
 use crate::storage::metrics::CommandKind;
 use crate::storage::mvcc::MvccReader;
 use crate::storage::txn::commands::{RawAtomicStore, RawCompareAndSwap};
@@ -662,6 +662,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
+        let task_id = build_task_id(start_ts, &ctx);
         let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
         let concurrency_manager = self.concurrency_manager.clone();
 
@@ -754,7 +755,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         scanner =
                             snap_store.scanner(true, key_only, false, end_key, Some(start_key))?;
                     };
-                    let res = scanner.scan(limit, sample_step);
+                    let res = scanner.scan(limit, sample_step).await;
 
                     let statistics = scanner.take_statistics();
                     metrics::tls_collect_scan_details(CMD, &statistics);
@@ -779,7 +780,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             }
             .in_resource_metering_tag(resource_tag),
             priority,
-            thread_rng().next_u64(),
+            task_id,
         );
 
         async move {
