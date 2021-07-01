@@ -47,9 +47,7 @@ command! {
 impl CommandExt for ResolveLock {
     ctx!();
     tag!(resolve_lock);
-
-    command_method!(readonly, bool, false);
-    command_method!(is_sys_cmd, bool, true);
+    property!(is_sys_cmd);
 
     fn write_bytes(&self) -> usize {
         self.key_locks
