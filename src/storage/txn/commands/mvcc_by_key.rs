@@ -22,12 +22,10 @@ command! {
 impl CommandExt for MvccByKey {
     ctx!();
     tag!(key_mvcc);
-    command_method!(readonly, bool, true);
-
+    property!(readonly);
     fn write_bytes(&self) -> usize {
         0
     }
-
     gen_lock!(empty);
 }
 

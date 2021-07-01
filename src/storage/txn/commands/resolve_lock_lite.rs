@@ -30,7 +30,7 @@ impl CommandExt for ResolveLockLite {
     ctx!();
     tag!(resolve_lock_lite);
     ts!(start_ts);
-    command_method!(is_sys_cmd, bool, true);
+    property!(is_sys_cmd);
     write_bytes!(resolve_keys: multiple);
     gen_lock!(resolve_keys: multiple);
 }
