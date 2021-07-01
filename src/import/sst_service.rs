@@ -591,6 +591,7 @@ where
         let context = request.take_context();
         let router = self.router.clone();
         let start_key = request.take_start_key();
+        let min_commit_ts = request.get_min_commit_ts();
         let end_key = if request.get_end_key().is_empty() {
             None
         } else {
@@ -626,7 +627,9 @@ where
                     return;
                 }
             };
-            let detector = DuplicateDetector::new(snapshot, start_key, end_key, key_only).unwrap();
+            let detector =
+                DuplicateDetector::new(snapshot, start_key, end_key, min_commit_ts, key_only)
+                    .unwrap();
             for resp in detector {
                 if let Err(e) = sink
                     .send((resp, WriteFlags::default().buffer_hint(true)))

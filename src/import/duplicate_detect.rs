@@ -21,6 +21,7 @@ pub struct DuplicateDetector<S: Snapshot> {
     iter: S::Iter,
     key_only: bool,
     valid: bool,
+    min_commit_ts: TimeStamp,
 }
 
 impl<S: Snapshot> DuplicateDetector<S> {
@@ -28,6 +29,7 @@ impl<S: Snapshot> DuplicateDetector<S> {
         snapshot: S,
         start_key: Vec<u8>,
         end_key: Option<Vec<u8>>,
+        min_commit_ts: u64,
         key_only: bool,
     ) -> Result<DuplicateDetector<S>> {
         let start_key = Key::from_raw(&start_key);
@@ -47,6 +49,7 @@ impl<S: Snapshot> DuplicateDetector<S> {
             snapshot,
             iter,
             key_only,
+            min_commit_ts: TimeStamp::new(min_commit_ts),
             valid: true,
         })
     }
@@ -58,6 +61,8 @@ impl<S: Snapshot> DuplicateDetector<S> {
         let mut last_commit_ts = TimeStamp::zero();
         let mut first_duplicate = true;
         let mut batch_size = 0;
+        let mut has_delete_key_before_import = false;
+        let mut has_put_key_before_import = false;
         while self.iter.valid().map_err(from_kv_error)? {
             let key = self.iter.key();
             let (user_key, commit_ts) = Key::split_on_ts_for(key)?;
@@ -65,7 +70,21 @@ impl<S: Snapshot> DuplicateDetector<S> {
             let write = WriteRef::parse(value).map_err(from_txn_types_error)?;
             match write.write_type {
                 WriteType::Delete => {
-                    last_key.clear();
+                    if commit_ts > self.min_commit_ts {
+                        return Err(Error::Engine(box_err!(
+                            "we find a delete key with commits ts {} larger than min_commit_ts of importer {}",
+                            commit_ts,
+                            self.min_commit_ts
+                        )));
+                    }
+                    if has_delete_key_before_import || has_put_key_before_import {
+                        self.iter.next().map_err(from_kv_error)?;
+                        continue;
+                    }
+                    last_value.clear();
+                    last_key.extend_from_slice(user_key);
+                    has_delete_key_before_import = true;
+                    last_commit_ts = commit_ts;
                     self.iter.next().map_err(from_kv_error)?;
                     continue;
                 }
@@ -75,6 +94,13 @@ impl<S: Snapshot> DuplicateDetector<S> {
                 }
                 WriteType::Put => {
                     if !last_key.is_empty() && user_key.eq(&last_key) {
+                        if has_delete_key_before_import || has_put_key_before_import {
+                            // Do not need to detect deleted keys.
+                            // If there are multiple versions of one key before import, we only detect
+                            // whether the first one is the same with keys of import.
+                            self.iter.next().map_err(from_kv_error)?;
+                            continue;
+                        }
                         batch_size += user_key.len();
                         if first_duplicate {
                             batch_size += last_key.len();
@@ -103,11 +129,20 @@ impl<S: Snapshot> DuplicateDetector<S> {
                         };
                         ret.push(self.make_kv_pair(&user_key, w, commit_ts)?);
                         first_duplicate = false;
+                        if commit_ts <= self.min_commit_ts {
+                            has_delete_key_before_import = true;
+                        }
                     } else {
                         if ret.len() >= MAX_SCAN_BATCH_COUNT || batch_size >= MAX_SCAN_BATCH_SIZE {
                             return Ok(Some(ret));
                         }
                         first_duplicate = true;
+                        has_delete_key_before_import = false;
+                        if commit_ts > self.min_commit_ts {
+                            has_put_key_before_import = false;
+                        } else {
+                            has_put_key_before_import = true;
+                        }
                         if !self.key_only {
                             last_value.clear();
                             last_value.extend_from_slice(value);
@@ -205,17 +240,21 @@ mod tests {
     use tikv_kv::Engine;
     use txn_types::Mutation;
 
-    fn write_data<E: Engine, L: LockManager>(
+    fn prewrite_data<E: Engine, L: LockManager>(
         storage: &Storage<E, L>,
+        primary: Vec<u8>,
         data: Vec<(Vec<u8>, Vec<u8>)>,
-        ts: u64,
+        start_ts: u64,
     ) {
-        let primary = data[0].0.clone();
-        let start_ts = ts - 1;
-        let keys: Vec<Key> = data.iter().map(|(key, _)| Key::from_raw(key)).collect();
         let cmd = commands::Prewrite::with_defaults(
             data.into_iter()
-                .map(|(key, value)| Mutation::Put((Key::from_raw(&key), value)))
+                .map(|(key, value)| {
+                    if value.is_empty() {
+                        Mutation::Delete(Key::from_raw(&key))
+                    } else {
+                        Mutation::Put((Key::from_raw(&key), value))
+                    }
+                })
                 .collect(),
             primary,
             start_ts.into(),
@@ -231,6 +270,40 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
+    }
+
+    fn rollback_data<E: Engine, L: LockManager>(
+        storage: &Storage<E, L>,
+        data: Vec<Vec<u8>>,
+        start_ts: u64,
+    ) {
+        let cmd = commands::Rollback::new(
+            data.into_iter().map(|key| Key::from_raw(&key)).collect(),
+            start_ts.into(),
+            Context::default(),
+        );
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                cmd,
+                Box::new(move |x| {
+                    x.unwrap();
+                    tx.send(()).unwrap();
+                }),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+    }
+
+    fn write_data<E: Engine, L: LockManager>(
+        storage: &Storage<E, L>,
+        data: Vec<(Vec<u8>, Vec<u8>)>,
+        ts: u64,
+    ) {
+        let primary = data[0].0.clone();
+        let start_ts = ts - 1;
+        let keys: Vec<Key> = data.iter().map(|(key, _)| Key::from_raw(key)).collect();
+        prewrite_data(storage, primary, data, start_ts);
         let cmd = commands::Commit::new(keys, start_ts.into(), ts.into(), Context::default());
         let (tx, rx) = channel();
         storage
@@ -243,6 +316,32 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
+    }
+
+    fn check_duplicate_data<S: Snapshot>(
+        mut detector: DuplicateDetector<S>,
+        expected_kvs: Vec<(Vec<u8>, Vec<u8>, u64)>,
+    ) {
+        let mut base = 0;
+        while let Some(resp) = detector.try_next().unwrap() {
+            let data: Vec<(Vec<u8>, Vec<u8>, u64)> = resp
+                .into_iter()
+                .map(|mut p| (p.take_key(), p.take_value(), p.get_commit_ts()))
+                .collect();
+            assert!(expected_kvs.len() >= base + data.len());
+            for i in base..(base + data.len()) {
+                assert_eq!(
+                    expected_kvs[i],
+                    data[i - base],
+                    "base {}, the {} data,  {}, {}",
+                    base,
+                    i,
+                    String::from_utf8(expected_kvs[i].0.clone()).unwrap(),
+                    String::from_utf8(data[i - base].0.clone()).unwrap(),
+                );
+            }
+            base += data.len();
+        }
     }
 
     #[test]
@@ -258,20 +357,21 @@ mod tests {
         }
         write_data(&storage, data, 3);
         let mut data = vec![];
+        let big_value = vec![1u8; 300];
         for i in 0..1000 {
             let key = format!("{}", i * 2);
-            let value = format!("{}", i * 2);
-            data.push((key.as_bytes().to_vec(), value.as_bytes().to_vec()))
+            data.push((key.as_bytes().to_vec(), big_value.clone()))
         }
         write_data(&storage, data, 5);
         // We have to do the prewrite manually so that the mem locks don't get released.
         let snapshot = storage.engine.snapshot(Default::default()).unwrap();
         let start = format!("{}", 0);
         let end = format!("{}", 800);
-        let mut detector = DuplicateDetector::new(
+        let detector = DuplicateDetector::new(
             snapshot,
             start.as_bytes().to_vec(),
             Some(end.as_bytes().to_vec()),
+            0,
             false,
         )
         .unwrap();
@@ -279,7 +379,7 @@ mod tests {
         for i in 0..400 {
             let key = format!("{}", i * 2);
             let value = format!("{}", i * 2);
-            expected_kvs.push((key.as_bytes().to_vec(), value.as_bytes().to_vec(), 5));
+            expected_kvs.push((key.as_bytes().to_vec(), big_value.clone(), 5));
             expected_kvs.push((key.as_bytes().to_vec(), value.as_bytes().to_vec(), 3));
         }
         expected_kvs.sort_by(|a, b| {
@@ -289,18 +389,101 @@ mod tests {
                 a.0.cmp(&b.0)
             }
         });
-        let mut base = 0;
-        while let Some(resp) = detector.try_next().unwrap() {
-            let data: Vec<(Vec<u8>, Vec<u8>, u64)> = resp
-                .into_iter()
-                .map(|mut p| (p.take_key(), p.take_value(), p.get_commit_ts()))
-                .collect();
-            println!("len {}", data.len());
-            assert!(expected_kvs.len() >= base + data.len());
-            for i in base..(base + data.len()) {
-                assert_eq!(expected_kvs[i], data[i - base], "the {} data", i);
+        check_duplicate_data(detector, expected_kvs);
+    }
+
+    // There are 40 key-value pairs in db, there are
+    //  [100, 101, 102, 103, 104, 105, 106, 107, 108, 109] with commit timestamp 10
+    //  [104, 105, 106, 107, 108, 109, 110, 111, 112, 113] with commit timestamp 14, these 20 keys
+    //   have existed in db before importing. So we do not think (105,10) is repeated with (105,14).
+    //  [108, 109, 110, 111, 112, 113, 114, 115, 116, 117] with commit timestamp 18
+    //  [112, 113, 114, 115, 116, 117, 118, 119, 120, 121] with commit timestamp 22, these 20 keys
+    // are imported by lightning. So (108,18) is repeated with (108,14), but (108,18) is not repeated
+    // with (108,10).
+    #[test]
+    fn test_duplicate_detect_incremental() {
+        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
+            .build()
+            .unwrap();
+        for &start in &[100, 104, 108, 112] {
+            let end = start + 10;
+            let mut data = vec![];
+            for i in start..end {
+                let key = format!("{}", i);
+                let value = format!("{}", i);
+                data.push((key.as_bytes().to_vec(), value.as_bytes().to_vec()))
             }
-            base += data.len();
+            write_data(&storage, data, start - 90);
         }
+
+        // We have to do the prewrite manually so that the mem locks don't get released.
+        let snapshot = storage.engine.snapshot(Default::default()).unwrap();
+        let start = format!("{}", 0);
+        let detector =
+            DuplicateDetector::new(snapshot, start.as_bytes().to_vec(), None, 16, false).unwrap();
+        let mut expected_kvs = vec![];
+        for &(i, ts) in &[
+            (108u64, 14),
+            (108, 18),
+            (109, 14),
+            (109, 18),
+            (110, 14),
+            (110, 18),
+            (111, 14),
+            (111, 18),
+            (112, 14),
+            (112, 18),
+            (112, 22),
+            (113, 14),
+            (113, 18),
+            (113, 22),
+            (114, 18),
+            (114, 22),
+            (115, 18),
+            (115, 22),
+            (116, 18),
+            (116, 22),
+            (117, 18),
+            (117, 22),
+        ] {
+            let key = format!("{}", i);
+            let value = format!("{}", i);
+            expected_kvs.push((key.as_bytes().to_vec(), value.as_bytes().to_vec(), ts));
+        }
+
+        expected_kvs.sort_by(|a, b| {
+            if a.0.eq(&b.0) {
+                b.2.cmp(&a.2)
+            } else {
+                a.0.cmp(&b.0)
+            }
+        });
+        check_duplicate_data(detector, expected_kvs);
+    }
+
+    #[test]
+    fn test_duplicate_detect_rollback_and_delete() {
+        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
+            .build()
+            .unwrap();
+        let data = vec![
+            (b"100".to_vec(), b"100".to_vec()),
+            (b"101".to_vec(), b"101".to_vec()),
+            (b"102".to_vec(), b"102".to_vec()),
+        ];
+        write_data(&storage, data.clone(), 10);
+        prewrite_data(&storage, b"100".to_vec(), data[..2].to_vec(), 11);
+        rollback_data(&storage, vec![b"100".to_vec(), b"101".to_vec()], 11);
+        write_data(&storage, vec![(b"102".to_vec(), vec![])], 12);
+        write_data(&storage, data, 14);
+        let expected_kvs = vec![
+            (b"100".to_vec(), b"100".to_vec(), 14),
+            (b"100".to_vec(), b"100".to_vec(), 10),
+            (b"101".to_vec(), b"101".to_vec(), 14),
+            (b"101".to_vec(), b"101".to_vec(), 10),
+        ];
+        let snapshot = storage.engine.snapshot(Default::default()).unwrap();
+        let detector = DuplicateDetector::new(snapshot, b"0".to_vec(), None, 13, false).unwrap();
+        check_duplicate_data(detector, expected_kvs);
     }
 }
