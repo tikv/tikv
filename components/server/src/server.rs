@@ -195,16 +195,16 @@ struct TiKVEngines<ER: RaftEngine> {
 
 struct Servers<ER: RaftEngine> {
     lock_mgr: LockManager,
-    server: ServerType<ER>,
+    server: LocalServer<ER>,
     node: Node<RpcClient, ER>,
     importer: Arc<SSTImporter>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
     cdc_memory_quota: MemoryQuota,
 }
 
-type ServerType<ER> =
-    Server<RaftRouter<RocksEngine, ER>, resolve::PdStoreAddrResolver, RaftKvType<ER>>;
-type RaftKvType<ER> = RaftKv<RocksEngine, ServerRaftStoreRouter<RocksEngine, ER>>;
+type LocalServer<ER> =
+    Server<RaftRouter<RocksEngine, ER>, resolve::PdStoreAddrResolver, LocalRaftKv<ER>>;
+type LocalRaftKv<ER> = RaftKv<RocksEngine, ServerRaftStoreRouter<RocksEngine, ER>>;
 
 impl<ER: RaftEngine> TiKVServer<ER> {
     fn init(mut config: TiKvConfig) -> TiKVServer<ER> {
