@@ -34,26 +34,7 @@ pub trait Notifier: Clone + Send + 'static {
     fn notify_unreachable(&self, region_id: u64, to_peer_id: u64);
 }
 
-#[derive(Clone)]
-pub struct RegionNotifier<EK, ER>
-where
-    EK: KvEngine,
-    ER: RaftEngine,
-{
-    router: RaftRouter<EK, ER>,
-}
-
-impl<EK, ER> RegionNotifier<EK, ER>
-where
-    EK: KvEngine,
-    ER: RaftEngine,
-{
-    pub fn new(router: RaftRouter<EK, ER>) -> Self {
-        Self { router }
-    }
-}
-
-impl<EK, ER> Notifier for RegionNotifier<EK, ER>
+impl<EK, ER> Notifier for RaftRouter<EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,
@@ -65,7 +46,7 @@ where
         ready_number: u64,
         send_time: Instant,
     ) {
-        if let Err(e) = self.router.force_send(
+        if let Err(e) = self.force_send(
             region_id,
             PeerMsg::Persisted {
                 peer_id,
@@ -89,7 +70,6 @@ where
             to_peer_id,
         };
         if let Err(e) = self
-            .router
             .force_send(region_id, PeerMsg::SignificantMsg(msg))
         {
             warn!(
