@@ -179,13 +179,15 @@ pub struct Config {
     #[online_config(skip)]
     pub perf_level: PerfLevel,
 
+    #[online_config(hidden)]
     pub cmd_batch: bool,
 
     #[online_config(skip)]
     pub trigger_ready_size: ReadableSize,
 
+    // When the size of raft db writebatch exceeds this value, write will be triggered.
     #[online_config(skip)]
-    pub trigger_write_size: ReadableSize,
+    pub raft_write_size_limit: ReadableSize,
 
     #[online_config(skip)]
     pub store_waterfall_metrics: bool,
@@ -243,7 +245,7 @@ impl Default for Config {
             snap_mgr_gc_tick_interval: ReadableDuration::minutes(1),
             snap_gc_timeout: ReadableDuration::hours(4),
             messages_per_tick: 4096,
-            max_peer_down_duration: ReadableDuration::minutes(5),
+            max_peer_down_duration: ReadableDuration::minutes(10),
             max_leader_missing_duration: ReadableDuration::hours(2),
             abnormal_leader_missing_duration: ReadableDuration::minutes(10),
             peer_stale_state_check_interval: ReadableDuration::minutes(5),
@@ -273,7 +275,7 @@ impl Default for Config {
             perf_level: PerfLevel::Disable,
             cmd_batch: true,
             trigger_ready_size: ReadableSize::mb(1),
-            trigger_write_size: ReadableSize::mb(1),
+            raft_write_size_limit: ReadableSize::mb(1),
             store_waterfall_metrics: false,
 
             // They are preserved for compatibility check.
@@ -453,6 +455,15 @@ impl Config {
         if self.future_poll_size == 0 {
             return Err(box_err!("future-poll-size should be greater than 0."));
         }
+
+        // Avoid hibernated peer being reported as down peer.
+        if self.hibernate_regions {
+            self.max_peer_down_duration = std::cmp::max(
+                self.max_peer_down_duration,
+                self.peer_stale_state_check_interval * 2,
+            );
+        }
+
         Ok(())
     }
 
@@ -638,8 +649,8 @@ impl Config {
             .with_label_values(&["trigger_ready_size"])
             .set(self.trigger_ready_size.0 as f64);
         CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["trigger_write_size"])
-            .set(self.trigger_write_size.0 as f64);
+            .with_label_values(&["raft_write_size_limit"])
+            .set(self.raft_write_size_limit.0 as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_waterfall_metrics"])
             .set((self.store_waterfall_metrics as i32).into());
@@ -816,5 +827,12 @@ mod tests {
         cfg.raft_election_timeout_ticks = 11;
         cfg.raft_store_max_leader_lease = ReadableDuration::secs(11);
         assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.hibernate_regions = true;
+        cfg.max_peer_down_duration = ReadableDuration::minutes(5);
+        cfg.peer_stale_state_check_interval = ReadableDuration::minutes(5);
+        assert!(cfg.validate().is_ok());
+        assert_eq!(cfg.max_peer_down_duration, ReadableDuration::minutes(10));
     }
 }

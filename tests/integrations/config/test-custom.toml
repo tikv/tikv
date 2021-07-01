@@ -185,7 +185,7 @@ dev-assert = true
 perf-level = 5
 cmd-batch = false
 trigger-ready-size = "12MB"
-trigger-write-size = "34MB"
+raft-write-size-limit = "34MB"
 store-waterfall-metrics = true
 
 [coprocessor]

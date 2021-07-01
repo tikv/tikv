@@ -210,7 +210,7 @@ fn test_serde_custom_tikv_config() {
         perf_level: PerfLevel::EnableTime,
         cmd_batch: false,
         trigger_ready_size: ReadableSize::mb(12),
-        trigger_write_size: ReadableSize::mb(34),
+        raft_write_size_limit: ReadableSize::mb(34),
         store_waterfall_metrics: true,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);

@@ -352,7 +352,7 @@
 
 ## How long the peer will be considered down and reported to PD when it hasn't been active for this
 ## time.
-# max-peer-down-duration = "5m"
+# max-peer-down-duration = "10m"
 
 ## Interval to check whether to start manual compaction for a Region.
 # region-compact-check-interval = "5m"
@@ -386,6 +386,12 @@
 
 ## Use how many threads to handle raft messages
 # store-pool-size = 2
+
+## Use how many threads to handle raft io tasks
+# store-io-pool-size = 2
+
+## When the size of raft db writebatch exceeds this value, write will be triggered.
+# raft-write-size-limit = "1MB"
 
 [coprocessor]
 ## When it is set to `true`, TiKV will try to split a Region with table prefix if that Region

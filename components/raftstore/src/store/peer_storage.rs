@@ -1528,6 +1528,16 @@ where
         self.raft_state = ctx.raft_state;
         self.apply_state = ctx.apply_state;
         self.last_term = ctx.last_term;
+        if self.truncated_index() == self.applied_index() {
+            self.applied_index_term = self.truncated_term();
+        } else {
+            panic!(
+                "{} applied index should be equal to truncated index after snapshot: {} != {}",
+                self.tag,
+                self.applied_index(),
+                self.truncated_index()
+            );
+        }
 
         if write_task.has_data() {
             write_task.messages = msgs;
