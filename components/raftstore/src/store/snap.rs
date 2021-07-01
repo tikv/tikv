@@ -747,10 +747,7 @@ impl Snapshot {
     }
 
     fn delete(&self) {
-        debug!(
-            "deleting snapshot file";
-            "snapshot" => %self.path(),
-        );
+        debug!("deleting snapshot file"; "snapshot" => %self.path());
         for cf_file in &self.cf_files {
             // Delete cloned files.
             delete_file_if_exist(&cf_file.clone_path).unwrap();
@@ -873,10 +870,7 @@ impl Snapshot {
     }
 
     pub fn save(&mut self) -> io::Result<()> {
-        debug!(
-            "saving to snapshot file";
-            "snapshot" => %self.path(),
-        );
+        debug!("saving to snapshot file"; "snapshot" => %self.path());
         for cf_file in &mut self.cf_files {
             if cf_file.size == 0 {
                 // Skip empty cf file.
@@ -1328,11 +1322,7 @@ impl SnapManager {
     }
 
     pub fn register(&self, key: SnapKey, entry: SnapEntry) {
-        debug!(
-            "register snapshot";
-            "key" => %key,
-            "entry" => ?entry,
-        );
+        debug!("register snapshot"; "key" => %key, "entry" => ?entry);
         match self.core.registry.wl().entry(key) {
             Entry::Occupied(mut e) => {
                 if e.get().contains(&entry) {
@@ -1351,11 +1341,7 @@ impl SnapManager {
     }
 
     pub fn deregister(&self, key: &SnapKey, entry: &SnapEntry) {
-        debug!(
-            "deregister snapshot";
-            "key" => %key,
-            "entry" => ?entry,
-        );
+        debug!("deregister snapshot"; "key" => %key, "entry" => ?entry);
         let mut need_clean = false;
         let mut handled = false;
         let registry = &mut self.core.registry.wl();

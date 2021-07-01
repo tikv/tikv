@@ -2061,6 +2061,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 "schedule snap gc";
                 "store_id" => self.fsm.store.id,
                 "region_id" => region_id,
+                "snaps" => ?snaps,
             );
             let gc_snap = PeerMsg::CasualMessage(CasualMessage::GcSnap { snaps });
             match self.ctx.router.send(region_id, gc_snap) {

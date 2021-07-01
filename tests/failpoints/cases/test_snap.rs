@@ -1,5 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::fs::OpenOptions;
+use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::*;
@@ -526,4 +528,86 @@ fn test_cancel_snapshot_generating() {
         let snap_index = parts[3].parse::<u64>().unwrap();
         assert!(snap_index > truncated_idx);
     }
+}
+
+// The scenario for the case is
+// 1. create a peer on store 2, and ensure it receives a snapshot;
+// 2. simulate peer 2 region worker is busy so that the snapshot can't be applied;
+// 3. isolate peer 2, and then remove and re-add a peer on store 2;
+// 4. simulate peer 2 apply worker is busy so that region meta can't be cleaned;
+// 5. tick `snap_mgr_gc` on store 2, and test whether the received snapshot is cleaned or not;
+// 6. restart store 2, peer 2 should apply the received snapshot successfully.
+#[test]
+fn test_snapshot_cannot_gc_when_applying() {
+    let mut cluster = new_server_cluster(0, 2);
+    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(20);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let rid = cluster.run_conf_change();
+    cluster.must_put(b"k0", b"v0");
+    let snap_dir = cluster.get_snap_dir(2);
+
+    // Skip apply and destroy tasks to simulate region worker is busy.
+    fail::cfg("on_region_worker_apply", "return").unwrap();
+    fail::cfg("on_region_worker_destroy", "return").unwrap();
+
+    // Add a peer on store 2 and wait for a snapshot received.
+    assert!(!cluster.has_snapshot_raft_state(rid, 2));
+    pd_client.must_add_peer(rid, new_learner_peer(2, 2));
+    let now = Instant::now();
+    loop {
+        if now.elapsed() > Duration::from_secs(1) {
+            panic!("store 2 must have snapshot raft state");
+        }
+        sleep_ms(100);
+        if cluster.has_snapshot_raft_state(rid, 2) {
+            assert!(fs::read_dir(&snap_dir).unwrap().count() > 0);
+            break;
+        }
+    }
+
+    // Isolate peer 2.
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+    // Avoid to clean region meta of peer 2.
+    fail::cfg("before_apply_handle_destroy", "return").unwrap();
+
+    // Peer 2 will receive a message with a larger peer id. So it will destroy itself.
+    // The destroy will begin with cancelling the pending snapshot apply. Even if this
+    // happens, snapshot files still shouldn't be cleaned in `snap_mgr_gc` because the
+    // peer state is still `PeerState::Applying`.
+    pd_client.must_remove_peer(rid, new_learner_peer(2, 2));
+    pd_client.must_add_peer(rid, new_learner_peer(2, 22));
+    cluster.clear_send_filters();
+
+    // Create an invalid snapshot with same region id, so that we can test whether
+    // `snap_mgr_gc` is ticked or not.
+    let p = Path::new(&snap_dir).join(&format!("rev_{}_0_0.meta", rid));
+    OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(&p)
+        .unwrap();
+    let now = Instant::now();
+    loop {
+        if now.elapsed() > Duration::from_secs(1) {
+            panic!("store 2 must tick snap_mgr_gc");
+        }
+        sleep_ms(100);
+        if fs::read_dir(&snap_dir)
+            .unwrap()
+            .all(|e| e.unwrap().path() != p)
+        {
+            // Sleep again to ensure the valid snapshot of peer 2 has also been tested.
+            sleep_ms(100);
+            break;
+        }
+    }
+
+    // Restart peer 2. It will continue to apply the received snapshot.
+    cluster.stop_node(2);
+    fail::remove("on_region_worker_apply");
+    fail::remove("on_region_worker_destroy");
+    fail::remove("before_apply_handle_destroy");
+    cluster.run_node(2).unwrap();
+    must_get_equal(&cluster.get_engine(2), b"k0", b"v0");
 }

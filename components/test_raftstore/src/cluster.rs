@@ -1098,6 +1098,17 @@ impl<T: Simulator> Cluster<T> {
             .unwrap()
     }
 
+    pub fn has_snapshot_raft_state(&self, region_id: u64, store_id: u64) -> bool {
+        self.get_engine(store_id)
+            .c()
+            .get_msg_cf::<RaftLocalState>(
+                engine_traits::CF_RAFT,
+                &keys::snapshot_raft_state_key(region_id),
+            )
+            .unwrap()
+            .is_some()
+    }
+
     pub fn wait_last_index(
         &mut self,
         region_id: u64,
