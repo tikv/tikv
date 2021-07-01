@@ -33,10 +33,10 @@ impl IngestExternalFileOptions for PanicIngestExternalFileOptions {
     }
 
     fn get_write_global_seqno(&mut self) -> bool {
-	panic!()
+        panic!()
     }
 
     fn set_write_global_seqno(&mut self, f: bool) {
-	panic!()
+        panic!()
     }
 }
