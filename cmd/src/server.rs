@@ -123,6 +123,7 @@ struct TiKVServer {
     encryption_key_manager: Option<Arc<DataKeyManager>>,
     engines: Option<Engines>,
     servers: Option<Servers>,
+    status_server: Option<Box<dyn Stop>>,
     region_info_accessor: RegionInfoAccessor,
     coprocessor_host: Option<CoprocessorHost>,
     to_stop: Vec<Box<dyn Stop>>,
@@ -182,6 +183,7 @@ impl TiKVServer {
             encryption_key_manager: None,
             engines: None,
             servers: None,
+            status_server: None,
             region_info_accessor,
             coprocessor_host,
             to_stop: vec![Box::new(resolve_worker)],
@@ -804,12 +806,15 @@ impl TiKVServer {
             ) {
                 error!(%e; "failed to bind addr for status service");
             } else {
-                self.to_stop.push(status_server);
+                self.status_server = Some(status_server);
             }
         }
     }
 
-    fn stop(self) {
+    fn stop(mut self) {
+        if let Some(status_server) = self.status_server.take() {
+            status_server.stop();
+        }
         let mut servers = self.servers.unwrap();
         servers
             .server
