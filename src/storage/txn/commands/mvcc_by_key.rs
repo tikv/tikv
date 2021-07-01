@@ -23,9 +23,11 @@ impl CommandExt for MvccByKey {
     ctx!();
     tag!(key_mvcc);
     property!(readonly);
+
     fn write_bytes(&self) -> usize {
         0
     }
+
     gen_lock!(empty);
 }
 
