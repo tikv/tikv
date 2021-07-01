@@ -2,7 +2,6 @@
 
 // TODO: move it
 #![allow(dead_code)]
-use std::marker::PhantomData;
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
@@ -213,7 +212,6 @@ where
     pub raft_states: HashMap<u64, RaftLocalState>,
     pub state_size: usize,
     pub tasks: Vec<AsyncWriteTask<EK, ER>>,
-    _phantom: PhantomData<EK>,
 }
 
 impl<EK, ER> AsyncWriteBatch<EK, ER>
@@ -229,7 +227,6 @@ where
             raft_states: HashMap::default(),
             tasks: vec![],
             state_size: 0,
-            _phantom: PhantomData,
         }
     }
 
