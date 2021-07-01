@@ -78,7 +78,6 @@ pub struct Config {
     // When merge raft messages into a batch message, leave a buffer.
     pub raft_client_grpc_send_msg_buffer: usize,
 
-    #[config(skip)]
     pub raft_client_queue_size: usize,
 
     pub raft_msg_max_batch_size: usize,

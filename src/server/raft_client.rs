@@ -750,11 +750,7 @@ pub struct RaftClient<S, R> {
     full_stores: Vec<(u64, usize)>,
     future_pool: Arc<ThreadPool<TaskCell>>,
     builder: ConnectionBuilder<S, R>,
-<<<<<<< HEAD
-=======
-    engine: PhantomData<E>,
     last_hash: (u64, u64),
->>>>>>> a41ae4597... raft_client: fix imbalance load of raft msg (#10226)
 }
 
 impl<S, R> RaftClient<S, R>
@@ -775,11 +771,7 @@ where
             full_stores: vec![],
             future_pool,
             builder,
-<<<<<<< HEAD
-=======
-            engine: PhantomData::<E>,
             last_hash: (0, 0),
->>>>>>> a41ae4597... raft_client: fix imbalance load of raft msg (#10226)
         }
     }
 
@@ -960,11 +952,7 @@ where
             full_stores: vec![],
             future_pool: self.future_pool.clone(),
             builder: self.builder.clone(),
-<<<<<<< HEAD
-=======
-            engine: PhantomData::<E>,
             last_hash: (0, 0),
->>>>>>> a41ae4597... raft_client: fix imbalance load of raft msg (#10226)
         }
     }
 }
