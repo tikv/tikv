@@ -446,9 +446,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                             .get_sched_pool(task.cmd.priority())
                             .clone()
                             .pool
-                            .spawn_force(async move {
+                            .spawn(async move {
                                 sched.finish_with_err(task.cid, Error::from(err));
-                            });
+                            })
+                            .unwrap();
                     }
                 }
             },
