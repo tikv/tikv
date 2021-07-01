@@ -117,6 +117,26 @@ impl FuturePool {
         Ok(())
     }
 
+    /// Spawns a future in the pool without checking whether the pool is full.
+    pub fn spawn_force<F>(&self, future: F)
+    where
+        F: Future + Send + 'static,
+    {
+        let timer = Instant::now_coarse();
+        let h_schedule = self.env.metrics_pool_schedule_duration.clone();
+        let metrics_handled_task_count = self.env.metrics_handled_task_count.clone();
+        let metrics_running_task_count = self.env.metrics_running_task_count.clone();
+
+        metrics_running_task_count.inc();
+
+        self.pool.spawn(async move {
+            h_schedule.observe(timer.elapsed_secs());
+            let _ = future.await;
+            metrics_handled_task_count.inc();
+            metrics_running_task_count.dec();
+        });
+    }
+
     /// Spawns a future in the pool and returns a handle to the result of the future.
     ///
     /// The future will not be executed if the handle is not polled.

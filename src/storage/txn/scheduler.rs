@@ -386,7 +386,12 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             }
             Ok(None) => {}
             Err(err) => {
-                self.finish_with_err(cid, err);
+                // Spawn the finish task to the pool to avoid stack overflow
+                // when many queuing tasks fail successively.
+                let this = self.clone();
+                self.inner.worker_pool.pool.spawn_force(async move {
+                    this.finish_with_err(cid, err);
+                });
             }
         }
     }
@@ -437,10 +442,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                             .get_sched_pool(task.cmd.priority())
                             .clone()
                             .pool
-                            .spawn(async move {
+                            .spawn_force(async move {
                                 sched.finish_with_err(task.cid, Error::from(err));
-                            })
-                            .unwrap();
+                            });
                     }
                 }
             },
@@ -609,49 +613,53 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
         let tag = task.cmd.tag();
         let resource_tag = ResourceMeteringTag::from_rpc_context(task.cmd.ctx());
-        self.get_sched_pool(task.cmd.priority())
-            .clone()
-            .pool
-            .spawn(
-                async move {
-                    fail_point!("scheduler_async_snapshot_finish");
-                    SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
+        let cid = task.cid;
+        let pool = self.get_sched_pool(task.cmd.priority()).clone().pool;
+        let this = self.clone();
+        let res = pool.spawn(
+            async move {
+                fail_point!("scheduler_async_snapshot_finish");
+                SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
 
-                    if self.check_task_deadline_exceeded(&task) {
-                        return;
-                    }
-
-                    let timer = Instant::now_coarse();
-
-                    let region_id = task.cmd.ctx().get_region_id();
-                    let ts = task.cmd.ts();
-                    let mut statistics = Statistics::default();
-
-                    if task.cmd.readonly() {
-                        self.process_read(snapshot, task, &mut statistics);
-                    } else {
-                        // Safety: `self.sched_pool` ensures a TLS engine exists.
-                        unsafe {
-                            with_tls_engine(|engine| {
-                                self.process_write(engine, snapshot, task, &mut statistics)
-                            });
-                        }
-                    };
-                    tls_collect_scan_details(tag.get_str(), &statistics);
-                    let elapsed = timer.elapsed();
-                    slow_log!(
-                        elapsed,
-                        "[region {}] scheduler handle command: {}, ts: {}",
-                        region_id,
-                        tag,
-                        ts
-                    );
-
-                    tls_collect_read_duration(tag.get_str(), elapsed);
+                if self.check_task_deadline_exceeded(&task) {
+                    return;
                 }
-                .in_resource_metering_tag(resource_tag),
-            )
-            .unwrap();
+
+                let timer = Instant::now_coarse();
+
+                let region_id = task.cmd.ctx().get_region_id();
+                let ts = task.cmd.ts();
+                let mut statistics = Statistics::default();
+
+                if task.cmd.readonly() {
+                    self.process_read(snapshot, task, &mut statistics);
+                } else {
+                    // Safety: `self.sched_pool` ensures a TLS engine exists.
+                    unsafe {
+                        with_tls_engine(|engine| {
+                            self.process_write(engine, snapshot, task, &mut statistics)
+                        });
+                    }
+                };
+                tls_collect_scan_details(tag.get_str(), &statistics);
+                let elapsed = timer.elapsed();
+                slow_log!(
+                    elapsed,
+                    "[region {}] scheduler handle command: {}, ts: {}",
+                    region_id,
+                    tag,
+                    ts
+                );
+
+                tls_collect_read_duration(tag.get_str(), elapsed);
+            }
+            .in_resource_metering_tag(resource_tag),
+        );
+        if let Err(_full) = res {
+            pool.spawn_force(async move {
+                this.finish_with_err(cid, StorageError::from(StorageErrorInner::SchedTooBusy));
+            })
+        }
     }
 
     /// Processes a read command within a worker thread, then posts `ReadFinished` message back to the
@@ -1095,6 +1103,51 @@ mod tests {
             block_on(f).unwrap(),
             Err(StorageError(box StorageErrorInner::DeadlineExceeded))
         ));
+
+        // A new request should not be blocked.
+        let mut req = BatchRollbackRequest::default();
+        req.set_keys(vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()].into());
+        let cmd: TypedCommand<()> = req.into();
+        let (cb, f) = paired_future_callback();
+        scheduler.run_cmd(cmd.cmd, StorageCallback::Boolean(cb));
+        assert!(block_on(f).is_ok());
+    }
+
+    #[test]
+    fn test_accumulate_many_expired_commands() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let scheduler = Scheduler::new(
+            engine,
+            DummyLockManager,
+            ConcurrencyManager::new(1.into()),
+            1024,
+            1,
+            100 * 1024 * 1024,
+            Arc::new(AtomicBool::new(true)),
+            false,
+        );
+
+        let mut lock = Lock::new(&[Key::from_raw(b"b")]);
+        let cid = scheduler.inner.gen_id();
+        assert!(scheduler.inner.latches.acquire(&mut lock, cid));
+
+        // Push lots of requests in the queue.
+        for _ in 0..65536 {
+            let mut req = BatchRollbackRequest::default();
+            req.mut_context().max_execution_duration_ms = 100;
+            req.set_keys(vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()].into());
+
+            let cmd: TypedCommand<()> = req.into();
+            let (cb, _) = paired_future_callback();
+            scheduler.run_cmd(cmd.cmd, StorageCallback::Boolean(cb));
+        }
+
+        // The task waits for 200ms until it acquires the latch, but the execution
+        // time limit is 100ms.
+        thread::sleep(Duration::from_millis(200));
+
+        // When releasing the lock, the queuing tasks should be all waken up without stack overflow.
+        scheduler.release_lock(&lock, cid);
 
         // A new request should not be blocked.
         let mut req = BatchRollbackRequest::default();
