@@ -69,9 +69,7 @@ where
             region_id,
             to_peer_id,
         };
-        if let Err(e) = self
-            .force_send(region_id, PeerMsg::SignificantMsg(msg))
-        {
+        if let Err(e) = self.force_send(region_id, PeerMsg::SignificantMsg(msg)) {
             warn!(
                 "failed to send unreachable";
                 "region_id" => region_id,
@@ -143,7 +141,7 @@ where
         }
         let last_index = self.entries.last().map_or(0, |e| e.get_index());
         if let Some((from, _)) = self.cut_logs {
-            if from <= last_index {
+            if from != last_index + 1 {
                 // Entries are put and deleted in the same writebatch.
                 return Err(box_err!(
                     "invalid cut logs, last_index {}, cut_logs {:?}",
