@@ -37,7 +37,7 @@ use super::metrics::*;
 use super::worker::RegionTask;
 use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
 
-use crate::store::async_io::{AsyncWriteMsg, AsyncWriteTask};
+use crate::store::async_io::write::{AsyncWriteMsg, AsyncWriteTask};
 
 // When we create a region peer, we should initialize its log term/index > 0,
 // so that we can force the follower peer to sync the snapshot first.
@@ -1789,8 +1789,8 @@ impl CachedEntries {
 #[cfg(test)]
 mod tests {
     use crate::coprocessor::CoprocessorHost;
+    use crate::store::async_io::write::AsyncWriteBatch;
     use crate::store::fsm::apply::compact_raft_log;
-    use crate::store::fsm::async_io::AsyncWriteBatch;
     use crate::store::worker::RegionRunner;
     use crate::store::worker::RegionTask;
     use crate::store::{bootstrap_store, initial_region, prepare_bootstrap_cluster};
