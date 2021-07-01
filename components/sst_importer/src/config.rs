@@ -14,6 +14,7 @@ pub struct Config {
     ///
     /// Default is 10m.
     pub import_mode_timeout: ReadableDuration,
+    pub write_global_seqno: bool,
 }
 
 impl Default for Config {
@@ -22,6 +23,7 @@ impl Default for Config {
             num_threads: 8,
             stream_channel_window: 128,
             import_mode_timeout: ReadableDuration::minutes(10),
+            write_global_seqno: false,
         }
     }
 }

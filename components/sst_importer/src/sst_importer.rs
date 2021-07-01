@@ -672,6 +672,7 @@ impl ImportDir {
 
         let mut opts = E::IngestExternalFileOptions::new();
         opts.move_files(true);
+        opts.set_write_global_seqno(Config::default().write_global_seqno);
         for (cf, cf_paths) in paths {
             let files: Vec<&str> = cf_paths.iter().map(|p| p.clone.to_str().unwrap()).collect();
             engine.ingest_external_file_cf(cf, &opts, &files)?;

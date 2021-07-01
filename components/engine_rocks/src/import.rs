@@ -55,4 +55,26 @@ impl IngestExternalFileOptions for RocksIngestExternalFileOptions {
     fn move_files(&mut self, f: bool) {
         self.0.move_files(f);
     }
+
+    fn get_write_global_seqno(&mut self) -> bool {
+        self.0.get_write_global_seqno()
+    }
+
+    fn set_write_global_seqno(&mut self, f: bool) {
+        self.0.set_write_global_seqno(f);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ingest_external_file_options() {
+        let mut opts = RocksIngestExternalFileOptions::new();
+        opts.set_write_global_seqno(true);
+        assert_eq!(true, opts.get_write_global_seqno());
+        opts.set_write_global_seqno(false);
+        assert_eq!(false, opts.get_write_global_seqno());
+    }
 }

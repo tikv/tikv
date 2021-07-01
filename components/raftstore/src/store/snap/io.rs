@@ -13,6 +13,7 @@ use engine_traits::{
     Iterable, KvEngine, Mutable, SstCompressionType, SstWriter, SstWriterBuilder, WriteBatch,
 };
 use kvproto::encryptionpb::EncryptionMethod;
+use sst_importer::Config as SstImporterConfig;
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 use tikv_util::time::Limiter;
 use tikv_util::{box_try, debug};
@@ -204,6 +205,7 @@ where
 {
     let mut ingest_opt = <E as ImportExt>::IngestExternalFileOptions::new();
     ingest_opt.move_files(true);
+    ingest_opt.set_write_global_seqno(SstImporterConfig::default().write_global_seqno);
     box_try!(db.ingest_external_file_cf(cf, &ingest_opt, &[path]));
     Ok(())
 }
