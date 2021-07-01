@@ -5,12 +5,12 @@ use std::time::Duration;
 
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
+use configuration::ConfigValue;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use grpcio::ClientUnaryReceiver;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb::TikvClient;
-use online_config::ConfigValue;
 use raftstore::coprocessor::CoprocessorHost;
 use test_raftstore::*;
 use tikv::config::ResolvedTsConfig;
