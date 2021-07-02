@@ -160,6 +160,7 @@ pub fn run_tikv(config: TiKvConfig) {
 const RESERVED_OPEN_FDS: u64 = 1000;
 
 const DEFAULT_METRICS_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
+const DEFAULT_MEMTRACE_FLUSH_INTERVAL: Duration = Duration::from_millis(1_000);
 const DEFAULT_ENGINE_METRICS_RESET_INTERVAL: Duration = Duration::from_millis(60_000);
 const DEFAULT_STORAGE_STATS_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -1020,14 +1021,19 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let mut engine_metrics =
             EngineMetricsManager::new(self.engines.as_ref().unwrap().engines.clone());
         let mut io_metrics = IOMetricsManager::new(fetcher);
-        let mut mem_trace_metrics = MemoryTraceManager::default();
-        mem_trace_metrics.register_provider((&*MEMTRACE_ROOT).to_owned());
         self.background_worker
             .spawn_interval_task(DEFAULT_METRICS_FLUSH_INTERVAL, move || {
                 let now = Instant::now();
                 engine_metrics.flush(now);
                 io_metrics.flush(now);
                 engines_info.update(now);
+            });
+
+        let mut mem_trace_metrics = MemoryTraceManager::default();
+        mem_trace_metrics.register_provider((&*MEMTRACE_ROOT).to_owned());
+        self.background_worker
+            .spawn_interval_task(DEFAULT_MEMTRACE_FLUSH_INTERVAL, move || {
+                let now = Instant::now();
                 mem_trace_metrics.flush(now);
             });
     }
