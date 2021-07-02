@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::storage::mvcc::Write;
 use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
 use engine_traits::{CF_DEFAULT, CF_WRITE};
 use kvproto::import_sstpb::{DuplicateDetectResponse, KvPair};
@@ -13,8 +14,6 @@ const MAX_SCAN_BATCH_COUNT: usize = 256;
 
 #[cfg(not(test))]
 const MAX_SCAN_BATCH_COUNT: usize = 4096;
-
-const MAX_SCAN_BATCH_SIZE: usize = 1024 * 1024; // 1MB
 
 pub struct DuplicateDetector<S: Snapshot> {
     snapshot: S,
@@ -56,110 +55,126 @@ impl<S: Snapshot> DuplicateDetector<S> {
 
     pub fn try_next(&mut self) -> Result<Option<Vec<KvPair>>> {
         let mut ret = vec![];
-        let mut last_key = Vec::with_capacity(256);
-        let mut last_value = Vec::with_capacity(256);
-        let mut last_commit_ts = TimeStamp::zero();
-        let mut first_duplicate = true;
-        let mut batch_size = 0;
-        let mut has_delete_key_before_import = false;
-        let mut has_put_key_before_import = false;
         while self.iter.valid().map_err(from_kv_error)? {
-            let key = self.iter.key();
-            let (user_key, commit_ts) = Key::split_on_ts_for(key)?;
-            let value = self.iter.value();
-            let write = WriteRef::parse(value).map_err(from_txn_types_error)?;
-            match write.write_type {
-                WriteType::Delete => {
-                    if commit_ts > self.min_commit_ts {
-                        return Err(Error::Engine(box_err!(
-                            "we find a delete key with commits ts {} larger than min_commit_ts of importer {}",
-                            commit_ts,
-                            self.min_commit_ts
-                        )));
-                    }
-                    if has_delete_key_before_import || has_put_key_before_import {
-                        self.iter.next().map_err(from_kv_error)?;
-                        continue;
-                    }
-                    last_value.clear();
-                    last_key.extend_from_slice(user_key);
-                    has_delete_key_before_import = true;
-                    last_commit_ts = commit_ts;
-                    self.iter.next().map_err(from_kv_error)?;
-                    continue;
-                }
-                WriteType::Lock | WriteType::Rollback => {
-                    self.iter.next().map_err(from_kv_error)?;
-                    continue;
-                }
-                WriteType::Put => {
-                    if !last_key.is_empty() && user_key.eq(&last_key) {
-                        if has_delete_key_before_import || has_put_key_before_import {
-                            // Do not need to detect deleted keys.
-                            // If there are multiple versions of one key before import, we only detect
-                            // whether the first one is the same with keys of import.
-                            self.iter.next().map_err(from_kv_error)?;
-                            continue;
-                        }
-                        batch_size += user_key.len();
-                        if first_duplicate {
-                            batch_size += last_key.len();
-                            if self.key_only {
-                                ret.push(self.make_kv_pair(&last_key, None, last_commit_ts)?);
-                            } else {
-                                let last_write =
-                                    WriteRef::parse(&last_value).map_err(from_txn_types_error)?;
-                                batch_size += last_write
-                                    .short_value
-                                    .as_ref()
-                                    .map(|v| v.len())
-                                    .unwrap_or(0);
-                                ret.push(self.make_kv_pair(
-                                    &last_key,
-                                    Some(last_write),
-                                    last_commit_ts,
-                                )?);
-                            }
-                        }
-                        let w = if self.key_only {
-                            None
-                        } else {
-                            batch_size += write.short_value.as_ref().map(|v| v.len()).unwrap_or(0);
-                            Some(write)
-                        };
-                        ret.push(self.make_kv_pair(&user_key, w, commit_ts)?);
-                        first_duplicate = false;
-                        if commit_ts <= self.min_commit_ts {
-                            has_delete_key_before_import = true;
-                        }
-                    } else {
-                        if ret.len() >= MAX_SCAN_BATCH_COUNT || batch_size >= MAX_SCAN_BATCH_SIZE {
-                            return Ok(Some(ret));
-                        }
-                        first_duplicate = true;
-                        has_delete_key_before_import = false;
-                        if commit_ts > self.min_commit_ts {
-                            has_put_key_before_import = false;
-                        } else {
-                            has_put_key_before_import = true;
-                        }
-                        if !self.key_only {
-                            last_value.clear();
-                            last_value.extend_from_slice(value);
-                        }
-                    }
-                }
+            self.read_next_user_key(&mut ret)?;
+            if ret.len() >= MAX_SCAN_BATCH_COUNT {
+                return Ok(Some(ret));
             }
-
-            last_key.clear();
-            last_key.extend_from_slice(user_key);
-            last_commit_ts = commit_ts;
-            self.iter.next().map_err(from_kv_error)?;
         }
         if ret.is_empty() {
             return Ok(None);
         }
         Ok(Some(ret))
+    }
+
+    fn read_next_user_key(&mut self, duplicate_pairs: &mut Vec<KvPair>) -> Result<()> {
+        let start_key = self.iter.key();
+        let (current_key, commit_ts) = Key::split_on_ts_for(start_key)?;
+        if commit_ts <= self.min_commit_ts {
+            self.iter.next().map_err(from_kv_error)?;
+            return Ok(());
+        }
+        let write = WriteRef::parse(self.iter.value()).map_err(from_txn_types_error)?;
+        match write.write_type {
+            WriteType::Delete | WriteType::Rollback | WriteType::Lock => {
+                Err(Error::Engine(box_err!(
+                    "we find a {:?} key with commits ts {} larger than min_commit_ts of importer {}",
+                    write.write_type,
+                    commit_ts,
+                    self.min_commit_ts
+                )))
+            }
+            WriteType::Put => {
+                let start_key = current_key.to_owned();
+                let write_info = write.to_owned();
+                self.collect_current_key_duplicate(
+                    start_key,
+                    commit_ts,
+                    write_info,
+                    duplicate_pairs,
+                )
+            }
+        }
+    }
+
+    fn collect_current_key_duplicate(
+        &mut self,
+        start_key: Vec<u8>,
+        end_commit_ts: TimeStamp,
+        write: Write,
+        duplicate_pairs: &mut Vec<KvPair>,
+    ) -> Result<()> {
+        self.iter.next().map_err(from_kv_error)?;
+        let mut has_duplicate = false;
+        while self.iter.valid().map_err(from_kv_error)? {
+            if let Some(current_write) = self.skip_lock_and_rollback(&start_key)? {
+                let (current_key, commit_ts) = Key::split_on_ts_for(self.iter.key())?;
+                if current_write.write_type == WriteType::Put {
+                    if self.key_only {
+                        if !has_duplicate {
+                            duplicate_pairs.push(self.make_kv_pair(
+                                &start_key,
+                                None,
+                                end_commit_ts,
+                            )?);
+                            has_duplicate = true;
+                        }
+                        duplicate_pairs.push(self.make_kv_pair(&current_key, None, commit_ts)?);
+                    } else {
+                        if !has_duplicate {
+                            duplicate_pairs.push(self.make_kv_pair(
+                                &start_key,
+                                Some(write.as_ref()),
+                                end_commit_ts,
+                            )?);
+                            has_duplicate = true;
+                        }
+                        duplicate_pairs.push(self.make_kv_pair(
+                            &current_key,
+                            Some(current_write.as_ref()),
+                            commit_ts,
+                        )?);
+                    }
+                }
+                self.iter.next().map_err(from_kv_error)?;
+                if commit_ts < self.min_commit_ts {
+                    self.skip_all_version(&start_key)?;
+                    return Ok(());
+                }
+            } else {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    fn skip_lock_and_rollback(&mut self, start_key: &[u8]) -> Result<Option<Write>> {
+        while self.iter.valid().map_err(from_kv_error)? {
+            let (current_key, _) = Key::split_on_ts_for(self.iter.key())?;
+            if !current_key.eq(start_key) {
+                return Ok(None);
+            } else {
+                let write = WriteRef::parse(self.iter.value()).map_err(from_txn_types_error)?;
+                match write.write_type {
+                    WriteType::Put | WriteType::Delete => return Ok(Some(write.to_owned())),
+                    WriteType::Lock | WriteType::Rollback => {
+                        self.iter.next().map_err(from_kv_error)?;
+                    }
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    fn skip_all_version(&mut self, start_key: &[u8]) -> Result<()> {
+        while self.iter.valid().map_err(from_kv_error)? {
+            let (current_key, _) = Key::split_on_ts_for(self.iter.key())?;
+            if !current_key.eq(start_key) {
+                break;
+            }
+            self.iter.next().map_err(from_kv_error)?;
+        }
+        Ok(())
     }
 
     fn make_kv_pair<'a>(
