@@ -75,7 +75,9 @@ impl CompactionFilter for RaftLogCompactionFilter {
         }
 
         if current_index < self.gc_point {
-            return CompactionFilterDecision::Remove;
+            return CompactionFilterDecision::RemoveAndSkipUntil(
+                keys::raft_log_key(current_region, current_index + 1).to_vec(),
+            );
         }
         CompactionFilterDecision::Keep
     }
