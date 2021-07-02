@@ -151,11 +151,7 @@ impl<const CAP: usize> Smoother<CAP> {
         if self.records.len() == 0 {
             return 0;
         }
-        self.records
-            .iter()
-            .max_by_key(|(k, _)| k)
-            .unwrap()
-            .0
+        self.records.iter().max_by_key(|(k, _)| k).unwrap().0
     }
 
     pub fn get_percentile_95(&mut self) -> u64 {
@@ -436,7 +432,9 @@ impl<E: Engine> FlowChecker<E> {
         }
 
         if let Some(throttle_cf) = self.throttle_cf.as_ref() {
-            SCHED_THROTTLE_CF_GAUGE.with_label_values(&[throttle_cf]).set(1);
+            SCHED_THROTTLE_CF_GAUGE
+                .with_label_values(&[throttle_cf])
+                .set(1);
             for (cf, _) in &self.cf_checkers {
                 if cf != throttle_cf {
                     SCHED_THROTTLE_CF_GAUGE.with_label_values(&[cf]).set(0);
@@ -445,8 +443,7 @@ impl<E: Engine> FlowChecker<E> {
         } else {
             for (cf, _) in &self.cf_checkers {
                 SCHED_THROTTLE_CF_GAUGE.with_label_values(&[cf]).set(0);
-
-            } 
+            }
         }
 
         let rate =
@@ -658,10 +655,15 @@ impl<E: Engine> FlowChecker<E> {
 
         if let Some(throttle_cf) = self.throttle_cf.as_ref() {
             if &cf != throttle_cf {
-                if num_l0_files > self.cf_checkers[throttle_cf].long_term_num_l0_files.get_max() + 4 {
-                                            SCHED_THROTTLE_ACTION_COUNTER
-                            .with_label_values(&[&cf, "change_throttle_cf"])
-                            .inc();
+                if num_l0_files
+                    > self.cf_checkers[throttle_cf]
+                        .long_term_num_l0_files
+                        .get_max()
+                        + 4
+                {
+                    SCHED_THROTTLE_ACTION_COUNTER
+                        .with_label_values(&[&cf, "change_throttle_cf"])
+                        .inc();
                     self.throttle_cf = Some(cf.clone());
                     self.last_target_file = None;
                 } else {
@@ -741,7 +743,7 @@ impl<E: Engine> FlowChecker<E> {
                         self.last_target_file = Some(checker.last_num_l0_files);
                         self.l0_target_flow = checker.short_term_flush_flow.get_avg();
                     }
-                    self.limiter.speed_limit() 
+                    self.limiter.speed_limit()
                 }
                 Trend::Decreasing => {
                     SCHED_THROTTLE_ACTION_COUNTER
@@ -775,15 +777,17 @@ impl<E: Engine> FlowChecker<E> {
                     .inc();
                 self.limiter.speed_limit()
             } else {
-                if self.last_target_file.is_some() && checker.short_term_flush_flow.get_avg() < self.l0_target_flow {
+                if self.last_target_file.is_some()
+                    && checker.short_term_flush_flow.get_avg() < self.l0_target_flow
+                {
                     SCHED_THROTTLE_ACTION_COUNTER
-                    .with_label_values(&[&cf, "up"])
-                    .inc();
+                        .with_label_values(&[&cf, "up"])
+                        .inc();
                     self.limiter.speed_limit() * (1.0 + LIMIT_UP_PERCENT)
                 } else {
                     SCHED_THROTTLE_ACTION_COUNTER
-                    .with_label_values(&[&cf, "up_keep"])
-                    .inc();
+                        .with_label_values(&[&cf, "up_keep"])
+                        .inc();
                     self.limiter.speed_limit()
                 }
             }
@@ -871,16 +875,17 @@ impl<E: Engine> FlowChecker<E> {
                     //     self.throttle_cf = Some(cf.clone());
                     //     self.last_target_file = None;
                     // } else {
-                        return;
+                    return;
                     // }
                 }
             }
 
             if num_l0_files > self.l0_files_threshold {
-
                 if let Some(last_target_file) = self.last_target_file {
                     if self.cf_checkers[&cf].short_term_flush_flow.get_avg() > self.l0_target_flow
-                    && self.cf_checkers[&cf].short_term_flush_flow.get_recent() as f64 > self.l0_target_flow {
+                        && self.cf_checkers[&cf].short_term_flush_flow.get_recent() as f64
+                            > self.l0_target_flow
+                    {
                         SCHED_THROTTLE_ACTION_COUNTER
                             .with_label_values(&[&cf, "down_flow"])
                             .inc();
@@ -914,8 +919,11 @@ impl<E: Engine> FlowChecker<E> {
             } else {
                 if self.last_target_file.is_some() {
                     if self.cf_checkers[&cf].short_term_l0_flow.get_avg() > self.l0_target_flow
-                    && num_l0_files <= 1 {
-                        self.l0_target_flow = 0.5 * self.cf_checkers[&cf].short_term_l0_flow.get_avg() + 0.5 * self.l0_target_flow;
+                        && num_l0_files <= 1
+                    {
+                        self.l0_target_flow = 0.5
+                            * self.cf_checkers[&cf].short_term_l0_flow.get_avg()
+                            + 0.5 * self.l0_target_flow;
                         SCHED_THROTTLE_ACTION_COUNTER
                             .with_label_values(&[&cf, "refresh_up_flow"])
                             .inc();

@@ -310,7 +310,7 @@ lazy_static! {
         "The target flow of L0."
     )
     .unwrap();
-    
+
     pub static ref SCHED_MEMTABLE_GAUGE: IntGaugeVec = register_int_gauge_vec!(
         "tikv_scheduler_memtable",
         "The number of memtables.",
