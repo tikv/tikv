@@ -19,7 +19,7 @@ lazy_static! {
             entry_cache,
             (raft_router, [alive, leak]),
             (apply_router, [alive, leak]),
-            raft_message,
+            raft_messages,
             raft_entries
         ]
     );
@@ -49,7 +49,7 @@ lazy_static! {
 
     /// Heap size trace for received raft messages.
     pub static ref MEMTRACE_RAFT_MESSAGES: Arc<dyn MemoryTrace + Send + Sync> =
-        MEMTRACE_ROOT.sub_trace(Id::Name("raft_message"));
+        MEMTRACE_ROOT.sub_trace(Id::Name("raft_messages"));
 
     /// Heap size trace for appended raft entries.
     pub static ref MEMTRACE_RAFT_ENTRIES: Arc<dyn MemoryTrace + Send + Sync> =
