@@ -48,7 +48,7 @@ use tikv_util::sys::disk;
 use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::topn::TopN;
-use tikv_util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
+use tikv_util::worker::{Runnable, ScheduleError, Scheduler};
 use tikv_util::{box_err, debug, error, info, thd_name, warn};
 
 type RecordPairVec = Vec<pdpb::RecordPair>;
@@ -661,7 +661,7 @@ where
                         right_derive,
                         callback,
                     };
-                    if let Err(Stopped(t)) = scheduler.schedule(task) {
+                    if let Err(ScheduleError::Stopped(t)) = scheduler.schedule(task) {
                         error!(
                             "failed to notify pd to split: Stopped";
                             "region_id" => region_id,
@@ -1154,12 +1154,14 @@ where
     }
 }
 
-impl<EK, ER, T> Runnable<Task<EK>> for Runner<EK, ER, T>
+impl<EK, ER, T> Runnable for Runner<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
     T: PdClient,
 {
+    type Task = Task<EK>;
+
     fn run(&mut self, task: Task<EK>) {
         debug!("executing task"; "task" => %task);
 
@@ -1513,7 +1515,7 @@ mod tests {
     use kvproto::pdpb::QueryKind;
     use std::sync::Mutex;
     use std::time::Instant;
-    use tikv_util::worker::FutureWorker;
+    use tikv_util::worker::LazyWorker;
 
     use super::*;
 
@@ -1553,7 +1555,9 @@ mod tests {
         }
     }
 
-    impl Runnable<Task<KvTestEngine>> for RunnerTest {
+    impl Runnable for RunnerTest {
+        type Task = Task<KvTestEngine>;
+
         fn run(&mut self, task: Task<KvTestEngine>) {
             if let Task::StoreInfos {
                 cpu_usages,
@@ -1580,10 +1584,10 @@ mod tests {
 
     #[test]
     fn test_collect_stats() {
-        let mut pd_worker = FutureWorker::new("test-pd-worker");
+        let mut pd_worker = LazyWorker::new("test-pd-worker");
         let store_stat = Arc::new(Mutex::new(StoreStat::default()));
         let runner = RunnerTest::new(1, pd_worker.scheduler(), Arc::clone(&store_stat));
-        pd_worker.start(runner).unwrap();
+        assert!(pd_worker.start(runner));
 
         let start = Instant::now();
         loop {
