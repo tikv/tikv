@@ -3,7 +3,6 @@
 use std::sync::{Arc, RwLock};
 
 use collections::HashMap;
-use engine_rocks::RocksEngine;
 use engine_traits::KvEngine;
 use fail::fail_point;
 use kvproto::metapb::{Peer, Region};
@@ -43,7 +42,7 @@ impl CdcObserver {
         }
     }
 
-    pub fn register_to(&self, coprocessor_host: &mut CoprocessorHost<RocksEngine>) {
+    pub fn register_to(&self, coprocessor_host: &mut CoprocessorHost<impl KvEngine>) {
         // use 0 as the priority of the cmd observer. CDC should have a higher priority than
         // the `resolved-ts`'s cmd observer
         coprocessor_host
