@@ -4,6 +4,7 @@ use crate::raft_engine::{RAFT_LOG_GC_INDEXES, RAFT_LOG_GC_ON_COMPACTION};
 use crate::raw::{
     new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
     CompactionFilterFactory, CompactionFilterValueType, DBCompactionFilter,
+    DBTableFileCreationReason,
 };
 use std::ffi::CString;
 use tikv_util::debug;
@@ -22,6 +23,13 @@ impl CompactionFilterFactory for RaftLogCompactionFilterFactory {
         ));
         let name = CString::new("raft_log_gc_compaction_filter").unwrap();
         unsafe { new_compaction_filter_raw(name, filter) }
+    }
+
+    fn should_filter_table_file_creation(&self, reason: &DBTableFileCreationReason) -> bool {
+        match reason {
+            DBTableFileCreationReason::Compaction | DBTableFileCreationReason::Flush => true,
+            DBTableFileCreationReason::Recovery | DBTableFileCreationReason::Misc => false,
+        }
     }
 }
 
@@ -86,6 +94,7 @@ impl CompactionFilter for RaftLogCompactionFilter {
 #[cfg(test)]
 mod tests {
 
+    use rocksdb::CFHandle;
     use std::collections::HashMap;
 
     use crate::RaftLogCompactionFilterFactory;
@@ -141,15 +150,31 @@ mod tests {
         // update test gc point
         RAFT_LOG_GC_ON_COMPACTION.store(true, std::sync::atomic::Ordering::Release);
         let mut indexes = RAFT_LOG_GC_INDEXES.write().unwrap();
+        indexes.insert(1, LOG_NUM / 4);
+        indexes.insert(2, LOG_NUM / 4);
+        indexes.insert(5, LOG_NUM * 2);
+        drop(indexes);
+
+        // trigger flush
+        db.flush_cf(cfh, true).unwrap();
+        // check gc
+        check_gc(&db, cfh, &map);
+
+        // update test gc point
+        RAFT_LOG_GC_ON_COMPACTION.store(true, std::sync::atomic::Ordering::Release);
+        let mut indexes = RAFT_LOG_GC_INDEXES.write().unwrap();
         indexes.insert(1, LOG_NUM / 2);
         indexes.insert(2, LOG_NUM / 2);
         indexes.insert(5, LOG_NUM * 2);
         drop(indexes);
-        db.flush(true).unwrap();
 
         // trigger compact
         db.compact_range_cf(cfh, None, None);
+        // check gc
+        check_gc(&db, cfh, &map)
+    }
 
+    fn check_gc(db: &DB, cfh: &CFHandle, map: &HashMap<u64, u64>) {
         // check gc
         for (rid, num) in map.iter() {
             let indexes = RAFT_LOG_GC_INDEXES.read().unwrap();
