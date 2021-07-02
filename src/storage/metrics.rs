@@ -371,6 +371,12 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
+    pub static ref SCHED_THROTTLE_TIME: Histogram =
+        register_histogram!(
+            "tikv_scheduler_throttle_duration_seconds",
+            "Bucketed histogram of peer commits logs duration.",
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
+        ).unwrap();
     pub static ref SCHED_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_scheduler_command_duration_seconds",
         "Bucketed histogram of command execution",

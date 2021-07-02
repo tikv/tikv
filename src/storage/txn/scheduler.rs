@@ -749,10 +749,13 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     });
 
                     {
+                        let start = Instant::now_coarse();
                         let _guard = self.control_mutex.lock().await;
                         let delay = self.inner.flow_controller.consume(to_be_write.size());
                         delay.await;
+                        SCHED_THROTTLE_TIME.observe(start.elapsed_secs());
                     }
+
                     // Safety: `self.sched_pool` ensures a TLS engine exists.
                     unsafe {
                         with_tls_engine(|engine: &E| {
