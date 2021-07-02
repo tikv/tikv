@@ -86,7 +86,11 @@ impl<S: Snapshot> DuplicateDetector<S> {
             }
             WriteType::Put => {
                 let start_key = current_key.to_owned();
-                let write_info = write.to_owned();
+                let write_info = if self.key_only {
+                    None
+                } else {
+                    Some(write.to_owned())
+                };
                 self.collect_current_key_duplicate(
                     start_key,
                     commit_ts,
@@ -101,48 +105,31 @@ impl<S: Snapshot> DuplicateDetector<S> {
         &mut self,
         start_key: Vec<u8>,
         end_commit_ts: TimeStamp,
-        write: Write,
+        mut write: Option<Write>,
         duplicate_pairs: &mut Vec<KvPair>,
     ) -> Result<()> {
         self.iter.next().map_err(from_kv_error)?;
-        let mut has_duplicate = false;
-        while self.iter.valid().map_err(from_kv_error)? {
-            if let Some(current_write) = self.skip_lock_and_rollback(&start_key)? {
-                let (current_key, commit_ts) = Key::split_on_ts_for(self.iter.key())?;
-                if current_write.write_type == WriteType::Put {
-                    if self.key_only {
-                        if !has_duplicate {
-                            duplicate_pairs.push(self.make_kv_pair(
-                                &start_key,
-                                None,
-                                end_commit_ts,
-                            )?);
-                            has_duplicate = true;
-                        }
-                        duplicate_pairs.push(self.make_kv_pair(&current_key, None, commit_ts)?);
-                    } else {
-                        if !has_duplicate {
-                            duplicate_pairs.push(self.make_kv_pair(
-                                &start_key,
-                                Some(write.as_ref()),
-                                end_commit_ts,
-                            )?);
-                            has_duplicate = true;
-                        }
-                        duplicate_pairs.push(self.make_kv_pair(
-                            &current_key,
-                            Some(current_write.as_ref()),
-                            commit_ts,
-                        )?);
-                    }
+        while let Some(current_write) = self.skip_lock_and_rollback(&start_key)? {
+            let (current_key, commit_ts) = Key::split_on_ts_for(self.iter.key())?;
+            if current_write.write_type == WriteType::Put {
+                let write_value = if self.key_only {
+                    None
+                } else {
+                    Some(current_write)
+                };
+                if write.is_some() {
+                    duplicate_pairs.push(self.make_kv_pair(
+                        &start_key,
+                        write.take(),
+                        end_commit_ts,
+                    )?);
                 }
-                self.iter.next().map_err(from_kv_error)?;
-                if commit_ts < self.min_commit_ts {
-                    self.skip_all_version(&start_key)?;
-                    return Ok(());
-                }
-            } else {
-                break;
+                duplicate_pairs.push(self.make_kv_pair(&current_key, write_value, commit_ts)?);
+            }
+            self.iter.next().map_err(from_kv_error)?;
+            if commit_ts < self.min_commit_ts {
+                self.skip_all_version(&start_key)?;
+                return Ok(());
             }
         }
         Ok(())
@@ -177,19 +164,14 @@ impl<S: Snapshot> DuplicateDetector<S> {
         Ok(())
     }
 
-    fn make_kv_pair<'a>(
-        &self,
-        key: &[u8],
-        write: Option<WriteRef<'a>>,
-        ts: TimeStamp,
-    ) -> Result<KvPair> {
+    fn make_kv_pair(&self, key: &[u8], write: Option<Write>, ts: TimeStamp) -> Result<KvPair> {
         let mut pair = KvPair::default();
         let user_key = Key::from_encoded_slice(key);
         pair.set_key(user_key.to_raw()?);
         pair.set_commit_ts(ts.into_inner());
         if let Some(write) = write {
             match write.short_value {
-                Some(value) => pair.set_value(value.to_vec()),
+                Some(value) => pair.set_value(value),
                 None => {
                     let value = self
                         .snapshot
