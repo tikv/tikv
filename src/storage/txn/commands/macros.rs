@@ -130,10 +130,10 @@ macro_rules! gen_lock {
     };
 }
 
-macro_rules! command_method {
-    ($name:ident, $return_ty: ty, $value: expr) => {
-        fn $name(&self) -> $return_ty {
-            $value
+macro_rules! property {
+    ($property:ident) => {
+        fn $property(&self) -> bool {
+            true
         }
     };
 }

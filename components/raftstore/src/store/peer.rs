@@ -44,7 +44,7 @@ use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, CollectedReady, Proposal};
 use crate::store::hibernate_state::GroupState;
-use crate::store::memory::needs_evict_entry_cache;
+use crate::store::memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES};
 use crate::store::msg::RaftCommand;
 use crate::store::util::{admin_cmd_epoch_lookup, RegionReadProgress};
 use crate::store::worker::{
@@ -56,6 +56,7 @@ use crate::store::{
 use crate::{Error, Result};
 use collections::{HashMap, HashSet};
 use pd_client::INVALID_ID;
+use tikv_alloc::trace::TraceEvent;
 use tikv_util::codec::number::decode_u64;
 use tikv_util::sys::disk;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
@@ -523,6 +524,8 @@ where
     last_unpersisted_number: u64,
 
     pub read_progress: Arc<RegionReadProgress>,
+
+    pub memtrace_raft_entries: usize,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -624,6 +627,7 @@ where
                 REGION_READ_PROGRESS_CAP,
                 tag,
             )),
+            memtrace_raft_entries: 0,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -1748,6 +1752,14 @@ where
 
         let mut ready = self.raft_group.ready();
 
+        // Update it after unstable entries pagination is introduced.
+        debug_assert!(ready.entries().last().map_or_else(
+            || true,
+            |entry| entry.index == self.raft_group.raft.raft_log.last_index()
+        ));
+        MEMTRACE_RAFT_ENTRIES.trace(TraceEvent::Sub(self.memtrace_raft_entries));
+        self.memtrace_raft_entries = 0;
+
         self.last_unpersisted_number = ready.number();
 
         if !ready.must_sync() {
@@ -2037,10 +2049,20 @@ where
                 continue;
             }
             if !replica_read {
-                if read_index.is_none() {
-                    // Actually, the read_index is none if and only if it's the first one in read.cmds.
-                    // Starting from the second, all the following ones' read_index is not none.
-                    read_index = read.read_index;
+                match (read_index, read.read_index) {
+                    (Some(local_responsed_index), Some(batch_index)) => {
+                        // `read_index` could be less than `read.read_index` because the former is
+                        // filled with `committed index` when proposed, and the latter is filled
+                        // after a read-index procedure finished.
+                        read_index = Some(cmp::max(local_responsed_index, batch_index));
+                    }
+                    (None, _) => {
+                        // Actually, the read_index is none if and only if it's the first one in
+                        // read.cmds. Starting from the second, all the following ones' read_index
+                        // is not none.
+                        read_index = read.read_index;
+                    }
+                    _ => {}
                 }
                 cb.invoke_read(self.handle_read(ctx, req, true, read_index));
                 continue;
