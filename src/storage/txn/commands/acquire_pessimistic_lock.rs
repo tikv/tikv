@@ -50,7 +50,7 @@ impl CommandExt for AcquirePessimisticLock {
     ctx!();
     tag!(acquire_pessimistic_lock);
     ts!(start_ts);
-    command_method!(can_be_pipelined, bool, true);
+    property!(can_be_pipelined);
 
     fn write_bytes(&self) -> usize {
         self.keys
