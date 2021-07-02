@@ -386,7 +386,16 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             }
             Ok(None) => {}
             Err(err) => {
-                self.finish_with_err(cid, err);
+                // Spawn the finish task to the pool to avoid stack overflow
+                // when many queuing tasks fail successively.
+                let this = self.clone();
+                self.inner
+                    .worker_pool
+                    .pool
+                    .spawn(async move {
+                        this.finish_with_err(cid, err);
+                    })
+                    .unwrap();
             }
         }
     }
@@ -1095,6 +1104,51 @@ mod tests {
             block_on(f).unwrap(),
             Err(StorageError(box StorageErrorInner::DeadlineExceeded))
         ));
+
+        // A new request should not be blocked.
+        let mut req = BatchRollbackRequest::default();
+        req.set_keys(vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()].into());
+        let cmd: TypedCommand<()> = req.into();
+        let (cb, f) = paired_future_callback();
+        scheduler.run_cmd(cmd.cmd, StorageCallback::Boolean(cb));
+        assert!(block_on(f).is_ok());
+    }
+
+    #[test]
+    fn test_accumulate_many_expired_commands() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let scheduler = Scheduler::new(
+            engine,
+            DummyLockManager,
+            ConcurrencyManager::new(1.into()),
+            1024,
+            1,
+            100 * 1024 * 1024,
+            Arc::new(AtomicBool::new(true)),
+            false,
+        );
+
+        let mut lock = Lock::new(&[Key::from_raw(b"b")]);
+        let cid = scheduler.inner.gen_id();
+        assert!(scheduler.inner.latches.acquire(&mut lock, cid));
+
+        // Push lots of requests in the queue.
+        for _ in 0..65536 {
+            let mut req = BatchRollbackRequest::default();
+            req.mut_context().max_execution_duration_ms = 100;
+            req.set_keys(vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()].into());
+
+            let cmd: TypedCommand<()> = req.into();
+            let (cb, _) = paired_future_callback();
+            scheduler.run_cmd(cmd.cmd, StorageCallback::Boolean(cb));
+        }
+
+        // The task waits for 200ms until it acquires the latch, but the execution
+        // time limit is 100ms.
+        thread::sleep(Duration::from_millis(200));
+
+        // When releasing the lock, the queuing tasks should be all waken up without stack overflow.
+        scheduler.release_lock(&lock, cid);
 
         // A new request should not be blocked.
         let mut req = BatchRollbackRequest::default();

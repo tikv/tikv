@@ -2096,7 +2096,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?rev=706fcaf286c8dd07ef59349c089f53289a32ce4c#706fcaf286c8dd07ef59349c089f53289a32ce4c"
+source = "git+https://github.com/pingcap/kvproto.git#ab6bb38882c491c8ee9da13112cb1d9a35695180"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -3392,6 +3392,7 @@ dependencies = [
  "crossbeam",
  "derivative",
  "encryption",
+ "encryption_export",
  "engine_panic",
  "engine_rocks",
  "engine_test",
