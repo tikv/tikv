@@ -9,11 +9,10 @@ use encryption::{
     Iv,
 };
 use engine_traits::{
-    CfName, EncryptionKeyManager, Error as EngineError, ImportExt, IngestExternalFileOptions,
-    Iterable, KvEngine, Mutable, SstCompressionType, SstWriter, SstWriterBuilder, WriteBatch,
+    CfName, EncryptionKeyManager, Error as EngineError, Iterable, KvEngine, Mutable,
+    SstCompressionType, SstWriter, SstWriterBuilder, WriteBatch,
 };
 use kvproto::encryptionpb::EncryptionMethod;
-use sst_importer::Config as SstImporterConfig;
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 use tikv_util::time::Limiter;
 use tikv_util::{box_try, debug};
@@ -203,10 +202,7 @@ pub fn apply_sst_cf_file<E>(path: &str, db: &E, cf: &str) -> Result<(), Error>
 where
     E: KvEngine,
 {
-    let mut ingest_opt = <E as ImportExt>::IngestExternalFileOptions::new();
-    ingest_opt.move_files(true);
-    ingest_opt.set_write_global_seqno(SstImporterConfig::default().write_global_seqno);
-    box_try!(db.ingest_external_file_cf(cf, &ingest_opt, &[path]));
+    box_try!(db.ingest_external_file_cf(cf, &[path]));
     Ok(())
 }
 

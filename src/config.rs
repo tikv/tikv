@@ -954,6 +954,8 @@ pub struct DbConfig {
     pub raftcf: RaftCfConfig,
     #[online_config(skip)]
     pub titan: TitanDBConfig,
+    #[online_config(skip)]
+    pub sst_ingestion_write_global_seqno: bool,
 }
 
 impl Default for DbConfig {
@@ -1000,6 +1002,7 @@ impl Default for DbConfig {
             lockcf: LockCfConfig::default(),
             raftcf: RaftCfConfig::default(),
             titan: titan_config,
+	    sst_ingestion_write_global_seqno: false,
         }
     }
 }
@@ -3475,7 +3478,7 @@ mod tests {
         ConfigController,
         ReceiverWrapper<TTLCheckerTask>,
     ) {
-        let engine = RocksEngine::from_db(Arc::new(
+        let mut engine = RocksEngine::from_db(Arc::new(
             new_engine_opt(
                 &cfg.storage.data_dir,
                 cfg.rocksdb.build_opt(),
@@ -3487,6 +3490,8 @@ mod tests {
             )
             .unwrap(),
         ));
+
+	engine.set_sst_ingestion_write_global_seqno(cfg.rocksdb.sst_ingestion_write_global_seqno);
 
         let (shared, cfg_controller) = (cfg.storage.block_cache.shared, ConfigController::new(cfg));
         cfg_controller.register(

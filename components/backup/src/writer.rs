@@ -367,11 +367,10 @@ mod tests {
             .unwrap();
         let db = rocks.get_rocksdb();
 
-        let opt = engine_rocks::raw::IngestExternalFileOptions::new();
         for (cf, sst) in ssts {
             let handle = db.as_inner().cf_handle(cf).unwrap();
             db.as_inner()
-                .ingest_external_file_cf(handle, &opt, &[sst.to_str().unwrap()])
+                .ingest_external_file_cf(handle, &[sst.to_str().unwrap()])
                 .unwrap();
         }
         for (cf, kv) in kvs {

@@ -136,8 +136,6 @@ mod tests {
 
         let cf_name = "default";
         let db = new_engine(path_str, db_opts, &[cf_name], cf_opts).unwrap();
-        let mut ingest_opts = RocksIngestExternalFileOptions::new();
-        ingest_opts.move_files(true);
 
         gen_sst_with_kvs(&db, cf_name, sst_path.to_str().unwrap(), &kvs);
 
@@ -159,7 +157,7 @@ mod tests {
         db.reset_global_seq(cf_name, &sst_clone).unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 2);
-        db.ingest_external_file_cf(cf_name, &ingest_opts, &[sst_clone.to_str().unwrap()])
+        db.ingest_external_file_cf(cf_name, &[sst_clone.to_str().unwrap()])
             .unwrap();
         check_db_with_kvs(&db, cf_name, &kvs);
         assert!(!sst_clone.exists());
@@ -175,7 +173,7 @@ mod tests {
         db.reset_global_seq(cf_name, &sst_clone).unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 1);
-        db.ingest_external_file_cf(cf_name, &ingest_opts, &[sst_clone.to_str().unwrap()])
+        db.ingest_external_file_cf(cf_name, &[sst_clone.to_str().unwrap()])
             .unwrap();
         check_db_with_kvs(&db, cf_name, &kvs);
         assert!(!sst_clone.exists());

@@ -243,9 +243,7 @@ fn test_delete_files_in_range_for_titan() {
         ))
         .unwrap();
     writer.finish().unwrap();
-    let mut opts = IngestExternalFileOptions::new();
-    opts.move_files(true);
-    db.ingest_external_file_cf(&default_cf, &opts, &[sst_file_path.to_str().unwrap()])
+    db.ingest_external_file_cf(&default_cf, &[sst_file_path.to_str().unwrap()])
         .unwrap();
 
     // Now the LSM structure of default cf is:

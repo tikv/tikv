@@ -26,6 +26,7 @@ use crate::{RocksEngineIterator, RocksSnapshot};
 pub struct RocksEngine {
     db: Arc<DB>,
     shared_block_cache: bool,
+    sst_ingestion_write_global_seqno: bool,
 }
 
 impl RocksEngine {
@@ -33,6 +34,7 @@ impl RocksEngine {
         RocksEngine {
             db,
             shared_block_cache: false,
+            sst_ingestion_write_global_seqno: false,
         }
     }
 
@@ -62,6 +64,14 @@ impl RocksEngine {
 
     pub fn set_shared_block_cache(&mut self, enable: bool) {
         self.shared_block_cache = enable;
+    }
+
+    pub fn set_sst_ingestion_write_global_seqno(&mut self, write: bool) {
+        self.sst_ingestion_write_global_seqno = write;
+    }
+
+    pub fn get_sst_ingestion_write_global_seqno(&self) -> bool {
+        self.sst_ingestion_write_global_seqno
     }
 }
 

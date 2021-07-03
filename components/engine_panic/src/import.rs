@@ -7,12 +7,7 @@ use std::path::Path;
 impl ImportExt for PanicEngine {
     type IngestExternalFileOptions = PanicIngestExternalFileOptions;
 
-    fn ingest_external_file_cf(
-        &self,
-        cf: &str,
-        opts: &Self::IngestExternalFileOptions,
-        files: &[&str],
-    ) -> Result<()> {
+    fn ingest_external_file_cf(&self, cf: &str, files: &[&str]) -> Result<()> {
         panic!()
     }
 
@@ -32,7 +27,7 @@ impl IngestExternalFileOptions for PanicIngestExternalFileOptions {
         panic!()
     }
 
-    fn get_write_global_seqno(&mut self) -> bool {
+    fn get_write_global_seqno(&self) -> bool {
         panic!()
     }
 
