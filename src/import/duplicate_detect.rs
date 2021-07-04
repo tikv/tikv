@@ -55,8 +55,8 @@ impl<S: Snapshot> DuplicateDetector<S> {
 
     pub fn try_next(&mut self) -> Result<Option<Vec<KvPair>>> {
         let mut ret = vec![];
-        while self.iter.valid().map_err(from_kv_error)? {
-            self.read_next_user_key(&mut ret)?;
+        while let Some((current_key, commit_ts)) = self.move_to_next_import_key()? {
+            self.collect_current_key_duplicate(current_key, commit_ts, &mut ret)?;
             if ret.len() >= MAX_SCAN_BATCH_COUNT {
                 return Ok(Some(ret));
             }
@@ -67,48 +67,42 @@ impl<S: Snapshot> DuplicateDetector<S> {
         Ok(Some(ret))
     }
 
-    fn read_next_user_key(&mut self, duplicate_pairs: &mut Vec<KvPair>) -> Result<()> {
-        let start_key = self.iter.key();
-        let (current_key, commit_ts) = Key::split_on_ts_for(start_key)?;
-        if commit_ts <= self.min_commit_ts {
+    fn move_to_next_import_key(&mut self) -> Result<Option<(Vec<u8>, TimeStamp)>> {
+        while self.iter.valid().map_err(from_kv_error)? {
+            let (current_key, commit_ts) = Key::split_on_ts_for(self.iter.key())?;
+            if commit_ts > self.min_commit_ts {
+                return Ok(Some((current_key.to_vec(), commit_ts)));
+            }
             self.iter.next().map_err(from_kv_error)?;
-            return Ok(());
         }
-        let write = WriteRef::parse(self.iter.value()).map_err(from_txn_types_error)?;
-        match write.write_type {
-            WriteType::Delete | WriteType::Rollback | WriteType::Lock => {
-                Err(Error::Engine(box_err!(
-                    "we find a {:?} key with commits ts {} larger than min_commit_ts of importer {}",
-                    write.write_type,
-                    commit_ts,
-                    self.min_commit_ts
-                )))
-            }
-            WriteType::Put => {
-                let start_key = current_key.to_owned();
-                let write_info = if self.key_only {
-                    None
-                } else {
-                    Some(write.to_owned())
-                };
-                self.collect_current_key_duplicate(
-                    start_key,
-                    commit_ts,
-                    write_info,
-                    duplicate_pairs,
-                )
-            }
-        }
+        Ok(None)
     }
 
     fn collect_current_key_duplicate(
         &mut self,
         start_key: Vec<u8>,
         end_commit_ts: TimeStamp,
-        mut write: Option<Write>,
         duplicate_pairs: &mut Vec<KvPair>,
     ) -> Result<()> {
-        self.iter.next().map_err(from_kv_error)?;
+        let write = WriteRef::parse(self.iter.value()).map_err(from_txn_types_error)?;
+        let mut write_info = match write.write_type {
+            WriteType::Delete | WriteType::Rollback | WriteType::Lock => {
+                return Err(Error::Engine(box_err!(
+                    "found a {:?} key with commits ts {} larger than min_commit_ts of importer {}",
+                    write.write_type,
+                    end_commit_ts,
+                    self.min_commit_ts
+                )));
+            }
+            WriteType::Put => {
+                if self.key_only {
+                    None
+                } else {
+                    Some(write.to_owned())
+                }
+            }
+        };
+
         while let Some(current_write) = self.skip_lock_and_rollback(&start_key)? {
             let (current_key, commit_ts) = Key::split_on_ts_for(self.iter.key())?;
             if current_write.write_type == WriteType::Put {
@@ -117,16 +111,15 @@ impl<S: Snapshot> DuplicateDetector<S> {
                 } else {
                     Some(current_write)
                 };
-                if write.is_some() {
+                if write_info.is_some() {
                     duplicate_pairs.push(self.make_kv_pair(
                         &start_key,
-                        write.take(),
+                        write_info.take(),
                         end_commit_ts,
                     )?);
                 }
                 duplicate_pairs.push(self.make_kv_pair(&current_key, write_value, commit_ts)?);
             }
-            self.iter.next().map_err(from_kv_error)?;
             if commit_ts < self.min_commit_ts {
                 self.skip_all_version(&start_key)?;
                 return Ok(());
@@ -136,6 +129,7 @@ impl<S: Snapshot> DuplicateDetector<S> {
     }
 
     fn skip_lock_and_rollback(&mut self, start_key: &[u8]) -> Result<Option<Write>> {
+        self.iter.next().map_err(from_kv_error)?;
         while self.iter.valid().map_err(from_kv_error)? {
             let (current_key, _) = Key::split_on_ts_for(self.iter.key())?;
             if !current_key.eq(start_key) {
@@ -154,6 +148,7 @@ impl<S: Snapshot> DuplicateDetector<S> {
     }
 
     fn skip_all_version(&mut self, start_key: &[u8]) -> Result<()> {
+        self.iter.next().map_err(from_kv_error)?;
         while self.iter.valid().map_err(from_kv_error)? {
             let (current_key, _) = Key::split_on_ts_for(self.iter.key())?;
             if !current_key.eq(start_key) {
