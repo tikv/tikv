@@ -3906,7 +3906,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "99% gRPC messge duration",
+          "title": "99% gRPC message duration",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -4001,7 +4001,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Average gRPC messge duration",
+          "title": "Average gRPC message duration",
           "tooltip": {
             "shared": true,
             "sort": 0,
