@@ -106,6 +106,15 @@ impl<S: Snapshot> DuplicateDetector<S> {
         while let Some(current_write) = self.skip_lock_and_rollback(&start_key)? {
             let (current_key, commit_ts) = Key::split_on_ts_for(self.iter.key())?;
             if current_write.write_type == WriteType::Put {
+                if commit_ts < self.min_commit_ts
+                    && current_write
+                        .as_ref()
+                        .check_gc_fence_as_latest_version(self.min_commit_ts)
+                {
+                    self.skip_all_version(&start_key)?;
+                    return Ok(());
+                }
+
                 let write_value = if self.key_only {
                     None
                 } else {
