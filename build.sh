@@ -8,12 +8,16 @@ echo "profile is ${PROXY_PROFILE}"
 echo "engine is ${ENGINE_LABEL_VALUE}"
 echo "prometheus metric name prefix is ${PROMETHEUS_METRIC_NAME_PREFIX}"
 
-PROXY_ENABLE_FEATURES=${PROXY_ENABLE_FEATURES} ./cargo-build.sh
-
 lib_suffix="so"
 if [[ $(uname -s) == "Darwin" ]]; then
   lib_suffix="dylib"
+  # use the openssl lib from system
+  export OPENSSL_ROOT_DIR=$(brew --prefix openssl)
+  export OPENSSL_NO_VENDOR=1
+  export OPENSSL_STATIC=1
 fi
+
+PROXY_ENABLE_FEATURES=${PROXY_ENABLE_FEATURES} ./cargo-build.sh
 
 target_name="lib${ENGINE_LABEL_VALUE}_proxy.${lib_suffix}"
 ori_build_path="target/${PROXY_PROFILE}/libraftstore_proxy.${lib_suffix}"
