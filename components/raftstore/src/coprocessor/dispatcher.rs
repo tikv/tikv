@@ -257,28 +257,13 @@ macro_rules! loop_ob {
 }
 
 /// Admin and invoke all coprocessors.
-<<<<<<< HEAD
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct CoprocessorHost {
     pub registry: Registry,
-}
-
-impl CoprocessorHost {
-    pub fn new<C: CasualRouter<RocksEngine> + Clone + Send + 'static>(ch: C) -> CoprocessorHost {
-=======
-#[derive(Clone)]
-pub struct CoprocessorHost<E>
-where
-    E: KvEngine + 'static,
-{
-    pub registry: Registry<E>,
     pub cfg: Config,
 }
 
-impl<E: KvEngine> Default for CoprocessorHost<E>
-where
-    E: 'static,
-{
+impl Default for CoprocessorHost {
     fn default() -> Self {
         CoprocessorHost {
             registry: Default::default(),
@@ -287,12 +272,11 @@ where
     }
 }
 
-impl<E: KvEngine> CoprocessorHost<E> {
-    pub fn new<C: CasualRouter<E> + Clone + Send + 'static>(
+impl CoprocessorHost {
+    pub fn new<C: CasualRouter<RocksEngine> + Clone + Send + 'static>(
         ch: C,
         cfg: Config,
-    ) -> CoprocessorHost<E> {
->>>>>>> 18ebcad6b... raftstore: approximate split range evenly instead of against split size (#9897)
+    ) -> CoprocessorHost {
         let mut registry = Registry::default();
         registry.register_split_check_observer(
             200,
@@ -406,13 +390,8 @@ impl<E: KvEngine> CoprocessorHost<E> {
         engine: &RocksEngine,
         auto_split: bool,
         policy: CheckPolicy,
-<<<<<<< HEAD
     ) -> SplitCheckerHost<'a, RocksEngine> {
-        let mut host = SplitCheckerHost::new(auto_split, cfg);
-=======
-    ) -> SplitCheckerHost<'a, E> {
         let mut host = SplitCheckerHost::new(auto_split, &self.cfg);
->>>>>>> 18ebcad6b... raftstore: approximate split range evenly instead of against split size (#9897)
         loop_ob!(
             region,
             &self.registry.split_check_observers,

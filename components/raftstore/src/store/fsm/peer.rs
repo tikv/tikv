@@ -1950,15 +1950,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn on_ready_split_region(&mut self, derived: metapb::Region, regions: Vec<metapb::Region>) {
         fail_point!("on_split", self.ctx.store_id() == 3, |_| {});
-<<<<<<< HEAD
-        self.register_split_region_check_tick();
-        let mut guard = self.ctx.store_meta.lock().unwrap();
-        let meta: &mut StoreMeta = &mut *guard;
-        let region_id = derived.get_id();
-        meta.set_region(&self.ctx.coprocessor_host, derived, &mut self.fsm.peer);
-        self.fsm.peer.post_split();
-=======
->>>>>>> 18ebcad6b... raftstore: approximate split range evenly instead of against split size (#9897)
 
         let region_id = derived.get_id();
         // Roughly estimate the size and keys for new regions.

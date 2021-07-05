@@ -190,9 +190,6 @@ mod tests {
         region.mut_peers().push(Peer::default());
 
         let (tx, rx) = mpsc::sync_channel(100);
-<<<<<<< HEAD
-        let mut runner = Runner::new(tx);
-=======
         let mut host =
             CoprocessorHost::<KvTestEngine>::new(tx.clone(), crate::coprocessor::Config::default());
         host.registry.register_consistency_check_observer(
@@ -200,7 +197,6 @@ mod tests {
             BoxConsistencyCheckObserver::new(RawConsistencyCheckObserver::default()),
         );
         let mut runner = Runner::new(tx, host);
->>>>>>> 18ebcad6b... raftstore: approximate split range evenly instead of against split size (#9897)
         let mut digest = crc32fast::Hasher::new();
         let kvs = vec![(b"k1", b"v1"), (b"k2", b"v2")];
         for (k, v) in kvs {

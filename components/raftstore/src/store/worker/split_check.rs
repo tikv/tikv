@@ -177,24 +177,11 @@ impl Display for Task {
 pub struct Runner<S> {
     engine: Arc<DB>,
     router: S,
-<<<<<<< HEAD
     coprocessor: CoprocessorHost,
-    cfg: Config,
 }
 
 impl<S: CasualRouter<RocksEngine>> Runner<S> {
-    pub fn new(engine: Arc<DB>, router: S, coprocessor: CoprocessorHost, cfg: Config) -> Runner<S> {
-=======
-    coprocessor: CoprocessorHost<E>,
-}
-
-impl<E, S> Runner<E, S>
-where
-    E: KvEngine,
-    S: CasualRouter<E>,
-{
-    pub fn new(engine: E, router: S, coprocessor: CoprocessorHost<E>) -> Runner<E, S> {
->>>>>>> 18ebcad6b... raftstore: approximate split range evenly instead of against split size (#9897)
+    pub fn new(engine: Arc<DB>, router: S, coprocessor: CoprocessorHost) -> Runner<S> {
         Runner {
             engine,
             router,
@@ -215,19 +202,9 @@ where
         );
         CHECK_SPILT_COUNTER_VEC.with_label_values(&["all"]).inc();
 
-<<<<<<< HEAD
-        let mut host = self.coprocessor.new_split_checker_host(
-            &self.cfg,
-            region,
-            &self.engine.c(),
-            auto_split,
-            policy,
-        );
-=======
         let mut host =
             self.coprocessor
-                .new_split_checker_host(region, &self.engine, auto_split, policy);
->>>>>>> 18ebcad6b... raftstore: approximate split range evenly instead of against split size (#9897)
+                .new_split_checker_host(region, &self.engine.c(), auto_split, policy);
         if host.skip() {
             debug!("skip split check"; "region_id" => region.get_id());
             return;

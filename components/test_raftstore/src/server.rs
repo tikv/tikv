@@ -301,20 +301,13 @@ impl Simulator for ServerCluster {
 
         let pessimistic_txn_cfg = cfg.pessimistic_txn;
 
-<<<<<<< HEAD
         let mut split_check_worker = Worker::new("split-check");
         let split_check_runner = SplitCheckRunner::new(
             Arc::clone(&engines.kv),
             router.clone(),
             coprocessor_host.clone(),
-            cfg.coprocessor,
         );
         split_check_worker.start(split_check_runner).unwrap();
-=======
-        let split_check_runner =
-            SplitCheckRunner::new(engines.kv.clone(), router.clone(), coprocessor_host.clone());
-        let split_check_scheduler = bg_worker.start("split-check", split_check_runner);
->>>>>>> 18ebcad6b... raftstore: approximate split range evenly instead of against split size (#9897)
 
         node.start(
             engines,
