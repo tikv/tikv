@@ -1140,8 +1140,8 @@ trait CreateKvEngine<ER>: KvEngine where ER: RaftEngine {
                         router: &RaftRouter<Self, ER>,
                         env: Arc<engine_rocks::raw::Env>, block_cache: &Option<engine_rocks::raw::Cache>) -> Self;
 
-    fn register_kv_config(&self,
-                          config: &TiKvConfig,
+    fn register_kv_config(config: &TiKvConfig,
+                          kv_engine: &Self,
                           cfg_controller: &mut Option<ConfigController>);
 
     fn start_debug_service(engines: &TiKVEngines<Self, ER>,
@@ -1188,14 +1188,14 @@ impl<ER> CreateKvEngine<ER> for RocksEngine where ER: RaftEngine {
         kv_engine
     }
 
-    fn register_kv_config(&self,
-                          config: &TiKvConfig,
+    fn register_kv_config(config: &TiKvConfig,
+                          kv_engine: &Self,
                           cfg_controller: &mut Option<ConfigController>) {
         let cfg_controller = cfg_controller.as_mut().unwrap();
         cfg_controller.register(
             tikv::config::Module::Rocksdb,
             Box::new(DBConfigManger::new(
-                self.clone(),
+                kv_engine.clone(),
                 DBType::Kv,
                 config.storage.block_cache.shared,
             )),
@@ -1272,8 +1272,8 @@ impl<ER> CreateKvEngine<ER> for engine_panic::PanicEngine where ER: RaftEngine {
         engine_panic::PanicEngine
     }
 
-    fn register_kv_config(&self,
-                          _config: &TiKvConfig,
+    fn register_kv_config(_config: &TiKvConfig,
+                          _kv_engine: &Self,
                           _cfg_controller: &mut Option<ConfigController>) {
     }
 
@@ -1307,8 +1307,8 @@ where EK: KvEngine + CreateKvEngine<ER>,
             block_cache)
     }
 
-    fn register_kv_config(&mut self, kv_engine: EK) {
-        <EK as CreateKvEngine<ER>>::register_kv_config(&kv_engine, &self.config, &mut self.cfg_controller)
+    fn register_kv_config(&mut self, kv_engine: &EK) {
+        <EK as CreateKvEngine<ER>>::register_kv_config(&self.config, &kv_engine, &mut self.cfg_controller)
     }
 }
 
@@ -1344,7 +1344,7 @@ where EK: KvEngine + CreateKvEngine<RocksEngine>
 
         check_and_dump_raft_engine(&self.config, &engines.raft, 8);
 
-        self.register_kv_config(engines.kv.clone());
+        self.register_kv_config(&engines.kv);
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
@@ -1389,7 +1389,7 @@ where EK: KvEngine + CreateKvEngine<RaftLogEngine>
         let kv_engine = self.create_kv_engine(env, &block_cache);
         let engines = Engines::new(kv_engine, raft_engine);
 
-        self.register_kv_config(engines.kv.clone());
+        self.register_kv_config(&engines.kv);
 
         let engines_info = Arc::new(EnginesResourceInfo::new(
             engines.kv.clone(),
