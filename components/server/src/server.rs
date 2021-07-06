@@ -937,35 +937,14 @@ impl<EK: KvEngine + CreateKvEngine<ER>, ER: RaftEngine> TiKVServer<EK, ER> {
             )
             .unwrap_or_else(|e| fatal!("failed to start lock manager: {}", e));
 
-        // Backup service.
-        if let Some(kv) = engines.engines.kv.bad_downcast::<RocksEngine>() {
-            let raw_rocks_engine = kv.as_inner().clone();
-
-            let mut backup_worker = Box::new(self.background_worker.lazy_build("backup-endpoint"));
-            let backup_scheduler = backup_worker.scheduler();
-            let backup_service = backup::Service::new(backup_scheduler);
-            if servers
-                .server
-                .register_service(create_backup(backup_service))
-                .is_some()
-            {
-                fatal!("failed to register backup service");
-            }
-
-            let backup_endpoint = backup::Endpoint::new(
-                servers.node.id(),
-                engines.engine.clone(),
-                self.region_info_accessor.clone(),
-                raw_rocks_engine,
-                self.config.backup.clone(),
-                self.concurrency_manager.clone(),
-            );
-            self.cfg_controller.as_mut().unwrap().register(
-                tikv::config::Module::Backup,
-                Box::new(backup_endpoint.get_config_manager()),
-            );
-            backup_worker.start(backup_endpoint);
-        }
+        <EK as CreateKvEngine<ER>>::start_backup_service(
+            &self.config,
+            &engines,
+            servers,
+            &self.background_worker,
+            &self.region_info_accessor,
+            &self.concurrency_manager,
+            &mut self.cfg_controller);
 
         let cdc_service = cdc::Service::new(
             servers.cdc_scheduler.clone(),
@@ -1162,6 +1141,14 @@ trait CreateKvEngine<ER>: KvEngine where ER: RaftEngine {
                            servers: &mut Servers<Self, ER>,
                            router: &RaftRouter<Self, ER>,
                            cfg_controller: &mut Option<ConfigController>);
+
+    fn start_backup_service(config: &TiKvConfig,
+                            engines: &TiKVEngines<Self, ER>,
+                            servers: &mut Servers<Self, ER>,
+                            background_worker: &Worker,
+                            region_info_accessor: &RegionInfoAccessor,
+                            concurrency_manager: &ConcurrencyManager,
+                            cfg_controller: &mut Option<ConfigController>);
 }
 
 impl<ER> CreateKvEngine<ER> for RocksEngine where ER: RaftEngine {
@@ -1232,6 +1219,41 @@ impl<ER> CreateKvEngine<ER> for RocksEngine where ER: RaftEngine {
             fatal!("failed to register debug service");
         }
     }
+
+    fn start_backup_service(config: &TiKvConfig,
+                            engines: &TiKVEngines<Self, ER>,
+                            servers: &mut Servers<Self, ER>,
+                            background_worker: &Worker,
+                            region_info_accessor: &RegionInfoAccessor,
+                            concurrency_manager: &ConcurrencyManager,
+                            cfg_controller: &mut Option<ConfigController>) {
+        let raw_rocks_engine = engines.engines.kv.as_inner().clone();
+
+        let mut backup_worker = Box::new(background_worker.lazy_build("backup-endpoint"));
+        let backup_scheduler = backup_worker.scheduler();
+        let backup_service = backup::Service::new(backup_scheduler);
+        if servers
+            .server
+            .register_service(create_backup(backup_service))
+            .is_some()
+        {
+            fatal!("failed to register backup service");
+        }
+
+        let backup_endpoint = backup::Endpoint::new(
+            servers.node.id(),
+            engines.engine.clone(),
+            region_info_accessor.clone(),
+            raw_rocks_engine,
+            config.backup.clone(),
+            concurrency_manager.clone(),
+        );
+        cfg_controller.as_mut().unwrap().register(
+            tikv::config::Module::Backup,
+            Box::new(backup_endpoint.get_config_manager()),
+        );
+        backup_worker.start(backup_endpoint);
+    }
 }
 
 impl<ER> CreateKvEngine<ER> for engine_panic::PanicEngine where ER: RaftEngine {
@@ -1252,6 +1274,15 @@ impl<ER> CreateKvEngine<ER> for engine_panic::PanicEngine where ER: RaftEngine {
                            _servers: &mut Servers<Self, ER>,
                            _router: &RaftRouter<Self, ER>,
                            _cfg_controller: &mut Option<ConfigController>) {
+    }
+
+    fn start_backup_service(_config: &TiKvConfig,
+                            _engines: &TiKVEngines<Self, ER>,
+                            _servers: &mut Servers<Self, ER>,
+                            _background_worker: &Worker,
+                            _region_info_accessor: &RegionInfoAccessor,
+                            _concurrency_manager: &ConcurrencyManager,
+                            _cfg_controller: &mut Option<ConfigController>) {
     }
 }
 
