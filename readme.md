@@ -1,4 +1,4 @@
-# RaftStoreProxy
+# TiDB Engine Extensions Library
 
 ## Abstract
 
