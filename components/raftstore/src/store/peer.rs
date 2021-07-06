@@ -3487,6 +3487,9 @@ where
             approximate_keys: self.approximate_keys,
             replication_status: self.region_replication_status(),
         });
+        self.peer_stat.written_bytes = 0;
+        self.peer_stat.written_keys = 0;
+        self.peer_stat.written_query_stats.clean();
         if let Err(e) = ctx.pd_scheduler.schedule(task) {
             error!(
                 "failed to notify pd";

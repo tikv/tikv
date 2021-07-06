@@ -198,21 +198,16 @@ impl Default for StoreStat {
 
 #[derive(Default)]
 pub struct PeerStat {
-    pub read_bytes: u64,
-    pub read_keys: u64,
-    pub read_query_stats: QueryStats,
-    // last_region_report_attributes records the state of the last region heartbeat
-    pub last_region_report_read_bytes: u64,
-    pub last_region_report_read_keys: u64,
-    pub last_region_report_read_query_stats: QueryStats,
-    pub last_region_report_written_bytes: u64,
-    pub last_region_report_written_keys: u64,
-    pub last_region_report_written_query_stats: QueryStats,
+    // region_report_read attributes are used to track the stats for reporting to region heatbeat
+    pub region_report_read_bytes: u64,
+    pub region_report_read_keys: u64,
+    pub region_report_read_stats: QueryStats,
+    // store_report_read attributes are used to track the stats for reporting to store heartbeat
+    pub store_report_read_bytes: u64,
+    pub store_report_read_keys: u64,
+    pub store_report_read_stats: QueryStats,
+    
     pub last_region_report_ts: UnixSecs,
-    // last_store_report_attributes records the state of the last store heartbeat
-    pub last_store_report_read_bytes: u64,
-    pub last_store_report_read_keys: u64,
-    pub last_store_report_query_stats: QueryStats,
     pub approximate_keys: u64,
     pub approximate_size: u64,
 }
@@ -733,16 +728,12 @@ where
 
         let mut report_peers = HashMap::default();
         for (region_id, region_peer) in &mut self.region_peers {
-            let read_bytes = region_peer.read_bytes - region_peer.last_store_report_read_bytes;
-            let read_keys = region_peer.read_keys - region_peer.last_store_report_read_keys;
-            let read_query_stats = region_peer
-                .read_query_stats
-                .sub_query_stats(&region_peer.last_store_report_query_stats);
-            region_peer.last_store_report_read_bytes = region_peer.read_bytes;
-            region_peer.last_store_report_read_keys = region_peer.read_keys;
-            region_peer
-                .last_store_report_query_stats
-                .fill_query_stats(&region_peer.read_query_stats);
+            let read_bytes = region_peer.store_report_read_bytes;
+            let read_keys = region_peer.store_report_read_keys;
+            region_peer.store_report_read_bytes = 0;
+            region_peer.store_report_read_keys = 0;
+            let read_query_stats = region_peer.store_report_read_stats.clone();
+            region_peer.store_report_read_stats.clean();
             if read_bytes < hotspot_byte_report_threshold()
                 && read_keys < hotspot_key_report_threshold()
                 && read_query_stats.get_read_query_num() < hotspot_query_num_report_threshold()
@@ -1029,13 +1020,14 @@ where
                 .region_peers
                 .entry(*region_id)
                 .or_insert_with(PeerStat::default);
-            peer_stat.read_bytes += region_info.flow.read_bytes as u64;
-            peer_stat.read_keys += region_info.flow.read_keys as u64;
+            peer_stat.region_report_read_bytes += region_info.flow.read_bytes as u64;
+            peer_stat.region_report_read_keys += region_info.flow.read_keys as u64;
+            peer_stat.store_report_read_bytes += region_info.flow.read_bytes as u64;
+            peer_stat.store_report_read_keys += region_info.flow.read_keys as u64;
             self.store_stat.engine_total_bytes_read += region_info.flow.read_bytes as u64;
             self.store_stat.engine_total_keys_read += region_info.flow.read_keys as u64;
-            peer_stat
-                .read_query_stats
-                .add_query_stats(&region_info.query_stats.0);
+            peer_stat.region_report_read_stats.add_query_stats(&region_info.query_stats.0);
+            peer_stat.store_report_read_stats.add_query_stats(&region_info.query_stats.0);
             self.store_stat
                 .engine_total_query_num
                 .add_query_stats(&region_info.query_stats.0);
@@ -1238,29 +1230,19 @@ where
                     peer_stat.approximate_size = hb_task.approximate_size;
                     peer_stat.approximate_keys = hb_task.approximate_keys;
 
-                    let read_bytes_delta =
-                        peer_stat.read_bytes - peer_stat.last_region_report_read_bytes;
-                    let read_keys_delta =
-                        peer_stat.read_keys - peer_stat.last_region_report_read_keys;
-                    let written_bytes_delta =
-                        hb_task.written_bytes - peer_stat.last_region_report_written_bytes;
-                    let written_keys_delta =
-                        hb_task.written_keys - peer_stat.last_region_report_written_keys;
-                    let written_query_stats_delta = hb_task
-                        .written_query_stats
-                        .sub_query_stats(&peer_stat.last_region_report_written_query_stats);
-                    let mut query_stats = peer_stat
-                        .read_query_stats
-                        .sub_query_stats(&peer_stat.last_region_report_read_query_stats);
+                    let read_bytes_delta = peer_stat.region_report_read_bytes;
+                    let read_keys_delta = peer_stat.region_report_read_keys;
+                    peer_stat.region_report_read_bytes = 0;
+                    peer_stat.region_report_read_keys = 0;
+
+
+                    let written_bytes_delta = hb_task.written_bytes;
+                    let written_keys_delta = hb_task.written_keys;
+                    let written_query_stats_delta = hb_task.written_query_stats.clone();
+                    let mut query_stats = peer_stat.region_report_read_stats.clone();
+                    peer_stat.region_report_read_stats.clean();
                     query_stats.add_query_stats(&written_query_stats_delta.0); // add write info
                     let mut last_report_ts = peer_stat.last_region_report_ts;
-                    peer_stat.last_region_report_written_bytes = hb_task.written_bytes;
-                    peer_stat.last_region_report_written_keys = hb_task.written_keys;
-                    peer_stat.last_region_report_written_query_stats = hb_task.written_query_stats;
-                    peer_stat.last_region_report_read_bytes = peer_stat.read_bytes;
-                    peer_stat.last_region_report_read_keys = peer_stat.read_keys;
-                    peer_stat.last_region_report_read_query_stats =
-                        peer_stat.read_query_stats.clone();
                     peer_stat.last_region_report_ts = UnixSecs::now();
 
                     if last_report_ts.is_zero() {
