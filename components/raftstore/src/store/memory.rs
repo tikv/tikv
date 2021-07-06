@@ -18,7 +18,9 @@ lazy_static! {
             applys,
             entry_cache,
             (raft_router, [alive, leak]),
-            (apply_router, [alive, leak])
+            (apply_router, [alive, leak]),
+            raft_messages,
+            raft_entries
         ]
     );
     /// Memory usage for raft peers fsms.
@@ -44,6 +46,14 @@ lazy_static! {
     pub static ref MEMTRACE_APPLY_ROUTER_LEAK: Arc<dyn MemoryTrace + Send + Sync> = MEMTRACE_ROOT
         .sub_trace(Id::Name("apply_router"))
         .sub_trace(Id::Name("leak"));
+
+    /// Heap size trace for received raft messages.
+    pub static ref MEMTRACE_RAFT_MESSAGES: Arc<dyn MemoryTrace + Send + Sync> =
+        MEMTRACE_ROOT.sub_trace(Id::Name("raft_messages"));
+
+    /// Heap size trace for appended raft entries.
+    pub static ref MEMTRACE_RAFT_ENTRIES: Arc<dyn MemoryTrace + Send + Sync> =
+        MEMTRACE_ROOT.sub_trace(Id::Name("raft_entries"));
 }
 
 pub fn needs_evict_entry_cache() -> bool {

@@ -352,7 +352,7 @@
 
 ## How long the peer will be considered down and reported to PD when it hasn't been active for this
 ## time.
-# max-peer-down-duration = "5m"
+# max-peer-down-duration = "10m"
 
 ## Interval to check whether to start manual compaction for a Region.
 # region-compact-check-interval = "5m"
