@@ -666,6 +666,11 @@ impl ImportDir {
             let cf = meta.get_cf_name();
             super::prepare_sst_for_ingestion(&path.save, &path.clone, key_manager.as_deref())?;
             ingest_bytes += meta.get_length();
+            // TODO: remove reset_global_seq() once write_global_seqno is only allowed to be set
+            // to false.
+            // Reset the global seqno to 0, in case the file was left unrecovered from previous
+            // imcomplete ingestion when write_global_seqno=true. This can be safely removed,
+            // once write_global_seqno is only allowed to be set to false.
             engine.reset_global_seq(cf, &path.clone)?;
             paths.entry(cf).or_insert_with(Vec::new).push(path);
         }

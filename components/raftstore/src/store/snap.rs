@@ -597,7 +597,11 @@ impl Snapshot {
             }
 
             if !plain_file_used(cf_file.cf) {
-                // Reset global seq number.
+                // TODO: remove reset_global_seq() once write_global_seqno is only allowed to be set
+                // to false.
+                // Reset the global seqno to 0, in case the file was left unrecovered from previous
+                // imcomplete ingestion when write_global_seqno=true. This can be safely removed,
+                // once write_global_seqno is only allowed to be set to false.
                 engine.reset_global_seq(&cf_file.cf, &cf_file.path)?;
             }
             check_file_size_and_checksum(
