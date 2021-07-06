@@ -440,7 +440,7 @@ impl<K: PrewriteKind> Prewriter<K> {
         // Note that this check cannot fully guarantee idempotence because an MVCC
         // GC can remove the old committed records, then we cannot determine
         // whether the transaction has been committed, so the error is still returned.
-        fn check_committed_record(
+        fn check_committed_record_on_err(
             prewrite_result: MvccResult<(TimeStamp, OldValue)>,
             reader: &mut SnapshotReader<impl Snapshot>,
             key: &Key,
@@ -452,8 +452,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                     "start_ts" => reader.start_ts, "commit_ts" => commit_ts);
                 Ok((vec![], commit_ts))
             } else {
-                prewrite_result?;
-                unreachable!()
+                Err(prewrite_result.unwrap_err().into())
             }
         }
 
@@ -486,10 +485,10 @@ impl<K: PrewriteKind> Prewriter<K> {
                     conflict_commit_ts,
                     ..
                 })) if conflict_commit_ts > start_ts => {
-                    return check_committed_record(prewrite_result, reader, &key);
+                    return check_committed_record_on_err(prewrite_result, reader, &key);
                 }
                 Err(MvccError(box MvccErrorInner::PessimisticLockNotFound { .. })) => {
-                    return check_committed_record(prewrite_result, reader, &key);
+                    return check_committed_record_on_err(prewrite_result, reader, &key);
                 }
                 Err(MvccError(box MvccErrorInner::CommitTsTooLarge { .. })) | Ok((..)) => {
                     // fallback to not using async commit or 1pc
