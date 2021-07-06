@@ -1002,7 +1002,7 @@ impl Default for DbConfig {
             lockcf: LockCfConfig::default(),
             raftcf: RaftCfConfig::default(),
             titan: titan_config,
-	    sst_ingestion_write_global_seqno: false,
+            sst_ingestion_write_global_seqno: false,
         }
     }
 }
@@ -3491,7 +3491,7 @@ mod tests {
             .unwrap(),
         ));
 
-	engine.set_sst_ingestion_write_global_seqno(cfg.rocksdb.sst_ingestion_write_global_seqno);
+        engine.set_sst_ingestion_write_global_seqno(cfg.rocksdb.sst_ingestion_write_global_seqno);
 
         let (shared, cfg_controller) = (cfg.storage.block_cache.shared, ConfigController::new(cfg));
         cfg_controller.register(
