@@ -387,20 +387,36 @@ impl<E: Engine> FlowChecker<E> {
                 while rx.try_recv().is_err() {
                     match flow_info_receiver.recv_deadline(deadline) {
                         Ok(FlowInfo::L0(cf, l0_bytes)) => {
-                            spare_ticks = 0;
+                            if let Some(throttle_cf) = checker.throttle_cf.as_ref() {
+                               if throttle_cf == &cf {
+                                    spare_ticks = 0;
+                               } 
+                            }
                             checker.check_long_term_l0_files(cf, l0_bytes)
                         }
-                        Ok(FlowInfo::L0Intra(_)) => {
-                            spare_ticks = 0;
+                        Ok(FlowInfo::L0Intra(cf)) => {
+                            if let Some(throttle_cf) = checker.throttle_cf.as_ref() {
+                               if throttle_cf == &cf {
+                                    spare_ticks = 0;
+                               } 
+                            }
                             // do nothing for l0 intra compaction, it makes a bigger L0 file
                         }
                         Ok(FlowInfo::Flush(cf, flush_bytes)) => {
-                            spare_ticks = 0;
+                            if let Some(throttle_cf) = checker.throttle_cf.as_ref() {
+                               if throttle_cf == &cf {
+                                    spare_ticks = 0;
+                               } 
+                            }
                             checker.adjust_memtables(&cf);
                             checker.check_l0_flow(cf, flush_bytes)
                         }
                         Ok(FlowInfo::Compaction(cf)) => {
-                            spare_ticks = 0;
+                            if let Some(throttle_cf) = checker.throttle_cf.as_ref() {
+                               if throttle_cf == &cf {
+                                    spare_ticks = 0;
+                               } 
+                            }
                             checker.adjust_pending_compaction_bytes(cf);
                         }
                         Err(RecvTimeoutError::Timeout) => {
