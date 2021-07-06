@@ -10,7 +10,7 @@ use crate::storage::{
     lock_manager::LockManager,
     mvcc::{
         has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn,
-        SnapshotReader,
+        Result as MvccResult, SnapshotReader, TxnCommitRecord,
     },
     txn::{
         actions::prewrite::{prewrite, CommitKind, TransactionKind, TransactionProperties},
@@ -26,7 +26,7 @@ use crate::storage::{
 use engine_traits::CF_WRITE;
 use kvproto::kvrpcpb::ExtraOp;
 use std::mem;
-use txn_types::{Key, Mutation, OldValues, TimeStamp, TxnExtra, Write, WriteType};
+use txn_types::{Key, Mutation, OldValue, OldValues, TimeStamp, TxnExtra, Write, WriteType};
 
 pub(crate) const FORWARD_MIN_MUTATIONS_NUM: usize = 12;
 
@@ -433,6 +433,30 @@ impl<K: PrewriteKind> Prewriter<K> {
         let mut final_min_commit_ts = TimeStamp::zero();
         let mut locks = Vec::new();
 
+        // Furthur check whether the prewrited transaction has been committed
+        // when encountering a WriteConflict or PessimisticLockNotFound error.
+        // This extra check manages to make prewrite idempotent after the transaction
+        // was committed.
+        // Note that this check cannot fully guarantee idempotence because an MVCC
+        // GC can remove the old committed records, then we cannot determine
+        // whether the transaction has been committed, so the error is still returned.
+        fn check_committed_record(
+            prewrite_result: MvccResult<(TimeStamp, OldValue)>,
+            reader: &mut SnapshotReader<impl Snapshot>,
+            key: &Key,
+        ) -> Result<(Vec<std::result::Result<(), StorageError>>, TimeStamp)> {
+            if let TxnCommitRecord::SingleRecord { commit_ts, .. } =
+                reader.get_txn_commit_record(key)?
+            {
+                info!("prewrited transaction has been committed";
+                    "start_ts" => reader.start_ts, "commit_ts" => commit_ts);
+                Ok((vec![], commit_ts))
+            } else {
+                prewrite_result?;
+                unreachable!()
+            }
+        }
+
         for m in mem::take(&mut self.mutations) {
             let is_pessimistic_lock = m.is_pessimistic_lock();
             let m = m.into_mutation();
@@ -456,6 +480,16 @@ impl<K: PrewriteKind> Prewriter<K> {
                         self.old_values
                             .insert(key, (old_value, Some(mutation_type)));
                     }
+                }
+                Err(MvccError(box MvccErrorInner::WriteConflict {
+                    start_ts,
+                    conflict_commit_ts,
+                    ..
+                })) if conflict_commit_ts > start_ts => {
+                    return check_committed_record(prewrite_result, reader, &key);
+                }
+                Err(MvccError(box MvccErrorInner::PessimisticLockNotFound { .. })) => {
+                    return check_committed_record(prewrite_result, reader, &key);
                 }
                 Err(MvccError(box MvccErrorInner::CommitTsTooLarge { .. })) | Ok((..)) => {
                     // fallback to not using async commit or 1pc
@@ -714,6 +748,10 @@ pub(in crate::storage::txn) fn fallback_1pc_locks(txn: &mut MvccTxn) {
 mod tests {
     use super::*;
     use crate::storage::txn::actions::acquire_pessimistic_lock::tests::must_pessimistic_locked;
+    use crate::storage::txn::actions::tests::{
+        must_pessimistic_prewrite_put_async_commit, must_prewrite_put,
+        must_prewrite_put_async_commit,
+    };
     use crate::storage::{
         mvcc::{tests::*, Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{
@@ -721,14 +759,14 @@ mod tests {
             commands::test_util::{
                 commit, pessimistic_prewrite_with_cm, prewrite, prewrite_with_cm, rollback,
             },
-            tests::{must_acquire_pessimistic_lock, must_rollback},
+            tests::{must_acquire_pessimistic_lock, must_commit, must_rollback},
             Error, ErrorInner,
         },
-        Engine, Snapshot, Statistics, TestEngineBuilder,
+        DummyLockManager, Engine, Snapshot, Statistics, TestEngineBuilder,
     };
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_WRITE;
-    use kvproto::kvrpcpb::Context;
+    use kvproto::kvrpcpb::{Context, ExtraOp};
     use txn_types::{Key, Mutation, TimeStamp};
 
     fn inner_test_prewrite_skip_constraint_check(pri_key_number: u8, write_num: usize) {
@@ -1333,8 +1371,6 @@ mod tests {
     // this test shows which stage in raft can we return the response
     #[test]
     fn test_response_stage() {
-        use crate::storage::DummyLockManager;
-        use kvproto::kvrpcpb::ExtraOp;
         let cm = ConcurrencyManager::new(42.into());
         let start_ts = TimeStamp::new(10);
         let keys = [b"k1", b"k2"];
@@ -1461,6 +1497,196 @@ mod tests {
             let snap = engine.snapshot(Default::default()).unwrap();
             let result = cmd.cmd.process_write(snap, context).unwrap();
             assert_eq!(result.response_policy, case.expected);
+        }
+    }
+
+    #[test]
+    fn test_optimistic_prewrite_committed_transaction() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let cm = ConcurrencyManager::new(1.into());
+        let mut statistics = Statistics::default();
+
+        let key = b"k";
+
+        // T1: start_ts = 5, commit_ts = 10, async commit
+        must_prewrite_put_async_commit(&engine, key, b"v1", key, &Some(vec![]), 5, 10);
+        must_commit(&engine, key, 5, 10);
+
+        // T2: start_ts = 15, commit_ts = 16, 1PC
+        let cmd = Prewrite::with_1pc(
+            vec![Mutation::Put((Key::from_raw(key), b"v2".to_vec()))],
+            key.to_vec(),
+            15.into(),
+            TimeStamp::default(),
+        );
+        let result = prewrite_command(&engine, cm.clone(), &mut statistics, cmd).unwrap();
+        let one_pc_commit_ts = result.one_pc_commit_ts;
+
+        // T3 is after T1 and T2
+        must_prewrite_put(&engine, key, b"v3", key, 20);
+        must_commit(&engine, key, 20, 25);
+
+        // Repeating the T1 prewrite request
+        let cmd = Prewrite::new(
+            vec![Mutation::Put((Key::from_raw(key), b"v1".to_vec()))],
+            key.to_vec(),
+            5.into(),
+            200,
+            false,
+            1,
+            10.into(),
+            TimeStamp::default(),
+            Some(vec![]),
+            false,
+            Context::default(),
+        );
+        let context = WriteContext {
+            lock_mgr: &DummyLockManager {},
+            concurrency_manager: cm.clone(),
+            extra_op: ExtraOp::Noop,
+            statistics: &mut statistics,
+            async_apply_prewrite: false,
+        };
+        let snap = engine.snapshot(Default::default()).unwrap();
+        let result = cmd.cmd.process_write(snap, context).unwrap();
+        assert!(result.to_be_write.modifies.is_empty()); // should not make real modifies
+        assert!(result.lock_guards.is_empty());
+        match result.pr {
+            ProcessResult::PrewriteResult { result } => {
+                assert!(result.locks.is_empty());
+                assert_eq!(result.min_commit_ts, 10.into()); // equals to the real commit ts
+                assert_eq!(result.one_pc_commit_ts, 0.into()); // not using 1PC
+            }
+            res => panic!("unexpected result {:?}", res),
+        }
+
+        // Repeating the T2 prewrite request
+        let cmd = Prewrite::with_1pc(
+            vec![Mutation::Put((Key::from_raw(key), b"v2".to_vec()))],
+            key.to_vec(),
+            15.into(),
+            TimeStamp::default(),
+        );
+        let context = WriteContext {
+            lock_mgr: &DummyLockManager {},
+            concurrency_manager: cm,
+            extra_op: ExtraOp::Noop,
+            statistics: &mut statistics,
+            async_apply_prewrite: false,
+        };
+        let snap = engine.snapshot(Default::default()).unwrap();
+        let result = cmd.cmd.process_write(snap, context).unwrap();
+        assert!(result.to_be_write.modifies.is_empty()); // should not make real modifies
+        assert!(result.lock_guards.is_empty());
+        match result.pr {
+            ProcessResult::PrewriteResult { result } => {
+                assert!(result.locks.is_empty());
+                assert_eq!(result.min_commit_ts, 0.into()); // 1PC does not need this
+                assert_eq!(result.one_pc_commit_ts, one_pc_commit_ts); // equals to the previous 1PC commit_ts
+            }
+            res => panic!("unexpected result {:?}", res),
+        }
+    }
+
+    #[test]
+    fn test_pessimistic_prewrite_committed_transaction() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let cm = ConcurrencyManager::new(1.into());
+        let mut statistics = Statistics::default();
+
+        let key = b"k";
+
+        // T1: start_ts = 5, commit_ts = 10, async commit
+        must_acquire_pessimistic_lock(&engine, key, key, 5, 5);
+        must_pessimistic_prewrite_put_async_commit(
+            &engine,
+            key,
+            b"v1",
+            key,
+            &Some(vec![]),
+            5,
+            5,
+            true,
+            10,
+        );
+        must_commit(&engine, key, 5, 10);
+
+        // T2: start_ts = 15, commit_ts = 16, 1PC
+        must_acquire_pessimistic_lock(&engine, key, key, 15, 15);
+        let cmd = PrewritePessimistic::with_1pc(
+            vec![(Mutation::Put((Key::from_raw(key), b"v2".to_vec())), true)],
+            key.to_vec(),
+            15.into(),
+            15.into(),
+            TimeStamp::default(),
+        );
+        let result = prewrite_command(&engine, cm.clone(), &mut statistics, cmd).unwrap();
+        let one_pc_commit_ts = result.one_pc_commit_ts;
+
+        // T3 is after T1 and T2
+        must_prewrite_put(&engine, key, b"v3", key, 20);
+        must_commit(&engine, key, 20, 25);
+
+        // Repeating the T1 prewrite request
+        let cmd = PrewritePessimistic::new(
+            vec![(Mutation::Put((Key::from_raw(key), b"v1".to_vec())), true)],
+            key.to_vec(),
+            5.into(),
+            200,
+            5.into(),
+            1,
+            10.into(),
+            TimeStamp::default(),
+            Some(vec![]),
+            false,
+            Context::default(),
+        );
+        let context = WriteContext {
+            lock_mgr: &DummyLockManager {},
+            concurrency_manager: cm.clone(),
+            extra_op: ExtraOp::Noop,
+            statistics: &mut statistics,
+            async_apply_prewrite: false,
+        };
+        let snap = engine.snapshot(Default::default()).unwrap();
+        let result = cmd.cmd.process_write(snap, context).unwrap();
+        assert!(result.to_be_write.modifies.is_empty()); // should not make real modifies
+        assert!(result.lock_guards.is_empty());
+        match result.pr {
+            ProcessResult::PrewriteResult { result } => {
+                assert!(result.locks.is_empty());
+                assert_eq!(result.min_commit_ts, 10.into()); // equals to the real commit ts
+                assert_eq!(result.one_pc_commit_ts, 0.into()); // not using 1PC
+            }
+            res => panic!("unexpected result {:?}", res),
+        }
+
+        // Repeating the T2 prewrite request
+        let cmd = PrewritePessimistic::with_1pc(
+            vec![(Mutation::Put((Key::from_raw(key), b"v2".to_vec())), true)],
+            key.to_vec(),
+            15.into(),
+            15.into(),
+            TimeStamp::default(),
+        );
+        let context = WriteContext {
+            lock_mgr: &DummyLockManager {},
+            concurrency_manager: cm,
+            extra_op: ExtraOp::Noop,
+            statistics: &mut statistics,
+            async_apply_prewrite: false,
+        };
+        let snap = engine.snapshot(Default::default()).unwrap();
+        let result = cmd.cmd.process_write(snap, context).unwrap();
+        assert!(result.to_be_write.modifies.is_empty()); // should not make real modifies
+        assert!(result.lock_guards.is_empty());
+        match result.pr {
+            ProcessResult::PrewriteResult { result } => {
+                assert!(result.locks.is_empty());
+                assert_eq!(result.min_commit_ts, 0.into()); // 1PC does not need this
+                assert_eq!(result.one_pc_commit_ts, one_pc_commit_ts); // equals to the previous 1PC commit_ts
+            }
+            res => panic!("unexpected result {:?}", res),
         }
     }
 }
