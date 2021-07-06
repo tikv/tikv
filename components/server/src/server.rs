@@ -1126,6 +1126,13 @@ impl<EK: KvEngine + CreateKvEngine<ER>, ER: RaftEngine> TiKVServer<EK, ER> {
 
 }
 
+/// Encapsulates differences in server startup between KV engines.
+///
+/// This mostly exists because there is not feature parity between
+/// engine_rocks and engine_traits, with some features not being fully
+/// abstracted. In the short term, TiKV should be able to operate
+/// without those features, but in the long term, they need to be implemented
+/// for all engines, and this trait reduced or deleted.
 trait CreateKvEngine<ER>: KvEngine where ER: RaftEngine {
     fn create_kv_engine(config: &TiKvConfig,
                         region_info_accessor: &RegionInfoAccessor,
