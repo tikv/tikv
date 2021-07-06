@@ -217,7 +217,7 @@ type LocalServer<EK, ER> =
     Server<RaftRouter<EK, ER>, resolve::PdStoreAddrResolver, LocalRaftKv<EK, ER>>;
 type LocalRaftKv<EK, ER> = RaftKv<EK, ServerRaftStoreRouter<EK, ER>>;
 
-impl<EK: KvEngine, ER: RaftEngine> TiKVServer<EK, ER> {
+impl<EK: KvEngine + CreateKvEngine<ER>, ER: RaftEngine> TiKVServer<EK, ER> {
     fn init(mut config: TiKvConfig) -> TiKVServer<EK, ER> {
         tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
         // It is okay use pd config and security config before `init_config`,
@@ -897,33 +897,11 @@ impl<EK: KvEngine, ER: RaftEngine> TiKVServer<EK, ER> {
             fatal!("failed to register import service");
         }
 
-        if let Some(kv) = engines.engines.kv.bad_downcast::<RocksEngine>() {
-            // FIXME: This is real ugly
-            let router = {
-                use std::any::Any;
-                let router: &dyn Any = &self.router;
-                let router: &RaftRouter<RocksEngine, ER> = router.downcast_ref().expect("rocks");
-                router.clone()
-            };
-            let engines = Engines {
-                kv: kv.clone(),
-                raft: engines.engines.raft.clone(),
-            };
-            // Debug service.
-            let debug_service = DebugService::new(
-                engines,
-                servers.server.get_debug_thread_pool().clone(),
-                router,
-                self.cfg_controller.as_ref().unwrap().clone(),
-            );
-            if servers
-                .server
-                .register_service(create_debug(debug_service))
-                .is_some()
-            {
-                fatal!("failed to register debug service");
-            }
-        }
+        <EK as CreateKvEngine<ER>>::start_debug_service(
+            &engines,
+            servers,
+            &self.router,
+            &mut self.cfg_controller);
 
         // Create Diagnostics service
         let diag_service = DiagnosticsService::new(
@@ -1179,6 +1157,11 @@ trait CreateKvEngine<ER>: KvEngine where ER: RaftEngine {
     fn register_kv_config(&self,
                           config: &TiKvConfig,
                           cfg_controller: &mut Option<ConfigController>);
+
+    fn start_debug_service(engines: &TiKVEngines<Self, ER>,
+                           servers: &mut Servers<Self, ER>,
+                           router: &RaftRouter<Self, ER>,
+                           cfg_controller: &mut Option<ConfigController>);
 }
 
 impl<ER> CreateKvEngine<ER> for RocksEngine where ER: RaftEngine {
@@ -1224,6 +1207,31 @@ impl<ER> CreateKvEngine<ER> for RocksEngine where ER: RaftEngine {
             )),
         );
     }
+
+    fn start_debug_service(engines: &TiKVEngines<Self, ER>,
+                           servers: &mut Servers<Self, ER>,
+                           router: &RaftRouter<Self, ER>,
+                           cfg_controller: &mut Option<ConfigController>) {
+        let router = router.clone();
+        let engines = Engines {
+            kv: engines.engines.kv.clone(),
+            raft: engines.engines.raft.clone(),
+        };
+        // Debug service.
+        let debug_service = DebugService::new(
+            engines,
+            servers.server.get_debug_thread_pool().clone(),
+            router,
+            cfg_controller.as_ref().unwrap().clone(),
+        );
+        if servers
+            .server
+            .register_service(create_debug(debug_service))
+            .is_some()
+        {
+            fatal!("failed to register debug service");
+        }
+    }
 }
 
 impl<ER> CreateKvEngine<ER> for engine_panic::PanicEngine where ER: RaftEngine {
@@ -1238,6 +1246,12 @@ impl<ER> CreateKvEngine<ER> for engine_panic::PanicEngine where ER: RaftEngine {
     fn register_kv_config(&self,
                           _config: &TiKvConfig,
                           _cfg_controller: &mut Option<ConfigController>) {
+    }
+
+    fn start_debug_service(_engines: &TiKVEngines<Self, ER>,
+                           _servers: &mut Servers<Self, ER>,
+                           _router: &RaftRouter<Self, ER>,
+                           _cfg_controller: &mut Option<ConfigController>) {
     }
 }
 
