@@ -2,30 +2,31 @@
 
 //! Tests for `SstExt`
 
-use std::fs;
 use panic_hook::recover_safe;
+use std::fs;
 
 use super::tempdir;
-use engine_traits::SeekKey;
-use engine_traits::Iterator;
-use engine_traits::{SstExt, SstWriterBuilder, SstWriter, SstReader, ExternalSstFileInfo};
-use engine_traits::{Result, Error};
 use engine_test::kv::KvTestEngine;
+use engine_traits::Iterator;
+use engine_traits::SeekKey;
+use engine_traits::{Error, Result};
+use engine_traits::{ExternalSstFileInfo, SstExt, SstReader, SstWriter, SstWriterBuilder};
 
 #[test]
 fn empty() -> Result<()> {
     let tempdir = tempdir();
-    let ref sst_path = tempdir.path().join("test-data.sst").to_string_lossy().to_string();
+    let ref sst_path = tempdir
+        .path()
+        .join("test-data.sst")
+        .to_string_lossy()
+        .to_string();
     let sst_builder = <KvTestEngine as SstExt>::SstWriterBuilder::new();
-    let sst_writer = sst_builder
-        .build(sst_path)?;
+    let sst_writer = sst_builder.build(sst_path)?;
 
     let res = sst_writer.finish();
 
     match res {
-        Err(Error::Engine(_)) => {
-            /* cannot create file with no entries */
-        },
+        Err(Error::Engine(_)) => { /* cannot create file with no entries */ }
         _ => panic!("unexpected result"),
     }
 
@@ -35,10 +36,13 @@ fn empty() -> Result<()> {
 #[test]
 fn basic() -> Result<()> {
     let tempdir = tempdir();
-    let ref sst_path = tempdir.path().join("test-data.sst").to_string_lossy().to_string();
+    let ref sst_path = tempdir
+        .path()
+        .join("test-data.sst")
+        .to_string_lossy()
+        .to_string();
     let sst_builder = <KvTestEngine as SstExt>::SstWriterBuilder::new();
-    let mut sst_writer = sst_builder
-        .build(sst_path)?;
+    let mut sst_writer = sst_builder.build(sst_path)?;
 
     sst_writer.put(b"k1", b"v1")?;
     sst_writer.finish()?;
@@ -60,10 +64,13 @@ fn basic() -> Result<()> {
 #[test]
 fn forward() -> Result<()> {
     let tempdir = tempdir();
-    let ref sst_path = tempdir.path().join("test-data.sst").to_string_lossy().to_string();
+    let ref sst_path = tempdir
+        .path()
+        .join("test-data.sst")
+        .to_string_lossy()
+        .to_string();
     let sst_builder = <KvTestEngine as SstExt>::SstWriterBuilder::new();
-    let mut sst_writer = sst_builder
-        .build(sst_path)?;
+    let mut sst_writer = sst_builder.build(sst_path)?;
 
     sst_writer.put(b"k1", b"v1")?;
     sst_writer.put(b"k2", b"v2")?;
@@ -94,10 +101,13 @@ fn forward() -> Result<()> {
 #[test]
 fn reverse() -> Result<()> {
     let tempdir = tempdir();
-    let ref sst_path = tempdir.path().join("test-data.sst").to_string_lossy().to_string();
+    let ref sst_path = tempdir
+        .path()
+        .join("test-data.sst")
+        .to_string_lossy()
+        .to_string();
     let sst_builder = <KvTestEngine as SstExt>::SstWriterBuilder::new();
-    let mut sst_writer = sst_builder
-        .build(sst_path)?;
+    let mut sst_writer = sst_builder.build(sst_path)?;
 
     sst_writer.put(b"k1", b"v1")?;
     sst_writer.put(b"k2", b"v2")?;
@@ -130,10 +140,13 @@ fn reverse() -> Result<()> {
 #[test]
 fn delete() -> Result<()> {
     let tempdir = tempdir();
-    let ref sst_path = tempdir.path().join("test-data.sst").to_string_lossy().to_string();
+    let ref sst_path = tempdir
+        .path()
+        .join("test-data.sst")
+        .to_string_lossy()
+        .to_string();
     let sst_builder = <KvTestEngine as SstExt>::SstWriterBuilder::new();
-    let mut sst_writer = sst_builder
-        .build(sst_path)?;
+    let mut sst_writer = sst_builder.build(sst_path)?;
 
     sst_writer.delete(b"k1")?;
     sst_writer.finish()?;
@@ -173,27 +186,26 @@ fn delete() -> Result<()> {
 #[test]
 fn same_key() -> Result<()> {
     let tempdir = tempdir();
-    let ref sst_path = tempdir.path().join("test-data.sst").to_string_lossy().to_string();
+    let ref sst_path = tempdir
+        .path()
+        .join("test-data.sst")
+        .to_string_lossy()
+        .to_string();
     let sst_builder = <KvTestEngine as SstExt>::SstWriterBuilder::new();
-    let mut sst_writer = sst_builder
-        .build(sst_path)?;
+    let mut sst_writer = sst_builder.build(sst_path)?;
 
     sst_writer.put(b"k1", b"v1")?;
     let res = sst_writer.put(b"k1", b"v1");
 
     match res {
-        Err(Error::Engine(_)) => {
-            /* keys must be added in order */
-        },
+        Err(Error::Engine(_)) => { /* keys must be added in order */ }
         _ => panic!("unexpected result"),
     }
 
     let res = sst_writer.delete(b"k1");
 
     match res {
-        Err(Error::Engine(_)) => {
-            /* keys must be added in order */
-        },
+        Err(Error::Engine(_)) => { /* keys must be added in order */ }
         _ => panic!("unexpected result"),
     }
 
@@ -216,27 +228,26 @@ fn same_key() -> Result<()> {
 #[test]
 fn reverse_key() -> Result<()> {
     let tempdir = tempdir();
-    let ref sst_path = tempdir.path().join("test-data.sst").to_string_lossy().to_string();
+    let ref sst_path = tempdir
+        .path()
+        .join("test-data.sst")
+        .to_string_lossy()
+        .to_string();
     let sst_builder = <KvTestEngine as SstExt>::SstWriterBuilder::new();
-    let mut sst_writer = sst_builder
-        .build(sst_path)?;
+    let mut sst_writer = sst_builder.build(sst_path)?;
 
     sst_writer.put(b"k2", b"v2")?;
     let res = sst_writer.put(b"k1", b"v1");
 
     match res {
-        Err(Error::Engine(_)) => {
-            /* keys must be added in order */
-        },
+        Err(Error::Engine(_)) => { /* keys must be added in order */ }
         _ => panic!("unexpected result"),
     }
 
     let res = sst_writer.delete(b"k1");
 
     match res {
-        Err(Error::Engine(_)) => {
-            /* keys must be added in order */
-        },
+        Err(Error::Engine(_)) => { /* keys must be added in order */ }
         _ => panic!("unexpected result"),
     }
 
@@ -259,10 +270,13 @@ fn reverse_key() -> Result<()> {
 #[test]
 fn file_path() -> Result<()> {
     let tempdir = tempdir();
-    let ref sst_path = tempdir.path().join("test-data.sst").to_string_lossy().to_string();
+    let ref sst_path = tempdir
+        .path()
+        .join("test-data.sst")
+        .to_string_lossy()
+        .to_string();
     let sst_builder = <KvTestEngine as SstExt>::SstWriterBuilder::new();
-    let mut sst_writer = sst_builder
-        .build(sst_path)?;
+    let mut sst_writer = sst_builder.build(sst_path)?;
 
     sst_writer.put(b"k1", b"v1")?;
     let info = sst_writer.finish()?;
@@ -274,10 +288,13 @@ fn file_path() -> Result<()> {
 #[test]
 fn other_external_sst_info() -> Result<()> {
     let tempdir = tempdir();
-    let ref sst_path = tempdir.path().join("test-data.sst").to_string_lossy().to_string();
+    let ref sst_path = tempdir
+        .path()
+        .join("test-data.sst")
+        .to_string_lossy()
+        .to_string();
     let sst_builder = <KvTestEngine as SstExt>::SstWriterBuilder::new();
-    let mut sst_writer = sst_builder
-        .build(&sst_path)?;
+    let mut sst_writer = sst_builder.build(&sst_path)?;
 
     sst_writer.put(b"k1", b"v11")?;
     sst_writer.put(b"k9", b"v9")?;
@@ -298,10 +315,13 @@ fn other_external_sst_info() -> Result<()> {
 #[test]
 fn external_sst_info_key_values_with_delete() -> Result<()> {
     let tempdir = tempdir();
-    let ref sst_path = tempdir.path().join("test-data.sst").to_string_lossy().to_string();
+    let ref sst_path = tempdir
+        .path()
+        .join("test-data.sst")
+        .to_string_lossy()
+        .to_string();
     let sst_builder = <KvTestEngine as SstExt>::SstWriterBuilder::new();
-    let mut sst_writer = sst_builder
-        .build(&sst_path)?;
+    let mut sst_writer = sst_builder.build(&sst_path)?;
 
     sst_writer.delete(b"k1")?;
 

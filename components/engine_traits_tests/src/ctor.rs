@@ -6,7 +6,7 @@ use super::tempdir;
 
 use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions, EngineConstructorExt};
 use engine_test::kv::KvTestEngine;
-use engine_traits::{ALL_CFS, SyncMutable, KvEngine};
+use engine_traits::{KvEngine, SyncMutable, ALL_CFS};
 
 use std::fs;
 
