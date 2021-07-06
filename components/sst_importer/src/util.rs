@@ -70,12 +70,12 @@ mod tests {
     use encryption::DataKeyManager;
     use engine_rocks::{
         util::{new_engine, RocksCFOptions},
-        RocksColumnFamilyOptions, RocksDBOptions, RocksEngine, RocksIngestExternalFileOptions,
-        RocksSstWriterBuilder, RocksTitanDBOptions,
+        RocksColumnFamilyOptions, RocksDBOptions, RocksEngine, RocksSstWriterBuilder,
+        RocksTitanDBOptions,
     };
     use engine_traits::{
-        CfName, ColumnFamilyOptions, DBOptions, EncryptionKeyManager, ImportExt,
-        IngestExternalFileOptions, Peekable, SstWriter, SstWriterBuilder, TitanDBOptions,
+        CfName, ColumnFamilyOptions, DBOptions, EncryptionKeyManager, ImportExt, Peekable,
+        SstWriter, SstWriterBuilder, TitanDBOptions,
     };
     use std::{path::Path, sync::Arc};
     use tempfile::Builder;
