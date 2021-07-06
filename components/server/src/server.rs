@@ -30,8 +30,8 @@ use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{from_rocks_compression_type, get_env, RocksEngine};
 use engine_traits::{
-    compaction_job::CompactionJobInfo, ColumnFamilyOptions, Engines, MiscExt,
-    RaftEngine, CF_DEFAULT, CF_LOCK, CF_WRITE, KvEngine,
+    compaction_job::CompactionJobInfo, ColumnFamilyOptions, Engines, KvEngine, RaftEngine,
+    CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
 use file_system::{
@@ -482,10 +482,7 @@ impl<EK: KvEngine + CreateKvEngine<ER>, ER: RaftEngine> TiKVServer<EK, ER> {
 
     fn init_gc_worker(
         &mut self,
-    ) -> GcWorker<
-        RaftKv<EK, ServerRaftStoreRouter<EK, ER>>,
-        RaftRouter<EK, ER>,
-    > {
+    ) -> GcWorker<RaftKv<EK, ServerRaftStoreRouter<EK, ER>>, RaftRouter<EK, ER>> {
         let engines = self.engines.as_ref().unwrap();
         let mut gc_worker = GcWorker::new(
             engines.engine.clone(),
@@ -901,7 +898,8 @@ impl<EK: KvEngine + CreateKvEngine<ER>, ER: RaftEngine> TiKVServer<EK, ER> {
             &engines,
             servers,
             &self.router,
-            &mut self.cfg_controller);
+            &mut self.cfg_controller,
+        );
 
         // Create Diagnostics service
         let diag_service = DiagnosticsService::new(
@@ -944,7 +942,8 @@ impl<EK: KvEngine + CreateKvEngine<ER>, ER: RaftEngine> TiKVServer<EK, ER> {
             &self.background_worker,
             &self.region_info_accessor,
             &self.concurrency_manager,
-            &mut self.cfg_controller);
+            &mut self.cfg_controller,
+        );
 
         let cdc_service = cdc::Service::new(
             servers.cdc_scheduler.clone(),
@@ -1123,7 +1122,6 @@ impl<EK: KvEngine + CreateKvEngine<ER>, ER: RaftEngine> TiKVServer<EK, ER> {
 
         self.to_stop.into_iter().for_each(|s| s.stop());
     }
-
 }
 
 /// Encapsulates differences in server startup between KV engines.
@@ -1133,37 +1131,55 @@ impl<EK: KvEngine + CreateKvEngine<ER>, ER: RaftEngine> TiKVServer<EK, ER> {
 /// abstracted. In the short term, TiKV should be able to operate
 /// without those features, but in the long term, they need to be implemented
 /// for all engines, and this trait reduced or deleted.
-trait CreateKvEngine<ER>: KvEngine where ER: RaftEngine {
-    fn create_kv_engine(config: &TiKvConfig,
-                        region_info_accessor: &RegionInfoAccessor,
-                        store_path: &Path,
-                        router: &RaftRouter<Self, ER>,
-                        env: Arc<engine_rocks::raw::Env>, block_cache: &Option<engine_rocks::raw::Cache>) -> Self;
+trait CreateKvEngine<ER>: KvEngine
+where
+    ER: RaftEngine,
+{
+    fn create_kv_engine(
+        config: &TiKvConfig,
+        region_info_accessor: &RegionInfoAccessor,
+        store_path: &Path,
+        router: &RaftRouter<Self, ER>,
+        env: Arc<engine_rocks::raw::Env>,
+        block_cache: &Option<engine_rocks::raw::Cache>,
+    ) -> Self;
 
-    fn register_kv_config(config: &TiKvConfig,
-                          kv_engine: &Self,
-                          cfg_controller: &mut Option<ConfigController>);
+    fn register_kv_config(
+        config: &TiKvConfig,
+        kv_engine: &Self,
+        cfg_controller: &mut Option<ConfigController>,
+    );
 
-    fn start_debug_service(engines: &TiKVEngines<Self, ER>,
-                           servers: &mut Servers<Self, ER>,
-                           router: &RaftRouter<Self, ER>,
-                           cfg_controller: &mut Option<ConfigController>);
+    fn start_debug_service(
+        engines: &TiKVEngines<Self, ER>,
+        servers: &mut Servers<Self, ER>,
+        router: &RaftRouter<Self, ER>,
+        cfg_controller: &mut Option<ConfigController>,
+    );
 
-    fn start_backup_service(config: &TiKvConfig,
-                            engines: &TiKVEngines<Self, ER>,
-                            servers: &mut Servers<Self, ER>,
-                            background_worker: &Worker,
-                            region_info_accessor: &RegionInfoAccessor,
-                            concurrency_manager: &ConcurrencyManager,
-                            cfg_controller: &mut Option<ConfigController>);
+    fn start_backup_service(
+        config: &TiKvConfig,
+        engines: &TiKVEngines<Self, ER>,
+        servers: &mut Servers<Self, ER>,
+        background_worker: &Worker,
+        region_info_accessor: &RegionInfoAccessor,
+        concurrency_manager: &ConcurrencyManager,
+        cfg_controller: &mut Option<ConfigController>,
+    );
 }
 
-impl<ER> CreateKvEngine<ER> for RocksEngine where ER: RaftEngine {
-    fn create_kv_engine(config: &TiKvConfig,
-                        region_info_accessor: &RegionInfoAccessor,
-                        store_path: &Path,
-                        router: &RaftRouter<Self, ER>,
-                        env: Arc<engine_rocks::raw::Env>, block_cache: &Option<engine_rocks::raw::Cache>) -> Self {
+impl<ER> CreateKvEngine<ER> for RocksEngine
+where
+    ER: RaftEngine,
+{
+    fn create_kv_engine(
+        config: &TiKvConfig,
+        region_info_accessor: &RegionInfoAccessor,
+        store_path: &Path,
+        router: &RaftRouter<Self, ER>,
+        env: Arc<engine_rocks::raw::Env>,
+        block_cache: &Option<engine_rocks::raw::Cache>,
+    ) -> Self {
         let mut kv_db_opts = config.rocksdb.build_opt();
         kv_db_opts.set_env(env);
         kv_db_opts.add_event_listener(create_rocks_raftstore_compaction_listener(router.clone()));
@@ -1188,9 +1204,11 @@ impl<ER> CreateKvEngine<ER> for RocksEngine where ER: RaftEngine {
         kv_engine
     }
 
-    fn register_kv_config(config: &TiKvConfig,
-                          kv_engine: &Self,
-                          cfg_controller: &mut Option<ConfigController>) {
+    fn register_kv_config(
+        config: &TiKvConfig,
+        kv_engine: &Self,
+        cfg_controller: &mut Option<ConfigController>,
+    ) {
         let cfg_controller = cfg_controller.as_mut().unwrap();
         cfg_controller.register(
             tikv::config::Module::Rocksdb,
@@ -1202,10 +1220,12 @@ impl<ER> CreateKvEngine<ER> for RocksEngine where ER: RaftEngine {
         );
     }
 
-    fn start_debug_service(engines: &TiKVEngines<Self, ER>,
-                           servers: &mut Servers<Self, ER>,
-                           router: &RaftRouter<Self, ER>,
-                           cfg_controller: &mut Option<ConfigController>) {
+    fn start_debug_service(
+        engines: &TiKVEngines<Self, ER>,
+        servers: &mut Servers<Self, ER>,
+        router: &RaftRouter<Self, ER>,
+        cfg_controller: &mut Option<ConfigController>,
+    ) {
         let router = router.clone();
         let engines = Engines {
             kv: engines.engines.kv.clone(),
@@ -1227,13 +1247,15 @@ impl<ER> CreateKvEngine<ER> for RocksEngine where ER: RaftEngine {
         }
     }
 
-    fn start_backup_service(config: &TiKvConfig,
-                            engines: &TiKVEngines<Self, ER>,
-                            servers: &mut Servers<Self, ER>,
-                            background_worker: &Worker,
-                            region_info_accessor: &RegionInfoAccessor,
-                            concurrency_manager: &ConcurrencyManager,
-                            cfg_controller: &mut Option<ConfigController>) {
+    fn start_backup_service(
+        config: &TiKvConfig,
+        engines: &TiKVEngines<Self, ER>,
+        servers: &mut Servers<Self, ER>,
+        background_worker: &Worker,
+        region_info_accessor: &RegionInfoAccessor,
+        concurrency_manager: &ConcurrencyManager,
+        cfg_controller: &mut Option<ConfigController>,
+    ) {
         let raw_rocks_engine = engines.engines.kv.as_inner().clone();
 
         let mut backup_worker = Box::new(background_worker.lazy_build("backup-endpoint"));
@@ -1263,57 +1285,80 @@ impl<ER> CreateKvEngine<ER> for RocksEngine where ER: RaftEngine {
     }
 }
 
-impl<ER> CreateKvEngine<ER> for engine_panic::PanicEngine where ER: RaftEngine {
-    fn create_kv_engine(_config: &TiKvConfig,
-                        _region_info_accessor: &RegionInfoAccessor,
-                        _store_path: &Path,
-                        _router: &RaftRouter<Self, ER>,
-                        _env: Arc<engine_rocks::raw::Env>, _block_cache: &Option<engine_rocks::raw::Cache>) -> Self {
+impl<ER> CreateKvEngine<ER> for engine_panic::PanicEngine
+where
+    ER: RaftEngine,
+{
+    fn create_kv_engine(
+        _config: &TiKvConfig,
+        _region_info_accessor: &RegionInfoAccessor,
+        _store_path: &Path,
+        _router: &RaftRouter<Self, ER>,
+        _env: Arc<engine_rocks::raw::Env>,
+        _block_cache: &Option<engine_rocks::raw::Cache>,
+    ) -> Self {
         engine_panic::PanicEngine
     }
 
-    fn register_kv_config(_config: &TiKvConfig,
-                          _kv_engine: &Self,
-                          _cfg_controller: &mut Option<ConfigController>) {
+    fn register_kv_config(
+        _config: &TiKvConfig,
+        _kv_engine: &Self,
+        _cfg_controller: &mut Option<ConfigController>,
+    ) {
     }
 
-    fn start_debug_service(_engines: &TiKVEngines<Self, ER>,
-                           _servers: &mut Servers<Self, ER>,
-                           _router: &RaftRouter<Self, ER>,
-                           _cfg_controller: &mut Option<ConfigController>) {
+    fn start_debug_service(
+        _engines: &TiKVEngines<Self, ER>,
+        _servers: &mut Servers<Self, ER>,
+        _router: &RaftRouter<Self, ER>,
+        _cfg_controller: &mut Option<ConfigController>,
+    ) {
     }
 
-    fn start_backup_service(_config: &TiKvConfig,
-                            _engines: &TiKVEngines<Self, ER>,
-                            _servers: &mut Servers<Self, ER>,
-                            _background_worker: &Worker,
-                            _region_info_accessor: &RegionInfoAccessor,
-                            _concurrency_manager: &ConcurrencyManager,
-                            _cfg_controller: &mut Option<ConfigController>) {
+    fn start_backup_service(
+        _config: &TiKvConfig,
+        _engines: &TiKVEngines<Self, ER>,
+        _servers: &mut Servers<Self, ER>,
+        _background_worker: &Worker,
+        _region_info_accessor: &RegionInfoAccessor,
+        _concurrency_manager: &ConcurrencyManager,
+        _cfg_controller: &mut Option<ConfigController>,
+    ) {
     }
 }
 
 impl<EK, ER> TiKVServer<EK, ER>
-where EK: KvEngine + CreateKvEngine<ER>,
-      ER: RaftEngine
+where
+    EK: KvEngine + CreateKvEngine<ER>,
+    ER: RaftEngine,
 {
-    fn create_kv_engine(&self, env: Arc<engine_rocks::raw::Env>, block_cache: &Option<engine_rocks::raw::Cache>) -> EK {
+    fn create_kv_engine(
+        &self,
+        env: Arc<engine_rocks::raw::Env>,
+        block_cache: &Option<engine_rocks::raw::Cache>,
+    ) -> EK {
         EK::create_kv_engine(
             &self.config,
             &self.region_info_accessor,
             &self.store_path,
             &self.router,
             env,
-            block_cache)
+            block_cache,
+        )
     }
 
     fn register_kv_config(&mut self, kv_engine: &EK) {
-        <EK as CreateKvEngine<ER>>::register_kv_config(&self.config, &kv_engine, &mut self.cfg_controller)
+        <EK as CreateKvEngine<ER>>::register_kv_config(
+            &self.config,
+            &kv_engine,
+            &mut self.cfg_controller,
+        )
     }
 }
 
 impl<EK> TiKVServer<EK, RocksEngine>
-where EK: KvEngine + CreateKvEngine<RocksEngine>
+where
+    EK: KvEngine + CreateKvEngine<RocksEngine>,
 {
     fn init_raw_engines(
         &mut self,
@@ -1367,15 +1412,13 @@ where EK: KvEngine + CreateKvEngine<RocksEngine>
 }
 
 impl<EK> TiKVServer<EK, RaftLogEngine>
-where EK: KvEngine + CreateKvEngine<RaftLogEngine>
+where
+    EK: KvEngine + CreateKvEngine<RaftLogEngine>,
 {
     fn init_raw_engines(
         &mut self,
         limiter: Option<Arc<IORateLimiter>>,
-    ) -> (
-        Engines<EK, RaftLogEngine>,
-        Arc<EnginesResourceInfo<EK>>,
-    ) {
+    ) -> (Engines<EK, RaftLogEngine>, Arc<EnginesResourceInfo<EK>>) {
         let env = get_env(self.encryption_key_manager.clone(), limiter).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
@@ -1569,7 +1612,11 @@ impl<EK: KvEngine> EnginesResourceInfo<EK> {
     pub fn update(&self, _now: Instant) {
         let mut normalized_pending_bytes = 0;
 
-        fn fetch_engine_cf<EK: KvEngine>(engine: &EK, cf: &str, normalized_pending_bytes: &mut u32) {
+        fn fetch_engine_cf<EK: KvEngine>(
+            engine: &EK,
+            cf: &str,
+            normalized_pending_bytes: &mut u32,
+        ) {
             if let Ok(cf_opts) = engine.get_options_cf(cf) {
                 if let Ok(Some(b)) = engine.get_cf_compaction_pending_bytes(cf) {
                     if cf_opts.get_soft_pending_compaction_bytes_limit() > 0 {
@@ -1618,7 +1665,9 @@ impl<EK: KvEngine> IOBudgetAdjustor for EnginesResourceInfo<EK> {
     }
 }
 
-fn create_rocks_raftstore_compaction_listener<ER: RaftEngine>(router: RaftRouter<RocksEngine, ER>) -> engine_rocks::CompactionListener {
+fn create_rocks_raftstore_compaction_listener<ER: RaftEngine>(
+    router: RaftRouter<RocksEngine, ER>,
+) -> engine_rocks::CompactionListener {
     fn size_change_filter(info: &engine_rocks::RocksCompactionJobInfo) -> bool {
         // When calculating region size, we only consider write and default
         // column families.
@@ -1635,13 +1684,12 @@ fn create_rocks_raftstore_compaction_listener<ER: RaftEngine>(router: RaftRouter
     }
 
     let ch = Mutex::new(router);
-    let compacted_handler =
-        Box::new(move |compacted_event: engine_rocks::RocksCompactedEvent| {
-            let ch = ch.lock().unwrap();
-            let event = StoreMsg::CompactedEvent(compacted_event);
-            if let Err(e) = ch.send_control(event) {
-                error_unknown!(?e; "send compaction finished event to raftstore failed");
-            }
-        });
+    let compacted_handler = Box::new(move |compacted_event: engine_rocks::RocksCompactedEvent| {
+        let ch = ch.lock().unwrap();
+        let event = StoreMsg::CompactedEvent(compacted_event);
+        if let Err(e) = ch.send_control(event) {
+            error_unknown!(?e; "send compaction finished event to raftstore failed");
+        }
+    });
     engine_rocks::CompactionListener::new(compacted_handler, Some(size_change_filter))
 }

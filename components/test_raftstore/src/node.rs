@@ -177,7 +177,10 @@ impl NodeCluster {
         self.post_create_coprocessor_host = Some(op)
     }
 
-    pub fn get_node(&mut self, node_id: u64) -> Option<&mut Node<TestPdClient, RocksEngine, RocksEngine>> {
+    pub fn get_node(
+        &mut self,
+        node_id: u64,
+    ) -> Option<&mut Node<TestPdClient, RocksEngine, RocksEngine>> {
         self.nodes.get_mut(&node_id)
     }
 

@@ -6,7 +6,7 @@ use crate::config::BLOCK_CACHE_RATE;
 use crate::server::ttl::TTLCheckerTask;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use engine_rocks::raw::{Cache, LRUCacheOptions, MemoryAllocator};
-use engine_traits::{ColumnFamilyOptions, CF_DEFAULT, KvEngine};
+use engine_traits::{ColumnFamilyOptions, KvEngine, CF_DEFAULT};
 use file_system::{get_io_rate_limiter, IOPriority, IORateLimitMode, IORateLimiter, IOType};
 use libc::c_int;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig, Result as CfgResult};
