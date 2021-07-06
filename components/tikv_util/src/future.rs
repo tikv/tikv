@@ -4,6 +4,8 @@ use crate::callback::must_call;
 use crate::Either;
 use futures::executor::{self, Notify, Spawn};
 use futures::{Async, Future, IntoFuture, Poll};
+use futures03::future::{self as std_future, Future as StdFuture, FutureExt, TryFutureExt};
+use futures03::stream::{Stream, StreamExt};
 use std::sync::{Arc, Mutex};
 use tokio_sync::oneshot;
 
@@ -149,4 +151,26 @@ pub fn poll_future_notify<F: Future<Item = (), Error = ()> + Send + 'static>(f: 
     let spawn = Arc::new(Mutex::new(Some(executor::spawn(f))));
     let notify = BatchCommandsNotify(spawn);
     notify.notify(0);
+}
+
+/// Create a stream proxy with buffer representing the remote stream. The returned task
+/// will receive messages from the remote stream as much as possible.
+pub fn create_stream_with_buffer<T, S>(
+    s: S,
+    size: usize,
+) -> (
+    impl Stream<Item = T> + Send + 'static,
+    impl StdFuture<Output = ()> + Send + 'static,
+)
+where
+    S: Stream<Item = T> + Send + 'static,
+    T: Send + 'static,
+{
+    let (tx, rx) = futures03::channel::mpsc::channel::<T>(size);
+    let driver = s
+        .then(std_future::ok::<T, futures03::channel::mpsc::SendError>)
+        .forward(tx)
+        .map_err(|e| warn!("stream with buffer send error"; "error" => %e))
+        .map(|_| ());
+    (rx, driver)
 }

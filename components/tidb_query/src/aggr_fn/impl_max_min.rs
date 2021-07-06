@@ -386,10 +386,12 @@ mod tests {
             (Collation::Binary, true, vec!["B", "a"], "a"),
             (Collation::Utf8Mb4Bin, true, vec!["B", "a"], "a"),
             (Collation::Utf8Mb4GeneralCi, true, vec!["B", "a"], "B"),
+            (Collation::Utf8Mb4UnicodeCi, true, vec!["ß", "sr"], "ß"),
             (Collation::Utf8Mb4BinNoPadding, true, vec!["B", "a"], "a"),
             (Collation::Binary, false, vec!["B", "a"], "B"),
             (Collation::Utf8Mb4Bin, false, vec!["B", "a"], "B"),
             (Collation::Utf8Mb4GeneralCi, false, vec!["B", "a"], "a"),
+            (Collation::Utf8Mb4UnicodeCi, false, vec!["ß", "st"], "ß"),
             (Collation::Utf8Mb4BinNoPadding, false, vec!["B", "a"], "B"),
         ];
         for (coll, is_max, args, expected) in cases {

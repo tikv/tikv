@@ -635,7 +635,7 @@ impl TiKVServer {
         // Import SST service.
         let import_service = ImportSSTService::new(
             self.config.import.clone(),
-            engines.raft_router.clone(),
+            engines.raft_router.get_router(),
             engines.engines.kv.clone(),
             servers.importer.clone(),
             self.security_mgr.clone(),

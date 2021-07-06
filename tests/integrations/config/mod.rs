@@ -159,7 +159,7 @@ fn test_serde_custom_tikv_config() {
         raft_entry_cache_life_time: ReadableDuration::secs(12),
         raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
         split_region_check_tick_interval: ReadableDuration::secs(12),
-        region_split_check_diff: ReadableSize::mb(6),
+        region_split_check_diff: ReadableSize::mb(20),
         region_compact_check_interval: ReadableDuration::secs(12),
         clean_stale_peer_delay: ReadableDuration::minutes(11),
         region_compact_check_step: 1_234,
@@ -595,6 +595,7 @@ fn test_serde_custom_tikv_config() {
     value.backup = BackupConfig {
         num_threads: 456,
         batch_size: 7,
+        sst_max_size: ReadableSize::mb(789),
     };
     value.import = ImportConfig {
         num_threads: 123,
@@ -614,6 +615,7 @@ fn test_serde_custom_tikv_config() {
     };
     value.cdc = CdcConfig {
         min_ts_interval: ReadableDuration::secs(4),
+        incremental_scan_speed_limit: ReadableSize(7),
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");

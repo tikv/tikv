@@ -51,7 +51,7 @@ lazy_static! {
     pub static ref COPR_SCAN_KEYS: HistogramVec = register_histogram_vec!(
         "tikv_coprocessor_scan_keys",
         "Bucketed histogram of coprocessor per request scan keys",
-        &["req"],
+        &["req", "kind"],
         exponential_buckets(1.0, 2.0, 20).unwrap()
     )
     .unwrap();

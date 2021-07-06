@@ -3,6 +3,59 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [4.0.13] - 2021-05-28
+
++ Improvements
+  + Limit CDC scan speed (128MB/s by default) [#9983](https://github.com/tikv/tikv/pull/9983)
+  + Reduce memory usage of CDC initial scan [#10133](https://github.com/tikv/tikv/pull/10133)
+  + Support back pressure CDC scan speed [#10142](https://github.com/tikv/tikv/pull/10142)
+  + Add a timeout for s3 storage client to avoid client hangs without responses [#10132](https://github.com/tikv/tikv/pull/10132)
++ Bug Fixes
+  + Fix the bug that TiKV cannot startup when the end of file dict file is damaged [#9963](https://github.com/tikv/tikv/pull/9963)
+  + Fix a potential OOM issue by avoiding unnecessary read for getting CDC old values [#10031](https://github.com/tikv/tikv/pull/10031)
+  + Fix a CDC OOM issue caused by reading old values [#10197](https://github.com/tikv/tikv/pull/10197)
+
+## [4.0.12] - 2021-04-02
+
++ Improvements
+  + Prevent a large number of reconnections in a short period of time [#9879](https://github.com/tikv/tikv/pull/9879)
+  + Optimize the write operations in the scenarios of many tombstones [#9729](https://github.com/tikv/tikv/pull/9729)
+  + Change the default value of `leader-transfer-max-log-lag` to `128` to increase the success rate of leader transfer [#9605](https://github.com/tikv/tikv/pull/9605)
++ Bug Fixes
+  + Fix the issue that the `IN` expression does not properly handle unsigned/signed integers [#9850](https://github.com/tikv/tikv/pull/9850)
+  + Fix the issue that the ingest operation is not re-entrant [#9779](https://github.com/tikv/tikv/pull/9779)
+  + Fix the issue that the space is missed when converting JSON to string in TiKV coprocessor [#9666](https://github.com/tikv/tikv/pull/9666)
+
+## [4.0.11] - 2021-02-26
+
++ New Features
+  + Support the `utf8mb4_unicode_ci` collation [#9577](https://github.com/tikv/tikv/pull/9577)
+  + Support the `cast_year_as_time` collation [#9299](https://github.com/tikv/tikv/pull/9299)
++ Improvements
+  + Add metrics of server information for DBaaS [#9591](https://github.com/tikv/tikv/pull/9591)
+  + Support multiple clusters in Grafana dashboards [#9572](https://github.com/tikv/tikv/pull/9572)
+  + Report RocksDB metrics to TiDB [#9316](https://github.com/tikv/tikv/pull/9316)
+  + Record the suspension time for Coprocessor tasks [#9277](https://github.com/tikv/tikv/pull/9277)
+  + Add thresholds of key counts and key size for Load Base Split [#9354](https://github.com/tikv/tikv/pull/9354)
+  + Check whether the file exists before data import [#9544](https://github.com/tikv/tikv/pull/9544)
+  + Improve Fast Tune panels [#9180](https://github.com/tikv/tikv/pull/9180)
++ Bug Fixes
+  + Fix the issue that TiKV is failed to build with `PROST=1` [#9604](https://github.com/tikv/tikv/pull/9604)
+  + Fix the unmatched memory diagnostics [#9589](https://github.com/tikv/tikv/pull/9589)
+  + Fix the issue that the end key of a partial RawKV-restore range is inclusive [#9583](https://github.com/tikv/tikv/pull/9583)
+  + Fix the issue that TiKV might panic when loading the old value of a key of a rolled-back transaction during TiCDC's incremental scan [#9569](https://github.com/tikv/tikv/pull/9569)
+  + Fix the configuration glitch of old values when changefeeds with different settings connect to one Region [#9565](https://github.com/tikv/tikv/pull/9565)
+  + Fix a crash issue that occurs when running a TiKV cluster on a machine with a network interface that lacks the MAC address (introduced in v4.0.9) [#9516](https://github.com/tikv/tikv/pull/9516)
+  + Fix the issue of TiKV OOM when backing up a huge Region [#9448](https://github.com/tikv/tikv/pull/9448)
+  + Fix the issue that `region-split-check-diff` cannot be customized [#9530](https://github.com/tikv/tikv/pull/9530)
+  + Fix the issue of TiKV panic when the system time goes back [#9542](https://github.com/tikv/tikv/pull/9542)
+
+## [4.0.10] - 2021-01-15
+
++ Bug Fixes
+  + Fix the wrong mapping between ready and peer [#9409](https://github.com/tikv/tikv/pull/9409)
+  + Fix the issue that some logs are not redacted when `security.redact-info-log` is set to `true` [#9314](https://github.com/tikv/tikv/pull/9314)
+
 ## [4.0.9] - 2020-12-18
 
 + Improvements

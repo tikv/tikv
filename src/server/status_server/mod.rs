@@ -35,12 +35,13 @@ use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use super::Result;
 use crate::config::ConfigController;
 use configuration::Configuration;
-use pd_client::RpcClient;
+use pd_client::{RpcClient, REQUEST_RECONNECT_INTERVAL};
 use security::{self, SecurityConfig};
 use tikv_alloc::error::ProfError;
 use tikv_util::collections::HashMap;
@@ -494,6 +495,7 @@ where
             // refresh the pd leader
             if let Err(e) = pd_client.reconnect() {
                 warn!("failed to reconnect pd client"; "err" => ?e);
+                thread::sleep(REQUEST_RECONNECT_INTERVAL);
             }
         }
         warn!(
@@ -553,6 +555,7 @@ where
             // refresh the pd leader
             if let Err(e) = pd_client.reconnect() {
                 warn!("failed to reconnect pd client"; "err" => ?e);
+                thread::sleep(REQUEST_RECONNECT_INTERVAL);
             }
         }
         warn!(

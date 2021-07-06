@@ -5,7 +5,9 @@ mod forward;
 
 use engine::IterOption;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use keys::DATA_PREFIX_KEY;
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
+use tikv_util::keybuilder::KeyBuilder;
 use txn_types::{Key, TimeStamp, TsSet, Value, Write, WriteRef, WriteType};
 
 use self::backward::BackwardKvScanner;
@@ -318,7 +320,7 @@ where
             "near_load_data_by_write",
         ));
     }
-    statistics.data.processed += 1;
+    statistics.data.processed_keys += 1;
     Ok(default_cursor.value(&mut statistics.data).to_vec())
 }
 
@@ -343,7 +345,7 @@ where
             "near_reverse_load_data_by_write",
         ));
     }
-    statistics.data.processed += 1;
+    statistics.data.processed_keys += 1;
     Ok(default_cursor.value(&mut statistics.data).to_vec())
 }
 
@@ -354,11 +356,33 @@ pub fn has_data_in_range<S: Snapshot>(
     right: &Key,
     statistic: &mut CfStatistics,
 ) -> Result<bool> {
-    let iter_opt = IterOption::new(None, None, true);
+    let iter_opt = IterOption::new(
+        None,
+        Some(KeyBuilder::from_slice(
+            right.as_encoded(),
+            DATA_PREFIX_KEY.len(),
+            0,
+        )),
+        true,
+    )
+    .set_max_skippable_internal_keys(100);
     let mut iter = snapshot.iter_cf(cf, iter_opt, ScanMode::Forward)?;
-    if iter.seek(left, statistic)? {
-        if iter.key(statistic) < right.as_encoded().as_slice() {
+    match iter.seek(left, statistic) {
+        Ok(valid) => {
+            if valid {
+                if iter.key(statistic) < right.as_encoded().as_slice() {
+                    return Ok(true);
+                }
+            }
+        }
+        Err(e)
+            if e.to_string()
+                .contains("Result incomplete: Too many internal keys skipped") =>
+        {
             return Ok(true);
+        }
+        err @ Err(_) => {
+            err?;
         }
     }
     Ok(false)
@@ -383,13 +407,13 @@ where
             user_key.as_encoded(),
         )
     {
-        assert_ge!(
-            after_ts,
-            Key::decode_ts_from(write_cursor.key(&mut statistics.write))?
-        );
         let write_ref = WriteRef::parse(write_cursor.value(&mut statistics.write))?;
         match write_ref.write_type {
             WriteType::Put | WriteType::Delete => {
+                assert_ge!(
+                    after_ts,
+                    Key::decode_ts_from(write_cursor.key(&mut statistics.write))?
+                );
                 ret = Some(write_ref.to_owned());
                 break;
             }

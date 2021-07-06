@@ -148,6 +148,8 @@ impl Simulator for ServerCluster {
         // listening address for the same store.
         if let Some(addr) = self.addrs.get(&node_id) {
             cfg.server.addr = addr.clone();
+        } else {
+            cfg.server.addr = format!("127.0.0.1:{}", test_util::alloc_port());
         }
 
         let local_reader =
@@ -207,7 +209,7 @@ impl Simulator for ServerCluster {
         };
         let import_service = ImportSSTService::new(
             cfg.import.clone(),
-            sim_router.clone(),
+            router.clone(),
             Arc::clone(&engines.kv),
             Arc::clone(&importer),
             security_mgr.clone(),

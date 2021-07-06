@@ -125,6 +125,10 @@ impl ServerRaftStoreRouter {
             })
         })
     }
+
+    pub fn get_router(&self) -> RaftRouter<RocksEngine> {
+        self.router.clone()
+    }
 }
 
 #[inline]

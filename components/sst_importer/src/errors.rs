@@ -8,6 +8,7 @@ use std::result;
 
 use encryption::Error as EncryptionError;
 use error_code::{self, ErrorCode, ErrorCodeExt};
+use futures03::channel::oneshot::Canceled;
 use grpcio::Error as GrpcError;
 use kvproto::import_sstpb;
 use tikv_util::codec::Error as CodecError;
@@ -59,6 +60,11 @@ quick_error! {
         Future(err: RecvError) {
             from()
             cause(err)
+        }
+        StdFuture(err: Canceled) {
+            from()
+            cause(err)
+            display("{}", err)
         }
         // FIXME: Remove concrete 'rocks' type
         RocksDB(msg: String) {
@@ -113,6 +119,9 @@ quick_error! {
             cause(err)
             description(err.description())
         }
+        FileConflict {
+            display("ingest file conflict")
+        }
     }
 }
 
@@ -133,6 +142,7 @@ impl ErrorCodeExt for Error {
             Error::Grpc(_) => error_code::sst_importer::GRPC,
             Error::Uuid(_) => error_code::sst_importer::UUID,
             Error::Future(_) => error_code::sst_importer::FUTURE,
+            Error::StdFuture(_) => error_code::sst_importer::FUTURE,
             Error::RocksDB(_) => error_code::sst_importer::ROCKSDB,
             Error::EngineTraits(e) => e.error_code(),
             Error::ParseIntError(_) => error_code::sst_importer::PARSE_INT_ERROR,
@@ -148,6 +158,7 @@ impl ErrorCodeExt for Error {
             Error::BadFormat(_) => error_code::sst_importer::BAD_FORMAT,
             Error::Encryption(e) => e.error_code(),
             Error::CodecError(e) => e.error_code(),
+            Error::FileConflict => error_code::sst_importer::FILE_CONFLICT,
         }
     }
 }

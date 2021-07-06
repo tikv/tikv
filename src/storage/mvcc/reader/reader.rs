@@ -8,9 +8,7 @@ use engine_traits::{TableProperties, TablePropertiesCollection};
 use engine_traits::{CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use raftstore::coprocessor::properties::MvccProperties;
-use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
-
-const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
+use txn_types::{Key, Lock, OldValue, TimeStamp, Value, Write, WriteRef, WriteType};
 
 pub struct MvccReader<S: Snapshot> {
     snapshot: S,
@@ -82,10 +80,12 @@ impl<S: Snapshot> MvccReader<S> {
             self.statistics.data.get += 1;
             self.snapshot.get(&k)?
         };
-        self.statistics.data.processed += 1;
 
         match val {
-            Some(val) => Ok(val),
+            Some(val) => {
+                self.statistics.data.processed_keys += 1;
+                Ok(val)
+            }
             None => Err(default_not_found_error(key.to_raw()?, "get")),
         }
     }
@@ -111,10 +111,6 @@ impl<S: Snapshot> MvccReader<S> {
                 None => None,
             }
         };
-
-        if res.is_some() {
-            self.statistics.lock.processed += 1;
-        }
 
         Ok(res)
     }
@@ -156,7 +152,6 @@ impl<S: Snapshot> MvccReader<S> {
             return Ok(None);
         }
         let write = WriteRef::parse(cursor.value(&mut self.statistics.write))?.to_owned();
-        self.statistics.write.processed += 1;
         Ok(Some((commit_ts, write)))
     }
 
@@ -164,9 +159,10 @@ impl<S: Snapshot> MvccReader<S> {
     /// Returns the blocking lock as the `Err` variant.
     fn check_lock(&mut self, key: &Key, ts: TimeStamp) -> Result<()> {
         if let Some(lock) = self.load_lock(key)? {
-            return lock
-                .check_ts_conflict(key, ts, &Default::default())
-                .map_err(From::from);
+            if let Err(e) = lock.check_ts_conflict(key, ts, &Default::default()) {
+                self.statistics.lock.processed_keys += 1;
+                return Err(e.into());
+            }
         }
         Ok(())
     }
@@ -317,7 +313,7 @@ impl<S: Snapshot> MvccReader<S> {
             }
             cursor.next(&mut self.statistics.lock);
         }
-        self.statistics.lock.processed += locks.len();
+        self.statistics.lock.processed_keys += locks.len();
         // If we reach here, `cursor.valid()` is `false`, so there MUST be no more locks.
         Ok((locks, false))
     }
@@ -340,7 +336,7 @@ impl<S: Snapshot> MvccReader<S> {
                 return Ok((keys, None));
             }
             if keys.len() >= limit {
-                self.statistics.write.processed += keys.len();
+                self.statistics.write.processed_keys += keys.len();
                 return Ok((keys, start));
             }
             let key =
@@ -380,6 +376,48 @@ impl<S: Snapshot> MvccReader<S> {
 
         check_need_gc(safe_point, ratio_threshold, prop)
     }
+
+    /// Read the old value for key for CDC.
+    /// `prev_write` stands for the previous write record of the key
+    /// it must be read in the caller and be passed in for optimization
+    pub fn get_old_value(
+        &mut self,
+        key: &Key,
+        start_ts: TimeStamp,
+        prev_write_loaded: bool,
+        prev_write: Option<Write>,
+    ) -> Result<OldValue> {
+        if prev_write_loaded && prev_write.is_none() {
+            return Ok(OldValue::None);
+        }
+        if let Some(prev_write) = prev_write {
+            match prev_write.write_type {
+                WriteType::Put => {
+                    // For Put, there must be an old value either in its
+                    // short value or in the default CF.
+                    return Ok(OldValue::Value {
+                        short_value: prev_write.short_value,
+                        start_ts: prev_write.start_ts,
+                    });
+                }
+                WriteType::Delete => {
+                    // For Delete, no old value.
+                    return Ok(OldValue::None);
+                }
+                // For Rollback and Lock, it's unknown whether there is a more
+                // previous valid write. Call `get_write` to get a valid
+                // previous write.
+                WriteType::Rollback | WriteType::Lock => (),
+            }
+        }
+        Ok(match self.get_write(key, start_ts)? {
+            Some(write) => OldValue::Value {
+                short_value: write.short_value,
+                start_ts: write.start_ts,
+            },
+            None => OldValue::None,
+        })
+    }
 }
 
 // Returns true if it needs gc.
@@ -416,8 +454,7 @@ pub fn check_need_gc(
         return true;
     }
 
-    // A lot of MVCC versions of a single row to GC.
-    props.max_row_versions > GC_MAX_ROW_VERSIONS_THRESHOLD
+    false
 }
 
 fn get_mvcc_properties(
@@ -447,8 +484,9 @@ fn get_mvcc_properties(
 mod tests {
     use super::*;
 
-    use crate::storage::kv::Modify;
+    use crate::storage::kv::{Modify, WriteData};
     use crate::storage::mvcc::{MvccReader, MvccTxn};
+    use crate::storage::{Engine, TestEngineBuilder};
     use engine::rocks::util::CFOptions;
     use engine::rocks::DB;
     use engine::rocks::{self, ColumnFamilyOptions, DBOptions};
@@ -456,7 +494,7 @@ mod tests {
     use engine_rocks::{Compat, RocksEngine};
     use engine_traits::{Mutable, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use kvproto::kvrpcpb::IsolationLevel;
+    use kvproto::kvrpcpb::{Context, IsolationLevel};
     use kvproto::metapb::{Peer, Region};
     use raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
     use raftstore::store::RegionSnapshot;
@@ -1455,5 +1493,154 @@ mod tests {
                 Some(long_value.to_vec())
             );
         }
+    }
+
+    #[test]
+    fn test_get_old_value() {
+        struct Case {
+            expected: OldValue,
+            // (write_record, put_ts)
+            // all data to write to the engine
+            // current write_cursor will be on the last record in `written`
+            // which also means prev_write is `Write` in the record
+            written: Vec<(Write, TimeStamp)>,
+        }
+        let cases = vec![
+            // prev_write is Rollback, and there exists a more previous valid write
+            Case {
+                expected: OldValue::Value {
+                    short_value: None,
+                    start_ts: TimeStamp::new(4),
+                },
+
+                written: vec![
+                    (
+                        Write::new(WriteType::Put, TimeStamp::new(4), None),
+                        TimeStamp::new(6),
+                    ),
+                    (
+                        Write::new(WriteType::Rollback, TimeStamp::new(5), None),
+                        TimeStamp::new(7),
+                    ),
+                ],
+            },
+            Case {
+                expected: OldValue::Value {
+                    short_value: Some(b"v".to_vec()),
+                    start_ts: TimeStamp::new(4),
+                },
+
+                written: vec![
+                    (
+                        Write::new(WriteType::Put, TimeStamp::new(4), Some(b"v".to_vec())),
+                        TimeStamp::new(6),
+                    ),
+                    (
+                        Write::new(WriteType::Rollback, TimeStamp::new(5), None),
+                        TimeStamp::new(7),
+                    ),
+                ],
+            },
+            // prev_write is Rollback, and there isn't a more previous valid write
+            Case {
+                expected: OldValue::None,
+                written: vec![(
+                    Write::new(WriteType::Rollback, TimeStamp::new(5), None),
+                    TimeStamp::new(6),
+                )],
+            },
+            // prev_write is Lock, and there exists a more previous valid write
+            Case {
+                expected: OldValue::Value {
+                    short_value: None,
+                    start_ts: TimeStamp::new(3),
+                },
+
+                written: vec![
+                    (
+                        Write::new(WriteType::Put, TimeStamp::new(3), None),
+                        TimeStamp::new(6),
+                    ),
+                    (
+                        Write::new(WriteType::Lock, TimeStamp::new(5), None),
+                        TimeStamp::new(7),
+                    ),
+                ],
+            },
+            // prev_write is Lock, and there isn't a more previous valid write
+            Case {
+                expected: OldValue::None,
+                written: vec![(
+                    Write::new(WriteType::Lock, TimeStamp::new(5), None),
+                    TimeStamp::new(6),
+                )],
+            },
+            // prev_write is Delete, and there exists a more previous valid write
+            Case {
+                expected: OldValue::None,
+                written: vec![
+                    (
+                        Write::new(WriteType::Put, TimeStamp::new(3), None),
+                        TimeStamp::new(6),
+                    ),
+                    (
+                        Write::new(WriteType::Delete, TimeStamp::new(7), None),
+                        TimeStamp::new(8),
+                    ),
+                ],
+            },
+        ];
+        for (i, case) in cases.into_iter().enumerate() {
+            let engine = TestEngineBuilder::new().build().unwrap();
+            let snapshot = engine.snapshot(&Context::default()).unwrap();
+            let mut txn = MvccTxn::new(snapshot, TimeStamp::new(10), true);
+            for (write_record, put_ts) in case.written.iter() {
+                txn.put_write(
+                    Key::from_raw(b"a"),
+                    *put_ts,
+                    write_record.as_ref().to_bytes(),
+                );
+            }
+            engine
+                .write(
+                    &Context::default(),
+                    WriteData::from_modifies(txn.into_modifies()),
+                )
+                .unwrap();
+            let snapshot = engine.snapshot(Default::default()).unwrap();
+            let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+            if !case.written.is_empty() {
+                let prev_write = reader
+                    .seek_write(&Key::from_raw(b"a"), case.written.last().unwrap().1)
+                    .unwrap()
+                    .map(|w| w.1);
+                let prev_write_loaded = true;
+                let result = reader
+                    .get_old_value(
+                        &Key::from_raw(b"a"),
+                        TimeStamp::new(25),
+                        prev_write_loaded,
+                        prev_write,
+                    )
+                    .unwrap();
+                assert_eq!(result, case.expected, "case #{}", i);
+            }
+        }
+
+        // Must return Oldvalue::None when prev_write_loaded is true and prev_write is None.
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let prev_write_loaded = true;
+        let prev_write = None;
+        let result = reader
+            .get_old_value(
+                &Key::from_raw(b"a"),
+                TimeStamp::new(25),
+                prev_write_loaded,
+                prev_write,
+            )
+            .unwrap();
+        assert_eq!(result, OldValue::None);
     }
 }
