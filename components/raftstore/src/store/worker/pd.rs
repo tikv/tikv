@@ -206,7 +206,7 @@ pub struct PeerStat {
     pub store_report_read_bytes: u64,
     pub store_report_read_keys: u64,
     pub store_report_read_stats: QueryStats,
-    
+
     pub last_region_report_ts: UnixSecs,
     pub approximate_keys: u64,
     pub approximate_size: u64,
@@ -1026,8 +1026,12 @@ where
             peer_stat.store_report_read_keys += region_info.flow.read_keys as u64;
             self.store_stat.engine_total_bytes_read += region_info.flow.read_bytes as u64;
             self.store_stat.engine_total_keys_read += region_info.flow.read_keys as u64;
-            peer_stat.region_report_read_stats.add_query_stats(&region_info.query_stats.0);
-            peer_stat.store_report_read_stats.add_query_stats(&region_info.query_stats.0);
+            peer_stat
+                .region_report_read_stats
+                .add_query_stats(&region_info.query_stats.0);
+            peer_stat
+                .store_report_read_stats
+                .add_query_stats(&region_info.query_stats.0);
             self.store_stat
                 .engine_total_query_num
                 .add_query_stats(&region_info.query_stats.0);
@@ -1234,7 +1238,6 @@ where
                     let read_keys_delta = peer_stat.region_report_read_keys;
                     peer_stat.region_report_read_bytes = 0;
                     peer_stat.region_report_read_keys = 0;
-
 
                     let written_bytes_delta = hb_task.written_bytes;
                     let written_keys_delta = hb_task.written_keys;
