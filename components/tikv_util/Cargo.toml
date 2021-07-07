@@ -68,3 +68,7 @@ regex = "1.0"
 tempfile = "3.0"
 toml = "0.4"
 utime = "0.2"
+
+[target.'cfg(unix)'.dev-dependencies]
+gag = "0.1.10"
+nix = "0.11"
