@@ -23,8 +23,7 @@ use tikv::storage::kv::{Engine, ScanMode, Snapshot};
 use tikv::storage::txn::{EntryBatch, SnapshotStore, TxnEntryScanner, TxnEntryStore};
 use tikv::storage::Statistics;
 use tikv_util::time::Limiter;
-use tikv_util::timer::Timer;
-use tikv_util::worker::{Runnable, RunnableWithTimer};
+use tikv_util::worker::Runnable;
 use txn_types::{Key, TimeStamp};
 use yatp::task::callback::{Handle, TaskCell};
 use yatp::ThreadPool;
@@ -576,12 +575,6 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
             db,
             config_manager: ConfigManager(Arc::new(RwLock::new(config))),
         }
-    }
-
-    pub fn new_timer(&self) -> Timer<()> {
-        let mut timer = Timer::new(1);
-        timer.add_task(Duration::from_millis(self.pool_idle_threshold), ());
-        timer
     }
 
     pub fn get_config_manager(&self) -> ConfigManager {
