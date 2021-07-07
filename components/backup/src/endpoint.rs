@@ -23,17 +23,9 @@ use tikv::storage::kv::{Engine, ScanMode, Snapshot};
 use tikv::storage::txn::{EntryBatch, SnapshotStore, TxnEntryScanner, TxnEntryStore};
 use tikv::storage::Statistics;
 use tikv_util::time::Limiter;
-<<<<<<< HEAD
 use tikv_util::timer::Timer;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 use txn_types::{Key, TimeStamp};
-=======
-use tikv_util::worker::Runnable;
-use tikv_util::{
-    box_err, debug, defer, error, error_unknown, impl_display_as_debug, info, thd_name, warn,
-};
-use txn_types::{Key, Lock, TimeStamp};
->>>>>>> 4869f2c3a... backup: do not recycle backup threads (#10288)
 use yatp::task::callback::{Handle, TaskCell};
 use yatp::ThreadPool;
 
@@ -785,20 +777,6 @@ impl<E: Engine, R: RegionInfoProvider> Runnable<Task> for Endpoint<E, R> {
         }
         info!("run backup task"; "task" => %task);
         self.handle_backup_task(task);
-<<<<<<< HEAD
-        self.pool.borrow_mut().heartbeat();
-    }
-}
-
-impl<E: Engine, R: RegionInfoProvider> RunnableWithTimer<Task, ()> for Endpoint<E, R> {
-    fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
-        let pool_idle_duration = Duration::from_millis(self.pool_idle_threshold);
-        self.pool
-            .borrow_mut()
-            .check_active(pool_idle_duration.clone());
-        timer.add_task(pool_idle_duration, ());
-=======
->>>>>>> 4869f2c3a... backup: do not recycle backup threads (#10288)
     }
 }
 
@@ -896,15 +874,11 @@ pub mod tests {
     use tempfile::TempDir;
     use tikv::storage::mvcc::tests::*;
     use tikv::storage::{RocksEngine, TestEngineBuilder};
-<<<<<<< HEAD
-    use tikv_util::time::Instant;
-=======
     use tikv_util::config::ReadableSize;
->>>>>>> 4869f2c3a... backup: do not recycle backup threads (#10288)
+    use tikv_util::time::Instant;
     use txn_types::SHORT_VALUE_MAX_LEN;
 
     use super::*;
-    use tikv_util::config::ReadableSize;
 
     #[derive(Clone)]
     pub struct MockRegionInfoProvider {
@@ -1424,68 +1398,4 @@ pub mod tests {
         endpoint.handle_backup_task(task);
         assert!(endpoint.pool.borrow().size == 3);
     }
-<<<<<<< HEAD
-
-    #[test]
-    fn test_thread_pool_shutdown_when_idle() {
-        let (_, mut endpoint) = new_endpoint();
-
-        // set the idle threshold to 100ms
-        endpoint.pool_idle_threshold = 100;
-        let mut backup_timer = endpoint.new_timer();
-        let endpoint = Arc::new(Mutex::new(endpoint));
-        let scheduler = {
-            let endpoint = endpoint.clone();
-            let (tx, rx) = tikv_util::mpsc::unbounded();
-            thread::spawn(move || loop {
-                let tick_time = backup_timer.next_timeout().unwrap();
-                let timeout = tick_time.checked_sub(Instant::now()).unwrap_or_default();
-                let task = match rx.recv_timeout(timeout) {
-                    Ok(Some(task)) => Some(task),
-                    _ => None,
-                };
-                if let Some(task) = task {
-                    let mut endpoint = endpoint.lock().unwrap();
-                    endpoint.run(task);
-                }
-                endpoint.lock().unwrap().on_timeout(&mut backup_timer, ());
-            });
-            tx
-        };
-
-        let mut req = BackupRequest::default();
-        req.set_start_key(vec![]);
-        req.set_end_key(vec![]);
-        req.set_start_version(1);
-        req.set_end_version(1);
-        req.set_storage_backend(make_noop_backend());
-
-        endpoint
-            .lock()
-            .unwrap()
-            .get_config_manager()
-            .set_num_threads(10);
-
-        let (tx, resp_rx) = unbounded();
-        let (task, _) = Task::new(req, tx).unwrap();
-
-        // if not task arrive after create the thread pool is empty
-        assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 0);
-
-        scheduler.send(Some(task)).unwrap();
-        // wait until the task finish
-        let _ = block_on(resp_rx.into_future());
-        assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 10);
-
-        // thread pool not yet shutdown
-        thread::sleep(Duration::from_millis(50));
-        assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 10);
-
-        // thread pool shutdown if not task arrive for 100ms
-        thread::sleep(Duration::from_millis(50));
-        assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 0);
-    }
-    // TODO: region err in txn(engine(request))
-=======
->>>>>>> 4869f2c3a... backup: do not recycle backup threads (#10288)
 }
