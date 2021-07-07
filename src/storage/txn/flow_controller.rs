@@ -34,6 +34,26 @@ enum Trend {
     OnlyOne,
 }
 
+// Flow controller is used to throttle the write rate at scheduler level, aiming
+// to substitute the write stall mechanism of RocksDB. It features in two points:
+//   * throttle at scheduler, so raftstore and apply won't be blocked anymore
+//   * better control on the throttle rate to avoid QPS drop under heavy write
+//
+// When write stall happens, the max speed of write rate max_delayed_write_rate
+// is limited to 16MB/s by default which doesn't take real disk ability into
+// account. It may underestimate the disk's throughout that 16MB/s is too small 
+// at once, causing a very large jitter on the write duration.
+// Also, it decreases the delayed write rate further if the factors still exceed
+// the threshold. So under heavy write load, the write rate may be throttled to
+// a very low rate from time to time, causing QPS drop eventually. 
+//
+// This main idea of the flow controller is to throttle at a steady write rate
+// so that the number of L0 keeps around the threshold. When it falls below the
+// threshold, the throttle state wouldn't exit right away. Instead, it may keep
+// or increase the throttle speed depending on some statistics.
+// How can we decide the throttle speed? As we can imagine, the consumption ability of L0 
+// wouldn't change dramatically corresponding to the ability of hardware. So given
+// a hardware 
 pub struct FlowController {
     discard_ratio: Arc<AtomicU64>,
     limiter: Arc<Limiter>,
