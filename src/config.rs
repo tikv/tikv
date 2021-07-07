@@ -1091,23 +1091,23 @@ impl DbConfig {
         opts.set_max_log_file_size(self.info_log_max_size.0);
         opts.set_log_file_time_to_roll(self.info_log_roll_time.as_secs());
         opts.set_keep_log_file_num(self.info_log_keep_log_file_num);
-        // if self.rate_bytes_per_sec.0 > 0 {
-        //     if self.rate_limiter_auto_tuned {
-        //         opts.set_writeampbasedratelimiter_with_auto_tuned(
-        //             self.rate_bytes_per_sec.0 as i64,
-        //             (self.rate_limiter_refill_period.as_millis() * 1000) as i64,
-        //             self.rate_limiter_mode,
-        //             self.rate_limiter_auto_tuned,
-        //         );
-        //     } else {
-        //         opts.set_ratelimiter_with_auto_tuned(
-        //             self.rate_bytes_per_sec.0 as i64,
-        //             (self.rate_limiter_refill_period.as_millis() * 1000) as i64,
-        //             self.rate_limiter_mode,
-        //             self.rate_limiter_auto_tuned,
-        //         );
-        //     }
-        // }
+        if self.rate_bytes_per_sec.0 > 0 {
+            // if self.rate_limiter_auto_tuned {
+            //     opts.set_writeampbasedratelimiter_with_auto_tuned(
+            //         self.rate_bytes_per_sec.0 as i64,
+            //         (self.rate_limiter_refill_period.as_millis() * 1000) as i64,
+            //         self.rate_limiter_mode,
+            //         self.rate_limiter_auto_tuned,
+            //     );
+            // } else {
+                opts.set_ratelimiter_with_auto_tuned(
+                    self.rate_bytes_per_sec.0 as i64,
+                    (self.rate_limiter_refill_period.as_millis() * 1000) as i64,
+                    self.rate_limiter_mode,
+                    self.rate_limiter_auto_tuned,
+                );
+            // }
+        }
 
         opts.set_bytes_per_sync(self.bytes_per_sync.0 as u64);
         opts.set_wal_bytes_per_sync(self.wal_bytes_per_sync.0 as u64);

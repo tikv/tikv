@@ -51,9 +51,13 @@ enum Trend {
 // so that the number of L0 keeps around the threshold. When it falls below the
 // threshold, the throttle state wouldn't exit right away. Instead, it may keep
 // or increase the throttle speed depending on some statistics.
-// How can we decide the throttle speed? As we can imagine, the consumption ability of L0 
-// wouldn't change dramatically corresponding to the ability of hardware. So given
-// a hardware 
+// How can we decide the throttle speed? As we can imagine, the consumption
+// ability of L0 wouldn't change dramatically corresponding to the ability of 
+// hardware. So we can record the flush flow when reach the threshold as target
+// flow, and increase or decrease the throttle speed based on whether current 
+// flush flow is smaller/larger than target flow.
+//
+// For
 pub struct FlowController {
     discard_ratio: Arc<AtomicU64>,
     limiter: Arc<Limiter>,
