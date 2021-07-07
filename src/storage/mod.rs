@@ -120,7 +120,7 @@ pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 /// encoding and appending timestamp.
 pub struct Storage<E: Engine, L: LockManager> {
     // TODO: Too many Arcs, would be slow when clone.
-    pub engine: E,
+    engine: E,
 
     sched: TxnScheduler<E, L>,
 
@@ -248,6 +248,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         kv::snapshot(engine, ctx)
             .map_err(txn::Error::from)
             .map_err(Error::from)
+    }
+
+    #[cfg(test)]
+    pub fn get_snapshot(&self) -> E::Snap {
+        self.engine.snapshot(Default::default()).unwrap()
     }
 
     pub fn release_snapshot(&self) {

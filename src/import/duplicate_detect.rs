@@ -141,7 +141,7 @@ impl<S: Snapshot> DuplicateDetector<S> {
         self.iter.next().map_err(from_kv_error)?;
         while self.iter.valid().map_err(from_kv_error)? {
             let (current_key, _) = Key::split_on_ts_for(self.iter.key())?;
-            if !current_key.eq(start_key) {
+            if current_key != start_key {
                 return Ok(None);
             } else {
                 let write = WriteRef::parse(self.iter.value()).map_err(from_txn_types_error)?;
@@ -160,7 +160,7 @@ impl<S: Snapshot> DuplicateDetector<S> {
         self.iter.next().map_err(from_kv_error)?;
         while self.iter.valid().map_err(from_kv_error)? {
             let (current_key, _) = Key::split_on_ts_for(self.iter.key())?;
-            if !current_key.eq(start_key) {
+            if current_key != start_key {
                 break;
             }
             self.iter.next().map_err(from_kv_error)?;
@@ -365,7 +365,7 @@ mod tests {
         }
         write_data(&storage, data, 5);
         // We have to do the prewrite manually so that the mem locks don't get released.
-        let snapshot = storage.engine.snapshot(Default::default()).unwrap();
+        let snapshot = storage.get_snapshot();
         let start = format!("{}", 0);
         let end = format!("{}", 800);
         let detector = DuplicateDetector::new(
@@ -384,7 +384,7 @@ mod tests {
             expected_kvs.push((key.as_bytes().to_vec(), value.as_bytes().to_vec(), 3));
         }
         expected_kvs.sort_by(|a, b| {
-            if a.0.eq(&b.0) {
+            if a.0 == b.0 {
                 b.2.cmp(&a.2)
             } else {
                 a.0.cmp(&b.0)
@@ -418,7 +418,7 @@ mod tests {
         }
 
         // We have to do the prewrite manually so that the mem locks don't get released.
-        let snapshot = storage.engine.snapshot(Default::default()).unwrap();
+        let snapshot = storage.get_snapshot();
         let start = format!("{}", 0);
         let detector =
             DuplicateDetector::new(snapshot, start.as_bytes().to_vec(), None, 16, false).unwrap();
@@ -453,7 +453,7 @@ mod tests {
         }
 
         expected_kvs.sort_by(|a, b| {
-            if a.0.eq(&b.0) {
+            if a.0 == b.0 {
                 b.2.cmp(&a.2)
             } else {
                 a.0.cmp(&b.0)
@@ -483,7 +483,7 @@ mod tests {
             (b"101".to_vec(), b"101".to_vec(), 14),
             (b"101".to_vec(), b"101".to_vec(), 10),
         ];
-        let snapshot = storage.engine.snapshot(Default::default()).unwrap();
+        let snapshot = storage.get_snapshot();
         let detector = DuplicateDetector::new(snapshot, b"0".to_vec(), None, 13, false).unwrap();
         check_duplicate_data(detector, expected_kvs);
     }
