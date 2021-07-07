@@ -232,7 +232,7 @@ mod tests {
 
         let mut region = Region::default();
         region.mut_peers().push(Peer::default());
-        let middle_key = get_region_approximate_middle(&engine.c(), &region)
+        let middle_key = get_region_approximate_middle(engine.c(), &region)
             .unwrap()
             .unwrap();
 
