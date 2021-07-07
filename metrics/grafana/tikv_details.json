@@ -3803,7 +3803,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "99% gRPC messge duration",
+          "title": "99% gRPC message duration",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -3898,7 +3898,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Average gRPC messge duration",
+          "title": "Average gRPC message duration",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -4116,11 +4116,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-<<<<<<< HEAD
           "title": "raft message batch size",
-=======
-          "title": "99% gRPC message duration",
->>>>>>> 54ac25ca0... *: typo messge -> message (#10516)
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -4173,7 +4169,6 @@
       "id": 2746,
       "panels": [
         {
-<<<<<<< HEAD
           "alert": {
             "conditions": [
               {
@@ -4217,78 +4212,6 @@
             "name": "TiKV raft store CPU alert",
             "noDataState": "ok",
             "notifications": []
-=======
-          "aliasColors": {},
-          "bars": false,
-          "dashLength": 10,
-          "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "decimals": 1,
-          "fill": 1,
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 12,
-            "y": 12
-          },
-          "id": 2532,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": false,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "current",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "nullPointMode": "null",
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "seriesOverrides": [],
-          "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "expr": "sum(rate(tikv_grpc_msg_duration_seconds_sum{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type) / sum(rate(tikv_grpc_msg_duration_seconds_count[1m])) by (type)",
-              "format": "time_series",
-              "interval": "",
-              "intervalFactor": 2,
-              "legendFormat": "{{type}}",
-              "refId": "A",
-              "step": 10
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeRegions": [],
-          "timeShift": null,
-          "title": "Average gRPC message duration",
-          "tooltip": {
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
->>>>>>> 54ac25ca0... *: typo messge -> message (#10516)
           },
           "aliasColors": {},
           "bars": false,
