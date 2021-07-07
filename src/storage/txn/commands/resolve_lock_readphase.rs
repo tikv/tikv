@@ -27,8 +27,12 @@ command! {
 impl CommandExt for ResolveLockReadPhase {
     ctx!();
     tag!(resolve_lock);
-    command_method!(readonly, bool, true);
-    command_method!(write_bytes, usize, 0);
+    property!(readonly);
+
+    fn write_bytes(&self) -> usize {
+        0
+    }
+
     gen_lock!(empty);
 }
 

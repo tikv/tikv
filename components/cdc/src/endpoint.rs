@@ -2,13 +2,14 @@
 
 use std::f64::INFINITY;
 use std::fmt;
+use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::atomic::AtomicCell;
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_traits::{KvEngine, Snapshot as EngineSnapshot};
 use fail::fail_point;
 use futures::compat::Future01CompatExt;
 use grpcio::{ChannelBuilder, Environment};
@@ -211,11 +212,12 @@ impl fmt::Debug for Task {
 
 const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
 
-pub struct Endpoint<T> {
+pub struct Endpoint<T, E> {
     capture_regions: HashMap<u64, Delegate>,
     connections: HashMap<ConnID, Conn>,
     scheduler: Scheduler<Task>,
     raft_router: T,
+    engine: PhantomData<E>,
     observer: CdcObserver,
 
     pd_client: Arc<dyn PdClient>,
@@ -251,7 +253,7 @@ pub struct Endpoint<T> {
     security_mgr: Arc<SecurityManager>,
 }
 
-impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
+impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
     pub fn new(
         cfg: &CdcConfig,
         pd_client: Arc<dyn PdClient>,
@@ -263,7 +265,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
         sink_memory_quota: MemoryQuota,
-    ) -> Endpoint<T> {
+    ) -> Endpoint<T, E> {
         let workers = Builder::new_multi_thread()
             .thread_name("cdcwkr")
             .worker_threads(cfg.incremental_scan_threads)
@@ -302,6 +304,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             workers,
             scan_concurrency_semaphore,
             raft_router,
+            engine: PhantomData,
             observer,
             store_meta,
             concurrency_manager,
@@ -1015,7 +1018,7 @@ struct Initializer {
 }
 
 impl Initializer {
-    async fn initialize<T: 'static + RaftStoreRouter<RocksEngine>>(
+    async fn initialize<T: 'static + RaftStoreRouter<E>, E: KvEngine>(
         &mut self,
         change_cmd: ChangeObserver,
         raft_router: T,
@@ -1080,7 +1083,7 @@ impl Initializer {
 
     async fn on_change_cmd_response(
         &mut self,
-        mut resp: ReadResponse<RocksSnapshot>,
+        mut resp: ReadResponse<impl EngineSnapshot>,
     ) -> Result<()> {
         if let Some(region_snapshot) = resp.snapshot {
             assert_eq!(self.region_id, region_snapshot.get_region().get_id());
@@ -1120,7 +1123,7 @@ impl Initializer {
         let start = Instant::now_coarse();
         // Time range: (checkpoint_ts, current]
         let current = TimeStamp::max();
-        let mut scanner = ScannerBuilder::new(snap, current, false)
+        let mut scanner = ScannerBuilder::new(snap, current)
             .fill_cache(false)
             .range(None, None)
             .build_delta_scanner(self.checkpoint_ts, self.txn_extra_op)
@@ -1276,7 +1279,7 @@ impl Initializer {
     }
 }
 
-impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable for Endpoint<T> {
+impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
     type Task = Task;
 
     fn run(&mut self, task: Task) {
@@ -1328,7 +1331,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable for Endpoint<T> {
     }
 }
 
-impl<T: 'static + RaftStoreRouter<RocksEngine>> RunnableWithTimer for Endpoint<T> {
+impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> RunnableWithTimer for Endpoint<T, E> {
     fn on_timeout(&mut self) {
         CDC_CAPTURED_REGION_COUNT.set(self.capture_regions.len() as i64);
         CDC_REGION_RESOLVE_STATUS_GAUGE_VEC
@@ -1383,6 +1386,7 @@ impl TxnExtraScheduler for CdcTxnExtraScheduler {
 #[cfg(test)]
 mod tests {
     use collections::HashSet;
+    use engine_rocks::RocksEngine;
     use engine_traits::DATA_CFS;
     use futures::executor::block_on;
     use futures::StreamExt;
@@ -1477,7 +1481,7 @@ mod tests {
     fn mock_endpoint(
         cfg: &CdcConfig,
     ) -> (
-        Endpoint<MockRaftStoreRouter>,
+        Endpoint<MockRaftStoreRouter, RocksEngine>,
         MockRaftStoreRouter,
         ReceiverWrapper<Task>,
     ) {
