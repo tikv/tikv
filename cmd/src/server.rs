@@ -9,6 +9,7 @@
 //! We keep these components in the `TiKVServer` struct.
 
 use crate::{setup::*, signal_handler};
+use cdc::MemoryQuota;
 use encryption::DataKeyManager;
 use engine::rocks;
 use engine_rocks::{
@@ -142,6 +143,7 @@ struct Servers {
     node: Node<RpcClient>,
     importer: Arc<SSTImporter>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
+    cdc_memory_quota: MemoryQuota,
 }
 
 impl TiKVServer {
@@ -603,6 +605,7 @@ impl TiKVServer {
 
         // Start CDC.
         let raft_router = self.engines.as_ref().unwrap().raft_router.clone();
+        let cdc_memory_quota = MemoryQuota::new(self.config.cdc.sink_memory_quota.0 as _);
         let cdc_endpoint = cdc::Endpoint::new(
             &self.config.cdc,
             self.pd_client.clone(),
@@ -610,6 +613,7 @@ impl TiKVServer {
             raft_router,
             cdc_ob,
             engines.store_meta.clone(),
+            cdc_memory_quota.clone(),
         );
         let cdc_timer = cdc_endpoint.new_timer();
         cdc_worker
@@ -623,6 +627,7 @@ impl TiKVServer {
             node,
             importer,
             cdc_scheduler,
+            cdc_memory_quota,
         });
 
         server_config
@@ -635,7 +640,7 @@ impl TiKVServer {
         // Import SST service.
         let import_service = ImportSSTService::new(
             self.config.import.clone(),
-            engines.raft_router.get_router(),
+            engines.raft_router.clone(),
             engines.engines.kv.clone(),
             servers.importer.clone(),
             self.security_mgr.clone(),
@@ -736,8 +741,11 @@ impl TiKVServer {
             .start_with_timer(backup_endpoint, backup_timer)
             .unwrap_or_else(|e| fatal!("failed to start backup endpoint: {}", e));
 
-        let cdc_service =
-            cdc::Service::new(servers.cdc_scheduler.clone(), self.security_mgr.clone());
+        let cdc_service = cdc::Service::new(
+            servers.cdc_scheduler.clone(),
+            self.security_mgr.clone(),
+            servers.cdc_memory_quota.clone(),
+        );
         if servers
             .server
             .register_service(create_change_data(cdc_service))
