@@ -422,6 +422,7 @@ impl<E: KvEngine> fmt::Debug for PeerMsg<E> {
             PeerMsg::CasualMessage(msg) => write!(fmt, "CasualMessage {:?}", msg),
             PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
             PeerMsg::Destroy(peer_id) => write!(fmt, "Destroy {}", peer_id),
+        }
     }
 }
 
