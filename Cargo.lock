@@ -470,7 +470,7 @@ dependencies = [
  "tikv",
  "tikv_util",
  "time 0.1.42",
- "tokio-threadpool",
+ "tokio 0.2.13",
  "txn_types",
 ]
 
@@ -1537,6 +1537,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c31b6d751ae2c7f11320402d34e41349dd1016f8d5d45e48c4312bc8625af50c"
 dependencies = [
  "byteorder",
+]
+
+[[package]]
+name = "gag"
+version = "0.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8cc0b9f53275dc5fada808f1d2f82e3688a6c14d735633d1590b7be8eb2307b5"
+dependencies = [
+ "libc",
+ "tempfile",
 ]
 
 [[package]]
@@ -3509,8 +3519,7 @@ dependencies = [
 [[package]]
 name = "rusoto_core"
 version = "0.45.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e977941ee0658df96fca7291ecc6fc9a754600b21ad84b959eb1dbbc9d5abcc7"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#f56ad0217e49ab7e3100ee0cd324db14608112bb"
 dependencies = [
  "async-trait",
  "base64 0.12.0",
@@ -3537,8 +3546,7 @@ dependencies = [
 [[package]]
 name = "rusoto_credential"
 version = "0.45.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09ac05563f83489b19b4d413607a30821ab08bbd9007d14fa05618da3ef09d8b"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#f56ad0217e49ab7e3100ee0cd324db14608112bb"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3557,8 +3565,7 @@ dependencies = [
 [[package]]
 name = "rusoto_kms"
 version = "0.45.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "111b99b940b1b02f5a98a5fcc96467a24ab899c43c1caff60d4a863342798c6e"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#f56ad0217e49ab7e3100ee0cd324db14608112bb"
 dependencies = [
  "async-trait",
  "bytes 0.5.3",
@@ -3571,8 +3578,7 @@ dependencies = [
 [[package]]
 name = "rusoto_mock"
 version = "0.45.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ff14fcb9ae32511e705349da464e117bac945b541ec87283ad5dc93c1280250"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#f56ad0217e49ab7e3100ee0cd324db14608112bb"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3586,8 +3592,7 @@ dependencies = [
 [[package]]
 name = "rusoto_s3"
 version = "0.45.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1146e37a7c1df56471ea67825fe09bbbd37984b5f6e201d8b2e0be4ee15643d8"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#f56ad0217e49ab7e3100ee0cd324db14608112bb"
 dependencies = [
  "async-trait",
  "bytes 0.5.3",
@@ -3599,8 +3604,7 @@ dependencies = [
 [[package]]
 name = "rusoto_signature"
 version = "0.45.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97a740a88dde8ded81b6f2cff9cd5e054a5a2e38a38397260f7acdd2c85d17dd"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#f56ad0217e49ab7e3100ee0cd324db14608112bb"
 dependencies = [
  "base64 0.12.0",
  "bytes 0.5.3",
@@ -3624,8 +3628,7 @@ dependencies = [
 [[package]]
 name = "rusoto_sts"
 version = "0.45.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3815b8c0fc1c50caf9e87603f23daadfedb18d854de287b361c69f68dc9d49e0"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#f56ad0217e49ab7e3100ee0cd324db14608112bb"
 dependencies = [
  "async-trait",
  "bytes 0.5.3",
@@ -4598,7 +4601,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "4.0.12"
+version = "4.0.13"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -4770,11 +4773,13 @@ dependencies = [
  "futures 0.3.8",
  "futures-cpupool",
  "fxhash",
+ "gag",
  "grpcio",
  "lazy_static",
  "libc",
  "log",
  "log_wrappers",
+ "nix 0.11.1",
  "num_cpus",
  "openssl",
  "panic_hook",
