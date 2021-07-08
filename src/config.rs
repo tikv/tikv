@@ -944,6 +944,8 @@ pub struct DbConfig {
     pub enable_multi_batch_write: bool,
     #[online_config(skip)]
     pub enable_unordered_write: bool,
+    #[online_config(skip)]
+    pub sst_ingestion_write_global_seqno: bool,
     #[online_config(submodule)]
     pub defaultcf: DefaultCfConfig,
     #[online_config(submodule)]
@@ -954,8 +956,6 @@ pub struct DbConfig {
     pub raftcf: RaftCfConfig,
     #[online_config(skip)]
     pub titan: TitanDBConfig,
-    #[online_config(skip)]
-    pub sst_ingestion_write_global_seqno: bool,
 }
 
 impl Default for DbConfig {
