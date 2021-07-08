@@ -936,16 +936,19 @@ where
         if self.need_flush.is_empty() {
             return;
         }
+        let mut counter = 0;
         for id in &self.need_flush {
             if let Some(s) = self.cache.get_mut(id) {
                 if s.dirty {
                     s.dirty = false;
+                    counter += 1;
                     s.queue.notify();
                 }
                 continue;
             }
             let l = self.pool.lock().unwrap();
             if let Some(q) = l.connections.get(id) {
+                counter += 1;
                 q.notify();
             }
         }
@@ -953,6 +956,7 @@ where
         if self.need_flush.capacity() > 2048 {
             self.need_flush.shrink_to(512);
         }
+        RAFT_MESSAGE_FLUSH_COUNTER.inc_by(counter);
     }
 }
 
