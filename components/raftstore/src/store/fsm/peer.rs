@@ -490,9 +490,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     }
                 }
                 PeerMsg::Noop => {}
-<<<<<<< HEAD
-=======
-                PeerMsg::UpdateReplicationMode => self.on_update_replication_mode(),
                 PeerMsg::Destroy(peer_id) => {
                     if self.fsm.peer.peer_id() == peer_id {
                         match self.fsm.peer.maybe_destroy(&self.ctx) {
@@ -503,7 +500,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                         }
                     }
                 }
->>>>>>> 7ad72d841... raftstore: reply to stale peer with tombstone message everytime (#10352)
             }
         }
         // Propose batch request which may be still waiting for more raft-command
