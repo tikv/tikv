@@ -367,10 +367,9 @@ impl<K: PrewriteKind> Prewriter<K> {
         // Set extra op here for getting the write record when check write conflict in prewrite.
 
         let rows = self.mutations.len();
-        let (locks, final_min_commit_ts) =
-            self.prewrite(&mut txn, &mut reader, context.extra_op)?;
-
+        let res = self.prewrite(&mut txn, &mut reader, context.extra_op);
         context.statistics.add(&reader.take_statistics());
+        let (locks, final_min_commit_ts) = res?;
 
         Ok(self.write_result(
             locks,
