@@ -11,12 +11,9 @@ use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant};
 use std::{cmp, io};
 
+use engine_traits::{KvEngine, RaftEngine};
 #[cfg(feature = "failpoints")]
 use fail::fail_point;
-use futures::future::TryFutureExt;
-use tokio::task::spawn_local;
-
-use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest,
     SplitRequest,
@@ -26,6 +23,7 @@ use kvproto::replication_modepb::RegionReplicationStatus;
 use kvproto::{metapb, pdpb};
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
+use yatp::Remote;
 
 use crate::store::cmd_resp::new_error;
 use crate::store::metrics::*;
@@ -521,6 +519,7 @@ where
 
     concurrency_manager: ConcurrencyManager,
     snap_mgr: SnapManager,
+    remote: Remote<yatp::task::future::TaskCell>,
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
@@ -540,6 +539,7 @@ where
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
         snap_mgr: SnapManager,
+        remote: Remote<yatp::task::future::TaskCell>,
     ) -> Runner<EK, ER, T> {
         let interval = store_heartbeat_interval / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
@@ -559,6 +559,7 @@ where
             stats_monitor,
             concurrency_manager,
             snap_mgr,
+            remote,
         }
     }
 
@@ -603,7 +604,7 @@ where
                 }
             }
         };
-        spawn_local(f);
+        self.remote.spawn(f);
     }
 
     // Note: The parameter doesn't contain `self` because this function may
@@ -618,6 +619,7 @@ where
         right_derive: bool,
         callback: Callback<EK::Snapshot>,
         task: String,
+        remote: Remote<yatp::task::future::TaskCell>,
     ) {
         if split_keys.is_empty() {
             info!("empty split key, skip ask batch split";
@@ -686,7 +688,7 @@ where
                 }
             }
         };
-        spawn_local(f);
+        remote.spawn(f);
     }
 
     fn handle_heartbeat(
@@ -710,17 +712,23 @@ where
             .region_keys_read
             .observe(region_stat.read_keys as f64);
 
-        let f = self
-            .pd_client
-            .region_heartbeat(term, region.clone(), peer, region_stat, replication_status)
-            .map_err(move |e| {
+        let resp = self.pd_client.region_heartbeat(
+            term,
+            region.clone(),
+            peer,
+            region_stat,
+            replication_status,
+        );
+        let f = async move {
+            if let Err(e) = resp.await {
                 debug!(
                     "failed to send heartbeat";
                     "region_id" => region.get_id(),
                     "err" => ?e
                 );
-            });
-        spawn_local(f);
+            }
+        };
+        self.remote.spawn(f);
     }
 
     fn handle_store_heartbeat(&mut self, mut stats: pdpb::StoreStats, store_info: StoreInfo<EK>) {
@@ -843,14 +851,17 @@ where
                 }
             }
         };
-        spawn_local(f);
+        self.remote.spawn(f);
     }
 
     fn handle_report_batch_split(&self, regions: Vec<metapb::Region>) {
-        let f = self.pd_client.report_batch_split(regions).map_err(|e| {
-            warn!("report split failed"; "err" => ?e);
-        });
-        spawn_local(f);
+        let resp = self.pd_client.report_batch_split(regions);
+        let f = async move {
+            if let Err(e) = resp.await {
+                warn!("report split failed"; "err" => ?e);
+            }
+        };
+        self.remote.spawn(f);
     }
 
     fn handle_validate_peer(&self, local_region: metapb::Region, peer: metapb::Peer) {
@@ -920,7 +931,7 @@ where
                 }
             }
         };
-        spawn_local(f);
+        self.remote.spawn(f);
     }
 
     fn schedule_heartbeat_receiver(&mut self) {
@@ -1024,7 +1035,7 @@ where
                 Err(e) => panic!("unexpected error: {:?}", e),
             }
         };
-        spawn_local(f);
+        self.remote.spawn(f);
         self.is_hb_receiver_scheduled = true;
     }
 
@@ -1127,9 +1138,10 @@ where
         if delay {
             info!("[failpoint] delay update max ts for 1s"; "region_id" => region_id);
             let deadline = Instant::now() + Duration::from_secs(1);
-            spawn_local(GLOBAL_TIMER_HANDLE.delay(deadline).compat().then(|_| f));
+            self.remote
+                .spawn(GLOBAL_TIMER_HANDLE.delay(deadline).compat().then(|_| f));
         } else {
-            spawn_local(f);
+            self.remote.spawn(f);
         }
     }
 
@@ -1150,7 +1162,7 @@ where
                 }
             }
         };
-        spawn_local(f);
+        self.remote.spawn(f);
     }
 }
 
@@ -1201,11 +1213,13 @@ where
                 right_derive,
                 callback,
                 String::from("batch_split"),
+                self.remote.clone(),
             ),
             Task::AutoSplit { split_infos } => {
                 let pd_client = self.pd_client.clone();
                 let router = self.router.clone();
                 let scheduler = self.scheduler.clone();
+                let remote = self.remote.clone();
 
                 let f = async move {
                     for split_info in split_infos {
@@ -1222,11 +1236,12 @@ where
                                 true,
                                 Callback::None,
                                 String::from("auto_split"),
+                                remote.clone(),
                             );
                         }
                     }
                 };
-                spawn_local(f);
+                self.remote.spawn(f);
             }
 
             Task::Heartbeat(hb_task) => {
