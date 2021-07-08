@@ -208,7 +208,7 @@ impl Simulator for NodeCluster {
         };
 
         // Create coprocessor.
-        let mut coprocessor_host = CoprocessorHost::new(router.clone());
+        let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
 
         if let Some(f) = self.post_create_coprocessor_host.as_ref() {
             f(node_id, &mut coprocessor_host);
@@ -228,7 +228,6 @@ impl Simulator for NodeCluster {
             Arc::clone(&engines.kv),
             router.clone(),
             coprocessor_host.clone(),
-            cfg.coprocessor.clone(),
         );
         split_check_worker.start(split_check_runner).unwrap();
         cfg_controller.register(

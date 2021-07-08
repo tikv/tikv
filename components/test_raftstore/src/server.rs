@@ -160,7 +160,7 @@ impl Simulator for ServerCluster {
         let raft_engine = RaftKv::new(sim_router.clone());
 
         // Create coprocessor.
-        let mut coprocessor_host = CoprocessorHost::new(router.clone());
+        let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
 
         let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
         region_info_accessor.start();
@@ -299,14 +299,13 @@ impl Simulator for ServerCluster {
         // Register the role change observer of the lock manager.
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
 
-        let pessimistic_txn_cfg = cfg.pessimistic_txn.clone();
+        let pessimistic_txn_cfg = cfg.pessimistic_txn;
 
         let mut split_check_worker = Worker::new("split-check");
         let split_check_runner = SplitCheckRunner::new(
             Arc::clone(&engines.kv),
             router.clone(),
             coprocessor_host.clone(),
-            cfg.coprocessor,
         );
         split_check_worker.start(split_check_runner).unwrap();
 
