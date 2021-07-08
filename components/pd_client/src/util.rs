@@ -41,8 +41,8 @@ const MAX_RETRY_TIMES: u64 = 5;
 const MAX_RETRY_DURATION: Duration = Duration::from_secs(10);
 
 // FIXME: Use a request-independent way to handle reconnection.
-const GLOBAL_RECONNECT_INTERVAL: Duration = Duration::from_millis(100); // 0.1s
-pub const REQUEST_RECONNECT_INTERVAL: Duration = Duration::from_secs(1); // 1s
+const GLOBAL_RECONNECT_INTERVAL: Duration = Duration::from_millis(200); // 0.2s
+pub const REQUEST_RECONNECT_INTERVAL: Duration = Duration::from_secs(2); // 2s
 
 pub struct TargetInfo {
     target_url: String,
@@ -365,7 +365,7 @@ pub struct Request<Req, F> {
     func: F,
 }
 
-const MAX_REQUEST_COUNT: usize = 3;
+const MAX_REQUEST_COUNT: usize = 2;
 
 impl<Req, Resp, F> Request<Req, F>
 where

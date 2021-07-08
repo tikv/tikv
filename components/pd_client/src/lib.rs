@@ -262,7 +262,7 @@ pub trait PdClient: Send + Sync {
     }
 }
 
-const REQUEST_TIMEOUT: u64 = 2; // 2s
+const REQUEST_TIMEOUT: u64 = 1; // 1s
 
 /// Takes the peer address (for sending raft messages) from a store.
 pub fn take_peer_address(store: &mut metapb::Store) -> String {
