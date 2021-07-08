@@ -259,7 +259,7 @@ pub enum CasualMessage<E: KvEngine> {
         hash: Vec<u8>,
     },
 
-    /// Approximate size of target region.
+    /// Approximate size of target region. This message can only be sent by split-check thread.
     RegionApproximateSize {
         size: u64,
     },
