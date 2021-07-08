@@ -56,8 +56,6 @@ enum Trend {
 // hardware. So we can record the flush flow when reach the threshold as target
 // flow, and increase or decrease the throttle speed based on whether current 
 // flush flow is smaller/larger than target flow.
-//
-// For
 pub struct FlowController {
     discard_ratio: Arc<AtomicU64>,
     limiter: Arc<Limiter>,
@@ -118,6 +116,7 @@ impl FlowController {
     }
 }
 
+// Smoother is a sliding window used to provide steadier flow statistics.
 struct Smoother<const CAP: usize> {
     records: VecDeque<(u64, Instant)>,
     total: u64,
@@ -245,6 +244,7 @@ impl<const CAP: usize> Smoother<CAP> {
             return Trend::OnlyOne;
         }
 
+        // Calculate the average of left and right parts
         let half = self.records.len() / 2;
         let mut left = 0;
         let mut right = 0;
