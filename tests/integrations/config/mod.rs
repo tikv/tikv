@@ -506,7 +506,6 @@ fn test_serde_custom_tikv_config() {
             bottommost_zstd_compression_sample_size: 0,
         },
         titan: titan_db_config.clone(),
-        sst_ingestion_write_global_seqno: false,
     };
     value.raftdb = RaftDbConfig {
         info_log_level: LogLevel::Info,

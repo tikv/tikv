@@ -17,7 +17,7 @@ impl ImportExt for RocksEngine {
         let cf = util::get_cf_handle(self.as_inner(), cf)?;
         let mut opts = RocksIngestExternalFileOptions::new();
         opts.move_files(true);
-        opts.set_write_global_seqno(self.get_sst_ingestion_write_global_seqno());
+        opts.set_write_global_seqno(false);
         // This is calling a specially optimized version of
         // ingest_external_file_cf. In cases where the memtable needs to be
         // flushed it avoids blocking writers while doing the flush. The unused
