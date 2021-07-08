@@ -868,7 +868,6 @@ pub mod tests {
     use tikv::storage::mvcc::tests::*;
     use tikv::storage::{RocksEngine, TestEngineBuilder};
     use tikv_util::config::ReadableSize;
-    use tikv_util::time::Instant;
     use txn_types::SHORT_VALUE_MAX_LEN;
 
     use super::*;
