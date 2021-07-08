@@ -615,6 +615,8 @@ fn test_serde_custom_tikv_config() {
     };
     value.cdc = CdcConfig {
         min_ts_interval: ReadableDuration::secs(4),
+        incremental_scan_threads: 3,
+        incremental_scan_concurrency: 4,
         incremental_scan_speed_limit: ReadableSize(7),
         sink_memory_quota: ReadableSize::mb(7),
     };

@@ -50,7 +50,7 @@ use crate::store::util::{
 use crate::store::{cmd_resp, util, Config, RegionSnapshot, RegionTask};
 use crate::{observe_perf_context_type, report_perf_context, Error, Result};
 
-use sst_importer::SSTImporter;
+use sst_importer::{SSTImporter, SSTMetaInfo};
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant};
@@ -219,7 +219,7 @@ pub enum ExecResult {
         ranges: Vec<Range>,
     },
     IngestSst {
-        ssts: Vec<SstMeta>,
+        ssts: Vec<SSTMetaInfo>,
     },
 }
 
@@ -333,7 +333,7 @@ struct ApplyContext<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
     /// has been persisted to kvdb because this entry may replay because of panic or power-off, which
     /// happened before `WriteBatch::write` and after `SSTImporter::delete`. We shall make sure that
     /// this entry will never apply again at first, then we can delete the ssts files.
-    delete_ssts: Vec<SstMeta>,
+    delete_ssts: Vec<SSTMetaInfo>,
 }
 
 impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
@@ -465,7 +465,7 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
         if !self.delete_ssts.is_empty() {
             let tag = self.tag.clone();
             for sst in self.delete_ssts.drain(..) {
-                self.importer.delete(&sst).unwrap_or_else(|e| {
+                self.importer.delete(&sst.meta).unwrap_or_else(|e| {
                     panic!("{} cleanup ingested file {:?}: {:?}", tag, sst, e);
                 });
             }
@@ -1482,7 +1482,7 @@ impl ApplyDelegate {
         importer: &Arc<SSTImporter>,
         engine: &RocksEngine,
         req: &Request,
-        ssts: &mut Vec<SstMeta>,
+        ssts: &mut Vec<SSTMetaInfo>,
     ) -> Result<Response> {
         let sst = req.get_ingest_sst().get_sst();
 
@@ -1499,13 +1499,14 @@ impl ApplyDelegate {
             return Err(e);
         }
 
-        importer.ingest(sst, engine).unwrap_or_else(|e| {
-            // If this failed, it means that the file is corrupted or something
-            // is wrong with the engine, but we can do nothing about that.
-            panic!("{} ingest {:?}: {:?}", self.tag, sst, e);
-        });
-
-        ssts.push(sst.clone());
+        match importer.ingest(sst, engine) {
+            Ok(meta_info) => ssts.push(meta_info),
+            Err(e) => {
+                // If this failed, it means that the file is corrupted or something
+                // is wrong with the engine, but we can do nothing about that.
+                panic!("{} ingest {:?}: {:?}", self.tag, sst, e);
+            }
+        };
         Ok(Response::default())
     }
 }
