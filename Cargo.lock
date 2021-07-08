@@ -470,7 +470,7 @@ dependencies = [
  "tikv",
  "tikv_util",
  "time 0.1.42",
- "tokio-threadpool",
+ "tokio 0.2.13",
  "txn_types",
 ]
 
