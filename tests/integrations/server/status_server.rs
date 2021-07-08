@@ -50,7 +50,7 @@ fn test_region_meta_endpoint() {
         router.unwrap(),
     )
     .unwrap();
-    let addr = "127.0.0.1:0".to_owned();
+    let addr = format!("127.0.0.1:{}", test_util::alloc_port());
     assert!(status_server.start(addr.clone(), addr).is_ok());
     let check_task = check(status_server.listening_addr(), region_id);
     let mut rt = tokio::runtime::Runtime::new().unwrap();
