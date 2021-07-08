@@ -705,7 +705,8 @@ impl<E: Engine> FlowChecker<E> {
                         .with_label_values(&[&cf, "change_throttle_cf"])
                         .inc();
                     self.throttle_cf = Some(cf.clone());
-                    self.last_target_file = None;
+                    self.last_target_file = Some(num_l0_files);
+                    // do not change target flow
                 } else {
                     return;
                 }
@@ -782,6 +783,10 @@ impl<E: Engine> FlowChecker<E> {
                         .with_label_values(&[&cf, "down"])
                         .inc();
                     // refresh down flow
+                    if self.last_target_file.is_none() {
+                        self.last_target_file = Some(checker.last_num_l0_files);
+                        self.l0_target_flow = checker.short_term_flush_flow.get_avg();
+                    }
                     self.limiter.speed_limit()
                 }
                 Trend::Decreasing => {
@@ -798,17 +803,12 @@ impl<E: Engine> FlowChecker<E> {
                 }
             }
         } else if is_throttled && !should_throttle {
-            // if checker.long_term_num_l0_files.get_avg() >= self.l0_files_threshold as f64 * 0.5 {
-            //     SCHED_THROTTLE_ACTION_COUNTER
-            //         .with_label_values(&[&cf, "keep2"])
-            //         .inc();
-            //     self.limiter.speed_limit()
-            // } else 
-            if checker.long_term_num_l0_files.get_recent() as f64
+            if checker.long_term_num_l0_files.get_avg() >= self.l0_files_threshold as f64 * 0.5 
+            && checker.long_term_num_l0_files.get_recent() as f64
                 >= self.l0_files_threshold as f64 * 0.5
             {
                 SCHED_THROTTLE_ACTION_COUNTER
-                    .with_label_values(&[&cf, "keep3"])
+                    .with_label_values(&[&cf, "keep2"])
                     .inc();
                 self.limiter.speed_limit()
             } else if checker.last_num_l0_files_from_flush >= self.l0_files_threshold {
