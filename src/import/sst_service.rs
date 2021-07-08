@@ -1,6 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::f64::INFINITY;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -29,16 +28,15 @@ use kvproto::raft_cmdpb::*;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use engine_rocks::RocksEngine;
 use engine_traits::{SstExt, SstWriterBuilder};
-use raftstore::router::handle_send_error;
-use raftstore::store::{Callback, ProposalRouter, RaftCommand};
+use raftstore::store::Callback;
 use security::{check_common_name, SecurityManager};
 
+use raftstore::router::RaftStoreRouter;
 use sst_importer::send_rpc_response;
 use tikv_util::future::create_stream_with_buffer;
 use tikv_util::future::paired_std_future_callback;
 use tikv_util::time::{Instant, Limiter};
 
-use sst_importer::import_mode::*;
 use sst_importer::metrics::*;
 use sst_importer::service::*;
 use sst_importer::{error_inc, sst_meta_to_path, Config, Error, Result, SSTImporter};
@@ -54,7 +52,6 @@ pub struct ImportSSTService<Router> {
     engine: Arc<DB>,
     threads: ThreadPool,
     importer: Arc<SSTImporter>,
-    switcher: Arc<Mutex<ImportModeSwitcher>>,
     limiter: Limiter,
     security_mgr: Arc<SecurityManager>,
     task_slots: Arc<Mutex<HashSet<PathBuf>>>,
@@ -62,7 +59,7 @@ pub struct ImportSSTService<Router> {
 
 impl<Router> ImportSSTService<Router>
 where
-    Router: ProposalRouter<RocksEngine> + Clone,
+    Router: 'static + RaftStoreRouter,
 {
     pub fn new(
         cfg: Config,
@@ -82,9 +79,8 @@ where
             threads,
             router,
             importer,
-            switcher: Arc::new(Mutex::new(ImportModeSwitcher::new())),
-            limiter: Limiter::new(INFINITY),
             security_mgr,
+            limiter: Limiter::new(std::f64::INFINITY),
             task_slots: Arc::new(Mutex::new(HashSet::default())),
         }
     }
@@ -103,7 +99,7 @@ where
 
 impl<Router> ImportSst for ImportSSTService<Router>
 where
-    Router: 'static + ProposalRouter<RocksEngine> + Clone + Send,
+    Router: 'static + RaftStoreRouter,
 {
     fn switch_mode(
         &mut self,
@@ -118,18 +114,17 @@ where
         let timer = Instant::now_coarse();
 
         let res = {
-            let mut switcher = self.switcher.lock().unwrap();
             fn mf(cf: &str, name: &str, v: f64) {
                 CONFIG_ROCKSDB_GAUGE.with_label_values(&[cf, name]).set(v);
             }
 
             match req.get_mode() {
-                SwitchMode::Normal => {
-                    switcher.enter_normal_mode(RocksEngine::from_ref(&self.engine), mf)
-                }
-                SwitchMode::Import => {
-                    switcher.enter_import_mode(RocksEngine::from_ref(&self.engine), mf)
-                }
+                SwitchMode::Normal => self
+                    .importer
+                    .enter_normal_mode(RocksEngine::from_ref(&self.engine), mf),
+                SwitchMode::Import => self
+                    .importer
+                    .enter_import_mode(RocksEngine::from_ref(&self.engine), mf),
             }
         };
         match res {
@@ -268,7 +263,7 @@ where
         let timer = Instant::now_coarse();
         let mut resp = IngestResponse::default();
         let mut errorpb = errorpb::Error::default();
-        if self.switcher.lock().unwrap().get_mode() == SwitchMode::Normal
+        if self.importer.get_mode() == SwitchMode::Normal
             && ingest_maybe_slowdown_writes(&self.engine, CF_DEFAULT)
         {
             let err = "too many sst files are ingesting";
@@ -315,8 +310,7 @@ where
             let m = meta.clone();
             let res = async move {
                 let mut resp = IngestResponse::default();
-                if let Err(e) = router.send(RaftCommand::new(cmd, Callback::Read(cb))) {
-                    let e = handle_send_error(region_id, e);
+                if let Err(e) = router.send_command(cmd, Callback::Read(cb)) {
                     resp.set_error(e.into());
                     return Ok(resp);
                 }
@@ -347,8 +341,7 @@ where
                 }
 
                 let (cb, future) = paired_std_future_callback();
-                if let Err(e) = router.send(RaftCommand::new(cmd, Callback::write(cb))) {
-                    let e = handle_send_error(region_id, e);
+                if let Err(e) = router.send_command(cmd, Callback::write(cb)) {
                     resp.set_error(e.into());
                     return Ok(resp);
                 }
@@ -436,7 +429,7 @@ where
         self.limiter.set_speed_limit(if speed_limit > 0 {
             speed_limit as f64
         } else {
-            INFINITY
+            std::f64::INFINITY
         });
 
         let ctx_task = async move {

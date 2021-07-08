@@ -37,6 +37,12 @@ pub struct RocksSstReader {
 }
 
 impl RocksSstReader {
+    pub fn read_kv_count_and_bytes<F: FnMut(u64, u64)>(&self, mut f: F) {
+        self.inner.read_table_properties(|p| {
+            f(p.num_entries(), p.raw_key_size() + p.raw_value_size());
+        });
+    }
+
     pub fn open_with_env(path: &str, env: Option<Arc<Env>>) -> Result<Self> {
         let mut cf_options = ColumnFamilyOptions::new();
         if let Some(env) = env {
