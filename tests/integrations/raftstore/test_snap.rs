@@ -450,43 +450,6 @@ fn test_server_snapshot_with_append() {
 }
 
 #[test]
-fn test_request_snapshot_apply_repeatedly() {
-    let mut cluster = new_node_cluster(0, 2);
-    configure_for_request_snapshot(&mut cluster);
-
-    let pd_client = Arc::clone(&cluster.pd_client);
-    // Disable default max peer count check.
-    pd_client.disable_default_operator();
-    let region_id = cluster.run_conf_change();
-    pd_client.must_add_peer(region_id, new_peer(2, 2));
-    cluster.must_transfer_leader(region_id, new_peer(2, 2));
-
-    sleep_ms(200);
-    // Install snapshot filter before requesting snapshot.
-    let (tx, rx) = mpsc::channel();
-    let notifier = Mutex::new(Some(tx));
-    cluster.sim.wl().add_recv_filter(
-        1,
-        Box::new(RecvSnapshotFilter {
-            notifier,
-            region_id,
-        }),
-    );
-    cluster.must_request_snapshot(1, region_id);
-    rx.recv_timeout(Duration::from_secs(5)).unwrap();
-
-    sleep_ms(200);
-    let engine = cluster.get_raft_engine(1);
-    let raft_key = keys::raft_state_key(region_id);
-    let raft_state: RaftLocalState = engine.c().get_msg(&raft_key).unwrap().unwrap();
-    assert!(
-        raft_state.get_last_index() > RAFT_INIT_LOG_INDEX,
-        "{:?}",
-        raft_state
-    );
-}
-
-#[test]
 fn test_inspected_snapshot() {
     let mut cluster = new_server_cluster(1, 3);
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
