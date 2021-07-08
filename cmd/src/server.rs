@@ -736,9 +736,8 @@ impl TiKVServer {
             tikv::config::Module::Backup,
             Box::new(backup_endpoint.get_config_manager()),
         );
-        let backup_timer = backup_endpoint.new_timer();
         backup_worker
-            .start_with_timer(backup_endpoint, backup_timer)
+            .start(backup_endpoint)
             .unwrap_or_else(|e| fatal!("failed to start backup endpoint: {}", e));
 
         let cdc_service = cdc::Service::new(
