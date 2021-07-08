@@ -14,7 +14,7 @@ use rusoto_core::{
     request::DispatchSignedRequest,
     {ByteStream, RusotoError},
 };
-use rusoto_s3::*;
+use rusoto_s3::{util::AddressingStyle, *};
 use rusoto_util::new_client;
 use tokio::time::{delay_for, timeout};
 
@@ -54,7 +54,10 @@ impl S3Storage {
         D: DispatchSignedRequest + Send + Sync + 'static,
     {
         Self::check_config(config)?;
-        let client = new_client!(S3Client, config, dispatcher);
+        let mut client = new_client!(S3Client, config, dispatcher);
+        if config.force_path_style {
+            client.config_mut().addressing_style = AddressingStyle::Path;
+        }
         Ok(S3Storage {
             config: config.clone(),
             client,
@@ -420,11 +423,13 @@ mod tests {
             prefix: "myprefix".to_string(),
             access_key: "abc".to_string(),
             secret_access_key: "xyz".to_string(),
+            force_path_style: true,
             ..Default::default()
         };
         let dispatcher = MockRequestDispatcher::with_status(200).with_request_checker(
             move |req: &SignedRequest| {
                 assert_eq!(req.region.name(), "ap-southeast-2");
+                assert_eq!(req.hostname(), "s3.ap-southeast-2.amazonaws.com");
                 assert_eq!(req.path(), "/mybucket/myprefix/mykey");
                 // PutObject is translated to HTTP PUT.
                 assert_eq!(req.payload.is_some(), req.method() == "PUT");
@@ -482,6 +487,36 @@ mod tests {
         fail::remove(s3_timeout_injected_fp);
         // no timeout
         assert!(resp.is_ok());
+    }
+
+    #[test]
+    fn test_s3_storage_with_virtual_host() {
+        let magic_contents = "abcd";
+        let config = Config {
+            region: "ap-southeast-1".to_string(),
+            bucket: "bucket2".to_string(),
+            prefix: "prefix2".to_string(),
+            access_key: "abc".to_string(),
+            secret_access_key: "xyz".to_string(),
+            force_path_style: false,
+            ..Default::default()
+        };
+        let dispatcher = MockRequestDispatcher::with_status(200).with_request_checker(
+            move |req: &SignedRequest| {
+                assert_eq!(req.region.name(), "ap-southeast-1");
+                assert_eq!(req.hostname(), "bucket2.s3.ap-southeast-1.amazonaws.com");
+                assert_eq!(req.path(), "/prefix2/key2");
+                // PutObject is translated to HTTP PUT.
+                assert_eq!(req.payload.is_some(), req.method() == "PUT");
+            },
+        );
+        let s = S3Storage::with_request_dispatcher(&config, dispatcher).unwrap();
+        s.write(
+            "key2",
+            Box::new(magic_contents.as_bytes()),
+            magic_contents.len() as u64,
+        )
+        .unwrap();
     }
 
     #[test]

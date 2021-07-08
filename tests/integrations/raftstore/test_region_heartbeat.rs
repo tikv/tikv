@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
+use std::ops::Add;
 use test_raftstore::*;
 use tikv_util::config::*;
 use tikv_util::time::UnixSecs as PdInstant;
@@ -206,31 +207,71 @@ fn test_region_heartbeat_term() {
 }
 
 #[test]
-fn test_region_heartbeat_when_size_or_keys_is_none() {
+fn test_region_heartbeat_report_approximate_size() {
     let mut cluster = new_server_cluster(0, 3);
-    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(50);
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.region_split_check_diff = ReadableSize::mb(2);
     cluster.run();
-
-    fail::cfg("region_size_or_keys_none", "return").unwrap();
     for i in 0..100 {
         let (k, v) = (format!("k{}", i), format!("v{}", i));
-        cluster.must_put(k.as_bytes(), v.as_bytes());
+        cluster.must_put_cf("write", k.as_bytes(), v.as_bytes());
+    }
+    cluster.must_flush_cf("write", true);
+
+    let ids = cluster.get_node_ids();
+    for id in ids {
+        cluster.stop_node(id);
+        cluster.run_node(id).unwrap();
     }
 
     let region_id = cluster.get_region_id(b"");
+    let mut approximate_size = 0;
+    let mut approximate_keys = 0;
     for _ in 0..10 {
-        sleep_ms(100);
-        let size = cluster
+        approximate_size = cluster
             .pd_client
             .get_region_approximate_size(region_id)
             .unwrap_or_default();
-        let keys = cluster
+        approximate_keys = cluster
             .pd_client
             .get_region_approximate_keys(region_id)
             .unwrap_or_default();
-        if size > 0 || keys > 0 {
-            return;
+        if approximate_size > 0 && approximate_keys > 0 {
+            break;
         }
+        sleep_ms(100);
     }
-    panic!("reported region keys should be updated");
+    assert!(approximate_size > 0 && approximate_keys > 0);
+
+    for i in 100..1000 {
+        let v = (i as u64) * (i as u64) * (i as u64);
+        let v_str = format!("v{}", v);
+        let mut value = "".to_string();
+        for _ in 0..100 {
+            value = value.add(v_str.as_str());
+        }
+        let k = format!("k{}", i);
+        cluster.must_put_cf("write", k.as_bytes(), value.as_bytes());
+    }
+    let mut size = 0;
+    let mut keys = 0;
+    for _ in 0..10 {
+        size = cluster
+            .pd_client
+            .get_region_approximate_size(region_id)
+            .unwrap_or_default();
+        keys = cluster
+            .pd_client
+            .get_region_approximate_keys(region_id)
+            .unwrap_or_default();
+        if size > approximate_size && keys > approximate_keys {
+            break;
+        }
+        sleep_ms(100);
+    }
+    // The region does not split, but it still refreshes the approximate_size.
+    let region_number = cluster.pd_client.get_regions_number();
+    assert_eq!(region_number, 1);
+    assert!(size > approximate_size && keys > approximate_keys);
 }

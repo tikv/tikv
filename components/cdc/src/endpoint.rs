@@ -16,7 +16,7 @@ use futures03::compat::Compat01As03;
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::{
     event::Event as Event_oneof_event, ChangeDataRequest,
-    DuplicateRequest as ErrorDuplicateRequest, Error as EventError, Event,
+    DuplicateRequest as ErrorDuplicateRequest, Error as EventError, Event, ResolvedTs,
 };
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::{
@@ -921,6 +921,7 @@ impl Initializer {
         // Time range: (checkpoint_ts, current]
         let current = TimeStamp::max();
         let mut scanner = ScannerBuilder::new(snap, current, false)
+            .fill_cache(false)
             .range(None, None)
             .build_delta_scanner(self.checkpoint_ts, self.txn_extra_op)
             .unwrap();
