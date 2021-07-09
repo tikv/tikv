@@ -6,6 +6,29 @@ use std::io::prelude::*;
 use std::mem::MaybeUninit;
 use std::process;
 
+// ## Differences between cgroup v1 and v2:
+// ### memory subsystem, memory limitation
+// v2:
+//   * path: /sys/fs/cgroup/<path-to-group>/memory.max
+//   * content: a number or "max" for no limitation
+// v1:
+//   * path: /sys/fs/cgroup/memory/<path-to-group>/memory.limit_in_bytes
+//   * content: a number or "-1" for no limitation
+// ### cpu subsystem, cpu quota
+// v2:
+//   * path: /sys/fs/cgroup/<path-to-group>/cpu.max
+//   * content: 2 numbers seperated with a blank, "max" indicates no limitation.
+// v1:
+//   * path: /sys/fs/cgroup/cpu/<path-to-group>/cpu.cfs_quota_us
+//   * content: a number
+//   * path: /sys/fs/cgroup/cpu/<path-to-group>/cpu.cfs_period_us
+//   * content: a number
+// ### cpuset subsystem, cpus
+// v2:
+//   * path: /sys/fs/cgroup/<path-to-group>/cpuset.cpus
+// v1:
+//   * path: /sys/fs/cgroup/cpuset/<path-to-group>/cpuset.cpus
+
 pub struct CGroupSys {
     cgroups: HashMap<String, String>,
     is_v2: bool,
@@ -180,12 +203,18 @@ mod tests {
     fn test_parse_proc_cgroup_v1() {
         let content = r#"
             10:cpuset:/test-cpuset
-            8:memory:/test-mem
-            4:cpuacct,cpu:/test-cpu
+            4:memory:/kubepods/burstable/poda2ebe2cd-64c7-11ea-8799-eeeeeeeeeeee/a026c487f1168b7f5442444ac8e35161dfcde87c175ef27d9a806270e267a575
+            5:cpuacct,cpu:/kubepods/burstable/poda2ebe2cd-64c7-11ea-8799-eeeeeeeeeeee/a026c487f1168b7f5442444ac8e35161dfcde87c175ef27d9a806270e267a575
         "#;
         let cgroups = parse_proc_cgroup_v1(&content);
-        assert_eq!(cgroups.get("memory").unwrap(), "/test-mem");
-        assert_eq!(cgroups.get("cpu").unwrap(), "/test-cpu");
+        assert_eq!(
+            cgroups.get("memory").unwrap(),
+            "/kubepods/burstable/poda2ebe2cd-64c7-11ea-8799-eeeeeeeeeeee/a026c487f1168b7f5442444ac8e35161dfcde87c175ef27d9a806270e267a575"
+        );
+        assert_eq!(
+            cgroups.get("cpu").unwrap(),
+            "/kubepods/burstable/poda2ebe2cd-64c7-11ea-8799-eeeeeeeeeeee/a026c487f1168b7f5442444ac8e35161dfcde87c175ef27d9a806270e267a575"
+        );
         assert_eq!(cgroups.get("cpuset").unwrap(), "/test-cpuset");
     }
 
@@ -234,6 +263,9 @@ mod tests {
         }
     }
 
+    // Currently this case can only be run manually:
+    // $ cargo test --package=tikv_util --features test-cgroup --tests test_cgroup
+    // Please make sure that you have privilege to run `cgcreate` and `cgdelete`.
     #[cfg(feature = "test-cgroup")]
     #[test]
     fn test_cgroup() {
