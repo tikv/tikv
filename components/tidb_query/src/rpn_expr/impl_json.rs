@@ -163,66 +163,23 @@ pub fn json_merge(args: &[&Option<Json>]) -> Result<Option<Json>> {
     Ok(Some(Json::merge(jsons)?))
 }
 
-<<<<<<< HEAD:components/tidb_query/src/rpn_expr/impl_json.rs
 #[rpn_fn]
 #[inline]
-fn json_unquote(arg: &Option<Json>) -> Result<Option<Bytes>> {
+fn json_unquote(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
     arg.as_ref().map_or(Ok(None), |json_arg| {
-        Ok(Some(Bytes::from(json_arg.as_ref().unquote()?)))
+        let tmp_str = std::str::from_utf8(json_arg)?;
+        Ok(Some(Bytes::from(self::unquote_string(tmp_str)?)))
     })
-=======
-#[rpn_fn(writer)]
-#[inline]
-fn json_quote(input: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
-    Ok(writer.write(quote(input)?))
 }
 
-fn quote(bytes: BytesRef) -> Result<Option<Bytes>> {
-    let mut result = Vec::with_capacity(bytes.len() * 2 + 2);
-    result.push(b'\"');
-    for byte in bytes.iter() {
-        if *byte == b'\"' || *byte == b'\\' {
-            result.push(b'\\');
-            result.push(*byte)
-        } else if *byte == b'\x07' {
-            // \a alert
-            result.push(b'\\');
-            result.push(b'a');
-        } else if *byte == b'\x08' {
-            // \b backspace
-            result.push(b'\\');
-            result.push(b'b')
-        } else if *byte == b'\x0c' {
-            // \f form feed
-            result.push(b'\\');
-            result.push(b'f')
-        } else if *byte == b'\n' {
-            result.push(b'\\');
-            result.push(b'n');
-        } else if *byte == b'\r' {
-            result.push(b'\\');
-            result.push(b'r');
-        } else if *byte == b'\t' {
-            result.push(b'\\');
-            result.push(b't')
-        } else if *byte == b'\x0b' {
-            // \v vertical tab
-            result.push(b'\\');
-            result.push(b'v')
-        } else {
-            result.push(*byte)
-        }
+fn unquote_string(s: &str) -> Result<String> {
+    let first_char = s.chars().next();
+    let last_char = s.chars().last();
+    if s.len() >= 2 && first_char == Some('"') && last_char == Some('"') {
+        Ok(json_unquote::unquote_string(&s[1..s.len() - 1])?)
+    } else {
+        Ok(String::from(s))
     }
-    result.push(b'\"');
-    Ok(Some(result))
-}
-
-#[rpn_fn]
-#[inline]
-fn json_unquote(arg: BytesRef) -> Result<Option<Bytes>> {
-    let tmp_str = std::str::from_utf8(arg)?;
-    Ok(Some(Bytes::from(self::unquote_string(tmp_str)?)))
->>>>>>> 2fb71587a... copr:  fix the wrong arguments type of json_unquote (#10177):components/tidb_query_expr/src/impl_json.rs
 }
 
 // Args should be like `(&Option<Json> , &[&Option<Bytes>])`.
@@ -241,21 +198,7 @@ fn valid_paths(expr: &tipb::Expr) -> Result<()> {
     Ok(())
 }
 
-<<<<<<< HEAD:components/tidb_query/src/rpn_expr/impl_json.rs
 #[rpn_fn(raw_varg, min_args = 2, extra_validator = json_with_paths_validator)]
-=======
-fn unquote_string(s: &str) -> Result<String> {
-    let first_char = s.chars().next();
-    let last_char = s.chars().last();
-    if s.len() >= 2 && first_char == Some('"') && last_char == Some('"') {
-        Ok(json_unquote::unquote_string(&s[1..s.len() - 1])?)
-    } else {
-        Ok(String::from(s))
-    }
-}
-
-#[rpn_fn(nullable, raw_varg, min_args = 2, extra_validator = json_with_paths_validator)]
->>>>>>> 2fb71587a... copr:  fix the wrong arguments type of json_unquote (#10177):components/tidb_query_expr/src/impl_json.rs
 #[inline]
 fn json_extract(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     assert!(args.len() >= 2);
