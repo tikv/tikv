@@ -168,7 +168,10 @@ impl TiKVServer {
 
         // Initialize raftstore channels.
         let (router, system) = fsm::create_raft_batch_system(&config.raft_store);
-        let mut coprocessor_host = Some(CoprocessorHost::new(router.clone()));
+        let mut coprocessor_host = Some(CoprocessorHost::new(
+            router.clone(),
+            config.coprocessor.clone(),
+        ));
         let region_info_accessor = RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap());
         region_info_accessor.start();
 
@@ -544,7 +547,6 @@ impl TiKVServer {
             engines.engines.kv.clone(),
             self.router.clone(),
             coprocessor_host.clone(),
-            self.config.coprocessor.clone(),
         );
         split_check_worker.start(split_check_runner).unwrap();
         cfg_controller.register(

@@ -1949,16 +1949,16 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn on_ready_split_region(&mut self, derived: metapb::Region, regions: Vec<metapb::Region>) {
         fail_point!("on_split", self.ctx.store_id() == 3, |_| {});
-        self.register_split_region_check_tick();
-        let mut meta = self.ctx.store_meta.lock().unwrap();
-        let region_id = derived.get_id();
-        meta.set_region(&self.ctx.coprocessor_host, derived, &mut self.fsm.peer);
-        self.fsm.peer.post_split();
 
+        let region_id = derived.get_id();
         // Roughly estimate the size and keys for new regions.
         let new_region_count = regions.len() as u64;
         let estimated_size = self.fsm.peer.approximate_size / new_region_count;
         let estimated_keys = self.fsm.peer.approximate_keys / new_region_count;
+        let mut meta = self.ctx.store_meta.lock().unwrap();
+        meta.set_region(&self.ctx.coprocessor_host, derived, &mut self.fsm.peer);
+        self.fsm.peer.post_split();
+
         // It's not correct anymore, so set it to false to schedule a split check task.
         self.fsm.peer.has_calculated_region_size = false;
 

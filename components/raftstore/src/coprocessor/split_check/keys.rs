@@ -185,8 +185,23 @@ pub fn get_region_approximate_keys(
     region: &Region,
     large_threshold: u64,
 ) -> Result<u64> {
+    let start = keys::enc_start_key(region);
+    let end = keys::enc_end_key(region);
+    let range = Range::new(&start, &end);
+    Ok(box_try!(get_range_approximate_keys(
+        db,
+        range,
+        large_threshold
+    )))
+}
+
+fn get_range_approximate_keys(
+    db: &impl KvEngine,
+    range: Range,
+    large_threshold: u64,
+) -> Result<u64> {
     // try to get from RangeProperties first.
-    match get_region_approximate_keys_cf(db, CF_WRITE, region, large_threshold) {
+    match get_range_approximate_keys_cf(db, CF_WRITE, range, large_threshold) {
         Ok(v) => {
             return Ok(v);
         }
@@ -196,30 +211,29 @@ pub fn get_region_approximate_keys(
         ),
     }
 
-    let start = keys::enc_start_key(region);
-    let end = keys::enc_end_key(region);
-    let cf = box_try!(db.cf_handle(CF_WRITE));
+    let start = &range.start_key;
+    let end = &range.end_key;
+    let cf = db.cf_handle(CF_WRITE).unwrap();
     let (_, keys) = get_range_entries_and_versions(db, cf, &start, &end).unwrap_or_default();
     Ok(keys)
 }
 
-pub fn get_region_approximate_keys_cf(
+fn get_range_approximate_keys_cf(
     db: &impl KvEngine,
     cfname: &str,
-    region: &Region,
+    range: Range,
     large_threshold: u64,
 ) -> Result<u64> {
-    let start_key = keys::enc_start_key(region);
-    let end_key = keys::enc_end_key(region);
-    let range = Range::new(&start_key, &end_key);
+    let start_key = &range.start_key;
+    let end_key = &range.end_key;
     let mut total_keys = 0;
     let (mem_keys, _) = box_try!(db.get_approximate_memtable_stats_cf(cfname, &range));
     total_keys += mem_keys;
 
-    let collection = box_try!(db.get_range_properties_cf(cfname, &start_key, &end_key));
+    let collection = box_try!(db.get_range_properties_cf(cfname, start_key, end_key));
     for (_, v) in collection.iter() {
         let props = box_try!(RangeProperties::decode(&v.user_collected_properties()));
-        total_keys += props.get_approximate_keys_in_range(&start_key, &end_key);
+        total_keys += props.get_approximate_keys_in_range(start_key, end_key);
     }
 
     if large_threshold != 0 && total_keys > large_threshold {
@@ -227,7 +241,7 @@ pub fn get_region_approximate_keys_cf(
             .iter()
             .map(|(k, v)| {
                 let props = RangeProperties::decode(&v.user_collected_properties()).unwrap();
-                let keys = props.get_approximate_keys_in_range(&start_key, &end_key);
+                let keys = props.get_approximate_keys_in_range(start_key, end_key);
                 format!(
                     "{}:{}",
                     Path::new(&*k)
@@ -240,8 +254,9 @@ pub fn get_region_approximate_keys_cf(
             .collect::<Vec<_>>()
             .join(", ");
         info!(
-            "region contains too many keys";
-            "region_id" => region.get_id(),
+            "range contains too many keys";
+            "start" => log_wrappers::Value::key(&range.start_key),
+            "end" => log_wrappers::Value::key(&range.end_key),
             "total_keys" => total_keys,
             "memtable" => mem_keys,
             "ssts_keys" => ssts,
@@ -333,17 +348,15 @@ mod tests {
         region.mut_region_epoch().set_conf_ver(5);
 
         let (tx, rx) = mpsc::sync_channel(100);
-        let mut cfg = Config::default();
-        cfg.region_max_keys = 100;
-        cfg.region_split_keys = 80;
-        cfg.batch_split_limit = 5;
+        let cfg = Config {
+            region_max_keys: 100,
+            region_split_keys: 80,
+            batch_split_limit: 5,
+            ..Default::default()
+        };
 
-        let mut runnable = SplitCheckRunner::new(
-            Arc::clone(&engine),
-            tx.clone(),
-            CoprocessorHost::new(tx),
-            cfg,
-        );
+        let mut runnable =
+            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
 
         // so split key will be z0080
         put_data(&engine, 0, 90, false);

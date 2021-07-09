@@ -13,11 +13,9 @@ use super::error::Result;
 use super::{KeyEntry, ObserverContext, SplitChecker};
 
 pub use self::half::{get_region_approximate_middle, HalfCheckObserver};
-pub use self::keys::{
-    get_region_approximate_keys, get_region_approximate_keys_cf, KeysCheckObserver,
-};
+pub use self::keys::{get_region_approximate_keys, KeysCheckObserver};
 pub use self::size::{
-    get_region_approximate_size, get_region_approximate_size_cf, SizeCheckObserver,
+    get_range_approximate_split_keys, get_region_approximate_size, SizeCheckObserver,
 };
 pub use self::table::TableCheckObserver;
 
