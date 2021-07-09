@@ -6,7 +6,6 @@ use std::time::*;
 use std::{fs, io, thread};
 
 use raft::eraftpb::MessageType;
-use raftstore::store::*;
 use test_raftstore::*;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;

@@ -7,8 +7,7 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
-use engine_rocks::Compat;
-use engine_traits::{KvEngine, Peekable};
+use engine_traits::KvEngine;
 use file_system::{IOOp, IOType};
 use futures::executor::block_on;
 use grpcio::Environment;

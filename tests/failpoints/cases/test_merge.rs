@@ -7,7 +7,6 @@ use std::time::*;
 
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::kvrpcpb::*;
-use kvproto::metapb::Region;
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use kvproto::tikvpb::TikvClient;
 use raft::eraftpb::MessageType;
