@@ -165,10 +165,10 @@ pub fn json_merge(args: &[&Option<Json>]) -> Result<Option<Json>> {
 
 #[rpn_fn]
 #[inline]
-fn json_unquote(arg: Option<BytesRef>) -> Result<Option<Bytes>> {
+fn json_unquote(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
     arg.as_ref().map_or(Ok(None), |json_arg| {
-        let tmp_str = std::str::from_utf8(json_arg)?;
-        Ok(Some(Bytes::from(self::unquote_string(tmp_str)?)))
+        let tmp_str = std::str::from_utf8(&json_arg).map_err(crate::codec::Error::from)?;
+        Ok(Some(Bytes::from(self::unquote_string(&tmp_str)?)))
     })
 }
 
