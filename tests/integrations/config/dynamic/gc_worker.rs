@@ -43,7 +43,7 @@ fn setup_cfg_controller(
     (gc_worker, cfg_controller)
 }
 
-fn validate<F>(scheduler: &FutureScheduler<GcTask>, f: F)
+fn validate<F>(scheduler: &FutureScheduler<GcTask<engine_rocks::RocksEngine>>, f: F)
 where
     F: FnOnce(&GcConfig, &Limiter) + Send + 'static,
 {
