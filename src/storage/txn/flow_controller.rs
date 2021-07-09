@@ -56,6 +56,8 @@ enum Trend {
 // hardware. So we can record the flush flow when reach the threshold as target
 // flow, and increase or decrease the throttle speed based on whether current 
 // flush flow is smaller/larger than target flow.
+
+// For compaction pending bytes, we use discardable ratio. 
 pub struct FlowController {
     discard_ratio: Arc<AtomicU64>,
     limiter: Arc<Limiter>,
@@ -305,22 +307,32 @@ impl<const CAP: usize> Smoother<CAP> {
 
 use engine_rocks::FlowInfo;
 
+// CFFlowChecker records some statistics and states related to one CF.
+// These statistics falls into five categories:
+//   * memtable
+//   * L0 files
+//   * flush flow
+//   * L0 flow (compaction read flow of L0)
+//   * pending compaction bytes
+// And all of them are collected from the hook of RocksDB's event listener.
 struct CFFlowChecker {
     last_num_memtables: Smoother<60>,
+    memtable_debt: f64,
+    init_speed: bool,
+
     last_num_l0_files: u64,
     last_num_l0_files_from_flush: u64,
     long_term_num_l0_files: Smoother<20>,
-    long_term_pending_bytes: Smoother<60>,
 
     last_flush_bytes_time: Instant,
     last_flush_bytes: u64,
     short_term_flush_flow: Smoother<10>,
+
     last_l0_bytes: u64,
     last_l0_bytes_time: Instant,
     short_term_l0_flow: Smoother<3>,
 
-    memtable_debt: f64,
-    init_speed: bool,
+    long_term_pending_bytes: Smoother<60>,
 
     on_start_memtable: bool,
     on_start_l0_files: bool,
@@ -706,7 +718,7 @@ impl<E: Engine> FlowChecker<E> {
                         .inc();
                     self.throttle_cf = Some(cf.clone());
                     self.last_target_file = Some(num_l0_files);
-                    // do not change target flow
+                    self.l0_target_flow = self.cf_checkers[&cf].short_term_flush_flow.get_avg();
                 } else {
                     return;
                 }
