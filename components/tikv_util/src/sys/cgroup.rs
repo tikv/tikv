@@ -210,7 +210,7 @@ mod tests {
     fn test_parse_cpu_cores() {
         let mut cpusets = Vec::new();
         cpusets.extend(parse_cpu_cores("1-2,5-8,10,12,4"));
-        cpusets.sort();
+        cpusets.sort_unstable();
         assert_eq!(cpusets, vec![1, 2, 4, 5, 6, 7, 8, 10, 12]);
     }
 
@@ -232,5 +232,85 @@ mod tests {
             let limit = parse_cpu_quota_v1(quota, period);
             assert_eq!(limit, expects[i]);
         }
+    }
+
+    #[cfg(feature = "test-cgroup")]
+    #[test]
+    fn test_cgroup() {
+        use std::process::{self, Command};
+
+        let pid = process::id();
+        let group = format!("tikv-test-{}", pid);
+        let ctls_group = format!("cpu,cpuset,memory:{}", group);
+
+        // $ cgcreate -g cpu,cpuset,memory:tikv-test
+        let mut child = Command::new("cgcreate")
+            .args(&["-g", &ctls_group])
+            .spawn()
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+
+        // $ cgclassify -g cpu,cpuset,memory:tikv-test <pid>
+        let mut child = Command::new("cgclassify")
+            .args(&["-g", &ctls_group, &format!("{}", pid)])
+            .spawn()
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+
+        // cgroup-v2 $ cgset -r memory.max=1G tikv-test
+        // cgroup-v1 $ cgset -r memory.limit_in_bytes=1G tikv-test
+        let mut child = if is_cgroup2_unified_mode() {
+            Command::new("cgset")
+                .args(&["-r", "memory.max=1G", &group])
+                .spawn()
+                .unwrap()
+        } else {
+            Command::new("cgset")
+                .args(&["-r", "memory.limit_in_bytes=1G", &group])
+                .spawn()
+                .unwrap()
+        };
+        assert!(child.wait().unwrap().success());
+
+        // cgroup-v2 $ cgset -r cpu.max='1000000 1000000' tikv-test
+        // cgroup-v1 $ cgset -r cpu.cfs_quota_us=1000000 tikv-test
+        // cgroup-v1 $ cgset -r cpu.cfs_period_us=1000000 tikv-test
+        if is_cgroup2_unified_mode() {
+            let mut child = Command::new("cgset")
+                .args(&["-r", "cpu.max=1000000 1000000", &group])
+                .spawn()
+                .unwrap();
+            assert!(child.wait().unwrap().success());
+        } else {
+            let mut child = Command::new("cgset")
+                .args(&["-r", "cpu.cfs_quota_us=1000000", &group])
+                .spawn()
+                .unwrap();
+            assert!(child.wait().unwrap().success());
+            let mut child = Command::new("cgset")
+                .args(&["-r", "cpu.cfs_period_us=1000000", &group])
+                .spawn()
+                .unwrap();
+            assert!(child.wait().unwrap().success());
+        }
+
+        // $ cgset -r cpuset.cpus=0 tikv-test
+        let mut child = Command::new("cgset")
+            .args(&["-r", "cpuset.cpus=0", &group])
+            .spawn()
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+
+        let cg = CGroupSys::new();
+        assert_eq!(cg.memory_limit_in_bytes(), 1 * 1024 * 1024 * 1024);
+        assert_eq!(cg.cpu_quota(), Some(1.0));
+        assert_eq!(cg.cpuset_cores().into_iter().collect::<Vec<_>>(), vec![0]);
+
+        // $ cgdelete -g cpu,cpuset,memory:tikv-test
+        let mut child = Command::new("cgdelete")
+            .args(&["-g", &ctls_group])
+            .spawn()
+            .unwrap();
+        assert!(child.wait().unwrap().success());
     }
 }
