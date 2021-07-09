@@ -31,7 +31,7 @@ impl ErrorCodeExt for Error {
             Error::Exists { .. } => EXISTS,
             Error::NotExists { .. } => NOT_EXISTS,
             Error::ConfChangeError(_) => CONF_CHANGE_ERROR,
-            _ => unreachable!(),
+            Error::RequestSnapshotDropped => unreachable!(),
         }
     }
 }
