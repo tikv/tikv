@@ -552,7 +552,8 @@ mod tests {
         // 4 4 5 5 5 5 5 6 7 7 7 7 7 8 8 8 8 8 9 9 9 9 9 10 10
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, REVERSE_SEEK_BOUND.into(), true)
+        let mut scanner = ScannerBuilder::new(snapshot, REVERSE_SEEK_BOUND.into())
+            .desc(true)
             .range(None, Some(Key::from_raw(&[11_u8])))
             .build()
             .unwrap();
@@ -778,7 +779,8 @@ mod tests {
         );
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, (REVERSE_SEEK_BOUND * 2).into(), true)
+        let mut scanner = ScannerBuilder::new(snapshot, (REVERSE_SEEK_BOUND * 2).into())
+            .desc(true)
             .range(None, None)
             .build()
             .unwrap();
@@ -863,7 +865,8 @@ mod tests {
         );
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, (REVERSE_SEEK_BOUND * 2).into(), true)
+        let mut scanner = ScannerBuilder::new(snapshot, (REVERSE_SEEK_BOUND * 2).into())
+            .desc(true)
             .range(None, None)
             .build()
             .unwrap();
@@ -939,7 +942,8 @@ mod tests {
         }
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, 1.into(), true)
+        let mut scanner = ScannerBuilder::new(snapshot, 1.into())
+            .desc(true)
             .range(None, None)
             .build()
             .unwrap();
@@ -1019,7 +1023,8 @@ mod tests {
         }
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, 1.into(), true)
+        let mut scanner = ScannerBuilder::new(snapshot, 1.into())
+            .desc(true)
             .range(None, None)
             .build()
             .unwrap();
@@ -1107,7 +1112,8 @@ mod tests {
         }
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, (REVERSE_SEEK_BOUND + 1).into(), true)
+        let mut scanner = ScannerBuilder::new(snapshot, (REVERSE_SEEK_BOUND + 1).into())
+            .desc(true)
             .range(None, None)
             .build()
             .unwrap();
@@ -1203,7 +1209,8 @@ mod tests {
         let snapshot = engine.snapshot(Default::default()).unwrap();
 
         // Test both bound specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), true)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into())
+            .desc(true)
             .range(Some(Key::from_raw(&[3u8])), Some(Key::from_raw(&[5u8])))
             .build()
             .unwrap();
@@ -1225,7 +1232,8 @@ mod tests {
         );
 
         // Test left bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), true)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into())
+            .desc(true)
             .range(None, Some(Key::from_raw(&[3u8])))
             .build()
             .unwrap();
@@ -1247,7 +1255,8 @@ mod tests {
         );
 
         // Test right bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), true)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into())
+            .desc(true)
             .range(Some(Key::from_raw(&[5u8])), None)
             .build()
             .unwrap();
@@ -1269,7 +1278,8 @@ mod tests {
         );
 
         // Test both bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot, 10.into(), true)
+        let mut scanner = ScannerBuilder::new(snapshot, 10.into())
+            .desc(true)
             .range(None, None)
             .build()
             .unwrap();
@@ -1339,7 +1349,8 @@ mod tests {
 
         // Call reverse scan
         let ts = 2.into();
-        let mut scanner = ScannerBuilder::new(snapshot, ts, true)
+        let mut scanner = ScannerBuilder::new(snapshot, ts)
+            .desc(true)
             .range(None, Some(k))
             .build()
             .unwrap();
@@ -1362,7 +1373,8 @@ mod tests {
             .collect();
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, read_ts, true)
+        let mut scanner = ScannerBuilder::new(snapshot, read_ts)
+            .desc(true)
             .range(None, None)
             .build()
             .unwrap();
