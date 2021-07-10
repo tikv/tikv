@@ -392,7 +392,9 @@ pub mod ctor {
                     .add_table_properties_collector_factory("tikv.range-properties-collector", f);
             }
             if !cf_opts.get_no_table_properties() {
-                let f = Box::new(MvccPropertiesCollectorFactory::default());
+                let f = Box::new(MvccPropertiesCollectorFactory {
+                    garbage_threshold: 1.0,
+                });
                 rocks_cf_opts
                     .add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
             }

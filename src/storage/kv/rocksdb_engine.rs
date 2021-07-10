@@ -228,7 +228,9 @@ impl TestEngineBuilder {
                     cfg_rocksdb.defaultcf.build_opt(&cache, None, enable_ttl),
                 ),
                 CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
-                CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
+                CF_WRITE => {
+                    CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None, 1.0))
+                }
                 CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
                 _ => CFOptions::new(*cf, ColumnFamilyOptions::new()),
             })

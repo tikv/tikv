@@ -992,6 +992,7 @@ impl TiKVServer<RocksEngine> {
             &block_cache,
             Some(&self.region_info_accessor),
             self.config.storage.enable_ttl,
+            self.config.gc.ratio_threshold - 1.0,
         );
         let db_path = self.store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
         let kv_engine = engine_rocks::raw_util::new_engine_opt(
@@ -1057,6 +1058,7 @@ impl TiKVServer<RaftLogEngine> {
             &block_cache,
             Some(&self.region_info_accessor),
             self.config.storage.enable_ttl,
+            self.config.gc.ratio_threshold - 1.0,
         );
         let db_path = self.store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
         let kv_engine = engine_rocks::raw_util::new_engine_opt(

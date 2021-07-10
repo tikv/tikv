@@ -411,10 +411,11 @@ pub struct MvccPropertiesCollector {
     row_versions: u64,
     cur_index_handle: IndexHandle,
     row_index_handles: IndexHandles,
+    garbage_threshold: f64,
 }
 
 impl MvccPropertiesCollector {
-    fn new() -> MvccPropertiesCollector {
+    fn new(garbage_threshold: f64) -> MvccPropertiesCollector {
         MvccPropertiesCollector {
             props: MvccProperties::new(),
             last_row: Vec::new(),
@@ -422,6 +423,7 @@ impl MvccPropertiesCollector {
             row_versions: 0,
             cur_index_handle: IndexHandle::default(),
             row_index_handles: IndexHandles::new(),
+            garbage_threshold,
         }
     }
 }
@@ -508,15 +510,25 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
         res.encode_handles(PROP_ROWS_INDEX, &self.row_index_handles);
         res.0
     }
+
+    fn need_compact(&self) -> bool {
+        if self.garbage_threshold > 1.0 {
+            return false;
+        }
+        let ratio = self.props.num_puts as f64 / self.props.num_versions as f64;
+        ratio < 1.0 - self.garbage_threshold
+    }
 }
 
 /// Can only be used for write CF.
-#[derive(Default)]
-pub struct MvccPropertiesCollectorFactory {}
+pub struct MvccPropertiesCollectorFactory {
+    // Continue compact output files if garbage_threshold reaches this.
+    pub garbage_threshold: f64,
+}
 
 impl TablePropertiesCollectorFactory for MvccPropertiesCollectorFactory {
     fn create_table_properties_collector(&mut self, _: u32) -> Box<dyn TablePropertiesCollector> {
-        Box::new(MvccPropertiesCollector::new())
+        Box::new(MvccPropertiesCollector::new(self.garbage_threshold))
     }
 }
 

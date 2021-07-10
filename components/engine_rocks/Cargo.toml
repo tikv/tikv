@@ -70,9 +70,9 @@ protobuf = "2"
 fail = "0.4"
 
 [dependencies.rocksdb]
-git = "https://github.com/tikv/rust-rocksdb.git"
+git = "https://github.com/hicqu/rust-rocksdb.git"
 package = "rocksdb"
-branch = "tikv-5.0"
+branch = "need-compact"
 features = ["encryption", "static_libcpp"]
 
 [dev-dependencies]
