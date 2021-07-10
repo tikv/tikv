@@ -320,7 +320,7 @@ fn test_safe_tombstone_gc() {
     let key = keys::region_state_key(r);
     let mut state: Option<RegionLocalState> = None;
     let timer = Instant::now();
-    while timer.elapsed() < Duration::from_secs(5) {
+    while timer.saturating_elapsed() < Duration::from_secs(5) {
         state = cluster.get_engine(4).c().get_msg_cf(CF_RAFT, &key).unwrap();
         if state.is_some() {
             break;

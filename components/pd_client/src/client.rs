@@ -3,7 +3,7 @@
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use std::u64;
 
 use futures::channel::mpsc;
@@ -18,7 +18,7 @@ use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
 use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationStatus};
 use security::SecurityManager;
-use tikv_util::time::duration_to_sec;
+use tikv_util::time::{duration_to_sec, Instant};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{box_err, debug, error, info, thd_name, warn};
 use tikv_util::{Either, HandyRwLock};
@@ -96,7 +96,7 @@ impl RpcClient {
                     let update_loop = async move {
                         loop {
                             let ok = GLOBAL_TIMER_HANDLE
-                                .delay(Instant::now() + duration)
+                                .delay(std::time::Instant::now() + duration)
                                 .compat()
                                 .await
                                 .is_ok();
@@ -132,7 +132,7 @@ impl RpcClient {
                         warn!("validate PD endpoints failed"; "err" => ?e);
                     }
                     let _ = GLOBAL_TIMER_HANDLE
-                        .delay(Instant::now() + cfg.retry_interval.0)
+                        .delay(std::time::Instant::now() + cfg.retry_interval.0)
                         .compat()
                         .await;
                 }
@@ -233,7 +233,7 @@ impl RpcClient {
                 let mut resp = handler.await?;
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["get_store_async"])
-                    .observe(duration_to_sec(timer.elapsed()));
+                    .observe(duration_to_sec(timer.saturating_elapsed()));
                 check_resp_header(resp.get_header())?;
                 let store = resp.take_store();
                 if store.get_state() != metapb::StoreState::Tombstone {
@@ -433,7 +433,7 @@ impl PdClient for RpcClient {
                 let mut resp = handler.await?;
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["get_region_by_id"])
-                    .observe(duration_to_sec(timer.elapsed()));
+                    .observe(duration_to_sec(timer.saturating_elapsed()));
                 check_resp_header(resp.get_header())?;
                 if resp.has_region() {
                     Ok(Some(resp.take_region()))
@@ -471,7 +471,7 @@ impl PdClient for RpcClient {
                 let mut resp = handler.await?;
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["get_region_by_id"])
-                    .observe(duration_to_sec(timer.elapsed()));
+                    .observe(duration_to_sec(timer.saturating_elapsed()));
                 check_resp_header(resp.get_header())?;
                 if resp.has_region() {
                     Ok(Some((resp.take_region(), resp.take_leader())))
@@ -602,7 +602,7 @@ impl PdClient for RpcClient {
                 let resp = handler.await?;
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["ask_split"])
-                    .observe(duration_to_sec(timer.elapsed()));
+                    .observe(duration_to_sec(timer.saturating_elapsed()));
                 check_resp_header(resp.get_header())?;
                 Ok(resp)
             }) as PdFuture<_>
@@ -637,7 +637,7 @@ impl PdClient for RpcClient {
                 let resp = handler.await?;
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["ask_batch_split"])
-                    .observe(duration_to_sec(timer.elapsed()));
+                    .observe(duration_to_sec(timer.saturating_elapsed()));
                 check_resp_header(resp.get_header())?;
                 Ok(resp)
             }) as PdFuture<_>
@@ -673,7 +673,7 @@ impl PdClient for RpcClient {
                 let resp = handler.await?;
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["store_heartbeat"])
-                    .observe(duration_to_sec(timer.elapsed()));
+                    .observe(duration_to_sec(timer.saturating_elapsed()));
                 check_resp_header(resp.get_header())?;
                 match feature_gate.set_version(resp.get_cluster_version()) {
                     Err(_) => warn!("invalid cluster version: {}", resp.get_cluster_version()),
@@ -709,7 +709,7 @@ impl PdClient for RpcClient {
                 let resp = handler.await?;
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["report_batch_split"])
-                    .observe(duration_to_sec(timer.elapsed()));
+                    .observe(duration_to_sec(timer.saturating_elapsed()));
                 check_resp_header(resp.get_header())?;
                 Ok(())
             }) as PdFuture<_>
@@ -763,7 +763,7 @@ impl PdClient for RpcClient {
                 let resp = handler.await?;
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["get_gc_safe_point"])
-                    .observe(duration_to_sec(timer.elapsed()));
+                    .observe(duration_to_sec(timer.saturating_elapsed()));
                 check_resp_header(resp.get_header())?;
                 Ok(resp.get_safe_point())
             }) as PdFuture<_>
@@ -826,7 +826,7 @@ impl PdClient for RpcClient {
                 };
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["tso"])
-                    .observe(duration_to_sec(timer.elapsed()));
+                    .observe(duration_to_sec(timer.saturating_elapsed()));
                 check_resp_header(resp.get_header())?;
                 let ts = resp.get_timestamp();
                 let encoded = TimeStamp::compose(ts.physical as _, ts.logical as _);

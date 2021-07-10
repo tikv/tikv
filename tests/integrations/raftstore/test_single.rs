@@ -195,7 +195,7 @@ fn test_node_apply_no_op() {
         if state.get_applied_index() > RAFT_INIT_LOG_INDEX {
             break;
         }
-        if timer.elapsed() > Duration::from_secs(3) {
+        if timer.saturating_elapsed() > Duration::from_secs(3) {
             panic!("apply no-op log not finish after 3 seconds");
         }
         sleep_ms(10);

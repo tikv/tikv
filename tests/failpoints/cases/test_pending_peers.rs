@@ -82,7 +82,7 @@ fn test_pending_snapshot() {
     let start = Instant::now();
     loop {
         if cluster.pd_client.get_pending_peers().get(&1).is_none()
-            || start.elapsed() > election_timeout * 10
+            || start.saturating_elapsed() > election_timeout * 10
         {
             break;
         }

@@ -944,5 +944,5 @@ fn test_conf_change_fast() {
     pd_client.must_add_peer(r1, new_learner_peer(2, 2));
     pd_client.must_add_peer(r1, new_peer(2, 2));
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
-    assert!(timer.elapsed() < Duration::from_secs(5));
+    assert!(timer.saturating_elapsed() < Duration::from_secs(5));
 }

@@ -169,7 +169,7 @@ fn assert_snapshot(snap_dir: &str, region_id: u64, exist: bool) {
             return;
         }
 
-        if timer.elapsed() < Duration::from_secs(6) {
+        if timer.saturating_elapsed() < Duration::from_secs(6) {
             thread::sleep(Duration::from_millis(20));
         } else {
             panic!(

@@ -143,7 +143,7 @@ fn test_server_snap_gc() {
         if snap_index != first_snap_idx {
             break;
         }
-        if now.elapsed() >= Duration::from_secs(5) {
+        if now.saturating_elapsed() >= Duration::from_secs(5) {
             panic!("can't get any snap after {}", first_snap_idx);
         }
     }
@@ -174,7 +174,7 @@ fn test_server_snap_gc() {
         if snap_files.is_empty() {
             return;
         }
-        if now.elapsed() > Duration::from_secs(10) {
+        if now.saturating_elapsed() > Duration::from_secs(10) {
             panic!("snap files is still not empty: {:?}", snap_files);
         }
         sleep_ms(20);

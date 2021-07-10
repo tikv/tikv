@@ -708,7 +708,7 @@ fn test_node_merge_restart_after_apply_premerge_before_apply_compact_log() {
         if apply_index >= last_index {
             break;
         }
-        if timer.elapsed() > Duration::from_secs(3) {
+        if timer.saturating_elapsed() > Duration::from_secs(3) {
             panic!("logs are not applied after 3 seconds");
         }
         thread::sleep(Duration::from_millis(20));
@@ -1287,7 +1287,7 @@ fn test_node_merge_crash_when_snapshot() {
         if local_state.get_state() == PeerState::Applying {
             break;
         }
-        if timer.elapsed() > Duration::from_secs(1) {
+        if timer.saturating_elapsed() > Duration::from_secs(1) {
             panic!("not become applying state after 1 seconds.");
         }
         sleep_ms(10);

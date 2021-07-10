@@ -108,7 +108,7 @@ fn test_stale_learner_restart() {
         .unwrap();
     let last_index = state.get_last_index();
     let timer = Instant::now();
-    while timer.elapsed() < Duration::from_secs(5) {
+    while timer.saturating_elapsed() < Duration::from_secs(5) {
         state = cluster
             .get_raft_engine(2)
             .c()

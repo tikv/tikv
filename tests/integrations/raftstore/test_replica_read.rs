@@ -167,7 +167,7 @@ fn test_replica_read_on_hibernate() {
     // a new election finally because it always ticks.
     let start = Instant::now();
     loop {
-        if start.elapsed() >= Duration::from_secs(6) {
+        if start.saturating_elapsed() >= Duration::from_secs(6) {
             break;
         }
         match rx.recv_timeout(Duration::from_secs(2)) {

@@ -3,13 +3,15 @@
 use std::fs;
 use std::io::{Error, ErrorKind, Result};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use collections::HashMap;
 use lazy_static::lazy_static;
 use libc::{self, pid_t};
 use prometheus::core::{Collector, Desc};
 use prometheus::{self, proto, CounterVec, IntCounterVec, IntGaugeVec, Opts};
+
+use crate::time::Instant;
 
 use procinfo::pid;
 
@@ -465,7 +467,7 @@ impl TidRetriever {
     pub fn get_tids(&mut self) -> &[pid_t] {
         // Update the tid list according to tid_buffer_update_interval.
         // If tid is not changed, update the tid list less frequently.
-        if self.tid_buffer_last_update.elapsed() >= self.tid_buffer_update_interval {
+        if self.tid_buffer_last_update.saturating_elapsed() >= self.tid_buffer_update_interval {
             let new_tid_buffer = get_thread_ids(self.pid).unwrap();
             if new_tid_buffer == self.tid_buffer {
                 self.tid_buffer_update_interval *= 2;
