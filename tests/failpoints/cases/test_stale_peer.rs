@@ -1,13 +1,14 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::thread;
-use std::time::*;
+use std::time::Duration;
 
 use engine_rocks::Compat;
 use engine_traits::Peekable;
 use kvproto::raft_serverpb::RaftLocalState;
 use test_raftstore::*;
 use tikv_util::config::ReadableDuration;
+use tikv_util::time::Instant;
 
 #[test]
 fn test_one_node_leader_missing() {

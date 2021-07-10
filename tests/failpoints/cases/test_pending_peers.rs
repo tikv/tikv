@@ -1,11 +1,11 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
-use std::time::Instant;
 
 use test_raftstore::*;
 
 use tikv_util::config::*;
+use tikv_util::time::Instant;
 
 #[test]
 fn test_pending_peers() {

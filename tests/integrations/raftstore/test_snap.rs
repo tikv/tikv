@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use engine_rocks::Compat;
 use engine_traits::{KvEngine, Peekable};
@@ -19,7 +19,7 @@ use rand::Rng;
 use security::SecurityManager;
 use test_raftstore::*;
 use tikv::server::snap::send_snap;
-use tikv_util::{config::*, HandyRwLock};
+use tikv_util::{config::*, time::Instant, HandyRwLock};
 
 fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;

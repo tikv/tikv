@@ -3,7 +3,7 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::*;
+use std::time::Duration;
 
 use futures::executor::block_on;
 
@@ -19,6 +19,7 @@ use raftstore::store::util::is_learner;
 use raftstore::Result;
 use test_raftstore::*;
 use tikv_util::config::ReadableDuration;
+use tikv_util::time::Instant;
 use tikv_util::HandyRwLock;
 
 fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {

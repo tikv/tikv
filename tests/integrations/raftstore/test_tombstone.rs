@@ -2,13 +2,14 @@
 
 use std::sync::Arc;
 use std::thread;
-use std::time::*;
+use std::time::Duration;
 
 use crossbeam::channel;
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState, StoreIdent};
 use protobuf::Message;
 use raft::eraftpb::MessageType;
 use tikv_util::config::*;
+use tikv_util::time::Instant;
 
 use engine_rocks::raw::Writable;
 use engine_rocks::Compat;

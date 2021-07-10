@@ -3,7 +3,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::*;
 use std::thread;
-use std::time::*;
+use std::time::Duration;
 
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::kvrpcpb::*;
@@ -18,6 +18,7 @@ use pd_client::PdClient;
 use raftstore::store::*;
 use test_raftstore::*;
 use tikv_util::config::*;
+use tikv_util::time::Instant;
 use tikv_util::HandyRwLock;
 
 /// Test if merge is rollback as expected.

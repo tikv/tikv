@@ -3,11 +3,11 @@
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread::sleep;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use test_raftstore::*;
 use tikv_util::config::*;
-use tikv_util::time::UnixSecs as PdInstant;
+use tikv_util::time::{Instant, UnixSecs as PdInstant};
 use tikv_util::HandyRwLock;
 
 fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64, peer: Option<u64>) {

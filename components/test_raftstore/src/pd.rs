@@ -1557,7 +1557,7 @@ impl PdClient for TestPdClient {
             let duration = Duration::from_millis(t.map_or(1000, |t| t.parse().unwrap()));
             Box::pin(async move {
                 let _ = GLOBAL_TIMER_HANDLE
-                    .delay(Instant::now() + duration)
+                    .delay(std::time::Instant::now() + duration)
                     .compat()
                     .await;
                 Err(box_err!("get tso fail"))

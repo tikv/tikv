@@ -3,12 +3,13 @@
 use std::sync::atomic::*;
 use std::sync::*;
 use std::thread;
-use std::time::*;
+use std::time::Duration;
 
 use futures::executor::block_on;
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use test_raftstore::*;
+use tikv_util::time::Instant;
 use tikv_util::HandyRwLock;
 
 #[test]
