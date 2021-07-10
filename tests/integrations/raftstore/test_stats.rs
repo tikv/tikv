@@ -15,7 +15,7 @@ use std::time::Duration;
 use test_raftstore::*;
 use tikv_util::config::*;
 
-use futures::{ SinkExt, StreamExt};
+use futures::{SinkExt, StreamExt};
 use grpcio::*;
 
 use kvproto::tikvpb::*;
