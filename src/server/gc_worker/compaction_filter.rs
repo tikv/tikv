@@ -1035,4 +1035,45 @@ pub mod tests {
         gc_runner.safe_point(200).gc(&raw_engine);
         must_get_none(&engine, b"zkey", 200);
     }
+
+    #[test]
+    fn test_continue_compaction_on_mvcc_garbage() {
+        let mut cfg = DbConfig::default();
+        cfg.writecf.disable_auto_compactions = true;
+        cfg.writecf.dynamic_level_bytes = false;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let builder = TestEngineBuilder::new()
+            .path(dir.path())
+            .conti_compaction_garbage_threshold(0.1);
+        let engine = builder.build_with_cfg(&cfg).unwrap();
+        let raw_engine = engine.get_rocksdb();
+        let mut gc_runner = TestGCRunner::new(0);
+
+        // So the construction of SST files will be:
+        // L1: |key_110|
+        must_prewrite_put(&engine, b"zkey", b"zvalue", b"zkey", 100);
+        must_commit(&engine, b"zkey", 100, 110);
+        gc_runner.target_level = Some(1);
+        gc_runner.safe_point(50).gc(&raw_engine);
+        assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[1], 1);
+
+        // So the construction of SST files will be:
+        // L0: |kex_110, kez_110|
+        // L1: |key_110|
+        // But the file on L0 will continue to be compacted to L1.
+        must_prewrite_delete(&engine, b"zkex", b"zkex", 100);
+        must_commit(&engine, b"zkex", 100, 110);
+        must_prewrite_delete(&engine, b"zkez", b"zkez", 100);
+        must_commit(&engine, b"zkez", 100, 110);
+        raw_engine.flush_cf(CF_WRITE, true).unwrap();
+
+        let now = Instant::now();
+        while now.elapsed() < Duration::from_secs(1) {
+            std::thread::sleep(Duration::from_millis(100));
+            if rocksdb_level_file_counts(&raw_engine, CF_WRITE)[0] == 0 {
+                return;
+            }
+        }
+    }
 }

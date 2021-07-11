@@ -174,6 +174,7 @@ pub struct TestEngineBuilder {
     path: Option<PathBuf>,
     cfs: Option<Vec<CfName>>,
     enable_ttl: bool,
+    conti_compaction_garbage_threshold: f64,
 }
 
 impl TestEngineBuilder {
@@ -182,6 +183,7 @@ impl TestEngineBuilder {
             path: None,
             cfs: None,
             enable_ttl: false,
+            conti_compaction_garbage_threshold: 1.0,
         }
     }
 
@@ -206,6 +208,11 @@ impl TestEngineBuilder {
         self
     }
 
+    pub fn conti_compaction_garbage_threshold(mut self, threshold: f64) -> Self {
+        self.conti_compaction_garbage_threshold = threshold;
+        self
+    }
+
     /// Build a `RocksEngine`.
     pub fn build(self) -> Result<RocksEngine> {
         let cfg_rocksdb = crate::config::DbConfig::default();
@@ -218,6 +225,7 @@ impl TestEngineBuilder {
             Some(p) => p.to_str().unwrap().to_owned(),
         };
         let enable_ttl = self.enable_ttl;
+        let conti_compaction_garbage_threshold = self.conti_compaction_garbage_threshold;
         let cfs = self.cfs.unwrap_or_else(|| crate::storage::ALL_CFS.to_vec());
         let cache = BlockCacheConfig::default().build_shared_cache();
         let cfs_opts = cfs
@@ -228,9 +236,12 @@ impl TestEngineBuilder {
                     cfg_rocksdb.defaultcf.build_opt(&cache, None, enable_ttl),
                 ),
                 CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
-                CF_WRITE => {
-                    CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None, 1.0))
-                }
+                CF_WRITE => CFOptions::new(
+                    CF_WRITE,
+                    cfg_rocksdb
+                        .writecf
+                        .build_opt(&cache, None, conti_compaction_garbage_threshold),
+                ),
                 CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
                 _ => CFOptions::new(*cf, ColumnFamilyOptions::new()),
             })
