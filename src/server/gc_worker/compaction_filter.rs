@@ -366,9 +366,7 @@ impl WriteCompactionFilter {
                 WriteType::Put => self.remove_older = true,
                 WriteType::Delete => {
                     self.remove_older = true;
-                    if self.is_bottommost_level {
-                        self.mvcc_deletion_overlaps = Some(0);
-                    }
+                    self.mvcc_deletion_overlaps = Some(0);
                 }
             }
         }
