@@ -59,8 +59,8 @@ use pd_client::INVALID_ID;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::codec::number::decode_u64;
 use tikv_util::sys::disk;
-use tikv_util::time::{duration_to_sec, monotonic_raw_now, saturating_elapsed};
-use tikv_util::time::{Instant as TiInstant, ThreadReadId};
+use tikv_util::time::{duration_to_sec, monotonic_raw_now};
+use tikv_util::time::{Instant as TiInstant, InstantExt, ThreadReadId};
 use tikv_util::worker::{FutureScheduler, Scheduler};
 use tikv_util::Either;
 use tikv_util::{box_err, debug, error, info, warn};
@@ -1225,7 +1225,7 @@ where
             }
             // TODO
             if let Some(instant) = self.peer_heartbeats.get(&p.get_id()) {
-                let elapsed = saturating_elapsed(*instant);
+                let elapsed = instant.saturating_elapsed();
                 if elapsed >= max_duration {
                     let mut stats = PeerStats::default();
                     stats.set_peer(p.clone());
@@ -1251,7 +1251,7 @@ where
 
         for i in 0..self.peers_start_pending_time.len() {
             let (_, pending_after) = self.peers_start_pending_time[i];
-            let elapsed = duration_to_sec(saturating_elapsed(pending_after));
+            let elapsed = duration_to_sec(pending_after.saturating_elapsed());
             RAFT_PEER_PENDING_DURATION.observe(elapsed);
         }
 
@@ -1323,7 +1323,7 @@ where
             if let Some(progress) = self.raft_group.raft.prs().get(peer_id) {
                 if progress.matched >= truncated_idx {
                     let (_, pending_after) = self.peers_start_pending_time.swap_remove(i);
-                    let elapsed = duration_to_sec(saturating_elapsed(pending_after));
+                    let elapsed = duration_to_sec(pending_after.saturating_elapsed());
                     RAFT_PEER_PENDING_DURATION.observe(elapsed);
                     debug!(
                         "peer has caught up logs";
@@ -1363,7 +1363,7 @@ where
                 StaleState::Valid
             }
             Some(instant)
-                if saturating_elapsed(instant) >= ctx.cfg.max_leader_missing_duration.0 =>
+                if instant.saturating_elapsed() >= ctx.cfg.max_leader_missing_duration.0 =>
             {
                 // Resets the `leader_missing_time` to avoid sending the same tasks to
                 // PD worker continuously during the leader missing timeout.
@@ -1371,7 +1371,7 @@ where
                 StaleState::ToValidate
             }
             Some(instant)
-                if saturating_elapsed(instant) >= ctx.cfg.abnormal_leader_missing_duration.0
+                if instant.saturating_elapsed() >= ctx.cfg.abnormal_leader_missing_duration.0
                     && !naive_peer =>
             {
                 // A peer is considered as in the leader missing state

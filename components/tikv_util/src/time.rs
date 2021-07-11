@@ -37,9 +37,15 @@ pub fn duration_to_nanos(d: Duration) -> u64 {
     d.as_secs() * 1_000_000_000 + nanos
 }
 
-#[inline]
-pub fn saturating_elapsed(i: std::time::Instant) -> Duration {
-    std::time::Instant::now().saturating_duration_since(i)
+pub trait InstantExt {
+    fn saturating_elapsed(&self) -> Duration;
+}
+
+impl InstantExt for std::time::Instant {
+    #[inline]
+    fn saturating_elapsed(&self) -> Duration {
+        std::time::Instant::now().saturating_duration_since(*self)
+    }
 }
 
 /// A time in seconds since the start of the Unix epoch.

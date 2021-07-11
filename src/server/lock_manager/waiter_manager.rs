@@ -636,7 +636,6 @@ pub mod tests {
     use super::*;
     use crate::storage::PessimisticLockRes;
     use tikv_util::future::paired_future_callback;
-    use tikv_util::time::saturating_elapsed;
     use tikv_util::worker::FutureWorker;
 
     use std::sync::mpsc;
@@ -647,6 +646,7 @@ pub mod tests {
     use kvproto::kvrpcpb::LockInfo;
     use rand::prelude::*;
     use tikv_util::config::ReadableDuration;
+    use tikv_util::time::InstantExt;
 
     fn dummy_waiter(start_ts: TimeStamp, lock_ts: TimeStamp, hash: u64) -> Waiter {
         Waiter {
@@ -663,7 +663,7 @@ pub mod tests {
     pub(crate) fn assert_elapsed<F: FnOnce()>(f: F, min: u64, max: u64) {
         let now = Instant::now();
         f();
-        let elapsed = saturating_elapsed(now);
+        let elapsed = now.saturating_elapsed();
         assert!(
             Duration::from_millis(min) <= elapsed && elapsed < Duration::from_millis(max),
             "elapsed: {:?}",
