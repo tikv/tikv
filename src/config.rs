@@ -3410,6 +3410,7 @@ mod tests {
                     &cfg.storage.block_cache.build_shared_cache(),
                     None,
                     cfg.storage.enable_ttl,
+                    1.0,
                 ),
             )
             .unwrap(),

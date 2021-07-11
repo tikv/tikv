@@ -162,7 +162,7 @@ fn test_delete_files_in_range_for_titan() {
     let kv_db_opts = cfg.rocksdb.build_opt();
     let kv_cfs_opts = cfg
         .rocksdb
-        .build_cf_opts(&cache, None, cfg.storage.enable_ttl);
+        .build_cf_opts(&cache, None, cfg.storage.enable_ttl, 1.0);
 
     let raft_path = path.path().join(Path::new("titan"));
     let engines = Engines::new(

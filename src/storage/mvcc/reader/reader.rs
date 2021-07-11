@@ -779,7 +779,9 @@ mod tests {
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_write_buffer_size(32 * 1024 * 1024);
         if with_properties {
-            let f = Box::new(MvccPropertiesCollectorFactory::default());
+            let f = Box::new(MvccPropertiesCollectorFactory {
+                garbage_threshold: 1.0,
+            });
             cf_opts.add_table_properties_collector_factory("tikv.test-collector", f);
         }
         let cfs_opts = vec![
