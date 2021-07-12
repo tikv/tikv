@@ -9,8 +9,8 @@ use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::codec::mysql::json::*;
 
-use serde_json::*;
 use serde::de::*;
+use serde_json::*;
 
 #[rpn_fn]
 #[inline]
@@ -644,14 +644,14 @@ mod tests {
             (
                 Some(r#""hello,\"quoted string\",world""#),
                 Some(r#"hello,"quoted string",world"#),
-                true
+                true,
             ),
             (Some(r#"A中\\\"文B"#), Some(r#"A中\\\"文B"#), true),
             (Some(r#""A中\\\"文B""#), Some(r#"A中\"文B"#), true),
             (Some(r#""\u00E0A中\\\"文B""#), Some(r#"àA中\"文B"#), true),
             (Some(r#""a""#), Some(r#"a"#), true),
             (Some(r#"""a"""#), None, false),
-            (Some(r#""""a""""#), None, false)
+            (Some(r#""""a""""#), None, false),
         ];
 
         for (arg, expect, success) in cases {
