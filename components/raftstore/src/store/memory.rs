@@ -8,7 +8,7 @@ use tikv_alloc::{
     trace::{Id, MemoryTrace, MemoryTraceNode},
 };
 use tikv_util::config::GIB;
-use tikv_util::sys::{get_global_memory_usage, memory_usage_reaches_high_water};
+use tikv_util::sys::memory_usage_reaches_high_water;
 
 lazy_static! {
     pub static ref MEMTRACE_ROOT: Arc<MemoryTraceNode> = mem_trace!(
@@ -58,8 +58,8 @@ lazy_static! {
 
 pub fn needs_evict_entry_cache() -> bool {
     fail_point!("needs_evict_entry_cache", |_| true);
-    if memory_usage_reaches_high_water() {
-        let usage = get_global_memory_usage();
+    let mut usage = 0;
+    if memory_usage_reaches_high_water(&mut usage) {
         let ec_usage = MEMTRACE_ENTRY_CACHE.sum() as u64;
         // Evict if entry cache memory usage reaches 1/5 of global, or 1GiB for small instances.
         // So for different system memory capacity, cache evict happens:

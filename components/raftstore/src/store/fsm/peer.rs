@@ -3623,7 +3623,10 @@ where
         if needs_evict_entry_cache() {
             self.fsm.peer.mut_store().evict_cache(true);
         }
-        if memory_usage_reaches_high_water() && !self.fsm.peer.get_store().cache_is_empty() {
+        let mut _usage = 0;
+        if memory_usage_reaches_high_water(&mut _usage)
+            && !self.fsm.peer.get_store().cache_is_empty()
+        {
             self.register_entry_cache_evict_tick();
         }
     }

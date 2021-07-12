@@ -39,11 +39,13 @@ use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
 use raftstore::router::RaftStoreRouter;
+use raftstore::store::memory::{MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES};
 use raftstore::store::CheckLeaderTask;
 use raftstore::store::{Callback, CasualMessage};
 use raftstore::{DiscardReason, Error as RaftStoreError};
 use tikv_util::future::{paired_future_callback, poll_future_notify};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
+use tikv_util::sys::memory_usage_reaches_high_water;
 use tikv_util::worker::Scheduler;
 use txn_types::{self, Key};
 
@@ -617,20 +619,36 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
     ) {
         let store_id = self.store_id;
         let ch = self.ch.clone();
-        ctx.spawn(async move {
-            let res = stream.map_err(Error::from).try_for_each(move |msg| {
+
+        let res = async move {
+            let mut stream = stream.map_err(Error::from);
+            loop {
+                let msg = match stream.try_next().await? {
+                    Some(msg) => msg,
+                    None => break,
+                };
                 RAFT_MESSAGE_RECV_COUNTER.inc();
                 let to_store_id = msg.get_to_peer().get_store_id();
                 if to_store_id != store_id {
-                    future::err(Error::from(RaftStoreError::StoreNotMatch {
+                    return Err(Error::from(RaftStoreError::StoreNotMatch {
                         to_store_id,
                         my_store_id: store_id,
-                    }))
-                } else {
-                    let ret = ch.send_raft_msg(msg).map_err(Error::from);
-                    future::ready(ret)
+                    }));
                 }
-            });
+                while needs_delay_raft_append() {
+                    let to = std::time::Instant::now() + std::time::Duration::from_millis(100);
+                    let _ = tikv_util::timer::GLOBAL_TIMER_HANDLE
+                        .delay(to)
+                        .compat()
+                        .await;
+                }
+                // TODO: don't reconnect for some errors.
+                ch.send_raft_msg(msg)?;
+            }
+            Ok::<(), Error>(())
+        };
+
+        ctx.spawn(async move {
             let status = match res.await {
                 Err(e) => {
                     let msg = format!("{:?}", e);
@@ -655,25 +673,40 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
         info!("batch_raft RPC is called, new gRPC stream established");
         let store_id = self.store_id;
         let ch = self.ch.clone();
-        ctx.spawn(async move {
-            let res = stream.map_err(Error::from).try_for_each(move |mut msgs| {
-                let len = msgs.get_msgs().len();
+
+        let res = async move {
+            let mut stream = stream.map_err(Error::from);
+            loop {
+                let mut batch_msg = match stream.try_next().await? {
+                    Some(msg) => msg,
+                    None => break,
+                };
+                let len = batch_msg.get_msgs().len();
                 RAFT_MESSAGE_RECV_COUNTER.inc_by(len as u64);
                 RAFT_MESSAGE_BATCH_SIZE.observe(len as f64);
-                for msg in msgs.take_msgs().into_iter() {
+                while needs_delay_raft_append() {
+                    let to = std::time::Instant::now() + std::time::Duration::from_millis(100);
+                    let _ = tikv_util::timer::GLOBAL_TIMER_HANDLE
+                        .delay(to)
+                        .compat()
+                        .await;
+                }
+                for msg in batch_msg.take_msgs().into_iter() {
                     let to_store_id = msg.get_to_peer().get_store_id();
                     if to_store_id != store_id {
-                        return future::err(Error::from(RaftStoreError::StoreNotMatch {
+                        return Err(Error::from(RaftStoreError::StoreNotMatch {
                             to_store_id,
                             my_store_id: store_id,
                         }));
                     }
-                    if let Err(e) = ch.send_raft_msg(msg) {
-                        return future::err(Error::from(e));
-                    }
+                    // TODO: don't reconnect for some errors.
+                    ch.send_raft_msg(msg)?;
                 }
-                future::ok(())
-            });
+            }
+            Ok::<(), Error>(())
+        };
+
+        ctx.spawn(async move {
             let status = match res.await {
                 Err(e) => {
                     let msg = format!("{:?}", e);
@@ -1938,6 +1971,21 @@ fn raftstore_error_to_region_error(e: RaftStoreError, region_id: u64) -> RegionE
         return region_error;
     }
     e.into()
+}
+
+fn needs_delay_raft_append() -> bool {
+    let mut usage = 0;
+    if memory_usage_reaches_high_water(&mut usage) {
+        let raft_msg_usage = (MEMTRACE_RAFT_ENTRIES.sum() + MEMTRACE_RAFT_MESSAGES.sum()) as u64;
+        if raft_msg_usage > usage / 5 {
+            // For different system memory capacity, `MsgAppend`s are delayed when:
+            // * system=8G,  memory_usage_limit=6G,  delay_at=1.2G
+            // * system=16G, memory_usage_limit=12G, delay_at=2.4G
+            // * system=32G, memory_usage_limit=24G, delay_at=4.8G
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
