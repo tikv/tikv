@@ -9,8 +9,7 @@ use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::codec::mysql::json::*;
 
-use serde::de::*;
-use serde_json::*;
+use serde::de::IgnoredAny;
 
 #[rpn_fn]
 #[inline]
@@ -212,7 +211,7 @@ fn json_unquote(arg: BytesRef) -> Result<Option<Bytes>> {
     let first_char = tmp_str.chars().next();
     let last_char = tmp_str.chars().last();
     if tmp_str.len() >= 2 && first_char == Some('"') && last_char == Some('"') {
-        let _: IgnoredAny = from_str(&tmp_str)?;
+        let _: IgnoredAny = serde_json::from_str(&tmp_str)?;
     }
     Ok(Some(Bytes::from(self::unquote_string(tmp_str)?)))
 }
