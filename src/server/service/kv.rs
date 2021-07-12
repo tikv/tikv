@@ -622,11 +622,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
 
         let res = async move {
             let mut stream = stream.map_err(Error::from);
-            loop {
-                let msg = match stream.try_next().await? {
-                    Some(msg) => msg,
-                    None => break,
-                };
+            while let Some(msg) = stream.try_next().await? {
                 RAFT_MESSAGE_RECV_COUNTER.inc();
                 let to_store_id = msg.get_to_peer().get_store_id();
                 if to_store_id != store_id {
@@ -676,11 +672,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
 
         let res = async move {
             let mut stream = stream.map_err(Error::from);
-            loop {
-                let mut batch_msg = match stream.try_next().await? {
-                    Some(msg) => msg,
-                    None => break,
-                };
+            while let Some(mut batch_msg) = stream.try_next().await? {
                 let len = batch_msg.get_msgs().len();
                 RAFT_MESSAGE_RECV_COUNTER.inc_by(len as u64);
                 RAFT_MESSAGE_BATCH_SIZE.observe(len as f64);
