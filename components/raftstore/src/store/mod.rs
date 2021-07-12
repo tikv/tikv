@@ -41,8 +41,8 @@ pub use self::region_snapshot::{new_temp_engine, RegionIterator, RegionSnapshot}
 pub use self::snap::{
     check_abort, copy_snapshot,
     snap_io::{apply_sst_cf_file, build_sst_cf_file},
-    ApplyOptions, Error as SnapError, GenericSnapshot, SnapEntry, SnapKey, SnapManager,
-    SnapManagerBuilder, Snapshot, SnapshotStatistics,
+    ApplyOptions, Error as SnapError, SnapEntry, SnapKey, SnapManager, SnapManagerBuilder,
+    Snapshot, SnapshotStatistics,
 };
 pub use self::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
 pub use self::worker::{
