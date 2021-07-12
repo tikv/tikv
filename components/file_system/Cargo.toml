@@ -16,13 +16,13 @@ prost-codec = [
 
 [dependencies]
 collections = { path = "../collections" }
+configuration = { path = "../configuration" }
 crc32fast = "1.2"
 crossbeam-utils = "0.8.0"
 fs2 = "0.4"
 lazy_static = "1.3"
 libc = "0.2"
 nix = "0.19"
-online_config = { path = "../online_config" }
 openssl = "0.10"
 parking_lot = "0.11"
 prometheus = { version = "0.10", features = ["nightly"] }

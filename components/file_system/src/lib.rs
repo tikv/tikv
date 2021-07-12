@@ -34,7 +34,7 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
-use online_config::ConfigValue;
+use configuration::ConfigValue;
 use openssl::error::ErrorStack;
 use openssl::hash::{self, Hasher, MessageDigest};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
