@@ -319,7 +319,7 @@ fn test_query_stats() {
                 store_id,
                 region_id,
                 QueryKind::Get,
-                10000
+                1000
             ));
             assert!(check_split_key(cluster, start_key));
         });
@@ -339,7 +339,7 @@ fn test_query_stats() {
                 store_id,
                 region_id,
                 QueryKind::Get,
-                10000
+                1000
             ));
             assert!(check_split_key(
                 cluster,
@@ -521,16 +521,19 @@ fn check_query_num_read(
     expect: u64,
 ) -> bool {
     let start = std::time::SystemTime::now();
+    let mut num = 0;
     loop {
         sleep_ms(10);
         if let Some(hot_peers) = cluster.pd_client.get_store_hotspots(store_id) {
             let peer_stat = hot_peers.get(&region_id).unwrap();
             let query_stat = peer_stat.get_query_stats();
-            if QueryStats::get_query_num(query_stat, kind) == expect {
+            num = QueryStats::get_query_num(query_stat, kind);
+            if num == expect {
                 return true;
             }
         }
-        if start.elapsed().unwrap().as_secs() > 5 {
+        if start.elapsed().unwrap().as_secs() > 10 {
+            println!("real query {}", num);
             return false;
         }
     }
@@ -581,7 +584,7 @@ fn batch_commands(
     start_key: &Vec<u8>,
 ) {
     let (mut sender, receiver) = client.batch_commands().unwrap();
-    for _ in 0..1000 {
+    for _ in 0..100 {
         let mut batch_req = BatchCommandsRequest::default();
         for i in 0..10 {
             let req = gen_request(ctx, start_key.clone());
@@ -602,7 +605,7 @@ fn batch_commands(
                 .collect::<Vec<usize>>(),
         ) {
             count += x;
-            if count == 10000 {
+            if count == 1000 {
                 tx.send(1).unwrap();
                 return;
             }
