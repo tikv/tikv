@@ -1870,11 +1870,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                         "snaps" => ?snaps,
                     );
                     for (key, is_sending) in snaps {
-                        let snap = if is_sending {
-                            self.ctx.snap_mgr.get_snapshot_for_sending(&key)?
-                        } else {
-                            self.ctx.snap_mgr.get_snapshot_for_applying(&key)?
-                        };
+                        let snap = self.ctx.snap_mgr.get_snapshot_for_gc(&key, is_sending)?;
                         self.ctx
                             .snap_mgr
                             .delete_snapshot(&key, snap.as_ref(), false);
