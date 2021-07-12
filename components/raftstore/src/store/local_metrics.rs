@@ -84,7 +84,6 @@ pub struct RaftSendMessageMetrics {
     pub vote: SendStatus,
     pub vote_resp: SendStatus,
     pub snapshot: SendStatus,
-    pub request_snapshot: SendStatus,
     pub heartbeat: SendStatus,
     pub heartbeat_resp: SendStatus,
     pub transfer_leader: SendStatus,
@@ -104,7 +103,6 @@ impl RaftSendMessageMetrics {
         flush_send_status!(vote, self);
         flush_send_status!(vote_resp, self);
         flush_send_status!(snapshot, self);
-        flush_send_status!(request_snapshot, self);
         flush_send_status!(heartbeat, self);
         flush_send_status!(heartbeat_resp, self);
         flush_send_status!(transfer_leader, self);
