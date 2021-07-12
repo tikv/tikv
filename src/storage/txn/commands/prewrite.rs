@@ -444,18 +444,14 @@ impl<K: PrewriteKind> Prewriter<K> {
             reader: &mut SnapshotReader<impl Snapshot>,
             key: &Key,
         ) -> Result<(Vec<std::result::Result<(), StorageError>>, TimeStamp)> {
-            if let TxnCommitRecord::SingleRecord { commit_ts, write } =
-                reader.get_txn_commit_record(key)?
-            {
-                if write.write_type == WriteType::Rollback {
-                    Err(prewrite_result.unwrap_err().into())
-                } else {
-                    info!("prewrited transaction has been committed";
-                    "start_ts" => reader.start_ts, "commit_ts" => commit_ts);
+            match reader.get_txn_commit_record(key)? {
+                TxnCommitRecord::SingleRecord { commit_ts, write }
+                    if write.write_type != WriteType::Rollback =>
+                {
+                    info!("prewrited transaction has been committed"; "start_ts" => reader.start_ts, "commit_ts" => commit_ts);
                     Ok((vec![], commit_ts))
                 }
-            } else {
-                Err(prewrite_result.unwrap_err().into())
+                _ => Err(prewrite_result.unwrap_err().into()),
             }
         }
 
