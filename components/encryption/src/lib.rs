@@ -24,10 +24,12 @@ mod metrics;
 
 pub use self::config::*;
 pub use self::crypter::{
-    encryption_method_from_db_encryption_method, verify_encryption_config, AesGcmCrypter, Iv,
+    compat, encryption_method_from_db_encryption_method, verify_encryption_config, AesGcmCrypter,
+    Iv,
 };
 pub use self::encrypted_file::EncryptedFile;
 pub use self::errors::{Error, Result};
+pub use self::file_dict_file::FileDictionaryFile;
 pub use self::io::{create_aes_ctr_crypter, DecrypterReader, EncrypterReader, EncrypterWriter};
 pub use self::manager::DataKeyManager;
 pub use self::master_key::{Backend, FileBackend, KmsBackend};

@@ -20,7 +20,7 @@ use tikv_util::worker::Worker;
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
 
-use cdc::{CdcObserver, Task};
+use cdc::{CdcObserver, MemoryQuota, Task};
 
 #[allow(clippy::type_complexity)]
 pub fn new_event_feed(
@@ -45,7 +45,7 @@ pub fn new_event_feed(
         if !keep_resolved_ts && change_data_event.has_resolved_ts() {
             continue;
         }
-        tikv_util::info!("receive event {:?}", change_data_event);
+        tikv_util::info!("cdc receive event {:?}", change_data_event);
         break change_data_event;
     };
     (req_tx, event_feed_wrap, receive_event)
@@ -86,7 +86,12 @@ impl TestSuite {
                 .entry(id)
                 .or_default()
                 .push(Box::new(move || {
-                    create_change_data(cdc::Service::new(scheduler.clone(), security_mgr.clone()))
+                    let memory_quota = MemoryQuota::new(std::usize::MAX);
+                    create_change_data(cdc::Service::new(
+                        scheduler.clone(),
+                        security_mgr.clone(),
+                        memory_quota,
+                    ))
                 }));
             let scheduler = worker.scheduler();
             let cdc_ob = cdc::CdcObserver::new(scheduler.clone());
@@ -111,9 +116,10 @@ impl TestSuite {
                 raft_router,
                 cdc_ob,
                 cluster.store_metas[id].clone(),
+                MemoryQuota::new(std::usize::MAX),
             );
             cdc_endpoint.set_min_ts_interval(Duration::from_millis(100));
-            cdc_endpoint.set_scan_batch_size(2);
+            cdc_endpoint.set_max_scan_batch_size(2);
             worker.start(cdc_endpoint).unwrap();
         }
 

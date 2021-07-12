@@ -148,6 +148,8 @@ impl Simulator for ServerCluster {
         // listening address for the same store.
         if let Some(addr) = self.addrs.get(&node_id) {
             cfg.server.addr = addr.clone();
+        } else {
+            cfg.server.addr = format!("127.0.0.1:{}", test_util::alloc_port());
         }
 
         let local_reader =
@@ -158,7 +160,7 @@ impl Simulator for ServerCluster {
         let raft_engine = RaftKv::new(sim_router.clone());
 
         // Create coprocessor.
-        let mut coprocessor_host = CoprocessorHost::new(router.clone());
+        let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
 
         let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
         region_info_accessor.start();
@@ -207,7 +209,7 @@ impl Simulator for ServerCluster {
         };
         let import_service = ImportSSTService::new(
             cfg.import.clone(),
-            router.clone(),
+            sim_router.clone(),
             Arc::clone(&engines.kv),
             Arc::clone(&importer),
             security_mgr.clone(),
@@ -297,14 +299,13 @@ impl Simulator for ServerCluster {
         // Register the role change observer of the lock manager.
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
 
-        let pessimistic_txn_cfg = cfg.pessimistic_txn.clone();
+        let pessimistic_txn_cfg = cfg.pessimistic_txn;
 
         let mut split_check_worker = Worker::new("split-check");
         let split_check_runner = SplitCheckRunner::new(
             Arc::clone(&engines.kv),
             router.clone(),
             coprocessor_host.clone(),
-            cfg.coprocessor,
         );
         split_check_worker.start(split_check_runner).unwrap();
 
