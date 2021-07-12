@@ -71,7 +71,7 @@ pub struct Downstream {
     // TODO: include cdc request.
     /// A unique identifier of the Downstream.
     id: DownstreamID,
-    // The reqeust ID set by CDC to identify events corresponding different requests.
+    // The request ID set by CDC to identify events corresponding different requests.
     req_id: u64,
     conn_id: ConnID,
     // The IP address of downstream.
@@ -83,7 +83,7 @@ pub struct Downstream {
 }
 
 impl Downstream {
-    /// Create a Downsteam.
+    /// Create a Downstream.
     ///
     /// peer is the address of the downstream.
     /// sink sends data to the downstream.
@@ -409,7 +409,7 @@ impl Delegate {
         old_value_cb: &OldValueCallback,
         old_value_cache: &mut OldValueCache,
     ) -> Result<()> {
-        // Stale CmdBatch, drop it sliently.
+        // Stale CmdBatch, drop it silently.
         if batch.cdc_id != self.handle.id {
             return Ok(());
         }
@@ -507,7 +507,7 @@ impl Delegate {
                 None => {
                     let mut row = EventRow::default();
 
-                    // This type means scan has finised.
+                    // This type means scan has finished.
                     set_event_row_type(&mut row, EventLogType::Initialized);
                     rows.last_mut().unwrap().push(row);
                 }

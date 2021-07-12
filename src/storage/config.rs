@@ -12,6 +12,7 @@ use file_system::{get_io_rate_limiter, IOPriority, IORateLimitMode, IORateLimite
 use libc::c_int;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig, Result as CfgResult};
 use std::error::Error;
+use strum::IntoEnumIterator;
 use tikv_util::config::{self, OptionReadableSize, ReadableDuration, ReadableSize};
 use tikv_util::sys::SysQuota;
 use tikv_util::worker::Scheduler;
@@ -155,6 +156,14 @@ impl ConfigManager for StorageConfigManger {
                 let limit: ReadableSize = limit.into();
                 limiter.set_io_rate_limit(limit.0 as usize);
             }
+
+            for t in IOType::iter() {
+                if let Some(priority) = io_rate_limit.remove(&(t.as_str().to_owned() + "_priority"))
+                {
+                    let priority: IOPriority = priority.into();
+                    limiter.set_io_priority(t, priority);
+                }
+            }
         }
         Ok(())
     }
@@ -254,27 +263,16 @@ pub struct IORateLimitConfig {
     /// turned on.
     #[online_config(skip)]
     pub strict: bool,
-    #[online_config(skip)]
     pub foreground_read_priority: IOPriority,
-    #[online_config(skip)]
     pub foreground_write_priority: IOPriority,
-    #[online_config(skip)]
     pub flush_priority: IOPriority,
-    #[online_config(skip)]
     pub level_zero_compaction_priority: IOPriority,
-    #[online_config(skip)]
     pub compaction_priority: IOPriority,
-    #[online_config(skip)]
     pub replication_priority: IOPriority,
-    #[online_config(skip)]
     pub load_balance_priority: IOPriority,
-    #[online_config(skip)]
     pub gc_priority: IOPriority,
-    #[online_config(skip)]
     pub import_priority: IOPriority,
-    #[online_config(skip)]
     pub export_priority: IOPriority,
-    #[online_config(skip)]
     pub other_priority: IOPriority,
 }
 
@@ -301,7 +299,7 @@ impl Default for IORateLimitConfig {
 
 impl IORateLimitConfig {
     pub fn build(&self, enable_statistics: bool) -> IORateLimiter {
-        let mut limiter = IORateLimiter::new(self.mode, self.strict, enable_statistics);
+        let limiter = IORateLimiter::new(self.mode, self.strict, enable_statistics);
         limiter.set_io_rate_limit(self.max_bytes_per_sec.0 as usize);
         limiter.set_io_priority(IOType::ForegroundRead, self.foreground_read_priority);
         limiter.set_io_priority(IOType::ForegroundWrite, self.foreground_write_priority);
