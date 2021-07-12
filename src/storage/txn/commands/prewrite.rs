@@ -444,14 +444,14 @@ impl<K: PrewriteKind> Prewriter<K> {
             reader: &mut SnapshotReader<impl Snapshot>,
             key: &Key,
         ) -> Result<(Vec<std::result::Result<(), StorageError>>, TimeStamp)> {
-            if let TxnCommitRecord::SingleRecord { commit_ts, .. } =
-                reader.get_txn_commit_record(key)?
-            {
-                info!("prewrited transaction has been committed";
-                    "start_ts" => reader.start_ts, "commit_ts" => commit_ts);
-                Ok((vec![], commit_ts))
-            } else {
-                Err(prewrite_result.unwrap_err().into())
+            match reader.get_txn_commit_record(key)? {
+                TxnCommitRecord::SingleRecord { commit_ts, write }
+                    if write.write_type != WriteType::Rollback =>
+                {
+                    info!("prewrited transaction has been committed"; "start_ts" => reader.start_ts, "commit_ts" => commit_ts);
+                    Ok((vec![], commit_ts))
+                }
+                _ => Err(prewrite_result.unwrap_err().into()),
             }
         }
 
@@ -1686,5 +1686,64 @@ mod tests {
             }
             res => panic!("unexpected result {:?}", res),
         }
+    }
+
+    #[test]
+    fn test_prewrite_rolledback_transaction() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let cm = ConcurrencyManager::new(1.into());
+        let mut statistics = Statistics::default();
+
+        let k1 = b"k1";
+        let v1 = b"v1";
+        let v2 = b"v2";
+
+        // Test the write conflict path.
+        must_acquire_pessimistic_lock(&engine, k1, v1, 1, 1);
+        must_rollback(&engine, k1, 1, true);
+        must_prewrite_put(&engine, k1, v2, k1, 5);
+        must_commit(&engine, k1, 5, 6);
+        let prewrite_cmd = Prewrite::new(
+            vec![Mutation::Put((Key::from_raw(k1), v1.to_vec()))],
+            k1.to_vec(),
+            1.into(),
+            10,
+            false,
+            2,
+            2.into(),
+            10.into(),
+            Some(vec![]),
+            false,
+            Context::default(),
+        );
+        let context = WriteContext {
+            lock_mgr: &DummyLockManager {},
+            concurrency_manager: cm.clone(),
+            extra_op: ExtraOp::Noop,
+            statistics: &mut statistics,
+            async_apply_prewrite: false,
+        };
+        let snap = engine.snapshot(Default::default()).unwrap();
+        assert!(prewrite_cmd.cmd.process_write(snap, context).is_err());
+
+        // Test the pessimistic lock is not found path.
+        must_acquire_pessimistic_lock(&engine, k1, v1, 10, 10);
+        must_rollback(&engine, k1, 10, true);
+        must_acquire_pessimistic_lock(&engine, k1, v1, 15, 15);
+        let prewrite_cmd = PrewritePessimistic::with_defaults(
+            vec![(Mutation::Put((Key::from_raw(k1), v1.to_vec())), true)],
+            k1.to_vec(),
+            10.into(),
+            10.into(),
+        );
+        let context = WriteContext {
+            lock_mgr: &DummyLockManager {},
+            concurrency_manager: cm,
+            extra_op: ExtraOp::Noop,
+            statistics: &mut statistics,
+            async_apply_prewrite: false,
+        };
+        let snap = engine.snapshot(Default::default()).unwrap();
+        assert!(prewrite_cmd.cmd.process_write(snap, context).is_err());
     }
 }
