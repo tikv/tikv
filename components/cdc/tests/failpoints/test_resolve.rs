@@ -113,7 +113,7 @@ fn test_stale_resolver() {
                     assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
                 }
                 _ => {
-                    panic!("unexepected event length {:?}", es);
+                    panic!("unexpected event length {:?}", es);
                 }
             },
             Event_oneof_event::Error(e) => panic!("{:?}", e),
