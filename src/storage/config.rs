@@ -263,29 +263,6 @@ pub struct IORateLimitConfig {
     /// turned on.
     #[config(skip)]
     pub strict: bool,
-<<<<<<< HEAD
-    #[config(skip)]
-    pub foreground_read_priority: IOPriority,
-    #[config(skip)]
-    pub foreground_write_priority: IOPriority,
-    #[config(skip)]
-    pub flush_priority: IOPriority,
-    #[config(skip)]
-    pub level_zero_compaction_priority: IOPriority,
-    #[config(skip)]
-    pub compaction_priority: IOPriority,
-    #[config(skip)]
-    pub replication_priority: IOPriority,
-    #[config(skip)]
-    pub load_balance_priority: IOPriority,
-    #[config(skip)]
-    pub gc_priority: IOPriority,
-    #[config(skip)]
-    pub import_priority: IOPriority,
-    #[config(skip)]
-    pub export_priority: IOPriority,
-    #[config(skip)]
-=======
     pub foreground_read_priority: IOPriority,
     pub foreground_write_priority: IOPriority,
     pub flush_priority: IOPriority,
@@ -296,7 +273,6 @@ pub struct IORateLimitConfig {
     pub gc_priority: IOPriority,
     pub import_priority: IOPriority,
     pub export_priority: IOPriority,
->>>>>>> 3142f7414... Support dynamically configuring IO priority (#10414)
     pub other_priority: IOPriority,
 }
 
