@@ -1480,25 +1480,6 @@ impl<T: Simulator> Cluster<T> {
     pub fn partition(&self, s1: Vec<u64>, s2: Vec<u64>) {
         self.add_send_filter(PartitionFilterFactory::new(s1, s2));
     }
-
-    // Request a snapshot on the given region.
-    pub fn must_request_snapshot(&self, store_id: u64, region_id: u64) -> u64 {
-        // Request snapshot.
-        let (request_tx, request_rx) = mpsc::channel();
-        let router = self.sim.rl().get_router(store_id).unwrap();
-        CasualRouter::send(
-            &router,
-            region_id,
-            CasualMessage::AccessPeer(Box::new(move |peer: &mut dyn AbstractPeer| {
-                let idx = peer.raft_commit_index();
-                peer.raft_request_snapshot(idx);
-                debug!("{} request snapshot at {:?}", idx, peer.meta_peer());
-                request_tx.send(idx).unwrap();
-            })),
-        )
-        .unwrap();
-        request_rx.recv_timeout(Duration::from_secs(5)).unwrap()
-    }
 }
 
 impl<T: Simulator> Drop for Cluster<T> {
