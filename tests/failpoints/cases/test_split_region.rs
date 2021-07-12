@@ -685,7 +685,7 @@ fn test_report_approximate_size_after_split_check() {
         .get_region_approximate_keys(region_id)
         .unwrap_or_default();
     assert!(approximate_size == 0 && approximate_keys == 0);
-    let (tx, rx) = mpsc::sync_channel(10);
+    let (tx, rx) = mpsc::channel();
     let tx = Arc::new(Mutex::new(tx));
 
     fail::cfg_callback("on_split_region_check_tick", move || {

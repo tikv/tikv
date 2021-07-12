@@ -250,6 +250,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             .map_err(Error::from)
     }
 
+    #[cfg(test)]
+    pub fn get_snapshot(&self) -> E::Snap {
+        self.engine.snapshot(Default::default()).unwrap()
+    }
+
     pub fn release_snapshot(&self) {
         self.engine.release_snapshot();
     }
