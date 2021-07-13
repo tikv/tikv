@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Display, Formatter};
 
-pub use configuration_derive::*;
+pub use online_config_derive::*;
 
 pub type ConfigChange = HashMap<String, ConfigValue>;
 
@@ -19,6 +19,7 @@ pub enum ConfigValue {
     Bool(bool),
     String(String),
     BlobRunMode(String),
+    IOPriority(String),
     OptionSize(Option<u64>),
     Module(ConfigChange),
     Skip,
@@ -39,6 +40,7 @@ impl Display for ConfigValue {
             ConfigValue::Bool(v) => write!(f, "{}", v),
             ConfigValue::String(v) => write!(f, "{}", v),
             ConfigValue::BlobRunMode(v) => write!(f, "{}", v),
+            ConfigValue::IOPriority(v) => write!(f, "{}", v),
             ConfigValue::Module(v) => write!(f, "{:?}", v),
             ConfigValue::Skip => write!(f, "ConfigValue::Skip"),
         }
@@ -95,26 +97,26 @@ impl_into!(bool, Bool);
 impl_into!(String, String);
 impl_into!(ConfigChange, Module);
 
-/// The Configuration trait
+/// The OnlineConfig trait
 ///
-/// There are four type of fields inside derived Configuration struct:
-/// 1. `#[config(skip)]` field, these fields will not return
+/// There are four type of fields inside derived OnlineConfig struct:
+/// 1. `#[online_config(skip)]` field, these fields will not return
 /// by `diff` method and have not effect of `update` method
-/// 2. `#[config(hidden)]` field, these fields have the same effect of
-/// `#[config(skip)]` field, in addition, these fields will not appear
+/// 2. `#[online_config(hidden)]` field, these fields have the same effect of
+/// `#[online_config(skip)]` field, in addition, these fields will not appear
 /// at the output of serializing `Self::Encoder`
-/// 3. `#[config(submodule)]` field, these fields represent the
-/// submodule, and should also derive `Configuration`
+/// 3. `#[online_config(submodule)]` field, these fields represent the
+/// submodule, and should also derive `OnlineConfig`
 /// 4. normal fields, the type of these fields should be implment
 /// `Into` and `From` for `ConfigValue`
-pub trait Configuration<'a> {
+pub trait OnlineConfig<'a> {
     type Encoder: serde::Serialize;
     /// Compare to other config, return the difference
     fn diff(&self, _: &Self) -> ConfigChange;
     /// Update config with difference returned by `diff`
     fn update(&mut self, _: ConfigChange);
     /// Get encoder that can be serialize with `serde::Serializer`
-    /// with the disappear of `#[config(hidden)]` field
+    /// with the disappear of `#[online_config(hidden)]` field
     fn get_encoder(&'a self) -> Self::Encoder;
     /// Get all fields and their type of the config
     fn typed(&self) -> ConfigChange;
@@ -129,23 +131,23 @@ pub trait ConfigManager: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate as configuration;
+    use crate as online_config;
 
-    #[derive(Clone, Configuration, Debug, Default, PartialEq)]
+    #[derive(Clone, OnlineConfig, Debug, Default, PartialEq)]
     pub struct TestConfig {
         field1: usize,
         field2: String,
-        #[config(skip)]
+        #[online_config(skip)]
         skip_field: u64,
-        #[config(submodule)]
+        #[online_config(submodule)]
         submodule_field: SubConfig,
     }
 
-    #[derive(Clone, Configuration, Debug, Default, PartialEq)]
+    #[derive(Clone, OnlineConfig, Debug, Default, PartialEq)]
     pub struct SubConfig {
         field1: u64,
         field2: bool,
-        #[config(skip)]
+        #[online_config(skip)]
         skip_field: String,
     }
 
@@ -233,25 +235,25 @@ mod tests {
     fn test_hidden_field() {
         use serde::Serialize;
 
-        #[derive(Configuration, Default, Serialize)]
+        #[derive(OnlineConfig, Default, Serialize)]
         #[serde(default)]
         #[serde(rename_all = "kebab-case")]
         pub struct TestConfig {
-            #[config(skip)]
+            #[online_config(skip)]
             skip_field: String,
-            #[config(hidden)]
+            #[online_config(hidden)]
             hidden_field: u64,
-            #[config(submodule)]
+            #[online_config(submodule)]
             submodule_field: SubConfig,
         }
 
-        #[derive(Configuration, Default, Serialize)]
+        #[derive(OnlineConfig, Default, Serialize)]
         #[serde(default)]
         #[serde(rename_all = "kebab-case")]
         pub struct SubConfig {
             #[serde(rename = "rename_field")]
             bool_field: bool,
-            #[config(hidden)]
+            #[online_config(hidden)]
             hidden_field: usize,
         }
 

@@ -61,7 +61,6 @@ make_auto_flush_static_metric! {
         vote,
         vote_resp,
         snapshot,
-        request_snapshot,
         heartbeat,
         heartbeat_resp,
         transfer_leader,
@@ -233,7 +232,12 @@ lazy_static! {
             "Bucketed histogram of peer appending log duration",
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
-
+    pub static ref CHECK_LEADER_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_resolved_ts_check_leader_duration_seconds",
+            "Bucketed histogram of handling check leader request duration",
+            exponential_buckets(0.005, 2.0, 20).unwrap()
+        ).unwrap();
     pub static ref PEER_COMMIT_LOG_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_commit_log_duration_seconds",
@@ -501,9 +505,9 @@ lazy_static! {
         "Total memory size of raft entries caches."
         ).unwrap();
 
-    pub static ref RAFT_ENTRIES_CACHES_EVICT: IntCounter = register_int_counter!(
-        "tikv_raft_entries_caches_evict",
-        "Cache evict counter"
+    pub static ref RAFT_ENTRIES_EVICT_BYTES: IntCounter = register_int_counter!(
+        "tikv_raft_entries_evict_bytes",
+        "Cache evict bytes."
     ).unwrap();
 
     pub static ref COMPACTION_GUARD_ACTION_COUNTER_VEC: IntCounterVec =

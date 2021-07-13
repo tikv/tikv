@@ -37,14 +37,14 @@ const DEFAULT_DELETE_BATCH_COUNT: usize = 128;
 const COMPACTION_FILTER_GC_FEATURE: Feature = Feature::require(5, 0, 0);
 
 // Global context to create a compaction filter for write CF. It's necessary as these fields are
-// not available when construcing `WriteCompactionFilterFactory`.
+// not available when constructing `WriteCompactionFilterFactory`.
 struct GcContext {
     db: RocksEngine,
     store_id: u64,
     safe_point: Arc<AtomicU64>,
     cfg_tracker: GcWorkerConfigManager,
     feature_gate: FeatureGate,
-    gc_scheduler: FutureScheduler<GcTask>,
+    gc_scheduler: FutureScheduler<GcTask<RocksEngine>>,
     region_info_provider: Arc<dyn RegionInfoProvider + 'static>,
     #[cfg(any(test, feature = "failpoints"))]
     callbacks_on_drop: Vec<Arc<dyn Fn(&WriteCompactionFilter) + Send + Sync>>,
@@ -95,19 +95,22 @@ lazy_static! {
     ).unwrap();
 }
 
-pub trait CompactionFilterInitializer {
+pub trait CompactionFilterInitializer<EK>
+where
+    EK: KvEngine,
+{
     fn init_compaction_filter(
         &self,
         store_id: u64,
         safe_point: Arc<AtomicU64>,
         cfg_tracker: GcWorkerConfigManager,
         feature_gate: FeatureGate,
-        gc_scheduler: FutureScheduler<GcTask>,
+        gc_scheduler: FutureScheduler<GcTask<EK>>,
         region_info_provider: Arc<dyn RegionInfoProvider>,
     );
 }
 
-impl<EK> CompactionFilterInitializer for EK
+impl<EK> CompactionFilterInitializer<EK> for EK
 where
     EK: KvEngine,
 {
@@ -117,21 +120,21 @@ where
         _safe_point: Arc<AtomicU64>,
         _cfg_tracker: GcWorkerConfigManager,
         _feature_gate: FeatureGate,
-        _gc_scheduler: FutureScheduler<GcTask>,
+        _gc_scheduler: FutureScheduler<GcTask<EK>>,
         _region_info_provider: Arc<dyn RegionInfoProvider>,
     ) {
         info!("Compaction filter is not supported for this engine.");
     }
 }
 
-impl CompactionFilterInitializer for RocksEngine {
+impl CompactionFilterInitializer<RocksEngine> for RocksEngine {
     fn init_compaction_filter(
         &self,
         store_id: u64,
         safe_point: Arc<AtomicU64>,
         cfg_tracker: GcWorkerConfigManager,
         feature_gate: FeatureGate,
-        gc_scheduler: FutureScheduler<GcTask>,
+        gc_scheduler: FutureScheduler<GcTask<RocksEngine>>,
         region_info_provider: Arc<dyn RegionInfoProvider>,
     ) {
         info!("initialize GC context for compaction filter");
@@ -234,7 +237,7 @@ struct WriteCompactionFilter {
     encountered_errors: bool,
 
     write_batch: RocksWriteBatch,
-    gc_scheduler: FutureScheduler<GcTask>,
+    gc_scheduler: FutureScheduler<GcTask<RocksEngine>>,
     // A key batch which is going to be sent to the GC worker.
     mvcc_deletions: Vec<Key>,
     // The count of records covered the current mvcc-deletion mark. The mvcc-deletion
@@ -265,7 +268,7 @@ impl WriteCompactionFilter {
         engine: RocksEngine,
         safe_point: u64,
         context: &CompactionFilterContext,
-        gc_scheduler: FutureScheduler<GcTask>,
+        gc_scheduler: FutureScheduler<GcTask<RocksEngine>>,
         regions_provider: (u64, Arc<dyn RegionInfoProvider>),
     ) -> Self {
         // Safe point must have been initialized.
@@ -306,7 +309,7 @@ impl WriteCompactionFilter {
 
     // `log_on_error` indicates whether to print an error log on scheduling failures.
     // It's only enabled for `GcTask::OrphanVersions`.
-    fn schedule_gc_task(&self, task: GcTask, log_on_error: bool) {
+    fn schedule_gc_task(&self, task: GcTask<RocksEngine>, log_on_error: bool) {
         if let Err(e) = self.gc_scheduler.schedule(task) {
             if log_on_error {
                 error!("compaction filter schedule {} fail", e.0);
@@ -464,11 +467,11 @@ impl WriteCompactionFilter {
     }
 
     fn flush_metrics(&self) {
-        GC_COMPACTION_FILTERED.inc_by(self.total_filtered as i64);
-        GC_COMPACTION_MVCC_ROLLBACK.inc_by(self.mvcc_rollback_and_locks as i64);
+        GC_COMPACTION_FILTERED.inc_by(self.total_filtered as u64);
+        GC_COMPACTION_MVCC_ROLLBACK.inc_by(self.mvcc_rollback_and_locks as u64);
         GC_COMPACTION_FILTER_ORPHAN_VERSIONS
             .with_label_values(&["generated"])
-            .inc_by(self.orphan_versions as i64);
+            .inc_by(self.orphan_versions as u64);
         if let Some((versions, filtered)) = STATS.with(|stats| {
             stats.versions.update(|x| x + self.total_versions);
             stats.filtered.update(|x| x + self.total_filtered);
@@ -692,8 +695,8 @@ pub mod test_utils {
         pub start: Option<&'a [u8]>,
         pub end: Option<&'a [u8]>,
         pub target_level: Option<usize>,
-        pub gc_scheduler: FutureScheduler<GcTask>,
-        pub gc_receiver: UnboundedReceiver<Option<GcTask>>,
+        pub gc_scheduler: FutureScheduler<GcTask<RocksEngine>>,
+        pub gc_receiver: UnboundedReceiver<Option<GcTask<RocksEngine>>>,
         pub(super) callbacks_on_drop: Vec<Arc<dyn Fn(&WriteCompactionFilter) + Send + Sync>>,
     }
 

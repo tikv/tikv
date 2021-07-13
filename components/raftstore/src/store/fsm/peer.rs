@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::iter::Iterator;
@@ -27,19 +28,18 @@ use kvproto::raft_serverpb::{
 };
 use kvproto::replication_modepb::{DrAutoSyncState, ReplicationMode};
 use protobuf::Message;
-use raft::eraftpb::{ConfChangeType, MessageType};
-use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
-use raft::{Ready, StateRole};
+use raft::eraftpb::{ConfChangeType, EntryType, MessageType};
+use raft::{self, Progress, ReadState, Ready, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT};
 use tikv_alloc::trace::TraceEvent;
-use tikv_util::memory::HeapSize;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
-use tikv_util::sys::memory_usage_reaches_high_water;
+use tikv_util::sys::{disk, memory_usage_reaches_high_water};
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
-use tikv_util::{box_err, debug, error, info, trace, warn};
+use tikv_util::{box_err, debug, defer, error, info, trace, warn};
 use tikv_util::{escape, is_zero_duration, Either};
 use txn_types::WriteBatchFlags;
 
+use self::memtrace::*;
 use crate::coprocessor::RegionChangeEvent;
 use crate::store::cmd_resp::{bind_term, new_error};
 use crate::store::fsm::store::{PollContext, StoreMeta};
@@ -51,7 +51,7 @@ use crate::store::hibernate_state::{GroupState, HibernateState};
 use crate::store::local_metrics::RaftProposeMetrics;
 use crate::store::memory::*;
 use crate::store::metrics::*;
-use crate::store::msg::{Callback, ExtCallback};
+use crate::store::msg::{Callback, ExtCallback, InspectedRaftMessage};
 use crate::store::peer::{ConsistencyState, Peer, StaleState};
 use crate::store::peer_storage::{ApplySnapResult, InvokeContext};
 use crate::store::transport::Transport;
@@ -127,6 +127,8 @@ where
     // Batch raft command which has the same header into an entry
     batch_req_builder: BatchRaftCmdRequestBuilder<EK>,
 
+    max_inflight_msgs: usize,
+
     trace: PeerMemoryTrace,
 }
 
@@ -147,10 +149,15 @@ where
 {
     fn drop(&mut self) {
         self.peer.stop();
+        let mut raft_messages_size = 0;
         while let Ok(msg) = self.receiver.try_recv() {
             let callback = match msg {
                 PeerMsg::RaftCommand(cmd) => cmd.callback,
                 PeerMsg::CasualMessage(CasualMessage::SplitRegion { callback, .. }) => callback,
+                PeerMsg::RaftMessage(im) => {
+                    raft_messages_size += im.heap_size;
+                    continue;
+                }
                 _ => continue,
             };
 
@@ -166,6 +173,15 @@ where
             _ => &HIBERNATED_PEER_STATE_GAUGE.awaken,
         })
         .dec();
+
+        MEMTRACE_RAFT_MESSAGES.trace(TraceEvent::Sub(raft_messages_size));
+        MEMTRACE_RAFT_ENTRIES.trace(TraceEvent::Sub(self.peer.memtrace_raft_entries));
+
+        let mut event = TraceEvent::default();
+        if let Some(e) = self.trace.reset(PeerMemoryTrace::default()) {
+            event = event + e;
+        }
+        MEMTRACE_PEERS.trace(event);
     }
 }
 
@@ -220,6 +236,7 @@ where
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(
                     cfg.raft_entry_max_size.0 as f64,
                 ),
+                max_inflight_msgs: cfg.raft_max_inflight_msgs,
                 trace: PeerMemoryTrace::default(),
             }),
         ))
@@ -246,6 +263,7 @@ where
         let mut region = metapb::Region::default();
         region.set_id(region_id);
 
+        HIBERNATED_PEER_STATE_GAUGE.awaken.inc();
         let (tx, rx) = mpsc::loose_bounded(cfg.notify_capacity);
         Ok((
             tx,
@@ -263,6 +281,7 @@ where
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(
                     cfg.raft_entry_max_size.0 as f64,
                 ),
+                max_inflight_msgs: cfg.raft_max_inflight_msgs,
                 trace: PeerMemoryTrace::default(),
             }),
         ))
@@ -305,35 +324,16 @@ where
             .maybe_hibernate(self.peer.peer_id(), self.peer.region())
     }
 
-    #[inline]
-    pub fn raft_heap_size(&self, cfg: &Config) -> usize {
-        let raft = &self.peer.raft_group.raft;
-        let peer_cnt = self.peer.region().get_peers().len();
-        let inflight_size = cfg.raft_max_inflight_msgs * mem::size_of::<u64>();
-        // Progress size
-        let mut size =
-            mem::size_of::<raft::Progress>() * peer_cnt * 6 / 5 + inflight_size * peer_cnt;
-        // We use Uuid for read request.
-        size += raft.read_states.len() * (mem::size_of::<raft::ReadState>() + 16);
-        // Every requests have at least header, which should be at least 8 bytes.
-        let entries = &raft.raft_log.unstable.entries;
-        size += entries.len() * (mem::size_of::<raft::eraftpb::Entry>() + 8);
-        let read_only = &raft.read_only;
-        size +=
-            read_only.pending_read_index.len() * (16 + mem::size_of::<raft::eraftpb::Message>());
-        size += read_only.read_index_queue.heap_size() + 16 * read_only.read_index_queue.len();
-        size += raft.msgs.len() * mem::size_of::<raft::eraftpb::Message>();
-        size
-    }
-
-    #[inline]
-    pub fn update_memory_trace(&mut self, cfg: &Config) -> Option<TraceEvent> {
-        let trace = PeerMemoryTrace {
-            raft_machine: self.raft_heap_size(cfg),
+    pub fn update_memory_trace(&mut self, event: &mut TraceEvent) {
+        let task = PeerMemoryTrace {
+            read_only: self.raft_read_size(),
+            progress: self.raft_progress_size(),
             proposals: self.peer.proposal_size(),
-            rest: self.peer.rest_size() + mem::size_of::<Self>(),
+            rest: self.peer.rest_size(),
         };
-        self.trace.reset(trace)
+        if let Some(e) = self.trace.reset(task) {
+            *event = *event + e;
+        }
     }
 }
 
@@ -581,6 +581,16 @@ where
                 }
                 PeerMsg::Noop => {}
                 PeerMsg::UpdateReplicationMode => self.on_update_replication_mode(),
+                PeerMsg::Destroy(peer_id) => {
+                    if self.fsm.peer.peer_id() == peer_id {
+                        match self.fsm.peer.maybe_destroy(&self.ctx) {
+                            None => self.ctx.raft_metrics.message_dropped.applying_snap += 1,
+                            Some(job) => {
+                                self.handle_destroy_peer(job);
+                            }
+                        }
+                    }
+                }
             }
         }
         // Propose batch request which may be still waiting for more raft-command
@@ -1221,7 +1231,21 @@ where
         }
     }
 
-    fn on_raft_message(&mut self, mut msg: RaftMessage) -> Result<()> {
+    fn on_raft_message(&mut self, msg: InspectedRaftMessage) -> Result<()> {
+        let InspectedRaftMessage { heap_size, mut msg } = msg;
+        let stepped = Cell::new(false);
+        let memtrace_raft_entries = &mut self.fsm.peer.memtrace_raft_entries as *mut usize;
+        defer!({
+            MEMTRACE_RAFT_MESSAGES.trace(TraceEvent::Sub(heap_size));
+            if stepped.get() {
+                unsafe {
+                    // It could be less than exact for entry overwritting.
+                    *memtrace_raft_entries += heap_size;
+                    MEMTRACE_RAFT_ENTRIES.trace(TraceEvent::Add(heap_size));
+                }
+            }
+        });
+
         debug!(
             "handle raft message";
             "region_id" => self.region_id(),
@@ -1230,6 +1254,33 @@ where
             "from_peer_id" => msg.get_from_peer().get_id(),
             "to_peer_id" => msg.get_to_peer().get_id(),
         );
+
+        let msg_type = msg.get_message().get_msg_type();
+        let store_id = self.ctx.store_id();
+
+        if disk::disk_full_precheck(store_id) || self.ctx.is_disk_full {
+            let mut flag = false;
+            if MessageType::MsgAppend == msg_type {
+                let entries = msg.get_message().get_entries();
+                for i in entries {
+                    let entry_type = i.get_entry_type();
+                    if EntryType::EntryNormal == entry_type && !i.get_data().is_empty() {
+                        flag = true;
+                        break;
+                    }
+                }
+            } else if MessageType::MsgTimeoutNow == msg_type {
+                flag = true;
+            }
+
+            if flag {
+                debug!(
+                    "skip {:?} because of disk full", msg_type;
+                    "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id()
+                );
+                return Err(Error::Timeout("disk full".to_owned()));
+            }
+        }
 
         if !self.validate_raft_msg(&msg) {
             return Ok(());
@@ -1275,10 +1326,6 @@ where
             Either::Right(v) => v,
         };
 
-        if !self.check_request_snapshot(&msg) {
-            return Ok(());
-        }
-
         if util::is_vote_msg(&msg.get_message())
             || msg.get_message().get_msg_type() == MessageType::MsgTimeoutNow
         {
@@ -1294,6 +1341,7 @@ where
         self.fsm.peer.insert_peer_cache(msg.take_from_peer());
 
         let result = self.fsm.peer.step(self.ctx, msg.take_message());
+        stepped.set(result.is_ok());
 
         if is_snapshot {
             if !self.fsm.peer.has_pending_snapshot() {
@@ -1478,25 +1526,11 @@ where
         //  unlike case e, 2 will be stale forever.
         // TODO: for case f, if 2 is stale for a long time, 2 will communicate with pd and pd will
         // tell 2 is stale, so 2 can remove itself.
-        if util::is_epoch_stale(from_epoch, self.fsm.peer.region().get_region_epoch())
+        let self_epoch = self.fsm.peer.region().get_region_epoch();
+        if util::is_epoch_stale(from_epoch, self_epoch)
             && util::find_peer(self.fsm.peer.region(), from_store_id).is_none()
         {
-            let mut need_gc_msg = util::is_vote_msg(msg.get_message());
-            if msg.has_extra_msg() {
-                // A learner can't vote so it sends the check-stale-peer msg to others to find out whether
-                // it is removed due to conf change or merge.
-                need_gc_msg |=
-                    msg.get_extra_msg().get_type() == ExtraMessageType::MsgCheckStalePeer;
-                // For backward compatibility
-                need_gc_msg |= msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp;
-            }
-            // The message is stale and not in current region.
-            self.ctx.handle_stale_msg(
-                msg,
-                self.fsm.peer.region().get_region_epoch().clone(),
-                need_gc_msg,
-                None,
-            );
+            self.ctx.handle_stale_msg(&msg, self_epoch.clone(), None);
             return true;
         }
 
@@ -1522,11 +1556,12 @@ where
                             "target_peer" => ?target,
                         );
                         if self.handle_destroy_peer(job) {
-                            if let Err(e) = self
-                                .ctx
-                                .router
-                                .send_control(StoreMsg::RaftMessage(msg.clone()))
-                            {
+                            // It's not frequent, so use 0 as `heap_size` is ok.
+                            let store_msg = StoreMsg::RaftMessage(InspectedRaftMessage {
+                                heap_size: 0,
+                                msg: msg.clone(),
+                            });
+                            if let Err(e) = self.ctx.router.send_control(store_msg) {
                                 info!(
                                     "failed to send back store message, are we shutting down?";
                                     "region_id" => self.fsm.region_id(),
@@ -1650,12 +1685,13 @@ where
             "peer_id" => self.fsm.peer_id(),
             "to_peer" => ?msg.get_to_peer(),
         );
-        match self.fsm.peer.maybe_destroy(&self.ctx) {
-            None => self.ctx.raft_metrics.message_dropped.applying_snap += 1,
-            Some(job) => {
-                self.handle_destroy_peer(job);
-            }
-        }
+
+        // Destroy peer in next round in order to apply more committed entries if any.
+        // It depends on the implementation that msgs which are handled in this round have already fetched.
+        let _ = self
+            .ctx
+            .router
+            .force_send(self.fsm.region_id(), PeerMsg::Destroy(self.fsm.peer_id()));
     }
 
     // Returns `Vec<(u64, bool)>` indicated (source_region_id, merge_to_this_peer) if the `msg`
@@ -1900,19 +1936,6 @@ where
         }
     }
 
-    // Check if this peer can handle request_snapshot.
-    fn check_request_snapshot(&mut self, msg: &RaftMessage) -> bool {
-        let m = msg.get_message();
-        let request_index = m.get_request_snapshot();
-        if request_index == raft::INVALID_INDEX {
-            // If it's not a request snapshot, then go on.
-            return true;
-        }
-        self.fsm
-            .peer
-            .ready_to_handle_request_snapshot(request_index)
-    }
-
     fn handle_destroy_peer(&mut self, job: DestroyPeerJob) -> bool {
         // The initialized flag implicitly means whether apply fsm exists or not.
         if job.initialized {
@@ -1993,7 +2016,6 @@ where
         // So in here, it's necessary to held the StoreMeta lock when closing the router.
         self.ctx.router.close(region_id);
         self.fsm.stop();
-        MEMTRACE_PEERS.trace(TraceEvent::Sub(self.fsm.trace.sum()));
 
         if is_initialized
             && !merged_by_target
@@ -2411,11 +2433,8 @@ where
                     .pending_msgs
                     .swap_remove_front(|m| m.get_to_peer() == &meta_peer)
                 {
-                    if let Err(e) = self
-                        .ctx
-                        .router
-                        .force_send(new_region_id, PeerMsg::RaftMessage(msg))
-                    {
+                    let peer_msg = PeerMsg::RaftMessage(InspectedRaftMessage { heap_size: 0, msg });
+                    if let Err(e) = self.ctx.router.force_send(new_region_id, peer_msg) {
                         warn!("handle first requset failed"; "region_id" => region_id, "error" => ?e);
                     }
                 }
@@ -3101,10 +3120,15 @@ where
         {
             panic!("{} unexpected region {:?}", self.fsm.peer.tag, r);
         }
-        let prev = meta.regions.insert(region.get_id(), region);
+        let prev = meta.regions.insert(region.get_id(), region.clone());
         assert_eq!(prev, Some(prev_region));
-
         drop(meta);
+
+        self.fsm.peer.read_progress.update_leader_info(
+            self.fsm.peer.leader_id(),
+            self.fsm.peer.term(),
+            &region,
+        );
 
         for r in &apply_result.destroyed_regions {
             if let Err(e) = self.ctx.router.force_send(
@@ -3176,6 +3200,10 @@ where
         self.ctx.store_stat.lock_cf_bytes_written += metrics.lock_cf_written_bytes;
         self.ctx.store_stat.engine_total_bytes_written += metrics.written_bytes;
         self.ctx.store_stat.engine_total_keys_written += metrics.written_keys;
+        self.ctx
+            .store_stat
+            .engine_total_query_stats
+            .add_query_stats(&metrics.written_query_stats.0);
     }
 
     /// Check if a request is valid if it has valid prepare_merge/commit_merge proposal.
@@ -3514,7 +3542,7 @@ where
             .mut_store()
             .maybe_gc_cache(alive_cache_idx, applied_idx);
         if needs_evict_entry_cache() {
-            self.fsm.peer.mut_store().half_evict_cache();
+            self.fsm.peer.mut_store().evict_cache(true);
             if !self.fsm.peer.get_store().cache_is_empty() {
                 self.register_entry_cache_evict_tick();
             }
@@ -3566,7 +3594,7 @@ where
 
         self.fsm.skip_gc_raft_log_ticks = 0;
         self.register_raft_gc_log_tick();
-        PEER_GC_RAFT_LOG_COUNTER.inc_by(total_gc_logs as i64);
+        PEER_GC_RAFT_LOG_COUNTER.inc_by(total_gc_logs);
     }
 
     fn register_entry_cache_evict_tick(&mut self) {
@@ -3576,7 +3604,7 @@ where
     fn on_entry_cache_evict_tick(&mut self) {
         fail_point!("on_entry_cache_evict_tick", |_| {});
         if needs_evict_entry_cache() {
-            self.fsm.peer.mut_store().half_evict_cache();
+            self.fsm.peer.mut_store().evict_cache(true);
         }
         if memory_usage_reaches_high_water() && !self.fsm.peer.get_store().cache_is_empty() {
             self.register_entry_cache_evict_tick();
@@ -3612,6 +3640,7 @@ where
             return;
         }
 
+        fail_point!("on_split_region_check_tick");
         self.register_split_region_check_tick();
 
         // To avoid frequent scan, we only add new scan tasks if all previous tasks
@@ -3768,6 +3797,7 @@ where
         self.fsm.peer.has_calculated_region_size = true;
         self.register_split_region_check_tick();
         self.register_pd_heartbeat_tick();
+        fail_point!("on_approximate_region_size");
     }
 
     fn on_approximate_region_keys(&mut self, keys: u64) {
@@ -3863,7 +3893,7 @@ where
             if group_state == GroupState::Idle {
                 self.fsm.peer.ping();
                 if !self.fsm.peer.is_leader() {
-                    // If leader is able to receive messge but can't send out any,
+                    // If leader is able to receive message but can't send out any,
                     // follower should be able to start an election.
                     self.fsm.reset_hibernate_state(GroupState::PreChaos);
                 } else {
@@ -4259,11 +4289,49 @@ impl<EK: KvEngine, ER: RaftEngine> AbstractPeer for PeerFsm<EK, ER> {
     fn raft_commit_index(&self) -> u64 {
         self.peer.raft_group.store().commit_index()
     }
-    fn raft_request_snapshot(&mut self, index: u64) {
-        self.peer.raft_group.request_snapshot(index).unwrap();
-    }
     fn pending_merge_state(&self) -> Option<&MergeState> {
         self.peer.pending_merge_state.as_ref()
+    }
+}
+
+mod memtrace {
+    use super::*;
+    use memory_trace_macros::MemoryTraceHelper;
+
+    /// Heap size for Raft internal `ReadOnly`.
+    #[derive(MemoryTraceHelper, Default, Debug)]
+    pub struct PeerMemoryTrace {
+        /// `ReadOnly` memory usage in Raft groups.
+        pub read_only: usize,
+        /// `Progress` memory usage in Raft groups.
+        pub progress: usize,
+        /// `Proposal` memory usage for peers.
+        pub proposals: usize,
+        pub rest: usize,
+    }
+
+    impl<EK, ER> PeerFsm<EK, ER>
+    where
+        EK: KvEngine,
+        ER: RaftEngine,
+    {
+        pub fn raft_read_size(&self) -> usize {
+            let msg_size = mem::size_of::<raft::eraftpb::Message>();
+            let raft = &self.peer.raft_group.raft;
+
+            // We use Uuid for read request.
+            let mut size = raft.read_states.len() * (mem::size_of::<ReadState>() + 16);
+            size += raft.read_only.read_index_queue.len() * 16;
+
+            // Every requests have at least header, which should be at least 8 bytes.
+            size + raft.read_only.pending_read_index.len() * (16 + msg_size)
+        }
+
+        pub fn raft_progress_size(&self) -> usize {
+            let peer_cnt = self.peer.region().get_peers().len();
+            let inflight_size = self.max_inflight_msgs * mem::size_of::<u64>();
+            mem::size_of::<Progress>() * peer_cnt * 6 / 5 + inflight_size * peer_cnt
+        }
     }
 }
 

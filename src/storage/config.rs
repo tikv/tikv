@@ -2,15 +2,17 @@
 
 //! Storage configuration.
 
+use crate::config::BLOCK_CACHE_RATE;
 use crate::server::ttl::TTLCheckerTask;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
-use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration, Result as CfgResult};
 use engine_rocks::raw::{Cache, LRUCacheOptions, MemoryAllocator};
 use engine_rocks::RocksEngine;
 use engine_traits::{CFOptionsExt, ColumnFamilyOptions, CF_DEFAULT};
 use file_system::{get_io_rate_limiter, IOPriority, IORateLimitMode, IORateLimiter, IOType};
 use libc::c_int;
+use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig, Result as CfgResult};
 use std::error::Error;
+use strum::IntoEnumIterator;
 use tikv_util::config::{self, OptionReadableSize, ReadableDuration, ReadableSize};
 use tikv_util::sys::SysQuota;
 use tikv_util::worker::Scheduler;
@@ -29,35 +31,35 @@ const DEFAULT_SCHED_PENDING_WRITE_MB: u64 = 100;
 
 const DEFAULT_RESERVED_SPACE_GB: u64 = 5;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    #[config(skip)]
+    #[online_config(skip)]
     pub data_dir: String,
     // Replaced by `GcConfig.ratio_threshold`. Keep it for backward compatibility.
-    #[config(skip)]
+    #[online_config(skip)]
     pub gc_ratio_threshold: f64,
-    #[config(skip)]
+    #[online_config(skip)]
     pub max_key_size: usize,
-    #[config(skip)]
+    #[online_config(skip)]
     pub scheduler_concurrency: usize,
-    #[config(skip)]
+    #[online_config(skip)]
     pub scheduler_worker_pool_size: usize,
-    #[config(skip)]
+    #[online_config(skip)]
     pub scheduler_pending_write_threshold: ReadableSize,
-    #[config(skip)]
+    #[online_config(skip)]
     // Reserve disk space to make tikv would have enough space to compact when disk is full.
     pub reserve_space: ReadableSize,
-    #[config(skip)]
+    #[online_config(skip)]
     pub enable_async_apply_prewrite: bool,
-    #[config(skip)]
+    #[online_config(skip)]
     pub enable_ttl: bool,
     /// Interval to check TTL for all SSTs,
     pub ttl_check_poll_interval: ReadableDuration,
-    #[config(submodule)]
+    #[online_config(submodule)]
     pub block_cache: BlockCacheConfig,
-    #[config(submodule)]
+    #[online_config(submodule)]
     pub io_rate_limit: IORateLimitConfig,
 }
 
@@ -154,25 +156,33 @@ impl ConfigManager for StorageConfigManger {
                 let limit: ReadableSize = limit.into();
                 limiter.set_io_rate_limit(limit.0 as usize);
             }
+
+            for t in IOType::iter() {
+                if let Some(priority) = io_rate_limit.remove(&(t.as_str().to_owned() + "_priority"))
+                {
+                    let priority: IOPriority = priority.into();
+                    limiter.set_io_priority(t, priority);
+                }
+            }
         }
         Ok(())
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct BlockCacheConfig {
-    #[config(skip)]
+    #[online_config(skip)]
     pub shared: bool,
     pub capacity: OptionReadableSize,
-    #[config(skip)]
+    #[online_config(skip)]
     pub num_shard_bits: i32,
-    #[config(skip)]
+    #[online_config(skip)]
     pub strict_capacity_limit: bool,
-    #[config(skip)]
+    #[online_config(skip)]
     pub high_pri_pool_ratio: f64,
-    #[config(skip)]
+    #[online_config(skip)]
     pub memory_allocator: Option<String>,
 }
 
@@ -197,7 +207,7 @@ impl BlockCacheConfig {
         let capacity = match self.capacity.0 {
             None => {
                 let total_mem = SysQuota::memory_limit_in_bytes();
-                ((total_mem as f64) * 0.45) as usize
+                ((total_mem as f64) * BLOCK_CACHE_RATE) as usize
             }
             Some(c) => c.0 as usize,
         };
@@ -240,40 +250,29 @@ impl BlockCacheConfig {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct IORateLimitConfig {
     pub max_bytes_per_sec: ReadableSize,
-    #[config(skip)]
+    #[online_config(skip)]
     pub mode: IORateLimitMode,
     /// When this flag is off, high-priority IOs are counted but not limited. Default
     /// set to false because the optimal throughput target provided by user might not be
     /// the maximum available bandwidth. For multi-tenancy use case, this flag should be
     /// turned on.
-    #[config(skip)]
+    #[online_config(skip)]
     pub strict: bool,
-    #[config(skip)]
     pub foreground_read_priority: IOPriority,
-    #[config(skip)]
     pub foreground_write_priority: IOPriority,
-    #[config(skip)]
     pub flush_priority: IOPriority,
-    #[config(skip)]
     pub level_zero_compaction_priority: IOPriority,
-    #[config(skip)]
     pub compaction_priority: IOPriority,
-    #[config(skip)]
     pub replication_priority: IOPriority,
-    #[config(skip)]
     pub load_balance_priority: IOPriority,
-    #[config(skip)]
     pub gc_priority: IOPriority,
-    #[config(skip)]
     pub import_priority: IOPriority,
-    #[config(skip)]
     pub export_priority: IOPriority,
-    #[config(skip)]
     pub other_priority: IOPriority,
 }
 
@@ -291,8 +290,8 @@ impl Default for IORateLimitConfig {
             replication_priority: IOPriority::High,
             load_balance_priority: IOPriority::High,
             gc_priority: IOPriority::High,
-            import_priority: IOPriority::Low,
-            export_priority: IOPriority::Low,
+            import_priority: IOPriority::Medium,
+            export_priority: IOPriority::Medium,
             other_priority: IOPriority::High,
         }
     }
@@ -300,7 +299,7 @@ impl Default for IORateLimitConfig {
 
 impl IORateLimitConfig {
     pub fn build(&self, enable_statistics: bool) -> IORateLimiter {
-        let mut limiter = IORateLimiter::new(self.mode, self.strict, enable_statistics);
+        let limiter = IORateLimiter::new(self.mode, self.strict, enable_statistics);
         limiter.set_io_rate_limit(self.max_bytes_per_sec.0 as usize);
         limiter.set_io_priority(IOType::ForegroundRead, self.foreground_read_priority);
         limiter.set_io_priority(IOType::ForegroundWrite, self.foreground_write_priority);

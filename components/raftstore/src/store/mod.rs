@@ -33,8 +33,9 @@ pub use self::fsm::{DestroyPeerJob, RaftRouter, StoreInfo};
 pub use self::hibernate_state::{GroupState, HibernateState};
 pub use self::memory::*;
 pub use self::msg::{
-    Callback, CasualMessage, ExtCallback, MergeResultKind, PeerMsg, PeerTicks, RaftCommand,
-    ReadCallback, ReadResponse, SignificantMsg, StoreMsg, StoreTick, WriteCallback, WriteResponse,
+    Callback, CasualMessage, ExtCallback, InspectedRaftMessage, MergeResultKind, PeerMsg,
+    PeerTicks, RaftCommand, ReadCallback, ReadResponse, SignificantMsg, StoreMsg, StoreTick,
+    WriteCallback, WriteResponse,
 };
 pub use self::peer::{
     AbstractPeer, Peer, PeerStat, ProposalContext, RequestInspector, RequestPolicy,
@@ -50,14 +51,15 @@ pub use self::replication_mode::{GlobalReplicationState, StoreGroup};
 pub use self::snap::{
     check_abort, copy_snapshot,
     snap_io::{apply_sst_cf_file, build_sst_cf_file},
-    ApplyOptions, Error as SnapError, GenericSnapshot, SnapEntry, SnapKey, SnapManager,
-    SnapManagerBuilder, Snapshot, SnapshotStatistics,
+    ApplyOptions, Error as SnapError, SnapEntry, SnapKey, SnapManager, SnapManagerBuilder,
+    Snapshot, SnapshotStatistics,
 };
 pub use self::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
-pub use self::util::RegionReadProgress;
+pub use self::util::{RegionReadProgress, RegionReadProgressRegistry};
 pub use self::worker::{
-    AutoSplitController, FlowStatistics, FlowStatsReporter, PdTask, ReadDelegate, ReadStats,
-    SplitConfig, SplitConfigManager, TrackVer,
+    AutoSplitController, FlowStatistics, FlowStatsReporter, PdTask, QueryStats, ReadDelegate,
+    ReadStats, SplitConfig, SplitConfigManager, TrackVer,
 };
+pub use self::worker::{CheckLeaderRunner, CheckLeaderTask};
 pub use self::worker::{KeyEntry, LocalReader, RegionTask};
 pub use self::worker::{SplitCheckRunner, SplitCheckTask};

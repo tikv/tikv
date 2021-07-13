@@ -32,6 +32,7 @@ use fail::fail_point;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{PeerRole, Region, RegionEpoch};
+use kvproto::pdpb::QueryKind;
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
     RaftCmdRequest, RaftCmdResponse, Request, Response,
@@ -55,6 +56,7 @@ use tikv_util::{Either, MustConsumeVec};
 use time::Timespec;
 use uuid::Builder as UuidBuilder;
 
+use self::memtrace::*;
 use crate::coprocessor::{
     Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle, ObserveLevel,
 };
@@ -71,7 +73,7 @@ use crate::store::util::{
     ConfChangeKind, KeysInfoFormatter,
 };
 use crate::store::{cmd_resp, util, Config, RegionSnapshot, RegionTask};
-use crate::{Error, Result};
+use crate::{bytes_capacity, store::QueryStats, Error, Result};
 
 use super::metrics::*;
 
@@ -182,16 +184,6 @@ where
     // TODO: seems we don't need to separate conf change from normal entries.
     fn set_conf_change(&mut self, cmd: PendingCmd<S>) {
         self.conf_change = Some(cmd);
-    }
-}
-
-impl<S> HeapSize for PendingCmdQueue<S>
-where
-    S: Snapshot,
-{
-    #[inline]
-    fn heap_size(&self) -> usize {
-        self.normals.heap_size()
     }
 }
 
@@ -771,8 +763,8 @@ where
     /// are all handled.
     pending_msgs: Vec<Msg<EK>>,
 
-    /// Approximate size of current buffer.
-    approximate_size: usize,
+    /// Cache heap size for itself.
+    heap_size: Option<usize>,
 }
 
 impl<EK> Debug for YieldState<EK>
@@ -792,21 +784,6 @@ impl Debug for WaitSourceMergeState {
         f.debug_struct("WaitSourceMergeState")
             .field("logs_up_to_date", &self.logs_up_to_date)
             .finish()
-    }
-}
-
-impl<EK> HeapSize for YieldState<EK>
-where
-    EK: KvEngine,
-{
-    fn heap_size(&self) -> usize {
-        // TODO: impl HeapSize for Entry.
-        let mut size = self.pending_entries.capacity() * mem::size_of::<Entry>()
-            + self.pending_msgs.heap_size();
-        for e in &self.pending_entries {
-            size += e.get_data().len() + e.get_context().len();
-        }
-        size
     }
 }
 
@@ -995,7 +972,7 @@ where
                     self.yield_state = Some(YieldState {
                         pending_entries,
                         pending_msgs: Vec::default(),
-                        approximate_size: 0,
+                        heap_size: None,
                     });
                     if let ApplyResult::WaitMergeSource(logs_up_to_date) = res {
                         self.wait_merge_state = Some(WaitSourceMergeState { logs_up_to_date });
@@ -1322,13 +1299,19 @@ where
     fn destroy<W: WriteBatch<EK>>(&mut self, apply_ctx: &mut ApplyContext<EK, W>) {
         self.stopped = true;
         apply_ctx.router.close(self.region_id());
-        MEMTRACE_APPLYS.trace(TraceEvent::Sub(self.trace.sum()));
         for cmd in self.pending_cmds.normals.drain(..) {
             notify_region_removed(self.region.get_id(), self.id, cmd);
         }
         if let Some(cmd) = self.pending_cmds.conf_change.take() {
             notify_region_removed(self.region.get_id(), self.id, cmd);
         }
+        self.yield_state = None;
+
+        let mut event = TraceEvent::default();
+        if let Some(e) = self.trace.reset(ApplyMemoryTrace::default()) {
+            event = event + e;
+        }
+        MEMTRACE_APPLYS.trace(event);
     }
 
     fn clear_all_commands_as_stale(&mut self) {
@@ -1338,6 +1321,15 @@ where
         }
         if let Some(cmd) = self.pending_cmds.conf_change.take() {
             notify_stale_command(region_id, peer_id, self.term, cmd);
+        }
+    }
+
+    fn clear_all_commands_silently(&mut self) {
+        for mut cmd in self.pending_cmds.normals.drain(..) {
+            cmd.cb.take();
+        }
+        if let Some(mut cmd) = self.pending_cmds.conf_change.take() {
+            cmd.cb.take();
         }
     }
 
@@ -1432,9 +1424,22 @@ where
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = match cmd_type {
-                CmdType::Put => self.handle_put(ctx.kv_wb_mut(), req),
-                CmdType::Delete => self.handle_delete(ctx.kv_wb_mut(), req),
+                CmdType::Put => {
+                    self.metrics
+                        .written_query_stats
+                        .add_query_num(QueryKind::Put, 1);
+                    self.handle_put(ctx.kv_wb_mut(), req)
+                }
+                CmdType::Delete => {
+                    self.metrics
+                        .written_query_stats
+                        .add_query_num(QueryKind::Delete, 1);
+                    self.handle_delete(ctx.kv_wb_mut(), req)
+                }
                 CmdType::DeleteRange => {
+                    self.metrics
+                        .written_query_stats
+                        .add_query_num(QueryKind::DeleteRange, 1);
                     self.handle_delete_range(&ctx.engine, req, &mut ranges, ctx.use_delete_range)
                 }
                 CmdType::IngestSst => self.handle_ingest_sst(ctx, req, &mut ssts),
@@ -2722,6 +2727,26 @@ where
             }),
         ))
     }
+
+    fn update_memory_trace(&mut self, event: &mut TraceEvent) {
+        let pending_cmds = self.pending_cmds.heap_size();
+        let merge_yield = if let Some(ref mut state) = self.yield_state {
+            if state.heap_size.is_none() {
+                state.heap_size = Some(state.heap_size());
+            }
+            state.heap_size.unwrap()
+        } else {
+            0
+        };
+
+        let task = ApplyMemoryTrace {
+            pending_cmds,
+            merge_yield,
+        };
+        if let Some(e) = self.trace.reset(task) {
+            *event = *event + e;
+        }
+    }
 }
 
 pub fn is_conf_change_cmd(msg: &RaftCmdRequest) -> bool {
@@ -2884,18 +2909,6 @@ pub struct CatchUpLogs {
     /// But due to the FIFO natural of channel, we need a flag to check if it's
     /// ready when polling.
     pub logs_up_to_date: Arc<AtomicU64>,
-}
-
-impl HeapSize for CatchUpLogs {
-    fn heap_size(&self) -> usize {
-        // CommitMergeRequest includes a Region in the heap.
-        // 8 represents the atomic number.
-        let mut size: usize = mem::size_of::<Region>() + 8;
-        for e in &self.merge.entries {
-            size += e.context.len() + e.data.len() + mem::size_of::<Entry>();
-        }
-        size
-    }
 }
 
 pub struct GenSnapTask {
@@ -3063,23 +3076,6 @@ where
     }
 }
 
-impl<EK> HeapSize for Msg<EK>
-where
-    EK: KvEngine,
-{
-    #[inline]
-    fn heap_size(&self) -> usize {
-        match self {
-            Msg::Apply { .. } => 0, // It's already counted when building.
-            Msg::Registration(r) => r.region.heap_size(),
-            Msg::LogsUpToDate(l) => l.heap_size(),
-            Msg::Snapshot(_) | Msg::Destroy(_) | Msg::Noop | Msg::Change { .. } => 0,
-            #[cfg(any(test, feature = "testexport"))]
-            Msg::Validate(..) => 0,
-        }
-    }
-}
-
 #[derive(Default, Clone, Debug, PartialEq)]
 pub struct ApplyMetrics {
     /// an inaccurate difference in region size since last reset.
@@ -3089,6 +3085,7 @@ pub struct ApplyMetrics {
 
     pub written_bytes: u64,
     pub written_keys: u64,
+    pub written_query_stats: QueryStats,
     pub lock_cf_written_bytes: u64,
 }
 
@@ -3185,7 +3182,11 @@ where
             return;
         }
 
-        let mut entries = apply.entries.take_entries();
+        let (mut entries, dangle_size) = apply.entries.take_entries();
+        if dangle_size > 0 {
+            MEMTRACE_ENTRY_CACHE.trace(TraceEvent::Sub(dangle_size));
+            RAFT_ENTRIES_CACHES_GAUGE.sub(dangle_size as i64);
+        }
         if entries.is_empty() {
             let rid = self.delegate.region_id();
             let StdRange { start, end } = apply.entries.range;
@@ -3501,7 +3502,7 @@ where
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
         msgs: &mut Vec<Msg<EK>>,
-    ) -> Option<TraceEvent> {
+    ) {
         let mut drainer = msgs.drain(..);
         loop {
             match drainer.next() {
@@ -3535,17 +3536,6 @@ where
                 None => break,
             }
         }
-        let s = self.delegate.yield_state.as_mut().map_or(0, |s| {
-            if s.approximate_size == 0 {
-                s.approximate_size = s.heap_size();
-            }
-            s.approximate_size
-        });
-        let trace = ApplyMemoryTrace {
-            pending_cmds: self.delegate.pending_cmds.heap_size(),
-            rest: s + mem::size_of::<Self>(),
-        };
-        self.delegate.trace.reset(trace)
     }
 }
 
@@ -3587,7 +3577,14 @@ where
     EK: KvEngine,
 {
     fn drop(&mut self) {
-        self.delegate.clear_all_commands_as_stale();
+        if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
+            self.delegate.clear_all_commands_silently()
+        } else {
+            self.delegate.clear_all_commands_as_stale();
+        }
+        let mut event = TraceEvent::default();
+        self.delegate.update_memory_trace(&mut event);
+        MEMTRACE_APPLYS.trace(event);
     }
 }
 
@@ -3613,7 +3610,8 @@ where
     apply_ctx: ApplyContext<EK, W>,
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
-    trace_event: Option<TraceEvent>,
+
+    trace_event: TraceEvent,
 }
 
 impl<EK, W> PollHandler<ApplyFsm<EK>, ControlFsm> for ApplyPoller<EK, W>
@@ -3689,9 +3687,8 @@ where
                 }
             }
         }
-        if let Some(trace_event) = normal.handle_tasks(&mut self.apply_ctx, &mut self.msg_buf) {
-            self.trace_event = Some(self.trace_event.map_or(trace_event, |e| e + trace_event));
-        }
+
+        normal.handle_tasks(&mut self.apply_ctx, &mut self.msg_buf);
 
         if normal.delegate.wait_merge_state.is_some() {
             // Check it again immediately as catching up logs can be very fast.
@@ -3707,10 +3704,9 @@ where
         self.apply_ctx.flush();
         for fsm in fsms {
             fsm.delegate.last_flush_applied_index = fsm.delegate.apply_state.get_applied_index();
+            fsm.delegate.update_memory_trace(&mut self.trace_event);
         }
-        if let Some(e) = self.trace_event.take() {
-            MEMTRACE_APPLYS.trace(e);
-        }
+        MEMTRACE_APPLYS.trace(mem::take(&mut self.trace_event));
     }
 
     fn get_priority(&self) -> Priority {
@@ -3783,7 +3779,7 @@ where
             ),
             messages_per_tick: cfg.messages_per_tick,
             cfg_tracker: self.cfg.clone().tracker(self.tag.clone()),
-            trace_event: None,
+            trace_event: Default::default(),
         }
     }
 }
@@ -3794,16 +3790,6 @@ where
     EK: KvEngine,
 {
     pub router: BatchRouter<ApplyFsm<EK>, ControlFsm>,
-}
-
-impl<EK> Drop for ApplyRouter<EK>
-where
-    EK: KvEngine,
-{
-    fn drop(&mut self) {
-        MEMTRACE_APPLY_ROUTER_ALIVE.trace(TraceEvent::Reset(0));
-        MEMTRACE_APPLY_ROUTER_LEAK.trace(TraceEvent::Reset(0));
-    }
 }
 
 impl<EK> Deref for ApplyRouter<EK>
@@ -3840,9 +3826,22 @@ where
                         "target region is not found, drop proposals";
                         "region_id" => region_id
                     );
-                    for p in apply.cbs.drain(..) {
-                        let cmd = PendingCmd::<EK::Snapshot>::new(p.index, p.term, p.cb);
-                        notify_region_removed(apply.region_id, apply.peer_id, cmd);
+                    // Invoking callback can release txn latch, if it's still leader, following
+                    // command may not read the writes of previous commands and break ACID. If
+                    // it's still leader, there are two possibility that mailbox is closed:
+                    // 1. The process is shutting down.
+                    // 2. The leader is destroyed. A leader won't propose to destroy itself, so
+                    //     it should either destroyed by older leaders or newer leaders. Leader
+                    //     won't respond to read until it has applied to current term, so no
+                    //     command will be proposed until command from older leaders have applied,
+                    //     which will then stop it from accepting proposals. If the command is
+                    //     proposed by new leader, then it won't be able to propose new proposals.
+                    // So only shutdown needs to be checked here.
+                    if !tikv_util::thread_group::is_shutdown(!cfg!(test)) {
+                        for p in apply.cbs.drain(..) {
+                            let cmd = PendingCmd::<EK::Snapshot>::new(p.index, p.term, p.cb);
+                            notify_region_removed(apply.region_id, apply.peer_id, cmd);
+                        }
                     }
                     return;
                 }
@@ -3959,6 +3958,79 @@ pub fn create_apply_batch_system<EK: KvEngine>(
     let (router, system) =
         batch_system::create_system(&cfg.apply_batch_system, tx, Box::new(ControlFsm));
     (ApplyRouter { router }, ApplyBatchSystem { system })
+}
+
+mod memtrace {
+    use super::*;
+    use memory_trace_macros::MemoryTraceHelper;
+
+    #[derive(MemoryTraceHelper, Default, Debug)]
+    pub struct ApplyMemoryTrace {
+        pub pending_cmds: usize,
+        pub merge_yield: usize,
+    }
+
+    impl<S> HeapSize for PendingCmdQueue<S>
+    where
+        S: Snapshot,
+    {
+        fn heap_size(&self) -> usize {
+            // Some fields of `PendingCmd` are on stack, but ignore them because they are just
+            // some small boxed closures.
+            self.normals.capacity() * mem::size_of::<PendingCmd<S>>()
+        }
+    }
+
+    impl<EK> HeapSize for YieldState<EK>
+    where
+        EK: KvEngine,
+    {
+        fn heap_size(&self) -> usize {
+            let mut size = self.pending_entries.capacity() * mem::size_of::<Entry>();
+            for e in &self.pending_entries {
+                size += bytes_capacity(&e.data) + bytes_capacity(&e.context);
+            }
+
+            size += self.pending_msgs.capacity() * mem::size_of::<Msg<EK>>();
+            for msg in &self.pending_msgs {
+                size += msg.heap_size();
+            }
+
+            size
+        }
+    }
+
+    impl<EK> HeapSize for Msg<EK>
+    where
+        EK: KvEngine,
+    {
+        /// Only consider large fields in `Msg`.
+        fn heap_size(&self) -> usize {
+            match self {
+                Msg::LogsUpToDate(l) => l.heap_size(),
+                // For entries in `Msg::Apply`, heap size is already updated when fetching them
+                // from `raft::Storage`. So use `0` here.
+                Msg::Apply { .. } => 0,
+                Msg::Registration(_)
+                | Msg::Snapshot(_)
+                | Msg::Destroy(_)
+                | Msg::Noop
+                | Msg::Change { .. } => 0,
+                #[cfg(any(test, feature = "testexport"))]
+                Msg::Validate(..) => 0,
+            }
+        }
+    }
+
+    impl HeapSize for CatchUpLogs {
+        fn heap_size(&self) -> usize {
+            let mut size: usize = 0;
+            for e in &self.merge.entries {
+                size += bytes_capacity(&e.data) + bytes_capacity(&e.context);
+            }
+            size
+        }
+    }
 }
 
 #[cfg(test)]

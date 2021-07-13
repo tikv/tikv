@@ -86,23 +86,23 @@ error_code = { path = "../error_code", default-features = false }
 file_system = { path = "../file_system", default-features = false }
 fs2 = "0.4"
 futures = "0.3"
-tokio = { version = "0.2", features = ["rt-threaded"] }
+tokio = { version = "1.5", features = ["rt-multi-thread"] }
 grpcio = { version = "0.9", default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"
 keys = { path = "../keys", default-features = false }
-kvproto = { rev = "7a046020d1c091638e1e8aba623c8c1e8962219d", git = "https://github.com/pingcap/kvproto.git", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { path = "../log_wrappers" }
 nix = "0.11"
 pd_client = { path = "../pd_client", default-features = false }
-prometheus = { version = "0.10", features = ["nightly"] }
+prometheus = { version = "0.12", features = ["nightly"] }
 promptly = "0.3.0"
 protobuf = "2.8"
 raft = { version = "0.6.0-alpha", default-features = false }
 raft_log_engine = { path = "../raft_log_engine", default-features = false }
 raftstore = { path = "../raftstore", default-features = false }
-rand = "0.7"
+rand = "0.8"
 resolved_ts = { path = "../../components/resolved_ts", default-features = false }
 security = { path = "../security", default-features = false }
 serde_json = "1.0"

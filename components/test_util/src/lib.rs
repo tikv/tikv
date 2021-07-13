@@ -71,7 +71,7 @@ pub fn alloc_port() -> u16 {
     if p == 0 {
         let _ = INITIAL_PORT.compare_exchange(
             0,
-            rand::thread_rng().gen_range(10240, MIN_LOCAL_PORT),
+            rand::thread_rng().gen_range(10240..MIN_LOCAL_PORT),
             Ordering::SeqCst,
             Ordering::SeqCst,
         );

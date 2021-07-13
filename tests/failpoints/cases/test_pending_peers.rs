@@ -21,7 +21,9 @@ fn test_pending_peers() {
     let region_id = cluster.run_conf_change();
     pd_client.must_add_peer(region_id, new_peer(2, 2));
 
+    // To ensure peer 2 is not pending.
     cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
 
     fail::cfg(region_worker_fp, "sleep(2000)").unwrap();
     pd_client.must_add_peer(region_id, new_peer(3, 3));

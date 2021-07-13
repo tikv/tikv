@@ -10,9 +10,9 @@ use std::time::Instant;
 use std::vec::IntoIter;
 
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::{RocksEngine, RocksWriteBatch};
 use engine_traits::{
-    DeleteStrategy, MiscExt, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    DeleteStrategy, KvEngine, MiscExt, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK,
+    CF_WRITE,
 };
 use file_system::{IOType, WithIOType};
 use futures::executor::block_on;
@@ -68,7 +68,10 @@ impl<T: PdClient + 'static> GcSafePointProvider for Arc<T> {
     }
 }
 
-pub enum GcTask {
+pub enum GcTask<E>
+where
+    E: KvEngine,
+{
     Gc {
         region_id: u64,
         start_key: Vec<u8>,
@@ -105,12 +108,15 @@ pub enum GcTask {
     /// until `DefaultCompactionFilter` is introduced.
     ///
     /// The tracking issue: <https://github.com/tikv/tikv/issues/9719>.
-    OrphanVersions { wb: RocksWriteBatch, id: usize },
+    OrphanVersions { wb: E::WriteBatch, id: usize },
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&GcConfig, &Limiter) + Send>),
 }
 
-impl GcTask {
+impl<E> GcTask<E>
+where
+    E: KvEngine,
+{
     pub fn get_enum_label(&self) -> GcCommandKind {
         match self {
             GcTask::Gc { .. } => GcCommandKind::gc,
@@ -124,7 +130,10 @@ impl GcTask {
     }
 }
 
-impl Display for GcTask {
+impl<E> Display for GcTask<E>
+where
+    E: KvEngine,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             GcTask::Gc {
@@ -165,7 +174,7 @@ impl Display for GcTask {
 struct GcRunner<E, RR>
 where
     E: Engine,
-    RR: RaftStoreRouter<RocksEngine>,
+    RR: RaftStoreRouter<E::Local>,
 {
     engine: E,
 
@@ -183,7 +192,7 @@ where
 impl<E, RR> GcRunner<E, RR>
 where
     E: Engine,
-    RR: RaftStoreRouter<RocksEngine>,
+    RR: RaftStoreRouter<E::Local>,
 {
     pub fn new(
         engine: E,
@@ -495,7 +504,7 @@ where
                 GC_KEYS_COUNTER_STATIC
                     .get(*cf)
                     .get(*tag)
-                    .inc_by(*count as i64);
+                    .inc_by(*count as u64);
             }
         }
     }
@@ -510,13 +519,13 @@ where
     }
 }
 
-impl<E, RR> FutureRunnable<GcTask> for GcRunner<E, RR>
+impl<E, RR> FutureRunnable<GcTask<E::Local>> for GcRunner<E, RR>
 where
     E: Engine,
-    RR: RaftStoreRouter<RocksEngine>,
+    RR: RaftStoreRouter<E::Local>,
 {
     #[inline]
-    fn run(&mut self, task: GcTask) {
+    fn run(&mut self, task: GcTask<E::Local>) {
         let _io_type_guard = WithIOType::new(IOType::Gc);
         let enum_label = task.get_enum_label();
 
@@ -620,7 +629,7 @@ where
                 info!("write GcTask::OrphanVersions success"; "id" => id);
                 GC_COMPACTION_FILTER_ORPHAN_VERSIONS
                     .with_label_values(&["cleaned"])
-                    .inc_by(wb.count() as i64);
+                    .inc_by(wb.count() as u64);
                 update_metrics(false);
             }
             #[cfg(any(test, feature = "testexport"))]
@@ -632,14 +641,14 @@ where
 }
 
 /// When we failed to schedule a `GcTask` to `GcRunner`, use this to handle the `ScheduleError`.
-fn handle_gc_task_schedule_error(e: FutureWorkerStopped<GcTask>) -> Result<()> {
+fn handle_gc_task_schedule_error(e: FutureWorkerStopped<GcTask<impl KvEngine>>) -> Result<()> {
     error!("failed to schedule gc task"; "err" => %e);
     Err(box_err!("failed to schedule gc task: {:?}", e))
 }
 
 /// Schedules a `GcTask` to the `GcRunner`.
 fn schedule_gc(
-    scheduler: &FutureScheduler<GcTask>,
+    scheduler: &FutureScheduler<GcTask<impl KvEngine>>,
     region_id: u64,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
@@ -659,7 +668,7 @@ fn schedule_gc(
 
 /// Does GC synchronously.
 pub fn sync_gc(
-    scheduler: &FutureScheduler<GcTask>,
+    scheduler: &FutureScheduler<GcTask<impl KvEngine>>,
     region_id: u64,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
@@ -678,7 +687,7 @@ pub fn sync_gc(
 pub struct GcWorker<E, RR>
 where
     E: Engine,
-    RR: RaftStoreRouter<RocksEngine> + 'static,
+    RR: RaftStoreRouter<E::Local> + 'static,
 {
     engine: E,
 
@@ -693,8 +702,8 @@ where
     /// How many strong references. The worker will be stopped
     /// once there are no more references.
     refs: Arc<AtomicUsize>,
-    worker: Arc<Mutex<FutureWorker<GcTask>>>,
-    worker_scheduler: FutureScheduler<GcTask>,
+    worker: Arc<Mutex<FutureWorker<GcTask<E::Local>>>>,
+    worker_scheduler: FutureScheduler<GcTask<E::Local>>,
 
     applied_lock_collector: Option<Arc<AppliedLockCollector>>,
 
@@ -705,7 +714,7 @@ where
 impl<E, RR> Clone for GcWorker<E, RR>
 where
     E: Engine,
-    RR: RaftStoreRouter<RocksEngine>,
+    RR: RaftStoreRouter<E::Local>,
 {
     #[inline]
     fn clone(&self) -> Self {
@@ -729,7 +738,7 @@ where
 impl<E, RR> Drop for GcWorker<E, RR>
 where
     E: Engine,
-    RR: RaftStoreRouter<RocksEngine> + 'static,
+    RR: RaftStoreRouter<E::Local> + 'static,
 {
     #[inline]
     fn drop(&mut self) {
@@ -749,7 +758,7 @@ where
 impl<E, RR> GcWorker<E, RR>
 where
     E: Engine,
-    RR: RaftStoreRouter<RocksEngine>,
+    RR: RaftStoreRouter<E::Local>,
 {
     pub fn new(
         engine: E,
@@ -823,7 +832,7 @@ where
 
     pub fn start_observe_lock_apply(
         &mut self,
-        coprocessor_host: &mut CoprocessorHost<RocksEngine>,
+        coprocessor_host: &mut CoprocessorHost<E::Local>,
         concurrency_manager: ConcurrencyManager,
     ) -> Result<()> {
         assert!(self.applied_lock_collector.is_none());
@@ -849,7 +858,7 @@ where
         Ok(())
     }
 
-    pub fn scheduler(&self) -> FutureScheduler<GcTask> {
+    pub fn scheduler(&self) -> FutureScheduler<GcTask<E::Local>> {
         self.worker_scheduler.clone()
     }
 
@@ -985,7 +994,7 @@ mod tests {
     use crate::storage::mvcc::tests::must_get_none;
     use crate::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
     use crate::storage::{txn::commands, Engine, Storage, TestStorageBuilder};
-    use engine_rocks::{util::get_cf_handle, RocksSnapshot};
+    use engine_rocks::{util::get_cf_handle, RocksEngine, RocksSnapshot};
     use engine_traits::KvEngine;
     use futures::executor::block_on;
     use kvproto::kvrpcpb::Op;

@@ -294,6 +294,11 @@ fn test_mvcc_basic() {
     let get_resp = client.kv_get(&get_req).unwrap();
     assert!(!get_resp.has_region_error());
     assert!(!get_resp.has_error());
+    assert!(get_resp.get_exec_details_v2().has_time_detail());
+    let scan_detail_v2 = get_resp.get_exec_details_v2().get_scan_detail_v2();
+    assert_eq!(scan_detail_v2.get_total_versions(), 1);
+    assert_eq!(scan_detail_v2.get_processed_versions(), 1);
+    assert!(scan_detail_v2.get_processed_versions_size() > 0);
     assert_eq!(get_resp.value, v);
 
     // Scan
@@ -321,6 +326,11 @@ fn test_mvcc_basic() {
     batch_get_req.set_keys(vec![k.clone()].into_iter().collect());
     batch_get_req.version = batch_get_version;
     let batch_get_resp = client.kv_batch_get(&batch_get_req).unwrap();
+    assert!(batch_get_resp.get_exec_details_v2().has_time_detail());
+    let scan_detail_v2 = batch_get_resp.get_exec_details_v2().get_scan_detail_v2();
+    assert_eq!(scan_detail_v2.get_total_versions(), 1);
+    assert_eq!(scan_detail_v2.get_processed_versions(), 1);
+    assert!(scan_detail_v2.get_processed_versions_size() > 0);
     assert_eq!(batch_get_resp.pairs.len(), 1);
     for kv in batch_get_resp.pairs.into_iter() {
         assert!(!kv.has_error());
@@ -1695,16 +1705,16 @@ fn test_get_lock_wait_info_api() {
 
     let mut ctx1 = ctx.clone();
     ctx1.set_resource_group_tag(b"resource_group_tag1".to_vec());
-    must_kv_pessimistic_lock(&client, ctx1, b"a".to_vec(), 20);
+    kv_pessimistic_lock_with_ttl(&client, ctx1, vec![b"a".to_vec()], 20, 20, false, 5000);
     let mut ctx2 = ctx.clone();
     let handle = thread::spawn(move || {
         ctx2.set_resource_group_tag(b"resource_group_tag2".to_vec());
-        kv_pessimistic_lock_with_ttl(&client2, ctx2, vec![b"a".to_vec()], 30, 30, false, 1000);
+        kv_pessimistic_lock_with_ttl(&client2, ctx2, vec![b"a".to_vec()], 30, 30, false, 5000);
     });
 
     let mut entries = None;
-    for _retry in 0..100 {
-        thread::sleep(Duration::from_millis(10));
+    for _retry in 0..200 {
+        thread::sleep(Duration::from_millis(25));
         // The lock should be in waiting state here.
         let req = GetLockWaitInfoRequest::default();
         let resp = client.get_lock_wait_info(&req).unwrap();

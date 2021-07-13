@@ -2,13 +2,14 @@
 
 use std::f64::INFINITY;
 use std::fmt;
+use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::atomic::AtomicCell;
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_traits::{KvEngine, Snapshot as EngineSnapshot};
 use fail::fail_point;
 use futures::compat::Future01CompatExt;
 use grpcio::{ChannelBuilder, Environment};
@@ -211,11 +212,12 @@ impl fmt::Debug for Task {
 
 const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
 
-pub struct Endpoint<T> {
+pub struct Endpoint<T, E> {
     capture_regions: HashMap<u64, Delegate>,
     connections: HashMap<ConnID, Conn>,
     scheduler: Scheduler<Task>,
     raft_router: T,
+    engine: PhantomData<E>,
     observer: CdcObserver,
 
     pd_client: Arc<dyn PdClient>,
@@ -251,7 +253,7 @@ pub struct Endpoint<T> {
     security_mgr: Arc<SecurityManager>,
 }
 
-impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
+impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
     pub fn new(
         cfg: &CdcConfig,
         pd_client: Arc<dyn PdClient>,
@@ -263,24 +265,22 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
         sink_memory_quota: MemoryQuota,
-    ) -> Endpoint<T> {
-        let workers = Builder::new()
-            .threaded_scheduler()
+    ) -> Endpoint<T, E> {
+        let workers = Builder::new_multi_thread()
             .thread_name("cdcwkr")
-            .core_threads(cfg.incremental_scan_threads)
+            .worker_threads(cfg.incremental_scan_threads)
             .build()
             .unwrap();
         let scan_concurrency_semaphore = Arc::new(Semaphore::new(cfg.incremental_scan_concurrency));
-        let tso_worker = Builder::new()
-            .threaded_scheduler()
+        let tso_worker = Builder::new_multi_thread()
             .thread_name("tso")
-            .core_threads(1)
+            .worker_threads(1)
             .build()
             .unwrap();
         CDC_SINK_CAP.set(sink_memory_quota.cap() as i64);
         CDC_OLD_VALUE_CACHE_MEMORY_QUOTA.set(cfg.old_value_cache_memory_quota.0 as i64);
         let old_value_cache = OldValueCache::new(cfg.old_value_cache_memory_quota);
-        let speed_limter = Limiter::new(if cfg.incremental_scan_speed_limit.0 > 0 {
+        let speed_limiter = Limiter::new(if cfg.incremental_scan_speed_limit.0 > 0 {
             cfg.incremental_scan_speed_limit.0 as f64
         } else {
             INFINITY
@@ -298,12 +298,13 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             pd_client,
             tso_worker,
             timer: SteadyTimer::default(),
-            scan_speed_limter: speed_limter,
+            scan_speed_limter: speed_limiter,
             max_scan_batch_bytes,
             max_scan_batch_size,
             workers,
             scan_concurrency_semaphore,
             raft_router,
+            engine: PhantomData,
             observer,
             store_meta,
             concurrency_manager,
@@ -646,7 +647,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             let features = if let Some(features) = conn.get_feature() {
                 features
             } else {
-                // None means there is no downsteam registered yet.
+                // None means there is no downstream registered yet.
                 continue;
             };
 
@@ -898,6 +899,8 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 Some(id) => id,
                 None => return vec![],
             };
+            // TODO: should using `RegionReadProgressRegistry` to dump leader info like `resolved-ts`
+            // to reduce the time holding the `store_meta` mutex
             for (region_id, _) in regions {
                 if let Some(region) = meta.regions.get(&region_id) {
                     if let Some((term, leader_id)) = meta.leaders.get(&region_id) {
@@ -1015,7 +1018,7 @@ struct Initializer {
 }
 
 impl Initializer {
-    async fn initialize<T: 'static + RaftStoreRouter<RocksEngine>>(
+    async fn initialize<T: 'static + RaftStoreRouter<E>, E: KvEngine>(
         &mut self,
         change_cmd: ChangeObserver,
         raft_router: T,
@@ -1080,7 +1083,7 @@ impl Initializer {
 
     async fn on_change_cmd_response(
         &mut self,
-        mut resp: ReadResponse<RocksSnapshot>,
+        mut resp: ReadResponse<impl EngineSnapshot>,
     ) -> Result<()> {
         if let Some(region_snapshot) = resp.snapshot {
             assert_eq!(self.region_id, region_snapshot.get_region().get_id());
@@ -1120,7 +1123,7 @@ impl Initializer {
         let start = Instant::now_coarse();
         // Time range: (checkpoint_ts, current]
         let current = TimeStamp::max();
-        let mut scanner = ScannerBuilder::new(snap, current, false)
+        let mut scanner = ScannerBuilder::new(snap, current)
             .fill_cache(false)
             .range(None, None)
             .build_delta_scanner(self.checkpoint_ts, self.txn_extra_op)
@@ -1276,7 +1279,7 @@ impl Initializer {
     }
 }
 
-impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable for Endpoint<T> {
+impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
     type Task = Task;
 
     fn run(&mut self, task: Task) {
@@ -1328,7 +1331,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable for Endpoint<T> {
     }
 }
 
-impl<T: 'static + RaftStoreRouter<RocksEngine>> RunnableWithTimer for Endpoint<T> {
+impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> RunnableWithTimer for Endpoint<T, E> {
     fn on_timeout(&mut self) {
         CDC_CAPTURED_REGION_COUNT.set(self.capture_regions.len() as i64);
         CDC_REGION_RESOLVE_STATUS_GAUGE_VEC
@@ -1383,6 +1386,7 @@ impl TxnExtraScheduler for CdcTxnExtraScheduler {
 #[cfg(test)]
 mod tests {
     use collections::HashSet;
+    use engine_rocks::RocksEngine;
     use engine_traits::DATA_CFS;
     use futures::executor::block_on;
     use futures::StreamExt;
@@ -1446,10 +1450,9 @@ mod tests {
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
         let (sink, drain) = crate::channel::channel(buffer, quota);
 
-        let pool = Builder::new()
-            .threaded_scheduler()
+        let pool = Builder::new_multi_thread()
             .thread_name("test-initializer-worker")
-            .core_threads(4)
+            .worker_threads(4)
             .build()
             .unwrap();
         let downstream_state = Arc::new(AtomicCell::new(DownstreamState::Normal));
@@ -1478,7 +1481,7 @@ mod tests {
     fn mock_endpoint(
         cfg: &CdcConfig,
     ) -> (
-        Endpoint<MockRaftStoreRouter>,
+        Endpoint<MockRaftStoreRouter, RocksEngine>,
         MockRaftStoreRouter,
         ReceiverWrapper<Task>,
     ) {
@@ -1496,7 +1499,12 @@ mod tests {
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
             max_ts_sync_status: Arc::new(AtomicU64::new(0)),
             track_ver: TrackVer::new(),
-            read_progress: Arc::new(RegionReadProgress::new(0, 0, "".to_owned())),
+            read_progress: Arc::new(RegionReadProgress::new(
+                &Region::default(),
+                0,
+                0,
+                "".to_owned(),
+            )),
         };
         store_meta.lock().unwrap().readers.insert(1, read_delegate);
         let (task_sched, task_rx) = dummy_scheduler();
@@ -1565,7 +1573,7 @@ mod tests {
                     assert_eq!(resolver.locks(), &expected_locks);
                     return;
                 }
-                t => panic!("unepxected task {} received", t),
+                t => panic!("unexpected task {} received", t),
             }
         };
         // To not block test by barrier.
@@ -1609,7 +1617,7 @@ mod tests {
         loop {
             let task = rx.recv_timeout(Duration::from_millis(100));
             match task {
-                Ok(t) => panic!("unepxected task {} received", t),
+                Ok(t) => panic!("unexpected task {} received", t),
                 Err(RecvTimeoutError::Timeout) => break,
                 Err(e) => panic!("unexpected err {:?}", e),
             }

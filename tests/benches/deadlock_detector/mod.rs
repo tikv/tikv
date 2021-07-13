@@ -29,14 +29,13 @@ impl DetectGenerator {
             entry.set_txn(self.timestamp);
             let mut wait_for_txn = self.timestamp;
             while wait_for_txn == self.timestamp {
-                wait_for_txn = self.rng.gen_range(
-                    if self.timestamp < self.range {
-                        0
-                    } else {
-                        self.timestamp - self.range
-                    },
-                    self.timestamp + self.range,
-                );
+                let low = if self.timestamp < self.range {
+                    0
+                } else {
+                    self.timestamp - self.range
+                };
+                let high = self.timestamp + self.range;
+                wait_for_txn = self.rng.gen_range(low..high);
             }
             entry.set_wait_for_txn(wait_for_txn);
             entry.set_key_hash(self.rng.gen());
