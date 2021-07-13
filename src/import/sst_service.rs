@@ -614,7 +614,7 @@ where
                         Ok(_) => {
                             IMPORT_RPC_DURATION
                                 .with_label_values(&[label, "ok"])
-                                .observe(timer.elapsed_secs());
+                                .observe(timer.saturating_elapsed_secs());
                         }
                         Err(e) => {
                             warn!(
