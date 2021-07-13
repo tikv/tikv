@@ -49,6 +49,8 @@ tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 twoway = "0.2.0"
 uuid = { version = "0.8.1", features = ["v4"] }
 static_assertions = { version = "1.0", features = ["nightly"] }
+serde = "1.0"
+serde_json = "1.0"
 
 [dev-dependencies]
 bstr = "0.2.8"
