@@ -372,7 +372,6 @@ impl<T: Transport, C> PollContext<T, C> {
         &mut self,
         msg: &RaftMessage,
         cur_epoch: RegionEpoch,
-        need_gc: bool,
         target_region: Option<metapb::Region>,
     ) {
         let region_id = msg.get_region_id();
@@ -380,23 +379,14 @@ impl<T: Transport, C> PollContext<T, C> {
         let to_peer = msg.get_to_peer();
         let msg_type = msg.get_message().get_msg_type();
 
-        if !need_gc {
-            info!(
-                "raft message is stale, ignore it";
-                "region_id" => region_id,
-                "current_region_epoch" => ?cur_epoch,
-                "msg_type" => ?msg_type,
-            );
-            self.raft_metrics.message_dropped.stale_msg += 1;
-            return;
-        }
-
         info!(
             "raft message is stale, tell to gc";
             "region_id" => region_id,
             "current_region_epoch" => ?cur_epoch,
             "msg_type" => ?msg_type,
         );
+
+        self.raft_metrics.message_dropped.stale_msg += 1;
 
         let mut gc_msg = RaftMessage::default();
         gc_msg.set_region_id(region_id);
@@ -1402,7 +1392,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 None
             };
             self.ctx
-                .handle_stale_msg(msg, region_epoch.clone(), true, merge_target);
+                .handle_stale_msg(msg, region_epoch.clone(), merge_target);
             return Ok(CheckMsgStatus::DropMsg);
         }
         // The region in this peer is already destroyed
@@ -1415,33 +1405,34 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 "current_region_epoch" => ?region_epoch,
                 "msg_type" => ?msg_type,
             );
-            let mut need_gc_msg = util::is_vote_msg(msg.get_message());
-            if msg.has_extra_msg() {
-                // A learner can't vote so it sends the check-stale-peer msg to others to find out whether
-                // it is removed due to conf change or merge.
-                need_gc_msg |=
-                    msg.get_extra_msg().get_type() == ExtraMessageType::MsgCheckStalePeer;
-                // For backward compatibility
-                need_gc_msg |= msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp;
-            }
-            let not_exist = util::find_peer(region, from_store_id).is_none();
-            self.ctx
-                .handle_stale_msg(msg, region_epoch.clone(), need_gc_msg && not_exist, None);
-
-            if need_gc_msg && !not_exist {
-                let mut send_msg = RaftMessage::default();
-                send_msg.set_region_id(region_id);
-                send_msg.set_from_peer(msg.get_to_peer().clone());
-                send_msg.set_to_peer(msg.get_from_peer().clone());
-                send_msg.set_region_epoch(region_epoch.clone());
-                let extra_msg = send_msg.mut_extra_msg();
-                extra_msg.set_type(ExtraMessageType::MsgCheckStalePeerResponse);
-                extra_msg.set_check_peers(region.get_peers().into());
-                if let Err(e) = self.ctx.trans.send(send_msg) {
-                    error!(?e;
-                        "send check stale peer response message failed";
-                        "region_id" => region_id,
-                    );
+            if util::find_peer(region, from_store_id).is_none() {
+                self.ctx.handle_stale_msg(msg, region_epoch.clone(), None);
+            } else {
+                let mut need_gc_msg = util::is_vote_msg(msg.get_message());
+                if msg.has_extra_msg() {
+                    // A learner can't vote so it sends the check-stale-peer msg to others to find out whether
+                    // it is removed due to conf change or merge.
+                    need_gc_msg |=
+                        msg.get_extra_msg().get_type() == ExtraMessageType::MsgCheckStalePeer;
+                    // For backward compatibility
+                    need_gc_msg |=
+                        msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp;
+                }
+                if need_gc_msg {
+                    let mut send_msg = RaftMessage::default();
+                    send_msg.set_region_id(region_id);
+                    send_msg.set_from_peer(msg.get_to_peer().clone());
+                    send_msg.set_to_peer(msg.get_from_peer().clone());
+                    send_msg.set_region_epoch(region_epoch.clone());
+                    let extra_msg = send_msg.mut_extra_msg();
+                    extra_msg.set_type(ExtraMessageType::MsgCheckStalePeerResponse);
+                    extra_msg.set_check_peers(region.get_peers().into());
+                    if let Err(e) = self.ctx.trans.send(send_msg) {
+                        error!(?e;
+                            "send check stale peer response message failed";
+                            "region_id" => region_id,
+                        );
+                    }
                 }
                 self.ctx.need_flush_trans = true;
             }
@@ -1965,11 +1956,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                         "snaps" => ?snaps,
                     );
                     for (key, is_sending) in snaps {
-                        let snap = if is_sending {
-                            self.ctx.snap_mgr.get_snapshot_for_sending(&key)?
-                        } else {
-                            self.ctx.snap_mgr.get_snapshot_for_applying(&key)?
-                        };
+                        let snap = self.ctx.snap_mgr.get_snapshot_for_gc(&key, is_sending)?;
                         self.ctx
                             .snap_mgr
                             .delete_snapshot(&key, snap.as_ref(), false);
