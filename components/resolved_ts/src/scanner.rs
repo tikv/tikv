@@ -108,7 +108,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                     } else {
                         TxnExtraOp::Noop
                     };
-                    let mut scanner = ScannerBuilder::new(snap, TimeStamp::max(), false)
+                    let mut scanner = ScannerBuilder::new(snap, TimeStamp::max())
                         .range(None, None)
                         .build_delta_scanner(task.checkpoint_ts, txn_extra_op)
                         .unwrap();
