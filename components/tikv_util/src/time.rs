@@ -277,18 +277,9 @@ impl Instant {
         Instant::MonotonicCoarse(monotonic_coarse_now())
     }
 
-    pub fn elapsed(&self) -> Duration {
-        match *self {
-            Instant::Monotonic(t) => {
-                let now = monotonic_now();
-                Instant::elapsed_duration(now, t)
-            }
-            Instant::MonotonicCoarse(t) => {
-                let now = monotonic_coarse_now();
-                Instant::saturating_elapsed_duration_coarse(now, t)
-            }
-        }
-    }
+    // This function may panic if the current time is earlier than this
+    // instant. Deprecated.
+    // pub fn elapsed(&self) -> Duration;
 
     pub fn saturating_elapsed(&self) -> Duration {
         match *self {
@@ -303,9 +294,9 @@ impl Instant {
         }
     }
 
-    pub fn elapsed_secs(&self) -> f64 {
-        duration_to_sec(self.saturating_elapsed())
-    }
+    // This function may panic if the current time is earlier than this
+    // instant. Deprecated.
+    // pub fn elapsed_secs(&self) -> f64;
 
     pub fn saturating_elapsed_secs(&self) -> f64 {
         duration_to_sec(self.saturating_elapsed())
@@ -367,7 +358,7 @@ impl Instant {
         if later >= earlier {
             (later - earlier).to_std().unwrap()
         } else {
-            debug!(
+            error!(
                 "monotonic time jumped back, {:.3} -> {:.3}",
                 earlier.sec as f64 + f64::from(earlier.nsec) / NANOSECONDS_PER_SECOND as f64,
                 later.sec as f64 + f64::from(later.nsec) / NANOSECONDS_PER_SECOND as f64
@@ -467,6 +458,8 @@ impl SubAssign<Duration> for Instant {
 impl Sub<Instant> for Instant {
     type Output = Duration;
 
+    // TODO: For safety in production code, `sub` actually does saturating_sub.
+    // We should remove this operator from public scope.
     fn sub(self, other: Instant) -> Duration {
         self.saturating_duration_since(other)
     }
@@ -614,8 +607,8 @@ mod tests {
 
         let zero = Duration::new(0, 0);
         // Sub Instant.
-        assert!(late_raw - early_raw >= zero);
-        assert!(late_coarse - early_coarse >= zero);
+        assert!(late_raw.duration_since(early_raw) >= zero);
+        assert!(late_coarse.duration_since(early_coarse) >= zero);
 
         // Sub Duration.
         assert_eq!(late_raw - zero, late_raw);

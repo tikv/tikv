@@ -383,7 +383,10 @@ impl ThreadInfoStatistics {
 
     pub fn record(&mut self) {
         let current_instant = Instant::now();
-        let time_delta = (current_instant - self.last_instant).as_millis() as f64 / 1000.0;
+        let time_delta = current_instant
+            .saturating_duration_since(self.last_instant)
+            .as_millis() as f64
+            / 1000.0;
         self.last_instant = current_instant;
         self.metrics_rate.clear();
 
@@ -641,7 +644,7 @@ mod tests {
 
                 let start = Instant::now();
                 loop {
-                    if (Instant::now() - start).as_millis() > duration_ms.into() {
+                    if start.saturating_elapsed().as_millis() > duration_ms.into() {
                         break;
                     }
                 }
