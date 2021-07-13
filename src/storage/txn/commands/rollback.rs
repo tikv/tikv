@@ -50,7 +50,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Rollback {
         released_locks.wake_up(context.lock_mgr);
 
         context.statistics.add(&reader.take_statistics());
-        let write_data = WriteData::from_modifies(txn.into_modifies());
+        let write_data = WriteData::from_modifies_with_allowed(txn.into_modifies());
         Ok(WriteResult {
             ctx: self.ctx,
             to_be_write: write_data,

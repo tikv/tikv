@@ -724,6 +724,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             }) => {
                 SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
+                if ctx.get_allowed_on_disk_full() {
+                    to_be_write.allowed_on_disk_full = ctx.get_allowed_on_disk_full();
+                    warn!("Scheduler got a forced txn");
+                }
+
                 if let Some(lock_info) = lock_info {
                     let WriteResultLockInfo {
                         lock,

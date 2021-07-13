@@ -88,6 +88,28 @@ pub enum Command {
     RawAtomicStore(RawAtomicStore),
 }
 
+/// Store Transaction scheduler commands type used by raftstore
+pub enum CommandType {
+    Prewrite,
+    PrewritePessimistic,
+    AcquirePessimisticLock,
+    Commit,
+    Cleanup,
+    Rollback,
+    PessimisticRollback,
+    TxnHeartBeat,
+    CheckTxnStatus,
+    CheckSecondaryLocks,
+    ResolveLockReadPhase,
+    ResolveLock,
+    ResolveLockLite,
+    Pause,
+    MvccByKey,
+    MvccByStartTs,
+    RawCompareAndSwap,
+    RawAtomicStore,
+}
+
 /// A `Command` with its return type, reified as the generic parameter `T`.
 ///
 /// Incoming grpc requests (like `CommitRequest`, `PrewriteRequest`) are converted to

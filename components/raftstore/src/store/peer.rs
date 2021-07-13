@@ -2352,6 +2352,7 @@ where
         mut cb: Callback<EK::Snapshot>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
+        allowed_on_disk_full: bool,
     ) -> bool {
         if self.pending_remove {
             return false;
@@ -2374,9 +2375,14 @@ where
             }
             Ok(RequestPolicy::ReadIndex) => return self.read_index(ctx, req, err_resp, cb),
             Ok(RequestPolicy::ProposeNormal) => {
-                let store_id = ctx.store_id();
-                if disk::disk_full_precheck(store_id) || ctx.is_disk_full {
-                    Err(Error::Timeout("disk full".to_owned()))
+                if disk::is_disk_threshold_2(ctx.disk_status) {
+                    Err(Error::Timeout("propose failed: disk full thd2".to_owned()))
+                } else if disk::is_disk_threshold_1(ctx.disk_status) {
+                    if allowed_on_disk_full {
+                        self.propose_normal(ctx, req)
+                    } else {
+                        Err(Error::Timeout("propose failed: disk full thd1".to_owned()))
+                    }
                 } else {
                     self.propose_normal(ctx, req)
                 }
@@ -3156,8 +3162,6 @@ where
         if self.is_applying_snapshot()
             || self.has_pending_snapshot()
             || msg.get_from() != self.leader_id()
-            // For followers whose disk is full.
-            || disk::disk_full_precheck(ctx.store_id()) || ctx.is_disk_full
         {
             info!(
                 "reject transferring leader";

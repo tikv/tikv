@@ -546,6 +546,7 @@ where
                     }
                 }
                 PeerMsg::RaftCommand(cmd) => {
+                    self.ctx.allowed_on_disk_full = cmd.allowed_on_disk_full;
                     self.ctx
                         .raft_metrics
                         .propose
@@ -1256,24 +1257,24 @@ where
         );
 
         let msg_type = msg.get_message().get_msg_type();
-        let store_id = self.ctx.store_id();
 
-        if disk::disk_full_precheck(store_id) || self.ctx.is_disk_full {
-            let mut flag = false;
+        if disk::is_disk_threshold_2(self.ctx.disk_status) {
+            // only leader transfer and winning log are allowed.
+            let mut allowed = true;
             if MessageType::MsgAppend == msg_type {
                 let entries = msg.get_message().get_entries();
                 for i in entries {
                     let entry_type = i.get_entry_type();
                     if EntryType::EntryNormal == entry_type && !i.get_data().is_empty() {
-                        flag = true;
+                        allowed = false;
                         break;
                     }
                 }
             } else if MessageType::MsgTimeoutNow == msg_type {
-                flag = true;
+                allowed = false;
             }
 
-            if flag {
+            if !allowed {
                 debug!(
                     "skip {:?} because of disk full", msg_type;
                     "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id()
@@ -3432,7 +3433,11 @@ where
         let mut resp = RaftCmdResponse::default();
         let term = self.fsm.peer.term();
         bind_term(&mut resp, term);
-        if self.fsm.peer.propose(self.ctx, cb, msg, resp) {
+        if self
+            .fsm
+            .peer
+            .propose(self.ctx, cb, msg, resp, self.ctx.allowed_on_disk_full)
+        {
             self.fsm.has_ready = true;
         }
 

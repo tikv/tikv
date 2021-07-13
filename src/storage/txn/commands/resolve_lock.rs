@@ -117,7 +117,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
                 cmd: ResolveLockReadPhase::new(txn_status, scan_key.take(), ctx.clone()).into(),
             }
         };
-        let write_data = WriteData::from_modifies(txn.into_modifies());
+        let write_data = WriteData::from_modifies_with_allowed(txn.into_modifies());
         Ok(WriteResult {
             ctx,
             to_be_write: write_data,

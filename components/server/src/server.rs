@@ -425,7 +425,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 cmp::max(
                     (capacity as f64 * 0.05) as u64,
                     self.config.storage.reserve_space.0,
-                )
+                ) / 10
             },
         )
         .unwrap();
@@ -1042,12 +1042,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let config_disk_capacity: u64 = self.config.raft_store.capacity.0;
         let store_path = self.store_path.clone();
         let snap_mgr = self.snap_mgr.clone().unwrap();
-        let disk_reserved = self.config.storage.reserve_space.0;
-        if disk_reserved == 0 {
+        let reserve_space = self.config.storage.reserve_space.0;
+        if reserve_space == 0 {
             info!("disk space checker not enabled");
             return;
         }
-        //TODO wal size ignore?
+        //threshold not exposed to users.
+        let thd1 = reserve_space;
+        let thd2 = reserve_space / 2;
         self.background_worker
             .spawn_interval_task(DEFAULT_STORAGE_STATS_INTERVAL, move || {
                 let disk_stats = match fs2::statvfs(&store_path) {
@@ -1083,18 +1085,34 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
                 let mut available = capacity.checked_sub(used_size).unwrap_or_default();
                 available = cmp::min(available, disk_stats.available_space());
-                if available <= disk_reserved {
+                let disk_status = disk::get_disk_status();
+                if available <= thd2 {
                     warn!(
-                        "disk full, available={},snap={},engine={},capacity={}",
-                        available, snap_size, kv_size, capacity
+                        "disk full thd2, available={},snap={},kv={},raft={},capacity={}",
+                        available, snap_size, kv_size, raft_size, capacity
                     );
-                    disk::set_disk_full();
-                } else if disk::is_disk_full() {
-                    info!(
-                        "disk normalized, available={},snap={},engine={},capacity={}",
-                        available, snap_size, kv_size, capacity
-                    );
-                    disk::clear_disk_full();
+                    disk::set_disk_status(disk::DiskStatus::DiskThd2);
+                } else if available <= thd1 {
+                    if disk::is_disk_threshold_2(disk_status) {
+                        warn!(
+                            "disk full thd2->thd1, available={},snap={},kv={},raft={},capacity={}",
+                            available, snap_size, kv_size, raft_size, capacity
+                        );
+                    } else {
+                        warn!(
+                            "disk full thd1, available={},snap={},kv={},raft={},capacity={}",
+                            available, snap_size, kv_size, raft_size, capacity
+                        );
+                    }
+                    disk::set_disk_status(disk::DiskStatus::DiskThd1);
+                } else {
+                    if disk::is_disk_threshold_1(disk_status) {
+                        info!(
+                            "disk full thd1->normal, available={},snap={},kv={},raft={},capacity={}",
+                            available, snap_size, kv_size, raft_size, capacity
+                        );
+                    }
+                    disk::set_disk_status(disk::DiskStatus::DiskNormal);
                 }
             })
     }
