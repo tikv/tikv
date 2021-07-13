@@ -61,7 +61,6 @@ make_auto_flush_static_metric! {
         vote,
         vote_resp,
         snapshot,
-        request_snapshot,
         heartbeat,
         heartbeat_resp,
         transfer_leader,

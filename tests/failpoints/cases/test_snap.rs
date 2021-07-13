@@ -6,7 +6,6 @@ use std::time::*;
 use std::{fs, io, thread};
 
 use raft::eraftpb::MessageType;
-use raftstore::store::*;
 use test_raftstore::*;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
@@ -178,66 +177,6 @@ fn assert_snapshot(snap_dir: &str, region_id: u64, exist: bool) {
             );
         }
     }
-}
-
-#[test]
-fn test_node_request_snapshot_on_split() {
-    let mut cluster = new_node_cluster(0, 3);
-    configure_for_request_snapshot(&mut cluster);
-    cluster.run();
-
-    let region = cluster.get_region(b"");
-    // Make sure peer 2 does not in the pending state.
-    cluster.must_transfer_leader(1, new_peer(2, 2));
-    for _ in 0..100 {
-        cluster.must_put(&[7; 100], &[7; 100]);
-    }
-    cluster.must_transfer_leader(1, new_peer(3, 3));
-
-    let split_fp = "apply_before_split_1_3";
-    fail::cfg(split_fp, "pause").unwrap();
-    let (split_tx, split_rx) = mpsc::channel();
-    cluster.split_region(
-        &region,
-        b"k1",
-        Callback::write(Box::new(move |_| {
-            split_tx.send(()).unwrap();
-        })),
-    );
-    // Split is stopped on peer3.
-    split_rx
-        .recv_timeout(Duration::from_millis(100))
-        .unwrap_err();
-
-    // Request snapshot.
-    let committed_index = cluster.must_request_snapshot(2, region.get_id());
-
-    // Install snapshot filter after requesting snapshot.
-    let (tx, rx) = mpsc::channel();
-    let notifier = Mutex::new(Some(tx));
-    cluster.sim.wl().add_recv_filter(
-        2,
-        Box::new(RecvSnapshotFilter {
-            notifier,
-            region_id: region.get_id(),
-        }),
-    );
-    // There is no snapshot as long as we pause the split.
-    rx.recv_timeout(Duration::from_millis(500)).unwrap_err();
-
-    // Continue split.
-    fail::remove(split_fp);
-    split_rx.recv().unwrap();
-    let mut m = rx.recv().unwrap();
-    let snapshot = m.take_message().take_snapshot();
-
-    // Requested snapshot_index >= committed_index.
-    assert!(
-        snapshot.get_metadata().get_index() >= committed_index,
-        "{:?} | {}",
-        m,
-        committed_index
-    );
 }
 
 // A peer on store 3 is isolated and is applying snapshot. (add failpoint so it's always pending)
