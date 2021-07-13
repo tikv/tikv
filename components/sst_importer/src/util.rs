@@ -149,16 +149,10 @@ mod tests {
         // The first ingestion will hard link sst_path to sst_clone.
         check_hard_link(&sst_path, 1);
         prepare_sst_for_ingestion(&sst_path, &sst_clone, key_manager).unwrap();
-        // TODO: remove reset_global_seq() once write_global_seqno is only allowed to be set
-        // to false.
-        db.reset_global_seq(cf_name, &sst_clone).unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 2);
         // If we prepare again, it will use hard link too.
         prepare_sst_for_ingestion(&sst_path, &sst_clone, key_manager).unwrap();
-        // TODO: remove reset_global_seq() once write_global_seqno is only allowed to be set
-        // to false.
-        db.reset_global_seq(cf_name, &sst_clone).unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 2);
         db.ingest_external_file_cf(cf_name, &[sst_clone.to_str().unwrap()])
@@ -174,7 +168,6 @@ mod tests {
         // The second ingestion will copy sst_path to sst_clone.
         check_hard_link(&sst_path, 2);
         prepare_sst_for_ingestion(&sst_path, &sst_clone, key_manager).unwrap();
-        db.reset_global_seq(cf_name, &sst_clone).unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 1);
         db.ingest_external_file_cf(cf_name, &[sst_clone.to_str().unwrap()])

@@ -597,11 +597,9 @@ impl Snapshot {
             }
 
             if !plain_file_used(cf_file.cf) {
-                // TODO: remove reset_global_seq() once write_global_seqno is only allowed to be set
-                // to false.
-                // Reset the global seqno to 0, in case the file was left unrecovered from previous
-                // imcomplete ingestion when write_global_seqno=true. This can be safely removed,
-                // once write_global_seqno is only allowed to be set to false.
+                // TODO: remove reset_global_seq() if possible. TiKV does not write global_seqno
+                // into to-be-ingested SST files by default, this is only kept for backward
+                // compatibility.
                 engine.reset_global_seq(&cf_file.cf, &cf_file.path)?;
             }
             check_file_size_and_checksum(
