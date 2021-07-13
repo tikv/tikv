@@ -13,7 +13,7 @@ use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, Statistics}
 use crate::storage::metrics::*;
 
 pub struct SchedLocalMetrics {
-    local_scan_details: HashMap<&'static str, Statistics>,
+    local_scan_details: HashMap<(&'static str, bool), Statistics>, // key: (tag, success)
     processing_read_duration: LocalHistogramVec,
     processing_write_duration: LocalHistogramVec,
     command_keyread_histogram_vec: LocalHistogramVec,
@@ -66,11 +66,11 @@ impl SchedPool {
     }
 }
 
-pub fn tls_collect_scan_details(cmd: &'static str, stats: &Statistics) {
+pub fn tls_collect_scan_details(cmd: &'static str, success: bool, stats: &Statistics) {
     TLS_SCHED_METRICS.with(|m| {
         m.borrow_mut()
             .local_scan_details
-            .entry(cmd)
+            .entry((cmd, success))
             .or_insert_with(Default::default)
             .add(stats);
     });
@@ -79,11 +79,12 @@ pub fn tls_collect_scan_details(cmd: &'static str, stats: &Statistics) {
 pub fn tls_flush() {
     TLS_SCHED_METRICS.with(|m| {
         let mut m = m.borrow_mut();
-        for (cmd, stat) in m.local_scan_details.drain() {
+        for ((cmd, success), stat) in m.local_scan_details.drain() {
+            let result_tag = ["failure", "success"][success as usize];
             for (cf, cf_details) in stat.details().iter() {
                 for (tag, count) in cf_details.iter() {
                     KV_COMMAND_SCAN_DETAILS
-                        .with_label_values(&[cmd, *cf, *tag])
+                        .with_label_values(&[cmd, *cf, *tag, result_tag])
                         .inc_by(*count as u64);
                 }
             }

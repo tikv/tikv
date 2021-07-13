@@ -393,7 +393,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     .worker_pool
                     .pool
                     .spawn(async move {
-                        this.finish_with_err(cid, err);
+                        this.finish_with_err(cid, err, &Statistics::default());
                     })
                     .unwrap();
             }
@@ -447,7 +447,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                             .clone()
                             .pool
                             .spawn(async move {
-                                sched.finish_with_err(task.cid, Error::from(err));
+                                sched.finish_with_err(
+                                    task.cid,
+                                    Error::from(err),
+                                    &Statistics::default(),
+                                );
                             })
                             .unwrap();
                     }
@@ -465,7 +469,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 SCHED_STAGE_COUNTER_VEC.get(tag).async_snapshot_err.inc();
 
                 info!("engine async_snapshot failed"; "err" => ?e);
-                self.finish_with_err(cid, e);
+                self.finish_with_err(cid, e, &Statistics::default());
             } else {
                 SCHED_STAGE_COUNTER_VEC.get(tag).snapshot.inc();
             }
@@ -481,7 +485,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     }
 
     /// Calls the callback with an error.
-    fn finish_with_err<ER>(&self, cid: u64, err: ER)
+    fn finish_with_err<ER>(&self, cid: u64, err: ER, statistics: &Statistics)
     where
         StorageError: From<ER>,
     {
@@ -489,6 +493,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let tctx = self.inner.dequeue_task_context(cid);
 
         SCHED_STAGE_COUNTER_VEC.get(tctx.tag).error.inc();
+        tls_collect_scan_details(tctx.tag.get_str(), false, statistics);
 
         let pr = ProcessResult::Failed {
             err: StorageError::from(err),
@@ -502,8 +507,16 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     ///
     /// If a next command is present, continues to execute; otherwise, delivers the result to the
     /// callback.
-    fn on_read_finished(&self, cid: u64, pr: ProcessResult, tag: metrics::CommandKind) {
+    fn on_read_finished(
+        &self,
+        cid: u64,
+        pr: ProcessResult,
+        tag: metrics::CommandKind,
+        statistics: &Statistics,
+    ) {
         SCHED_STAGE_COUNTER_VEC.get(tag).read_finish.inc();
+        let success = !matches!(pr, ProcessResult::Failed { .. });
+        tls_collect_scan_details(tag.get_str(), success, &statistics);
 
         debug!("read command finished"; "cid" => cid);
         let tctx = self.inner.dequeue_task_context(cid);
@@ -527,6 +540,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         pipelined: bool,
         async_apply_prewrite: bool,
         tag: metrics::CommandKind,
+        statistics: &Statistics,
     ) {
         // TODO: Does async apply prewrite worth a special metric here?
         if pipelined {
@@ -552,12 +566,16 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         // that the proposed or committed callback is surely invoked, which takes and invokes
         // `tctx.cb(tctx.pr)`.
         if let Some(cb) = tctx.cb {
-            let pr = match result {
-                Ok(()) => pr.or(tctx.pr).unwrap(),
-                Err(e) => ProcessResult::Failed {
-                    err: StorageError::from(e),
-                },
+            let (pr, success) = match result {
+                Ok(()) => (pr.or(tctx.pr).unwrap(), true),
+                Err(e) => (
+                    ProcessResult::Failed {
+                        err: StorageError::from(e),
+                    },
+                    false,
+                ),
             };
+            tls_collect_scan_details(tag.get_str(), success, statistics);
             if let ProcessResult::NextCommand { cmd } = pr {
                 SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
                 self.schedule_command(cmd, cb);
@@ -603,9 +621,12 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         pr: ProcessResult,
         tag: metrics::CommandKind,
         stage: metrics::CommandStageKind,
+        statistics: &Statistics,
     ) {
         debug!("early return response"; "cid" => cid);
         SCHED_STAGE_COUNTER_VEC.get(tag).get(stage).inc();
+        let success = !matches!(pr, ProcessResult::Failed { .. });
+        tls_collect_scan_details(tag.get_str(), success, statistics);
         cb.execute(pr);
         // It won't release locks here until write finished.
     }
@@ -634,19 +655,16 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
                     let region_id = task.cmd.ctx().get_region_id();
                     let ts = task.cmd.ts();
-                    let mut statistics = Statistics::default();
 
                     if task.cmd.readonly() {
-                        self.process_read(snapshot, task, &mut statistics);
+                        self.process_read(snapshot, task);
                     } else {
                         // Safety: `self.sched_pool` ensures a TLS engine exists.
                         unsafe {
-                            with_tls_engine(|engine| {
-                                self.process_write(engine, snapshot, task, &mut statistics)
-                            });
+                            with_tls_engine(|engine| self.process_write(engine, snapshot, task));
                         }
                     };
-                    tls_collect_scan_details(tag.get_str(), &statistics);
+                    // tls_collect_scan_details(tag.get_str(), &statistics);
                     let elapsed = timer.elapsed();
                     slow_log!(
                         elapsed,
@@ -665,22 +683,23 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
     /// Processes a read command within a worker thread, then posts `ReadFinished` message back to the
     /// `Scheduler`.
-    fn process_read(self, snapshot: E::Snap, task: Task, statistics: &mut Statistics) {
+    fn process_read(self, snapshot: E::Snap, task: Task) {
         fail_point!("txn_before_process_read");
         debug!("process read cmd in worker pool"; "cid" => task.cid);
 
         let tag = task.cmd.tag();
 
+        let mut statistics = Statistics::default();
         let pr = task
             .cmd
-            .process_read(snapshot, statistics)
+            .process_read(snapshot, &mut statistics)
             .unwrap_or_else(|e| ProcessResult::Failed { err: e.into() });
-        self.on_read_finished(task.cid, pr, tag);
+        self.on_read_finished(task.cid, pr, tag, &statistics);
     }
 
     /// Processes a write command within a worker thread, then posts either a `WriteFinished`
     /// message if successful or a `FinishedWithErr` message back to the `Scheduler`.
-    fn process_write(self, engine: &E, snapshot: E::Snap, task: Task, statistics: &mut Statistics) {
+    fn process_write(self, engine: &E, snapshot: E::Snap, task: Task) {
         fail_point!("txn_before_process_write");
         let tag = task.cmd.tag();
         let cid = task.cid;
@@ -692,12 +711,13 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             .pipelined_pessimistic_lock
             .load(Ordering::Relaxed);
         let pipelined = pipelined_pessimistic_lock && task.cmd.can_be_pipelined();
+        let mut statistics = Statistics::default();
 
         let context = WriteContext {
             lock_mgr: &self.inner.lock_mgr,
             concurrency_manager: self.inner.concurrency_manager.clone(),
             extra_op: task.extra_op,
-            statistics,
+            statistics: &mut statistics,
             async_apply_prewrite: self.inner.enable_async_apply_prewrite,
         };
 
@@ -748,6 +768,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         wait_timeout,
                         diag_ctx,
                     );
+                    tls_collect_scan_details(tag.get_str(), true, &statistics);
                 } else if to_be_write.modifies.is_empty() {
                     scheduler.on_write_finished(
                         cid,
@@ -757,31 +778,44 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         false,
                         false,
                         tag,
+                        &statistics,
                     );
                 } else {
                     let mut pr = Some(pr);
                     let mut is_async_apply_prewrite = false;
+                    let statistics = Arc::new(statistics);
 
+                    let sched_pool = scheduler.get_sched_pool(priority).pool.clone();
+                    let stats = statistics.clone();
                     let (proposed_cb, committed_cb): (Option<ExtCallback>, Option<ExtCallback>) =
                         match response_policy {
                             ResponsePolicy::OnApplied => (None, None),
                             ResponsePolicy::OnCommitted => {
                                 self.inner.store_pr(cid, pr.take().unwrap());
                                 let sched = scheduler.clone();
+                                let sched_pool = sched_pool.clone();
                                 // Currently, the only case that response is returned after finishing
                                 // commit is async applying prewrites for async commit transactions.
                                 // The committed callback is not guaranteed to be invoked. So store
                                 // the `pr` to the tctx instead of capturing it to the closure.
                                 let committed_cb = Box::new(move || {
-                                    fail_point!("before_async_apply_prewrite_finish", |_| {});
-                                    let (cb, pr) = sched.inner.take_task_cb_and_pr(cid);
-                                    Self::early_response(
-                                        cid,
-                                        cb.unwrap(),
-                                        pr.unwrap(),
-                                        tag,
-                                        metrics::CommandStageKind::async_apply_prewrite,
-                                    );
+                                    sched_pool
+                                        .spawn(async move {
+                                            fail_point!(
+                                                "before_async_apply_prewrite_finish",
+                                                |_| {}
+                                            );
+                                            let (cb, pr) = sched.inner.take_task_cb_and_pr(cid);
+                                            Self::early_response(
+                                                cid,
+                                                cb.unwrap(),
+                                                pr.unwrap(),
+                                                tag,
+                                                metrics::CommandStageKind::async_apply_prewrite,
+                                                &stats,
+                                            );
+                                        })
+                                        .unwrap();
                                 });
                                 is_async_apply_prewrite = true;
                                 (None, Some(committed_cb))
@@ -798,20 +832,29 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                                     // the `pr` to the tctx instead of capturing it to the closure.
                                     self.inner.store_pr(cid, pr.take().unwrap());
                                     let sched = scheduler.clone();
+                                    let sched_pool = sched_pool.clone();
                                     // Currently, the only case that response is returned after finishing
                                     // proposed phase is pipelined pessimistic lock.
                                     // TODO: Unify the code structure of pipelined pessimistic lock and
                                     // async apply prewrite.
                                     let proposed_cb = Box::new(move || {
-                                        fail_point!("before_pipelined_write_finish", |_| {});
-                                        let (cb, pr) = sched.inner.take_task_cb_and_pr(cid);
-                                        Self::early_response(
-                                            cid,
-                                            cb.unwrap(),
-                                            pr.unwrap(),
-                                            tag,
-                                            metrics::CommandStageKind::pipelined_write,
-                                        );
+                                        sched_pool
+                                            .spawn(async move {
+                                                fail_point!(
+                                                    "before_pipelined_write_finish",
+                                                    |_| {}
+                                                );
+                                                let (cb, pr) = sched.inner.take_task_cb_and_pr(cid);
+                                                Self::early_response(
+                                                    cid,
+                                                    cb.unwrap(),
+                                                    pr.unwrap(),
+                                                    tag,
+                                                    metrics::CommandStageKind::pipelined_write,
+                                                    &stats,
+                                                );
+                                            })
+                                            .unwrap();
                                     });
                                     (Some(proposed_cb), None)
                                 } else {
@@ -821,7 +864,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         };
 
                     let sched = scheduler.clone();
-                    let sched_pool = scheduler.get_sched_pool(priority).pool.clone();
+                    let stats = statistics.clone();
                     // The callback to receive async results of write prepare from the storage engine.
                     let engine_cb = Box::new(move |(_, result)| {
                         sched_pool
@@ -836,6 +879,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                                     pipelined,
                                     is_async_apply_prewrite,
                                     tag,
+                                    &stats,
                                 );
                                 KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
                                     .get(tag)
@@ -855,7 +899,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         SCHED_STAGE_COUNTER_VEC.get(tag).async_write_err.inc();
 
                         info!("engine async_write failed"; "cid" => cid, "err" => ?e);
-                        scheduler.finish_with_err(cid, e);
+                        scheduler.finish_with_err(cid, e, &statistics);
                     }
                 }
             }
@@ -864,7 +908,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             Err(err) => {
                 SCHED_STAGE_COUNTER_VEC.get(tag).prepare_write_err.inc();
                 debug!("write command failed at prewrite"; "cid" => cid, "err" => ?err);
-                scheduler.finish_with_err(cid, err);
+                scheduler.finish_with_err(cid, err, &statistics);
             }
         }
     }
@@ -874,7 +918,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     #[inline]
     fn check_task_deadline_exceeded(&self, task: &Task) -> bool {
         if let Err(e) = task.deadline.check() {
-            self.finish_with_err(task.cid, e);
+            self.finish_with_err(task.cid, e, &Statistics::default());
             true
         } else {
             false
