@@ -432,15 +432,15 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let mut ctx = req.take_context();
                     let region_id = ctx.get_region_id();
                     let peer = ctx.get_peer();
+                    let key = Key::from_raw(req.get_key());
                     tls_collect_query(
                         region_id,
                         peer,
-                        &req.get_key(),
-                        &req.get_key(),
+                        key.as_encoded(),
+                        key.as_encoded(),
                         false,
                         QueryKind::Get,
                     );
-                    let key = Key::from_raw(req.get_key());
                     let start_ts = req.get_version().into();
                     let isolation_level = ctx.get_isolation_level();
                     let fill_cache = !ctx.get_not_fill_cache();
@@ -1516,6 +1516,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         return Err(box_err!("Invalid KeyRanges"));
                     };
                     let mut result = Vec::new();
+                    let mut key_ranges = vec![];
+                    for range in &ranges {
+                        key_ranges.push(build_key_range(
+                            &range.start_key,
+                            &range.end_key,
+                            reverse_scan,
+                        ));
+                    }
                     let ranges_len = ranges.len();
                     for i in 0..ranges_len {
                         let start_key = Key::from_encoded(ranges[i].take_start_key());
@@ -1553,14 +1561,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                 .await
                         }?;
                         result.extend(pairs.into_iter());
-                    }
-                    let mut key_ranges = vec![];
-                    for range in ranges {
-                        key_ranges.push(build_key_range(
-                            &range.start_key,
-                            &range.end_key,
-                            reverse_scan,
-                        ));
                     }
                     tls_collect_query_batch(
                         ctx.get_region_id(),
