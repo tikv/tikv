@@ -587,7 +587,7 @@ impl Snapshot {
         )
     }
 
-    fn validate(&self, engine: &impl KvEngine, for_send: bool) -> RaftStoreResult<()> {
+    fn validate(&self, for_send: bool) -> RaftStoreResult<()> {
         for cf_file in &self.cf_files {
             if cf_file.size == 0 {
                 // Skip empty file. The checksum of this cf file should be 0 and
@@ -595,10 +595,6 @@ impl Snapshot {
                 continue;
             }
 
-            if !plain_file_used(cf_file.cf) {
-                // Reset global seq number.
-                engine.reset_global_seq(&cf_file.cf, &cf_file.path)?;
-            }
             check_file_size_and_checksum(
                 &cf_file.path,
                 cf_file.size,
@@ -665,7 +661,7 @@ impl Snapshot {
     {
         fail_point!("snapshot_enter_do_build");
         if self.exists() {
-            match self.validate(engine, true) {
+            match self.validate(true) {
                 Ok(()) => return Ok(()),
                 Err(e) => {
                     error!(?e;
@@ -815,7 +811,7 @@ impl Snapshot {
     }
 
     pub fn apply<EK: KvEngine>(&mut self, options: ApplyOptions<EK>) -> Result<()> {
-        box_try!(self.validate(&options.db, false));
+        box_try!(self.validate(false));
 
         let abort_checker = ApplyAbortChecker(options.abort);
         let coprocessor_host = options.coprocessor_host;
