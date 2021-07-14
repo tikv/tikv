@@ -666,9 +666,6 @@ impl ImportDir {
             let cf = meta.get_cf_name();
             super::prepare_sst_for_ingestion(&path.save, &path.clone, key_manager.as_deref())?;
             ingest_bytes += meta.get_length();
-            // TODO: remove reset_global_seq() if possible. TiKV does not write global_seqno into
-            // to-be-ingested SST files by default, this is only kept for backward compatibility.
-            engine.reset_global_seq(cf, &path.clone)?;
             paths.entry(cf).or_insert_with(Vec::new).push(path);
         }
 

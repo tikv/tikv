@@ -10,10 +10,6 @@ impl ImportExt for PanicEngine {
     fn ingest_external_file_cf(&self, cf: &str, files: &[&str]) -> Result<()> {
         panic!()
     }
-
-    fn reset_global_seq<P: AsRef<Path>>(&self, cf: &str, path: P) -> Result<()> {
-        panic!()
-    }
 }
 
 pub struct PanicIngestExternalFileOptions;
