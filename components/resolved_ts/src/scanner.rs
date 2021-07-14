@@ -2,6 +2,10 @@
 
 use std::marker::PhantomData;
 use std::sync::Arc;
+<<<<<<< HEAD
+=======
+use std::time::Duration;
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 
 use engine_traits::KvEngine;
 use kvproto::kvrpcpb::{ExtraOp as TxnExtraOp, IsolationLevel};
@@ -13,6 +17,10 @@ use raftstore::store::RegionSnapshot;
 use tikv::storage::kv::{ScanMode as MvccScanMode, Snapshot};
 use tikv::storage::mvcc::{DeltaScanner, MvccReader, ScannerBuilder};
 use tikv::storage::txn::{TxnEntry, TxnEntryScanner};
+<<<<<<< HEAD
+=======
+use tikv_util::{time::Instant, timer::GLOBAL_TIMER_HANDLE};
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 use tokio::runtime::{Builder, Runtime};
 use txn_types::{Key, Lock, TimeStamp};
 
@@ -164,7 +172,12 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                 }
             }
             entries.push(ScanEntry::None);
+<<<<<<< HEAD
             (task.send_entries)(entries);
+=======
+            RTS_SCAN_DURATION_HISTOGRAM.observe(start.saturating_elapsed().as_secs_f64());
+            (task.send_entries)(entries, apply_index);
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
         };
         self.workers.spawn(fut);
     }
@@ -173,6 +186,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
         task: &mut ScanTask,
         raft_router: T,
     ) -> Result<RegionSnapshot<E::Snapshot>> {
+<<<<<<< HEAD
         let (cb, fut) = tikv_util::future::paired_future_callback();
         let before_start = task.before_start.take();
         let change_cmd = ChangeObserver {
@@ -195,6 +209,45 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
         let mut resp = box_try!(fut.await);
         if resp.response.get_header().has_error() {
             return Err(Error::Request(resp.response.take_header().take_error()));
+=======
+        let mut last_err = None;
+        for retry_times in 0..=GET_SNAPSHOT_RETRY_TIME {
+            if retry_times != 0 {
+                if let Err(e) = GLOBAL_TIMER_HANDLE
+                    .delay(
+                        std::time::Instant::now() + retry_times * GET_SNAPSHOT_RETRY_BACKOFF_STEP,
+                    )
+                    .compat()
+                    .await
+                {
+                    error!("failed to backoff"; "err" => ?e);
+                }
+                if (task.is_cancelled)() {
+                    return Err(Error::Other("scan task cancelled".into()));
+                }
+            }
+            let (cb, fut) = tikv_util::future::paired_future_callback();
+            let change_cmd = ChangeObserver::from_rts(task.region.id, task.handle.clone());
+            raft_router.significant_send(
+                task.region.id,
+                SignificantMsg::CaptureChange {
+                    cmd: change_cmd,
+                    region_epoch: task.region.get_region_epoch().clone(),
+                    callback: Callback::Read(Box::new(cb)),
+                },
+            )?;
+            let mut resp = box_try!(fut.await);
+            if resp.response.get_header().has_error() {
+                let err = resp.response.take_header().take_error();
+                // These two errors can't handled by retrying since the epoch and observe id is unchanged
+                if err.has_epoch_not_match() || err.get_message().contains("stale observe id") {
+                    return Err(Error::request(err));
+                }
+                last_err = Some(err)
+            } else {
+                return Ok(resp.snapshot.unwrap());
+            }
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
         }
         Ok(resp.snapshot.unwrap())
     }

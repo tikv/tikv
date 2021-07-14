@@ -1,8 +1,14 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
-use std::time::Instant;
 
+<<<<<<< HEAD
+=======
+use strum::EnumCount;
+
+use tikv_util::time::Instant;
+
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 use crate::iosnoop::{fetch_io_bytes, flush_io_latency_metrics};
 use crate::metrics::IO_BYTES_VEC;
 use crate::IOBytes;

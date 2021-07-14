@@ -4,9 +4,14 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+<<<<<<< HEAD
 use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, error, u64};
+=======
+use std::sync::{Arc, Mutex};
+use std::{cmp, error, mem, u64};
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 
 use engine_traits::CF_RAFT;
 use engine_traits::{Engines, KvEngine, Mutable, Peekable};
@@ -25,6 +30,11 @@ use crate::store::ProposalContext;
 use crate::{Error, Result};
 use engine_traits::{RaftEngine, RaftLogBatch};
 use into_other::into_other;
+<<<<<<< HEAD
+=======
+use tikv_alloc::trace::TraceEvent;
+use tikv_util::time::Instant;
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 use tikv_util::worker::Scheduler;
 
 use super::metrics::*;
@@ -1520,7 +1530,7 @@ where
         "meta_key" => 1,
         "apply_key" => 1,
         "raft_key" => 1,
-        "takes" => ?t.elapsed(),
+        "takes" => ?t.saturating_elapsed(),
     );
     Ok(())
 }

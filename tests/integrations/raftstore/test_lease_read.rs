@@ -4,7 +4,7 @@
 
 use std::sync::atomic::*;
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::*;
+use std::time::Duration;
 use std::{mem, thread};
 
 use kvproto::metapb;
@@ -17,6 +17,7 @@ use pd_client::PdClient;
 use raftstore::store::{Callback, RegionSnapshot};
 use test_raftstore::*;
 use tikv_util::config::*;
+use tikv_util::time::Instant;
 use tikv_util::HandyRwLock;
 
 // A helper function for testing the lease reads and lease renewing.
@@ -251,8 +252,23 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
     let state: RaftLocalState = engine.c().get_msg(&state_key).unwrap().unwrap();
     assert_eq!(state.get_last_index(), last_index + 1);
 
+<<<<<<< HEAD
     // wait some time for the proposal to be applied.
     thread::sleep(election_timeout / 2);
+=======
+    // Wait some time for the proposal to be applied.
+    let now = Instant::now();
+    loop {
+        thread::sleep(Duration::from_millis(100));
+        if now.saturating_elapsed() > election_timeout * 2 {
+            panic!("store {} must apply to {}", store_id, last_index + 1);
+        }
+        let apply_state = cluster.apply_state(region_id, store_id);
+        if apply_state.applied_index >= last_index + 1 {
+            break;
+        }
+    }
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 
     // Check if the leader does a local read.
     must_read_on_peer(cluster, peer, region, key, b"v1");

@@ -15,8 +15,17 @@ use std::{
     fs::{self, File},
     net::SocketAddr,
     path::{Path, PathBuf},
+<<<<<<< HEAD:cmd/src/server.rs
     sync::{atomic::AtomicU64, Arc, Mutex},
     time::{Duration, Instant},
+=======
+    sync::{
+        atomic::{AtomicU32, AtomicU64, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
+    u64,
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544):components/server/src/server.rs
 };
 
 use cdc::MemoryQuota;
@@ -81,8 +90,12 @@ use tikv_util::{
     config::{ensure_dir_exist, VersionTrack},
     sys::sys_quota::SysQuota,
     thread_group::GroupProperties,
+<<<<<<< HEAD:cmd/src/server.rs
     time::Monitor,
     timer::GLOBAL_TIMER_HANDLE,
+=======
+    time::{Instant, Monitor},
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544):components/server/src/server.rs
     worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker, Worker},
 };
 use tokio::runtime::Builder;
@@ -1221,7 +1234,7 @@ impl<R: RaftEngine> EngineMetricsManager<R> {
     pub fn flush(&mut self, now: Instant) {
         self.engines.kv.flush_metrics("kv");
         self.engines.raft.flush_metrics("raft");
-        if now.duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
+        if now.saturating_duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
             self.engines.kv.reset_statistics();
             self.engines.raft.reset_statistics();
             self.last_reset = now;

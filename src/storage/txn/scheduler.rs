@@ -83,7 +83,7 @@ impl Drop for CmdTimer {
     fn drop(&mut self) {
         SCHED_HISTOGRAM_VEC_STATIC
             .get(self.tag)
-            .observe(self.begin.elapsed_secs());
+            .observe(self.begin.saturating_elapsed_secs());
     }
 }
 
@@ -135,7 +135,7 @@ impl TaskContext {
     fn on_schedule(&mut self) {
         SCHED_LATCH_HISTOGRAM_VEC
             .get(self.tag)
-            .observe(self.latch_timer.elapsed_secs());
+            .observe(self.latch_timer.saturating_elapsed_secs());
     }
 }
 
@@ -285,7 +285,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             enable_async_apply_prewrite,
         });
 
-        slow_log!(t.elapsed(), "initialized the transaction scheduler");
+        slow_log!(
+            t.saturating_elapsed(),
+            "initialized the transaction scheduler"
+        );
         Scheduler {
             engine: Some(engine),
             inner,
@@ -570,6 +573,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 let timer = Instant::now_coarse();
                 let mut statistics = Statistics::default();
 
+<<<<<<< HEAD
                 if task.cmd.readonly() {
                     self.process_read(snapshot, task, &mut statistics);
                 } else {
@@ -588,6 +592,27 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     tag,
                     ts
                 );
+=======
+                    if task.cmd.readonly() {
+                        self.process_read(snapshot, task, &mut statistics);
+                    } else {
+                        // Safety: `self.sched_pool` ensures a TLS engine exists.
+                        unsafe {
+                            with_tls_engine(|engine| {
+                                self.process_write(engine, snapshot, task, &mut statistics)
+                            });
+                        }
+                    };
+                    tls_collect_scan_details(tag.get_str(), &statistics);
+                    let elapsed = timer.saturating_elapsed();
+                    slow_log!(
+                        elapsed,
+                        "[region {}] scheduler handle command: {}, ts: {}",
+                        region_id,
+                        tag,
+                        ts
+                    );
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 
                 tls_collect_read_duration(tag.get_str(), read_duration.elapsed());
             })
