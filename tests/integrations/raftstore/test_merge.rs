@@ -3,7 +3,7 @@
 use std::iter::*;
 use std::sync::*;
 use std::thread;
-use std::time::*;
+use std::time::Duration;
 
 use kvproto::raft_cmdpb::CmdType;
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
@@ -16,6 +16,7 @@ use pd_client::PdClient;
 use raftstore::store::*;
 use test_raftstore::*;
 use tikv_util::config::*;
+use tikv_util::time::Instant;
 use tikv_util::HandyRwLock;
 
 /// Test if merge is working as expected in a general condition.
