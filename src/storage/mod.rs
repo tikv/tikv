@@ -384,10 +384,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
-                        .observe(begin_instant.elapsed_secs());
+                        .observe(begin_instant.saturating_elapsed_secs());
                     SCHED_HISTOGRAM_VEC_STATIC
                         .get(CMD)
-                        .observe(command_duration.elapsed_secs());
+                        .observe(command_duration.saturating_elapsed_secs());
 
                     Ok((result?, statistics, perf_statistics.delta()))
                 }
@@ -531,7 +531,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 metrics::tls_collect_scan_details(CMD, &statistics);
                 SCHED_HISTOGRAM_VEC_STATIC
                     .get(CMD)
-                    .observe(command_duration.elapsed_secs());
+                    .observe(command_duration.saturating_elapsed_secs());
 
                 Ok(())
             },
@@ -629,10 +629,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
-                        .observe(begin_instant.elapsed_secs());
+                        .observe(begin_instant.saturating_elapsed_secs());
                     SCHED_HISTOGRAM_VEC_STATIC
                         .get(CMD)
-                        .observe(command_duration.elapsed_secs());
+                        .observe(command_duration.saturating_elapsed_secs());
 
                     Ok((result?, statistics, perf_statistics.delta()))
                 }
@@ -714,13 +714,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC
                                 .get(CMD)
                                 .locked
-                                .observe(begin_instant.elapsed().as_secs_f64());
+                                .observe(begin_instant.saturating_elapsed().as_secs_f64());
                             txn::Error::from_mvcc(e)
                         })?;
                     CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC
                         .get(CMD)
                         .unlocked
-                        .observe(begin_instant.elapsed().as_secs_f64());
+                        .observe(begin_instant.saturating_elapsed().as_secs_f64());
                 }
 
                 let mut snap_ctx = SnapContext {
@@ -766,10 +766,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
-                        .observe(begin_instant.elapsed_secs());
+                        .observe(begin_instant.saturating_elapsed_secs());
                     SCHED_HISTOGRAM_VEC_STATIC
                         .get(CMD)
-                        .observe(command_duration.elapsed_secs());
+                        .observe(command_duration.saturating_elapsed_secs());
 
                     res.map_err(Error::from).map(|results| {
                         KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
@@ -848,7 +848,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC
                                 .get(CMD)
                                 .locked
-                                .observe(begin_instant.elapsed().as_secs_f64());
+                                .observe(begin_instant.saturating_elapsed().as_secs_f64());
                             Err(txn::Error::from_mvcc(mvcc::ErrorInner::KeyIsLocked(
                                 lock.clone().into_lock_info(key.to_raw()?),
                             )))
@@ -860,7 +860,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC
                     .get(CMD)
                     .unlocked
-                    .observe(begin_instant.elapsed().as_secs_f64());
+                    .observe(begin_instant.saturating_elapsed().as_secs_f64());
 
                 let snap_ctx = SnapContext {
                     pb_ctx: &ctx,
@@ -898,10 +898,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
-                        .observe(begin_instant.elapsed_secs());
+                        .observe(begin_instant.saturating_elapsed_secs());
                     SCHED_HISTOGRAM_VEC_STATIC
                         .get(CMD)
-                        .observe(command_duration.elapsed_secs());
+                        .observe(command_duration.saturating_elapsed_secs());
 
                     Ok(locks)
                 }
@@ -1038,10 +1038,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     tls_collect_read_flow(ctx.get_region_id(), &stats);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
-                        .observe(begin_instant.elapsed_secs());
+                        .observe(begin_instant.saturating_elapsed_secs());
                     SCHED_HISTOGRAM_VEC_STATIC
                         .get(CMD)
-                        .observe(command_duration.elapsed_secs());
+                        .observe(command_duration.saturating_elapsed_secs());
                     r
                 }
             },
@@ -1130,10 +1130,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                 SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                     .get(CMD)
-                    .observe(begin_instant.elapsed_secs());
+                    .observe(begin_instant.saturating_elapsed_secs());
                 SCHED_HISTOGRAM_VEC_STATIC
                     .get(CMD)
-                    .observe(command_duration.elapsed_secs());
+                    .observe(command_duration.saturating_elapsed_secs());
                 Ok(())
             },
             priority,
@@ -1208,10 +1208,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     tls_collect_read_flow(ctx.get_region_id(), &stats);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
-                        .observe(begin_instant.elapsed_secs());
+                        .observe(begin_instant.saturating_elapsed_secs());
                     SCHED_HISTOGRAM_VEC_STATIC
                         .get(CMD)
-                        .observe(command_duration.elapsed_secs());
+                        .observe(command_duration.saturating_elapsed_secs());
                     Ok(result)
                 }
             },
@@ -1461,10 +1461,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
-                        .observe(begin_instant.elapsed_secs());
+                        .observe(begin_instant.saturating_elapsed_secs());
                     SCHED_HISTOGRAM_VEC_STATIC
                         .get(CMD)
-                        .observe(command_duration.elapsed_secs());
+                        .observe(command_duration.saturating_elapsed_secs());
 
                     result
                 }
@@ -1575,10 +1575,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
-                        .observe(begin_instant.elapsed_secs());
+                        .observe(begin_instant.saturating_elapsed_secs());
                     SCHED_HISTOGRAM_VEC_STATIC
                         .get(CMD)
-                        .observe(command_duration.elapsed_secs());
+                        .observe(command_duration.saturating_elapsed_secs());
                     Ok(result)
                 }
             },
@@ -1637,10 +1637,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     tls_collect_read_flow(ctx.get_region_id(), &stats);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
-                        .observe(begin_instant.elapsed_secs());
+                        .observe(begin_instant.saturating_elapsed_secs());
                     SCHED_HISTOGRAM_VEC_STATIC
                         .get(CMD)
-                        .observe(command_duration.elapsed_secs());
+                        .observe(command_duration.saturating_elapsed_secs());
                     r
                 }
             },
@@ -1753,14 +1753,14 @@ fn prepare_snap_ctx<'a>(
                     CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC
                         .get(cmd)
                         .locked
-                        .observe(begin_instant.elapsed().as_secs_f64());
+                        .observe(begin_instant.saturating_elapsed().as_secs_f64());
                     txn::Error::from_mvcc(e)
                 })?;
         }
         CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC
             .get(cmd)
             .unlocked
-            .observe(begin_instant.elapsed().as_secs_f64());
+            .observe(begin_instant.saturating_elapsed().as_secs_f64());
     }
 
     let mut snap_ctx = SnapContext {

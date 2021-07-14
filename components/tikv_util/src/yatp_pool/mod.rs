@@ -40,7 +40,7 @@ impl<T: PoolTicker> TickerWrapper<T> {
 
     pub fn try_tick(&mut self) {
         let now = Instant::now_coarse();
-        if now.duration_since(self.last_tick_time) < tick_interval() {
+        if now.saturating_duration_since(self.last_tick_time) < tick_interval() {
             return;
         }
         self.last_tick_time = now;

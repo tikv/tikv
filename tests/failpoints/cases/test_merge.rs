@@ -3,7 +3,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::*;
 use std::thread;
-use std::time::*;
+use std::time::Duration;
 
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::kvrpcpb::*;
@@ -17,6 +17,7 @@ use pd_client::PdClient;
 use raftstore::store::*;
 use test_raftstore::*;
 use tikv_util::config::*;
+use tikv_util::time::Instant;
 use tikv_util::HandyRwLock;
 
 /// Test if merge is rollback as expected.
@@ -590,7 +591,7 @@ fn test_node_merge_restart_after_apply_premerge_before_apply_compact_log() {
         if apply_index >= last_index {
             break;
         }
-        if timer.elapsed() > Duration::from_secs(3) {
+        if timer.saturating_elapsed() > Duration::from_secs(3) {
             panic!("logs are not applied after 3 seconds");
         }
         thread::sleep(Duration::from_millis(20));
@@ -1169,7 +1170,7 @@ fn test_node_merge_crash_when_snapshot() {
         if local_state.get_state() == PeerState::Applying {
             break;
         }
-        if timer.elapsed() > Duration::from_secs(1) {
+        if timer.saturating_elapsed() > Duration::from_secs(1) {
             panic!("not become applying state after 1 seconds.");
         }
         sleep_ms(10);
