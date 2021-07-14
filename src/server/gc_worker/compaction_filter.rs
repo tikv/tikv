@@ -173,12 +173,13 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             return std::ptr::null_mut();
         }
 
-        let (enable, skip_vcheck, ratio_threshold) = {
+        let (enable, skip_vcheck, ratio_threshold, prefer_tombstones) = {
             let value = &*gc_context.cfg_tracker.value();
             (
                 value.enable_compaction_filter,
                 value.compaction_filter_skip_version_check,
                 value.ratio_threshold,
+                value.prefer_tombstones_than_garbage,
             )
         };
 
@@ -223,6 +224,7 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             safe_point,
             context,
             gc_scheduler,
+            prefer_tombstones,
             (store_id, region_info_provider),
         ));
         let name = CString::new("write_compaction_filter").unwrap();
@@ -244,6 +246,7 @@ struct WriteCompactionFilter {
     // mark will be sent to the GC worker only if `mvcc_deletion_overlaps` is 0. It's
     // a little optimization to reduce modifications on write CF.
     mvcc_deletion_overlaps: Option<usize>,
+    prefer_tombstones: bool,
     regions_provider: (u64, Arc<dyn RegionInfoProvider>),
 
     mvcc_key_prefix: Vec<u8>,
@@ -269,6 +272,7 @@ impl WriteCompactionFilter {
         safe_point: u64,
         context: &CompactionFilterContext,
         gc_scheduler: FutureScheduler<GcTask<RocksEngine>>,
+        prefer_tombstones: bool,
         regions_provider: (u64, Arc<dyn RegionInfoProvider>),
     ) -> Self {
         // Safe point must have been initialized.
@@ -286,6 +290,7 @@ impl WriteCompactionFilter {
             gc_scheduler,
             mvcc_deletions: Vec::with_capacity(DEFAULT_DELETE_BATCH_COUNT),
             mvcc_deletion_overlaps: None,
+            prefer_tombstones,
             regions_provider,
 
             mvcc_key_prefix: vec![],
@@ -352,10 +357,12 @@ impl WriteCompactionFilter {
 
         self.versions += 1;
         if self.mvcc_key_prefix != mvcc_key_prefix {
-            if self.mvcc_deletion_overlaps.take() == Some(0) {
-                self.handle_bottommost_delete();
-                if self.mvcc_deletions.len() >= DEFAULT_DELETE_BATCH_COUNT {
-                    self.gc_mvcc_deletions();
+            if let Some(overlaps) = self.mvcc_deletion_overlaps.take() {
+                if overlaps == 0 || self.prefer_tombstones {
+                    self.handle_bottommost_delete();
+                    if self.mvcc_deletions.len() >= DEFAULT_DELETE_BATCH_COUNT {
+                        self.gc_mvcc_deletions();
+                    }
                 }
             }
             self.switch_key_metrics();
@@ -377,7 +384,7 @@ impl WriteCompactionFilter {
                 WriteType::Put => self.remove_older = true,
                 WriteType::Delete => {
                     self.remove_older = true;
-                    if self.is_bottommost_level {
+                    if self.is_bottommost_level || self.prefer_tombstones {
                         self.mvcc_deletion_overlaps = Some(0);
                     }
                 }
@@ -523,8 +530,10 @@ impl Drop for WriteCompactionFilter {
     // NOTE: it's required that `CompactionFilter` is dropped before the compaction result
     // becomes installed into the DB instance.
     fn drop(&mut self) {
-        if self.mvcc_deletion_overlaps.take() == Some(0) {
-            self.handle_bottommost_delete();
+        if let Some(overlaps) = self.mvcc_deletion_overlaps.take() {
+            if overlaps == 0 || self.is_bottommost_level {
+                self.handle_bottommost_delete();
+            }
         }
         self.gc_mvcc_deletions();
 
