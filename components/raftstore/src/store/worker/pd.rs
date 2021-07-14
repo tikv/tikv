@@ -1241,7 +1241,7 @@ where
 
                     let written_bytes_delta = hb_task.written_bytes;
                     let written_keys_delta = hb_task.written_keys;
-                    let written_query_stats_delta = hb_task.written_query_stats.clone();
+                    let written_query_stats_delta = hb_task.written_query_stats;
                     let mut query_stats = peer_stat.region_report_read_stats.clone();
                     peer_stat.region_report_read_stats.clean();
                     query_stats.add_query_stats(&written_query_stats_delta.0); // add write info
