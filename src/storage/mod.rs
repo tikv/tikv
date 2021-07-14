@@ -414,12 +414,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let mut req_snaps = vec![];
 
                 for (mut req, id) in requests.into_iter().zip(ids) {
-                    let region_id = req.get_context().get_region_id();
-                    let peer = req.get_context().get_peer();
-                    tls_collect_qps(region_id, peer, &req.get_key(), &req.get_key(), false);
-                    let key = Key::from_raw(req.get_key());
-                    let start_ts = req.get_version().into();
                     let mut ctx = req.take_context();
+                    let region_id = ctx.get_region_id();
+                    let peer = ctx.get_peer();
+                    let key = Key::from_raw(req.get_key());
+                    tls_collect_qps(region_id, peer, key.as_encoded(), key.as_encoded(), false);
+                    let start_ts = req.get_version().into();
                     let isolation_level = ctx.get_isolation_level();
                     let fill_cache = !ctx.get_not_fill_cache();
                     let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
@@ -1468,6 +1468,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         return Err(box_err!("Invalid KeyRanges"));
                     };
                     let mut result = Vec::new();
+                    let mut key_ranges = vec![];
+                    for range in &ranges {
+                        key_ranges.push(build_key_range(
+                            &range.start_key,
+                            &range.end_key,
+                            reverse_scan,
+                        ));
+                    }
                     let ranges_len = ranges.len();
                     for i in 0..ranges_len {
                         let start_key = Key::from_encoded(ranges[i].take_start_key());
@@ -1505,14 +1513,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                 .await
                         }?;
                         result.extend(pairs.into_iter());
-                    }
-                    let mut key_ranges = vec![];
-                    for range in ranges {
-                        key_ranges.push(build_key_range(
-                            &range.start_key,
-                            &range.end_key,
-                            reverse_scan,
-                        ));
                     }
                     tls_collect_qps_batch(ctx.get_region_id(), ctx.get_peer(), key_ranges);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
