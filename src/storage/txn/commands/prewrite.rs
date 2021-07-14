@@ -28,6 +28,8 @@ use kvproto::kvrpcpb::ExtraOp;
 use std::mem;
 use txn_types::{Key, Mutation, OldValue, OldValues, TimeStamp, TxnExtra, Write, WriteType};
 
+use super::ReaderWithStats;
+
 pub(crate) const FORWARD_MIN_MUTATIONS_NUM: usize = 12;
 
 command! {
@@ -362,13 +364,14 @@ impl<K: PrewriteKind> Prewriter<K> {
         self.check_max_ts_synced(&snapshot)?;
 
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
-        let mut reader =
-            SnapshotReader::new(self.start_ts, snapshot, !self.ctx.get_not_fill_cache());
+        let mut reader = ReaderWithStats::new(
+            SnapshotReader::new(self.start_ts, snapshot, !self.ctx.get_not_fill_cache()),
+            &mut context.statistics,
+        );
         // Set extra op here for getting the write record when check write conflict in prewrite.
 
         let rows = self.mutations.len();
         let res = self.prewrite(&mut txn, &mut reader, context.extra_op);
-        context.statistics.add(&reader.take_statistics());
         let (locks, final_min_commit_ts) = res?;
 
         Ok(self.write_result(
