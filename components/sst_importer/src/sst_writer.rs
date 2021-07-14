@@ -13,11 +13,11 @@ use crate::Result;
 
 pub struct TxnSSTWriter<E: KvEngine> {
     default: E::SstWriter,
-    default_entries: u64,
+    pub(crate) default_entries: u64,
     default_path: ImportPath,
     default_meta: SstMeta,
     write: E::SstWriter,
-    write_entries: u64,
+    pub(crate) write_entries: u64,
     write_path: ImportPath,
     write_meta: SstMeta,
     key_manager: Option<Arc<DataKeyManager>>,
@@ -99,7 +99,7 @@ impl<E: KvEngine> TxnSSTWriter<E> {
 
 pub struct RawSSTWriter<E: KvEngine> {
     default: E::SstWriter,
-    default_entries: u64,
+    pub(crate) default_entries: u64,
     default_path: ImportPath,
     default_meta: SstMeta,
     key_manager: Option<Arc<DataKeyManager>>,
