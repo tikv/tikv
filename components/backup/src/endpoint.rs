@@ -6,7 +6,7 @@ use std::f64::INFINITY;
 use std::fmt;
 use std::sync::atomic::*;
 use std::sync::*;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use concurrency_manager::ConcurrencyManager;
 use configuration::Configuration;
