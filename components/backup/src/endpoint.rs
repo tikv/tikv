@@ -1,12 +1,12 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::f64::INFINITY;
 use std::fmt;
 use std::sync::atomic::*;
 use std::sync::*;
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::{borrow::Cow, time::*};
 
 use concurrency_manager::ConcurrencyManager;
 use configuration::Configuration;
@@ -28,8 +28,13 @@ use tikv::storage::txn::{
     EntryBatch, Error as TxnError, SnapshotStore, TxnEntryScanner, TxnEntryStore,
 };
 use tikv::storage::Statistics;
+<<<<<<< HEAD
 use tikv_util::time::Limiter;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
+=======
+use tikv_util::time::{Instant, Limiter};
+use tikv_util::worker::Runnable;
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 use tikv_util::{
     box_err, debug, defer, error, error_unknown, impl_display_as_debug, info, slow_log, thd_name,
     warn,
@@ -200,7 +205,7 @@ impl BackupRange {
         };
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["snapshot"])
-            .observe(start_snapshot.elapsed().as_secs_f64());
+            .observe(start_snapshot.saturating_elapsed().as_secs_f64());
         let snap_store = SnapshotStore::new(
             snapshot,
             backup_ts,
@@ -289,7 +294,7 @@ impl BackupRange {
         }
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["scan"])
-            .observe(start_scan.elapsed().as_secs_f64());
+            .observe(start_scan.saturating_elapsed().as_secs_f64());
 
         if writer.need_flush_keys() {
             match writer.save(&storage.storage) {
@@ -372,7 +377,7 @@ impl BackupRange {
         }
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["raw_scan"])
-            .observe(start.elapsed().as_secs_f64());
+            .observe(start.saturating_elapsed().as_secs_f64());
         Ok(statistics)
     }
 
@@ -942,7 +947,11 @@ fn to_sst_compression_type(ct: CompressionType) -> Option<SstCompressionType> {
 #[cfg(test)]
 pub mod tests {
     use std::path::{Path, PathBuf};
+<<<<<<< HEAD
     use std::{fs, thread};
+=======
+    use std::time::Duration;
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 
     use engine_traits::MiscExt;
     use external_storage_export::{make_local_backend, make_noop_backend};

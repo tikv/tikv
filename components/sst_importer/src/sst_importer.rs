@@ -7,7 +7,6 @@ use std::io::{self, Write};
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
 
 use futures::executor::ThreadPool;
 use kvproto::backup::StorageBackend;
@@ -28,7 +27,7 @@ use engine_traits::{
     SeekKey, SstExt, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 };
 use file_system::{get_io_rate_limiter, sync_dir, File, OpenOptions};
-use tikv_util::time::Limiter;
+use tikv_util::time::{Instant, Limiter};
 use txn_types::{is_short_value, Key, TimeStamp, Write as KvWrite, WriteRef, WriteType};
 
 use super::Config;
@@ -213,7 +212,7 @@ impl SSTImporter {
 
             IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["read"])
-                .observe(start_read.elapsed().as_secs_f64());
+                .observe(start_read.saturating_elapsed().as_secs_f64());
 
             url
         };
@@ -314,7 +313,7 @@ impl SSTImporter {
             }
             IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["rename"])
-                .observe(start_rename_rewrite.elapsed().as_secs_f64());
+                .observe(start_rename_rewrite.saturating_elapsed().as_secs_f64());
             return Ok(Some(range));
         }
 
@@ -389,14 +388,14 @@ impl SSTImporter {
 
         IMPORTER_DOWNLOAD_DURATION
             .with_label_values(&["rewrite"])
-            .observe(start_rename_rewrite.elapsed().as_secs_f64());
+            .observe(start_rename_rewrite.saturating_elapsed().as_secs_f64());
 
         if let Some(start_key) = first_key {
             let start_finish = Instant::now();
             sst_writer.finish()?;
             IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["finish"])
-                .observe(start_finish.elapsed().as_secs_f64());
+                .observe(start_finish.saturating_elapsed().as_secs_f64());
 
             let mut final_range = Range::default();
             final_range.set_start(start_key);
@@ -680,7 +679,7 @@ impl ImportDir {
         IMPORTER_INGEST_BYTES.observe(ingest_bytes as _);
         IMPORTER_INGEST_DURATION
             .with_label_values(&["ingest"])
-            .observe(start.elapsed().as_secs_f64());
+            .observe(start.saturating_elapsed().as_secs_f64());
         Ok(())
     }
 

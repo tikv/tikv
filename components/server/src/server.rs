@@ -21,7 +21,12 @@ use std::{
         atomic::{AtomicU32, AtomicU64, Ordering},
         Arc, Mutex,
     },
+<<<<<<< HEAD
     time::{Duration, Instant},
+=======
+    time::Duration,
+    u64,
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 };
 
 use cdc::MemoryQuota;
@@ -91,7 +96,7 @@ use tikv_util::{
     math::MovingAvgU32,
     sys::{register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
-    time::Monitor,
+    time::{Instant, Monitor},
     worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker, Worker},
 };
 use tokio::runtime::Builder;
@@ -1353,7 +1358,7 @@ impl<R: RaftEngine> EngineMetricsManager<R> {
     pub fn flush(&mut self, now: Instant) {
         self.engines.kv.flush_metrics("kv");
         self.engines.raft.flush_metrics("raft");
-        if now.duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
+        if now.saturating_duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
             self.engines.kv.reset_statistics();
             self.engines.raft.reset_statistics();
             self.last_reset = now;

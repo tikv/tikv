@@ -6,7 +6,6 @@ use std::iter::Peekable;
 use std::mem;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 use std::vec::IntoIter;
 
 use concurrency_manager::ConcurrencyManager;
@@ -24,7 +23,7 @@ use raftstore::router::RaftStoreRouter;
 use raftstore::store::msg::StoreMsg;
 use raftstore::store::util::find_peer;
 use tikv_util::config::{Tracker, VersionTrack};
-use tikv_util::time::{duration_to_sec, Limiter, SlowTimer};
+use tikv_util::time::{duration_to_sec, Instant, Limiter, SlowTimer};
 use tikv_util::worker::{
     FutureRunnable, FutureScheduler, FutureWorker, Stopped as FutureWorkerStopped,
 };
@@ -414,7 +413,7 @@ where
         info!(
             "unsafe destroy range finished deleting files in range";
             "start_key" => %start_key, "end_key" => %end_key,
-            "cost_time" => ?delete_files_start_time.elapsed(),
+            "cost_time" => ?delete_files_start_time.saturating_elapsed(),
         );
 
         // Then, delete all remaining keys in the range.
@@ -447,7 +446,7 @@ where
 
         info!(
             "unsafe destroy range finished cleaning up all";
-            "start_key" => %start_key, "end_key" => %end_key, "cost_time" => ?cleanup_all_start_time.elapsed(),
+            "start_key" => %start_key, "end_key" => %end_key, "cost_time" => ?cleanup_all_start_time.saturating_elapsed(),
         );
 
         self.raft_store_router
@@ -526,7 +525,7 @@ where
         let update_metrics = |is_err| {
             GC_TASK_DURATION_HISTOGRAM_VEC
                 .with_label_values(&[enum_label.get_str()])
-                .observe(duration_to_sec(timer.elapsed()));
+                .observe(duration_to_sec(timer.saturating_elapsed()));
 
             if is_err {
                 GC_GCTASK_FAIL_COUNTER_STATIC.get(enum_label).inc();
