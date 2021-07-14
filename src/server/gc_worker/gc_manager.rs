@@ -7,8 +7,8 @@ use raft::StateRole;
 use std::cmp::Ordering;
 use std::sync::mpsc;
 use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
-use std::time::{Duration, Instant};
-use tikv_util::worker::FutureScheduler;
+use std::time::Duration;
+use tikv_util::{time::Instant, worker::FutureScheduler};
 use txn_types::{Key, TimeStamp};
 
 use crate::server::metrics::*;
@@ -477,7 +477,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
         need_rewind: &mut bool,
         end: &mut Option<Key>,
     ) {
-        if self.safe_point_last_check_time.elapsed() < self.cfg.poll_safe_point_interval
+        if self.safe_point_last_check_time.saturating_elapsed() < self.cfg.poll_safe_point_interval
             && !self.cfg.always_check_safe_point
         {
             // Skip this check.

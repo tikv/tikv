@@ -1,10 +1,15 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::thread;
+<<<<<<< HEAD
+=======
+use std::time::Duration;
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 
 use fail;
 use test_raftstore::*;
 use tikv_util::config::ReadableDuration;
+use tikv_util::time::Instant;
 
 #[test]
 fn test_one_node_leader_missing() {
@@ -79,3 +84,52 @@ fn test_node_update_localreader_after_removed() {
     // Make sure peer 2 is removed in node 2.
     cluster.must_region_not_exist(r1, 2);
 }
+<<<<<<< HEAD
+=======
+
+#[test]
+fn test_stale_learner_restart() {
+    let mut cluster = new_node_cluster(0, 2);
+    cluster.pd_client.disable_default_operator();
+    cluster.cfg.raft_store.raft_log_gc_threshold = 10;
+    let r = cluster.run_conf_change();
+    cluster
+        .pd_client
+        .must_add_peer(r, new_learner_peer(2, 1003));
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    // Simulates slow apply.
+    fail::cfg("on_handle_apply_1003", "return").unwrap();
+    cluster.must_put(b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
+    let state_key = keys::raft_state_key(r);
+    let mut state: RaftLocalState = cluster
+        .get_raft_engine(1)
+        .c()
+        .get_msg(&state_key)
+        .unwrap()
+        .unwrap();
+    let last_index = state.get_last_index();
+    let timer = Instant::now();
+    while timer.saturating_elapsed() < Duration::from_secs(5) {
+        state = cluster
+            .get_raft_engine(2)
+            .c()
+            .get_msg(&state_key)
+            .unwrap()
+            .unwrap();
+        if last_index <= state.get_hard_state().get_commit() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    if state.last_index != last_index {
+        panic!("store 2 has not catched up logs after 5 secs.");
+    }
+    cluster.shutdown();
+    must_get_none(&cluster.get_engine(2), b"k2");
+    fail::remove("on_handle_apply_1003");
+    cluster.run_node(2).unwrap();
+    must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
+}
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)

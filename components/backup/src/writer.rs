@@ -1,7 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
-use std::time::Instant;
 
 use engine::DB;
 use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
@@ -13,7 +12,14 @@ use kvproto::backup::File;
 use kvproto::metapb::Region;
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv::storage::txn::TxnEntry;
+<<<<<<< HEAD
 use tikv_util::{self, box_err, file::Sha256Reader, time::Limiter};
+=======
+use tikv_util::{
+    self, box_err, error,
+    time::{Instant, Limiter},
+};
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 use txn_types::KvPair;
 
 use crate::metrics::*;
@@ -257,7 +263,7 @@ impl BackupWriter {
         }
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["save"])
-            .observe(start.elapsed().as_secs_f64());
+            .observe(start.saturating_elapsed().as_secs_f64());
         Ok(files)
     }
 
@@ -339,7 +345,7 @@ impl BackupRawKVWriter {
         }
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["save_raw"])
-            .observe(start.elapsed().as_secs_f64());
+            .observe(start.saturating_elapsed().as_secs_f64());
         Ok(files)
     }
 }

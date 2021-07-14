@@ -16,14 +16,25 @@ use std::io;
 use std::marker::Unpin;
 use std::path::Path;
 use std::sync::Arc;
+<<<<<<< HEAD
 use std::time::Instant;
+=======
+use std::time::Duration;
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 
 use futures_io::AsyncRead;
+<<<<<<< HEAD
 #[cfg(feature = "protobuf-codec")]
 use kvproto::backup::StorageBackend_oneof_backend as Backend;
 #[cfg(feature = "prost-codec")]
 use kvproto::backup::{storage_backend::Backend, Local};
 use kvproto::backup::{Gcs, Noop, StorageBackend, S3};
+=======
+use futures_util::AsyncReadExt;
+use tikv_util::stream::{block_on_external_io, READ_BUF_SIZE};
+use tikv_util::time::{Instant, Limiter};
+use tokio::time::timeout;
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 
 mod local;
 pub use local::LocalStorage;
@@ -61,9 +72,14 @@ pub fn create_storage(backend: &StorageBackend) -> io::Result<Arc<dyn ExternalSt
         }
     };
     EXT_STORAGE_CREATE_HISTOGRAM
+<<<<<<< HEAD
         .with_label_values(&[label])
         .observe(start.elapsed().as_secs_f64());
     storage
+=======
+        .with_label_values(&[storage.name()])
+        .observe(start.saturating_elapsed().as_secs_f64());
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 }
 
 /// Formats the storage backend as a URL.

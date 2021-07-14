@@ -465,7 +465,16 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                         .raft_metrics
                         .propose
                         .request_wait_time
+<<<<<<< HEAD
                         .observe(duration_to_sec(cmd.send_time.elapsed()) as f64);
+=======
+                        .observe(duration_to_sec(cmd.send_time.saturating_elapsed()) as f64);
+                    if let Some(Err(e)) = cmd.deadline.map(|deadline| deadline.check()) {
+                        cmd.callback.invoke_with_response(new_error(e.into()));
+                        continue;
+                    }
+
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
                     let req_size = cmd.request.compute_size();
                     if self.fsm.batch_req_builder.can_batch(&cmd.request, req_size) {
                         self.fsm.batch_req_builder.add(cmd, req_size);

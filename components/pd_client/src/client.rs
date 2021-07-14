@@ -1,9 +1,24 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt;
+<<<<<<< HEAD
 use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
+=======
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+use std::u64;
+
+use futures::channel::mpsc;
+use futures::compat::Future01CompatExt;
+use futures::executor::block_on;
+use futures::future::{self, BoxFuture, FutureExt, TryFutureExt};
+use futures::sink::SinkExt;
+use futures::stream::{StreamExt, TryStreamExt};
+use grpcio::{CallOption, EnvBuilder, Environment, Result as GrpcResult, WriteFlags};
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 
 use futures::sync::mpsc;
 use futures::sync::oneshot;
@@ -15,7 +30,13 @@ use grpcio::{CallOption, EnvBuilder, WriteFlags};
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
 use security::SecurityManager;
+<<<<<<< HEAD
 use tikv_util::time::duration_to_sec;
+=======
+use tikv_util::time::{duration_to_sec, Instant};
+use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+use tikv_util::{box_err, debug, error, info, thd_name, warn};
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 use tikv_util::{Either, HandyRwLock};
 use txn_types::TimeStamp;
 
@@ -66,7 +87,7 @@ impl RpcClient {
                     let update_loop = async move {
                         loop {
                             let ok = GLOBAL_TIMER_HANDLE
-                                .delay(Instant::now() + duration)
+                                .delay(std::time::Instant::now() + duration)
                                 .compat()
                                 .await
                                 .is_ok();
@@ -103,7 +124,14 @@ impl RpcClient {
                     if i as usize % cfg.retry_log_every == 0 {
                         warn!("validate PD endpoints failed"; "err" => ?e);
                     }
+<<<<<<< HEAD
                     thread::sleep(cfg.retry_interval.0);
+=======
+                    let _ = GLOBAL_TIMER_HANDLE
+                        .delay(std::time::Instant::now() + cfg.retry_interval.0)
+                        .compat()
+                        .await;
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
                 }
             }
         }
@@ -153,10 +181,47 @@ impl RpcClient {
         } else {
             return Err(Error::RegionNotFound(key.to_owned()));
         };
+<<<<<<< HEAD
         let leader = if resp.has_leader() {
             Some(resp.take_leader())
         } else {
             None
+=======
+
+        self.pd_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
+            .execute()
+    }
+
+    fn get_store_and_stats(&self, store_id: u64) -> PdFuture<(metapb::Store, pdpb::StoreStats)> {
+        let timer = Instant::now();
+
+        let mut req = pdpb::GetStoreRequest::default();
+        req.set_header(self.header());
+        req.set_store_id(store_id);
+
+        let executor = move |client: &Client, req: pdpb::GetStoreRequest| {
+            let handler = client
+                .inner
+                .rl()
+                .client_stub
+                .get_store_async_opt(&req, Self::call_option(client))
+                .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "get_store_async", e));
+
+            Box::pin(async move {
+                let mut resp = handler.await?;
+                PD_REQUEST_HISTOGRAM_VEC
+                    .with_label_values(&["get_store_async"])
+                    .observe(duration_to_sec(timer.saturating_elapsed()));
+                check_resp_header(resp.get_header())?;
+                let store = resp.take_store();
+                if store.get_state() != metapb::StoreState::Tombstone {
+                    Ok((store, resp.take_stats()))
+                } else {
+                    Err(Error::StoreTombstone(format!("{:?}", store)))
+                }
+            }) as PdFuture<_>
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
         };
         Ok((region, leader))
     }
@@ -326,7 +391,7 @@ impl PdClient for RpcClient {
             Box::new(handler.map_err(Error::Grpc).and_then(move |mut resp| {
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["get_region_by_id"])
-                    .observe(duration_to_sec(timer.elapsed()));
+                    .observe(duration_to_sec(timer.saturating_elapsed()));
                 check_resp_header(resp.get_header())?;
                 if resp.has_region() {
                     Ok(Some(resp.take_region()))
@@ -362,7 +427,7 @@ impl PdClient for RpcClient {
             Box::new(handler.map_err(Error::Grpc).and_then(move |mut resp| {
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["get_region_by_id"])
-                    .observe(duration_to_sec(timer.elapsed()));
+                    .observe(duration_to_sec(timer.saturating_elapsed()));
                 check_resp_header(resp.get_header())?;
                 if resp.has_region() {
                     Ok(Some((resp.take_region(), resp.take_leader())))
@@ -470,7 +535,7 @@ impl PdClient for RpcClient {
             Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["ask_split"])
-                    .observe(duration_to_sec(timer.elapsed()));
+                    .observe(duration_to_sec(timer.saturating_elapsed()));
                 check_resp_header(resp.get_header())?;
                 Ok(resp)
             })) as PdFuture<_>
@@ -502,7 +567,7 @@ impl PdClient for RpcClient {
             Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["ask_batch_split"])
-                    .observe(duration_to_sec(timer.elapsed()));
+                    .observe(duration_to_sec(timer.saturating_elapsed()));
                 check_resp_header(resp.get_header())?;
                 Ok(resp)
             })) as PdFuture<_>
@@ -531,7 +596,7 @@ impl PdClient for RpcClient {
             Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["store_heartbeat"])
-                    .observe(duration_to_sec(timer.elapsed()));
+                    .observe(duration_to_sec(timer.saturating_elapsed()));
                 check_resp_header(resp.get_header())?;
                 Ok(())
             })) as PdFuture<_>
@@ -560,7 +625,7 @@ impl PdClient for RpcClient {
             Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["report_batch_split"])
-                    .observe(duration_to_sec(timer.elapsed()));
+                    .observe(duration_to_sec(timer.saturating_elapsed()));
                 check_resp_header(resp.get_header())?;
                 Ok(())
             })) as PdFuture<_>
@@ -612,7 +677,7 @@ impl PdClient for RpcClient {
             Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["get_gc_safe_point"])
-                    .observe(duration_to_sec(timer.elapsed()));
+                    .observe(duration_to_sec(timer.saturating_elapsed()));
                 check_resp_header(resp.get_header())?;
                 Ok(resp.get_safe_point())
             })) as PdFuture<_>
@@ -682,6 +747,7 @@ impl PdClient for RpcClient {
                 Ok(())
             });
             cli.client_stub.spawn(send_once);
+<<<<<<< HEAD
             Box::new(
                 resp_stream
                     .into_future()
@@ -705,6 +771,22 @@ impl PdClient for RpcClient {
                         Ok(encoded)
                     }),
             ) as PdFuture<_>
+=======
+            Box::pin(async move {
+                let resp = resp_stream.try_next().await?;
+                let resp = match resp {
+                    Some(r) => r,
+                    None => return Ok(TimeStamp::zero()),
+                };
+                PD_REQUEST_HISTOGRAM_VEC
+                    .with_label_values(&["tso"])
+                    .observe(duration_to_sec(timer.saturating_elapsed()));
+                check_resp_header(resp.get_header())?;
+                let ts = resp.get_timestamp();
+                let encoded = TimeStamp::compose(ts.physical as _, ts.logical as _);
+                Ok(encoded)
+            }) as PdFuture<_>
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
         };
 
         self.leader_client

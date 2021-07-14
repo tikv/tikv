@@ -4,7 +4,7 @@ use std::fmt::{self, Display, Formatter};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use futures::{future, Async, Future, Poll, Stream};
 use futures_cpupool::{Builder as CpuPoolBuilder, CpuPool};
@@ -19,6 +19,11 @@ use kvproto::tikvpb::TikvClient;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
 use security::SecurityManager;
+<<<<<<< HEAD
+=======
+use tikv_util::config::{Tracker, VersionTrack};
+use tikv_util::time::Instant;
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 use tikv_util::worker::Runnable;
 use tikv_util::DeferContext;
 
@@ -168,11 +173,21 @@ fn send_snap(
                 SendStat {
                     key,
                     total_size,
+<<<<<<< HEAD
                     elapsed: timer.elapsed(),
                 }
             })
         });
     Ok(send)
+=======
+                    elapsed: timer.saturating_elapsed(),
+                })
+            }
+            Err(e) => Err(e),
+        }
+    };
+    Ok(send_task)
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 }
 
 struct RecvSnapContext {

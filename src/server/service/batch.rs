@@ -373,8 +373,17 @@ impl<E: Engine, L: LockManager> ReqBatcher<E, L> {
                 }
             }
         }
+<<<<<<< HEAD
         false
     }
+=======
+        GRPC_MSG_HISTOGRAM_STATIC
+            .kv_batch_get_command
+            .observe(begin_instant.saturating_elapsed_secs());
+    };
+    poll_future_notify(f);
+}
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 
     /// Check all batchers and submit if their limiters see fit.
     /// Called by anyone with a suitable timeslice for executing commands.
@@ -402,6 +411,7 @@ impl<E: Engine, L: LockManager> ReqBatcher<E, L> {
                 limiter.observe_submit(now, batcher.submit(&self.tx, storage));
             }
         }
+<<<<<<< HEAD
     }
 
     /// Whether or not every batcher is empty of buffered requests.
@@ -414,4 +424,11 @@ impl<E: Engine, L: LockManager> ReqBatcher<E, L> {
         }
         true
     }
+=======
+        GRPC_MSG_HISTOGRAM_STATIC
+            .raw_batch_get_command
+            .observe(begin_instant.saturating_elapsed_secs());
+    };
+    poll_future_notify(f);
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 }

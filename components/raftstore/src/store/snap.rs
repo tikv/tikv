@@ -10,8 +10,12 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
+<<<<<<< HEAD
 use std::time::Instant;
 use std::{error, result, str, thread, time, u64};
+=======
+use std::{error::Error as StdError, result, str, thread, time, u64};
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 
 use encryption::{
     create_aes_ctr_crypter, encryption_method_from_db_encryption_method, DataKeyManager, Iv,
@@ -37,7 +41,12 @@ use tikv_util::collections::{HashMap, HashMapEntry as Entry};
 use tikv_util::file::{
     calc_crc32, calc_crc32_and_size, delete_file_if_exist, file_exists, get_file_size, sync_dir,
 };
+<<<<<<< HEAD
 use tikv_util::time::{duration_to_sec, Limiter};
+=======
+use keys::{enc_end_key, enc_start_key};
+use tikv_util::time::{duration_to_sec, Instant, Limiter};
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 use tikv_util::HandyRwLock;
 
 use crate::coprocessor::CoprocessorHost;
@@ -805,14 +814,14 @@ impl Snapshot {
         snap_data.set_version(SNAPSHOT_VERSION);
         snap_data.set_meta(self.meta_file.meta.clone());
 
-        SNAPSHOT_BUILD_TIME_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
+        SNAPSHOT_BUILD_TIME_HISTOGRAM.observe(duration_to_sec(t.saturating_elapsed()) as f64);
         info!(
             "scan snapshot";
             "region_id" => region.get_id(),
             "snapshot" => self.path(),
             "key_count" => stat.kv_count,
             "size" => total_size,
-            "takes" => ?t.elapsed(),
+            "takes" => ?t.saturating_elapsed(),
         );
 
         Ok(())

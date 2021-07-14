@@ -3,6 +3,7 @@
 use std::f64::INFINITY;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
+<<<<<<< HEAD
 use std::sync::mpsc;
 use std::sync::{atomic, Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -20,6 +21,16 @@ use tokio_core::reactor::Handle;
 use crate::server::metrics::*;
 use crate::storage::kv::{
     Engine, Error as EngineError, ErrorInner as EngineErrorInner, ScanMode, Statistics, WriteData,
+=======
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::vec::IntoIter;
+
+use concurrency_manager::ConcurrencyManager;
+use engine_traits::{
+    DeleteStrategy, KvEngine, MiscExt, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK,
+    CF_WRITE,
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 };
 use crate::storage::mvcc::{check_need_gc, Error as MvccError, MvccReader, MvccTxn};
 use pd_client::PdClient;
@@ -28,7 +39,7 @@ use raftstore::router::ServerRaftStoreRouter;
 use raftstore::store::msg::StoreMsg;
 use raftstore::store::RegionSnapshot;
 use tikv_util::config::{Tracker, VersionTrack};
-use tikv_util::time::{duration_to_sec, Limiter, SlowTimer};
+use tikv_util::time::{duration_to_sec, Instant, Limiter, SlowTimer};
 use tikv_util::worker::{
     FutureRunnable, FutureScheduler, FutureWorker, Stopped as FutureWorkerStopped,
 };
@@ -445,7 +456,12 @@ impl<E: Engine> GcRunner<E> {
 
         info!(
             "unsafe destroy range finished deleting files in range";
+<<<<<<< HEAD
             "start_key" => %start_key, "end_key" => %end_key, "cost_time" => ?delete_files_start_time.elapsed()
+=======
+            "start_key" => %start_key, "end_key" => %end_key,
+            "cost_time" => ?delete_files_start_time.saturating_elapsed(),
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
         );
 
         // Then, delete all remaining keys in the range.
@@ -480,7 +496,7 @@ impl<E: Engine> GcRunner<E> {
 
         info!(
             "unsafe destroy range finished cleaning up all";
-            "start_key" => %start_key, "end_key" => %end_key, "cost_time" => ?cleanup_all_start_time.elapsed(),
+            "start_key" => %start_key, "end_key" => %end_key, "cost_time" => ?cleanup_all_start_time.saturating_elapsed(),
         );
         if let Some(router) = self.raft_store_router.as_ref() {
             router
@@ -562,8 +578,13 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
         let timer = SlowTimer::from_secs(GC_TASK_SLOW_SECONDS);
         let update_metrics = |is_err| {
             GC_TASK_DURATION_HISTOGRAM_VEC
+<<<<<<< HEAD
                 .with_label_values(&[label])
                 .observe(duration_to_sec(timer.elapsed()));
+=======
+                .with_label_values(&[enum_label.get_str()])
+                .observe(duration_to_sec(timer.saturating_elapsed()));
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 
             if is_err {
                 GC_GCTASK_FAIL_COUNTER_VEC.with_label_values(&[label]).inc();

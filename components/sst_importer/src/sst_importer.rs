@@ -8,7 +8,10 @@ use std::marker::Unpin;
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+<<<<<<< HEAD
 use std::time::{Duration, Instant};
+=======
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 
 use futures_util::io::{AsyncRead, AsyncReadExt};
 use kvproto::backup::StorageBackend;
@@ -26,9 +29,14 @@ use engine_traits::{
     EncryptionKeyManager, IngestExternalFileOptions, Iterator, KvEngine, SeekKey, SstReader,
     SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 };
+<<<<<<< HEAD
 use external_storage::{block_on_external_io, create_storage, url_of_backend, READ_BUF_SIZE};
 use tikv_util::file::sync_dir;
 use tikv_util::time::Limiter;
+=======
+use file_system::{get_io_rate_limiter, sync_dir, File, OpenOptions};
+use tikv_util::time::{Instant, Limiter};
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 use txn_types::{is_short_value, Key, TimeStamp, Write as KvWrite, WriteRef, WriteType};
 
 use super::{Error, Result};
@@ -265,8 +273,15 @@ impl SSTImporter {
 
             IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["read"])
+<<<<<<< HEAD
                 .observe(start_read.elapsed().as_secs_f64());
         }
+=======
+                .observe(start_read.saturating_elapsed().as_secs_f64());
+
+            url
+        };
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 
         // now validate the SST file.
         let path_str = path.temp.to_str().unwrap();
@@ -362,7 +377,7 @@ impl SSTImporter {
             }
             IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["rename"])
-                .observe(start_rename_rewrite.elapsed().as_secs_f64());
+                .observe(start_rename_rewrite.saturating_elapsed().as_secs_f64());
             return Ok(Some(range));
         }
 
@@ -428,14 +443,14 @@ impl SSTImporter {
 
         IMPORTER_DOWNLOAD_DURATION
             .with_label_values(&["rewrite"])
-            .observe(start_rename_rewrite.elapsed().as_secs_f64());
+            .observe(start_rename_rewrite.saturating_elapsed().as_secs_f64());
 
         if let Some(start_key) = first_key {
             let start_finish = Instant::now();
             sst_writer.finish()?;
             IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["finish"])
-                .observe(start_finish.elapsed().as_secs_f64());
+                .observe(start_finish.saturating_elapsed().as_secs_f64());
 
             let mut final_range = Range::default();
             final_range.set_start(start_key);
@@ -708,8 +723,13 @@ impl ImportDir {
 
         IMPORTER_INGEST_DURATION
             .with_label_values(&["ingest"])
+<<<<<<< HEAD
             .observe(start.elapsed().as_secs_f64());
         Ok(meta_info)
+=======
+            .observe(start.saturating_elapsed().as_secs_f64());
+        Ok(())
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
     }
 
     fn list_ssts(&self) -> Result<Vec<SstMeta>> {

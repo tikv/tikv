@@ -2,7 +2,7 @@
 
 use std::error::Error as StdError;
 use std::sync::{mpsc, Arc, Mutex, RwLock};
-use std::time::*;
+use std::time::Duration;
 use std::{result, thread};
 
 use futures::Future;
@@ -29,7 +29,12 @@ use raftstore::store::*;
 use raftstore::{Error, Result};
 use tikv::config::TiKvConfig;
 use tikv::server::Result as ServerResult;
+<<<<<<< HEAD
 use tikv_util::collections::{HashMap, HashSet};
+=======
+use tikv_util::thread_group::GroupProperties;
+use tikv_util::time::Instant;
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 use tikv_util::HandyRwLock;
 
 use super::*;
@@ -343,7 +348,9 @@ impl<T: Simulator> Cluster<T> {
                 e @ Err(_) => return e,
                 Ok(resp) => resp,
             };
-            if self.refresh_leader_if_needed(&resp, region_id) && timer.elapsed() < timeout {
+            if self.refresh_leader_if_needed(&resp, region_id)
+                && timer.saturating_elapsed() < timeout
+            {
                 warn!(
                     "{:?} is no longer leader, let's retry",
                     request.get_header().get_peer()
@@ -662,7 +669,12 @@ impl<T: Simulator> Cluster<T> {
     ) -> RaftCmdResponse {
         let timer = Instant::now();
         let mut tried_times = 0;
+<<<<<<< HEAD
         while tried_times < 10 || timer.elapsed() < timeout {
+=======
+        // At least retry once.
+        while tried_times < 2 || timer.saturating_elapsed() < timeout {
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
             tried_times += 1;
             let mut region = self.get_region(key);
             let region_id = region.get_id();
@@ -935,6 +947,26 @@ impl<T: Simulator> Cluster<T> {
         self.apply_state(region_id, store_id).take_truncated_state()
     }
 
+<<<<<<< HEAD
+=======
+    pub fn wait_log_truncated(&self, region_id: u64, store_id: u64, index: u64) {
+        let timer = Instant::now();
+        loop {
+            let truncated_state = self.truncated_state(region_id, store_id);
+            if truncated_state.get_index() >= index {
+                return;
+            }
+            if timer.saturating_elapsed() >= Duration::from_secs(5) {
+                panic!(
+                    "[region {}] log is still not truncated to {}: {:?} on store {}",
+                    region_id, index, truncated_state, store_id,
+                );
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
     pub fn apply_state(&self, region_id: u64, store_id: u64) -> RaftApplyState {
         let key = keys::apply_state_key(region_id);
         self.get_engine(store_id)
@@ -978,7 +1010,7 @@ impl<T: Simulator> Cluster<T> {
             if cur_index >= expected {
                 return;
             }
-            if timer.elapsed() >= timeout {
+            if timer.saturating_elapsed() >= timeout {
                 panic!(
                     "[region {}] last index still not reach {}: {:?}",
                     region_id, expected, raft_state
@@ -1078,7 +1110,7 @@ impl<T: Simulator> Cluster<T> {
             if cur_leader == Some(leader.clone()) {
                 return;
             }
-            if timer.elapsed() > Duration::from_secs(5) {
+            if timer.saturating_elapsed() > Duration::from_secs(5) {
                 panic!(
                     "failed to transfer leader to [{}] {:?}, current leader: {:?}",
                     region_id, leader, cur_leader
@@ -1310,7 +1342,7 @@ impl<T: Simulator> Cluster<T> {
                 );
                 break;
             }
-            if timer.elapsed() > Duration::from_secs(60) {
+            if timer.saturating_elapsed() > Duration::from_secs(60) {
                 panic!("region {} is not removed after 60s.", region_id);
             }
             thread::sleep(Duration::from_millis(100));

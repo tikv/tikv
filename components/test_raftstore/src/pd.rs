@@ -4,8 +4,12 @@ use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
+<<<<<<< HEAD
 use std::time::{Duration, Instant};
 use std::{cmp, thread};
+=======
+use std::time::Duration;
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 
 use futures::future::{err, ok};
 use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -20,8 +24,12 @@ use keys::{self, data_key, enc_end_key, enc_start_key};
 use pd_client::{Error, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result};
 use raftstore::store::util::check_key_in_region;
 use raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
+<<<<<<< HEAD
 use tikv_util::collections::{HashMap, HashMapEntry, HashSet};
 use tikv_util::time::UnixSecs;
+=======
+use tikv_util::time::{Instant, UnixSecs};
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{Either, HandyRwLock};
 use txn_types::TimeStamp;
@@ -841,7 +849,7 @@ impl TestPdClient {
         loop {
             let region = self.get_region_by_id(from).wait().unwrap();
             if let Some(r) = region {
-                if timer.elapsed() > duration {
+                if timer.saturating_elapsed() > duration {
                     panic!("region {:?} is still not merged.", r);
                 }
             } else {
@@ -1078,6 +1086,7 @@ impl PdClient for TestPdClient {
             .entry(store_id)
             .or_insert_with(Store::default);
         let rx = store.receiver.take().unwrap();
+<<<<<<< HEAD
         Box::new(
             rx.map(|resp| vec![resp])
                 .select(
@@ -1091,6 +1100,25 @@ impl PdClient for TestPdClient {
                     }),
                 )
                 .map_err(|e| box_err!("failed to receive next heartbeat response: {:?}", e))
+=======
+        let st1 = rx.map(|resp| vec![resp]);
+        let st2 = stream::unfold(
+            (timer, cluster1, store_id),
+            |(timer, cluster1, store_id)| async move {
+                timer
+                    .delay(std::time::Instant::now() + Duration::from_millis(500))
+                    .compat()
+                    .await
+                    .unwrap();
+                let mut cluster = cluster1.wl();
+                let resps = cluster.poll_heartbeat_responses_for(store_id);
+                drop(cluster);
+                Some((resps, (timer, cluster1, store_id)))
+            },
+        );
+        Box::pin(
+            stream::select(st1, st2)
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
                 .for_each(move |resps| {
                     for resp in resps {
                         f(resp);
@@ -1213,6 +1241,19 @@ impl PdClient for TestPdClient {
     }
 
     fn get_tso(&self) -> PdFuture<TimeStamp> {
+<<<<<<< HEAD
+=======
+        fail_point!("test_raftstore_get_tso", |t| {
+            let duration = Duration::from_millis(t.map_or(1000, |t| t.parse().unwrap()));
+            Box::pin(async move {
+                let _ = GLOBAL_TIMER_HANDLE
+                    .delay(std::time::Instant::now() + duration)
+                    .compat()
+                    .await;
+                Err(box_err!("get tso fail"))
+            })
+        });
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
         if self.trigger_tso_failure.swap(false, Ordering::SeqCst) {
             return Box::new(futures::future::result(Err(
                 pd_client::errors::Error::Grpc(grpcio::Error::RpcFailure(grpcio::RpcStatus::new(

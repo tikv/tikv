@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt;
-use std::time::Instant;
 
 use engine_rocks::RocksEngine;
 use engine_traits::KvEngine;
@@ -21,8 +20,12 @@ use crate::store::fsm::apply::{CatchUpLogs, ChangeCmd};
 use crate::store::fsm::PeerFsm;
 use crate::store::util::KeysInfoFormatter;
 use crate::store::SnapKey;
+<<<<<<< HEAD
 use engine_rocks::CompactedEvent;
 use tikv_util::escape;
+=======
+use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 
 use super::RegionSnapshot;
 

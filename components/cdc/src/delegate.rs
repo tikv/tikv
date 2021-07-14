@@ -561,7 +561,33 @@ impl Delegate {
         old_value_cb: Rc<RefCell<OldValueCallback>>,
         old_value_stats: &mut OldValueStats,
     ) -> Result<()> {
+<<<<<<< HEAD
         let mut rows = HashMap::default();
+=======
+        let txn_extra_op = self.txn_extra_op;
+        let mut read_old_value = |row: &mut EventRow, read_old_ts| {
+            if txn_extra_op == TxnExtraOp::ReadOldValue {
+                let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
+                let start = Instant::now();
+                let (old_value, statistics) = old_value_cb(key, read_old_ts, old_value_cache);
+                row.old_value = old_value.unwrap_or_default();
+                CDC_OLD_VALUE_DURATION_HISTOGRAM
+                    .with_label_values(&["all"])
+                    .observe(start.saturating_elapsed().as_secs_f64());
+                if let Some(statistics) = statistics {
+                    for (cf, cf_details) in statistics.details().iter() {
+                        for (tag, count) in cf_details.iter() {
+                            CDC_OLD_VALUE_SCAN_DETAILS
+                                .with_label_values(&[*cf, *tag])
+                                .inc_by(*count as u64);
+                        }
+                    }
+                }
+            }
+        };
+
+        let mut rows: HashMap<Vec<u8>, EventRow> = HashMap::default();
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
         for mut req in requests {
             // CDC cares about put requests only.
             if req.get_cmd_type() != CmdType::Put {

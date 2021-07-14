@@ -5,8 +5,17 @@ use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+<<<<<<< HEAD
 use std::time::{Duration, Instant};
+=======
+use std::time::Duration;
+
+use futures::future::FutureExt;
+use pin_project::pin_project;
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 use tokio::sync::{Semaphore, SemaphorePermit};
+
+use tikv_util::time::Instant;
 
 use crate::coprocessor::metrics::*;
 
@@ -106,7 +115,7 @@ where
                 Poll::Ready(res)
             }
             Poll::Pending => {
-                *this.execution_time += now.elapsed();
+                *this.execution_time += now.saturating_elapsed();
                 Poll::Pending
             }
         }

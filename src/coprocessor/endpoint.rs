@@ -2,7 +2,11 @@
 
 use std::marker::PhantomData;
 use std::sync::Arc;
+<<<<<<< HEAD
 use std::time::Duration;
+=======
+use std::{borrow::Cow, time::Duration};
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 
 use async_stream::try_stream;
 use futures::{future, Future, Stream};
@@ -30,6 +34,14 @@ use crate::coprocessor::interceptors::track;
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
+<<<<<<< HEAD
+=======
+use concurrency_manager::ConcurrencyManager;
+use engine_rocks::PerfLevel;
+use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
+use tikv_util::time::Instant;
+use txn_types::Lock;
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 
 /// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
 /// which means they don't need a permit from the semaphore before execution.
@@ -98,6 +110,42 @@ impl<E: Engine> Endpoint<E> {
         }
     }
 
+<<<<<<< HEAD
+=======
+    fn check_memory_locks(&self, req_ctx: &ReqContext) -> Result<()> {
+        let start_ts = req_ctx.txn_start_ts;
+        if !req_ctx.context.get_stale_read() {
+            self.concurrency_manager.update_max_ts(start_ts);
+        }
+        if req_ctx.context.get_isolation_level() == IsolationLevel::Si {
+            let begin_instant = Instant::now();
+            for range in &req_ctx.ranges {
+                let start_key = txn_types::Key::from_raw_maybe_unbounded(range.get_start());
+                let end_key = txn_types::Key::from_raw_maybe_unbounded(range.get_end());
+                self.concurrency_manager
+                    .read_range_check(start_key.as_ref(), end_key.as_ref(), |key, lock| {
+                        Lock::check_ts_conflict(
+                            Cow::Borrowed(lock),
+                            key,
+                            start_ts,
+                            &req_ctx.bypass_locks,
+                        )
+                    })
+                    .map_err(|e| {
+                        MEM_LOCK_CHECK_HISTOGRAM_VEC_STATIC
+                            .locked
+                            .observe(begin_instant.saturating_elapsed().as_secs_f64());
+                        MvccError::from(e)
+                    })?;
+            }
+            MEM_LOCK_CHECK_HISTOGRAM_VEC_STATIC
+                .unlocked
+                .observe(begin_instant.saturating_elapsed().as_secs_f64());
+        }
+        Ok(())
+    }
+
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
     /// Parse the raw `Request` to create `RequestHandlerBuilder` and `ReqContext`.
     /// Returns `Err` if fails.
     fn parse_request(

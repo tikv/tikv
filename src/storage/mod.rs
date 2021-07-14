@@ -246,12 +246,26 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+<<<<<<< HEAD
 
                     result
                 });
                 tls_collect_command_duration(CMD, command_duration.elapsed());
                 result
             },
+=======
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.saturating_elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.saturating_elapsed_secs());
+
+                    Ok((result?, statistics, perf_statistics.delta()))
+                }
+            }
+            .in_resource_metering_tag(resource_tag),
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
             priority,
             thread_rng().next_u64(),
         );
@@ -315,12 +329,22 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                 .map_err(Error::from),
                         );
                     }
+<<<<<<< HEAD
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     results
                 });
                 metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
                 Ok(result)
+=======
+                }
+                metrics::tls_collect_scan_details(CMD, &statistics);
+                SCHED_HISTOGRAM_VEC_STATIC
+                    .get(CMD)
+                    .observe(command_duration.saturating_elapsed_secs());
+
+                Ok(())
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
             },
             priority,
             thread_rng().next_u64(),
@@ -389,12 +413,26 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+<<<<<<< HEAD
 
                     result
                 });
                 metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
                 result
             },
+=======
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.saturating_elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.saturating_elapsed_secs());
+
+                    Ok((result?, statistics, perf_statistics.delta()))
+                }
+            }
+            .in_resource_metering_tag(resource_tag),
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
             priority,
             thread_rng().next_u64(),
         );
@@ -445,8 +483,59 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
+<<<<<<< HEAD
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
                 let result = metrics::tls_processing_read_observe_duration(CMD, || {
+=======
+
+                // Update max_ts and check the in-memory lock table before getting the snapshot
+                if !ctx.get_stale_read() {
+                    concurrency_manager.update_max_ts(start_ts);
+                }
+                if ctx.get_isolation_level() == IsolationLevel::Si {
+                    let begin_instant = Instant::now();
+                    concurrency_manager
+                        .read_range_check(Some(&start_key), end_key.as_ref(), |key, lock| {
+                            Lock::check_ts_conflict(
+                                Cow::Borrowed(lock),
+                                &key,
+                                start_ts,
+                                &bypass_locks,
+                            )
+                        })
+                        .map_err(|e| {
+                            CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC
+                                .get(CMD)
+                                .locked
+                                .observe(begin_instant.saturating_elapsed().as_secs_f64());
+                            txn::Error::from_mvcc(e)
+                        })?;
+                    CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC
+                        .get(CMD)
+                        .unlocked
+                        .observe(begin_instant.saturating_elapsed().as_secs_f64());
+                }
+
+                let mut snap_ctx = SnapContext {
+                    pb_ctx: &ctx,
+                    start_ts,
+                    ..Default::default()
+                };
+                if need_check_locks_in_replica_read(&ctx) {
+                    let mut key_range = KeyRange::default();
+                    key_range.set_start_key(start_key.as_encoded().to_vec());
+                    if let Some(end_key) = &end_key {
+                        key_range.set_end_key(end_key.as_encoded().to_vec());
+                    }
+                    snap_ctx.key_ranges = vec![key_range];
+                }
+
+                let snapshot =
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                {
+                    let begin_instant = Instant::now_coarse();
+
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
                     let snap_store = SnapshotStore::new(
                         snapshot,
                         start_ts,
@@ -469,6 +558,15 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let statistics = scanner.take_statistics();
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+<<<<<<< HEAD
+=======
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.saturating_elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.saturating_elapsed_secs());
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 
                     res.map_err(Error::from).map(|results| {
                         metrics::tls_collect_key_reads(CMD, results.len());
@@ -485,8 +583,138 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             thread_rng().next_u64(),
         );
 
+<<<<<<< HEAD
         res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
             .flatten()
+=======
+        async move {
+            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                .await?
+        }
+    }
+
+    pub fn scan_lock(
+        &self,
+        mut ctx: Context,
+        max_ts: TimeStamp,
+        start_key: Option<Key>,
+        end_key: Option<Key>,
+        limit: usize,
+    ) -> impl Future<Output = Result<Vec<LockInfo>>> {
+        const CMD: CommandKind = CommandKind::scan_lock;
+        let priority = ctx.get_priority();
+        let priority_tag = get_priority_tag(priority);
+        let resource_tag = ResourceMeteringTag::from_rpc_context(&ctx);
+        let concurrency_manager = self.concurrency_manager.clone();
+        // Do not allow replica read for scan_lock.
+        ctx.set_replica_read(false);
+
+        let res = self.read_pool.spawn_handle(
+            async move {
+                if let Some(start_key) = &start_key {
+                    let end_key = match &end_key {
+                        Some(k) => k.as_encoded().as_slice(),
+                        None => &[],
+                    };
+                    tls_collect_query(
+                        ctx.get_region_id(),
+                        ctx.get_peer(),
+                        start_key.as_encoded(),
+                        end_key,
+                        false,
+                        QueryKind::Scan,
+                    );
+                }
+
+                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+                    .get(priority_tag)
+                    .inc();
+
+                let command_duration = tikv_util::time::Instant::now_coarse();
+
+                concurrency_manager.update_max_ts(max_ts);
+                let begin_instant = Instant::now();
+                // TODO: Though it's very unlikely to find a conflicting memory lock here, it's not
+                // a good idea to return an error to the client, making the GC fail. A better
+                // approach is to wait for these locks to be unlocked.
+                concurrency_manager.read_range_check(
+                    start_key.as_ref(),
+                    end_key.as_ref(),
+                    |key, lock| {
+                        // `Lock::check_ts_conflict` can't be used here, because LockType::Lock
+                        // can't be ignored in this case.
+                        if lock.ts <= max_ts {
+                            CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC
+                                .get(CMD)
+                                .locked
+                                .observe(begin_instant.saturating_elapsed().as_secs_f64());
+                            Err(txn::Error::from_mvcc(mvcc::ErrorInner::KeyIsLocked(
+                                lock.clone().into_lock_info(key.to_raw()?),
+                            )))
+                        } else {
+                            Ok(())
+                        }
+                    },
+                )?;
+                CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC
+                    .get(CMD)
+                    .unlocked
+                    .observe(begin_instant.saturating_elapsed().as_secs_f64());
+
+                let snap_ctx = SnapContext {
+                    pb_ctx: &ctx,
+                    ..Default::default()
+                };
+
+                let snapshot =
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                {
+                    let begin_instant = Instant::now_coarse();
+                    let mut statistics = Statistics::default();
+                    let mut reader = MvccReader::new(
+                        snapshot,
+                        Some(ScanMode::Forward),
+                        !ctx.get_not_fill_cache(),
+                    );
+                    let result = reader
+                        .scan_locks(
+                            start_key.as_ref(),
+                            end_key.as_ref(),
+                            |lock| lock.ts <= max_ts,
+                            limit,
+                        )
+                        .map_err(txn::Error::from);
+                    statistics.add(&reader.statistics);
+                    let (kv_pairs, _) = result?;
+                    let mut locks = Vec::with_capacity(kv_pairs.len());
+                    for (key, lock) in kv_pairs {
+                        let lock_info =
+                            lock.into_lock_info(key.into_raw().map_err(txn::Error::from)?);
+                        locks.push(lock_info);
+                    }
+
+                    metrics::tls_collect_scan_details(CMD, &statistics);
+                    metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.saturating_elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.saturating_elapsed_secs());
+
+                    Ok(locks)
+                }
+            }
+            .in_resource_metering_tag(resource_tag),
+            priority,
+            thread_rng().next_u64(),
+        );
+        async move {
+            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                .await?
+        }
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
     }
 
     pub fn sched_txn_command<T: StorageCallbackType>(
@@ -589,6 +817,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &key, &key, false);
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
+<<<<<<< HEAD
                 let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &ctx)).await?;
                 let result = metrics::tls_processing_read_observe_duration(CMD, || {
                     let cf = Self::rawkv_cf(&cf)?;
@@ -607,6 +836,30 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 });
                 metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
                 result
+=======
+                let snap_ctx = SnapContext {
+                    pb_ctx: &ctx,
+                    ..Default::default()
+                };
+                let snapshot =
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                let store = RawStore::new(snapshot, enable_ttl);
+                let cf = Self::rawkv_cf(&cf)?;
+                {
+                    let begin_instant = Instant::now_coarse();
+                    let mut stats = Statistics::default();
+                    let r = store.raw_get_key_value(cf, &Key::from_encoded(key), &mut stats);
+                    KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
+                    tls_collect_read_flow(ctx.get_region_id(), &stats);
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.saturating_elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.saturating_elapsed_secs());
+                    r
+                }
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
             },
             priority,
             thread_rng().next_u64(),
@@ -667,10 +920,20 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     }
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &stats);
 
+<<<<<<< HEAD
                     Ok(results)
                 });
                 metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
                 result
+=======
+                SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                    .get(CMD)
+                    .observe(begin_instant.saturating_elapsed_secs());
+                SCHED_HISTOGRAM_VEC_STATIC
+                    .get(CMD)
+                    .observe(command_duration.saturating_elapsed_secs());
+                Ok(())
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
             },
             priority,
             thread_rng().next_u64(),
@@ -727,6 +990,15 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                     tls_collect_key_reads(CMD, stats.data.flow_stats.read_keys as usize);
                     tls_collect_read_flow(ctx.get_region_id(), &stats);
+<<<<<<< HEAD
+=======
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.saturating_elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.saturating_elapsed_secs());
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
                     Ok(result)
                 });
                 metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
@@ -1023,6 +1295,16 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         statistics.write.flow_stats.read_keys as usize,
                     );
                     metrics::tls_collect_scan_details(CMD, &statistics);
+<<<<<<< HEAD
+=======
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.saturating_elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.saturating_elapsed_secs());
+
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
                     result
                 });
                 metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
@@ -1149,6 +1431,15 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         statistics.write.flow_stats.read_keys as usize,
                     );
                     metrics::tls_collect_scan_details(CMD, &statistics);
+<<<<<<< HEAD
+=======
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.saturating_elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.saturating_elapsed_secs());
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
                     Ok(result)
                 });
                 metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
@@ -1163,6 +1454,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     }
 }
 
+<<<<<<< HEAD
 /// Get a single value.
 pub struct PointGetCommand {
     pub ctx: Context,
@@ -1170,6 +1462,63 @@ pub struct PointGetCommand {
     /// None if this is a raw get, Some if this is a transactional get.
     pub ts: Option<TimeStamp>,
 }
+=======
+    /// Get the value of a raw key.
+    pub fn raw_get_key_ttl(
+        &self,
+        ctx: Context,
+        cf: String,
+        key: Vec<u8>,
+    ) -> impl Future<Output = Result<Option<u64>>> {
+        const CMD: CommandKind = CommandKind::raw_get_key_ttl;
+        let priority = ctx.get_priority();
+        let priority_tag = get_priority_tag(priority);
+        let enable_ttl = self.enable_ttl;
+
+        let res = self.read_pool.spawn_handle(
+            async move {
+                tls_collect_query(
+                    ctx.get_region_id(),
+                    ctx.get_peer(),
+                    &key,
+                    &key,
+                    false,
+                    QueryKind::Get,
+                );
+
+                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+                    .get(priority_tag)
+                    .inc();
+
+                let command_duration = tikv_util::time::Instant::now_coarse();
+                let snap_ctx = SnapContext {
+                    pb_ctx: &ctx,
+                    ..Default::default()
+                };
+                let snapshot =
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                let store = RawStore::new(snapshot, enable_ttl);
+                let cf = Self::rawkv_cf(&cf)?;
+                {
+                    let begin_instant = Instant::now_coarse();
+                    let mut stats = Statistics::default();
+                    let r = store.raw_get_key_ttl(cf, &Key::from_encoded(key), &mut stats);
+                    KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
+                    tls_collect_read_flow(ctx.get_region_id(), &stats);
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.saturating_elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.saturating_elapsed_secs());
+                    r
+                }
+            },
+            priority,
+            thread_rng().next_u64(),
+        );
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 
 impl PointGetCommand {
     pub fn from_get(request: &mut GetRequest) -> Self {
@@ -1208,6 +1557,72 @@ fn get_priority_tag(priority: CommandPri) -> CommandPriority {
     }
 }
 
+<<<<<<< HEAD
+=======
+fn prepare_snap_ctx<'a>(
+    pb_ctx: &'a Context,
+    keys: impl IntoIterator<Item = &'a Key> + Clone,
+    start_ts: TimeStamp,
+    bypass_locks: &'a TsSet,
+    concurrency_manager: &ConcurrencyManager,
+    cmd: CommandKind,
+) -> Result<SnapContext<'a>> {
+    // Update max_ts and check the in-memory lock table before getting the snapshot
+    if !pb_ctx.get_stale_read() {
+        concurrency_manager.update_max_ts(start_ts);
+    }
+    fail_point!("before-storage-check-memory-locks");
+    let isolation_level = pb_ctx.get_isolation_level();
+    if isolation_level == IsolationLevel::Si {
+        let begin_instant = Instant::now();
+        for key in keys.clone() {
+            concurrency_manager
+                .read_key_check(&key, |lock| {
+                    Lock::check_ts_conflict(Cow::Borrowed(lock), &key, start_ts, bypass_locks)
+                })
+                .map_err(|e| {
+                    CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC
+                        .get(cmd)
+                        .locked
+                        .observe(begin_instant.saturating_elapsed().as_secs_f64());
+                    txn::Error::from_mvcc(e)
+                })?;
+        }
+        CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC
+            .get(cmd)
+            .unlocked
+            .observe(begin_instant.saturating_elapsed().as_secs_f64());
+    }
+
+    let mut snap_ctx = SnapContext {
+        pb_ctx,
+        start_ts,
+        ..Default::default()
+    };
+    if need_check_locks_in_replica_read(pb_ctx) {
+        snap_ctx.key_ranges = keys
+            .into_iter()
+            .map(|k| point_key_range(k.clone()))
+            .collect();
+    }
+    Ok(snap_ctx)
+}
+
+pub fn need_check_locks_in_replica_read(ctx: &Context) -> bool {
+    ctx.get_replica_read() && ctx.get_isolation_level() == IsolationLevel::Si
+}
+
+pub fn point_key_range(key: Key) -> KeyRange {
+    let mut end_key = key.as_encoded().to_vec();
+    end_key.push(0);
+    let end_key = Key::from_encoded(end_key);
+    let mut key_range = KeyRange::default();
+    key_range.set_start_key(key.into_encoded());
+    key_range.set_end_key(end_key.into_encoded());
+    key_range
+}
+
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 /// A builder to build a temporary `Storage<E>`.
 ///
 /// Only used for test purpose.

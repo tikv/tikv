@@ -343,6 +343,12 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                 Ok(CmdRes::Resp(_)) => {
                     req_timer.observe_duration();
                     ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
+<<<<<<< HEAD
+=======
+                    ASYNC_REQUESTS_DURATIONS_VEC
+                        .write
+                        .observe(begin_instant.saturating_elapsed_secs());
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
                     fail_point!("raftkv_async_write_finish");
                     write_cb((cb_ctx, Ok(())))
                 }
@@ -382,7 +388,13 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                     Err(invalid_resp_type(CmdType::Snap, r[0].get_cmd_type()).into()),
                 )),
                 Ok(CmdRes::Snap(s)) => {
+<<<<<<< HEAD
                     req_timer.observe_duration();
+=======
+                    ASYNC_REQUESTS_DURATIONS_VEC
+                        .snapshot
+                        .observe(begin_instant.saturating_elapsed_secs());
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
                     ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
                     cb((cb_ctx, Ok(s)))
                 }
@@ -482,8 +494,58 @@ impl EngineIterator for RegionIterator<RocksEngine> {
         RegionIterator::next(self).map_err(KvError::from)
     }
 
+<<<<<<< HEAD
     fn prev(&mut self) -> kv::Result<bool> {
         RegionIterator::prev(self).map_err(KvError::from)
+=======
+impl ReadIndexObserver for ReplicaReadLockChecker {
+    fn on_step(&self, msg: &mut eraftpb::Message) {
+        if msg.get_msg_type() != MessageType::MsgReadIndex {
+            return;
+        }
+        assert_eq!(msg.get_entries().len(), 1);
+        let mut rctx = ReadIndexContext::parse(msg.get_entries()[0].get_data()).unwrap();
+        if let Some(mut request) = rctx.request.take() {
+            let begin_instant = Instant::now();
+
+            let start_ts = request.get_start_ts().into();
+            self.concurrency_manager.update_max_ts(start_ts);
+            for range in request.mut_key_ranges().iter_mut() {
+                let key_bound = |key: Vec<u8>| {
+                    if key.is_empty() {
+                        None
+                    } else {
+                        Some(txn_types::Key::from_encoded(key))
+                    }
+                };
+                let start_key = key_bound(range.take_start_key());
+                let end_key = key_bound(range.take_end_key());
+                let res = self.concurrency_manager.read_range_check(
+                    start_key.as_ref(),
+                    end_key.as_ref(),
+                    |key, lock| {
+                        txn_types::Lock::check_ts_conflict(
+                            Cow::Borrowed(lock),
+                            key,
+                            start_ts,
+                            &Default::default(),
+                        )
+                    },
+                );
+                if let Err(txn_types::Error(box txn_types::ErrorInner::KeyIsLocked(lock))) = res {
+                    rctx.locked = Some(lock);
+                    REPLICA_READ_LOCK_CHECK_HISTOGRAM_VEC_STATIC
+                        .locked
+                        .observe(begin_instant.saturating_elapsed().as_secs_f64());
+                } else {
+                    REPLICA_READ_LOCK_CHECK_HISTOGRAM_VEC_STATIC
+                        .unlocked
+                        .observe(begin_instant.saturating_elapsed().as_secs_f64());
+                }
+            }
+            msg.mut_entries()[0].set_data(rctx.to_bytes().into());
+        }
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
     }
 
     fn seek(&mut self, key: &Key) -> kv::Result<bool> {

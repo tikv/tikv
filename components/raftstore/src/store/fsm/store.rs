@@ -466,7 +466,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             StoreTick::ConsistencyCheck => self.on_consistency_check_tick(),
             StoreTick::CleanupImportSST => self.on_cleanup_import_sst_tick(),
         }
-        let elapsed = t.elapsed();
+        let elapsed = t.saturating_elapsed();
         RAFT_EVENT_DURATION
             .with_label_values(&[tick.tag()])
             .observe(duration_to_sec(elapsed) as f64);
@@ -626,7 +626,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
                     .post_raft_ready_append(ready);
             }
         }
-        let dur = self.timer.elapsed();
+        let dur = self.timer.saturating_elapsed();
         if !self.poll_ctx.store_stat.is_busy {
             let election_timeout = Duration::from_millis(
                 self.poll_ctx.cfg.raft_base_tick_interval.as_millis()
@@ -797,7 +797,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for 
         self.poll_ctx
             .raft_metrics
             .process_ready
-            .observe(duration_to_sec(self.timer.elapsed()) as f64);
+            .observe(duration_to_sec(self.timer.saturating_elapsed()) as f64);
         self.poll_ctx.raft_metrics.flush();
         self.poll_ctx.store_stat.flush();
     }
@@ -848,9 +848,15 @@ impl<T, C> RaftPollerBuilder<T, C> {
         let mut applying_count = 0;
         let mut region_peers = vec![];
 
+<<<<<<< HEAD
         let t = Instant::now();
         let mut kv_wb = self.engines.kv.c().write_batch();
         let mut raft_wb = self.engines.raft.c().write_batch();
+=======
+        let t = TiInstant::now();
+        let mut kv_wb = self.engines.kv.write_batch();
+        let mut raft_wb = self.engines.raft.log_batch(4 * 1024);
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
         let mut applying_regions = vec![];
         let mut merging_count = 0;
         let mut meta = self.store_meta.lock().unwrap();
@@ -945,7 +951,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
             "tombstone_count" => tombstone_count,
             "applying_count" =>  applying_count,
             "merge_count" => merging_count,
-            "takes" => ?t.elapsed(),
+            "takes" => ?t.saturating_elapsed(),
         );
 
         self.clear_stale_data(&meta)?;
@@ -975,7 +981,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
 
     /// `clear_stale_data` clean up all possible garbage data.
     fn clear_stale_data(&self, meta: &StoreMeta) -> Result<()> {
-        let t = Instant::now();
+        let t = TiInstant::now();
 
         let mut ranges = Vec::new();
         let mut last_start_key = keys::data_key(b"");
@@ -993,7 +999,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
             "cleans up garbage data";
             "store_id" => self.store.get_id(),
             "garbage_range_count" => ranges.len(),
-            "takes" => ?t.elapsed()
+            "takes" => ?t.saturating_elapsed()
         );
 
         Ok(())
@@ -2249,7 +2255,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             .store
             .last_unreachable_report
             .get(&store_id)
-            .map_or(UNREACHABLE_BACKOFF, |t| now.duration_since(*t))
+            .map_or(UNREACHABLE_BACKOFF, |t| now.saturating_duration_since(*t))
             < UNREACHABLE_BACKOFF
         {
             return;

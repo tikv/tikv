@@ -5,7 +5,6 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::thread;
 use std::time::Duration;
-use std::time::Instant;
 
 use futures::future::{loop_fn, ok, Loop};
 use futures::sync::mpsc::UnboundedSender;
@@ -22,7 +21,11 @@ use kvproto::pdpb::{
     RegionHeartbeatRequest, RegionHeartbeatResponse, ResponseHeader,
 };
 use security::SecurityManager;
+<<<<<<< HEAD
 use tikv_util::collections::HashSet;
+=======
+use tikv_util::time::Instant;
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{Either, HandyRwLock};
 use tokio_timer::timer::Handle;
@@ -113,6 +116,22 @@ impl LeaderClient {
                 last_try_reconnect: Instant::now(),
             })),
         }
+<<<<<<< HEAD
+=======
+
+        info!(
+            "update pd client";
+            "prev_leader" => &inner.target.target_url,
+            "prev_via" => &inner.target.via,
+            "leader" => &target.target_url,
+            "via" => &target.via,
+        );
+        inner.target = target;
+        slow_log!(
+            start_refresh.saturating_elapsed(),
+            "PD client refresh region heartbeat",
+        );
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
     }
 
     pub fn handle_region_heartbeat_response<F>(&self, f: F) -> PdFuture<()>
@@ -168,9 +187,7 @@ impl LeaderClient {
 
         let future = {
             let inner = self.inner.rl();
-            if start
-                .checked_duration_since(inner.last_try_reconnect)
-                .map_or(true, |d| d < GLOBAL_RECONNECT_INTERVAL)
+            if start.saturating_duration_since(inner.last_try_reconnect) < GLOBAL_RECONNECT_INTERVAL
             {
                 // Avoid unnecessary updating.
                 // Prevent a large number of reconnections in a short time.
@@ -188,9 +205,7 @@ impl LeaderClient {
 
         {
             let mut inner = self.inner.wl();
-            if start
-                .checked_duration_since(inner.last_try_reconnect)
-                .map_or(true, |d| d < GLOBAL_RECONNECT_INTERVAL)
+            if start.saturating_duration_since(inner.last_try_reconnect) < GLOBAL_RECONNECT_INTERVAL
             {
                 // There may be multiple reconnections that pass the read lock at the same time.
                 // Check again in the write lock to avoid unnecessary updating.
@@ -202,7 +217,12 @@ impl LeaderClient {
             inner.last_try_reconnect = start;
         }
 
+<<<<<<< HEAD
         let (client, members) = match future.await {
+=======
+        slow_log!(start.saturating_elapsed(), "try reconnect pd");
+        let (client, target_info, members) = match future.await {
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
             Err(e) => {
                 PD_RECONNECT_COUNTER_VEC
                     .with_label_values(&["failure"])
@@ -218,6 +238,7 @@ impl LeaderClient {
         };
         fail_point!("leader_client_reconnect", |_| Ok(()));
 
+<<<<<<< HEAD
         {
             let mut inner = self.inner.wl();
             let (tx, rx) = client.region_heartbeat().unwrap_or_else(|e| {
@@ -242,6 +263,12 @@ impl LeaderClient {
             }
         }
         warn!("updating PD client done"; "spend" => ?start.elapsed());
+=======
+        fail_point!("pd_client_reconnect", |_| Ok(()));
+
+        self.update_client(client, target_info, members);
+        info!("trying to update PD client done"; "spend" => ?start.saturating_elapsed());
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
         Ok(())
     }
 }
@@ -288,6 +315,7 @@ where
                 Box::new(ok(self))
             }
             Err(_) => {
+<<<<<<< HEAD
                 // Make a request before the next reconnection.
                 self.request_sent = MAX_REQUEST_COUNT - 1;
 
@@ -297,6 +325,14 @@ where
                         .delay(Instant::now() + REQUEST_RECONNECT_INTERVAL)
                         .then(|_| Err(self)),
                 )
+=======
+                let _ = self
+                    .client
+                    .timer
+                    .delay(std::time::Instant::now() + REQUEST_RECONNECT_INTERVAL)
+                    .compat()
+                    .await;
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
             }
         }
     }
@@ -455,6 +491,7 @@ pub fn validate_endpoints(
     }
 }
 
+<<<<<<< HEAD
 async fn connect(
     env: Arc<Environment>,
     security_mgr: &SecurityManager,
@@ -510,6 +547,31 @@ pub async fn try_connect_leader(
                             "{} no longer belongs to cluster {}, it is in {}",
                             ep, cluster_id, new_cluster_id
                         );
+=======
+    pub async fn reconnect_leader(
+        &self,
+        leader: &Member,
+    ) -> Result<(Option<(PdClientStub, String)>, bool)> {
+        fail_point!("connect_leader", |_| Ok((None, true)));
+        let mut retry_times = MAX_RETRY_TIMES;
+        let timer = Instant::now();
+        // Try to connect the PD cluster leader.
+        loop {
+            let (res, has_network_err) = self.connect_member(leader).await?;
+            match res {
+                Some((client, ep, _)) => return Ok((Some((client, ep)), has_network_err)),
+                None => {
+                    if has_network_err
+                        && retry_times > 0
+                        && timer.saturating_elapsed() <= MAX_RETRY_DURATION
+                    {
+                        let _ = GLOBAL_TIMER_HANDLE
+                            .delay(std::time::Instant::now() + RETRY_INTERVAL)
+                            .compat()
+                            .await;
+                        retry_times -= 1;
+                        continue;
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
                     }
                 }
                 Err(e) => {

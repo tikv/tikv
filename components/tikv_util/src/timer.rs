@@ -315,8 +315,13 @@ mod tests {
         let delay =
             handle.delay(::std::time::Instant::now() + std::time::Duration::from_millis(100));
         let timer = Instant::now();
+<<<<<<< HEAD
         delay.wait().unwrap();
         assert!(timer.elapsed() >= Duration::from_millis(100));
+=======
+        block_on(delay.compat()).unwrap();
+        assert!(timer.saturating_elapsed() >= Duration::from_millis(100));
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
     }
 
     #[test]

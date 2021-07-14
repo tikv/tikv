@@ -1,13 +1,24 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt::{self, Display, Formatter};
+<<<<<<< HEAD
 use std::sync::Arc;
 use std::time::Instant;
+=======
+use std::marker::PhantomData;
+use std::sync::{Arc, Mutex};
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 
 use kvproto::metapb;
 
 use pd_client::{take_peer_address, PdClient};
+<<<<<<< HEAD
 use tikv_util::collections::HashMap;
+=======
+use raftstore::router::RaftStoreRouter;
+use raftstore::store::GlobalReplicationState;
+use tikv_util::time::Instant;
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
 use super::metrics::*;
@@ -50,8 +61,13 @@ impl<T: PdClient> Runner<T> {
     fn resolve(&mut self, store_id: u64) -> Result<String> {
         if let Some(s) = self.store_addrs.get(&store_id) {
             let now = Instant::now();
+<<<<<<< HEAD
             let elapsed = now.duration_since(s.last_update);
             if elapsed.as_secs() < STORE_ADDRESS_REFRESH_SECONDS {
+=======
+            let elapsed = now.saturating_duration_since(s.last_update);
+            if elapsed.as_secs() < store_address_refresh_interval_secs() {
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
                 return Ok(s.addr.clone());
             }
         }
@@ -139,7 +155,7 @@ mod tests {
     use std::str::FromStr;
     use std::sync::Arc;
     use std::thread;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     use kvproto::metapb;
     use pd_client::{PdClient, Result};
@@ -157,7 +173,7 @@ mod tests {
             // The store address will be changed every millisecond.
             let mut store = self.store.clone();
             let mut sock = SocketAddr::from_str(store.get_address()).unwrap();
-            sock.set_port(tikv_util::time::duration_to_ms(self.start.elapsed()) as u16);
+            sock.set_port(tikv_util::time::duration_to_ms(self.start.saturating_elapsed()) as u16);
             store.set_address(format!("{}:{}", sock.ip(), sock.port()));
             Ok(store)
         }

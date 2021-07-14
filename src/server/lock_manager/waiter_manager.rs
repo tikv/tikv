@@ -637,7 +637,11 @@ pub mod tests {
     use kvproto::kvrpcpb::LockInfo;
     use rand::prelude::*;
     use tikv_util::config::ReadableDuration;
+<<<<<<< HEAD
     use tokio_core::reactor::Core;
+=======
+    use tikv_util::time::InstantExt;
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 
     fn dummy_waiter(start_ts: TimeStamp, lock_ts: TimeStamp, hash: u64) -> Waiter {
         Waiter {
@@ -653,7 +657,7 @@ pub mod tests {
     pub(crate) fn assert_elapsed<F: FnOnce()>(f: F, min: u64, max: u64) {
         let now = Instant::now();
         f();
-        let elapsed = now.elapsed();
+        let elapsed = now.saturating_elapsed();
         assert!(
             Duration::from_millis(min) <= elapsed && elapsed < Duration::from_millis(max),
             "elapsed: {:?}",

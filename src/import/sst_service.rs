@@ -173,7 +173,7 @@ where
                         }
                         file.append(data)?;
                         IMPORT_UPLOAD_CHUNK_BYTES.observe(data.len() as f64);
-                        IMPORT_UPLOAD_CHUNK_DURATION.observe(start.elapsed_secs());
+                        IMPORT_UPLOAD_CHUNK_DURATION.observe(start.saturating_elapsed_secs());
                         Ok(file)
                     })
                     .await?;
@@ -208,6 +208,7 @@ where
             // Records how long the download task waits to be scheduled.
             sst_importer::metrics::IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["queue"])
+<<<<<<< HEAD
                 .observe(start.elapsed().as_secs_f64());
             // SST writer must not be opened in gRPC threads, because it may be
             // blocked for a long time due to IO, especially, when encryption at rest
@@ -217,6 +218,9 @@ where
                 .set_cf(name_to_cf(req.get_sst().get_cf_name()).unwrap())
                 .build(importer.get_path(req.get_sst()).to_str().unwrap())
                 .unwrap();
+=======
+                .observe(start.saturating_elapsed().as_secs_f64());
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 
             // FIXME: download() should be an async fn, to allow BR to cancel
             // a download task.
@@ -395,7 +399,7 @@ where
                     "compact files in range";
                     "start" => start.map(log_wrappers::Value::key),
                     "end" => end.map(log_wrappers::Value::key),
-                    "output_level" => ?output_level, "takes" => ?timer.elapsed()
+                    "output_level" => ?output_level, "takes" => ?timer.saturating_elapsed()
                 ),
                 Err(ref e) => error!(
                     "compact files in range failed";
@@ -483,7 +487,7 @@ where
                             _ => return Err(Error::InvalidChunk),
                         };
                         writer.write(batch)?;
-                        IMPORT_WRITE_CHUNK_DURATION.observe(start.elapsed_secs());
+                        IMPORT_WRITE_CHUNK_DURATION.observe(start.saturating_elapsed_secs());
                         Ok(writer)
                     })
                     .await?;
@@ -501,6 +505,76 @@ where
         self.threads.spawn_ok(buf_driver);
         self.threads.spawn_ok(handle_task);
     }
+<<<<<<< HEAD
+=======
+
+    fn duplicate_detect(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        mut request: DuplicateDetectRequest,
+        mut sink: ServerStreamingSink<DuplicateDetectResponse>,
+    ) {
+        let label = "duplicate_detect";
+        let timer = Instant::now_coarse();
+        let context = request.take_context();
+        let router = self.router.clone();
+        let start_key = request.take_start_key();
+        let min_commit_ts = request.get_min_commit_ts();
+        let end_key = if request.get_end_key().is_empty() {
+            None
+        } else {
+            Some(request.take_end_key())
+        };
+        let key_only = request.get_key_only();
+        let snap_res = Self::async_snapshot(router, make_request_header(context));
+        let handle_task = async move {
+            let res = snap_res.await;
+            let snapshot = match res {
+                Ok(snap) => snap.snapshot,
+                Err(e) => {
+                    let mut resp = DuplicateDetectResponse::default();
+                    pb_error_inc(label, &e);
+                    resp.set_region_error(e);
+                    match sink
+                        .send((resp, WriteFlags::default().buffer_hint(true)))
+                        .await
+                    {
+                        Ok(_) => {
+                            IMPORT_RPC_DURATION
+                                .with_label_values(&[label, "ok"])
+                                .observe(timer.saturating_elapsed_secs());
+                        }
+                        Err(e) => {
+                            warn!(
+                                "connection send message fail";
+                                "err" => %e
+                            );
+                        }
+                    }
+                    let _ = sink.close().await;
+                    return;
+                }
+            };
+            let detector =
+                DuplicateDetector::new(snapshot, start_key, end_key, min_commit_ts, key_only)
+                    .unwrap();
+            for resp in detector {
+                if let Err(e) = sink
+                    .send((resp, WriteFlags::default().buffer_hint(true)))
+                    .await
+                {
+                    warn!(
+                        "connection send message fail";
+                        "err" => %e
+                    );
+                    break;
+                }
+            }
+            let _ = sink.close().await;
+        };
+        self.threads.spawn_ok(handle_task);
+    }
+>>>>>>> a3860711c... Avoid duration calculation panic when clock jumps back (#10544)
 }
 
 // add error statistics from pb error response
