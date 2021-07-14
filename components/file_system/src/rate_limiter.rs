@@ -660,7 +660,7 @@ mod tests {
                 std::thread::sleep(duration);
             }
             let end = Instant::now();
-            end.duration_since(begin)
+            end.saturating_duration_since(begin)
         };
         approximate_eq!(
             stats.fetch(IOType::ForegroundWrite, IOOp::Write) as f64,
@@ -698,7 +698,7 @@ mod tests {
                 std::thread::sleep(Duration::from_secs(2));
             }
             let end = Instant::now();
-            end.duration_since(begin)
+            end.saturating_duration_since(begin)
         };
         approximate_eq!(
             stats.fetch(IOType::Compaction, IOOp::Write) as f64,
@@ -753,7 +753,7 @@ mod tests {
             std::thread::sleep(Duration::from_secs(2));
         }
         let end = Instant::now();
-        let duration = end.duration_since(begin);
+        let duration = end.saturating_duration_since(begin);
         let write_bytes = stats.fetch(IOType::ForegroundWrite, IOOp::Write);
         approximate_eq!(
             write_bytes as f64,
