@@ -153,14 +153,15 @@ fn test_query_stats() {
             client.raw_batch_get(&req).unwrap();
             assert!(check_split_key(cluster, start_key));
         });
-    let raw_scan: Box<Query> = Box::new(|ctx, cluster, client, _store_id, _region_id, start_key| {
-        let mut req = RawScanRequest::default();
-        req.set_context(ctx.clone());
-        req.start_key = start_key.clone();
-        req.end_key = vec![];
-        client.raw_scan(&req).unwrap();
-        assert!(check_split_key(cluster, start_key));
-    });
+    let raw_scan: Box<Query> =
+        Box::new(|ctx, cluster, client, _store_id, _region_id, start_key| {
+            let mut req = RawScanRequest::default();
+            req.set_context(ctx.clone());
+            req.start_key = start_key.clone();
+            req.end_key = vec![];
+            client.raw_scan(&req).unwrap();
+            assert!(check_split_key(cluster, start_key));
+        });
     let raw_batch_scan: Box<Query> =
         Box::new(|ctx, cluster, client, _store_id, _region_id, start_key| {
             let mut req = RawBatchScanRequest::default();
@@ -182,16 +183,17 @@ fn test_query_stats() {
             Key::from_raw(&start_key).as_encoded().to_vec()
         ));
     });
-    let batch_get: Box<Query> = Box::new(|ctx, cluster, client, _store_id, _region_id, start_key| {
-        let mut req = BatchGetRequest::default();
-        req.set_context(ctx.clone());
-        req.set_keys(protobuf::RepeatedField::from(vec![start_key.clone()]));
-        client.kv_batch_get(&req).unwrap();
-        assert!(check_split_key(
-            cluster,
-            Key::from_raw(&start_key).as_encoded().to_vec()
-        ));
-    });
+    let batch_get: Box<Query> =
+        Box::new(|ctx, cluster, client, _store_id, _region_id, start_key| {
+            let mut req = BatchGetRequest::default();
+            req.set_context(ctx.clone());
+            req.set_keys(protobuf::RepeatedField::from(vec![start_key.clone()]));
+            client.kv_batch_get(&req).unwrap();
+            assert!(check_split_key(
+                cluster,
+                Key::from_raw(&start_key).as_encoded().to_vec()
+            ));
+        });
     let scan: Box<Query> = Box::new(|ctx, cluster, client, _store_id, _region_id, start_key| {
         let mut req = ScanRequest::default();
         req.set_context(ctx.clone());
@@ -203,17 +205,18 @@ fn test_query_stats() {
             Key::from_raw(&start_key).as_encoded().to_vec()
         ));
     });
-    let scan_lock: Box<Query> = Box::new(|ctx, cluster, client, _store_id, _region_id, start_key| {
-        let mut req = ScanLockRequest::default();
-        req.set_context(ctx.clone());
-        req.start_key = start_key.clone();
-        req.end_key = vec![];
-        client.kv_scan_lock(&req).unwrap();
-        assert!(check_split_key(
-            cluster,
-            Key::from_raw(&start_key).as_encoded().to_vec()
-        ));
-    });
+    let scan_lock: Box<Query> =
+        Box::new(|ctx, cluster, client, _store_id, _region_id, start_key| {
+            let mut req = ScanLockRequest::default();
+            req.set_context(ctx.clone());
+            req.start_key = start_key.clone();
+            req.end_key = vec![];
+            client.kv_scan_lock(&req).unwrap();
+            assert!(check_split_key(
+                cluster,
+                Key::from_raw(&start_key).as_encoded().to_vec()
+            ));
+        });
     let get_key_ttl: Box<Query> =
         Box::new(|ctx, cluster, client, _store_id, _region_id, start_key| {
             let mut req = RawGetKeyTtlRequest::default();
@@ -290,7 +293,7 @@ fn put(
     cluster: &Cluster<ServerCluster>,
     client: &TikvClient,
     ctx: &Context,
-    store_id: u64,
+    _store_id: u64,
     key: Vec<u8>,
 ) {
     // Prewrite
