@@ -13,7 +13,7 @@ fn test_batch() {
         batch_system::create_system(&Config::default(), control_tx, control_fsm);
     let builder = Builder::new();
     let metrics = builder.metrics.clone();
-    system.spawn("test".to_owned(), builder);
+    system.spawn("test".to_owned(), builder, false);
     let mut expected_metrics = HandleMetrics::default();
     assert_eq!(*metrics.lock().unwrap(), expected_metrics);
     let (tx, rx) = mpsc::unbounded();

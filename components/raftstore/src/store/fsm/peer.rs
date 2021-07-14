@@ -10,7 +10,9 @@ use std::{cmp, u64};
 use batch_system::{BasicMailbox, Fsm};
 use collections::HashMap;
 use engine_traits::CF_RAFT;
-use engine_traits::{Engines, KvEngine, RaftEngine, SSTMetaInfo, WriteBatchExt};
+use engine_traits::{
+    Engines, KvEngine, Mutable, RaftEngine, RaftLogBatch, SSTMetaInfo, WriteBatchExt,
+};
 use error_code::ErrorCodeExt;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SwitchMode;
@@ -925,25 +927,32 @@ where
         }
     }
 
-    pub fn collect_ready(&mut self) {
+    pub fn collect_ready(&mut self, offset: usize) -> bool {
         let has_ready = self.fsm.has_ready;
         self.fsm.has_ready = false;
         if !has_ready || self.fsm.stopped {
-            return;
+            return false;
         }
         self.ctx.pending_count += 1;
         self.ctx.has_ready = true;
+        let progress = self.ctx.kv_wb.data_size() + self.ctx.raft_wb.size();
         let res = self.fsm.peer.handle_raft_ready_append(self.ctx);
         if let Some(mut r) = res {
             // This bases on an assumption that fsm array passed in `end` method will have
             // the same order of processing.
-            r.batch_offset = self.ctx.processed_fsm_count;
+            r.batch_offset = offset;
             self.on_role_changed(&r.ready);
             if r.ctx.has_new_entries {
                 self.register_raft_gc_log_tick();
             }
-            self.ctx.ready_res.push(r);
+            if self.ctx.kv_wb.data_size() + self.ctx.raft_wb.size() == progress {
+                self.ctx.readonly_ready_res.push(r);
+            } else {
+                self.ctx.ready_res.push(r);
+            }
+            return true;
         }
+        false
     }
 
     pub fn post_raft_ready_append(&mut self, ready: CollectedReady) {
