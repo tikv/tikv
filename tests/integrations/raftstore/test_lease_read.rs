@@ -17,7 +17,6 @@ use pd_client::PdClient;
 use raftstore::store::{Callback, RegionSnapshot};
 use test_raftstore::*;
 use tikv_util::config::*;
-use tikv_util::time::Instant;
 use tikv_util::HandyRwLock;
 
 // A helper function for testing the lease reads and lease renewing.
