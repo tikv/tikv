@@ -217,7 +217,6 @@ fn test_query_stats() {
                 Key::from_raw(&start_key).as_encoded().to_vec()
             ));
         });
-    fail::cfg("mock_hotspot_threshold", "return(0)").unwrap();
     fail::cfg("mock_tick_interval", "return(0)").unwrap();
     fail::cfg("mock_collect_interval", "return(0)").unwrap();
     test_query_num(raw_get);
@@ -232,7 +231,6 @@ fn test_query_stats() {
     test_query_num(raw_batch_get_command);
     test_query_num(batch_get_command);
     fail::remove("mock_tick_interval");
-    fail::remove("mock_hotspot_threshold");
     fail::remove("mock_collect_interval");
 }
 
