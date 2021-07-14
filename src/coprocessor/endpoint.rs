@@ -3,7 +3,6 @@
 use std::future::Future;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::time::Instant;
 use std::{borrow::Cow, time::Duration};
 
 use async_stream::try_stream;
@@ -34,6 +33,7 @@ use crate::coprocessor::*;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::PerfLevel;
 use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
+use tikv_util::time::Instant;
 use txn_types::Lock;
 
 /// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
@@ -126,13 +126,13 @@ impl<E: Engine> Endpoint<E> {
                     .map_err(|e| {
                         MEM_LOCK_CHECK_HISTOGRAM_VEC_STATIC
                             .locked
-                            .observe(begin_instant.elapsed().as_secs_f64());
+                            .observe(begin_instant.saturating_elapsed().as_secs_f64());
                         MvccError::from(e)
                     })?;
             }
             MEM_LOCK_CHECK_HISTOGRAM_VEC_STATIC
                 .unlocked
-                .observe(begin_instant.elapsed().as_secs_f64());
+                .observe(begin_instant.saturating_elapsed().as_secs_f64());
         }
         Ok(())
     }

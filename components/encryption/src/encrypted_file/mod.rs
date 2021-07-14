@@ -2,12 +2,12 @@
 
 use std::io::{Read, Write};
 use std::path::Path;
-use std::time::Instant;
 
 use file_system::{rename, File, OpenOptions};
 use kvproto::encryptionpb::EncryptedContent;
 use protobuf::Message;
 use rand::{thread_rng, RngCore};
+use tikv_util::time::Instant;
 
 use crate::master_key::*;
 use crate::metrics::*;
@@ -51,7 +51,7 @@ impl<'a> EncryptedFile<'a> {
 
                 ENCRYPT_DECRPTION_FILE_HISTOGRAM
                     .with_label_values(&[self.name, "read"])
-                    .observe(start.elapsed().as_secs_f64());
+                    .observe(start.saturating_elapsed().as_secs_f64());
 
                 Ok(plaintext)
             }
@@ -89,7 +89,7 @@ impl<'a> EncryptedFile<'a> {
 
         ENCRYPT_DECRPTION_FILE_HISTOGRAM
             .with_label_values(&[self.name, "write"])
-            .observe(start.elapsed().as_secs_f64());
+            .observe(start.saturating_elapsed().as_secs_f64());
 
         // TODO GC broken temp files if necessary.
         Ok(())
