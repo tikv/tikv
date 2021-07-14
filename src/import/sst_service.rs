@@ -229,45 +229,68 @@ where
 }
 
 #[macro_export]
-macro_rules! write_stream_chunk {
-    ($import:expr, $engine:expr, $rx:expr, $writer_ty:ident, $chunk_ty:ident, $resp_ty:ident) => {{
-        async move {
-            let first_req = $rx.try_next().await?;
-            let meta = match first_req {
-                Some(r) => match r.chunk {
-                    Some($chunk_ty::Meta(m)) => m,
-                    _ => return Err(Error::InvalidChunk),
-                },
-                _ => return Err(Error::InvalidChunk),
-            };
+macro_rules! impl_write {
+    ($fn:ident, $req_ty:ident, $resp_ty:ident, $chunk_ty:ident, $writer_fn:ident) => {
+        fn $fn(
+            &mut self,
+            _ctx: RpcContext<'_>,
+            stream: RequestStream<$req_ty>,
+            sink: ClientStreamingSink<$resp_ty>,
+        ) {
+            let import = self.importer.clone();
+            let engine = self.engine.clone();
+            let (rx, buf_driver) =
+                create_stream_with_buffer(stream, self.cfg.stream_channel_window);
+            let mut rx = rx.map_err(Error::from);
 
-            let writer = match $import.$writer_ty(&$engine, meta) {
-                Ok(w) => w,
-                Err(e) => {
-                    error!("build writer failed {:?}", e);
-                    return Err(Error::InvalidChunk);
-                }
-            };
-            let writer = $rx
-                .try_fold(writer, |mut writer, req| async move {
-                    let start = Instant::now_coarse();
-                    let batch = match req.chunk {
-                        Some($chunk_ty::Batch(b)) => b,
+            let timer = Instant::now_coarse();
+            let label = stringify!($fn);
+            let handle_task = async move {
+                let res = async move {
+                    let first_req = rx.try_next().await?;
+                    let meta = match first_req {
+                        Some(r) => match r.chunk {
+                            Some($chunk_ty::Meta(m)) => m,
+                            _ => return Err(Error::InvalidChunk),
+                        },
                         _ => return Err(Error::InvalidChunk),
                     };
-                    writer.write(batch)?;
-                    IMPORT_WRITE_CHUNK_DURATION.observe(start.elapsed_secs());
-                    Ok(writer)
-                })
-                .await?;
 
-            writer.finish().map(|metas| {
-                let mut resp = $resp_ty::default();
-                resp.set_metas(metas.into());
-                resp
-            })
+                    let writer = match import.$writer_fn(&engine, meta) {
+                        Ok(w) => w,
+                        Err(e) => {
+                            error!("build writer failed {:?}", e);
+                            return Err(Error::InvalidChunk);
+                        }
+                    };
+                    let writer = rx
+                        .try_fold(writer, |mut writer, req| async move {
+                            let start = Instant::now_coarse();
+                            let batch = match req.chunk {
+                                Some($chunk_ty::Batch(b)) => b,
+                                _ => return Err(Error::InvalidChunk),
+                            };
+                            writer.write(batch)?;
+                            IMPORT_WRITE_CHUNK_DURATION
+                                .observe(start.saturating_elapsed().as_secs_f64());
+                            Ok(writer)
+                        })
+                        .await?;
+
+                    writer.finish().map(|metas| {
+                        let mut resp = $resp_ty::default();
+                        resp.set_metas(metas.into());
+                        resp
+                    })
+                }
+                .await;
+                crate::send_rpc_response!(res, sink, label, timer);
+            };
+
+            self.threads.spawn_ok(buf_driver);
+            self.threads.spawn_ok(handle_task);
         }
-    }};
+    };
 }
 
 impl<E, Router> ImportSst for ImportSSTService<E, Router>
@@ -336,7 +359,7 @@ where
                         }
                         file.append(data)?;
                         IMPORT_UPLOAD_CHUNK_BYTES.observe(data.len() as f64);
-                        IMPORT_UPLOAD_CHUNK_DURATION.observe(start.elapsed_secs());
+                        IMPORT_UPLOAD_CHUNK_DURATION.observe(start.saturating_elapsed_secs());
                         Ok(file)
                     })
                     .await?;
@@ -368,7 +391,7 @@ where
             // Records how long the download task waits to be scheduled.
             sst_importer::metrics::IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["queue"])
-                .observe(start.elapsed().as_secs_f64());
+                .observe(start.saturating_elapsed().as_secs_f64());
 
             // FIXME: download() should be an async fn, to allow BR to cancel
             // a download task.
@@ -526,7 +549,7 @@ where
                     "compact files in range";
                     "start" => start.map(log_wrappers::Value::key),
                     "end" => end.map(log_wrappers::Value::key),
-                    "output_level" => ?output_level, "takes" => ?timer.elapsed()
+                    "output_level" => ?output_level, "takes" => ?timer.saturating_elapsed()
                 ),
                 Err(ref e) => error!(%*e;
                     "compact files in range failed";
@@ -568,56 +591,6 @@ where
         ctx.spawn(ctx_task);
     }
 
-    fn write(
-        &mut self,
-        _ctx: RpcContext<'_>,
-        stream: RequestStream<WriteRequest>,
-        sink: ClientStreamingSink<WriteResponse>,
-    ) {
-        let import = self.importer.clone();
-        let engine = self.engine.clone();
-        let (rx, buf_driver) = create_stream_with_buffer(stream, self.cfg.stream_channel_window);
-        let mut rx = rx.map_err(Error::from);
-
-        let timer = Instant::now_coarse();
-        let label = "write";
-        let f = write_stream_chunk!(import, engine, rx, new_txn_writer, Chunk, WriteResponse);
-        let handle_task = async move {
-            let res = f.await;
-            crate::send_rpc_response!(res, sink, label, timer);
-        };
-        self.threads.spawn_ok(buf_driver);
-        self.threads.spawn_ok(handle_task);
-    }
-
-    fn raw_write(
-        &mut self,
-        _ctx: RpcContext<'_>,
-        stream: RequestStream<RawWriteRequest>,
-        sink: ClientStreamingSink<RawWriteResponse>,
-    ) {
-        let import = self.importer.clone();
-        let engine = self.engine.clone();
-        let (rx, buf_driver) = create_stream_with_buffer(stream, self.cfg.stream_channel_window);
-        let mut rx = rx.map_err(Error::from);
-        let timer = Instant::now_coarse();
-        let label = "raw_write";
-        let f = write_stream_chunk!(
-            import,
-            engine,
-            rx,
-            new_raw_writer,
-            RawChunk,
-            RawWriteResponse
-        );
-        let handle_task = async move {
-            let res = f.await;
-            crate::send_rpc_response!(res, sink, label, timer);
-        };
-        self.threads.spawn_ok(buf_driver);
-        self.threads.spawn_ok(handle_task);
-    }
-
     fn duplicate_detect(
         &mut self,
         _ctx: RpcContext<'_>,
@@ -652,7 +625,7 @@ where
                         Ok(_) => {
                             IMPORT_RPC_DURATION
                                 .with_label_values(&[label, "ok"])
-                                .observe(timer.elapsed_secs());
+                                .observe(timer.saturating_elapsed_secs());
                         }
                         Err(e) => {
                             warn!(
@@ -684,6 +657,16 @@ where
         };
         self.threads.spawn_ok(handle_task);
     }
+
+    impl_write!(write, WriteRequest, WriteResponse, Chunk, new_txn_writer);
+
+    impl_write!(
+        raw_write,
+        RawWriteRequest,
+        RawWriteResponse,
+        RawChunk,
+        new_raw_writer
+    );
 }
 
 // add error statistics from pb error response

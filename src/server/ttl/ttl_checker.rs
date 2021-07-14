@@ -208,6 +208,6 @@ pub fn check_ttl_and_compact_files<E: KvEngine>(
     debug!(
         "compact files finished";
         "files_count" => files_count,
-        "time_takes" => ?timer.elapsed(),
+        "time_takes" => ?timer.saturating_elapsed(),
     );
 }

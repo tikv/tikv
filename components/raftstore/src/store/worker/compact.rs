@@ -3,13 +3,13 @@
 use std::collections::VecDeque;
 use std::error::Error as StdError;
 use std::fmt::{self, Display, Formatter};
-use std::time::Instant;
 
 use fail::fail_point;
 use thiserror::Error;
 
 use engine_traits::KvEngine;
 use engine_traits::CF_WRITE;
+use tikv_util::time::Instant;
 use tikv_util::worker::Runnable;
 use tikv_util::{box_try, error, info, warn};
 
@@ -115,7 +115,7 @@ where
             "range_start" => start_key.map(::log_wrappers::Value::key),
             "range_end" => end_key.map(::log_wrappers::Value::key),
             "cf" => cf_name,
-            "time_takes" => ?timer.elapsed(),
+            "time_takes" => ?timer.saturating_elapsed(),
         );
         Ok(())
     }
