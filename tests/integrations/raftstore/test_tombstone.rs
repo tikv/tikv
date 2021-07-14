@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState, StoreIdent};
 use protobuf::Message;
+use tikv_util::time::Instant;
 
 use engine::rocks::Writable;
 use engine_rocks::Compat;

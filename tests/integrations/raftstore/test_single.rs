@@ -5,6 +5,7 @@ use std::time::Duration;
 use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
 use test_raftstore::*;
 use tikv_util::config::*;
+use tikv_util::time::Instant;
 
 // TODO add epoch not match test cases.
 

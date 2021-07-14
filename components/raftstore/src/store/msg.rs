@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt;
-use std::time::Instant;
 
 use engine_rocks::RocksEngine;
 use engine_traits::KvEngine;
@@ -23,6 +22,7 @@ use crate::store::util::KeysInfoFormatter;
 use crate::store::SnapKey;
 use engine_rocks::CompactedEvent;
 use tikv_util::escape;
+use tikv_util::time::Instant;
 
 use super::RegionSnapshot;
 

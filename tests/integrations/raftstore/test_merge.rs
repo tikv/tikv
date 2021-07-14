@@ -181,7 +181,7 @@ fn test_node_merge_with_slow_learner() {
         if state1.get_index() != state2.get_index() {
             break;
         }
-        if timer.elapsed() > Duration::from_secs(3) {
+        if timer.saturating_elapsed() > Duration::from_secs(3) {
             panic!("log compaction not finish after 3 seconds.");
         }
         sleep_ms(10);

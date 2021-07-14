@@ -1,7 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use tikv_util::time::Instant;
 
 use futures03::{
     channel::mpsc::{
@@ -248,7 +250,7 @@ impl Drop for Drain {
             memory_quota.free(total_bytes);
         });
         block_on(&mut drain);
-        let takes = start.elapsed();
+        let takes = start.saturating_elapsed();
         if takes >= Duration::from_millis(200) {
             warn!("drop Drain too slow"; "takes" => ?takes);
         }

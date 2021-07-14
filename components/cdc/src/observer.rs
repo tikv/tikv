@@ -154,7 +154,7 @@ impl CmdObserver<RocksEngine> for CdcObserver {
                                         .get_value_default(&prev_key, statistics.as_mut().unwrap());
                                     CDC_OLD_VALUE_DURATION_HISTOGRAM
                                         .with_label_values(&["get"])
-                                        .observe(start.elapsed().as_secs_f64());
+                                        .observe(start.saturating_elapsed().as_secs_f64());
                                     value
                                 });
                                 (value, statistics)
@@ -175,7 +175,7 @@ impl CmdObserver<RocksEngine> for CdcObserver {
                     .unwrap_or_default();
                 CDC_OLD_VALUE_DURATION_HISTOGRAM
                     .with_label_values(&["seek"])
-                    .observe(start.elapsed().as_secs_f64());
+                    .observe(start.saturating_elapsed().as_secs_f64());
                 if value.is_none() {
                     old_value_stats.miss_none_count += 1;
                 }
