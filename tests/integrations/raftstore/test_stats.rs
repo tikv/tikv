@@ -403,7 +403,7 @@ fn batch_commands(
 
     let (tx, rx) = mpsc::sync_channel(1);
     thread::spawn(move || {
-        // We have send 10k requests to the server, so we should get 10k responses.
+        // We have send 1k requests to the server, so we should get 1k responses.
         let mut count = 0;
         for x in block_on(
             receiver
