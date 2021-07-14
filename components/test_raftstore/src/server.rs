@@ -33,12 +33,8 @@ use raftstore::router::{
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
 use raftstore::store::{
-<<<<<<< HEAD
     AutoSplitController, Callback, LocalReader, SnapManagerBuilder, SplitCheckRunner,
-=======
-    AutoSplitController, Callback, CheckLeaderRunner, LocalReader, SnapManagerBuilder,
-    SplitCheckRunner, SplitConfigManager,
->>>>>>> 84c717660... fix unencoded keys in load-base-split (#10543)
+    SplitConfigManager,
 };
 use raftstore::Result;
 use security::SecurityManager;
@@ -616,4 +612,17 @@ pub fn must_new_cluster_and_debug_client() -> (Cluster<ServerCluster>, DebugClie
     let client = DebugClient::new(channel);
 
     (cluster, client, leader.get_store_id())
+}
+
+pub fn must_new_and_configure_cluster_and_kv_client(
+    configure: impl FnMut(&mut Cluster<ServerCluster>),
+) -> (Cluster<ServerCluster>, TikvClient, Context) {
+    let (cluster, leader, ctx) = must_new_and_configure_cluster(configure);
+
+    let env = Arc::new(Environment::new(1));
+    let channel =
+        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
+    let client = TikvClient::new(channel);
+
+    (cluster, client, ctx)
 }
