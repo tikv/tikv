@@ -2,8 +2,6 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::fmt;
-use std::io::{self, Write};
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -14,11 +12,10 @@ use kvproto::backup::StorageBackend;
 #[cfg(feature = "prost-codec")]
 use kvproto::import_sstpb::pair::Op as PairOp;
 #[cfg(not(feature = "prost-codec"))]
-use kvproto::import_sstpb::PairOp;
 use kvproto::import_sstpb::*;
 use uuid::{Builder as UuidBuilder, Uuid};
 
-use encryption::{DataKeyManager, EncrypterWriter};
+use encryption::DataKeyManager;
 use engine_rocks::{
     encryption::get_env as get_encrypted_env, file_system::get_env as get_inspected_env,
     RocksSstReader,
@@ -27,20 +24,23 @@ use engine_traits::{
     name_to_cf, EncryptionKeyManager, IngestExternalFileOptions, Iterator, KvEngine, SSTMetaInfo,
     SeekKey, SstExt, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 };
-use file_system::{get_io_rate_limiter, sync_dir, File, OpenOptions};
+use file_system::{get_io_rate_limiter, OpenOptions};
 use tikv_util::time::Limiter;
-use txn_types::{is_short_value, Key, TimeStamp, Write as KvWrite, WriteRef, WriteType};
+use txn_types::{Key, TimeStamp, WriteRef};
 
-use super::Config;
-use super::{Error, Result};
+use crate::import_file::{ImportFile, ImportPath};
 use crate::import_mode::{ImportModeSwitcher, RocksDBMetricsFn};
 use crate::metrics::*;
+use crate::sst_writer::{RawSSTWriter, TxnSSTWriter};
+use crate::Config;
+use crate::{Error, Result};
 
 /// SSTImporter manages SST files that are waiting for ingesting.
 pub struct SSTImporter {
     dir: ImportDir,
     key_manager: Option<Arc<DataKeyManager>>,
     switcher: ImportModeSwitcher,
+    enable_ttl: bool,
 }
 
 impl SSTImporter {
@@ -48,12 +48,14 @@ impl SSTImporter {
         cfg: &Config,
         root: P,
         key_manager: Option<Arc<DataKeyManager>>,
+        enable_ttl: bool,
     ) -> Result<SSTImporter> {
         let switcher = ImportModeSwitcher::new(cfg);
         Ok(SSTImporter {
             dir: ImportDir::new(root)?,
             key_manager,
             switcher,
+            enable_ttl,
         })
     }
 
@@ -412,7 +414,7 @@ impl SSTImporter {
         self.dir.list_ssts()
     }
 
-    pub fn new_writer<E: KvEngine>(&self, db: &E, meta: SstMeta) -> Result<SSTWriter<E>> {
+    pub fn new_txn_writer<E: KvEngine>(&self, db: &E, meta: SstMeta) -> Result<TxnSSTWriter<E>> {
         let mut default_meta = meta.clone();
         default_meta.set_cf_name(CF_DEFAULT.to_owned());
         let default_path = self.dir.join(&default_meta)?;
@@ -431,7 +433,7 @@ impl SSTImporter {
             .build(write_path.temp.to_str().unwrap())
             .unwrap();
 
-        Ok(SSTWriter::new(
+        Ok(TxnSSTWriter::new(
             default,
             write,
             default_path,
@@ -441,112 +443,26 @@ impl SSTImporter {
             self.key_manager.clone(),
         ))
     }
-}
 
-pub struct SSTWriter<E: KvEngine> {
-    default: E::SstWriter,
-    default_entries: u64,
-    default_path: ImportPath,
-    default_meta: SstMeta,
-    write: E::SstWriter,
-    write_entries: u64,
-    write_path: ImportPath,
-    write_meta: SstMeta,
-    key_manager: Option<Arc<DataKeyManager>>,
-}
-
-impl<E: KvEngine> SSTWriter<E> {
-    pub fn new(
-        default: E::SstWriter,
-        write: E::SstWriter,
-        default_path: ImportPath,
-        write_path: ImportPath,
-        default_meta: SstMeta,
-        write_meta: SstMeta,
-        key_manager: Option<Arc<DataKeyManager>>,
-    ) -> Self {
-        SSTWriter {
+    pub fn new_raw_writer<E: KvEngine>(
+        &self,
+        db: &E,
+        mut meta: SstMeta,
+    ) -> Result<RawSSTWriter<E>> {
+        meta.set_cf_name(CF_DEFAULT.to_owned());
+        let default_path = self.dir.join(&meta)?;
+        let default = E::SstWriterBuilder::new()
+            .set_db(&db)
+            .set_cf(CF_DEFAULT)
+            .build(default_path.temp.to_str().unwrap())
+            .unwrap();
+        Ok(RawSSTWriter::new(
             default,
             default_path,
-            default_entries: 0,
-            default_meta,
-            write,
-            write_path,
-            write_entries: 0,
-            write_meta,
-            key_manager,
-        }
-    }
-
-    pub fn write(&mut self, batch: WriteBatch) -> Result<()> {
-        let commit_ts = TimeStamp::new(batch.get_commit_ts());
-        for m in batch.get_pairs().iter() {
-            let k = Key::from_raw(m.get_key()).append_ts(commit_ts);
-            self.put(k.as_encoded(), m.get_value(), m.get_op())?;
-        }
-        Ok(())
-    }
-
-    fn put(&mut self, key: &[u8], value: &[u8], op: PairOp) -> Result<()> {
-        let k = keys::data_key(key);
-        let (_, commit_ts) = Key::split_on_ts_for(key)?;
-        let w = match (op, is_short_value(value)) {
-            (PairOp::Delete, _) => KvWrite::new(WriteType::Delete, commit_ts, None),
-            (PairOp::Put, true) => KvWrite::new(WriteType::Put, commit_ts, Some(value.to_vec())),
-            (PairOp::Put, false) => {
-                self.default.put(&k, value)?;
-                self.default_entries += 1;
-                KvWrite::new(WriteType::Put, commit_ts, None)
-            }
-        };
-        self.write.put(&k, &w.as_ref().to_bytes())?;
-        self.write_entries += 1;
-        Ok(())
-    }
-
-    pub fn finish(self) -> Result<Vec<SstMeta>> {
-        let default_meta = self.default_meta.clone();
-        let write_meta = self.write_meta.clone();
-        let mut metas = Vec::with_capacity(2);
-        let (default_entries, write_entries) = (self.default_entries, self.write_entries);
-        let (p1, p2) = (self.default_path.clone(), self.write_path.clone());
-        let (w1, w2, key_manager) = (self.default, self.write, self.key_manager);
-        if default_entries > 0 {
-            w1.finish()?;
-            Self::save(p1, key_manager.as_deref())?;
-            metas.push(default_meta);
-        }
-        if write_entries > 0 {
-            w2.finish()?;
-            Self::save(p2, key_manager.as_deref())?;
-            metas.push(write_meta);
-        }
-        info!("finish write to sst";
-            "default entries" => default_entries,
-            "write entries" => write_entries,
-        );
-        Ok(metas)
-    }
-
-    // move file from temp to save.
-    fn save(mut import_path: ImportPath, key_manager: Option<&DataKeyManager>) -> Result<()> {
-        file_system::rename(&import_path.temp, &import_path.save)?;
-        if let Some(key_manager) = key_manager {
-            let temp_str = import_path
-                .temp
-                .to_str()
-                .ok_or_else(|| Error::InvalidSSTPath(import_path.temp.clone()))?;
-            let save_str = import_path
-                .save
-                .to_str()
-                .ok_or_else(|| Error::InvalidSSTPath(import_path.save.clone()))?;
-            key_manager.link_file(temp_str, save_str)?;
-            key_manager.delete_file(temp_str)?;
-        }
-        // sync the directory after rename
-        import_path.save.pop();
-        sync_dir(&import_path.save)?;
-        Ok(())
+            meta,
+            self.key_manager.clone(),
+            self.enable_ttl,
+        ))
     }
 }
 
@@ -698,149 +614,6 @@ impl ImportDir {
             }
         }
         Ok(ssts)
-    }
-}
-
-#[derive(Clone)]
-pub struct ImportPath {
-    // The path of the file that has been uploaded.
-    save: PathBuf,
-    // The path of the file that is being uploaded.
-    temp: PathBuf,
-    // The path of the file that is going to be ingested.
-    clone: PathBuf,
-}
-
-impl fmt::Debug for ImportPath {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ImportPath")
-            .field("save", &self.save)
-            .field("temp", &self.temp)
-            .field("clone", &self.clone)
-            .finish()
-    }
-}
-// `SyncableWrite` extends io::Write with sync
-trait SyncableWrite: io::Write + Send {
-    // sync all metadata to storage
-    fn sync(&self) -> io::Result<()>;
-}
-
-impl SyncableWrite for File {
-    fn sync(&self) -> io::Result<()> {
-        self.sync_all()
-    }
-}
-
-impl SyncableWrite for EncrypterWriter<File> {
-    fn sync(&self) -> io::Result<()> {
-        self.sync_all()
-    }
-}
-
-/// ImportFile is used to handle the writing and verification of SST files.
-pub struct ImportFile {
-    meta: SstMeta,
-    path: ImportPath,
-    file: Option<Box<dyn SyncableWrite>>,
-    digest: crc32fast::Hasher,
-    key_manager: Option<Arc<DataKeyManager>>,
-}
-
-impl ImportFile {
-    fn create(
-        meta: SstMeta,
-        path: ImportPath,
-        key_manager: Option<Arc<DataKeyManager>>,
-    ) -> Result<ImportFile> {
-        let file: Box<dyn SyncableWrite> = if let Some(ref manager) = key_manager {
-            // key manager will truncate existed file, so we should check exist manually.
-            if path.temp.exists() {
-                return Err(Error::Io(io::Error::new(
-                    io::ErrorKind::AlreadyExists,
-                    format!("file already exists, {}", path.temp.to_str().unwrap()),
-                )));
-            }
-            Box::new(manager.create_file(&path.temp)?)
-        } else {
-            Box::new(
-                OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(&path.temp)?,
-            )
-        };
-        Ok(ImportFile {
-            meta,
-            path,
-            file: Some(file),
-            digest: crc32fast::Hasher::new(),
-            key_manager,
-        })
-    }
-
-    pub fn append(&mut self, data: &[u8]) -> Result<()> {
-        self.file.as_mut().unwrap().write_all(data)?;
-        self.digest.update(data);
-        Ok(())
-    }
-
-    pub fn finish(&mut self) -> Result<()> {
-        self.validate()?;
-        // sync is a wrapping for File::sync_all
-        self.file.take().unwrap().sync()?;
-        if self.path.save.exists() {
-            return Err(Error::FileExists(
-                self.path.save.clone(),
-                "finalize SST write cache",
-            ));
-        }
-        file_system::rename(&self.path.temp, &self.path.save)?;
-        if let Some(ref manager) = self.key_manager {
-            let tmp_str = self.path.temp.to_str().unwrap();
-            let save_str = self.path.save.to_str().unwrap();
-            manager.link_file(tmp_str, save_str)?;
-            manager.delete_file(self.path.temp.to_str().unwrap())?;
-        }
-        Ok(())
-    }
-
-    fn cleanup(&mut self) -> Result<()> {
-        self.file.take();
-        if self.path.temp.exists() {
-            if let Some(ref manager) = self.key_manager {
-                manager.delete_file(self.path.temp.to_str().unwrap())?;
-            }
-            file_system::remove_file(&self.path.temp)?;
-        }
-        Ok(())
-    }
-
-    fn validate(&self) -> Result<()> {
-        let crc32 = self.digest.clone().finalize();
-        let expect = self.meta.get_crc32();
-        if crc32 != expect {
-            let reason = format!("crc32 {}, expect {}", crc32, expect);
-            return Err(Error::FileCorrupted(self.path.temp.clone(), reason));
-        }
-        Ok(())
-    }
-}
-
-impl Drop for ImportFile {
-    fn drop(&mut self) {
-        if let Err(e) = self.cleanup() {
-            warn!("cleanup failed"; "file" => ?self, "err" => %e);
-        }
-    }
-}
-
-impl fmt::Debug for ImportFile {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ImportFile")
-            .field("meta", &self.meta)
-            .field("path", &self.path)
-            .finish()
     }
 }
 
@@ -1331,7 +1104,7 @@ mod tests {
         // performs the download.
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None).unwrap();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
         let db = create_sst_test_engine().unwrap();
 
         let range = importer
@@ -1380,7 +1153,8 @@ mod tests {
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
         let (temp_dir, key_manager) = new_key_manager_for_test();
-        let importer = SSTImporter::new(&cfg, &importer_dir, Some(key_manager.clone())).unwrap();
+        let importer =
+            SSTImporter::new(&cfg, &importer_dir, Some(key_manager.clone()), false).unwrap();
 
         let db_path = temp_dir.path().join("db");
         let env = get_encrypted_env(Some(key_manager), None /*base_env*/).unwrap();
@@ -1432,7 +1206,7 @@ mod tests {
         // performs the download.
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None).unwrap();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
         let db = create_sst_test_engine().unwrap();
 
         let range = importer
@@ -1476,7 +1250,7 @@ mod tests {
         // performs the download.
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None).unwrap();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
 
         // creates a sample SST file.
         let (_ext_sst_dir, backend, meta) = create_sample_external_sst_file_txn_default().unwrap();
@@ -1519,7 +1293,7 @@ mod tests {
         // performs the download.
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None).unwrap();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
 
         // creates a sample SST file.
         let (_ext_sst_dir, backend, meta) = create_sample_external_sst_file_txn_write().unwrap();
@@ -1584,7 +1358,7 @@ mod tests {
             // performs the download.
             let importer_dir = tempfile::tempdir().unwrap();
             let cfg = Config::default();
-            let importer = SSTImporter::new(&cfg, &importer_dir, None).unwrap();
+            let importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
             let db = create_sst_test_engine().unwrap();
 
             let range = importer
@@ -1655,7 +1429,7 @@ mod tests {
         let (_ext_sst_dir, backend, mut meta) = create_sample_external_sst_file().unwrap();
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None).unwrap();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
         let db = create_sst_test_engine().unwrap();
         // note: the range doesn't contain the DATA_PREFIX 'z'.
         meta.mut_range().set_start(b"t123_r02".to_vec());
@@ -1700,7 +1474,7 @@ mod tests {
         let (_ext_sst_dir, backend, mut meta) = create_sample_external_sst_file().unwrap();
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None).unwrap();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
         let db = create_sst_test_engine().unwrap();
         meta.mut_range().set_start(b"t5_r02".to_vec());
         meta.mut_range().set_end(b"t5_r12".to_vec());
@@ -1746,7 +1520,7 @@ mod tests {
         meta.set_uuid(vec![0u8; 16]);
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None).unwrap();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
         let db = create_sst_test_engine().unwrap();
         let backend = external_storage_export::make_local_backend(ext_sst_dir.path());
 
@@ -1770,7 +1544,7 @@ mod tests {
         let (_ext_sst_dir, backend, mut meta) = create_sample_external_sst_file().unwrap();
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None).unwrap();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
         let db = create_sst_test_engine().unwrap();
         meta.mut_range().set_start(vec![b'x']);
         meta.mut_range().set_end(vec![b'y']);
@@ -1795,7 +1569,7 @@ mod tests {
         let (_ext_sst_dir, backend, meta) = create_sample_external_sst_file().unwrap();
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None).unwrap();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
         let db = create_sst_test_engine().unwrap();
 
         let result = importer.download::<TestEngine>(
@@ -1823,11 +1597,11 @@ mod tests {
 
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None).unwrap();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
         let db_path = importer_dir.path().join("db");
         let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
 
-        let mut w = importer.new_writer::<TestEngine>(&db, meta).unwrap();
+        let mut w = importer.new_txn_writer::<TestEngine>(&db, meta).unwrap();
         let mut batch = WriteBatch::default();
         let mut pairs = vec![];
 
@@ -1870,7 +1644,7 @@ mod tests {
         // performs the download.
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None).unwrap();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
         let db = create_sst_test_engine().unwrap();
 
         let range = importer
@@ -1922,7 +1696,7 @@ mod tests {
         // performs the download.
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None).unwrap();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
         let db = create_sst_test_engine().unwrap();
 
         let range = importer
@@ -1970,7 +1744,7 @@ mod tests {
         // performs the download.
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None).unwrap();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
         let db = create_sst_test_engine().unwrap();
 
         let range = importer

@@ -730,6 +730,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 &self.config.import,
                 import_path,
                 self.encryption_key_manager.clone(),
+                self.config.storage.enable_ttl,
             )
             .unwrap(),
         );

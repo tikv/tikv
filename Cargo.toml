@@ -253,6 +253,9 @@ rusoto_mock = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr
 rusoto_s3 = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
 rusoto_sts = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
 
+[patch.'https://github.com/pingcap/kvproto']
+kvproto = { branch = "master", git = "https://github.com/andylokandy/kvproto.git", default-features = false }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
 
