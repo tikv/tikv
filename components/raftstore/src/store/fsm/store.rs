@@ -1293,6 +1293,7 @@ impl RaftBatchSystem {
         handles.push(workers.cleanup_worker.stop());
         handles.push(workers.raftlog_gc_worker.stop());
         self.apply_system.shutdown();
+        fail_point!("after_shutdown_apply");
         self.system.shutdown();
         for h in handles {
             if let Some(h) = h {

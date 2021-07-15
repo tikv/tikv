@@ -42,12 +42,14 @@ struct FuturePoolRunner {
     after_start: Option<Arc<dyn Fn() + Send + Sync>>,
     on_tick: Option<Arc<dyn Fn() + Send + Sync>>,
     env: Env,
+    props: Option<crate::thread_group::GroupProperties>,
 }
 
 impl yatp::pool::Runner for FuturePoolRunner {
     type TaskCell = future::TaskCell;
 
     fn start(&mut self, local: &mut Local<Self::TaskCell>) {
+        crate::thread_group::set_properties(self.props.clone());
         self.inner.start(local);
         if let Some(after_start) = &self.after_start {
             after_start();
