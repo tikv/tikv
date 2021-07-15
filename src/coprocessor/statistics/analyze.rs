@@ -7,7 +7,9 @@ use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
 use rand::rngs::ThreadRng;
 use rand::{thread_rng, Rng};
-use tidb_query::codec::datum::{encode_value, Datum, NIL_FLAG};
+use tidb_query::codec::datum::{
+    encode_value, Datum, DatumDecoder, DURATION_FLAG, INT_FLAG, NIL_FLAG, UINT_FLAG,
+};
 use tidb_query::codec::table;
 use tidb_query::executor::{Executor, IndexScanExecutor, ScanExecutor, TableScanExecutor};
 use tidb_query::expr::EvalContext;
@@ -229,7 +231,28 @@ impl<S: Snapshot> SampleBuilder<S> {
                     pk_builder.append(&v);
                 }
             }
+
             for (i, (collector, val)) in collectors.iter_mut().zip(cols_iter).enumerate() {
+                // This is a workaround for different encoding methods used by TiDB and TiKV for CM Sketch.
+                // We need this because we must ensure we are using the same encoding method when we are querying values from
+                //   CM Sketch (in TiDB) and inserting values into CM Sketch (here).
+                // We are inserting raw bytes from TableScanExecutor into CM Sketch here and query CM Sketch using bytes
+                //   encoded by tablecodec.EncodeValue() in TiDB. Their results are different after row format becomes ver 2.
+                //
+                // Here we (1) convert INT bytes to VAR_INT bytes, (2) convert UINT bytes to VAR_UINT bytes,
+                //   and (3) "flatten" the duration value from DURATION bytes into i64 value, then convert it to VAR_INT bytes.
+                // These are the only 3 cases we need to care about according to TiDB's tablecodec.EncodeValue() and
+                //   TiKV's V1CompatibleEncoder::write_v2_as_datum().
+                let val = match val[0] {
+                    INT_FLAG | UINT_FLAG | DURATION_FLAG => {
+                        let mut mut_val = &val[..];
+                        let decoded_val = mut_val.read_datum()?;
+                        let flattened = table::flatten(&mut EvalContext::default(), decoded_val)?;
+                        encode_value(&mut EvalContext::default(), &[flattened])?
+                    }
+                    _ => val,
+                };
+
                 if self.cols_info[i].as_accessor().is_string_like() {
                     let sorted_val = match_template_collator! {
                         TT, match self.cols_info[i].as_accessor().collation()? {

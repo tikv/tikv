@@ -41,7 +41,10 @@ impl S3Storage {
     /// Create a new S3 storage for the given config.
     pub fn new(config: &Config) -> io::Result<S3Storage> {
         Self::check_config(config)?;
-        let client = new_client!(S3Client, config);
+        let mut client = new_client!(S3Client, config);
+        if config.force_path_style {
+            client.config_mut().addressing_style = AddressingStyle::Path;
+        }
         Ok(S3Storage {
             config: config.clone(),
             client,

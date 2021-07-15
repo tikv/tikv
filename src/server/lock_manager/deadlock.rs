@@ -20,6 +20,7 @@ use raftstore::coprocessor::{
     BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
     RegionChangeEvent, RegionChangeObserver, RoleObserver,
 };
+use raftstore::store::util::is_region_initialized;
 use security::{check_common_name, SecurityManager};
 use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
@@ -398,7 +399,7 @@ impl RoleChangeNotifier {
         // of the deadlock detector stepping down.
         //
         // If the peers of a region is not empty, the region info is complete.
-        !region.get_peers().is_empty()
+        is_region_initialized(region)
             && region.get_start_key() <= LEADER_KEY
             && (region.get_end_key().is_empty() || LEADER_KEY < region.get_end_key())
     }
