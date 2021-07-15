@@ -265,14 +265,11 @@ macro_rules! impl_write {
                     };
                     let writer = rx
                         .try_fold(writer, |mut writer, req| async move {
-                            let start = Instant::now_coarse();
                             let batch = match req.chunk {
                                 Some($chunk_ty::Batch(b)) => b,
                                 _ => return Err(Error::InvalidChunk),
                             };
                             writer.write(batch)?;
-                            IMPORT_WRITE_CHUNK_DURATION
-                                .observe(start.saturating_elapsed().as_secs_f64());
                             Ok(writer)
                         })
                         .await?;

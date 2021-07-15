@@ -1377,51 +1377,6 @@ mod tests {
     }
 
     #[test]
-    fn test_write_sst() {
-        let mut meta = SstMeta::default();
-        meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
-
-        let importer_dir = tempfile::tempdir().unwrap();
-        let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
-        let db_path = importer_dir.path().join("db");
-        let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
-
-        let mut w = importer.new_txn_writer::<TestEngine>(&db, meta).unwrap();
-        let mut batch = WriteBatch::default();
-        let mut pairs = vec![];
-
-        // put short value kv in wirte cf
-        let mut pair = Pair::default();
-        pair.set_key(b"k1".to_vec());
-        pair.set_value(b"short_value".to_vec());
-        pairs.push(pair);
-
-        // put big value kv in default cf
-        let big_value = vec![42; 256];
-        let mut pair = Pair::default();
-        pair.set_key(b"k2".to_vec());
-        pair.set_value(big_value);
-        pairs.push(pair);
-
-        // put delete type key in write cf
-        let mut pair = Pair::default();
-        pair.set_key(b"k3".to_vec());
-        pair.set_op(PairOp::Delete);
-        pairs.push(pair);
-
-        // generate two cf metas
-        batch.set_commit_ts(10);
-        batch.set_pairs(pairs.into());
-        w.write(batch).unwrap();
-        assert_eq!(w.write_entries, 3);
-        assert_eq!(w.default_entries, 1);
-
-        let metas = w.finish().unwrap();
-        assert_eq!(metas.len(), 2);
-    }
-
-    #[test]
     fn test_download_rawkv_sst() {
         // creates a sample SST file.
         let (_ext_sst_dir, backend, meta) =
