@@ -783,41 +783,26 @@ impl<E: Engine> FlowChecker<E> {
             let x = self.recorder.get_percentile_95();
             if x == 0 { INFINITY } else { x as f64 }
         } else if is_throttled && should_throttle {
-            match checker.long_term_num_l0_files.trend() {
-                Trend::OnlyOne => {
-                    SCHED_THROTTLE_ACTION_COUNTER
-                        .with_label_values(&[&cf, "down2"])
-                        .inc();
-                    self.limiter.speed_limit()
-                }
-                Trend::Increasing => {
-                    SCHED_THROTTLE_ACTION_COUNTER
-                        .with_label_values(&[&cf, "down"])
-                        .inc();
-                    // refresh down flow
-                    if self.last_target_file.is_none() {
+            // refresh down flow
+            if let Some(last_target_file) = self.last_target_file {
+                if checker.last_num_l0_files > last_target_file + 3 {
+                    if self.l0_target_flow > checker.short_term_l0_flow.get_avg() {
+                        self.l0_target_flow = checker.short_term_l0_flow.get_avg();
                         self.last_target_file = Some(checker.last_num_l0_files);
-                        self.l0_target_flow = checker.short_term_flush_flow.get_avg();
+                        SCHED_THROTTLE_ACTION_COUNTER
+                            .with_label_values(&[&cf, "refresh_down_flow"])
+                            .inc();
                     }
-                    self.limiter.speed_limit()
                 }
-                Trend::Decreasing => {
-                    SCHED_THROTTLE_ACTION_COUNTER
-                        .with_label_values(&[&cf, "keep_decr"])
-                        .inc();
-                    self.limiter.speed_limit()
-                }
-                Trend::NoTrend => {
-                    SCHED_THROTTLE_ACTION_COUNTER
-                        .with_label_values(&[&cf, "keep"])
-                        .inc();
-                    self.limiter.speed_limit()
-                }
+            } else {
+                self.last_target_file = Some(checker.last_num_l0_files);
+                self.l0_target_flow = checker.short_term_flush_flow.get_avg();
             }
+            self.limiter.speed_limit()
         } else if is_throttled && !should_throttle {
             if checker.long_term_num_l0_files.get_avg() >= self.l0_files_threshold as f64 * 0.5 
-            && checker.long_term_num_l0_files.get_recent() as f64
-                >= self.l0_files_threshold as f64 * 0.5
+            // && checker.long_term_num_l0_files.get_recent() as f64
+            //     >= self.l0_files_threshold as f64 * 0.5
             {
                 SCHED_THROTTLE_ACTION_COUNTER
                     .with_label_values(&[&cf, "keep2"])
@@ -829,19 +814,20 @@ impl<E: Engine> FlowChecker<E> {
                     .inc();
                 self.limiter.speed_limit()
             } else {
-                if self.last_target_file.is_some()
-                    && checker.short_term_flush_flow.get_avg() < self.l0_target_flow
-                {
-                    SCHED_THROTTLE_ACTION_COUNTER
-                        .with_label_values(&[&cf, "up"])
-                        .inc();
-                    self.limiter.speed_limit() * (1.0 + LIMIT_UP_PERCENT)
-                } else {
-                    SCHED_THROTTLE_ACTION_COUNTER
-                        .with_label_values(&[&cf, "up_keep"])
-                        .inc();
-                    self.limiter.speed_limit()
+                if self.last_target_file.is_some() {
+                    if self.cf_checkers[&cf].short_term_l0_flow.get_avg() > self.l0_target_flow {
+                        let new = 0.5
+                            * self.cf_checkers[&cf].short_term_l0_flow.get_avg()
+                            + 0.5 * self.l0_target_flow;
+                        if new > self.l0_target_flow {
+                            self.l0_target_flow = new;
+                            SCHED_THROTTLE_ACTION_COUNTER
+                                .with_label_values(&[&cf, "refresh_up_flow"])
+                                .inc();
+                        }
+                    }
                 }
+                self.limiter.speed_limit()
             }
         } else {
             INFINITY
@@ -942,15 +928,14 @@ impl<E: Engine> FlowChecker<E> {
                             .with_label_values(&[&cf, "down_flow"])
                             .inc();
                         self.down_flow(cf);
-                    } else if num_l0_files > last_target_file + 3 {
-                        if self.l0_target_flow > self.cf_checkers[&cf].short_term_l0_flow.get_avg() {
-                            self.l0_target_flow = self.cf_checkers[&cf].short_term_l0_flow.get_avg();
-                            self.last_target_file = Some(num_l0_files);
-                            SCHED_THROTTLE_ACTION_COUNTER
-                                .with_label_values(&[&cf, "refresh_down_flow"])
-                                .inc();
-                            self.down_flow(cf);
-                        }
+                    } else if (self.cf_checkers[&cf].short_term_flush_flow.get_avg() < self.l0_target_flow
+                        || (self.cf_checkers[&cf].short_term_flush_flow.get_recent() as f64) < self.l0_target_flow)
+                        && self.recorder.get_recent() as f64 > self.limiter.speed_limit() * 0.95
+                    {
+                        SCHED_THROTTLE_ACTION_COUNTER
+                            .with_label_values(&[&cf, "slow_up"])
+                            .inc();
+                        self.update_speed_limit(self.limiter.speed_limit() * (1.0 + LIMIT_UP_PERCENT));
                     } else {
                         SCHED_THROTTLE_ACTION_COUNTER
                             .with_label_values(&[&cf, "keep_flow"])
@@ -971,23 +956,18 @@ impl<E: Engine> FlowChecker<E> {
                         .inc();
                 }
             } else {
-                if self.last_target_file.is_some() {
-                    if self.cf_checkers[&cf].short_term_l0_flow.get_avg() > self.l0_target_flow
-                        && num_l0_files <= 1
-                    {
-                        self.l0_target_flow = 0.5
-                            * self.cf_checkers[&cf].short_term_l0_flow.get_avg()
-                            + 0.5 * self.l0_target_flow;
-                        SCHED_THROTTLE_ACTION_COUNTER
-                            .with_label_values(&[&cf, "refresh_up_flow"])
-                            .inc();
-                    }
-                    if self.cf_checkers[&cf].short_term_l0_flow.get_avg() > self.l0_target_flow {
-                        SCHED_THROTTLE_ACTION_COUNTER
-                            .with_label_values(&[&cf, "want_to_reset_target_flow"])
-                            .inc();
-                        // self.last_target_file = None;
-                    }
+                if self.last_target_file.is_some()
+                    && checker.short_term_flush_flow.get_avg() < self.l0_target_flow
+                    && self.recorder.get_recent() as f64 > self.limiter.speed_limit() * 0.95
+                {
+                    SCHED_THROTTLE_ACTION_COUNTER
+                        .with_label_values(&[&cf, "up"])
+                        .inc();
+                    self.update_speed_limit(self.limiter.speed_limit() * (1.0 + LIMIT_UP_PERCENT))
+                } else {
+                    SCHED_THROTTLE_ACTION_COUNTER
+                        .with_label_values(&[&cf, "up_keep"])
+                        .inc();
                 }
             }
         }
