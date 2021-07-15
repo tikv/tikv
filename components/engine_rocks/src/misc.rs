@@ -1,13 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::engine::RocksEngine;
-use crate::import::RocksIngestExternalFileOptions;
 use crate::sst::RocksSstWriterBuilder;
 use crate::{util, RocksSstWriter};
 use engine_traits::{
-    CFNamesExt, DeleteStrategy, ImportExt, IngestExternalFileOptions, IterOptions, Iterable,
-    Iterator, MiscExt, Mutable, Range, Result, SstWriter, SstWriterBuilder, WriteBatch,
-    WriteBatchExt, ALL_CFS,
+    CFNamesExt, DeleteStrategy, ImportExt, IterOptions, Iterable, Iterator, MiscExt, Mutable,
+    Range, Result, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt, ALL_CFS,
 };
 use rocksdb::Range as RocksRange;
 use tikv_util::box_try;
@@ -82,9 +80,7 @@ impl RocksEngine {
 
         if let Some(writer) = writer_wrapper {
             writer.finish()?;
-            let mut opt = RocksIngestExternalFileOptions::new();
-            opt.move_files(true);
-            self.ingest_external_file_cf(cf, &opt, &[sst_path.as_str()])?;
+            self.ingest_external_file_cf(cf, &[sst_path.as_str()])?;
         } else {
             let mut wb = self.write_batch();
             for key in data.iter() {

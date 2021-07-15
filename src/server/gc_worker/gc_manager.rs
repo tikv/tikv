@@ -6,8 +6,8 @@ use std::cmp::Ordering;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{mpsc, Arc};
 use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
-use std::time::{Duration, Instant};
-use tikv_util::worker::FutureScheduler;
+use std::time::Duration;
+use tikv_util::{time::Instant, worker::FutureScheduler};
 use txn_types::{Key, TimeStamp};
 
 use crate::server::metrics::*;
@@ -489,7 +489,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
         need_rewind: &mut bool,
         end: &mut Option<Key>,
     ) {
-        if self.safe_point_last_check_time.elapsed() < self.cfg.poll_safe_point_interval
+        if self.safe_point_last_check_time.saturating_elapsed() < self.cfg.poll_safe_point_interval
             && !self.cfg.always_check_safe_point
         {
             // Skip this check.
