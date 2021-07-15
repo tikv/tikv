@@ -305,15 +305,12 @@ impl ImportDir {
             let cf = meta.get_cf_name();
             super::prepare_sst_for_ingestion(&path.save, &path.clone, key_manager.as_deref())?;
             ingest_bytes += meta.get_length();
-            engine.reset_global_seq(cf, &path.clone)?;
             paths.entry(cf).or_insert_with(Vec::new).push(path);
         }
 
-        let mut opts = E::IngestExternalFileOptions::new();
-        opts.move_files(true);
         for (cf, cf_paths) in paths {
             let files: Vec<&str> = cf_paths.iter().map(|p| p.clone.to_str().unwrap()).collect();
-            engine.ingest_external_file_cf(cf, &opts, &files)?;
+            engine.ingest_external_file_cf(cf, &files)?;
         }
         INPORTER_INGEST_COUNT.observe(metas.len() as _);
         IMPORTER_INGEST_BYTES.observe(ingest_bytes as _);
