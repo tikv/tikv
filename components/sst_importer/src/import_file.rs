@@ -11,9 +11,7 @@ use engine_rocks::{
     encryption::get_env as get_encrypted_env, file_system::get_env as get_inspected_env,
     RocksSstReader,
 };
-use engine_traits::{
-    EncryptionKeyManager, KvEngine, SSTMetaInfo, SstReader,
-};
+use engine_traits::{EncryptionKeyManager, KvEngine, SSTMetaInfo, SstReader};
 use file_system::{get_io_rate_limiter, sync_dir, File, OpenOptions};
 use kvproto::import_sstpb::*;
 use tikv_util::time::Instant;
