@@ -12,7 +12,7 @@ use engine_rocks::{
     RocksSstReader,
 };
 use engine_traits::{
-    EncryptionKeyManager, IngestExternalFileOptions, KvEngine, SSTMetaInfo, SstReader,
+    EncryptionKeyManager, KvEngine, SSTMetaInfo, SstReader,
 };
 use file_system::{get_io_rate_limiter, sync_dir, File, OpenOptions};
 use kvproto::import_sstpb::*;
