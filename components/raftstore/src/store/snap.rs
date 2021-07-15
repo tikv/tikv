@@ -8,7 +8,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
-use std::time::Instant;
 use std::{error::Error as StdError, result, str, thread, time, u64};
 
 use fail::fail_point;
@@ -33,7 +32,7 @@ use file_system::{
     File, Metadata, OpenOptions,
 };
 use keys::{enc_end_key, enc_start_key};
-use tikv_util::time::{duration_to_sec, Limiter};
+use tikv_util::time::{duration_to_sec, Instant, Limiter};
 use tikv_util::HandyRwLock;
 use tikv_util::{box_err, box_try, debug, error, info, map, warn};
 
@@ -588,7 +587,7 @@ impl Snapshot {
         )
     }
 
-    fn validate(&self, engine: &impl KvEngine, for_send: bool) -> RaftStoreResult<()> {
+    fn validate(&self, for_send: bool) -> RaftStoreResult<()> {
         for cf_file in &self.cf_files {
             if cf_file.size == 0 {
                 // Skip empty file. The checksum of this cf file should be 0 and
@@ -596,10 +595,6 @@ impl Snapshot {
                 continue;
             }
 
-            if !plain_file_used(cf_file.cf) {
-                // Reset global seq number.
-                engine.reset_global_seq(&cf_file.cf, &cf_file.path)?;
-            }
             check_file_size_and_checksum(
                 &cf_file.path,
                 cf_file.size,
@@ -666,7 +661,7 @@ impl Snapshot {
     {
         fail_point!("snapshot_enter_do_build");
         if self.exists() {
-            match self.validate(engine, true) {
+            match self.validate(true) {
                 Ok(()) => return Ok(()),
                 Err(e) => {
                     error!(?e;
@@ -802,21 +797,21 @@ impl Snapshot {
         snap_data.set_version(SNAPSHOT_VERSION);
         snap_data.set_meta(self.meta_file.meta.clone());
 
-        SNAPSHOT_BUILD_TIME_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
+        SNAPSHOT_BUILD_TIME_HISTOGRAM.observe(duration_to_sec(t.saturating_elapsed()) as f64);
         info!(
             "scan snapshot";
             "region_id" => region.get_id(),
             "snapshot" => self.path(),
             "key_count" => stat.kv_count,
             "size" => total_size,
-            "takes" => ?t.elapsed(),
+            "takes" => ?t.saturating_elapsed(),
         );
 
         Ok(())
     }
 
     pub fn apply<EK: KvEngine>(&mut self, options: ApplyOptions<EK>) -> Result<()> {
-        box_try!(self.validate(&options.db, false));
+        box_try!(self.validate(false));
 
         let abort_checker = ApplyAbortChecker(options.abort);
         let coprocessor_host = options.coprocessor_host;

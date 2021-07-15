@@ -126,8 +126,10 @@ fn test_ingest_reentrant() {
     assert!(!resp.has_error());
 
     let checksum2 = calc_crc32(save_path).unwrap();
-    // Checksums are different because ingest changed global seqno in sst file.
-    assert_ne!(checksum1, checksum2);
+    // TODO: Remove this once write_global_seqno is deprecated.
+    // Checksums are the same since the global seqno in the SST file no longer gets updated with the
+    // default setting, which is write_global_seqno=false.
+    assert_eq!(checksum1, checksum2);
     // Do ingest again and it can be reentrant
     let resp = import.ingest(&ingest).unwrap();
     assert!(!resp.has_error());

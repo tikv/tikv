@@ -7,7 +7,6 @@ use std::io::{self, Write};
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
 
 use futures::executor::ThreadPool;
 use kvproto::backup::StorageBackend;
@@ -24,11 +23,11 @@ use engine_rocks::{
     RocksSstReader,
 };
 use engine_traits::{
-    name_to_cf, EncryptionKeyManager, IngestExternalFileOptions, Iterator, KvEngine, SSTMetaInfo,
-    SeekKey, SstExt, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
+    name_to_cf, EncryptionKeyManager, Iterator, KvEngine, SSTMetaInfo, SeekKey, SstExt, SstReader,
+    SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 };
 use file_system::{get_io_rate_limiter, sync_dir, File, OpenOptions};
-use tikv_util::time::Limiter;
+use tikv_util::time::{Instant, Limiter};
 use txn_types::{is_short_value, Key, TimeStamp, Write as KvWrite, WriteRef, WriteType};
 
 use super::Config;
@@ -213,7 +212,7 @@ impl SSTImporter {
 
             IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["read"])
-                .observe(start_read.elapsed().as_secs_f64());
+                .observe(start_read.saturating_elapsed().as_secs_f64());
 
             url
         };
@@ -314,7 +313,7 @@ impl SSTImporter {
             }
             IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["rename"])
-                .observe(start_rename_rewrite.elapsed().as_secs_f64());
+                .observe(start_rename_rewrite.saturating_elapsed().as_secs_f64());
             return Ok(Some(range));
         }
 
@@ -389,14 +388,14 @@ impl SSTImporter {
 
         IMPORTER_DOWNLOAD_DURATION
             .with_label_values(&["rewrite"])
-            .observe(start_rename_rewrite.elapsed().as_secs_f64());
+            .observe(start_rename_rewrite.saturating_elapsed().as_secs_f64());
 
         if let Some(start_key) = first_key {
             let start_finish = Instant::now();
             sst_writer.finish()?;
             IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["finish"])
-                .observe(start_finish.elapsed().as_secs_f64());
+                .observe(start_finish.saturating_elapsed().as_secs_f64());
 
             let mut final_range = Range::default();
             final_range.set_start(start_key);
@@ -666,21 +665,18 @@ impl ImportDir {
             let cf = meta.get_cf_name();
             super::prepare_sst_for_ingestion(&path.save, &path.clone, key_manager.as_deref())?;
             ingest_bytes += meta.get_length();
-            engine.reset_global_seq(cf, &path.clone)?;
             paths.entry(cf).or_insert_with(Vec::new).push(path);
         }
 
-        let mut opts = E::IngestExternalFileOptions::new();
-        opts.move_files(true);
         for (cf, cf_paths) in paths {
             let files: Vec<&str> = cf_paths.iter().map(|p| p.clone.to_str().unwrap()).collect();
-            engine.ingest_external_file_cf(cf, &opts, &files)?;
+            engine.ingest_external_file_cf(cf, &files)?;
         }
         INPORTER_INGEST_COUNT.observe(metas.len() as _);
         IMPORTER_INGEST_BYTES.observe(ingest_bytes as _);
         IMPORTER_INGEST_DURATION
             .with_label_values(&["ingest"])
-            .observe(start.elapsed().as_secs_f64());
+            .observe(start.saturating_elapsed().as_secs_f64());
         Ok(())
     }
 
