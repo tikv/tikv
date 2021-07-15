@@ -228,7 +228,7 @@ impl<E: KvEngine> RawSSTWriter<E> {
             .with_label_values(&["raw_default_cf"])
             .inc_by(self.default_bytes);
 
-        return Ok(vec![self.default_meta]);
+        Ok(vec![self.default_meta])
     }
 }
 
