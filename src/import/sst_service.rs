@@ -68,9 +68,13 @@ where
         importer: Arc<SSTImporter>,
         security_mgr: Arc<SecurityManager>,
     ) -> ImportSSTService<Router> {
+        let props = tikv_util::thread_group::current_properties();
         let threads = ThreadPoolBuilder::new()
             .pool_size(cfg.num_threads)
             .name_prefix("sst-importer")
+            .after_start(move |_| {
+                tikv_util::thread_group::set_properties(props.clone());
+            })
             .create()
             .unwrap();
         ImportSSTService {

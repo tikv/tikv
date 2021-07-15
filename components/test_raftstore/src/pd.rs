@@ -3,12 +3,12 @@
 use futures::future::{err, ok};
 use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures::{Future, Stream};
+use std::cmp;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
-use std::{cmp, thread};
 use tokio_timer::timer::Handle;
 
 use kvproto::metapb;
@@ -938,11 +938,7 @@ impl TestPdClient {
             Ok(mut c) => {
                 c.stores.remove(&store_id);
             }
-            Err(e) => {
-                if !thread::panicking() {
-                    panic!("failed to acquire write lock: {:?}", e)
-                }
-            }
+            Err(e) => safe_panic!("failed to acquire write lock: {:?}", e),
         }
     }
 
