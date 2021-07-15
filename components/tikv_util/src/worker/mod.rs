@@ -86,7 +86,7 @@ pub trait Runnable<T: Display> {
             let task_str = format!("{}", t);
             let timer = Instant::now_coarse();
             self.run(t);
-            slow_log!(timer.elapsed(), "handle task {}", task_str);
+            slow_log!(timer.saturating_elapsed(), "handle task {}", task_str);
         }
     }
 
@@ -341,9 +341,13 @@ impl<T: Display + Send + 'static> Worker<T> {
         let rx = receiver.take().unwrap();
         let counter = Arc::clone(&self.scheduler.counter);
         let batch_size = self.batch_size;
+        let props = crate::thread_group::current_properties();
         let h = ThreadBuilder::new()
             .name(thd_name!(self.scheduler.name.as_ref()))
-            .spawn(move || poll(runner, rx, counter, batch_size, timer))?;
+            .spawn(move || {
+                crate::thread_group::set_properties(props);
+                poll(runner, rx, counter, batch_size, timer)
+            })?;
         self.handle = Some(h);
         Ok(())
     }

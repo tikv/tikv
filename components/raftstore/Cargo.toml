@@ -88,5 +88,6 @@ git = "https://github.com/tikv/yatp.git"
 branch = "tikv-4.0"
 
 [dev-dependencies]
+engine_rocks = { path = "../engine_rocks", default-features = false }
 panic_hook = { path = "../panic_hook" }
 test_sst_importer = { path = "../test_sst_importer" }

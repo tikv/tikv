@@ -188,14 +188,14 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
                 };
                 tls_collect_scan_details(tag.get_str(), &statistics);
                 slow_log!(
-                    timer.elapsed(),
+                    timer.saturating_elapsed(),
                     "[region {}] scheduler handle command: {}, ts: {}",
                     region_id,
                     tag,
                     ts
                 );
 
-                tls_collect_read_duration(tag.get_str(), read_duration.elapsed());
+                tls_collect_read_duration(tag.get_str(), read_duration.saturating_elapsed());
             })
             .unwrap();
     }

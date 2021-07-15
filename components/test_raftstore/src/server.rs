@@ -160,7 +160,7 @@ impl Simulator for ServerCluster {
         let raft_engine = RaftKv::new(sim_router.clone());
 
         // Create coprocessor.
-        let mut coprocessor_host = CoprocessorHost::new(router.clone());
+        let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
 
         let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
         region_info_accessor.start();
@@ -209,7 +209,7 @@ impl Simulator for ServerCluster {
         };
         let import_service = ImportSSTService::new(
             cfg.import.clone(),
-            router.clone(),
+            sim_router.clone(),
             Arc::clone(&engines.kv),
             Arc::clone(&importer),
             security_mgr.clone(),
@@ -299,14 +299,13 @@ impl Simulator for ServerCluster {
         // Register the role change observer of the lock manager.
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
 
-        let pessimistic_txn_cfg = cfg.pessimistic_txn.clone();
+        let pessimistic_txn_cfg = cfg.pessimistic_txn;
 
         let mut split_check_worker = Worker::new("split-check");
         let split_check_runner = SplitCheckRunner::new(
             Arc::clone(&engines.kv),
             router.clone(),
             coprocessor_host.clone(),
-            cfg.coprocessor,
         );
         split_check_worker.start(split_check_runner).unwrap();
 
@@ -449,8 +448,7 @@ pub fn new_incompatible_server_cluster(id: u64, count: usize) -> Cluster<ServerC
     Cluster::new(id, count, sim, pd_client)
 }
 
-pub fn must_new_cluster() -> (Cluster<ServerCluster>, metapb::Peer, Context) {
-    let count = 1;
+pub fn must_new_cluster_mul(count: usize) -> (Cluster<ServerCluster>, metapb::Peer, Context) {
     let mut cluster = new_server_cluster(0, count);
     cluster.run();
 
@@ -466,7 +464,13 @@ pub fn must_new_cluster() -> (Cluster<ServerCluster>, metapb::Peer, Context) {
 }
 
 pub fn must_new_cluster_and_kv_client() -> (Cluster<ServerCluster>, TikvClient, Context) {
-    let (cluster, leader, ctx) = must_new_cluster();
+    must_new_cluster_and_kv_client_mul(1)
+}
+
+pub fn must_new_cluster_and_kv_client_mul(
+    count: usize,
+) -> (Cluster<ServerCluster>, TikvClient, Context) {
+    let (cluster, leader, ctx) = must_new_cluster_mul(count);
 
     let env = Arc::new(Environment::new(1));
     let channel =
@@ -477,7 +481,7 @@ pub fn must_new_cluster_and_kv_client() -> (Cluster<ServerCluster>, TikvClient, 
 }
 
 pub fn must_new_cluster_and_debug_client() -> (Cluster<ServerCluster>, DebugClient, u64) {
-    let (cluster, leader, _) = must_new_cluster();
+    let (cluster, leader, _) = must_new_cluster_mul(1);
 
     let env = Arc::new(Environment::new(1));
     let channel =

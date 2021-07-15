@@ -9,6 +9,7 @@
 //! We keep these components in the `TiKVServer` struct.
 
 use crate::{setup::*, signal_handler};
+use cdc::MemoryQuota;
 use encryption::DataKeyManager;
 use engine::rocks;
 use engine_rocks::{
@@ -66,6 +67,7 @@ use tikv_util::{
     check_environment_variables,
     config::ensure_dir_exist,
     sys::sys_quota::SysQuota,
+    thread_group::GroupProperties,
     time::Monitor,
     worker::{FutureWorker, Worker},
 };
@@ -143,10 +145,12 @@ struct Servers {
     node: Node<RpcClient>,
     importer: Arc<SSTImporter>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
+    cdc_memory_quota: MemoryQuota,
 }
 
 impl TiKVServer {
     fn init(mut config: TiKvConfig) -> TiKVServer {
+        tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
         // It is okay use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only
         // used during startup process.
@@ -167,7 +171,10 @@ impl TiKVServer {
 
         // Initialize raftstore channels.
         let (router, system) = fsm::create_raft_batch_system(&config.raft_store);
-        let mut coprocessor_host = Some(CoprocessorHost::new(router.clone()));
+        let mut coprocessor_host = Some(CoprocessorHost::new(
+            router.clone(),
+            config.coprocessor.clone(),
+        ));
         let region_info_accessor = RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap());
         region_info_accessor.start();
 
@@ -544,7 +551,6 @@ impl TiKVServer {
             engines.engines.kv.clone(),
             self.router.clone(),
             coprocessor_host.clone(),
-            self.config.coprocessor.clone(),
         );
         split_check_worker.start(split_check_runner).unwrap();
         cfg_controller.register(
@@ -605,6 +611,7 @@ impl TiKVServer {
 
         // Start CDC.
         let raft_router = self.engines.as_ref().unwrap().raft_router.clone();
+        let cdc_memory_quota = MemoryQuota::new(self.config.cdc.sink_memory_quota.0 as _);
         let cdc_endpoint = cdc::Endpoint::new(
             &self.config.cdc,
             self.pd_client.clone(),
@@ -612,6 +619,7 @@ impl TiKVServer {
             raft_router,
             cdc_ob,
             engines.store_meta.clone(),
+            cdc_memory_quota.clone(),
         );
         let cdc_timer = cdc_endpoint.new_timer();
         cdc_worker
@@ -625,6 +633,7 @@ impl TiKVServer {
             node,
             importer,
             cdc_scheduler,
+            cdc_memory_quota,
         });
 
         server_config
@@ -637,7 +646,7 @@ impl TiKVServer {
         // Import SST service.
         let import_service = ImportSSTService::new(
             self.config.import.clone(),
-            engines.raft_router.get_router(),
+            engines.raft_router.clone(),
             engines.engines.kv.clone(),
             servers.importer.clone(),
             self.security_mgr.clone(),
@@ -651,9 +660,13 @@ impl TiKVServer {
         }
 
         // The `DebugService` and `DiagnosticsService` will share the same thread pool
+        let props = tikv_util::thread_group::current_properties();
         let pool = Builder::new()
             .name_prefix(thd_name!("debugger"))
             .pool_size(1)
+            .after_start(move || {
+                tikv_util::thread_group::set_properties(props.clone());
+            })
             .create();
 
         // Debug service.
@@ -733,13 +746,15 @@ impl TiKVServer {
             tikv::config::Module::Backup,
             Box::new(backup_endpoint.get_config_manager()),
         );
-        let backup_timer = backup_endpoint.new_timer();
         backup_worker
-            .start_with_timer(backup_endpoint, backup_timer)
+            .start(backup_endpoint)
             .unwrap_or_else(|e| fatal!("failed to start backup endpoint: {}", e));
 
-        let cdc_service =
-            cdc::Service::new(servers.cdc_scheduler.clone(), self.security_mgr.clone());
+        let cdc_service = cdc::Service::new(
+            servers.cdc_scheduler.clone(),
+            self.security_mgr.clone(),
+            servers.cdc_memory_quota.clone(),
+        );
         if servers
             .server
             .register_service(create_change_data(cdc_service))
@@ -812,6 +827,7 @@ impl TiKVServer {
     }
 
     fn stop(mut self) {
+        tikv_util::thread_group::mark_shutdown();
         if let Some(status_server) = self.status_server.take() {
             status_server.stop();
         }

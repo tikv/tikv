@@ -4,7 +4,7 @@ use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use kvproto::raft_serverpb::*;
 use raft::eraftpb::{Message, MessageType};
@@ -15,7 +15,7 @@ use raftstore::store::*;
 use raftstore::Result;
 use test_raftstore::*;
 use tikv_util::config::*;
-use tikv_util::HandyRwLock;
+use tikv_util::{time::Instant, HandyRwLock};
 
 fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
@@ -139,7 +139,7 @@ fn test_server_snap_gc() {
         if snap_index != first_snap_idx {
             break;
         }
-        if now.elapsed() >= Duration::from_secs(5) {
+        if now.saturating_elapsed() >= Duration::from_secs(5) {
             panic!("can't get any snap after {}", first_snap_idx);
         }
     }
@@ -170,7 +170,7 @@ fn test_server_snap_gc() {
         if snap_files.is_empty() {
             return;
         }
-        if now.elapsed() > Duration::from_secs(10) {
+        if now.saturating_elapsed() > Duration::from_secs(10) {
             panic!("snap files is still not empty: {:?}", snap_files);
         }
         sleep_ms(20);

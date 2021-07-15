@@ -5,11 +5,12 @@ use std::result::Result;
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
 use std::thread::{Builder, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use engine_traits::KvEngines;
 use engine_traits::MetricsFlusher;
 use rocksdb::DB;
+use tikv_util::time::Instant;
 
 use crate::rocks_metrics::*;
 use crate::rocks_metrics_defs::*;
@@ -50,7 +51,7 @@ impl MetricsFlusher<RocksEngine, RocksEngine> for RocksMetricsFlusher {
                 while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(interval) {
                     flush_metrics(&db, "kv", shared_block_cache);
                     flush_metrics(&raft_db, "raft", shared_block_cache);
-                    if last_reset.elapsed() >= reset_interval {
+                    if last_reset.saturating_elapsed() >= reset_interval {
                         db.reset_statistics();
                         raft_db.reset_statistics();
                         last_reset = Instant::now();

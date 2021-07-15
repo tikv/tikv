@@ -5,9 +5,11 @@ use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use futures::Sink as Sink03;
 use futures::{Future, Stream};
-use futures03::compat::Compat;
+use futures03::{
+    compat::{Compat, Compat01As03Sink},
+    FutureExt,
+};
 use grpcio::{DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
 use kvproto::cdcpb::{
     ChangeData, ChangeDataEvent, ChangeDataRequest, Compatibility, Event, ResolvedTs,
@@ -18,7 +20,7 @@ use security::{check_common_name, SecurityManager};
 use tikv_util::collections::HashMap;
 use tikv_util::worker::*;
 
-use crate::channel::{canal, Sink};
+use crate::channel::{channel, MemoryQuota, Sink};
 use crate::delegate::{Downstream, DownstreamID};
 use crate::endpoint::{Deregister, Task};
 
@@ -258,16 +260,22 @@ impl Conn {
 pub struct Service {
     scheduler: Scheduler<Task>,
     security_mgr: Arc<SecurityManager>,
+    memory_quota: MemoryQuota,
 }
 
 impl Service {
     /// Create a ChangeData service.
     ///
     /// It requires a scheduler of an `Endpoint` in order to schedule tasks.
-    pub fn new(scheduler: Scheduler<Task>, security_mgr: Arc<SecurityManager>) -> Service {
+    pub fn new(
+        scheduler: Scheduler<Task>,
+        security_mgr: Arc<SecurityManager>,
+        memory_quota: MemoryQuota,
+    ) -> Service {
         Service {
             scheduler,
             security_mgr,
+            memory_quota,
         }
     }
 }
@@ -284,7 +292,7 @@ impl ChangeData for Service {
         }
         // TODO explain buffer.
         let buffer = 1024;
-        let (event_sink, event_drain) = canal(buffer);
+        let (event_sink, mut event_drain) = channel(buffer, self.memory_quota.clone());
         let peer = ctx.peer();
         let conn = Conn::new(event_sink, peer);
         let conn_id = conn.get_id();
@@ -360,9 +368,9 @@ impl ChangeData for Service {
         let peer = ctx.peer();
         let scheduler = self.scheduler.clone();
 
-        let rx = event_drain.drain_grpc_message();
-        let send_resp = sink.send_all(Compat::new(rx));
-        ctx.spawn(send_resp.then(move |res| {
+        ctx.spawn(Compat::new(async move {
+            let mut sink = Compat01As03Sink::new(sink);
+            let res = event_drain.forward(&mut sink).await;
             // Unregister this downstream only.
             let deregister = Deregister::Conn(conn_id);
             if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
@@ -376,8 +384,7 @@ impl ChangeData for Service {
                     warn!("cdc send failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
                 }
             }
-            Ok(())
-        }));
+        }.unit_error().boxed()));
     }
 }
 
@@ -386,6 +393,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use futures::sink::Sink;
     use futures03::compat::Compat01As03;
     use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder, WriteFlags};
     #[cfg(feature = "prost-codec")]
@@ -483,11 +491,12 @@ mod tests {
         );
     }
 
-    fn new_rpc_suite() -> (Server, ChangeDataClient, Receiver<Option<Task>>) {
+    fn new_rpc_suite(max_bytes: usize) -> (Server, ChangeDataClient, Receiver<Option<Task>>) {
         let security_mgr = Arc::new(SecurityManager::new(&Default::default()).unwrap());
         let env = Arc::new(EnvBuilder::new().build());
+        let memory_quota = MemoryQuota::new(max_bytes);
         let (scheduler, rx) = dummy_scheduler();
-        let cdc_service = Service::new(scheduler, security_mgr);
+        let cdc_service = Service::new(scheduler, security_mgr, memory_quota);
         let builder =
             ServerBuilder::new(env.clone()).register_service(create_change_data(cdc_service));
         let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
@@ -502,7 +511,8 @@ mod tests {
     #[test]
     fn test_flow_control() {
         // Disable CDC sink memory quota.
-        let (_server, client, task_rx) = new_rpc_suite();
+        let max_bytes = std::usize::MAX;
+        let (_server, client, task_rx) = new_rpc_suite(max_bytes);
         // Create a event feed stream.
         let (tx, rx) = client.event_feed().unwrap();
         let mut rx = Compat01As03::new(rx);
@@ -531,7 +541,10 @@ mod tests {
         let must_fill_window = || {
             let mut window_size = 0;
             loop {
-                if poll_timeout(&mut send(), Duration::from_millis(100)).is_err() {
+                if matches!(
+                    poll_timeout(&mut send(), Duration::from_millis(100)),
+                    Err(_) | Ok(Err(_))
+                ) {
                     // Window is filled and flow control in sink is triggered.
                     break;
                 }
