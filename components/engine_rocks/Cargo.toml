@@ -71,11 +71,7 @@ protobuf = "2"
 fail = "0.4"
 
 [dependencies.rocksdb]
-# TODO(MrCroxx): move back to tikv repo after pr#635 is merged.
-# git = "https://github.com/tikv/rust-rocksdb.git"
-# package = "rocksdb"
-# features = ["encryption", "static_libcpp"]
-path = "../../../rust-rocksdb"
+git = "https://github.com/tikv/rust-rocksdb.git"
 package = "rocksdb"
 features = ["encryption", "static_libcpp"]
 

@@ -25,7 +25,7 @@ impl CompactionFilterFactory for RaftLogCompactionFilterFactory {
         unsafe { new_compaction_filter_raw(name, filter) }
     }
 
-    fn should_filter_table_file_creation(&self, reason: &DBTableFileCreationReason) -> bool {
+    fn should_filter_table_file_creation(&self, reason: DBTableFileCreationReason) -> bool {
         match reason {
             DBTableFileCreationReason::Compaction | DBTableFileCreationReason::Flush => true,
             DBTableFileCreationReason::Recovery | DBTableFileCreationReason::Misc => false,
