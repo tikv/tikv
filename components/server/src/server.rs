@@ -152,6 +152,7 @@ pub fn run_tikv(config: TiKvConfig) {
     // and that the ability to launch with kv as PanicEngine mostly
     // exists to prove that alternate engines can typecheck,
     // while other engines are in development.
+    #[allow(clippy::collapsible_else_if)]
     if std::env::var("TIKV_USE_PANIC_KV_ENGINE").ok().is_none() {
         if !config.raft_engine.enable {
             run_impl!(RocksEngine, RocksEngine)
