@@ -392,5 +392,6 @@ fn test_duplicate_and_close() {
     });
     assert_eq!(ret.len(), (data_count - 1000) as usize * 4);
     req.set_mode(SwitchMode::Normal);
-    import.switch_mode(&req).unwrap();
+    let r = import.switch_mode(&req);
+    assert!(r.is_ok());
 }
