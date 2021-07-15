@@ -76,14 +76,14 @@ impl<E: KvEngine> TxnSSTWriter<E> {
             (PairOp::Put, false) => {
                 self.default.put(&k, value)?;
                 self.default_entries += 1;
-                self.default_bytes += value.len() as u64;
+                self.default_bytes += (k.len() + value.len()) as u64;
                 KvWrite::new(WriteType::Put, commit_ts, None)
             }
         };
         let write = w.as_ref().to_bytes();
         self.write.put(&k, &write)?;
         self.write_entries += 1;
-        self.write_bytes += write.len() as u64;
+        self.write_bytes += (k.len() + write.len()) as u64;
         Ok(())
     }
 
@@ -167,11 +167,12 @@ impl<E: KvEngine> RawSSTWriter<E> {
             PairOp::Delete => {
                 self.default.delete(&k)?;
                 self.default_deletes += 1;
+                self.default_bytes += k.len() as u64;
             }
             PairOp::Put => {
                 self.default.put(&k, value)?;
                 self.default_entries += 1;
-                self.default_bytes += value.len() as u64;
+                self.default_bytes += (k.len() + value.len()) as u64;
             }
         }
         Ok(())
