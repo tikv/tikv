@@ -1,13 +1,13 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
-use std::time::Instant;
 
 use fail;
 
 use test_raftstore::*;
 
 use tikv_util::config::*;
+use tikv_util::time::Instant;
 
 #[test]
 fn test_pending_peers() {
@@ -94,7 +94,7 @@ fn test_pending_snapshot() {
     let start = Instant::now();
     loop {
         if cluster.pd_client.get_pending_peers().get(&1).is_none()
-            || start.elapsed() > election_timeout * 10
+            || start.saturating_elapsed() > election_timeout * 10
         {
             break;
         }

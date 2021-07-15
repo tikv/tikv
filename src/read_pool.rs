@@ -207,7 +207,7 @@ impl<E: Engine, R: FlowStatsReporter> ReadPoolRunner<E, R> {
         THREAD_LAST_TICK_TIME.with(|tls_last_tick| {
             let now = Instant::now_coarse();
             let last_tick = tls_last_tick.get();
-            if now.duration_since(last_tick) < TICK_INTERVAL {
+            if now.saturating_duration_since(last_tick) < TICK_INTERVAL {
                 return;
             }
             tls_last_tick.set(now);
