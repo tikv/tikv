@@ -11,6 +11,7 @@ use std::time::Duration;
 use engine_rocks::raw::{
     new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
     CompactionFilterFactory, CompactionFilterValueType, DBCompactionFilter,
+    DBTableFileCreationReason,
 };
 use engine_rocks::{
     RocksEngine, RocksMvccProperties, RocksUserCollectedPropertiesNoRc, RocksWriteBatch,
@@ -156,6 +157,13 @@ impl CompactionFilterInitializer<RocksEngine> for RocksEngine {
 pub struct WriteCompactionFilterFactory;
 
 impl CompactionFilterFactory for WriteCompactionFilterFactory {
+    fn should_filter_table_file_creation(&self, reason: DBTableFileCreationReason) -> bool {
+        match reason {
+            DBTableFileCreationReason::Compaction | DBTableFileCreationReason::Flush => true,
+            DBTableFileCreationReason::Recovery | DBTableFileCreationReason::Misc => false,
+        }
+    }
+
     fn create_compaction_filter(
         &self,
         context: &CompactionFilterContext,
