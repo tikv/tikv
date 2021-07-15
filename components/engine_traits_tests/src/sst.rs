@@ -15,13 +15,13 @@ use engine_traits::{ExternalSstFileInfo, SstExt, SstReader, SstWriter, SstWriter
 #[test]
 fn empty() -> Result<()> {
     let tempdir = tempdir();
-    let ref sst_path = tempdir
+    let sst_path = tempdir
         .path()
         .join("test-data.sst")
         .to_string_lossy()
         .to_string();
     let sst_builder = <KvTestEngine as SstExt>::SstWriterBuilder::new();
-    let sst_writer = sst_builder.build(sst_path)?;
+    let sst_writer = sst_builder.build(&sst_path)?;
 
     let res = sst_writer.finish();
 
@@ -36,18 +36,18 @@ fn empty() -> Result<()> {
 #[test]
 fn basic() -> Result<()> {
     let tempdir = tempdir();
-    let ref sst_path = tempdir
+    let sst_path = tempdir
         .path()
         .join("test-data.sst")
         .to_string_lossy()
         .to_string();
     let sst_builder = <KvTestEngine as SstExt>::SstWriterBuilder::new();
-    let mut sst_writer = sst_builder.build(sst_path)?;
+    let mut sst_writer = sst_builder.build(&sst_path)?;
 
     sst_writer.put(b"k1", b"v1")?;
     sst_writer.finish()?;
 
-    let sst_reader = <KvTestEngine as SstExt>::SstReader::open(sst_path)?;
+    let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path)?;
     let mut iter = sst_reader.iter();
 
     iter.seek(SeekKey::Start)?;
@@ -64,19 +64,19 @@ fn basic() -> Result<()> {
 #[test]
 fn forward() -> Result<()> {
     let tempdir = tempdir();
-    let ref sst_path = tempdir
+    let sst_path = tempdir
         .path()
         .join("test-data.sst")
         .to_string_lossy()
         .to_string();
     let sst_builder = <KvTestEngine as SstExt>::SstWriterBuilder::new();
-    let mut sst_writer = sst_builder.build(sst_path)?;
+    let mut sst_writer = sst_builder.build(&sst_path)?;
 
     sst_writer.put(b"k1", b"v1")?;
     sst_writer.put(b"k2", b"v2")?;
     sst_writer.finish()?;
 
-    let sst_reader = <KvTestEngine as SstExt>::SstReader::open(sst_path)?;
+    let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path)?;
     let mut iter = sst_reader.iter();
 
     iter.seek(SeekKey::Start)?;
@@ -101,19 +101,19 @@ fn forward() -> Result<()> {
 #[test]
 fn reverse() -> Result<()> {
     let tempdir = tempdir();
-    let ref sst_path = tempdir
+    let sst_path = tempdir
         .path()
         .join("test-data.sst")
         .to_string_lossy()
         .to_string();
     let sst_builder = <KvTestEngine as SstExt>::SstWriterBuilder::new();
-    let mut sst_writer = sst_builder.build(sst_path)?;
+    let mut sst_writer = sst_builder.build(&sst_path)?;
 
     sst_writer.put(b"k1", b"v1")?;
     sst_writer.put(b"k2", b"v2")?;
     sst_writer.finish()?;
 
-    let sst_reader = <KvTestEngine as SstExt>::SstReader::open(sst_path)?;
+    let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path)?;
     let mut iter = sst_reader.iter();
 
     iter.seek(SeekKey::End)?;
@@ -140,18 +140,18 @@ fn reverse() -> Result<()> {
 #[test]
 fn delete() -> Result<()> {
     let tempdir = tempdir();
-    let ref sst_path = tempdir
+    let sst_path = tempdir
         .path()
         .join("test-data.sst")
         .to_string_lossy()
         .to_string();
     let sst_builder = <KvTestEngine as SstExt>::SstWriterBuilder::new();
-    let mut sst_writer = sst_builder.build(sst_path)?;
+    let mut sst_writer = sst_builder.build(&sst_path)?;
 
     sst_writer.delete(b"k1")?;
     sst_writer.finish()?;
 
-    let sst_reader = <KvTestEngine as SstExt>::SstReader::open(sst_path)?;
+    let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path)?;
     let mut iter = sst_reader.iter();
 
     iter.seek(SeekKey::Start)?;
@@ -186,13 +186,13 @@ fn delete() -> Result<()> {
 #[test]
 fn same_key() -> Result<()> {
     let tempdir = tempdir();
-    let ref sst_path = tempdir
+    let sst_path = tempdir
         .path()
         .join("test-data.sst")
         .to_string_lossy()
         .to_string();
     let sst_builder = <KvTestEngine as SstExt>::SstWriterBuilder::new();
-    let mut sst_writer = sst_builder.build(sst_path)?;
+    let mut sst_writer = sst_builder.build(&sst_path)?;
 
     sst_writer.put(b"k1", b"v1")?;
     let res = sst_writer.put(b"k1", b"v1");
@@ -211,7 +211,7 @@ fn same_key() -> Result<()> {
 
     sst_writer.finish()?;
 
-    let sst_reader = <KvTestEngine as SstExt>::SstReader::open(sst_path)?;
+    let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path)?;
     let mut iter = sst_reader.iter();
 
     iter.seek(SeekKey::Start)?;
@@ -228,13 +228,13 @@ fn same_key() -> Result<()> {
 #[test]
 fn reverse_key() -> Result<()> {
     let tempdir = tempdir();
-    let ref sst_path = tempdir
+    let sst_path = tempdir
         .path()
         .join("test-data.sst")
         .to_string_lossy()
         .to_string();
     let sst_builder = <KvTestEngine as SstExt>::SstWriterBuilder::new();
-    let mut sst_writer = sst_builder.build(sst_path)?;
+    let mut sst_writer = sst_builder.build(&sst_path)?;
 
     sst_writer.put(b"k2", b"v2")?;
     let res = sst_writer.put(b"k1", b"v1");
@@ -253,7 +253,7 @@ fn reverse_key() -> Result<()> {
 
     sst_writer.finish()?;
 
-    let sst_reader = <KvTestEngine as SstExt>::SstReader::open(sst_path)?;
+    let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path)?;
     let mut iter = sst_reader.iter();
 
     iter.seek(SeekKey::Start)?;
@@ -270,13 +270,13 @@ fn reverse_key() -> Result<()> {
 #[test]
 fn file_path() -> Result<()> {
     let tempdir = tempdir();
-    let ref sst_path = tempdir
+    let sst_path = tempdir
         .path()
         .join("test-data.sst")
         .to_string_lossy()
         .to_string();
     let sst_builder = <KvTestEngine as SstExt>::SstWriterBuilder::new();
-    let mut sst_writer = sst_builder.build(sst_path)?;
+    let mut sst_writer = sst_builder.build(&sst_path)?;
 
     sst_writer.put(b"k1", b"v1")?;
     let info = sst_writer.finish()?;
@@ -288,7 +288,7 @@ fn file_path() -> Result<()> {
 #[test]
 fn other_external_sst_info() -> Result<()> {
     let tempdir = tempdir();
-    let ref sst_path = tempdir
+    let sst_path = tempdir
         .path()
         .join("test-data.sst")
         .to_string_lossy()
@@ -315,7 +315,7 @@ fn other_external_sst_info() -> Result<()> {
 #[test]
 fn external_sst_info_key_values_with_delete() -> Result<()> {
     let tempdir = tempdir();
-    let ref sst_path = tempdir
+    let sst_path = tempdir
         .path()
         .join("test-data.sst")
         .to_string_lossy()
