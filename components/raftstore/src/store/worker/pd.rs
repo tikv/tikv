@@ -1238,9 +1238,6 @@ where
                     let read_keys_delta = peer_stat.region_report_read_keys;
                     peer_stat.region_report_read_bytes = 0;
                     peer_stat.region_report_read_keys = 0;
-
-                    let written_bytes_delta = hb_task.written_bytes;
-                    let written_keys_delta = hb_task.written_keys;
                     let written_query_stats_delta = hb_task.written_query_stats;
                     let mut query_stats = peer_stat.region_report_read_stats.clone();
                     peer_stat.region_report_read_stats.clean();
@@ -1254,8 +1251,8 @@ where
                     (
                         read_bytes_delta,
                         read_keys_delta,
-                        written_bytes_delta,
-                        written_keys_delta,
+                        hb_task.written_bytes,
+                        hb_task.written_keys,
                         last_report_ts,
                         query_stats.0,
                     )
