@@ -436,9 +436,11 @@ impl Debugger {
             let start_key = range_borders[thread_index].clone();
             let end_key = range_borders[thread_index + 1].clone();
 
+            let props = tikv_util::thread_group::current_properties();
             let thread = ThreadBuilder::new()
                 .name(format!("mvcc-recover-thread-{}", thread_index))
                 .spawn(move || {
+                    tikv_util::thread_group::set_properties(props);
                     v1!(
                         "thread {}: started on range [{}, {})",
                         thread_index,

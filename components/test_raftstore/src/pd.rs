@@ -1,11 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cmp;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
-use std::{cmp, thread};
 
 use futures::future::{err, ok};
 use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -939,11 +939,7 @@ impl TestPdClient {
             Ok(mut c) => {
                 c.stores.remove(&store_id);
             }
-            Err(e) => {
-                if !thread::panicking() {
-                    panic!("failed to acquire write lock: {:?}", e)
-                }
-            }
+            Err(e) => safe_panic!("failed to acquire write lock: {:?}", e),
         }
     }
 

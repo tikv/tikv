@@ -264,9 +264,11 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
 
         let (tx, rx) = mpsc::channel();
         self.gc_manager_ctx.set_stop_signal_receiver(rx);
+        let props = tikv_util::thread_group::current_properties();
         let res: Result<_> = ThreadBuilder::new()
             .name(thd_name!("gc-manager"))
             .spawn(move || {
+                tikv_util::thread_group::set_properties(props);
                 self.run();
             })
             .map_err(|e| box_err!("failed to start gc manager: {:?}", e));

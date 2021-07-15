@@ -66,6 +66,7 @@ use tikv_util::{
     check_environment_variables,
     config::ensure_dir_exist,
     sys::sys_quota::SysQuota,
+    thread_group::GroupProperties,
     time::Monitor,
     worker::{FutureWorker, Worker},
 };
@@ -146,6 +147,7 @@ struct Servers {
 
 impl TiKVServer {
     fn init(mut config: TiKvConfig) -> TiKVServer {
+        tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
         // It is okay use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only
         // used during startup process.
@@ -649,9 +651,13 @@ impl TiKVServer {
         }
 
         // The `DebugService` and `DiagnosticsService` will share the same thread pool
+        let props = tikv_util::thread_group::current_properties();
         let pool = Builder::new()
             .name_prefix(thd_name!("debugger"))
             .pool_size(1)
+            .after_start(move || {
+                tikv_util::thread_group::set_properties(props.clone());
+            })
             .create();
 
         // Debug service.
@@ -810,6 +816,7 @@ impl TiKVServer {
     }
 
     fn stop(self) {
+        tikv_util::thread_group::mark_shutdown();
         let mut servers = self.servers.unwrap();
         servers
             .server

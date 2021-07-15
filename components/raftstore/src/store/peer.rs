@@ -301,9 +301,15 @@ impl CmdEpochChecker {
 
 impl Drop for CmdEpochChecker {
     fn drop(&mut self) {
-        for state in self.proposed_admin_cmd.drain(..) {
-            for cb in state.cbs {
-                apply::notify_stale_req(self.term, cb);
+        if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
+            for mut state in self.proposed_admin_cmd.drain(..) {
+                state.cbs.clear();
+            }
+        } else {
+            for state in self.proposed_admin_cmd.drain(..) {
+                for cb in state.cbs {
+                    apply::notify_stale_req(self.term, cb);
+                }
             }
         }
     }
@@ -1544,6 +1550,11 @@ impl Peer {
                 // have no effect.
                 self.proposals.clear();
             }
+            fail_point!(
+                "before_leader_handle_committed_entries",
+                self.is_leader(),
+                |_| ()
+            );
             for entry in committed_entries.iter().rev() {
                 // raft meta is very small, can be ignored.
                 self.raft_log_size_hint += entry.get_data().len() as u64;
