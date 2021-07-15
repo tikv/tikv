@@ -181,7 +181,7 @@ store-reschedule-duration = "2s"
 future-poll-size = 2
 hibernate-regions = false
 dev-assert = true
-perf-level = 5
+perf-level = 1
 
 [coprocessor]
 split-region-on-table = false
