@@ -1,6 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::result;
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::thread;
@@ -40,6 +41,7 @@ pub struct Inner {
     members: GetMembersResponse,
     security_mgr: Arc<SecurityManager>,
     on_reconnect: Option<Box<dyn Fn() + Sync + Send + 'static>>,
+    pub pending_heartbeat: Arc<AtomicU64>,
 
     last_try_reconnect: Instant,
 }
@@ -109,6 +111,7 @@ impl LeaderClient {
                 members,
                 security_mgr,
                 on_reconnect: None,
+                pending_heartbeat: Arc::default(),
 
                 last_try_reconnect: Instant::now(),
             })),
