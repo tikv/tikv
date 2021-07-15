@@ -26,9 +26,9 @@ use crate::store::util::is_epoch_stale;
 use crate::store::util::KeysInfoFormatter;
 use crate::store::worker::split_controller::{SplitInfo, TOP_N};
 use crate::store::worker::{AutoSplitController, ReadStats};
-use crate::store::Callback;
-use crate::store::StoreInfo;
-use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter};
+use crate::store::{
+    Callback, CasualMessage, PeerMsg, RaftCommand, RaftRouter, SnapManager, StoreInfo,
+};
 
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
@@ -309,10 +309,12 @@ impl StatsMonitor {
         self.sender = Some(sender);
 
         let scheduler = self.scheduler.clone();
+        let props = tikv_util::thread_group::current_properties();
 
         let h = Builder::new()
             .name(thd_name!("stats-monitor"))
             .spawn(move || {
+                tikv_util::thread_group::set_properties(props);
                 let mut thread_stats = ThreadInfoStatistics::new();
                 while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(collect_interval) {
                     if timer_cnt % thread_info_interval == 0 {
@@ -399,6 +401,7 @@ pub struct Runner<T: PdClient> {
     // calls Runner's run() on Task received.
     scheduler: Scheduler<Task>,
     stats_monitor: StatsMonitor,
+    snap_mgr: SnapManager,
 }
 
 impl<T: PdClient> Runner<T> {
@@ -411,6 +414,7 @@ impl<T: PdClient> Runner<T> {
         scheduler: Scheduler<Task>,
         store_heartbeat_interval: u64,
         auto_split_controller: AutoSplitController,
+        snap_mgr: SnapManager,
     ) -> Runner<T> {
         let interval = Duration::from_secs(store_heartbeat_interval) / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
@@ -428,6 +432,7 @@ impl<T: PdClient> Runner<T> {
             start_ts: UnixSecs::now(),
             scheduler,
             stats_monitor,
+            snap_mgr,
         }
     }
 
@@ -621,9 +626,8 @@ impl<T: PdClient> Runner<T> {
         };
         stats.set_capacity(capacity);
 
-        // already include size of snapshot files
-        let used_size =
-            stats.get_used_size() + get_engine_used_size(Arc::clone(&store_info.engine));
+        let used_size = self.snap_mgr.get_total_snap_size().unwrap()
+            + get_engine_used_size(Arc::clone(&store_info.engine));
         stats.set_used_size(used_size);
 
         let mut available = if capacity > used_size {

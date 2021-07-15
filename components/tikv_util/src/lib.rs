@@ -53,6 +53,7 @@ pub mod lru;
 pub mod metrics;
 pub mod mpsc;
 pub mod sys;
+pub mod thread_group;
 pub mod time;
 pub mod timer;
 pub mod worker;
@@ -462,35 +463,32 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
         .unwrap();
 
     let data_dir = data_dir.to_string();
-    let orig_hook = panic::take_hook();
     panic::set_hook(Box::new(move |info: &panic::PanicInfo<'_>| {
-        use slog::Drain;
-        if slog_global::borrow_global().is_enabled(::slog::Level::Error) {
-            let msg = match info.payload().downcast_ref::<&'static str>() {
-                Some(s) => *s,
-                None => match info.payload().downcast_ref::<String>() {
-                    Some(s) => &s[..],
-                    None => "Box<Any>",
-                },
-            };
-            let thread = thread::current();
-            let name = thread.name().unwrap_or("<unnamed>");
-            let loc = info
-                .location()
-                .map(|l| format!("{}:{}", l.file(), l.line()));
-            let bt = backtrace::Backtrace::new();
-            crit!("{}", msg;
-                "thread_name" => name,
-                "location" => loc.unwrap_or_else(|| "<unknown>".to_owned()),
-                "backtrace" => format_args!("{:?}", bt),
-            );
-        } else {
-            orig_hook(info);
-        }
+        let msg = match info.payload().downcast_ref::<&'static str>() {
+            Some(s) => *s,
+            None => match info.payload().downcast_ref::<String>() {
+                Some(s) => &s[..],
+                None => "Box<Any>",
+            },
+        };
+
+        let thread = thread::current();
+        let name = thread.name().unwrap_or("<unnamed>");
+        let loc = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()));
+        let bt = backtrace::Backtrace::new();
+        crit!("{}", msg;
+            "thread_name" => name,
+            "location" => loc.unwrap_or_else(|| "<unknown>".to_owned()),
+            "backtrace" => format_args!("{:?}", bt),
+        );
 
         // There might be remaining logs in the async logger.
         // To collect remaining logs and also collect future logs, replace the old one with a
         // terminal logger.
+        // When the old global async logger is replaced, the old async guard will be taken and dropped.
+        // In the drop() the async guard, it waits for the finish of the remaining logs in the async logger.
         if let Some(level) = ::log::max_level().to_level() {
             let drainer = logger::text_format(logger::term_writer());
             let _ = logger::init_log(
@@ -554,11 +552,84 @@ pub fn is_zero_duration(d: &Duration) -> bool {
 mod tests {
     use super::*;
 
+    use std::io::Read;
     use std::rc::Rc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::*;
 
     use tempfile::Builder;
+
+    #[test]
+    #[cfg(unix)]
+    fn test_panic_hook() {
+        use gag::BufferRedirect;
+        use nix::sys::wait::{wait, WaitStatus};
+        use nix::unistd::{fork, ForkResult};
+        use slog::{self, Drain, OwnedKVList, Record};
+
+        struct DelayDrain<D>(D);
+
+        impl<D> Drain for DelayDrain<D>
+        where
+            D: Drain,
+            <D as Drain>::Err: std::fmt::Display,
+        {
+            type Ok = <D as Drain>::Ok;
+            type Err = <D as Drain>::Err;
+
+            fn log(
+                &self,
+                record: &Record<'_>,
+                values: &OwnedKVList,
+            ) -> Result<Self::Ok, Self::Err> {
+                std::thread::sleep(Duration::from_millis(100));
+                self.0.log(record, values)
+            }
+        }
+
+        fn run_and_wait_child_process(child: impl Fn()) -> Result<i32, String> {
+            match fork() {
+                Ok(ForkResult::Parent { .. }) => match wait().unwrap() {
+                    WaitStatus::Exited(_, status) => Ok(status),
+                    v => Err(format!("{:?}", v)),
+                },
+                Ok(ForkResult::Child) => {
+                    child();
+                    std::process::exit(0);
+                }
+                Err(e) => Err(format!("Fork failed: {}", e)),
+            }
+        }
+
+        let mut stderr = BufferRedirect::stderr().unwrap();
+        let status = run_and_wait_child_process(|| {
+            set_panic_hook(false, "./");
+            let drainer = logger::text_format(logger::term_writer());
+            crate::logger::init_log(
+                DelayDrain(drainer),
+                logger::get_level_by_string("debug").unwrap(),
+                true, // use async drainer
+                true, // init std log
+                vec![],
+                0,
+            )
+            .unwrap();
+
+            let _ = std::thread::spawn(|| {
+                // let the global logger is held by the other thread, so the
+                // drop() of the async drain is not called in time.
+                let _guard = slog_global::borrow_global();
+                std::thread::sleep(Duration::from_secs(1));
+            });
+            panic!("test");
+        })
+        .unwrap();
+
+        assert_eq!(status, 1);
+        let mut panic = String::new();
+        stderr.read_to_string(&mut panic).unwrap();
+        assert!(!panic.is_empty());
+    }
 
     #[test]
     fn test_panic_mark_file_path() {

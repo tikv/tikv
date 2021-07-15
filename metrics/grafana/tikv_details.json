@@ -5971,7 +5971,7 @@
           },
           "yaxes": [
             {
-              "format": "ops",
+              "format": "opm",
               "label": null,
               "logBase": 1,
               "max": null,

@@ -7,6 +7,7 @@ use std::cell::Cell;
 use std::future::Future as StdFuture;
 use std::time::Duration;
 use tikv_util::future_pool::{self, FuturePool};
+use tikv_util::thread_group::GroupProperties;
 use tikv_util::time::Instant;
 use yatp::pool::{CloneRunnerBuilder, Local, Runner};
 use yatp::queue::{multilevel, Extras, QueueType};
@@ -154,12 +155,14 @@ pub struct ReadPoolRunner<E: Engine, R: FlowStatsReporter> {
     engine: Option<E>,
     reporter: R,
     inner: FutureRunner,
+    props: Option<GroupProperties>,
 }
 
 impl<E: Engine, R: FlowStatsReporter> Runner for ReadPoolRunner<E, R> {
     type TaskCell = TaskCell;
 
     fn start(&mut self, local: &mut Local<Self::TaskCell>) {
+        tikv_util::thread_group::set_properties(self.props.clone());
         set_tls_engine(self.engine.take().unwrap());
         self.inner.start(local)
     }
@@ -193,6 +196,7 @@ impl<E: Engine, R: FlowStatsReporter> ReadPoolRunner<E, R> {
             engine: Some(engine),
             reporter,
             inner,
+            props: tikv_util::thread_group::current_properties(),
         }
     }
 
@@ -207,7 +211,7 @@ impl<E: Engine, R: FlowStatsReporter> ReadPoolRunner<E, R> {
         THREAD_LAST_TICK_TIME.with(|tls_last_tick| {
             let now = Instant::now_coarse();
             let last_tick = tls_last_tick.get();
-            if now.duration_since(last_tick) < TICK_INTERVAL {
+            if now.saturating_duration_since(last_tick) < TICK_INTERVAL {
                 return;
             }
             tls_last_tick.set(now);

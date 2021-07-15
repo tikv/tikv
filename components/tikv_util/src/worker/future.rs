@@ -140,9 +140,13 @@ impl<T: Display + Send + 'static> Worker<T> {
         }
 
         let rx = receiver.take().unwrap();
+        let props = crate::thread_group::current_properties();
         let h = Builder::new()
             .name(thd_name!(self.scheduler.name.as_ref()))
-            .spawn(move || poll(runner, rx))?;
+            .spawn(move || {
+                crate::thread_group::set_properties(props);
+                poll(runner, rx)
+            })?;
 
         self.handle = Some(h);
         Ok(())
@@ -186,8 +190,8 @@ mod tests {
     use std::sync::mpsc;
     use std::sync::mpsc::*;
     use std::time::Duration;
-    use std::time::Instant;
 
+    use crate::time::Instant;
     use crate::timer::GLOBAL_TIMER_HANDLE;
     use futures::Future;
     use tokio_core::reactor::Handle;
@@ -205,7 +209,7 @@ mod tests {
             self.ch.send(step).unwrap();
             let f = self
                 .timer
-                .delay(Instant::now() + Duration::from_millis(step))
+                .delay(std::time::Instant::now() + Duration::from_millis(step))
                 .map_err(|_| ());
             handle.spawn(f);
         }
@@ -235,7 +239,7 @@ mod tests {
         assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 1000);
         assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 1500);
         // above three tasks are executed concurrently, should be less then 2s.
-        assert!(start.elapsed() < Duration::from_secs(2));
+        assert!(start.saturating_elapsed() < Duration::from_secs(2));
         worker.stop().unwrap().join().unwrap();
         // now worker can't handle any task
         assert!(worker.is_busy());

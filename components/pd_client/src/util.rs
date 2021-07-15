@@ -6,7 +6,6 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::thread;
 use std::time::Duration;
-use std::time::Instant;
 
 use futures::future::{loop_fn, ok, Loop};
 use futures::sync::mpsc::UnboundedSender;
@@ -24,6 +23,7 @@ use kvproto::pdpb::{
 };
 use security::SecurityManager;
 use tikv_util::collections::HashSet;
+use tikv_util::time::Instant;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{Either, HandyRwLock};
 use tokio_timer::timer::Handle;
@@ -171,9 +171,7 @@ impl LeaderClient {
 
         let future = {
             let inner = self.inner.rl();
-            if start
-                .checked_duration_since(inner.last_try_reconnect)
-                .map_or(true, |d| d < GLOBAL_RECONNECT_INTERVAL)
+            if start.saturating_duration_since(inner.last_try_reconnect) < GLOBAL_RECONNECT_INTERVAL
             {
                 // Avoid unnecessary updating.
                 // Prevent a large number of reconnections in a short time.
@@ -191,9 +189,7 @@ impl LeaderClient {
 
         {
             let mut inner = self.inner.wl();
-            if start
-                .checked_duration_since(inner.last_try_reconnect)
-                .map_or(true, |d| d < GLOBAL_RECONNECT_INTERVAL)
+            if start.saturating_duration_since(inner.last_try_reconnect) < GLOBAL_RECONNECT_INTERVAL
             {
                 // There may be multiple reconnections that pass the read lock at the same time.
                 // Check again in the write lock to avoid unnecessary updating.
@@ -244,7 +240,7 @@ impl LeaderClient {
                 on_reconnect();
             }
         }
-        warn!("updating PD client done"; "spend" => ?start.elapsed());
+        warn!("updating PD client done"; "spend" => ?start.saturating_elapsed());
         Ok(())
     }
 }
@@ -297,7 +293,7 @@ where
                 Box::new(
                     self.client
                         .timer
-                        .delay(Instant::now() + REQUEST_RECONNECT_INTERVAL)
+                        .delay(std::time::Instant::now() + REQUEST_RECONNECT_INTERVAL)
                         .then(|_| Err(self)),
                 )
             }

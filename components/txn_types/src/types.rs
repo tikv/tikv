@@ -312,17 +312,50 @@ impl From<kvrpcpb::Mutation> for Mutation {
     }
 }
 
-#[derive(Default, Debug, Clone, PartialEq)]
-pub struct OldValue {
-    pub short_value: Option<Value>,
-    pub start_ts: TimeStamp,
+/// `OldValue` is used by cdc to read the previous value associated with some key during the prewrite process
+#[derive(Debug, Clone, PartialEq)]
+pub enum OldValue {
+    /// A real `OldValue`
+    Value {
+        short_value: Option<Value>,
+        start_ts: TimeStamp,
+    },
+    /// `None` means we don't found a previous value
+    None,
+    /// `Unspecified` means one of the following:
+    ///   - The user doesn't care about the previous value
+    ///   - We don't sure if there is a previous value
+    Unspecified,
+}
+
+impl Default for OldValue {
+    fn default() -> Self {
+        OldValue::Unspecified
+    }
+}
+
+impl OldValue {
+    pub fn valid(&self) -> bool {
+        *self != OldValue::Unspecified
+    }
+
+    pub fn size(&self) -> usize {
+        let value_size = match self {
+            OldValue::Value {
+                short_value: Some(v),
+                ..
+            } => v.len(),
+            _ => 0,
+        };
+        value_size + std::mem::size_of::<OldValue>()
+    }
 }
 
 // Returned by MvccTxn when extra_op is set to kvrpcpb::ExtraOp::ReadOldValue.
 // key with current ts -> (short value of the prev txn, start ts of the prev txn).
 // The value of the map will be None when the mutation is `Insert`.
 // MutationType is the type of mutation of the current write.
-pub type OldValues = HashMap<Key, (Option<OldValue>, MutationType)>;
+pub type OldValues = HashMap<Key, (OldValue, MutationType)>;
 
 // Extra data fields filled by kvrpcpb::ExtraOp.
 #[derive(Default, Debug, Clone)]
@@ -331,12 +364,7 @@ pub struct TxnExtra {
 }
 
 impl TxnExtra {
-    pub fn add_old_value(
-        &mut self,
-        key: Key,
-        value: Option<OldValue>,
-        mutation_type: MutationType,
-    ) {
+    pub fn add_old_value(&mut self, key: Key, value: OldValue, mutation_type: MutationType) {
         self.old_values.insert(key, (value, mutation_type));
     }
 
@@ -461,6 +489,24 @@ mod tests {
             let mut longer_raw = raw.to_vec();
             longer_raw.push(0);
             assert!(!encoded.is_encoded_from(&longer_raw));
+        }
+    }
+
+    #[test]
+    fn test_old_value_valid() {
+        let cases = vec![
+            (OldValue::Unspecified, false),
+            (OldValue::None, true),
+            (
+                OldValue::Value {
+                    short_value: None,
+                    start_ts: 0.into(),
+                },
+                true,
+            ),
+        ];
+        for (old_value, v) in cases {
+            assert_eq!(old_value.valid(), v);
         }
     }
 }

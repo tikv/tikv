@@ -249,7 +249,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                     result
                 });
-                tls_collect_command_duration(CMD, command_duration.elapsed());
+                tls_collect_command_duration(CMD, command_duration.saturating_elapsed());
                 result
             },
             priority,
@@ -319,7 +319,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     results
                 });
-                metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
+                metrics::tls_collect_command_duration(CMD, command_duration.saturating_elapsed());
                 Ok(result)
             },
             priority,
@@ -392,7 +392,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                     result
                 });
-                metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
+                metrics::tls_collect_command_duration(CMD, command_duration.saturating_elapsed());
                 result
             },
             priority,
@@ -478,7 +478,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             .collect()
                     })
                 });
-                metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
+                metrics::tls_collect_command_duration(CMD, command_duration.saturating_elapsed());
                 result
             },
             priority,
@@ -605,7 +605,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     }
                     Ok(r)
                 });
-                metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
+                metrics::tls_collect_command_duration(CMD, command_duration.saturating_elapsed());
                 result
             },
             priority,
@@ -669,7 +669,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                     Ok(results)
                 });
-                metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
+                metrics::tls_collect_command_duration(CMD, command_duration.saturating_elapsed());
                 result
             },
             priority,
@@ -729,7 +729,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     tls_collect_read_flow(ctx.get_region_id(), &stats);
                     Ok(result)
                 });
-                metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
+                metrics::tls_collect_command_duration(CMD, command_duration.saturating_elapsed());
                 result
             },
             priority,
@@ -1025,7 +1025,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     result
                 });
-                metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
+                metrics::tls_collect_command_duration(CMD, command_duration.saturating_elapsed());
                 result
             },
             priority,
@@ -1151,7 +1151,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     Ok(result)
                 });
-                metrics::tls_collect_command_duration(CMD, command_duration.elapsed());
+                metrics::tls_collect_command_duration(CMD, command_duration.saturating_elapsed());
                 result
             },
             priority,

@@ -4,7 +4,6 @@ use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
-use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
 
 use engine::DB;
@@ -14,10 +13,10 @@ use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
 
+#[cfg(any(test, feature = "testexport"))]
 use crate::coprocessor::Config;
 use crate::coprocessor::CoprocessorHost;
 use crate::coprocessor::SplitCheckerHost;
-use crate::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
 use crate::store::{Callback, CasualMessage, CasualRouter};
 use crate::Result;
 use configuration::{ConfigChange, Configuration};
@@ -133,11 +132,6 @@ pub enum Task {
     ChangeConfig(ConfigChange),
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&Config) + Send>),
-    GetRegionApproximateSizeAndKeys {
-        region: Region,
-        pending_tasks: Arc<AtomicU64>,
-        cb: Box<dyn FnOnce(u64, u64) + Send>,
-    },
 }
 
 impl Task {
@@ -164,11 +158,6 @@ impl Display for Task {
             Task::ChangeConfig(_) => write!(f, "[split check worker] Change Config Task"),
             #[cfg(any(test, feature = "testexport"))]
             Task::Validate(_) => write!(f, "[split check worker] Validate config"),
-            Task::GetRegionApproximateSizeAndKeys { region, .. } => write!(
-                f,
-                "[split check worker] Get region approximate size and keys for region {}",
-                region.get_id()
-            ),
         }
     }
 }
@@ -177,16 +166,14 @@ pub struct Runner<S> {
     engine: Arc<DB>,
     router: S,
     coprocessor: CoprocessorHost,
-    cfg: Config,
 }
 
 impl<S: CasualRouter<RocksEngine>> Runner<S> {
-    pub fn new(engine: Arc<DB>, router: S, coprocessor: CoprocessorHost, cfg: Config) -> Runner<S> {
+    pub fn new(engine: Arc<DB>, router: S, coprocessor: CoprocessorHost) -> Runner<S> {
         Runner {
             engine,
             router,
             coprocessor,
-            cfg,
         }
     }
 
@@ -203,13 +190,9 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
         );
         CHECK_SPILT_COUNTER_VEC.with_label_values(&["all"]).inc();
 
-        let mut host = self.coprocessor.new_split_checker_host(
-            &self.cfg,
-            region,
-            &self.engine.c(),
-            auto_split,
-            policy,
-        );
+        let mut host =
+            self.coprocessor
+                .new_split_checker_host(region, &self.engine.c(), auto_split, policy);
         if host.skip() {
             debug!("skip split check"; "region_id" => region.get_id());
             return;
@@ -317,7 +300,7 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
             "split check config updated";
             "change" => ?change
         );
-        self.cfg.update(change);
+        self.coprocessor.cfg.update(change);
     }
 }
 
@@ -331,29 +314,7 @@ impl<S: CasualRouter<RocksEngine>> Runnable<Task> for Runner<S> {
             } => self.check_split(&region, auto_split, policy),
             Task::ChangeConfig(c) => self.change_cfg(c),
             #[cfg(any(test, feature = "testexport"))]
-            Task::Validate(f) => f(&self.cfg),
-            Task::GetRegionApproximateSizeAndKeys {
-                region,
-                pending_tasks,
-                cb,
-            } => {
-                if pending_tasks.fetch_sub(1, AtomicOrdering::SeqCst) > 1 {
-                    return;
-                }
-                let size =
-                    get_region_approximate_size(self.engine.c(), &region, 0).unwrap_or_default();
-                let keys =
-                    get_region_approximate_keys(self.engine.c(), &region, 0).unwrap_or_default();
-                let _ = self.router.send(
-                    region.get_id(),
-                    CasualMessage::RegionApproximateSize { size },
-                );
-                let _ = self.router.send(
-                    region.get_id(),
-                    CasualMessage::RegionApproximateKeys { keys },
-                );
-                cb(size, keys);
-            }
+            Task::Validate(f) => f(&self.coprocessor.cfg),
         }
     }
 }
