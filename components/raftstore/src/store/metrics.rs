@@ -332,6 +332,12 @@ lazy_static! {
             "TODO",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
+    pub static ref STORE_WRITE_SYNC_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_sync_duration_seconds",
+            "TODO",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
     pub static ref STORE_KNOW_PERSIST_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_know_persist_duration_seconds",

@@ -1,6 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
@@ -172,6 +175,7 @@ where
 {
     WriteTask(AsyncWriteTask<EK, ER>),
     Shutdown,
+    Persisted,
 }
 
 /// AsyncWriteBatch is used for combining several AsyncWriteTask into one.
@@ -182,8 +186,6 @@ where
 {
     pub kv_wb: EK::WriteBatch,
     pub raft_wb: ER::LogBatch,
-    // region_id -> (peer_id, ready_number)
-    pub readies: HashMap<u64, (u64, u64)>,
     // Write raft state once for a region everytime writing to disk
     pub raft_states: HashMap<u64, RaftLocalState>,
     pub state_size: usize,
@@ -201,7 +203,6 @@ where
         Self {
             kv_wb,
             raft_wb,
-            readies: HashMap::default(),
             raft_states: HashMap::default(),
             tasks: vec![],
             state_size: 0,
@@ -215,8 +216,6 @@ where
         if let Err(e) = task.valid() {
             panic!("task is not valid: {:?}", e);
         }
-        self.readies
-            .insert(task.region_id, (task.peer_id, task.ready_number));
         if let Some(kv_wb) = task.kv_wb.take() {
             self.kv_wb.merge(kv_wb);
         }
@@ -244,7 +243,6 @@ where
     fn clear(&mut self) {
         // raft_wb doesn't have clear interface but it should be consumed by raft db before
         self.kv_wb.clear();
-        self.readies.clear();
         self.raft_states.clear();
         self.tasks.clear();
         self.state_size = 0;
@@ -309,12 +307,18 @@ where
 {
     store_id: u64,
     tag: String,
+    worker_id: usize,
     kv_engine: EK,
     raft_engine: ER,
     receiver: Receiver<AsyncWriteMsg<EK, ER>>,
     notifier: N,
     trans: T,
     wb: AsyncWriteBatch<EK, ER>,
+    pending_tasks: VecDeque<(u64, Vec<AsyncWriteTask<EK, ER>>)>,
+    last_id: u64,
+    last_persisted_id: u64,
+    global_last_persisted_id: Arc<AtomicU64>,
+    sync_sender: Sender<(usize, u64)>,
     raft_write_size_limit: usize,
     message_metrics: RaftSendMessageMetrics,
     perf_context: EK::PerfContext,
@@ -330,11 +334,14 @@ where
     fn new(
         store_id: u64,
         tag: String,
+        worker_id: usize,
         kv_engine: EK,
         raft_engine: ER,
         receiver: Receiver<AsyncWriteMsg<EK, ER>>,
         notifier: N,
         trans: T,
+        global_last_persisted_id: Arc<AtomicU64>,
+        sync_sender: Sender<(usize, u64)>,
         config: &Config,
     ) -> Self {
         let wb = AsyncWriteBatch::new(
@@ -347,12 +354,18 @@ where
         Self {
             store_id,
             tag,
+            worker_id,
             kv_engine,
             raft_engine,
             receiver,
             notifier,
             trans,
             wb,
+            pending_tasks: VecDeque::new(),
+            last_id: 0,
+            last_persisted_id: 0,
+            global_last_persisted_id,
+            sync_sender,
             raft_write_size_limit: config.raft_write_size_limit.0 as usize,
             message_metrics: Default::default(),
             perf_context,
@@ -388,6 +401,10 @@ where
                         }
                     }
                 };
+                if self.last_persisted_id < self.global_last_persisted_id.load(Ordering::Acquire) {
+                    self.last_persisted_id = self.global_last_persisted_id.load(Ordering::Acquire);
+                    self.after_persist();
+                }
                 match msg {
                     AsyncWriteMsg::Shutdown => {
                         stopped = true;
@@ -398,6 +415,7 @@ where
                             .observe(duration_to_sec(task.send_time.elapsed()));
                         self.wb.add_write_task(task);
                     }
+                    AsyncWriteMsg::Persisted => (),
                 }
             }
 
@@ -444,7 +462,7 @@ where
             self.perf_context.start_observe();
             let now = Instant::now();
             self.raft_engine
-                .consume_and_shrink(&mut self.wb.raft_wb, true, RAFT_WB_SHRINK_SIZE, 16 * 1024)
+                .consume_and_shrink(&mut self.wb.raft_wb, false, RAFT_WB_SHRINK_SIZE, 16 * 1024)
                 .unwrap_or_else(|e| {
                     panic!("{} failed to write to raft engine: {:?}", self.tag, e);
                 });
@@ -456,34 +474,55 @@ where
         now = Instant::now();
         self.wb.after_write_to_db(now);
 
-        fail_point!("raft_before_follower_send");
+        self.wb.flush_metrics();
 
-        now = Instant::now();
+        self.last_id += 1;
+        self.pending_tasks
+            .push_back((self.last_id, std::mem::take(&mut self.wb.tasks)));
+
+        self.sync_sender.send((self.worker_id, self.last_id));
+
+        self.wb.clear();
+
+        fail_point!("raft_after_save");
+    }
+
+    fn after_persist(&mut self) {
+        let mut readies = HashMap::default();
         let mut unreachable_peers = HashSet::default();
-        for task in &mut self.wb.tasks {
-            for msg in task.messages.drain(..) {
-                let msg_type = msg.get_message().get_msg_type();
-                let to_peer_id = msg.get_to_peer().get_id();
-                let to_store_id = msg.get_to_peer().get_store_id();
-                if let Err(e) = self.trans.send(msg) {
-                    // We use metrics to observe failure on production.
-                    debug!(
-                        "failed to send msg to other peer in async-writer";
-                        "region_id" => task.region_id,
-                        "peer_id" => task.peer_id,
-                        "target_peer_id" => to_peer_id,
-                        "target_store_id" => to_store_id,
-                        "err" => ?e,
-                        "error_code" => %e.error_code(),
-                    );
-                    self.message_metrics.add(msg_type, false);
-                    // Send unreachable to this peer.
-                    // If this msg is snapshot, it is unnecessary to send snapshot
-                    // status to this peer because it has already become follower.
-                    // (otherwise the snapshot msg should be sent in store thread other than here)
-                    unreachable_peers.insert((task.region_id, to_peer_id));
-                } else {
-                    self.message_metrics.add(msg_type, true);
+        let now = Instant::now();
+        fail_point!("raft_before_follower_send");
+        while !self.pending_tasks.is_empty() {
+            if self.pending_tasks.front().unwrap().0 > self.last_persisted_id {
+                break;
+            }
+            let (_, tasks) = self.pending_tasks.pop_front().unwrap();
+            for mut task in tasks {
+                readies.insert(task.region_id, (task.peer_id, task.ready_number));
+                for msg in task.messages.drain(..) {
+                    let msg_type = msg.get_message().get_msg_type();
+                    let to_peer_id = msg.get_to_peer().get_id();
+                    let to_store_id = msg.get_to_peer().get_store_id();
+                    if let Err(e) = self.trans.send(msg) {
+                        // We use metrics to observe failure on production.
+                        debug!(
+                            "failed to send msg to other peer in async-writer";
+                            "region_id" => task.region_id,
+                            "peer_id" => task.peer_id,
+                            "target_peer_id" => to_peer_id,
+                            "target_store_id" => to_store_id,
+                            "err" => ?e,
+                            "error_code" => %e.error_code(),
+                        );
+                        self.message_metrics.add(msg_type, false);
+                        // Send unreachable to this peer.
+                        // If this msg is snapshot, it is unnecessary to send snapshot
+                        // status to this peer because it has already become follower.
+                        // (otherwise the snapshot msg should be sent in store thread other than here)
+                        unreachable_peers.insert((task.region_id, to_peer_id));
+                    } else {
+                        self.message_metrics.add(msg_type, true);
+                    }
                 }
             }
         }
@@ -494,17 +533,83 @@ where
         }
         STORE_WRITE_SEND_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()));
 
-        now = Instant::now();
-        for (region_id, (peer_id, ready_number)) in &self.wb.readies {
+        let now = Instant::now();
+        for (region_id, (peer_id, ready_number)) in &readies {
             self.notifier
                 .notify_persisted(*region_id, *peer_id, *ready_number, now);
         }
         STORE_WRITE_CALLBACK_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()));
+    }
+}
 
-        self.wb.flush_metrics();
-        self.wb.clear();
+struct Syncer<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    raft_engine: ER,
+    receiver: Receiver<(usize, u64)>,
+    io_senders: Vec<Sender<AsyncWriteMsg<EK, ER>>>,
+    global_persisted_ids: Vec<Arc<AtomicU64>>,
+}
 
-        fail_point!("raft_after_save");
+impl<EK, ER> Syncer<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    fn new(
+        raft_engine: ER,
+        receiver: Receiver<(usize, u64)>,
+        io_senders: Vec<Sender<AsyncWriteMsg<EK, ER>>>,
+        global_persisted_ids: Vec<Arc<AtomicU64>>,
+    ) -> Self {
+        Self {
+            raft_engine,
+            receiver,
+            io_senders,
+            global_persisted_ids,
+        }
+    }
+
+    fn run(&mut self) {
+        let mut persist_map = HashMap::default();
+        loop {
+            let mut first_time = true;
+            loop {
+                let mut msg = if first_time {
+                    match self.receiver.recv() {
+                        Ok(msg) => msg,
+                        Err(_) => return,
+                    }
+                } else {
+                    match self.receiver.try_recv() {
+                        Ok(msg) => msg,
+                        Err(TryRecvError::Empty) => break,
+                        Err(TryRecvError::Disconnected) => {
+                            return;
+                        }
+                    }
+                };
+                // TODO
+                if msg.0 == 0 {
+                    return;
+                }
+                persist_map.insert(msg.0, msg.1);
+            }
+            let now = Instant::now();
+            self.raft_engine.sync().unwrap_or_else(|e| {
+                panic!("syncer failed to sync raft db: {:?}", e);
+            });
+            STORE_WRITE_SYNC_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()));
+
+            for (worker_id, persisted_id) in &persist_map {
+                self.global_persisted_ids[*worker_id].store(*persisted_id, Ordering::Release);
+                // TODO
+                let _ = self.io_senders[*worker_id].send(AsyncWriteMsg::Persisted);
+            }
+            persist_map.clear();
+        }
     }
 }
 
@@ -514,7 +619,9 @@ where
     ER: RaftEngine,
 {
     writers: Vec<Sender<AsyncWriteMsg<EK, ER>>>,
+    sync_sender: Option<Sender<(usize, u64)>>,
     handlers: Vec<JoinHandle<()>>,
+    sync_handler: Option<JoinHandle<()>>,
 }
 
 impl<EK, ER> AsyncWriters<EK, ER>
@@ -525,7 +632,9 @@ where
     pub fn new() -> Self {
         Self {
             writers: vec![],
+            sync_sender: None,
             handlers: vec![],
+            sync_handler: None,
         }
     }
 
@@ -542,25 +651,46 @@ where
         trans: &T,
         config: &Config,
     ) -> Result<()> {
+        let (sync_sender, sync_receiver) = channel();
+        let mut global_persisted_ids = vec![];
         for i in 0..config.store_io_pool_size {
             let tag = format!("store-writer-{}", i);
             let (tx, rx) = channel();
+            let global_persisted_id = Arc::new(AtomicU64::new(0));
             let mut worker = AsyncWriteWorker::new(
                 store_id,
                 tag.clone(),
+                i,
                 kv_engine.clone(),
                 raft_engine.clone(),
                 rx,
                 notifier.clone(),
                 trans.clone(),
+                global_persisted_id.clone(),
+                sync_sender.clone(),
                 config,
             );
             let t = thread::Builder::new().name(thd_name!(tag)).spawn(move || {
                 worker.run();
             })?;
+            global_persisted_ids.push(global_persisted_id);
             self.writers.push(tx);
             self.handlers.push(t);
         }
+        let mut syncer = Syncer::new(
+            raft_engine.clone(),
+            sync_receiver,
+            self.writers.clone(),
+            global_persisted_ids,
+        );
+        self.sync_handler = Some(
+            thread::Builder::new()
+                .name(thd_name!("store-syncer"))
+                .spawn(move || {
+                    syncer.run();
+                })?,
+        );
+        self.sync_sender = Some(sync_sender);
         Ok(())
     }
 
@@ -570,6 +700,8 @@ where
             self.writers[i].send(AsyncWriteMsg::Shutdown).unwrap();
             handler.join().unwrap();
         }
+        self.sync_sender.as_ref().unwrap().send((0, 0));
+        self.sync_handler.take().unwrap().join().unwrap();
     }
 }
 

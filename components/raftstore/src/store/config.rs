@@ -275,7 +275,7 @@ impl Default for Config {
             perf_level: PerfLevel::Disable,
             cmd_batch: true,
             trigger_ready_size: ReadableSize::mb(1),
-            raft_write_size_limit: ReadableSize::mb(1),
+            raft_write_size_limit: ReadableSize::kb(16),
             store_waterfall_metrics: false,
 
             // They are preserved for compatibility check.
