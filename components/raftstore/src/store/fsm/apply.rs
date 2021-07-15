@@ -551,7 +551,7 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
             }
         }
 
-        let elapsed = t.elapsed();
+        let elapsed = t.saturating_elapsed();
         STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(elapsed) as f64);
 
         slow_log!(
@@ -905,7 +905,7 @@ impl ApplyDelegate {
             if should_write_to_engine(&cmd) || apply_ctx.kv_wb().should_write_to_engine() {
                 apply_ctx.commit(self);
                 if let Some(start) = self.handle_start.as_ref() {
-                    if start.elapsed() >= apply_ctx.yield_duration {
+                    if start.saturating_elapsed() >= apply_ctx.yield_duration {
                         return ApplyResult::Yield;
                     }
                 }
@@ -3087,7 +3087,7 @@ impl ApplyFsm {
         loop {
             match drainer.next() {
                 Some(Msg::Apply { start, apply }) => {
-                    APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(start.elapsed_secs());
+                    APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(start.saturating_elapsed_secs());
                     self.handle_apply(apply_ctx, apply);
                     if let Some(ref mut state) = self.delegate.yield_state {
                         state.pending_msgs = drainer.collect();

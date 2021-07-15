@@ -6,7 +6,7 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use std::u64;
 
 use engine_rocks::{RocksEngine, RocksSnapshot};
@@ -15,6 +15,7 @@ use engine_traits::{
 };
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
+use tikv_util::time::Instant;
 
 use crate::coprocessor::CoprocessorHost;
 use crate::store::peer_storage::{
@@ -361,7 +362,7 @@ impl<R: CasualRouter<RocksEngine>> SnapContext<R> {
         info!(
             "apply new data";
             "region_id" => region_id,
-            "time_takes" => ?timer.elapsed(),
+            "time_takes" => ?timer.saturating_elapsed(),
         );
         Ok(())
     }

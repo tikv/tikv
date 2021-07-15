@@ -1,18 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::{Ordering as CmpOrdering, Reverse};
-use std::f64::INFINITY;
-use std::fmt::{self, Display, Formatter};
-use std::fs::{self, Metadata};
-use std::fs::{File, OpenOptions};
-use std::io::{self, ErrorKind, Read, Write};
-use std::path::Path;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, RwLock};
-use std::time::Instant;
-use std::{error, result, str, thread, time, u64};
-
 use encryption::{
     create_aes_ctr_crypter, encryption_method_from_db_encryption_method, DataKeyManager, Iv,
 };
@@ -27,6 +14,17 @@ use kvproto::raft_serverpb::RaftSnapshotData;
 use kvproto::raft_serverpb::{SnapshotCfFile, SnapshotMeta};
 use protobuf::Message;
 use raft::eraftpb::Snapshot as RaftSnapshot;
+use std::cmp::{Ordering as CmpOrdering, Reverse};
+use std::f64::INFINITY;
+use std::fmt::{self, Display, Formatter};
+use std::fs::{self, Metadata};
+use std::fs::{File, OpenOptions};
+use std::io::{self, ErrorKind, Read, Write};
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, RwLock};
+use std::{error, result, str, thread, time, u64};
 
 use crate::errors::Error as RaftStoreError;
 use crate::store::RaftRouter;
@@ -37,7 +35,7 @@ use tikv_util::collections::{HashMap, HashMapEntry as Entry};
 use tikv_util::file::{
     calc_crc32, calc_crc32_and_size, delete_file_if_exist, file_exists, get_file_size, sync_dir,
 };
-use tikv_util::time::{duration_to_sec, Limiter};
+use tikv_util::time::{duration_to_sec, Instant, Limiter};
 use tikv_util::HandyRwLock;
 
 use crate::coprocessor::CoprocessorHost;
@@ -805,14 +803,14 @@ impl Snapshot {
         snap_data.set_version(SNAPSHOT_VERSION);
         snap_data.set_meta(self.meta_file.meta.clone());
 
-        SNAPSHOT_BUILD_TIME_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
+        SNAPSHOT_BUILD_TIME_HISTOGRAM.observe(duration_to_sec(t.saturating_elapsed()) as f64);
         info!(
             "scan snapshot";
             "region_id" => region.get_id(),
             "snapshot" => self.path(),
             "key_count" => stat.kv_count,
             "size" => total_size,
-            "takes" => ?t.elapsed(),
+            "takes" => ?t.saturating_elapsed(),
         );
 
         Ok(())
