@@ -714,6 +714,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
         }
     }
 
+    #[allow(clippy::collapsible_else_if)]
     fn split_region(
         &mut self,
         ctx: RpcContext<'_>,
