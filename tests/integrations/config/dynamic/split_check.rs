@@ -31,8 +31,7 @@ fn setup(cfg: TiKvConfig, engine: Arc<DB>) -> (ConfigController, Worker<Task>) {
     let runner = Runner::new(
         engine,
         router.clone(),
-        CoprocessorHost::new(router),
-        cfg.coprocessor.clone(),
+        CoprocessorHost::new(router, cfg.coprocessor.clone()),
     );
     let mut worker: Worker<Task> = Worker::new("split-check-config");
     worker.start(runner).unwrap();

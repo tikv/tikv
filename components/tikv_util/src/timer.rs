@@ -206,6 +206,7 @@ fn start_global_steady_timer() -> SteadyTimer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::time::InstantExt;
     use crate::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer};
     use futures::Future;
     use std::sync::mpsc::RecvTimeoutError;
@@ -320,7 +321,7 @@ mod tests {
             handle.delay(::std::time::Instant::now() + std::time::Duration::from_millis(100));
         let timer = Instant::now();
         delay.wait().unwrap();
-        assert!(timer.elapsed() >= Duration::from_millis(100));
+        assert!(timer.saturating_elapsed() >= Duration::from_millis(100));
     }
 
     #[test]
@@ -329,6 +330,6 @@ mod tests {
         let timer = t.clock.now();
         let delay = t.delay(Duration::from_millis(100));
         delay.wait().unwrap();
-        assert!(timer.elapsed() >= Duration::from_millis(100));
+        assert!(timer.saturating_elapsed() >= Duration::from_millis(100));
     }
 }

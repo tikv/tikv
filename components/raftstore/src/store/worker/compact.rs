@@ -4,7 +4,6 @@ use std::collections::VecDeque;
 use std::error;
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
-use std::time::Instant;
 
 use engine::rocks;
 use engine::rocks::util::compact_range;
@@ -12,6 +11,7 @@ use engine::DB;
 use engine_rocks::Compat;
 use engine_traits::KvEngine;
 use engine_traits::CF_WRITE;
+use tikv_util::time::Instant;
 use tikv_util::worker::Runnable;
 
 use super::metrics::COMPACT_RANGE_CF;
@@ -125,7 +125,7 @@ impl Runner {
             "range_start" => start_key.map(::log_wrappers::Value::key),
             "range_end" => end_key.map(::log_wrappers::Value::key),
             "cf" => cf_name,
-            "time_takes" => ?timer.elapsed(),
+            "time_takes" => ?timer.saturating_elapsed(),
         );
         Ok(())
     }

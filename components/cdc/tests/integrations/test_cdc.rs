@@ -762,49 +762,70 @@ fn test_old_value_basic() {
     m1.set_op(Op::Put);
     m1.key = k1.clone();
     m1.value = b"v1".to_vec();
-    suite.must_kv_prewrite(1, vec![m1], k1.clone(), 1.into());
-    suite.must_kv_commit(1, vec![k1.clone()], 1.into(), 2.into());
+    let ts1 = suite.cluster.pd_client.get_tso().wait().unwrap();
+    suite.must_kv_prewrite(1, vec![m1], k1.clone(), ts1);
+    let ts2 = suite.cluster.pd_client.get_tso().wait().unwrap();
+    suite.must_kv_commit(1, vec![k1.clone()], ts1, ts2);
     // Rollback
     let mut m2 = Mutation::default();
     m2.set_op(Op::Put);
     m2.key = k1.clone();
     m2.value = b"v2".to_vec();
-    suite.must_kv_prewrite(1, vec![m2], k1.clone(), 3.into());
-    suite.must_kv_rollback(1, vec![k1.clone()], 3.into());
+    let ts3 = suite.cluster.pd_client.get_tso().wait().unwrap();
+    suite.must_kv_prewrite(1, vec![m2], k1.clone(), ts3);
+    suite.must_kv_rollback(1, vec![k1.clone()], ts3);
     // Update value
     let mut m3 = Mutation::default();
     m3.set_op(Op::Put);
     m3.key = k1.clone();
     m3.value = vec![b'3'; 5120];
-    suite.must_kv_prewrite(1, vec![m3], k1.clone(), 4.into());
-    suite.must_kv_commit(1, vec![k1.clone()], 4.into(), 5.into());
+    let ts4 = suite.cluster.pd_client.get_tso().wait().unwrap();
+    suite.must_kv_prewrite(1, vec![m3], k1.clone(), ts4);
+    let ts5 = suite.cluster.pd_client.get_tso().wait().unwrap();
+    suite.must_kv_commit(1, vec![k1.clone()], ts4, ts5);
     // Lock
     let mut m4 = Mutation::default();
     m4.set_op(Op::Lock);
     m4.key = k1.clone();
-    suite.must_kv_prewrite(1, vec![m4], k1.clone(), 6.into());
-    suite.must_kv_commit(1, vec![k1.clone()], 6.into(), 7.into());
+    let ts6 = suite.cluster.pd_client.get_tso().wait().unwrap();
+    suite.must_kv_prewrite(1, vec![m4], k1.clone(), ts6);
+    let ts7 = suite.cluster.pd_client.get_tso().wait().unwrap();
+    suite.must_kv_commit(1, vec![k1.clone()], ts6, ts7);
     // Delete value and rollback
     let mut m5 = Mutation::default();
     m5.set_op(Op::Del);
     m5.key = k1.clone();
-    suite.must_kv_prewrite(1, vec![m5], k1.clone(), 8.into());
-    suite.must_kv_rollback(1, vec![k1.clone()], 8.into());
+    let ts8 = suite.cluster.pd_client.get_tso().wait().unwrap();
+    suite.must_kv_prewrite(1, vec![m5], k1.clone(), ts8);
+    suite.must_kv_rollback(1, vec![k1.clone()], ts8);
     // Update value
     let mut m6 = Mutation::default();
     m6.set_op(Op::Put);
     m6.key = k1.clone();
     m6.value = b"v6".to_vec();
-    suite.must_kv_prewrite(1, vec![m6], k1.clone(), 10.into());
-    suite.must_kv_commit(1, vec![k1.clone()], 10.into(), 11.into());
+    let ts9 = suite.cluster.pd_client.get_tso().wait().unwrap();
+    let ts10 = suite.cluster.pd_client.get_tso().wait().unwrap();
+    suite.must_kv_prewrite(1, vec![m6], k1.clone(), ts10);
+    let ts11 = suite.cluster.pd_client.get_tso().wait().unwrap();
+    suite.must_kv_commit(1, vec![k1.clone()], ts10, ts11);
     // Delete value in pessimistic txn.
     // In pessimistic txn, CDC must use for_update_ts to read the old value.
     let mut m7 = Mutation::default();
     m7.set_op(Op::PessimisticLock);
     m7.key = k1.clone();
-    suite.must_acquire_pessimistic_lock(1, vec![m7.clone()], k1.clone(), 9.into(), 12.into());
+    let ts12 = suite.cluster.pd_client.get_tso().wait().unwrap();
+    suite.must_acquire_pessimistic_lock(1, vec![m7.clone()], k1.clone(), ts9, ts12);
     m7.set_op(Op::Del);
-    suite.must_kv_pessimistic_prewrite(1, vec![m7], k1, 9.into(), 12.into());
+    suite.must_kv_pessimistic_prewrite(1, vec![m7], k1.clone(), ts9, ts12);
+    let ts13 = suite.cluster.pd_client.get_tso().wait().unwrap();
+    suite.must_kv_commit(1, vec![k1.clone()], ts9, ts13);
+    // Insert value again
+    let mut m8 = Mutation::default();
+    m8.set_op(Op::Insert);
+    m8.key = k1.clone();
+    m8.value = b"v1".to_vec();
+    let ts14 = suite.cluster.pd_client.get_tso().wait().unwrap();
+    suite.must_kv_prewrite(1, vec![m8], k1, ts14);
 
     let mut event_count = 0;
     loop {
@@ -814,13 +835,20 @@ fn test_old_value_basic() {
                 Event_oneof_event::Entries(mut es) => {
                     for row in es.take_entries().to_vec() {
                         if row.get_type() == EventLogType::Prewrite {
-                            if row.get_start_ts() == 3 || row.get_start_ts() == 4 {
+                            if row.get_start_ts() == ts3.into_inner()
+                                || row.get_start_ts() == ts4.into_inner()
+                            {
                                 assert_eq!(row.get_old_value(), b"v1");
                                 event_count += 1;
-                            } else if row.get_start_ts() == 8 {
-                                assert_eq!(row.get_old_value(), vec![b'3'; 5120].as_slice());
+                            } else if row.get_start_ts() == ts8.into_inner() {
+                                assert_eq!(
+                                    row.get_old_value(),
+                                    vec![b'3'; 5120].as_slice(),
+                                    "{:?}",
+                                    row
+                                );
                                 event_count += 1;
-                            } else if row.get_start_ts() == 9 {
+                            } else if row.get_start_ts() == ts9.into_inner() {
                                 assert_eq!(row.get_old_value(), b"v6");
                                 event_count += 1;
                             }
@@ -845,18 +873,20 @@ fn test_old_value_basic() {
             match e.event.unwrap() {
                 Event_oneof_event::Entries(mut es) => {
                     for row in es.take_entries().to_vec() {
-                        if row.get_type() == EventLogType::Committed && row.get_start_ts() == 1 {
+                        if row.get_type() == EventLogType::Committed
+                            && row.get_start_ts() == ts1.into_inner()
+                        {
                             assert_eq!(row.get_old_value(), b"");
                             event_count += 1;
                         } else if row.get_type() == EventLogType::Committed
-                            && row.get_start_ts() == 4
+                            && row.get_start_ts() == ts4.into_inner()
                         {
                             assert_eq!(row.get_old_value(), b"v1");
                             event_count += 1;
                         } else if row.get_type() == EventLogType::Prewrite
-                            && row.get_start_ts() == 9
+                            && row.get_start_ts() == ts14.into_inner()
                         {
-                            assert_eq!(row.get_old_value(), b"v6");
+                            assert_eq!(row.get_old_value(), b"");
                             event_count += 1;
                         }
                     }

@@ -366,6 +366,11 @@ pub fn region_on_same_stores(lhs: &metapb::Region, rhs: &metapb::Region) -> bool
     })
 }
 
+#[inline]
+pub fn is_region_initialized(r: &metapb::Region) -> bool {
+    !r.get_peers().is_empty()
+}
+
 /// Lease records an expired time, for examining the current moment is in lease or not.
 /// It's dedicated to the Raft leader lease mechanism, contains either state of
 ///   1. Suspect Timestamp
@@ -1327,6 +1332,15 @@ mod tests {
             let quorum = super::integration_on_half_fail_quorum_fn(voter_count);
             assert_eq!(quorum, expected_quorum);
         }
+    }
+
+    #[test]
+    fn test_is_region_initialized() {
+        let mut region = metapb::Region::default();
+        assert_eq!(is_region_initialized(&region), false);
+        let peers = vec![new_peer(1, 2)];
+        region.set_peers(peers.into());
+        assert_eq!(is_region_initialized(&region), true);
     }
 
     #[test]

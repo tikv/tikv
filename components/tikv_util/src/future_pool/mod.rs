@@ -148,7 +148,7 @@ impl FuturePool {
 
         self.env.metrics_running_task_count.inc();
         self.pool.spawn(async move {
-            h_schedule.observe(timer.elapsed_secs());
+            h_schedule.observe(timer.saturating_elapsed_secs());
             let _ = future.await;
         });
         Ok(())
@@ -173,7 +173,7 @@ impl FuturePool {
         let (tx, rx) = oneshot::channel();
         self.env.metrics_running_task_count.inc();
         self.pool.spawn(async move {
-            h_schedule.observe(timer.elapsed_secs());
+            h_schedule.observe(timer.saturating_elapsed_secs());
             let res = future.await;
             let _ = tx.send(res);
         });
@@ -190,7 +190,7 @@ fn try_tick_thread(on_tick: &Option<Arc<dyn Fn() + Send + Sync>>) {
     THREAD_LAST_TICK_TIME.with(|tls_last_tick| {
         let now = Instant::now_coarse();
         let last_tick = tls_last_tick.get();
-        if now.duration_since(last_tick) < TICK_INTERVAL {
+        if now.saturating_duration_since(last_tick) < TICK_INTERVAL {
             return;
         }
         tls_last_tick.set(now);

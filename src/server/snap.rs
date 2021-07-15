@@ -1,9 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt::{self, Display, Formatter};
+use std::io::{Read, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use futures::{future, Async, Future, Poll, Stream};
 use futures_cpupool::{Builder as CpuPoolBuilder, CpuPool};
@@ -16,8 +17,9 @@ use kvproto::raft_serverpb::{Done, SnapshotChunk};
 use kvproto::tikvpb::TikvClient;
 
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::{GenericSnapshot, SnapEntry, SnapKey, SnapManager};
+use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
 use security::SecurityManager;
+use tikv_util::time::Instant;
 use tikv_util::worker::Runnable;
 use tikv_util::DeferContext;
 
@@ -54,7 +56,7 @@ impl Display for Task {
 
 struct SnapChunk {
     first: Option<SnapshotChunk>,
-    snap: Box<dyn GenericSnapshot>,
+    snap: Box<Snapshot>,
     remain_bytes: usize,
 }
 
@@ -160,14 +162,14 @@ fn send_snap(
             drop(client);
             result.map(|s| {
                 fail_point!("snapshot_delete_after_send");
-                s.snap.delete();
+                mgr.delete_snapshot(&key, &*s.snap, true);
                 // TODO: improve it after rustc resolves the bug.
                 // Call `info` in the closure directly will cause rustc
                 // panic with `Cannot create local mono-item for DefId`.
                 SendStat {
                     key,
                     total_size,
-                    elapsed: timer.elapsed(),
+                    elapsed: timer.saturating_elapsed(),
                 }
             })
         });
@@ -176,7 +178,7 @@ fn send_snap(
 
 struct RecvSnapContext {
     key: SnapKey,
-    file: Option<Box<dyn GenericSnapshot>>,
+    file: Option<Box<Snapshot>>,
     raft_msg: RaftMessage,
 }
 

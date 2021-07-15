@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
@@ -40,12 +40,12 @@ use crate::store::fsm::{
     apply, Apply, ApplyMetrics, ApplyTask, CollectedReady, GroupState, Proposal, RegionProposal,
 };
 use crate::store::worker::{HeartbeatTask, ReadDelegate, ReadProgress, RegionTask};
-use crate::store::{Callback, Config, PdTask, ReadResponse, RegionSnapshot, SplitCheckTask};
+use crate::store::{Callback, Config, PdTask, ReadResponse, RegionSnapshot};
 use crate::{Error, Result};
 use pd_client::INVALID_ID;
 use tikv_util::collections::{HashMap, HashSet};
-use tikv_util::time::Instant as UtilInstant;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
+use tikv_util::time::{Instant as TiInstant, InstantExt};
 use tikv_util::worker::Scheduler;
 use tikv_util::Either;
 
@@ -366,9 +366,13 @@ pub struct Peer {
     /// of deleted entries.
     pub compaction_declined_bytes: u64,
     /// Approximate size of the region.
-    pub approximate_size: Option<u64>,
+    pub approximate_size: u64,
     /// Approximate keys of the region.
-    pub approximate_keys: Option<u64>,
+    pub approximate_keys: u64,
+    /// Whether this region has calculated region size by split-check thread. If we just splitted
+    ///  the region or ingested one file which may be overlapped with the existed data, the
+    /// `approximate_size` is not very accurate.
+    pub has_calculated_region_size: bool,
 
     /// The state for consistency check.
     pub consistency_state: ConsistencyState,
@@ -405,20 +409,18 @@ pub struct Peer {
     pub peer_stat: PeerStat,
 
     /// Time of the last attempt to wake up inactive leader.
-    pub bcast_wake_up_time: Option<UtilInstant>,
+    pub bcast_wake_up_time: Option<TiInstant>,
     /// The known newest conf version and its corresponding peer list
     /// Send to these peers to check whether itself is stale.
     pub check_stale_conf_ver: u64,
     pub check_stale_peers: Vec<metapb::Peer>,
+    /// Whether this peer is created by replication and is the first
+    /// one of this region on local store.
+    pub local_first_replicate: bool,
 
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     /// Check whether this proposal can be proposed based on its epoch
     cmd_epoch_checker: CmdEpochChecker,
-
-    /// The number of pending pd heartbeat tasks. Pd heartbeat task may be blocked by
-    /// reading rocksdb. To avoid unnecessary io operations, we always let the later
-    /// task run when there are more than 1 pending tasks.
-    pub pending_pd_heartbeat_tasks: Arc<AtomicU64>,
 }
 
 impl Peer {
@@ -470,8 +472,9 @@ impl Peer {
             down_peer_ids: vec![],
             size_diff_hint: 0,
             delete_keys_hint: 0,
-            approximate_size: None,
-            approximate_keys: None,
+            approximate_size: 0,
+            approximate_keys: 0,
+            has_calculated_region_size: false,
             compaction_declined_bytes: 0,
             leader_unreachable: false,
             pending_remove: false,
@@ -500,9 +503,9 @@ impl Peer {
             bcast_wake_up_time: None,
             check_stale_conf_ver: 0,
             check_stale_peers: vec![],
+            local_first_replicate: false,
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
             cmd_epoch_checker: Default::default(),
-            pending_pd_heartbeat_tasks: Arc::new(AtomicU64::new(0)),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -628,7 +631,7 @@ impl Peer {
     /// 3. Notify all pending requests.
     pub fn destroy<T, C>(&mut self, ctx: &PollContext<T, C>, keep_data: bool) -> Result<()> {
         fail_point!("raft_store_skip_destroy_peer", |_| Ok(()));
-        let t = Instant::now();
+        let t = TiInstant::now();
 
         let region = self.region().clone();
         info!(
@@ -675,7 +678,7 @@ impl Peer {
             "peer destroy itself";
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
-            "takes" => ?t.elapsed(),
+            "takes" => ?t.saturating_elapsed(),
         );
 
         Ok(())
@@ -970,11 +973,13 @@ impl Peer {
             if p.get_id() == self.peer.get_id() {
                 continue;
             }
+            // TODO
             if let Some(instant) = self.peer_heartbeats.get(&p.get_id()) {
-                if instant.elapsed() >= max_duration {
+                let elapsed = instant.saturating_elapsed();
+                if elapsed >= max_duration {
                     let mut stats = PeerStats::default();
                     stats.set_peer(p.clone());
-                    stats.set_down_seconds(instant.elapsed().as_secs());
+                    stats.set_down_seconds(elapsed.as_secs());
                     down_peers.push(stats);
                     down_peer_ids.push(p.get_id());
                 }
@@ -999,6 +1004,15 @@ impl Peer {
             if id == self.peer.get_id() {
                 continue;
             }
+            // The `matched` is 0 only in these two cases:
+            // 1. Current leader hasn't communicated with this peer.
+            // 2. This peer does not exist yet(maybe it is created but not initialized)
+            //
+            // The correctness of region merge depends on the fact that all target peers must exist during merging.
+            // (PD rely on `pending_peers` to check whether all target peers exist)
+            //
+            // So if the `matched` is 0, it must be a pending peer.
+            // It can be ensured because `truncated_index` must be greater than `RAFT_INIT_LOG_INDEX`(5).
             if progress.matched < truncated_idx {
                 if let Some(p) = self.get_peer_from_cache(id) {
                     pending_peers.push(p);
@@ -1053,7 +1067,7 @@ impl Peer {
             if let Some(progress) = self.raft_group.raft.prs().get(peer_id) {
                 if progress.matched >= truncated_idx {
                     let (_, pending_after) = self.peers_start_pending_time.swap_remove(i);
-                    let elapsed = duration_to_sec(pending_after.elapsed());
+                    let elapsed = duration_to_sec(pending_after.saturating_elapsed());
                     debug!(
                         "peer has caught up logs";
                         "region_id" => self.region_id,
@@ -1091,14 +1105,16 @@ impl Peer {
                 self.leader_missing_time = Instant::now().into();
                 StaleState::Valid
             }
-            Some(instant) if instant.elapsed() >= ctx.cfg.max_leader_missing_duration.0 => {
+            Some(instant)
+                if instant.saturating_elapsed() >= ctx.cfg.max_leader_missing_duration.0 =>
+            {
                 // Resets the `leader_missing_time` to avoid sending the same tasks to
                 // PD worker continuously during the leader missing timeout.
                 self.leader_missing_time = Instant::now().into();
                 StaleState::ToValidate
             }
             Some(instant)
-                if instant.elapsed() >= ctx.cfg.abnormal_leader_missing_duration.0
+                if instant.saturating_elapsed() >= ctx.cfg.abnormal_leader_missing_duration.0
                     && !naive_peer =>
             {
                 // A peer is considered as in the leader missing state
@@ -2316,11 +2332,15 @@ impl Peer {
             poll_ctx.raft_metrics.invalid_proposal.read_index_no_leader += 1;
             // The leader may be hibernated, send a message for trying to awaken the leader.
             if self.bcast_wake_up_time.is_none()
-                || self.bcast_wake_up_time.as_ref().unwrap().elapsed()
+                || self
+                    .bcast_wake_up_time
+                    .as_ref()
+                    .unwrap()
+                    .saturating_elapsed()
                     >= Duration::from_millis(MIN_BCAST_WAKE_UP_INTERVAL)
             {
                 self.bcast_wake_up_message(poll_ctx);
-                self.bcast_wake_up_time = Some(UtilInstant::now_coarse());
+                self.bcast_wake_up_time = Some(TiInstant::now_coarse());
 
                 let task = PdTask::QueryRegionLeader {
                     region_id: self.region_id,
@@ -2836,11 +2856,6 @@ impl Peer {
         None
     }
 
-    pub fn is_region_size_or_keys_none(&self) -> bool {
-        fail_point!("region_size_or_keys_none", |_| true);
-        self.approximate_size.is_none() || self.approximate_keys.is_none()
-    }
-
     pub fn heartbeat_pd<T, C>(&mut self, ctx: &PollContext<T, C>) {
         let task = PdTask::Heartbeat(HeartbeatTask {
             term: self.term(),
@@ -2850,57 +2865,19 @@ impl Peer {
             pending_peers: self.collect_pending_peers(ctx),
             written_bytes: self.peer_stat.written_bytes,
             written_keys: self.peer_stat.written_keys,
-            approximate_size: self.approximate_size.unwrap_or_default(),
-            approximate_keys: self.approximate_keys.unwrap_or_default(),
+            approximate_size: self.approximate_size,
+            approximate_keys: self.approximate_keys,
         });
-        if !self.is_region_size_or_keys_none() {
-            if let Err(e) = ctx.pd_scheduler.schedule(task) {
-                error!(
-                    "failed to notify pd";
-                    "region_id" => self.region_id,
-                    "peer_id" => self.peer.get_id(),
-                    "err" => ?e,
-                );
-            }
-            return;
-        }
-
-        if self.pending_pd_heartbeat_tasks.load(Ordering::SeqCst) > 2 {
-            return;
-        }
-        let region_id = self.region_id;
-        let peer_id = self.peer.get_id();
-        let scheduler = ctx.pd_scheduler.clone();
-        let split_check_task = SplitCheckTask::GetRegionApproximateSizeAndKeys {
-            region: self.region().clone(),
-            pending_tasks: self.pending_pd_heartbeat_tasks.clone(),
-            cb: Box::new(move |size: u64, keys: u64| {
-                if let PdTask::Heartbeat(mut h) = task {
-                    h.approximate_size = size;
-                    h.approximate_keys = keys;
-                    if let Err(e) = scheduler.schedule(PdTask::Heartbeat(h)) {
-                        error!(
-                            "failed to notify pd";
-                            "region_id" => region_id,
-                            "peer_id" => peer_id,
-                            "err" => ?e,
-                        );
-                    }
-                }
-            }),
-        };
-        self.pending_pd_heartbeat_tasks
-            .fetch_add(1, Ordering::SeqCst);
-        if let Err(e) = ctx.split_check_scheduler.schedule(split_check_task) {
+        if let Err(e) = ctx.pd_scheduler.schedule(task) {
             error!(
                 "failed to notify pd";
-                "region_id" => region_id,
-                "peer_id" => peer_id,
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
                 "err" => ?e,
             );
-            self.pending_pd_heartbeat_tasks
-                .fetch_sub(1, Ordering::SeqCst);
+            return;
         }
+        fail_point!("schedule_check_split");
     }
 
     fn send_raft_message<T: Transport>(&mut self, msg: eraftpb::Message, trans: &mut T) {

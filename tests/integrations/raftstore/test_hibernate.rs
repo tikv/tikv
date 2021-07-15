@@ -2,12 +2,13 @@
 
 use std::sync::*;
 use std::thread;
-use std::time::*;
+use std::time::Duration;
 
 use futures::Future;
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use test_raftstore::*;
+use tikv_util::time::Instant;
 use tikv_util::HandyRwLock;
 
 #[test]
@@ -157,7 +158,7 @@ fn test_prompt_learner() {
             break;
         }
         thread::sleep(Duration::from_millis(10));
-        if timer.elapsed() > Duration::from_secs(3) {
+        if timer.saturating_elapsed() > Duration::from_secs(3) {
             panic!("log is not compact after 3 seconds");
         }
     }
@@ -194,7 +195,8 @@ fn test_transfer_leader_delay() {
     ));
     cluster.transfer_leader(1, new_peer(3, 3));
     let timer = Instant::now();
-    while timer.elapsed() < Duration::from_secs(3) && messages.lock().unwrap().is_empty() {
+    while timer.saturating_elapsed() < Duration::from_secs(3) && messages.lock().unwrap().is_empty()
+    {
         thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(messages.lock().unwrap().len(), 1);
@@ -213,7 +215,7 @@ fn test_transfer_leader_delay() {
         .send_raft_message(messages.lock().unwrap().pop().unwrap())
         .unwrap();
     let timer = Instant::now();
-    while timer.elapsed() < Duration::from_secs(3) {
+    while timer.saturating_elapsed() < Duration::from_secs(3) {
         let resp = cluster.request(
             b"k2",
             vec![new_put_cmd(b"k2", b"v2")],
@@ -269,7 +271,7 @@ fn test_split_delay() {
             break;
         }
         thread::sleep(Duration::from_millis(10));
-        if timer.elapsed() > Duration::from_secs(3) {
+        if timer.saturating_elapsed() > Duration::from_secs(3) {
             panic!("log is not compact after 3 seconds");
         }
     }
