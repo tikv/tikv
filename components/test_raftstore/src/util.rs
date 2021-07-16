@@ -862,12 +862,14 @@ pub fn kv_read(client: &TikvClient, ctx: Context, key: Vec<u8>, ts: u64) -> GetR
     client.kv_get(&get_req).unwrap()
 }
 
-pub fn must_kv_prewrite(
+pub fn must_kv_prewrite_with(
     client: &TikvClient,
     ctx: Context,
     muts: Vec<Mutation>,
     pk: Vec<u8>,
     ts: u64,
+    use_async_commit: bool,
+    try_one_pc: bool,
 ) {
     let mut prewrite_req = PrewriteRequest::default();
     prewrite_req.set_context(ctx);
@@ -876,6 +878,8 @@ pub fn must_kv_prewrite(
     prewrite_req.start_version = ts;
     prewrite_req.lock_ttl = 3000;
     prewrite_req.min_commit_ts = prewrite_req.start_version + 1;
+    prewrite_req.use_async_commit = use_async_commit;
+    prewrite_req.try_one_pc = try_one_pc;
     let prewrite_resp = client.kv_prewrite(&prewrite_req).unwrap();
     assert!(
         !prewrite_resp.has_region_error(),
@@ -887,6 +891,16 @@ pub fn must_kv_prewrite(
         "{:?}",
         prewrite_resp.get_errors()
     );
+}
+
+pub fn must_kv_prewrite(
+    client: &TikvClient,
+    ctx: Context,
+    muts: Vec<Mutation>,
+    pk: Vec<u8>,
+    ts: u64,
+) {
+    must_kv_prewrite_with(client, ctx, muts, pk, ts, false, false)
 }
 
 pub fn must_kv_commit(
