@@ -193,8 +193,6 @@ impl Drop for ImportFile {
 /// The file being written is stored in `$root/.temp/$file_name`. After writing
 /// is completed, the file is moved to `$root/$file_name`. The file generated
 /// from the ingestion process will be placed in `$root/.clone/$file_name`.
-///
-/// TODO: Add size and rate limit.
 pub struct ImportDir {
     root_dir: PathBuf,
     temp_dir: PathBuf,
