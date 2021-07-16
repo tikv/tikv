@@ -71,7 +71,7 @@ pub struct Downstream {
     // TODO: include cdc request.
     /// A unique identifier of the Downstream.
     id: DownstreamID,
-    // The reqeust ID set by CDC to identify events corresponding different requests.
+    // The request ID set by CDC to identify events corresponding different requests.
     req_id: u64,
     conn_id: ConnID,
     // The IP address of downstream.
@@ -83,7 +83,7 @@ pub struct Downstream {
 }
 
 impl Downstream {
-    /// Create a Downsteam.
+    /// Create a Downstream.
     ///
     /// peer is the address of the downstream.
     /// sink sends data to the downstream.
@@ -409,7 +409,7 @@ impl Delegate {
         old_value_cb: &OldValueCallback,
         old_value_cache: &mut OldValueCache,
     ) -> Result<()> {
-        // Stale CmdBatch, drop it sliently.
+        // Stale CmdBatch, drop it silently.
         if batch.cdc_id != self.handle.id {
             return Ok(());
         }
@@ -507,7 +507,7 @@ impl Delegate {
                 None => {
                     let mut row = EventRow::default();
 
-                    // This type means scan has finised.
+                    // This type means scan has finished.
                     set_event_row_type(&mut row, EventLogType::Initialized);
                     rows.last_mut().unwrap().push(row);
                 }
@@ -548,7 +548,7 @@ impl Delegate {
                 row.old_value = old_value.unwrap_or_default();
                 CDC_OLD_VALUE_DURATION_HISTOGRAM
                     .with_label_values(&["all"])
-                    .observe(start.elapsed().as_secs_f64());
+                    .observe(start.saturating_elapsed().as_secs_f64());
                 if let Some(statistics) = statistics {
                     for (cf, cf_details) in statistics.details().iter() {
                         for (tag, count) in cf_details.iter() {

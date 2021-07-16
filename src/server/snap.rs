@@ -6,7 +6,7 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use futures::future::{Future, TryFutureExt};
 use futures::sink::SinkExt;
@@ -27,6 +27,7 @@ use raftstore::router::RaftStoreRouter;
 use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
 use security::SecurityManager;
 use tikv_util::config::{Tracker, VersionTrack};
+use tikv_util::time::Instant;
 use tikv_util::worker::Runnable;
 use tikv_util::DeferContext;
 
@@ -178,7 +179,7 @@ pub fn send_snap(
                 Ok(SendStat {
                     key,
                     total_size,
-                    elapsed: timer.elapsed(),
+                    elapsed: timer.saturating_elapsed(),
                 })
             }
             Err(e) => Err(e),

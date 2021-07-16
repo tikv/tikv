@@ -3,7 +3,7 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::*;
+use std::time::Duration;
 
 use futures::executor::block_on;
 
@@ -19,6 +19,7 @@ use raftstore::store::util::is_learner;
 use raftstore::Result;
 use test_raftstore::*;
 use tikv_util::config::ReadableDuration;
+use tikv_util::time::Instant;
 use tikv_util::HandyRwLock;
 
 fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -944,5 +945,5 @@ fn test_conf_change_fast() {
     pd_client.must_add_peer(r1, new_learner_peer(2, 2));
     pd_client.must_add_peer(r1, new_peer(2, 2));
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
-    assert!(timer.elapsed() < Duration::from_secs(5));
+    assert!(timer.saturating_elapsed() < Duration::from_secs(5));
 }

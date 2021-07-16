@@ -60,7 +60,7 @@ use tikv_alloc::trace::TraceEvent;
 use tikv_util::codec::number::decode_u64;
 use tikv_util::sys::disk;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
-use tikv_util::time::{Instant as UtilInstant, ThreadReadId};
+use tikv_util::time::{Instant as TiInstant, InstantExt, ThreadReadId};
 use tikv_util::worker::{FutureScheduler, Scheduler};
 use tikv_util::Either;
 use tikv_util::{box_err, debug, error, info, warn};
@@ -469,8 +469,6 @@ where
     /// Approximate size of logs that is applied but not compacted yet.
     pub raft_log_size_hint: u64,
 
-    /// The index of the latest proposed prepare merge command.
-    last_proposed_prepare_merge_idx: u64,
     /// The index of the latest committed prepare merge command.
     last_committed_prepare_merge_idx: u64,
     /// The merge related state. It indicates this Peer is in merging.
@@ -488,7 +486,7 @@ where
     pub peer_stat: PeerStat,
 
     /// Time of the last attempt to wake up inactive leader.
-    pub bcast_wake_up_time: Option<UtilInstant>,
+    pub bcast_wake_up_time: Option<TiInstant>,
     /// Current replication mode version.
     pub replication_mode_version: u64,
     /// The required replication state at current version.
@@ -591,7 +589,6 @@ where
             pending_merge_state: None,
             want_rollback_merge_peers: HashSet::default(),
             pending_request_snapshot_count: Arc::new(AtomicUsize::new(0)),
-            last_proposed_prepare_merge_idx: 0,
             last_committed_prepare_merge_idx: 0,
             leader_missing_time: Some(Instant::now()),
             tag: tag.clone(),
@@ -806,7 +803,7 @@ where
     /// 3. Notify all pending requests.
     pub fn destroy<T>(&mut self, ctx: &PollContext<EK, ER, T>, keep_data: bool) -> Result<()> {
         fail_point!("raft_store_skip_destroy_peer", |_| Ok(()));
-        let t = Instant::now();
+        let t = TiInstant::now();
 
         let region = self.region().clone();
         info!(
@@ -853,7 +850,7 @@ where
             "peer destroy itself";
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
-            "takes" => ?t.elapsed(),
+            "takes" => ?t.saturating_elapsed(),
         );
 
         Ok(())
@@ -1073,14 +1070,10 @@ where
     {
         for msg in msgs {
             let msg_type = msg.get_msg_type();
-            let snapshot_index = msg.get_request_snapshot();
             let i = self.send_raft_message(msg, trans) as usize;
             match msg_type {
                 MessageType::MsgAppend => metrics.append[i] += 1,
                 MessageType::MsgAppendResponse => {
-                    if snapshot_index != raft::INVALID_INDEX {
-                        metrics.request_snapshot[i] += 1;
-                    }
                     metrics.append_resp[i] += 1;
                 }
                 MessageType::MsgRequestPreVote => metrics.prevote[i] += 1,
@@ -1223,11 +1216,13 @@ where
             if p.get_id() == self.peer.get_id() {
                 continue;
             }
+            // TODO
             if let Some(instant) = self.peer_heartbeats.get(&p.get_id()) {
-                if instant.elapsed() >= max_duration {
+                let elapsed = instant.saturating_elapsed();
+                if elapsed >= max_duration {
                     let mut stats = PeerStats::default();
                     stats.set_peer(p.clone());
-                    stats.set_down_seconds(instant.elapsed().as_secs());
+                    stats.set_down_seconds(elapsed.as_secs());
                     down_peers.push(stats);
                     down_peer_ids.push(p.get_id());
                 }
@@ -1249,7 +1244,7 @@ where
 
         for i in 0..self.peers_start_pending_time.len() {
             let (_, pending_after) = self.peers_start_pending_time[i];
-            let elapsed = duration_to_sec(pending_after.elapsed());
+            let elapsed = duration_to_sec(pending_after.saturating_elapsed());
             RAFT_PEER_PENDING_DURATION.observe(elapsed);
         }
 
@@ -1321,7 +1316,7 @@ where
             if let Some(progress) = self.raft_group.raft.prs().get(peer_id) {
                 if progress.matched >= truncated_idx {
                     let (_, pending_after) = self.peers_start_pending_time.swap_remove(i);
-                    let elapsed = duration_to_sec(pending_after.elapsed());
+                    let elapsed = duration_to_sec(pending_after.saturating_elapsed());
                     RAFT_PEER_PENDING_DURATION.observe(elapsed);
                     debug!(
                         "peer has caught up logs";
@@ -1360,14 +1355,16 @@ where
                 self.leader_missing_time = Instant::now().into();
                 StaleState::Valid
             }
-            Some(instant) if instant.elapsed() >= ctx.cfg.max_leader_missing_duration.0 => {
+            Some(instant)
+                if instant.saturating_elapsed() >= ctx.cfg.max_leader_missing_duration.0 =>
+            {
                 // Resets the `leader_missing_time` to avoid sending the same tasks to
                 // PD worker continuously during the leader missing timeout.
                 self.leader_missing_time = Instant::now().into();
                 StaleState::ToValidate
             }
             Some(instant)
-                if instant.elapsed() >= ctx.cfg.abnormal_leader_missing_duration.0
+                if instant.saturating_elapsed() >= ctx.cfg.abnormal_leader_missing_duration.0
                     && !naive_peer =>
             {
                 // A peer is considered as in the leader missing state
@@ -1573,45 +1570,6 @@ where
     fn is_merging(&self) -> bool {
         self.last_committed_prepare_merge_idx > self.get_store().applied_index()
             || self.pending_merge_state.is_some()
-    }
-
-    // Checks merge strictly, it checks whether there is any ongoing merge by
-    // tracking last proposed prepare merge.
-    // TODO: There is a false positives, proposed prepare merge may never be
-    //       committed.
-    fn is_merging_strict(&self) -> bool {
-        self.last_proposed_prepare_merge_idx > self.get_store().applied_index() || self.is_merging()
-    }
-
-    // Check if this peer can handle request_snapshot.
-    pub fn ready_to_handle_request_snapshot(&mut self, request_index: u64) -> bool {
-        let reject_reason = if !self.is_leader() {
-            // Only leader can handle request snapshot.
-            "not_leader"
-        } else if self.get_store().applied_index_term() != self.term()
-            || self.get_store().applied_index() < request_index
-        {
-            // Reject if there are any unapplied raft log.
-            // We don't want to handle request snapshot if there is any ongoing
-            // merge, because it is going to be destroyed. This check prevents
-            // handling request snapshot after leadership being transferred.
-            "stale_apply"
-        } else if self.is_merging_strict() || self.is_splitting() {
-            // Reject if it is merging or splitting.
-            // `is_merging_strict` also checks last proposed prepare merge, it
-            // prevents handling request snapshot while a prepare merge going
-            // to be committed.
-            "split_merge"
-        } else {
-            return true;
-        };
-
-        info!("can not handle request snapshot";
-            "reason" => reject_reason,
-            "region_id" => self.region().get_id(),
-            "peer_id" => self.peer_id(),
-            "request_index" => request_index);
-        false
     }
 
     /// Checks if leader needs to keep sending logs for follower.
@@ -2804,11 +2762,15 @@ where
             poll_ctx.raft_metrics.invalid_proposal.read_index_no_leader += 1;
             // The leader may be hibernated, send a message for trying to awaken the leader.
             if self.bcast_wake_up_time.is_none()
-                || self.bcast_wake_up_time.as_ref().unwrap().elapsed()
+                || self
+                    .bcast_wake_up_time
+                    .as_ref()
+                    .unwrap()
+                    .saturating_elapsed()
                     >= Duration::from_millis(MIN_BCAST_WAKE_UP_INTERVAL)
             {
                 self.bcast_wake_up_message(poll_ctx);
-                self.bcast_wake_up_time = Some(UtilInstant::now_coarse());
+                self.bcast_wake_up_time = Some(TiInstant::now_coarse());
 
                 let task = PdTask::QueryRegionLeader {
                     region_id: self.region_id,
@@ -3113,10 +3075,6 @@ where
             // The message is dropped silently, this usually due to leader absence
             // or transferring leader. Both cases can be considered as NotLeader error.
             return Err(Error::NotLeader(self.region_id, None));
-        }
-
-        if ctx.contains(ProposalContext::PREPARE_MERGE) {
-            self.last_proposed_prepare_merge_idx = propose_index;
         }
 
         Ok(Either::Left(propose_index))
@@ -3903,7 +3861,6 @@ pub trait AbstractPeer {
     fn apply_state(&self) -> &RaftApplyState;
     fn raft_status(&self) -> raft::Status;
     fn raft_commit_index(&self) -> u64;
-    fn raft_request_snapshot(&mut self, index: u64);
     fn pending_merge_state(&self) -> Option<&MergeState>;
 }
 

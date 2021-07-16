@@ -551,7 +551,7 @@ where
                         .raft_metrics
                         .propose
                         .request_wait_time
-                        .observe(duration_to_sec(cmd.send_time.elapsed()) as f64);
+                        .observe(duration_to_sec(cmd.send_time.saturating_elapsed()) as f64);
                     if let Some(Err(e)) = cmd.deadline.map(|deadline| deadline.check()) {
                         cmd.callback.invoke_with_response(new_error(e.into()));
                         continue;
@@ -1327,10 +1327,6 @@ where
             Either::Right(v) => v,
         };
 
-        if !self.check_request_snapshot(&msg) {
-            return Ok(());
-        }
-
         if util::is_vote_msg(&msg.get_message())
             || msg.get_message().get_msg_type() == MessageType::MsgTimeoutNow
         {
@@ -1939,19 +1935,6 @@ where
                 )
                 .unwrap();
         }
-    }
-
-    // Check if this peer can handle request_snapshot.
-    fn check_request_snapshot(&mut self, msg: &RaftMessage) -> bool {
-        let m = msg.get_message();
-        let request_index = m.get_request_snapshot();
-        if request_index == raft::INVALID_INDEX {
-            // If it's not a request snapshot, then go on.
-            return true;
-        }
-        self.fsm
-            .peer
-            .ready_to_handle_request_snapshot(request_index)
     }
 
     fn handle_destroy_peer(&mut self, job: DestroyPeerJob) -> bool {
@@ -4310,9 +4293,6 @@ impl<EK: KvEngine, ER: RaftEngine> AbstractPeer for PeerFsm<EK, ER> {
     }
     fn raft_commit_index(&self) -> u64 {
         self.peer.raft_group.store().commit_index()
-    }
-    fn raft_request_snapshot(&mut self, index: u64) {
-        self.peer.raft_group.request_snapshot(index).unwrap();
     }
     fn pending_merge_state(&self) -> Option<&MergeState> {
         self.peer.pending_merge_state.as_ref()

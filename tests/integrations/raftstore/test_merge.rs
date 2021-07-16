@@ -15,7 +15,6 @@ use engine_rocks::Compat;
 use engine_traits::Peekable;
 use engine_traits::{CF_RAFT, CF_WRITE};
 use pd_client::PdClient;
-use raftstore::store::*;
 use test_raftstore::*;
 use tikv::storage::kv::SnapContext;
 use tikv_util::config::*;
@@ -821,81 +820,6 @@ fn test_merge_with_slow_promote() {
     pd_client.must_merge(right.get_id(), left.get_id());
     cluster.sim.wl().clear_send_filters(3);
     cluster.must_transfer_leader(left.get_id(), new_peer(3, left.get_id() + 3));
-}
-
-#[test]
-fn test_request_snapshot_after_propose_merge() {
-    let mut cluster = new_node_cluster(0, 3);
-    configure_for_merge(&mut cluster);
-    cluster.cfg.raft_store.merge_max_log_gap = 100;
-    configure_for_lease_read(&mut cluster, Some(100), Some(1000));
-    let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_operator();
-
-    cluster.run_conf_change();
-    pd_client.must_add_peer(1, new_peer(2, 2));
-    pd_client.must_add_peer(1, new_peer(3, 3));
-
-    let region = pd_client.get_region(b"k1").unwrap();
-    cluster.must_split(&region, b"k2");
-
-    cluster.must_put(b"k1", b"v1");
-    cluster.must_put(b"k3", b"v3");
-    must_get_equal(&cluster.get_engine(2), b"k3", b"v3");
-    must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
-
-    let region = pd_client.get_region(b"k3").unwrap();
-    let target_region = pd_client.get_region(b"k1").unwrap();
-
-    let leader = cluster.leader_of_region(region.get_id()).unwrap();
-    let followers: Vec<_> = region
-        .get_peers()
-        .iter()
-        .filter(|p| p.id != leader.id)
-        .collect();
-
-    let k = b"k1_for_apply_to_current_term";
-    cluster.must_put(k, b"value");
-    for i in 1..=3 {
-        must_get_equal(&cluster.get_engine(i), k, b"value");
-    }
-
-    // Drop append messages, so prepare merge can not be committed.
-    cluster.add_send_filter(CloneFilterFactory(DropMessageFilter::new(
-        MessageType::MsgAppend,
-    )));
-    let prepare_merge = new_prepare_merge(target_region);
-    let mut req = new_admin_request(region.get_id(), region.get_region_epoch(), prepare_merge);
-    req.mut_header().set_peer(leader.clone());
-    let (tx, rx) = mpsc::channel();
-    cluster
-        .sim
-        .rl()
-        .async_command_on_node(
-            leader.store_id,
-            req,
-            Callback::write_ext(
-                Box::new(|_| {}),
-                Some(Box::new(move || tx.send(()).unwrap())),
-                None,
-            ),
-        )
-        .unwrap();
-    rx.recv_timeout(Duration::from_secs(1)).unwrap();
-
-    // Install snapshot filter before requesting snapshot.
-    let (tx, rx) = mpsc::channel();
-    let notifier = Mutex::new(Some(tx));
-    cluster.sim.wl().add_recv_filter(
-        followers[1].store_id,
-        Box::new(RecvSnapshotFilter {
-            notifier,
-            region_id: region.get_id(),
-        }),
-    );
-    cluster.must_request_snapshot(followers[1].store_id, region.get_id());
-    // Leader should reject request snapshot if there is any proposed merge.
-    rx.recv_timeout(Duration::from_millis(500)).unwrap_err();
 }
 
 /// Test whether a isolated store recover properly if there is no target peer
