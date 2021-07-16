@@ -289,7 +289,7 @@ impl Instant {
             }
             Instant::MonotonicCoarse(t) => {
                 let now = monotonic_coarse_now();
-                Instant::saturating_elapsed_duration_coarse(now, t)
+                Instant::elapsed_duration_coarse(now, t)
             }
         }
     }
@@ -308,7 +308,7 @@ impl Instant {
                 Instant::elapsed_duration(later, earlier)
             }
             (Instant::MonotonicCoarse(later), Instant::MonotonicCoarse(earlier)) => {
-                Instant::saturating_elapsed_duration_coarse(later, earlier)
+                Instant::elapsed_duration_coarse(later, earlier)
             }
             _ => {
                 panic!("duration between different types of Instants");
@@ -322,7 +322,7 @@ impl Instant {
                 Instant::saturating_elapsed_duration(later, earlier)
             }
             (Instant::MonotonicCoarse(later), Instant::MonotonicCoarse(earlier)) => {
-                Instant::saturating_elapsed_duration_coarse(later, earlier)
+                Instant::elapsed_duration_coarse(later, earlier)
             }
             _ => {
                 panic!("duration between different types of Instants");
@@ -372,10 +372,7 @@ impl Instant {
     // and therefore the timer registers are typically running at an offset.
     // Use millisecond resolution for ignoring the error.
     // See more: https://linux.die.net/man/2/clock_gettime
-    pub(crate) fn saturating_elapsed_duration_coarse(
-        later: Timespec,
-        earlier: Timespec,
-    ) -> Duration {
+    pub(crate) fn elapsed_duration_coarse(later: Timespec, earlier: Timespec) -> Duration {
         let later_ms = later.sec * MILLISECOND_PER_SECOND
             + i64::from(later.nsec) / NANOSECONDS_PER_MILLISECOND;
         let earlier_ms = earlier.sec * MILLISECOND_PER_SECOND
