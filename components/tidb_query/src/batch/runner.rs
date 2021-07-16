@@ -2,11 +2,11 @@
 
 use std::convert::TryFrom;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use kvproto::coprocessor::KeyRange;
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
-use tikv_util::deadline::Deadline;
+use tikv_util::{deadline::Deadline, time::Instant};
 use tipb::{self, ExecType, ExecutorExecutionSummary, FieldType};
 use tipb::{Chunk, DagRequest, EncodeType, SelectResponse};
 use yatp::task::future::reschedule;
@@ -350,7 +350,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
         let mut time_slice_start = Instant::now();
         loop {
-            let time_slice_len = time_slice_start.elapsed();
+            let time_slice_len = time_slice_start.saturating_elapsed();
             // Check whether we should yield from the execution
             if time_slice_len > MAX_TIME_SLICE {
                 reschedule().await;

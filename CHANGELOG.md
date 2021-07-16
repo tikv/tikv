@@ -3,16 +3,28 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [4.0.13] - 2021-05-28
+
++ Improvements
+  + Limit CDC scan speed (128MB/s by default) [#9983](https://github.com/tikv/tikv/pull/9983)
+  + Reduce memory usage of CDC initial scan [#10133](https://github.com/tikv/tikv/pull/10133)
+  + Support back pressure CDC scan speed [#10142](https://github.com/tikv/tikv/pull/10142)
+  + Add a timeout for s3 storage client to avoid client hangs without responses [#10132](https://github.com/tikv/tikv/pull/10132)
++ Bug Fixes
+  + Fix the bug that TiKV cannot startup when the end of file dict file is damaged [#9963](https://github.com/tikv/tikv/pull/9963)
+  + Fix a potential OOM issue by avoiding unnecessary read for getting CDC old values [#10031](https://github.com/tikv/tikv/pull/10031)
+  + Fix a CDC OOM issue caused by reading old values [#10197](https://github.com/tikv/tikv/pull/10197)
+
 ## [4.0.12] - 2021-04-02
 
 + Improvements
- + Prevent a large number of reconnections in a short period of time [#9879](https://github.com/tikv/tikv/pull/9879)
- + Optimize the write operations in the scenarios of many tombstones [#9729](https://github.com/tikv/tikv/pull/9729)
- + Change the default value of `leader-transfer-max-log-lag` to `128` to increase the success rate of leader transfer [#9605](https://github.com/tikv/tikv/pull/9605)
+  + Prevent a large number of reconnections in a short period of time [#9879](https://github.com/tikv/tikv/pull/9879)
+  + Optimize the write operations in the scenarios of many tombstones [#9729](https://github.com/tikv/tikv/pull/9729)
+  + Change the default value of `leader-transfer-max-log-lag` to `128` to increase the success rate of leader transfer [#9605](https://github.com/tikv/tikv/pull/9605)
 + Bug Fixes
- + Fix the issue that the `IN` expression does not properly handle unsigned/signed integers [#9850](https://github.com/tikv/tikv/pull/9850)
- + Fix the issue that the ingest operation is not re-entrant [#9779](https://github.com/tikv/tikv/pull/9779)
- + Fix the issue that the space is missed when converting JSON to string in TiKV coprocessor [#9666](https://github.com/tikv/tikv/pull/9666)
+  + Fix the issue that the `IN` expression does not properly handle unsigned/signed integers [#9850](https://github.com/tikv/tikv/pull/9850)
+  + Fix the issue that the ingest operation is not re-entrant [#9779](https://github.com/tikv/tikv/pull/9779)
+  + Fix the issue that the space is missed when converting JSON to string in TiKV coprocessor [#9666](https://github.com/tikv/tikv/pull/9666)
 
 ## [4.0.11] - 2021-02-26
 

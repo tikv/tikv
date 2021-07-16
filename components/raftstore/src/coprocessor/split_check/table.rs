@@ -342,8 +342,8 @@ mod tests {
         cfg.region_max_keys = 2000000000;
         cfg.region_split_keys = 1000000000;
         // Try to ignore the ApproximateRegionSize
-        let coprocessor = CoprocessorHost::new(stx);
-        let mut runnable = SplitCheckRunner::new(Arc::clone(&engine), tx, coprocessor, cfg);
+        let coprocessor = CoprocessorHost::new(stx, cfg);
+        let mut runnable = SplitCheckRunner::new(engine.clone(), tx, coprocessor);
 
         type Case = (Option<Vec<u8>>, Option<Vec<u8>>, Option<i64>);
         let mut check_cases = |cases: Vec<Case>| {

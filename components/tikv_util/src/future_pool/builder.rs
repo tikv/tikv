@@ -123,6 +123,7 @@ impl Builder {
             after_start: self.after_start.clone(),
             on_tick: self.on_tick.clone(),
             env: env.clone(),
+            props: crate::thread_group::current_properties(),
         };
         // If zero `pool_size` or `stack_size` is passed in, yatp will keep its default
         // configuration unchanged.

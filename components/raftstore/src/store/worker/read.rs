@@ -32,15 +32,15 @@ use crate::store::fsm::store::StoreMeta;
 /// A read only delegate of `Peer`.
 #[derive(Clone, Debug)]
 pub struct ReadDelegate {
-    region: metapb::Region,
-    peer_id: u64,
-    term: u64,
-    applied_index_term: u64,
-    leader_lease: Option<RemoteLease>,
-    last_valid_ts: RefCell<Timespec>,
+    pub region: metapb::Region,
+    pub peer_id: u64,
+    pub term: u64,
+    pub applied_index_term: u64,
+    pub leader_lease: Option<RemoteLease>,
+    pub last_valid_ts: RefCell<Timespec>,
 
-    tag: String,
-    invalid: Arc<AtomicBool>,
+    pub tag: String,
+    pub invalid: Arc<AtomicBool>,
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
 }
 
@@ -487,7 +487,9 @@ impl Default for ReadMetrics {
 
 impl ReadMetrics {
     pub fn maybe_flush(&mut self) {
-        if self.last_flush_time.elapsed() >= Duration::from_millis(METRICS_FLUSH_INTERVAL) {
+        if self.last_flush_time.saturating_elapsed()
+            >= Duration::from_millis(METRICS_FLUSH_INTERVAL)
+        {
             self.flush();
             self.last_flush_time = Instant::now();
         }
