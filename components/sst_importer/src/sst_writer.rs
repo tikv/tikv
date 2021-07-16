@@ -321,7 +321,10 @@ mod tests {
         assert_eq!(w.default_entries, 1);
         assert_eq!(w.default_deletes, 1);
         // ttl takes 8 more bytes
-        assert_eq!(w.default_bytes, b"short_value".len() as u64 + 8);
+        assert_eq!(
+            w.default_bytes as usize,
+            b"zk1".len() + b"short_value".len() + 8 + b"zk2".len()
+        );
 
         let metas = w.finish().unwrap();
         assert_eq!(metas.len(), 1);
