@@ -249,6 +249,11 @@ where
     }
 
     #[inline]
+    fn is_empty(&self) -> bool {
+        self.tasks.is_empty()
+    }
+
+    #[inline]
     fn get_raft_size(&self) -> usize {
         self.state_size + self.raft_wb.persist_size()
     }
@@ -381,9 +386,9 @@ where
             let mut first_time = true;
             while self.wb.get_raft_size() < self.raft_write_size_limit {
                 let msg = if first_time {
+                    first_time = false;
                     match self.receiver.recv() {
                         Ok(msg) => {
-                            first_time = false;
                             STORE_WRITE_TASK_GEN_DURATION_HISTOGRAM
                                 .observe(duration_to_sec(loop_begin.elapsed()));
                             handle_begin = Instant::now();
@@ -417,6 +422,10 @@ where
                     }
                     AsyncWriteMsg::Persisted => (),
                 }
+            }
+
+            if self.wb.is_empty() {
+                continue;
             }
 
             STORE_WRITE_HANDLE_MSG_DURATION_HISTOGRAM
@@ -480,7 +489,9 @@ where
         self.pending_tasks
             .push_back((self.last_id, std::mem::take(&mut self.wb.tasks)));
 
-        self.sync_sender.send((self.worker_id, self.last_id));
+        self.sync_sender
+            .send((self.worker_id, self.last_id))
+            .unwrap();
 
         self.wb.clear();
 
@@ -564,6 +575,7 @@ where
         io_senders: Vec<Sender<AsyncWriteMsg<EK, ER>>>,
         global_persisted_ids: Vec<Arc<AtomicU64>>,
     ) -> Self {
+        assert_eq!(io_senders.len(), global_persisted_ids.len());
         Self {
             raft_engine,
             receiver,
@@ -573,11 +585,15 @@ where
     }
 
     fn run(&mut self) {
-        let mut persist_map = HashMap::default();
+        let mut persist_vec = vec![];
+        for _ in 0..self.io_senders.len() {
+            persist_vec.push(None);
+        }
         loop {
             let mut first_time = true;
             loop {
-                let mut msg = if first_time {
+                let msg = if first_time {
+                    first_time = false;
                     match self.receiver.recv() {
                         Ok(msg) => msg,
                         Err(_) => return,
@@ -591,11 +607,11 @@ where
                         }
                     }
                 };
-                // TODO
-                if msg.0 == 0 {
+                // HACK, TODO: fix it
+                if msg.1 == 0 {
                     return;
                 }
-                persist_map.insert(msg.0, msg.1);
+                persist_vec[msg.0] = Some(msg.1);
             }
             let now = Instant::now();
             self.raft_engine.sync().unwrap_or_else(|e| {
@@ -603,12 +619,14 @@ where
             });
             STORE_WRITE_SYNC_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()));
 
-            for (worker_id, persisted_id) in &persist_map {
-                self.global_persisted_ids[*worker_id].store(*persisted_id, Ordering::Release);
-                // TODO
-                let _ = self.io_senders[*worker_id].send(AsyncWriteMsg::Persisted);
+            for i in 0..persist_vec.len() {
+                if let Some(persisted_id) = persist_vec[i] {
+                    self.global_persisted_ids[i].store(persisted_id, Ordering::Release);
+                    // TODO
+                    let _ = self.io_senders[i].send(AsyncWriteMsg::Persisted);
+                    persist_vec[i] = None;
+                }
             }
-            persist_map.clear();
         }
     }
 }
@@ -700,7 +718,7 @@ where
             self.writers[i].send(AsyncWriteMsg::Shutdown).unwrap();
             handler.join().unwrap();
         }
-        self.sync_sender.as_ref().unwrap().send((0, 0));
+        self.sync_sender.as_ref().unwrap().send((0, 0)).unwrap();
         self.sync_handler.take().unwrap().join().unwrap();
     }
 }
