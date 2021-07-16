@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::{HashMap, HashSet};
-use std::fs::File;
+use std::fs::{read_to_string, File};
 use std::io::prelude::*;
 use std::mem::MaybeUninit;
 use std::process;
@@ -36,10 +36,7 @@ pub struct CGroupSys {
 
 impl CGroupSys {
     pub fn new() -> Self {
-        let mut f = File::open(&format!("/proc/{}/cgroup", process::id())).unwrap();
-        let mut lines = String::new();
-        f.read_to_string(&mut lines).unwrap();
-
+        let mut lines = read_to_string(&format!("/proc/{}/cgroup", process::id())).unwrap();
         let is_v2 = is_cgroup2_unified_mode();
         let cgroups = if !is_v2 {
             parse_proc_cgroup_v1(&lines)
@@ -129,11 +126,7 @@ fn is_cgroup2_unified_mode() -> bool {
 
 fn parse_proc_cgroup_v1(lines: &str) -> HashMap<String, String> {
     let mut subsystems = HashMap::new();
-    let lines = lines
-        .split('\n')
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty());
-    for line in lines {
+    for line in lines.lines().map(|s| s.trim()).filter(|s| !s.is_empty()) {
         let mut iter = line.split(':');
         let _id = iter.next().unwrap();
         let systems = iter.next().unwrap();
