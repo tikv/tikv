@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use std::sync::*;
 use std::thread;
 use std::time::Duration;
-use std::time::Instant;
 
 use futures::channel::mpsc as future_mpsc;
 use grpcio::{ChannelBuilder, Environment};
@@ -28,6 +27,7 @@ use tikv::storage::kv::Engine;
 use tikv::storage::SnapshotStore;
 use tikv::{config::BackupConfig, storage::kv::SnapContext};
 use tikv_util::config::ReadableSize;
+use tikv_util::time::Instant;
 use tikv_util::worker::{LazyWorker, Worker};
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
@@ -49,7 +49,7 @@ macro_rules! retry_req {
         let start = Instant::now();
         let timeout = Duration::from_millis($timeout);
         let mut tried_times = 0;
-        while tried_times < $retry || start.elapsed() < timeout {
+        while tried_times < $retry || start.saturating_elapsed() < timeout {
             if $check_resp {
                 break;
             } else {

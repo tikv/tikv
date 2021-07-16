@@ -1,3 +1,10 @@
+// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+
+use std::fs;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
 use crossbeam::channel::{unbounded, Receiver};
 use engine_rocks::{
     self,
@@ -9,10 +16,7 @@ use kvproto::raft_serverpb::RaftLocalState;
 use protobuf::Message;
 use raft::eraftpb::Entry;
 use raft_log_engine::RaftLogEngine;
-use std::fs;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use tikv_util::time::Instant;
 
 const CONSUME_THRESHOLD: usize = 32 * 1024;
 
@@ -54,7 +58,7 @@ pub fn check_and_dump_raft_db(
         threads.push(t);
     }
     info!("Start to scan raft log from raftdb and dump into raft engine");
-    let consumed_time = std::time::Instant::now();
+    let consumed_time = Instant::now();
     // Seek all region id from raftdb and send them to workers.
     let mut it = origin_engine.iterator().unwrap();
     let mut valid = it.seek(SeekKey::Key(keys::REGION_RAFT_MIN_KEY)).unwrap();
@@ -81,7 +85,7 @@ pub fn check_and_dump_raft_db(
         "Finished dump, total regions: {}; Total bytes: {}; Consumed time: {:?}",
         count_region,
         count_size.load(Ordering::Relaxed),
-        consumed_time.elapsed(),
+        consumed_time.saturating_elapsed(),
     );
     convert_to_dirty_raftdb(raftdb_path);
     check_and_delete_safely(raftdb_path);

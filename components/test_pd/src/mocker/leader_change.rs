@@ -72,7 +72,7 @@ impl PdMocker for LeaderChange {
     fn get_region_by_id(&self, _: &GetRegionByIdRequest) -> Option<Result<GetRegionResponse>> {
         let inner = self.inner.lock().unwrap();
         let now = Instant::now();
-        if now.duration_since(inner.r.ts) > LeaderChange::get_leader_interval() {
+        if now.saturating_duration_since(inner.r.ts) > LeaderChange::get_leader_interval() {
             return Some(Err("not leader".to_owned()));
         }
         Some(Ok(GetRegionResponse::default()))

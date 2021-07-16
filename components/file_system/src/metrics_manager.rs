@@ -1,7 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
-use std::time::Instant;
+
+use tikv_util::time::Instant;
 
 use crate::iosnoop::{fetch_io_bytes, flush_io_latency_metrics};
 use crate::metrics::IO_BYTES_VEC;

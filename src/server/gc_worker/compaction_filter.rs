@@ -6,7 +6,7 @@ use std::mem;
 use std::result::Result;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use engine_rocks::raw::{
     new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
@@ -19,7 +19,7 @@ use engine_traits::{MiscExt, Mutable, MvccProperties};
 use pd_client::{Feature, FeatureGate};
 use prometheus::{local::*, *};
 use raftstore::coprocessor::RegionInfoProvider;
-use tikv_util::worker::FutureScheduler;
+use tikv_util::{time::Instant, worker::FutureScheduler};
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 
 use crate::server::gc_worker::{GcConfig, GcTask, GcWorkerConfigManager};
@@ -476,7 +476,7 @@ struct CompactionFilterStats {
 impl CompactionFilterStats {
     fn need_report(&self) -> bool {
         self.versions.get() >= 1024 * 1024 // 1M versions.
-            || self.last_report.get().elapsed() >= Duration::from_secs(60)
+            || self.last_report.get().saturating_elapsed() >= Duration::from_secs(60)
     }
 
     fn prepare_report(&self) -> (usize, usize) {

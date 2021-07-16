@@ -171,7 +171,7 @@ pub fn get_old_value<S: EngineSnapshot>(
                         let value = reader.get_value_default(&prev_key, &mut statistics);
                         CDC_OLD_VALUE_DURATION_HISTOGRAM
                             .with_label_values(&["get"])
-                            .observe(start.elapsed().as_secs_f64());
+                            .observe(start.saturating_elapsed().as_secs_f64());
                         (value, Some(statistics))
                     }
                     // Unspecified should not be added into cache.
@@ -191,7 +191,7 @@ pub fn get_old_value<S: EngineSnapshot>(
         .unwrap_or_default();
     CDC_OLD_VALUE_DURATION_HISTOGRAM
         .with_label_values(&["seek"])
-        .observe(start.elapsed().as_secs_f64());
+        .observe(start.saturating_elapsed().as_secs_f64());
     if value.is_none() {
         old_value_cache.miss_none_count += 1;
     }
