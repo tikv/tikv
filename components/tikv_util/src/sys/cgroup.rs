@@ -36,7 +36,7 @@ pub struct CGroupSys {
 
 impl CGroupSys {
     pub fn new() -> Self {
-        let mut lines = read_to_string(&format!("/proc/{}/cgroup", process::id())).unwrap();
+        let lines = read_to_string(&format!("/proc/{}/cgroup", process::id())).unwrap();
         let is_v2 = is_cgroup2_unified_mode();
         let cgroups = if !is_v2 {
             parse_proc_cgroup_v1(&lines)
