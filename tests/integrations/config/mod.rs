@@ -206,7 +206,7 @@ fn test_serde_custom_tikv_config() {
         hibernate_regions: false,
         dev_assert: true,
         apply_yield_duration: ReadableDuration::millis(333),
-        perf_level: PerfLevel::EnableTime,
+        perf_level: PerfLevel::Disable,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {

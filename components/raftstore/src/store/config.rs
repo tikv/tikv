@@ -259,7 +259,7 @@ impl Default for Config {
             region_max_size: ReadableSize(0),
             region_split_size: ReadableSize(0),
             clean_stale_peer_delay: ReadableDuration::minutes(0),
-            perf_level: PerfLevel::Disable,
+            perf_level: PerfLevel::EnableTime,
         }
     }
 }

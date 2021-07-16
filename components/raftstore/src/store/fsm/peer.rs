@@ -550,7 +550,7 @@ where
                         .raft_metrics
                         .propose
                         .request_wait_time
-                        .observe(duration_to_sec(cmd.send_time.elapsed()) as f64);
+                        .observe(duration_to_sec(cmd.send_time.saturating_elapsed()) as f64);
                     if let Some(Err(e)) = cmd.deadline.map(|deadline| deadline.check()) {
                         cmd.callback.invoke_with_response(new_error(e.into()));
                         continue;
