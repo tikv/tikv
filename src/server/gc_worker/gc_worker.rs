@@ -5,7 +5,7 @@ use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::mpsc;
 use std::sync::{atomic, Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use engine::rocks::DB;
 use engine_rocks::{Compat, RocksEngine};
@@ -28,7 +28,7 @@ use raftstore::router::ServerRaftStoreRouter;
 use raftstore::store::msg::StoreMsg;
 use raftstore::store::RegionSnapshot;
 use tikv_util::config::{Tracker, VersionTrack};
-use tikv_util::time::{duration_to_sec, Limiter, SlowTimer};
+use tikv_util::time::{duration_to_sec, Instant, Limiter, SlowTimer};
 use tikv_util::worker::{
     FutureRunnable, FutureScheduler, FutureWorker, Stopped as FutureWorkerStopped,
 };
@@ -445,7 +445,7 @@ impl<E: Engine> GcRunner<E> {
 
         info!(
             "unsafe destroy range finished deleting files in range";
-            "start_key" => %start_key, "end_key" => %end_key, "cost_time" => ?delete_files_start_time.elapsed()
+            "start_key" => %start_key, "end_key" => %end_key, "cost_time" => ?delete_files_start_time.saturating_elapsed()
         );
 
         // Then, delete all remaining keys in the range.
@@ -480,7 +480,7 @@ impl<E: Engine> GcRunner<E> {
 
         info!(
             "unsafe destroy range finished cleaning up all";
-            "start_key" => %start_key, "end_key" => %end_key, "cost_time" => ?cleanup_all_start_time.elapsed(),
+            "start_key" => %start_key, "end_key" => %end_key, "cost_time" => ?cleanup_all_start_time.saturating_elapsed(),
         );
         if let Some(router) = self.raft_store_router.as_ref() {
             router
@@ -563,7 +563,7 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
         let update_metrics = |is_err| {
             GC_TASK_DURATION_HISTOGRAM_VEC
                 .with_label_values(&[label])
-                .observe(duration_to_sec(timer.elapsed()));
+                .observe(duration_to_sec(timer.saturating_elapsed()));
 
             if is_err {
                 GC_GCTASK_FAIL_COUNTER_VEC.with_label_values(&[label]).inc();

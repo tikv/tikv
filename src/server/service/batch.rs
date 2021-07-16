@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::server::load_statistics::ThreadLoad;
 use crate::server::metrics::*;
@@ -16,6 +16,7 @@ use tikv_util::collections::HashMap;
 use tikv_util::future::poll_future_notify;
 use tikv_util::metrics::HistogramReader;
 use tikv_util::mpsc::batch::Sender;
+use tikv_util::time::Instant;
 
 const REQUEST_BATCH_LIMITER_SAMPLE_WINDOW: usize = 30;
 const REQUEST_BATCH_LIMITER_LOW_LOAD_RATIO: f32 = 0.3;
@@ -143,7 +144,7 @@ impl BatchLimiter {
     #[inline]
     fn is_due(&self, now: Instant) -> bool {
         if let Some(timeout) = self.timeout {
-            now - self.last_submit_time >= timeout
+            now.saturating_duration_since(self.last_submit_time) >= timeout
         } else {
             true
         }

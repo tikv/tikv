@@ -3,7 +3,7 @@
 use std::iter::*;
 use std::sync::*;
 use std::thread;
-use std::time::*;
+use std::time::Duration;
 
 use kvproto::raft_cmdpb::CmdType;
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
@@ -16,6 +16,7 @@ use pd_client::PdClient;
 use raftstore::store::*;
 use test_raftstore::*;
 use tikv_util::config::*;
+use tikv_util::time::Instant;
 use tikv_util::HandyRwLock;
 
 /// Test if merge is working as expected in a general condition.
@@ -181,7 +182,7 @@ fn test_node_merge_with_slow_learner() {
         if state1.get_index() != state2.get_index() {
             break;
         }
-        if timer.elapsed() > Duration::from_secs(3) {
+        if timer.saturating_elapsed() > Duration::from_secs(3) {
             panic!("log compaction not finish after 3 seconds.");
         }
         sleep_ms(10);

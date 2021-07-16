@@ -1,15 +1,14 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use futures::future::{err, ok};
+use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use futures::{Future, Stream};
+use std::cmp;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
-use std::{cmp, thread};
-
-use futures::future::{err, ok};
-use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use futures::{Future, Stream};
+use std::time::Duration;
 use tokio_timer::timer::Handle;
 
 use kvproto::metapb;
@@ -21,7 +20,7 @@ use pd_client::{Error, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result};
 use raftstore::store::util::check_key_in_region;
 use raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
 use tikv_util::collections::{HashMap, HashMapEntry, HashSet};
-use tikv_util::time::UnixSecs;
+use tikv_util::time::{Instant, UnixSecs};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{Either, HandyRwLock};
 use txn_types::TimeStamp;
@@ -841,7 +840,7 @@ impl TestPdClient {
         loop {
             let region = self.get_region_by_id(from).wait().unwrap();
             if let Some(r) = region {
-                if timer.elapsed() > duration {
+                if timer.saturating_elapsed() > duration {
                     panic!("region {:?} is still not merged.", r);
                 }
             } else {
@@ -939,11 +938,7 @@ impl TestPdClient {
             Ok(mut c) => {
                 c.stores.remove(&store_id);
             }
-            Err(e) => {
-                if !thread::panicking() {
-                    panic!("failed to acquire write lock: {:?}", e)
-                }
-            }
+            Err(e) => safe_panic!("failed to acquire write lock: {:?}", e),
         }
     }
 
@@ -1082,7 +1077,8 @@ impl PdClient for TestPdClient {
             rx.map(|resp| vec![resp])
                 .select(
                     stream::unfold(timer, |timer| {
-                        let interval = timer.delay(Instant::now() + Duration::from_millis(500));
+                        let interval =
+                            timer.delay(std::time::Instant::now() + Duration::from_millis(500));
                         Some(interval.then(|_| Ok(((), timer))))
                     })
                     .map(move |_| {

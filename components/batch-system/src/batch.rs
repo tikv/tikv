@@ -15,6 +15,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use tikv_util::mpsc;
 use tikv_util::time::Instant;
+use tikv_util::{debug, error, info, safe_panic, thd_name, warn};
 
 /// A unify type for FSMs so that they can be sent to channel easily.
 enum FsmTypes<N, C> {
@@ -295,7 +296,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 if p.is_stopped() {
                     reschedule_fsms.push((i, ReschedulePolicy::Remove));
                 } else {
-                    if batch.timers[i].elapsed() >= self.reschedule_duration {
+                    if batch.timers[i].saturating_elapsed() >= self.reschedule_duration {
                         hot_fsm_count += 1;
                         // We should only reschedule a half of the hot regions, otherwise,
                         // it's possible all the hot regions are fetched in a batch the
@@ -393,9 +394,13 @@ where
                 max_batch_size: self.max_batch_size,
                 reschedule_duration: self.reschedule_duration,
             };
+            let props = tikv_util::thread_group::current_properties();
             let t = thread::Builder::new()
                 .name(thd_name!(format!("{}-{}", name_prefix, i)))
-                .spawn(move || poller.poll())
+                .spawn(move || {
+                    tikv_util::thread_group::set_properties(props);
+                    poller.poll()
+                })
                 .unwrap();
             self.workers.push(t);
         }
@@ -419,9 +424,7 @@ where
             }
         }
         if let Some(e) = last_error {
-            if !thread::panicking() {
-                panic!("failed to join worker thread: {:?}", e);
-            }
+            safe_panic!("failed to join worker thread: {:?}", e);
         }
         info!("batch system {} is stopped.", name_prefix);
     }
