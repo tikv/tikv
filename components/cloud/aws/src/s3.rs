@@ -524,8 +524,8 @@ mod tests {
         assert!(S3Storage::new(config).is_err());
     }
 
-    #[test]
     #[cfg(feature = "failpoints")]
+    #[test]
     fn test_s3_storage() {
         let magic_contents = "5678";
         let bucket_name = StringNonEmpty::required("mybucket".to_string()).unwrap();
