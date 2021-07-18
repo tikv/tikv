@@ -858,11 +858,11 @@ mod tests {
         for (duration, string, exp) in cases {
             let expected = exp.map(|exp| Duration::parse(&mut ctx, exp, MAX_FSP).unwrap());
             let duration = duration.map(|arg1| Duration::parse(&mut ctx, arg1, MAX_FSP).unwrap());
-            let string = string.map(|arg2| Duration::parse(&mut ctx, arg2, MAX_FSP).unwrap());
+            let string = string.map(|str| str.as_bytes().to_vec());
             let output = RpnFnScalarEvaluator::new()
                 .push_param(duration)
                 .push_param(string)
-                .evaluate(ScalarFuncSig::AddDurationAndDuration)
+                .evaluate(ScalarFuncSig::AddDurationAndString)
                 .unwrap();
             assert_eq!(output, expected);
         }
