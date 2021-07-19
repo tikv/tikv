@@ -219,7 +219,12 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
     pub fn schedule(&mut self, router: &BatchRouter<N, C>, index: usize, inplace: bool) {
         let to_schedule = match self.normals[index].take() {
             Some(f) => f,
-            None => return,
+            None => {
+                if !inplace {
+                    self.normals.swap_remove(index);
+                }
+                return;
+            }
         };
         let mut res = match to_schedule.policy {
             Some(ReschedulePolicy::Release(l)) => self.release(to_schedule, l),
