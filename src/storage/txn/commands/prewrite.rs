@@ -8,14 +8,10 @@
 use crate::storage::{
     kv::WriteData,
     lock_manager::LockManager,
-<<<<<<< HEAD
-    mvcc::{has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn},
-=======
     mvcc::{
         has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn,
-        Result as MvccResult, SnapshotReader, TxnCommitRecord,
+        Result as MvccResult, TxnCommitRecord,
     },
->>>>>>> c709d566c... storage: do not report WriteConflict or PessimisticLockNotFound if txn is committed (#10522)
     txn::{
         actions::prewrite::{prewrite, CommitKind, TransactionKind, TransactionProperties},
         commands::{
@@ -374,15 +370,10 @@ impl<K: PrewriteKind> Prewriter<K> {
         // Set extra op here for getting the write record when check write conflict in prewrite.
 
         let rows = self.mutations.len();
-<<<<<<< HEAD
-        let (locks, final_min_commit_ts) = self.prewrite(&mut txn, context.extra_op)?;
 
+        let res = self.prewrite(&mut txn, context.extra_op);
         context.statistics.add(&txn.take_statistics());
-=======
-        let res = self.prewrite(&mut txn, &mut reader, context.extra_op);
-        context.statistics.add(&reader.take_statistics());
         let (locks, final_min_commit_ts) = res?;
->>>>>>> c709d566c... storage: do not report WriteConflict or PessimisticLockNotFound if txn is committed (#10522)
 
         Ok(self.write_result(
             locks,
@@ -453,14 +444,14 @@ impl<K: PrewriteKind> Prewriter<K> {
         // whether the transaction has been committed, so the error is still returned.
         fn check_committed_record_on_err(
             prewrite_result: MvccResult<(TimeStamp, OldValue)>,
-            reader: &mut SnapshotReader<impl Snapshot>,
+            txn: &mut MvccTxn<impl Snapshot>,
             key: &Key,
         ) -> Result<(Vec<std::result::Result<(), StorageError>>, TimeStamp)> {
             if let TxnCommitRecord::SingleRecord { commit_ts, .. } =
-                reader.get_txn_commit_record(key)?
+                txn.reader.get_txn_commit_record(key, txn.start_ts)?
             {
                 info!("prewrited transaction has been committed";
-                    "start_ts" => reader.start_ts, "commit_ts" => commit_ts);
+                    "start_ts" => txn.start_ts, "commit_ts" => commit_ts);
                 Ok((vec![], commit_ts))
             } else {
                 Err(prewrite_result.unwrap_err().into())
@@ -490,21 +481,17 @@ impl<K: PrewriteKind> Prewriter<K> {
                             .insert(key, (old_value, Some(mutation_type)));
                     }
                 }
-<<<<<<< HEAD
-                Err(MvccError(box MvccErrorInner::CommitTsTooLarge { .. })) | Ok((_, _)) => {
-=======
                 Err(MvccError(box MvccErrorInner::WriteConflict {
                     start_ts,
                     conflict_commit_ts,
                     ..
                 })) if conflict_commit_ts > start_ts => {
-                    return check_committed_record_on_err(prewrite_result, reader, &key);
+                    return check_committed_record_on_err(prewrite_result, txn, &key);
                 }
                 Err(MvccError(box MvccErrorInner::PessimisticLockNotFound { .. })) => {
-                    return check_committed_record_on_err(prewrite_result, reader, &key);
+                    return check_committed_record_on_err(prewrite_result, txn, &key);
                 }
-                Err(MvccError(box MvccErrorInner::CommitTsTooLarge { .. })) | Ok((..)) => {
->>>>>>> c709d566c... storage: do not report WriteConflict or PessimisticLockNotFound if txn is committed (#10522)
+                Err(MvccError(box MvccErrorInner::CommitTsTooLarge { .. })) | Ok((_, _)) => {
                     // fallback to not using async commit or 1pc
                     props.commit_kind = CommitKind::TwoPc;
                     async_commit_pk = None;
@@ -760,14 +747,10 @@ pub(in crate::storage::txn) fn fallback_1pc_locks<S: Snapshot>(txn: &mut MvccTxn
 #[cfg(test)]
 mod tests {
     use super::*;
-<<<<<<< HEAD
-=======
-    use crate::storage::txn::actions::acquire_pessimistic_lock::tests::must_pessimistic_locked;
     use crate::storage::txn::actions::tests::{
         must_pessimistic_prewrite_put_async_commit, must_prewrite_put,
         must_prewrite_put_async_commit,
     };
->>>>>>> c709d566c... storage: do not report WriteConflict or PessimisticLockNotFound if txn is committed (#10522)
     use crate::storage::{
         mvcc::{tests::*, Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{
