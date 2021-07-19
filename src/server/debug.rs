@@ -7,7 +7,7 @@ use std::thread::{Builder as ThreadBuilder, JoinHandle};
 use std::{error::Error as StdError, result};
 
 use kvproto::debugpb::{self, Db as DBType};
-use kvproto::metapb::Region;
+use kvproto::metapb::{PeerRole, Region};
 use kvproto::raft_serverpb::*;
 use protobuf::Message;
 use raft::eraftpb::Entry;
@@ -556,6 +556,7 @@ impl<ER: RaftEngine> Debugger<ER> {
         &self,
         store_ids: Vec<u64>,
         region_ids: Option<Vec<u64>>,
+        promote_learner: bool,
     ) -> Result<()> {
         let store_id = self.get_store_id()?;
         if store_ids.iter().any(|&s| s == store_id) {
@@ -583,6 +584,43 @@ impl<ER: RaftEngine> Debugger<ER> {
 
                 let region_id = region_state.get_region().get_id();
                 let old_peers = region_state.mut_region().take_peers();
+
+                if promote_learner {
+                    if new_peers
+                        .iter()
+                        .filter(|peer| peer.get_role() != PeerRole::Learner)
+                        .count()
+                        != 0
+                    {
+                        // no need to promote learner, do nothing
+                    } else if new_peers
+                        .iter()
+                        .filter(|peer| peer.get_role() == PeerRole::Learner)
+                        .count()
+                        > 1
+                    {
+                        error!(
+                            "failed to promote learner due to multiple learners, skip promote learner";
+                            "region_id" => region_id,
+                        )
+                    } else {
+                        for peer in &mut new_peers {
+                            match peer.get_role() {
+                                PeerRole::Voter
+                                | PeerRole::IncomingVoter
+                                | PeerRole::DemotingVoter => {}
+                                PeerRole::Learner => {
+                                    info!(
+                                        "promote learner";
+                                        "region_id" => region_id,
+                                        "peer_id" => peer.get_id(),
+                                    );
+                                    peer.set_role(PeerRole::Voter);
+                                }
+                            }
+                        }
+                    }
+                }
                 info!(
                     "peers changed";
                     "region_id" => region_id,
@@ -1221,7 +1259,7 @@ mod tests {
     use std::sync::Arc;
 
     use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
-    use kvproto::metapb::{Peer, Region};
+    use kvproto::metapb::{Peer, PeerRole, Region};
     use raft::eraftpb::EntryType;
     use tempfile::Builder;
 
@@ -1232,13 +1270,22 @@ mod tests {
     use engine_traits::{Mutable, SyncMutable};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
-    fn init_region_state(engine: &Arc<DB>, region_id: u64, stores: &[u64]) -> Region {
+    fn init_region_state(
+        engine: &Arc<DB>,
+        region_id: u64,
+        stores: &[u64],
+        mut learner: usize,
+    ) -> Region {
         let mut region = Region::default();
         region.set_id(region_id);
         for (i, &store_id) in stores.iter().enumerate() {
             let mut peer = Peer::default();
             peer.set_id(i as u64);
             peer.set_store_id(store_id);
+            if learner > 0 {
+                peer.set_role(PeerRole::Learner);
+                learner -= 1;
+            }
             region.mut_peers().push(peer);
         }
         let mut region_state = RegionLocalState::default();
@@ -1518,21 +1565,21 @@ mod tests {
         let engine = &debugger.engines.kv;
 
         // region 1 with peers at stores 11, 12, 13.
-        let region_1 = init_region_state(engine.as_inner(), 1, &[11, 12, 13]);
+        let region_1 = init_region_state(engine.as_inner(), 1, &[11, 12, 13], 0);
         // Got the target region from pd, which doesn't contains the store.
         let mut target_region_1 = region_1.clone();
         target_region_1.mut_peers().remove(0);
         target_region_1.mut_region_epoch().set_conf_ver(100);
 
         // region 2 with peers at stores 11, 12, 13.
-        let region_2 = init_region_state(engine.as_inner(), 2, &[11, 12, 13]);
+        let region_2 = init_region_state(engine.as_inner(), 2, &[11, 12, 13], 0);
         // Got the target region from pd, which has different peer_id.
         let mut target_region_2 = region_2.clone();
         target_region_2.mut_peers()[0].set_id(100);
         target_region_2.mut_region_epoch().set_conf_ver(100);
 
         // region 3 with peers at stores 21, 22, 23.
-        let region_3 = init_region_state(engine.as_inner(), 3, &[21, 22, 23]);
+        let region_3 = init_region_state(engine.as_inner(), 3, &[21, 22, 23], 0);
         // Got the target region from pd but the peers are not changed.
         let mut target_region_3 = region_3;
         target_region_3.mut_region_epoch().set_conf_ver(100);
@@ -1576,7 +1623,7 @@ mod tests {
         assert!(!errors.is_empty());
 
         // region 1 with peers at stores 11, 12, 13.
-        init_region_state(engine.as_inner(), 1, &[11, 12, 13]);
+        init_region_state(engine.as_inner(), 1, &[11, 12, 13], 0);
         let mut expected_state = get_region_state(engine.as_inner(), 1);
         expected_state.set_state(PeerState::Tombstone);
 
@@ -1606,14 +1653,23 @@ mod tests {
                 .collect::<Vec<_>>()
         };
 
+        let get_region_learner = |engine: &Arc<DB>, region_id: u64| {
+            get_region_state(engine, region_id)
+                .get_region()
+                .get_peers()
+                .iter()
+                .filter(|p| p.get_role() == PeerRole::Learner)
+                .count()
+        };
+
         // region 1 with peers at stores 11, 12, 13 and 14.
-        init_region_state(engine.as_inner(), 1, &[11, 12, 13, 14]);
+        init_region_state(engine.as_inner(), 1, &[11, 12, 13, 14], 0);
         // region 2 with peers at stores 21, 22 and 23.
-        init_region_state(engine.as_inner(), 2, &[21, 22, 23]);
+        init_region_state(engine.as_inner(), 2, &[21, 22, 23], 0);
 
         // Only remove specified stores from region 1.
         debugger
-            .remove_failed_stores(vec![13, 14, 21, 23], Some(vec![1]))
+            .remove_failed_stores(vec![13, 14, 21, 23], Some(vec![1]), false)
             .unwrap();
 
         // 13 and 14 should be removed from region 1.
@@ -1622,14 +1678,38 @@ mod tests {
         assert_eq!(get_region_stores(engine.as_inner(), 2), &[21, 22, 23]);
 
         // Remove specified stores from all regions.
-        debugger.remove_failed_stores(vec![11, 23], None).unwrap();
+        debugger
+            .remove_failed_stores(vec![11, 23], None, false)
+            .unwrap();
 
         assert_eq!(get_region_stores(engine.as_inner(), 1), &[12]);
         assert_eq!(get_region_stores(engine.as_inner(), 2), &[21, 22]);
 
         // Should fail when the store itself is in the failed list.
-        init_region_state(engine.as_inner(), 3, &[100, 31, 32, 33]);
-        debugger.remove_failed_stores(vec![100], None).unwrap_err();
+        init_region_state(engine.as_inner(), 3, &[100, 31, 32, 33], 0);
+        debugger
+            .remove_failed_stores(vec![100], None, false)
+            .unwrap_err();
+
+        // no learner, promote learner does nothing
+        init_region_state(engine.as_inner(), 4, &[41, 42, 43, 44], 0);
+        debugger.remove_failed_stores(vec![44], None, true).unwrap();
+        assert_eq!(get_region_stores(engine.as_inner(), 4), &[41, 42, 43]);
+        assert_eq!(get_region_learner(engine.as_inner(), 4), 0);
+
+        // promote learner
+        init_region_state(engine.as_inner(), 5, &[51, 52, 53, 54], 1);
+        debugger
+            .remove_failed_stores(vec![52, 53, 54], None, true)
+            .unwrap();
+        assert_eq!(get_region_stores(engine.as_inner(), 5), &[51]);
+        assert_eq!(get_region_learner(engine.as_inner(), 5), 0);
+
+        // no need to promote learner
+        init_region_state(engine.as_inner(), 6, &[61, 62, 63, 64], 1);
+        debugger.remove_failed_stores(vec![64], None, true).unwrap();
+        assert_eq!(get_region_stores(engine.as_inner(), 6), &[61, 62, 63]);
+        assert_eq!(get_region_learner(engine.as_inner(), 6), 1);
     }
 
     #[test]

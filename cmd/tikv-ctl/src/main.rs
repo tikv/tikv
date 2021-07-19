@@ -530,7 +530,12 @@ trait DebugExecutor {
     }
 
     /// Recover the cluster when given `store_ids` are failed.
-    fn remove_fail_stores(&self, store_ids: Vec<u64>, region_ids: Option<Vec<u64>>);
+    fn remove_fail_stores(
+        &self,
+        store_ids: Vec<u64>,
+        region_ids: Option<Vec<u64>>,
+        promote_learner: bool,
+    );
 
     /// Recreate the region with metadata from pd, but alloc new id for it.
     fn recreate_region(&self, sec_mgr: Arc<SecurityManager>, pd_cfg: &PdConfig, region_id: u64);
@@ -758,7 +763,7 @@ impl DebugExecutor for DebugClient {
         unimplemented!("only available for local mode");
     }
 
-    fn remove_fail_stores(&self, _: Vec<u64>, _: Option<Vec<u64>>) {
+    fn remove_fail_stores(&self, _: Vec<u64>, _: Option<Vec<u64>>, _: bool) {
         self.check_local_mode();
     }
 
@@ -936,9 +941,14 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
         println!("all regions are healthy")
     }
 
-    fn remove_fail_stores(&self, store_ids: Vec<u64>, region_ids: Option<Vec<u64>>) {
+    fn remove_fail_stores(
+        &self,
+        store_ids: Vec<u64>,
+        region_ids: Option<Vec<u64>>,
+        promote_learner: bool,
+    ) {
         println!("removing stores {:?} from configurations...", store_ids);
-        self.remove_failed_stores(store_ids, region_ids)
+        self.remove_failed_stores(store_ids, region_ids, promote_learner)
             .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
         println!("success");
     }
@@ -1586,6 +1596,11 @@ fn main() {
                                 .help("Only for these regions"),
                         )
                         .arg(
+                            Arg::with_name("promote-learner")
+                                .required(false)
+                                .help("Promote learner to voter"),
+                        )
+                        .arg(
                             Arg::with_name("all-regions")
                                 .required_unless("regions")
                                 .conflicts_with("regions")
@@ -2196,7 +2211,11 @@ fn main() {
                     .collect::<Result<Vec<_>, _>>()
                     .expect("parse regions fail")
             });
-            debug_executor.remove_fail_stores(store_ids, region_ids);
+            debug_executor.remove_fail_stores(
+                store_ids,
+                region_ids,
+                matches.is_present("promote-learner"),
+            );
         } else {
             println!("{}", matches.usage());
         }
