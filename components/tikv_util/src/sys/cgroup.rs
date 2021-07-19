@@ -1,8 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::{HashMap, HashSet};
-use std::fs::{read_to_string, File};
-use std::io::prelude::*;
+use std::fs::read_to_string;
 use std::mem::MaybeUninit;
 use std::process;
 
@@ -48,45 +47,25 @@ impl CGroupSys {
 
     /// -1 means no limit.
     pub fn memory_limit_in_bytes(&self) -> i64 {
-        if self.is_v2 {
+        let path = if self.is_v2 {
             let group = self.cgroups.get("").unwrap();
-            let path = format!("/sys/fs/cgroup/{}/memory.max", group);
-            if let Ok(mut f) = File::open(&path) {
-                let mut buffer = String::new();
-                f.read_to_string(&mut buffer).unwrap();
-                return parse_memory_max(buffer.trim());
-            }
+            format!("/sys/fs/cgroup/{}/memory.max", group)
         } else {
             let group = self.cgroups.get("memory").unwrap();
-            let path = format!("/sys/fs/cgroup/memory/{}/memory.limit_in_bytes", group);
-            if let Ok(mut f) = File::open(&path) {
-                let mut buffer = String::new();
-                f.read_to_string(&mut buffer).unwrap();
-                return parse_memory_max(buffer.trim());
-            }
-        }
-        -1
+            format!("/sys/fs/cgroup/memory/{}/memory.limit_in_bytes", group)
+        };
+        read_to_string(&path).map_or(-1, |x| parse_memory_max(x.trim()))
     }
 
     pub fn cpuset_cores(&self) -> HashSet<usize> {
-        if self.is_v2 {
+        let path = if self.is_v2 {
             let group = self.cgroups.get("").unwrap();
-            let path = format!("/sys/fs/cgroup/{}/cpuset.cpus", group);
-            if let Ok(mut f) = File::open(&path) {
-                let mut buffer = String::new();
-                f.read_to_string(&mut buffer).unwrap();
-                return parse_cpu_cores(buffer.trim());
-            }
+            format!("/sys/fs/cgroup/{}/cpuset.cpus", group)
         } else {
             let group = self.cgroups.get("cpuset").unwrap();
-            let path = format!("/sys/fs/cgroup/cpuset/{}/cpuset.cpus", group);
-            if let Ok(mut f) = File::open(&path) {
-                let mut buffer = String::new();
-                f.read_to_string(&mut buffer).unwrap();
-                return parse_cpu_cores(buffer.trim());
-            }
-        }
-        HashSet::new()
+            format!("/sys/fs/cgroup/cpuset/{}/cpuset.cpus", group)
+        };
+        read_to_string(&path).map_or_else(|_| HashSet::new(), |x| parse_cpu_cores(x.trim()))
     }
 
     /// None means no limit.
@@ -94,19 +73,14 @@ impl CGroupSys {
         if self.is_v2 {
             let group = self.cgroups.get("").unwrap();
             let path = format!("/sys/fs/cgroup/{}/cpu.max", group);
-            if let Ok(mut f) = File::open(&path) {
-                let mut buffer = String::new();
-                f.read_to_string(&mut buffer).unwrap();
+            if let Ok(buffer) = read_to_string(&path) {
                 return parse_cpu_quota_v2(buffer.trim());
             }
         } else {
             let group = self.cgroups.get("cpu").unwrap();
             let path1 = format!("/sys/fs/cgroup/cpu/{}/cpu.cfs_quota_us", group);
             let path2 = format!("/sys/fs/cgroup/cpu/{}/cpu.cfs_period_us", group);
-            if let (Ok(mut f1), Ok(mut f2)) = (File::open(&path1), File::open(&path2)) {
-                let (mut buffer1, mut buffer2) = (String::new(), String::new());
-                f1.read_to_string(&mut buffer1).unwrap();
-                f2.read_to_string(&mut buffer2).unwrap();
+            if let (Ok(buffer1), Ok(buffer2)) = (read_to_string(&path1), read_to_string(&path2)) {
                 return parse_cpu_quota_v1(buffer1.trim(), buffer2.trim());
             }
         }
@@ -153,6 +127,10 @@ fn parse_memory_max(line: &str) -> i64 {
 
 fn parse_cpu_cores(value: &str) -> HashSet<usize> {
     let mut cores = HashSet::new();
+    if value.is_empty() {
+        return cores;
+    }
+
     for v in value.split(',') {
         if v.contains('-') {
             let mut v = v.split('-');
@@ -220,8 +198,8 @@ mod tests {
 
     #[test]
     fn test_parse_memory_max() {
-        let contents = vec!["max", "9223372036854771712", "21474836480"];
-        let expects = vec![-1, 9223372036854771712, 21474836480];
+        let contents = vec!["max", "-1", "9223372036854771712", "21474836480"];
+        let expects = vec![-1, -1, 9223372036854771712, 21474836480];
         for (content, expect) in contents.into_iter().zip(expects) {
             let limit = parse_memory_max(content);
             assert_eq!(limit, expect);
@@ -231,6 +209,9 @@ mod tests {
     #[test]
     fn test_parse_cpu_cores() {
         let mut cpusets = Vec::new();
+        cpusets.extend(parse_cpu_cores(""));
+        assert!(cpusets.is_empty());
+
         cpusets.extend(parse_cpu_cores("1-2,5-8,10,12,4"));
         cpusets.sort_unstable();
         assert_eq!(cpusets, vec![1, 2, 4, 5, 6, 7, 8, 10, 12]);
