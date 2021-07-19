@@ -202,12 +202,11 @@ fn quote(bytes: BytesRef) -> Result<Option<Bytes>> {
     Ok(Some(result))
 }
 
-#[rpn_fn(nullable)]
+#[rpn_fn]
 #[inline]
-fn json_unquote(arg: Option<JsonRef>) -> Result<Option<Bytes>> {
-    arg.as_ref().map_or(Ok(None), |json_arg| {
-        Ok(Some(Bytes::from(json_arg.unquote()?)))
-    })
+fn json_unquote(arg: BytesRef) -> Result<Option<Bytes>> {
+    let tmp_str = std::str::from_utf8(arg)?;
+    Ok(Some(Bytes::from(self::unquote_string(tmp_str)?)))
 }
 
 // Args should be like `(Option<JsonRef> , &[Option<BytesRef>])`.
@@ -224,6 +223,16 @@ fn valid_paths(expr: &tipb::Expr) -> Result<()> {
         super::function::validate_expr_return_type(&child, EvalType::Bytes)?;
     }
     Ok(())
+}
+
+fn unquote_string(s: &str) -> Result<String> {
+    let first_char = s.chars().next();
+    let last_char = s.chars().last();
+    if s.len() >= 2 && first_char == Some('"') && last_char == Some('"') {
+        Ok(json_unquote::unquote_string(&s[1..s.len() - 1])?)
+    } else {
+        Ok(String::from(s))
+    }
 }
 
 #[rpn_fn(nullable, raw_varg, min_args = 2, extra_validator = json_with_paths_validator)]
@@ -619,27 +628,22 @@ mod tests {
     #[test]
     fn test_json_unquote() {
         let cases = vec![
-            (None, false, None),
-            (Some(r"a"), false, Some("a")),
-            (Some(r#""3""#), false, Some(r#""3""#)),
-            (Some(r#""3""#), true, Some(r#"3"#)),
-            (Some(r#"{"a":  "b"}"#), false, Some(r#"{"a":  "b"}"#)),
-            (Some(r#"{"a":  "b"}"#), true, Some(r#"{"a": "b"}"#)),
+            (None, None),
+            (Some(r#"""#), Some(r#"""#)),
+            (Some(r"a"), Some("a")),
+            (Some(r#""3"#), Some(r#""3"#)),
+            (Some(r#"{"a":  "b"}"#), Some(r#"{"a":  "b"}"#)),
             (
-                Some(r#"hello,\"quoted string\",world"#),
-                false,
+                Some(r#""hello,\"quoted string\",world""#),
                 Some(r#"hello,"quoted string",world"#),
             ),
+            (Some(r#"A中\\\"文B"#), Some(r#"A中\\\"文B"#)),
+            (Some(r#""A中\\\"文B""#), Some(r#"A中\"文B"#)),
+            (Some(r#""\u00E0A中\\\"文B""#), Some(r#"àA中\"文B"#)),
         ];
 
-        for (arg, parse, expect_output) in cases {
-            let arg = arg.map(|input| {
-                if parse {
-                    input.parse().unwrap()
-                } else {
-                    Json::from_string(input.to_string()).unwrap()
-                }
-            });
+        for (arg, expect_output) in cases {
+            let arg = arg.map(Bytes::from);
             let expect_output = expect_output.map(Bytes::from);
 
             let output = RpnFnScalarEvaluator::new()
