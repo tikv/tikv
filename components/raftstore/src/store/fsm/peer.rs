@@ -700,6 +700,17 @@ where
                     self.fsm.peer.send_wake_up_message(&mut self.ctx, &leader);
                 }
             }
+            CasualMessage::RejectRaftAppend { peer_id } => {
+                let mut msg = raft::eraftpb::Message::new();
+                msg.msg_type = MessageType::MsgUnreachable;
+                msg.to = peer_id;
+                msg.from = self.fsm.peer.peer_id();
+                self.fsm.peer.send(
+                    &mut self.ctx.trans,
+                    vec![msg],
+                    &mut self.ctx.raft_metrics.send_message,
+                );
+            }
         }
     }
 

@@ -1063,8 +1063,12 @@ where
     }
 
     #[inline]
-    fn send<T, I>(&mut self, trans: &mut T, msgs: I, metrics: &mut RaftSendMessageMetrics)
-    where
+    pub(crate) fn send<T, I>(
+        &mut self,
+        trans: &mut T,
+        msgs: I,
+        metrics: &mut RaftSendMessageMetrics,
+    ) where
         T: Transport,
         I: IntoIterator<Item = eraftpb::Message>,
     {
