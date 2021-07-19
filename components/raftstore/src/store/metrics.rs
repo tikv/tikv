@@ -283,6 +283,12 @@ lazy_static! {
             "Bucketed histogram of sending callback to store thread duration.",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
+    pub static ref STORE_WRITE_FLUSH_SEND_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_write_flush_send_duration_seconds",
+            "Bucketed histogram of sending msg duration after writing db.",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
     pub static ref STORE_PERSISTED_MSG_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_persist_msg_duration_seconds",

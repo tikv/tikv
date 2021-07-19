@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::Instant;
+use std::time::{Instant, Duration};
 
 use crate::store::config::Config;
 use crate::store::fsm::RaftRouter;
@@ -16,6 +16,7 @@ use crate::store::{PeerMsg, SignificantMsg};
 use crate::Result;
 
 use collections::{HashMap, HashSet};
+use crossbeam::utils::CachePadded;
 use engine_traits::{
     KvEngine, PerfContext, PerfContextKind, RaftEngine, RaftLogBatch, WriteBatch, WriteOptions,
 };
@@ -320,9 +321,9 @@ where
     trans: T,
     wb: AsyncWriteBatch<EK, ER>,
     pending_tasks: VecDeque<(u64, Vec<AsyncWriteTask<EK, ER>>)>,
-    last_id: u64,
+    last_unpersisted_id: u64,
     last_persisted_id: u64,
-    global_last_persisted_id: Arc<AtomicU64>,
+    global_persisted_id: Arc<CachePadded<AtomicU64>>,
     sync_sender: Sender<(usize, u64)>,
     raft_write_size_limit: usize,
     message_metrics: RaftSendMessageMetrics,
@@ -345,7 +346,7 @@ where
         receiver: Receiver<AsyncWriteMsg<EK, ER>>,
         notifier: N,
         trans: T,
-        global_last_persisted_id: Arc<AtomicU64>,
+        global_persisted_id: Arc<CachePadded<AtomicU64>>,
         sync_sender: Sender<(usize, u64)>,
         config: &Config,
     ) -> Self {
@@ -367,9 +368,9 @@ where
             trans,
             wb,
             pending_tasks: VecDeque::new(),
-            last_id: 0,
+            last_unpersisted_id: 0,
             last_persisted_id: 0,
-            global_last_persisted_id,
+            global_persisted_id,
             sync_sender,
             raft_write_size_limit: config.raft_write_size_limit.0 as usize,
             message_metrics: Default::default(),
@@ -378,11 +379,11 @@ where
     }
 
     fn run(&mut self) {
-        let mut stopped = false;
-        while !stopped {
+        loop {
             let loop_begin = Instant::now();
             let mut handle_begin = loop_begin;
 
+            let mut after_persist = Duration::from_micros(0);
             let mut first_time = true;
             while self.wb.get_raft_size() < self.raft_write_size_limit {
                 let msg = if first_time {
@@ -400,21 +401,17 @@ where
                     match self.receiver.try_recv() {
                         Ok(msg) => msg,
                         Err(TryRecvError::Empty) => break,
-                        Err(TryRecvError::Disconnected) => {
-                            stopped = true;
-                            break;
-                        }
+                        Err(TryRecvError::Disconnected) => return,
                     }
                 };
-                if self.last_persisted_id < self.global_last_persisted_id.load(Ordering::Acquire) {
-                    self.last_persisted_id = self.global_last_persisted_id.load(Ordering::Acquire);
+                if self.last_persisted_id < self.global_persisted_id.load(Ordering::Acquire) {
+                    self.last_persisted_id = self.global_persisted_id.load(Ordering::Acquire);
+                    let now = Instant::now();
                     self.after_persist();
+                    after_persist += now.elapsed();
                 }
                 match msg {
-                    AsyncWriteMsg::Shutdown => {
-                        stopped = true;
-                        break;
-                    }
+                    AsyncWriteMsg::Shutdown => return,
                     AsyncWriteMsg::WriteTask(task) => {
                         STORE_WRITE_TASK_WAIT_DURATION_HISTOGRAM
                             .observe(duration_to_sec(task.send_time.elapsed()));
@@ -424,12 +421,19 @@ where
                 }
             }
 
+            let now = Instant::now();
+            STORE_WRITE_HANDLE_MSG_DURATION_HISTOGRAM
+                .observe(duration_to_sec(now - handle_begin - after_persist));
+
+            if self.trans.need_flush() {
+                self.trans.flush();
+                self.message_metrics.flush();
+                STORE_WRITE_FLUSH_SEND_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()));
+            }
+
             if self.wb.is_empty() {
                 continue;
             }
-
-            STORE_WRITE_HANDLE_MSG_DURATION_HISTOGRAM
-                .observe(duration_to_sec(handle_begin.elapsed()));
 
             STORE_WRITE_TRIGGER_SIZE_HISTOGRAM.observe(self.wb.get_raft_size() as f64);
 
@@ -485,12 +489,12 @@ where
 
         self.wb.flush_metrics();
 
-        self.last_id += 1;
+        self.last_unpersisted_id += 1;
         self.pending_tasks
-            .push_back((self.last_id, std::mem::take(&mut self.wb.tasks)));
+            .push_back((self.last_unpersisted_id, std::mem::take(&mut self.wb.tasks)));
 
         self.sync_sender
-            .send((self.worker_id, self.last_id))
+            .send((self.worker_id, self.last_unpersisted_id))
             .unwrap();
 
         self.wb.clear();
@@ -537,23 +541,22 @@ where
                 }
             }
         }
-        self.trans.flush();
-        self.message_metrics.flush();
         for (region_id, to_peer_id) in unreachable_peers {
             self.notifier.notify_unreachable(region_id, to_peer_id);
         }
-        STORE_WRITE_SEND_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()));
+        let now2 = Instant::now();
+        STORE_WRITE_SEND_DURATION_HISTOGRAM.observe(duration_to_sec(now2 - now));
 
-        let now = Instant::now();
         for (region_id, (peer_id, ready_number)) in &readies {
             self.notifier
-                .notify_persisted(*region_id, *peer_id, *ready_number, now);
+                .notify_persisted(*region_id, *peer_id, *ready_number, now2);
         }
-        STORE_WRITE_CALLBACK_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()));
+
+        STORE_WRITE_CALLBACK_DURATION_HISTOGRAM.observe(duration_to_sec(now2.elapsed()));
     }
 }
 
-struct Syncer<EK, ER>
+struct SyncWorker<EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,
@@ -561,10 +564,10 @@ where
     raft_engine: ER,
     receiver: Receiver<(usize, u64)>,
     io_senders: Vec<Sender<AsyncWriteMsg<EK, ER>>>,
-    global_persisted_ids: Vec<Arc<AtomicU64>>,
+    global_persisted_ids: Vec<Arc<CachePadded<AtomicU64>>>,
 }
 
-impl<EK, ER> Syncer<EK, ER>
+impl<EK, ER> SyncWorker<EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,
@@ -573,7 +576,7 @@ where
         raft_engine: ER,
         receiver: Receiver<(usize, u64)>,
         io_senders: Vec<Sender<AsyncWriteMsg<EK, ER>>>,
-        global_persisted_ids: Vec<Arc<AtomicU64>>,
+        global_persisted_ids: Vec<Arc<CachePadded<AtomicU64>>>,
     ) -> Self {
         assert_eq!(io_senders.len(), global_persisted_ids.len());
         Self {
@@ -615,7 +618,7 @@ where
             }
             let now = Instant::now();
             self.raft_engine.sync().unwrap_or_else(|e| {
-                panic!("syncer failed to sync raft db: {:?}", e);
+                panic!("sync worker failed to sync raft db: {:?}", e);
             });
             STORE_WRITE_SYNC_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()));
 
@@ -674,7 +677,7 @@ where
         for i in 0..config.store_io_pool_size {
             let tag = format!("store-writer-{}", i);
             let (tx, rx) = channel();
-            let global_persisted_id = Arc::new(AtomicU64::new(0));
+            let global_persisted_id = Arc::new(CachePadded::new(AtomicU64::new(0)));
             let mut worker = AsyncWriteWorker::new(
                 store_id,
                 tag.clone(),
@@ -695,7 +698,7 @@ where
             self.writers.push(tx);
             self.handlers.push(t);
         }
-        let mut syncer = Syncer::new(
+        let mut syncer = SyncWorker::new(
             raft_engine.clone(),
             sync_receiver,
             self.writers.clone(),
