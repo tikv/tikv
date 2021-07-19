@@ -1597,6 +1597,8 @@ fn main() {
                         )
                         .arg(
                             Arg::with_name("promote-learner")
+                                .long("promote-learner")
+                                .takes_value(false)
                                 .required(false)
                                 .help("Promote learner to voter"),
                         )
