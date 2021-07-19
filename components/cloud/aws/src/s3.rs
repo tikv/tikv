@@ -503,7 +503,6 @@ impl BlobStorage for S3Storage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::io::AsyncReadExt;
     use rusoto_core::signature::SignedRequest;
     use rusoto_mock::MockRequestDispatcher;
 
@@ -525,6 +524,8 @@ mod tests {
 
     #[test]
     fn test_s3_storage() {
+        use futures::io::AsyncReadExt;
+        
         let magic_contents = "5678";
         let bucket_name = StringNonEmpty::required("mybucket".to_string()).unwrap();
         let mut bucket = BucketConf::default(bucket_name);
