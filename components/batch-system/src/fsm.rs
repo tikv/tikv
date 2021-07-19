@@ -55,6 +55,10 @@ pub trait Fsm {
     fn get_priority(&self) -> Priority {
         Priority::Normal
     }
+
+    fn region_id(&self) -> u64 {
+        0
+    }
 }
 
 pub struct FsmState<N> {

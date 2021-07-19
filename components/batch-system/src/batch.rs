@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use tikv_util::mpsc;
-use tikv_util::time::Instant;
+use tikv_util::time::{duration_to_sec, Instant};
 use tikv_util::{debug, error, info, safe_panic, thd_name, warn};
 
 /// A unify type for FSMs so that they can be sent to channel easily.
@@ -308,12 +308,19 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
             let mut hot_fsm_count = 0;
             for (i, p) in batch.normals.iter_mut().enumerate() {
                 let len = self.handler.handle_normal(p);
+                let region_id = p.region_id();
                 if p.is_stopped() {
                     reschedule_fsms.push((i, ReschedulePolicy::Remove));
                 } else if p.get_priority() != self.handler.get_priority() {
                     reschedule_fsms.push((i, ReschedulePolicy::Schedule));
                 } else {
-                    if batch.timers[i].saturating_elapsed() >= self.reschedule_duration {
+                    let d = batch.timers[i].saturating_elapsed();
+                    if d >= self.reschedule_duration {
+                        info!(
+                            "encounter hot peer fsm";
+                            "region_id" => region_id,
+                            "duration(s)" => duration_to_sec(d),
+                        );
                         hot_fsm_count += 1;
                         // We should only reschedule a half of the hot regions, otherwise,
                         // it's possible all the hot regions are fetched in a batch the

@@ -398,7 +398,7 @@ where
     ER: RaftEngine,
 {
     /// The ID of the Region which this Peer belongs to.
-    region_id: u64,
+    pub region_id: u64,
     // TODO: remove it once panic!() support slog fields.
     /// Peer_tag, "[region <region_id>] <peer_id>"
     pub tag: String,
