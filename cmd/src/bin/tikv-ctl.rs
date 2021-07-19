@@ -531,7 +531,12 @@ trait DebugExecutor {
     }
 
     /// Recover the cluster when given `store_ids` are failed.
-    fn remove_fail_stores(&self, store_ids: Vec<u64>, region_ids: Option<Vec<u64>>);
+    fn remove_fail_stores(
+        &self,
+        store_ids: Vec<u64>,
+        region_ids: Option<Vec<u64>>,
+        promote_learner: bool,
+    );
 
     fn remove_regions(&self, region_ids: Vec<u64>);
 
@@ -764,7 +769,7 @@ impl DebugExecutor for DebugClient {
     fn print_bad_regions(&self) {
         unimplemented!("only available for local mode");
     }
-    fn remove_fail_stores(&self, _: Vec<u64>, _: Option<Vec<u64>>) {
+    fn remove_fail_stores(&self, _: Vec<u64>, _: Option<Vec<u64>>, _: bool) {
         unimplemented!("only available for local mode");
     }
 
@@ -950,9 +955,14 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
         v1!("all regions are healthy")
     }
 
-    fn remove_fail_stores(&self, store_ids: Vec<u64>, region_ids: Option<Vec<u64>>) {
-        v1!("removing stores {:?} from configurations...", store_ids);
-        self.remove_failed_stores(store_ids, region_ids)
+    fn remove_fail_stores(
+        &self,
+        store_ids: Vec<u64>,
+        region_ids: Option<Vec<u64>>,
+        promote_learner: bool,
+    ) {
+        println!("removing stores {:?} from configurations...", store_ids);
+        self.remove_failed_stores(store_ids, region_ids, promote_learner)
             .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
         v1!("success");
     }
@@ -1596,6 +1606,11 @@ fn main() {
                                 .require_delimiter(true)
                                 .value_delimiter(",")
                                 .help("Only for these regions"),
+                        )
+                        .arg(
+                            Arg::with_name("promote-learner")
+                                .required(false)
+                                .help("Promote learner to voter"),
                         )
                         .arg(
                             Arg::with_name("all-regions")
@@ -2252,7 +2267,7 @@ fn main() {
                     .collect::<Result<Vec<_>, _>>()
                     .expect("parse regions fail")
             });
-            debug_executor.remove_fail_stores(store_ids, region_ids);
+            debug_executor.remove_fail_stores(store_ids, region_ids, matches.is_present("promote-learner"));
         } else if let Some(matches) = matches.subcommand_matches("remove-regions") {
             let region_ids = matches
                 .values_of("regions")
