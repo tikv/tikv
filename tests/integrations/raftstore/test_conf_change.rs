@@ -544,7 +544,7 @@ fn test_conf_change_safe<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Isolate the leader.
     cluster.must_transfer_leader(region_id, new_peer(1, 1));
-    cluster.add_send_filter(IsolationFilterFactory::new(1));
+    cluster.stop_node(1);
 
     // Ensure new leader is elected and it works.
     cluster.must_put(b"k1", b"v1");
@@ -558,7 +558,7 @@ fn test_conf_change_safe<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.must_none_peer(region_id, new_peer(4, 4));
 
     // Recover the isolated peer.
-    cluster.clear_send_filters();
+    cluster.run_node(1).unwrap();
 
     // Then new node could be added.
     pd_client.must_add_peer(region_id, new_peer(4, 4));
@@ -570,7 +570,7 @@ fn test_conf_change_safe<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Isolate the leader.
     cluster.must_transfer_leader(region_id, new_peer(1, 1));
-    cluster.add_send_filter(IsolationFilterFactory::new(1));
+    cluster.stop_node(1);
 
     // Ensure new leader is elected and it works.
     cluster.must_put(b"k3", b"v3");

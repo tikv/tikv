@@ -938,7 +938,10 @@ fn test_merge_isolated_store_with_no_target_peer() {
     let right_on_store3 = find_peer(&right, 3).unwrap().to_owned();
     pd_client.must_remove_peer(right.get_id(), right_on_store3);
 
+    // Ensure snapshot is sent and applied.
+    must_get_equal(&cluster.get_engine(4), b"k4", b"v1");
     cluster.must_put(b"k22", b"v22");
+    // Ensure leader has updated its progress.
     must_get_equal(&cluster.get_engine(4), b"k22", b"v22");
 
     cluster.add_send_filter(IsolationFilterFactory::new(4));

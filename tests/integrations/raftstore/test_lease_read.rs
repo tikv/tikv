@@ -173,7 +173,7 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
     // Avoid triggering the log compaction in this test case.
     cluster.cfg.raft_store.raft_log_gc_threshold = 100;
     // Increase the Raft tick interval to make this test case running reliably.
-    let election_timeout = configure_for_lease_read(cluster, Some(500), None);
+    let election_timeout = configure_for_lease_read(cluster, Some(500), Some(5));
 
     let store_id = 1u64;
     let peer = new_peer(store_id, 1);

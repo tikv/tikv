@@ -8,7 +8,7 @@ use std::{result, thread};
 
 use futures::executor::block_on;
 use kvproto::errorpb::Error as PbError;
-use kvproto::metapb::{self, Peer, RegionEpoch, StoreLabel};
+use kvproto::metapb::{self, PeerRole, RegionEpoch, StoreLabel};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{
@@ -121,7 +121,7 @@ pub trait Simulator {
             }
         }
         rx.recv_timeout(timeout)
-            .map_err(|_| Error::Timeout(format!("request timeout for {:?}", timeout)))
+            .map_err(|e| Error::Timeout(format!("request timeout for {:?}: {:?}", timeout, e)))
     }
 }
 
@@ -441,7 +441,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     fn valid_leader_id(&self, region_id: u64, leader_id: u64) -> bool {
-        let store_ids = match self.store_ids_of_region(region_id) {
+        let store_ids = match self.voter_store_ids_of_region(region_id) {
             None => return false,
             Some(ids) => ids,
         };
@@ -449,10 +449,22 @@ impl<T: Simulator> Cluster<T> {
         store_ids.contains(&leader_id) && node_ids.contains(&leader_id)
     }
 
-    fn store_ids_of_region(&self, region_id: u64) -> Option<Vec<u64>> {
+    fn voter_store_ids_of_region(&self, region_id: u64) -> Option<Vec<u64>> {
         block_on(self.pd_client.get_region_by_id(region_id))
             .unwrap()
-            .map(|region| region.get_peers().iter().map(Peer::get_store_id).collect())
+            .map(|region| {
+                region
+                    .get_peers()
+                    .iter()
+                    .flat_map(|p| {
+                        if p.get_role() != PeerRole::Learner {
+                            Some(p.get_store_id())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            })
     }
 
     pub fn query_leader(
@@ -484,7 +496,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn leader_of_region(&mut self, region_id: u64) -> Option<metapb::Peer> {
-        let store_ids = match self.store_ids_of_region(region_id) {
+        let store_ids = match self.voter_store_ids_of_region(region_id) {
             None => return None,
             Some(ids) => ids,
         };
@@ -518,16 +530,20 @@ impl<T: Simulator> Cluster<T> {
                     .1
                     .push(*store_id);
             }
-            if let Some((_, (l, c))) = leaders.drain().max_by_key(|(_, (_, c))| c.len()) {
+            if let Some((_, (l, c))) = leaders.iter().max_by_key(|(_, (_, c))| c.len()) {
                 // It may be a step down leader.
                 if c.contains(&l.get_store_id()) {
-                    leader = Some(l);
+                    leader = Some(l.clone());
+                    // Technically, correct calculation should use two quorum when in joint
+                    // state. Here just for simplicity.
                     if c.len() > store_ids.len() / 2 {
                         break;
                     }
                 }
             }
+            debug!("failed to detect leaders"; "leaders" => ?leaders, "store_ids" => ?store_ids);
             sleep_ms(10);
+            leaders.clear();
         }
 
         if let Some(l) = leader {
@@ -730,8 +746,8 @@ impl<T: Simulator> Cluster<T> {
         }
 
         // If command is stale, leadership may have changed.
-        // Or epoch not match, it can be introduced by wrong leader.
-        if err.has_stale_command() || err.has_epoch_not_match() {
+        // EpochNotMatch is not checked as leadership is checked first in raftstore.
+        if err.has_stale_command() {
             self.reset_leader_of_region(region_id);
             return true;
         }
@@ -1254,6 +1270,7 @@ impl<T: Simulator> Cluster<T> {
         let mut try_cnt = 0;
         let split_count = self.pd_client.get_split_count();
         loop {
+            debug!("asking split"; "region" => ?region, "key" => ?split_key);
             // In case ask split message is ignored, we should retry.
             if try_cnt % 50 == 0 {
                 self.reset_leader_of_region(region.get_id());
