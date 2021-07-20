@@ -56,12 +56,12 @@ impl MvccPropertiesExt for RocksEngine {
         end_key: &[u8],
     ) -> Option<MvccProperties> {
         let collection = match self.get_range_properties_cf(cf, &start_key, &end_key) {
-            Ok(c) if !c.is_empty() => c,
+            Ok(c) if !c.0.is_empty() => c,
             _ => return None,
         };
         let mut props = MvccProperties::new();
-        for (_, v) in collection.iter() {
-            let mvcc = match RocksMvccProperties::decode(&v.user_collected_properties().0) {
+        for (_, v) in collection.0.iter() {
+            let mvcc = match RocksMvccProperties::decode(&v.user_collected_properties()) {
                 Ok(m) => m,
                 Err(_) => return None,
             };

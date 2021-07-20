@@ -534,15 +534,15 @@ pub fn get_range_entries_and_versions(
         Err(_) => return None,
     };
 
-    if collection.is_empty() {
+    if collection.0.is_empty() {
         return None;
     }
 
     // Aggregate total MVCC properties and total number entries.
     let mut props = MvccProperties::new();
     let mut num_entries = 0;
-    for (_, v) in collection.iter() {
-        let mvcc = match RocksMvccProperties::decode(&v.user_collected_properties().0) {
+    for (_, v) in collection.0.iter() {
+        let mvcc = match RocksMvccProperties::decode(&v.user_collected_properties()) {
             Ok(v) => v,
             Err(_) => return None,
         };

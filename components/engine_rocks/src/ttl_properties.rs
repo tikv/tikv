@@ -40,13 +40,13 @@ impl TtlPropertiesExt for RocksEngine {
     ) -> Result<Vec<(String, TtlProperties)>> {
         let range = Range::new(start_key, end_key);
         let collection = self.get_properties_of_tables_in_range(cf, &[range])?;
-        if collection.is_empty() {
+        if collection.0.is_empty() {
             return Ok(vec![]);
         }
 
         let mut res = Vec::new();
-        for (file_name, v) in collection.iter() {
-            let prop = match RocksTtlProperties::decode(&v.user_collected_properties().0) {
+        for (file_name, v) in collection.0.iter() {
+            let prop = match RocksTtlProperties::decode(&v.user_collected_properties()) {
                 Ok(v) => v,
                 Err(_) => continue,
             };
