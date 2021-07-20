@@ -61,7 +61,7 @@ impl MvccPropertiesExt for RocksEngine {
         };
         let mut props = MvccProperties::new();
         for (_, v) in collection.iter() {
-            let mvcc = match RocksMvccProperties::decode(&v.user_collected_properties()) {
+            let mvcc = match RocksMvccProperties::decode(&v.user_collected_properties().0) {
                 Ok(m) => m,
                 Err(_) => return None,
             };

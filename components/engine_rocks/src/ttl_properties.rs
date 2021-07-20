@@ -46,7 +46,7 @@ impl TtlPropertiesExt for RocksEngine {
 
         let mut res = Vec::new();
         for (file_name, v) in collection.iter() {
-            let prop = match RocksTtlProperties::decode(&v.user_collected_properties()) {
+            let prop = match RocksTtlProperties::decode(&v.user_collected_properties().0) {
                 Ok(v) => v,
                 Err(_) => continue,
             };
