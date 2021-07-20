@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use engine_rocks::file_system::get_env as get_inspected_env;
+use engine_rocks::get_env;
 use engine_rocks::raw::DBOptions;
 use engine_rocks::raw_util::CFOptions;
 use engine_rocks::{RocksEngine as BaseRocksEngine, RocksEngineIterator};
@@ -103,8 +103,7 @@ impl RocksEngine {
         };
         let worker = Worker::new("engine-rocksdb");
         let mut db_opts = DBOptions::new();
-        let env = get_inspected_env(None, io_rate_limiter).unwrap();
-        db_opts.set_env(env);
+        db_opts.set_env(get_env(None /*key_manager*/, io_rate_limiter).unwrap());
         let db = Arc::new(engine_rocks::raw_util::new_engine(
             &path,
             Some(db_opts),

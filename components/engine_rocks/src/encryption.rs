@@ -12,10 +12,10 @@ use rocksdb::{
 };
 
 // Use engine::Env directly since Env is not abstracted.
-pub fn get_env(
-    key_manager: Option<Arc<DataKeyManager>>,
+pub(crate) fn get_env(
     base_env: Option<Arc<Env>>,
-) -> encryption::Result<Arc<Env>> {
+    key_manager: Option<Arc<DataKeyManager>>,
+) -> std::result::Result<Arc<Env>, String> {
     let base_env = base_env.unwrap_or_else(|| Arc::new(Env::default()));
     if let Some(manager) = key_manager {
         Ok(Arc::new(Env::new_key_managed_encrypted_env(
