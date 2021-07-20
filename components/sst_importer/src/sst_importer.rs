@@ -1198,9 +1198,9 @@ mod tests {
             let collection = db.get_range_properties_cf(cf, &start, &end).unwrap();
             assert!(!collection.is_empty());
             for (_, v) in collection.iter() {
-                assert!(!v.user_collected_properties().is_empty());
+                assert!(!v.user_collected_properties().0.is_empty());
                 assert_eq!(
-                    v.user_collected_properties()
+                    v.user_collected_properties().0
                         .get(PROP_TEST_MARKER_CF_NAME)
                         .unwrap(),
                     cf.as_bytes()
