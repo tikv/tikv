@@ -49,11 +49,9 @@ impl DecodeProperties for rc::UserCollectedProperties {
     }
 }
 
-#[repr(transparent)]
-pub struct RocksUserCollectedPropertiesNoRc(rocksdb::UserCollectedProperties);
-impl DecodeProperties for RocksUserCollectedPropertiesNoRc {
+impl DecodeProperties for rocksdb::UserCollectedProperties {
     fn decode(&self, k: &str) -> tikv_util::codec::Result<&[u8]> {
-        self.0
+        self
             .get(k.as_bytes())
             .ok_or(tikv_util::codec::Error::KeyNotFound)
     }
