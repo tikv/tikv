@@ -2,12 +2,11 @@
 
 use std::borrow::Cow;
 use std::fmt;
-use std::time::Instant;
 
 use bitflags::bitflags;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
 use kvproto::import_sstpb::SstMeta;
-use kvproto::kvrpcpb::{ExtraOp as TxnExtraOp, KeyRange, LeaderInfo};
+use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
@@ -21,7 +20,7 @@ use crate::store::fsm::apply::{CatchUpLogs, ChangeObserver};
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::KeysInfoFormatter;
 use crate::store::SnapKey;
-use tikv_util::{deadline::Deadline, escape, memory::HeapSize};
+use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
 
 use super::{AbstractPeer, RegionSnapshot};
 
@@ -424,12 +423,17 @@ impl<S: Snapshot> RaftCommand<S> {
     }
 }
 
+pub struct InspectedRaftMessage {
+    pub heap_size: usize,
+    pub msg: RaftMessage,
+}
+
 /// Message that can be sent to a peer.
 pub enum PeerMsg<EK: KvEngine> {
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target
     /// peer doesn't exist.
-    RaftMessage(RaftMessage),
+    RaftMessage(InspectedRaftMessage),
     /// Raft command is the command that is expected to be proposed by the
     /// leader of the target raft group. If it's failed to be sent, callback
     /// usually needs to be called before dropping in case of resource leak.
@@ -438,7 +442,9 @@ pub enum PeerMsg<EK: KvEngine> {
     /// that the raft node will not work anymore.
     Tick(PeerTicks),
     /// Result of applying committed entries. The message can't be lost.
-    ApplyRes { res: ApplyTaskRes<EK::Snapshot> },
+    ApplyRes {
+        res: ApplyTaskRes<EK::Snapshot>,
+    },
     /// Message that can't be lost but rarely created. If they are lost, real bad
     /// things happen like some peers will be considered dead in the group.
     SignificantMsg(SignificantMsg<EK::Snapshot>),
@@ -452,6 +458,7 @@ pub enum PeerMsg<EK: KvEngine> {
     HeartbeatPd,
     /// Asks region to change replication mode.
     UpdateReplicationMode,
+    Destroy(u64),
 }
 
 impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
@@ -471,6 +478,7 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
             PeerMsg::CasualMessage(msg) => write!(fmt, "CasualMessage {:?}", msg),
             PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
             PeerMsg::UpdateReplicationMode => write!(fmt, "UpdateReplicationMode"),
+            PeerMsg::Destroy(peer_id) => write!(fmt, "Destroy {}", peer_id),
         }
     }
 }
@@ -479,7 +487,7 @@ pub enum StoreMsg<EK>
 where
     EK: KvEngine,
 {
-    RaftMessage(RaftMessage),
+    RaftMessage(InspectedRaftMessage),
 
     ValidateSSTResult {
         invalid_ssts: Vec<SstMeta>,
@@ -500,15 +508,6 @@ where
     Tick(StoreTick),
     Start {
         store: metapb::Store,
-    },
-    CheckLeader {
-        leaders: Vec<LeaderInfo>,
-        cb: Box<dyn FnOnce(Vec<u64>) + Send>,
-    },
-    // Get the minimal `safe_ts` from regions overlap with the key range [`start_key`, `end_key`)
-    GetStoreSafeTS {
-        key_range: KeyRange,
-        cb: Box<dyn FnOnce(u64) + Send>,
     },
     /// Message only used for test.
     #[cfg(any(test, feature = "testexport"))]
@@ -539,10 +538,6 @@ where
             ),
             StoreMsg::Tick(tick) => write!(fmt, "StoreTick {:?}", tick),
             StoreMsg::Start { ref store } => write!(fmt, "Start store {:?}", store),
-            StoreMsg::CheckLeader { ref leaders, .. } => write!(fmt, "CheckLeader {:?}", leaders),
-            StoreMsg::GetStoreSafeTS { ref key_range, .. } => {
-                write!(fmt, "GetStoreSafeTS {:?}", key_range)
-            }
             #[cfg(any(test, feature = "testexport"))]
             StoreMsg::Validate(_) => write!(fmt, "Validate config"),
             StoreMsg::UpdateReplicationMode(_) => write!(fmt, "UpdateReplicationMode"),

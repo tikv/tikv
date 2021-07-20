@@ -9,7 +9,6 @@ use engine_rocks::RocksSstReader;
 pub use engine_rocks::RocksSstWriter;
 use engine_rocks::RocksSstWriterBuilder;
 use engine_traits::KvEngine;
-use engine_traits::SstReader;
 use engine_traits::SstWriter;
 use engine_traits::SstWriterBuilder;
 use kvproto::import_sstpb::*;
@@ -75,8 +74,8 @@ where
     new_test_engine_with_options_and_env(path, cfs, apply, None)
 }
 
-pub fn new_sst_reader(path: &str) -> RocksSstReader {
-    RocksSstReader::open(path).expect("test sst reader")
+pub fn new_sst_reader(path: &str, e: Option<Arc<Env>>) -> RocksSstReader {
+    RocksSstReader::open_with_env(path, e).expect("test sst reader")
 }
 
 pub fn new_sst_writer(path: &str) -> RocksSstWriter {

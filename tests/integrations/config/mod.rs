@@ -61,7 +61,7 @@ fn test_serde_custom_tikv_config() {
     value.slow_log_file = "slow_foo".to_owned();
     value.slow_log_threshold = ReadableDuration::secs(1);
     value.abort_on_panic = true;
-    value.memory_usage_limit = ReadableSize::gb(10);
+    value.memory_usage_limit = OptionReadableSize(Some(ReadableSize::gb(10)));
     value.memory_usage_high_water = 0.65;
     value.server = ServerConfig {
         cluster_id: 0, // KEEP IT ZERO, it is skipped by serde.
@@ -206,7 +206,7 @@ fn test_serde_custom_tikv_config() {
         hibernate_regions: false,
         dev_assert: true,
         apply_yield_duration: ReadableDuration::millis(333),
-        perf_level: PerfLevel::EnableTime,
+        perf_level: PerfLevel::Disable,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {

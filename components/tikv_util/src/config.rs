@@ -17,7 +17,7 @@ use thiserror::Error;
 
 use super::time::Instant;
 use crate::slow_log;
-use configuration::ConfigValue;
+use online_config::ConfigValue;
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
@@ -80,7 +80,7 @@ impl From<ConfigValue> for ReadableSize {
 
 /// This trivial type is needed, because we can't define the `From<Option<ReadableSize>>`
 /// and `Into<Option<ReadableSize>>` trait for `ConfigValue` which is needed to derive
-/// `Configuration` trait for `BlockCacheConfig`
+/// `OnlineConfig` trait for `BlockCacheConfig`
 #[derive(Clone, Debug, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(from = "Option<ReadableSize>")]
 #[serde(into = "Option<ReadableSize>")]
@@ -1149,7 +1149,11 @@ impl<T> Tracker<T> {
                 Err(_) => {
                     let t = Instant::now_coarse();
                     let value = self.inner.value.read().unwrap();
-                    slow_log!(t.elapsed(), "{} tracker get updated value", self.tag);
+                    slow_log!(
+                        t.saturating_elapsed(),
+                        "{} tracker get updated value",
+                        self.tag
+                    );
                     Some(value)
                 }
             }

@@ -84,7 +84,6 @@ pub struct RaftSendMessageMetrics {
     pub vote: SendStatus,
     pub vote_resp: SendStatus,
     pub snapshot: SendStatus,
-    pub request_snapshot: SendStatus,
     pub heartbeat: SendStatus,
     pub heartbeat_resp: SendStatus,
     pub transfer_leader: SendStatus,
@@ -104,7 +103,6 @@ impl RaftSendMessageMetrics {
         flush_send_status!(vote, self);
         flush_send_status!(vote_resp, self);
         flush_send_status!(snapshot, self);
-        flush_send_status!(request_snapshot, self);
         flush_send_status!(heartbeat, self);
         flush_send_status!(heartbeat_resp, self);
         flush_send_status!(transfer_leader, self);
@@ -351,6 +349,7 @@ pub struct RaftMetrics {
     pub process_ready: LocalHistogram,
     pub append_log: LocalHistogram,
     pub commit_log: LocalHistogram,
+    pub check_leader: LocalHistogram,
     pub leader_missing: Arc<Mutex<HashSet<u64>>>,
     pub invalid_proposal: RaftInvalidProposeMetrics,
 }
@@ -367,6 +366,7 @@ impl Default for RaftMetrics {
                 .local(),
             append_log: PEER_APPEND_LOG_HISTOGRAM.local(),
             commit_log: PEER_COMMIT_LOG_HISTOGRAM.local(),
+            check_leader: CHECK_LEADER_DURATION_HISTOGRAM.local(),
             leader_missing: Arc::default(),
             invalid_proposal: Default::default(),
         }
@@ -382,6 +382,7 @@ impl RaftMetrics {
         self.process_ready.flush();
         self.append_log.flush();
         self.commit_log.flush();
+        self.check_leader.flush();
         self.message_dropped.flush();
         self.invalid_proposal.flush();
         let mut missing = self.leader_missing.lock().unwrap();

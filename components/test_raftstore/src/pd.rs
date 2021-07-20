@@ -1,11 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cmp;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
-use std::{cmp, thread};
+use std::time::Duration;
 
 use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures::compat::Future01CompatExt;
@@ -28,7 +28,7 @@ use pd_client::{Error, FeatureGate, Key, PdClient, PdFuture, RegionInfo, RegionS
 use raftstore::store::util::{check_key_in_region, find_peer, is_learner};
 use raftstore::store::QueryStats;
 use raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
-use tikv_util::time::UnixSecs;
+use tikv_util::time::{Instant, UnixSecs};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{Either, HandyRwLock};
 use txn_types::TimeStamp;
@@ -537,6 +537,7 @@ impl PdCluster {
                 && overlaps[0].get_region_epoch().get_conf_ver() == conf_ver
         };
         if !same_region {
+            debug!("region changed"; "from" => ?overlaps, "to" => ?region, "leader" => ?leader);
             // remove overlap regions
             for r in overlaps {
                 self.remove_region(&r);
@@ -1081,7 +1082,7 @@ impl TestPdClient {
         loop {
             let region = block_on(self.get_region_by_id(from)).unwrap();
             if let Some(r) = region {
-                if timer.elapsed() > duration {
+                if timer.saturating_elapsed() > duration {
                     panic!("region {:?} is still not merged.", r);
                 }
             } else {
@@ -1213,9 +1214,7 @@ impl TestPdClient {
                 c.stores.remove(&store_id);
             }
             Err(e) => {
-                if !thread::panicking() {
-                    panic!("failed to acquire write lock: {:?}", e)
-                }
+                safe_panic!("failed to acquire write lock: {:?}", e)
             }
         }
     }
@@ -1394,7 +1393,7 @@ impl PdClient for TestPdClient {
             (timer, cluster1, store_id),
             |(timer, cluster1, store_id)| async move {
                 timer
-                    .delay(Instant::now() + Duration::from_millis(500))
+                    .delay(std::time::Instant::now() + Duration::from_millis(500))
                     .compat()
                     .await
                     .unwrap();
@@ -1558,7 +1557,7 @@ impl PdClient for TestPdClient {
             let duration = Duration::from_millis(t.map_or(1000, |t| t.parse().unwrap()));
             Box::pin(async move {
                 let _ = GLOBAL_TIMER_HANDLE
-                    .delay(Instant::now() + duration)
+                    .delay(std::time::Instant::now() + duration)
                     .compat()
                     .await;
                 Err(box_err!("get tso fail"))

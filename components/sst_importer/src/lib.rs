@@ -17,7 +17,6 @@ mod errors;
 pub mod metrics;
 mod util;
 #[macro_use]
-pub mod service;
 pub mod import_mode;
 pub mod sst_importer;
 

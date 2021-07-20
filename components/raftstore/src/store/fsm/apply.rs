@@ -611,7 +611,7 @@ where
             self.notifier.notify(apply_res);
         }
 
-        let elapsed = t.elapsed();
+        let elapsed = t.saturating_elapsed();
         STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(elapsed) as f64);
 
         slow_log!(
@@ -1033,7 +1033,7 @@ where
             {
                 apply_ctx.commit(self);
                 if let Some(start) = self.handle_start.as_ref() {
-                    if start.elapsed() >= apply_ctx.yield_duration {
+                    if start.saturating_elapsed() >= apply_ctx.yield_duration {
                         return ApplyResult::Yield;
                     }
                 }
@@ -1321,6 +1321,15 @@ where
         }
         if let Some(cmd) = self.pending_cmds.conf_change.take() {
             notify_stale_command(region_id, peer_id, self.term, cmd);
+        }
+    }
+
+    fn clear_all_commands_silently(&mut self) {
+        for mut cmd in self.pending_cmds.normals.drain(..) {
+            cmd.cb.take();
+        }
+        if let Some(mut cmd) = self.pending_cmds.conf_change.take() {
+            cmd.cb.take();
         }
     }
 
@@ -3498,7 +3507,7 @@ where
         loop {
             match drainer.next() {
                 Some(Msg::Apply { start, apply }) => {
-                    APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(start.elapsed_secs());
+                    APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(start.saturating_elapsed_secs());
                     // If there is any apply task, we change this fsm to normal-priority.
                     // When it meets a ingest-request or a delete-range request, it will change to
                     // low-priority.
@@ -3568,7 +3577,11 @@ where
     EK: KvEngine,
 {
     fn drop(&mut self) {
-        self.delegate.clear_all_commands_as_stale();
+        if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
+            self.delegate.clear_all_commands_silently()
+        } else {
+            self.delegate.clear_all_commands_as_stale();
+        }
         let mut event = TraceEvent::default();
         self.delegate.update_memory_trace(&mut event);
         MEMTRACE_APPLYS.trace(event);
@@ -3779,16 +3792,6 @@ where
     pub router: BatchRouter<ApplyFsm<EK>, ControlFsm>,
 }
 
-impl<EK> Drop for ApplyRouter<EK>
-where
-    EK: KvEngine,
-{
-    fn drop(&mut self) {
-        MEMTRACE_APPLY_ROUTER_ALIVE.trace(TraceEvent::Reset(0));
-        MEMTRACE_APPLY_ROUTER_LEAK.trace(TraceEvent::Reset(0));
-    }
-}
-
 impl<EK> Deref for ApplyRouter<EK>
 where
     EK: KvEngine,
@@ -3823,9 +3826,22 @@ where
                         "target region is not found, drop proposals";
                         "region_id" => region_id
                     );
-                    for p in apply.cbs.drain(..) {
-                        let cmd = PendingCmd::<EK::Snapshot>::new(p.index, p.term, p.cb);
-                        notify_region_removed(apply.region_id, apply.peer_id, cmd);
+                    // Invoking callback can release txn latch, if it's still leader, following
+                    // command may not read the writes of previous commands and break ACID. If
+                    // it's still leader, there are two possibility that mailbox is closed:
+                    // 1. The process is shutting down.
+                    // 2. The leader is destroyed. A leader won't propose to destroy itself, so
+                    //     it should either destroyed by older leaders or newer leaders. Leader
+                    //     won't respond to read until it has applied to current term, so no
+                    //     command will be proposed until command from older leaders have applied,
+                    //     which will then stop it from accepting proposals. If the command is
+                    //     proposed by new leader, then it won't be able to propose new proposals.
+                    // So only shutdown needs to be checked here.
+                    if !tikv_util::thread_group::is_shutdown(!cfg!(test)) {
+                        for p in apply.cbs.drain(..) {
+                            let cmd = PendingCmd::<EK::Snapshot>::new(p.index, p.term, p.cb);
+                            notify_region_removed(apply.region_id, apply.peer_id, cmd);
+                        }
                     }
                     return;
                 }

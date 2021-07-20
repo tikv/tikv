@@ -3,12 +3,12 @@
 use std::collections::hash_map::Entry;
 use std::error::Error as StdError;
 use std::sync::{mpsc, Arc, Mutex, RwLock};
-use std::time::*;
+use std::time::Duration;
 use std::{result, thread};
 
 use futures::executor::block_on;
 use kvproto::errorpb::Error as PbError;
-use kvproto::metapb::{self, Peer, RegionEpoch, StoreLabel};
+use kvproto::metapb::{self, PeerRole, RegionEpoch, StoreLabel};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{
@@ -34,6 +34,8 @@ use raftstore::store::*;
 use raftstore::{Error, Result};
 use tikv::config::TiKvConfig;
 use tikv::server::Result as ServerResult;
+use tikv_util::thread_group::GroupProperties;
+use tikv_util::time::Instant;
 use tikv_util::HandyRwLock;
 
 use super::*;
@@ -120,7 +122,7 @@ pub trait Simulator {
             }
         }
         rx.recv_timeout(timeout)
-            .map_err(|_| Error::Timeout(format!("request timeout for {:?}", timeout)))
+            .map_err(|e| Error::Timeout(format!("request timeout for {:?}: {:?}", timeout, e)))
     }
 }
 
@@ -137,6 +139,7 @@ pub struct Cluster<T: Simulator> {
     pub engines: HashMap<u64, Engines<RocksEngine, RocksEngine>>,
     key_managers_map: HashMap<u64, Option<Arc<DataKeyManager>>>,
     pub labels: HashMap<u64, HashMap<String, String>>,
+    group_props: HashMap<u64, GroupProperties>,
 
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
@@ -163,6 +166,7 @@ impl<T: Simulator> Cluster<T> {
             engines: HashMap::default(),
             key_managers_map: HashMap::default(),
             labels: HashMap::default(),
+            group_props: HashMap::default(),
             sim,
             pd_client,
         }
@@ -233,6 +237,9 @@ impl<T: Simulator> Cluster<T> {
             let key_mgr = self.key_managers.last().unwrap().clone();
             let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
 
+            let props = GroupProperties::default();
+            tikv_util::thread_group::set_properties(Some(props.clone()));
+
             let mut sim = self.sim.wl();
             let node_id = sim.run_node(
                 0,
@@ -243,6 +250,7 @@ impl<T: Simulator> Cluster<T> {
                 router,
                 system,
             )?;
+            self.group_props.insert(node_id, props);
             self.engines.insert(node_id, engines);
             self.store_metas.insert(node_id, store_meta);
             self.key_managers_map.insert(node_id, key_mgr);
@@ -304,6 +312,9 @@ impl<T: Simulator> Cluster<T> {
                 .insert(Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP))))
                 .clone(),
         };
+        let props = GroupProperties::default();
+        self.group_props.insert(node_id, props.clone());
+        tikv_util::thread_group::set_properties(Some(props));
         debug!("calling run node"; "node_id" => node_id);
         // FIXME: rocksdb event listeners may not work, because we change the router.
         self.sim
@@ -315,13 +326,10 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn stop_node(&mut self, node_id: u64) {
         debug!("stopping node {}", node_id);
+        self.group_props[&node_id].mark_shutdown();
         match self.sim.write() {
             Ok(mut sim) => sim.stop_node(node_id),
-            Err(_) => {
-                if !thread::panicking() {
-                    panic!("failed to acquire write lock.")
-                }
-            }
+            Err(_) => safe_panic!("failed to acquire write lock."),
         }
         self.pd_client.shutdown_store(node_id);
         debug!("node {} stopped", node_id);
@@ -422,7 +430,9 @@ impl<T: Simulator> Cluster<T> {
                 e @ Err(_) => return e,
                 Ok(resp) => resp,
             };
-            if self.refresh_leader_if_needed(&resp, region_id) && timer.elapsed() < timeout {
+            if self.refresh_leader_if_needed(&resp, region_id)
+                && timer.saturating_elapsed() < timeout
+            {
                 warn!(
                     "{:?} is no longer leader, let's retry",
                     request.get_header().get_peer()
@@ -434,7 +444,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     fn valid_leader_id(&self, region_id: u64, leader_id: u64) -> bool {
-        let store_ids = match self.store_ids_of_region(region_id) {
+        let store_ids = match self.voter_store_ids_of_region(region_id) {
             None => return false,
             Some(ids) => ids,
         };
@@ -442,10 +452,22 @@ impl<T: Simulator> Cluster<T> {
         store_ids.contains(&leader_id) && node_ids.contains(&leader_id)
     }
 
-    fn store_ids_of_region(&self, region_id: u64) -> Option<Vec<u64>> {
+    fn voter_store_ids_of_region(&self, region_id: u64) -> Option<Vec<u64>> {
         block_on(self.pd_client.get_region_by_id(region_id))
             .unwrap()
-            .map(|region| region.get_peers().iter().map(Peer::get_store_id).collect())
+            .map(|region| {
+                region
+                    .get_peers()
+                    .iter()
+                    .flat_map(|p| {
+                        if p.get_role() != PeerRole::Learner {
+                            Some(p.get_store_id())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            })
     }
 
     pub fn query_leader(
@@ -477,7 +499,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn leader_of_region(&mut self, region_id: u64) -> Option<metapb::Peer> {
-        let store_ids = match self.store_ids_of_region(region_id) {
+        let store_ids = match self.voter_store_ids_of_region(region_id) {
             None => return None,
             Some(ids) => ids,
         };
@@ -511,16 +533,20 @@ impl<T: Simulator> Cluster<T> {
                     .1
                     .push(*store_id);
             }
-            if let Some((_, (l, c))) = leaders.drain().max_by_key(|(_, (_, c))| c.len()) {
+            if let Some((_, (l, c))) = leaders.iter().max_by_key(|(_, (_, c))| c.len()) {
                 // It may be a step down leader.
                 if c.contains(&l.get_store_id()) {
-                    leader = Some(l);
+                    leader = Some(l.clone());
+                    // Technically, correct calculation should use two quorum when in joint
+                    // state. Here just for simplicity.
                     if c.len() > store_ids.len() / 2 {
                         break;
                     }
                 }
             }
+            debug!("failed to detect leaders"; "leaders" => ?leaders, "store_ids" => ?store_ids);
             sleep_ms(10);
+            leaders.clear();
         }
 
         if let Some(l) = leader {
@@ -692,12 +718,9 @@ impl<T: Simulator> Cluster<T> {
         match self.sim.read() {
             Ok(s) => keys = s.get_node_ids(),
             Err(_) => {
-                if thread::panicking() {
-                    // Leave the resource to avoid double panic.
-                    return;
-                } else {
-                    panic!("failed to acquire read lock");
-                }
+                safe_panic!("failed to acquire read lock");
+                // Leave the resource to avoid double panic.
+                return;
             }
         }
         for id in keys {
@@ -726,8 +749,8 @@ impl<T: Simulator> Cluster<T> {
         }
 
         // If command is stale, leadership may have changed.
-        // Or epoch not match, it can be introduced by wrong leader.
-        if err.has_stale_command() || err.has_epoch_not_match() {
+        // EpochNotMatch is not checked as leadership is checked first in raftstore.
+        if err.has_stale_command() {
             self.reset_leader_of_region(region_id);
             return true;
         }
@@ -754,7 +777,7 @@ impl<T: Simulator> Cluster<T> {
         let timer = Instant::now();
         let mut tried_times = 0;
         // At least retry once.
-        while tried_times < 2 || timer.elapsed() < timeout {
+        while tried_times < 2 || timer.saturating_elapsed() < timeout {
             tried_times += 1;
             let mut region = self.get_region(key);
             let region_id = region.get_id();
@@ -1039,7 +1062,7 @@ impl<T: Simulator> Cluster<T> {
             if truncated_state.get_index() >= index {
                 return;
             }
-            if timer.elapsed() >= Duration::from_secs(5) {
+            if timer.saturating_elapsed() >= Duration::from_secs(5) {
                 panic!(
                     "[region {}] log is still not truncated to {}: {:?} on store {}",
                     region_id, index, truncated_state, store_id,
@@ -1092,7 +1115,7 @@ impl<T: Simulator> Cluster<T> {
             if cur_index >= expected {
                 return;
             }
-            if timer.elapsed() >= timeout {
+            if timer.saturating_elapsed() >= timeout {
                 panic!(
                     "[region {}] last index still not reach {}: {:?}",
                     region_id, expected, raft_state
@@ -1196,7 +1219,7 @@ impl<T: Simulator> Cluster<T> {
                     return;
                 }
             }
-            if timer.elapsed() > Duration::from_secs(5) {
+            if timer.saturating_elapsed() > Duration::from_secs(5) {
                 panic!(
                     "failed to transfer leader to [{}] {:?}, current leader: {:?}",
                     region_id, leader, cur_leader
@@ -1250,6 +1273,7 @@ impl<T: Simulator> Cluster<T> {
         let mut try_cnt = 0;
         let split_count = self.pd_client.get_split_count();
         loop {
+            debug!("asking split"; "region" => ?region, "key" => ?split_key);
             // In case ask split message is ignored, we should retry.
             if try_cnt % 50 == 0 {
                 self.reset_leader_of_region(region.get_id());
@@ -1448,7 +1472,7 @@ impl<T: Simulator> Cluster<T> {
                 );
                 break;
             }
-            if timer.elapsed() > Duration::from_secs(60) {
+            if timer.saturating_elapsed() > Duration::from_secs(60) {
                 panic!("region {} is not removed after 60s.", region_id);
             }
             thread::sleep(Duration::from_millis(100));
@@ -1458,25 +1482,6 @@ impl<T: Simulator> Cluster<T> {
     // it's so common that we provide an API for it
     pub fn partition(&self, s1: Vec<u64>, s2: Vec<u64>) {
         self.add_send_filter(PartitionFilterFactory::new(s1, s2));
-    }
-
-    // Request a snapshot on the given region.
-    pub fn must_request_snapshot(&self, store_id: u64, region_id: u64) -> u64 {
-        // Request snapshot.
-        let (request_tx, request_rx) = mpsc::channel();
-        let router = self.sim.rl().get_router(store_id).unwrap();
-        CasualRouter::send(
-            &router,
-            region_id,
-            CasualMessage::AccessPeer(Box::new(move |peer: &mut dyn AbstractPeer| {
-                let idx = peer.raft_commit_index();
-                peer.raft_request_snapshot(idx);
-                debug!("{} request snapshot at {:?}", idx, peer.meta_peer());
-                request_tx.send(idx).unwrap();
-            })),
-        )
-        .unwrap();
-        request_rx.recv_timeout(Duration::from_secs(5)).unwrap()
     }
 }
 

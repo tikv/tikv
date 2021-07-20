@@ -4,6 +4,7 @@ mod future_pool;
 mod metrics;
 pub use future_pool::{Full, FuturePool};
 
+use crate::thread_group::GroupProperties;
 use crate::time::{Duration, Instant};
 use fail::fail_point;
 use std::sync::Arc;
@@ -39,7 +40,7 @@ impl<T: PoolTicker> TickerWrapper<T> {
 
     pub fn try_tick(&mut self) {
         let now = Instant::now_coarse();
-        if now.duration_since(self.last_tick_time) < tick_interval() {
+        if now.saturating_duration_since(self.last_tick_time) < tick_interval() {
             return;
         }
         self.last_tick_time = now;
@@ -79,6 +80,7 @@ impl Config {
 pub struct YatpPoolRunner<T: PoolTicker> {
     inner: FutureRunner,
     ticker: TickerWrapper<T>,
+    props: Option<GroupProperties>,
     after_start: Option<Arc<dyn Fn() + Send + Sync>>,
     before_stop: Option<Arc<dyn Fn() + Send + Sync>>,
     before_pause: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -88,6 +90,9 @@ impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
     type TaskCell = TaskCell;
 
     fn start(&mut self, local: &mut Local<Self::TaskCell>) {
+        if let Some(props) = self.props.take() {
+            crate::thread_group::set_properties(Some(props));
+        }
         self.inner.start(local);
         if let Some(f) = self.after_start.take() {
             f();
@@ -133,6 +138,7 @@ impl<T: PoolTicker> YatpPoolRunner<T> {
         YatpPoolRunner {
             inner,
             ticker,
+            props: crate::thread_group::current_properties(),
             after_start,
             before_stop,
             before_pause,

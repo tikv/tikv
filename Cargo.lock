@@ -204,7 +204,6 @@ version = "0.0.1"
 dependencies = [
  "collections",
  "concurrency_manager",
- "configuration",
  "crc64fast",
  "engine_rocks",
  "engine_traits",
@@ -219,6 +218,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "log_wrappers",
+ "online_config",
  "pd_client",
  "prometheus",
  "raft",
@@ -388,12 +388,13 @@ dependencies = [
 
 [[package]]
 name = "bzip2-sys"
-version = "0.1.8+1.0.8"
+version = "0.1.11+1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05305b41c5034ff0e93937ac64133d109b5a2660114ec45e9760bc6816d83038"
+checksum = "736a955f3fa7875102d57c82b8cac37ec45224a07fd32d58f9f7a186b6cd4cdc"
 dependencies = [
  "cc",
  "libc 0.2.86",
+ "pkg-config",
 ]
 
 [[package]]
@@ -616,25 +617,6 @@ dependencies = [
  "tikv_alloc",
  "tokio",
  "txn_types",
-]
-
-[[package]]
-name = "configuration"
-version = "0.1.0"
-dependencies = [
- "configuration_derive",
- "serde",
- "serde_derive",
- "toml",
-]
-
-[[package]]
-name = "configuration_derive"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]
@@ -1038,7 +1020,6 @@ dependencies = [
  "async-trait",
  "byteorder",
  "bytes 1.0.1",
- "configuration",
  "crc32fast",
  "crossbeam",
  "derive_more",
@@ -1052,6 +1033,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "matches",
+ "online_config",
  "openssl",
  "prometheus",
  "protobuf",
@@ -1107,7 +1089,6 @@ name = "engine_rocks"
 version = "0.0.1"
 dependencies = [
  "collections",
- "configuration",
  "encryption",
  "engine_traits",
  "fail",
@@ -1117,6 +1098,7 @@ dependencies = [
  "lazy_static",
  "log_wrappers",
  "num_cpus",
+ "online_config",
  "prometheus",
  "prometheus-static-metric",
  "protobuf",
@@ -1322,6 +1304,7 @@ dependencies = [
  "libc 0.2.86",
  "maligned",
  "nix 0.19.0",
+ "online_config",
  "openssl",
  "parking_lot",
  "prometheus",
@@ -2114,7 +2097,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/lhy1024/kvproto.git?rev=dda0a102bc6ac7371e1f99cd2797825aa210b4a0#dda0a102bc6ac7371e1f99cd2797825aa210b4a0"
+source = "git+https://github.com/pingcap/kvproto.git#ab6bb38882c491c8ee9da13112cb1d9a35695180"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -2200,7 +2183,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#46b7a1da47e626ae35158a51a3c90babafbd8ff2"
+source = "git+https://github.com/tikv/rust-rocksdb.git#12a953bc942c60a00ffb44d3907bdf2193d6be0d"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2219,7 +2202,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#46b7a1da47e626ae35158a51a3c90babafbd8ff2"
+source = "git+https://github.com/tikv/rust-rocksdb.git#12a953bc942c60a00ffb44d3907bdf2193d6be0d"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2709,6 +2692,25 @@ name = "once_cell"
 version = "1.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "af8b08b04175473088b46763e51ee54da5f9a164bc162f615b91bc179dbf15a3"
+
+[[package]]
+name = "online_config"
+version = "0.1.0"
+dependencies = [
+ "online_config_derive",
+ "serde",
+ "serde_derive",
+ "toml",
+]
+
+[[package]]
+name = "online_config_derive"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "oorandom"
@@ -3363,11 +3365,11 @@ dependencies = [
 name = "raft_log_engine"
 version = "0.0.1"
 dependencies = [
- "configuration",
  "engine_traits",
  "kvproto",
  "lazy_static",
  "num_cpus",
+ "online_config",
  "protobuf",
  "raft",
  "raft-engine",
@@ -3389,11 +3391,11 @@ dependencies = [
  "bytes 1.0.1",
  "collections",
  "concurrency_manager",
- "configuration",
  "crc32fast",
  "crossbeam",
  "derivative",
  "encryption",
+ "encryption_export",
  "engine_panic",
  "engine_rocks",
  "engine_test",
@@ -3405,12 +3407,14 @@ dependencies = [
  "futures 0.3.15",
  "futures-util",
  "into_other",
+ "itertools 0.10.0",
  "keys",
  "kvproto",
  "lazy_static",
  "log",
  "log_wrappers",
  "memory_trace_macros",
+ "online_config",
  "openssl",
  "panic_hook",
  "pd_client",
@@ -3722,7 +3726,6 @@ version = "0.0.1"
 dependencies = [
  "collections",
  "concurrency_manager",
- "configuration",
  "crossbeam",
  "engine_rocks",
  "engine_traits",
@@ -3733,6 +3736,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "log_wrappers",
+ "online_config",
  "panic_hook",
  "pd_client",
  "prometheus",
@@ -3759,14 +3763,15 @@ name = "resource_metering"
 version = "0.0.1"
 dependencies = [
  "collections",
- "configuration",
  "crossbeam",
+ "fail",
  "futures 0.3.15",
  "grpcio",
  "kvproto",
  "lazy_static",
  "libc 0.2.86",
  "log",
+ "online_config",
  "pdqselect",
  "pin-project",
  "procinfo",
@@ -3816,7 +3821,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#41d7180df72cf5aae97fbae9a18aec52ad29dfcc"
+source = "git+https://github.com/tikv/rust-rocksdb.git#12a953bc942c60a00ffb44d3907bdf2193d6be0d"
 dependencies = [
  "libc 0.2.86",
  "librocksdb_sys",
@@ -4754,6 +4759,7 @@ dependencies = [
 name = "test_raftstore"
 version = "0.0.1"
 dependencies = [
+ "backtrace",
  "collections",
  "concurrency_manager",
  "crossbeam",
@@ -4842,7 +4848,6 @@ dependencies = [
  "cdc",
  "collections",
  "concurrency_manager",
- "configuration",
  "crc64fast",
  "criterion",
  "criterion-cpu-time",
@@ -4863,6 +4868,7 @@ dependencies = [
  "kvproto",
  "log_wrappers",
  "more-asserts",
+ "online_config",
  "panic_hook",
  "paste 1.0.4",
  "pd_client",
@@ -4980,6 +4986,7 @@ dependencies = [
  "log_wrappers",
  "prometheus",
  "prometheus-static-metric",
+ "serde_json",
  "thiserror",
  "tikv_util",
  "time",
@@ -5072,6 +5079,8 @@ dependencies = [
  "rand 0.8.3",
  "regex",
  "safemem",
+ "serde",
+ "serde_json",
  "static_assertions",
  "tidb_query_codegen",
  "tidb_query_common",
@@ -5098,7 +5107,6 @@ dependencies = [
  "codec",
  "collections",
  "concurrency_manager",
- "configuration",
  "coprocessor_plugin_api",
  "crc32fast",
  "crc64fast",
@@ -5141,6 +5149,7 @@ dependencies = [
  "nom 5.1.0",
  "notify",
  "num_cpus",
+ "online_config",
  "openssl",
  "panic_hook",
  "parking_lot",
@@ -5171,6 +5180,7 @@ dependencies = [
  "slog",
  "slog-global",
  "sst_importer",
+ "strum",
  "sysinfo",
  "tempfile",
  "test_sst_importer",
@@ -5350,7 +5360,6 @@ dependencies = [
  "chrono",
  "codec",
  "collections",
- "configuration",
  "crc32fast",
  "crossbeam",
  "derive_more",
@@ -5369,6 +5378,7 @@ dependencies = [
  "log_wrappers",
  "nix 0.11.1",
  "num_cpus",
+ "online_config",
  "openssl",
  "page_size",
  "panic_hook",

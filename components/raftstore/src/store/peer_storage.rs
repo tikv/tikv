@@ -7,7 +7,6 @@ use std::ops::Range;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 use std::{cmp, error, mem, u64};
 
 use engine_traits::CF_RAFT;
@@ -29,6 +28,7 @@ use crate::{bytes_capacity, Error, Result};
 use engine_traits::{RaftEngine, RaftLogBatch};
 use into_other::into_other;
 use tikv_alloc::trace::TraceEvent;
+use tikv_util::time::Instant;
 use tikv_util::worker::Scheduler;
 use tikv_util::{box_err, box_try, debug, defer, error, info, warn};
 
@@ -187,6 +187,7 @@ impl EntryCache {
                 let truncate_to = cache_len
                     .checked_sub((cache_last_index - first_index + 1) as usize)
                     .unwrap_or_default();
+                let trunc_to_idx = self.cache[truncate_to].index;
                 for e in self.cache.drain(truncate_to..) {
                     mem_size_change -=
                         (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64;
@@ -195,7 +196,7 @@ impl EntryCache {
                     // Only committed entries can be traced, and only uncommitted entries
                     // can be truncated. So there won't be any overlaps.
                     let cached_last = cached.range.end - 1;
-                    assert!(cached_last < truncate_to as u64);
+                    assert!(cached_last < trunc_to_idx);
                 }
             } else if cache_last_index + 1 < first_index {
                 panic!(
@@ -1614,6 +1615,16 @@ where
         self.schedule_applying_snapshot();
         let prev_region = self.region().clone();
         self.set_region(snap_region);
+        if self.truncated_index() == self.applied_index() {
+            self.applied_index_term = self.truncated_term();
+        } else {
+            panic!(
+                "{} applied index should be equal to truncated index after snapshot: {} != {}",
+                self.tag,
+                self.applied_index(),
+                self.truncated_index()
+            );
+        }
 
         Some(ApplySnapResult {
             prev_region,
@@ -1669,7 +1680,7 @@ where
         "meta_key" => 1,
         "apply_key" => 1,
         "raft_key" => 1,
-        "takes" => ?t.elapsed(),
+        "takes" => ?t.saturating_elapsed(),
     );
     Ok(())
 }
@@ -2525,18 +2536,54 @@ mod tests {
 
     #[test]
     fn test_storage_cache_size_change() {
+        let new_padded_entry = |index: u64, term: u64, pad_len: usize| {
+            let mut e = new_entry(index, term);
+            e.data = vec![b'x'; pad_len].into();
+            e
+        };
+
+        // Test the initial data structure size.
         let (tx, rx) = mpsc::sync_channel(8);
         let mut cache = EntryCache::new_with_cb(move |c: i64| tx.send(c).unwrap());
         assert_eq!(rx.try_recv().unwrap(), 896);
 
-        cache.append("", &[new_entry(1, 1), new_entry(2, 1)]);
+        cache.append(
+            "",
+            &[new_padded_entry(101, 1, 1), new_padded_entry(102, 1, 2)],
+        );
+        assert_eq!(rx.try_recv().unwrap(), 3);
+
+        // Test size change for one overlapped entry.
+        cache.append("", &[new_padded_entry(102, 2, 3)]);
+        assert_eq!(rx.try_recv().unwrap(), 1);
+
+        // Test size change for all overlapped entries.
+        cache.append(
+            "",
+            &[new_padded_entry(101, 3, 4), new_padded_entry(102, 3, 5)],
+        );
+        assert_eq!(rx.try_recv().unwrap(), 5);
+
+        cache.append("", &[new_padded_entry(103, 3, 6)]);
+        assert_eq!(rx.try_recv().unwrap(), 6);
+
+        // Test trace a dangle entry.
+        let cached_entries = CachedEntries::new(vec![new_padded_entry(100, 1, 1)]);
+        cache.trace_cached_entries(cached_entries);
+        assert_eq!(rx.try_recv().unwrap(), 1);
+
+        // Test trace an entry which is still in cache.
+        let cached_entries = CachedEntries::new(vec![new_padded_entry(102, 3, 5)]);
+        cache.trace_cached_entries(cached_entries);
         assert_eq!(rx.try_recv().unwrap(), 0);
 
-        cache.append("", &[new_entry(2, 2)]);
-        assert_eq!(rx.try_recv().unwrap(), 0);
+        // Test compare `cached_last` with `trunc_to_idx` in `EntryCache::append_impl`.
+        cache.append("", &[new_padded_entry(103, 4, 7)]);
+        assert_eq!(rx.try_recv().unwrap(), 1);
 
-        cache.append("", &[new_entry(1, 2), new_entry(2, 2)]);
-        assert_eq!(rx.try_recv().unwrap(), 0);
+        // Test compact all entries and traced dangle entries.
+        cache.compact_to(104);
+        assert_eq!(rx.try_recv().unwrap(), -17);
 
         drop(cache);
         assert_eq!(rx.try_recv().unwrap(), -896);
