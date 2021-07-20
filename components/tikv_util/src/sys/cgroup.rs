@@ -27,6 +27,9 @@ use std::process;
 //   * path: /sys/fs/cgroup/<path-to-group>/cpuset.cpus
 // v1:
 //   * path: /sys/fs/cgroup/cpuset/<path-to-group>/cpuset.cpus
+//
+// For more details about cgrop v2, PTAL
+// https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html.
 
 pub struct CGroupSys {
     cgroups: HashMap<String, String>,
@@ -98,6 +101,11 @@ fn is_cgroup2_unified_mode() -> bool {
     f_type == libc::CGROUP2_SUPER_MAGIC
 }
 
+// From cgroup spec:
+// "/proc/$PID/cgroup" lists a process’s cgroup membership. If legacy cgroup is in use in
+// the system, this file may contain multiple lines, one for each hierarchy.
+//
+// The format is "<id>:<hierarchy>:<path>". For example, "10:cpuset:/test-cpuset".
 fn parse_proc_cgroup_v1(lines: &str) -> HashMap<String, String> {
     let mut subsystems = HashMap::new();
     for line in lines.lines().map(|s| s.trim()).filter(|s| !s.is_empty()) {
@@ -112,9 +120,12 @@ fn parse_proc_cgroup_v1(lines: &str) -> HashMap<String, String> {
     subsystems
 }
 
+// From cgroup spec:
+// The entry for cgroup v2 is always in the format "0::$PATH"
 fn parse_proc_cgroup_v2(lines: &str) -> HashMap<String, String> {
     let subsystems = parse_proc_cgroup_v1(lines);
     assert_eq!(subsystems.len(), 1);
+    assert_eq!(subsystems.keys().next().unwrap(), "");
     subsystems
 }
 
