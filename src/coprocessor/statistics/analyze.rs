@@ -4,7 +4,6 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
 use std::sync::Arc;
-use std::time::Instant;
 
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
@@ -13,7 +12,9 @@ use rand::rngs::StdRng;
 use rand::Rng;
 use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
 use tidb_query_common::storage::Range;
-use tidb_query_datatype::codec::datum::{encode_value, split_datum, Datum, NIL_FLAG};
+use tidb_query_datatype::codec::datum::{
+    encode_value, split_datum, Datum, DatumDecoder, DURATION_FLAG, INT_FLAG, NIL_FLAG, UINT_FLAG,
+};
 use tidb_query_datatype::codec::table;
 use tidb_query_datatype::def::Collation;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
@@ -22,6 +23,7 @@ use tidb_query_executors::{
     interface::BatchExecutor, runner::MAX_TIME_SLICE, BatchTableScanExecutor,
 };
 use tidb_query_expr::BATCH_MAX_SIZE;
+use tikv_util::time::Instant;
 use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
 use yatp::task::future::reschedule;
 
@@ -135,7 +137,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
         while let Some((key, _)) = scanner.next()? {
             row_count += 1;
             if row_count >= BATCH_MAX_SIZE {
-                if time_slice_start.elapsed() > MAX_TIME_SLICE {
+                if time_slice_start.saturating_elapsed() > MAX_TIME_SLICE {
                     reschedule().await;
                     time_slice_start = Instant::now();
                 }
@@ -341,7 +343,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
             self.columns_info.len() + self.column_groups.len(),
         );
         while !is_drained {
-            let time_slice_elapsed = time_slice_start.elapsed();
+            let time_slice_elapsed = time_slice_start.saturating_elapsed();
             if time_slice_elapsed > MAX_TIME_SLICE {
                 reschedule().await;
                 time_slice_start = Instant::now();
@@ -636,7 +638,7 @@ impl<S: Snapshot> SampleBuilder<S> {
         let mut common_handle_cms = CmSketch::new(self.cm_sketch_depth, self.cm_sketch_width);
         let mut common_handle_fms = FmSketch::new(self.max_fm_sketch_size);
         while !is_drained {
-            let time_slice_elapsed = time_slice_start.elapsed();
+            let time_slice_elapsed = time_slice_start.saturating_elapsed();
             if time_slice_elapsed > MAX_TIME_SLICE {
                 reschedule().await;
                 time_slice_start = Instant::now();
@@ -725,6 +727,28 @@ impl<S: Snapshot> SampleBuilder<S> {
                         &mut EvalContext::default(),
                         &mut val,
                     )?;
+
+                    // This is a workaround for different encoding methods used by TiDB and TiKV for CM Sketch.
+                    // We need this because we must ensure we are using the same encoding method when we are querying values from
+                    //   CM Sketch (in TiDB) and inserting values into CM Sketch (here).
+                    // We are inserting raw bytes from TableScanExecutor into CM Sketch here and query CM Sketch using bytes
+                    //   encoded by tablecodec.EncodeValue() in TiDB. Their results are different after row format becomes ver 2.
+                    //
+                    // Here we (1) convert INT bytes to VAR_INT bytes, (2) convert UINT bytes to VAR_UINT bytes,
+                    //   and (3) "flatten" the duration value from DURATION bytes into i64 value, then convert it to VAR_INT bytes.
+                    // These are the only 3 cases we need to care about according to TiDB's tablecodec.EncodeValue() and
+                    //   TiKV's V1CompatibleEncoder::write_v2_as_datum().
+                    val = match val[0] {
+                        INT_FLAG | UINT_FLAG | DURATION_FLAG => {
+                            let mut mut_val = &val[..];
+                            let decoded_val = mut_val.read_datum()?;
+                            let flattened =
+                                table::flatten(&mut EvalContext::default(), decoded_val)?;
+                            encode_value(&mut EvalContext::default(), &[flattened])?
+                        }
+                        _ => val,
+                    };
+
                     if columns_info[i].as_accessor().is_string_like() {
                         let sorted_val = match_template_collator! {
                             TT, match columns_info[i].as_accessor().collation()? {

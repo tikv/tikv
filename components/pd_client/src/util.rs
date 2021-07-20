@@ -6,7 +6,6 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::thread;
 use std::time::Duration;
-use std::time::Instant;
 
 use futures::channel::mpsc::UnboundedSender;
 use futures::compat::Future01CompatExt;
@@ -30,6 +29,7 @@ use kvproto::pdpb::{
     RegionHeartbeatRequest, RegionHeartbeatResponse, ResponseHeader,
 };
 use security::SecurityManager;
+use tikv_util::time::Instant;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{box_err, debug, error, info, slow_log, warn};
 use tikv_util::{Either, HandyRwLock};
@@ -229,7 +229,7 @@ impl Client {
         );
         inner.target = target;
         slow_log!(
-            start_refresh.elapsed(),
+            start_refresh.saturating_elapsed(),
             "PD client refresh region heartbeat",
         );
     }
@@ -289,9 +289,7 @@ impl Client {
 
         let future = {
             let inner = self.inner.rl();
-            if start
-                .checked_duration_since(inner.last_try_reconnect)
-                .map_or(true, |d| d < GLOBAL_RECONNECT_INTERVAL)
+            if start.saturating_duration_since(inner.last_try_reconnect) < GLOBAL_RECONNECT_INTERVAL
             {
                 // Avoid unnecessary updating.
                 // Prevent a large number of reconnections in a short time.
@@ -312,9 +310,7 @@ impl Client {
 
         {
             let mut inner = self.inner.wl();
-            if start
-                .checked_duration_since(inner.last_try_reconnect)
-                .map_or(true, |d| d < GLOBAL_RECONNECT_INTERVAL)
+            if start.saturating_duration_since(inner.last_try_reconnect) < GLOBAL_RECONNECT_INTERVAL
             {
                 // There may be multiple reconnections that pass the read lock at the same time.
                 // Check again in the write lock to avoid unnecessary updating.
@@ -326,7 +322,7 @@ impl Client {
             inner.last_try_reconnect = start;
         }
 
-        slow_log!(start.elapsed(), "try reconnect pd");
+        slow_log!(start.saturating_elapsed(), "try reconnect pd");
         let (client, target_info, members) = match future.await {
             Err(e) => {
                 PD_RECONNECT_COUNTER_VEC
@@ -351,7 +347,7 @@ impl Client {
         fail_point!("pd_client_reconnect", |_| Ok(()));
 
         self.update_client(client, target_info, members);
-        info!("trying to update PD client done"; "spend" => ?start.elapsed());
+        info!("trying to update PD client done"; "spend" => ?start.saturating_elapsed());
         Ok(())
     }
 }
@@ -392,7 +388,7 @@ where
                 let _ = self
                     .client
                     .timer
-                    .delay(Instant::now() + REQUEST_RECONNECT_INTERVAL)
+                    .delay(std::time::Instant::now() + REQUEST_RECONNECT_INTERVAL)
                     .compat()
                     .await;
             }
@@ -677,16 +673,18 @@ impl PdConnector {
         fail_point!("connect_leader", |_| Ok((None, true)));
         let mut retry_times = MAX_RETRY_TIMES;
         let timer = Instant::now();
-
         // Try to connect the PD cluster leader.
         loop {
             let (res, has_network_err) = self.connect_member(leader).await?;
             match res {
                 Some((client, ep, _)) => return Ok((Some((client, ep)), has_network_err)),
                 None => {
-                    if has_network_err && retry_times > 0 && timer.elapsed() <= MAX_RETRY_DURATION {
+                    if has_network_err
+                        && retry_times > 0
+                        && timer.saturating_elapsed() <= MAX_RETRY_DURATION
+                    {
                         let _ = GLOBAL_TIMER_HANDLE
-                            .delay(Instant::now() + RETRY_INTERVAL)
+                            .delay(std::time::Instant::now() + RETRY_INTERVAL)
                             .compat()
                             .await;
                         retry_times -= 1;

@@ -20,9 +20,8 @@ use crate::server::gc_worker::GcWorker;
 use crate::server::Proxy;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::{Engine, Storage};
-use engine_rocks::RocksEngine;
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::SnapManager;
+use raftstore::store::{CheckLeaderTask, SnapManager};
 use security::SecurityManager;
 use tikv_util::config::VersionTrack;
 use tikv_util::sys::{get_global_memory_usage, record_global_memory_usage};
@@ -51,7 +50,8 @@ pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 ///
 /// It hosts various internal components, including gRPC, the raftstore router
 /// and a snapshot worker.
-pub struct Server<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolver + 'static> {
+pub struct Server<T: RaftStoreRouter<E::Local> + 'static, S: StoreAddrResolver + 'static, E: Engine>
+{
     env: Arc<Environment>,
     /// A GrpcServer builder or a GrpcServer.
     ///
@@ -59,7 +59,7 @@ pub struct Server<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolve
     builder_or_server: Option<Either<ServerBuilder, GrpcServer>>,
     local_addr: SocketAddr,
     // Transport.
-    trans: ServerTransport<T, S, RocksEngine>,
+    trans: ServerTransport<T, S, E::Local>,
     raft_router: T,
     // For sending/receiving snapshots.
     snap_mgr: SnapManager,
@@ -74,9 +74,11 @@ pub struct Server<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolve
     timer: Handle,
 }
 
-impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Server<T, S> {
+impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: Engine>
+    Server<T, S, E>
+{
     #[allow(clippy::too_many_arguments)]
-    pub fn new<E: Engine, L: LockManager>(
+    pub fn new<L: LockManager>(
         store_id: u64,
         cfg: &Arc<VersionTrack<Config>>,
         security_mgr: &Arc<SecurityManager>,
@@ -87,6 +89,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
         resolver: S,
         snap_mgr: SnapManager,
         gc_worker: GcWorker<E, T>,
+        check_leader_scheduler: Scheduler<CheckLeaderTask>,
         env: Arc<Environment>,
         yatp_read_pool: Option<ReadPool>,
         debug_thread_pool: Arc<Runtime>,
@@ -118,6 +121,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             copr_v2,
             raft_router.clone(),
             lazy_worker.scheduler(),
+            check_leader_scheduler,
             Arc::clone(&grpc_thread_load),
             cfg.value().enable_request_batch,
             proxy,
@@ -187,7 +191,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
         self.snap_worker.scheduler()
     }
 
-    pub fn transport(&self) -> ServerTransport<T, S, RocksEngine> {
+    pub fn transport(&self) -> ServerTransport<T, S, E::Local> {
         self.trans.clone()
     }
 
@@ -320,7 +324,7 @@ pub mod test_router {
     use raftstore::store::*;
     use raftstore::Result as RaftStoreResult;
 
-    use engine_rocks::RocksSnapshot;
+    use engine_rocks::{RocksEngine, RocksSnapshot};
     use engine_traits::{KvEngine, Snapshot};
     use kvproto::raft_serverpb::RaftMessage;
 
@@ -501,6 +505,7 @@ mod tests {
         );
         let mock_store_id = 5;
         let addr = Arc::new(Mutex::new(None));
+        let (check_leader_scheduler, _) = tikv_util::worker::dummy_scheduler();
         let mut server = Server::new(
             mock_store_id,
             &cfg,
@@ -515,6 +520,7 @@ mod tests {
             },
             SnapManager::new(""),
             gc_worker,
+            check_leader_scheduler,
             env,
             None,
             debug_thread_pool,

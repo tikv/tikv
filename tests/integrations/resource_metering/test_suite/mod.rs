@@ -10,7 +10,7 @@ use futures::channel::oneshot;
 use futures::{select, FutureExt};
 use grpcio::{Environment, Server};
 use kvproto::kvrpcpb::Context;
-use kvproto::resource_usage_agent::ReportCpuTimeRequest;
+use kvproto::resource_usage_agent::CpuTimeRecord;
 use mock_agent_server::MockAgentServer;
 use resource_metering::cpu::recorder::{init_recorder, TEST_TAG_PREFIX};
 use resource_metering::reporter::{ResourceMeteringReporter, Task};
@@ -31,8 +31,8 @@ pub struct TestSuite {
     reporter: Option<Box<LazyWorker<Task>>>,
     cfg_controller: ConfigController,
 
-    tx: Sender<Vec<ReportCpuTimeRequest>>,
-    rx: Receiver<Vec<ReportCpuTimeRequest>>,
+    tx: Sender<Vec<CpuTimeRecord>>,
+    rx: Receiver<Vec<CpuTimeRecord>>,
 
     env: Arc<Environment>,
     rt: Runtime,
