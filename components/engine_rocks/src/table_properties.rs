@@ -92,20 +92,6 @@ impl RocksTableProperties {
 #[repr(transparent)]
 pub struct RocksUserCollectedProperties(pub rc::UserCollectedProperties);
 
-impl RocksUserCollectedProperties {
-    pub fn get(&self, index: &[u8]) -> Option<&[u8]> {
-        self.0.get(index)
-    }
-
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
 impl DecodeProperties for rc::UserCollectedProperties {
     fn decode(&self, k: &str) -> tikv_util::codec::Result<&[u8]> {
         self.get(k.as_bytes())
