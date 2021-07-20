@@ -2,6 +2,7 @@
 
 use super::test_suite::TestSuite;
 
+use std::iter;
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -109,10 +110,11 @@ pub fn case_max_resource_groups(test_suite: &mut TestSuite) {
     test_suite.cfg_agent_address(format!("127.0.0.1:{}", port));
 
     // Workload
-    // [req-1 * 3, req-2 * 3, req-3 * 3, req-4, req-5]
-    let mut wl = (1..=5)
-        .chain(1..=3)
-        .chain(1..=3)
+    // [req-{1..3} * 10, req-{4..5} * 1]
+    let mut wl = iter::repeat(1..=3)
+        .take(10)
+        .flatten()
+        .chain(4..=5)
         .map(|n| format!("req-{}", n))
         .collect::<Vec<_>>();
     wl.shuffle(&mut rand::thread_rng());
