@@ -5,7 +5,7 @@ use super::{IOOp, IOPriority, IOType};
 
 use std::str::FromStr;
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicU32, AtomicUsize, Ordering},
     Arc,
 };
 use std::time::Duration;
@@ -424,16 +424,20 @@ impl PriorityBasedIORateLimiter {
 /// An instance of `IORateLimiter` can be safely shared between threads.
 pub struct IORateLimiter {
     mode: IORateLimitMode,
-    priority_map: [IOPriority; IOType::COUNT],
+    priority_map: [CachePadded<AtomicU32>; IOType::COUNT],
     throughput_limiter: Arc<PriorityBasedIORateLimiter>,
     stats: Option<Arc<IORateLimiterStatistics>>,
 }
 
 impl IORateLimiter {
     pub fn new(mode: IORateLimitMode, strict: bool, enable_statistics: bool) -> Self {
+        let priority_map: [CachePadded<AtomicU32>; IOType::COUNT] = Default::default();
+        for i in 0..IOType::COUNT {
+            priority_map[i].store(IOPriority::High as u32, Ordering::Relaxed);
+        }
         IORateLimiter {
             mode,
-            priority_map: [IOPriority::High; IOType::COUNT],
+            priority_map,
             throughput_limiter: Arc::new(PriorityBasedIORateLimiter::new(strict)),
             stats: if enable_statistics {
                 Some(Arc::new(IORateLimiterStatistics::new()))
@@ -451,16 +455,16 @@ impl IORateLimiter {
         )
     }
 
-    pub fn set_io_priority(&mut self, io_type: IOType, io_priority: IOPriority) {
-        self.priority_map[io_type as usize] = io_priority;
-    }
-
     pub fn statistics(&self) -> Option<Arc<IORateLimiterStatistics>> {
         self.stats.clone()
     }
 
     pub fn set_io_rate_limit(&self, rate: usize) {
         self.throughput_limiter.set_bytes_per_sec(rate);
+    }
+
+    pub fn set_io_priority(&self, io_type: IOType, io_priority: IOPriority) {
+        self.priority_map[io_type as usize].store(io_priority as u32, Ordering::Relaxed);
     }
 
     pub fn set_low_priority_io_adjustor_if_needed(
@@ -478,9 +482,12 @@ impl IORateLimiter {
     /// less than the requested bytes, but must be greater than zero.
     pub fn request(&self, io_type: IOType, io_op: IOOp, mut bytes: usize) -> usize {
         if self.mode.contains(io_op) {
-            bytes = self
-                .throughput_limiter
-                .request(self.priority_map[io_type as usize], bytes);
+            bytes = self.throughput_limiter.request(
+                IOPriority::unsafe_from_u32(
+                    self.priority_map[io_type as usize].load(Ordering::Relaxed),
+                ),
+                bytes,
+            );
         }
         if let Some(stats) = &self.stats {
             stats.record(io_type, io_op, bytes);
@@ -496,7 +503,12 @@ impl IORateLimiter {
         if self.mode.contains(io_op) {
             bytes = self
                 .throughput_limiter
-                .async_request(self.priority_map[io_type as usize], bytes)
+                .async_request(
+                    IOPriority::unsafe_from_u32(
+                        self.priority_map[io_type as usize].load(Ordering::Relaxed),
+                    ),
+                    bytes,
+                )
                 .await;
         }
         if let Some(stats) = &self.stats {
@@ -508,9 +520,12 @@ impl IORateLimiter {
     #[cfg(test)]
     fn request_with_skewed_clock(&self, io_type: IOType, io_op: IOOp, mut bytes: usize) -> usize {
         if self.mode.contains(io_op) {
-            bytes = self
-                .throughput_limiter
-                .request_with_skewed_clock(self.priority_map[io_type as usize], bytes);
+            bytes = self.throughput_limiter.request_with_skewed_clock(
+                IOPriority::unsafe_from_u32(
+                    self.priority_map[io_type as usize].load(Ordering::Relaxed),
+                ),
+                bytes,
+            );
         }
         if let Some(stats) = &self.stats {
             stats.record(io_type, io_op, bytes);
@@ -594,7 +609,7 @@ mod tests {
     #[test]
     fn test_rate_limit_toggle() {
         let bytes_per_sec = 2000;
-        let mut limiter = IORateLimiter::new_for_test();
+        let limiter = IORateLimiter::new_for_test();
         limiter.set_io_priority(IOType::Compaction, IOPriority::Low);
         let limiter = Arc::new(limiter);
         let stats = limiter.statistics().unwrap();
@@ -669,6 +684,39 @@ mod tests {
     }
 
     #[test]
+    fn test_rate_limit_dynamic_priority() {
+        let bytes_per_sec = 2000;
+        let limiter = Arc::new(IORateLimiter::new(
+            IORateLimitMode::AllIo,
+            false, /*strict*/
+            true,  /*enable_statistics*/
+        ));
+        limiter.set_io_priority(IOType::ForegroundWrite, IOPriority::Medium);
+        verify_rate_limit(&limiter, bytes_per_sec, Duration::from_secs(2));
+        limiter.set_io_priority(IOType::ForegroundWrite, IOPriority::High);
+        let stats = limiter.statistics().unwrap();
+        stats.reset();
+        let duration = {
+            let begin = Instant::now();
+            {
+                let _context = start_background_jobs(
+                    &limiter,
+                    2, /*job_count*/
+                    Request(IOType::ForegroundWrite, IOOp::Write, 10),
+                    None, /*interval*/
+                );
+                std::thread::sleep(Duration::from_secs(2));
+            }
+            let end = Instant::now();
+            end.duration_since(begin)
+        };
+        assert!(
+            stats.fetch(IOType::ForegroundWrite, IOOp::Write) as f64
+                > bytes_per_sec as f64 * duration.as_secs_f64() * 1.5
+        );
+    }
+
+    #[test]
     fn test_rate_limited_heavy_flow() {
         let low_bytes_per_sec = 2000;
         let high_bytes_per_sec = 10000;
@@ -712,7 +760,7 @@ mod tests {
         let write_work = 50;
         let compaction_work = 80;
         let import_work = 50;
-        let mut limiter = IORateLimiter::new_for_test();
+        let limiter = IORateLimiter::new_for_test();
         limiter.set_io_rate_limit(bytes_per_sec);
         limiter.set_io_priority(IOType::Compaction, IOPriority::Medium);
         limiter.set_io_priority(IOType::Import, IOPriority::Low);
