@@ -14,6 +14,7 @@ use engine_traits::{Engines, KvEngine, RaftEngine, Snapshot, WriteBatch, WriteOp
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use kvproto::errorpb;
+use kvproto::kvrpcpb::AllowedLevel;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{self, PeerRole};
 use kvproto::pdpb::PeerStats;
@@ -2310,7 +2311,7 @@ where
         mut cb: Callback<EK::Snapshot>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
-        allowed_on_disk_full: bool,
+        allowed_level: AllowedLevel,
     ) -> bool {
         if self.pending_remove {
             return false;
@@ -2333,16 +2334,34 @@ where
             }
             Ok(RequestPolicy::ReadIndex) => return self.read_index(ctx, req, err_resp, cb),
             Ok(RequestPolicy::ProposeNormal) => {
-                if disk::is_disk_threshold_2(ctx.disk_status) {
-                    Err(Error::Timeout("propose failed: disk full thd2".to_owned()))
-                } else if disk::is_disk_threshold_1(ctx.disk_status) {
-                    if allowed_on_disk_full {
-                        self.propose_normal(ctx, req)
-                    } else {
-                        Err(Error::Timeout("propose failed: disk full thd1".to_owned()))
+                let mut allowed = true;
+                let mut err_msg = String::from("propose failed: disk full ");
+                let store_id = ctx.store.get_id();
+                match allowed_level {
+                    AllowedLevel::AllowedAlreadyFull => allowed = true,
+                    AllowedLevel::AllowedAlmostFull => {
+                        if disk::is_disk_threshold_2(ctx.disk_status, store_id) {
+                            allowed = false;
+                            err_msg.push_str("threshod2 happened");
+                        }
                     }
-                } else {
+                    AllowedLevel::AllowedNormal => {
+                        if disk::is_disk_threshold_2(ctx.disk_status, store_id) {
+                            allowed = false;
+                            err_msg.push_str("threshod2 happened");
+                        } else if disk::is_disk_threshold_1(ctx.disk_status, store_id)
+                            && !req.has_admin_request()
+                        {
+                            allowed = false;
+                            err_msg.push_str("threshod1 happened");
+                        }
+                    }
+                }
+
+                if allowed {
                     self.propose_normal(ctx, req)
+                } else {
+                    Err(Error::DiskFull(ctx.store.get_id(), err_msg))
                 }
             }
             Ok(RequestPolicy::ProposeTransferLeader) => {

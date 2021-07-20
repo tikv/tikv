@@ -10,7 +10,7 @@ use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Servic
 use kvproto::deadlock::create_deadlock;
 use kvproto::debugpb::{create_debug, DebugClient};
 use kvproto::import_sstpb::create_import_sst;
-use kvproto::kvrpcpb::Context;
+use kvproto::kvrpcpb::{AllowedLevel, Context};
 use kvproto::metapb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
@@ -133,6 +133,7 @@ pub struct ServerCluster {
     raft_client: RaftClient<AddressMap, RaftStoreBlackHole, RocksEngine>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
     env: Arc<Environment>,
+    allowed_level: AllowedLevel,
 }
 
 impl ServerCluster {
@@ -172,6 +173,7 @@ impl ServerCluster {
             concurrency_managers: HashMap::default(),
             env,
             txn_extra_schedulers: HashMap::default(),
+            allowed_level: AllowedLevel::AllowedNormal,
         }
     }
 
@@ -533,7 +535,11 @@ impl Simulator for ServerCluster {
             None => return Err(box_err!("missing sender for store {}", node_id)),
             Some(meta) => meta.sim_router.clone(),
         };
-        router.send_command(request, cb)
+        if self.get_allowed_level_on_disk_full() != AllowedLevel::AllowedNormal {
+            router.send_command_without_deadline(request, cb, self.get_allowed_level_on_disk_full())
+        } else {
+            router.send_command(request, cb)
+        }
     }
 
     fn async_read(
@@ -596,6 +602,18 @@ impl Simulator for ServerCluster {
 
     fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RocksEngine>> {
         self.metas.get(&node_id).map(|m| m.raw_router.clone())
+    }
+
+    fn set_allowed_level_on_disk_full(&mut self, level: AllowedLevel) {
+        self.allowed_level = level
+    }
+
+    fn get_allowed_level_on_disk_full(&self) -> AllowedLevel {
+        self.allowed_level
+    }
+
+    fn clear_allowed_level_on_disk_full(&mut self) {
+        self.allowed_level = AllowedLevel::AllowedNormal
     }
 }
 

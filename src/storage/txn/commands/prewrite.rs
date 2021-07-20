@@ -463,6 +463,7 @@ impl<K: PrewriteKind> Prewriter<K> {
             let m = m.into_mutation();
             let key = m.key().clone();
             let mutation_type = m.mutation_type();
+
             let mut secondaries = &self.secondary_keys.as_ref().map(|_| vec![]);
             if Some(m.key()) == async_commit_pk {
                 secondaries = &self.secondary_keys;
@@ -555,9 +556,10 @@ impl<K: PrewriteKind> Prewriter<K> {
             // If an error (KeyIsLocked or WriteConflict) occurs before, these lock guards
             // are dropped along with `txn` automatically.
             let lock_guards = txn.take_guards();
+            let allowed_level = self.ctx.get_allowed_level();
             WriteResult {
                 ctx: self.ctx,
-                to_be_write: WriteData::new(txn.into_modifies(), extra),
+                to_be_write: WriteData::new_ext(txn.into_modifies(), extra, None, allowed_level),
                 rows,
                 pr,
                 lock_info: None,

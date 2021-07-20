@@ -294,15 +294,11 @@ where
             committed_cb,
         );
         if let Some(deadline) = batch.deadline {
-            self.router.send_command_with_deadline(
-                cmd,
-                cb,
-                deadline,
-                batch.allowed_on_disk_full,
-            )?;
+            self.router
+                .send_command_with_deadline(cmd, cb, deadline, batch.allowed_level)?;
         } else {
             self.router
-                .send_command_without_deadline(cmd, cb, batch.allowed_on_disk_full)?;
+                .send_command_without_deadline(cmd, cb, batch.allowed_level)?;
         }
 
         Ok(())

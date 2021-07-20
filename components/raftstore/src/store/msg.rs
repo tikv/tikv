@@ -5,7 +5,6 @@ use std::fmt;
 
 use bitflags::bitflags;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
-use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
 use kvproto::metapb::RegionEpoch;
@@ -13,6 +12,7 @@ use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::ReplicationStatus;
+use kvproto::{import_sstpb::SstMeta, kvrpcpb::AllowedLevel};
 use raft::SnapshotStatus;
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
@@ -409,7 +409,7 @@ pub struct RaftCommand<S: Snapshot> {
     pub request: RaftCmdRequest,
     pub callback: Callback<S>,
     pub deadline: Option<Deadline>,
-    pub allowed_on_disk_full: bool,
+    pub allowed_level: AllowedLevel,
 }
 
 impl<S: Snapshot> RaftCommand<S> {
@@ -420,7 +420,7 @@ impl<S: Snapshot> RaftCommand<S> {
             callback,
             send_time: Instant::now(),
             deadline: None,
-            allowed_on_disk_full: false,
+            allowed_level: AllowedLevel::default(),
         }
     }
 }

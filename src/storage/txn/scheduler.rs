@@ -29,7 +29,7 @@ use std::u64;
 
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
-use kvproto::kvrpcpb::{CommandPri, ExtraOp};
+use kvproto::kvrpcpb::{AllowedLevel, CommandPri, ExtraOp};
 use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
 use tikv_util::{callback::must_call, deadline::Deadline, time::Instant};
 use txn_types::TimeStamp;
@@ -726,10 +726,16 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 response_policy,
             }) => {
                 SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
-
-                if ctx.get_allowed_on_disk_full() {
-                    to_be_write.allowed_on_disk_full = ctx.get_allowed_on_disk_full();
-                    warn!("Scheduler got a forced txn");
+                match ctx.get_allowed_level() {
+                    AllowedLevel::AllowedAlreadyFull => {
+                        to_be_write.allowed_level = AllowedLevel::AllowedAlreadyFull
+                    }
+                    AllowedLevel::AllowedAlmostFull => {
+                        if to_be_write.allowed_level != AllowedLevel::AllowedAlreadyFull {
+                            to_be_write.allowed_level = AllowedLevel::AllowedAlmostFull
+                        }
+                    }
+                    _ => {}
                 }
 
                 if let Some(lock_info) = lock_info {

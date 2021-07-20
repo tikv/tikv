@@ -986,7 +986,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         self.engine.async_write(
             &ctx,
-            WriteData::from_modifies(modifies),
+            WriteData::from_modifies_allowed_almost_full(modifies),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.delete_range.inc();
@@ -1246,7 +1246,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         self.engine.async_write(
             &ctx,
-            WriteData::from_modifies(vec![m]),
+            WriteData::from_modifies_allowed_almost_full(vec![m]),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_put.inc();
@@ -1287,7 +1287,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             .collect();
         self.engine.async_write(
             &ctx,
-            WriteData::from_modifies(modifies),
+            WriteData::from_modifies_allowed_almost_full(modifies),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_put.inc();
@@ -1306,7 +1306,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         self.engine.async_write(
             &ctx,
-            WriteData::from_modifies(vec![Modify::Delete(
+            WriteData::from_modifies_allowed_almost_full(vec![Modify::Delete(
                 Self::rawkv_cf(&cf)?,
                 Key::from_encoded(key),
             )]),
@@ -1339,7 +1339,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         self.engine.async_write(
             &ctx,
-            WriteData::from_modifies(vec![Modify::DeleteRange(cf, start_key, end_key, false)]),
+            WriteData::from_modifies_allowed_almost_full(vec![Modify::DeleteRange(
+                cf, start_key, end_key, false,
+            )]),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_delete_range.inc();
@@ -1363,7 +1365,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             .collect();
         self.engine.async_write(
             &ctx,
-            WriteData::from_modifies(modifies),
+            WriteData::from_modifies_allowed_almost_full(modifies),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_delete.inc();

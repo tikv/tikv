@@ -61,7 +61,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Cleanup {
         )?);
         released_locks.wake_up(context.lock_mgr);
 
-        let write_data = WriteData::from_modifies_with_allowed(txn.into_modifies());
+        let write_data = WriteData::from_modifies_allowed_almost_full(txn.into_modifies());
         Ok(WriteResult {
             ctx: self.ctx,
             to_be_write: write_data,

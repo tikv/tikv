@@ -415,20 +415,17 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         if self.config.raft_store.capacity.0 > 0 {
             capacity = cmp::min(capacity, self.config.raft_store.capacity.0);
         }
+        let mut reserve_space = self.config.storage.reserve_space.0;
+        if self.config.storage.reserve_space.0 != 0 {
+            reserve_space = cmp::max(
+                (capacity as f64 * 0.05) as u64,
+                self.config.storage.reserve_space.0,
+            );
+        }
+        disk::set_disk_reserved_space(reserve_space);
         //TODO after disk full readonly impl, such file should be removed.
-        file_system::reserve_space_for_recover(
-            &self.config.storage.data_dir,
-            if self.config.storage.reserve_space.0 == 0 {
-                0
-            } else {
-                // Max one of configured `reserve_space` and `storage.capacity * 5%`.
-                cmp::max(
-                    (capacity as f64 * 0.05) as u64,
-                    self.config.storage.reserve_space.0,
-                ) / 10
-            },
-        )
-        .unwrap();
+        file_system::reserve_space_for_recover(&self.config.storage.data_dir, reserve_space / 5)
+            .unwrap();
     }
 
     fn init_yatp(&self) {
@@ -1042,7 +1039,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let config_disk_capacity: u64 = self.config.raft_store.capacity.0;
         let store_path = self.store_path.clone();
         let snap_mgr = self.snap_mgr.clone().unwrap();
-        let reserve_space = self.config.storage.reserve_space.0;
+        let reserve_space = disk::get_disk_reserved_space();
         if reserve_space == 0 {
             info!("disk space checker not enabled");
             return;
@@ -1093,7 +1090,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                     );
                     disk::set_disk_status(disk::DiskStatus::DiskThd2);
                 } else if available <= thd1 {
-                    if disk::is_disk_threshold_2(disk_status) {
+                    if disk::is_disk_threshold_2(disk_status, 0) {
                         warn!(
                             "disk full thd2->thd1, available={},snap={},kv={},raft={},capacity={}",
                             available, snap_size, kv_size, raft_size, capacity
@@ -1106,7 +1103,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                     }
                     disk::set_disk_status(disk::DiskStatus::DiskThd1);
                 } else {
-                    if disk::is_disk_threshold_1(disk_status) {
+                    if disk::is_disk_threshold_1(disk_status, 0) {
                         info!(
                             "disk full thd1->normal, available={},snap={},kv={},raft={},capacity={}",
                             available, snap_size, kv_size, raft_size, capacity

@@ -36,7 +36,7 @@ use engine_traits::{
 };
 use futures::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
-use kvproto::kvrpcpb::{Context, ExtraOp as TxnExtraOp, KeyRange};
+use kvproto::kvrpcpb::{AllowedLevel, Context, ExtraOp as TxnExtraOp, KeyRange};
 use thiserror::Error;
 use tikv_util::{deadline::Deadline, escape};
 use txn_types::{Key, TimeStamp, TxnExtra, Value};
@@ -111,12 +111,12 @@ pub struct WriteData {
     pub modifies: Vec<Modify>,
     pub extra: TxnExtra,
     pub deadline: Option<Deadline>,
-    pub allowed_on_disk_full: bool,
+    pub allowed_level: AllowedLevel,
 }
 
 impl WriteData {
     pub fn new(modifies: Vec<Modify>, extra: TxnExtra) -> Self {
-        Self::new_ext(modifies, extra, None, false)
+        Self::new_ext(modifies, extra, None, AllowedLevel::AllowedNormal)
     }
 
     pub fn from_modifies(modifies: Vec<Modify>) -> Self {
@@ -127,18 +127,32 @@ impl WriteData {
         modifies: Vec<Modify>,
         extra: TxnExtra,
         deadline: Option<Deadline>,
-        allowed_on_disk_full: bool,
+        allowed_level: AllowedLevel,
     ) -> Self {
         Self {
             modifies,
             extra,
             deadline,
-            allowed_on_disk_full,
+            allowed_level,
         }
     }
 
-    pub fn from_modifies_with_allowed(modifies: Vec<Modify>) -> Self {
-        Self::new_ext(modifies, TxnExtra::default(), None, true)
+    pub fn from_modifies_allowed_almost_full(modifies: Vec<Modify>) -> Self {
+        Self::new_ext(
+            modifies,
+            TxnExtra::default(),
+            None,
+            AllowedLevel::AllowedAlmostFull,
+        )
+    }
+
+    pub fn from_modifies_allowed_already_full(modifies: Vec<Modify>) -> Self {
+        Self::new_ext(
+            modifies,
+            TxnExtra::default(),
+            None,
+            AllowedLevel::AllowedAlreadyFull,
+        )
     }
 }
 

@@ -4,6 +4,7 @@ use std::cell::RefCell;
 
 use crossbeam::channel::{SendError, TrySendError};
 use engine_traits::{KvEngine, RaftEngine, Snapshot};
+use kvproto::kvrpcpb::AllowedLevel;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::SnapshotStatus;
@@ -48,7 +49,7 @@ where
 
     /// Sends RaftCmdRequest to local store.
     fn send_command(&self, req: RaftCmdRequest, cb: Callback<EK::Snapshot>) -> RaftStoreResult<()> {
-        send_command_impl::<EK, _>(self, req, cb, None, false)
+        send_command_impl::<EK, _>(self, req, cb, None, AllowedLevel::default())
     }
 
     fn send_command_with_deadline(
@@ -56,18 +57,18 @@ where
         req: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
         deadline: Deadline,
-        allowed_on_disk_full: bool,
+        allowed_level: AllowedLevel,
     ) -> RaftStoreResult<()> {
-        send_command_impl::<EK, _>(self, req, cb, Some(deadline), allowed_on_disk_full)
+        send_command_impl::<EK, _>(self, req, cb, Some(deadline), allowed_level)
     }
 
     fn send_command_without_deadline(
         &self,
         req: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
-        allowed_on_disk_full: bool,
+        allowed_level: AllowedLevel,
     ) -> RaftStoreResult<()> {
-        send_command_impl::<EK, _>(self, req, cb, None, allowed_on_disk_full)
+        send_command_impl::<EK, _>(self, req, cb, None, allowed_level)
     }
 
     /// Reports the peer being unreachable to the Region.
@@ -112,7 +113,7 @@ fn send_command_impl<EK, PR>(
     req: RaftCmdRequest,
     cb: Callback<EK::Snapshot>,
     deadline: Option<Deadline>,
-    allowed_on_disk_full: bool,
+    allowed_level: AllowedLevel,
 ) -> RaftStoreResult<()>
 where
     EK: KvEngine,
@@ -121,7 +122,7 @@ where
     let region_id = req.get_header().get_region_id();
     let mut cmd = RaftCommand::new(req, cb);
     cmd.deadline = deadline;
-    cmd.allowed_on_disk_full = allowed_on_disk_full;
+    cmd.allowed_level = allowed_level;
     router
         .send(cmd)
         .map_err(|e| handle_send_error(region_id, e))
