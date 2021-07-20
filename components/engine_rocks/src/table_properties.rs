@@ -42,21 +42,6 @@ impl RocksTablePropertiesCollection {
     }
 }
 
-pub struct RocksTableProperties(rc::TableProperties);
-
-impl RocksTableProperties {
-    pub fn num_entries(&self) -> u64 {
-        self.0.num_entries()
-    }
-
-    pub fn user_collected_properties(&self) -> RocksUserCollectedProperties {
-        RocksUserCollectedProperties(self.0.user_collected_properties())
-    }
-}
-
-#[repr(transparent)]
-pub struct RocksUserCollectedProperties(pub rc::UserCollectedProperties);
-
 impl DecodeProperties for rc::UserCollectedProperties {
     fn decode(&self, k: &str) -> tikv_util::codec::Result<&[u8]> {
         self.get(k.as_bytes())
