@@ -12,7 +12,7 @@ use std::sync::Arc;
 use collections::HashMap;
 use futures::SinkExt;
 use grpcio::{CallOption, ChannelBuilder, Environment, WriteFlags};
-use kvproto::resource_usage_agent::{ReportCpuTimeRequest, ResourceUsageAgentClient};
+use kvproto::resource_usage_agent::{CpuTimeRecord, ResourceUsageAgentClient};
 use tikv_util::time::Duration;
 use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
 
@@ -202,7 +202,7 @@ impl RunnableWithTimer for ResourceMeteringReporter {
                         defer!(reporting.store(false, SeqCst));
 
                         for (tag, (timestamp_list, cpu_time_ms_list, _)) in records {
-                            let mut req = ReportCpuTimeRequest::default();
+                            let mut req = CpuTimeRecord::default();
                             req.set_resource_group_tag(tag);
                             req.set_record_list_timestamp_sec(timestamp_list);
                             req.set_record_list_cpu_time_ms(cpu_time_ms_list);
@@ -214,7 +214,7 @@ impl RunnableWithTimer for ResourceMeteringReporter {
                         // others
                         let timestamp_list = others.keys().cloned().collect::<Vec<_>>();
                         let cpu_time_ms_list = others.values().cloned().collect::<Vec<_>>();
-                        let mut req = ReportCpuTimeRequest::default();
+                        let mut req = CpuTimeRecord::default();
                         req.set_record_list_timestamp_sec(timestamp_list);
                         req.set_record_list_cpu_time_ms(cpu_time_ms_list);
                         if tx.send((req, WriteFlags::default())).await.is_err() {
