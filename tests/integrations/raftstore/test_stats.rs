@@ -101,33 +101,46 @@ fn test_node_simple_store_stats() {
 fn test_store_heartbeat_report_hotspots() {
     fail::cfg("mock_hotspot_threshold", "return(0)").unwrap();
     fail::cfg("mock_tick_interval", "return(0)").unwrap();
-    let (cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
+    let (mut cluster, client, _) = must_new_and_configure_cluster_and_kv_client(|cluster| {
         cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(10);
     });
-    let (k, v) = (b"key".to_vec(), b"v2".to_vec());
+    let (k1, v1) = (b"k1".to_vec(), b"v1".to_vec());
+    let (k3, v3) = (b"k3".to_vec(), b"v3".to_vec());
+    let region = cluster.get_region(b"");
+    cluster.must_split(&region, b"k2");
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+    let left = cluster.get_region(b"k1");
+    let mut left_ctx = Context::default();
+    left_ctx.set_region_id(left.id);
+    left_ctx.set_peer(left.get_peers()[0].clone());
+    left_ctx.set_region_epoch(cluster.get_region_epoch(left.id));
+    let right = cluster.get_region(b"k3");
+    let mut right_ctx = Context::default();
+    right_ctx.set_region_id(right.id);
+    right_ctx.set_peer(right.get_peers()[0].clone());
+    right_ctx.set_region_epoch(cluster.get_region_epoch(right.id));
 
-    // Raw put
-    let mut put_req = RawPutRequest::default();
-    put_req.set_context(ctx.clone());
-    put_req.key = k.clone();
-    put_req.value = v.clone();
-    let put_resp = client.raw_put(&put_req).unwrap();
-    assert!(!put_resp.has_region_error());
-    assert!(put_resp.error.is_empty());
+    // raw get k1 100 times
     for _i in 0..100 {
-        // Raw get
         let mut get_req = RawGetRequest::default();
-        get_req.set_context(ctx.clone());
-        get_req.key = k.clone();
+        get_req.set_context(left_ctx.clone());
+        get_req.key = k1.clone();
         let get_resp = client.raw_get(&get_req).unwrap();
-        assert_eq!(get_resp.value, v);
+        assert_eq!(get_resp.value, v1);
+    }
+    // raw get k3 10 times
+    for _i in 0..10 {
+        let mut get_req = RawGetRequest::default();
+        get_req.set_context(right_ctx.clone());
+        get_req.key = k3.clone();
+        let get_resp = client.raw_get(&get_req).unwrap();
+        assert_eq!(get_resp.value, v3);
     }
     sleep_ms(50);
-    let region_id = cluster.get_region_id(b"");
     let store_id = 1;
     let hot_peers = cluster.pd_client.get_store_hotspots(store_id).unwrap();
-    let peer_stat = hot_peers.get(&region_id).unwrap();
-    assert_eq!(peer_stat.get_region_id(), region_id);
+    let peer_stat = hot_peers.get(&left.id).unwrap();
     assert!(peer_stat.get_read_keys() > 0);
     assert!(peer_stat.get_read_bytes() > 0);
     fail::remove("mock_tick_interval");
