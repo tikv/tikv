@@ -372,7 +372,7 @@ impl<K: PrewriteKind> Prewriter<K> {
 
         let rows = self.mutations.len();
         let res = self.prewrite(&mut txn, &mut reader, context.extra_op);
-        let (locks, final_min_commit_ts) = res?;
+        let (locks, final_min_commit_ts, allowed) = res?;
 
         Ok(self.write_result(
             locks,
@@ -381,6 +381,7 @@ impl<K: PrewriteKind> Prewriter<K> {
             rows,
             context.async_apply_prewrite,
             context.lock_mgr,
+            allowed,
         ))
     }
 
@@ -407,7 +408,7 @@ impl<K: PrewriteKind> Prewriter<K> {
         txn: &mut MvccTxn,
         reader: &mut SnapshotReader<impl Snapshot>,
         extra_op: ExtraOp,
-    ) -> Result<(Vec<std::result::Result<(), StorageError>>, TimeStamp)> {
+    ) -> Result<(Vec<std::result::Result<(), StorageError>>, TimeStamp, bool)> {
         let commit_kind = match (&self.secondary_keys, self.try_one_pc) {
             (_, true) => CommitKind::OnePc(self.max_commit_ts),
             (&Some(_), false) => CommitKind::Async(self.max_commit_ts),
@@ -446,23 +447,29 @@ impl<K: PrewriteKind> Prewriter<K> {
             prewrite_result: MvccResult<(TimeStamp, OldValue)>,
             reader: &mut SnapshotReader<impl Snapshot>,
             key: &Key,
-        ) -> Result<(Vec<std::result::Result<(), StorageError>>, TimeStamp)> {
+        ) -> Result<(Vec<std::result::Result<(), StorageError>>, TimeStamp, bool)> {
             match reader.get_txn_commit_record(key)? {
                 TxnCommitRecord::SingleRecord { commit_ts, write }
                     if write.write_type != WriteType::Rollback =>
                 {
                     info!("prewrited transaction has been committed"; "start_ts" => reader.start_ts, "commit_ts" => commit_ts);
-                    Ok((vec![], commit_ts))
+                    Ok((vec![], commit_ts, true))
                 }
                 _ => Err(prewrite_result.unwrap_err().into()),
             }
         }
 
+        let mut allowed = true;
         for m in mem::take(&mut self.mutations) {
             let is_pessimistic_lock = m.is_pessimistic_lock();
             let m = m.into_mutation();
             let key = m.key().clone();
             let mutation_type = m.mutation_type();
+
+            if mutation_type != txn_types::MutationType::Delete {
+                allowed = false
+            }
+
             let mut secondaries = &self.secondary_keys.as_ref().map(|_| vec![]);
             if Some(m.key()) == async_commit_pk {
                 secondaries = &self.secondary_keys;
@@ -514,7 +521,7 @@ impl<K: PrewriteKind> Prewriter<K> {
             }
         }
 
-        Ok((locks, final_min_commit_ts))
+        Ok((locks, final_min_commit_ts, allowed))
     }
 
     /// Prepare a WriteResult object from the results of executing the prewrite.
@@ -526,6 +533,7 @@ impl<K: PrewriteKind> Prewriter<K> {
         rows: usize,
         async_apply_prewrite: bool,
         lock_manager: &impl LockManager,
+        delete_only: bool,
     ) -> WriteResult {
         let async_commit_ts = if self.secondary_keys.is_some() {
             final_min_commit_ts
@@ -557,7 +565,11 @@ impl<K: PrewriteKind> Prewriter<K> {
             let lock_guards = txn.take_guards();
             WriteResult {
                 ctx: self.ctx,
-                to_be_write: WriteData::new(txn.into_modifies(), extra),
+                to_be_write: if delete_only {
+                    WriteData::new_ext(txn.into_modifies(), extra, None, true)
+                } else {
+                    WriteData::new(txn.into_modifies(), extra)
+                },
                 rows,
                 pr,
                 lock_info: None,

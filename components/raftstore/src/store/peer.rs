@@ -2336,10 +2336,11 @@ where
                 if disk::is_disk_threshold_2(ctx.disk_status) {
                     Err(Error::Timeout("propose failed: disk full thd2".to_owned()))
                 } else if disk::is_disk_threshold_1(ctx.disk_status) {
-                    if allowed_on_disk_full {
+                    if allowed_on_disk_full || req.has_admin_request() {
                         self.propose_normal(ctx, req)
                     } else {
-                        Err(Error::Timeout("propose failed: disk full thd1".to_owned()))
+                        let cmd: String = String::from("propose failed: disk full thd1");
+                        Err(Error::Timeout(cmd))
                     }
                 } else {
                     self.propose_normal(ctx, req)
