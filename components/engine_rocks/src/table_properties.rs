@@ -1,8 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::engine::RocksEngine;
-use crate::util;
 use crate::properties_types::DecodeProperties;
+use crate::util;
 use engine_traits::Range;
 use engine_traits::{Error, Result};
 use rocksdb::table_properties_rc as rc;
