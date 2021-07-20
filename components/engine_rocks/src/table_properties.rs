@@ -106,13 +106,6 @@ impl RocksUserCollectedProperties {
     }
 }
 
-impl DecodeProperties for RocksUserCollectedProperties {
-    fn decode(&self, k: &str) -> tikv_util::codec::Result<&[u8]> {
-        self.get(k.as_bytes())
-            .ok_or(tikv_util::codec::Error::KeyNotFound)
-    }
-}
-
 impl DecodeProperties for rc::UserCollectedProperties {
     fn decode(&self, k: &str) -> tikv_util::codec::Result<&[u8]> {
         self.get(k.as_bytes())
