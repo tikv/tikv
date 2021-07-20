@@ -1196,11 +1196,11 @@ mod tests {
             let start = keys::data_key(b"");
             let end = keys::data_end_key(b"");
             let collection = db.get_range_properties_cf(cf, &start, &end).unwrap();
-            assert!(!collection.is_empty());
-            for (_, v) in collection.iter() {
-                assert!(!v.user_collected_properties().0.is_empty());
+            assert!(!collection.0.is_empty());
+            for (_, v) in collection.0.iter() {
+                assert!(!v.user_collected_properties().is_empty());
                 assert_eq!(
-                    v.user_collected_properties().0
+                    v.user_collected_properties()
                         .get(PROP_TEST_MARKER_CF_NAME)
                         .unwrap(),
                     cf.as_bytes()
