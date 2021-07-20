@@ -11,13 +11,13 @@ extern crate tikv_alloc;
 use std::io::{self, Write};
 use std::marker::Unpin;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use file_system::File;
 use futures_io::AsyncRead;
 use futures_util::AsyncReadExt;
 use tikv_util::stream::{block_on_external_io, READ_BUF_SIZE};
-use tikv_util::time::Limiter;
+use tikv_util::time::{Instant, Limiter};
 use tokio::time::timeout;
 
 mod local;
@@ -36,7 +36,7 @@ pub mod request;
 pub fn record_storage_create(start: Instant, storage: &dyn ExternalStorage) {
     EXT_STORAGE_CREATE_HISTOGRAM
         .with_label_values(&[storage.name()])
-        .observe(start.elapsed().as_secs_f64());
+        .observe(start.saturating_elapsed().as_secs_f64());
 }
 
 /// An abstraction of an external storage.

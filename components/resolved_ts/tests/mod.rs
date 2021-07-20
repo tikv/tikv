@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
+use configuration::ConfigValue;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use grpcio::ClientUnaryReceiver;
 use grpcio::{ChannelBuilder, Environment};
@@ -73,9 +74,7 @@ impl TestSuite {
             let cm = sim.get_concurrency_manager(*id);
             let env = Arc::new(Environment::new(1));
             let cfg = ResolvedTsConfig {
-                advance_ts_interval: tikv_util::config::ReadableDuration(Duration::from_millis(
-                    100,
-                )),
+                advance_ts_interval: tikv_util::config::ReadableDuration(Duration::from_millis(10)),
                 ..Default::default()
             };
             let rts_endpoint = resolved_ts::Endpoint::new(
@@ -108,6 +107,19 @@ impl TestSuite {
             worker.stop();
         }
         self.cluster.shutdown();
+    }
+
+    pub fn must_change_advance_ts_interval(&self, store_id: u64, new_interval: Duration) {
+        let change = {
+            let mut c = std::collections::HashMap::default();
+            c.insert(
+                "advance_ts_interval".to_owned(),
+                ConfigValue::Duration(new_interval.as_millis() as u64),
+            );
+            c
+        };
+        let scheduler = self.endpoints.get(&store_id).unwrap().scheduler();
+        scheduler.schedule(Task::ChangeConfig { change }).unwrap();
     }
 
     pub fn must_kv_prewrite(
@@ -339,6 +351,7 @@ impl TestSuite {
             }
             sleep_ms(100)
         }
+        panic!("fail to get same ts after 50 trys");
     }
 
     pub fn must_get_rts_ge(&mut self, region_id: u64, rts: TimeStamp) {
@@ -350,5 +363,6 @@ impl TestSuite {
             }
             sleep_ms(100)
         }
+        panic!("fail to get greater ts after 50 trys");
     }
 }

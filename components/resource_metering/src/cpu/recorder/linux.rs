@@ -12,7 +12,7 @@ use std::sync::atomic::Ordering::{Relaxed, SeqCst};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64};
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use collections::{HashMap, HashSet};
 use crossbeam::channel::{unbounded, Receiver, Sender};
@@ -20,6 +20,8 @@ use lazy_static::lazy_static;
 use libc::pid_t;
 use procinfo::pid;
 use procinfo::pid::Stat;
+
+use tikv_util::time::Instant;
 
 use super::RecorderHandle;
 
@@ -283,7 +285,7 @@ impl CpuRecorder {
         const THREAD_STAT_LEN_THRESHOLD: usize = 500;
         const RECORD_LEN_THRESHOLD: usize = 20_000;
 
-        let duration_secs = self.last_gc_instant.elapsed().as_secs();
+        let duration_secs = self.last_gc_instant.saturating_elapsed().as_secs();
         let need_gc = duration_secs >= GC_INTERVAL_SECS;
 
         if need_gc {
@@ -314,7 +316,7 @@ impl CpuRecorder {
     }
 
     pub fn may_advance_window(&mut self) -> bool {
-        let duration = self.last_collect_instant.elapsed();
+        let duration = self.last_collect_instant.saturating_elapsed();
         let need_advance = duration.as_millis() >= self.precision_ms.load(Relaxed) as _;
 
         if need_advance {
