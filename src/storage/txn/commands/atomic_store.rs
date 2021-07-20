@@ -68,7 +68,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
                 _ => panic!("Not support mutation type"),
             }
         }
-        let to_be_write = WriteData::from_modifies(data);
+        let to_be_write = WriteData::from_modifies_with_allowed(data);
         Ok(WriteResult {
             ctx,
             to_be_write,

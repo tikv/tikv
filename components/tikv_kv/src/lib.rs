@@ -111,19 +111,34 @@ pub struct WriteData {
     pub modifies: Vec<Modify>,
     pub extra: TxnExtra,
     pub deadline: Option<Deadline>,
+    pub allowed_on_disk_full: bool,
 }
 
 impl WriteData {
     pub fn new(modifies: Vec<Modify>, extra: TxnExtra) -> Self {
-        Self {
-            modifies,
-            extra,
-            deadline: None,
-        }
+        Self::new_ext(modifies, extra, None, false)
     }
 
     pub fn from_modifies(modifies: Vec<Modify>) -> Self {
         Self::new(modifies, TxnExtra::default())
+    }
+
+    pub fn new_ext(
+        modifies: Vec<Modify>,
+        extra: TxnExtra,
+        deadline: Option<Deadline>,
+        allowed_on_disk_full: bool,
+    ) -> Self {
+        Self {
+            modifies,
+            extra,
+            deadline,
+            allowed_on_disk_full,
+        }
+    }
+
+    pub fn from_modifies_with_allowed(modifies: Vec<Modify>) -> Self {
+        Self::new_ext(modifies, TxnExtra::default(), None, true)
     }
 }
 

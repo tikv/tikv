@@ -409,6 +409,7 @@ pub struct RaftCommand<S: Snapshot> {
     pub request: RaftCmdRequest,
     pub callback: Callback<S>,
     pub deadline: Option<Deadline>,
+    pub allowed_on_disk_full: bool,
 }
 
 impl<S: Snapshot> RaftCommand<S> {
@@ -419,6 +420,7 @@ impl<S: Snapshot> RaftCommand<S> {
             callback,
             send_time: Instant::now(),
             deadline: None,
+            allowed_on_disk_full: false,
         }
     }
 }
