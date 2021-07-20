@@ -921,12 +921,10 @@ mod tests {
     use std::f64::INFINITY;
     use tikv_util::stream::block_on_external_io;
 
+    use engine_traits::Error as TraitError;
+    use engine_traits::ExternalSstFileInfo;
     use engine_traits::{
         collect, EncryptionMethod, Iterable, Iterator, SeekKey, CF_DEFAULT, DATA_CFS,
-    };
-    use engine_traits::{Error as TraitError, TablePropertiesExt};
-    use engine_traits::{
-        ExternalSstFileInfo, TableProperties, TablePropertiesCollection, UserCollectedProperties,
     };
     use tempfile::Builder;
     use test_sst_importer::{

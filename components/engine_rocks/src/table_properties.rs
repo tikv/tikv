@@ -1,29 +1,19 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::engine::RocksEngine;
+use crate::properties_types::DecodeProperties;
 use crate::util;
-use engine_traits::DecodeProperties;
 use engine_traits::Range;
 use engine_traits::{Error, Result};
-use engine_traits::{
-    TableProperties, TablePropertiesCollectionIter, TablePropertiesKey, UserCollectedProperties,
-};
-use engine_traits::{TablePropertiesCollection, TablePropertiesExt};
 use rocksdb::table_properties_rc as rc;
 use std::ops::Deref;
 
-impl TablePropertiesExt for RocksEngine {
-    type TablePropertiesCollection = RocksTablePropertiesCollection;
-    type TablePropertiesCollectionIter = RocksTablePropertiesCollectionIter;
-    type TablePropertiesKey = RocksTablePropertiesKey;
-    type TableProperties = RocksTableProperties;
-    type UserCollectedProperties = RocksUserCollectedProperties;
-
-    fn get_properties_of_tables_in_range(
+impl RocksEngine {
+    pub(crate) fn get_properties_of_tables_in_range(
         &self,
         cf: &str,
         ranges: &[Range],
-    ) -> Result<Self::TablePropertiesCollection> {
+    ) -> Result<RocksTablePropertiesCollection> {
         let cf = util::get_cf_handle(self.as_inner(), cf)?;
         // FIXME: extra allocation
         let ranges: Vec<_> = ranges.iter().map(util::range_to_rocks_range).collect();
@@ -33,6 +23,16 @@ impl TablePropertiesExt for RocksEngine {
         let raw = raw.map_err(Error::Engine)?;
         Ok(RocksTablePropertiesCollection::from_raw(raw))
     }
+
+    pub fn get_range_properties_cf(
+        &self,
+        cfname: &str,
+        start_key: &[u8],
+        end_key: &[u8],
+    ) -> Result<RocksTablePropertiesCollection> {
+        let range = Range::new(start_key, end_key);
+        self.get_properties_of_tables_in_range(cfname, &[range])
+    }
 }
 
 pub struct RocksTablePropertiesCollection(rc::TablePropertiesCollection);
@@ -41,35 +41,21 @@ impl RocksTablePropertiesCollection {
     fn from_raw(raw: rc::TablePropertiesCollection) -> RocksTablePropertiesCollection {
         RocksTablePropertiesCollection(raw)
     }
-}
 
-impl
-    TablePropertiesCollection<
-        RocksTablePropertiesCollectionIter,
-        RocksTablePropertiesKey,
-        RocksTableProperties,
-        RocksUserCollectedProperties,
-    > for RocksTablePropertiesCollection
-{
-    fn iter(&self) -> RocksTablePropertiesCollectionIter {
+    pub fn iter(&self) -> RocksTablePropertiesCollectionIter {
         RocksTablePropertiesCollectionIter(self.0.iter())
     }
 
-    fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 
 pub struct RocksTablePropertiesCollectionIter(rc::TablePropertiesCollectionIter);
-
-impl
-    TablePropertiesCollectionIter<
-        RocksTablePropertiesKey,
-        RocksTableProperties,
-        RocksUserCollectedProperties,
-    > for RocksTablePropertiesCollectionIter
-{
-}
 
 impl Iterator for RocksTablePropertiesCollectionIter {
     type Item = (RocksTablePropertiesKey, RocksTableProperties);
@@ -83,8 +69,6 @@ impl Iterator for RocksTablePropertiesCollectionIter {
 
 pub struct RocksTablePropertiesKey(rc::TablePropertiesKey);
 
-impl TablePropertiesKey for RocksTablePropertiesKey {}
-
 impl Deref for RocksTablePropertiesKey {
     type Target = str;
 
@@ -95,12 +79,12 @@ impl Deref for RocksTablePropertiesKey {
 
 pub struct RocksTableProperties(rc::TableProperties);
 
-impl TableProperties<RocksUserCollectedProperties> for RocksTableProperties {
-    fn num_entries(&self) -> u64 {
+impl RocksTableProperties {
+    pub fn num_entries(&self) -> u64 {
         self.0.num_entries()
     }
 
-    fn user_collected_properties(&self) -> RocksUserCollectedProperties {
+    pub fn user_collected_properties(&self) -> RocksUserCollectedProperties {
         RocksUserCollectedProperties(self.0.user_collected_properties())
     }
 }
@@ -108,13 +92,17 @@ impl TableProperties<RocksUserCollectedProperties> for RocksTableProperties {
 #[repr(transparent)]
 pub struct RocksUserCollectedProperties(rc::UserCollectedProperties);
 
-impl UserCollectedProperties for RocksUserCollectedProperties {
-    fn get(&self, index: &[u8]) -> Option<&[u8]> {
+impl RocksUserCollectedProperties {
+    pub fn get(&self, index: &[u8]) -> Option<&[u8]> {
         self.0.get(index)
     }
 
-    fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 
