@@ -11,7 +11,7 @@ mod test_encryption;
 mod test_gc_worker;
 mod test_import_service;
 mod test_kv_service;
-mod test_memory_full;
+mod test_memory_usage_limit;
 mod test_merge;
 mod test_pd_client;
 mod test_pending_peers;

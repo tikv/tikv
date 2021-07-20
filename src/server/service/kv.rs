@@ -653,7 +653,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
             let mut stream = stream.map_err(Error::from);
             while let Some(msg) = stream.try_next().await? {
                 RAFT_MESSAGE_RECV_COUNTER.inc();
-                let reject = needs_delay_raft_append();
+                let reject = needs_reject_raft_append();
                 Self::handle_raft_message(store_id, &ch, msg, reject)?;
             }
             Ok::<(), Error>(())
@@ -691,7 +691,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
                 let len = batch_msg.get_msgs().len();
                 RAFT_MESSAGE_RECV_COUNTER.inc_by(len as u64);
                 RAFT_MESSAGE_BATCH_SIZE.observe(len as f64);
-                let reject = needs_delay_raft_append();
+                let reject = needs_reject_raft_append();
                 for msg in batch_msg.take_msgs().into_iter() {
                     Self::handle_raft_message(store_id, &ch, msg, reject)?;
                 }
@@ -1966,16 +1966,16 @@ fn raftstore_error_to_region_error(e: RaftStoreError, region_id: u64) -> RegionE
     e.into()
 }
 
-fn needs_delay_raft_append() -> bool {
-    fail_point!("needs_delay_raft_append", |_| true);
+fn needs_reject_raft_append() -> bool {
+    fail_point!("needs_reject_raft_append", |_| true);
     let mut usage = 0;
     if memory_usage_reaches_high_water(&mut usage) {
         let raft_msg_usage = (MEMTRACE_RAFT_ENTRIES.sum() + MEMTRACE_RAFT_MESSAGES.sum()) as u64;
         if raft_msg_usage > usage / 5 {
-            // For different system memory capacity, `MsgAppend`s are delayed when:
-            // * system=8G,  memory_usage_limit=6G,  delay_at=1.2G
-            // * system=16G, memory_usage_limit=12G, delay_at=2.4G
-            // * system=32G, memory_usage_limit=24G, delay_at=4.8G
+            // For different system memory capacity, `MsgAppend`s are rejected when:
+            // * system=8G,  memory_usage_limit=6G,  reject_at=1.2G
+            // * system=16G, memory_usage_limit=12G, reject_at=2.4G
+            // * system=32G, memory_usage_limit=24G, reject_at=4.8G
             return true;
         }
     }
