@@ -6,7 +6,6 @@ use crate::util;
 use engine_traits::Range;
 use engine_traits::{Error, Result};
 use rocksdb::table_properties_rc as rc;
-use std::ops::Deref;
 
 impl RocksEngine {
     pub(crate) fn get_properties_of_tables_in_range(
@@ -35,45 +34,11 @@ impl RocksEngine {
     }
 }
 
-pub struct RocksTablePropertiesCollection(rc::TablePropertiesCollection);
+pub struct RocksTablePropertiesCollection(pub rc::TablePropertiesCollection);
 
 impl RocksTablePropertiesCollection {
     fn from_raw(raw: rc::TablePropertiesCollection) -> RocksTablePropertiesCollection {
         RocksTablePropertiesCollection(raw)
-    }
-
-    pub fn iter(&self) -> RocksTablePropertiesCollectionIter {
-        RocksTablePropertiesCollectionIter(self.0.iter())
-    }
-
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
-pub struct RocksTablePropertiesCollectionIter(rc::TablePropertiesCollectionIter);
-
-impl Iterator for RocksTablePropertiesCollectionIter {
-    type Item = (RocksTablePropertiesKey, RocksTableProperties);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.0
-            .next()
-            .map(|(key, props)| (RocksTablePropertiesKey(key), RocksTableProperties(props)))
-    }
-}
-
-pub struct RocksTablePropertiesKey(rc::TablePropertiesKey);
-
-impl Deref for RocksTablePropertiesKey {
-    type Target = str;
-
-    fn deref(&self) -> &str {
-        self.0.deref()
     }
 }
 
