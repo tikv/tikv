@@ -3,8 +3,7 @@
 use crate::engine::RocksEngine;
 use crate::properties::{get_range_entries_and_versions, RangeProperties};
 use engine_traits::{
-    MiscExt, Range, RangePropertiesExt, Result,
-    CF_DEFAULT, CF_LOCK, CF_WRITE, LARGE_CFS,
+    MiscExt, Range, RangePropertiesExt, Result, CF_DEFAULT, CF_LOCK, CF_WRITE, LARGE_CFS,
 };
 use std::path::Path;
 use tikv_util::{box_err, box_try, debug, info};

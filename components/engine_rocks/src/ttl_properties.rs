@@ -2,13 +2,10 @@
 
 use std::collections::HashMap;
 
-use crate::{RocksEngine, UserProperties};
 use crate::properties_types::DecodeProperties;
+use crate::{RocksEngine, UserProperties};
 use engine_traits::util::get_expire_ts;
-use engine_traits::{
-    Range, Result,
-    TtlProperties, TtlPropertiesExt,
-};
+use engine_traits::{Range, Result, TtlProperties, TtlPropertiesExt};
 use rocksdb::{DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory};
 use tikv_util::error;
 
