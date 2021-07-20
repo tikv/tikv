@@ -122,13 +122,13 @@ impl Runnable for ResourceMeteringReporter {
                 self.config = new_config;
             }
             Task::CpuRecords(records) => {
-                let max_tag_count = self.config.max_resource_groups;
+                let max_resource_groups = self.config.max_resource_groups;
                 let tmp_group_map = &mut self.tmp_group_map;
                 let tmp_top_vec = &mut self.tmp_top_vec;
                 tmp_group_map.clear();
                 tmp_top_vec.clear();
 
-                // Group CPU time by tag
+                // Sum the CPU time by tag
                 for (tag, ms) in &records.records {
                     let tag = &tag.infos.extra_attachment;
                     if tag.is_empty() {
@@ -141,12 +141,47 @@ impl Runnable for ResourceMeteringReporter {
                     return;
                 }
 
-                // CPU time less than `threshold` will be filtered out
-                let threshold = (tmp_group_map.len() > max_tag_count)
+                // If the number of records is greater than `max_resource_groups` in this round, we
+                // needs to evict records with little CPU time.
+                //
+                // To implement it, a `threshold` to filter out those records will be calculated. It
+                // will be either:
+                // - `0` if the number of records less than `max_resource_groups` so that all
+                //   records will be saved, or
+                // - the `max_resource_groups + 1`th largest aggregated CPU time.
+                //
+                // Examples:
+                //
+                //   Case 1:
+                //   +---------------------+---------------------------------------+
+                //   | Max Resource Groups |   8                                   |
+                //   +----------+----------+-------+-------+-------+-------+-------+
+                //   |          |   Tag    | tag 3 | tag 2 | tag 5 | tag 4 | tag 1 |
+                //   | Records  +----------+-------+-------+-------+-------+-------+
+                //   |          | CPU time |   90  |   60  |   50  |   30  |   10  |
+                //   +----------+----------+-------+-------+-------+-------+-------+
+                //   | Threshold           |   0                                   |
+                //   +----------+----------+-------+-------+-------+-------+-------+
+                //   | Will be Saved       |  v    |  v    |  v    |  v    |  v    |
+                //   +---------------------+-------+-------+-------+-------+-------+
+                //
+                //  Case 2:
+                //   +---------------------+---------------------------------------+
+                //   | Max Resource Groups |   3                                   |
+                //   +----------+----------+-------+-------+-------+-------+-------+
+                //   |          |   Tag    | tag 3 | tag 2 | tag 5 | tag 4 | tag 1 |
+                //   | Records  +----------+-------+-------+-------+-------+-------+
+                //   |          | CPU time |   90  |   60  |   50  |   30  |   10  |
+                //   +----------+----------+-------+-------+-------+-------+-------+
+                //   | Threshold           |   30                      ^           |
+                //   +----------+----------+-------+-------+-------+-------+-------+
+                //   | Will be Saved       |  v    |  v    |  v    |  x    |  x    |
+                //   +---------------------+-------+-------+-------+-------+-------+
+                let threshold = (tmp_group_map.len() > max_resource_groups)
                     .then(|| {
                         tmp_top_vec.extend(tmp_group_map.values());
-                        pdqselect::select_by(tmp_top_vec, max_tag_count, |a, b| b.cmp(a));
-                        tmp_top_vec[max_tag_count]
+                        pdqselect::select_by(tmp_top_vec, max_resource_groups, |a, b| b.cmp(a));
+                        tmp_top_vec[max_resource_groups]
                     })
                     .unwrap_or(0);
 
