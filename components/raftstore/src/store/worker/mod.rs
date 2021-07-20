@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod check_leader;
 mod cleanup;
 mod cleanup_sst;
 mod compact;
@@ -13,6 +14,7 @@ mod split_check;
 mod split_config;
 mod split_controller;
 
+pub use self::check_leader::{Runner as CheckLeaderRunner, Task as CheckLeaderTask};
 pub use self::cleanup::{Runner as CleanupRunner, Task as CleanupTask};
 pub use self::cleanup_sst::{Runner as CleanupSSTRunner, Task as CleanupSSTTask};
 pub use self::compact::{Runner as CompactRunner, Task as CompactTask};

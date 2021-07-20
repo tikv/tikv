@@ -12,12 +12,13 @@ use configuration::{self, ConfigChange, ConfigManager, Configuration};
 use engine_traits::{KvEngine, Snapshot};
 use grpcio::Environment;
 use kvproto::metapb::Region;
+use kvproto::raft_cmdpb::AdminCmdType;
 use pd_client::PdClient;
 use raftstore::coprocessor::CmdBatch;
 use raftstore::coprocessor::{ObserveHandle, ObserveID};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::StoreMeta;
-use raftstore::store::util::{self, RegionReadProgress};
+use raftstore::store::util::{self, RegionReadProgress, RegionReadProgressRegistry};
 use raftstore::store::RegionSnapshot;
 use security::SecurityManager;
 use tikv::config::ResolvedTsConfig;
@@ -30,7 +31,6 @@ use crate::metrics::*;
 use crate::resolver::Resolver;
 use crate::scanner::{ScanEntry, ScanMode, ScanTask, ScannerPool};
 use crate::sinker::{CmdSinker, SinkCmd};
-use kvproto::raft_cmdpb::AdminCmdType;
 
 enum ResolverStatus {
     Pending {
@@ -246,7 +246,9 @@ impl ObserveRegion {
 
 pub struct Endpoint<T, E: KvEngine, C> {
     cfg: ResolvedTsConfig,
+    cfg_version: usize,
     store_meta: Arc<Mutex<StoreMeta>>,
+    region_read_progress: RegionReadProgressRegistry,
     regions: HashMap<u64, ObserveRegion>,
     scanner_pool: ScannerPool<T, E>,
     scheduler: Scheduler<Task<E::Snapshot>>,
@@ -272,10 +274,12 @@ where
         security_mgr: Arc<SecurityManager>,
         sinker: C,
     ) -> Self {
+        let region_read_progress = store_meta.lock().unwrap().region_read_progress.clone();
         let advance_worker = AdvanceTsWorker::new(
             pd_client,
             scheduler.clone(),
             store_meta.clone(),
+            region_read_progress.clone(),
             concurrency_manager,
             env,
             security_mgr,
@@ -283,15 +287,17 @@ where
         let scanner_pool = ScannerPool::new(cfg.scan_lock_pool_size, raft_router);
         let ep = Self {
             cfg: cfg.clone(),
+            cfg_version: 0,
             scheduler,
             store_meta,
+            region_read_progress,
             advance_worker,
             scanner_pool,
             sinker,
             regions: HashMap::default(),
             _phantom: PhantomData::default(),
         };
-        ep.register_advance_event();
+        ep.register_advance_event(ep.cfg_version);
         ep
     }
 
@@ -299,18 +305,15 @@ where
         let region_id = region.get_id();
         assert!(self.regions.get(&region_id).is_none());
         let observe_region = {
-            let store_meta = self.store_meta.lock().unwrap();
-            if let Some(read_progress) = store_meta.region_read_progress.get(&region_id) {
+            if let Some(read_progress) = self.region_read_progress.get(&region_id) {
                 info!(
                     "register observe region";
-                    "store id" => ?store_meta.store_id.clone(),
                     "region" => ?region
                 );
-                ObserveRegion::new(region.clone(), Arc::clone(read_progress))
+                ObserveRegion::new(region.clone(), read_progress)
             } else {
                 warn!(
                     "try register unexit region";
-                    "store id" => ?store_meta.store_id.clone(),
                     "region" => ?region,
                 );
                 return;
@@ -396,7 +399,9 @@ where
     fn region_updated(&mut self, incoming_region: Region) {
         let region_id = incoming_region.get_id();
         if let Some(obs_region) = self.regions.get_mut(&region_id) {
-            if obs_region.meta.get_region_epoch() == incoming_region.get_region_epoch() {
+            if obs_region.meta.get_region_epoch().get_version()
+                == incoming_region.get_region_epoch().get_version()
+            {
                 // only peer list change, no need to re-register region
                 obs_region.meta = incoming_region;
                 return;
@@ -545,10 +550,32 @@ where
         }
     }
 
-    fn register_advance_event(&self) {
+    fn register_advance_event(&self, cfg_version: usize) {
+        // Ignore advance event that registered with previous `advance_ts_interval` config
+        if self.cfg_version != cfg_version {
+            return;
+        }
         let regions = self.regions.keys().into_iter().copied().collect();
+        self.advance_worker.advance_ts_for_regions(regions);
         self.advance_worker
-            .register_advance_event(self.cfg.advance_ts_interval.0, regions);
+            .register_next_event(self.cfg.advance_ts_interval.0, self.cfg_version);
+    }
+
+    fn handle_change_config(&mut self, change: ConfigChange) {
+        let prev = format!("{:?}", self.cfg);
+        let prev_advance_ts_interval = self.cfg.advance_ts_interval;
+        self.cfg.update(change);
+        if self.cfg.advance_ts_interval != prev_advance_ts_interval {
+            // Increase the `cfg_version` to reject advance event that registered before
+            self.cfg_version += 1;
+            // Advance `resolved-ts` immediately after `advance_ts_interval` changed
+            self.register_advance_event(self.cfg_version);
+        }
+        info!(
+            "resolved-ts config changed";
+            "prev" => prev,
+            "current" => ?self.cfg,
+        );
     }
 }
 
@@ -566,7 +593,9 @@ pub enum Task<S: Snapshot> {
         observe_id: ObserveID,
         cause: String,
     },
-    RegisterAdvanceEvent,
+    RegisterAdvanceEvent {
+        cfg_version: usize,
+    },
     AdvanceResolvedTs {
         regions: Vec<u64>,
         ts: TimeStamp,
@@ -636,7 +665,9 @@ impl<S: Snapshot> fmt::Debug for Task<S> {
                 .field("observe_id", &observe_id)
                 .field("apply_index", &apply_index)
                 .finish(),
-            Task::RegisterAdvanceEvent => de.field("name", &"register_advance_event").finish(),
+            Task::RegisterAdvanceEvent { .. } => {
+                de.field("name", &"register_advance_event").finish()
+            }
             Task::ChangeConfig { ref change } => de
                 .field("name", &"change_config")
                 .field("change", &change)
@@ -682,16 +713,8 @@ where
                 entries,
                 apply_index,
             } => self.handle_scan_locks(region_id, observe_id, entries, apply_index),
-            Task::RegisterAdvanceEvent => self.register_advance_event(),
-            Task::ChangeConfig { change } => {
-                let prev = format!("{:?}", self.cfg);
-                self.cfg.update(change);
-                info!(
-                    "resolved-ts config changed";
-                    "prev" => prev,
-                    "current" => ?self.cfg,
-                );
-            }
+            Task::RegisterAdvanceEvent { cfg_version } => self.register_advance_event(cfg_version),
+            Task::ChangeConfig { change } => self.handle_change_config(change),
         }
     }
 }
@@ -723,9 +746,8 @@ where
 {
     fn on_timeout(&mut self) {
         let (mut oldest_ts, mut oldest_region, mut zero_ts_count) = (u64::MAX, 0, 0);
-        {
-            let meta = self.store_meta.lock().unwrap();
-            for (region_id, read_progress) in &meta.region_read_progress {
+        self.region_read_progress.with(|registry| {
+            for (region_id, read_progress) in registry {
                 let ts = read_progress.safe_ts();
                 if ts == 0 {
                     zero_ts_count += 1;
@@ -736,7 +758,7 @@ where
                     oldest_region = *region_id;
                 }
             }
-        }
+        });
         let mut lock_heap_size = 0;
         let (mut resolved_count, mut unresolved_count) = (0, 0);
         for observe_region in self.regions.values() {

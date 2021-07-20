@@ -1,7 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use tikv_util::time::Instant;
 
 use futures::{
     channel::mpsc::{
@@ -61,7 +63,20 @@ impl MemoryQuota {
         }
     }
     fn free(&self, bytes: usize) {
-        self.in_use.fetch_sub(bytes, Ordering::Release);
+        let mut in_use_bytes = self.in_use.load(Ordering::Relaxed);
+        loop {
+            // Saturating at the numeric bounds instead of overflowing.
+            let new_in_use_bytes = in_use_bytes - std::cmp::min(bytes, in_use_bytes);
+            match self.in_use.compare_exchange(
+                in_use_bytes,
+                new_in_use_bytes,
+                Ordering::Acquire,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return,
+                Err(current) => in_use_bytes = current,
+            }
+        }
     }
 }
 
@@ -130,20 +145,38 @@ impl Sink {
         if bytes != 0 && !self.memory_quota.alloc(bytes) {
             return Err(SendError::Congested);
         }
-        self.unbounded_sender
-            .unbounded_send((event, bytes))
-            .map_err(SendError::from)
+        match self.unbounded_sender.unbounded_send((event, bytes)) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                // Free quota if send fails.
+                self.memory_quota.free(bytes);
+                Err(SendError::from(e))
+            }
+        }
     }
 
     pub async fn send_all(&mut self, events: Vec<CdcEvent>) -> Result<(), SendError> {
+        // Allocate quota in advance.
+        let mut total_bytes = 0;
+        for event in &events {
+            total_bytes += event.size();
+        }
+        if !self.memory_quota.alloc(total_bytes as _) {
+            return Err(SendError::Congested);
+        }
         for event in events {
             let bytes = event.size() as usize;
-            if !self.memory_quota.alloc(bytes) {
-                return Err(SendError::Congested);
+            if let Err(e) = self.bounded_sender.feed((event, bytes)).await {
+                // Free quota if send fails.
+                self.memory_quota.free(total_bytes as _);
+                return Err(SendError::from(e));
             }
-            self.bounded_sender.feed((event, bytes)).await?;
         }
-        self.bounded_sender.flush().await?;
+        if let Err(e) = self.bounded_sender.flush().await {
+            // Free quota if send fails.
+            self.memory_quota.free(total_bytes as _);
+            return Err(SendError::from(e));
+        }
         Ok(())
     }
 }
@@ -204,14 +237,16 @@ impl Drop for Drain {
         self.unbounded_receiver.close();
         let start = Instant::now();
         let mut drain = Box::pin(async {
+            let memory_quota = self.memory_quota.clone();
             let mut total_bytes = 0;
-            while let Some((_, bytes)) = self.drain().next().await {
+            let mut drain = self.drain();
+            while let Some((_, bytes)) = drain.next().await {
                 total_bytes += bytes;
             }
-            self.memory_quota.free(total_bytes);
+            memory_quota.free(total_bytes);
         });
         block_on(&mut drain);
-        let takes = start.elapsed();
+        let takes = start.saturating_elapsed();
         if takes >= Duration::from_millis(200) {
             warn!("drop Drain too slow"; "takes" => ?takes);
         }
@@ -386,7 +421,7 @@ mod tests {
             let memory_quota = rx.memory_quota.clone();
             assert_eq!(memory_quota.alloc(event.size() as _), false,);
             drop(rx);
-            assert_eq!(memory_quota.alloc(1024), true,);
+            assert_eq!(memory_quota.alloc(1024), true);
         }
         // Make sure memory quota is freed when tx is dropped before rx.
         {
@@ -404,7 +439,25 @@ mod tests {
             assert_eq!(memory_quota.alloc(event.size() as _), false,);
             drop(send);
             drop(rx);
-            assert_eq!(memory_quota.alloc(1024), true,);
+            assert_eq!(memory_quota.alloc(1024), true);
+        }
+        // Make sure sending message to a closed channel does not leak memory quota.
+        {
+            let (mut send, rx) = new_test_cancal(buffer as _, max_pending_bytes as _, force_send);
+            let memory_quota = rx.memory_quota.clone();
+            assert_eq!(memory_quota.in_use(), 0);
+            drop(rx);
+            for _ in 0..max_pending_bytes {
+                send(CdcEvent::Event(e.clone())).unwrap_err();
+            }
+            assert_eq!(memory_quota.in_use(), 0);
+            assert_eq!(memory_quota.alloc(1024), true);
+
+            // Freeing bytes should not cause overflow.
+            memory_quota.free(1024);
+            assert_eq!(memory_quota.in_use(), 0);
+            memory_quota.free(1024);
+            assert_eq!(memory_quota.in_use(), 0);
         }
     }
 }

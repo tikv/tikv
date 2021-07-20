@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use collections::HashSet;
 
-use engine_traits::{name_to_cf, KvEngine, CF_WRITE};
+use engine_traits::{KvEngine, CF_WRITE};
 use file_system::{set_io_type, IOType};
 use futures::executor::{ThreadPool, ThreadPoolBuilder};
 use futures::{TryFutureExt, TryStreamExt};
@@ -23,7 +23,6 @@ use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::*;
 
 use crate::server::CONFIG_ROCKSDB_GAUGE;
-use engine_traits::{SstExt, SstWriterBuilder};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::Callback;
 use sst_importer::send_rpc_response;
@@ -266,7 +265,7 @@ where
                         }
                         file.append(data)?;
                         IMPORT_UPLOAD_CHUNK_BYTES.observe(data.len() as f64);
-                        IMPORT_UPLOAD_CHUNK_DURATION.observe(start.elapsed_secs());
+                        IMPORT_UPLOAD_CHUNK_DURATION.observe(start.saturating_elapsed_secs());
                         Ok(file)
                     })
                     .await?;
@@ -298,16 +297,7 @@ where
             // Records how long the download task waits to be scheduled.
             sst_importer::metrics::IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["queue"])
-                .observe(start.elapsed().as_secs_f64());
-
-            // SST writer must not be opened in gRPC threads, because it may be
-            // blocked for a long time due to IO, especially, when encryption at rest
-            // is enabled, and it leads to gRPC keepalive timeout.
-            let sst_writer = <E as SstExt>::SstWriterBuilder::new()
-                .set_db(&engine)
-                .set_cf(name_to_cf(req.get_sst().get_cf_name()).unwrap())
-                .build(importer.get_path(req.get_sst()).to_str().unwrap())
-                .unwrap();
+                .observe(start.saturating_elapsed().as_secs_f64());
 
             // FIXME: download() should be an async fn, to allow BR to cancel
             // a download task.
@@ -319,7 +309,7 @@ where
                 req.get_name(),
                 req.get_rewrite_rule(),
                 limiter,
-                sst_writer,
+                engine,
             );
             let mut resp = DownloadResponse::default();
             match res {
@@ -465,7 +455,7 @@ where
                     "compact files in range";
                     "start" => start.map(log_wrappers::Value::key),
                     "end" => end.map(log_wrappers::Value::key),
-                    "output_level" => ?output_level, "takes" => ?timer.elapsed()
+                    "output_level" => ?output_level, "takes" => ?timer.saturating_elapsed()
                 ),
                 Err(ref e) => error!(%*e;
                     "compact files in range failed";
@@ -546,7 +536,7 @@ where
                             _ => return Err(Error::InvalidChunk),
                         };
                         writer.write(batch)?;
-                        IMPORT_WRITE_CHUNK_DURATION.observe(start.elapsed_secs());
+                        IMPORT_WRITE_CHUNK_DURATION.observe(start.saturating_elapsed_secs());
                         Ok(writer)
                     })
                     .await?;
