@@ -65,8 +65,10 @@ pub struct ResourceMeteringReporter {
 
     // resource_tag -> ([timestamp_secs], [cpu_time_ms])
     records: HashMap<Vec<u8>, (Vec<u64>, Vec<u32>)>,
+
     // timestamp_secs -> cpu_time_ms
-    others: HashMap<u64, u32>,
+    others_ts: Vec<u64>,
+    others_cpu_time: Vec<u32>,
 
     tmp_group_map: HashMap<Vec<u8>, u32>,
     tmp_top_vec: Vec<u32>,
@@ -82,7 +84,8 @@ impl ResourceMeteringReporter {
             reporting: Arc::new(AtomicBool::new(false)),
             cpu_records_collector: None,
             records: HashMap::default(),
-            others: HashMap::default(),
+            others_ts: Vec::default(),
+            others_cpu_time: Vec::default(),
             tmp_group_map: HashMap::default(),
             tmp_top_vec: Vec::default(),
         }
@@ -158,7 +161,7 @@ impl Runnable for ResourceMeteringReporter {
                 //   +----------+----------+-------+-------+-------+-------+-------+
                 //   |          |   Tag    | tag 3 | tag 2 | tag 5 | tag 4 | tag 1 |
                 //   | Records  +----------+-------+-------+-------+-------+-------+
-                //   |          | CPU time |   90  |   60  |   50  |   30  |   10  |
+                //   |          | CPU Time |   90  |   60  |   50  |   30  |   10  |
                 //   +----------+----------+-------+-------+-------+-------+-------+
                 //   | Threshold           |   0                                   |
                 //   +----------+----------+-------+-------+-------+-------+-------+
@@ -171,7 +174,7 @@ impl Runnable for ResourceMeteringReporter {
                 //   +----------+----------+-------+-------+-------+-------+-------+
                 //   |          |   Tag    | tag 3 | tag 2 | tag 5 | tag 4 | tag 1 |
                 //   | Records  +----------+-------+-------+-------+-------+-------+
-                //   |          | CPU time |   90  |   60  |   50  |   30  |   10  |
+                //   |          | CPU Time |   90  |   60  |   50  |   30  |   10  |
                 //   +----------+----------+-------+-------+-------+-------+-------+
                 //   | Threshold           |   30                      ^           |
                 //   +----------+----------+-------+-------+-------+-------+-------+
@@ -186,18 +189,19 @@ impl Runnable for ResourceMeteringReporter {
                     .unwrap_or(0);
 
                 let timestamp_secs = records.begin_unix_time_secs;
-                let other = self.others.entry(timestamp_secs).or_insert(0);
+                let mut other = 0;
                 for (tag, ms) in tmp_group_map.drain() {
                     if ms > threshold {
                         let (ts, cpu) = self.records.entry(tag).or_insert((vec![], vec![]));
                         ts.push(timestamp_secs);
                         cpu.push(ms);
                     } else {
-                        *other += ms;
+                        other += ms;
                     }
                 }
-                if *other == 0 {
-                    self.others.remove(&timestamp_secs);
+                if other > 0 {
+                    self.others_ts.push(timestamp_secs);
+                    self.others_cpu_time.push(other);
                 }
             }
         }
@@ -212,12 +216,13 @@ impl Runnable for ResourceMeteringReporter {
 impl RunnableWithTimer for ResourceMeteringReporter {
     fn on_timeout(&mut self) {
         if self.records.is_empty() {
-            assert!(self.others.is_empty());
+            assert!(self.others_ts.is_empty());
             return;
         }
 
         let records = std::mem::take(&mut self.records);
-        let others = std::mem::take(&mut self.others);
+        let others_ts = std::mem::take(&mut self.others_ts);
+        let others_cpu_time = std::mem::take(&mut self.others_cpu_time);
 
         if self.reporting.load(SeqCst) {
             return;
@@ -243,12 +248,10 @@ impl RunnableWithTimer for ResourceMeteringReporter {
                         }
 
                         // others
-                        if !others.is_empty() {
-                            let timestamp_list = others.keys().cloned().collect::<Vec<_>>();
-                            let cpu_time_ms_list = others.values().cloned().collect::<Vec<_>>();
+                        if !others_ts.is_empty() {
                             let mut req = CpuTimeRecord::default();
-                            req.set_record_list_timestamp_sec(timestamp_list);
-                            req.set_record_list_cpu_time_ms(cpu_time_ms_list);
+                            req.set_record_list_timestamp_sec(others_ts);
+                            req.set_record_list_cpu_time_ms(others_cpu_time);
                             if tx.send((req, WriteFlags::default())).await.is_err() {
                                 return;
                             }
