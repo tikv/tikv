@@ -90,7 +90,7 @@ impl RocksTableProperties {
 }
 
 #[repr(transparent)]
-pub struct RocksUserCollectedProperties(rc::UserCollectedProperties);
+pub struct RocksUserCollectedProperties(pub rc::UserCollectedProperties);
 
 impl RocksUserCollectedProperties {
     pub fn get(&self, index: &[u8]) -> Option<&[u8]> {
@@ -107,6 +107,13 @@ impl RocksUserCollectedProperties {
 }
 
 impl DecodeProperties for RocksUserCollectedProperties {
+    fn decode(&self, k: &str) -> tikv_util::codec::Result<&[u8]> {
+        self.get(k.as_bytes())
+            .ok_or(tikv_util::codec::Error::KeyNotFound)
+    }
+}
+
+impl DecodeProperties for rc::UserCollectedProperties {
     fn decode(&self, k: &str) -> tikv_util::codec::Result<&[u8]> {
         self.get(k.as_bytes())
             .ok_or(tikv_util::codec::Error::KeyNotFound)
