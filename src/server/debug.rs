@@ -778,16 +778,16 @@ fn dump_mvcc_properties(db: &Arc<DB>, start: &[u8], end: &[u8]) -> Result<Vec<(S
     let mut num_entries = 0; // number of Rocksdb K/V entries.
 
     let collection = box_try!(db.c().get_range_properties_cf(CF_WRITE, &start, &end));
-    let num_files = collection.len();
+    let num_files = collection.0.len();
 
     let mut mvcc_properties = MvccProperties::new();
-    for (_, v) in collection.iter() {
+    for (_, v) in collection.0.iter() {
         num_entries += v.num_entries();
-        let mvcc = box_try!(RocksMvccProperties::decode(&v.user_collected_properties().0));
+        let mvcc = box_try!(RocksMvccProperties::decode(&v.user_collected_properties()));
         mvcc_properties.add(&mvcc);
     }
 
-    let sst_files = collection
+    let sst_files = collection.0
         .iter()
         .map(|(k, _)| {
             Path::new(&*k)
