@@ -73,8 +73,7 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
 }
 
 impl<E: KvEngine> AdvanceTsWorker<E> {
-    pub fn register_advance_event(&self, advance_ts_interval: Duration, regions: Vec<u64>) {
-        let timeout = self.timer.delay(advance_ts_interval);
+    pub fn advance_ts_for_regions(&self, regions: Vec<u64>) {
         let pd_client = self.pd_client.clone();
         let scheduler = self.scheduler.clone();
         let cm: ConcurrencyManager = self.concurrency_manager.clone();
@@ -85,7 +84,6 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
         let region_read_progress = self.region_read_progress.clone();
 
         let fut = async move {
-            let _ = timeout.compat().await;
             // Ignore get tso errors since we will retry every `advance_ts_interval`.
             let mut min_ts = pd_client.get_tso().await.unwrap_or_default();
 
@@ -98,10 +96,6 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
                 if min_mem_lock_ts < min_ts {
                     min_ts = min_mem_lock_ts;
                 }
-            }
-
-            if let Err(e) = scheduler.schedule(Task::RegisterAdvanceEvent) {
-                info!("failed to schedule register advance event"; "err" => ?e);
             }
 
             let regions = Self::region_resolved_ts_store(
@@ -123,6 +117,18 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
                 }) {
                     info!("failed to schedule advance event"; "err" => ?e);
                 }
+            }
+        };
+        self.worker.spawn(fut);
+    }
+
+    pub fn register_next_event(&self, advance_ts_interval: Duration, cfg_version: usize) {
+        let scheduler = self.scheduler.clone();
+        let timeout = self.timer.delay(advance_ts_interval);
+        let fut = async move {
+            let _ = timeout.compat().await;
+            if let Err(e) = scheduler.schedule(Task::RegisterAdvanceEvent { cfg_version }) {
+                info!("failed to schedule register advance event"; "err" => ?e);
             }
         };
         self.worker.spawn(fut);
