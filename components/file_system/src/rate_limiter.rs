@@ -255,7 +255,7 @@ macro_rules! request_imp {
                         / cached_bytes_per_epoch) as u32
             } else {
                 // `(a-1)/b` is equivalent to `roundup(a.saturating_sub(b)/b)`.
-                locked.next_refill_time - now
+                locked.next_refill_time.saturating_duration_since(now)
                     + DEFAULT_REFILL_PERIOD
                         * ((locked.pending_bytes[priority_idx] - 1) / cached_bytes_per_epoch) as u32
             };
@@ -346,8 +346,8 @@ impl PriorityBasedIORateLimiter {
             return;
         }
         debug_assert!(now >= locked.next_refill_time);
-        let skipped_epochs =
-            (now - locked.next_refill_time).as_secs_f32() / DEFAULT_REFILL_PERIOD.as_secs_f32();
+        let skipped_epochs = (now.saturating_duration_since(locked.next_refill_time)).as_secs_f32()
+            / DEFAULT_REFILL_PERIOD.as_secs_f32();
         locked.next_refill_time = now + DEFAULT_REFILL_PERIOD;
 
         debug_assert!(
@@ -675,7 +675,7 @@ mod tests {
                 std::thread::sleep(duration);
             }
             let end = Instant::now();
-            end.duration_since(begin)
+            end.saturating_duration_since(begin)
         };
         approximate_eq!(
             stats.fetch(IOType::ForegroundWrite, IOOp::Write) as f64,
@@ -746,7 +746,7 @@ mod tests {
                 std::thread::sleep(Duration::from_secs(2));
             }
             let end = Instant::now();
-            end.duration_since(begin)
+            end.saturating_duration_since(begin)
         };
         approximate_eq!(
             stats.fetch(IOType::Compaction, IOOp::Write) as f64,
@@ -801,7 +801,7 @@ mod tests {
             std::thread::sleep(Duration::from_secs(2));
         }
         let end = Instant::now();
-        let duration = end.duration_since(begin);
+        let duration = end.saturating_duration_since(begin);
         let write_bytes = stats.fetch(IOType::ForegroundWrite, IOOp::Write);
         approximate_eq!(
             write_bytes as f64,
