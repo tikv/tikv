@@ -576,7 +576,7 @@ where
                 PeerMsg::Start => self.start(),
                 PeerMsg::HeartbeatPd => {
                     if self.fsm.peer.is_leader() {
-                        self.register_pd_heartbeat_tick()
+                        self.on_pd_heartbeat_tick();
                     }
                 }
                 PeerMsg::Noop => {}
