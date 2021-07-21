@@ -824,7 +824,15 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 let released = if commit_ts.is_zero() {
                     txn.rollback(current_key.clone())?
                 } else if commit_ts > current_lock.ts {
-                    txn.commit(current_key.clone(), commit_ts)?
+                    match txn.commit(current_key.clone(), commit_ts) {
+                        Ok(res) => res,
+                        Err(e) => {
+                            info!("[for debug] commit error for lock";
+                            "key"  => ?current_key,
+                            "lock" => ?current_lock);
+                            return Err(e.into());
+                        }
+                    }
                 } else {
                     return Err(Error::from(ErrorInner::InvalidTxnTso {
                         start_ts: current_lock.ts,
