@@ -336,9 +336,6 @@
 ## Interval to GC unnecessary Raft log.
 # raft-log-gc-tick-interval = "10s"
 
-## Threshold to GC stale Raft log, must be >= 1.
-# raft-log-gc-threshold = 50
-
 ## When the entry count exceeds this value, GC will be forced to trigger.
 # raft-log-gc-count-limit = 73728
 

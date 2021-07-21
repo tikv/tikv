@@ -63,6 +63,8 @@ pub struct Config {
     // Interval to gc unnecessary raft log (s).
     pub raft_log_gc_tick_interval: ReadableDuration,
     // A threshold to gc stale raft log, must >= 1.
+    // Note: this config is not needed after #8668, but some tests rely on it.
+    #[doc(hidden)]
     pub raft_log_gc_threshold: u64,
     // When entry count exceed this value, gc will be forced trigger.
     pub raft_log_gc_count_limit: u64,
@@ -208,7 +210,7 @@ impl Default for Config {
             raft_max_inflight_msgs: 256,
             raft_entry_max_size: ReadableSize::mb(8),
             raft_log_gc_tick_interval: ReadableDuration::secs(10),
-            raft_log_gc_threshold: 50,
+            raft_log_gc_threshold: 1,
             // Assume the average size of entries is 1k.
             raft_log_gc_count_limit: split_size * 3 / 4 / ReadableSize::kb(1),
             raft_log_gc_size_limit: split_size * 3 / 4,
