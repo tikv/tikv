@@ -345,6 +345,11 @@ pub enum CasualMessage<EK: KvEngine> {
         region: metapb::Region,
         leader: metapb::Peer,
     },
+
+    /// For drop raft messages at an upper layer.
+    RejectRaftAppend {
+        peer_id: u64,
+    },
 }
 
 impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
@@ -397,6 +402,9 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
             CasualMessage::ForceCompactRaftLogs => write!(fmt, "ForceCompactRaftLogs"),
             CasualMessage::AccessPeer(_) => write!(fmt, "AccessPeer"),
             CasualMessage::QueryRegionLeaderResp { .. } => write!(fmt, "QueryRegionLeaderResp"),
+            CasualMessage::RejectRaftAppend { peer_id } => {
+                write!(fmt, "RejectRaftAppend(peer_id={})", peer_id)
+            }
         }
     }
 }
@@ -509,11 +517,13 @@ where
     Start {
         store: metapb::Store,
     },
+
+    /// Asks the store to update replication mode.
+    UpdateReplicationMode(ReplicationStatus),
+
     /// Message only used for test.
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
-    /// Asks the store to update replication mode.
-    UpdateReplicationMode(ReplicationStatus),
 }
 
 impl<EK> fmt::Debug for StoreMsg<EK>

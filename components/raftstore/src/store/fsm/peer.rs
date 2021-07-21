@@ -700,6 +700,17 @@ where
                     self.fsm.peer.send_wake_up_message(&mut self.ctx, &leader);
                 }
             }
+            CasualMessage::RejectRaftAppend { peer_id } => {
+                let mut msg = raft::eraftpb::Message::new();
+                msg.msg_type = MessageType::MsgUnreachable;
+                msg.to = peer_id;
+                msg.from = self.fsm.peer.peer_id();
+                self.fsm.peer.send(
+                    &mut self.ctx.trans,
+                    vec![msg],
+                    &mut self.ctx.raft_metrics.send_message,
+                );
+            }
         }
     }
 
@@ -3606,7 +3617,10 @@ where
         if needs_evict_entry_cache() {
             self.fsm.peer.mut_store().evict_cache(true);
         }
-        if memory_usage_reaches_high_water() && !self.fsm.peer.get_store().cache_is_empty() {
+        let mut _usage = 0;
+        if memory_usage_reaches_high_water(&mut _usage)
+            && !self.fsm.peer.get_store().cache_is_empty()
+        {
             self.register_entry_cache_evict_tick();
         }
     }

@@ -23,6 +23,7 @@ use crate::storage::{
     SecondaryLocksStatus, Storage, TxnStatus,
 };
 use crate::{forward_duplex, forward_unary};
+use fail::fail_point;
 use futures::compat::Future01CompatExt;
 use futures::future::{self, Future, FutureExt, TryFutureExt};
 use futures::sink::SinkExt;
@@ -38,12 +39,15 @@ use kvproto::mpp::*;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
+use raft::eraftpb::MessageType;
 use raftstore::router::RaftStoreRouter;
+use raftstore::store::memory::{MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES};
 use raftstore::store::CheckLeaderTask;
 use raftstore::store::{Callback, CasualMessage};
 use raftstore::{DiscardReason, Error as RaftStoreError};
 use tikv_util::future::{paired_future_callback, poll_future_notify};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
+use tikv_util::sys::memory_usage_reaches_high_water;
 use tikv_util::worker::Scheduler;
 use txn_types::{self, Key};
 
@@ -122,6 +126,33 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Service<
             enable_req_batch,
             grpc_thread_load,
             proxy,
+        }
+    }
+
+    fn handle_raft_message(
+        store_id: u64,
+        ch: &T,
+        msg: RaftMessage,
+        reject: bool,
+    ) -> ServerResult<()> {
+        let to_store_id = msg.get_to_peer().get_store_id();
+        if to_store_id != store_id {
+            return Err(Error::from(RaftStoreError::StoreNotMatch {
+                to_store_id,
+                my_store_id: store_id,
+            }));
+        }
+        if reject && msg.get_message().get_msg_type() == MessageType::MsgAppend {
+            let id = msg.get_region_id();
+            let peer_id = msg.get_message().get_from();
+            let m = CasualMessage::RejectRaftAppend { peer_id };
+            let _ = ch.send_casual_msg(id, m);
+            return Ok(());
+        }
+        match ch.send_raft_msg(msg) {
+            Ok(()) => Ok(()),
+            Err(RaftStoreError::RegionNotFound(_)) => Ok(()),
+            Err(e) => Err(Error::from(e)),
         }
     }
 }
@@ -624,20 +655,18 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
     ) {
         let store_id = self.store_id;
         let ch = self.ch.clone();
-        ctx.spawn(async move {
-            let res = stream.map_err(Error::from).try_for_each(move |msg| {
+
+        let res = async move {
+            let mut stream = stream.map_err(Error::from);
+            while let Some(msg) = stream.try_next().await? {
                 RAFT_MESSAGE_RECV_COUNTER.inc();
-                let to_store_id = msg.get_to_peer().get_store_id();
-                if to_store_id != store_id {
-                    future::err(Error::from(RaftStoreError::StoreNotMatch {
-                        to_store_id,
-                        my_store_id: store_id,
-                    }))
-                } else {
-                    let ret = ch.send_raft_msg(msg).map_err(Error::from);
-                    future::ready(ret)
-                }
-            });
+                let reject = needs_reject_raft_append();
+                Self::handle_raft_message(store_id, &ch, msg, reject)?;
+            }
+            Ok::<(), Error>(())
+        };
+
+        ctx.spawn(async move {
             let status = match res.await {
                 Err(e) => {
                     let msg = format!("{:?}", e);
@@ -662,25 +691,22 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
         info!("batch_raft RPC is called, new gRPC stream established");
         let store_id = self.store_id;
         let ch = self.ch.clone();
-        ctx.spawn(async move {
-            let res = stream.map_err(Error::from).try_for_each(move |mut msgs| {
-                let len = msgs.get_msgs().len();
+
+        let res = async move {
+            let mut stream = stream.map_err(Error::from);
+            while let Some(mut batch_msg) = stream.try_next().await? {
+                let len = batch_msg.get_msgs().len();
                 RAFT_MESSAGE_RECV_COUNTER.inc_by(len as u64);
                 RAFT_MESSAGE_BATCH_SIZE.observe(len as f64);
-                for msg in msgs.take_msgs().into_iter() {
-                    let to_store_id = msg.get_to_peer().get_store_id();
-                    if to_store_id != store_id {
-                        return future::err(Error::from(RaftStoreError::StoreNotMatch {
-                            to_store_id,
-                            my_store_id: store_id,
-                        }));
-                    }
-                    if let Err(e) = ch.send_raft_msg(msg) {
-                        return future::err(Error::from(e));
-                    }
+                let reject = needs_reject_raft_append();
+                for msg in batch_msg.take_msgs().into_iter() {
+                    Self::handle_raft_message(store_id, &ch, msg, reject)?;
                 }
-                future::ok(())
-            });
+            }
+            Ok::<(), Error>(())
+        };
+
+        ctx.spawn(async move {
             let status = match res.await {
                 Err(e) => {
                     let msg = format!("{:?}", e);
@@ -1982,6 +2008,22 @@ fn raftstore_error_to_region_error(e: RaftStoreError, region_id: u64) -> RegionE
         return region_error;
     }
     e.into()
+}
+
+fn needs_reject_raft_append() -> bool {
+    fail_point!("needs_reject_raft_append", |_| true);
+    let mut usage = 0;
+    if memory_usage_reaches_high_water(&mut usage) {
+        let raft_msg_usage = (MEMTRACE_RAFT_ENTRIES.sum() + MEMTRACE_RAFT_MESSAGES.sum()) as u64;
+        if raft_msg_usage > usage / 5 {
+            // For different system memory capacity, `MsgAppend`s are rejected when:
+            // * system=8G,  memory_usage_limit=6G,  reject_at=1.2G
+            // * system=16G, memory_usage_limit=12G, reject_at=2.4G
+            // * system=32G, memory_usage_limit=24G, reject_at=4.8G
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]

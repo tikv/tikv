@@ -2,6 +2,9 @@
 
 use raft::eraftpb::MessageType;
 use raftstore::store::MEMTRACE_ENTRY_CACHE;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use test_raftstore::*;
 use tikv_util::config::ReadableDuration;
 
@@ -66,4 +69,61 @@ fn test_evict_entry_cache() {
     fail::cfg("memory_usage_reaches_high_water", "off").unwrap();
     fail::cfg("needs_evict_entry_cache", "off").unwrap();
     fail::cfg("on_entry_cache_evict_tick", "off").unwrap();
+}
+
+// Test Raft leader will pause a follower if it meets memory full.
+#[test]
+fn test_memory_full_cause_of_raft_message() {
+    let mut cluster = new_server_cluster(0, 2);
+    let pd_client = cluster.pd_client.clone();
+    cluster.pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+    pd_client.must_add_peer(r1, new_learner_peer(2, 2));
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    let append_to_2 = Arc::new(AtomicUsize::new(0));
+    let append_to_2_ = append_to_2.clone();
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(r1, 2)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend)
+            .allow(usize::MAX)
+            .set_msg_callback(Arc::new(move |_m| {
+                append_to_2_.fetch_add(1, Ordering::SeqCst);
+            })),
+    ));
+
+    let response_to_1 = Arc::new(AtomicUsize::new(0));
+    let response_to_1_ = response_to_1.clone();
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(r1, 1)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgUnreachable)
+            .allow(usize::MAX)
+            .set_msg_callback(Arc::new(move |_m| {
+                response_to_1_.fetch_add(1, Ordering::SeqCst);
+            })),
+    ));
+
+    // A MsgHeartbeatResponse will trigger one MsgAppend.
+    fail::cfg("needs_reject_raft_append", "return").unwrap();
+    (0..10).for_each(|_| cluster.must_put(b"k1", b"v1"));
+    let now = Instant::now();
+    while now.elapsed() < Duration::from_secs(2) {
+        sleep_ms(100);
+        let appends = append_to_2.load(Ordering::SeqCst);
+        if appends < 10 {
+            continue;
+        }
+        let responses = response_to_1.load(Ordering::SeqCst);
+        if responses < 10 {
+            continue;
+        }
+        fail::cfg("needs_delay_raft_append", "off").unwrap();
+        return;
+    }
+    panic!("must have 10 MsgAppend and 10 MsgUnreachable");
 }
