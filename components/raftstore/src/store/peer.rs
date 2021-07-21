@@ -662,8 +662,7 @@ where
             unpersisted_message_count: 0,
             persisted_number: 0,
             snap_ctx: None,
-            async_writer_id: seahash::hash(region.get_id().as_ne_bytes()) as usize
-                % cfg.store_io_pool_size,
+            async_writer_id: rand::random::<usize>() % cfg.store_io_pool_size,
         };
 
         // If this region has only one peer and I am the one, campaign directly.

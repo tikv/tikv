@@ -277,7 +277,7 @@ fn test_batch_write() {
 
     t.worker.wb.add_write_task(task_3);
 
-    t.worker.sync_write();
+    t.worker.write_to_db();
 
     let snapshot = kv_engine.snapshot();
     assert_eq!(snapshot.get_value(b"kv_k1").unwrap().unwrap(), b"kv_v1");

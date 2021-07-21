@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::{Instant, Duration};
+use std::time::{Duration, Instant};
 
 use crate::store::config::Config;
 use crate::store::fsm::RaftRouter;
@@ -259,7 +259,7 @@ where
         self.state_size + self.raft_wb.persist_size()
     }
 
-    fn before_write_to_db(&mut self, now: Instant) {
+    fn before_write_to_db(&mut self) {
         // Put raft state to raft writebatch
         let raft_states = std::mem::take(&mut self.raft_states);
         for (region_id, state) in raft_states {
@@ -267,6 +267,7 @@ where
         }
         self.state_size = 0;
         if self.waterfall_metrics {
+            let now = Instant::now();
             for task in &self.tasks {
                 for ts in &task.proposal_times {
                     self.metrics.to_write.observe(duration_to_sec(now - *ts));
@@ -275,8 +276,9 @@ where
         }
     }
 
-    fn after_write_to_kv_db(&mut self, now: Instant) {
+    fn after_write_to_kv_db(&mut self) {
         if self.waterfall_metrics {
+            let now = Instant::now();
             for task in &self.tasks {
                 for ts in &task.proposal_times {
                     self.metrics.kvdb_end.observe(duration_to_sec(now - *ts));
@@ -285,8 +287,9 @@ where
         }
     }
 
-    fn after_write_to_db(&mut self, now: Instant) {
+    fn after_write_to_db(&mut self) {
         if self.waterfall_metrics {
+            let now = Instant::now();
             for task in &self.tasks {
                 for ts in &task.proposal_times {
                     self.metrics.write_end.observe(duration_to_sec(now - *ts))
@@ -437,21 +440,20 @@ where
 
             STORE_WRITE_TRIGGER_SIZE_HISTOGRAM.observe(self.wb.get_raft_size() as f64);
 
-            self.sync_write();
+            self.write_to_db();
 
             STORE_WRITE_LOOP_DURATION_HISTOGRAM
                 .observe(duration_to_sec(handle_begin.elapsed()) as f64);
         }
     }
 
-    fn sync_write(&mut self) {
-        let mut now = Instant::now();
-        self.wb.before_write_to_db(now);
+    fn write_to_db(&mut self) {
+        let now = Instant::now();
+        self.wb.before_write_to_db();
 
         fail_point!("raft_before_save");
 
         if !self.wb.kv_wb.is_empty() {
-            let now = Instant::now();
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
             self.wb.kv_wb.write_opt(&write_opts).unwrap_or_else(|e| {
@@ -464,8 +466,7 @@ where
             STORE_WRITE_KVDB_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()) as f64);
         }
 
-        now = Instant::now();
-        self.wb.after_write_to_kv_db(now);
+        self.wb.after_write_to_kv_db();
 
         fail_point!("raft_between_save");
 
@@ -484,8 +485,7 @@ where
             STORE_WRITE_RAFTDB_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()) as f64);
         }
 
-        now = Instant::now();
-        self.wb.after_write_to_db(now);
+        self.wb.after_write_to_db();
 
         self.wb.flush_metrics();
 
