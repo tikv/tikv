@@ -1,5 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
-use crate::{new_event_feed, TestSuite};
+use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
 use futures::executor::block_on;
 use futures::sink::SinkExt;
 use grpcio::WriteFlags;
@@ -128,7 +128,7 @@ fn test_delayed_change_cmd() {
     configure_for_lease_read(&mut cluster, Some(50), Some(20));
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(100);
     cluster.pd_client.disable_default_operator();
-    let mut suite = TestSuite::with_cluster(3, cluster);
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
     suite.cluster.must_put(b"k1", b"v1");
     let region = suite.cluster.pd_client.get_region(&[]).unwrap();
     let leader = new_peer(1, 1);
