@@ -3570,6 +3570,11 @@ where
     fn get_priority(&self) -> Priority {
         self.delegate.priority
     }
+
+    #[inline]
+    fn region_id(&self) -> u64 {
+        self.delegate.region.get_id()
+    }
 }
 
 impl<EK> Drop for ApplyFsm<EK>

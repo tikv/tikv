@@ -510,6 +510,11 @@ where
     {
         self.mailbox.take()
     }
+
+    #[inline]
+    fn region_id(&self) -> u64 {
+        self.peer.region_id
+    }
 }
 
 pub struct PeerFsmDelegate<'a, EK, ER, T: 'static>
