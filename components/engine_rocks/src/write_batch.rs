@@ -15,7 +15,7 @@ impl WriteBatchExt for RocksEngine {
     type WriteBatch = RocksWriteBatch;
     type WriteBatchVec = RocksWriteBatchVec;
 
-    const WRITE_BATCH_MAX_KEYS: usize = 256;
+    const WRITE_BATCH_MAX_KEYS: usize = 2048;
 
     fn support_write_batch_vec(&self) -> bool {
         let options = self.as_inner().get_db_options();
