@@ -158,7 +158,7 @@ impl Runnable for ResourceMeteringReporter {
                     let kth = self.find_top_k[self.config.max_resource_groups];
                     let others = &mut self.others;
                     self.records
-                        .drain_filter(|_, (_, _, total)| *total < kth)
+                        .drain_filter(|_, (_, _, total)| *total <= kth)
                         .for_each(|(_, (secs_list, cpu_time_list, _))| {
                             secs_list
                                 .into_iter()
@@ -212,13 +212,15 @@ impl RunnableWithTimer for ResourceMeteringReporter {
                         }
 
                         // others
-                        let timestamp_list = others.keys().cloned().collect::<Vec<_>>();
-                        let cpu_time_ms_list = others.values().cloned().collect::<Vec<_>>();
-                        let mut req = CpuTimeRecord::default();
-                        req.set_record_list_timestamp_sec(timestamp_list);
-                        req.set_record_list_cpu_time_ms(cpu_time_ms_list);
-                        if tx.send((req, WriteFlags::default())).await.is_err() {
-                            return;
+                        if !others.is_empty() {
+                            let timestamp_list = others.keys().cloned().collect::<Vec<_>>();
+                            let cpu_time_ms_list = others.values().cloned().collect::<Vec<_>>();
+                            let mut req = CpuTimeRecord::default();
+                            req.set_record_list_timestamp_sec(timestamp_list);
+                            req.set_record_list_cpu_time_ms(cpu_time_ms_list);
+                            if tx.send((req, WriteFlags::default())).await.is_err() {
+                                return;
+                            }
                         }
 
                         if tx.close().await.is_err() {
