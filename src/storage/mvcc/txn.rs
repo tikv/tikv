@@ -709,6 +709,7 @@ pub(crate) mod tests {
             lock_ttl: 0,
             min_commit_ts: TimeStamp::default(),
             need_old_value: false,
+            retry_request: false,
         }
     }
 
