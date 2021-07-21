@@ -2543,7 +2543,7 @@ fn run_sst_dump_command(cmd: &ArgMatches<'_>, cfg: &TiKvConfig) {
     };
     args.insert(0, "sst_dump".to_owned());
     let opts = cfg.rocksdb.build_opt();
-    engine::rocks::run_sst_dump_tool(&args, &opts);
+    engine_rocks::raw::run_sst_dump_tool(&args, &opts);
 }
 
 fn print_bad_ssts(db: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &TiKvConfig) {
@@ -2557,7 +2557,8 @@ fn print_bad_ssts(db: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &
     let mut stderr = BufferRedirect::stderr().unwrap();
     let stdout = BufferRedirect::stdout().unwrap();
     let opts = cfg.rocksdb.build_opt();
-    match run_and_wait_child_process(|| engine::rocks::run_sst_dump_tool(&args, &opts)).unwrap() {
+    match run_and_wait_child_process(|| engine_rocks::raw::run_sst_dump_tool(&args, &opts)).unwrap()
+    {
         0 => {}
         status => {
             let mut err = String::new();
@@ -2571,7 +2572,7 @@ fn print_bad_ssts(db: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &
     drop(stdout);
     let mut buffer = Vec::new();
     stderr_buf.read_to_end(&mut buffer).unwrap();
-    let mut corruptions = unsafe { String::from_utf8_unchecked(buffer) };
+    let corruptions = unsafe { String::from_utf8_unchecked(buffer) };
 
     for line in corruptions.lines() {
         println!("--------------------------------------------------------");
@@ -2599,9 +2600,10 @@ fn print_bad_ssts(db: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &
             args1.push(format!("--manifest={}", manifest_path));
         }
 
-        let mut stdout = BufferRedirect::stdout().unwrap();
-        let mut stderr = BufferRedirect::stderr().unwrap();
-        match run_and_wait_child_process(|| engine::rocks::run_ldb_tool(&args1, &opts)).unwrap() {
+        let stdout = BufferRedirect::stdout().unwrap();
+        let stderr = BufferRedirect::stderr().unwrap();
+        match run_and_wait_child_process(|| engine_rocks::raw::run_ldb_tool(&args1, &opts)).unwrap()
+        {
             0 => {}
             status => {
                 let mut err = String::new();
