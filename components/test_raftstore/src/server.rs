@@ -59,7 +59,7 @@ use tikv::{
 };
 use tikv_util::config::VersionTrack;
 use tikv_util::time::ThreadReadId;
-use tikv_util::worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker};
+use tikv_util::worker::{Builder as WorkerBuilder, LazyWorker};
 use tikv_util::HandyRwLock;
 use txn_types::TxnExtraScheduler;
 
@@ -249,7 +249,7 @@ impl Simulator for ServerCluster {
         }
 
         // Create storage.
-        let pd_worker = FutureWorker::new("test-pd-worker");
+        let pd_worker = LazyWorker::new("test-pd-worker");
         let pd_sender = pd_worker.scheduler();
         let storage_read_pool = ReadPool::from(storage::build_read_pool(
             &tikv::config::StorageReadPoolConfig::default_for_test(),
