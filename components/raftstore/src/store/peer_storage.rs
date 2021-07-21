@@ -965,6 +965,15 @@ where
         self.region = region;
     }
 
+    pub fn peer_state(&self) -> Option<PeerState> {
+        let rid = self.region.id;
+        self.engines
+            .kv
+            .get_msg_cf(CF_RAFT, &keys::region_state_key(rid))
+            .unwrap()
+            .map(|s: RegionLocalState| s.get_state())
+    }
+
     pub fn raw_snapshot(&self) -> EK::Snapshot {
         self.engines.kv.snapshot()
     }
