@@ -67,6 +67,7 @@ use tikv_util::{
     check_environment_variables,
     config::ensure_dir_exist,
     sys::sys_quota::SysQuota,
+    thread_group::GroupProperties,
     time::Monitor,
     worker::{FutureWorker, Worker},
 };
@@ -124,6 +125,7 @@ struct TiKVServer {
     encryption_key_manager: Option<Arc<DataKeyManager>>,
     engines: Option<Engines>,
     servers: Option<Servers>,
+    status_server: Option<Box<dyn Stop>>,
     region_info_accessor: RegionInfoAccessor,
     coprocessor_host: Option<CoprocessorHost>,
     to_stop: Vec<Box<dyn Stop>>,
@@ -148,6 +150,7 @@ struct Servers {
 
 impl TiKVServer {
     fn init(mut config: TiKvConfig) -> TiKVServer {
+        tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
         // It is okay use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only
         // used during startup process.
@@ -187,6 +190,7 @@ impl TiKVServer {
             encryption_key_manager: None,
             engines: None,
             servers: None,
+            status_server: None,
             region_info_accessor,
             coprocessor_host,
             to_stop: vec![Box::new(resolve_worker)],
@@ -656,9 +660,13 @@ impl TiKVServer {
         }
 
         // The `DebugService` and `DiagnosticsService` will share the same thread pool
+        let props = tikv_util::thread_group::current_properties();
         let pool = Builder::new()
             .name_prefix(thd_name!("debugger"))
             .pool_size(1)
+            .after_start(move || {
+                tikv_util::thread_group::set_properties(props.clone());
+            })
             .create();
 
         // Debug service.
@@ -813,12 +821,16 @@ impl TiKVServer {
             ) {
                 error!(%e; "failed to bind addr for status service");
             } else {
-                self.to_stop.push(status_server);
+                self.status_server = Some(status_server);
             }
         }
     }
 
-    fn stop(self) {
+    fn stop(mut self) {
+        tikv_util::thread_group::mark_shutdown();
+        if let Some(status_server) = self.status_server.take() {
+            status_server.stop();
+        }
         let mut servers = self.servers.unwrap();
         servers
             .server

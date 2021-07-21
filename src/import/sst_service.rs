@@ -68,9 +68,13 @@ where
         importer: Arc<SSTImporter>,
         security_mgr: Arc<SecurityManager>,
     ) -> ImportSSTService<Router> {
+        let props = tikv_util::thread_group::current_properties();
         let threads = ThreadPoolBuilder::new()
             .pool_size(cfg.num_threads)
             .name_prefix("sst-importer")
+            .after_start(move |_| {
+                tikv_util::thread_group::set_properties(props.clone());
+            })
             .create()
             .unwrap();
         ImportSSTService {
@@ -173,7 +177,7 @@ where
                         }
                         file.append(data)?;
                         IMPORT_UPLOAD_CHUNK_BYTES.observe(data.len() as f64);
-                        IMPORT_UPLOAD_CHUNK_DURATION.observe(start.elapsed_secs());
+                        IMPORT_UPLOAD_CHUNK_DURATION.observe(start.saturating_elapsed_secs());
                         Ok(file)
                     })
                     .await?;
@@ -208,7 +212,7 @@ where
             // Records how long the download task waits to be scheduled.
             sst_importer::metrics::IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["queue"])
-                .observe(start.elapsed().as_secs_f64());
+                .observe(start.saturating_elapsed().as_secs_f64());
             // SST writer must not be opened in gRPC threads, because it may be
             // blocked for a long time due to IO, especially, when encryption at rest
             // is enabled, and it leads to gRPC keepalive timeout.
@@ -395,7 +399,7 @@ where
                     "compact files in range";
                     "start" => start.map(log_wrappers::Value::key),
                     "end" => end.map(log_wrappers::Value::key),
-                    "output_level" => ?output_level, "takes" => ?timer.elapsed()
+                    "output_level" => ?output_level, "takes" => ?timer.saturating_elapsed()
                 ),
                 Err(ref e) => error!(
                     "compact files in range failed";
@@ -483,7 +487,7 @@ where
                             _ => return Err(Error::InvalidChunk),
                         };
                         writer.write(batch)?;
-                        IMPORT_WRITE_CHUNK_DURATION.observe(start.elapsed_secs());
+                        IMPORT_WRITE_CHUNK_DURATION.observe(start.saturating_elapsed_secs());
                         Ok(writer)
                     })
                     .await?;

@@ -110,7 +110,7 @@ where
         m.borrow_mut()
             .local_sched_processing_read_histogram_vec
             .with_label_values(&[cmd])
-            .observe(now.elapsed_secs());
+            .observe(now.saturating_elapsed_secs());
         ret
     })
 }

@@ -298,7 +298,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             lock_mgr,
         });
 
-        slow_log!(t.elapsed(), "initialized the transaction scheduler");
+        slow_log!(
+            t.saturating_elapsed(),
+            "initialized the transaction scheduler"
+        );
         Scheduler {
             engine: Some(engine),
             inner,

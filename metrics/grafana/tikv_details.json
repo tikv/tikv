@@ -3803,7 +3803,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "99% gRPC messge duration",
+          "title": "99% gRPC message duration",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -3898,7 +3898,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Average gRPC messge duration",
+          "title": "Average gRPC message duration",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -6030,7 +6030,12 @@
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
-          "seriesOverrides": [],
+          "seriesOverrides": [
+            {
+              "alias": "pending",
+              "yaxis": 2
+            }
+          ],
           "spaceLength": 10,
           "stack": false,
           "steppedLine": false,
@@ -6043,6 +6048,13 @@
               "metric": "",
               "refId": "A",
               "step": 4
+            },
+            {
+              "refId": "B",
+              "expr": "sum(tikv_pd_pending_heartbeat_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (instance)",
+              "intervalFactor": 1,
+              "format": "time_series",
+              "legendFormat": "pending-{{instance}}"
             }
           ],
           "thresholds": [],
@@ -6077,7 +6089,7 @@
               "label": null,
               "logBase": 1,
               "max": null,
-              "min": null,
+              "min": "0",
               "show": true
             }
           ],

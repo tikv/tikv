@@ -309,10 +309,12 @@ impl StatsMonitor {
         self.sender = Some(sender);
 
         let scheduler = self.scheduler.clone();
+        let props = tikv_util::thread_group::current_properties();
 
         let h = Builder::new()
             .name(thd_name!("stats-monitor"))
             .spawn(move || {
+                tikv_util::thread_group::set_properties(props);
                 let mut thread_stats = ThreadInfoStatistics::new();
                 while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(collect_interval) {
                     if timer_cnt % thread_info_interval == 0 {
