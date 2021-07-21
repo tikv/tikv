@@ -2649,12 +2649,12 @@ fn print_bad_ssts(db: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &
 
                 // consider the case that include both meta and user data
                 if end.starts_with(&[keys::DATA_PREFIX]) {
-                    print_overlap_region(&pd_client, &vec![], &end[1..]);
+                    print_overlap_region(&pd_client, &[], &end[1..]);
                 }
             } else {
                 println!(
                     "unexpected key {}, seems raw kv?",
-                    hex::encode_upper(&start)
+                    log_wrappers::Value(&start)
                 );
             }
         } else {
@@ -2672,10 +2672,8 @@ fn print_bad_ssts(db: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &
 fn run_and_wait_child_process(child: impl Fn()) -> Result<i32, String> {
     match unsafe { fork() } {
         Ok(ForkResult::Parent { .. }) => match wait().unwrap() {
-            WaitStatus::Exited(_, status) => {
-                return Ok(status);
-            }
-            v @ _ => {
+            WaitStatus::Exited(_, status) => Ok(status),
+            v => {
                 return Err(format!("{:?}", v));
             }
         },
@@ -2700,7 +2698,7 @@ fn print_overlap_region(pd_client: &RpcClient, start: &[u8], end: &[u8]) {
             Err(e) => {
                 println!(
                     "can not get the region of key {}: {}",
-                    hex::encode_upper(start),
+                    log_wrappers::Value(&start),
                     e
                 );
                 return;
@@ -2708,7 +2706,7 @@ fn print_overlap_region(pd_client: &RpcClient, start: &[u8], end: &[u8]) {
             Ok(r) => r,
         };
         println!("{:?}", region);
-        if region.get_end_key() > end || region.get_end_key().len() == 0 {
+        if region.get_end_key() > end || region.get_end_key().is_empty() {
             break;
         }
         key = region.get_end_key().to_vec();
