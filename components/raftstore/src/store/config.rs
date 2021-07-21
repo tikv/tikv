@@ -165,6 +165,9 @@ pub struct Config {
     #[online_config(skip)]
     pub store_io_pool_size: usize,
 
+    pub io_reschedule_concurrent_max_count: usize,
+    pub io_reschedule_hotpot_duration: ReadableDuration,
+
     #[online_config(skip)]
     pub future_poll_size: usize,
     #[online_config(skip)]
@@ -268,6 +271,8 @@ impl Default for Config {
             apply_batch_system: BatchSystemConfig::default(),
             store_batch_system: BatchSystemConfig::default(),
             store_io_pool_size: 2,
+            io_reschedule_concurrent_max_count: 5,
+            io_reschedule_hotpot_duration: ReadableDuration::secs(1),
             future_poll_size: 1,
             hibernate_regions: true,
             dev_assert: false,

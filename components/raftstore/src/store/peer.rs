@@ -40,6 +40,7 @@ use uuid::Uuid;
 
 use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::errors::RAFTSTORE_IS_BUSY;
+use crate::store::async_io::write::{AsyncWriteMsg, AsyncWriteTask};
 use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, CollectedReady, Proposal};
@@ -558,7 +559,8 @@ where
     persisted_number: u64,
     snap_ctx: Option<SnapshotContext>,
     /// The choose id of async writer thread.
-    async_writer_id: usize,
+    async_writer_id: Option<(usize, UtilInstant, usize)>,
+    pending_write_tasks: Option<(Vec<AsyncWriteTask<EK, ER>>, u64)>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -662,7 +664,8 @@ where
             unpersisted_message_count: 0,
             persisted_number: 0,
             snap_ctx: None,
-            async_writer_id: rand::random::<usize>() % cfg.store_io_pool_size,
+            async_writer_id: None,
+            pending_write_tasks: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -1974,10 +1977,8 @@ where
         }
 
         let has_new_entries = !ready.entries().is_empty();
-        let async_write_sender = &ctx.async_write_senders[self.async_writer_id];
-        let ready_res = match self.mut_store().handle_raft_ready(
+        let (ready_res, write_task) = match self.mut_store().handle_raft_ready(
             &mut ready,
-            async_write_sender,
             destroy_regions,
             persisted_msgs,
             proposal_times,
@@ -1990,7 +1991,88 @@ where
             }
         };
 
+        match &ready_res {
+            HandleReadyResult::SendIOTask | HandleReadyResult::Snapshot { .. } => {
+                match self.should_send_write_task(ctx) {
+                    None => {
+                        self.pending_write_tasks
+                            .as_mut()
+                            .unwrap()
+                            .0
+                            .push(write_task);
+                        STORE_IO_RESCHEDULE_PENDING_TASK_TOTAL_GAUGE.inc();
+                    }
+                    Some(id) => {
+                        if let Err(e) =
+                            ctx.async_write_senders[id].send(AsyncWriteMsg::WriteTask(write_task))
+                        {
+                            // IO threads are destroyed after store threads during shutdown.
+                            panic!("{} failed to send write msg, err: {:?}", self.tag, e);
+                        }
+                    }
+                }
+            }
+            _ => (),
+        }
+
         Some(CollectedReady::new(ready_res, ready, has_new_entries))
+    }
+
+    pub fn should_send_write_task<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) -> Option<usize> {
+        if self.pending_write_tasks.is_some() {
+            return None;
+        }
+        if ctx.cfg.store_io_pool_size <= 1 {
+            return Some(0);
+        }
+        let now = UtilInstant::now_coarse();
+        if !self.has_unpersisted_ready() {
+            let new_id = rand::random::<usize>() % ctx.cfg.store_io_pool_size;
+            self.async_writer_id = Some((new_id, now, 0));
+            return Some(new_id);
+        }
+        // There are some unpersisted readies so `async_writer_id` must not be None.
+        let (id, last_time, count) = self.async_writer_id.as_mut().unwrap();
+        // Whether the duration doesn't exceed the config value
+        if now - *last_time
+            < ctx.cfg.io_reschedule_hotpot_duration.0 + Duration::from_millis(*count as u64 * 10)
+        {
+            return Some(*id);
+        }
+        if *count == 0 {
+            let new_id = rand::random::<usize>() % ctx.cfg.store_io_pool_size;
+            if new_id == *id {
+                // It's Lucky to not reschedule
+                *last_time = UtilInstant::now_coarse();
+                return Some(*id);
+            }
+        }
+        let success = loop {
+            let concurrent = ctx.io_reschedule_concurrent_count.load(Ordering::SeqCst);
+            if concurrent >= ctx.cfg.io_reschedule_concurrent_max_count {
+                break false;
+            }
+            if ctx
+                .io_reschedule_concurrent_count
+                .compare_exchange(
+                    concurrent,
+                    concurrent + 1,
+                    Ordering::SeqCst,
+                    Ordering::Relaxed,
+                )
+                .is_ok()
+            {
+                break true;
+            }
+        };
+        if success {
+            STORE_IO_RESCHEDULE_REGION_TOTAL_GAUGE.inc();
+            self.pending_write_tasks = Some((vec![], self.unpersisted_readies.back().unwrap().0));
+            None
+        } else {
+            *count += 1;
+            Some(*id)
+        }
     }
 
     pub fn post_raft_ready_append<T: Transport>(
@@ -2249,6 +2331,26 @@ where
         self.raft_group.on_persist_ready(persisted_number);
         self.report_know_persist_duration(pre_persist_index, &mut ctx.raft_metrics);
         self.report_know_commit_duration(pre_commit_index, &mut ctx.raft_metrics);
+
+        if let Some((_, last_number)) = self.pending_write_tasks.as_ref() {
+            if persisted_number >= *last_number {
+                ctx.io_reschedule_concurrent_count
+                    .fetch_sub(1, Ordering::SeqCst);
+                STORE_IO_RESCHEDULE_REGION_TOTAL_GAUGE.dec();
+                let (tasks, _) = self.pending_write_tasks.take().unwrap();
+                let new_id = rand::random::<usize>() % ctx.cfg.store_io_pool_size;
+                self.async_writer_id = Some((new_id, UtilInstant::now_coarse(), 0));
+                STORE_IO_RESCHEDULE_PENDING_TASK_TOTAL_GAUGE.sub(tasks.len() as i64);
+                for task in tasks {
+                    if let Err(e) =
+                        ctx.async_write_senders[new_id].send(AsyncWriteMsg::WriteTask(task))
+                    {
+                        // IO threads are destroyed after store threads during shutdown.
+                        panic!("{} failed to send write msg, err: {:?}", self.tag, e);
+                    }
+                }
+            }
+        }
 
         if self.snap_ctx.is_some() && self.unpersisted_readies.is_empty() {
             // Since the snapshot must belong to the last ready, so if `unpersisted_readies`

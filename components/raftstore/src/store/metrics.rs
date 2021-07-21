@@ -692,4 +692,14 @@ lazy_static! {
         "Number of peers in hibernated state.",
         &["state"],
     ).unwrap();
+
+    pub static ref STORE_IO_RESCHEDULE_REGION_TOTAL_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_raftstore_io_reschedule_region_total",
+        "TODO"
+    ).unwrap();
+
+    pub static ref STORE_IO_RESCHEDULE_PENDING_TASK_TOTAL_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_raftstore_io_reschedule_pending_task_total",
+        "TODO"
+    ).unwrap();
 }
