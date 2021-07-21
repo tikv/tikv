@@ -60,7 +60,7 @@ You can view the list of [TiKV Adopters](https://tikv.org/adopters/).
 
 ## TiKV roadmap
 
-You can see the [TiKV Roadmap](docs/ROADMAP.md).
+You can see the [TiKV Roadmap](https://tikv.org/docs/4.0/roadmap/).
 
 ## TiKV software stack
 
