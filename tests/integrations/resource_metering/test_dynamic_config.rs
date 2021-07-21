@@ -6,7 +6,7 @@ use std::iter;
 use std::thread::sleep;
 use std::time::Duration;
 
-use rand::prelude::SliceRandom;
+use rand::prelude::*;
 use test_util::alloc_port;
 
 const ONE_SEC: Duration = Duration::from_secs(1);

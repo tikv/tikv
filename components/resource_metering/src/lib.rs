@@ -80,7 +80,7 @@ impl Default for Config {
             enabled: false,
             agent_address: "".to_string(),
             report_agent_interval: ReadableDuration::minutes(1),
-            max_resource_groups: 2000,
+            max_resource_groups: 200,
             precision: ReadableDuration::secs(1),
         }
     }

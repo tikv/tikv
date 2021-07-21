@@ -63,11 +63,15 @@ pub struct ResourceMeteringReporter {
     reporting: Arc<AtomicBool>,
     cpu_records_collector: Option<CollectorHandle>,
 
-    // resource_tag -> ([timestamp_secs], [cpu_time_ms], total_cpu_time_ms)
-    records: HashMap<Vec<u8>, (Vec<u64>, Vec<u32>, u32)>,
+    // resource_tag -> ([timestamp_secs], [cpu_time_ms])
+    records: HashMap<Vec<u8>, (Vec<u64>, Vec<u32>)>,
+
     // timestamp_secs -> cpu_time_ms
-    others: HashMap<u64, u32>,
-    find_top_k: Vec<u32>,
+    others_ts: Vec<u64>,
+    others_cpu_time: Vec<u32>,
+
+    tmp_group_map: HashMap<Vec<u8>, u32>,
+    tmp_top_vec: Vec<u32>,
 }
 
 impl ResourceMeteringReporter {
@@ -80,8 +84,10 @@ impl ResourceMeteringReporter {
             reporting: Arc::new(AtomicBool::new(false)),
             cpu_records_collector: None,
             records: HashMap::default(),
-            others: HashMap::default(),
-            find_top_k: Vec::default(),
+            others_ts: Vec::default(),
+            others_cpu_time: Vec::default(),
+            tmp_group_map: HashMap::default(),
+            tmp_top_vec: Vec::default(),
         }
     }
 
@@ -119,54 +125,83 @@ impl Runnable for ResourceMeteringReporter {
                 self.config = new_config;
             }
             Task::CpuRecords(records) => {
-                let timestamp_secs = records.begin_unix_time_secs;
+                let max_resource_groups = self.config.max_resource_groups;
+                let tmp_group_map = &mut self.tmp_group_map;
+                let tmp_top_vec = &mut self.tmp_top_vec;
+                tmp_group_map.clear();
+                tmp_top_vec.clear();
 
+                // Sum the CPU time by tag
                 for (tag, ms) in &records.records {
                     let tag = &tag.infos.extra_attachment;
                     if tag.is_empty() {
                         continue;
                     }
 
-                    let ms = *ms as u32;
-                    match self.records.get_mut(tag) {
-                        Some((ts, cpu_time, total)) => {
-                            if *ts.last().unwrap() == timestamp_secs {
-                                *cpu_time.last_mut().unwrap() += ms;
-                            } else {
-                                ts.push(timestamp_secs);
-                                cpu_time.push(ms);
-                            }
-                            *total += ms;
-                        }
-                        None => {
-                            self.records
-                                .insert(tag.clone(), (vec![timestamp_secs], vec![ms], ms));
-                        }
-                    }
+                    *tmp_group_map.entry(tag.clone()).or_insert(0) += *ms as u32;
+                }
+                if tmp_group_map.is_empty() {
+                    return;
                 }
 
-                if self.records.len() > self.config.max_resource_groups {
-                    self.find_top_k.clear();
-                    for (_, _, total) in self.records.values() {
-                        self.find_top_k.push(*total);
+                // If the number of records is greater than `max_resource_groups` in this round, we
+                // needs to evict records with little CPU time.
+                //
+                // To implement it, a `threshold` to filter out those records will be calculated. It
+                // will be either:
+                // - `0` if the number of records less than `max_resource_groups` so that all
+                //   records will be saved, or
+                // - the `max_resource_groups + 1`th largest aggregated CPU time.
+                //
+                // Examples:
+                //
+                //   Case 1:
+                //   +---------------------+---------------------------------------+
+                //   | Max Resource Groups |   8                                   |
+                //   +----------+----------+-------+-------+-------+-------+-------+
+                //   |          |   Tag    | tag 3 | tag 2 | tag 5 | tag 4 | tag 1 |
+                //   | Records  +----------+-------+-------+-------+-------+-------+
+                //   |          | CPU Time |   90  |   60  |   50  |   30  |   10  |
+                //   +----------+----------+-------+-------+-------+-------+-------+
+                //   | Threshold           |   0                                   |
+                //   +----------+----------+-------+-------+-------+-------+-------+
+                //   | Will be Saved       |  v    |  v    |  v    |  v    |  v    |
+                //   +---------------------+-------+-------+-------+-------+-------+
+                //
+                //  Case 2:
+                //   +---------------------+---------------------------------------+
+                //   | Max Resource Groups |   3                                   |
+                //   +----------+----------+-------+-------+-------+-------+-------+
+                //   |          |   Tag    | tag 3 | tag 2 | tag 5 | tag 4 | tag 1 |
+                //   | Records  +----------+-------+-------+-------+-------+-------+
+                //   |          | CPU Time |   90  |   60  |   50  |   30  |   10  |
+                //   +----------+----------+-------+-------+-------+-------+-------+
+                //   | Threshold           |   30                      ^           |
+                //   +----------+----------+-------+-------+-------+-------+-------+
+                //   | Will be Saved       |  v    |  v    |  v    |  x    |  x    |
+                //   +---------------------+-------+-------+-------+-------+-------+
+                let threshold = (tmp_group_map.len() > max_resource_groups)
+                    .then(|| {
+                        tmp_top_vec.extend(tmp_group_map.values());
+                        pdqselect::select_by(tmp_top_vec, max_resource_groups, |a, b| b.cmp(a));
+                        tmp_top_vec[max_resource_groups]
+                    })
+                    .unwrap_or(0);
+
+                let timestamp_secs = records.begin_unix_time_secs;
+                let mut other = 0;
+                for (tag, ms) in tmp_group_map.drain() {
+                    if ms > threshold {
+                        let (ts, cpu) = self.records.entry(tag).or_insert((vec![], vec![]));
+                        ts.push(timestamp_secs);
+                        cpu.push(ms);
+                    } else {
+                        other += ms;
                     }
-                    pdqselect::select_by(
-                        &mut self.find_top_k,
-                        self.config.max_resource_groups,
-                        |a, b| b.cmp(a),
-                    );
-                    let kth = self.find_top_k[self.config.max_resource_groups];
-                    let others = &mut self.others;
-                    self.records
-                        .drain_filter(|_, (_, _, total)| *total <= kth)
-                        .for_each(|(_, (secs_list, cpu_time_list, _))| {
-                            secs_list
-                                .into_iter()
-                                .zip(cpu_time_list.into_iter())
-                                .for_each(|(secs, cpu_time)| {
-                                    *others.entry(secs).or_insert(0) += cpu_time
-                                })
-                        });
+                }
+                if other > 0 {
+                    self.others_ts.push(timestamp_secs);
+                    self.others_cpu_time.push(other);
                 }
             }
         }
@@ -181,12 +216,13 @@ impl Runnable for ResourceMeteringReporter {
 impl RunnableWithTimer for ResourceMeteringReporter {
     fn on_timeout(&mut self) {
         if self.records.is_empty() {
-            assert!(self.others.is_empty());
+            assert!(self.others_ts.is_empty());
             return;
         }
 
         let records = std::mem::take(&mut self.records);
-        let others = std::mem::take(&mut self.others);
+        let others_ts = std::mem::take(&mut self.others_ts);
+        let others_cpu_time = std::mem::take(&mut self.others_cpu_time);
 
         if self.reporting.load(SeqCst) {
             return;
@@ -201,7 +237,7 @@ impl RunnableWithTimer for ResourceMeteringReporter {
                     client.spawn(async move {
                         defer!(reporting.store(false, SeqCst));
 
-                        for (tag, (timestamp_list, cpu_time_ms_list, _)) in records {
+                        for (tag, (timestamp_list, cpu_time_ms_list)) in records {
                             let mut req = CpuTimeRecord::default();
                             req.set_resource_group_tag(tag);
                             req.set_record_list_timestamp_sec(timestamp_list);
@@ -212,12 +248,10 @@ impl RunnableWithTimer for ResourceMeteringReporter {
                         }
 
                         // others
-                        if !others.is_empty() {
-                            let timestamp_list = others.keys().cloned().collect::<Vec<_>>();
-                            let cpu_time_ms_list = others.values().cloned().collect::<Vec<_>>();
+                        if !others_ts.is_empty() {
                             let mut req = CpuTimeRecord::default();
-                            req.set_record_list_timestamp_sec(timestamp_list);
-                            req.set_record_list_cpu_time_ms(cpu_time_ms_list);
+                            req.set_record_list_timestamp_sec(others_ts);
+                            req.set_record_list_cpu_time_ms(others_cpu_time);
                             if tx.send((req, WriteFlags::default())).await.is_err() {
                                 return;
                             }
