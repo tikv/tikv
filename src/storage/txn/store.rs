@@ -1,6 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::time::{Duration, Instant};
+
+use async_trait::async_trait;
 use kvproto::kvrpcpb::IsolationLevel;
+use yatp::task::future::reschedule;
 
 use super::{Error, ErrorInner, Result};
 use crate::storage::kv::{Snapshot, Statistics};
@@ -10,6 +14,9 @@ use crate::storage::mvcc::{
     PointGetterBuilder, Scanner as MvccScanner, ScannerBuilder,
 };
 use txn_types::{Key, KvPair, TimeStamp, TsSet, Value, WriteRef};
+
+const MAX_TIME_SLICE: Duration = Duration::from_millis(2);
+const MAX_BATCH_SIZE: usize = 1024;
 
 pub trait Store: Send {
     /// The scanner type returned by `scanner()`.
@@ -48,16 +55,30 @@ pub trait Store: Send {
 /// [`Scanner`]s allow retrieving items or batches from a scan result.
 ///
 /// Commonly they are obtained as a result of a [`scanner`](Store::scanner) operation.
+#[async_trait]
 pub trait Scanner: Send {
     /// Get the next [`KvPair`](KvPair) if it exists.
     fn next(&mut self) -> Result<Option<(Key, Value)>>;
 
     /// Get the next [`KvPair`](KvPair)s up to `limit` if they exist.
     /// If `sample_step` is greater than 0, skips `sample_step - 1` number of keys after each returned key.
-    fn scan(&mut self, limit: usize, sample_step: usize) -> Result<Vec<Result<KvPair>>> {
+    async fn scan(&mut self, limit: usize, sample_step: usize) -> Result<Vec<Result<KvPair>>> {
         let mut row_count = 0;
         let mut results = Vec::with_capacity(limit);
+
+        let mut scan_count = 0;
+        let mut time_slice_start = Instant::now();
         while results.len() < limit {
+            // let the coroutine yield after scanning some rows
+            if scan_count >= MAX_BATCH_SIZE {
+                if time_slice_start.elapsed() > MAX_TIME_SLICE {
+                    reschedule().await;
+                    time_slice_start = Instant::now();
+                }
+                scan_count = 0;
+            }
+
+            scan_count += 1;
             match self.next() {
                 Ok(Some((k, v))) => {
                     if sample_step > 0 {
@@ -635,6 +656,7 @@ mod tests {
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CfName;
     use engine_traits::{IterOptions, ReadOptions};
+    use futures_executor::block_on;
     use kvproto::kvrpcpb::Context;
     use std::sync::Arc;
 
@@ -861,7 +883,7 @@ mod tests {
 
         let half = (key_num / 2) as usize;
         let expect = &store.keys[0..half];
-        let result = scanner.scan(half, 0).unwrap();
+        let result = block_on(scanner.scan(half, 0)).unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
         let expect: Vec<Option<KvPair>> = expect
             .iter()
@@ -884,7 +906,7 @@ mod tests {
             .scanner(true, false, false, None, Some(start_key))
             .unwrap();
 
-        let result = scanner.scan(half, 0).unwrap();
+        let result = block_on(scanner.scan(half, 0)).unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
 
         let mut expect: Vec<Option<KvPair>> = expect
@@ -1365,6 +1387,7 @@ mod tests {
 mod benches {
     use super::*;
     use crate::test;
+    use futures_executor::block_on;
     use rand::RngCore;
     use std::collections::BTreeMap;
 
@@ -1484,7 +1507,7 @@ mod benches {
                     test::black_box(None),
                 )
                 .unwrap();
-            test::black_box(scanner.scan(1000, 0).unwrap());
+            test::black_box(block_on(scanner.scan(1000, 0)).unwrap());
         })
     }
 }
