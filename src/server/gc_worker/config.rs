@@ -18,6 +18,8 @@ pub struct GcConfig {
     pub batch_keys: usize,
     pub max_write_bytes_per_sec: ReadableSize,
     pub enable_compaction_filter: bool,
+    /// GC mvcc deletions will still leave RocksDB tombstones.
+    pub prefer_tombstones_than_garbage: bool,
     /// By default compaction_filter can only works if `cluster_version` is greater than 5.0.0.
     /// Change `compaction_filter_skip_version_check` can enable it by force.
     pub compaction_filter_skip_version_check: bool,
@@ -30,6 +32,7 @@ impl Default for GcConfig {
             batch_keys: DEFAULT_GC_BATCH_KEYS,
             max_write_bytes_per_sec: ReadableSize(DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC),
             enable_compaction_filter: true,
+            prefer_tombstones_than_garbage: true,
             compaction_filter_skip_version_check: false,
         }
     }

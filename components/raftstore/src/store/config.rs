@@ -218,7 +218,7 @@ impl Default for Config {
             raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
             split_region_check_tick_interval: ReadableDuration::secs(10),
             region_split_check_diff: split_size / 16,
-            region_compact_check_interval: ReadableDuration::minutes(5),
+            region_compact_check_interval: ReadableDuration::minutes(0),
             region_compact_check_step: 100,
             region_compact_min_tombstones: 10000,
             region_compact_tombstones_percent: 30,
