@@ -197,11 +197,12 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
                 let mut r = TsoResponse::default();
                 r.set_header(header.clone());
                 r.mut_timestamp().physical = 42;
+                r.count = 1;
                 GrpcResult::Ok((r, WriteFlags::default()))
             }))
             .await
             .unwrap();
-            resp.close().await.unwrap();
+            let _ = resp.close().await;
         };
         ctx.spawn(fut);
     }
