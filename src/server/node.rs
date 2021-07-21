@@ -12,8 +12,7 @@ use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
 use crate::storage::{config::Config as StorageConfig, Storage};
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::RocksEngine;
-use engine_traits::{Engines, KvEngine, Peekable, RaftEngine};
+use engine_traits::{Engines, KvEngine, RaftEngine};
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::replication_modepb::ReplicationStatus;
@@ -58,11 +57,11 @@ where
 
 /// A wrapper for the raftstore which runs Multi-Raft.
 // TODO: we will rename another better name like RaftStore later.
-pub struct Node<C: PdClient + 'static, ER: RaftEngine> {
+pub struct Node<C: PdClient + 'static, EK: KvEngine, ER: RaftEngine> {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: Arc<VersionTrack<StoreConfig>>,
-    system: RaftBatchSystem<RocksEngine, ER>,
+    system: RaftBatchSystem<EK, ER>,
     has_started: bool,
 
     pd_client: Arc<C>,
@@ -70,20 +69,21 @@ pub struct Node<C: PdClient + 'static, ER: RaftEngine> {
     bg_worker: Worker,
 }
 
-impl<C, ER> Node<C, ER>
+impl<C, EK, ER> Node<C, EK, ER>
 where
     C: PdClient,
+    EK: KvEngine,
     ER: RaftEngine,
 {
     /// Creates a new Node.
     pub fn new(
-        system: RaftBatchSystem<RocksEngine, ER>,
+        system: RaftBatchSystem<EK, ER>,
         cfg: &ServerConfig,
         store_cfg: Arc<VersionTrack<StoreConfig>>,
         pd_client: Arc<C>,
         state: Arc<Mutex<GlobalReplicationState>>,
         bg_worker: Worker,
-    ) -> Node<C, ER> {
+    ) -> Node<C, EK, ER> {
         let mut store = metapb::Store::default();
         store.set_id(INVALID_ID);
         if cfg.advertise_addr.is_empty() {
@@ -132,7 +132,7 @@ where
         }
     }
 
-    pub fn try_bootstrap_store(&mut self, engines: Engines<RocksEngine, ER>) -> Result<()> {
+    pub fn try_bootstrap_store(&mut self, engines: Engines<EK, ER>) -> Result<()> {
         let mut store_id = self.check_store(&engines)?;
         if store_id == INVALID_ID {
             store_id = self.alloc_id()?;
@@ -152,12 +152,12 @@ where
     #[allow(clippy::too_many_arguments)]
     pub fn start<T>(
         &mut self,
-        engines: Engines<RocksEngine, ER>,
+        engines: Engines<EK, ER>,
         trans: T,
         snap_mgr: SnapManager,
-        pd_worker: FutureWorker<PdTask<RocksEngine>>,
+        pd_worker: FutureWorker<PdTask<EK>>,
         store_meta: Arc<Mutex<StoreMeta>>,
-        coprocessor_host: CoprocessorHost<RocksEngine>,
+        coprocessor_host: CoprocessorHost<EK>,
         importer: Arc<SSTImporter>,
         split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
@@ -209,17 +209,17 @@ where
 
     /// Gets a transmission end of a channel which is used to send `Msg` to the
     /// raftstore.
-    pub fn get_router(&self) -> RaftRouter<RocksEngine, ER> {
+    pub fn get_router(&self) -> RaftRouter<EK, ER> {
         self.system.router()
     }
     /// Gets a transmission end of a channel which is used send messages to apply worker.
-    pub fn get_apply_router(&self) -> ApplyRouter<RocksEngine> {
+    pub fn get_apply_router(&self) -> ApplyRouter<EK> {
         self.system.apply_router()
     }
 
     // check store, return store id for the engine.
     // If the store is not bootstrapped, use INVALID_ID.
-    fn check_store(&self, engines: &Engines<RocksEngine, ER>) -> Result<u64> {
+    fn check_store(&self, engines: &Engines<EK, ER>) -> Result<u64> {
         let res = engines.kv.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?;
         if res.is_none() {
             return Ok(INVALID_ID);
@@ -268,7 +268,7 @@ where
     #[doc(hidden)]
     pub fn prepare_bootstrap_cluster(
         &self,
-        engines: &Engines<RocksEngine, ER>,
+        engines: &Engines<EK, ER>,
         store_id: u64,
     ) -> Result<metapb::Region> {
         let region_id = self.alloc_id()?;
@@ -292,7 +292,7 @@ where
 
     fn check_or_prepare_bootstrap_cluster(
         &self,
-        engines: &Engines<RocksEngine, ER>,
+        engines: &Engines<EK, ER>,
         store_id: u64,
     ) -> Result<Option<metapb::Region>> {
         if let Some(first_region) = engines.kv.get_msg(keys::PREPARE_BOOTSTRAP_KEY)? {
@@ -306,7 +306,7 @@ where
 
     fn bootstrap_cluster(
         &mut self,
-        engines: &Engines<RocksEngine, ER>,
+        engines: &Engines<EK, ER>,
         first_region: metapb::Region,
     ) -> Result<()> {
         let region_id = first_region.get_id();
@@ -368,12 +368,12 @@ where
     fn start_store<T>(
         &mut self,
         store_id: u64,
-        engines: Engines<RocksEngine, ER>,
+        engines: Engines<EK, ER>,
         trans: T,
         snap_mgr: SnapManager,
-        pd_worker: FutureWorker<PdTask<RocksEngine>>,
+        pd_worker: FutureWorker<PdTask<EK>>,
         store_meta: Arc<Mutex<StoreMeta>>,
-        coprocessor_host: CoprocessorHost<RocksEngine>,
+        coprocessor_host: CoprocessorHost<EK>,
         importer: Arc<SSTImporter>,
         split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,

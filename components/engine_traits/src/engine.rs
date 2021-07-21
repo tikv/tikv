@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::any::Any;
 use std::fmt::Debug;
 
 use crate::*;
@@ -53,7 +54,9 @@ pub trait KvEngine:
 
     /// Cast to a concrete engine type
     ///
-    /// This only exists as a temporary hack during refactoring.
-    /// It cannot be used forever.
-    fn bad_downcast<T: 'static>(&self) -> &T;
+    /// This is used for a few temporary purposes in tikv.
+    fn bad_downcast<T: KvEngine>(&self) -> Option<&T> {
+        let e: &dyn Any = self;
+        e.downcast_ref()
+    }
 }
