@@ -20,10 +20,11 @@ import os
 import subprocess
 import sys
 
-components = [f for f in os.listdir("components") if os.path.isdir(f"components/{f}")]
+components = [f for f in os.listdir("components") if os.path.isfile(f"components/{f}/Cargo.toml")]
 
 other_crates = [
-    ("cmd", "cmd"),
+    ("tikv-ctl", "cmd/tikv-ctl"),
+    ("tikv-server", "cmd/tikv-server"),
     ("tests", "tests"),
     ("tikv", "./"),
 ]
