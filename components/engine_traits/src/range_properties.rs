@@ -12,6 +12,10 @@ pub trait RangePropertiesExt {
     /// Gets the number of keys in a range.
     fn get_range_approximate_keys(&self, range: Range, large_threshold: u64) -> Result<u64>;
 
+    /// Gets the number of keys in a range.
+    ///
+    /// The `large_threshold` parameter is for logging only:
+    /// a range with more keys than this is considered too large.
     fn get_range_approximate_keys_cf(
         &self,
         cfname: &str,

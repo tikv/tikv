@@ -154,6 +154,9 @@ pub mod ctor {
         /// - The column families specified as `opts`, with options.
         ///
         /// Note that if `opts` is not `None` then the `cfs` argument is completely ignored.
+        ///
+        /// The engine stores its data in the `path` directory.
+        /// If that directory does not exist, then it is created.
         fn new_engine(
             path: &str,
             db_opt: Option<DBOptions>,
@@ -162,6 +165,9 @@ pub mod ctor {
         ) -> Result<Self>;
 
         /// Create a new engine with specified column families and options
+        ///
+        /// The engine stores its data in the `path` directory.
+        /// If that directory does not exist, then it is created.
         fn new_engine_opt(path: &str, db_opt: DBOptions, cfs_opts: Vec<CFOptions>) -> Result<Self>;
     }
 
