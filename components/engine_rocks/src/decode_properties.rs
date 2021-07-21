@@ -87,8 +87,7 @@ pub trait DecodeProperties {
 
 impl DecodeProperties for rocksdb::UserCollectedProperties {
     fn decode(&self, k: &str) -> tikv_util::codec::Result<&[u8]> {
-        self
-            .get(k.as_bytes())
+        self.get(k.as_bytes())
             .ok_or(tikv_util::codec::Error::KeyNotFound)
     }
 }

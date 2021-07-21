@@ -12,9 +12,7 @@ use engine_rocks::raw::{
     new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
     CompactionFilterFactory, CompactionFilterValueType, DBCompactionFilter,
 };
-use engine_rocks::{
-    RocksEngine, RocksMvccProperties, RocksWriteBatch,
-};
+use engine_rocks::{RocksEngine, RocksMvccProperties, RocksWriteBatch};
 use engine_traits::{
     KvEngine, MiscExt, Mutable, MvccProperties, WriteBatch, WriteBatchExt, WriteOptions,
 };
