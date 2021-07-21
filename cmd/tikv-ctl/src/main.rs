@@ -530,7 +530,7 @@ trait DebugExecutor {
     }
 
     /// Recover the cluster when given `store_ids` are failed.
-    fn remove_fail_stores(&self, store_ids: Vec<u64>, region_ids: Option<Vec<u64>>);
+    fn remove_fail_stores(&self, store_ids: Vec<u64>, region_ids: Option<Vec<u64>>, mgr: Arc<SecurityManager>, pd_cfg: &PdConfig);
 
     /// Recreate the region with metadata from pd, but alloc new id for it.
     fn recreate_region(&self, sec_mgr: Arc<SecurityManager>, pd_cfg: &PdConfig, region_id: u64);
@@ -758,7 +758,7 @@ impl DebugExecutor for DebugClient {
         unimplemented!("only available for local mode");
     }
 
-    fn remove_fail_stores(&self, _: Vec<u64>, _: Option<Vec<u64>>) {
+    fn remove_fail_stores(&self, _: Vec<u64>, _: Option<Vec<u64>>, _: Arc<SecurityManager>, _: &PdConfig) {
         self.check_local_mode();
     }
 
@@ -936,9 +936,11 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
         println!("all regions are healthy")
     }
 
-    fn remove_fail_stores(&self, store_ids: Vec<u64>, region_ids: Option<Vec<u64>>) {
+    fn remove_fail_stores(&self, store_ids: Vec<u64>, region_ids: Option<Vec<u64>>, mgr: Arc<SecurityManager>, pd_cfg: &PdConfig) {
         println!("removing stores {:?} from configurations...", store_ids);
-        self.remove_failed_stores(store_ids, region_ids)
+        let rpc_client = RpcClient::new(pd_cfg, None, mgr)
+            .unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
+        self.remove_failed_stores(store_ids, region_ids, rpc_client)
             .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
         println!("success");
     }
@@ -1592,6 +1594,17 @@ fn main() {
                                 .long("all-regions")
                                 .takes_value(false)
                                 .help("Do the command for all regions"),
+                        ) 
+                        .arg(
+                            Arg::with_name("pd")
+                                .required(true)
+                                .short("p")
+                                .takes_value(true)
+                                .multiple(true)
+                                .use_delimiter(true)
+                                .require_delimiter(true)
+                                .value_delimiter(",")
+                                .help("PD endpoints"),
                         )
                 ),
         )
@@ -2190,13 +2203,22 @@ fn main() {
         }
     } else if let Some(matches) = matches.subcommand_matches("unsafe-recover") {
         if let Some(matches) = matches.subcommand_matches("remove-fail-stores") {
+            let pd_cfg = PdConfig {
+                endpoints: matches
+                    .values_of("pd")
+                    .unwrap()
+                    .map(ToOwned::to_owned)
+                    .collect(),
+                ..Default::default()
+            };
+
             let store_ids = values_t!(matches, "stores", u64).expect("parse stores fail");
             let region_ids = matches.values_of("regions").map(|ids| {
                 ids.map(str::parse)
                     .collect::<Result<Vec<_>, _>>()
                     .expect("parse regions fail")
             });
-            debug_executor.remove_fail_stores(store_ids, region_ids);
+            debug_executor.remove_fail_stores(store_ids, region_ids, mgr, &pd_cfg);
         } else {
             println!("{}", matches.usage());
         }
