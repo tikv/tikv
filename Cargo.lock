@@ -2182,7 +2182,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=perf/purge-scan#d3012f3b44c3e2830f6ef89a73d4a5d0102cf588"
+source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=perf/purge-scan#24b7af68c90aa7bfa182e00fa04ed32d0ef09408"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2201,7 +2201,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=perf/purge-scan#d3012f3b44c3e2830f6ef89a73d4a5d0102cf588"
+source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=perf/purge-scan#24b7af68c90aa7bfa182e00fa04ed32d0ef09408"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3819,7 +3819,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=perf/purge-scan#d3012f3b44c3e2830f6ef89a73d4a5d0102cf588"
+source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=perf/purge-scan#24b7af68c90aa7bfa182e00fa04ed32d0ef09408"
 dependencies = [
  "libc 0.2.86",
  "librocksdb_sys",
