@@ -23,7 +23,6 @@ use crate::storage::{
     SecondaryLocksStatus, Storage, TxnStatus,
 };
 use crate::{forward_duplex, forward_unary};
-use engine_rocks::RocksEngine;
 use futures::compat::Future01CompatExt;
 use futures::future::{self, Future, FutureExt, TryFutureExt};
 use futures::sink::SinkExt;
@@ -52,7 +51,7 @@ const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
 /// Service handles the RPC messages for the `Tikv` service.
-pub struct Service<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> {
+pub struct Service<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> {
     store_id: u64,
     /// Used to handle requests related to GC.
     gc_worker: GcWorker<E, T>,
@@ -76,7 +75,7 @@ pub struct Service<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: Lock
     proxy: Proxy,
 }
 
-impl<T: RaftStoreRouter<RocksEngine> + Clone + 'static, E: Engine + Clone, L: LockManager + Clone>
+impl<T: RaftStoreRouter<E::Local> + Clone + 'static, E: Engine + Clone, L: LockManager + Clone>
     Clone for Service<T, E, L>
 {
     fn clone(&self) -> Self {
@@ -96,7 +95,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Clone + 'static, E: Engine + Clone, L: Lo
     }
 }
 
-impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Service<T, E, L> {
+impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Service<T, E, L> {
     /// Constructs a new `Service` which provides the `Tikv` service.
     pub fn new(
         store_id: u64,
@@ -139,7 +138,7 @@ macro_rules! handle_request {
                 sink.success(resp).await?;
                 GRPC_MSG_HISTOGRAM_STATIC
                     .$fn_name
-                    .observe(duration_to_sec(begin_instant.elapsed()));
+                    .observe(duration_to_sec(begin_instant.saturating_elapsed()));
                 ServerResult::Ok(())
             }
             .map_err(|e| {
@@ -156,9 +155,7 @@ macro_rules! handle_request {
     }
 }
 
-impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
-    for Service<T, E, L>
-{
+impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for Service<T, E, L> {
     handle_request!(kv_get, future_get, GetRequest, GetResponse);
     handle_request!(kv_scan, future_scan, ScanRequest, ScanResponse);
     handle_request!(
@@ -294,6 +291,13 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         RawCasResponse
     );
 
+    handle_request!(
+        raw_checksum,
+        future_raw_checksum,
+        RawChecksumRequest,
+        RawChecksumResponse
+    );
+
     fn kv_import(&mut self, _: RpcContext<'_>, _: ImportRequest, _: UnarySink<ImportResponse>) {
         unimplemented!();
     }
@@ -315,7 +319,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .coprocessor
-                .observe(duration_to_sec(begin_instant.elapsed()));
+                .observe(duration_to_sec(begin_instant.saturating_elapsed()));
             ServerResult::Ok(())
         }
         .map_err(|e| {
@@ -343,7 +347,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .raw_coprocessor
-                .observe(duration_to_sec(begin_instant.elapsed()));
+                .observe(duration_to_sec(begin_instant.saturating_elapsed()));
             ServerResult::Ok(())
         }
         .map_err(|e| {
@@ -383,7 +387,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .register_lock_observer
-                .observe(duration_to_sec(begin_instant.elapsed()));
+                .observe(duration_to_sec(begin_instant.saturating_elapsed()));
             ServerResult::Ok(())
         }
         .map_err(|e| {
@@ -427,7 +431,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .check_lock_observer
-                .observe(duration_to_sec(begin_instant.elapsed()));
+                .observe(duration_to_sec(begin_instant.saturating_elapsed()));
             ServerResult::Ok(())
         }
         .map_err(|e| {
@@ -465,7 +469,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .remove_lock_observer
-                .observe(duration_to_sec(begin_instant.elapsed()));
+                .observe(duration_to_sec(begin_instant.saturating_elapsed()));
             ServerResult::Ok(())
         }
         .map_err(|e| {
@@ -510,7 +514,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .physical_scan_lock
-                .observe(duration_to_sec(begin_instant.elapsed()));
+                .observe(duration_to_sec(begin_instant.saturating_elapsed()));
             ServerResult::Ok(())
         }
         .map_err(|e| {
@@ -559,7 +563,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .unsafe_destroy_range
-                .observe(duration_to_sec(begin_instant.elapsed()));
+                .observe(duration_to_sec(begin_instant.saturating_elapsed()));
             ServerResult::Ok(())
         }
         .map_err(|e| {
@@ -596,7 +600,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 Ok(_) => {
                     GRPC_MSG_HISTOGRAM_STATIC
                         .coprocessor_stream
-                        .observe(duration_to_sec(begin_instant.elapsed()));
+                        .observe(duration_to_sec(begin_instant.saturating_elapsed()));
                     let _ = sink.close().await;
                 }
                 Err(e) => {
@@ -710,6 +714,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         }
     }
 
+    #[allow(clippy::collapsible_else_if)]
     fn split_region(
         &mut self,
         ctx: RpcContext<'_>,
@@ -721,13 +726,21 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
 
         let region_id = req.get_context().get_region_id();
         let (cb, f) = paired_future_callback();
-        let mut split_keys = if !req.get_split_key().is_empty() {
-            vec![Key::from_raw(req.get_split_key()).into_encoded()]
+        let mut split_keys = if req.is_raw_kv {
+            if !req.get_split_key().is_empty() {
+                vec![req.get_split_key().to_vec()]
+            } else {
+                req.take_split_keys().to_vec()
+            }
         } else {
-            req.take_split_keys()
-                .into_iter()
-                .map(|x| Key::from_raw(&x).into_encoded())
-                .collect()
+            if !req.get_split_key().is_empty() {
+                vec![Key::from_raw(req.get_split_key()).into_encoded()]
+            } else {
+                req.take_split_keys()
+                    .into_iter()
+                    .map(|x| Key::from_raw(&x).into_encoded())
+                    .collect()
+            }
         };
         split_keys.sort();
         let req = CasualMessage::SplitRegion {
@@ -781,7 +794,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .split_region
-                .observe(duration_to_sec(begin_instant.elapsed()));
+                .observe(duration_to_sec(begin_instant.saturating_elapsed()));
             ServerResult::Ok(())
         }
         .map_err(|e| {
@@ -876,7 +889,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .read_index
-                .observe(begin_instant.elapsed_secs());
+                .observe(begin_instant.saturating_elapsed_secs());
             ServerResult::Ok(())
         }
         .map_err(|e| {
@@ -1100,7 +1113,7 @@ fn response_batch_commands_request<F>(
             } else {
                 GRPC_MSG_HISTOGRAM_STATIC
                     .get(label_enum)
-                    .observe(begin_instant.elapsed_secs());
+                    .observe(begin_instant.saturating_elapsed_secs());
             }
         }
     };
@@ -1235,7 +1248,7 @@ fn future_get<E: Engine, L: LockManager>(
 
     async move {
         let v = v.await;
-        let duration_ms = duration_to_ms(start.elapsed());
+        let duration_ms = duration_to_ms(start.saturating_elapsed());
         let mut resp = GetResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
@@ -1311,7 +1324,7 @@ fn future_batch_get<E: Engine, L: LockManager>(
 
     async move {
         let v = v.await;
-        let duration_ms = duration_to_ms(start.elapsed());
+        let duration_ms = duration_to_ms(start.saturating_elapsed());
         let mut resp = BatchGetResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
@@ -1719,6 +1732,34 @@ fn future_raw_compare_and_swap<E: Engine, L: LockManager>(
                         resp.set_previous_not_exist(true);
                     }
                     resp.set_succeed(succeed);
+                }
+                Err(e) => resp.set_error(format!("{}", e)),
+            }
+        }
+        Ok(resp)
+    }
+}
+
+fn future_raw_checksum<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
+    mut req: RawChecksumRequest,
+) -> impl Future<Output = ServerResult<RawChecksumResponse>> {
+    let f = storage.raw_checksum(
+        req.take_context(),
+        req.get_algorithm(),
+        req.take_ranges().into(),
+    );
+    async move {
+        let v = f.await;
+        let mut resp = RawChecksumResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            match v {
+                Ok((checksum, kvs, bytes)) => {
+                    resp.set_checksum(checksum);
+                    resp.set_total_kvs(kvs);
+                    resp.set_total_bytes(bytes);
                 }
                 Err(e) => resp.set_error(format!("{}", e)),
             }

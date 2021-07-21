@@ -408,7 +408,7 @@ where
                     ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
                     ASYNC_REQUESTS_DURATIONS_VEC
                         .write
-                        .observe(begin_instant.elapsed_secs());
+                        .observe(begin_instant.saturating_elapsed_secs());
                     fail_point!("raftkv_async_write_finish");
                     write_cb((cb_ctx, Ok(())))
                 }
@@ -466,7 +466,7 @@ where
                 Ok(CmdRes::Snap(s)) => {
                     ASYNC_REQUESTS_DURATIONS_VEC
                         .snapshot
-                        .observe(begin_instant.elapsed_secs());
+                        .observe(begin_instant.saturating_elapsed_secs());
                     ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
                     cb((cb_ctx, Ok(s)))
                 }
@@ -560,11 +560,11 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                     rctx.locked = Some(lock);
                     REPLICA_READ_LOCK_CHECK_HISTOGRAM_VEC_STATIC
                         .locked
-                        .observe(begin_instant.elapsed().as_secs_f64());
+                        .observe(begin_instant.saturating_elapsed().as_secs_f64());
                 } else {
                     REPLICA_READ_LOCK_CHECK_HISTOGRAM_VEC_STATIC
                         .unlocked
-                        .observe(begin_instant.elapsed().as_secs_f64());
+                        .observe(begin_instant.saturating_elapsed().as_secs_f64());
                 }
             }
             msg.mut_entries()[0].set_data(rctx.to_bytes().into());

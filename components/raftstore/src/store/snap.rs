@@ -8,7 +8,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
-use std::time::Instant;
 use std::{error::Error as StdError, result, str, thread, time, u64};
 
 use fail::fail_point;
@@ -33,7 +32,7 @@ use file_system::{
     File, Metadata, OpenOptions,
 };
 use keys::{enc_end_key, enc_start_key};
-use tikv_util::time::{duration_to_sec, Limiter};
+use tikv_util::time::{duration_to_sec, Instant, Limiter};
 use tikv_util::HandyRwLock;
 use tikv_util::{box_err, box_try, debug, error, info, map, warn};
 
@@ -588,7 +587,7 @@ impl Snapshot {
         )
     }
 
-    fn validate(&self, engine: &impl KvEngine, for_send: bool) -> RaftStoreResult<()> {
+    fn validate(&self, for_send: bool) -> RaftStoreResult<()> {
         for cf_file in &self.cf_files {
             if cf_file.size == 0 {
                 // Skip empty file. The checksum of this cf file should be 0 and
@@ -596,10 +595,6 @@ impl Snapshot {
                 continue;
             }
 
-            if !plain_file_used(cf_file.cf) {
-                // Reset global seq number.
-                engine.reset_global_seq(&cf_file.cf, &cf_file.path)?;
-            }
             check_file_size_and_checksum(
                 &cf_file.path,
                 cf_file.size,
@@ -666,7 +661,7 @@ impl Snapshot {
     {
         fail_point!("snapshot_enter_do_build");
         if self.exists() {
-            match self.validate(engine, true) {
+            match self.validate(true) {
                 Ok(()) => return Ok(()),
                 Err(e) => {
                     error!(?e;
@@ -716,6 +711,10 @@ impl Snapshot {
                 self.mgr.rename_tmp_cf_file_for_send(cf_file)?;
             } else {
                 delete_file_if_exist(&cf_file.tmp_path).unwrap();
+                if let Some(ref mgr) = self.mgr.encryption_key_manager {
+                    let src = cf_file.tmp_path.to_str().unwrap();
+                    mgr.delete_file(src)?;
+                }
             }
 
             SNAPSHOT_CF_KV_COUNT
@@ -758,6 +757,10 @@ impl Snapshot {
 
             // Delete cf files.
             delete_file_if_exist(&cf_file.path).unwrap();
+            if let Some(ref mgr) = self.mgr.encryption_key_manager {
+                let path = cf_file.path.to_str().unwrap();
+                mgr.delete_file(path).unwrap();
+            }
         }
         delete_file_if_exist(&self.meta_file.path).unwrap();
         if self.hold_tmp_files {
@@ -794,21 +797,21 @@ impl Snapshot {
         snap_data.set_version(SNAPSHOT_VERSION);
         snap_data.set_meta(self.meta_file.meta.clone());
 
-        SNAPSHOT_BUILD_TIME_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
+        SNAPSHOT_BUILD_TIME_HISTOGRAM.observe(duration_to_sec(t.saturating_elapsed()) as f64);
         info!(
             "scan snapshot";
             "region_id" => region.get_id(),
             "snapshot" => self.path(),
             "key_count" => stat.kv_count,
             "size" => total_size,
-            "takes" => ?t.elapsed(),
+            "takes" => ?t.saturating_elapsed(),
         );
 
         Ok(())
     }
 
     pub fn apply<EK: KvEngine>(&mut self, options: ApplyOptions<EK>) -> Result<()> {
-        box_try!(self.validate(&options.db, false));
+        box_try!(self.validate(false));
 
         let abort_checker = ApplyAbortChecker(options.abort);
         let coprocessor_host = options.coprocessor_host;
@@ -1039,18 +1042,8 @@ impl Write for Snapshot {
 
 impl Drop for Snapshot {
     fn drop(&mut self) {
-        // cleanup if some of the cf files and meta file is partly written
-        if self
-            .cf_files
-            .iter()
-            .any(|cf_file| file_exists(&cf_file.tmp_path))
-            || file_exists(&self.meta_file.tmp_path)
-        {
-            self.delete();
-            return;
-        }
-        // cleanup if data corruption happens and any file goes missing
-        if !self.exists() {
+        // Cleanup if the snapshot is not built or received successfully.
+        if self.hold_tmp_files {
             self.delete();
         }
     }
@@ -1209,8 +1202,11 @@ impl SnapManager {
         self.core.registry.rl().contains_key(key)
     }
 
-    // NOTE: it calculates snapshot size by scanning the base directory.
-    // Don't call it in raftstore thread until the size limitation mechanism gets refactored.
+    /// Get a `Snapshot` can be used for `build`. Concurrent calls are allowed
+    /// because only one caller can lock temporary disk files.
+    ///
+    /// NOTE: it calculates snapshot size by scanning the base directory.
+    /// Don't call it in raftstore thread until the size limitation mechanism gets refactored.
     pub fn get_snapshot_for_building(&self, key: &SnapKey) -> RaftStoreResult<Box<Snapshot>> {
         let mut old_snaps = None;
         while self.get_total_snap_size()? > self.max_total_snap_size() {
@@ -1273,6 +1269,8 @@ impl SnapManager {
         Ok(Box::new(s))
     }
 
+    /// Get a `Snapshot` can be used for writting and then `save`. Concurrent calls
+    /// are allowed because only one caller can lock temporary disk files.
     pub fn get_snapshot_for_receiving(
         &self,
         key: &SnapKey,
@@ -1451,7 +1449,6 @@ impl SnapManagerCore {
             return false;
         }
         snap.delete();
-        // FIXME: clean `EncryptionKeyManager` correctly.
         true
     }
 
@@ -1463,7 +1460,13 @@ impl SnapManagerCore {
             let dst = cf_file.path.to_str().unwrap();
             // It's ok that the cf file is moved but machine fails before `mgr.rename_file`
             // because without metadata file, saved cf files are nothing.
-            mgr.link_file(src, dst)?;
+            while let Err(e) = mgr.link_file(src, dst) {
+                if e.kind() == ErrorKind::AlreadyExists {
+                    mgr.delete_file(dst)?;
+                    continue;
+                }
+                return Err(e.into());
+            }
             mgr.delete_file(src)?;
         }
         let (checksum, size) = calc_checksum_and_size(&cf_file.path, mgr)?;
@@ -1526,6 +1529,8 @@ pub mod tests {
     use std::sync::atomic::{AtomicU64, AtomicUsize};
     use std::sync::{Arc, RwLock};
 
+    use encryption::{EncryptionConfig, FileConfig, MasterKeyConfig};
+    use encryption_export::data_key_manager_from_config;
     use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions, EngineConstructorExt};
     use engine_test::kv::KvTestEngine;
     use engine_test::raft::RaftTestEngine;
@@ -1534,6 +1539,7 @@ pub mod tests {
     use engine_traits::{ExternalSstFileInfo, SstExt, SstWriter, SstWriterBuilder};
     use engine_traits::{KvEngine, Snapshot as EngineSnapshot};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use kvproto::encryptionpb::EncryptionMethod;
     use kvproto::metapb::{Peer, Region};
     use kvproto::raft_serverpb::{
         RaftApplyState, RaftSnapshotData, RegionLocalState, SnapshotMeta,
@@ -1699,6 +1705,27 @@ pub mod tests {
         let mut db_opt = DBOptions::new();
         db_opt.with_default_ctr_encrypted_env(b"abcd".to_vec());
         db_opt
+    }
+
+    fn create_enc_dir(prefix: &str) -> (TempDir, String, String) {
+        let dir = Builder::new().prefix(prefix).tempdir().unwrap();
+        let master_path = dir.path().join("master_key");
+
+        let mut f = OpenOptions::new()
+            .create_new(true)
+            .append(true)
+            .open(&master_path)
+            .unwrap();
+        // A 32 bytes key (in hex) followed by one '\n'.
+        f.write_all(&[b'A'; 64]).unwrap();
+        f.write_all(&[b'\n'; 1]).unwrap();
+
+        let dict_path = dir.path().join("dict");
+        file_system::create_dir_all(&dict_path).unwrap();
+
+        let key_path = master_path.to_str().unwrap().to_owned();
+        let dict_path = dict_path.to_str().unwrap().to_owned();
+        (dir, key_path, dict_path)
     }
 
     #[test]
@@ -2488,5 +2515,51 @@ pub mod tests {
         src_mgr.init().unwrap();
         // The sst_path will be deleted by SnapManager because it is a temp filet.
         assert!(!file_system::file_exists(&sst_path));
+    }
+
+    #[test]
+    fn test_build_with_encryption() {
+        let (_enc_dir, key_path, dict_path) = create_enc_dir(&"test_build_with_encryption_enc");
+        let enc_cfg = EncryptionConfig {
+            data_encryption_method: EncryptionMethod::Aes128Ctr,
+            master_key: MasterKeyConfig::File {
+                config: FileConfig { path: key_path },
+            },
+            ..Default::default()
+        };
+        let enc_mgr = data_key_manager_from_config(&enc_cfg, &dict_path)
+            .unwrap()
+            .map(|x| Arc::new(x));
+        assert!(enc_mgr.is_some());
+
+        let snap_dir = Builder::new()
+            .prefix("test_build_with_encryption_snap")
+            .tempdir()
+            .unwrap();
+        let _mgr_path = snap_dir.path().to_str().unwrap();
+        let snap_mgr = SnapManagerBuilder::default()
+            .encryption_key_manager(enc_mgr)
+            .build(snap_dir.path().to_str().unwrap());
+        snap_mgr.init().unwrap();
+
+        let kv_dir = Builder::new()
+            .prefix("test_build_with_encryption_kv")
+            .tempdir()
+            .unwrap();
+        let db: KvTestEngine = open_test_db(kv_dir.path(), None, None).unwrap();
+        let snapshot = db.snapshot();
+        let key = SnapKey::new(1, 1, 1);
+        let region = gen_test_region(1, 1, 1);
+
+        // Test one snapshot can be built multi times. DataKeyManager should be handled correctly.
+        for _ in 0..2 {
+            let mut s1 = snap_mgr.get_snapshot_for_building(&key).unwrap();
+            let mut snap_data = RaftSnapshotData::default();
+            snap_data.set_region(region.clone());
+            let mut stat = SnapshotStatistics::new();
+            s1.build(&db, &snapshot, &region, &mut snap_data, &mut stat)
+                .unwrap();
+            assert!(snap_mgr.delete_snapshot(&key, &s1, false));
+        }
     }
 }

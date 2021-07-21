@@ -9,6 +9,8 @@ use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::codec::mysql::json::*;
 
+use serde::de::IgnoredAny;
+
 #[rpn_fn]
 #[inline]
 fn json_depth(arg: JsonRef) -> Result<Option<i64>> {
@@ -206,6 +208,11 @@ fn quote(bytes: BytesRef) -> Result<Option<Bytes>> {
 #[inline]
 fn json_unquote(arg: BytesRef) -> Result<Option<Bytes>> {
     let tmp_str = std::str::from_utf8(arg)?;
+    let first_char = tmp_str.chars().next();
+    let last_char = tmp_str.chars().last();
+    if tmp_str.len() >= 2 && first_char == Some('"') && last_char == Some('"') {
+        let _: IgnoredAny = serde_json::from_str(&tmp_str)?;
+    }
     Ok(Some(Bytes::from(self::unquote_string(tmp_str)?)))
 }
 
@@ -628,29 +635,39 @@ mod tests {
     #[test]
     fn test_json_unquote() {
         let cases = vec![
-            (None, None),
-            (Some(r#"""#), Some(r#"""#)),
-            (Some(r"a"), Some("a")),
-            (Some(r#""3"#), Some(r#""3"#)),
-            (Some(r#"{"a":  "b"}"#), Some(r#"{"a":  "b"}"#)),
+            (None, None, true),
+            (Some(r#"""#), Some(r#"""#), true),
+            (Some(r"a"), Some("a"), true),
+            (Some(r#""3"#), Some(r#""3"#), true),
+            (Some(r#"{"a":  "b"}"#), Some(r#"{"a":  "b"}"#), true),
             (
                 Some(r#""hello,\"quoted string\",world""#),
                 Some(r#"hello,"quoted string",world"#),
+                true,
             ),
-            (Some(r#"A中\\\"文B"#), Some(r#"A中\\\"文B"#)),
-            (Some(r#""A中\\\"文B""#), Some(r#"A中\"文B"#)),
-            (Some(r#""\u00E0A中\\\"文B""#), Some(r#"àA中\"文B"#)),
+            (Some(r#"A中\\\"文B"#), Some(r#"A中\\\"文B"#), true),
+            (Some(r#""A中\\\"文B""#), Some(r#"A中\"文B"#), true),
+            (Some(r#""\u00E0A中\\\"文B""#), Some(r#"àA中\"文B"#), true),
+            (Some(r#""a""#), Some(r#"a"#), true),
+            (Some(r#"""a"""#), None, false),
+            (Some(r#""""a""""#), None, false),
         ];
 
-        for (arg, expect_output) in cases {
+        for (arg, expect, success) in cases {
             let arg = arg.map(Bytes::from);
-            let expect_output = expect_output.map(Bytes::from);
-
+            let expect = expect.map(Bytes::from);
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg.clone())
-                .evaluate(ScalarFuncSig::JsonUnquoteSig)
-                .unwrap();
-            assert_eq!(output, expect_output, "{:?}", arg);
+                .evaluate(ScalarFuncSig::JsonUnquoteSig);
+            match output {
+                Ok(s) => {
+                    assert_eq!(s, expect, "{:?}", arg);
+                    assert_eq!(success, true);
+                }
+                Err(_) => {
+                    assert_eq!(success, false);
+                }
+            }
         }
     }
 

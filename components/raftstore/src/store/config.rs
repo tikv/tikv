@@ -228,7 +228,7 @@ impl Default for Config {
             snap_mgr_gc_tick_interval: ReadableDuration::minutes(1),
             snap_gc_timeout: ReadableDuration::hours(4),
             messages_per_tick: 4096,
-            max_peer_down_duration: ReadableDuration::minutes(5),
+            max_peer_down_duration: ReadableDuration::minutes(10),
             max_leader_missing_duration: ReadableDuration::hours(2),
             abnormal_leader_missing_duration: ReadableDuration::minutes(10),
             peer_stale_state_check_interval: ReadableDuration::minutes(5),
@@ -259,7 +259,7 @@ impl Default for Config {
             region_max_size: ReadableSize(0),
             region_split_size: ReadableSize(0),
             clean_stale_peer_delay: ReadableDuration::minutes(0),
-            perf_level: PerfLevel::Disable,
+            perf_level: PerfLevel::EnableTime,
         }
     }
 }
@@ -433,6 +433,15 @@ impl Config {
         if self.future_poll_size == 0 {
             return Err(box_err!("future-poll-size should be greater than 0."));
         }
+
+        // Avoid hibernated peer being reported as down peer.
+        if self.hibernate_regions {
+            self.max_peer_down_duration = std::cmp::max(
+                self.max_peer_down_duration,
+                self.peer_stale_state_check_interval * 2,
+            );
+        }
+
         Ok(())
     }
 
@@ -781,5 +790,12 @@ mod tests {
         cfg.raft_election_timeout_ticks = 11;
         cfg.raft_store_max_leader_lease = ReadableDuration::secs(11);
         assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.hibernate_regions = true;
+        cfg.max_peer_down_duration = ReadableDuration::minutes(5);
+        cfg.peer_stale_state_check_interval = ReadableDuration::minutes(5);
+        assert!(cfg.validate().is_ok());
+        assert_eq!(cfg.max_peer_down_duration, ReadableDuration::minutes(10));
     }
 }

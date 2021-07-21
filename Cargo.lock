@@ -1134,6 +1134,7 @@ name = "engine_traits"
 version = "0.0.1"
 dependencies = [
  "error_code",
+ "fail",
  "file_system",
  "kvproto",
  "log_wrappers",
@@ -1304,6 +1305,7 @@ dependencies = [
  "libc 0.2.86",
  "maligned",
  "nix 0.19.0",
+ "online_config",
  "openssl",
  "parking_lot",
  "prometheus",
@@ -2096,7 +2098,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?rev=706fcaf286c8dd07ef59349c089f53289a32ce4c#706fcaf286c8dd07ef59349c089f53289a32ce4c"
+source = "git+https://github.com/pingcap/kvproto.git#2ac2a7984b2d01b96ed56fd8474f4bf80fa33c51"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -2182,7 +2184,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/hunterlxt/rust-rocksdb.git?branch=xt/sst-dump#3258252a36eb2a65df33cab885c0bf2ea4930140"
+source = "git+https://github.com/tikv/rust-rocksdb.git#12a953bc942c60a00ffb44d3907bdf2193d6be0d"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2201,7 +2203,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/hunterlxt/rust-rocksdb.git?branch=xt/sst-dump#3258252a36eb2a65df33cab885c0bf2ea4930140"
+source = "git+https://github.com/tikv/rust-rocksdb.git#12a953bc942c60a00ffb44d3907bdf2193d6be0d"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3394,6 +3396,7 @@ dependencies = [
  "crossbeam",
  "derivative",
  "encryption",
+ "encryption_export",
  "engine_panic",
  "engine_rocks",
  "engine_test",
@@ -3762,6 +3765,7 @@ version = "0.0.1"
 dependencies = [
  "collections",
  "crossbeam",
+ "fail",
  "futures 0.3.15",
  "grpcio",
  "kvproto",
@@ -3818,7 +3822,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/hunterlxt/rust-rocksdb.git?branch=xt/sst-dump#3258252a36eb2a65df33cab885c0bf2ea4930140"
+source = "git+https://github.com/tikv/rust-rocksdb.git#12a953bc942c60a00ffb44d3907bdf2193d6be0d"
 dependencies = [
  "libc 0.2.86",
  "librocksdb_sys",
@@ -4983,6 +4987,7 @@ dependencies = [
  "log_wrappers",
  "prometheus",
  "prometheus-static-metric",
+ "serde_json",
  "thiserror",
  "tikv_util",
  "time",
@@ -5075,6 +5080,8 @@ dependencies = [
  "rand 0.8.3",
  "regex",
  "safemem",
+ "serde",
+ "serde_json",
  "static_assertions",
  "tidb_query_codegen",
  "tidb_query_common",
@@ -5174,6 +5181,7 @@ dependencies = [
  "slog",
  "slog-global",
  "sst_importer",
+ "strum",
  "sysinfo",
  "tempfile",
  "test_sst_importer",
