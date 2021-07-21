@@ -10,4 +10,4 @@ prost-codec = ["fuzz-targets/prost-codec"]
 
 [dependencies]
 fuzz-targets = { path = "../targets", default-features = false }
-libfuzzer-sys = "0.3.1"
+libfuzzer-sys = "0.4"
