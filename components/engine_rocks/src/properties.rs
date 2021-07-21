@@ -542,7 +542,7 @@ pub fn get_range_entries_and_versions(
     let mut props = MvccProperties::new();
     let mut num_entries = 0;
     for (_, v) in collection.iter() {
-        let mvcc = match RocksMvccProperties::decode(&v.user_collected_properties()) {
+        let mvcc = match RocksMvccProperties::decode(v.user_collected_properties()) {
             Ok(v) => v,
             Err(_) => return None,
         };

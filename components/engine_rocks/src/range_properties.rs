@@ -42,7 +42,7 @@ impl RangePropertiesExt for RocksEngine {
 
         let collection = box_try!(self.get_range_properties_cf(cfname, start_key, end_key));
         for (_, v) in collection.iter() {
-            let props = box_try!(RangeProperties::decode(&v.user_collected_properties()));
+            let props = box_try!(RangeProperties::decode(v.user_collected_properties()));
             total_keys += props.get_approximate_keys_in_range(start_key, end_key);
         }
 
@@ -50,7 +50,7 @@ impl RangePropertiesExt for RocksEngine {
             let ssts = collection
                 .iter()
                 .map(|(k, v)| {
-                    let props = RangeProperties::decode(&v.user_collected_properties()).unwrap();
+                    let props = RangeProperties::decode(v.user_collected_properties()).unwrap();
                     let keys = props.get_approximate_keys_in_range(start_key, end_key);
                     format!(
                         "{}:{}",
@@ -102,7 +102,7 @@ impl RangePropertiesExt for RocksEngine {
 
         let collection = box_try!(self.get_range_properties_cf(cfname, &start_key, &end_key));
         for (_, v) in collection.iter() {
-            let props = box_try!(RangeProperties::decode(&v.user_collected_properties()));
+            let props = box_try!(RangeProperties::decode(v.user_collected_properties()));
             total_size += props.get_approximate_size_in_range(&start_key, &end_key);
         }
 
@@ -110,7 +110,7 @@ impl RangePropertiesExt for RocksEngine {
             let ssts = collection
                 .iter()
                 .map(|(k, v)| {
-                    let props = RangeProperties::decode(&v.user_collected_properties()).unwrap();
+                    let props = RangeProperties::decode(v.user_collected_properties()).unwrap();
                     let size = props.get_approximate_size_in_range(&start_key, &end_key);
                     format!(
                         "{}:{}",
@@ -172,7 +172,7 @@ impl RangePropertiesExt for RocksEngine {
 
         let mut keys = vec![];
         for (_, v) in collection.iter() {
-            let props = box_try!(RangeProperties::decode(&v.user_collected_properties()));
+            let props = box_try!(RangeProperties::decode(v.user_collected_properties()));
             keys.extend(
                 props
                     .take_excluded_range(start_key, end_key)

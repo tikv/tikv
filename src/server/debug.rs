@@ -783,7 +783,7 @@ fn dump_mvcc_properties(db: &Arc<DB>, start: &[u8], end: &[u8]) -> Result<Vec<(S
     let mut mvcc_properties = MvccProperties::new();
     for (_, v) in collection.iter() {
         num_entries += v.num_entries();
-        let mvcc = box_try!(RocksMvccProperties::decode(&v.user_collected_properties()));
+        let mvcc = box_try!(RocksMvccProperties::decode(v.user_collected_properties()));
         mvcc_properties.add(&mvcc);
     }
 
