@@ -12,7 +12,7 @@ impl RocksEngine {
         &self,
         cf: &str,
         ranges: &[Range],
-    ) -> Result<RocksTablePropertiesCollection> {
+    ) -> Result<rc::TablePropertiesCollection> {
         let cf = util::get_cf_handle(self.as_inner(), cf)?;
         // FIXME: extra allocation
         let ranges: Vec<_> = ranges.iter().map(util::range_to_rocks_range).collect();
@@ -20,7 +20,7 @@ impl RocksEngine {
             .as_inner()
             .get_properties_of_tables_in_range_rc(cf, &ranges);
         let raw = raw.map_err(Error::Engine)?;
-        Ok(RocksTablePropertiesCollection::from_raw(raw))
+        Ok(raw)
     }
 
     pub fn get_range_properties_cf(
@@ -28,17 +28,9 @@ impl RocksEngine {
         cfname: &str,
         start_key: &[u8],
         end_key: &[u8],
-    ) -> Result<RocksTablePropertiesCollection> {
+    ) -> Result<rc::TablePropertiesCollection> {
         let range = Range::new(start_key, end_key);
         self.get_properties_of_tables_in_range(cfname, &[range])
-    }
-}
-
-pub struct RocksTablePropertiesCollection(pub rc::TablePropertiesCollection);
-
-impl RocksTablePropertiesCollection {
-    fn from_raw(raw: rc::TablePropertiesCollection) -> RocksTablePropertiesCollection {
-        RocksTablePropertiesCollection(raw)
     }
 }
 

@@ -1196,8 +1196,8 @@ mod tests {
             let start = keys::data_key(b"");
             let end = keys::data_end_key(b"");
             let collection = db.get_range_properties_cf(cf, &start, &end).unwrap();
-            assert!(!collection.0.is_empty());
-            for (_, v) in collection.0.iter() {
+            assert!(!collection.is_empty());
+            for (_, v) in collection.iter() {
                 assert!(!v.user_collected_properties().is_empty());
                 assert_eq!(
                     v.user_collected_properties()
