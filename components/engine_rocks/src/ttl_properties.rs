@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::properties_types::DecodeProperties;
+use crate::decode_properties::DecodeProperties;
 use crate::{RocksEngine, UserProperties};
 use engine_traits::util::get_expire_ts;
 use engine_traits::{Range, Result, TtlProperties, TtlPropertiesExt};

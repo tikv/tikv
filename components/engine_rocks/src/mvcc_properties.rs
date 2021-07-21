@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::properties_types::DecodeProperties;
+use crate::decode_properties::DecodeProperties;
 use crate::{RocksEngine, UserProperties};
 use engine_traits::{MvccProperties, MvccPropertiesExt, Result};
 use txn_types::TimeStamp;

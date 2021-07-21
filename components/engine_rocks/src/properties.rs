@@ -6,7 +6,7 @@ use std::io::Read;
 use std::ops::{Deref, DerefMut};
 use std::u64;
 
-use crate::properties_types::{DecodeProperties, IndexHandle, IndexHandles};
+use crate::decode_properties::{DecodeProperties, IndexHandle, IndexHandles};
 use engine_traits::{MvccProperties, Range};
 use rocksdb::{
     DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,
