@@ -3561,8 +3561,6 @@ where
             //             |-------------------- entries will be left ----------------------|
             return;
         } else if replicated_idx - first_idx < self.ctx.cfg.raft_log_gc_threshold {
-            // Logs will only be kept `max_ticks` * `raft_log_gc_tick_interval`.
-            self.register_raft_gc_log_tick();
             return;
         } else {
             replicated_idx
