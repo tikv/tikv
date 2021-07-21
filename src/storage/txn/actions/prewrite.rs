@@ -76,7 +76,7 @@ pub fn prewrite<S: Snapshot>(
     }
 
     // For keys that do not need pessimistic locks in a pessimistic async-commit transaction,
-    // we need to check the key has not been committed before.
+    // we need to check the key has not been committed before if it is a retry request.
     //
     // It is to prevent the following case:
     // The key was prewrited successfully before, but the response is lost. The client resend
@@ -89,6 +89,7 @@ pub fn prewrite<S: Snapshot>(
     // record is collapsed.
     if txn_props.is_pessimistic()
         && !is_pessimistic_lock
+        && txn_props.retry_request
         && matches!(txn_props.commit_kind, CommitKind::Async(..))
     {
         match reader.get_txn_commit_record(&mutation.key)? {
@@ -157,6 +158,7 @@ pub struct TransactionProperties<'a> {
     pub lock_ttl: u64,
     pub min_commit_ts: TimeStamp,
     pub need_old_value: bool,
+    pub retry_request: bool,
 }
 
 impl<'a> TransactionProperties<'a> {
@@ -570,6 +572,7 @@ pub mod tests {
             lock_ttl: 0,
             min_commit_ts: TimeStamp::default(),
             need_old_value: false,
+            retry_request: false,
         }
     }
 
@@ -594,6 +597,7 @@ pub mod tests {
             lock_ttl: 2000,
             min_commit_ts: 10.into(),
             need_old_value: true,
+            retry_request: false,
         }
     }
 
@@ -902,6 +906,7 @@ pub mod tests {
                 lock_ttl: 0,
                 min_commit_ts: TimeStamp::default(),
                 need_old_value: true,
+                retry_request: false,
             },
             Mutation::CheckNotExists(Key::from_raw(key)),
             &None,
@@ -932,6 +937,7 @@ pub mod tests {
             lock_ttl: 2000,
             min_commit_ts: 10.into(),
             need_old_value: true,
+            retry_request: false,
         };
         // calculated commit_ts = 43 ≤ 50, ok
         let (_, old_value) = prewrite(
@@ -980,6 +986,7 @@ pub mod tests {
             lock_ttl: 2000,
             min_commit_ts: 10.into(),
             need_old_value: true,
+            retry_request: false,
         };
         // calculated commit_ts = 43 ≤ 50, ok
         let (_, old_value) = prewrite(
@@ -1087,6 +1094,7 @@ pub mod tests {
             lock_ttl: 2000,
             min_commit_ts: 51.into(),
             need_old_value: true,
+            retry_request: false,
         };
 
         let cases = vec![
@@ -1145,6 +1153,7 @@ pub mod tests {
             lock_ttl: 2000,
             min_commit_ts: 51.into(),
             need_old_value: true,
+            retry_request: false,
         };
 
         let cases: Vec<_> = vec![
@@ -1263,6 +1272,7 @@ pub mod tests {
                 lock_ttl: 0,
                 min_commit_ts: TimeStamp::default(),
                 need_old_value: true,
+                retry_request: false,
             };
             let snapshot = engine.snapshot(Default::default()).unwrap();
             let cm = ConcurrencyManager::new(start_ts);
@@ -1315,6 +1325,7 @@ pub mod tests {
             lock_ttl: 0,
             min_commit_ts: TimeStamp::default(),
             need_old_value: true,
+            retry_request: false,
         };
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let cm = ConcurrencyManager::new(start_ts);
@@ -1454,6 +1465,7 @@ pub mod tests {
                     lock_ttl: 0,
                     min_commit_ts: TimeStamp::default(),
                     need_old_value: true,
+                    retry_request: false,
                 };
                 let (_, old_value) = prewrite(
                     &mut txn,
@@ -1488,6 +1500,7 @@ pub mod tests {
                     lock_ttl: 0,
                     min_commit_ts: TimeStamp::default(),
                     need_old_value: true,
+                    retry_request: false,
                 };
                 let (_, old_value) = prewrite(
                     &mut txn,
