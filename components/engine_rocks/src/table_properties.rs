@@ -1,7 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::engine::RocksEngine;
-use crate::properties_types::DecodeProperties;
 use crate::util;
 use engine_traits::Range;
 use engine_traits::{Error, Result};
@@ -30,13 +29,5 @@ impl RocksEngine {
     ) -> Result<rocksdb::TablePropertiesCollection> {
         let range = Range::new(start_key, end_key);
         self.get_properties_of_tables_in_range(cfname, &[range])
-    }
-}
-
-impl DecodeProperties for rocksdb::UserCollectedProperties {
-    fn decode(&self, k: &str) -> tikv_util::codec::Result<&[u8]> {
-        self
-            .get(k.as_bytes())
-            .ok_or(tikv_util::codec::Error::KeyNotFound)
     }
 }

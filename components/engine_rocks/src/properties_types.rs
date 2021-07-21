@@ -84,3 +84,11 @@ pub trait DecodeProperties {
         IndexHandles::decode(buf)
     }
 }
+
+impl DecodeProperties for rocksdb::UserCollectedProperties {
+    fn decode(&self, k: &str) -> tikv_util::codec::Result<&[u8]> {
+        self
+            .get(k.as_bytes())
+            .ok_or(tikv_util::codec::Error::KeyNotFound)
+    }
+}
