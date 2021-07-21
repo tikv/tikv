@@ -32,8 +32,6 @@ impl BitVec {
         self.length += 1;
         if value {
             self.data[idx] |= mask;
-        } else {
-            self.data[idx] &= !mask;
         }
     }
 
@@ -59,7 +57,15 @@ impl BitVec {
     pub fn truncate(&mut self, len: usize) {
         if len < self.length {
             self.length = len;
-            self.data.truncate(Self::upper_bound(len));
+            let idx = Self::upper_bound(len);
+            self.data.truncate(idx);
+            if idx != 0 {
+                let rem = self.length % BITS;
+                if rem != 0 {
+                    let mask = 0xffffffffffffffff << rem;
+                    self.data[idx - 1] &= !mask;
+                }
+            }
         }
     }
 
@@ -280,6 +286,41 @@ mod tests {
         assert_eq!(x.len(), 4);
         x.truncate(0);
         assert_eq!(x.len(), 0);
+    }
+
+    #[test]
+    fn test_truncate_greater_than_64() {
+        let mut x = BitVec::with_capacity(0);
+        for i in 0..70 {
+            x.push(i % 2 == 0);
+        }
+
+        assert_eq!(x.len(), 70);
+        x.truncate(67);
+        assert_eq!(x.len(), 67);
+        assert_eq!(x.data.len(), 2);
+
+        for i in 0..67 {
+            assert_eq!(x.get(i), (i % 2 == 0));
+        }
+    }
+
+    #[test]
+    fn test_truncate_greater_64() {
+        let mut x = BitVec::with_capacity(0);
+        for i in 0..=65 {
+            x.push(i % 2 == 0);
+        }
+
+        assert_eq!(x.data.len(), 2);
+        assert_eq!(x.len(), 66);
+        x.truncate(64);
+        assert_eq!(x.len(), 64);
+        assert_eq!(x.data.len(), 1);
+
+        for i in 0..64 {
+            assert_eq!(x.get(i), (i % 2 == 0));
+        }
     }
 
     #[test]
