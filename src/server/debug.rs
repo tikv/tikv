@@ -35,6 +35,10 @@ use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Worker;
 use txn_types::Key;
 
+use pd_client::RpcClient;
+use pd_client::PdClient;
+use futures_executor::block_on;
+
 use crate::config::ConfigController;
 use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
 
@@ -552,10 +556,12 @@ impl<ER: RaftEngine> Debugger<ER> {
         Ok(res)
     }
 
+  
     pub fn remove_failed_stores(
         &self,
         store_ids: Vec<u64>,
         region_ids: Option<Vec<u64>>,
+        rpc_client: RpcClient,
     ) -> Result<()> {
         let store_id = self.get_store_id()?;
         if store_ids.iter().any(|&s| s == store_id) {
@@ -577,11 +583,25 @@ impl<ER: RaftEngine> Debugger<ER> {
                 if region_state.get_state() == PeerState::Tombstone {
                     return Ok(());
                 }
+                let region_id = region_state.get_region().get_id();
+
+                let mut region = match block_on(rpc_client.get_region_by_id(region_state.get_region().get_id())) {
+                    Ok(Some(region)) => region,
+                    Ok(None) => {
+                        warn!("no such region {} on PD", region_id);
+                        return Ok(());
+                    }
+                    Err(e) => panic!("RpcClient::get_region_by_id {:?}", e),
+                };
 
                 let mut new_peers = region_state.get_region().get_peers().to_owned();
                 new_peers.retain(|peer| !store_ids.contains(&peer.get_store_id()));
 
-                let region_id = region_state.get_region().get_id();
+                if region.get_region_epoch().get_conf_ver() > region_state.get_region().get_region_epoch().get_conf_ver() {
+                    region_state.mut_region().mut_region_epoch().set_conf_ver(region.get_region_epoch().get_conf_ver());
+                    new_peers.retain(|peer| region.get_peers().iter().any(|p| p.get_store_id() == peer.get_store_id()));
+                }
+
                 let old_peers = region_state.mut_region().take_peers();
                 info!(
                     "peers changed";
@@ -602,8 +622,8 @@ impl<ER: RaftEngine> Debugger<ER> {
                     if let Some(value) = box_try!(kv.get_value_cf(CF_RAFT, &key)) {
                         box_try!(remove_stores(&key, &value, &mut wb));
                     } else {
-                        let msg = format!("No such region {} on the store", region_id);
-                        return Err(Error::Other(msg.into()));
+                        info!("No such region {} on the store, skip", region_id);
+                        // return Err(Error::Other(msg.into()));
                     }
                 }
             } else {
