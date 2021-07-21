@@ -28,8 +28,8 @@ use engine_rocks::util::{
     FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
 };
 use engine_rocks::{
-    RaftDBLogger, RangePropertiesCollectorFactory, RocksEngine, RocksEventListener,
-    RocksSstPartitionerFactory, RocksdbLogger, TtlPropertiesCollectorFactory,
+    RaftDBLogger, RaftLogCompactionFilterFactory, RangePropertiesCollectorFactory, RocksEngine,
+    RocksEventListener, RocksSstPartitionerFactory, RocksdbLogger, TtlPropertiesCollectorFactory,
     DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt};
@@ -1175,7 +1175,7 @@ impl Default for RaftDefaultCfConfig {
 }
 
 impl RaftDefaultCfConfig {
-    pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
+    pub fn build_opt(&self, cache: &Option<Cache>, gc_on_compaction: bool) -> ColumnFamilyOptions {
         let no_region_info_accessor: Option<&RegionInfoAccessor> = None;
         let mut cf_opts = build_cf_opt!(self, CF_DEFAULT, cache, no_region_info_accessor);
         let f = Box::new(FixedPrefixSliceTransform::new(region_raft_prefix_len()));
@@ -1183,6 +1183,15 @@ impl RaftDefaultCfConfig {
             .set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform", f)
             .unwrap();
         cf_opts.set_titandb_options(&self.titan.build_opts());
+        if gc_on_compaction {
+            debug!("enable raft log compaction filter";);
+            cf_opts
+                .set_compaction_filter_factory(
+                    "raft_log_compaction_filter_factory",
+                    Box::new(RaftLogCompactionFilterFactory {}),
+                )
+                .unwrap();
+        }
         cf_opts
     }
 }
@@ -1240,6 +1249,7 @@ pub struct RaftDbConfig {
     pub allow_concurrent_memtable_write: bool,
     pub bytes_per_sync: ReadableSize,
     pub wal_bytes_per_sync: ReadableSize,
+    pub gc_on_compaction: bool,
     #[online_config(submodule)]
     pub defaultcf: RaftDefaultCfConfig,
     #[online_config(skip)]
@@ -1282,6 +1292,7 @@ impl Default for RaftDbConfig {
             wal_bytes_per_sync: ReadableSize::kb(512),
             defaultcf: RaftDefaultCfConfig::default(),
             titan: titan_config,
+            gc_on_compaction: true,
         }
     }
 }
@@ -1330,7 +1341,10 @@ impl RaftDbConfig {
     }
 
     pub fn build_cf_opts(&self, cache: &Option<Cache>) -> Vec<CFOptions<'_>> {
-        vec![CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt(cache))]
+        vec![CFOptions::new(
+            CF_DEFAULT,
+            self.defaultcf.build_opt(cache, self.gc_on_compaction),
+        )]
     }
 
     fn validate(&mut self) -> Result<(), Box<dyn Error>> {

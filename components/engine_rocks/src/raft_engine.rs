@@ -1,6 +1,11 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::{util, RocksEngine, RocksWriteBatch};
+use lazy_static::lazy_static;
+use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, RwLock};
 
 use engine_traits::{
     Error, Iterable, KvEngine, MiscExt, Mutable, Peekable, RaftEngine, RaftEngineReadOnly,
@@ -12,6 +17,12 @@ use raft::eraftpb::Entry;
 use tikv_util::{box_err, box_try};
 
 const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
+
+lazy_static! {
+    pub static ref RAFT_LOG_GC_ON_COMPACTION: AtomicBool = AtomicBool::new(false);
+    pub static ref RAFT_LOG_GC_INDEXES: Arc<RwLock<HashMap<u64, u64>>> =
+        Arc::new(RwLock::new(HashMap::new()));
+}
 
 impl RaftEngineReadOnly for RocksEngine {
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {
@@ -171,7 +182,13 @@ impl RaftEngine for RocksEngine {
         self.put_msg(&keys::raft_state_key(raft_group_id), state)
     }
 
+    // Always returns Ok(0) when using compaction filter.
     fn gc(&self, raft_group_id: u64, mut from: u64, to: u64) -> Result<usize> {
+        if RAFT_LOG_GC_ON_COMPACTION.load(Ordering::Acquire) {
+            let mut indexes = RAFT_LOG_GC_INDEXES.write().unwrap();
+            indexes.insert(raft_group_id, to);
+            return Ok(0);
+        }
         if from >= to {
             return Ok(0);
         }
