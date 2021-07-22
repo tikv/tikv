@@ -100,6 +100,7 @@ pub fn prewrite<S: Snapshot>(
                     "start_ts" => txn_props.start_ts, "commit_ts" => commit_ts,
                     "key" => ?mutation.key, "mutation_type" => ?mutation.mutation_type,
                     "write_type" => ?write.write_type);
+                txn.clear();
                 return Ok((commit_ts, OldValue::Unspecified));
             }
             _ => {}
