@@ -28,10 +28,7 @@ use std::{
 use cdc::MemoryQuota;
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
-use engine_rocks::{
-    encryption::get_env as get_encrypted_env, file_system::get_env as get_inspected_env,
-    from_rocks_compression_type, RocksEngine,
-};
+use engine_rocks::{from_rocks_compression_type, get_env, RocksEngine};
 use engine_traits::{
     compaction_job::CompactionJobInfo, CFOptionsExt, ColumnFamilyOptions, Engines, MiscExt,
     RaftEngine, CF_DEFAULT, CF_LOCK, CF_WRITE,
@@ -729,6 +726,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             &self.config.import,
             import_path,
             self.encryption_key_manager.clone(),
+            self.config.storage.enable_ttl,
         )
         .unwrap();
         for (cf_name, compression_type) in &[
@@ -743,7 +741,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         ] {
             importer.set_compression_type(cf_name, from_rocks_compression_type(*compression_type));
         }
-        let importer = Arc::new(importer);
 
         let split_check_runner = SplitCheckRunner::new(
             engines.engines.kv.clone(),
@@ -1173,9 +1170,7 @@ impl TiKVServer<RocksEngine> {
         &mut self,
         limiter: Option<Arc<IORateLimiter>>,
     ) -> (Engines<RocksEngine, RocksEngine>, Arc<EnginesResourceInfo>) {
-        let env =
-            get_encrypted_env(self.encryption_key_manager.clone(), None /*base_env*/).unwrap();
-        let env = get_inspected_env(Some(env), limiter).unwrap();
+        let env = get_env(self.encryption_key_manager.clone(), limiter).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         // Create raft engine.
@@ -1253,9 +1248,7 @@ impl TiKVServer<RaftLogEngine> {
         Engines<RocksEngine, RaftLogEngine>,
         Arc<EnginesResourceInfo>,
     ) {
-        let env =
-            get_encrypted_env(self.encryption_key_manager.clone(), None /*base_env*/).unwrap();
-        let env = get_inspected_env(Some(env), limiter).unwrap();
+        let env = get_env(self.encryption_key_manager.clone(), limiter).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         // Create raft engine.
