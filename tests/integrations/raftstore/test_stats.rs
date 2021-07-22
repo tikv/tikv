@@ -305,46 +305,60 @@ fn test_query_stats() {
         });
     let raw_batch_get_command: Box<Query> =
         Box::new(|ctx, cluster, client, store_id, region_id, start_key| {
-            let get_command: Box<GenRequest> = Box::new(|ctx, start_key| {
-                let mut get_req = RawGetRequest::default();
-                get_req.set_context(ctx.clone());
-                get_req.key = start_key.clone();
-                let mut req = BatchCommandsRequestRequest::new();
-                req.set_raw_get(get_req);
-                return req;
-            });
-            batch_commands(&ctx, &client, get_command, &start_key);
-            assert!(check_query_num_read(
-                cluster,
-                store_id,
-                region_id,
-                QueryKind::Get,
-                1000
-            ));
-            assert!(check_split_key(cluster, start_key));
+            let mut flag = false;
+            for i in 0..3 {
+                let get_command: Box<GenRequest> = Box::new(|ctx, start_key| {
+                    let mut get_req = RawGetRequest::default();
+                    get_req.set_context(ctx.clone());
+                    get_req.key = start_key.clone();
+                    let mut req = BatchCommandsRequestRequest::new();
+                    req.set_raw_get(get_req);
+                    return req;
+                });
+                batch_commands(&ctx, &client, get_command, &start_key);
+                assert!(check_split_key(cluster, start_key.clone()));
+                if check_query_num_read(
+                    cluster,
+                    store_id,
+                    region_id,
+                    QueryKind::Get,
+                    (i + 1) * 1000,
+                ) {
+                    flag = true;
+                    break;
+                }
+            }
+            assert!(flag);
         });
     let batch_get_command: Box<Query> =
         Box::new(|ctx, cluster, client, store_id, region_id, start_key| {
-            let get_command: Box<GenRequest> = Box::new(|ctx, start_key| {
-                let mut get_req = GetRequest::default();
-                get_req.set_context(ctx.clone());
-                get_req.key = start_key;
-                let mut req = BatchCommandsRequestRequest::new();
-                req.set_get(get_req);
-                return req;
-            });
-            batch_commands(&ctx, &client, get_command, &start_key);
-            assert!(check_query_num_read(
-                cluster,
-                store_id,
-                region_id,
-                QueryKind::Get,
-                1000
-            ));
-            assert!(check_split_key(
-                cluster,
-                Key::from_raw(&start_key).as_encoded().to_vec()
-            ));
+            let mut flag = false;
+            for i in 0..3 {
+                let get_command: Box<GenRequest> = Box::new(|ctx, start_key| {
+                    let mut get_req = GetRequest::default();
+                    get_req.set_context(ctx.clone());
+                    get_req.key = start_key;
+                    let mut req = BatchCommandsRequestRequest::new();
+                    req.set_get(get_req);
+                    return req;
+                });
+                batch_commands(&ctx, &client, get_command, &start_key);
+                assert!(check_split_key(
+                    cluster,
+                    Key::from_raw(&start_key).as_encoded().to_vec()
+                ));
+                if check_query_num_read(
+                    cluster,
+                    store_id,
+                    region_id,
+                    QueryKind::Get,
+                    (i + 1) * 1000,
+                ) {
+                    flag = true;
+                    break;
+                }
+            }
+            assert!(flag);
         });
     fail::cfg("mock_hotspot_threshold", "return(0)").unwrap();
     fail::cfg("mock_tick_interval", "return(0)").unwrap();
@@ -437,7 +451,7 @@ fn put(
 
 fn test_query_num(query: Box<Query>) {
     let (cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
-        cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(10);
+        cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
         cluster.cfg.split.qps_threshold = 0;
         cluster.cfg.split.split_balance_score = 2.0;
         cluster.cfg.split.split_contained_score = 2.0;
@@ -463,7 +477,7 @@ fn test_query_num(query: Box<Query>) {
 
 fn test_delete_query() {
     let (cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
-        cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(10);
+        cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
         cluster.cfg.storage.enable_ttl = true;
     });
 

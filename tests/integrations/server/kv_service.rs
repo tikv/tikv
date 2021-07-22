@@ -948,7 +948,7 @@ fn test_double_run_node() {
     let coprocessor_host = CoprocessorHost::new(router, raftstore::coprocessor::Config::default());
     let importer = {
         let dir = Path::new(engines.kv.path()).join("import-sst");
-        Arc::new(SSTImporter::new(&ImportConfig::default(), dir, None).unwrap())
+        Arc::new(SSTImporter::new(&ImportConfig::default(), dir, None, false).unwrap())
     };
     let (split_check_scheduler, _) = dummy_scheduler();
 
