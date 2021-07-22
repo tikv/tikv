@@ -420,6 +420,7 @@ impl<K: PrewriteKind> Prewriter<K> {
             lock_ttl: self.lock_ttl,
             min_commit_ts: self.min_commit_ts,
             need_old_value: extra_op == ExtraOp::ReadOldValue,
+            is_retry_request: self.ctx.is_retry_request,
         };
 
         let async_commit_pk = self
@@ -441,6 +442,7 @@ impl<K: PrewriteKind> Prewriter<K> {
         // whether the transaction has been committed, so the error is still returned.
         fn check_committed_record_on_err(
             prewrite_result: MvccResult<(TimeStamp, OldValue)>,
+            txn: &mut MvccTxn,
             reader: &mut SnapshotReader<impl Snapshot>,
             key: &Key,
         ) -> Result<(Vec<std::result::Result<(), StorageError>>, TimeStamp)> {
@@ -448,7 +450,10 @@ impl<K: PrewriteKind> Prewriter<K> {
                 TxnCommitRecord::SingleRecord { commit_ts, write }
                     if write.write_type != WriteType::Rollback =>
                 {
-                    info!("prewrited transaction has been committed"; "start_ts" => reader.start_ts, "commit_ts" => commit_ts);
+                    info!("prewrited transaction has been committed";
+                        "start_ts" => reader.start_ts, "commit_ts" => commit_ts,
+                        "key" => ?key, "write_type" => ?write.write_type);
+                    txn.clear();
                     Ok((vec![], commit_ts))
                 }
                 _ => Err(prewrite_result.unwrap_err().into()),
@@ -484,10 +489,10 @@ impl<K: PrewriteKind> Prewriter<K> {
                     conflict_commit_ts,
                     ..
                 })) if conflict_commit_ts > start_ts => {
-                    return check_committed_record_on_err(prewrite_result, reader, &key);
+                    return check_committed_record_on_err(prewrite_result, txn, reader, &key);
                 }
                 Err(MvccError(box MvccErrorInner::PessimisticLockNotFound { .. })) => {
-                    return check_committed_record_on_err(prewrite_result, reader, &key);
+                    return check_committed_record_on_err(prewrite_result, txn, reader, &key);
                 }
                 Err(MvccError(box MvccErrorInner::CommitTsTooLarge { .. })) | Ok((..)) => {
                     // fallback to not using async commit or 1pc
@@ -1686,6 +1691,49 @@ mod tests {
             }
             res => panic!("unexpected result {:?}", res),
         }
+    }
+
+    #[test]
+    fn test_repeated_pessimistic_prewrite_1pc() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let cm = ConcurrencyManager::new(1.into());
+        let mut statistics = Statistics::default();
+
+        must_acquire_pessimistic_lock(&engine, b"k2", b"k2", 5, 5);
+        // The second key needs a pessimistic lock
+        let mutations = vec![
+            (Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())), false),
+            (Mutation::Put((Key::from_raw(b"k2"), b"v2".to_vec())), true),
+        ];
+        let res = pessimistic_prewrite_with_cm(
+            &engine,
+            cm.clone(),
+            &mut statistics,
+            mutations.clone(),
+            b"k2".to_vec(),
+            5,
+            5,
+            Some(100),
+        )
+        .unwrap();
+        let commit_ts = res.one_pc_commit_ts;
+        cm.update_max_ts(commit_ts.next());
+        // repeate the prewrite
+        let res = pessimistic_prewrite_with_cm(
+            &engine,
+            cm,
+            &mut statistics,
+            mutations,
+            b"k2".to_vec(),
+            5,
+            5,
+            Some(100),
+        )
+        .unwrap();
+        // The new commit ts should be same as before.
+        assert_eq!(res.one_pc_commit_ts, commit_ts);
+        must_seek_write(&engine, b"k1", 100, 5, commit_ts, WriteType::Put);
+        must_seek_write(&engine, b"k2", 100, 5, commit_ts, WriteType::Put);
     }
 
     #[test]
