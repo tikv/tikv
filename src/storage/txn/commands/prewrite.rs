@@ -1720,6 +1720,7 @@ mod tests {
         )
         .unwrap();
         let commit_ts = res.one_pc_commit_ts;
+        cm.update_max_ts(commit_ts.next());
         // repeate the prewrite
         let res = pessimistic_prewrite_with_cm(
             &engine,
