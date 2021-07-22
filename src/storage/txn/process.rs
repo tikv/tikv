@@ -830,7 +830,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                             info!("[for debug] commit error for lock";
                             "key"  => ?current_key,
                             "lock" => ?current_lock);
-                            return Err(e.into());
+                            return Err(Error::from(e));
                         }
                     }
                 } else {
