@@ -898,6 +898,8 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 Some(id) => id,
                 None => return vec![],
             };
+            // TODO: should using `RegionReadProgressRegistry` to dump leader info like `resolved-ts`
+            // to reduce the time holding the `store_meta` mutex
             for (region_id, _) in regions {
                 if let Some(region) = meta.regions.get(&region_id) {
                     if let Some((term, leader_id)) = meta.leaders.get(&region_id) {
@@ -1148,7 +1150,7 @@ impl Initializer {
             self.sink_scan_events(entries, done).await?;
         }
 
-        let takes = start.elapsed();
+        let takes = start.saturating_elapsed();
         if let Some(resolver) = resolver {
             self.finish_building_resolver(resolver, region, takes);
         }
@@ -1496,7 +1498,12 @@ mod tests {
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
             max_ts_sync_status: Arc::new(AtomicU64::new(0)),
             track_ver: TrackVer::new(),
-            read_progress: Arc::new(RegionReadProgress::new(0, 0, "".to_owned())),
+            read_progress: Arc::new(RegionReadProgress::new(
+                &Region::default(),
+                0,
+                0,
+                "".to_owned(),
+            )),
         };
         store_meta.lock().unwrap().readers.insert(1, read_delegate);
         let (task_sched, task_rx) = dummy_scheduler();
@@ -1587,9 +1594,9 @@ mod tests {
         check_result();
         // 2s to allow certain inaccuracy.
         assert!(
-            start_1_3.elapsed() >= Duration::new(2, 0),
+            start_1_3.saturating_elapsed() >= Duration::new(2, 0),
             "{:?}",
-            start_1_3.elapsed()
+            start_1_3.saturating_elapsed()
         );
 
         let start_1_6 = Instant::now();
@@ -1598,9 +1605,9 @@ mod tests {
         check_result();
         // 4s to allow certain inaccuracy.
         assert!(
-            start_1_6.elapsed() >= Duration::new(4, 0),
+            start_1_6.saturating_elapsed() >= Duration::new(4, 0),
             "{:?}",
-            start_1_6.elapsed()
+            start_1_6.saturating_elapsed()
         );
 
         initializer.build_resolver = false;

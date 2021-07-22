@@ -117,7 +117,7 @@ pub fn check_and_dump_raft_db(
     }
 
     info!("Start to scan raft log from RocksEngine and dump into RaftLogEngine");
-    let consumed_time = std::time::Instant::now();
+    let consumed_time = tikv_util::time::Instant::now();
     // Seek all region id from raftdb and send them to workers.
     let mut it = src_engine.iterator().unwrap();
     let mut valid = it.seek(SeekKey::Key(keys::REGION_RAFT_MIN_KEY)).unwrap();
@@ -144,7 +144,7 @@ pub fn check_and_dump_raft_db(
         "Finished dump, total regions: {}; Total bytes: {}; Consumed time: {:?}",
         count_region,
         count_size.load(Ordering::Relaxed),
-        consumed_time.elapsed(),
+        consumed_time.saturating_elapsed(),
     );
 
     rename_to_tmp_dir(&raftdb_path, &dirty_raftdb_path);
@@ -242,7 +242,7 @@ pub fn check_and_dump_raft_engine(config: &TiKvConfig, engine: &RocksEngine, thr
     }
 
     info!("Start to scan raft log from RaftLogEngine and dump into RocksEngine");
-    let consumed_time = std::time::Instant::now();
+    let consumed_time = tikv_util::time::Instant::now();
     // Seek all region id from RaftLogEngine and send them to workers.
     for id in src_engine.raft_groups() {
         tx.send(id).unwrap();
@@ -259,7 +259,7 @@ pub fn check_and_dump_raft_engine(config: &TiKvConfig, engine: &RocksEngine, thr
         "Finished dump, total regions: {}; Total bytes: {}; Consumed time: {:?}",
         count_region,
         count_size.load(Ordering::Relaxed),
-        consumed_time.elapsed(),
+        consumed_time.saturating_elapsed(),
     );
 
     rename_to_tmp_dir(&raft_engine_path, &dirty_raft_engine_path);

@@ -21,7 +21,7 @@ use std::{
         atomic::{AtomicU32, AtomicU64, Ordering},
         Arc, Mutex,
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use cdc::MemoryQuota;
@@ -60,8 +60,8 @@ use raftstore::{
         fsm,
         fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_MSG_CAP},
         memory::MEMTRACE_ROOT,
-        AutoSplitController, GlobalReplicationState, LocalReader, SnapManagerBuilder,
-        SplitCheckRunner, SplitConfigManager, StoreMsg,
+        AutoSplitController, CheckLeaderRunner, GlobalReplicationState, LocalReader,
+        SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMsg,
     },
 };
 use security::SecurityManager;
@@ -91,7 +91,7 @@ use tikv_util::{
     math::MovingAvgU32,
     sys::{register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
-    time::Monitor,
+    time::{Instant, Monitor},
     worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker, Worker},
 };
 use tokio::runtime::Builder;
@@ -659,6 +659,11 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             None
         };
 
+        let check_leader_runner = CheckLeaderRunner::new(engines.store_meta.clone());
+        let check_leader_scheduler = self
+            .background_worker
+            .start("check-leader", check_leader_runner);
+
         let server_config = Arc::new(VersionTrack::new(self.config.server.clone()));
 
         self.config
@@ -694,6 +699,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.resolver.clone(),
             snap_mgr.clone(),
             gc_worker.clone(),
+            check_leader_scheduler,
             self.env.clone(),
             unified_read_pool,
             debug_thread_pool,
@@ -1347,7 +1353,7 @@ impl<R: RaftEngine> EngineMetricsManager<R> {
     pub fn flush(&mut self, now: Instant) {
         self.engines.kv.flush_metrics("kv");
         self.engines.raft.flush_metrics("raft");
-        if now.duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
+        if now.saturating_duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
             self.engines.kv.reset_statistics();
             self.engines.raft.reset_statistics();
             self.last_reset = now;
