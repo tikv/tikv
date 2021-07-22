@@ -54,7 +54,7 @@ pub fn must_prewrite_put_impl<E: Engine>(
             lock_ttl,
             min_commit_ts,
             need_old_value: false,
-            retry_request: false,
+            is_retry_request: false,
         },
         mutation,
         &secondary_keys,
@@ -241,7 +241,7 @@ fn default_txn_props(
         lock_ttl: 0,
         min_commit_ts: TimeStamp::default(),
         need_old_value: false,
-        retry_request: false,
+        is_retry_request: false,
     }
 }
 fn must_prewrite_put_err_impl<E: Engine>(

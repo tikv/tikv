@@ -692,7 +692,7 @@ mod tests {
                             lock_ttl: 0,
                             min_commit_ts: TimeStamp::default(),
                             need_old_value: false,
-                            retry_request: false,
+                            is_retry_request: false,
                         },
                         Mutation::Put((Key::from_raw(key), key.to_vec())),
                         &None,

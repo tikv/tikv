@@ -423,7 +423,7 @@ impl<K: PrewriteKind> Prewriter<K> {
             lock_ttl: self.lock_ttl,
             min_commit_ts: self.min_commit_ts,
             need_old_value: extra_op == ExtraOp::ReadOldValue,
-            retry_request: self.ctx.retry_request,
+            is_retry_request: self.is_ctx.is_retry_request,
         };
 
         let async_commit_pk = self
