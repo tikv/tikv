@@ -598,7 +598,7 @@ where
             check_quorum: true,
             skip_bcast_commit: true,
             pre_vote: cfg.prevote,
-            //max_committed_size_per_ready: MAX_COMMITTED_SIZE_PER_READY,
+            max_committed_size_per_ready: MAX_COMMITTED_SIZE_PER_READY,
             ..Default::default()
         };
 
@@ -2031,9 +2031,9 @@ where
             self.async_writer_id = Some((new_id, now, 0));
             return Some(new_id);
         }
-        // There are some unpersisted readies so `async_writer_id` must not be None.
+        // There are some unpersisted readies so `async_writer_id` must not be None
         let (id, last_time, count) = self.async_writer_id.as_mut().unwrap();
-        // Whether the duration doesn't exceed the config value
+        // Whether the duration doesn't exceed the config value or not
         if now - *last_time
             < ctx.cfg.io_reschedule_hotpot_duration.0 + Duration::from_millis(*count as u64 * 10)
         {

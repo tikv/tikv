@@ -228,7 +228,7 @@ impl EntryCache {
         // Clean cached entries which have been already sent to apply threads. For example,
         // if entries [1, 10), [10, 20), [20, 30) are sent to apply threads and `compact_to(15)`
         // is called, only [20, 30) will still be kept in cache.
-        /*let old_trace_cap = self.trace.capacity();
+        let old_trace_cap = self.trace.capacity();
         while let Some(cached_entries) = self.trace.pop_front() {
             if cached_entries.range.start > idx {
                 self.trace.push_front(cached_entries);
@@ -244,7 +244,7 @@ impl EntryCache {
             idx = cmp::max(cached_entries.range.end - 1, idx);
         }
         let new_trace_cap = self.trace.capacity();
-        mem_size_change += Self::get_trace_vec_mem_size_change(new_trace_cap, old_trace_cap);*/
+        mem_size_change += Self::get_trace_vec_mem_size_change(new_trace_cap, old_trace_cap);
 
         let cache_first_idx = self.first_index().unwrap_or(u64::MAX);
         if cache_first_idx > idx {
