@@ -2,12 +2,14 @@
 
 use crate::rocks_metrics::*;
 
-use file_system::{get_io_type, set_io_type, IOType};
+use file_system::{delete_file_if_exist, get_io_type, set_io_type, IOType};
+use lazy_static::lazy_static;
+use regex::Regex;
 use rocksdb::{
     CompactionJobInfo, DBBackgroundErrorReason, FlushJobInfo, IngestionInfo, SubcompactionJobInfo,
     WriteStallInfo,
 };
-use tikv_util::set_panic_mark;
+use tikv_util::{error, set_panic_mark};
 
 pub struct RocksEventListener {
     db_name: String,
@@ -102,6 +104,36 @@ impl rocksdb::EventListener for RocksEventListener {
             if err.starts_with("Corruption") {
                 set_panic_mark();
             }
+            if (reason == DBBackgroundErrorReason::Flush
+                || reason == DBBackgroundErrorReason::Compaction)
+                && err.starts_with("IO error: No space left on device")
+            {
+                // recycle incomplete sst file
+                lazy_static! {
+                    static ref RE: Regex = Regex::new(
+                        r"(?:While appending to file: )(?P<path>.+)(?:: No space left on device)"
+                    )
+                    .unwrap();
+                }
+                error!("rocksdb background error (disk full), incomplete sst file will be removed.";
+                    "db"=>&self.db_name,
+                    "reason"=>&r,
+                    "error"=>&err
+                );
+                if let Some(c) = RE.captures(&err) {
+                    if let Some(path) = c.name("path") {
+                        let path = path.as_str();
+                        // CRITICAL: remove incomplete sst file
+                        match delete_file_if_exist(path) {
+                            Ok(_) => {}
+                            Err(err) => {
+                                error!("remove incomplete sst file error."; "path"=>path,"err"=>format!("{}", err))
+                            }
+                        }
+                    }
+                }
+                return;
+            }
             panic!(
                 "rocksdb background error. db: {}, reason: {}, error: {}",
                 self.db_name, r, err
@@ -113,5 +145,24 @@ impl rocksdb::EventListener for RocksEventListener {
         STORE_ENGINE_EVENT_COUNTER_VEC
             .with_label_values(&[&self.db_name, info.cf_name(), "stall_conditions_changed"])
             .inc();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use regex::Regex;
+
+    #[test]
+    fn test_regex() {
+        let s = "IO error: No space left on deviceWhile appending to file: /rocksfull/dbuHoG8a/000017.sst: No space left on device, Accumulated background error counts: 1".to_owned();
+        let re =
+            Regex::new(r"(?:While appending to file: )(?P<path>.+)(?:: No space left on device)")
+                .unwrap();
+        let c = re.captures(&s).unwrap();
+        assert_eq!(
+            c.name("path").unwrap().as_str(),
+            "/rocksfull/dbuHoG8a/000017.sst"
+        );
     }
 }

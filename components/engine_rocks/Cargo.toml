@@ -69,6 +69,7 @@ kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = f
 raft = { version = "0.6.0-alpha", default-features = false }
 protobuf = "2"
 fail = "0.4"
+regex = "1.5.4"
 
 [dependencies.rocksdb]
 git = "https://github.com/tikv/rust-rocksdb.git"
