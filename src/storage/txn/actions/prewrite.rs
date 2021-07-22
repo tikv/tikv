@@ -1225,16 +1225,20 @@ pub mod tests {
         must_commit(&engine, b"k2", 10, 20);
 
         // This is a resent prewrite
-        must_pessimistic_prewrite_put_async_commit(
+        must_prewrite_put_impl(
             &engine,
             b"k2",
             b"v2",
             b"k1",
             &Some(vec![]),
-            10,
-            10,
+            10.into(),
             false,
-            15,
+            100,
+            10.into(),
+            1,
+            15.into(),
+            TimeStamp::default(),
+            true,
         );
         // Commit repeatedly, these operations should have no effect.
         must_commit(&engine, b"k1", 10, 25);

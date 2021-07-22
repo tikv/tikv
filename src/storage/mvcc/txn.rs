@@ -1011,6 +1011,7 @@ pub(crate) mod tests {
                     expected_lock_info.get_txn_size(),
                     TimeStamp::zero(),
                     TimeStamp::zero(),
+                    false,
                 );
             } else {
                 expected_lock_info.set_lock_type(Op::PessimisticLock);
