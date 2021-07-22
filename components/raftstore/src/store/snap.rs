@@ -8,7 +8,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
-use std::time::Instant;
 use std::{error::Error as StdError, result, str, thread, time, u64};
 
 use fail::fail_point;
@@ -33,7 +32,7 @@ use file_system::{
     File, Metadata, OpenOptions,
 };
 use keys::{enc_end_key, enc_start_key};
-use tikv_util::time::{duration_to_sec, Limiter};
+use tikv_util::time::{duration_to_sec, Instant, Limiter};
 use tikv_util::HandyRwLock;
 use tikv_util::{box_err, box_try, debug, error, info, map, warn};
 
@@ -806,14 +805,14 @@ where
         snap_data.set_version(SNAPSHOT_VERSION);
         snap_data.set_meta(self.meta_file.meta.clone());
 
-        SNAPSHOT_BUILD_TIME_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
+        SNAPSHOT_BUILD_TIME_HISTOGRAM.observe(duration_to_sec(t.saturating_elapsed()) as f64);
         info!(
             "scan snapshot";
             "region_id" => region.get_id(),
             "snapshot" => self.path(),
             "key_count" => stat.kv_count,
             "size" => total_size,
-            "takes" => ?t.elapsed(),
+            "takes" => ?t.saturating_elapsed(),
         );
 
         Ok(())

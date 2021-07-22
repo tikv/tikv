@@ -1150,7 +1150,7 @@ impl Initializer {
             self.sink_scan_events(entries, done).await?;
         }
 
-        let takes = start.elapsed();
+        let takes = start.saturating_elapsed();
         if let Some(resolver) = resolver {
             self.finish_building_resolver(resolver, region, takes);
         }
@@ -1594,9 +1594,9 @@ mod tests {
         check_result();
         // 2s to allow certain inaccuracy.
         assert!(
-            start_1_3.elapsed() >= Duration::new(2, 0),
+            start_1_3.saturating_elapsed() >= Duration::new(2, 0),
             "{:?}",
-            start_1_3.elapsed()
+            start_1_3.saturating_elapsed()
         );
 
         let start_1_6 = Instant::now();
@@ -1605,9 +1605,9 @@ mod tests {
         check_result();
         // 4s to allow certain inaccuracy.
         assert!(
-            start_1_6.elapsed() >= Duration::new(4, 0),
+            start_1_6.saturating_elapsed() >= Duration::new(4, 0),
             "{:?}",
-            start_1_6.elapsed()
+            start_1_6.saturating_elapsed()
         );
 
         initializer.build_resolver = false;
