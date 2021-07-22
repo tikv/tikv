@@ -991,6 +991,15 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         unimplemented!()
     }
 
+    fn is_alive(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: IsAliveRequest,
+        _sink: UnarySink<IsAliveResponse>,
+    ) {
+        unimplemented!()
+    }
+
     fn check_leader(
         &mut self,
         ctx: RpcContext<'_>,

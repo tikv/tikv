@@ -423,6 +423,7 @@ impl<K: PrewriteKind> Prewriter<K> {
             lock_ttl: self.lock_ttl,
             min_commit_ts: self.min_commit_ts,
             need_old_value: extra_op == ExtraOp::ReadOldValue,
+            is_retry_request: self.ctx.is_retry_request,
         };
 
         let async_commit_pk = self
@@ -451,7 +452,10 @@ impl<K: PrewriteKind> Prewriter<K> {
                 TxnCommitRecord::SingleRecord { commit_ts, write }
                     if write.write_type != WriteType::Rollback =>
                 {
-                    info!("prewrited transaction has been committed"; "start_ts" => txn.start_ts, "commit_ts" => commit_ts);
+                    info!("prewrited transaction has been committed";
+                        "start_ts" => txn.start_ts, "commit_ts" => commit_ts,
+                        "key" => ?key, "write_type" => ?write.write_type);
+                    txn.clear();
                     Ok((vec![], commit_ts))
                 }
                 _ => Err(prewrite_result.unwrap_err().into()),
@@ -756,7 +760,7 @@ mod tests {
         txn::{
             commands::test_util::prewrite_command,
             commands::test_util::{
-                commit, pessimsitic_prewrite_with_cm, prewrite, prewrite_with_cm, rollback,
+                commit, pessimistic_prewrite_with_cm, prewrite, prewrite_with_cm, rollback,
             },
             tests::{must_acquire_pessimistic_lock, must_commit, must_rollback},
             Error, ErrorInner,
@@ -1014,7 +1018,7 @@ mod tests {
 
         let mutations = vec![(Mutation::Put((Key::from_raw(key), value.to_vec())), true)];
         let mut statistics = Statistics::default();
-        pessimsitic_prewrite_with_cm(
+        pessimistic_prewrite_with_cm(
             &engine,
             cm.clone(),
             &mut statistics,
@@ -1040,7 +1044,7 @@ mod tests {
             (Mutation::Put((Key::from_raw(k2), v2.to_vec())), false),
         ];
         statistics = Statistics::default();
-        pessimsitic_prewrite_with_cm(
+        pessimistic_prewrite_with_cm(
             &engine,
             cm.clone(),
             &mut statistics,
@@ -1064,7 +1068,7 @@ mod tests {
 
         let mutations = vec![(Mutation::Put((Key::from_raw(k1), v1.to_vec())), true)];
         statistics = Statistics::default();
-        let res = pessimsitic_prewrite_with_cm(
+        let res = pessimistic_prewrite_with_cm(
             &engine,
             cm,
             &mut statistics,
@@ -1610,6 +1614,49 @@ mod tests {
             }
             res => panic!("unexpected result {:?}", res),
         }
+    }
+
+    #[test]
+    fn test_repeated_pessimistic_prewrite_1pc() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let cm = ConcurrencyManager::new(1.into());
+        let mut statistics = Statistics::default();
+
+        must_acquire_pessimistic_lock(&engine, b"k2", b"k2", 5, 5);
+        // The second key needs a pessimistic lock
+        let mutations = vec![
+            (Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())), false),
+            (Mutation::Put((Key::from_raw(b"k2"), b"v2".to_vec())), true),
+        ];
+        let res = pessimistic_prewrite_with_cm(
+            &engine,
+            cm.clone(),
+            &mut statistics,
+            mutations.clone(),
+            b"k2".to_vec(),
+            5,
+            5,
+            Some(100),
+        )
+        .unwrap();
+        let commit_ts = res.one_pc_commit_ts;
+        cm.update_max_ts(commit_ts.next());
+        // repeate the prewrite
+        let res = pessimistic_prewrite_with_cm(
+            &engine,
+            cm,
+            &mut statistics,
+            mutations,
+            b"k2".to_vec(),
+            5,
+            5,
+            Some(100),
+        )
+        .unwrap();
+        // The new commit ts should be same as before.
+        assert_eq!(res.one_pc_commit_ts, commit_ts);
+        must_seek_write(&engine, b"k1", 100, 5, commit_ts, WriteType::Put);
+        must_seek_write(&engine, b"k2", 100, 5, commit_ts, WriteType::Put);
     }
 
     #[test]
