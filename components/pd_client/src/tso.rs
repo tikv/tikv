@@ -219,7 +219,7 @@ fn allocate_timestamps(
     }) = pending_requests.pop_front()
     {
         if tso_request.count != offset {
-            return Err(box_err!("PD gives expected number of timestamps"));
+            return Err(box_err!("PD gives unexpected number of timestamps"));
         }
 
         for request in requests {
