@@ -452,7 +452,9 @@ impl<K: PrewriteKind> Prewriter<K> {
                 TxnCommitRecord::SingleRecord { commit_ts, write }
                     if write.write_type != WriteType::Rollback =>
                 {
-                    info!("prewrited transaction has been committed"; "start_ts" => reader.start_ts, "commit_ts" => commit_ts);
+                    info!("prewrited transaction has been committed";
+                        "start_ts" => reader.start_ts, "commit_ts" => commit_ts,
+                        "key" => ?key, "write_type" => ?write.write_type);
                     Ok((vec![], commit_ts))
                 }
                 _ => Err(prewrite_result.unwrap_err().into()),

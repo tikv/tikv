@@ -79,7 +79,7 @@ pub fn prewrite<S: Snapshot>(
     // we need to check the key has not been committed before if it is a retry request.
     //
     // It is to prevent the following case:
-    // The key was prewrited successfully before, but the response is lost. The client resend
+    // The key was prewritten successfully before, but the response is lost. The client resends
     // the same request after the transaction is resolved (to become committed). If we still
     // write the lock, the client might commit these keys more than once.
     //
@@ -97,7 +97,9 @@ pub fn prewrite<S: Snapshot>(
                 if write.write_type != WriteType::Rollback =>
             {
                 info!("prewrited transaction has been committed";
-                    "start_ts" => txn_props.start_ts, "commit_ts" => commit_ts);
+                    "start_ts" => txn_props.start_ts, "commit_ts" => commit_ts,
+                    "key" => ?mutation.key, "mutation_type" => ?mutation.mutation_type,
+                    "write_type" => ?write.write_type);
                 return Ok((commit_ts, OldValue::Unspecified));
             }
             _ => {}
