@@ -511,6 +511,7 @@ impl<'de> Deserialize<'de> for ReadableDuration {
     }
 }
 
+/// Normalizes the path and canonicalizes its longest physically existing sub-path.
 fn canonicalize_fallback<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
     fn normalize(path: &Path) -> PathBuf {
         use std::path::Component;
@@ -588,7 +589,6 @@ fn canonicalize_fallback<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
     try_canonicalize_normalized_path(&normalize(path.as_ref()))
 }
 
-/// Normalizes the path and canonicalizes its longest physically existing sub-path.
 fn canonicalize_imp<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
     match path.as_ref().canonicalize() {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => canonicalize_fallback(path),
@@ -601,11 +601,7 @@ pub fn canonicalize_path(path: &str) -> Result<String, Box<dyn Error>> {
 }
 
 pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<dyn Error>> {
-    let path = Path::new(path);
-    let mut path = canonicalize_imp(path)?;
-    if !sub_path.is_empty() {
-        path = path.join(Path::new(sub_path));
-    }
+    let path = canonicalize_imp(Path::new(path).join(Path::new(sub_path)))?;
     if path.exists() && path.is_file() {
         return Err(format!("{}/{} is not a directory!", path.display(), sub_path).into());
     }
@@ -1523,22 +1519,21 @@ mod tests {
         };
         for first in nodes {
             for second in nodes {
-                let path = format!(
-                    "{}/{}/../{}/non_existing",
-                    tmp_dir.to_str().unwrap(),
-                    first,
-                    second
-                );
-                let res_path = canonicalize_path(&path).unwrap();
+                let base_path = format!("{}/{}/..", tmp_dir.to_str().unwrap(), first,);
+                let sub_path = format!("{}/non_existing", second);
+                let full_path = format!("{}/{}", &base_path, &sub_path);
+                let res_path1 = canonicalize_path(&full_path).unwrap();
+                let res_path2 = canonicalize_sub_path(&base_path, &sub_path).unwrap();
+                assert_eq!(Path::new(&res_path1), Path::new(&res_path2));
                 // resolve to second/non_existing
                 if *second == "non_existing" {
                     assert_eq!(
-                        Path::new(&res_path),
+                        Path::new(&res_path1),
                         tmp_dir.to_path_buf().join("non_existing/non_existing")
                     );
                 } else {
                     assert_eq!(
-                        Path::new(&res_path),
+                        Path::new(&res_path1),
                         tmp_dir.to_path_buf().join("dir/non_existing")
                     );
                 }
