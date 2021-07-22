@@ -7,10 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use encryption::{DataKeyManager, EncrypterWriter};
-use engine_rocks::{
-    encryption::get_env as get_encrypted_env, file_system::get_env as get_inspected_env,
-    RocksSstReader,
-};
+use engine_rocks::{get_env, RocksSstReader};
 use engine_traits::{EncryptionKeyManager, KvEngine, SSTMetaInfo, SstReader};
 use file_system::{get_io_rate_limiter, sync_dir, File, OpenOptions};
 use kvproto::import_sstpb::*;
@@ -277,8 +274,7 @@ impl ImportDir {
     ) -> Result<SSTMetaInfo> {
         let path = self.join(meta)?;
         let path_str = path.save.to_str().unwrap();
-        let env = get_encrypted_env(key_manager, None /*base_env*/)?;
-        let env = get_inspected_env(Some(env), get_io_rate_limiter())?;
+        let env = get_env(key_manager, get_io_rate_limiter())?;
         let sst_reader = RocksSstReader::open_with_env(&path_str, Some(env))?;
         sst_reader.verify_checksum()?;
         // TODO: check the length and crc32 of ingested file.
