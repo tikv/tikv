@@ -10,7 +10,7 @@ use encryption_export::{
     create_backend, data_key_manager_from_config, encryption_method_from_db_encryption_method,
     DataKeyManager, DecrypterReader, Iv,
 };
-use engine_rocks::encryption::get_env;
+use engine_rocks::get_env;
 use engine_rocks::raw_util::new_engine_opt;
 use engine_rocks::RocksEngine;
 use engine_traits::{
@@ -108,7 +108,7 @@ fn new_debug_executor(
 
     let cache = cfg.storage.block_cache.build_shared_cache();
     let shared_block_cache = cache.is_some();
-    let env = get_env(key_manager, None).unwrap();
+    let env = get_env(key_manager, None /*io_rate_limiter*/).unwrap();
 
     let mut kv_db_opts = cfg.rocksdb.build_opt();
     kv_db_opts.set_env(env.clone());
@@ -2478,7 +2478,7 @@ fn run_ldb_command(cmd: &ArgMatches<'_>, cfg: &TiKvConfig) {
     let key_manager = data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
         .unwrap()
         .map(Arc::new);
-    let env = get_env(key_manager, None).unwrap();
+    let env = get_env(key_manager, None /*io_rate_limiter*/).unwrap();
     let mut opts = cfg.rocksdb.build_opt();
     opts.set_env(env);
 
