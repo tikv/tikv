@@ -104,9 +104,10 @@ pub fn register_memory_usage_high_water(mark: u64) {
     MEMORY_USAGE_HIGH_WATER.store(mark, Ordering::Release);
 }
 
-pub fn memory_usage_reaches_high_water() -> bool {
+pub fn memory_usage_reaches_high_water(usage: &mut u64) -> bool {
     fail_point!("memory_usage_reaches_high_water", |_| true);
-    get_global_memory_usage() >= MEMORY_USAGE_HIGH_WATER.load(Ordering::Acquire)
+    *usage = get_global_memory_usage();
+    *usage >= MEMORY_USAGE_HIGH_WATER.load(Ordering::Acquire)
 }
 
 fn limit_cpu_cores_quota_by_env_var(quota: f64) -> f64 {
