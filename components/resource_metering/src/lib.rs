@@ -69,8 +69,9 @@ pub struct Config {
 
     pub agent_address: String,
     pub report_agent_interval: ReadableDuration,
-    pub max_resource_groups: usize,
 
+    // Only `max_resource_groups` records are kept in each precision period to save memory.
+    pub max_resource_groups: usize,
     pub precision: ReadableDuration,
 }
 

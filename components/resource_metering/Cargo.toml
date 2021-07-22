@@ -33,7 +33,6 @@ log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 futures = "0.3"
-pdqselect = "0.1"
 fail = "0.4"
 
 [target.'cfg(target_os = "linux")'.dependencies]

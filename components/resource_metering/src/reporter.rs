@@ -183,8 +183,9 @@ impl Runnable for ResourceMeteringReporter {
                 let threshold = (tmp_group_map.len() > max_resource_groups)
                     .then(|| {
                         tmp_top_vec.extend(tmp_group_map.values());
-                        pdqselect::select_by(tmp_top_vec, max_resource_groups, |a, b| b.cmp(a));
-                        tmp_top_vec[max_resource_groups]
+                        let (_, threshold, _) = tmp_top_vec
+                            .select_nth_unstable_by(max_resource_groups, |a, b| b.cmp(a));
+                        *threshold
                     })
                     .unwrap_or(0);
 
