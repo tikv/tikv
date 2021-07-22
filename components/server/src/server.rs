@@ -741,6 +741,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         ] {
             importer.set_compression_type(cf_name, from_rocks_compression_type(*compression_type));
         }
+        let importer = Arc::new(importer);
 
         let split_check_runner = SplitCheckRunner::new(
             engines.engines.kv.clone(),
