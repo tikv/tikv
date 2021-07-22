@@ -159,6 +159,13 @@ impl MvccTxn {
         lock.rollback_ts.push(self.start_ts);
         self.put_lock(key.clone(), &lock);
     }
+
+    pub(crate) fn clear(&mut self) {
+        self.write_size = 0;
+        self.modifies.clear();
+        self.locks_for_1pc.clear();
+        self.guards.clear();
+    }
 }
 
 impl fmt::Debug for MvccTxn {
