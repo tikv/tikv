@@ -72,6 +72,7 @@ enable-request-batch = false
 background-thread-count = 999
 end-point-slow-log-threshold = "1s"
 forward-max-connections-per-address = 5
+reject-messages-on-memory-ratio = 0.8
 
 [server.labels]
 a = "b"
@@ -182,6 +183,7 @@ future-poll-size = 2
 hibernate-regions = false
 dev-assert = true
 perf-level = 1
+evict-cache-on-memory-ratio = 0.8
 
 [coprocessor]
 split-region-on-table = false
