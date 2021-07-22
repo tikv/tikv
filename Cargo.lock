@@ -2150,7 +2150,11 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
+<<<<<<< HEAD
 source = "git+https://github.com/pingcap/kvproto.git?branch=release-5.0#7790f94ac2ad2a1141fc63089e335135e79d1961"
+=======
+source = "git+https://github.com/pingcap/kvproto.git#91a52cd9e8db8dec6147114c94d1678fffc0a5ba"
+>>>>>>> a7d836c61... storage: prevent repeated non-pessimistic lock prewrite from writing locks (#10600)
 dependencies = [
  "futures 0.3.8",
  "grpcio",

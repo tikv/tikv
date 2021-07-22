@@ -333,6 +333,7 @@ impl<S: Snapshot> MvccTxn<S> {
         self.put_lock(key.clone(), &lock);
     }
 
+<<<<<<< HEAD
     pub(crate) fn collapse_prev_rollback(&mut self, key: Key) -> Result<()> {
         if let Some((commit_ts, write)) = self.reader.seek_write(&key, self.start_ts)? {
             if write.write_type == WriteType::Rollback && !write.as_ref().is_protected() {
@@ -340,6 +341,13 @@ impl<S: Snapshot> MvccTxn<S> {
             }
         }
         Ok(())
+=======
+    pub(crate) fn clear(&mut self) {
+        self.write_size = 0;
+        self.modifies.clear();
+        self.locks_for_1pc.clear();
+        self.guards.clear();
+>>>>>>> a7d836c61... storage: prevent repeated non-pessimistic lock prewrite from writing locks (#10600)
     }
 }
 
@@ -889,6 +897,7 @@ pub(crate) mod tests {
             lock_ttl: 0,
             min_commit_ts: TimeStamp::default(),
             need_old_value: false,
+            is_retry_request: false,
         }
     }
 
@@ -1176,6 +1185,7 @@ pub(crate) mod tests {
                     expected_lock_info.get_txn_size(),
                     TimeStamp::zero(),
                     TimeStamp::zero(),
+                    false,
                 );
             } else {
                 expected_lock_info.set_lock_type(Op::PessimisticLock);

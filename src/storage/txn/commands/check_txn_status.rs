@@ -922,6 +922,7 @@ pub mod tests {
             1,
             /* min_commit_ts */ TimeStamp::zero(),
             /* max_commit_ts */ TimeStamp::zero(),
+            false,
         );
         must_success(
             &engine,
@@ -1043,6 +1044,7 @@ pub mod tests {
             1,
             /* min_commit_ts */ TimeStamp::zero(),
             /* max_commit_ts */ TimeStamp::zero(),
+            false,
         );
         must_success(
             &engine,
