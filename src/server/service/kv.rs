@@ -77,6 +77,9 @@ pub struct Service<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockMan
     grpc_thread_load: Arc<ThreadLoad>,
 
     proxy: Proxy,
+
+    // Go `server::Config` to get more details.
+    reject_messages_on_memory_ratio: f64,
 }
 
 impl<T: RaftStoreRouter<E::Local> + Clone + 'static, E: Engine + Clone, L: LockManager + Clone>
@@ -95,6 +98,7 @@ impl<T: RaftStoreRouter<E::Local> + Clone + 'static, E: Engine + Clone, L: LockM
             enable_req_batch: self.enable_req_batch,
             grpc_thread_load: self.grpc_thread_load.clone(),
             proxy: self.proxy.clone(),
+            reject_messages_on_memory_ratio: self.reject_messages_on_memory_ratio,
         }
     }
 }
@@ -113,6 +117,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Service<
         grpc_thread_load: Arc<ThreadLoad>,
         enable_req_batch: bool,
         proxy: Proxy,
+        reject_messages_on_memory_ratio: f64,
     ) -> Self {
         Service {
             store_id,
@@ -126,6 +131,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Service<
             enable_req_batch,
             grpc_thread_load,
             proxy,
+            reject_messages_on_memory_ratio,
         }
     }
 
@@ -143,6 +149,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Service<
             }));
         }
         if reject && msg.get_message().get_msg_type() == MessageType::MsgAppend {
+            RAFT_APPEND_REJECTS.inc();
             let id = msg.get_region_id();
             let peer_id = msg.get_message().get_from();
             let m = CasualMessage::RejectRaftAppend { peer_id };
@@ -655,12 +662,13 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
     ) {
         let store_id = self.store_id;
         let ch = self.ch.clone();
+        let reject_messages_on_memory_ratio = self.reject_messages_on_memory_ratio;
 
         let res = async move {
             let mut stream = stream.map_err(Error::from);
             while let Some(msg) = stream.try_next().await? {
                 RAFT_MESSAGE_RECV_COUNTER.inc();
-                let reject = needs_reject_raft_append();
+                let reject = needs_reject_raft_append(reject_messages_on_memory_ratio);
                 Self::handle_raft_message(store_id, &ch, msg, reject)?;
             }
             Ok::<(), Error>(())
@@ -691,6 +699,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
         info!("batch_raft RPC is called, new gRPC stream established");
         let store_id = self.store_id;
         let ch = self.ch.clone();
+        let reject_messages_on_memory_ratio = self.reject_messages_on_memory_ratio;
 
         let res = async move {
             let mut stream = stream.map_err(Error::from);
@@ -698,7 +707,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
                 let len = batch_msg.get_msgs().len();
                 RAFT_MESSAGE_RECV_COUNTER.inc_by(len as u64);
                 RAFT_MESSAGE_BATCH_SIZE.observe(len as f64);
-                let reject = needs_reject_raft_append();
+                let reject = needs_reject_raft_append(reject_messages_on_memory_ratio);
                 for msg in batch_msg.take_msgs().into_iter() {
                     Self::handle_raft_message(store_id, &ch, msg, reject)?;
                 }
@@ -2010,16 +2019,16 @@ fn raftstore_error_to_region_error(e: RaftStoreError, region_id: u64) -> RegionE
     e.into()
 }
 
-fn needs_reject_raft_append() -> bool {
+fn needs_reject_raft_append(reject_messages_on_memory_ratio: f64) -> bool {
     fail_point!("needs_reject_raft_append", |_| true);
+    if reject_messages_on_memory_ratio - 0.0 < std::f64::EPSILON {
+        return false;
+    }
+
     let mut usage = 0;
     if memory_usage_reaches_high_water(&mut usage) {
         let raft_msg_usage = (MEMTRACE_RAFT_ENTRIES.sum() + MEMTRACE_RAFT_MESSAGES.sum()) as u64;
-        if raft_msg_usage > usage / 5 {
-            // For different system memory capacity, `MsgAppend`s are rejected when:
-            // * system=8G,  memory_usage_limit=6G,  reject_at=1.2G
-            // * system=16G, memory_usage_limit=12G, reject_at=2.4G
-            // * system=32G, memory_usage_limit=24G, reject_at=4.8G
+        if raft_msg_usage as f64 > usage as f64 * reject_messages_on_memory_ratio {
             return true;
         }
     }

@@ -1925,7 +1925,7 @@ where
                 cbs,
             );
             self.mut_store().trace_cached_entries(apply.entries.clone());
-            if needs_evict_entry_cache() {
+            if needs_evict_entry_cache(ctx.cfg.evict_cache_on_memory_ratio) {
                 // Compact all cached entries instead of half evict.
                 self.mut_store().evict_cache(false);
             }
