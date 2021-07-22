@@ -322,6 +322,13 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
         RawCasResponse
     );
 
+    handle_request!(
+        raw_checksum,
+        future_raw_checksum,
+        RawChecksumRequest,
+        RawChecksumResponse
+    );
+
     fn kv_import(&mut self, _: RpcContext<'_>, _: ImportRequest, _: UnarySink<ImportResponse>) {
         unimplemented!();
     }
@@ -733,6 +740,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
         }
     }
 
+    #[allow(clippy::collapsible_else_if)]
     fn split_region(
         &mut self,
         ctx: RpcContext<'_>,
@@ -744,13 +752,21 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
 
         let region_id = req.get_context().get_region_id();
         let (cb, f) = paired_future_callback();
-        let mut split_keys = if !req.get_split_key().is_empty() {
-            vec![Key::from_raw(req.get_split_key()).into_encoded()]
+        let mut split_keys = if req.is_raw_kv {
+            if !req.get_split_key().is_empty() {
+                vec![req.get_split_key().to_vec()]
+            } else {
+                req.take_split_keys().to_vec()
+            }
         } else {
-            req.take_split_keys()
-                .into_iter()
-                .map(|x| Key::from_raw(&x).into_encoded())
-                .collect()
+            if !req.get_split_key().is_empty() {
+                vec![Key::from_raw(req.get_split_key()).into_encoded()]
+            } else {
+                req.take_split_keys()
+                    .into_iter()
+                    .map(|x| Key::from_raw(&x).into_encoded())
+                    .collect()
+            }
         };
         split_keys.sort();
         let req = CasualMessage::SplitRegion {
@@ -1742,6 +1758,34 @@ fn future_raw_compare_and_swap<E: Engine, L: LockManager>(
                         resp.set_previous_not_exist(true);
                     }
                     resp.set_succeed(succeed);
+                }
+                Err(e) => resp.set_error(format!("{}", e)),
+            }
+        }
+        Ok(resp)
+    }
+}
+
+fn future_raw_checksum<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
+    mut req: RawChecksumRequest,
+) -> impl Future<Output = ServerResult<RawChecksumResponse>> {
+    let f = storage.raw_checksum(
+        req.take_context(),
+        req.get_algorithm(),
+        req.take_ranges().into(),
+    );
+    async move {
+        let v = f.await;
+        let mut resp = RawChecksumResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            match v {
+                Ok((checksum, kvs, bytes)) => {
+                    resp.set_checksum(checksum);
+                    resp.set_total_kvs(kvs);
+                    resp.set_total_bytes(bytes);
                 }
                 Err(e) => resp.set_error(format!("{}", e)),
             }

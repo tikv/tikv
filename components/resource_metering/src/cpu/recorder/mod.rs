@@ -10,6 +10,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use collections::HashMap;
 
+pub const TEST_TAG_PREFIX: &[u8] = b"__resource_metering::tests::";
+
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
