@@ -35,6 +35,7 @@ use engine_rocks::{
 };
 use engine_traits::{CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use file_system::IOPriority;
 use keys::region_raft_prefix_len;
 use pd_client::Config as PdConfig;
 use raft_log_engine::RaftEngineConfig as RawRaftEngineConfig;
@@ -3003,6 +3004,7 @@ fn to_change_value(v: &str, typed: &ConfigValue) -> CfgResult<ConfigValue> {
         ConfigValue::Usize(_) => ConfigValue::from(v.parse::<usize>()?),
         ConfigValue::Bool(_) => ConfigValue::from(v.parse::<bool>()?),
         ConfigValue::BlobRunMode(_) => ConfigValue::from(v.parse::<BlobRunMode>()?),
+        ConfigValue::IOPriority(_) => ConfigValue::from(v.parse::<IOPriority>()?),
         ConfigValue::String(_) => ConfigValue::String(v.to_owned()),
         _ => unreachable!(),
     };
@@ -3031,7 +3033,8 @@ fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, 
                         | ConfigValue::Size(_)
                         | ConfigValue::OptionSize(_)
                         | ConfigValue::String(_)
-                        | ConfigValue::BlobRunMode(_) => Ok(true),
+                        | ConfigValue::BlobRunMode(_)
+                        | ConfigValue::IOPriority(_) => Ok(true),
                         _ => Ok(false),
                     }
                 }
@@ -3389,6 +3392,7 @@ mod tests {
         incoming.coprocessor.region_split_keys = 10000;
         incoming.gc.max_write_bytes_per_sec = ReadableSize::mb(100);
         incoming.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(500);
+        incoming.storage.io_rate_limit.import_priority = file_system::IOPriority::High;
         let diff = old.diff(&incoming);
         let mut change = HashMap::new();
         change.insert(
@@ -3399,6 +3403,10 @@ mod tests {
         change.insert(
             "rocksdb.defaultcf.block-cache-size".to_owned(),
             "500MB".to_owned(),
+        );
+        change.insert(
+            "storage.io-rate-limit.import-priority".to_owned(),
+            "high".to_owned(),
         );
         let res = to_config_change(change).unwrap();
         assert_eq!(diff, res);

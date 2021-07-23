@@ -1470,6 +1470,7 @@ version = "0.1.0"
 dependencies = [
  "bcc",
  "collections",
+ "configuration",
  "crc32fast",
  "crossbeam-utils 0.8.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "fs2",
@@ -2254,7 +2255,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?rev=7a046020d1c091638e1e8aba623c8c1e8962219d#7a046020d1c091638e1e8aba623c8c1e8962219d"
+source = "git+https://github.com/pingcap/kvproto.git?branch=release-5.1#768c114017e87dff8e35f62fdfed26e86cfbee84"
 dependencies = [
  "futures 0.3.8",
  "grpcio",
@@ -3641,6 +3642,7 @@ dependencies = [
  "crossbeam",
  "derivative",
  "encryption",
+ "encryption_export",
  "engine_panic",
  "engine_rocks",
  "engine_test",
@@ -5496,6 +5498,7 @@ dependencies = [
  "slog",
  "slog-global",
  "sst_importer",
+ "strum",
  "sysinfo",
  "tempfile",
  "test_sst_importer",

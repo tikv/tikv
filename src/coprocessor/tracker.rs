@@ -101,15 +101,15 @@ impl Tracker {
     pub fn on_scheduled(&mut self) {
         assert_eq!(self.current_stage, TrackerState::Initialized);
         let now = Instant::now_coarse();
-        self.schedule_wait_time = now - self.request_begin_at;
+        self.schedule_wait_time = now.saturating_duration_since(self.request_begin_at);
         self.current_stage = TrackerState::Scheduled(now);
     }
 
     pub fn on_snapshot_finished(&mut self) {
         if let TrackerState::Scheduled(at) = self.current_stage {
             let now = Instant::now_coarse();
-            self.snapshot_wait_time = now - at;
-            self.wait_time = now - self.request_begin_at;
+            self.snapshot_wait_time = now.saturating_duration_since(at);
+            self.wait_time = now.saturating_duration_since(self.request_begin_at);
             self.current_stage = TrackerState::SnapshotRetrieved(now);
         } else {
             unreachable!()
@@ -119,7 +119,7 @@ impl Tracker {
     pub fn on_begin_all_items(&mut self) {
         if let TrackerState::SnapshotRetrieved(at) = self.current_stage {
             let now = Instant::now_coarse();
-            self.handler_build_time = now - at;
+            self.handler_build_time = now.saturating_duration_since(at);
             self.current_stage = TrackerState::AllItemsBegan;
         } else {
             unreachable!()
@@ -131,7 +131,7 @@ impl Tracker {
         match self.current_stage {
             TrackerState::AllItemsBegan => {}
             TrackerState::ItemFinished(at) => {
-                self.item_suspend_time = now - at;
+                self.item_suspend_time = now.saturating_duration_since(at);
                 self.total_suspend_time += self.item_suspend_time;
             }
             _ => unreachable!(),
@@ -148,7 +148,7 @@ impl Tracker {
     ) {
         if let TrackerState::ItemBegan(at) = self.current_stage {
             let now = Instant::now_coarse();
-            self.item_process_time = now - at;
+            self.item_process_time = now.saturating_duration_since(at);
             self.total_process_time += self.item_process_time;
             if let Some(storage_stats) = some_storage_stats {
                 self.total_storage_stats.add(&storage_stats);
@@ -233,7 +233,7 @@ impl Tracker {
             _ => unreachable!(),
         }
 
-        self.req_lifetime = Instant::now_coarse() - self.request_begin_at;
+        self.req_lifetime = self.request_begin_at.saturating_elapsed();
         self.current_stage = TrackerState::AllItemFinished;
         self.track();
     }
