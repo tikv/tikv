@@ -979,13 +979,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2584f639eb95fea8c798496315b297cf81b9b58b6d30ab066a75455333cf4b12"
 dependencies = [
  "cfg-if 1.0.0",
+<<<<<<< HEAD
  "crossbeam-utils 0.8.3",
+=======
+ "crossbeam-utils 0.8.3 (registry+https://github.com/rust-lang/crates.io-index)",
+>>>>>>> f3f55b190... raftstore: separate read write ready (#10592)
  "lazy_static",
  "memoffset 0.6.1",
  "scopeguard",
 ]
 
 [[package]]
+<<<<<<< HEAD
 name = "crossbeam-queue"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -993,6 +998,17 @@ checksum = "c695eeca1e7173472a32221542ae469b3e9aac3a4fc81f7696bcad82029493db"
 dependencies = [
  "cfg-if 0.1.10",
  "crossbeam-utils 0.7.2",
+=======
+name = "crossbeam-epoch"
+version = "0.9.3"
+source = "git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0#e0e083d062649484188b7337fe388fd12f2c8d94"
+dependencies = [
+ "cfg-if 1.0.0",
+ "crossbeam-utils 0.8.3 (git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0)",
+ "lazy_static",
+ "memoffset 0.6.1",
+ "scopeguard",
+>>>>>>> f3f55b190... raftstore: separate read write ready (#10592)
 ]
 
 [[package]]
@@ -1032,6 +1048,19 @@ name = "crossbeam-utils"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7e9d99fa91428effe99c5c6d4634cdeba32b8cf784fc428a2a687f61a952c49"
+<<<<<<< HEAD
+=======
+dependencies = [
+ "autocfg",
+ "cfg-if 1.0.0",
+ "lazy_static",
+]
+
+[[package]]
+name = "crossbeam-utils"
+version = "0.8.3"
+source = "git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0#e0e083d062649484188b7337fe388fd12f2c8d94"
+>>>>>>> f3f55b190... raftstore: separate read write ready (#10592)
 dependencies = [
  "autocfg",
  "cfg-if 1.0.0",

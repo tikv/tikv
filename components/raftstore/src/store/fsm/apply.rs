@@ -15,7 +15,14 @@ use std::time::Duration;
 use std::vec::Drain;
 use std::{cmp, usize};
 
+<<<<<<< HEAD
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
+=======
+use batch_system::{
+    BasicMailbox, BatchRouter, BatchSystem, Fsm, HandleResult, HandlerBuilder, PollHandler,
+    Priority, TrackedFsm,
+};
+>>>>>>> f3f55b190... raftstore: separate read write ready (#10592)
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::PerfContext;
@@ -3446,48 +3453,51 @@ where
         unimplemented!()
     }
 
-    fn handle_normal(&mut self, normal: &mut ApplyFsm<EK>) -> Option<usize> {
-        let mut expected_msg_count = None;
+    fn handle_normal(
+        &mut self,
+        normal: &mut impl TrackedFsm<Target = ApplyFsm<EK>>,
+    ) -> HandleResult {
+        let mut handle_result = HandleResult::KeepProcessing;
         normal.delegate.handle_start = Some(Instant::now_coarse());
         if normal.delegate.yield_state.is_some() {
             if normal.delegate.wait_merge_state.is_some() {
                 // We need to query the length first, otherwise there is a race
                 // condition that new messages are queued after resuming and before
                 // query the length.
-                expected_msg_count = Some(normal.receiver.len());
+                handle_result = HandleResult::stop_at(normal.receiver.len(), false);
             }
             normal.resume_pending(&mut self.apply_ctx);
             if normal.delegate.wait_merge_state.is_some() {
                 // Yield due to applying CommitMerge, this fsm can be released if its
-                // channel msg count equals to expected_msg_count because it will receive
+                // channel msg count equals to last count because it will receive
                 // a new message if its source region has applied all needed logs.
-                return expected_msg_count;
+                return handle_result;
             } else if normal.delegate.yield_state.is_some() {
                 // Yield due to other reasons, this fsm must not be released because
                 // it's possible that no new message will be sent to itself.
                 // The remaining messages will be handled in next rounds.
-                return None;
+                return HandleResult::KeepProcessing;
             }
-            expected_msg_count = None;
+            handle_result = HandleResult::KeepProcessing;
         }
         fail_point!("before_handle_normal_3", normal.delegate.id() == 3, |_| {
-            None
+            HandleResult::KeepProcessing
         });
         fail_point!(
             "before_handle_normal_1003",
             normal.delegate.id() == 1003,
-            |_| { None }
+            |_| { HandleResult::KeepProcessing }
         );
         while self.msg_buf.len() < self.messages_per_tick {
             match normal.receiver.try_recv() {
                 Ok(msg) => self.msg_buf.push(msg),
                 Err(TryRecvError::Empty) => {
-                    expected_msg_count = Some(0);
+                    handle_result = HandleResult::stop_at(0, false);
                     break;
                 }
                 Err(TryRecvError::Disconnected) => {
                     normal.delegate.stopped = true;
-                    expected_msg_count = Some(0);
+                    handle_result = HandleResult::stop_at(0, false);
                     break;
                 }
             }
@@ -3495,20 +3505,28 @@ where
         normal.handle_tasks(&mut self.apply_ctx, &mut self.msg_buf);
         if normal.delegate.wait_merge_state.is_some() {
             // Check it again immediately as catching up logs can be very fast.
-            expected_msg_count = Some(0);
+            handle_result = HandleResult::stop_at(0, false);
         } else if normal.delegate.yield_state.is_some() {
             // Let it continue to run next time.
-            expected_msg_count = None;
+            handle_result = HandleResult::KeepProcessing;
         }
-        expected_msg_count
+        handle_result
     }
 
+<<<<<<< HEAD
     fn end(&mut self, fsms: &mut [Box<ApplyFsm<EK>>]) {
         let is_synced = self.apply_ctx.flush();
         if is_synced {
             for fsm in fsms {
                 fsm.delegate.last_sync_apply_index = fsm.delegate.apply_state.get_applied_index();
             }
+=======
+    fn end(&mut self, fsms: &mut [Option<impl TrackedFsm<Target = ApplyFsm<EK>>>]) {
+        self.apply_ctx.flush();
+        for fsm in fsms.iter_mut().flatten() {
+            fsm.delegate.last_flush_applied_index = fsm.delegate.apply_state.get_applied_index();
+            fsm.delegate.update_memory_trace(&mut self.trace_event);
+>>>>>>> f3f55b190... raftstore: separate read write ready (#10592)
         }
     }
 }
