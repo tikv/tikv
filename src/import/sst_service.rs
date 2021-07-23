@@ -265,7 +265,7 @@ where
                         }
                         file.append(data)?;
                         IMPORT_UPLOAD_CHUNK_BYTES.observe(data.len() as f64);
-                        IMPORT_UPLOAD_CHUNK_DURATION.observe(start.elapsed_secs());
+                        IMPORT_UPLOAD_CHUNK_DURATION.observe(start.saturating_elapsed_secs());
                         Ok(file)
                     })
                     .await?;
@@ -297,7 +297,7 @@ where
             // Records how long the download task waits to be scheduled.
             sst_importer::metrics::IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["queue"])
-                .observe(start.elapsed().as_secs_f64());
+                .observe(start.saturating_elapsed().as_secs_f64());
 
             // FIXME: download() should be an async fn, to allow BR to cancel
             // a download task.
@@ -455,7 +455,7 @@ where
                     "compact files in range";
                     "start" => start.map(log_wrappers::Value::key),
                     "end" => end.map(log_wrappers::Value::key),
-                    "output_level" => ?output_level, "takes" => ?timer.elapsed()
+                    "output_level" => ?output_level, "takes" => ?timer.saturating_elapsed()
                 ),
                 Err(ref e) => error!(%*e;
                     "compact files in range failed";
@@ -536,7 +536,7 @@ where
                             _ => return Err(Error::InvalidChunk),
                         };
                         writer.write(batch)?;
-                        IMPORT_WRITE_CHUNK_DURATION.observe(start.elapsed_secs());
+                        IMPORT_WRITE_CHUNK_DURATION.observe(start.saturating_elapsed_secs());
                         Ok(writer)
                     })
                     .await?;

@@ -82,7 +82,7 @@ impl Locks {
 
     /// Returns true if the `Locks` is expired.
     fn is_expired(&self, now: Instant, ttl: Duration) -> bool {
-        now.duration_since(self.last_detect_time) >= ttl
+        now.saturating_duration_since(self.last_detect_time) >= ttl
     }
 
     /// Generate a `WaitForEntry` for the lock.
@@ -327,7 +327,8 @@ impl DetectTable {
     /// Iterates the whole table to remove all expired entries.
     fn active_expire(&mut self) {
         if self.wait_for_map.len() >= Self::ACTIVE_EXPIRE_THRESHOLD
-            && self.now.duration_since(self.last_active_expire) >= Self::ACTIVE_EXPIRE_INTERVAL
+            && self.now.saturating_duration_since(self.last_active_expire)
+                >= Self::ACTIVE_EXPIRE_INTERVAL
         {
             let now = self.now;
             let ttl = self.ttl;

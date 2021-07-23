@@ -2,13 +2,14 @@
 
 use std::sync::atomic::Ordering;
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::*;
+use std::time::Duration;
 use std::{fs, io, thread};
 
 use raft::eraftpb::MessageType;
 use raftstore::store::*;
 use test_raftstore::*;
 use tikv_util::config::*;
+use tikv_util::time::Instant;
 use tikv_util::HandyRwLock;
 
 #[test]
@@ -169,7 +170,7 @@ fn assert_snapshot(snap_dir: &str, region_id: u64, exist: bool) {
             return;
         }
 
-        if timer.elapsed() < Duration::from_secs(6) {
+        if timer.saturating_elapsed() < Duration::from_secs(6) {
             thread::sleep(Duration::from_millis(20));
         } else {
             panic!(
