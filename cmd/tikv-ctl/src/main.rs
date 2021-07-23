@@ -2610,8 +2610,13 @@ fn print_bad_ssts(db: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &
                 let mut stderr_buf = stderr.into_inner();
                 drop(stdout);
                 stderr_buf.read_to_string(&mut err).unwrap();
-                println!("failed to run {}:\n{}", args1.join(" "), err);
-                std::process::exit(status);
+                println!(
+                    "ldb process return status code {}, failed to run {}:\n{}",
+                    status,
+                    args1.join(" "),
+                    err
+                );
+                continue;
             }
         };
 
@@ -2666,7 +2671,7 @@ fn print_bad_ssts(db: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &
         }
     }
     println!("--------------------------------------------------------");
-    println!("finish print");
+    println!("corruption analysis has completed");
 }
 
 fn run_and_wait_child_process(child: impl Fn()) -> Result<i32, String> {
