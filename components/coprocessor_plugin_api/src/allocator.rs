@@ -60,6 +60,6 @@ mod tests {
 
     #[test]
     fn atomic_is_lock_free() {
-        assert!(Atomic::<AllocFn>::is_lock_free());
+        assert!(Atomic::<Option<AllocFn>>::is_lock_free());
     }
 }
