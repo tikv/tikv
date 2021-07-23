@@ -13,10 +13,7 @@ use kvproto::import_sstpb::pair::Op as PairOp;
 use kvproto::import_sstpb::*;
 
 use encryption::DataKeyManager;
-use engine_rocks::{
-    encryption::get_env as get_encrypted_env, file_system::get_env as get_inspected_env,
-    RocksSstReader,
-};
+use engine_rocks::{get_env, RocksSstReader};
 use engine_traits::{
     name_to_cf, EncryptionKeyManager, Iterator, KvEngine, SSTMetaInfo, SeekKey, SstExt, SstReader,
     SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
@@ -219,8 +216,7 @@ impl SSTImporter {
 
         // now validate the SST file.
         let path_str = path.temp.to_str().unwrap();
-        let env = get_encrypted_env(self.key_manager.clone(), None /*base_env*/)?;
-        let env = get_inspected_env(Some(env), get_io_rate_limiter())?;
+        let env = get_env(self.key_manager.clone(), get_io_rate_limiter())?;
         // Use abstracted SstReader after Env is abstracted.
         let sst_reader = RocksSstReader::open_with_env(path_str, Some(env))?;
         sst_reader.verify_checksum()?;
@@ -558,7 +554,7 @@ mod tests {
         // Test ImportDir::ingest()
 
         let db_path = temp_dir.path().join("db");
-        let env = get_encrypted_env(key_manager.clone(), None /*base_env*/).unwrap();
+        let env = get_env(key_manager.clone(), None /*io_rate_limiter*/).unwrap();
         let db = new_test_engine_with_env(db_path.to_str().unwrap(), &[CF_DEFAULT], env);
 
         let cases = vec![(0, 10), (5, 15), (10, 20), (0, 100)];
@@ -943,8 +939,7 @@ mod tests {
             SSTImporter::new(&cfg, &importer_dir, Some(key_manager.clone()), false).unwrap();
 
         let db_path = temp_dir.path().join("db");
-        let env = get_encrypted_env(Some(key_manager), None /*base_env*/).unwrap();
-        // ensure encrypted enabled
+        let env = get_env(Some(key_manager), None /*io_rate_limiter*/).unwrap();
         let db = new_test_engine_with_env(db_path.to_str().unwrap(), DATA_CFS, env.clone());
 
         let range = importer
