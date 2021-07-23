@@ -3781,16 +3781,6 @@ where
     pub router: BatchRouter<ApplyFsm<EK>, ControlFsm>,
 }
 
-impl<EK> Drop for ApplyRouter<EK>
-where
-    EK: KvEngine,
-{
-    fn drop(&mut self) {
-        MEMTRACE_APPLY_ROUTER_ALIVE.trace(TraceEvent::Reset(0));
-        MEMTRACE_APPLY_ROUTER_LEAK.trace(TraceEvent::Reset(0));
-    }
-}
-
 impl<EK> Deref for ApplyRouter<EK>
 where
     EK: KvEngine,
