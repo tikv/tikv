@@ -44,6 +44,7 @@ where
             lock_ttl: 0,
             min_commit_ts: TimeStamp::default(),
             need_old_value: false,
+            is_retry_request: false,
         };
         prewrite(
             &mut txn,
@@ -90,6 +91,7 @@ fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Bench
                     lock_ttl: 0,
                     min_commit_ts: TimeStamp::default(),
                     need_old_value: false,
+                    is_retry_request: false,
                 };
                 prewrite(&mut txn, &txn_props, mutation, &None, false).unwrap();
             }
