@@ -97,7 +97,7 @@ fn test_node_bootstrap_with_prepared_data() {
 
     let importer = {
         let dir = tmp_path.path().join("import-sst");
-        Arc::new(SSTImporter::new(&cfg.import, dir, None).unwrap())
+        Arc::new(SSTImporter::new(&cfg.import, dir, None, false).unwrap())
     };
     let (split_check_scheduler, _) = dummy_scheduler();
 
