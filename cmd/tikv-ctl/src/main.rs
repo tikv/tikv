@@ -2640,7 +2640,7 @@ fn print_bad_ssts(db: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &
             let matches = match r.captures(&output) {
                 None => {
                     println!("sst start key format is not correct: {}", output);
-                    return;
+                    continue;
                 }
                 Some(v) => v,
             };
