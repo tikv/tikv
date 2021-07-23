@@ -512,7 +512,7 @@ impl<'de> Deserialize<'de> for ReadableDuration {
 }
 
 /// Normalizes the path and canonicalizes its longest physically existing sub-path.
-fn canonicalize_fallback<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
+fn canonicalize_non_existing_path<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
     fn normalize(path: &Path) -> PathBuf {
         use std::path::Component;
         let mut components = path.components().peekable();
@@ -591,7 +591,7 @@ fn canonicalize_fallback<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
 
 fn canonicalize_imp<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
     match path.as_ref().canonicalize() {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => canonicalize_fallback(path),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => canonicalize_non_existing_path(path),
         other => other,
     }
 }
@@ -1500,7 +1500,7 @@ mod tests {
         let cases = vec![".", "/../../", "./../"];
         for case in &cases {
             assert_eq!(
-                Path::new(&canonicalize_fallback(case).unwrap()),
+                Path::new(&canonicalize_non_existing_path(case).unwrap()),
                 Path::new(case).canonicalize().unwrap(),
             );
         }
