@@ -3,7 +3,7 @@
 use std::collections::hash_map::Entry;
 use std::error::Error as StdError;
 use std::sync::{mpsc, Arc, Mutex, RwLock};
-use std::time::*;
+use std::time::Duration;
 use std::{result, thread};
 
 use futures::executor::block_on;
@@ -35,6 +35,7 @@ use raftstore::{Error, Result};
 use tikv::config::TiKvConfig;
 use tikv::server::Result as ServerResult;
 use tikv_util::thread_group::GroupProperties;
+use tikv_util::time::Instant;
 use tikv_util::HandyRwLock;
 
 use super::*;
@@ -429,7 +430,9 @@ impl<T: Simulator> Cluster<T> {
                 e @ Err(_) => return e,
                 Ok(resp) => resp,
             };
-            if self.refresh_leader_if_needed(&resp, region_id) && timer.elapsed() < timeout {
+            if self.refresh_leader_if_needed(&resp, region_id)
+                && timer.saturating_elapsed() < timeout
+            {
                 warn!(
                     "{:?} is no longer leader, let's retry",
                     request.get_header().get_peer()
@@ -758,7 +761,7 @@ impl<T: Simulator> Cluster<T> {
         let timer = Instant::now();
         let mut tried_times = 0;
         // At least retry once.
-        while tried_times < 2 || timer.elapsed() < timeout {
+        while tried_times < 2 || timer.saturating_elapsed() < timeout {
             tried_times += 1;
             let mut region = self.get_region(key);
             let region_id = region.get_id();
@@ -1043,7 +1046,7 @@ impl<T: Simulator> Cluster<T> {
             if truncated_state.get_index() >= index {
                 return;
             }
-            if timer.elapsed() >= Duration::from_secs(5) {
+            if timer.saturating_elapsed() >= Duration::from_secs(5) {
                 panic!(
                     "[region {}] log is still not truncated to {}: {:?} on store {}",
                     region_id, index, truncated_state, store_id,
@@ -1096,7 +1099,7 @@ impl<T: Simulator> Cluster<T> {
             if cur_index >= expected {
                 return;
             }
-            if timer.elapsed() >= timeout {
+            if timer.saturating_elapsed() >= timeout {
                 panic!(
                     "[region {}] last index still not reach {}: {:?}",
                     region_id, expected, raft_state
@@ -1200,7 +1203,7 @@ impl<T: Simulator> Cluster<T> {
                     return;
                 }
             }
-            if timer.elapsed() > Duration::from_secs(5) {
+            if timer.saturating_elapsed() > Duration::from_secs(5) {
                 panic!(
                     "failed to transfer leader to [{}] {:?}, current leader: {:?}",
                     region_id, leader, cur_leader
@@ -1452,7 +1455,7 @@ impl<T: Simulator> Cluster<T> {
                 );
                 break;
             }
-            if timer.elapsed() > Duration::from_secs(60) {
+            if timer.saturating_elapsed() > Duration::from_secs(60) {
                 panic!("region {} is not removed after 60s.", region_id);
             }
             thread::sleep(Duration::from_millis(100));

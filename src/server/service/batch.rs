@@ -226,7 +226,7 @@ fn future_batch_get_command<E: Engine, L: LockManager>(
         }
         GRPC_MSG_HISTOGRAM_STATIC
             .kv_batch_get_command
-            .observe(begin_instant.elapsed_secs());
+            .observe(begin_instant.saturating_elapsed_secs());
     };
     poll_future_notify(f);
 }
@@ -265,7 +265,7 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager>(
         }
         GRPC_MSG_HISTOGRAM_STATIC
             .raw_batch_get_command
-            .observe(begin_instant.elapsed_secs());
+            .observe(begin_instant.saturating_elapsed_secs());
     };
     poll_future_notify(f);
 }

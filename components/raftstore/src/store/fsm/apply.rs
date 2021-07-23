@@ -17,7 +17,8 @@ use std::vec::Drain;
 use std::{cmp, usize};
 
 use batch_system::{
-    BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler, Priority,
+    BasicMailbox, BatchRouter, BatchSystem, Fsm, HandleResult, HandlerBuilder, PollHandler,
+    Priority, TrackedFsm,
 };
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
@@ -610,7 +611,7 @@ where
             self.notifier.notify(apply_res);
         }
 
-        let elapsed = t.elapsed();
+        let elapsed = t.saturating_elapsed();
         STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(elapsed) as f64);
 
         slow_log!(
@@ -1032,7 +1033,7 @@ where
             {
                 apply_ctx.commit(self);
                 if let Some(start) = self.handle_start.as_ref() {
-                    if start.elapsed() >= apply_ctx.yield_duration {
+                    if start.saturating_elapsed() >= apply_ctx.yield_duration {
                         return ApplyResult::Yield;
                     }
                 }
@@ -3492,7 +3493,7 @@ where
         loop {
             match drainer.next() {
                 Some(Msg::Apply { start, apply }) => {
-                    APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(start.elapsed_secs());
+                    APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(start.saturating_elapsed_secs());
                     // If there is any apply task, we change this fsm to normal-priority.
                     // When it meets a ingest-request or a delete-range request, it will change to
                     // low-priority.
@@ -3626,48 +3627,51 @@ where
         unimplemented!()
     }
 
-    fn handle_normal(&mut self, normal: &mut ApplyFsm<EK>) -> Option<usize> {
-        let mut expected_msg_count = None;
+    fn handle_normal(
+        &mut self,
+        normal: &mut impl TrackedFsm<Target = ApplyFsm<EK>>,
+    ) -> HandleResult {
+        let mut handle_result = HandleResult::KeepProcessing;
         normal.delegate.handle_start = Some(Instant::now_coarse());
         if normal.delegate.yield_state.is_some() {
             if normal.delegate.wait_merge_state.is_some() {
                 // We need to query the length first, otherwise there is a race
                 // condition that new messages are queued after resuming and before
                 // query the length.
-                expected_msg_count = Some(normal.receiver.len());
+                handle_result = HandleResult::stop_at(normal.receiver.len(), false);
             }
             normal.resume_pending(&mut self.apply_ctx);
             if normal.delegate.wait_merge_state.is_some() {
                 // Yield due to applying CommitMerge, this fsm can be released if its
-                // channel msg count equals to expected_msg_count because it will receive
+                // channel msg count equals to last count because it will receive
                 // a new message if its source region has applied all needed logs.
-                return expected_msg_count;
+                return handle_result;
             } else if normal.delegate.yield_state.is_some() {
                 // Yield due to other reasons, this fsm must not be released because
                 // it's possible that no new message will be sent to itself.
                 // The remaining messages will be handled in next rounds.
-                return None;
+                return HandleResult::KeepProcessing;
             }
-            expected_msg_count = None;
+            handle_result = HandleResult::KeepProcessing;
         }
         fail_point!("before_handle_normal_3", normal.delegate.id() == 3, |_| {
-            None
+            HandleResult::KeepProcessing
         });
         fail_point!(
             "before_handle_normal_1003",
             normal.delegate.id() == 1003,
-            |_| { None }
+            |_| { HandleResult::KeepProcessing }
         );
         while self.msg_buf.len() < self.messages_per_tick {
             match normal.receiver.try_recv() {
                 Ok(msg) => self.msg_buf.push(msg),
                 Err(TryRecvError::Empty) => {
-                    expected_msg_count = Some(0);
+                    handle_result = HandleResult::stop_at(0, false);
                     break;
                 }
                 Err(TryRecvError::Disconnected) => {
                     normal.delegate.stopped = true;
-                    expected_msg_count = Some(0);
+                    handle_result = HandleResult::stop_at(0, false);
                     break;
                 }
             }
@@ -3677,17 +3681,17 @@ where
 
         if normal.delegate.wait_merge_state.is_some() {
             // Check it again immediately as catching up logs can be very fast.
-            expected_msg_count = Some(0);
+            handle_result = HandleResult::stop_at(0, false);
         } else if normal.delegate.yield_state.is_some() {
             // Let it continue to run next time.
-            expected_msg_count = None;
+            handle_result = HandleResult::KeepProcessing;
         }
-        expected_msg_count
+        handle_result
     }
 
-    fn end(&mut self, fsms: &mut [Box<ApplyFsm<EK>>]) {
+    fn end(&mut self, fsms: &mut [Option<impl TrackedFsm<Target = ApplyFsm<EK>>>]) {
         self.apply_ctx.flush();
-        for fsm in fsms {
+        for fsm in fsms.iter_mut().flatten() {
             fsm.delegate.last_flush_applied_index = fsm.delegate.apply_state.get_applied_index();
             fsm.delegate.update_memory_trace(&mut self.trace_event);
         }
@@ -3775,16 +3779,6 @@ where
     EK: KvEngine,
 {
     pub router: BatchRouter<ApplyFsm<EK>, ControlFsm>,
-}
-
-impl<EK> Drop for ApplyRouter<EK>
-where
-    EK: KvEngine,
-{
-    fn drop(&mut self) {
-        MEMTRACE_APPLY_ROUTER_ALIVE.trace(TraceEvent::Reset(0));
-        MEMTRACE_APPLY_ROUTER_LEAK.trace(TraceEvent::Reset(0));
-    }
 }
 
 impl<EK> Deref for ApplyRouter<EK>
