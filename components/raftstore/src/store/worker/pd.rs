@@ -1432,7 +1432,6 @@ fn collect_report_read_peer_stats(
 #[cfg(test)]
 mod tests {
     use engine_test::kv::KvTestEngine;
-    use kvproto::pdpb::QueryKind;
     use std::sync::Mutex;
     use std::time::Instant;
     use tikv_util::worker::FutureWorker;
