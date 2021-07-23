@@ -1533,6 +1533,6 @@ mod tests {
         }
         let mut store_stats = pdpb::StoreStats::default();
         store_stats = collect_report_read_peer_stats(1, report_stats, store_stats);
-        assert_eq!(store_stats.peer_stats.len(), 3)
+        assert_eq!(store_stats.peer_stats.len(), 2)
     }
 }
