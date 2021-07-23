@@ -139,7 +139,7 @@ macro_rules! handle_request {
                 sink.success(resp).await?;
                 GRPC_MSG_HISTOGRAM_STATIC
                     .$fn_name
-                    .observe(duration_to_sec(begin_instant.elapsed()));
+                    .observe(duration_to_sec(begin_instant.saturating_elapsed()));
                 ServerResult::Ok(())
             }
             .map_err(|e| {
@@ -315,7 +315,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .coprocessor
-                .observe(duration_to_sec(begin_instant.elapsed()));
+                .observe(duration_to_sec(begin_instant.saturating_elapsed()));
             ServerResult::Ok(())
         }
         .map_err(|e| {
@@ -343,7 +343,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .raw_coprocessor
-                .observe(duration_to_sec(begin_instant.elapsed()));
+                .observe(duration_to_sec(begin_instant.saturating_elapsed()));
             ServerResult::Ok(())
         }
         .map_err(|e| {
@@ -383,7 +383,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .register_lock_observer
-                .observe(duration_to_sec(begin_instant.elapsed()));
+                .observe(duration_to_sec(begin_instant.saturating_elapsed()));
             ServerResult::Ok(())
         }
         .map_err(|e| {
@@ -427,7 +427,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .check_lock_observer
-                .observe(duration_to_sec(begin_instant.elapsed()));
+                .observe(duration_to_sec(begin_instant.saturating_elapsed()));
             ServerResult::Ok(())
         }
         .map_err(|e| {
@@ -465,7 +465,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .remove_lock_observer
-                .observe(duration_to_sec(begin_instant.elapsed()));
+                .observe(duration_to_sec(begin_instant.saturating_elapsed()));
             ServerResult::Ok(())
         }
         .map_err(|e| {
@@ -510,7 +510,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .physical_scan_lock
-                .observe(duration_to_sec(begin_instant.elapsed()));
+                .observe(duration_to_sec(begin_instant.saturating_elapsed()));
             ServerResult::Ok(())
         }
         .map_err(|e| {
@@ -559,7 +559,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .unsafe_destroy_range
-                .observe(duration_to_sec(begin_instant.elapsed()));
+                .observe(duration_to_sec(begin_instant.saturating_elapsed()));
             ServerResult::Ok(())
         }
         .map_err(|e| {
@@ -596,7 +596,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 Ok(_) => {
                     GRPC_MSG_HISTOGRAM_STATIC
                         .coprocessor_stream
-                        .observe(duration_to_sec(begin_instant.elapsed()));
+                        .observe(duration_to_sec(begin_instant.saturating_elapsed()));
                     let _ = sink.close().await;
                 }
                 Err(e) => {
@@ -781,7 +781,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .split_region
-                .observe(duration_to_sec(begin_instant.elapsed()));
+                .observe(duration_to_sec(begin_instant.saturating_elapsed()));
             ServerResult::Ok(())
         }
         .map_err(|e| {
@@ -876,7 +876,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .read_index
-                .observe(begin_instant.elapsed_secs());
+                .observe(begin_instant.saturating_elapsed_secs());
             ServerResult::Ok(())
         }
         .map_err(|e| {
@@ -1100,7 +1100,7 @@ fn response_batch_commands_request<F>(
             } else {
                 GRPC_MSG_HISTOGRAM_STATIC
                     .get(label_enum)
-                    .observe(begin_instant.elapsed_secs());
+                    .observe(begin_instant.saturating_elapsed_secs());
             }
         }
     };
@@ -1235,7 +1235,7 @@ fn future_get<E: Engine, L: LockManager>(
 
     async move {
         let v = v.await;
-        let duration_ms = duration_to_ms(start.elapsed());
+        let duration_ms = duration_to_ms(start.saturating_elapsed());
         let mut resp = GetResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
@@ -1311,7 +1311,7 @@ fn future_batch_get<E: Engine, L: LockManager>(
 
     async move {
         let v = v.await;
-        let duration_ms = duration_to_ms(start.elapsed());
+        let duration_ms = duration_to_ms(start.saturating_elapsed());
         let mut resp = BatchGetResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
