@@ -1525,13 +1525,6 @@ mod tests {
             stat.set_read_bytes(6 - i);
             stat.read_keys = i;
             stat.read_bytes = 6 - i;
-            let mut query_stat = QueryStats::default();
-            if i == 3 {
-                query_stat.add_query_num(QueryKind::Get, 6);
-            } else {
-                query_stat.add_query_num(QueryKind::Get, 0);
-            }
-            stat.set_query_stats(query_stat.0);
             report_stats.insert(i, stat);
         }
         let mut store_stats = pdpb::StoreStats::default();
