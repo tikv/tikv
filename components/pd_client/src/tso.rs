@@ -11,6 +11,7 @@
 //! single `TsoRequest` to the PD server. The other future receives `TsoResponse`s from the PD
 //! server and allocates timestamps for the requests.
 
+use crate::metrics::PD_PENDING_TSO_REQUEST_GAUGE;
 use crate::{Error, Result};
 
 use futures::{
@@ -131,11 +132,12 @@ async fn run_tso(
 
             // Wake up the sending future blocked by too many pending requests as we are consuming
             // some of them here.
-            if pending_requests.len() == MAX_PENDING_COUNT {
+            if pending_requests.len() >= MAX_PENDING_COUNT {
                 sending_future_waker.wake();
             }
 
             allocate_timestamps(&resp, &mut pending_requests)?;
+            PD_PENDING_TSO_REQUEST_GAUGE.set(pending_requests.len() as i64);
         }
         Ok(())
     };
@@ -188,6 +190,7 @@ impl<'a> Stream for TsoRequestStream<'a> {
                 requests,
             };
             pending_requests.push_back(request_group);
+            PD_PENDING_TSO_REQUEST_GAUGE.set(pending_requests.len() as i64);
 
             let write_flags = WriteFlags::default().buffer_hint(false);
             Poll::Ready(Some((req, write_flags)))
