@@ -74,7 +74,7 @@ mod json_merge;
 mod json_modify;
 mod json_remove;
 mod json_type;
-mod json_unquote;
+pub mod json_unquote;
 
 pub use self::jcodec::{JsonDatumPayloadChunkEncoder, JsonDecoder, JsonEncoder};
 pub use self::json_modify::ModifyType;

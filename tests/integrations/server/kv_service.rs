@@ -1651,10 +1651,10 @@ fn test_forwarding_reconnect() {
     let mut req = RawGetRequest::default();
     req.set_context(ctx);
     // Large timeout value to ensure the error is from proxy instead of client.
-    let timer = std::time::Instant::now();
+    let timer = tikv_util::time::Instant::now();
     let timeout = Duration::from_secs(5);
     let res = client.raw_get_opt(&req, call_opt.clone().timeout(timeout));
-    let elapsed = timer.elapsed();
+    let elapsed = timer.saturating_elapsed();
     assert!(elapsed < timeout, "{:?}", elapsed);
     // Because leader server is shutdown, reconnecting has to be timeout.
     match res {

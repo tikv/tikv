@@ -6,7 +6,7 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use std::u64;
 
 use engine_traits::{DeleteStrategy, Range, CF_LOCK, CF_RAFT};
@@ -14,6 +14,7 @@ use engine_traits::{KvEngine, Mutable, WriteBatch};
 use fail::fail_point;
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
+use tikv_util::time::Instant;
 use tikv_util::{box_err, box_try, defer, error, info, thd_name, warn};
 
 use crate::coprocessor::CoprocessorHost;
@@ -294,7 +295,7 @@ where
             return;
         }
 
-        let start = tikv_util::time::Instant::now();
+        let start = Instant::now();
         let _io_type_guard = WithIOType::new(if for_balance {
             IOType::LoadBalance
         } else {
@@ -314,7 +315,9 @@ where
         }
 
         SNAP_COUNTER.generate.success.inc();
-        SNAP_HISTOGRAM.generate.observe(start.elapsed_secs());
+        SNAP_HISTOGRAM
+            .generate
+            .observe(start.saturating_elapsed_secs());
     }
 
     /// Applies snapshot data of the Region.
@@ -387,7 +390,7 @@ where
         info!(
             "apply new data";
             "region_id" => region_id,
-            "time_takes" => ?timer.elapsed(),
+            "time_takes" => ?timer.saturating_elapsed(),
         );
         Ok(())
     }
@@ -403,7 +406,7 @@ where
         SNAP_COUNTER.apply.all.inc();
         // let apply_histogram = SNAP_HISTOGRAM.with_label_values(&["apply"]);
         // let timer = apply_histogram.start_coarse_timer();
-        let start = tikv_util::time::Instant::now();
+        let start = Instant::now();
 
         match self.apply_snap(region_id, Arc::clone(&status)) {
             Ok(()) => {
@@ -425,7 +428,9 @@ where
             }
         }
 
-        SNAP_HISTOGRAM.apply.observe(start.elapsed_secs());
+        SNAP_HISTOGRAM
+            .apply
+            .observe(start.saturating_elapsed_secs());
     }
 
     /// Cleans up the data within the range.
