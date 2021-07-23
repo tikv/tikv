@@ -718,32 +718,16 @@ where
             let read_keys = region_peer.read_keys - region_peer.last_store_report_read_keys;
             region_peer.last_store_report_read_bytes = region_peer.read_bytes;
             region_peer.last_store_report_read_keys = region_peer.read_keys;
-<<<<<<< HEAD
-            // TODO: select hotspot peer by binaray heap in future
-=======
-            region_peer
-                .last_store_report_query_stats
-                .fill_query_stats(&region_peer.read_query_stats);
->>>>>>> 731fdee6b... raftstore: support limit the count of the peer stats reported in heartbeat (#10247)
             if read_bytes < hotspot_byte_report_threshold()
                 && read_keys < hotspot_key_report_threshold()
             {
                 continue;
             }
-<<<<<<< HEAD
-            let mut peer_stat = pdpb::PeerStat::default();
-            peer_stat.set_region_id(*region_id);
-            peer_stat.set_read_bytes(read_bytes);
-            peer_stat.set_read_keys(read_keys);
-            stats.peer_stats.push(peer_stat);
-=======
             let mut read_stat = pdpb::PeerStat::default();
             read_stat.set_region_id(*region_id);
             read_stat.set_read_keys(read_keys);
             read_stat.set_read_bytes(read_bytes);
-            read_stat.set_query_stats(read_query_stats.0);
             report_peers.insert(*region_id, read_stat);
->>>>>>> 731fdee6b... raftstore: support limit the count of the peer stats reported in heartbeat (#10247)
         }
 
         stats = collect_report_read_peer_stats(HOTSPOT_REPORT_CAPACITY, report_peers, stats);
@@ -1414,7 +1398,6 @@ fn collect_report_read_peer_stats(
     }
     let mut keys_topn_report = TopN::new(capacity);
     let mut bytes_topn_report = TopN::new(capacity);
-    let mut stats_topn_report = TopN::new(capacity);
     for read_stat in report_read_stats.values() {
         let mut cmp_stat = PeerCmpReadStat::default();
         cmp_stat.region_id = read_stat.region_id;
@@ -1424,9 +1407,6 @@ fn collect_report_read_peer_stats(
         let mut byte_cmp_stat = cmp_stat.clone();
         byte_cmp_stat.report_stat = read_stat.read_bytes;
         bytes_topn_report.push(byte_cmp_stat);
-        let mut query_cmp_stat = cmp_stat.clone();
-        query_cmp_stat.report_stat = get_read_query_num(read_stat.get_query_stats());
-        stats_topn_report.push(query_cmp_stat);
     }
 
     for x in keys_topn_report {
@@ -1440,17 +1420,7 @@ fn collect_report_read_peer_stats(
             stats.peer_stats.push(report_stat);
         }
     }
-
-    for x in stats_topn_report {
-        if let Some(report_stat) = report_read_stats.remove(&x.region_id) {
-            stats.peer_stats.push(report_stat);
-        }
-    }
     stats
-}
-
-fn get_read_query_num(stat: &pdpb::QueryStats) -> u64 {
-    stat.get_get() + stat.get_coprocessor() + stat.get_scan()
 }
 
 #[cfg(not(target_os = "macos"))]
