@@ -76,6 +76,7 @@ use crate::storage::{
     types::StorageCallbackType,
 };
 use concurrency_manager::ConcurrencyManager;
+use engine_rocks::FlowInfo;
 use engine_traits::{CfName, CF_DEFAULT, DATA_CFS};
 use futures::prelude::*;
 use kvproto::kvrpcpb::{
@@ -189,8 +190,6 @@ macro_rules! check_key_size {
         }
     };
 }
-
-use engine_rocks::FlowInfo;
 
 impl<E: Engine, L: LockManager> Storage<E, L> {
     /// Create a `Storage` from given engine.

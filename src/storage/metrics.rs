@@ -355,12 +355,12 @@ lazy_static! {
     .unwrap();
     pub static ref SCHED_DOWN_FLOW_GAUGE: IntGauge = register_int_gauge!(
         "tikv_scheduler_down_flow",
-        "The speed of l0 compaction flow."
+        "The down changes for throttle flow."
     )
     .unwrap();
     pub static ref SCHED_UP_FLOW_GAUGE: IntGauge = register_int_gauge!(
         "tikv_scheduler_up_flow",
-        "The speed of l0 compaction flow."
+        "The up changes for throttle flow."
     )
     .unwrap();
     pub static ref SCHED_THROTTLE_ACTION_COUNTER: IntCounterVec = {

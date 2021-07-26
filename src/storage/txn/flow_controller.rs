@@ -1,4 +1,4 @@
-// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::VecDeque;
 use std::f64::INFINITY;
@@ -10,9 +10,10 @@ use std::time::Duration;
 use std::u64;
 
 use collections::HashMap;
+use engine_rocks::FlowInfo;
 use engine_traits::{CFNamesExt, MiscExt};
 use rand::Rng;
-use tikv_util::time::{Consume, duration_to_sec, Instant, Limiter};
+use tikv_util::time::{duration_to_sec, Consume, Instant, Limiter};
 
 use crate::storage::config::Config;
 use crate::storage::metrics::*;
@@ -41,23 +42,23 @@ enum Trend {
 //
 // When write stall happens, the max speed of write rate max_delayed_write_rate
 // is limited to 16MB/s by default which doesn't take real disk ability into
-// account. It may underestimate the disk's throughout that 16MB/s is too small 
+// account. It may underestimate the disk's throughout that 16MB/s is too small
 // at once, causing a very large jitter on the write duration.
 // Also, it decreases the delayed write rate further if the factors still exceed
 // the threshold. So under heavy write load, the write rate may be throttled to
-// a very low rate from time to time, causing QPS drop eventually. 
+// a very low rate from time to time, causing QPS drop eventually.
 //
 // This main idea of the flow controller is to throttle at a steady write rate
 // so that the number of L0 keeps around the threshold. When it falls below the
 // threshold, the throttle state wouldn't exit right away. Instead, it may keep
 // or increase the throttle speed depending on some statistics.
 // How can we decide the throttle speed? As we can imagine, the consumption
-// ability of L0 wouldn't change dramatically corresponding to the ability of 
+// ability of L0 wouldn't change dramatically corresponding to the ability of
 // hardware. So we can record the flush flow when reach the threshold as target
-// flow, and increase or decrease the throttle speed based on whether current 
+// flow, and increase or decrease the throttle speed based on whether current
 // flush flow is smaller/larger than target flow.
 
-// For compaction pending bytes, we use discardable ratio. 
+// For compaction pending bytes, we use discardable ratio...(TBD)
 pub struct FlowController {
     discard_ratio: Arc<AtomicU64>,
     limiter: Arc<Limiter>,
@@ -188,26 +189,6 @@ impl<const CAP: usize> Smoother<CAP> {
         v[((self.records.len() - 1) as f64 * 0.90) as usize].0
     }
 
-    // fn factorial(&self, n: u64) -> u64 {
-    //     let mut res = 1;
-    //     for i in 1..=n {
-    //         res *= i;
-    //     }
-    //     res
-    // }
-
-    // fn binom_fact(&self, n: u64, k: u64) -> u64 {
-    //     self.factorial(n) / self.factorial(k) / self.factorial(n - k)
-    // }
-
-    // fn binom_cdf(&self, x: u64, n: u64, p: f64) -> f64 {
-    //     let mut cd = 0.0;
-    //     for i in 0..=x {
-    //         cd += self.binom_fact(n, i) as f64 * p.powi(i as i32) * (1.0 - p).powi((n - i) as i32);
-    //     }
-    //     cd
-    // }
-
     pub fn slope(&self) -> f64 {
         if self.records.len() <= 1 {
             return 0.0;
@@ -271,41 +252,8 @@ impl<const CAP: usize> Smoother<CAP> {
         } else {
             Trend::NoTrend
         }
-
-        // follow the way of Cox-Stuart
-        // let half = if self.size % 2 == 0 {
-        //     self.size / 2
-        // } else {
-        //     (self.size - 1) / 2
-        // };
-
-        // use std::cmp::Ordering;
-        // let mut num_pos = 0;
-        // let mut num_neg = 0;
-        // for i in 0..half {
-        //     match self.records[(self.idx + i + half) % CAP].cmp(&self.records[(self.idx + i) % CAP])
-        //     {
-        //         Ordering::Greater => num_pos += 1,
-        //         Ordering::Less => num_neg += 1,
-        //         Ordering::Equal => {}
-        //     }
-        // }
-
-        // let num = num_neg + num_pos;
-        // let k = std::cmp::min(num_neg, num_pos);
-        // let p_value = 2.0 * self.binom_cdf(k, num, 0.5);
-
-        // if num_pos > num_neg && p_value < 0.05 {
-        //     Trend::Increasing
-        // } else if num_pos < num_neg && p_value < 0.05 {
-        //     Trend::Decreasing
-        // } else {
-        //     Trend::NoTrend
-        // }
     }
 }
-
-use engine_rocks::FlowInfo;
 
 // CFFlowChecker records some statistics and states related to one CF.
 // These statistics falls into five categories:
@@ -426,34 +374,34 @@ impl<E: Engine> FlowChecker<E> {
                     match flow_info_receiver.recv_deadline(deadline) {
                         Ok(FlowInfo::L0(cf, l0_bytes)) => {
                             if let Some(throttle_cf) = checker.throttle_cf.as_ref() {
-                               if throttle_cf == &cf {
+                                if throttle_cf == &cf {
                                     spare_ticks = 0;
-                               } 
+                                }
                             }
                             checker.check_long_term_l0_files(cf, l0_bytes)
                         }
                         Ok(FlowInfo::L0Intra(cf)) => {
                             if let Some(throttle_cf) = checker.throttle_cf.as_ref() {
-                               if throttle_cf == &cf {
+                                if throttle_cf == &cf {
                                     spare_ticks = 0;
-                               } 
+                                }
                             }
                             // do nothing for l0 intra compaction, it makes a bigger L0 file
                         }
                         Ok(FlowInfo::Flush(cf, flush_bytes)) => {
                             if let Some(throttle_cf) = checker.throttle_cf.as_ref() {
-                               if throttle_cf == &cf {
+                                if throttle_cf == &cf {
                                     spare_ticks = 0;
-                               } 
+                                }
                             }
                             checker.adjust_memtables(&cf);
                             checker.check_l0_flow(cf, flush_bytes)
                         }
                         Ok(FlowInfo::Compaction(cf)) => {
                             if let Some(throttle_cf) = checker.throttle_cf.as_ref() {
-                               if throttle_cf == &cf {
+                                if throttle_cf == &cf {
                                     spare_ticks = 0;
-                               } 
+                                }
                             }
                             checker.adjust_pending_compaction_bytes(cf);
                         }
@@ -674,6 +622,46 @@ impl<E: Engine> FlowChecker<E> {
         self.update_speed_limit(throttle);
     }
 
+    fn tick_l0(&mut self) {
+        if self.limiter.speed_limit() != INFINITY {
+            let cf = self.throttle_cf.as_ref().unwrap();
+            let checker = self.cf_checkers.get_mut(cf).unwrap();
+            if checker.last_num_l0_files <= self.l0_files_threshold {
+                SCHED_THROTTLE_ACTION_COUNTER
+                    .with_label_values(&[&cf, "tick2"])
+                    .inc();
+
+                let throttle = if checker.long_term_num_l0_files.get_avg()
+                    >= self.l0_files_threshold as f64 * 0.5
+                {
+                    SCHED_THROTTLE_ACTION_COUNTER
+                        .with_label_values(&[&cf, "keep2"])
+                        .inc();
+                    self.limiter.speed_limit()
+                } else if checker.long_term_num_l0_files.get_recent() as f64
+                    >= self.l0_files_threshold as f64 * 0.5
+                {
+                    SCHED_THROTTLE_ACTION_COUNTER
+                        .with_label_values(&[&cf, "keep3"])
+                        .inc();
+                    self.limiter.speed_limit()
+                } else if checker.last_num_l0_files_from_flush >= self.l0_files_threshold {
+                    SCHED_THROTTLE_ACTION_COUNTER
+                        .with_label_values(&[&cf, "keep4"])
+                        .inc();
+                    self.limiter.speed_limit()
+                } else {
+                    SCHED_THROTTLE_ACTION_COUNTER
+                        .with_label_values(&[&cf, "up2"])
+                        .inc();
+                    self.limiter.speed_limit() * (1.0 + 5.0 * LIMIT_UP_PERCENT)
+                };
+
+                self.update_speed_limit(throttle)
+            }
+        }
+    }
+
     fn check_long_term_l0_files(&mut self, cf: String, l0_bytes: u64) {
         let num_l0_files = self
             .engine
@@ -730,45 +718,6 @@ impl<E: Engine> FlowChecker<E> {
         self.adjust_l0_files(cf);
     }
 
-    fn tick_l0(&mut self) {
-        if self.limiter.speed_limit() != INFINITY {
-            let cf = self.throttle_cf.as_ref().unwrap();
-            let checker = self.cf_checkers.get_mut(cf).unwrap();
-            if checker.last_num_l0_files <= self.l0_files_threshold {
-                SCHED_THROTTLE_ACTION_COUNTER
-                    .with_label_values(&[&cf, "tick2"])
-                    .inc();
-
-                let throttle = if checker.long_term_num_l0_files.get_avg()
-                    >= self.l0_files_threshold as f64 * 0.5
-                {
-                    SCHED_THROTTLE_ACTION_COUNTER
-                        .with_label_values(&[&cf, "keep2"])
-                        .inc();
-                    self.limiter.speed_limit()
-                } else if checker.long_term_num_l0_files.get_recent() as f64
-                    >= self.l0_files_threshold as f64 * 0.5
-                {
-                    SCHED_THROTTLE_ACTION_COUNTER
-                        .with_label_values(&[&cf, "keep3"])
-                        .inc();
-                    self.limiter.speed_limit()
-                } else if checker.last_num_l0_files_from_flush >= self.l0_files_threshold {
-                    SCHED_THROTTLE_ACTION_COUNTER
-                        .with_label_values(&[&cf, "keep4"])
-                        .inc();
-                    self.limiter.speed_limit()
-                } else {
-                    SCHED_THROTTLE_ACTION_COUNTER
-                        .with_label_values(&[&cf, "up2"])
-                        .inc();
-                    self.limiter.speed_limit() * (1.0 + 5.0 * LIMIT_UP_PERCENT)
-                };
-
-                self.update_speed_limit(throttle)
-            }
-        }
-    }
     fn adjust_l0_files(&mut self, cf: String) {
         let checker = self.cf_checkers.get_mut(&cf).unwrap();
 
@@ -802,7 +751,7 @@ impl<E: Engine> FlowChecker<E> {
             }
             self.limiter.speed_limit()
         } else if is_throttled && !should_throttle {
-            if checker.long_term_num_l0_files.get_avg() >= self.l0_files_threshold as f64 * 0.5 
+            if checker.long_term_num_l0_files.get_avg() >= self.l0_files_threshold as f64 * 0.5
             // && checker.long_term_num_l0_files.get_recent() as f64
             //     >= self.l0_files_threshold as f64 * 0.5
             {
@@ -818,8 +767,7 @@ impl<E: Engine> FlowChecker<E> {
             } else {
                 if self.last_target_file.is_some() {
                     if self.cf_checkers[&cf].short_term_l0_flow.get_avg() > self.l0_target_flow {
-                        let new = 0.5
-                            * self.cf_checkers[&cf].short_term_l0_flow.get_avg()
+                        let new = 0.5 * self.cf_checkers[&cf].short_term_l0_flow.get_avg()
                             + 0.5 * self.l0_target_flow;
                         if new > self.l0_target_flow {
                             self.l0_target_flow = new;
@@ -915,15 +863,7 @@ impl<E: Engine> FlowChecker<E> {
 
             if let Some(throttle_cf) = self.throttle_cf.as_ref() {
                 if &cf != throttle_cf {
-                    // if num_l0_files as f64 > self.cf_checkers[throttle_cf].long_term_num_l0_files.get_avg() + 8.0 {
-                    //     SCHED_THROTTLE_ACTION_COUNTER
-                    //         .with_label_values(&[&cf, "change_throttle_cf1"])
-                    //         .inc();
-                    //     self.throttle_cf = Some(cf.clone());
-                    //     self.last_target_file = None;
-                    // } else {
                     return;
-                    // }
                 }
             }
 
@@ -936,8 +876,10 @@ impl<E: Engine> FlowChecker<E> {
                         .with_label_values(&[&cf, "down_flow"])
                         .inc();
                     self.down_flow(cf);
-                } else if (self.cf_checkers[&cf].short_term_flush_flow.get_avg() < self.l0_target_flow
-                    || (self.cf_checkers[&cf].short_term_flush_flow.get_recent() as f64) < self.l0_target_flow)
+                } else if (self.cf_checkers[&cf].short_term_flush_flow.get_avg()
+                    < self.l0_target_flow
+                    || (self.cf_checkers[&cf].short_term_flush_flow.get_recent() as f64)
+                        < self.l0_target_flow)
                     && self.recorder.get_recent() as f64 > self.limiter.speed_limit() * 0.95
                 {
                     SCHED_THROTTLE_ACTION_COUNTER
@@ -949,15 +891,6 @@ impl<E: Engine> FlowChecker<E> {
                         .with_label_values(&[&cf, "keep_flow"])
                         .inc();
                 }
-            // } else if self.cf_checkers[&cf].short_term_flush_flow.get_avg()
-            //     > self.cf_checkers[&cf].short_term_l0_flow.get_avg()
-            // {
-            //     SCHED_THROTTLE_ACTION_COUNTER
-            //         .with_label_values(&[&cf, "init_down_flow"])
-            //         .inc();
-            //     self.l0_target_flow = self.cf_checkers[&cf].short_term_l0_flow.get_avg();
-            //     self.last_target_file = Some(num_l0_files);
-            //     self.down_flow(cf);
             } else {
                 SCHED_THROTTLE_ACTION_COUNTER
                     .with_label_values(&[&cf, "no_target_flow"])

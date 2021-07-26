@@ -12,7 +12,7 @@ use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
 use crate::storage::{config::Config as StorageConfig, Storage};
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::RocksEngine;
+use engine_rocks::{FlowInfo, RocksEngine};
 use engine_traits::{Engines, Peekable, RaftEngine};
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
@@ -30,8 +30,6 @@ use tikv_util::worker::{FutureWorker, Scheduler, Worker};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
-
-use engine_rocks::FlowInfo;
 
 /// Creates a new storage engine which is backed by the Raft consensus
 /// protocol.

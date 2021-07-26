@@ -24,7 +24,7 @@ use std::{
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{
-    encryption::get_env as get_encrypted_env, file_system::get_env as get_inspected_env,
+    encryption::get_env as get_encrypted_env, file_system::get_env as get_inspected_env, FlowInfo,
     RocksEngine,
 };
 use engine_traits::{compaction_job::CompactionJobInfo, Engines, RaftEngine, CF_DEFAULT, CF_WRITE};
@@ -141,7 +141,6 @@ pub fn run_tikv(config: TiKvConfig) {
 const RESERVED_OPEN_FDS: u64 = 1000;
 
 const DEFAULT_METRICS_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
-use engine_rocks::FlowInfo;
 /// A complete TiKV server.
 struct TiKVServer<ER: RaftEngine> {
     config: TiKvConfig,

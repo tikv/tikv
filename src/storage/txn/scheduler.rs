@@ -29,6 +29,7 @@ use std::u64;
 
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
+use engine_rocks::FlowInfo;
 use kvproto::kvrpcpb::{CommandPri, ExtraOp};
 use tikv_util::{callback::must_call, time::Instant};
 use txn_types::TimeStamp;
@@ -240,7 +241,7 @@ impl<L: LockManager> SchedulerInner<L> {
         None
     }
 }
-use engine_rocks::FlowInfo;
+
 /// Scheduler which schedules the execution of `storage::Command`s.
 #[derive(Clone)]
 pub struct Scheduler<E: Engine, L: LockManager> {
