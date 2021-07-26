@@ -73,7 +73,7 @@ pub struct CpuRecords {
     pub begin_unix_time_secs: u64,
     pub duration: Duration,
 
-    // First collect as tag -> clock ticks. Before do collect, convert to tag -> ms.
+    // tag -> ms
     pub records: HashMap<ResourceMeteringTag, u64>,
 }
 
