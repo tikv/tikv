@@ -125,6 +125,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
             Arc::clone(&grpc_thread_load),
             cfg.value().enable_request_batch,
             proxy,
+            cfg.value().reject_messages_on_memory_ratio,
         );
 
         let addr = SocketAddr::from_str(&cfg.value().addr)?;

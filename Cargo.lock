@@ -133,6 +133,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "atomic"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3410529e8288c463bedb5930f82833bc0c90e5d2fe639a56582a4d09220b281"
+dependencies = [
+ "autocfg",
+]
+
+[[package]]
 name = "atty"
 version = "0.2.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -624,6 +633,7 @@ name = "coprocessor_plugin_api"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "atomic",
  "rustc_version 0.3.3",
 ]
 
@@ -758,10 +768,11 @@ dependencies = [
 [[package]]
 name = "crossbeam-epoch"
 version = "0.9.3"
-source = "git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0#e0e083d062649484188b7337fe388fd12f2c8d94"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2584f639eb95fea8c798496315b297cf81b9b58b6d30ab066a75455333cf4b12"
 dependencies = [
  "cfg-if 1.0.0",
- "crossbeam-utils 0.8.3 (git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0)",
+ "crossbeam-utils 0.8.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "lazy_static",
  "memoffset",
  "scopeguard",
@@ -770,11 +781,10 @@ dependencies = [
 [[package]]
 name = "crossbeam-epoch"
 version = "0.9.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2584f639eb95fea8c798496315b297cf81b9b58b6d30ab066a75455333cf4b12"
+source = "git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0#e0e083d062649484188b7337fe388fd12f2c8d94"
 dependencies = [
  "cfg-if 1.0.0",
- "crossbeam-utils 0.8.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crossbeam-utils 0.8.3 (git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0)",
  "lazy_static",
  "memoffset",
  "scopeguard",
@@ -815,7 +825,8 @@ dependencies = [
 [[package]]
 name = "crossbeam-utils"
 version = "0.8.3"
-source = "git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0#e0e083d062649484188b7337fe388fd12f2c8d94"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7e9d99fa91428effe99c5c6d4634cdeba32b8cf784fc428a2a687f61a952c49"
 dependencies = [
  "autocfg",
  "cfg-if 1.0.0",
@@ -825,8 +836,7 @@ dependencies = [
 [[package]]
 name = "crossbeam-utils"
 version = "0.8.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7e9d99fa91428effe99c5c6d4634cdeba32b8cf784fc428a2a687f61a952c49"
+source = "git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0#e0e083d062649484188b7337fe388fd12f2c8d94"
 dependencies = [
  "autocfg",
  "cfg-if 1.0.0",
@@ -1134,6 +1144,7 @@ name = "engine_traits"
 version = "0.0.1"
 dependencies = [
  "error_code",
+ "fail",
  "file_system",
  "kvproto",
  "log_wrappers",
@@ -2097,7 +2108,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#ab6bb38882c491c8ee9da13112cb1d9a35695180"
+source = "git+https://github.com/pingcap/kvproto.git#91a52cd9e8db8dec6147114c94d1678fffc0a5ba"
 dependencies = [
  "futures 0.3.15",
  "grpcio",

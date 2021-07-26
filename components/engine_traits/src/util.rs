@@ -3,6 +3,7 @@
 use super::{Error, Result};
 use tikv_util::codec;
 use tikv_util::codec::number::{self, NumberEncoder};
+use tikv_util::time::UnixSecs;
 
 /// Check if key in range [`start_key`, `end_key`).
 #[allow(dead_code)]
@@ -22,6 +23,18 @@ pub fn check_key_in_range(
             end: end_key.to_vec(),
         })
     }
+}
+
+pub fn ttl_current_ts() -> u64 {
+    fail_point!("ttl_current_ts", |r| r.map_or(2, |e| e.parse().unwrap()));
+    UnixSecs::now().into_inner()
+}
+
+pub fn ttl_to_expire_ts(ttl: u64) -> u64 {
+    if ttl == 0 {
+        return 0;
+    }
+    ttl.saturating_add(ttl_current_ts())
 }
 
 pub fn append_expire_ts(value: &mut Vec<u8>, expire_ts: u64) {
