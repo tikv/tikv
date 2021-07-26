@@ -81,8 +81,8 @@ impl Default for Config {
             ttl_check_poll_interval: ReadableDuration::hours(12),
             block_cache: BlockCacheConfig::default(),
             disable_write_stall: true,
-            pending_compaction_bytes_soft_limit: ReadableSize::gb(64).0,
-            pending_compaction_bytes_hard_limit: ReadableSize::gb(512).0,
+            pending_compaction_bytes_soft_limit: ReadableSize::gb(128).0,
+            pending_compaction_bytes_hard_limit: ReadableSize::gb(1024).0,
             memtables_threshold: 5,
             l0_files_threshold: 9,
         }

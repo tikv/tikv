@@ -341,10 +341,26 @@ lazy_static! {
         &["cf"]
     )
     .unwrap();
+    pub static ref SCHED_LONG_TERM_FLUSH_FLOW_GAUGE: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_scheduler_long_term_flush_flow",
+        "The speed of flush flow.",
+        &["cf"]
+    )
+    .unwrap();
     pub static ref SCHED_L0_FLOW_GAUGE: IntGaugeVec = register_int_gauge_vec!(
         "tikv_scheduler_l0_flow",
         "The speed of l0 compaction flow.",
         &["cf"]
+    )
+    .unwrap();
+    pub static ref SCHED_DOWN_FLOW_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_scheduler_down_flow",
+        "The speed of l0 compaction flow."
+    )
+    .unwrap();
+    pub static ref SCHED_UP_FLOW_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_scheduler_up_flow",
+        "The speed of l0 compaction flow."
     )
     .unwrap();
     pub static ref SCHED_THROTTLE_ACTION_COUNTER: IntCounterVec = {
