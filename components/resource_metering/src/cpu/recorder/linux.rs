@@ -261,11 +261,10 @@ impl CpuRecorder {
                         let prev_cpu_ticks = (thread_stat.prev_stat.utime as u64)
                             .wrapping_add(thread_stat.prev_stat.stime as u64);
                         let current_cpu_ticks = (stat.utime as u64).wrapping_add(stat.stime as u64);
-                        let delta_ms = current_cpu_ticks.wrapping_sub(prev_cpu_ticks) * 1_000
-                            / (*CLK_TCK as u64);
+                        let delta_ticks = current_cpu_ticks.wrapping_sub(prev_cpu_ticks);
 
-                        if delta_ms != 0 {
-                            *records.entry(prev_tag).or_insert(0) += delta_ms;
+                        if delta_ticks != 0 {
+                            *records.entry(prev_tag).or_insert(0) += delta_ticks;
                         }
                     }
 
@@ -331,6 +330,11 @@ impl CpuRecorder {
             records.duration = duration;
 
             if !records.records.is_empty() {
+                // convert from tag -> clock ticks to tag -> ms.
+                for (tag, v) in records.records.iter_mut() {
+                    let ticks = *v;
+                    *v = ticks * 1_000 / (*CLK_TCK as u64);
+                }
                 let records = Arc::new(records);
                 for collector in self.collectors.values() {
                     collector.collect(records.clone());
