@@ -266,6 +266,7 @@ impl CpuRecorder {
 
                         if delta_ms != 0 {
                             *records.entry(prev_tag).or_insert(0) += delta_ms;
+                            thread_stat.prev_stat = stat;
                         }
                     }
 
@@ -281,7 +282,6 @@ impl CpuRecorder {
                     // Store the beginning stat for the current tag.
                     if cur_tag.is_some() {
                         thread_stat.prev_tag = cur_tag;
-                        thread_stat.prev_stat = stat;
                     }
                 }
             }
