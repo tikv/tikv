@@ -1602,8 +1602,6 @@ mod tests {
         batch.set_commit_ts(10);
         batch.set_pairs(pairs.into());
         w.write(batch).unwrap();
-        assert_eq!(w.write_entries, 2);
-        assert_eq!(w.default_entries, 1);
 
         let metas = w.finish().unwrap();
         assert_eq!(metas.len(), 2);
