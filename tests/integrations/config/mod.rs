@@ -211,7 +211,7 @@ fn test_serde_custom_tikv_config() {
         perf_level: PerfLevel::Disable,
         evict_cache_on_memory_ratio: 0.8,
         cmd_batch: false,
-        trigger_ready_size: ReadableSize::mb(12),
+        raft_ready_size_limit: ReadableSize::mb(12),
         raft_write_size_limit: ReadableSize::mb(34),
         store_waterfall_metrics: true,
     };

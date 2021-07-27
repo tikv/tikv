@@ -202,7 +202,7 @@ pub struct Config {
     pub cmd_batch: bool,
 
     #[online_config(skip)]
-    pub trigger_ready_size: ReadableSize,
+    pub raft_ready_size_limit: ReadableSize,
 
     // When the size of raft db writebatch exceeds this value, write will be triggered.
     #[online_config(skip)]
@@ -297,8 +297,8 @@ impl Default for Config {
             perf_level: PerfLevel::EnableTime,
             evict_cache_on_memory_ratio: 0.2,
             cmd_batch: true,
-            trigger_ready_size: ReadableSize::mb(1),
-            raft_write_size_limit: ReadableSize::kb(16),
+            raft_ready_size_limit: ReadableSize::mb(1),
+            raft_write_size_limit: ReadableSize::mb(1),
             store_waterfall_metrics: false,
 
             // They are preserved for compatibility check.
@@ -669,6 +669,12 @@ impl Config {
             .with_label_values(&["store_io_notify_capacity"])
             .set((self.store_io_notify_capacity as i32).into());
         CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["io_reschedule_concurrent_max_count"])
+            .set((self.io_reschedule_concurrent_max_count as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["io_reschedule_hotpot_duration"])
+            .set(self.io_reschedule_hotpot_duration.as_secs() as f64);
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["future_poll_size"])
             .set(self.future_poll_size as f64);
         CONFIG_RAFTSTORE_GAUGE
@@ -678,8 +684,8 @@ impl Config {
             .with_label_values(&["cmd_batch"])
             .set((self.cmd_batch as i32).into());
         CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["trigger_ready_size"])
-            .set(self.trigger_ready_size.0 as f64);
+            .with_label_values(&["raft_ready_size_limit"])
+            .set(self.raft_ready_size_limit.0 as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_write_size_limit"])
             .set(self.raft_write_size_limit.0 as f64);
