@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use atomic::{Atomic, Ordering};
 use std::alloc::{GlobalAlloc, Layout};
-use std::sync::atomic::{AtomicPtr, Ordering};
 
 type AllocFn = unsafe fn(Layout) -> *mut u8;
 type DeallocFn = unsafe fn(*mut u8, Layout);
@@ -18,19 +18,19 @@ pub struct HostAllocatorPtr {
 
 /// An allocator that forwards invocations to the host (TiKV) of the plugin.
 pub struct HostAllocator {
-    alloc_fn: AtomicPtr<AllocFn>,
-    dealloc_fn: AtomicPtr<DeallocFn>,
+    alloc_fn: Atomic<Option<AllocFn>>,
+    dealloc_fn: Atomic<Option<DeallocFn>>,
 }
 
 impl HostAllocator {
     /// Creates a new [`HostAllocator`].
     ///
-    /// The internal function pointers are set to `nullptr`, so any attempt to allocate memory
-    /// before a call to [`set_allocator()`] will result in a segmentation fault.
+    /// The internal function pointers are initially `None`, so any attempt to allocate memory
+    /// before a call to [`set_allocator()`] will result in a panic.
     pub const fn new() -> Self {
         HostAllocator {
-            alloc_fn: AtomicPtr::new(std::ptr::null_mut()),
-            dealloc_fn: AtomicPtr::new(std::ptr::null_mut()),
+            alloc_fn: Atomic::new(None),
+            dealloc_fn: Atomic::new(None),
         }
     }
 
@@ -39,17 +39,27 @@ impl HostAllocator {
     /// because otherwise the [`HostAllocator`] is in an invalid state.
     pub fn set_allocator(&self, allocator: HostAllocatorPtr) {
         self.alloc_fn
-            .store(allocator.alloc_fn as *mut _, Ordering::SeqCst);
+            .store(Some(allocator.alloc_fn), Ordering::SeqCst);
         self.dealloc_fn
-            .store(allocator.dealloc_fn as *mut _, Ordering::SeqCst);
+            .store(Some(allocator.dealloc_fn), Ordering::SeqCst);
     }
 }
 
 unsafe impl GlobalAlloc for HostAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        (*self.alloc_fn.load(Ordering::Relaxed))(layout)
+        self.alloc_fn.load(Ordering::Relaxed).unwrap()(layout)
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        (*self.dealloc_fn.load(Ordering::Relaxed))(ptr, layout)
+        self.dealloc_fn.load(Ordering::Relaxed).unwrap()(ptr, layout)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn atomic_is_lock_free() {
+        assert!(Atomic::<Option<AllocFn>>::is_lock_free());
     }
 }

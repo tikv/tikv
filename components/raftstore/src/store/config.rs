@@ -166,6 +166,9 @@ pub struct Config {
     pub store_io_pool_size: usize,
 
     #[online_config(skip)]
+    pub store_io_notify_capacity: usize,
+
+    #[online_config(skip)]
     pub future_poll_size: usize,
     #[online_config(skip)]
     pub hibernate_regions: bool,
@@ -179,9 +182,30 @@ pub struct Config {
     #[online_config(skip)]
     pub perf_level: PerfLevel,
 
+    #[doc(hidden)]
+    #[online_config(skip)]
+    /// When TiKV memory usage reaches `memory_usage_high_water` it will try to limit memory
+    /// increasing. For raftstore layer entries will be evicted from entry cache, if they
+    /// utilize memory more than `evict_cache_on_memory_ratio` * total.
+    ///
+    /// Set it to 0 can disable cache evict.
+    // By default it's 0.2. So for different system memory capacity, cache evict happens:
+    // * system=8G,  memory_usage_limit=6G,  evict=1.2G
+    // * system=16G, memory_usage_limit=12G, evict=2.4G
+    // * system=32G, memory_usage_limit=24G, evict=4.8G
+    pub evict_cache_on_memory_ratio: f64,
+
+    #[online_config(hidden)]
+    pub cmd_batch: bool,
+
+    pub trigger_ready_size: ReadableSize,
+
     // When the size of raft db writebatch exceeds this value, write will be triggered.
     #[online_config(skip)]
     pub raft_write_size_limit: ReadableSize,
+
+    #[online_config(skip)]
+    pub store_waterfall_metrics: bool,
 
     // Deprecated! These configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
@@ -259,12 +283,16 @@ impl Default for Config {
             apply_batch_system: BatchSystemConfig::default(),
             store_batch_system: BatchSystemConfig::default(),
             store_io_pool_size: 2,
+            store_io_notify_capacity: 40960,
             future_poll_size: 1,
             hibernate_regions: true,
             dev_assert: false,
             apply_yield_duration: ReadableDuration::millis(500),
-            perf_level: PerfLevel::Disable,
+            perf_level: PerfLevel::EnableTime,
+            evict_cache_on_memory_ratio: 0.2,
+            cmd_batch: true,
             raft_write_size_limit: ReadableSize::mb(1),
+            store_waterfall_metrics: false,
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
@@ -452,6 +480,12 @@ impl Config {
             );
         }
 
+        if self.evict_cache_on_memory_ratio < 0.0 {
+            return Err(box_err!(
+                "evict_cache_on_memory_ratio must be greater than 0"
+            ));
+        }
+
         Ok(())
     }
 
@@ -625,14 +659,23 @@ impl Config {
             .with_label_values(&["store_io_pool_size"])
             .set((self.store_io_pool_size as i32).into());
         CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["store_io_notify_capacity"])
+            .set((self.store_io_notify_capacity as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["future_poll_size"])
             .set(self.future_poll_size as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["hibernate_regions"])
             .set((self.hibernate_regions as i32).into());
         CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["cmd_batch"])
+            .set((self.cmd_batch as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_write_size_limit"])
             .set(self.raft_write_size_limit.0 as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["store_waterfall_metrics"])
+            .set((self.store_waterfall_metrics as i32).into());
     }
 
     fn write_change_into_metrics(change: ConfigChange) {

@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 
 use crate::store::{Config, Transport};
@@ -8,20 +9,27 @@ use engine_rocks::RocksWriteBatch;
 use engine_test::kv::{new_engine, KvTestEngine};
 use engine_traits::{Mutable, Peekable, WriteBatchExt, ALL_CFS};
 use kvproto::raft_serverpb::RaftMessage;
-use tempfile::{Builder, TempDir};
+use tempfile::Builder;
 
 use super::*;
 
-fn create_tmp_engine(path: &str) -> (TempDir, KvTestEngine) {
+fn create_engines(path: &str) -> Engines<KvTestEngine, KvTestEngine> {
     let path = Builder::new().prefix(path).tempdir().unwrap();
-    let engine = new_engine(
-        path.path().join("db").to_str().unwrap(),
+    let kv_db = new_engine(
+        path.path().join("kv").to_str().unwrap(),
         None,
         ALL_CFS,
         None,
     )
     .unwrap();
-    (path, engine)
+    let raft_db = new_engine(
+        path.path().join("raft").to_str().unwrap(),
+        None,
+        ALL_CFS,
+        None,
+    )
+    .unwrap();
+    Engines::new(kv_db, raft_db)
 }
 
 fn must_have_entries_and_state(
@@ -146,11 +154,19 @@ fn must_wait_same_notifies(
             }
         }
 
-        if timer.elapsed() > Duration::from_secs(5) {
-            panic!("wait some notifies after 3 seconds")
+        if timer.saturating_elapsed() > Duration::from_secs(5) {
+            panic!("wait some notifies after 5 seconds")
         }
-        thread::sleep(Duration::from_millis(20));
+        thread::sleep(Duration::from_millis(10));
     }
+}
+
+fn init_write_batch(
+    engines: &Engines<KvTestEngine, KvTestEngine>,
+    task: &mut WriteTask<KvTestEngine, KvTestEngine>,
+) {
+    task.kv_wb = Some(engines.kv.write_batch());
+    task.raft_wb = Some(engines.raft.write_batch());
 }
 
 /// Help function for less code
@@ -165,52 +181,119 @@ fn delete_kv(wb: &mut Option<RocksWriteBatch>, key: &[u8]) {
     wb.as_mut().unwrap().delete(key).unwrap();
 }
 
-struct TestAsyncWriteWorker {
-    worker: AsyncWriteWorker<KvTestEngine, KvTestEngine, TestTransport, TestNotifier>,
+struct TestWorker {
+    worker: Worker<KvTestEngine, KvTestEngine, TestTransport, TestNotifier>,
     msg_rx: Receiver<RaftMessage>,
     notify_rx: Receiver<(u64, (u64, u64))>,
+    sync_receiver: Receiver<SyncMsg>,
 }
 
-impl TestAsyncWriteWorker {
-    fn new(cfg: &Config, kv_engine: &KvTestEngine, raft_engine: &KvTestEngine) -> Self {
-        let (_, task_rx) = channel();
-        let (msg_tx, msg_rx) = channel();
+impl TestWorker {
+    fn new(cfg: &Config, engines: &Engines<KvTestEngine, KvTestEngine>) -> Self {
+        let (_, task_rx) = unbounded();
+        let (msg_tx, msg_rx) = unbounded();
         let trans = TestTransport { tx: msg_tx };
-        let (notify_tx, notify_rx) = channel();
+        let (notify_tx, notify_rx) = unbounded();
         let notifier = TestNotifier { tx: notify_tx };
+        let (sync_sender, sync_receiver) = unbounded();
         Self {
-            worker: AsyncWriteWorker::new(
+            worker: Worker::new(
                 1,
                 "writer".to_string(),
-                kv_engine.clone(),
-                raft_engine.clone(),
+                0,
+                engines.clone(),
                 task_rx,
                 notifier,
                 trans,
+                Arc::new(CachePadded::new(AtomicU64::new(0))),
+                sync_sender,
                 cfg,
             ),
             msg_rx,
             notify_rx,
+            sync_receiver,
         }
     }
 }
 
-struct TestAsyncWriters {
-    writers: AsyncWriters<KvTestEngine, KvTestEngine>,
+struct TestEngineSync(Arc<AtomicUsize>);
+
+impl EngineSync for TestEngineSync {
+    fn sync(&self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+struct TestSyncWorker {
+    worker: Option<SyncWorker<KvTestEngine, KvTestEngine, TestEngineSync>>,
+    sender: Sender<SyncMsg>,
+    write_receivers: Vec<Receiver<WriteMsg<KvTestEngine, KvTestEngine>>>,
+    global_persisted_ids: Vec<Arc<CachePadded<AtomicU64>>>,
+    sync_cnt: Arc<AtomicUsize>,
+}
+
+impl TestSyncWorker {
+    fn new(cfg: &Config) -> Self {
+        let (mut write_senders, mut write_receivers) = (vec![], vec![]);
+        let (sender, receiver) = unbounded();
+        let mut global_persisted_ids = vec![];
+        for _ in 0..cfg.store_io_pool_size {
+            let (tx, rx) = unbounded();
+            write_senders.push(tx);
+            write_receivers.push(rx);
+            global_persisted_ids.push(Arc::new(CachePadded::new(AtomicU64::new(0))));
+        }
+        let sync_cnt = Arc::new(AtomicUsize::new(0));
+        Self {
+            worker: Some(SyncWorker::new(
+                TestEngineSync(sync_cnt.clone()),
+                receiver,
+                write_senders,
+                global_persisted_ids.clone(),
+            )),
+            sender,
+            write_receivers,
+            global_persisted_ids,
+            sync_cnt,
+        }
+    }
+
+    fn must_have_persisted_msg(&self, worker_id: usize) {
+        let mut res = true;
+        while let Ok(m) = self.write_receivers[worker_id].try_recv() {
+            if let WriteMsg::Persisted = m {
+                res = true;
+            } else {
+                panic!("write msg {:?} is not persisted msg", m);
+            }
+        }
+        if !res {
+            panic!("no persisted msg");
+        }
+    }
+
+    fn must_same_persisted_id(&self, worker_id: usize, persisted_id: u64) {
+        assert_eq!(
+            self.global_persisted_ids[worker_id].load(Ordering::SeqCst),
+            persisted_id
+        );
+    }
+}
+
+struct TestWriters {
+    writers: StoreWriters<KvTestEngine, KvTestEngine>,
     msg_rx: Receiver<RaftMessage>,
     notify_rx: Receiver<(u64, (u64, u64))>,
 }
 
-impl TestAsyncWriters {
-    fn new(cfg: &Config, kv_engine: &KvTestEngine, raft_engine: &KvTestEngine) -> Self {
-        let (msg_tx, msg_rx) = channel();
+impl TestWriters {
+    fn new(cfg: &Config, engines: &Engines<KvTestEngine, KvTestEngine>) -> Self {
+        let (msg_tx, msg_rx) = unbounded();
         let trans = TestTransport { tx: msg_tx };
-        let (notify_tx, notify_rx) = channel();
+        let (notify_tx, notify_rx) = unbounded();
         let notifier = TestNotifier { tx: notify_tx };
-        let mut writers = AsyncWriters::new();
-        writers
-            .spawn(1, kv_engine, raft_engine, &notifier, &trans, &cfg)
-            .unwrap();
+        let mut writers = StoreWriters::new();
+        writers.spawn(1, &engines, &notifier, &trans, &cfg).unwrap();
         Self {
             writers,
             msg_rx,
@@ -218,21 +301,19 @@ impl TestAsyncWriters {
         }
     }
 
-    fn async_write_sender(&self, id: usize) -> &Sender<AsyncWriteMsg<KvTestEngine, KvTestEngine>> {
+    fn write_sender(&self, id: usize) -> &Sender<WriteMsg<KvTestEngine, KvTestEngine>> {
         &self.writers.senders()[id]
     }
 }
 
 #[test]
-fn test_batch_write() {
-    let (_dir, kv_engine) = create_tmp_engine("async-io-batch-kv");
-    let (_dir, raft_engine) = create_tmp_engine("async-io-batch-raft");
-    let mut t = TestAsyncWriteWorker::new(&Config::default(), &kv_engine, &raft_engine);
+fn test_worker() {
+    let engines = create_engines("async-io-worker");
+    let mut t = TestWorker::new(&Config::default(), &engines);
 
-    let mut task_1 = AsyncWriteTask::<KvTestEngine, KvTestEngine>::new(1, 1, 10);
-    task_1.kv_wb = Some(kv_engine.write_batch());
+    let mut task_1 = WriteTask::<KvTestEngine, KvTestEngine>::new(1, 1, 10);
+    init_write_batch(&engines, &mut task_1);
     put_kv(&mut task_1.kv_wb, b"kv_k1", b"kv_v1");
-    task_1.raft_wb = Some(raft_engine.write_batch());
     put_kv(&mut task_1.raft_wb, b"raft_k1", b"raft_v1");
     task_1.entries.append(&mut vec![
         new_entry(5, 5),
@@ -243,12 +324,11 @@ fn test_batch_write() {
     task_1.raft_state = Some(new_raft_state(5, 123, 6, 8));
     task_1.messages.append(&mut vec![RaftMessage::default()]);
 
-    t.worker.wb.add_write_task(task_1);
+    t.worker.batch.add_write_task(task_1);
 
-    let mut task_2 = AsyncWriteTask::<KvTestEngine, KvTestEngine>::new(2, 2, 15);
-    task_2.kv_wb = Some(kv_engine.write_batch());
+    let mut task_2 = WriteTask::<KvTestEngine, KvTestEngine>::new(2, 2, 15);
+    init_write_batch(&engines, &mut task_2);
     put_kv(&mut task_2.kv_wb, b"kv_k2", b"kv_v2");
-    task_2.raft_wb = Some(raft_engine.write_batch());
     put_kv(&mut task_2.raft_wb, b"raft_k2", b"raft_v2");
     task_2
         .entries
@@ -258,12 +338,11 @@ fn test_batch_write() {
         .messages
         .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
 
-    t.worker.wb.add_write_task(task_2);
+    t.worker.batch.add_write_task(task_2);
 
-    let mut task_3 = AsyncWriteTask::<KvTestEngine, KvTestEngine>::new(1, 1, 11);
-    task_3.kv_wb = Some(kv_engine.write_batch());
+    let mut task_3 = WriteTask::<KvTestEngine, KvTestEngine>::new(1, 1, 11);
+    init_write_batch(&engines, &mut task_3);
     put_kv(&mut task_3.kv_wb, b"kv_k3", b"kv_v3");
-    task_3.raft_wb = Some(raft_engine.write_batch());
     put_kv(&mut task_3.raft_wb, b"raft_k3", b"raft_v3");
     delete_kv(&mut task_3.raft_wb, b"raft_k1");
     task_3
@@ -275,24 +354,42 @@ fn test_batch_write() {
         .messages
         .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
 
-    t.worker.wb.add_write_task(task_3);
+    t.worker.batch.add_write_task(task_3);
 
-    t.worker.sync_write();
+    t.worker.write_to_db();
 
-    let snapshot = kv_engine.snapshot();
+    let snapshot = engines.kv.snapshot();
     assert_eq!(snapshot.get_value(b"kv_k1").unwrap().unwrap(), b"kv_v1");
     assert_eq!(snapshot.get_value(b"kv_k2").unwrap().unwrap(), b"kv_v2");
     assert_eq!(snapshot.get_value(b"kv_k3").unwrap().unwrap(), b"kv_v3");
 
-    let snapshot = raft_engine.snapshot();
+    let snapshot = engines.raft.snapshot();
     assert!(snapshot.get_value(b"raft_k1").unwrap().is_none());
     assert_eq!(snapshot.get_value(b"raft_k2").unwrap().unwrap(), b"raft_v2");
     assert_eq!(snapshot.get_value(b"raft_k3").unwrap().unwrap(), b"raft_v3");
 
+    let m = t.sync_receiver.try_recv().unwrap();
+    if let SyncMsg::Sync {
+        worker_id,
+        unpersisted_id,
+    } = m
+    {
+        assert_eq!((worker_id, unpersisted_id), (0, 1));
+    } else {
+        panic!("sync msg is wrong");
+    }
+
+    // Callback and msg should not be sent before fsync
+    assert!(t.notify_rx.try_recv().is_err());
+    assert!(t.msg_rx.try_recv().is_err());
+
+    t.worker.last_persisted_id = 1;
+    t.worker.after_persist(&mut HashMap::default());
+
     must_have_same_notifies(vec![(1, (1, 11)), (2, (2, 15))], &t.notify_rx);
 
     must_have_entries_and_state(
-        &raft_engine,
+        &engines.raft,
         vec![
             (
                 1,
@@ -311,17 +408,59 @@ fn test_batch_write() {
 }
 
 #[test]
+fn test_sync_worker() {
+    let mut cfg = Config::default();
+    cfg.store_io_pool_size = 3;
+    let mut t = TestSyncWorker::new(&cfg);
+    let msg = [(0, 1), (0, 2), (1, 3), (1, 4)];
+    for (a, b) in msg.iter() {
+        t.sender
+            .send(SyncMsg::Sync {
+                worker_id: *a,
+                unpersisted_id: *b,
+            })
+            .unwrap();
+    }
+
+    let mut worker = t.worker.take().unwrap();
+    let handler = thread::spawn(move || {
+        worker.run();
+    });
+
+    let timer = Instant::now();
+    loop {
+        if t.sync_cnt.load(Ordering::SeqCst) >= 1 {
+            break;
+        }
+        if timer.saturating_elapsed() > Duration::from_secs(5) {
+            panic!("wait sync after 5 seconds")
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    // Wait for notifying after sync
+    thread::sleep(Duration::from_millis(50));
+    t.must_have_persisted_msg(0);
+    t.must_have_persisted_msg(1);
+    t.must_have_persisted_msg(2);
+    t.must_same_persisted_id(0, 2);
+    t.must_same_persisted_id(1, 4);
+    t.must_same_persisted_id(2, 0);
+
+    t.sender.send(SyncMsg::Shutdown).unwrap();
+    handler.join().unwrap();
+}
+
+#[test]
 fn test_basic_flow() {
-    let (_dir, kv_engine) = create_tmp_engine("async-io-basic-kv");
-    let (_dir, raft_engine) = create_tmp_engine("async-io-basic-raft");
+    let engines = create_engines("async-io-basic");
     let mut cfg = Config::default();
     cfg.store_io_pool_size = 2;
-    let mut t = TestAsyncWriters::new(&cfg, &kv_engine, &raft_engine);
+    let mut t = TestWriters::new(&cfg, &engines);
 
-    let mut task_1 = AsyncWriteTask::<KvTestEngine, KvTestEngine>::new(1, 1, 10);
-    task_1.kv_wb = Some(kv_engine.write_batch());
+    let mut task_1 = WriteTask::<KvTestEngine, KvTestEngine>::new(1, 1, 10);
+    init_write_batch(&engines, &mut task_1);
     put_kv(&mut task_1.kv_wb, b"kv_k1", b"kv_v1");
-    task_1.raft_wb = Some(raft_engine.write_batch());
     put_kv(&mut task_1.raft_wb, b"raft_k1", b"raft_v1");
     task_1
         .entries
@@ -331,14 +470,11 @@ fn test_basic_flow() {
         .messages
         .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
 
-    t.async_write_sender(0)
-        .send(AsyncWriteMsg::WriteTask(task_1))
-        .unwrap();
+    t.write_sender(0).send(WriteMsg::WriteTask(task_1)).unwrap();
 
-    let mut task_2 = AsyncWriteTask::<KvTestEngine, KvTestEngine>::new(2, 2, 20);
-    task_2.kv_wb = Some(kv_engine.write_batch());
+    let mut task_2 = WriteTask::<KvTestEngine, KvTestEngine>::new(2, 2, 20);
+    init_write_batch(&engines, &mut task_2);
     put_kv(&mut task_2.kv_wb, b"kv_k2", b"kv_v2");
-    task_2.raft_wb = Some(raft_engine.write_batch());
     put_kv(&mut task_2.raft_wb, b"raft_k2", b"raft_v2");
     task_2
         .entries
@@ -348,15 +484,12 @@ fn test_basic_flow() {
         .messages
         .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
 
-    t.async_write_sender(1)
-        .send(AsyncWriteMsg::WriteTask(task_2))
-        .unwrap();
+    t.write_sender(1).send(WriteMsg::WriteTask(task_2)).unwrap();
 
-    let mut task_3 = AsyncWriteTask::<KvTestEngine, KvTestEngine>::new(1, 1, 15);
-    task_3.kv_wb = Some(kv_engine.write_batch());
+    let mut task_3 = WriteTask::<KvTestEngine, KvTestEngine>::new(1, 1, 15);
+    init_write_batch(&engines, &mut task_3);
     put_kv(&mut task_3.kv_wb, b"kv_k3", b"kv_v3");
     delete_kv(&mut task_3.kv_wb, b"kv_k1");
-    task_3.raft_wb = Some(raft_engine.write_batch());
     put_kv(&mut task_3.raft_wb, b"raft_k3", b"raft_v3");
     delete_kv(&mut task_3.raft_wb, b"raft_k2");
     task_3.entries.append(&mut vec![new_entry(6, 6)]);
@@ -366,14 +499,12 @@ fn test_basic_flow() {
         .messages
         .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
 
-    t.async_write_sender(0)
-        .send(AsyncWriteMsg::WriteTask(task_3))
-        .unwrap();
+    t.write_sender(0).send(WriteMsg::WriteTask(task_3)).unwrap();
 
     must_wait_same_notifies(vec![(1, (1, 15)), (2, (2, 20))], &t.notify_rx);
 
     must_have_entries_and_state(
-        &raft_engine,
+        &engines.raft,
         vec![
             (
                 1,

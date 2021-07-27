@@ -17,5 +17,6 @@ define_error_codes!(
     CANNOT_READ_EXTERNAL_STORAGE => ("CannotReadExternalStorage", "", ""),
     WRONG_KEY_PREFIX => ("WrongKeyPrefix", "", ""),
     BAD_FORMAT => ("BadFormat", "", ""),
-    FILE_CONFLICT => ("FileConflict", "", "")
+    FILE_CONFLICT => ("FileConflict", "", ""),
+    TTL_NOT_ENABLED => ("TTLNotEnabled", "", "")
 );

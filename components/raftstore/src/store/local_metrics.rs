@@ -419,3 +419,35 @@ impl RaftMetrics {
         missing.clear();
     }
 }
+
+pub struct StoreWriteMetrics {
+    pub task_gen: LocalHistogram,
+    pub task_wait: LocalHistogram,
+    pub waterfall_metrics: bool,
+    pub to_write: LocalHistogram,
+    pub kvdb_end: LocalHistogram,
+    pub write_end: LocalHistogram,
+}
+
+impl StoreWriteMetrics {
+    pub fn new(waterfall_metrics: bool) -> Self {
+        Self {
+            task_gen: STORE_WRITE_TASK_GEN_DURATION_HISTOGRAM.local(),
+            task_wait: STORE_WRITE_TASK_WAIT_DURATION_HISTOGRAM.local(),
+            waterfall_metrics,
+            to_write: STORE_TO_WRITE_DURATION_HISTOGRAM.local(),
+            kvdb_end: STORE_WRITE_KVDB_END_DURATION_HISTOGRAM.local(),
+            write_end: STORE_WRITE_END_DURATION_HISTOGRAM.local(),
+        }
+    }
+
+    pub fn flush(&mut self) {
+        self.task_gen.flush();
+        self.task_wait.flush();
+        if self.waterfall_metrics {
+            self.to_write.flush();
+            self.kvdb_end.flush();
+            self.write_end.flush();
+        }
+    }
+}

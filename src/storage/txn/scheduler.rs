@@ -101,7 +101,7 @@ impl Drop for CmdTimer {
     fn drop(&mut self) {
         SCHED_HISTOGRAM_VEC_STATIC
             .get(self.tag)
-            .observe(self.begin.elapsed_secs());
+            .observe(self.begin.saturating_elapsed_secs());
     }
 }
 
@@ -153,7 +153,7 @@ impl TaskContext {
     fn on_schedule(&mut self) {
         SCHED_LATCH_HISTOGRAM_VEC
             .get(self.tag)
-            .observe(self.latch_timer.elapsed_secs());
+            .observe(self.latch_timer.saturating_elapsed_secs());
     }
 }
 
@@ -319,7 +319,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             enable_async_apply_prewrite,
         });
 
-        slow_log!(t.elapsed(), "initialized the transaction scheduler");
+        slow_log!(
+            t.saturating_elapsed(),
+            "initialized the transaction scheduler"
+        );
         Scheduler {
             engine: Some(engine),
             inner,
@@ -647,7 +650,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         }
                     };
                     tls_collect_scan_details(tag.get_str(), &statistics);
-                    let elapsed = timer.elapsed();
+                    let elapsed = timer.saturating_elapsed();
                     slow_log!(
                         elapsed,
                         "[region {}] scheduler handle command: {}, ts: {}",
@@ -714,7 +717,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             // Initiates an async write operation on the storage engine, there'll be a `WriteFinished`
             // message when it finishes.
             Ok(WriteResult {
-                mut ctx,
+                ctx,
                 mut to_be_write,
                 rows,
                 pr,
@@ -731,13 +734,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         is_first_lock,
                         wait_timeout,
                     } = lock_info;
-                    // Currently only pessimistic_lock request may wait for other locks, and a
-                    // single request may wait lock at most once in its lifecycle. Take the tag out
-                    // instead of cloning it.
-                    let resource_group_tag = ctx.take_resource_group_tag();
                     let diag_ctx = DiagnosticContext {
                         key,
-                        resource_group_tag,
+                        resource_group_tag: ctx.get_resource_group_tag().into(),
                     };
                     scheduler.on_wait_for_lock(
                         cid,
