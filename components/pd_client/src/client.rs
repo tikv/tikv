@@ -835,16 +835,8 @@ impl PdClient for RpcClient {
                 })?;
                 PD_REQUEST_HISTOGRAM_VEC
                     .with_label_values(&["tso"])
-<<<<<<< HEAD
-                    .observe(duration_to_sec(timer.elapsed()));
-                check_resp_header(resp.get_header())?;
-                let ts = resp.get_timestamp();
-                let encoded = TimeStamp::compose(ts.physical as _, ts.logical as _);
-                Ok(encoded)
-=======
-                    .observe(duration_to_sec(begin.saturating_elapsed()));
+                    .observe(duration_to_sec(begin.elapsed()));
                 Ok(ts)
->>>>>>> 353897753... pd_client: use stream RPC for TSO requests (#10557)
             }) as PdFuture<_>
         };
         self.pd_client

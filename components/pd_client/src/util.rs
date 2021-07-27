@@ -333,13 +333,8 @@ impl Client {
             inner.last_try_reconnect = start;
         }
 
-<<<<<<< HEAD
         slow_log!(start.elapsed(), "try reconnect pd");
-        let (client, target_info, members) = match future.await {
-=======
-        slow_log!(start.saturating_elapsed(), "try reconnect pd");
         let (client, target_info, members, tso) = match future.await {
->>>>>>> 353897753... pd_client: use stream RPC for TSO requests (#10557)
             Err(e) => {
                 PD_RECONNECT_COUNTER_VEC
                     .with_label_values(&["failure"])
@@ -362,13 +357,8 @@ impl Client {
 
         fail_point!("pd_client_reconnect", |_| Ok(()));
 
-<<<<<<< HEAD
-        self.update_client(client, target_info, members);
-        info!("trying to update PD client done"; "spend" => ?start.elapsed());
-=======
         self.update_client(client, target_info, members, tso);
-        info!("trying to update PD client done"; "spend" => ?start.saturating_elapsed());
->>>>>>> 353897753... pd_client: use stream RPC for TSO requests (#10557)
+        info!("trying to update PD client done"; "spend" => ?start.elapsed());
         Ok(())
     }
 }
