@@ -377,7 +377,11 @@ impl Instant {
         later: Timespec,
         earlier: Timespec,
     ) -> Duration {
+<<<<<<< HEAD
         let later_ms = later.sec * MILLISECONDS_PER_SECOND
+=======
+        let later_ms = later.sec * MILLISECOND_PER_SECOND
+>>>>>>> master
             + i64::from(later.nsec) / NANOSECONDS_PER_MILLISECOND;
         let earlier_ms = earlier.sec * MILLISECONDS_PER_SECOND
             + i64::from(earlier.nsec) / NANOSECONDS_PER_MILLISECOND;

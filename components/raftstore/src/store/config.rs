@@ -226,6 +226,25 @@ pub struct Config {
     #[serde(skip_serializing)]
     #[online_config(skip)]
     pub clean_stale_peer_delay: ReadableDuration,
+<<<<<<< HEAD
+=======
+    #[serde(with = "engine_config::perf_level_serde")]
+    #[online_config(skip)]
+    pub perf_level: PerfLevel,
+
+    #[doc(hidden)]
+    #[online_config(skip)]
+    /// When TiKV memory usage reaches `memory_usage_high_water` it will try to limit memory
+    /// increasing. For raftstore layer entries will be evicted from entry cache, if they
+    /// utilize memory more than `evict_cache_on_memory_ratio` * total.
+    ///
+    /// Set it to 0 can disable cache evict.
+    // By default it's 0.2. So for different system memory capacity, cache evict happens:
+    // * system=8G,  memory_usage_limit=6G,  evict=1.2G
+    // * system=16G, memory_usage_limit=12G, evict=2.4G
+    // * system=32G, memory_usage_limit=24G, evict=4.8G
+    pub evict_cache_on_memory_ratio: f64,
+>>>>>>> master
 }
 
 impl Default for Config {
@@ -305,6 +324,11 @@ impl Default for Config {
             region_max_size: ReadableSize(0),
             region_split_size: ReadableSize(0),
             clean_stale_peer_delay: ReadableDuration::minutes(0),
+<<<<<<< HEAD
+=======
+            perf_level: PerfLevel::EnableTime,
+            evict_cache_on_memory_ratio: 0.2,
+>>>>>>> master
         }
     }
 }

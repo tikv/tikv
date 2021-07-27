@@ -185,10 +185,13 @@ hibernate-regions = false
 dev-assert = true
 perf-level = 1
 evict-cache-on-memory-ratio = 0.8
+<<<<<<< HEAD
 cmd-batch = false
 trigger-ready-size = "12MB"
 raft-write-size-limit = "34MB"
 store-waterfall-metrics = true
+=======
+>>>>>>> master
 
 [coprocessor]
 split-region-on-table = false
