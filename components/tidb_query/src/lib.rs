@@ -26,7 +26,6 @@
 #![allow(clippy::no_effect)]
 #![feature(box_patterns)]
 #![feature(matches_macro)]
-#![feature(const_generics)]
 
 #[macro_use]
 extern crate failure;

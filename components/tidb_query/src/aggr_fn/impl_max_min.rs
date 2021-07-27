@@ -97,8 +97,12 @@ impl<T: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
 
         if eval_type == EvalType::Int {
             return match is_unsigned {
-                false => Ok(Box::new(AggFnExtremumForInt::<T, false>::new())),
-                true => Ok(Box::new(AggFnExtremumForInt::<T, true>::new())),
+                false => Ok(Box::new(
+                    AggFnExtremumForInt::<T, AggSignedIntCompator>::new(),
+                )),
+                true => Ok(Box::new(
+                    AggFnExtremumForInt::<T, AggUnsignedIntCompator>::new(),
+                )),
             };
         }
 
@@ -276,55 +280,63 @@ where
 }
 
 #[derive(Debug, AggrFunction)]
-#[aggr_function(state = AggFnStateExtremumForInt::<E, IS_UNSIGNED>::new())]
-pub struct AggFnExtremumForInt<E, const IS_UNSIGNED: bool>
+#[aggr_function(state = AggFnStateExtremumForInt::<E, COMPATOR>::new())]
+pub struct AggFnExtremumForInt<E, COMPATOR>
 where
     E: Extremum,
     VectorValue: VectorValueExt<Int>,
+    COMPATOR: AggIntCompator,
 {
     _phantom: std::marker::PhantomData<E>,
+    _compator_marker: std::marker::PhantomData<COMPATOR>,
 }
 
-impl<E, const IS_UNSIGNED: bool> AggFnExtremumForInt<E, IS_UNSIGNED>
+impl<E, COMPATOR> AggFnExtremumForInt<E, COMPATOR>
 where
     E: Extremum,
     VectorValue: VectorValueExt<Int>,
+    COMPATOR: AggIntCompator,
 {
     pub fn new() -> Self {
         Self {
             _phantom: std::marker::PhantomData,
+            _compator_marker: std::marker::PhantomData,
         }
     }
 }
 
 #[derive(Debug)]
-pub struct AggFnStateExtremumForInt<E, const IS_UNSIGNED: bool>
+pub struct AggFnStateExtremumForInt<E, COMPATOR>
 where
     E: Extremum,
     VectorValue: VectorValueExt<Int>,
+    COMPATOR: AggIntCompator,
 {
     extremum: Option<Int>,
     _phantom: std::marker::PhantomData<E>,
+    _compator_marker: std::marker::PhantomData<COMPATOR>,
 }
 
-impl<E, const IS_UNSIGNED: bool> AggFnStateExtremumForInt<E, IS_UNSIGNED>
+impl<E, COMPATOR> AggFnStateExtremumForInt<E, COMPATOR>
 where
     E: Extremum,
     VectorValue: VectorValueExt<Int>,
+    COMPATOR: AggIntCompator,
 {
     pub fn new() -> Self {
         Self {
             extremum: None,
             _phantom: std::marker::PhantomData,
+            _compator_marker: std::marker::PhantomData,
         }
     }
 }
 
-impl<E, const IS_UNSIGNED: bool> super::ConcreteAggrFunctionState
-    for AggFnStateExtremumForInt<E, IS_UNSIGNED>
+impl<E, COMPATOR> super::ConcreteAggrFunctionState for AggFnStateExtremumForInt<E, COMPATOR>
 where
     E: Extremum,
     VectorValue: VectorValueExt<Int>,
+    COMPATOR: AggIntCompator,
 {
     type ParameterType = Int;
 
@@ -335,18 +347,8 @@ where
                 self.extremum = value.clone();
                 return Ok(());
             }
-            if IS_UNSIGNED {
-                let v1 = self.extremum.map(|x| x as u64);
-                let v2 = value.map(|x| x as u64);
-                if v1.cmp(&v2) == E::ORD {
-                    self.extremum = value.clone()
-                }
-            } else {
-                let v1 = self.extremum.map(|x| x as i64);
-                let v2 = value.map(|x| x as i64);
-                if v1.cmp(&v2) == E::ORD {
-                    self.extremum = value.clone()
-                }
+            if COMPATOR::compare(&self.extremum, &value, E::ORD) {
+                self.extremum = value.clone()
             }
         }
         Ok(())
@@ -356,6 +358,32 @@ where
     fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
         target[0].push(self.extremum);
         Ok(())
+    }
+}
+
+pub trait AggIntCompator: std::fmt::Debug + Send + 'static {
+    fn compare(extremum: &Option<Int>, new_val: &Option<Int>, ordering: Ordering) -> bool;
+}
+
+#[derive(Debug)]
+struct AggSignedIntCompator {}
+
+impl AggIntCompator for AggSignedIntCompator {
+    fn compare(extremum: &Option<Int>, new_val: &Option<Int>, ordering: Ordering) -> bool {
+        let v1 = extremum.map(|x| x as i64);
+        let v2 = new_val.map(|x| x as i64);
+        v1.cmp(&v2) == ordering
+    }
+}
+
+#[derive(Debug)]
+struct AggUnsignedIntCompator {}
+
+impl AggIntCompator for AggUnsignedIntCompator {
+    fn compare(extremum: &Option<Int>, new_val: &Option<Int>, ordering: Ordering) -> bool {
+        let v1 = extremum.map(|x| x as u64);
+        let v2 = new_val.map(|x| x as u64);
+        v1.cmp(&v2) == ordering
     }
 }
 
