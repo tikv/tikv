@@ -34,5 +34,5 @@ serde = "1.0"
 serde_derive = "1.0"
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 raft = { version = "0.6.0-alpha", default-features = false }
-raft-engine = { git = "https://github.com/tikv/raft-engine", branch = "master" }
+raft-engine = { git = "https://github.com/tabokie/raft-engine", branch = "metrics" }
 protobuf = "2"
