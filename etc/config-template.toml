@@ -300,7 +300,7 @@
 
 ## The path to RaftDB directory.
 ## If not set, it will be `{data-dir}/raft`.
-## If there are multiple disks on the machine, storing the data of Raft RocksDB on differen disks
+## If there are multiple disks on the machine, storing the data of Raft RocksDB on a differen disk
 ## can improve TiKV performance.
 # raftdb-path = ""
 
@@ -885,6 +885,13 @@
 [raft-engine]
 ## Enable raft-engine will ignore all settings about `raftdb`.
 # enable = false
+
+## The path to Raft engine directory.
+## If not set, it will be `{data-dir}/raft-engine`.
+## If there are multiple disks on the machine, storing the data of Raft engine on a different disk
+## can improve TiKV performance.
+# dir = ""
+
 ## Recovery mode. Candidates are `tolerate-corrupted-tail-records` and `absolute-consistency`.
 # recovery_mode = "tolerate-corrupted-tail-records"
 # bytes-per-sync = "256KB"
