@@ -768,11 +768,10 @@ dependencies = [
 [[package]]
 name = "crossbeam-epoch"
 version = "0.9.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2584f639eb95fea8c798496315b297cf81b9b58b6d30ab066a75455333cf4b12"
+source = "git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0#e0e083d062649484188b7337fe388fd12f2c8d94"
 dependencies = [
  "cfg-if 1.0.0",
- "crossbeam-utils 0.8.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crossbeam-utils 0.8.3 (git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0)",
  "lazy_static",
  "memoffset",
  "scopeguard",
@@ -781,10 +780,11 @@ dependencies = [
 [[package]]
 name = "crossbeam-epoch"
 version = "0.9.3"
-source = "git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0#e0e083d062649484188b7337fe388fd12f2c8d94"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2584f639eb95fea8c798496315b297cf81b9b58b6d30ab066a75455333cf4b12"
 dependencies = [
  "cfg-if 1.0.0",
- "crossbeam-utils 0.8.3 (git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0)",
+ "crossbeam-utils 0.8.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "lazy_static",
  "memoffset",
  "scopeguard",
@@ -825,8 +825,7 @@ dependencies = [
 [[package]]
 name = "crossbeam-utils"
 version = "0.8.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7e9d99fa91428effe99c5c6d4634cdeba32b8cf784fc428a2a687f61a952c49"
+source = "git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0#e0e083d062649484188b7337fe388fd12f2c8d94"
 dependencies = [
  "autocfg",
  "cfg-if 1.0.0",
@@ -836,7 +835,8 @@ dependencies = [
 [[package]]
 name = "crossbeam-utils"
 version = "0.8.3"
-source = "git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0#e0e083d062649484188b7337fe388fd12f2c8d94"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7e9d99fa91428effe99c5c6d4634cdeba32b8cf784fc428a2a687f61a952c49"
 dependencies = [
  "autocfg",
  "cfg-if 1.0.0",
@@ -3329,7 +3329,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.6.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#7c21f8d12f2043c43004fca48861568db7c76bd9"
+source = "git+https://github.com/tikv/raft-rs?branch=master#fa0a7c8a545de644734b5e1e1d743c7a5c873d18"
 dependencies = [
  "bytes 1.0.1",
  "fxhash",
@@ -3363,7 +3363,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.6.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#7c21f8d12f2043c43004fca48861568db7c76bd9"
+source = "git+https://github.com/tikv/raft-rs?branch=master#fa0a7c8a545de644734b5e1e1d743c7a5c873d18"
 dependencies = [
  "bytes 1.0.1",
  "lazy_static",

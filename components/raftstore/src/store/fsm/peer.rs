@@ -53,13 +53,8 @@ use crate::store::local_metrics::RaftMetrics;
 use crate::store::memory::*;
 use crate::store::metrics::*;
 use crate::store::msg::{Callback, ExtCallback, InspectedRaftMessage};
-<<<<<<< HEAD
 use crate::store::peer::{ConsistencyState, Peer, PersistSnapshotResult, StaleState};
 use crate::store::peer_storage::HandleReadyResult;
-=======
-use crate::store::peer::{ConsistencyState, Peer, StaleState};
-use crate::store::peer_storage::{ApplySnapResult, InvokeContext};
->>>>>>> master
 use crate::store::transport::Transport;
 use crate::store::util::{is_learner, KeysInfoFormatter};
 use crate::store::worker::{
@@ -751,17 +746,11 @@ where
                 msg.msg_type = MessageType::MsgUnreachable;
                 msg.to = peer_id;
                 msg.from = self.fsm.peer.peer_id();
-<<<<<<< HEAD
 
                 let raft_msg = self.fsm.peer.switch_to_raft_msg(vec![msg]);
                 self.fsm.peer.send_raft_msg(
                     &mut self.ctx.trans,
                     raft_msg,
-=======
-                self.fsm.peer.send(
-                    &mut self.ctx.trans,
-                    vec![msg],
->>>>>>> master
                     &mut self.ctx.raft_metrics.send_message,
                 );
             }
