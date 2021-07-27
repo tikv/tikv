@@ -204,6 +204,7 @@ fn test_serde_custom_tikv_config() {
         apply_batch_system,
         store_batch_system,
         store_io_pool_size: 5,
+        store_io_notify_capacity: 123456,
         future_poll_size: 2,
         hibernate_regions: false,
         dev_assert: true,
@@ -214,6 +215,8 @@ fn test_serde_custom_tikv_config() {
         raft_ready_size_limit: ReadableSize::mb(12),
         raft_write_size_limit: ReadableSize::mb(34),
         store_waterfall_metrics: true,
+        io_reschedule_concurrent_max_count: 1234,
+        io_reschedule_hotpot_duration: ReadableDuration::secs(4321),
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {

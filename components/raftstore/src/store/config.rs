@@ -168,9 +168,6 @@ pub struct Config {
     #[online_config(skip)]
     pub store_io_notify_capacity: usize,
 
-    pub io_reschedule_concurrent_max_count: usize,
-    pub io_reschedule_hotpot_duration: ReadableDuration,
-
     #[online_config(skip)]
     pub future_poll_size: usize,
     #[online_config(skip)]
@@ -210,6 +207,9 @@ pub struct Config {
 
     #[online_config(skip)]
     pub store_waterfall_metrics: bool,
+
+    pub io_reschedule_concurrent_max_count: usize,
+    pub io_reschedule_hotpot_duration: ReadableDuration,
 
     // Deprecated! These configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
@@ -288,8 +288,6 @@ impl Default for Config {
             store_batch_system: BatchSystemConfig::default(),
             store_io_pool_size: 2,
             store_io_notify_capacity: 40960,
-            io_reschedule_concurrent_max_count: 4,
-            io_reschedule_hotpot_duration: ReadableDuration::secs(5),
             future_poll_size: 1,
             hibernate_regions: true,
             dev_assert: false,
@@ -300,6 +298,8 @@ impl Default for Config {
             raft_ready_size_limit: ReadableSize::mb(1),
             raft_write_size_limit: ReadableSize::mb(1),
             store_waterfall_metrics: false,
+            io_reschedule_concurrent_max_count: 4,
+            io_reschedule_hotpot_duration: ReadableDuration::secs(5),
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
@@ -669,12 +669,6 @@ impl Config {
             .with_label_values(&["store_io_notify_capacity"])
             .set((self.store_io_notify_capacity as i32).into());
         CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["io_reschedule_concurrent_max_count"])
-            .set((self.io_reschedule_concurrent_max_count as i32).into());
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["io_reschedule_hotpot_duration"])
-            .set(self.io_reschedule_hotpot_duration.as_secs() as f64);
-        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["future_poll_size"])
             .set(self.future_poll_size as f64);
         CONFIG_RAFTSTORE_GAUGE
@@ -692,6 +686,12 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_waterfall_metrics"])
             .set((self.store_waterfall_metrics as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["io_reschedule_concurrent_max_count"])
+            .set((self.io_reschedule_concurrent_max_count as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["io_reschedule_hotpot_duration"])
+            .set(self.io_reschedule_hotpot_duration.as_secs() as f64);
     }
 
     fn write_change_into_metrics(change: ConfigChange) {

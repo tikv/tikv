@@ -180,18 +180,18 @@ store-max-batch-size = 21
 store-pool-size = 3
 store-reschedule-duration = "2s"
 store-io-pool-size = 5
+store-io-notify-capacity = 123456
 future-poll-size = 2
 hibernate-regions = false
 dev-assert = true
 perf-level = 1
 evict-cache-on-memory-ratio = 0.8
-<<<<<<< HEAD
 cmd-batch = false
-trigger-ready-size = "12MB"
+raft-ready-size-limit = "12MB"
 raft-write-size-limit = "34MB"
 store-waterfall-metrics = true
-=======
->>>>>>> master
+io-reschedule-concurrent-max-count = 1234
+io-reschedule-hotpot-duration = "4321s"
 
 [coprocessor]
 split-region-on-table = false
