@@ -1891,13 +1891,14 @@ where
             } else {
                 vec![]
             };
-            let apply = Apply::new(
+            let mut apply = Apply::new(
                 self.peer_id(),
                 self.region_id,
                 self.term(),
                 committed_entries,
                 cbs,
             );
+            apply.on_schedule(&ctx.raft_metrics);
             self.mut_store().trace_cached_entries(apply.entries.clone());
             if needs_evict_entry_cache(ctx.cfg.evict_cache_on_memory_ratio) {
                 // Compact all cached entries instead of half evict.

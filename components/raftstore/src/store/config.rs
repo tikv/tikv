@@ -198,8 +198,6 @@ pub struct Config {
     #[online_config(hidden)]
     pub cmd_batch: bool,
 
-    pub trigger_ready_size: ReadableSize,
-
     // When the size of raft db writebatch exceeds this value, write will be triggered.
     #[online_config(skip)]
     pub raft_write_size_limit: ReadableSize,

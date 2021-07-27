@@ -33,7 +33,7 @@ use raft::{self, Progress, ReadState, Ready, SnapshotStatus, StateRole, INVALID_
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::sys::{disk, memory_usage_reaches_high_water};
-use tikv_util::time::duration_to_sec;
+use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::worker::{Scheduler, Stopped};
 use tikv_util::{box_err, debug, defer, error, info, trace, warn};
 use tikv_util::{escape, is_zero_duration, Either};
@@ -48,7 +48,7 @@ use crate::store::fsm::{
     ExecResult,
 };
 use crate::store::hibernate_state::{GroupState, HibernateState};
-use crate::store::local_metrics::RaftProposeMetrics;
+use crate::store::local_metrics::RaftMetrics;
 use crate::store::memory::*;
 use crate::store::metrics::*;
 use crate::store::msg::{Callback, ExtCallback, InspectedRaftMessage};
@@ -124,7 +124,7 @@ where
     /// `skip_gc_raft_log_ticks`.
     skip_gc_raft_log_ticks: usize,
 
-    // Batch raft command which has the same header into an entry
+    /// Batch raft command which has the same header into an entry
     batch_req_builder: BatchRaftCmdRequestBuilder<EK>,
 
     max_inflight_msgs: usize,
@@ -139,7 +139,7 @@ where
     raft_entry_max_size: f64,
     batch_req_size: u32,
     request: Option<RaftCmdRequest>,
-    callbacks: Vec<(Callback<E::Snapshot>, usize)>,
+    callbacks: Vec<(Callback<E::Snapshot>, usize, TiInstant)>,
 }
 
 impl<EK, ER> Drop for PeerFsm<EK, ER>
@@ -377,6 +377,7 @@ where
     fn add(&mut self, cmd: RaftCommand<E::Snapshot>, req_size: u32) {
         let req_num = cmd.request.get_requests().len();
         let RaftCommand {
+            send_time,
             mut request,
             callback,
             ..
@@ -389,7 +390,7 @@ where
         } else {
             self.request = Some(request);
         };
-        self.callbacks.push((callback, req_num));
+        self.callbacks.push((callback, req_num, send_time));
         self.batch_req_size += req_size;
     }
 
@@ -407,14 +408,23 @@ where
         false
     }
 
-    fn build(&mut self, metric: &mut RaftProposeMetrics) -> Option<RaftCommand<E::Snapshot>> {
+    fn build(&mut self, metric: &mut RaftMetrics) -> Option<RaftCommand<E::Snapshot>> {
         if let Some(req) = self.request.take() {
             self.batch_req_size = 0;
             if self.callbacks.len() == 1 {
-                let (cb, _) = self.callbacks.pop().unwrap();
+                let (mut cb, _, send_time) = self.callbacks.pop().unwrap();
+                if metric.waterfall_metrics {
+                    metric
+                        .batch_wait
+                        .observe(send_time.saturating_elapsed_secs());
+                }
+                // Update the ts
+                if let Callback::Write { cb, .. } = &mut cb {
+                    cb.1 = TiInstant::now();
+                }
                 return Some(RaftCommand::new(req, cb));
             }
-            metric.batch += self.callbacks.len() - 1;
+            metric.propose.batch += self.callbacks.len() - 1;
             let mut cbs = std::mem::take(&mut self.callbacks);
             let proposed_cbs: Vec<ExtCallback> = cbs
                 .iter_mut()
@@ -454,11 +464,20 @@ where
                     }
                 }))
             };
+            if metric.waterfall_metrics {
+                let now = TiInstant::now();
+                for (_, _, send_time) in &cbs {
+                    metric
+                        .batch_wait
+                        .observe(duration_to_sec(send_time.saturating_duration_since(now)));
+                }
+            }
+
             let cb = Callback::write_ext(
                 Box::new(move |resp| {
                     let mut last_index = 0;
                     let has_error = resp.response.get_header().has_error();
-                    for (cb, req_num) in cbs {
+                    for (cb, req_num, _) in cbs {
                         let next_index = last_index + req_num;
                         let mut cmd_resp = RaftCmdResponse::default();
                         cmd_resp.set_header(resp.response.get_header().clone());
@@ -557,14 +576,16 @@ where
                     }
 
                     let req_size = cmd.request.compute_size();
-                    if self.fsm.batch_req_builder.can_batch(&cmd.request, req_size) {
+                    if self.ctx.cfg.cmd_batch
+                        && self.fsm.batch_req_builder.can_batch(&cmd.request, req_size)
+                    {
                         self.fsm.batch_req_builder.add(cmd, req_size);
                         if self.fsm.batch_req_builder.should_finish() {
                             self.propose_batch_raft_command();
                         }
                     } else {
                         self.propose_batch_raft_command();
-                        self.propose_raft_command(cmd.request, cmd.callback)
+                        self.propose_raft_command(cmd.request, cmd.callback);
                     }
                 }
                 PeerMsg::Tick(tick) => self.on_tick(tick),
@@ -603,11 +624,7 @@ where
     }
 
     fn propose_batch_raft_command(&mut self) {
-        if let Some(cmd) = self
-            .fsm
-            .batch_req_builder
-            .build(&mut self.ctx.raft_metrics.propose)
-        {
+        if let Some(cmd) = self.fsm.batch_req_builder.build(&mut self.ctx.raft_metrics) {
             self.propose_raft_command(cmd.request, cmd.callback)
         }
     }
@@ -942,7 +959,7 @@ where
         }
     }
 
-    fn on_persisted_msg(&mut self, peer_id: u64, ready_number: u64, _send_time: Instant) {
+    fn on_persisted_msg(&mut self, peer_id: u64, ready_number: u64, _send_time: TiInstant) {
         if peer_id != self.fsm.peer_id() {
             error!(
                 "peer id not match";
@@ -4370,7 +4387,7 @@ mod memtrace {
 #[cfg(test)]
 mod tests {
     use super::BatchRaftCmdRequestBuilder;
-    use crate::store::local_metrics::RaftProposeMetrics;
+    use crate::store::local_metrics::RaftMetrics;
     use crate::store::msg::{Callback, ExtCallback, RaftCommand};
 
     use engine_test::kv::KvTestEngine;
@@ -4387,7 +4404,7 @@ mod tests {
         let max_batch_size = 1000.0;
         let mut builder = BatchRaftCmdRequestBuilder::<KvTestEngine>::new(max_batch_size);
         let mut q = Request::default();
-        let mut metric = RaftProposeMetrics::default();
+        let mut metric = RaftMetrics::new(true);
 
         let mut req = RaftCmdRequest::default();
         req.set_admin_request(AdminRequest::default());

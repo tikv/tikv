@@ -371,6 +371,7 @@ impl RaftInvalidProposeMetrics {
 /// The buffered metrics counters for raft.
 #[derive(Clone)]
 pub struct RaftMetrics {
+    pub store_time: LocalHistogram,
     pub ready: RaftReadyMetrics,
     pub send_message: RaftSendMessageMetrics,
     pub message_dropped: RaftMessageDropMetrics,
@@ -381,11 +382,14 @@ pub struct RaftMetrics {
     pub check_leader: LocalHistogram,
     pub leader_missing: Arc<Mutex<HashSet<u64>>>,
     pub invalid_proposal: RaftInvalidProposeMetrics,
+    pub waterfall_metrics: bool,
+    pub batch_wait: LocalHistogram,
 }
 
-impl Default for RaftMetrics {
-    fn default() -> RaftMetrics {
-        RaftMetrics {
+impl RaftMetrics {
+    pub fn new(waterfall_metrics: bool) -> Self {
+        Self {
+            store_time: STORE_TIME_HISTOGRAM.local(),
             ready: Default::default(),
             send_message: Default::default(),
             message_dropped: Default::default(),
@@ -398,13 +402,13 @@ impl Default for RaftMetrics {
             check_leader: CHECK_LEADER_DURATION_HISTOGRAM.local(),
             leader_missing: Arc::default(),
             invalid_proposal: Default::default(),
+            waterfall_metrics,
+            batch_wait: STORE_BATCH_WAIT_DURATION_HISTOGRAM.local(),
         }
     }
-}
-
-impl RaftMetrics {
     /// Flushs all metrics
     pub fn flush(&mut self) {
+        self.store_time.flush();
         self.ready.flush();
         self.send_message.flush();
         self.propose.flush();
@@ -414,6 +418,9 @@ impl RaftMetrics {
         self.check_leader.flush();
         self.message_dropped.flush();
         self.invalid_proposal.flush();
+        if self.waterfall_metrics {
+            self.batch_wait.flush();
+        }
         let mut missing = self.leader_missing.lock().unwrap();
         LEADER_MISSING.set(missing.len() as i64);
         missing.clear();
@@ -424,7 +431,7 @@ pub struct StoreWriteMetrics {
     pub task_gen: LocalHistogram,
     pub task_wait: LocalHistogram,
     pub waterfall_metrics: bool,
-    pub to_write: LocalHistogram,
+    pub before_write: LocalHistogram,
     pub kvdb_end: LocalHistogram,
     pub write_end: LocalHistogram,
 }
@@ -435,7 +442,7 @@ impl StoreWriteMetrics {
             task_gen: STORE_WRITE_TASK_GEN_DURATION_HISTOGRAM.local(),
             task_wait: STORE_WRITE_TASK_WAIT_DURATION_HISTOGRAM.local(),
             waterfall_metrics,
-            to_write: STORE_TO_WRITE_DURATION_HISTOGRAM.local(),
+            before_write: STORE_BEFORE_WRITE_DURATION_HISTOGRAM.local(),
             kvdb_end: STORE_WRITE_KVDB_END_DURATION_HISTOGRAM.local(),
             write_end: STORE_WRITE_END_DURATION_HISTOGRAM.local(),
         }
@@ -445,7 +452,7 @@ impl StoreWriteMetrics {
         self.task_gen.flush();
         self.task_wait.flush();
         if self.waterfall_metrics {
-            self.to_write.flush();
+            self.before_write.flush();
             self.kvdb_end.flush();
             self.write_end.flush();
         }
