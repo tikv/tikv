@@ -8,12 +8,7 @@ use tidb_query_common::Result;
 use tidb_query_datatype::codec::collation::*;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::EvalContext;
-<<<<<<< HEAD
-use tidb_query_datatype::{Collation, EvalType, FieldTypeAccessor};
-=======
-use tidb_query_datatype::match_template_collator;
 use tidb_query_datatype::{Collation, EvalType, FieldTypeAccessor, FieldTypeFlag};
->>>>>>> bb064d642... copr: fix Max/Min bug when comparing signed and unsigned int64 (#10167)
 use tidb_query_expr::RpnExpression;
 use tipb::{Expr, ExprType, FieldType};
 
