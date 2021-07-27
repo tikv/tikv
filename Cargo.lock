@@ -959,6 +959,7 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-epoch"
+<<<<<<< HEAD
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "058ed274caafc1f60c4997b5fc07bf7dc7cca454af7c6e81edffe5f33f70dace"
@@ -966,6 +967,13 @@ dependencies = [
  "autocfg",
  "cfg-if 0.1.10",
  "crossbeam-utils 0.7.2",
+=======
+version = "0.9.3"
+source = "git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0#e0e083d062649484188b7337fe388fd12f2c8d94"
+dependencies = [
+ "cfg-if 1.0.0",
+ "crossbeam-utils 0.8.3 (git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0)",
+>>>>>>> 353897753... pd_client: use stream RPC for TSO requests (#10557)
  "lazy_static",
  "maybe-uninit",
  "memoffset 0.5.1",
@@ -979,7 +987,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2584f639eb95fea8c798496315b297cf81b9b58b6d30ab066a75455333cf4b12"
 dependencies = [
  "cfg-if 1.0.0",
+<<<<<<< HEAD
  "crossbeam-utils 0.8.3",
+=======
+ "crossbeam-utils 0.8.3 (registry+https://github.com/rust-lang/crates.io-index)",
+>>>>>>> 353897753... pd_client: use stream RPC for TSO requests (#10557)
  "lazy_static",
  "memoffset 0.6.1",
  "scopeguard",
@@ -1030,6 +1042,18 @@ dependencies = [
 [[package]]
 name = "crossbeam-utils"
 version = "0.8.3"
+source = "git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0#e0e083d062649484188b7337fe388fd12f2c8d94"
+dependencies = [
+ "autocfg",
+ "cfg-if 1.0.0",
+ "lazy_static",
+]
+
+[[package]]
+<<<<<<< HEAD
+=======
+name = "crossbeam-utils"
+version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7e9d99fa91428effe99c5c6d4634cdeba32b8cf784fc428a2a687f61a952c49"
 dependencies = [
@@ -1039,6 +1063,7 @@ dependencies = [
 ]
 
 [[package]]
+>>>>>>> 353897753... pd_client: use stream RPC for TSO requests (#10557)
 name = "crypto-mac"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2959,6 +2984,7 @@ dependencies = [
  "slog-global",
  "tikv_alloc",
  "tikv_util",
+ "tokio",
  "tokio-timer",
  "txn_types",
  "yatp",
