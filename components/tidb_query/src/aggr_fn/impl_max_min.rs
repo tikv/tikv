@@ -96,14 +96,15 @@ impl<T: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
         }
 
         if eval_type == EvalType::Int {
-            return match is_unsigned {
-                false => Ok(Box::new(
-                    AggFnExtremumForInt::<T, AggSignedIntCompator>::new(),
-                )),
-                true => Ok(Box::new(
+            if is_unsigned {
+                return Ok(Box::new(
                     AggFnExtremumForInt::<T, AggUnsignedIntCompator>::new(),
-                )),
-            };
+                ));
+            } else {
+                return Ok(Box::new(
+                    AggFnExtremumForInt::<T, AggSignedIntCompator>::new(),
+                ));
+            }
         }
 
         match_template_evaluable! {
@@ -344,11 +345,11 @@ where
     fn update_concrete(&mut self, _ctx: &mut EvalContext, value: &Option<Int>) -> Result<()> {
         if value.is_some() {
             if self.extremum.is_none() {
-                self.extremum = value.clone();
+                self.extremum = *value;
                 return Ok(());
             }
             if COMPATOR::compare(&self.extremum, &value, E::ORD) {
-                self.extremum = value.clone()
+                self.extremum = *value;
             }
         }
         Ok(())
