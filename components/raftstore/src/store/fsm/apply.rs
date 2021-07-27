@@ -40,6 +40,7 @@ use kvproto::raft_cmdpb::{
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState,
 };
+use prometheus::local::LocalHistogram;
 use raft::eraftpb::{
     ConfChange, ConfChangeType, ConfChangeV2, Entry, EntryType, Snapshot as RaftSnapshot,
 };
@@ -61,6 +62,7 @@ use crate::coprocessor::{
     Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle, ObserveLevel,
 };
 use crate::store::fsm::RaftPollerBuilder;
+use crate::store::local_metrics::RaftMetrics;
 use crate::store::memory::*;
 use crate::store::metrics::*;
 use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
@@ -405,6 +407,9 @@ where
 
     /// The ssts waiting to be ingested in `write_to_db`.
     pending_ssts: Vec<SstMeta>,
+
+    apply_wait: LocalHistogram,
+    apply_time: LocalHistogram,
 }
 
 impl<EK, W> ApplyContext<EK, W>
@@ -455,6 +460,8 @@ where
             priority,
             yield_high_latency_operation: cfg.apply_batch_system.low_priority_pool_size > 0,
             pending_ssts: vec![],
+            apply_wait: APPLY_TASK_WAIT_TIME_HISTOGRAM.local(),
+            apply_time: APPLY_TIME_HISTOGRAM.local(),
         }
     }
 
@@ -547,11 +554,15 @@ where
         self.host
             .on_flush_applied_cmd_batch(batch_max_level, cmd_batch, &self.engine);
         // Invoke callbacks
+        let now = Instant::now();
         for (cb, resp) in cb_batch.drain(..) {
             if let Some(scheduled_ts) = cb.invoke_with_response(resp) {
-                APPLY_TIME_HISTOGRAM.observe(duration_to_sec(scheduled_ts.elapsed()));
+                self.apply_time
+                    .observe(duration_to_sec(now.saturating_duration_since(scheduled_ts)));
             }
         }
+        self.apply_time.flush();
+        self.apply_wait.flush();
         need_sync
     }
 
@@ -613,7 +624,7 @@ where
             self.notifier.notify(apply_res);
         }
 
-        let elapsed = t.elapsed();
+        let elapsed = t.saturating_elapsed();
         STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(elapsed) as f64);
 
         slow_log!(
@@ -1035,7 +1046,7 @@ where
             {
                 apply_ctx.commit(self);
                 if let Some(start) = self.handle_start.as_ref() {
-                    if start.elapsed() >= apply_ctx.yield_duration {
+                    if start.saturating_elapsed() >= apply_ctx.yield_duration {
                         return ApplyResult::Yield;
                     }
                 }
@@ -2849,11 +2860,17 @@ impl<S: Snapshot> Apply<S> {
         }
     }
 
-    pub fn on_schedule(&mut self) {
+    pub fn on_schedule(&mut self, metrics: &RaftMetrics) {
+        let mut now = None;
         for cb in &mut self.cbs {
             if let Callback::Write { cb, .. } = &mut cb.cb {
-                STORE_TIME_HISTOGRAM.observe(duration_to_sec(cb.1.elapsed()) as f64);
-                cb.1 = std::time::Instant::now();
+                if now.is_none() {
+                    now = Some(Instant::now());
+                }
+                metrics.store_time.observe(duration_to_sec(
+                    now.unwrap().saturating_duration_since(cb.1),
+                ));
+                cb.1 = now.unwrap();
             }
         }
     }
@@ -3519,7 +3536,9 @@ where
         loop {
             match drainer.next() {
                 Some(Msg::Apply { start, apply }) => {
-                    APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(start.elapsed_secs());
+                    apply_ctx
+                        .apply_wait
+                        .observe(start.saturating_elapsed_secs());
                     // If there is any apply task, we change this fsm to normal-priority.
                     // When it meets a ingest-request or a delete-range request, it will change to
                     // low-priority.
@@ -3802,16 +3821,6 @@ where
     EK: KvEngine,
 {
     pub router: BatchRouter<ApplyFsm<EK>, ControlFsm>,
-}
-
-impl<EK> Drop for ApplyRouter<EK>
-where
-    EK: KvEngine,
-{
-    fn drop(&mut self) {
-        MEMTRACE_APPLY_ROUTER_ALIVE.trace(TraceEvent::Reset(0));
-        MEMTRACE_APPLY_ROUTER_LEAK.trace(TraceEvent::Reset(0));
-    }
 }
 
 impl<EK> Deref for ApplyRouter<EK>
@@ -4108,7 +4117,7 @@ mod tests {
     pub fn create_tmp_importer(path: &str) -> (TempDir, Arc<SSTImporter>) {
         let dir = Builder::new().prefix(path).tempdir().unwrap();
         let importer =
-            Arc::new(SSTImporter::new(&ImportConfig::default(), dir.path(), None).unwrap());
+            Arc::new(SSTImporter::new(&ImportConfig::default(), dir.path(), None, false).unwrap());
         (dir, importer)
     }
 

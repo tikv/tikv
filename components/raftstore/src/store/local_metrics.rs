@@ -371,6 +371,7 @@ impl RaftInvalidProposeMetrics {
 /// The buffered metrics counters for raft.
 #[derive(Clone)]
 pub struct RaftMetrics {
+    pub store_time: LocalHistogram,
     pub ready: RaftReadyMetrics,
     pub send_message: RaftSendMessageMetrics,
     pub message_dropped: RaftMessageDropMetrics,
@@ -383,6 +384,7 @@ pub struct RaftMetrics {
     pub invalid_proposal: RaftInvalidProposeMetrics,
     pub persisted_msg: LocalHistogram,
     pub waterfall_metrics: bool,
+    pub batch_wait: LocalHistogram,
     pub to_write_queue: LocalHistogram,
     pub know_persist: LocalHistogram,
     pub know_commit: LocalHistogram,
@@ -392,6 +394,7 @@ pub struct RaftMetrics {
 impl RaftMetrics {
     pub fn new(waterfall_metrics: bool) -> Self {
         Self {
+            store_time: STORE_TIME_HISTOGRAM.local(),
             ready: Default::default(),
             send_message: Default::default(),
             message_dropped: Default::default(),
@@ -406,6 +409,7 @@ impl RaftMetrics {
             invalid_proposal: Default::default(),
             persisted_msg: STORE_PERSISTED_MSG_DURATION_HISTOGRAM.local(),
             waterfall_metrics,
+            batch_wait: STORE_BATCH_WAIT_DURATION_HISTOGRAM.local(),
             to_write_queue: STORE_TO_WRITE_QUEUE_DURATION_HISTOGRAM.local(),
             know_persist: STORE_KNOW_PERSIST_DURATION_HISTOGRAM.local(),
             know_commit: STORE_KNOW_COMMIT_DURATION_HISTOGRAM.local(),
@@ -414,6 +418,7 @@ impl RaftMetrics {
     }
     /// Flushs all metrics
     pub fn flush(&mut self) {
+        self.store_time.flush();
         self.ready.flush();
         self.send_message.flush();
         self.propose.flush();
@@ -425,6 +430,7 @@ impl RaftMetrics {
         self.invalid_proposal.flush();
         self.persisted_msg.flush();
         if self.waterfall_metrics {
+            self.batch_wait.flush();
             self.to_write_queue.flush();
             self.know_persist.flush();
             self.know_commit.flush();
@@ -436,26 +442,34 @@ impl RaftMetrics {
     }
 }
 
-pub struct AsyncWriteMetrics {
+pub struct StoreWriteMetrics {
+    pub task_gen: LocalHistogram,
+    pub task_wait: LocalHistogram,
+    pub waterfall_metrics: bool,
     pub to_write: LocalHistogram,
     pub kvdb_end: LocalHistogram,
     pub write_end: LocalHistogram,
 }
 
-impl Default for AsyncWriteMetrics {
-    fn default() -> AsyncWriteMetrics {
-        AsyncWriteMetrics {
+impl StoreWriteMetrics {
+    pub fn new(waterfall_metrics: bool) -> Self {
+        Self {
+            task_gen: STORE_WRITE_TASK_GEN_DURATION_HISTOGRAM.local(),
+            task_wait: STORE_WRITE_TASK_WAIT_DURATION_HISTOGRAM.local(),
+            waterfall_metrics,
             to_write: STORE_TO_WRITE_DURATION_HISTOGRAM.local(),
             kvdb_end: STORE_WRITE_KVDB_END_DURATION_HISTOGRAM.local(),
             write_end: STORE_WRITE_END_DURATION_HISTOGRAM.local(),
         }
     }
-}
 
-impl AsyncWriteMetrics {
     pub fn flush(&mut self) {
-        self.to_write.flush();
-        self.kvdb_end.flush();
-        self.write_end.flush();
+        self.task_gen.flush();
+        self.task_wait.flush();
+        if self.waterfall_metrics {
+            self.to_write.flush();
+            self.kvdb_end.flush();
+            self.write_end.flush();
+        }
     }
 }

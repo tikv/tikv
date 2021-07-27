@@ -4,7 +4,7 @@
 
 use std::sync::atomic::*;
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::*;
+use std::time::Duration;
 use std::{mem, thread};
 
 use engine_rocks::RocksSnapshot;
@@ -14,6 +14,7 @@ use raft::eraftpb::{ConfChangeType, MessageType};
 use raftstore::store::{Callback, RegionSnapshot};
 use test_raftstore::*;
 use tikv_util::config::*;
+use tikv_util::time::Instant;
 use tikv_util::HandyRwLock;
 
 // A helper function for testing the lease reads and lease renewing.
@@ -248,7 +249,7 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
     let now = Instant::now();
     loop {
         thread::sleep(Duration::from_millis(100));
-        if now.elapsed() > election_timeout * 2 {
+        if now.saturating_elapsed() > election_timeout * 2 {
             panic!("store {} must apply to {}", store_id, last_index + 1);
         }
         let apply_state = cluster.apply_state(region_id, store_id);

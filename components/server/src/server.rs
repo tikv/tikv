@@ -21,17 +21,14 @@ use std::{
         atomic::{AtomicU32, AtomicU64, Ordering},
         Arc, Mutex,
     },
-    time::{Duration, Instant},
+    time::Duration,
     u64,
 };
 
 use cdc::MemoryQuota;
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
-use engine_rocks::{
-    encryption::get_env as get_encrypted_env, file_system::get_env as get_inspected_env,
-    RocksEngine,
-};
+use engine_rocks::{get_env, RocksEngine};
 use engine_traits::{
     compaction_job::CompactionJobInfo, CFOptionsExt, ColumnFamilyOptions, Engines, MiscExt,
     RaftEngine, CF_DEFAULT, CF_LOCK, CF_WRITE,
@@ -92,7 +89,7 @@ use tikv_util::{
     math::MovingAvgU32,
     sys::{disk, register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
-    time::Monitor,
+    time::{Instant, Monitor},
     worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker, Worker},
 };
 use tokio::runtime::Builder;
@@ -160,6 +157,7 @@ pub fn run_tikv(config: TiKvConfig) {
 const RESERVED_OPEN_FDS: u64 = 1000;
 
 const DEFAULT_METRICS_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
+const DEFAULT_MEMTRACE_FLUSH_INTERVAL: Duration = Duration::from_millis(1_000);
 const DEFAULT_ENGINE_METRICS_RESET_INTERVAL: Duration = Duration::from_millis(60_000);
 const DEFAULT_STORAGE_STATS_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -195,12 +193,16 @@ struct TiKVEngines<ER: RaftEngine> {
 
 struct Servers<ER: RaftEngine> {
     lock_mgr: LockManager,
-    server: Server<RaftRouter<RocksEngine, ER>, resolve::PdStoreAddrResolver>,
+    server: LocalServer<ER>,
     node: Node<RpcClient, ER>,
     importer: Arc<SSTImporter>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
     cdc_memory_quota: MemoryQuota,
 }
+
+type LocalServer<ER> =
+    Server<RaftRouter<RocksEngine, ER>, resolve::PdStoreAddrResolver, LocalRaftKv<ER>>;
+type LocalRaftKv<ER> = RaftKv<RocksEngine, ServerRaftStoreRouter<RocksEngine, ER>>;
 
 impl<ER: RaftEngine> TiKVServer<ER> {
     fn init(mut config: TiKvConfig) -> TiKVServer<ER> {
@@ -725,6 +727,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 &self.config.import,
                 import_path,
                 self.encryption_key_manager.clone(),
+                self.config.storage.enable_ttl,
             )
             .unwrap(),
         );
@@ -1016,14 +1019,19 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let mut engine_metrics =
             EngineMetricsManager::new(self.engines.as_ref().unwrap().engines.clone());
         let mut io_metrics = IOMetricsManager::new(fetcher);
-        let mut mem_trace_metrics = MemoryTraceManager::default();
-        mem_trace_metrics.register_provider((&*MEMTRACE_ROOT).to_owned());
         self.background_worker
             .spawn_interval_task(DEFAULT_METRICS_FLUSH_INTERVAL, move || {
                 let now = Instant::now();
                 engine_metrics.flush(now);
                 io_metrics.flush(now);
                 engines_info.update(now);
+            });
+
+        let mut mem_trace_metrics = MemoryTraceManager::default();
+        mem_trace_metrics.register_provider((&*MEMTRACE_ROOT).to_owned());
+        self.background_worker
+            .spawn_interval_task(DEFAULT_MEMTRACE_FLUSH_INTERVAL, move || {
+                let now = Instant::now();
                 mem_trace_metrics.flush(now);
             });
     }
@@ -1152,9 +1160,7 @@ impl TiKVServer<RocksEngine> {
         &mut self,
         limiter: Option<Arc<IORateLimiter>>,
     ) -> (Engines<RocksEngine, RocksEngine>, Arc<EnginesResourceInfo>) {
-        let env =
-            get_encrypted_env(self.encryption_key_manager.clone(), None /*base_env*/).unwrap();
-        let env = get_inspected_env(Some(env), limiter).unwrap();
+        let env = get_env(self.encryption_key_manager.clone(), limiter).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         // Create raft engine.
@@ -1232,9 +1238,7 @@ impl TiKVServer<RaftLogEngine> {
         Engines<RocksEngine, RaftLogEngine>,
         Arc<EnginesResourceInfo>,
     ) {
-        let env =
-            get_encrypted_env(self.encryption_key_manager.clone(), None /*base_env*/).unwrap();
-        let env = get_inspected_env(Some(env), limiter).unwrap();
+        let env = get_env(self.encryption_key_manager.clone(), limiter).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         // Create raft engine.
@@ -1420,7 +1424,7 @@ impl<R: RaftEngine> EngineMetricsManager<R> {
     pub fn flush(&mut self, now: Instant) {
         self.engines.kv.flush_metrics("kv");
         self.engines.raft.flush_metrics("raft");
-        if now.duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
+        if now.saturating_duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
             self.engines.kv.reset_statistics();
             self.engines.raft.reset_statistics();
             self.last_reset = now;

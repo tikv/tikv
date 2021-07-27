@@ -356,7 +356,8 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
     ) -> Result<MvccScanner<S>> {
         // Check request bounds with physical bound
         self.verify_range(&lower_bound, &upper_bound)?;
-        let scanner = ScannerBuilder::new(self.snapshot.clone(), self.start_ts, desc)
+        let scanner = ScannerBuilder::new(self.snapshot.clone(), self.start_ts)
+            .desc(desc)
             .range(lower_bound, upper_bound)
             .omit_value(key_only)
             .fill_cache(self.fill_cache)
@@ -387,16 +388,15 @@ impl<S: Snapshot> TxnEntryStore for SnapshotStore<S> {
             // Scan ts in (after_ts, start_ts].
             (Some(after_ts.next()), Some(self.start_ts))
         };
-        let scanner =
-            ScannerBuilder::new(self.snapshot.clone(), self.start_ts, false /* desc */)
-                .range(lower_bound, upper_bound)
-                .omit_value(false)
-                .fill_cache(self.fill_cache)
-                .isolation_level(self.isolation_level)
-                .bypass_locks(self.bypass_locks.clone())
-                .hint_min_ts(min_ts)
-                .hint_max_ts(max_ts)
-                .build_entry_scanner(after_ts, output_delete)?;
+        let scanner = ScannerBuilder::new(self.snapshot.clone(), self.start_ts)
+            .range(lower_bound, upper_bound)
+            .omit_value(false)
+            .fill_cache(self.fill_cache)
+            .isolation_level(self.isolation_level)
+            .bypass_locks(self.bypass_locks.clone())
+            .hint_min_ts(min_ts)
+            .hint_max_ts(max_ts)
+            .build_entry_scanner(after_ts, output_delete)?;
 
         Ok(scanner)
     }
@@ -692,6 +692,7 @@ mod tests {
                             lock_ttl: 0,
                             min_commit_ts: TimeStamp::default(),
                             need_old_value: false,
+                            is_retry_request: false,
                         },
                         Mutation::Put((Key::from_raw(key), key.to_vec())),
                         &None,

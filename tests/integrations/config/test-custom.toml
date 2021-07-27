@@ -72,6 +72,7 @@ enable-request-batch = false
 background-thread-count = 999
 end-point-slow-log-threshold = "1s"
 forward-max-connections-per-address = 5
+reject-messages-on-memory-ratio = 0.8
 
 [server.labels]
 a = "b"
@@ -182,7 +183,8 @@ store-io-pool-size = 5
 future-poll-size = 2
 hibernate-regions = false
 dev-assert = true
-perf-level = 5
+perf-level = 1
+evict-cache-on-memory-ratio = 0.8
 cmd-batch = false
 trigger-ready-size = "12MB"
 raft-write-size-limit = "34MB"

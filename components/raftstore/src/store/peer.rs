@@ -9,7 +9,7 @@ use std::{cmp, mem, u64, usize};
 
 use bitflags::bitflags;
 use crossbeam::atomic::AtomicCell;
-use crossbeam::channel::TrySendError;
+use crossbeam::channel::{Sender, TrySendError};
 use engine_traits::{Engines, KvEngine, RaftEngine, Snapshot, WriteBatch, WriteOptions};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
@@ -40,12 +40,12 @@ use uuid::Uuid;
 
 use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::errors::RAFTSTORE_IS_BUSY;
-use crate::store::async_io::write::{AsyncWriteMsg, AsyncWriteTask};
+use crate::store::async_io::write::{WriteMsg, WriteTask};
 use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, CollectedReady, Proposal};
 use crate::store::hibernate_state::GroupState;
-use crate::store::memory::needs_evict_entry_cache;
+use crate::store::memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES};
 use crate::store::msg::RaftCommand;
 use crate::store::util::{admin_cmd_epoch_lookup, RegionReadProgress};
 use crate::store::worker::{
@@ -57,10 +57,11 @@ use crate::store::{
 use crate::{Error, Result};
 use collections::{HashMap, HashSet};
 use pd_client::INVALID_ID;
+use tikv_alloc::trace::TraceEvent;
 use tikv_util::codec::number::decode_u64;
 use tikv_util::sys::disk;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
-use tikv_util::time::{Instant as UtilInstant, ThreadReadId};
+use tikv_util::time::{Instant as TiInstant, InstantExt, ThreadReadId};
 use tikv_util::worker::{FutureScheduler, Scheduler};
 use tikv_util::Either;
 use tikv_util::{box_err, debug, error, info, warn};
@@ -110,17 +111,17 @@ impl<S: Snapshot> ProposalQueue<S> {
         }
     }
 
-    fn find_scheduled_ts(&self, index: u64) -> Option<(u64, Instant)> {
-        let map = |p: &Proposal<_>| (p.index);
-        let idx = self.queue.binary_search_by_key(&index, map);
-        if let Ok(i) = idx {
-            self.queue[i]
-                .cb
-                .get_scheduled_ts()
-                .map(|ts| (self.queue[i].term, ts))
-        } else {
-            None
-        }
+    fn find_scheduled_ts(&self, index: u64) -> Option<(u64, TiInstant)> {
+        self.queue
+            .binary_search_by_key(&index, |p: &Proposal<_>| (p.index))
+            .ok()
+            .map(|i| {
+                self.queue[i]
+                    .cb
+                    .get_scheduled_ts()
+                    .map(|ts| (self.queue[i].term, ts))
+            })
+            .flatten()
     }
 
     fn find_propose_time(&self, term: u64, index: u64) -> Option<Timespec> {
@@ -498,8 +499,6 @@ where
     /// Approximate size of logs that is applied but not compacted yet.
     pub raft_log_size_hint: u64,
 
-    /// The index of the latest proposed prepare merge command.
-    last_proposed_prepare_merge_idx: u64,
     /// The index of the latest committed prepare merge command.
     last_committed_prepare_merge_idx: u64,
     /// The merge related state. It indicates this Peer is in merging.
@@ -517,7 +516,7 @@ where
     pub peer_stat: PeerStat,
 
     /// Time of the last attempt to wake up inactive leader.
-    pub bcast_wake_up_time: Option<UtilInstant>,
+    pub bcast_wake_up_time: Option<TiInstant>,
     /// Current replication mode version.
     pub replication_mode_version: u64,
     /// The required replication state at current version.
@@ -551,6 +550,8 @@ where
 
     pub read_progress: Arc<RegionReadProgress>,
 
+    pub memtrace_raft_entries: usize,
+
     /// unpersisted readies: (ready number, the max number of following ready
     /// whose data to be persisted is empty, msgs).
     unpersisted_readies: VecDeque<(u64, u64, Vec<Vec<RaftMessage>>)>,
@@ -558,9 +559,11 @@ where
     unpersisted_message_count: usize,
     persisted_number: u64,
     snap_ctx: Option<SnapshotContext>,
-    /// The choose id of async writer thread.
-    async_writer_id: Option<(usize, UtilInstant, usize)>,
-    pending_write_tasks: Option<(Vec<AsyncWriteTask<EK, ER>>, u64)>,
+    /// (chosen id of writer thread, last chosen time, reschedule retry count)
+    current_writer_id: Option<(usize, TiInstant, usize)>,
+    /// Used for rescheduling to another write thread.
+    /// (pending write tasks, the last unpersisted ready number since rescheduling)
+    pending_write_tasks: Option<(Vec<WriteTask<EK, ER>>, u64)>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -626,7 +629,6 @@ where
             pending_merge_state: None,
             want_rollback_merge_peers: HashSet::default(),
             pending_request_snapshot_count: Arc::new(AtomicUsize::new(0)),
-            last_proposed_prepare_merge_idx: 0,
             last_committed_prepare_merge_idx: 0,
             leader_missing_time: Some(Instant::now()),
             tag: tag.clone(),
@@ -660,11 +662,12 @@ where
                 REGION_READ_PROGRESS_CAP,
                 tag,
             )),
+            memtrace_raft_entries: 0,
             unpersisted_readies: VecDeque::default(),
             unpersisted_message_count: 0,
             persisted_number: 0,
             snap_ctx: None,
-            async_writer_id: None,
+            current_writer_id: None,
             pending_write_tasks: None,
         };
 
@@ -844,7 +847,7 @@ where
     /// 3. Notify all pending requests.
     pub fn destroy<T>(&mut self, ctx: &PollContext<EK, ER, T>, keep_data: bool) -> Result<()> {
         fail_point!("raft_store_skip_destroy_peer", |_| Ok(()));
-        let t = Instant::now();
+        let t = TiInstant::now();
 
         let region = self.region().clone();
         info!(
@@ -891,7 +894,7 @@ where
             "peer destroy itself";
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
-            "takes" => ?t.elapsed(),
+            "takes" => ?t.saturating_elapsed(),
         );
 
         Ok(())
@@ -1104,7 +1107,7 @@ where
     }
 
     #[inline]
-    fn send_raft_msg<T: Transport>(
+    pub fn send_raft_msg<T: Transport>(
         &mut self,
         trans: &mut T,
         msgs: Vec<RaftMessage>,
@@ -1152,7 +1155,7 @@ where
     }
 
     #[inline]
-    fn switch_to_raft_msg(&mut self, msgs: Vec<eraftpb::Message>) -> Vec<RaftMessage> {
+    pub fn switch_to_raft_msg(&mut self, msgs: Vec<eraftpb::Message>) -> Vec<RaftMessage> {
         let mut raft_msgs = Vec::with_capacity(msgs.len());
         for msg in msgs {
             if let Some(m) = self.fill_raft_message(msg) {
@@ -1219,7 +1222,7 @@ where
         let has_snap_task = self.get_store().has_gen_snap_task();
         let pre_commit_index = self.raft_group.raft.raft_log.committed;
         self.raft_group.step(m)?;
-        self.report_know_commit_duration(pre_commit_index, &mut ctx.raft_metrics);
+        self.report_know_commit_duration(pre_commit_index, &ctx.raft_metrics);
 
         let mut for_balance = false;
         if !has_snap_task && self.get_store().has_gen_snap_task() {
@@ -1241,7 +1244,7 @@ where
         Ok(())
     }
 
-    fn report_know_persist_duration(&self, pre_persist_index: u64, metrics: &mut RaftMetrics) {
+    fn report_know_persist_duration(&self, pre_persist_index: u64, metrics: &RaftMetrics) {
         if !metrics.waterfall_metrics {
             return;
         }
@@ -1255,17 +1258,17 @@ where
                     .unwrap_or(false)
                 {
                     if now.is_none() {
-                        now = Some(Instant::now());
+                        now = Some(TiInstant::now());
                     }
-                    metrics
-                        .know_persist
-                        .observe(duration_to_sec(now.unwrap() - scheduled_ts));
+                    metrics.know_persist.observe(duration_to_sec(
+                        now.unwrap().saturating_duration_since(scheduled_ts),
+                    ));
                 }
             }
         }
     }
 
-    fn report_know_commit_duration(&self, pre_commit_index: u64, metrics: &mut RaftMetrics) {
+    fn report_know_commit_duration(&self, pre_commit_index: u64, metrics: &RaftMetrics) {
         if !metrics.waterfall_metrics {
             return;
         }
@@ -1279,16 +1282,16 @@ where
                     .unwrap_or(false)
                 {
                     if now.is_none() {
-                        now = Some(Instant::now());
+                        now = Some(TiInstant::now());
                     }
                     if index <= self.raft_group.raft.raft_log.persisted {
-                        metrics
-                            .know_commit
-                            .observe(duration_to_sec(now.unwrap() - scheduled_ts));
+                        metrics.know_commit.observe(duration_to_sec(
+                            now.unwrap().saturating_duration_since(scheduled_ts),
+                        ));
                     } else {
-                        metrics
-                            .know_commit_not_persist
-                            .observe(duration_to_sec(now.unwrap() - scheduled_ts));
+                        metrics.know_commit_not_persist.observe(duration_to_sec(
+                            now.unwrap().saturating_duration_since(scheduled_ts),
+                        ));
                     }
                 }
             }
@@ -1324,11 +1327,13 @@ where
             if p.get_id() == self.peer.get_id() {
                 continue;
             }
+            // TODO
             if let Some(instant) = self.peer_heartbeats.get(&p.get_id()) {
-                if instant.elapsed() >= max_duration {
+                let elapsed = instant.saturating_elapsed();
+                if elapsed >= max_duration {
                     let mut stats = PeerStats::default();
                     stats.set_peer(p.clone());
-                    stats.set_down_seconds(instant.elapsed().as_secs());
+                    stats.set_down_seconds(elapsed.as_secs());
                     down_peers.push(stats);
                     down_peer_ids.push(p.get_id());
                 }
@@ -1350,7 +1355,7 @@ where
 
         for i in 0..self.peers_start_pending_time.len() {
             let (_, pending_after) = self.peers_start_pending_time[i];
-            let elapsed = duration_to_sec(pending_after.elapsed());
+            let elapsed = duration_to_sec(pending_after.saturating_elapsed());
             RAFT_PEER_PENDING_DURATION.observe(elapsed);
         }
 
@@ -1422,7 +1427,7 @@ where
             if let Some(progress) = self.raft_group.raft.prs().get(peer_id) {
                 if progress.matched >= truncated_idx {
                     let (_, pending_after) = self.peers_start_pending_time.swap_remove(i);
-                    let elapsed = duration_to_sec(pending_after.elapsed());
+                    let elapsed = duration_to_sec(pending_after.saturating_elapsed());
                     RAFT_PEER_PENDING_DURATION.observe(elapsed);
                     debug!(
                         "peer has caught up logs";
@@ -1461,14 +1466,16 @@ where
                 self.leader_missing_time = Instant::now().into();
                 StaleState::Valid
             }
-            Some(instant) if instant.elapsed() >= ctx.cfg.max_leader_missing_duration.0 => {
+            Some(instant)
+                if instant.saturating_elapsed() >= ctx.cfg.max_leader_missing_duration.0 =>
+            {
                 // Resets the `leader_missing_time` to avoid sending the same tasks to
                 // PD worker continuously during the leader missing timeout.
                 self.leader_missing_time = Instant::now().into();
                 StaleState::ToValidate
             }
             Some(instant)
-                if instant.elapsed() >= ctx.cfg.abnormal_leader_missing_duration.0
+                if instant.saturating_elapsed() >= ctx.cfg.abnormal_leader_missing_duration.0
                     && !naive_peer =>
             {
                 // A peer is considered as in the leader missing state
@@ -1673,45 +1680,6 @@ where
             || self.pending_merge_state.is_some()
     }
 
-    // Checks merge strictly, it checks whether there is any ongoing merge by
-    // tracking last proposed prepare merge.
-    // TODO: There is a false positives, proposed prepare merge may never be
-    //       committed.
-    fn is_merging_strict(&self) -> bool {
-        self.last_proposed_prepare_merge_idx > self.get_store().applied_index() || self.is_merging()
-    }
-
-    // Check if this peer can handle request_snapshot.
-    pub fn ready_to_handle_request_snapshot(&mut self, request_index: u64) -> bool {
-        let reject_reason = if !self.is_leader() {
-            // Only leader can handle request snapshot.
-            "not_leader"
-        } else if self.get_store().applied_index_term() != self.term()
-            || self.get_store().applied_index() < request_index
-        {
-            // Reject if there are any unapplied raft log.
-            // We don't want to handle request snapshot if there is any ongoing
-            // merge, because it is going to be destroyed. This check prevents
-            // handling request snapshot after leadership being transferred.
-            "stale_apply"
-        } else if self.is_merging_strict() || self.is_splitting() {
-            // Reject if it is merging or splitting.
-            // `is_merging_strict` also checks last proposed prepare merge, it
-            // prevents handling request snapshot while a prepare merge going
-            // to be committed.
-            "split_merge"
-        } else {
-            return true;
-        };
-
-        info!("can not handle request snapshot";
-            "reason" => reject_reason,
-            "region_id" => self.region().get_id(),
-            "peer_id" => self.peer_id(),
-            "request_index" => request_index);
-        false
-    }
-
     /// Checks if leader needs to keep sending logs for follower.
     ///
     /// In DrAutoSync mode, if leader goes to sleep before the region is sync,
@@ -1899,6 +1867,14 @@ where
 
         let mut ready = self.raft_group.ready();
 
+        // Update it after unstable entries pagination is introduced.
+        debug_assert!(ready.entries().last().map_or_else(
+            || true,
+            |entry| entry.index == self.raft_group.raft.raft_log.last_index()
+        ));
+        MEMTRACE_RAFT_ENTRIES.trace(TraceEvent::Sub(self.memtrace_raft_entries));
+        self.memtrace_raft_entries = 0;
+
         let mut proposal_times = vec![];
 
         if ctx.raft_metrics.waterfall_metrics {
@@ -1910,11 +1886,11 @@ where
                     if entry.term == term {
                         proposal_times.push(scheduled_ts);
                         if now.is_none() {
-                            now = Some(Instant::now());
+                            now = Some(TiInstant::now());
                         }
-                        ctx.raft_metrics
-                            .to_write_queue
-                            .observe(duration_to_sec(now.unwrap() - scheduled_ts));
+                        ctx.raft_metrics.to_write_queue.observe(duration_to_sec(
+                            now.unwrap().saturating_duration_since(scheduled_ts),
+                        ));
                     }
                 }
             }
@@ -1977,7 +1953,7 @@ where
         }
 
         let has_new_entries = !ready.entries().is_empty();
-        let (ready_res, write_task) = match self.mut_store().handle_raft_ready(
+        let (ready_res, task) = match self.mut_store().handle_raft_ready(
             &mut ready,
             destroy_regions,
             persisted_msgs,
@@ -1995,20 +1971,11 @@ where
             HandleReadyResult::SendIOTask | HandleReadyResult::Snapshot { .. } => {
                 match self.should_send_write_task(ctx) {
                     None => {
-                        self.pending_write_tasks
-                            .as_mut()
-                            .unwrap()
-                            .0
-                            .push(write_task);
+                        self.pending_write_tasks.as_mut().unwrap().0.push(task);
                         STORE_IO_RESCHEDULE_PENDING_TASK_TOTAL_GAUGE.inc();
                     }
                     Some(id) => {
-                        if let Err(e) =
-                            ctx.async_write_senders[id].send(AsyncWriteMsg::WriteTask(write_task))
-                        {
-                            // IO threads are destroyed after store threads during shutdown.
-                            panic!("{} failed to send write msg, err: {:?}", self.tag, e);
-                        }
+                        self.send_write_msg(&ctx.write_senders[id], WriteMsg::WriteTask(task));
                     }
                 }
             }
@@ -2018,35 +1985,48 @@ where
         Some(CollectedReady::new(ready_res, ready, has_new_entries))
     }
 
-    pub fn should_send_write_task<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) -> Option<usize> {
+    /// Check if write task can be sent to write worker or pushed into `self.pending_write_tasks`.
+    ///
+    /// Returns None if the task should be pushed into `self.pending_write_tasks`.
+    /// Some(id) means the task should be sent to the write worker with this id.
+    fn should_send_write_task<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) -> Option<usize> {
+        // If pending_write_tasks is not None, the later task should be pushed into it.
         if self.pending_write_tasks.is_some() {
             return None;
         }
         if ctx.cfg.store_io_pool_size <= 1 {
             return Some(0);
         }
-        let now = UtilInstant::now_coarse();
+        let now = TiInstant::now_coarse();
         if !self.has_unpersisted_ready() {
+            // If no previous pending ready, we can randomly select a new writer worker.
             let new_id = rand::random::<usize>() % ctx.cfg.store_io_pool_size;
-            self.async_writer_id = Some((new_id, now, 0));
+            self.current_writer_id = Some((new_id, now, 0));
             return Some(new_id);
         }
         // There are some unpersisted readies so `async_writer_id` must not be None
-        let (id, last_time, count) = self.async_writer_id.as_mut().unwrap();
-        // Whether the duration doesn't exceed the config value or not
+        let (id, last_time, retry_cnt) = self.current_writer_id.as_mut().unwrap();
+        // Whether the duration doesn't exceed the `io_reschedule_hotpot_duration` or not
         if now - *last_time
-            < ctx.cfg.io_reschedule_hotpot_duration.0 + Duration::from_millis(*count as u64 * 10)
+            < ctx.cfg.io_reschedule_hotpot_duration.0
+                + Duration::from_millis(*retry_cnt as u64 * 10)
         {
             return Some(*id);
         }
-        if *count == 0 {
+        if *retry_cnt == 0 {
+            // The hot write peers should not be rescheduled entirely.
+            // So it will not be rescheduled if the random id is the same as the original one.
             let new_id = rand::random::<usize>() % ctx.cfg.store_io_pool_size;
             if new_id == *id {
-                // It's Lucky to not reschedule
-                *last_time = UtilInstant::now_coarse();
+                // Reset the time
+                *last_time = TiInstant::now_coarse();
                 return Some(*id);
             }
         }
+        // This peer should be rescheduled.
+        // Try to add 1 to `io_reschedule_concurrent_count`.
+        // The `cfg.io_reschedule_concurrent_max_count` is used for controlling the concurrent count
+        // of rescheduling peer fsm because rescheduling will introduce performance penalty.
         let success = loop {
             let concurrent = ctx.io_reschedule_concurrent_count.load(Ordering::SeqCst);
             if concurrent >= ctx.cfg.io_reschedule_concurrent_max_count {
@@ -2067,11 +2047,31 @@ where
         };
         if success {
             STORE_IO_RESCHEDULE_REGION_TOTAL_GAUGE.inc();
+            // Rescheduling succeeds. The task should be pushed into `self.pending_write_tasks`.
             self.pending_write_tasks = Some((vec![], self.unpersisted_readies.back().unwrap().0));
             None
         } else {
-            *count += 1;
+            // Rescheduling fails at this time, add one to the `retry_cnt`.
+            // The task should be sent to the original write worker.
+            *retry_cnt += 1;
             Some(*id)
+        }
+    }
+
+    fn send_write_msg(&self, sender: &Sender<WriteMsg<EK, ER>>, msg: WriteMsg<EK, ER>) {
+        match sender.try_send(msg) {
+            Ok(()) => return,
+            Err(TrySendError::Full(msg)) => {
+                // TODO: add metrics
+                if let Err(_) = sender.send(msg) {
+                    // Write threads are destroyed after store threads during shutdown.
+                    panic!("{} failed to send write msg, err: disconnected", self.tag);
+                }
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                // Write threads are destroyed after store threads during shutdown.
+                panic!("{} failed to send write msg, err: disconnected", self.tag);
+            }
         }
     }
 
@@ -2122,10 +2122,15 @@ where
                     // we can safely consider it is persisted so the persisted msgs can be sent immediately.
                     self.persisted_number = ready.number();
                     self.send_raft_msg(&mut ctx.trans, msgs, &mut ctx.raft_metrics.send_message);
-                    // The light ready don't need to be handled because no data needs to be persisted.
-                    // On the other hand, if there are something need to be handled, they should be handled
-                    // after getting this ready.
-                    let _ = self.raft_group.advance_append(ready);
+                    // The commit index and messages of light ready should be empty because no data needs
+                    // to be persisted. Only the committed entries may not be empty when the size is too
+                    // large to be fetched in the previous ready.
+                    let mut light_rd = self.raft_group.advance_append(ready);
+                    assert!(light_rd.commit_index().is_none());
+                    assert!(light_rd.messages().is_empty());
+                    if !light_rd.committed_entries().is_empty() {
+                        self.handle_raft_committed_entries(ctx, light_rd.take_committed_entries());
+                    }
                 }
             }
         }
@@ -2211,13 +2216,6 @@ where
                     lease_to_be_updated = false;
                 }
             }
-            if let Some((term, scheduled_ts)) = self.proposals.find_scheduled_ts(entry.get_index())
-            {
-                if term == entry.get_term() {
-                    STORE_SCHEDULE_COMMIT_DURATION_HISTOGRAM
-                        .observe(duration_to_sec(scheduled_ts.elapsed()));
-                }
-            }
 
             fail_point!(
                 "leader_commit_prepare_merge",
@@ -2266,9 +2264,9 @@ where
                 committed_entries,
                 cbs,
             );
-            apply.on_schedule();
+            apply.on_schedule(&ctx.raft_metrics);
             self.mut_store().trace_cached_entries(apply.entries.clone());
-            if needs_evict_entry_cache() {
+            if needs_evict_entry_cache(ctx.cfg.evict_cache_on_memory_ratio) {
                 // Compact all cached entries instead of half evict.
                 self.mut_store().evict_cache(false);
             }
@@ -2329,25 +2327,27 @@ where
         let pre_persist_index = self.raft_group.raft.raft_log.persisted;
         let pre_commit_index = self.raft_group.raft.raft_log.committed;
         self.raft_group.on_persist_ready(persisted_number);
-        self.report_know_persist_duration(pre_persist_index, &mut ctx.raft_metrics);
-        self.report_know_commit_duration(pre_commit_index, &mut ctx.raft_metrics);
+        self.report_know_persist_duration(pre_persist_index, &ctx.raft_metrics);
+        self.report_know_commit_duration(pre_commit_index, &ctx.raft_metrics);
 
         if let Some((_, last_number)) = self.pending_write_tasks.as_ref() {
             if persisted_number >= *last_number {
+                // The peer must be destroyed after all previous write tasks have been finished.
+                // So do not worry about a destroyed peer being counted in `io_reschedule_concurrent_count`.
                 ctx.io_reschedule_concurrent_count
                     .fetch_sub(1, Ordering::SeqCst);
+
                 STORE_IO_RESCHEDULE_REGION_TOTAL_GAUGE.dec();
-                let (tasks, _) = self.pending_write_tasks.take().unwrap();
+
                 let new_id = rand::random::<usize>() % ctx.cfg.store_io_pool_size;
-                self.async_writer_id = Some((new_id, UtilInstant::now_coarse(), 0));
+                self.current_writer_id = Some((new_id, TiInstant::now_coarse(), 0));
+
+                let (tasks, _) = self.pending_write_tasks.take().unwrap();
+
                 STORE_IO_RESCHEDULE_PENDING_TASK_TOTAL_GAUGE.sub(tasks.len() as i64);
+
                 for task in tasks {
-                    if let Err(e) =
-                        ctx.async_write_senders[new_id].send(AsyncWriteMsg::WriteTask(task))
-                    {
-                        // IO threads are destroyed after store threads during shutdown.
-                        panic!("{} failed to send write msg, err: {:?}", self.tag, e);
-                    }
+                    self.send_write_msg(&ctx.write_senders[new_id], WriteMsg::WriteTask(task));
                 }
             }
         }
@@ -3142,11 +3142,15 @@ where
             poll_ctx.raft_metrics.invalid_proposal.read_index_no_leader += 1;
             // The leader may be hibernated, send a message for trying to awaken the leader.
             if self.bcast_wake_up_time.is_none()
-                || self.bcast_wake_up_time.as_ref().unwrap().elapsed()
+                || self
+                    .bcast_wake_up_time
+                    .as_ref()
+                    .unwrap()
+                    .saturating_elapsed()
                     >= Duration::from_millis(MIN_BCAST_WAKE_UP_INTERVAL)
             {
                 self.bcast_wake_up_message(poll_ctx);
-                self.bcast_wake_up_time = Some(UtilInstant::now_coarse());
+                self.bcast_wake_up_time = Some(TiInstant::now_coarse());
 
                 let task = PdTask::QueryRegionLeader {
                     region_id: self.region_id,
@@ -3451,10 +3455,6 @@ where
             // The message is dropped silently, this usually due to leader absence
             // or transferring leader. Both cases can be considered as NotLeader error.
             return Err(Error::NotLeader(self.region_id, None));
-        }
-
-        if ctx.contains(ProposalContext::PREPARE_MERGE) {
-            self.last_proposed_prepare_merge_idx = propose_index;
         }
 
         Ok(Either::Left(propose_index))
@@ -4220,7 +4220,6 @@ pub trait AbstractPeer {
     fn apply_state(&self) -> &RaftApplyState;
     fn raft_status(&self) -> raft::Status;
     fn raft_commit_index(&self) -> u64;
-    fn raft_request_snapshot(&mut self, index: u64);
     fn pending_merge_state(&self) -> Option<&MergeState>;
 }
 

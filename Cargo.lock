@@ -133,6 +133,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "atomic"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3410529e8288c463bedb5930f82833bc0c90e5d2fe639a56582a4d09220b281"
+dependencies = [
+ "autocfg",
+]
+
+[[package]]
 name = "atty"
 version = "0.2.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -388,12 +397,13 @@ dependencies = [
 
 [[package]]
 name = "bzip2-sys"
-version = "0.1.8+1.0.8"
+version = "0.1.11+1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05305b41c5034ff0e93937ac64133d109b5a2660114ec45e9760bc6816d83038"
+checksum = "736a955f3fa7875102d57c82b8cac37ec45224a07fd32d58f9f7a186b6cd4cdc"
 dependencies = [
  "cc",
  "libc 0.2.86",
+ "pkg-config",
 ]
 
 [[package]]
@@ -623,6 +633,7 @@ name = "coprocessor_plugin_api"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "atomic",
  "rustc_version 0.3.3",
 ]
 
@@ -1133,6 +1144,7 @@ name = "engine_traits"
 version = "0.0.1"
 dependencies = [
  "error_code",
+ "fail",
  "file_system",
  "kvproto",
  "log_wrappers",
@@ -1303,6 +1315,7 @@ dependencies = [
  "libc 0.2.86",
  "maligned",
  "nix 0.19.0",
+ "online_config",
  "openssl",
  "parking_lot",
  "prometheus",
@@ -2095,7 +2108,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#706fcaf286c8dd07ef59349c089f53289a32ce4c"
+source = "git+https://github.com/pingcap/kvproto.git#91a52cd9e8db8dec6147114c94d1678fffc0a5ba"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -2181,7 +2194,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#46b7a1da47e626ae35158a51a3c90babafbd8ff2"
+source = "git+https://github.com/tikv/rust-rocksdb.git#12a953bc942c60a00ffb44d3907bdf2193d6be0d"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2200,7 +2213,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#46b7a1da47e626ae35158a51a3c90babafbd8ff2"
+source = "git+https://github.com/tikv/rust-rocksdb.git#12a953bc942c60a00ffb44d3907bdf2193d6be0d"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3316,7 +3329,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.6.0"
-source = "git+https://github.com/gengliqi/raft-rs?branch=demo-apply-unpersisted-log#cb60b9bee48ea969f387717711dda29de4cdacd7"
+source = "git+https://github.com/tikv/raft-rs?branch=master#7c21f8d12f2043c43004fca48861568db7c76bd9"
 dependencies = [
  "bytes 1.0.1",
  "fxhash",
@@ -3350,7 +3363,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.6.0"
-source = "git+https://github.com/gengliqi/raft-rs?branch=demo-apply-unpersisted-log#cb60b9bee48ea969f387717711dda29de4cdacd7"
+source = "git+https://github.com/tikv/raft-rs?branch=master#7c21f8d12f2043c43004fca48861568db7c76bd9"
 dependencies = [
  "bytes 1.0.1",
  "lazy_static",
@@ -3763,6 +3776,7 @@ version = "0.0.1"
 dependencies = [
  "collections",
  "crossbeam",
+ "fail",
  "futures 0.3.15",
  "grpcio",
  "kvproto",
@@ -3819,7 +3833,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#41d7180df72cf5aae97fbae9a18aec52ad29dfcc"
+source = "git+https://github.com/tikv/rust-rocksdb.git#12a953bc942c60a00ffb44d3907bdf2193d6be0d"
 dependencies = [
  "libc 0.2.86",
  "librocksdb_sys",
@@ -4984,6 +4998,7 @@ dependencies = [
  "log_wrappers",
  "prometheus",
  "prometheus-static-metric",
+ "serde_json",
  "thiserror",
  "tikv_util",
  "time",
@@ -5076,6 +5091,8 @@ dependencies = [
  "rand 0.8.3",
  "regex",
  "safemem",
+ "serde",
+ "serde_json",
  "static_assertions",
  "tidb_query_codegen",
  "tidb_query_common",
@@ -5175,6 +5192,7 @@ dependencies = [
  "slog",
  "slog-global",
  "sst_importer",
+ "strum",
  "sysinfo",
  "tempfile",
  "test_sst_importer",

@@ -504,7 +504,6 @@ impl BlobStorage for S3Storage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::io::AsyncReadExt;
     use rusoto_core::signature::SignedRequest;
     use rusoto_mock::MockRequestDispatcher;
 
@@ -524,6 +523,7 @@ mod tests {
         assert!(S3Storage::new(config).is_err());
     }
 
+    #[cfg(feature = "failpoints")]
     #[test]
     fn test_s3_storage() {
         let magic_contents = "5678";

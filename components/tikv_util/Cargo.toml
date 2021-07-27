@@ -18,6 +18,7 @@ prost-codec = [
   "grpcio/prost-codec",
   "kvproto/prost-codec",
 ]
+test-cgroup = []
 
 [dependencies]
 async-speed-limit = "0.3"

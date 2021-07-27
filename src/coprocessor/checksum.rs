@@ -1,7 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::Instant;
-
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
@@ -9,6 +7,7 @@ use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
 use tidb_query_common::storage::Range;
 use tidb_query_executors::runner::MAX_TIME_SLICE;
 use tidb_query_expr::BATCH_MAX_SIZE;
+use tikv_util::time::Instant;
 use tipb::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse};
 use yatp::task::future::reschedule;
 
@@ -78,7 +77,7 @@ impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
         while let Some((k, v)) = self.scanner.next()? {
             row_count += 1;
             if row_count >= BATCH_MAX_SIZE {
-                if time_slice_start.elapsed() > MAX_TIME_SLICE {
+                if time_slice_start.saturating_elapsed() > MAX_TIME_SLICE {
                     reschedule().await;
                     time_slice_start = Instant::now();
                 }

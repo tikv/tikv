@@ -7,7 +7,6 @@ use std::ops::Range;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 use std::{cmp, error, mem, u64};
 
 use engine_traits::CF_RAFT;
@@ -30,6 +29,7 @@ use crate::{bytes_capacity, Error, Result};
 use engine_traits::{RaftEngine, RaftLogBatch};
 use into_other::into_other;
 use tikv_alloc::trace::TraceEvent;
+use tikv_util::time::Instant;
 use tikv_util::worker::Scheduler;
 use tikv_util::{box_err, box_try, debug, defer, error, info, warn};
 
@@ -37,7 +37,7 @@ use super::metrics::*;
 use super::worker::RegionTask;
 use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
 
-use crate::store::async_io::write::AsyncWriteTask;
+use crate::store::async_io::write::WriteTask;
 
 // When we create a region peer, we should initialize its log term/index > 0,
 // so that we can force the follower peer to sync the snapshot first.
@@ -1088,7 +1088,7 @@ where
         &mut self,
         invoke_ctx: &mut InvokeContext,
         entries: Vec<Entry>,
-        task: &mut AsyncWriteTask<EK, ER>,
+        task: &mut WriteTask<EK, ER>,
     ) {
         if entries.is_empty() {
             return;
@@ -1192,7 +1192,7 @@ where
         &mut self,
         ctx: &mut InvokeContext,
         snap: &Snapshot,
-        task: &mut AsyncWriteTask<EK, ER>,
+        task: &mut WriteTask<EK, ER>,
         msgs: Vec<RaftMessage>,
         destroy_regions: Vec<metapb::Region>,
     ) -> Result<HandleReadyResult> {
@@ -1471,11 +1471,11 @@ where
         destroy_regions: Vec<metapb::Region>,
         mut msgs: Vec<RaftMessage>,
         proposal_times: Vec<Instant>,
-    ) -> Result<(HandleReadyResult, AsyncWriteTask<EK, ER>)> {
+    ) -> Result<(HandleReadyResult, WriteTask<EK, ER>)> {
         let region_id = self.get_region_id();
         let mut ctx = InvokeContext::new(self);
 
-        let mut write_task = AsyncWriteTask::new(region_id, self.peer_id, ready.number());
+        let mut write_task = WriteTask::new(region_id, self.peer_id, ready.number());
 
         let mut res = HandleReadyResult::SendIOTask;
         if !ready.snapshot().is_empty() {
@@ -1615,7 +1615,7 @@ where
         "meta_key" => 1,
         "apply_key" => 1,
         "raft_key" => 1,
-        "takes" => ?t.elapsed(),
+        "takes" => ?t.saturating_elapsed(),
     );
     Ok(())
 }
@@ -1786,7 +1786,7 @@ impl CachedEntries {
 #[cfg(test)]
 mod tests {
     use crate::coprocessor::CoprocessorHost;
-    use crate::store::async_io::write::AsyncWriteBatch;
+    use crate::store::async_io::write::write_to_db_for_test;
     use crate::store::fsm::apply::compact_raft_log;
     use crate::store::worker::RegionRunner;
     use crate::store::worker::RegionTask;
@@ -1843,30 +1843,14 @@ mod tests {
         PeerStorage::new(engines, &region, sched, 0, "".to_owned()).unwrap()
     }
 
-    fn write_to_db(
-        async_wb: &mut AsyncWriteBatch<KvTestEngine, RaftTestEngine>,
-        task: AsyncWriteTask<KvTestEngine, RaftTestEngine>,
-    ) {
-        async_wb.add_write_task(task);
-        async_wb.before_write_to_db(Instant::now());
-        async_wb.kv_wb.write().unwrap();
-        async_wb.raft_wb.write().unwrap();
-        async_wb.clear();
-    }
-
     fn new_storage_from_ents(
         sched: Scheduler<RegionTask<KvTestSnapshot>>,
         path: &TempDir,
         ents: &[Entry],
     ) -> PeerStorage<KvTestEngine, RaftTestEngine> {
         let mut store = new_storage(sched, path);
-        let mut async_wb = AsyncWriteBatch::new(
-            store.engines.kv.write_batch(),
-            store.engines.raft.log_batch(64),
-            false,
-        );
         let mut ctx = InvokeContext::new(&store);
-        let mut write_task = AsyncWriteTask::new(store.get_region_id(), store.peer_id);
+        let mut write_task = WriteTask::new(store.get_region_id(), store.peer_id, 0);
         store.append(&mut ctx, ents[1..].to_vec(), &mut write_task);
         ctx.apply_state
             .mut_truncated_state()
@@ -1881,7 +1865,7 @@ mod tests {
         }
         ctx.save_apply_state_to(write_task.kv_wb.as_mut().unwrap())
             .unwrap();
-        write_to_db(&mut async_wb, write_task);
+        write_to_db_for_test(&store.engines, write_task);
         store.raft_state = ctx.raft_state;
         store.apply_state = ctx.apply_state;
         store
@@ -1891,20 +1875,15 @@ mod tests {
         if ents.is_empty() {
             return;
         }
-        let mut async_wb = AsyncWriteBatch::new(
-            store.engines.kv.write_batch(),
-            store.engines.raft.log_batch(64),
-            false,
-        );
         let mut ctx = InvokeContext::new(store);
-        let mut write_task = AsyncWriteTask::new(store.get_region_id(), store.peer_id);
+        let mut write_task = WriteTask::new(store.get_region_id(), store.peer_id, 0);
         store.append(&mut ctx, ents.to_vec(), &mut write_task);
         if write_task.raft_wb.is_none() {
             write_task.raft_wb = Some(store.engines.raft.log_batch(64));
         }
         ctx.save_raft_state_to(write_task.raft_wb.as_mut().unwrap())
             .unwrap();
-        write_to_db(&mut async_wb, write_task);
+        write_to_db_for_test(&store.engines, write_task);
         store.raft_state = ctx.raft_state;
     }
 
@@ -2207,13 +2186,8 @@ mod tests {
         // Drop the task.
         let _ = s.gen_snap_task.borrow_mut().take().unwrap();
 
-        let mut async_wb = AsyncWriteBatch::new(
-            s.engines.kv.write_batch(),
-            s.engines.raft.log_batch(64),
-            false,
-        );
         let mut ctx = InvokeContext::new(&s);
-        let mut write_task = AsyncWriteTask::new(s.get_region_id(), s.peer_id);
+        let mut write_task = WriteTask::new(s.get_region_id(), s.peer_id, 0);
         s.append(
             &mut ctx,
             [new_entry(6, 5), new_entry(7, 5)].to_vec(),
@@ -2235,7 +2209,7 @@ mod tests {
         }
         ctx.save_apply_state_to(write_task.kv_wb.as_mut().unwrap())
             .unwrap();
-        write_to_db(&mut async_wb, write_task);
+        write_to_db_for_test(&s.engines, write_task);
         s.apply_state = ctx.apply_state;
         s.raft_state = ctx.raft_state;
         ctx = InvokeContext::new(&s);
@@ -2542,7 +2516,7 @@ mod tests {
         assert_eq!(s2.first_index(), s2.applied_index() + 1);
         let mut ctx = InvokeContext::new(&s2);
         assert_ne!(ctx.last_term, snap1.get_metadata().get_term());
-        let mut write_task = AsyncWriteTask::new(s2.get_region_id(), s2.peer_id);
+        let mut write_task = WriteTask::new(s2.get_region_id(), s2.peer_id, 0);
         let res = s2
             .apply_snapshot(&mut ctx, &snap1, &mut write_task, vec![], vec![])
             .unwrap();
@@ -2570,7 +2544,7 @@ mod tests {
         validate_cache(&s3, &ents[1..]);
         let mut ctx = InvokeContext::new(&s3);
         assert_ne!(ctx.last_term, snap1.get_metadata().get_term());
-        let mut write_task = AsyncWriteTask::new(s3.get_region_id(), s3.peer_id);
+        let mut write_task = WriteTask::new(s3.get_region_id(), s3.peer_id, 0);
         let res = s3
             .apply_snapshot(&mut ctx, &snap1, &mut write_task, vec![], vec![])
             .unwrap();

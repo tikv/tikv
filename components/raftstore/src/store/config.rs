@@ -165,6 +165,9 @@ pub struct Config {
     #[online_config(skip)]
     pub store_io_pool_size: usize,
 
+    #[online_config(skip)]
+    pub store_io_notify_capacity: usize,
+
     pub io_reschedule_concurrent_max_count: usize,
     pub io_reschedule_hotpot_duration: ReadableDuration,
 
@@ -181,6 +184,19 @@ pub struct Config {
     #[serde(with = "engine_config::perf_level_serde")]
     #[online_config(skip)]
     pub perf_level: PerfLevel,
+
+    #[doc(hidden)]
+    #[online_config(skip)]
+    /// When TiKV memory usage reaches `memory_usage_high_water` it will try to limit memory
+    /// increasing. For raftstore layer entries will be evicted from entry cache, if they
+    /// utilize memory more than `evict_cache_on_memory_ratio` * total.
+    ///
+    /// Set it to 0 can disable cache evict.
+    // By default it's 0.2. So for different system memory capacity, cache evict happens:
+    // * system=8G,  memory_usage_limit=6G,  evict=1.2G
+    // * system=16G, memory_usage_limit=12G, evict=2.4G
+    // * system=32G, memory_usage_limit=24G, evict=4.8G
+    pub evict_cache_on_memory_ratio: f64,
 
     #[online_config(hidden)]
     pub cmd_batch: bool,
@@ -271,13 +287,15 @@ impl Default for Config {
             apply_batch_system: BatchSystemConfig::default(),
             store_batch_system: BatchSystemConfig::default(),
             store_io_pool_size: 2,
-            io_reschedule_concurrent_max_count: 5,
-            io_reschedule_hotpot_duration: ReadableDuration::secs(1),
+            store_io_notify_capacity: 40960,
+            io_reschedule_concurrent_max_count: 4,
+            io_reschedule_hotpot_duration: ReadableDuration::secs(5),
             future_poll_size: 1,
             hibernate_regions: true,
             dev_assert: false,
             apply_yield_duration: ReadableDuration::millis(500),
-            perf_level: PerfLevel::Disable,
+            perf_level: PerfLevel::EnableTime,
+            evict_cache_on_memory_ratio: 0.2,
             cmd_batch: true,
             trigger_ready_size: ReadableSize::mb(1),
             raft_write_size_limit: ReadableSize::kb(16),
@@ -467,6 +485,12 @@ impl Config {
                 self.max_peer_down_duration,
                 self.peer_stale_state_check_interval * 2,
             );
+        }
+
+        if self.evict_cache_on_memory_ratio < 0.0 {
+            return Err(box_err!(
+                "evict_cache_on_memory_ratio must be greater than 0"
+            ));
         }
 
         Ok(())

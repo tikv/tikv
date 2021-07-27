@@ -9,8 +9,8 @@ use crate::storage::mvcc::{
     Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader,
 };
 use crate::storage::txn::commands::{
-    Command, CommandExt, ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
-    WriteResultLockInfo,
+    Command, CommandExt, ReaderWithStats, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
+    WriteResult, WriteResultLockInfo,
 };
 use crate::storage::txn::{acquire_pessimistic_lock, Error, ErrorInner, Result};
 use crate::storage::{
@@ -50,7 +50,7 @@ impl CommandExt for AcquirePessimisticLock {
     ctx!();
     tag!(acquire_pessimistic_lock);
     ts!(start_ts);
-    command_method!(can_be_pipelined, bool, true);
+    property!(can_be_pipelined);
 
     fn write_bytes(&self) -> usize {
         self.keys
@@ -72,10 +72,17 @@ fn extract_lock_info_from_result<T>(res: &StorageResult<T>) -> &LockInfo {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock {
-    fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+    fn process_write(
+        mut self,
+        snapshot: S,
+        mut context: WriteContext<'_, L>,
+    ) -> Result<WriteResult> {
         let (start_ts, ctx, keys) = (self.start_ts, self.ctx, self.keys);
         let mut txn = MvccTxn::new(start_ts, context.concurrency_manager);
-        let mut reader = SnapshotReader::new(start_ts, snapshot, !ctx.get_not_fill_cache());
+        let mut reader = ReaderWithStats::new(
+            SnapshotReader::new(start_ts, snapshot, !ctx.get_not_fill_cache()),
+            &mut context.statistics,
+        );
 
         let rows = keys.len();
         let mut res = if self.return_values {
@@ -123,7 +130,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
             }
         }
 
-        context.statistics.add(&reader.take_statistics());
         // no conflict
         let (pr, to_be_write, rows, ctx, lock_info) = if res.is_ok() {
             let pr = ProcessResult::PessimisticLockRes { res };
