@@ -2064,10 +2064,10 @@ where
 
     fn send_write_msg(&self, sender: &Sender<WriteMsg<EK, ER>>, msg: WriteMsg<EK, ER>) {
         match sender.try_send(msg) {
-            Ok(()) => return,
+            Ok(()) => (),
             Err(TrySendError::Full(msg)) => {
                 // TODO: add metrics
-                if let Err(_) = sender.send(msg) {
+                if sender.send(msg).is_err() {
                     // Write threads are destroyed after store threads during shutdown.
                     panic!("{} failed to send write msg, err: disconnected", self.tag);
                 }
