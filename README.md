@@ -58,10 +58,6 @@ For instructions on deployment, configuration, and maintenance of TiKV,see TiKV 
 
 You can view the list of [TiKV Adopters](https://tikv.org/adopters/).
 
-## TiKV roadmap
-
-You can see the [TiKV Roadmap](docs/ROADMAP.md).
-
 ## TiKV software stack
 
 ![The TiKV software stack](images/tikv_stack.png)
