@@ -12,6 +12,7 @@ use crate::server::service::kv::{
 };
 use crate::storage::{kv::Engine, lock_manager::LockManager, PointGetCommand, Storage};
 use kvproto::kvrpcpb::*;
+use prometheus::HistogramTimer;
 use tikv_util::collections::HashMap;
 use tikv_util::future::poll_future_notify;
 use tikv_util::metrics::HistogramReader;
@@ -71,7 +72,7 @@ trait Batcher<E: Engine, L: LockManager> {
     /// Returns number of fused commands been submitted.
     fn submit(
         &mut self,
-        tx: &Sender<(u64, batch_commands_response::Response)>,
+        tx: &Sender<(u64, batch_commands_response::Response, Arc<HistogramTimer>)>,
         storage: &Storage<E, L>,
     ) -> usize;
 
@@ -286,7 +287,7 @@ impl<E: Engine, L: LockManager> Batcher<E, L> for ReadBatcher {
 
     fn submit(
         &mut self,
-        tx: &Sender<(u64, batch_commands_response::Response)>,
+        tx: &Sender<(u64, batch_commands_response::Response, Arc<HistogramTimer>)>,
         storage: &Storage<E, L>,
     ) -> usize {
         let mut output = 0;
@@ -318,13 +319,13 @@ type ReqBatcherInner<E, L> = (BatchLimiter, Box<dyn Batcher<E, L> + Send>);
 // and controls the submit timing of those batchers based on respective `BatchLimiter`.
 pub struct ReqBatcher<E: Engine, L: LockManager> {
     inners: BTreeMap<BatchableRequestKind, ReqBatcherInner<E, L>>,
-    tx: Sender<(u64, batch_commands_response::Response)>,
+    tx: Sender<(u64, batch_commands_response::Response, Arc<HistogramTimer>)>,
 }
 
 impl<E: Engine, L: LockManager> ReqBatcher<E, L> {
     /// Constructs a new `ReqBatcher` which provides batching of one request stream with specific response channel.
     pub fn new(
-        tx: Sender<(u64, batch_commands_response::Response)>,
+        tx: Sender<(u64, batch_commands_response::Response, Arc<HistogramTimer>)>,
         timeout: Option<Duration>,
         readpool_thread_load: Arc<ThreadLoad>,
     ) -> Self {
