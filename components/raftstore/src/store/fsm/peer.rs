@@ -993,7 +993,7 @@ where
         }
         self.ctx
             .raft_metrics
-            .persisted_msg
+            .persisted_msg_wait
             .observe(duration_to_sec(send_time.saturating_elapsed()));
         if let Some(persist_snap_res) = self.fsm.peer.on_persist_ready(self.ctx, ready_number) {
             self.on_ready_apply_snapshot(persist_snap_res);

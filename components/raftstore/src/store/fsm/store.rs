@@ -615,7 +615,6 @@ pub struct RaftPoller<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: 'stat
     peer_msg_buf: Vec<PeerMsg<EK>>,
     previous_metrics: RaftMetrics,
     timer: TiInstant,
-    loop_timer: TiInstant,
     poll_ctx: PollContext<EK, ER, T>,
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
@@ -692,10 +691,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         self.poll_ctx.sync_log = false;
         self.poll_ctx.has_ready = false;
         self.poll_ctx.is_disk_full = disk::is_disk_full();
-        self.timer = TiInstant::now_coarse();
-        STORE_LOOP_DURATION_HISTOGRAM
-            .observe(duration_to_sec(self.loop_timer.saturating_elapsed()) as f64);
-        self.loop_timer = TiInstant::now_coarse();
+        self.timer = TiInstant::now();
         // update config
         if let Some(incoming) = self.cfg_tracker.any_new() {
             match Ord::cmp(
@@ -801,8 +797,6 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             .raft_metrics
             .process_ready
             .observe(duration_to_sec(self.timer.saturating_elapsed()) as f64);
-        STORE_LOOP_WORK_DURATION_HISTOGRAM
-            .observe(duration_to_sec(self.loop_timer.saturating_elapsed()) as f64);
         self.poll_ctx.raft_metrics.flush();
         self.poll_ctx.store_stat.flush();
 
@@ -1067,8 +1061,7 @@ where
             store_msg_buf: Vec::with_capacity(ctx.cfg.messages_per_tick),
             peer_msg_buf: Vec::with_capacity(ctx.cfg.messages_per_tick),
             previous_metrics: ctx.raft_metrics.clone(),
-            timer: TiInstant::now_coarse(),
-            loop_timer: TiInstant::now_coarse(),
+            timer: TiInstant::now(),
             messages_per_tick: ctx.cfg.messages_per_tick,
             poll_ctx: ctx,
             cfg_tracker: self.cfg.clone().tracker(tag),

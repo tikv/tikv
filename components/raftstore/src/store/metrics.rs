@@ -211,26 +211,13 @@ lazy_static! {
     pub static ref STORE_TIME_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_duration_secs",
-            "TODO",
+            "Bucketed histogram of proposals' store time duration.",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
     pub static ref APPLY_TIME_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_apply_duration_secs",
-            "TODO",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
-        ).unwrap();
-
-    pub static ref STORE_LOOP_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_store_loop_duration_seconds",
-            "TODO",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
-        ).unwrap();
-    pub static ref STORE_LOOP_WORK_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_store_loop_work_duration_seconds",
-            "TODO",
+            "Bucketed histogram of proposals' apply time duration.",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
 
@@ -240,7 +227,6 @@ lazy_static! {
             "Bucketed histogram of store write task wait time duration.",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
-
     pub static ref STORE_WRITE_TASK_GEN_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_write_task_gen_duration_secs",
@@ -289,77 +275,72 @@ lazy_static! {
             "Bucketed histogram of sending msg duration after writing db.",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
-    pub static ref STORE_PERSISTED_MSG_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_store_persist_msg_duration_seconds",
-            "TODO",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
-        ).unwrap();
     pub static ref STORE_WRITE_LOOP_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_write_loop_duration_seconds",
             "Bucketed histogram of store write loop duration.",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
+    pub static ref STORE_WRITE_SYNC_RAFT_DB_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_sync_raft_db_duration_seconds",
+            "Bucketed histogram of sync raft db duration.",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    pub static ref STORE_PERSISTED_MSG_WAIT_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_persist_msg_wait_duration_seconds",
+            "Bucketed histogram of persisted msg wait duration.",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
 
+    /// Waterfall Metrics
     pub static ref STORE_BATCH_WAIT_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_batch_wait_duration_seconds",
-            "TODO",
+            "Bucketed histogram of proposals' wait batch duration.",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
     pub static ref STORE_TO_WRITE_QUEUE_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_to_write_queue_duration_seconds",
-            "TODO",
+            "Bucketed histogram of proposals' to write queue duration.",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
-    pub static ref STORE_TO_WRITE_DURATION_HISTOGRAM: Histogram =
+    pub static ref STORE_BEFORE_WRITE_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
-            "tikv_raftstore_store_to_write_duration_seconds",
-            "TODO",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
-        ).unwrap();
-    pub static ref STORE_FILL_WB_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_store_fill_wb_duration_seconds",
-            "TODO",
+            "tikv_raftstore_store_before_write_duration_seconds",
+            "Bucketed histogram of proposals' before write duration.",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
     pub static ref STORE_WRITE_KVDB_END_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_write_kvdb_end_duration_seconds",
-            "TODO",
+            "Bucketed histogram of proposals' write kv db end duration.",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
     pub static ref STORE_WRITE_END_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_write_end_duration_seconds",
-            "TODO",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
-        ).unwrap();
-    pub static ref STORE_WRITE_SYNC_RAFT_DB_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_store_sync_raft_db_duration_seconds",
-            "TODO",
+            "Bucketed histogram of proposals' write db end duration.",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
     pub static ref STORE_KNOW_PERSIST_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_know_persist_duration_seconds",
-            "TODO",
+            "Bucketed histogram of proposals' persist duration.",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
     pub static ref STORE_KNOW_COMMIT_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_know_commit_duration_seconds",
-            "TODO",
+            "Bucketed histogram of proposals' commit and persist duration.",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
     pub static ref STORE_KNOW_COMMIT_NOT_PERSIST_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_know_commit_not_persist_duration_seconds",
-            "TODO",
+            "Bucketed histogram of proposals' commit but not persist duration",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
 
@@ -687,13 +668,13 @@ lazy_static! {
         &["state"],
     ).unwrap();
 
-    pub static ref STORE_IO_RESCHEDULE_REGION_TOTAL_GAUGE: IntGauge = register_int_gauge!(
+    pub static ref STORE_IO_RESCHEDULE_PEER_TOTAL_GAUGE: IntGauge = register_int_gauge!(
         "tikv_raftstore_io_reschedule_region_total",
-        "TODO"
+        "Total number of io rescheduling peers"
     ).unwrap();
 
-    pub static ref STORE_IO_RESCHEDULE_PENDING_TASK_TOTAL_GAUGE: IntGauge = register_int_gauge!(
-        "tikv_raftstore_io_reschedule_pending_task_total",
-        "TODO"
+    pub static ref STORE_IO_RESCHEDULE_PENDING_TASKS_TOTAL_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_raftstore_io_reschedule_pending_tasks_total",
+        "Total number of pending write tasks from io rescheduling peers"
     ).unwrap();
 }

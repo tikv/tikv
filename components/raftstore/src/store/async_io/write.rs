@@ -288,7 +288,7 @@ where
             for task in &self.tasks {
                 for ts in &task.proposal_times {
                     metrics
-                        .to_write
+                        .before_write
                         .observe(duration_to_sec(now.saturating_duration_since(*ts)));
                 }
             }

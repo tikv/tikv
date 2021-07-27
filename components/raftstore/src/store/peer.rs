@@ -1972,7 +1972,7 @@ where
                 match self.should_send_write_task(ctx) {
                     None => {
                         self.pending_write_tasks.as_mut().unwrap().0.push(task);
-                        STORE_IO_RESCHEDULE_PENDING_TASK_TOTAL_GAUGE.inc();
+                        STORE_IO_RESCHEDULE_PENDING_TASKS_TOTAL_GAUGE.inc();
                     }
                     Some(id) => {
                         self.send_write_msg(&ctx.write_senders[id], WriteMsg::WriteTask(task));
@@ -2006,6 +2006,10 @@ where
         }
         // There are some unpersisted readies so `async_writer_id` must not be None
         let (id, last_time, retry_cnt) = self.current_writer_id.as_mut().unwrap();
+        if ctx.cfg.io_reschedule_concurrent_max_count == 0 {
+            // No rescheduling
+            return Some(*id);
+        }
         // Whether the duration doesn't exceed the `io_reschedule_hotpot_duration` or not
         if now - *last_time
             < ctx.cfg.io_reschedule_hotpot_duration.0
@@ -2046,7 +2050,7 @@ where
             }
         };
         if success {
-            STORE_IO_RESCHEDULE_REGION_TOTAL_GAUGE.inc();
+            STORE_IO_RESCHEDULE_PEER_TOTAL_GAUGE.inc();
             // Rescheduling succeeds. The task should be pushed into `self.pending_write_tasks`.
             self.pending_write_tasks = Some((vec![], self.unpersisted_readies.back().unwrap().0));
             None
@@ -2337,14 +2341,14 @@ where
                 ctx.io_reschedule_concurrent_count
                     .fetch_sub(1, Ordering::SeqCst);
 
-                STORE_IO_RESCHEDULE_REGION_TOTAL_GAUGE.dec();
+                STORE_IO_RESCHEDULE_PEER_TOTAL_GAUGE.dec();
 
                 let new_id = rand::random::<usize>() % ctx.cfg.store_io_pool_size;
                 self.current_writer_id = Some((new_id, TiInstant::now_coarse(), 0));
 
                 let (tasks, _) = self.pending_write_tasks.take().unwrap();
 
-                STORE_IO_RESCHEDULE_PENDING_TASK_TOTAL_GAUGE.sub(tasks.len() as i64);
+                STORE_IO_RESCHEDULE_PENDING_TASKS_TOTAL_GAUGE.sub(tasks.len() as i64);
 
                 for task in tasks {
                     self.send_write_msg(&ctx.write_senders[new_id], WriteMsg::WriteTask(task));
