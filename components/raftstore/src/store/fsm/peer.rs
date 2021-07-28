@@ -480,7 +480,7 @@ where
                 for (_, _, send_time) in &cbs {
                     metric
                         .batch_wait
-                        .observe(duration_to_sec(send_time.saturating_duration_since(now)));
+                        .observe(duration_to_sec(now.saturating_duration_since(*send_time)));
                 }
             }
 
