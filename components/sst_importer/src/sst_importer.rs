@@ -351,7 +351,7 @@ impl SSTImporter {
 
         while iter.valid()? {
             let old_key = keys::origin_key(iter.key());
-            if is_after_end_bound(&old_key, &range_end) {
+            if is_after_end_bound(old_key, &range_end) {
                 break;
             }
             if !old_key.starts_with(old_prefix) {
@@ -429,7 +429,7 @@ impl SSTImporter {
         default_meta.set_cf_name(CF_DEFAULT.to_owned());
         let default_path = self.dir.join(&default_meta)?;
         let default = E::SstWriterBuilder::new()
-            .set_db(&db)
+            .set_db(db)
             .set_cf(CF_DEFAULT)
             .set_compression_type(self.compression_types.get(CF_DEFAULT).copied())
             .build(default_path.temp.to_str().unwrap())
@@ -439,7 +439,7 @@ impl SSTImporter {
         write_meta.set_cf_name(CF_WRITE.to_owned());
         let write_path = self.dir.join(&write_meta)?;
         let write = E::SstWriterBuilder::new()
-            .set_db(&db)
+            .set_db(db)
             .set_cf(CF_WRITE)
             .set_compression_type(self.compression_types.get(CF_WRITE).copied())
             .build(write_path.temp.to_str().unwrap())
@@ -464,7 +464,7 @@ impl SSTImporter {
         meta.set_cf_name(CF_DEFAULT.to_owned());
         let default_path = self.dir.join(&meta)?;
         let default = E::SstWriterBuilder::new()
-            .set_db(&db)
+            .set_db(db)
             .set_cf(CF_DEFAULT)
             .build(default_path.temp.to_str().unwrap())
             .unwrap();

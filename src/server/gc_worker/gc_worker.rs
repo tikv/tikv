@@ -142,8 +142,8 @@ where
                 ..
             } => f
                 .debug_struct("Gc")
-                .field("start_key", &log_wrappers::Value::key(&start_key))
-                .field("end_key", &log_wrappers::Value::key(&end_key))
+                .field("start_key", &log_wrappers::Value::key(start_key))
+                .field("end_key", &log_wrappers::Value::key(end_key))
                 .field("safe_point", safe_point)
                 .finish(),
             GcTask::GcKeys { .. } => f.debug_struct("GcKeys").finish(),
@@ -220,7 +220,7 @@ where
     fn need_gc(&self, start_key: &[u8], end_key: &[u8], safe_point: TimeStamp) -> bool {
         let props = match self
             .engine
-            .get_mvcc_properties_cf(CF_WRITE, safe_point, &start_key, &end_key)
+            .get_mvcc_properties_cf(CF_WRITE, safe_point, start_key, end_key)
         {
             Some(c) => c,
             None => return true,
@@ -353,7 +353,7 @@ where
         let mut gc_info = GcInfo::default();
         let mut next_gc_key = keys.next();
         while let Some(ref key) = next_gc_key {
-            if let Err(e) = self.gc_key(safe_point, &key, &mut gc_info, &mut txn, &mut reader) {
+            if let Err(e) = self.gc_key(safe_point, key, &mut gc_info, &mut txn, &mut reader) {
                 error!(?e; "GC meets failure"; "key" => %key,);
                 // Switch to the next key if meets failure.
                 gc_info.is_completed = true;

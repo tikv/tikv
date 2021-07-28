@@ -821,7 +821,7 @@ mod tests {
                 black_box(&mut ctx),
                 black_box(schema),
                 black_box(&mut columns),
-                black_box(&logical_rows),
+                black_box(logical_rows),
                 black_box(1024),
             );
             assert!(result.is_ok());

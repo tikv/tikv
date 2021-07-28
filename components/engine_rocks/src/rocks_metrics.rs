@@ -1624,7 +1624,7 @@ mod tests {
         }
 
         let shared_block_cache = false;
-        flush_engine_properties(&engine.as_inner(), "kv", shared_block_cache);
+        flush_engine_properties(engine.as_inner(), "kv", shared_block_cache);
         let handle = engine.as_inner().cf_handle("default").unwrap();
         let info = engine
             .as_inner()

@@ -706,7 +706,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .read_range_check(Some(&start_key), end_key.as_ref(), |key, lock| {
                             Lock::check_ts_conflict(
                                 Cow::Borrowed(lock),
-                                &key,
+                                key,
                                 start_ts,
                                 &bypass_locks,
                             )
@@ -1186,12 +1186,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let store = RawStore::new(snapshot, enable_ttl);
                 {
                     let begin_instant = Instant::now_coarse();
-                    let keys: Vec<Key> = keys.into_iter().map(Key::from_encoded).collect();
+
                     let cf = Self::rawkv_cf(&cf)?;
                     // no scan_count for this kind of op.
                     let mut stats = Statistics::default();
                     let result: Vec<Result<KvPair>> = keys
                         .into_iter()
+                        .map(Key::from_encoded)
                         .map(|k| {
                             let v = store.raw_get_key_value(cf, &k, &mut stats);
                             (k, v)
@@ -1541,7 +1542,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         let pairs: Vec<Result<KvPair>> = if reverse_scan {
                             store
                                 .reverse_raw_scan(
-                                    &cf,
+                                    cf,
                                     &start_key,
                                     end_key.as_ref(),
                                     each_limit,
@@ -1552,7 +1553,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         } else {
                             store
                                 .forward_raw_scan(
-                                    &cf,
+                                    cf,
                                     &start_key,
                                     end_key.as_ref(),
                                     each_limit,
@@ -1802,8 +1803,8 @@ fn prepare_snap_ctx<'a>(
         let begin_instant = Instant::now();
         for key in keys.clone() {
             concurrency_manager
-                .read_key_check(&key, |lock| {
-                    Lock::check_ts_conflict(Cow::Borrowed(lock), &key, start_ts, bypass_locks)
+                .read_key_check(key, |lock| {
+                    Lock::check_ts_conflict(Cow::Borrowed(lock), key, start_ts, bypass_locks)
                 })
                 .map_err(|e| {
                     CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC
@@ -6252,7 +6253,7 @@ mod tests {
             .unwrap();
         let res = consumer.take_data();
         assert!(res[0].is_ok());
-        let key_error = extract_key_error(&res[1].as_ref().unwrap_err());
+        let key_error = extract_key_error(res[1].as_ref().unwrap_err());
         assert_eq!(key_error.get_locked().get_key(), b"key");
     }
 

@@ -76,8 +76,8 @@ impl TestSuite {
             let sim = cluster.sim.rl();
             let backup_endpoint = backup::Endpoint::new(
                 *id,
-                sim.storages[&id].clone(),
-                sim.region_info_accessors[&id].clone(),
+                sim.storages[id].clone(),
+                sim.region_info_accessors[id].clone(),
                 engines.kv.as_inner().clone(),
                 BackupConfig {
                     num_threads: 4,

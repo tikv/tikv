@@ -99,8 +99,8 @@ impl<S> Display for Task<S> {
                 f,
                 "Destroy {} [{}, {})",
                 region_id,
-                log_wrappers::Value::key(&start_key),
-                log_wrappers::Value::key(&end_key)
+                log_wrappers::Value::key(start_key),
+                log_wrappers::Value::key(end_key)
             ),
         }
     }
@@ -186,12 +186,12 @@ impl PendingDeleteRanges {
     ///
     /// Before an insert is called, it must call drain_overlap_ranges to clean the overlapping range.
     fn insert(&mut self, region_id: u64, start_key: &[u8], end_key: &[u8], stale_sequence: u64) {
-        if !self.find_overlap_ranges(&start_key, &end_key).is_empty() {
+        if !self.find_overlap_ranges(start_key, end_key).is_empty() {
             panic!(
                 "[region {}] register deleting data in [{}, {}) failed due to overlap",
                 region_id,
-                log_wrappers::Value::key(&start_key),
-                log_wrappers::Value::key(&end_key),
+                log_wrappers::Value::key(start_key),
+                log_wrappers::Value::key(end_key),
             );
         }
         let info = StalePeerInfo {
@@ -436,13 +436,13 @@ where
     /// Cleans up the data within the range.
     fn cleanup_range(&self, ranges: &[Range]) -> Result<()> {
         self.engine
-            .delete_all_in_range(DeleteStrategy::DeleteFiles, &ranges)
+            .delete_all_in_range(DeleteStrategy::DeleteFiles, ranges)
             .unwrap_or_else(|e| {
                 error!("failed to delete files in range"; "err" => %e);
             });
         self.delete_all_in_range(ranges)?;
         self.engine
-            .delete_all_in_range(DeleteStrategy::DeleteBlobs, &ranges)
+            .delete_all_in_range(DeleteStrategy::DeleteBlobs, ranges)
             .unwrap_or_else(|e| {
                 error!("failed to delete files in range"; "err" => %e);
             });

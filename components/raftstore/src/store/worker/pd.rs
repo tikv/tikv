@@ -255,7 +255,7 @@ where
                 f,
                 "ask split region {} with key {}",
                 region.get_id(),
-                log_wrappers::Value::key(&split_key),
+                log_wrappers::Value::key(split_key),
             ),
             Task::AutoSplit { ref split_infos } => {
                 write!(f, "auto split split regions, num is {}", split_infos.len(),)
