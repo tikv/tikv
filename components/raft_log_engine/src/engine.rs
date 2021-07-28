@@ -165,25 +165,17 @@ impl RaftEngine for RaftLogEngine {
     }
 
     fn has_builtin_entry_cache(&self) -> bool {
-        true
+        false
     }
 
-    fn gc_entry_cache(&self, raft_group_id: u64, to: u64) {
-        self.0.compact_cache_to(raft_group_id, to)
-    }
+    fn gc_entry_cache(&self, _: u64, _: u64) {}
+
     /// Flush current cache stats.
     fn flush_stats(&self) -> Option<CacheStats> {
-        let stat = self.0.flush_cache_stats();
-        Some(engine_traits::CacheStats {
-            hit: stat.hit,
-            miss: stat.miss,
-            cache_size: stat.cache_size,
-        })
+        None
     }
 
-    fn stop(&self) {
-        self.0.stop();
-    }
+    fn stop(&self) {}
 
     fn dump_stats(&self) -> Result<String> {
         // Raft engine won't dump anything.
