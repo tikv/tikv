@@ -1,6 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::cpu::collector::{register_collector, Collector, CollectorHandle};
+use crate::row::collector::{register_row_collector, RowCollector, RowCollectorHandle};
+use crate::row::recorder::RowStats;
+
 use crate::cpu::recorder::CpuRecords;
 use crate::Config;
 
@@ -32,9 +35,26 @@ impl Collector for CpuRecordsCollector {
     }
 }
 
+pub struct RowRecordsCollector {
+    scheduler: Scheduler<Task>,
+}
+
+impl RowRecordsCollector {
+    pub fn new(scheduler: Scheduler<Task>) -> Self {
+        Self { scheduler }
+    }
+}
+
+impl RowCollector for RowRecordsCollector {
+    fn collect_row(&self, records: Arc<HashMap<Vec<u8>, RowStats>>) {
+        self.scheduler.schedule(Task::RowRecords(records)).ok();
+    }
+}
+
 pub enum Task {
     ConfigChange(Config),
     CpuRecords(Arc<CpuRecords>),
+    RowRecords(Arc<HashMap<Vec<u8>, RowStats>>),
 }
 
 impl Display for Task {
@@ -45,6 +65,9 @@ impl Display for Task {
             }
             Task::CpuRecords(_) => {
                 write!(f, "CpuRecords")?;
+            }
+            Task::RowRecords(_) => {
+                write!(f, "RowRecords")?;
             }
         }
 
@@ -62,6 +85,7 @@ pub struct ResourceMeteringReporter {
     client: Option<ResourceUsageAgentClient>,
     reporting: Arc<AtomicBool>,
     cpu_records_collector: Option<CollectorHandle>,
+    row_records_collector: Option<RowCollectorHandle>,
 
     // resource_tag -> ([timestamp_secs], [cpu_time_ms], total_cpu_time_ms)
     records: HashMap<Vec<u8>, (Vec<u64>, Vec<u32>, u32)>,
@@ -79,6 +103,7 @@ impl ResourceMeteringReporter {
             client: None,
             reporting: Arc::new(AtomicBool::new(false)),
             cpu_records_collector: None,
+            row_records_collector: None,
             records: HashMap::default(),
             others: HashMap::default(),
             find_top_k: Vec::default(),
@@ -96,6 +121,11 @@ impl ResourceMeteringReporter {
         if self.cpu_records_collector.is_none() {
             self.cpu_records_collector = Some(register_collector(Box::new(
                 CpuRecordsCollector::new(self.scheduler.clone()),
+            )));
+        }
+        if self.row_records_collector.is_none() {
+            self.row_records_collector = Some(register_row_collector(Box::new(
+                RowRecordsCollector::new(self.scheduler.clone()),
             )));
         }
     }
@@ -167,6 +197,14 @@ impl Runnable for ResourceMeteringReporter {
                                     *others.entry(secs).or_insert(0) += cpu_time
                                 })
                         });
+                }
+            }
+            Task::RowRecords(records) => {
+                for (k, v) in records.iter() {
+                    info!(
+                        "collector receive, index: {}, row: {}, tag: {:?}",
+                        v.read_index_count, v.read_row_count, k
+                    );
                 }
             }
         }

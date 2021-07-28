@@ -18,6 +18,7 @@ use tikv_util::worker::Scheduler;
 
 pub mod cpu;
 pub mod reporter;
+pub mod row;
 
 #[derive(Debug, Default, Eq, PartialEq, Clone, Hash)]
 pub struct ResourceMeteringTag {

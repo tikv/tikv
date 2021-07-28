@@ -48,6 +48,7 @@ collections = { path = "../collections" }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 itertools = "0.10"
+resource_metering = { path = "../resource_metering" }
 
 [dev-dependencies]
 anyhow = "1.0"

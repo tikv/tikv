@@ -5,6 +5,7 @@ use tipb::ColumnInfo;
 use tipb::FieldType;
 
 use crate::interface::*;
+use resource_metering::row::recorder::inc_thread_scan_row;
 use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
 use tidb_query_common::storage::{IntervalRange, Range, Storage};
 use tidb_query_common::Result;
@@ -102,6 +103,7 @@ impl<S: Storage, I: ScanExecutorImpl> ScanExecutor<S, I> {
 
         for _ in 0..scan_rows {
             let some_row = self.scanner.next()?;
+            inc_thread_scan_row();
             if let Some((key, value)) = some_row {
                 // Retrieved one row from point range or non-point range.
 
