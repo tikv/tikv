@@ -28,8 +28,6 @@ use kvproto::metapb::{Peer, Region};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::{PeerState, SnapshotMeta};
 use kvproto::tikvpb::TikvClient;
-use nix::sys::wait::{wait, WaitStatus};
-use nix::unistd::{fork, ForkResult};
 use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use protobuf::Message;
 use raft::eraftpb::{ConfChange, ConfChangeV2, Entry, EntryType};
@@ -53,7 +51,7 @@ use std::{process, str, thread, u64};
 use tikv::config::{ConfigController, TiKvConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
 use tikv_util::config::canonicalize_sub_path;
-use tikv_util::{escape, unescape};
+use tikv_util::{escape, run_and_wait_child_process, unescape};
 use txn_types::Key;
 
 const METRICS_PROMETHEUS: &str = "prometheus";
@@ -2650,17 +2648,14 @@ fn print_bad_ssts(db: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &
             if start.starts_with(&[keys::DATA_PREFIX]) {
                 print_overlap_region(&pd_client, &start[1..], &end[1..]);
             } else if start.starts_with(&[keys::LOCAL_PREFIX]) {
-                println!("it isn't easy to handle local data");
+                println!("it isn't easy to handle local data, start key:{}", log_wrappers::Value(&start));
 
                 // consider the case that include both meta and user data
                 if end.starts_with(&[keys::DATA_PREFIX]) {
                     print_overlap_region(&pd_client, &[], &end[1..]);
                 }
             } else {
-                println!(
-                    "unexpected key {}, seems raw kv?",
-                    log_wrappers::Value(&start)
-                );
+                println!("unexpected key {}", log_wrappers::Value(&start));
             }
         } else {
             // it is expected when the sst is output of a compaction and the sst isn't added to manifest yet.
@@ -2672,27 +2667,11 @@ fn print_bad_ssts(db: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &
     }
     println!("--------------------------------------------------------");
     println!("corruption analysis has completed");
-}
-
-fn run_and_wait_child_process(child: impl Fn()) -> Result<i32, String> {
-    match unsafe { fork() } {
-        Ok(ForkResult::Parent { .. }) => match wait().unwrap() {
-            WaitStatus::Exited(_, status) => Ok(status),
-            v => {
-                return Err(format!("{:?}", v));
-            }
-        },
-        Ok(ForkResult::Child) => {
-            //  run it as a child process
-            // due to when encouter error, sst dump tool calls exit(1) directly
-            // , which avoid tikv-ctl from printing more information
-            child();
-            std::process::exit(0);
-        }
-        Err(e) => {
-            return Err(format!("Fork failed: {}", e));
-        }
-    }
+    println!("");
+    println!("Maybe you are trying to start tikv-server without panic caused by file reading.");
+    println!("Then here is the method:");
+    println!("1.Use the subcommand `remove_sst_file` provided by ldb to delete the sst");
+    println!("2.Turn the related region into a tombstone");
 }
 
 fn print_overlap_region(pd_client: &RpcClient, start: &[u8], end: &[u8]) {
