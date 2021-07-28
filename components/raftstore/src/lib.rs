@@ -6,7 +6,6 @@
 #![feature(div_duration)]
 #![feature(min_specialization)]
 #![feature(box_patterns)]
-#![feature(vecdeque_binary_search)]
 
 #[cfg(test)]
 extern crate test;
