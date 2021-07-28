@@ -458,42 +458,7 @@ impl<E: Engine> FlowChecker<E> {
         self.limiter.reset_statistics();
     }
 
-    // fn check_raft_pending_compaction_bytes(&mut self) -> bool {
-    //     let num = (self.engine.raft_engine().get_pending_compaction_bytes() as f64).log2();
-    //     self.raft_checker
-    //         .long_term_pending_bytes
-    //         .observe((num * RATIO_PRECISION) as u64);
-    //     SCHED_PENDING_COMPACTION_BYTES_GAUGE
-    //         .with_label_values(&["raft_db"])
-    //         .set(self.raft_checker.long_term_pending_bytes.get_avg() as i64);
-    //     let pending_compaction_bytes =
-    //         self.raft_checker.long_term_pending_bytes.get_avg() / RATIO_PRECISION;
-
-    //     let hard = (self.pending_compaction_bytes_hard_limit as f64).log2();
-    //     let soft = (self.pending_compaction_bytes_soft_limit as f64).log2();
-
-    //     if pending_compaction_bytes < soft {
-    //         false
-    //     } else {
-    //         let new_ratio = (pending_compaction_bytes - soft) / (hard - soft);
-    //         let old_ratio = self.discard_ratio.load(Ordering::Relaxed);
-    //         let ratio = (if old_ratio != 0 {
-    //             self.factor * (old_ratio as f64 / RATIO_PRECISION) + (1.0 - self.factor) * new_ratio
-    //         } else {
-    //             new_ratio
-    //         } * RATIO_PRECISION) as u64;
-
-    //         SCHED_DISCARD_RATIO_GAUGE.set(ratio as i64);
-    //         self.discard_ratio.store(ratio, Ordering::Relaxed);
-    //         true
-    //     }
-    // }
-
     fn adjust_pending_compaction_bytes(&mut self, cf: String) {
-        // raftdb has higher priority
-        // if self.check_raft_pending_compaction_bytes() {
-        //     return;
-        // }
         let hard = (self.pending_compaction_bytes_hard_limit as f64).log2();
         let soft = (self.pending_compaction_bytes_soft_limit as f64).log2();
 
