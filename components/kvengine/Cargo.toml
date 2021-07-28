@@ -1,0 +1,16 @@
+[package]
+name = "kvengine"
+version = "0.0.1"
+authors = ["The TiKV Authors"]
+license = "Apache-2.0"
+edition = "2018"
+publish = false
+
+[dependencies]
+bytes = "1.0"
+thiserror = "1.0"
+rand = "0.8"
+byteorder = "1.2"
+crossbeam = "0.8"
+farmhash = "1.1.5"
+crc32c = "0.6"
