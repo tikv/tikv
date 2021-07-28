@@ -11,6 +11,7 @@ use tipb::{ColumnInfo, FieldType, TableScan};
 
 use super::util::scan_executor::*;
 use crate::interface::*;
+use resource_metering::row::recorder::add_thread_scan_row;
 use tidb_query_common::storage::{IntervalRange, Storage};
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
@@ -111,7 +112,9 @@ impl<S: Storage> BatchExecutor for BatchTableScanExecutor<S> {
 
     #[inline]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        self.0.next_batch(scan_rows)
+        let result = self.0.next_batch(scan_rows);
+        add_thread_scan_row(result.physical_columns.rows_len() as u64);
+        result
     }
 
     #[inline]

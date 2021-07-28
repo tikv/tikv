@@ -13,6 +13,7 @@ use crate::interface::*;
 use codec::number::NumberCodec;
 use codec::prelude::NumberDecoder;
 use itertools::izip;
+use resource_metering::row::recorder::add_thread_scan_index;
 use tidb_query_common::storage::{IntervalRange, Storage};
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
@@ -141,7 +142,9 @@ impl<S: Storage> BatchExecutor for BatchIndexScanExecutor<S> {
 
     #[inline]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        self.0.next_batch(scan_rows)
+        let result = self.0.next_batch(scan_rows);
+        add_thread_scan_index(result.physical_columns.rows_len() as u64);
+        result
     }
 
     #[inline]

@@ -6,9 +6,15 @@ use std::ops::Deref;
 use std::sync::Arc;
 use tikv_util::time::Instant;
 
-pub fn inc_thread_scan_row() {
+pub fn add_thread_scan_row(count: u64) {
     CURRENT_REQ_ROW.with(|r| {
-        r.row_stats.borrow_mut().read_row_count += 1;
+        r.row_stats.borrow_mut().read_row_count += count;
+    })
+}
+
+pub fn add_thread_scan_index(count: u64) {
+    CURRENT_REQ_ROW.with(|r| {
+        r.row_stats.borrow_mut().read_index_count += count;
     })
 }
 
