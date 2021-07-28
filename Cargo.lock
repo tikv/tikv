@@ -2883,6 +2883,7 @@ dependencies = [
  "thiserror",
  "tikv_alloc",
  "tikv_util",
+ "tokio",
  "tokio-timer",
  "txn_types",
  "yatp",
