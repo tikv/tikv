@@ -28,6 +28,7 @@ use error_code::ErrorCodeExt;
 use fail::fail_point;
 use kvproto::raft_serverpb::{RaftLocalState, RaftMessage};
 use raft::eraftpb::Entry;
+use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::time::{duration_to_sec, Instant};
 use tikv_util::{box_err, debug, thd_name, warn};
 
@@ -146,30 +147,29 @@ where
                 self.ready_number
             ));
         }
-        if let Some(last_index) = self.entries.last().map(|e| e.get_index()) {
-            if let Some((from, _)) = self.cut_logs {
-                if from != last_index + 1 {
-                    // Entries are put and deleted in the same writebatch.
-                    return Err(box_err!(
-                        "invalid cut logs, last_index {}, cut_logs {:?}",
-                        last_index,
-                        self.cut_logs
-                    ));
-                }
-            }
-            if self
-                .raft_state
-                .as_ref()
-                .map_or(true, |r| r.get_last_index() != last_index)
-            {
+        let last_index = self.entries.last().map_or(0, |e| e.get_index());
+        if let Some((from, _)) = self.cut_logs {
+            if from != last_index + 1 {
+                // Entries are put and deleted in the same writebatch.
                 return Err(box_err!(
-                    "invalid raft state, last_index {}, raft_state {:?}",
+                    "invalid cut logs, last_index {}, cut_logs {:?}",
                     last_index,
-                    self.raft_state
+                    self.cut_logs
                 ));
             }
         }
-
+        if last_index != 0
+            && self
+                .raft_state
+                .as_ref()
+                .map_or(true, |r| r.get_last_index() != last_index)
+        {
+            return Err(box_err!(
+                "invalid raft state, last_index {}, raft_state {:?}",
+                last_index,
+                self.raft_state
+            ));
+        }
         Ok(())
     }
 }
@@ -311,7 +311,7 @@ where
         }
     }
 
-    fn after_write_to_raft_db(&mut self, metrics: &StoreWriteMetrics) {
+    fn after_write_to_db(&mut self, metrics: &StoreWriteMetrics) {
         if metrics.waterfall_metrics {
             let now = Instant::now();
             for task in &self.tasks {
@@ -348,6 +348,7 @@ where
     // Used for getting the latest persisted id from sync worker
     global_persisted_id: Arc<CachePadded<AtomicU64>>,
     sync_sender: Sender<SyncMsg>,
+    cfg_tracker: Tracker<Config>,
     raft_write_size_limit: usize,
     metrics: StoreWriteMetrics,
     message_metrics: RaftSendMessageMetrics,
@@ -371,7 +372,7 @@ where
         trans: T,
         global_persisted_id: Arc<CachePadded<AtomicU64>>,
         sync_sender: Sender<SyncMsg>,
-        config: &Config,
+        cfg: &Arc<VersionTrack<Config>>,
     ) -> Self {
         let batch = WriteTaskBatch::new(
             engines.kv.write_batch_with_cap(KV_WB_DEFAULT_SIZE),
@@ -379,7 +380,8 @@ where
         );
         let perf_context = engines
             .kv
-            .get_perf_context(config.perf_level, PerfContextKind::RaftstoreStore);
+            .get_perf_context(cfg.value().perf_level, PerfContextKind::RaftstoreStore);
+        let cfg_tracker = cfg.clone().tracker(tag.clone());
         Self {
             store_id,
             tag,
@@ -394,8 +396,9 @@ where
             last_persisted_id: 0,
             global_persisted_id,
             sync_sender,
-            raft_write_size_limit: config.raft_write_size_limit.0 as usize,
-            metrics: StoreWriteMetrics::new(config.store_waterfall_metrics),
+            cfg_tracker,
+            raft_write_size_limit: cfg.value().raft_write_size_limit.0 as usize,
+            metrics: StoreWriteMetrics::new(cfg.value().store_waterfall_metrics),
             message_metrics: Default::default(),
             perf_context,
         }
@@ -472,6 +475,12 @@ where
 
             STORE_WRITE_LOOP_DURATION_HISTOGRAM
                 .observe(duration_to_sec(handle_begin.saturating_elapsed()));
+
+            // update config
+            if let Some(incoming) = self.cfg_tracker.any_new() {
+                self.raft_write_size_limit = incoming.raft_write_size_limit.0 as usize;
+                self.metrics.waterfall_metrics = incoming.store_waterfall_metrics;
+            }
         }
     }
 
@@ -525,7 +534,7 @@ where
                 .observe(duration_to_sec(now.saturating_elapsed()) as f64);
         }
 
-        self.batch.after_write_to_raft_db(&self.metrics);
+        self.batch.after_write_to_db(&self.metrics);
 
         self.last_unpersisted_id += 1;
         self.pending_tasks.push_back((
@@ -745,13 +754,14 @@ where
         engines: &Engines<EK, ER>,
         notifier: &N,
         trans: &T,
-        config: &Config,
+        cfg: &Arc<VersionTrack<Config>>,
     ) -> Result<()> {
         let (sync_sender, sync_receiver) = unbounded();
         let mut global_persisted_ids = vec![];
-        for i in 0..config.store_io_pool_size {
+        let pool_size = cfg.value().store_io_pool_size;
+        for i in 0..pool_size {
             let tag = format!("store-writer-{}", i);
-            let (tx, rx) = bounded(config.store_io_notify_capacity);
+            let (tx, rx) = bounded(cfg.value().store_io_notify_capacity);
             let global_persisted_id = Arc::new(CachePadded::new(AtomicU64::new(0)));
             let mut worker = Worker::new(
                 store_id,
@@ -763,7 +773,7 @@ where
                 trans.clone(),
                 global_persisted_id.clone(),
                 sync_sender.clone(),
-                config,
+                cfg,
             );
             let t = thread::Builder::new().name(thd_name!(tag)).spawn(move || {
                 worker.run();

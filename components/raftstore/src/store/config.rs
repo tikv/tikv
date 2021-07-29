@@ -195,14 +195,11 @@ pub struct Config {
     // * system=32G, memory_usage_limit=24G, evict=4.8G
     pub evict_cache_on_memory_ratio: f64,
 
-    #[online_config(hidden)]
     pub cmd_batch: bool,
 
     // When the size of raft db writebatch exceeds this value, write will be triggered.
-    #[online_config(skip)]
     pub raft_write_size_limit: ReadableSize,
 
-    #[online_config(skip)]
     pub store_waterfall_metrics: bool,
 
     // Deprecated! These configuration has been moved to Coprocessor.

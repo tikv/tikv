@@ -207,7 +207,7 @@ impl TestWorker {
                 trans,
                 Arc::new(CachePadded::new(AtomicU64::new(0))),
                 sync_sender,
-                cfg,
+                &Arc::new(VersionTrack::new(cfg.clone())),
             ),
             msg_rx,
             notify_rx,
@@ -293,7 +293,15 @@ impl TestWriters {
         let (notify_tx, notify_rx) = unbounded();
         let notifier = TestNotifier { tx: notify_tx };
         let mut writers = StoreWriters::new();
-        writers.spawn(1, &engines, &notifier, &trans, &cfg).unwrap();
+        writers
+            .spawn(
+                1,
+                &engines,
+                &notifier,
+                &trans,
+                &Arc::new(VersionTrack::new(cfg.clone())),
+            )
+            .unwrap();
         Self {
             writers,
             msg_rx,
