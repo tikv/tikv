@@ -2,7 +2,7 @@
 
 use crate::cpu::collector::{register_collector, Collector, CollectorHandle};
 use crate::row::collector::{register_row_collector, RowCollector, RowCollectorHandle};
-use crate::row::recorder::RowStats;
+use crate::row::recorder::{RowRecords, RowStats};
 
 use crate::cpu::recorder::CpuRecords;
 use crate::Config;
@@ -46,7 +46,7 @@ impl RowRecordsCollector {
 }
 
 impl RowCollector for RowRecordsCollector {
-    fn collect_row(&self, records: Arc<HashMap<Vec<u8>, RowStats>>) {
+    fn collect_row(&self, records: Arc<RowRecords>) {
         self.scheduler.schedule(Task::RowRecords(records)).ok();
     }
 }
@@ -54,7 +54,7 @@ impl RowCollector for RowRecordsCollector {
 pub enum Task {
     ConfigChange(Config),
     CpuRecords(Arc<CpuRecords>),
-    RowRecords(Arc<HashMap<Vec<u8>, RowStats>>),
+    RowRecords(Arc<RowRecords>),
 }
 
 impl Display for Task {
@@ -88,10 +88,64 @@ pub struct ResourceMeteringReporter {
     row_records_collector: Option<RowCollectorHandle>,
 
     // resource_tag -> ([timestamp_secs], [cpu_time_ms], total_cpu_time_ms)
-    records: HashMap<Vec<u8>, (Vec<u64>, Vec<u32>, u32)>,
-    // timestamp_secs -> cpu_time_ms
-    others: HashMap<u64, u32>,
+    records: HashMap<Vec<u8>, ReportRecord>,
+    // timestamp_secs -> OtherRecord
+    others: HashMap<u64, OtherRecord>,
     find_top_k: Vec<u32>,
+}
+
+struct ReportRecord {
+    timestamp_secs_list: Vec<u64>,
+    cpu_time_ms_list: Vec<u32>,
+    read_row_count_list: Vec<u64>,
+    read_index_count_list: Vec<u64>,
+    total_cpu_time_ms: u32,
+}
+
+impl ReportRecord {
+    fn new() -> Self {
+        Self {
+            timestamp_secs_list: vec![],
+            cpu_time_ms_list: vec![],
+            read_row_count_list: vec![],
+            read_index_count_list: vec![],
+            total_cpu_time_ms: 0,
+        }
+    }
+    fn add_cpu_time_ms(&mut self, timestamp_secs: u64, cpu_time_ms: u32) {
+        if *self.timestamp_secs_list.last().unwrap() == timestamp_secs {
+            *self.cpu_time_ms_list.last_mut().unwrap() += cpu_time_ms;
+        } else {
+            self.timestamp_secs_list.push(timestamp_secs);
+            self.cpu_time_ms_list.push(cpu_time_ms);
+        }
+        self.total_cpu_time_ms += cpu_time_ms;
+    }
+
+    fn add_row_stats(&mut self, timestamp_secs: u64, row_stats: &RowStats) {
+        if *self.timestamp_secs_list.last().unwrap() == timestamp_secs {
+            *self.read_row_count_list.last_mut().unwrap() += row_stats.read_row_count;
+            *self.read_index_count_list.last_mut().unwrap() += row_stats.read_index_count;
+        } else {
+            self.timestamp_secs_list.push(timestamp_secs);
+            self.read_row_count_list.push(row_stats.read_row_count);
+            self.read_index_count_list.push(row_stats.read_index_count);
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct OtherRecord {
+    cpu_time_ms: u32,
+    row_stats: RowStats,
+}
+
+impl OtherRecord {
+    fn merge(&mut self, cpu_time_ms: u32, read_row_count: u64, read_index_count: u64) {
+        self.cpu_time_ms += cpu_time_ms;
+        self.row_stats.read_row_count += read_row_count;
+        self.row_stats.read_index_count += read_index_count;
+    }
 }
 
 impl ResourceMeteringReporter {
@@ -159,26 +213,21 @@ impl Runnable for ResourceMeteringReporter {
 
                     let ms = *ms as u32;
                     match self.records.get_mut(tag) {
-                        Some((ts, cpu_time, total)) => {
-                            if *ts.last().unwrap() == timestamp_secs {
-                                *cpu_time.last_mut().unwrap() += ms;
-                            } else {
-                                ts.push(timestamp_secs);
-                                cpu_time.push(ms);
-                            }
-                            *total += ms;
+                        Some(record) => {
+                            record.add_cpu_time_ms(timestamp_secs, ms);
                         }
                         None => {
-                            self.records
-                                .insert(tag.clone(), (vec![timestamp_secs], vec![ms], ms));
+                            let mut record = ReportRecord::new();
+                            record.add_cpu_time_ms(timestamp_secs, ms);
+                            self.records.insert(tag.clone(), record);
                         }
                     }
                 }
 
                 if self.records.len() > self.config.max_resource_groups {
                     self.find_top_k.clear();
-                    for (_, _, total) in self.records.values() {
-                        self.find_top_k.push(*total);
+                    for record in self.records.values() {
+                        self.find_top_k.push(record.total_cpu_time_ms);
                     }
                     pdqselect::select_by(
                         &mut self.find_top_k,
@@ -188,23 +237,42 @@ impl Runnable for ResourceMeteringReporter {
                     let kth = self.find_top_k[self.config.max_resource_groups];
                     let others = &mut self.others;
                     self.records
-                        .drain_filter(|_, (_, _, total)| *total <= kth)
-                        .for_each(|(_, (secs_list, cpu_time_list, _))| {
-                            secs_list
+                        .drain_filter(|_, record| record.total_cpu_time_ms <= kth)
+                        .for_each(|(_, record)| {
+                            record
+                                .timestamp_secs_list
                                 .into_iter()
-                                .zip(cpu_time_list.into_iter())
-                                .for_each(|(secs, cpu_time)| {
-                                    *others.entry(secs).or_insert(0) += cpu_time
-                                })
+                                .zip(
+                                    record.cpu_time_ms_list.into_iter().zip(
+                                        record
+                                            .read_row_count_list
+                                            .into_iter()
+                                            .zip(record.read_index_count_list)
+                                            .into_iter(),
+                                    ),
+                                )
+                                .for_each(
+                                    |(secs, (cpu_time, (read_row_cound, read_index_count)))| {
+                                        (*others.entry(secs).or_insert(OtherRecord::default()))
+                                            .merge(cpu_time, read_row_cound, read_index_count);
+                                    },
+                                )
                         });
                 }
             }
             Task::RowRecords(records) => {
-                for (k, v) in records.iter() {
-                    info!(
-                        "collector receive, index: {}, row: {}, tag: {:?}",
-                        v.read_index_count, v.read_row_count, k
-                    );
+                let timestamp_secs = records.begin_unix_time_secs;
+                for (tag, row_stats) in &records.records {
+                    match self.records.get_mut(tag) {
+                        Some(record) => {
+                            record.add_row_stats(timestamp_secs, row_stats);
+                        }
+                        None => {
+                            let mut record = ReportRecord::new();
+                            record.add_row_stats(timestamp_secs, row_stats);
+                            self.records.insert(tag.clone(), record);
+                        }
+                    }
                 }
             }
         }
@@ -239,23 +307,32 @@ impl RunnableWithTimer for ResourceMeteringReporter {
                     client.spawn(async move {
                         defer!(reporting.store(false, SeqCst));
 
-                        for (tag, (timestamp_list, cpu_time_ms_list, _)) in records {
+                        for (tag, record) in records {
                             let mut req = CpuTimeRecord::default();
                             req.set_resource_group_tag(tag);
-                            req.set_record_list_timestamp_sec(timestamp_list);
-                            req.set_record_list_cpu_time_ms(cpu_time_ms_list);
+                            req.set_record_list_timestamp_sec(record.timestamp_secs_list);
+                            req.set_record_list_cpu_time_ms(record.cpu_time_ms_list);
+                            req.set_record_list_scan_rows(record.read_row_count_list);
                             if tx.send((req, WriteFlags::default())).await.is_err() {
                                 return;
                             }
                         }
 
                         // others
+
                         if !others.is_empty() {
-                            let timestamp_list = others.keys().cloned().collect::<Vec<_>>();
-                            let cpu_time_ms_list = others.values().cloned().collect::<Vec<_>>();
+                            let mut timestamp_secs_list = vec![];
+                            let mut cpu_time_ms_list = vec![];
+                            let mut read_row_count_list = vec![];
+                            for (ts, record) in others {
+                                timestamp_secs_list.push(ts);
+                                cpu_time_ms_list.push(record.cpu_time_ms);
+                                read_row_count_list.push(record.row_stats.read_row_count);
+                            }
                             let mut req = CpuTimeRecord::default();
-                            req.set_record_list_timestamp_sec(timestamp_list);
+                            req.set_record_list_timestamp_sec(timestamp_secs_list);
                             req.set_record_list_cpu_time_ms(cpu_time_ms_list);
+                            req.set_record_list_scan_rows(read_row_count_list);
                             if tx.send((req, WriteFlags::default())).await.is_err() {
                                 return;
                             }

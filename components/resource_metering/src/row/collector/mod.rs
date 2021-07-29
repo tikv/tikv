@@ -1,4 +1,4 @@
-use crate::row::recorder::RowStats;
+use crate::row::recorder::RowRecords;
 use collections::HashMap;
 use lazy_static::lazy_static;
 use std::sync::atomic::AtomicU64;
@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, Mutex};
 
 pub trait RowCollector: Send {
-    fn collect_row(&self, records: Arc<HashMap<Vec<u8>, RowStats>>);
+    fn collect_row(&self, records: Arc<RowRecords>);
 }
 
 #[derive(Copy, Clone, Default, Debug, Eq, PartialEq, Hash)]

@@ -2,8 +2,9 @@ use crate::row::collector::GLOBAL_COLLOCTERS;
 
 use collections::HashMap;
 use std::cell::RefCell;
-use std::ops::Deref;
+use std::ops::{Deref, Sub};
 use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tikv_util::time::Instant;
 
 pub fn add_thread_scan_row(count: u64) {
@@ -28,8 +29,9 @@ pub fn on_poll_finish(tag: Vec<u8>) {
     CURRENT_REQ_ROW.with(|r| {
         let row_stats = r.row_stats.borrow();
         if row_stats.read_row_count > 0 || row_stats.read_index_count > 0 {
-            r.row_stats_map
+            r.row_records
                 .borrow_mut()
+                .records
                 .entry(tag)
                 .or_insert(RowStats::default())
                 .merge(row_stats.deref());
@@ -39,15 +41,12 @@ pub fn on_poll_finish(tag: Vec<u8>) {
         let duration = r.last_collect_instant.borrow().saturating_elapsed();
         if duration.as_millis() > 1000 {
             println!("send row stats start");
-            let mut row_stats_map = HashMap::default();
-            for (k, v) in r.row_stats_map.borrow_mut().drain() {
-                row_stats_map.insert(k, v);
-            }
-            let row_stats_map = Arc::new(row_stats_map);
+            let row_records = r.row_records.borrow_mut().take_and_reset();
+            let row_records = Arc::new(row_records);
             {
                 let guard = GLOBAL_COLLOCTERS.lock().unwrap();
                 for (_id, collector) in guard.iter() {
-                    collector.collect_row(row_stats_map.clone());
+                    collector.collect_row(row_records.clone());
                 }
             }
 
@@ -60,14 +59,14 @@ pub fn on_poll_finish(tag: Vec<u8>) {
 pub struct LocalReqRowTag {
     last_collect_instant: RefCell<Instant>,
     row_stats: RefCell<RowStats>,
-    row_stats_map: RefCell<HashMap<Vec<u8>, RowStats>>,
+    row_records: RefCell<RowRecords>,
 }
 
 thread_local! {
     pub static CURRENT_REQ_ROW: LocalReqRowTag = LocalReqRowTag{
         last_collect_instant: RefCell::new(Instant::now()),
         row_stats: RefCell::new(RowStats::default()),
-        row_stats_map: RefCell::new(HashMap::default()),
+        row_records: RefCell::new(RowRecords::default()),
     }
 }
 
@@ -86,5 +85,43 @@ impl RowStats {
     pub fn merge(&mut self, other: &Self) {
         self.read_row_count += other.read_row_count;
         self.read_index_count += other.read_index_count;
+    }
+}
+
+#[derive(Debug)]
+pub struct RowRecords {
+    pub begin_unix_time_secs: u64,
+
+    // tag -> RowStats
+    pub records: HashMap<Vec<u8>, RowStats>,
+}
+
+impl Default for RowRecords {
+    fn default() -> Self {
+        let now_unix_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Clock may have gone backwards");
+        Self {
+            begin_unix_time_secs: now_unix_time.as_secs(),
+            records: HashMap::default(),
+        }
+    }
+}
+
+impl RowRecords {
+    fn take_and_reset(&mut self) -> Self {
+        let mut records = HashMap::default();
+        for (k, v) in self.records.drain() {
+            records.insert(k, v);
+        }
+        let old_begin_unix_time_secs = self.begin_unix_time_secs;
+        let now_unix_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Clock may have gone backwards");
+        self.begin_unix_time_secs = now_unix_time.as_secs();
+        Self {
+            begin_unix_time_secs: old_begin_unix_time_secs,
+            records,
+        }
     }
 }
