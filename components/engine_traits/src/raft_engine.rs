@@ -75,8 +75,6 @@ pub trait RaftEngine: Clone + Sync + Send + 'static {
     }
     fn reset_statistics(&self) {}
 
-    fn get_pending_compaction_bytes(&self) -> u64;
-
     fn stop(&self) {}
 
     fn dump_stats(&self) -> Result<String>;

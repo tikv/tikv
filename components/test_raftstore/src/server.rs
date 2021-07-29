@@ -65,7 +65,7 @@ type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksEngin
 type SimulateServerTransport =
     SimulateTransport<ServerTransport<SimulateStoreTransport, PdStoreAddrResolver>>;
 
-pub type SimulateEngine = RaftKv<SimulateStoreTransport, RocksEngine>;
+pub type SimulateEngine = RaftKv<SimulateStoreTransport>;
 
 #[derive(Default, Clone)]
 pub struct AddressMap {
@@ -108,7 +108,7 @@ struct ServerMeta {
     sim_trans: SimulateServerTransport,
     raw_router: RaftRouter<RocksEngine, RocksEngine>,
     raw_apply_router: ApplyRouter<RocksEngine>,
-    gc_worker: GcWorker<RaftKv<SimulateStoreTransport, RocksEngine>, SimulateStoreTransport>,
+    gc_worker: GcWorker<RaftKv<SimulateStoreTransport>, SimulateStoreTransport>,
 }
 
 type PendingServices = Vec<Box<dyn Fn() -> Service>>;
@@ -186,7 +186,7 @@ impl ServerCluster {
     pub fn get_gc_worker(
         &self,
         node_id: u64,
-    ) -> &GcWorker<RaftKv<SimulateStoreTransport, RocksEngine>, SimulateStoreTransport> {
+    ) -> &GcWorker<RaftKv<SimulateStoreTransport>, SimulateStoreTransport> {
         &self.metas.get(&node_id).unwrap().gc_worker
     }
 
@@ -228,7 +228,7 @@ impl Simulator for ServerCluster {
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
         let sim_router = SimulateTransport::new(raft_router.clone());
 
-        let raft_engine = RaftKv::new(sim_router.clone(), engines.kv.clone(), engines.raft.clone());
+        let raft_engine = RaftKv::new(sim_router.clone(), engines.kv.clone());
 
         // Create coprocessor.
         let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
@@ -248,7 +248,7 @@ impl Simulator for ServerCluster {
             raft_engine.clone(),
         ));
 
-        let mut engine = RaftKv::new(sim_router.clone(), engines.kv.clone(), engines.raft.clone());
+        let mut engine = RaftKv::new(sim_router.clone(), engines.kv.clone());
         if let Some(scheduler) = self.txn_extra_schedulers.remove(&node_id) {
             engine.set_txn_extra_scheduler(scheduler);
         }

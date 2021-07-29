@@ -173,10 +173,6 @@ impl RaftEngine for RaftLogEngine {
         // Raft engine won't dump anything.
         Ok("".to_owned())
     }
-
-    fn get_pending_compaction_bytes(&self) -> u64 {
-        0
-    }
 }
 
 fn transfer_error(e: RaftEngineError) -> engine_traits::Error {

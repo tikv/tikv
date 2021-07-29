@@ -33,18 +33,17 @@ const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 
 /// Creates a new storage engine which is backed by the Raft consensus
 /// protocol.
-pub fn create_raft_storage<S, R>(
-    engine: RaftKv<S, R>,
+pub fn create_raft_storage<S>(
+    engine: RaftKv<S>,
     cfg: &StorageConfig,
     read_pool: ReadPoolHandle,
     lock_mgr: LockManager,
     concurrency_manager: ConcurrencyManager,
     pipelined_pessimistic_lock: Arc<AtomicBool>,
     flow_info_receiver: Option<std::sync::mpsc::Receiver<FlowInfo>>,
-) -> Result<Storage<RaftKv<S, R>, LockManager>>
+) -> Result<Storage<RaftKv<S>, LockManager>>
 where
     S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
-    R: RaftEngine,
 {
     let store = Storage::from_engine(
         engine,

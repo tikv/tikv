@@ -12,7 +12,7 @@ use bitflags::bitflags;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::CF_DEFAULT;
-use engine_traits::{CfName, KvEngine, RaftEngine};
+use engine_traits::{CfName, KvEngine};
 use engine_traits::{MvccProperties, MvccPropertiesExt};
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::{
@@ -164,28 +164,24 @@ fn on_read_result(
 
 /// `RaftKv` is a storage engine base on `RaftStore`.
 #[derive(Clone)]
-pub struct RaftKv<S, R>
+pub struct RaftKv<S>
 where
     S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
-    R: RaftEngine,
 {
     router: S,
-    kv_engine: RocksEngine,
-    raft_engine: R,
+    engine: RocksEngine,
     txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
 }
 
-impl<S, R> RaftKv<S, R>
+impl<S> RaftKv<S>
 where
     S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
-    R: RaftEngine,
 {
     /// Create a RaftKv using specified configuration.
-    pub fn new(router: S, kv_engine: RocksEngine, raft_engine: R) -> RaftKv<S, R> {
+    pub fn new(router: S, engine: RocksEngine) -> RaftKv<S> {
         RaftKv {
             router,
-            kv_engine,
-            raft_engine,
+            engine,
             txn_extra_scheduler: None,
         }
     }
@@ -295,41 +291,33 @@ fn invalid_resp_type(exp: CmdType, act: CmdType) -> Error {
     ))
 }
 
-impl<S, R> Display for RaftKv<S, R>
+impl<S> Display for RaftKv<S>
 where
     S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
-    R: RaftEngine,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RaftKv")
     }
 }
 
-impl<S, R> Debug for RaftKv<S, R>
+impl<S> Debug for RaftKv<S>
 where
     S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
-    R: RaftEngine,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RaftKv")
     }
 }
 
-impl<S, R> Engine for RaftKv<S, R>
+impl<S> Engine for RaftKv<S>
 where
     S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
-    R: RaftEngine,
 {
     type Snap = RegionSnapshot<RocksSnapshot>;
-    type Kv = RocksEngine;
-    type Raft = R;
+    type Local = RocksEngine;
 
     fn kv_engine(&self) -> RocksEngine {
-        self.kv_engine.clone()
-    }
-
-    fn raft_engine(&self) -> R {
-        self.raft_engine.clone()
+        self.engine.clone()
     }
 
     fn snapshot_on_kv_engine(&self, start_key: &[u8], end_key: &[u8]) -> kv::Result<Self::Snap> {
@@ -339,7 +327,7 @@ where
         // Use a fake peer to avoid panic.
         region.mut_peers().push(Default::default());
         Ok(RegionSnapshot::<RocksSnapshot>::from_raw(
-            self.kv_engine.clone(),
+            self.engine.clone(),
             region,
         ))
     }
@@ -363,7 +351,7 @@ where
                 }
             }
         }
-        write_modifies(&self.kv_engine, modifies)
+        write_modifies(&self.engine, modifies)
     }
 
     fn async_write(
@@ -490,7 +478,7 @@ where
     ) -> Option<MvccProperties> {
         let start = keys::data_key(start);
         let end = keys::data_end_key(end);
-        self.kv_engine
+        self.engine
             .get_mvcc_properties_cf(cf, safe_point, &start, &end)
     }
 }

@@ -90,10 +90,6 @@ impl RaftEngine for PanicEngine {
     fn dump_stats(&self) -> Result<String> {
         panic!()
     }
-
-    fn get_pending_compaction_bytes(&self) -> u64 {
-        panic!()
-    }
 }
 
 impl RaftLogBatch for PanicWriteBatch {
