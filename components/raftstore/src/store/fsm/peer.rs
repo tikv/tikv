@@ -128,7 +128,6 @@ where
     /// Destroy is delayed because of some unpersisted readies in Peer.
     /// Should call `destroy_peer` again after persisting all readies.
     delayed_destroy: Option<bool>,
-    raft_ready_size_limit: usize,
 
     max_inflight_msgs: usize,
 
@@ -240,7 +239,6 @@ where
                     cfg.raft_entry_max_size.0 as f64,
                 ),
                 delayed_destroy: None,
-                raft_ready_size_limit: cfg.raft_ready_size_limit.0 as usize,
                 max_inflight_msgs: cfg.raft_max_inflight_msgs,
                 trace: PeerMemoryTrace::default(),
             }),
@@ -287,7 +285,6 @@ where
                     cfg.raft_entry_max_size.0 as f64,
                 ),
                 delayed_destroy: None,
-                raft_ready_size_limit: cfg.raft_ready_size_limit.0 as usize,
                 max_inflight_msgs: cfg.raft_max_inflight_msgs,
                 trace: PeerMemoryTrace::default(),
             }),
@@ -645,7 +642,7 @@ where
             }
             if self.fsm.batch_req_builder.get_batch_size() as usize
                 + self.fsm.peer.raft_group.raft.raft_log.unstable.entries_size
-                >= self.fsm.raft_ready_size_limit
+                >= self.ctx.cfg.raft_ready_size_limit.0 as usize
             {
                 self.propose_batch_raft_command();
                 self.collect_ready();

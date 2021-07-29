@@ -711,6 +711,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                 _ => {}
             }
             self.poll_ctx.cfg = incoming.clone();
+            self.poll_ctx.raft_metrics.waterfall_metrics =
+                self.poll_ctx.cfg.store_waterfall_metrics;
             self.poll_ctx.update_ticks_timeout();
         }
     }
@@ -1170,7 +1172,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .start("consistency-check", consistency_check_runner);
 
         self.store_writers
-            .spawn(meta.get_id(), &engines, &self.router, &trans, &cfg.value())?;
+            .spawn(meta.get_id(), &engines, &self.router, &trans, &cfg)?;
 
         let mut builder = RaftPollerBuilder {
             cfg,
