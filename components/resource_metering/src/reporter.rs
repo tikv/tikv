@@ -103,13 +103,18 @@ struct ReportRecord {
 }
 
 impl ReportRecord {
-    fn new() -> Self {
+    fn new(
+        timestamp_secs: u64,
+        cpu_time_ms: u32,
+        read_row_count: u64,
+        read_index_count: u64,
+    ) -> Self {
         Self {
-            timestamp_secs_list: vec![],
-            cpu_time_ms_list: vec![],
-            read_row_count_list: vec![],
-            read_index_count_list: vec![],
-            total_cpu_time_ms: 0,
+            timestamp_secs_list: vec![timestamp_secs],
+            cpu_time_ms_list: vec![cpu_time_ms],
+            read_row_count_list: vec![read_row_count],
+            read_index_count_list: vec![read_index_count],
+            total_cpu_time_ms: cpu_time_ms,
         }
     }
     fn add_cpu_time_ms(&mut self, timestamp_secs: u64, cpu_time_ms: u32) {
@@ -217,8 +222,7 @@ impl Runnable for ResourceMeteringReporter {
                             record.add_cpu_time_ms(timestamp_secs, ms);
                         }
                         None => {
-                            let mut record = ReportRecord::new();
-                            record.add_cpu_time_ms(timestamp_secs, ms);
+                            let record = ReportRecord::new(timestamp_secs, ms, 0, 0);
                             self.records.insert(tag.clone(), record);
                         }
                     }
@@ -268,8 +272,12 @@ impl Runnable for ResourceMeteringReporter {
                             record.add_row_stats(timestamp_secs, row_stats);
                         }
                         None => {
-                            let mut record = ReportRecord::new();
-                            record.add_row_stats(timestamp_secs, row_stats);
+                            let record = ReportRecord::new(
+                                timestamp_secs,
+                                0,
+                                row_stats.read_row_count,
+                                row_stats.read_index_count,
+                            );
                             self.records.insert(tag.clone(), record);
                         }
                     }
