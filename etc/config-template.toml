@@ -334,7 +334,7 @@
 # raft-entry-max-size = "8MB"
 
 ## Interval to GC unnecessary Raft log.
-# raft-log-gc-tick-interval = "10s"
+# raft-log-gc-tick-interval = "1s"
 
 ## When the entry count exceeds this value, GC will be forced to trigger.
 # raft-log-gc-count-limit = 73728
