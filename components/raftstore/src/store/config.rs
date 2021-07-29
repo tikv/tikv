@@ -60,7 +60,7 @@ pub struct Config {
     // When the entry exceed the max size, reject to propose it.
     pub raft_entry_max_size: ReadableSize,
 
-    // Interval to gc unnecessary raft log (s).
+    // Interval to gc unnecessary raft log.
     pub raft_log_gc_tick_interval: ReadableDuration,
     // A threshold to gc stale raft log, must >= 1.
     // Note: this config is not needed after #8668, but some tests rely on it.
