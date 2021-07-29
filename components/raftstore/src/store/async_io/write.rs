@@ -147,29 +147,30 @@ where
                 self.ready_number
             ));
         }
-        let last_index = self.entries.last().map_or(0, |e| e.get_index());
-        if let Some((from, _)) = self.cut_logs {
-            if from != last_index + 1 {
-                // Entries are put and deleted in the same writebatch.
-                return Err(box_err!(
-                    "invalid cut logs, last_index {}, cut_logs {:?}",
-                    last_index,
-                    self.cut_logs
-                ));
+        if let Some(last_index) = self.entries.last().map(|e| e.get_index()) {
+            if let Some((from, _)) = self.cut_logs {
+                if from != last_index + 1 {
+                    // Entries are put and deleted in the same writebatch.
+                    return Err(box_err!(
+                        "invalid cut logs, last_index {}, cut_logs {:?}",
+                        last_index,
+                        self.cut_logs
+                    ));
+                }
             }
-        }
-        if last_index != 0
-            && self
+            if self
                 .raft_state
                 .as_ref()
                 .map_or(true, |r| r.get_last_index() != last_index)
-        {
-            return Err(box_err!(
-                "invalid raft state, last_index {}, raft_state {:?}",
-                last_index,
-                self.raft_state
-            ));
+            {
+                return Err(box_err!(
+                    "invalid raft state, last_index {}, raft_state {:?}",
+                    last_index,
+                    self.raft_state
+                ));
+            }
         }
+
         Ok(())
     }
 }
@@ -311,7 +312,7 @@ where
         }
     }
 
-    fn after_write_to_db(&mut self, metrics: &StoreWriteMetrics) {
+    fn after_write_to_raft_db(&mut self, metrics: &StoreWriteMetrics) {
         if metrics.waterfall_metrics {
             let now = Instant::now();
             for task in &self.tasks {
@@ -534,7 +535,7 @@ where
                 .observe(duration_to_sec(now.saturating_elapsed()) as f64);
         }
 
-        self.batch.after_write_to_db(&self.metrics);
+        self.batch.after_write_to_raft_db(&self.metrics);
 
         self.last_unpersisted_id += 1;
         self.pending_tasks.push_back((
