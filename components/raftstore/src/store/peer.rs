@@ -9,7 +9,7 @@ use std::{cmp, mem, u64, usize};
 
 use bitflags::bitflags;
 use crossbeam::atomic::AtomicCell;
-use crossbeam::channel::{Sender, TrySendError};
+use crossbeam::channel::TrySendError;
 use engine_traits::{Engines, KvEngine, RaftEngine, Snapshot, WriteBatch, WriteOptions};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
@@ -111,14 +111,14 @@ impl<S: Snapshot> ProposalQueue<S> {
         }
     }
 
-    fn find_scheduled_ts(&self, index: u64) -> Option<(u64, TiInstant)> {
+    fn find_request_times(&self, index: u64) -> Option<(u64, &Vec<TiInstant>)> {
         self.queue
             .binary_search_by_key(&index, |p: &Proposal<_>| (p.index))
             .ok()
             .map(|i| {
                 self.queue[i]
                     .cb
-                    .get_scheduled_ts()
+                    .get_request_times()
                     .map(|ts| (self.queue[i].term, ts))
             })
             .flatten()
@@ -1250,7 +1250,7 @@ where
         }
         let mut now = None;
         for index in pre_persist_index + 1..=self.raft_group.raft.raft_log.persisted {
-            if let Some((term, scheduled_ts)) = self.proposals.find_scheduled_ts(index) {
+            if let Some((term, times)) = self.proposals.find_request_times(index) {
                 if self
                     .get_store()
                     .term(index)
@@ -1260,9 +1260,11 @@ where
                     if now.is_none() {
                         now = Some(TiInstant::now());
                     }
-                    metrics.know_persist.observe(duration_to_sec(
-                        now.unwrap().saturating_duration_since(scheduled_ts),
-                    ));
+                    for t in times {
+                        metrics
+                            .know_persist
+                            .observe(duration_to_sec(now.unwrap().saturating_duration_since(*t)));
+                    }
                 }
             }
         }
@@ -1274,7 +1276,7 @@ where
         }
         let mut now = None;
         for index in pre_commit_index + 1..=self.raft_group.raft.raft_log.committed {
-            if let Some((term, scheduled_ts)) = self.proposals.find_scheduled_ts(index) {
+            if let Some((term, times)) = self.proposals.find_request_times(index) {
                 if self
                     .get_store()
                     .term(index)
@@ -1284,14 +1286,13 @@ where
                     if now.is_none() {
                         now = Some(TiInstant::now());
                     }
-                    if index <= self.raft_group.raft.raft_log.persisted {
-                        metrics.know_commit.observe(duration_to_sec(
-                            now.unwrap().saturating_duration_since(scheduled_ts),
-                        ));
+                    let hist = if index <= self.raft_group.raft.raft_log.persisted {
+                        &metrics.know_commit
                     } else {
-                        metrics.know_commit_not_persist.observe(duration_to_sec(
-                            now.unwrap().saturating_duration_since(scheduled_ts),
-                        ));
+                        &metrics.know_commit_not_persist
+                    };
+                    for t in times {
+                        hist.observe(duration_to_sec(now.unwrap().saturating_duration_since(*t)));
                     }
                 }
             }
@@ -1875,22 +1876,22 @@ where
         MEMTRACE_RAFT_ENTRIES.trace(TraceEvent::Sub(self.memtrace_raft_entries));
         self.memtrace_raft_entries = 0;
 
-        let mut proposal_times = vec![];
+        let mut request_times = vec![];
 
         if ctx.raft_metrics.waterfall_metrics {
             let mut now = None;
             for entry in ready.entries() {
-                if let Some((term, scheduled_ts)) =
-                    self.proposals.find_scheduled_ts(entry.get_index())
-                {
+                if let Some((term, times)) = self.proposals.find_request_times(entry.get_index()) {
                     if entry.term == term {
-                        proposal_times.push(scheduled_ts);
+                        request_times.append(&mut times.clone());
                         if now.is_none() {
                             now = Some(TiInstant::now());
                         }
-                        ctx.raft_metrics.to_write_queue.observe(duration_to_sec(
-                            now.unwrap().saturating_duration_since(scheduled_ts),
-                        ));
+                        for t in times {
+                            ctx.raft_metrics.to_write_queue.observe(duration_to_sec(
+                                now.unwrap().saturating_duration_since(*t),
+                            ));
+                        }
                     }
                 }
             }
@@ -1957,7 +1958,7 @@ where
             &mut ready,
             destroy_regions,
             persisted_msgs,
-            proposal_times,
+            request_times,
         ) {
             Ok(r) => r,
             Err(e) => {
@@ -2038,12 +2039,7 @@ where
             }
             if ctx
                 .io_reschedule_concurrent_count
-                .compare_exchange(
-                    count,
-                    count + 1,
-                    Ordering::SeqCst,
-                    Ordering::Relaxed,
-                )
+                .compare_exchange(count, count + 1, Ordering::SeqCst, Ordering::Relaxed)
                 .is_ok()
             {
                 break true;
@@ -2062,7 +2058,12 @@ where
         }
     }
 
-    fn send_write_msg(&self, ctx: &mut PollContext<EK, ER, T>, writer_id: usize, msg: WriteMsg<EK, ER>) {
+    fn send_write_msg<T>(
+        &self,
+        ctx: &PollContext<EK, ER, T>,
+        writer_id: usize,
+        msg: WriteMsg<EK, ER>,
+    ) {
         match ctx.write_senders[writer_id].try_send(msg) {
             Ok(()) => (),
             Err(TrySendError::Full(msg)) => {
@@ -2071,7 +2072,9 @@ where
                     // Write threads are destroyed after store threads during shutdown.
                     panic!("{} failed to send write msg, err: disconnected", self.tag);
                 }
-                ctx.raft_metrics.write_block_wait.observe(now.saturating_elapsed_secs());
+                ctx.raft_metrics
+                    .write_block_wait
+                    .observe(now.saturating_elapsed_secs());
             }
             Err(TrySendError::Disconnected(_)) => {
                 // Write threads are destroyed after store threads during shutdown.

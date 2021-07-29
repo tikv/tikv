@@ -102,7 +102,7 @@ where
     pub cut_logs: Option<(u64, u64)>,
     pub raft_state: Option<RaftLocalState>,
     pub messages: Vec<RaftMessage>,
-    pub proposal_times: Vec<Instant>,
+    pub request_times: Vec<Instant>,
 }
 
 impl<EK, ER> WriteTask<EK, ER>
@@ -122,7 +122,7 @@ where
             cut_logs: None,
             raft_state: None,
             messages: vec![],
-            proposal_times: vec![],
+            request_times: vec![],
         }
     }
 
@@ -286,10 +286,10 @@ where
         if metrics.waterfall_metrics {
             let now = Instant::now();
             for task in &self.tasks {
-                for ts in &task.proposal_times {
+                for t in &task.request_times {
                     metrics
                         .before_write
-                        .observe(duration_to_sec(now.saturating_duration_since(*ts)));
+                        .observe(duration_to_sec(now.saturating_duration_since(*t)));
                 }
             }
         }
@@ -299,10 +299,10 @@ where
         if metrics.waterfall_metrics {
             let now = Instant::now();
             for task in &self.tasks {
-                for ts in &task.proposal_times {
+                for t in &task.request_times {
                     metrics
                         .kvdb_end
-                        .observe(duration_to_sec(now.saturating_duration_since(*ts)));
+                        .observe(duration_to_sec(now.saturating_duration_since(*t)));
                 }
             }
         }
@@ -312,10 +312,10 @@ where
         if metrics.waterfall_metrics {
             let now = Instant::now();
             for task in &self.tasks {
-                for ts in &task.proposal_times {
+                for t in &task.request_times {
                     metrics
                         .write_end
-                        .observe(duration_to_sec(now.saturating_duration_since(*ts)))
+                        .observe(duration_to_sec(now.saturating_duration_since(*t)))
                 }
             }
         }

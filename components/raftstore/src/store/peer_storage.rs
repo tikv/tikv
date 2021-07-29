@@ -1470,7 +1470,7 @@ where
         ready: &mut Ready,
         destroy_regions: Vec<metapb::Region>,
         mut msgs: Vec<RaftMessage>,
-        proposal_times: Vec<Instant>,
+        request_times: Vec<Instant>,
     ) -> Result<(HandleReadyResult, WriteTask<EK, ER>)> {
         let region_id = self.get_region_id();
         let mut ctx = InvokeContext::new(self);
@@ -1493,7 +1493,7 @@ where
         if !ready.entries().is_empty() {
             self.append(&mut ctx, ready.take_entries(), &mut write_task);
         }
-        write_task.proposal_times = proposal_times;
+        write_task.request_times = request_times;
 
         // Last index is 0 means the peer is created from raft message
         // and has not applied snapshot yet, so skip persistent hard state.

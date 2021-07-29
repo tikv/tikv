@@ -419,7 +419,7 @@ pub fn make_cb_ext(
 ) -> (Callback<RocksSnapshot>, mpsc::Receiver<RaftCmdResponse>) {
     let (cb, receiver) = make_cb(cmd);
     if let Callback::Write { cb, .. } = cb {
-        (Callback::write_ext(cb.0, proposed, committed), receiver)
+        (Callback::write_ext(cb, proposed, committed), receiver)
     } else {
         (cb, receiver)
     }

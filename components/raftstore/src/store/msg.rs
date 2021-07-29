@@ -68,7 +68,7 @@ pub enum Callback<S: Snapshot> {
     Read(ReadCallback<S>),
     /// Write callback.
     Write {
-        cb: (WriteCallback, Instant),
+        cb: WriteCallback,
         /// `proposed_cb` is called after a request is proposed to the raft group successfully.
         /// It's used to notify the caller to move on early because it's very likely the request
         /// will be applied to the raftstore.
@@ -76,6 +76,7 @@ pub enum Callback<S: Snapshot> {
         /// `committed_cb` is called after a request is committed and before it's being applied, and
         /// it's guaranteed that the request will be successfully applied soon.
         committed_cb: Option<ExtCallback>,
+        request_times: Vec<Instant>,
     },
 }
 
@@ -95,25 +96,23 @@ where
         committed_cb: Option<ExtCallback>,
     ) -> Self {
         Callback::Write {
-            cb: (cb, Instant::now()),
+            cb,
             proposed_cb,
             committed_cb,
+            request_times: vec![],
         }
     }
 
-    pub fn get_scheduled_ts(&self) -> Option<Instant> {
+    pub fn get_request_times(&self) -> Option<&Vec<Instant>> {
         match self {
-            Callback::Write {
-                cb: (_cb, scheduled_ts),
-                ..
-            } => Some(*scheduled_ts),
+            Callback::Write { request_times, .. } => Some(request_times),
             _ => None,
         }
     }
 
-    pub fn invoke_with_response(self, resp: RaftCmdResponse) -> Option<Instant> {
+    pub fn invoke_with_response(self, resp: RaftCmdResponse) {
         match self {
-            Callback::None => None,
+            Callback::None => (),
             Callback::Read(read) => {
                 let resp = ReadResponse {
                     response: resp,
@@ -121,15 +120,10 @@ where
                     txn_extra_op: TxnExtraOp::Noop,
                 };
                 read(resp);
-                None
             }
-            Callback::Write {
-                cb: (cb, scheduled_ts),
-                ..
-            } => {
+            Callback::Write { cb, .. } => {
                 let resp = WriteResponse { response: resp };
                 cb(resp);
-                Some(scheduled_ts)
             }
         }
     }
@@ -170,7 +164,7 @@ where
         match self {
             Callback::None => write!(fmt, "Callback::None"),
             Callback::Read(_) => write!(fmt, "Callback::Read(..)"),
-            Callback::Write { cb, .. } => write!(fmt, "Callback::Write({:?})", cb.1),
+            Callback::Write { .. } => write!(fmt, "Callback::Write(..)"),
         }
     }
 }
