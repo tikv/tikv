@@ -2,9 +2,9 @@ use crate::row::collector::GLOBAL_COLLOCTERS;
 
 use collections::HashMap;
 use std::cell::RefCell;
-use std::ops::{Deref, Sub};
+use std::ops::Deref;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tikv_util::time::Instant;
 
 pub fn add_thread_scan_row(count: u64) {
@@ -26,6 +26,9 @@ pub fn on_poll_begin() {
 }
 
 pub fn on_poll_finish(tag: Vec<u8>) {
+    if tag.is_empty() {
+        return;
+    }
     CURRENT_REQ_ROW.with(|r| {
         let row_stats = r.row_stats.borrow();
         if row_stats.read_row_count > 0 || row_stats.read_index_count > 0 {

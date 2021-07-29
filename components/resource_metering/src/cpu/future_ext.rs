@@ -2,6 +2,7 @@
 
 use crate::ResourceMeteringTag;
 
+use crate::row::recorder::{on_poll_begin, on_poll_finish};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -27,6 +28,9 @@ impl<T: std::future::Future> std::future::Future for InTags<T> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
         let _guard = this.tag.attach();
-        this.inner.poll(cx)
+        on_poll_begin();
+        let result = this.inner.poll(cx);
+        on_poll_finish(this.tag.infos.extra_attachment.clone());
+        result
     }
 }

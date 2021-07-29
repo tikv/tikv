@@ -6,7 +6,6 @@ use kvproto::kvrpcpb::ScanDetailV2;
 use crate::storage::kv::PerfStatisticsDelta;
 
 use engine_rocks::set_perf_level;
-use resource_metering::row::recorder::{on_poll_begin, on_poll_finish};
 use tikv_util::time::{self, Duration, Instant};
 
 use super::metrics::*;
@@ -140,7 +139,6 @@ impl Tracker {
 
         set_perf_level(self.req_ctx.perf_level);
         self.current_stage = TrackerState::ItemBegan(now);
-        on_poll_begin();
     }
 
     pub fn on_finish_item(
@@ -158,7 +156,6 @@ impl Tracker {
             // Record delta perf statistics
             self.total_perf_stats += perf_statistics;
             self.current_stage = TrackerState::ItemFinished(now);
-            on_poll_finish(Vec::from(self.req_ctx.context.get_resource_group_tag()));
         } else {
             unreachable!()
         }
