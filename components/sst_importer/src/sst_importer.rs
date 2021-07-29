@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -13,13 +14,10 @@ use kvproto::import_sstpb::pair::Op as PairOp;
 use kvproto::import_sstpb::*;
 
 use encryption::DataKeyManager;
-use engine_rocks::{
-    encryption::get_env as get_encrypted_env, file_system::get_env as get_inspected_env,
-    RocksSstReader,
-};
+use engine_rocks::{get_env, RocksSstReader};
 use engine_traits::{
-    name_to_cf, EncryptionKeyManager, Iterator, KvEngine, SSTMetaInfo, SeekKey, SstExt, SstReader,
-    SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
+    name_to_cf, CfName, EncryptionKeyManager, Iterator, KvEngine, SSTMetaInfo, SeekKey,
+    SstCompressionType, SstExt, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 };
 use file_system::{get_io_rate_limiter, OpenOptions};
 use tikv_util::time::{Instant, Limiter};
@@ -38,6 +36,7 @@ pub struct SSTImporter {
     key_manager: Option<Arc<DataKeyManager>>,
     switcher: ImportModeSwitcher,
     enable_ttl: bool,
+    compression_types: HashMap<CfName, SstCompressionType>,
 }
 
 impl SSTImporter {
@@ -53,7 +52,20 @@ impl SSTImporter {
             key_manager,
             switcher,
             enable_ttl,
+            compression_types: HashMap::with_capacity(2),
         })
+    }
+
+    pub fn set_compression_type(
+        &mut self,
+        cf_name: CfName,
+        compression_type: Option<SstCompressionType>,
+    ) {
+        if let Some(ct) = compression_type {
+            self.compression_types.insert(cf_name, ct);
+        } else {
+            self.compression_types.remove(cf_name);
+        }
     }
 
     pub fn start_switch_mode_check<E: KvEngine>(&self, executor: &ThreadPool, db: E) {
@@ -219,8 +231,7 @@ impl SSTImporter {
 
         // now validate the SST file.
         let path_str = path.temp.to_str().unwrap();
-        let env = get_encrypted_env(self.key_manager.clone(), None /*base_env*/)?;
-        let env = get_inspected_env(Some(env), get_io_rate_limiter())?;
+        let env = get_env(self.key_manager.clone(), get_io_rate_limiter())?;
         // Use abstracted SstReader after Env is abstracted.
         let sst_reader = RocksSstReader::open_with_env(path_str, Some(env))?;
         sst_reader.verify_checksum()?;
@@ -330,9 +341,11 @@ impl SSTImporter {
         // SST writer must not be opened in gRPC threads, because it may be
         // blocked for a long time due to IO, especially, when encryption at rest
         // is enabled, and it leads to gRPC keepalive timeout.
+        let cf_name = name_to_cf(meta.get_cf_name()).unwrap();
         let mut sst_writer = <E as SstExt>::SstWriterBuilder::new()
             .set_db(&engine)
-            .set_cf(name_to_cf(meta.get_cf_name()).unwrap())
+            .set_cf(cf_name)
+            .set_compression_type(self.compression_types.get(cf_name).copied())
             .build(path.save.to_str().unwrap())
             .unwrap();
 
@@ -418,6 +431,7 @@ impl SSTImporter {
         let default = E::SstWriterBuilder::new()
             .set_db(&db)
             .set_cf(CF_DEFAULT)
+            .set_compression_type(self.compression_types.get(CF_DEFAULT).copied())
             .build(default_path.temp.to_str().unwrap())
             .unwrap();
 
@@ -427,6 +441,7 @@ impl SSTImporter {
         let write = E::SstWriterBuilder::new()
             .set_db(&db)
             .set_cf(CF_WRITE)
+            .set_compression_type(self.compression_types.get(CF_WRITE).copied())
             .build(write_path.temp.to_str().unwrap())
             .unwrap();
 
@@ -557,7 +572,7 @@ mod tests {
         // Test ImportDir::ingest()
 
         let db_path = temp_dir.path().join("db");
-        let env = get_encrypted_env(key_manager.clone(), None /*base_env*/).unwrap();
+        let env = get_env(key_manager.clone(), None /*io_rate_limiter*/).unwrap();
         let db = new_test_engine_with_env(db_path.to_str().unwrap(), &[CF_DEFAULT], env);
 
         let cases = vec![(0, 10), (5, 15), (10, 20), (0, 100)];
@@ -942,8 +957,7 @@ mod tests {
             SSTImporter::new(&cfg, &importer_dir, Some(key_manager.clone()), false).unwrap();
 
         let db_path = temp_dir.path().join("db");
-        let env = get_encrypted_env(Some(key_manager), None /*base_env*/).unwrap();
-        // ensure encrypted enabled
+        let env = get_env(Some(key_manager), None /*io_rate_limiter*/).unwrap();
         let db = new_test_engine_with_env(db_path.to_str().unwrap(), DATA_CFS, env.clone());
 
         let range = importer
@@ -1520,5 +1534,89 @@ mod tests {
                 (b"zc".to_vec(), b"v4".to_vec()),
             ]
         );
+    }
+
+    #[test]
+    fn test_download_compression() {
+        // creates a sample SST file.
+        let (_ext_sst_dir, backend, meta) = create_sample_external_sst_file().unwrap();
+
+        // performs the download.
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let mut importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
+        importer.set_compression_type(CF_DEFAULT, Some(SstCompressionType::Snappy));
+        let db = create_sst_test_engine().unwrap();
+
+        importer
+            .download::<TestEngine>(
+                &meta,
+                &backend,
+                "sample.sst",
+                &new_rewrite_rule(b"t123", b"t789", 0),
+                Limiter::new(INFINITY),
+                db,
+            )
+            .unwrap()
+            .unwrap();
+
+        // verifies the SST is compressed using Snappy.
+        let sst_file_path = importer.dir.join(&meta).unwrap().save;
+        assert!(sst_file_path.is_file());
+
+        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
+        assert_eq!(sst_reader.compression_name(), "Snappy");
+    }
+
+    #[test]
+    fn test_write_compression() {
+        let mut meta = SstMeta::default();
+        meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
+
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let mut importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
+        importer.set_compression_type(CF_DEFAULT, Some(SstCompressionType::Zstd));
+        let db_path = importer_dir.path().join("db");
+        let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
+
+        let mut w = importer.new_txn_writer::<TestEngine>(&db, meta).unwrap();
+        let mut batch = WriteBatch::default();
+        let mut pairs = vec![];
+
+        // put short value kv in write cf
+        let mut pair = Pair::default();
+        pair.set_key(b"k1".to_vec());
+        pair.set_value(b"short_value".to_vec());
+        pairs.push(pair);
+
+        // put big value kv in default cf
+        let big_value = vec![42; 256];
+        let mut pair = Pair::default();
+        pair.set_key(b"k2".to_vec());
+        pair.set_value(big_value);
+        pairs.push(pair);
+
+        // generate two cf metas
+        batch.set_commit_ts(10);
+        batch.set_pairs(pairs.into());
+        w.write(batch).unwrap();
+
+        let metas = w.finish().unwrap();
+        assert_eq!(metas.len(), 2);
+
+        // verifies SST compression algorithm...
+        for meta in metas {
+            let sst_file_path = importer.dir.join(&meta).unwrap().save;
+            assert!(sst_file_path.is_file());
+
+            let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
+            let expected_compression_name = match &*meta.cf_name {
+                CF_DEFAULT => "ZSTD",
+                CF_WRITE => "LZ4", // Lz4 is the default if unspecified.
+                _ => unreachable!(),
+            };
+            assert_eq!(sst_reader.compression_name(), expected_compression_name);
+        }
     }
 }
