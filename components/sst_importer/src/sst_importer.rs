@@ -2,11 +2,8 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-<<<<<<< HEAD
 use std::fmt;
 use std::io::{self, Write};
-=======
->>>>>>> 3f0c72a38... sst_importer: always use the bottommost compression (zstd) when writing SSTs (#10577)
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -26,13 +23,9 @@ use engine_rocks::{
     RocksSstReader,
 };
 use engine_traits::{
-<<<<<<< HEAD
-    name_to_cf, EncryptionKeyManager, IngestExternalFileOptions, Iterator, KvEngine, SSTMetaInfo,
-    SeekKey, SstExt, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
-=======
-    name_to_cf, CfName, EncryptionKeyManager, Iterator, KvEngine, SSTMetaInfo, SeekKey,
-    SstCompressionType, SstExt, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
->>>>>>> 3f0c72a38... sst_importer: always use the bottommost compression (zstd) when writing SSTs (#10577)
+    name_to_cf, CfName, EncryptionKeyManager, IngestExternalFileOptions, Iterator, KvEngine,
+    SSTMetaInfo, SeekKey, SstCompressionType, SstExt, SstReader, SstWriter, SstWriterBuilder,
+    CF_DEFAULT, CF_WRITE,
 };
 use file_system::{get_io_rate_limiter, sync_dir, File, OpenOptions};
 use tikv_util::time::{Instant, Limiter};
@@ -48,11 +41,7 @@ pub struct SSTImporter {
     dir: ImportDir,
     key_manager: Option<Arc<DataKeyManager>>,
     switcher: ImportModeSwitcher,
-<<<<<<< HEAD
-=======
-    enable_ttl: bool,
     compression_types: HashMap<CfName, SstCompressionType>,
->>>>>>> 3f0c72a38... sst_importer: always use the bottommost compression (zstd) when writing SSTs (#10577)
 }
 
 impl SSTImporter {
@@ -66,11 +55,7 @@ impl SSTImporter {
             dir: ImportDir::new(root)?,
             key_manager,
             switcher,
-<<<<<<< HEAD
-=======
-            enable_ttl,
             compression_types: HashMap::with_capacity(2),
->>>>>>> 3f0c72a38... sst_importer: always use the bottommost compression (zstd) when writing SSTs (#10577)
         })
     }
 

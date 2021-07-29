@@ -27,14 +27,10 @@ use std::{
 use cdc::MemoryQuota;
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
-<<<<<<< HEAD
 use engine_rocks::{
     encryption::get_env as get_encrypted_env, file_system::get_env as get_inspected_env,
-    RocksEngine,
+    from_rocks_compression_type, RocksEngine,
 };
-=======
-use engine_rocks::{from_rocks_compression_type, get_env, RocksEngine};
->>>>>>> 3f0c72a38... sst_importer: always use the bottommost compression (zstd) when writing SSTs (#10577)
 use engine_traits::{
     compaction_job::CompactionJobInfo, CFOptionsExt, ColumnFamilyOptions, Engines, MiscExt,
     RaftEngine, CF_DEFAULT, CF_LOCK, CF_WRITE,
@@ -718,21 +714,10 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         );
 
         let import_path = self.store_path.join("import");
-<<<<<<< HEAD
-        let importer = Arc::new(
-            SSTImporter::new(
-                &self.config.import,
-                import_path,
-                self.encryption_key_manager.clone(),
-            )
-            .unwrap(),
-        );
-=======
         let mut importer = SSTImporter::new(
             &self.config.import,
             import_path,
             self.encryption_key_manager.clone(),
-            self.config.storage.enable_ttl,
         )
         .unwrap();
         for (cf_name, compression_type) in &[
@@ -748,7 +733,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             importer.set_compression_type(cf_name, from_rocks_compression_type(*compression_type));
         }
         let importer = Arc::new(importer);
->>>>>>> 3f0c72a38... sst_importer: always use the bottommost compression (zstd) when writing SSTs (#10577)
 
         let split_check_runner = SplitCheckRunner::new(
             engines.engines.kv.clone(),
