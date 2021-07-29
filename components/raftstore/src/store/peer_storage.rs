@@ -1840,7 +1840,7 @@ mod tests {
 
         let region = initial_region(1, 1, 1);
         prepare_bootstrap_cluster(&engines, &region).unwrap();
-        PeerStorage::new(engines, &region, sched, 0, "".to_owned()).unwrap()
+        PeerStorage::new(engines, &region, sched, 1, "".to_owned()).unwrap()
     }
 
     fn new_storage_from_ents(
@@ -1850,7 +1850,7 @@ mod tests {
     ) -> PeerStorage<KvTestEngine, RaftTestEngine> {
         let mut store = new_storage(sched, path);
         let mut ctx = InvokeContext::new(&store);
-        let mut write_task = WriteTask::new(store.get_region_id(), store.peer_id, 0);
+        let mut write_task = WriteTask::new(store.get_region_id(), store.peer_id, 1);
         store.append(&mut ctx, ents[1..].to_vec(), &mut write_task);
         ctx.apply_state
             .mut_truncated_state()
@@ -1865,6 +1865,7 @@ mod tests {
         }
         ctx.save_apply_state_to(write_task.kv_wb.as_mut().unwrap())
             .unwrap();
+        write_task.raft_state = Some(ctx.raft_state.clone());
         write_to_db_for_test(&store.engines, write_task);
         store.raft_state = ctx.raft_state;
         store.apply_state = ctx.apply_state;
@@ -1876,13 +1877,9 @@ mod tests {
             return;
         }
         let mut ctx = InvokeContext::new(store);
-        let mut write_task = WriteTask::new(store.get_region_id(), store.peer_id, 0);
+        let mut write_task = WriteTask::new(store.get_region_id(), store.peer_id, 1);
         store.append(&mut ctx, ents.to_vec(), &mut write_task);
-        if write_task.raft_wb.is_none() {
-            write_task.raft_wb = Some(store.engines.raft.log_batch(64));
-        }
-        ctx.save_raft_state_to(write_task.raft_wb.as_mut().unwrap())
-            .unwrap();
+        write_task.raft_state = Some(ctx.raft_state.clone());
         write_to_db_for_test(&store.engines, write_task);
         store.raft_state = ctx.raft_state;
     }
@@ -2187,7 +2184,7 @@ mod tests {
         let _ = s.gen_snap_task.borrow_mut().take().unwrap();
 
         let mut ctx = InvokeContext::new(&s);
-        let mut write_task = WriteTask::new(s.get_region_id(), s.peer_id, 0);
+        let mut write_task = WriteTask::new(s.get_region_id(), s.peer_id, 1);
         s.append(
             &mut ctx,
             [new_entry(6, 5), new_entry(7, 5)].to_vec(),
@@ -2199,11 +2196,7 @@ mod tests {
         ctx.raft_state.set_hard_state(hs);
         ctx.raft_state.set_last_index(7);
         ctx.apply_state.set_applied_index(7);
-        if write_task.raft_wb.is_none() {
-            write_task.raft_wb = Some(s.engines.raft.log_batch(64));
-        }
-        ctx.save_raft_state_to(write_task.raft_wb.as_mut().unwrap())
-            .unwrap();
+        write_task.raft_state = Some(ctx.raft_state.clone());
         if write_task.kv_wb.is_none() {
             write_task.kv_wb = Some(s.engines.kv.write_batch());
         }
@@ -2516,7 +2509,7 @@ mod tests {
         assert_eq!(s2.first_index(), s2.applied_index() + 1);
         let mut ctx = InvokeContext::new(&s2);
         assert_ne!(ctx.last_term, snap1.get_metadata().get_term());
-        let mut write_task = WriteTask::new(s2.get_region_id(), s2.peer_id, 0);
+        let mut write_task = WriteTask::new(s2.get_region_id(), s2.peer_id, 1);
         let res = s2
             .apply_snapshot(&mut ctx, &snap1, &mut write_task, vec![], vec![])
             .unwrap();
@@ -2544,7 +2537,7 @@ mod tests {
         validate_cache(&s3, &ents[1..]);
         let mut ctx = InvokeContext::new(&s3);
         assert_ne!(ctx.last_term, snap1.get_metadata().get_term());
-        let mut write_task = WriteTask::new(s3.get_region_id(), s3.peer_id, 0);
+        let mut write_task = WriteTask::new(s3.get_region_id(), s3.peer_id, 1);
         let res = s3
             .apply_snapshot(&mut ctx, &snap1, &mut write_task, vec![], vec![])
             .unwrap();

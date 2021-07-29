@@ -421,13 +421,12 @@ where
             self.batch_req_size = 0;
             if self.callbacks.len() == 1 {
                 let (mut cb, _, send_time) = self.callbacks.pop().unwrap();
-                if metric.waterfall_metrics {
-                    metric
-                        .batch_wait
-                        .observe(send_time.saturating_elapsed_secs());
-                }
-                // Fill the request times
                 if let Callback::Write { request_times, .. } = &mut cb {
+                    if metric.waterfall_metrics {
+                        metric
+                            .batch_wait
+                            .observe(send_time.saturating_elapsed_secs());
+                    }
                     *request_times = vec![send_time];
                 }
                 return Some(RaftCommand::new(req, cb));
