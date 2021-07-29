@@ -816,6 +816,8 @@ where
 {
     /// The ID of the peer.
     id: u64,
+    /// The peer is witness.
+    witness: bool,
     /// The term of the Region.
     term: u64,
     /// The Region information of the peer.
@@ -883,6 +885,7 @@ where
     fn from_registration(reg: Registration) -> ApplyDelegate<EK> {
         ApplyDelegate {
             id: reg.id,
+            witness: reg.witness,
             tag: format!("[region {}] {}", reg.region.get_id(), reg.id),
             region: reg.region,
             pending_remove: false,
@@ -1355,6 +1358,9 @@ where
         if req.has_admin_request() {
             self.exec_admin_cmd(ctx, req)
         } else {
+            if self.witness {
+
+            }
             self.exec_write_cmd(ctx, req)
         }
     }
@@ -1423,6 +1429,12 @@ where
         let mut ssts = vec![];
         for req in requests {
             let cmd_type = req.get_cmd_type();
+            if self.witness {
+                let mut resp = Response::default();
+                resp.set_cmd_type(cmd_type);
+                responses.push(resp);
+                continue;
+            }
             let mut resp = match cmd_type {
                 CmdType::Put => {
                     self.metrics
@@ -2823,6 +2835,7 @@ where
     S: Snapshot,
 {
     pub peer_id: u64,
+    pub witness: bool,
     pub region_id: u64,
     pub term: u64,
     pub entries: CachedEntries,
@@ -2832,6 +2845,7 @@ where
 impl<S: Snapshot> Apply<S> {
     pub(crate) fn new(
         peer_id: u64,
+        witness: bool,
         region_id: u64,
         term: u64,
         entries: Vec<Entry>,
@@ -2840,6 +2854,7 @@ impl<S: Snapshot> Apply<S> {
         let entries = CachedEntries::new(entries);
         Apply {
             peer_id,
+            witness,
             region_id,
             term,
             entries,
@@ -2850,6 +2865,7 @@ impl<S: Snapshot> Apply<S> {
 
 pub struct Registration {
     pub id: u64,
+    pub witness: bool,
     pub term: u64,
     pub apply_state: RaftApplyState,
     pub applied_index_term: u64,
@@ -2863,6 +2879,7 @@ impl Registration {
     pub fn new<EK: KvEngine, ER: RaftEngine>(peer: &Peer<EK, ER>) -> Registration {
         Registration {
             id: peer.peer_id(),
+            witness: peer.peer.get_witness(),
             term: peer.term(),
             apply_state: peer.get_store().apply_state().clone(),
             applied_index_term: peer.get_store().applied_index_term(),
@@ -4130,6 +4147,7 @@ mod tests {
         fn default() -> Self {
             Registration {
                 id: Default::default(),
+                witness: false,
                 term: Default::default(),
                 apply_state: Default::default(),
                 applied_index_term: Default::default(),
@@ -4145,6 +4163,7 @@ mod tests {
         fn dup(&self) -> Self {
             Registration {
                 id: self.id,
+                witness: self.witness,
                 term: self.term,
                 apply_state: self.apply_state.clone(),
                 applied_index_term: self.applied_index_term,
@@ -4306,7 +4325,7 @@ mod tests {
         entries: Vec<Entry>,
         cbs: Vec<Proposal<S>>,
     ) -> Apply<S> {
-        Apply::new(peer_id, region_id, term, entries, cbs)
+        Apply::new(peer_id, false, region_id, term, entries, cbs)
     }
 
     #[test]

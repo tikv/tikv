@@ -685,6 +685,7 @@ where
     pub engines: Engines<EK, ER>,
 
     peer_id: u64,
+    witness: bool,
     region: metapb::Region,
     raft_state: RaftLocalState,
     apply_state: RaftApplyState,
@@ -747,6 +748,7 @@ where
         region: &metapb::Region,
         region_sched: Scheduler<RegionTask<EK::Snapshot>>,
         peer_id: u64,
+        witness: bool,
         tag: String,
     ) -> Result<PeerStorage<EK, ER>> {
         debug!(
@@ -756,7 +758,10 @@ where
             "path" => ?engines.kv.path(),
         );
         let mut raft_state = init_raft_state(&engines, region)?;
-        let apply_state = init_apply_state(&engines, region)?;
+        let mut apply_state = init_apply_state(&engines, region)?;
+        if witness {
+            apply_state.applied_index = raft_state.get_hard_state().get_commit();
+        }
         if let Err(e) = validate_states(region.get_id(), &engines, &mut raft_state, &apply_state) {
             return Err(box_err!("{} validate state fail: {:?}", tag, e));
         }
@@ -772,6 +777,7 @@ where
         Ok(PeerStorage {
             engines,
             peer_id,
+            witness,
             region: region.clone(),
             raft_state,
             apply_state,
@@ -1904,7 +1910,7 @@ mod tests {
 
         let region = initial_region(1, 1, 1);
         prepare_bootstrap_cluster(&engines, &region).unwrap();
-        PeerStorage::new(engines, &region, sched, 0, "".to_owned()).unwrap()
+        PeerStorage::new(engines, &region, sched, 0, false, "".to_owned()).unwrap()
     }
 
     struct ReadyContext {
@@ -2802,7 +2808,7 @@ mod tests {
         let region = initial_region(1, 1, 1);
         prepare_bootstrap_cluster(&engines, &region).unwrap();
         let build_storage = || -> Result<PeerStorage<KvTestEngine, RaftTestEngine>> {
-            PeerStorage::new(engines.clone(), &region, sched.clone(), 0, "".to_owned())
+            PeerStorage::new(engines.clone(), &region, sched.clone(), 0, false, "".to_owned())
         };
         let mut s = build_storage().unwrap();
         let mut raft_state = RaftLocalState::default();
