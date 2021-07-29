@@ -51,6 +51,11 @@ fn test_disk_almost_full_allowed_leader_behaviors() {
     cluster.must_transfer_leader(1, new_peer(1, 1));
     fail::cfg("disk_almost_full_peer_1", "return").unwrap();
 
+    // Test set operations allowed flag will be allowed to exec.
+    cluster.set_allowed_level_on_disk_full(AllowedLevel::AllowedAlmostFull);
+    cluster.must_put(b"k11", b"v11");
+    cluster.clear_allowed_level_on_disk_full();
+
     // Test transfer leader should be allowed.
     cluster.must_transfer_leader(1, new_peer(2, 2));
 
@@ -73,10 +78,6 @@ fn test_disk_almost_full_allowed_leader_behaviors() {
     let region_1 = cluster.get_region(b"k0");
     let region_2 = cluster.get_region(b"k2");
     cluster.must_try_merge(region_1.get_id(), region_2.get_id());
-
-    // Test set operations allowed flag will be allowed to exec.
-    cluster.set_allowed_level_on_disk_full(AllowedLevel::AllowedAlmostFull);
-    cluster.must_put(b"k11", b"v11");
 
     fail::remove("disk_almost_full_peer_1");
 }

@@ -23,6 +23,7 @@ use crate::storage::{
     SecondaryLocksStatus, Storage, TxnStatus,
 };
 use crate::{forward_duplex, forward_unary};
+use fail::fail_point;
 use futures::compat::Future01CompatExt;
 use futures::future::{self, Future, FutureExt, TryFutureExt};
 use futures::sink::SinkExt;
@@ -38,12 +39,15 @@ use kvproto::mpp::*;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
+use raft::eraftpb::MessageType;
 use raftstore::router::RaftStoreRouter;
+use raftstore::store::memory::{MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES};
 use raftstore::store::CheckLeaderTask;
 use raftstore::store::{Callback, CasualMessage};
 use raftstore::{DiscardReason, Error as RaftStoreError};
 use tikv_util::future::{paired_future_callback, poll_future_notify};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
+use tikv_util::sys::memory_usage_reaches_high_water;
 use tikv_util::worker::Scheduler;
 use txn_types::{self, Key};
 
@@ -73,6 +77,9 @@ pub struct Service<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockMan
     grpc_thread_load: Arc<ThreadLoad>,
 
     proxy: Proxy,
+
+    // Go `server::Config` to get more details.
+    reject_messages_on_memory_ratio: f64,
 }
 
 impl<T: RaftStoreRouter<E::Local> + Clone + 'static, E: Engine + Clone, L: LockManager + Clone>
@@ -91,6 +98,7 @@ impl<T: RaftStoreRouter<E::Local> + Clone + 'static, E: Engine + Clone, L: LockM
             enable_req_batch: self.enable_req_batch,
             grpc_thread_load: self.grpc_thread_load.clone(),
             proxy: self.proxy.clone(),
+            reject_messages_on_memory_ratio: self.reject_messages_on_memory_ratio,
         }
     }
 }
@@ -109,6 +117,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Service<
         grpc_thread_load: Arc<ThreadLoad>,
         enable_req_batch: bool,
         proxy: Proxy,
+        reject_messages_on_memory_ratio: f64,
     ) -> Self {
         Service {
             store_id,
@@ -122,6 +131,35 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Service<
             enable_req_batch,
             grpc_thread_load,
             proxy,
+            reject_messages_on_memory_ratio,
+        }
+    }
+
+    fn handle_raft_message(
+        store_id: u64,
+        ch: &T,
+        msg: RaftMessage,
+        reject: bool,
+    ) -> ServerResult<()> {
+        let to_store_id = msg.get_to_peer().get_store_id();
+        if to_store_id != store_id {
+            return Err(Error::from(RaftStoreError::StoreNotMatch {
+                to_store_id,
+                my_store_id: store_id,
+            }));
+        }
+        if reject && msg.get_message().get_msg_type() == MessageType::MsgAppend {
+            RAFT_APPEND_REJECTS.inc();
+            let id = msg.get_region_id();
+            let peer_id = msg.get_message().get_from();
+            let m = CasualMessage::RejectRaftAppend { peer_id };
+            let _ = ch.send_casual_msg(id, m);
+            return Ok(());
+        }
+        match ch.send_raft_msg(msg) {
+            Ok(()) => Ok(()),
+            Err(RaftStoreError::RegionNotFound(_)) => Ok(()),
+            Err(e) => Err(Error::from(e)),
         }
     }
 }
@@ -289,6 +327,13 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
         future_raw_compare_and_swap,
         RawCasRequest,
         RawCasResponse
+    );
+
+    handle_request!(
+        raw_checksum,
+        future_raw_checksum,
+        RawChecksumRequest,
+        RawChecksumResponse
     );
 
     fn kv_import(&mut self, _: RpcContext<'_>, _: ImportRequest, _: UnarySink<ImportResponse>) {
@@ -617,20 +662,19 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
     ) {
         let store_id = self.store_id;
         let ch = self.ch.clone();
-        ctx.spawn(async move {
-            let res = stream.map_err(Error::from).try_for_each(move |msg| {
+        let reject_messages_on_memory_ratio = self.reject_messages_on_memory_ratio;
+
+        let res = async move {
+            let mut stream = stream.map_err(Error::from);
+            while let Some(msg) = stream.try_next().await? {
                 RAFT_MESSAGE_RECV_COUNTER.inc();
-                let to_store_id = msg.get_to_peer().get_store_id();
-                if to_store_id != store_id {
-                    future::err(Error::from(RaftStoreError::StoreNotMatch {
-                        to_store_id,
-                        my_store_id: store_id,
-                    }))
-                } else {
-                    let ret = ch.send_raft_msg(msg).map_err(Error::from);
-                    future::ready(ret)
-                }
-            });
+                let reject = needs_reject_raft_append(reject_messages_on_memory_ratio);
+                Self::handle_raft_message(store_id, &ch, msg, reject)?;
+            }
+            Ok::<(), Error>(())
+        };
+
+        ctx.spawn(async move {
             let status = match res.await {
                 Err(e) => {
                     let msg = format!("{:?}", e);
@@ -655,25 +699,23 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
         info!("batch_raft RPC is called, new gRPC stream established");
         let store_id = self.store_id;
         let ch = self.ch.clone();
-        ctx.spawn(async move {
-            let res = stream.map_err(Error::from).try_for_each(move |mut msgs| {
-                let len = msgs.get_msgs().len();
+        let reject_messages_on_memory_ratio = self.reject_messages_on_memory_ratio;
+
+        let res = async move {
+            let mut stream = stream.map_err(Error::from);
+            while let Some(mut batch_msg) = stream.try_next().await? {
+                let len = batch_msg.get_msgs().len();
                 RAFT_MESSAGE_RECV_COUNTER.inc_by(len as u64);
                 RAFT_MESSAGE_BATCH_SIZE.observe(len as f64);
-                for msg in msgs.take_msgs().into_iter() {
-                    let to_store_id = msg.get_to_peer().get_store_id();
-                    if to_store_id != store_id {
-                        return future::err(Error::from(RaftStoreError::StoreNotMatch {
-                            to_store_id,
-                            my_store_id: store_id,
-                        }));
-                    }
-                    if let Err(e) = ch.send_raft_msg(msg) {
-                        return future::err(Error::from(e));
-                    }
+                let reject = needs_reject_raft_append(reject_messages_on_memory_ratio);
+                for msg in batch_msg.take_msgs().into_iter() {
+                    Self::handle_raft_message(store_id, &ch, msg, reject)?;
                 }
-                future::ok(())
-            });
+            }
+            Ok::<(), Error>(())
+        };
+
+        ctx.spawn(async move {
             let status = match res.await {
                 Err(e) => {
                     let msg = format!("{:?}", e);
@@ -707,6 +749,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
         }
     }
 
+    #[allow(clippy::collapsible_else_if)]
     fn split_region(
         &mut self,
         ctx: RpcContext<'_>,
@@ -718,13 +761,21 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
 
         let region_id = req.get_context().get_region_id();
         let (cb, f) = paired_future_callback();
-        let mut split_keys = if !req.get_split_key().is_empty() {
-            vec![Key::from_raw(req.get_split_key()).into_encoded()]
+        let mut split_keys = if req.is_raw_kv {
+            if !req.get_split_key().is_empty() {
+                vec![req.get_split_key().to_vec()]
+            } else {
+                req.take_split_keys().to_vec()
+            }
         } else {
-            req.take_split_keys()
-                .into_iter()
-                .map(|x| Key::from_raw(&x).into_encoded())
-                .collect()
+            if !req.get_split_key().is_empty() {
+                vec![Key::from_raw(req.get_split_key()).into_encoded()]
+            } else {
+                req.take_split_keys()
+                    .into_iter()
+                    .map(|x| Key::from_raw(&x).into_encoded())
+                    .collect()
+            }
         };
         split_keys.sort();
         let req = CasualMessage::SplitRegion {
@@ -1724,6 +1775,34 @@ fn future_raw_compare_and_swap<E: Engine, L: LockManager>(
     }
 }
 
+fn future_raw_checksum<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
+    mut req: RawChecksumRequest,
+) -> impl Future<Output = ServerResult<RawChecksumResponse>> {
+    let f = storage.raw_checksum(
+        req.take_context(),
+        req.get_algorithm(),
+        req.take_ranges().into(),
+    );
+    async move {
+        let v = f.await;
+        let mut resp = RawChecksumResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            match v {
+                Ok((checksum, kvs, bytes)) => {
+                    resp.set_checksum(checksum);
+                    resp.set_total_kvs(kvs);
+                    resp.set_total_bytes(bytes);
+                }
+                Err(e) => resp.set_error(format!("{}", e)),
+            }
+        }
+        Ok(resp)
+    }
+}
+
 fn future_copr<E: Engine>(
     copr: &Endpoint<E>,
     peer: Option<String>,
@@ -1938,6 +2017,22 @@ fn raftstore_error_to_region_error(e: RaftStoreError, region_id: u64) -> RegionE
         return region_error;
     }
     e.into()
+}
+
+fn needs_reject_raft_append(reject_messages_on_memory_ratio: f64) -> bool {
+    fail_point!("needs_reject_raft_append", |_| true);
+    if reject_messages_on_memory_ratio - 0.0 < std::f64::EPSILON {
+        return false;
+    }
+
+    let mut usage = 0;
+    if memory_usage_reaches_high_water(&mut usage) {
+        let raft_msg_usage = (MEMTRACE_RAFT_ENTRIES.sum() + MEMTRACE_RAFT_MESSAGES.sum()) as u64;
+        if raft_msg_usage as f64 > usage as f64 * reject_messages_on_memory_ratio {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]

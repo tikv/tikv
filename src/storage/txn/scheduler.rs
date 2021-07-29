@@ -717,7 +717,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             // Initiates an async write operation on the storage engine, there'll be a `WriteFinished`
             // message when it finishes.
             Ok(WriteResult {
-                mut ctx,
+                ctx,
                 mut to_be_write,
                 rows,
                 pr,
@@ -745,13 +745,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         is_first_lock,
                         wait_timeout,
                     } = lock_info;
-                    // Currently only pessimistic_lock request may wait for other locks, and a
-                    // single request may wait lock at most once in its lifecycle. Take the tag out
-                    // instead of cloning it.
-                    let resource_group_tag = ctx.take_resource_group_tag();
                     let diag_ctx = DiagnosticContext {
                         key,
-                        resource_group_tag,
+                        resource_group_tag: ctx.get_resource_group_tag().into(),
                     };
                     scheduler.on_wait_for_lock(
                         cid,
