@@ -1,10 +1,14 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
+<<<<<<< HEAD
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::marker::Unpin;
+=======
+use std::collections::HashMap;
+>>>>>>> 3f0c72a38... sst_importer: always use the bottommost compression (zstd) when writing SSTs (#10577)
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -23,8 +27,13 @@ use uuid::{Builder as UuidBuilder, Uuid};
 use encryption::{DataKeyManager, EncrypterWriter};
 use engine_rocks::{encryption::get_env, RocksSstReader};
 use engine_traits::{
+<<<<<<< HEAD
     EncryptionKeyManager, IngestExternalFileOptions, Iterator, KvEngine, SeekKey, SstReader,
     SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
+=======
+    name_to_cf, CfName, EncryptionKeyManager, Iterator, KvEngine, SSTMetaInfo, SeekKey,
+    SstCompressionType, SstExt, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
+>>>>>>> 3f0c72a38... sst_importer: always use the bottommost compression (zstd) when writing SSTs (#10577)
 };
 use external_storage::{block_on_external_io, create_storage, url_of_backend, READ_BUF_SIZE};
 use tikv_util::file::sync_dir;
@@ -46,6 +55,11 @@ pub struct SSTImporter {
     dir: ImportDir,
     key_manager: Option<Arc<DataKeyManager>>,
     switcher: ImportModeSwitcher,
+<<<<<<< HEAD
+=======
+    enable_ttl: bool,
+    compression_types: HashMap<CfName, SstCompressionType>,
+>>>>>>> 3f0c72a38... sst_importer: always use the bottommost compression (zstd) when writing SSTs (#10577)
 }
 
 impl SSTImporter {
@@ -58,9 +72,33 @@ impl SSTImporter {
             dir: ImportDir::new(root)?,
             key_manager,
             switcher,
+<<<<<<< HEAD
         })
     }
 
+=======
+            enable_ttl,
+            compression_types: HashMap::with_capacity(2),
+        })
+    }
+
+    pub fn set_compression_type(
+        &mut self,
+        cf_name: CfName,
+        compression_type: Option<SstCompressionType>,
+    ) {
+        if let Some(ct) = compression_type {
+            self.compression_types.insert(cf_name, ct);
+        } else {
+            self.compression_types.remove(cf_name);
+        }
+    }
+
+    pub fn start_switch_mode_check<E: KvEngine>(&self, executor: &ThreadPool, db: E) {
+        self.switcher.start(executor, db);
+    }
+
+>>>>>>> 3f0c72a38... sst_importer: always use the bottommost compression (zstd) when writing SSTs (#10577)
     pub fn get_path(&self, meta: &SstMeta) -> PathBuf {
         let path = self.dir.join(meta).unwrap();
         path.save
@@ -376,6 +414,20 @@ impl SSTImporter {
             Bound::Included(s) => iter.seek(SeekKey::Key(&keys::data_key(&s)))?,
             Bound::Excluded(_) => unreachable!(),
         };
+<<<<<<< HEAD
+=======
+        // SST writer must not be opened in gRPC threads, because it may be
+        // blocked for a long time due to IO, especially, when encryption at rest
+        // is enabled, and it leads to gRPC keepalive timeout.
+        let cf_name = name_to_cf(meta.get_cf_name()).unwrap();
+        let mut sst_writer = <E as SstExt>::SstWriterBuilder::new()
+            .set_db(&engine)
+            .set_cf(cf_name)
+            .set_compression_type(self.compression_types.get(cf_name).copied())
+            .build(path.save.to_str().unwrap())
+            .unwrap();
+
+>>>>>>> 3f0c72a38... sst_importer: always use the bottommost compression (zstd) when writing SSTs (#10577)
         while iter.valid()? {
             let old_key = keys::origin_key(iter.key());
             if is_after_end_bound(&old_key, &range_end) {
@@ -458,6 +510,7 @@ impl SSTImporter {
         let default = E::SstWriterBuilder::new()
             .set_db(&db)
             .set_cf(CF_DEFAULT)
+            .set_compression_type(self.compression_types.get(CF_DEFAULT).copied())
             .build(default_path.temp.to_str().unwrap())
             .unwrap();
 
@@ -467,6 +520,7 @@ impl SSTImporter {
         let write = E::SstWriterBuilder::new()
             .set_db(&db)
             .set_cf(CF_WRITE)
+            .set_compression_type(self.compression_types.get(CF_WRITE).copied())
             .build(write_path.temp.to_str().unwrap())
             .unwrap();
 
@@ -1973,5 +2027,89 @@ mod tests {
                 (b"zc".to_vec(), b"v4".to_vec()),
             ]
         );
+    }
+
+    #[test]
+    fn test_download_compression() {
+        // creates a sample SST file.
+        let (_ext_sst_dir, backend, meta) = create_sample_external_sst_file().unwrap();
+
+        // performs the download.
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let mut importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
+        importer.set_compression_type(CF_DEFAULT, Some(SstCompressionType::Snappy));
+        let db = create_sst_test_engine().unwrap();
+
+        importer
+            .download::<TestEngine>(
+                &meta,
+                &backend,
+                "sample.sst",
+                &new_rewrite_rule(b"t123", b"t789", 0),
+                Limiter::new(INFINITY),
+                db,
+            )
+            .unwrap()
+            .unwrap();
+
+        // verifies the SST is compressed using Snappy.
+        let sst_file_path = importer.dir.join(&meta).unwrap().save;
+        assert!(sst_file_path.is_file());
+
+        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
+        assert_eq!(sst_reader.compression_name(), "Snappy");
+    }
+
+    #[test]
+    fn test_write_compression() {
+        let mut meta = SstMeta::default();
+        meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
+
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let mut importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
+        importer.set_compression_type(CF_DEFAULT, Some(SstCompressionType::Zstd));
+        let db_path = importer_dir.path().join("db");
+        let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
+
+        let mut w = importer.new_txn_writer::<TestEngine>(&db, meta).unwrap();
+        let mut batch = WriteBatch::default();
+        let mut pairs = vec![];
+
+        // put short value kv in write cf
+        let mut pair = Pair::default();
+        pair.set_key(b"k1".to_vec());
+        pair.set_value(b"short_value".to_vec());
+        pairs.push(pair);
+
+        // put big value kv in default cf
+        let big_value = vec![42; 256];
+        let mut pair = Pair::default();
+        pair.set_key(b"k2".to_vec());
+        pair.set_value(big_value);
+        pairs.push(pair);
+
+        // generate two cf metas
+        batch.set_commit_ts(10);
+        batch.set_pairs(pairs.into());
+        w.write(batch).unwrap();
+
+        let metas = w.finish().unwrap();
+        assert_eq!(metas.len(), 2);
+
+        // verifies SST compression algorithm...
+        for meta in metas {
+            let sst_file_path = importer.dir.join(&meta).unwrap().save;
+            assert!(sst_file_path.is_file());
+
+            let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
+            let expected_compression_name = match &*meta.cf_name {
+                CF_DEFAULT => "ZSTD",
+                CF_WRITE => "LZ4", // Lz4 is the default if unspecified.
+                _ => unreachable!(),
+            };
+            assert_eq!(sst_reader.compression_name(), expected_compression_name);
+        }
     }
 }
