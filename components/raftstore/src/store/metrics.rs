@@ -293,6 +293,12 @@ lazy_static! {
             "Bucketed histogram of persisted msg wait duration.",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
+    pub static ref STORE_WRITE_MSG_BLOCK_WAIT_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_write_msg_block_wait_duration_seconds",
+            "Bucketed histogram of write msg block wait duration.",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
 
     /// Waterfall Metrics
     pub static ref STORE_BATCH_WAIT_DURATION_HISTOGRAM: Histogram =

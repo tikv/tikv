@@ -1975,7 +1975,7 @@ where
                         STORE_IO_RESCHEDULE_PENDING_TASKS_TOTAL_GAUGE.inc();
                     }
                     Some(id) => {
-                        self.send_write_msg(&ctx.write_senders[id], WriteMsg::WriteTask(task));
+                        self.send_write_msg(&ctx, id, WriteMsg::WriteTask(task));
                     }
                 }
             }
@@ -2032,15 +2032,15 @@ where
         // The `cfg.io_reschedule_concurrent_max_count` is used for controlling the concurrent count
         // of rescheduling peer fsm because rescheduling will introduce performance penalty.
         let success = loop {
-            let concurrent = ctx.io_reschedule_concurrent_count.load(Ordering::SeqCst);
-            if concurrent >= ctx.cfg.io_reschedule_concurrent_max_count {
+            let count = ctx.io_reschedule_concurrent_count.load(Ordering::SeqCst);
+            if count >= ctx.cfg.io_reschedule_concurrent_max_count {
                 break false;
             }
             if ctx
                 .io_reschedule_concurrent_count
                 .compare_exchange(
-                    concurrent,
-                    concurrent + 1,
+                    count,
+                    count + 1,
                     Ordering::SeqCst,
                     Ordering::Relaxed,
                 )
@@ -2062,15 +2062,16 @@ where
         }
     }
 
-    fn send_write_msg(&self, sender: &Sender<WriteMsg<EK, ER>>, msg: WriteMsg<EK, ER>) {
-        match sender.try_send(msg) {
+    fn send_write_msg(&self, ctx: &mut PollContext<EK, ER, T>, writer_id: usize, msg: WriteMsg<EK, ER>) {
+        match ctx.write_senders[writer_id].try_send(msg) {
             Ok(()) => (),
             Err(TrySendError::Full(msg)) => {
-                // TODO: add metrics
-                if sender.send(msg).is_err() {
+                let now = TiInstant::now();
+                if ctx.write_senders[writer_id].send(msg).is_err() {
                     // Write threads are destroyed after store threads during shutdown.
                     panic!("{} failed to send write msg, err: disconnected", self.tag);
                 }
+                ctx.raft_metrics.write_block_wait.observe(now.saturating_elapsed_secs());
             }
             Err(TrySendError::Disconnected(_)) => {
                 // Write threads are destroyed after store threads during shutdown.
@@ -2351,7 +2352,7 @@ where
                 STORE_IO_RESCHEDULE_PENDING_TASKS_TOTAL_GAUGE.sub(tasks.len() as i64);
 
                 for task in tasks {
-                    self.send_write_msg(&ctx.write_senders[new_id], WriteMsg::WriteTask(task));
+                    self.send_write_msg(&ctx, new_id, WriteMsg::WriteTask(task));
                 }
             }
         }

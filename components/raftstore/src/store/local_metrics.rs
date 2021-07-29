@@ -383,6 +383,7 @@ pub struct RaftMetrics {
     pub leader_missing: Arc<Mutex<HashSet<u64>>>,
     pub invalid_proposal: RaftInvalidProposeMetrics,
     pub persisted_msg_wait: LocalHistogram,
+    pub write_block_wait: LocalHistogram,
     pub waterfall_metrics: bool,
     pub batch_wait: LocalHistogram,
     pub to_write_queue: LocalHistogram,
@@ -408,6 +409,7 @@ impl RaftMetrics {
             leader_missing: Arc::default(),
             invalid_proposal: Default::default(),
             persisted_msg_wait: STORE_PERSISTED_MSG_WAIT_DURATION_HISTOGRAM.local(),
+            write_block_wait: STORE_WRITE_MSG_BLOCK_WAIT_DURATION_HISTOGRAM.local(),
             waterfall_metrics,
             batch_wait: STORE_BATCH_WAIT_DURATION_HISTOGRAM.local(),
             to_write_queue: STORE_TO_WRITE_QUEUE_DURATION_HISTOGRAM.local(),
@@ -429,6 +431,7 @@ impl RaftMetrics {
         self.message_dropped.flush();
         self.invalid_proposal.flush();
         self.persisted_msg_wait.flush();
+        self.write_block_wait.flush();
         if self.waterfall_metrics {
             self.batch_wait.flush();
             self.to_write_queue.flush();
