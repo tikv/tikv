@@ -61,7 +61,7 @@ impl SyncBenchRouter {
                 let cmd_type = cmd.request.get_requests()[0].get_cmd_type();
                 resp.set_cmd_type(cmd_type);
                 response.mut_responses().push(resp);
-                cb.0(WriteResponse { response })
+                cb(WriteResponse { response })
             }
             _ => unreachable!(),
         }

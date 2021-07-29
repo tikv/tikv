@@ -556,10 +556,13 @@ where
         // Invoke callbacks
         let now = Instant::now();
         for (cb, resp) in cb_batch.drain(..) {
-            if let Some(scheduled_ts) = cb.invoke_with_response(resp) {
-                self.apply_time
-                    .observe(duration_to_sec(now.saturating_duration_since(scheduled_ts)));
+            if let Some(times) = cb.get_request_times() {
+                for t in times {
+                    self.apply_time
+                        .observe(duration_to_sec(now.saturating_duration_since(*t)));
+                }
             }
+            cb.invoke_with_response(resp);
         }
         self.apply_time.flush();
         self.apply_wait.flush();
@@ -2863,14 +2866,16 @@ impl<S: Snapshot> Apply<S> {
     pub fn on_schedule(&mut self, metrics: &RaftMetrics) {
         let mut now = None;
         for cb in &mut self.cbs {
-            if let Callback::Write { cb, .. } = &mut cb.cb {
+            if let Callback::Write { request_times, .. } = &mut cb.cb {
                 if now.is_none() {
                     now = Some(Instant::now());
                 }
-                metrics.store_time.observe(duration_to_sec(
-                    now.unwrap().saturating_duration_since(cb.1),
-                ));
-                cb.1 = now.unwrap();
+                for t in request_times {
+                    metrics
+                        .store_time
+                        .observe(duration_to_sec(now.unwrap().saturating_duration_since(*t)));
+                    *t = now.unwrap();
+                }
             }
         }
     }

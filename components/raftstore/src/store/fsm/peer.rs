@@ -418,9 +418,9 @@ where
                         .batch_wait
                         .observe(send_time.saturating_elapsed_secs());
                 }
-                // Update the ts
-                if let Callback::Write { cb, .. } = &mut cb {
-                    cb.1 = TiInstant::now();
+                // Fill the request times
+                if let Callback::Write { request_times, .. } = &mut cb {
+                    *request_times = vec![send_time];
                 }
                 return Some(RaftCommand::new(req, cb));
             }
@@ -464,16 +464,25 @@ where
                     }
                 }))
             };
-            if metric.waterfall_metrics {
-                let now = TiInstant::now();
-                for (_, _, send_time) in &cbs {
-                    metric
-                        .batch_wait
-                        .observe(duration_to_sec(now.saturating_duration_since(*send_time)));
-                }
-            }
 
-            let cb = Callback::write_ext(
+            let now = TiInstant::now();
+            let times: Vec<_> = cbs
+                .iter_mut()
+                .filter_map(|cb| {
+                    if let Callback::Write { .. } = &mut cb.0 {
+                        if metric.waterfall_metrics {
+                            metric
+                                .batch_wait
+                                .observe(duration_to_sec(now.saturating_duration_since(cb.2)));
+                        }
+                        Some(cb.2)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            let mut cb = Callback::write_ext(
                 Box::new(move |resp| {
                     let mut last_index = 0;
                     let has_error = resp.response.get_header().has_error();
@@ -493,6 +502,11 @@ where
                 proposed_cb,
                 committed_cb,
             );
+
+            if let Callback::Write { request_times, .. } = &mut cb {
+                *request_times = times;
+            }
+
             return Some(RaftCommand::new(req, cb));
         }
         None
