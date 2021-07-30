@@ -24,9 +24,7 @@ use raftstore::store::msg::StoreMsg;
 use raftstore::store::util::find_peer;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::time::{duration_to_sec, Instant, Limiter, SlowTimer};
-use tikv_util::worker::{
-    FutureRunnable, FutureScheduler, FutureWorker, Stopped as FutureWorkerStopped,
-};
+use tikv_util::worker::{Builder as WorkerBuilder, LazyWorker, Runnable, ScheduleError, Scheduler};
 use txn_types::{Key, TimeStamp};
 
 use crate::server::metrics::*;
@@ -518,11 +516,13 @@ where
     }
 }
 
-impl<E, RR> FutureRunnable<GcTask<E::Local>> for GcRunner<E, RR>
+impl<E, RR> Runnable for GcRunner<E, RR>
 where
     E: Engine,
     RR: RaftStoreRouter<E::Local>,
 {
+    type Task = GcTask<E::Local>;
+
     #[inline]
     fn run(&mut self, task: GcTask<E::Local>) {
         let _io_type_guard = WithIOType::new(IOType::Gc);
@@ -640,14 +640,14 @@ where
 }
 
 /// When we failed to schedule a `GcTask` to `GcRunner`, use this to handle the `ScheduleError`.
-fn handle_gc_task_schedule_error(e: FutureWorkerStopped<GcTask<impl KvEngine>>) -> Result<()> {
+fn handle_gc_task_schedule_error(e: ScheduleError<GcTask<impl KvEngine>>) -> Result<()> {
     error!("failed to schedule gc task"; "err" => %e);
     Err(box_err!("failed to schedule gc task: {:?}", e))
 }
 
 /// Schedules a `GcTask` to the `GcRunner`.
 fn schedule_gc(
-    scheduler: &FutureScheduler<GcTask<impl KvEngine>>,
+    scheduler: &Scheduler<GcTask<impl KvEngine>>,
     region_id: u64,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
@@ -667,7 +667,7 @@ fn schedule_gc(
 
 /// Does GC synchronously.
 pub fn sync_gc(
-    scheduler: &FutureScheduler<GcTask<impl KvEngine>>,
+    scheduler: &Scheduler<GcTask<impl KvEngine>>,
     region_id: u64,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
@@ -701,8 +701,8 @@ where
     /// How many strong references. The worker will be stopped
     /// once there are no more references.
     refs: Arc<AtomicUsize>,
-    worker: Arc<Mutex<FutureWorker<GcTask<E::Local>>>>,
-    worker_scheduler: FutureScheduler<GcTask<E::Local>>,
+    worker: Arc<Mutex<LazyWorker<GcTask<E::Local>>>>,
+    worker_scheduler: Scheduler<GcTask<E::Local>>,
 
     applied_lock_collector: Option<Arc<AppliedLockCollector>>,
 
@@ -765,15 +765,16 @@ where
         cfg: GcConfig,
         feature_gate: FeatureGate,
     ) -> GcWorker<E, RR> {
-        let worker = Arc::new(Mutex::new(FutureWorker::new("gc-worker")));
-        let worker_scheduler = worker.lock().unwrap().scheduler();
+        let worker_builder = WorkerBuilder::new("gc-worker");
+        let worker = worker_builder.create().lazy_build("gc-worker");
+        let worker_scheduler = worker.scheduler();
         GcWorker {
             engine,
             raft_store_router,
             config_manager: GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg))),
             scheduled_tasks: Arc::new(AtomicUsize::new(0)),
             refs: Arc::new(AtomicUsize::new(1)),
-            worker,
+            worker: Arc::new(Mutex::new(worker)),
             worker_scheduler,
             applied_lock_collector: None,
             gc_manager_handle: Arc::new(Mutex::new(None)),
@@ -803,10 +804,11 @@ where
 
         let mut handle = self.gc_manager_handle.lock().unwrap();
         assert!(handle.is_none());
+
         let new_handle = GcManager::new(
             cfg,
             safe_point,
-            self.worker_scheduler.clone(),
+            self.scheduler().clone(),
             self.config_manager.clone(),
             self.feature_gate.clone(),
         )
@@ -822,11 +824,8 @@ where
             self.config_manager.0.clone().tracker("gc-woker".to_owned()),
             self.config_manager.value().clone(),
         );
-        self.worker
-            .lock()
-            .unwrap()
-            .start(runner)
-            .map_err(|e| box_err!("failed to start gc_worker, err: {:?}", e))
+        self.worker.lock().unwrap().start(runner);
+        Ok(())
     }
 
     pub fn start_observe_lock_apply(
@@ -849,15 +848,11 @@ where
             h.stop()?;
         }
         // Stop self.
-        if let Some(h) = self.worker.lock().unwrap().stop() {
-            if let Err(e) = h.join() {
-                return Err(box_err!("failed to join gc_worker handle, err: {:?}", e));
-            }
-        }
+        self.worker.lock().unwrap().stop();
         Ok(())
     }
 
-    pub fn scheduler(&self) -> FutureScheduler<GcTask<E::Local>> {
+    pub fn scheduler(&self) -> Scheduler<GcTask<E::Local>> {
         self.worker_scheduler.clone()
     }
 

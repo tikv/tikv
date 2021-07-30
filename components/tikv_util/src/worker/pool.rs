@@ -370,13 +370,13 @@ impl Worker {
         &self,
         name: S,
     ) -> LazyWorker<T> {
-        let (rx, receiver) = unbounded();
+        let (tx, rx) = unbounded();
         let metrics_pending_task_count = WORKER_PENDING_TASK_VEC.with_label_values(&[&name.into()]);
         LazyWorker {
-            receiver: Some(receiver),
+            receiver: Some(rx),
             worker: self.clone(),
             scheduler: Scheduler::new(
-                rx,
+                tx,
                 self.counter.clone(),
                 self.pending_capacity,
                 metrics_pending_task_count.clone(),
