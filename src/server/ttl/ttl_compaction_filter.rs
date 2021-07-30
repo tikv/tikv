@@ -7,7 +7,7 @@ use engine_rocks::raw::{
     new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
     CompactionFilterFactory, CompactionFilterValueType, DBCompactionFilter,
 };
-use engine_rocks::{RocksTtlProperties, RocksUserCollectedPropertiesNoRc};
+use engine_rocks::RocksTtlProperties;
 use engine_traits::util::{get_expire_ts, ttl_current_ts};
 
 pub struct TTLCompactionFilterFactory;
@@ -22,10 +22,7 @@ impl CompactionFilterFactory for TTLCompactionFilterFactory {
         let mut min_expire_ts = u64::MAX;
         for i in 0..context.file_numbers().len() {
             let table_props = context.table_properties(i);
-            let user_props = unsafe {
-                &*(table_props.user_collected_properties() as *const _
-                    as *const RocksUserCollectedPropertiesNoRc)
-            };
+            let user_props = table_props.user_collected_properties();
             if let Ok(props) = RocksTtlProperties::decode(user_props) {
                 if props.min_expire_ts != 0 {
                     min_expire_ts = std::cmp::min(min_expire_ts, props.min_expire_ts);
