@@ -158,17 +158,6 @@ where
                     ));
                 }
             }
-            if self
-                .raft_state
-                .as_ref()
-                .map_or(true, |r| r.get_last_index() != last_index)
-            {
-                return Err(box_err!(
-                    "invalid raft state, last_index {}, raft_state {:?}",
-                    last_index,
-                    self.raft_state
-                ));
-            }
         }
 
         Ok(())
