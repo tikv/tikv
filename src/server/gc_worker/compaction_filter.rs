@@ -21,7 +21,7 @@ use pd_client::{Feature, FeatureGate};
 use prometheus::{local::*, *};
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::time::Instant;
-use tikv_util::worker::{Builder as WorkerBuilder, Scheduler};
+use tikv_util::worker::Scheduler;
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 
 use crate::server::gc_worker::{GcConfig, GcTask, GcWorkerConfigManager};
@@ -698,7 +698,7 @@ pub mod test_utils {
 
     impl<'a> TestGCRunner<'a> {
         pub fn new(safe_point: u64) -> Self {
-            let (tx, rx) = unbounded();
+            let (_tx, rx) = unbounded();
             let worker = WorkerBuilder::new("test-gc-runner").create();
             let gc_scheduler = worker.lazy_build("gc-runner").scheduler();
 

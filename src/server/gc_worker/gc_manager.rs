@@ -697,8 +697,8 @@ mod tests {
     impl GcManagerTestUtil {
         pub fn new(regions: BTreeMap<Vec<u8>, RegionInfo>) -> Self {
             let (gc_task_sender, gc_task_receiver) = channel();
-            let mut worker = WorkerBuilder::new("test-gc-manager").create();
-            let mut scheduler = worker.start("gc-manager", MockGcRunner { tx: gc_task_sender });
+            let worker = WorkerBuilder::new("test-gc-manager").create();
+            let scheduler = worker.start("gc-manager", MockGcRunner { tx: gc_task_sender });
 
             let (safe_point_sender, safe_point_receiver) = channel();
 
