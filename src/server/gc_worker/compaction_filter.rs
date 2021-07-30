@@ -663,6 +663,7 @@ pub mod test_utils {
     use futures::channel::mpsc::{unbounded, UnboundedReceiver};
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
     use tikv_util::config::VersionTrack;
+    use tikv_util::worker::Builder as WorkerBuilder;
 
     /// Do a global GC with the given safe point.
     pub fn gc_by_compact(engine: &StorageRocksEngine, _: &[u8], safe_point: u64) {
