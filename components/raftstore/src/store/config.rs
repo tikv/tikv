@@ -200,7 +200,7 @@ pub struct Config {
     // When the size of raft db writebatch exceeds this value, write will be triggered.
     pub raft_write_size_limit: ReadableSize,
 
-    pub store_waterfall_metrics: bool,
+    pub waterfall_metrics: bool,
 
     // Deprecated! These configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
@@ -287,7 +287,7 @@ impl Default for Config {
             evict_cache_on_memory_ratio: 0.2,
             cmd_batch: true,
             raft_write_size_limit: ReadableSize::mb(1),
-            store_waterfall_metrics: false,
+            waterfall_metrics: false,
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
@@ -669,8 +669,8 @@ impl Config {
             .with_label_values(&["raft_write_size_limit"])
             .set(self.raft_write_size_limit.0 as f64);
         CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["store_waterfall_metrics"])
-            .set((self.store_waterfall_metrics as i32).into());
+            .with_label_values(&["waterfall_metrics"])
+            .set((self.waterfall_metrics as i32).into());
     }
 
     fn write_change_into_metrics(change: ConfigChange) {

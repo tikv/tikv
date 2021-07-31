@@ -213,7 +213,7 @@ fn test_serde_custom_tikv_config() {
         evict_cache_on_memory_ratio: 0.8,
         cmd_batch: false,
         raft_write_size_limit: ReadableSize::mb(34),
-        store_waterfall_metrics: true,
+        waterfall_metrics: true,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {

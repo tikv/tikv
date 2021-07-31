@@ -799,8 +799,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                 _ => {}
             }
             self.poll_ctx.cfg = incoming.clone();
-            self.poll_ctx.raft_metrics.waterfall_metrics =
-                self.poll_ctx.cfg.store_waterfall_metrics;
+            self.poll_ctx.raft_metrics.waterfall_metrics = self.poll_ctx.cfg.waterfall_metrics;
             self.poll_ctx.update_ticks_timeout();
         }
     }
@@ -1120,7 +1119,7 @@ where
             importer: self.importer.clone(),
             store_meta: self.store_meta.clone(),
             pending_create_peers: self.pending_create_peers.clone(),
-            raft_metrics: RaftMetrics::new(self.cfg.value().store_waterfall_metrics),
+            raft_metrics: RaftMetrics::new(self.cfg.value().waterfall_metrics),
             snap_mgr: self.snap_mgr.clone(),
             coprocessor_host: self.coprocessor_host.clone(),
             timer: SteadyTimer::default(),

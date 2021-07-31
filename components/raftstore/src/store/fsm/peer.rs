@@ -30,6 +30,7 @@ use kvproto::replication_modepb::{DrAutoSyncState, ReplicationMode};
 use protobuf::Message;
 use raft::eraftpb::{ConfChangeType, EntryType, MessageType};
 use raft::{self, Progress, ReadState, Ready, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT};
+use smallvec::{smallvec, SmallVec};
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::sys::{disk, memory_usage_reaches_high_water};
@@ -419,7 +420,7 @@ where
                             .batch_wait
                             .observe(send_time.saturating_elapsed_secs());
                     }
-                    *request_times = vec![send_time];
+                    *request_times = smallvec![send_time];
                 }
                 return Some(RaftCommand::new(req, cb));
             }
@@ -465,7 +466,7 @@ where
             };
 
             let now = TiInstant::now();
-            let times: Vec<_> = cbs
+            let times: SmallVec<[TiInstant; 4]> = cbs
                 .iter_mut()
                 .filter_map(|cb| {
                     if let Callback::Write { .. } = &mut cb.0 {

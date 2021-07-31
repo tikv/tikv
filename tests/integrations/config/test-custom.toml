@@ -188,7 +188,7 @@ perf-level = 1
 evict-cache-on-memory-ratio = 0.8
 cmd-batch = false
 raft-write-size-limit = "34MB"
-store-waterfall-metrics = true
+waterfall-metrics = true
 
 [coprocessor]
 split-region-on-table = false
