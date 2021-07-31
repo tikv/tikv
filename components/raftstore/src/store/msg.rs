@@ -14,6 +14,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::ReplicationStatus;
 use raft::SnapshotStatus;
+use smallvec::SmallVec;
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeObserver};
@@ -76,7 +77,7 @@ pub enum Callback<S: Snapshot> {
         /// `committed_cb` is called after a request is committed and before it's being applied, and
         /// it's guaranteed that the request will be successfully applied soon.
         committed_cb: Option<ExtCallback>,
-        request_times: Vec<Instant>,
+        request_times: SmallVec<[Instant; 4]>,
     },
 }
 
@@ -99,11 +100,11 @@ where
             cb,
             proposed_cb,
             committed_cb,
-            request_times: vec![],
+            request_times: SmallVec::new(),
         }
     }
 
-    pub fn get_request_times(&self) -> Option<&Vec<Instant>> {
+    pub fn get_request_times(&self) -> Option<&SmallVec<[Instant; 4]>> {
         match self {
             Callback::Write { request_times, .. } => Some(request_times),
             _ => None,

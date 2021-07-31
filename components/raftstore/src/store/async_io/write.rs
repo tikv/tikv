@@ -386,7 +386,7 @@ where
             sync_sender,
             cfg_tracker,
             raft_write_size_limit: cfg.value().raft_write_size_limit.0 as usize,
-            metrics: StoreWriteMetrics::new(cfg.value().store_waterfall_metrics),
+            metrics: StoreWriteMetrics::new(cfg.value().waterfall_metrics),
             message_metrics: Default::default(),
             perf_context,
         }
@@ -467,7 +467,7 @@ where
             // update config
             if let Some(incoming) = self.cfg_tracker.any_new() {
                 self.raft_write_size_limit = incoming.raft_write_size_limit.0 as usize;
-                self.metrics.waterfall_metrics = incoming.store_waterfall_metrics;
+                self.metrics.waterfall_metrics = incoming.waterfall_metrics;
             }
         }
     }
@@ -657,10 +657,7 @@ where
     }
 
     fn run(&mut self) {
-        let mut persist_vec = vec![];
-        for _ in 0..self.write_senders.len() {
-            persist_vec.push(None);
-        }
+        let mut persist_vec = vec![None; self.write_senders.len()];
         loop {
             let mut first_time = true;
             loop {

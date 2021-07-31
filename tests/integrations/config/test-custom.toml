@@ -189,7 +189,7 @@ evict-cache-on-memory-ratio = 0.8
 cmd-batch = false
 raft-ready-size-limit = "12MB"
 raft-write-size-limit = "34MB"
-store-waterfall-metrics = true
+waterfall-metrics = true
 io-reschedule-concurrent-max-count = 1234
 io-reschedule-hotpot-duration = "4321s"
 

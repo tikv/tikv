@@ -214,7 +214,7 @@ fn test_serde_custom_tikv_config() {
         cmd_batch: false,
         raft_ready_size_limit: ReadableSize::mb(12),
         raft_write_size_limit: ReadableSize::mb(34),
-        store_waterfall_metrics: true,
+        waterfall_metrics: true,
         io_reschedule_concurrent_max_count: 1234,
         io_reschedule_hotpot_duration: ReadableDuration::secs(4321),
     };
