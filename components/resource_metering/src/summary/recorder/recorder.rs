@@ -1,33 +1,26 @@
-// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+use crate::cpu::recorder::RecorderHandle;
+use crate::summary::collector::{Collector, CollectorId};
+use crate::summary::collector::{CollectorRegistrationMsg, COLLECTOR_REGISTRATION_CHANNEL};
 
-use crate::cpu::collector::{Collector, CollectorId};
-use crate::cpu::collector::{CollectorRegistrationMsg, COLLECTOR_REGISTRATION_CHANNEL};
-use crate::cpu::recorder::CpuRecords;
-use crate::{ResourceMeteringTag, SharedTagPtr, TagInfos};
+use crate::summary::recorder::{ReqSummary, ReqSummaryRecords, TagInfo};
+use crate::SharedTagPtr;
 
-use std::cell::Cell;
 use std::fs::read_dir;
-use std::marker::PhantomData;
 use std::sync::atomic::Ordering::{Relaxed, SeqCst};
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
 use collections::{HashMap, HashSet};
 use crossbeam::channel::{unbounded, Receiver, Sender};
-use fail::fail_point;
 use lazy_static::lazy_static;
 use libc::pid_t;
-use procinfo::pid;
-use procinfo::pid::Stat;
-
+use std::borrow::Borrow;
 use tikv_util::time::Instant;
 
-use super::RecorderHandle;
-
-const RECORD_FREQUENCY: f64 = 99.0;
-const GC_INTERVAL_SECS: u64 = 15 * 60;
+const GC_INTERVAL_SECS: u64 = 1 * 60;
 
 pub fn init_recorder() -> RecorderHandle {
     lazy_static! {
@@ -40,9 +33,9 @@ pub fn init_recorder() -> RecorderHandle {
             let precision_ms0 = precision_ms.clone();
 
             let join_handle = std::thread::Builder::new()
-                .name("cpu-recorder".to_owned())
+                .name("summary-recorder".to_owned())
                 .spawn(move || {
-                    let mut recorder = CpuRecorder::new(pause, precision_ms);
+                    let mut recorder = ReqSummaryRecorder::new(pause, precision_ms);
 
                     loop {
                         recorder.handle_pause();
@@ -52,8 +45,8 @@ pub fn init_recorder() -> RecorderHandle {
                         recorder.may_advance_window();
                         recorder.may_gc();
 
-                        std::thread::sleep(Duration::from_micros(
-                            (1_000.0 / RECORD_FREQUENCY * 1_000.0) as _,
+                        std::thread::sleep(Duration::from_millis(
+                            recorder.precision_ms.load(Relaxed),
                         ));
                     }
                 })
@@ -64,103 +57,47 @@ pub fn init_recorder() -> RecorderHandle {
     HANDLE.clone()
 }
 
-impl ResourceMeteringTag {
-    pub fn attach(&self) -> Guard {
-        CURRENT_REQ.with(|s| {
-            if s.is_set.get() {
-                panic!("Nested attachment is not allowed.")
-            }
-
-            let prev = s.shared_ptr.swap(self.clone());
-            assert!(prev.is_none());
-            s.is_set.set(true);
-        });
-
-        Guard::default()
-    }
-}
-
-struct LocalReqTag {
-    is_set: Cell<bool>,
-    shared_ptr: SharedTagPtr,
-}
-thread_local! {
-    static CURRENT_REQ: LocalReqTag = {
-        let thread_id = unsafe { libc::syscall(libc::SYS_gettid) as libc::pid_t };
-
-        let shared_ptr = SharedTagPtr::default();
-        THREAD_REGISTRATION_CHANNEL.0.send(ThreadRegistrationMsg {
-            thread_id,
-            shared_ptr: shared_ptr.clone(),
-        }).ok();
-
-        LocalReqTag {
-            is_set: Cell::new(false),
-            shared_ptr,
-        }
-    };
-}
-
-#[derive(Default)]
-pub struct Guard {
-    // A trick to impl !Send, !Sync
-    _p: PhantomData<*const ()>,
-}
-impl Drop for Guard {
-    fn drop(&mut self) {
-        CURRENT_REQ.with(|s| {
-            while s.shared_ptr.take().is_none() {}
-            s.is_set.set(false);
-        });
-    }
-}
-
 lazy_static! {
     static ref PID: pid_t = unsafe { libc::getpid() };
-    static ref CLK_TCK: libc::c_long = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
     static ref THREAD_REGISTRATION_CHANNEL: (
         Sender<ThreadRegistrationMsg>,
         Receiver<ThreadRegistrationMsg>
     ) = unbounded();
 }
+
 struct ThreadRegistrationMsg {
     thread_id: pid_t,
-    shared_ptr: SharedTagPtr,
+    thread_stat: ThreadStat,
 }
 
-struct CpuRecorder {
+struct ReqSummaryRecorder {
     pause: Arc<AtomicBool>,
     precision_ms: Arc<AtomicU64>,
-
     thread_stats: HashMap<pid_t, ThreadStat>,
-    current_window_records: CpuRecords,
-
+    current_window_records: ReqSummaryRecords,
     last_collect_instant: Instant,
     last_gc_instant: Instant,
-
     collectors: HashMap<CollectorId, Box<dyn Collector>>,
 }
 
 struct ThreadStat {
     shared_ptr: SharedTagPtr,
-    prev_tag: Option<ResourceMeteringTag>,
-    prev_stat: pid::Stat,
+    req_summary: Arc<ReqSummary>,
+    // tag -> Req
+    records_by_tag: Arc<Mutex<HashMap<TagInfo, ReqSummary>>>,
 }
 
-impl CpuRecorder {
+impl ReqSummaryRecorder {
     pub fn new(pause: Arc<AtomicBool>, precision_ms: Arc<AtomicU64>) -> Self {
         let now = Instant::now();
 
         Self {
             pause,
             precision_ms,
-
+            thread_stats: HashMap::default(),
+            current_window_records: ReqSummaryRecords::default(),
             last_collect_instant: now,
             last_gc_instant: now,
-
-            thread_stats: HashMap::default(),
-            current_window_records: CpuRecords::default(),
-
             collectors: HashMap::default(),
         }
     }
@@ -176,7 +113,6 @@ impl CpuRecorder {
             self.reset();
         }
     }
-
     pub fn handle_collector_registration(&mut self) {
         let mut should_reset = false;
         loop {
@@ -205,68 +141,38 @@ impl CpuRecorder {
     pub fn handle_thread_registration(&mut self) {
         while let Ok(ThreadRegistrationMsg {
             thread_id,
-            shared_ptr,
+            thread_stat,
         }) = THREAD_REGISTRATION_CHANNEL.1.try_recv()
         {
-            self.thread_stats.insert(
-                thread_id,
-                ThreadStat {
-                    prev_stat: Stat::default(),
-                    shared_ptr,
-                    prev_tag: None,
-                },
-            );
+            self.thread_stats.insert(thread_id, thread_stat);
         }
     }
-
     pub fn record(&mut self) {
         let records = &mut self.current_window_records.records;
-        self.thread_stats.iter_mut().for_each(|(tid, thread_stat)| {
-            let cur_tag = thread_stat.shared_ptr.take().map(|req_tag| {
-                let tag = req_tag.clone();
-                // Put it back as quickly as possible.
-                assert!(thread_stat.shared_ptr.swap(req_tag).is_none());
-                tag
-            });
-
-            let prev_tag = thread_stat.prev_tag.take();
-
-            if cur_tag.is_some() || prev_tag.is_some() {
-                STAT_TASK_COUNT.inc();
-
-                // If existing current tag, need to store the beginning stat.
-                // If existing previous tag, need to get the end stat to calculate delta.
-                if let Ok(stat) = procinfo::pid::stat_task(*PID, *tid) {
-                    // Accumulate the cpu time for the previous tag.
-                    if let Some(prev_tag) = prev_tag {
-                        let prev_cpu_ticks = (thread_stat.prev_stat.utime as u64)
-                            .wrapping_add(thread_stat.prev_stat.stime as u64);
-                        let current_cpu_ticks = (stat.utime as u64).wrapping_add(stat.stime as u64);
-                        let delta_ms = current_cpu_ticks.wrapping_sub(prev_cpu_ticks) * 1_000
-                            / (*CLK_TCK as u64);
-
-                        if delta_ms != 0 {
-                            *records.entry(prev_tag).or_insert(0) += delta_ms;
-                        }
-                    }
-
-                    fail_point!(
-                        "cpu-record-test-filter",
-                        cur_tag.as_ref().map_or(false, |t| !t
-                            .infos
-                            .extra_attachment
-                            .starts_with(super::TEST_TAG_PREFIX)),
-                        |_| {}
-                    );
-
-                    // Store the beginning stat for the current tag.
-                    if cur_tag.is_some() {
-                        thread_stat.prev_tag = cur_tag;
-                        thread_stat.prev_stat = stat;
-                    }
+        self.thread_stats
+            .iter_mut()
+            .for_each(|(_tid, thread_stat)| {
+                let mut map_guard = thread_stat.records_by_tag.lock().unwrap();
+                for (k, v) in map_guard.drain() {
+                    records.entry(k).or_insert(ReqSummary::default()).merge(&v);
                 }
-            }
-        });
+                let cur_tag = thread_stat.shared_ptr.take().map(|req_tag| {
+                    let tag = req_tag.clone();
+                    // Put it back as quickly as possible.
+                    assert!(thread_stat.shared_ptr.swap(req_tag).is_none());
+                    tag
+                });
+                if let Some(tag) = cur_tag {
+                    let cur_req_summary: &ReqSummary = thread_stat.req_summary.borrow();
+                    let cur_req_summary = cur_req_summary.take_and_reset();
+                    let tag = &tag.infos.extra_attachment;
+                    let tag = TagInfo::new(tag.clone());
+                    records
+                        .entry(tag)
+                        .or_insert(ReqSummary::default())
+                        .merge(&cur_req_summary);
+                }
+            });
     }
 
     pub fn may_gc(&mut self) -> bool {
@@ -278,11 +184,7 @@ impl CpuRecorder {
 
         if need_gc {
             if let Some(thread_ids) = Self::get_thread_ids() {
-                self.thread_stats.retain(|k, v| {
-                    let retain = thread_ids.contains(k);
-                    assert!(retain || v.shared_ptr.take().is_none());
-                    retain
-                });
+                self.thread_stats.retain(|k, _v| thread_ids.contains(k));
             }
 
             if self.thread_stats.capacity() > THREAD_STAT_LEN_THRESHOLD
@@ -344,22 +246,10 @@ impl CpuRecorder {
             }
         }
     }
-
     fn reset(&mut self) {
         let now = Instant::now();
-        self.current_window_records = CpuRecords::default();
-        for v in self.thread_stats.values_mut() {
-            v.prev_tag = None;
-        }
+        self.current_window_records = ReqSummaryRecords::default();
         self.last_collect_instant = now;
         self.last_gc_instant = now;
     }
-}
-
-lazy_static! {
-    static ref STAT_TASK_COUNT: prometheus::IntCounter = prometheus::register_int_counter!(
-        "tikv_req_cpu_stat_task_count",
-        "Counter of stat_task call"
-    )
-    .unwrap();
 }

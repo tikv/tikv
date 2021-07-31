@@ -1,8 +1,11 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::cpu::collector::{register_collector, Collector, CollectorHandle};
-use crate::row::collector::{register_row_collector, RowCollector, RowCollectorHandle};
-use crate::row::recorder::{RowRecords, RowStats};
+use crate::summary::collector::{
+    register_collector as summary_register_collector, Collector as SummaryCollector,
+    CollectorHandle as SummaryCollectorHandle,
+};
+use crate::summary::recorder::{ReqSummary, ReqSummaryRecords};
 
 use crate::cpu::recorder::CpuRecords;
 use crate::Config;
@@ -45,16 +48,18 @@ impl RowRecordsCollector {
     }
 }
 
-impl RowCollector for RowRecordsCollector {
-    fn collect_row(&self, records: Arc<RowRecords>) {
-        self.scheduler.schedule(Task::RowRecords(records)).ok();
+impl SummaryCollector for RowRecordsCollector {
+    fn collect(&self, records: Arc<ReqSummaryRecords>) {
+        self.scheduler
+            .schedule(Task::ReqSummaryRecords(records))
+            .ok();
     }
 }
 
 pub enum Task {
     ConfigChange(Config),
     CpuRecords(Arc<CpuRecords>),
-    RowRecords(Arc<RowRecords>),
+    ReqSummaryRecords(Arc<ReqSummaryRecords>),
 }
 
 impl Display for Task {
@@ -66,8 +71,8 @@ impl Display for Task {
             Task::CpuRecords(_) => {
                 write!(f, "CpuRecords")?;
             }
-            Task::RowRecords(_) => {
-                write!(f, "RowRecords")?;
+            Task::ReqSummaryRecords(_) => {
+                write!(f, "ReqSummaryRecords")?;
             }
         }
 
@@ -85,7 +90,7 @@ pub struct ResourceMeteringReporter {
     client: Option<ResourceUsageAgentClient>,
     reporting: Arc<AtomicBool>,
     cpu_records_collector: Option<CollectorHandle>,
-    row_records_collector: Option<RowCollectorHandle>,
+    summary_records_collector: Option<SummaryCollectorHandle>,
 
     // resource_tag -> ([timestamp_secs], [cpu_time_ms], total_cpu_time_ms)
     records: HashMap<Vec<u8>, ReportRecord>,
@@ -97,23 +102,16 @@ pub struct ResourceMeteringReporter {
 struct ReportRecord {
     timestamp_secs_list: Vec<u64>,
     cpu_time_ms_list: Vec<u32>,
-    read_row_count_list: Vec<u64>,
-    read_index_count_list: Vec<u64>,
+    summary_list: Vec<ReqSummary>,
     total_cpu_time_ms: u32,
 }
 
 impl ReportRecord {
-    fn new(
-        timestamp_secs: u64,
-        cpu_time_ms: u32,
-        read_row_count: u64,
-        read_index_count: u64,
-    ) -> Self {
+    fn new(timestamp_secs: u64, cpu_time_ms: u32, summary: ReqSummary) -> Self {
         Self {
             timestamp_secs_list: vec![timestamp_secs],
             cpu_time_ms_list: vec![cpu_time_ms],
-            read_row_count_list: vec![read_row_count],
-            read_index_count_list: vec![read_index_count],
+            summary_list: vec![summary],
             total_cpu_time_ms: cpu_time_ms,
         }
     }
@@ -127,14 +125,12 @@ impl ReportRecord {
         self.total_cpu_time_ms += cpu_time_ms;
     }
 
-    fn add_row_stats(&mut self, timestamp_secs: u64, row_stats: &RowStats) {
+    fn add_req_summary(&mut self, timestamp_secs: u64, summary: &ReqSummary) {
         if *self.timestamp_secs_list.last().unwrap() == timestamp_secs {
-            *self.read_row_count_list.last_mut().unwrap() += row_stats.read_row_count;
-            *self.read_index_count_list.last_mut().unwrap() += row_stats.read_index_count;
+            (*self.summary_list.last_mut().unwrap()).merge(summary);
         } else {
             self.timestamp_secs_list.push(timestamp_secs);
-            self.read_row_count_list.push(row_stats.read_row_count);
-            self.read_index_count_list.push(row_stats.read_index_count);
+            self.summary_list.push(summary.clone());
         }
     }
 }
@@ -142,14 +138,13 @@ impl ReportRecord {
 #[derive(Debug, Default)]
 struct OtherRecord {
     cpu_time_ms: u32,
-    row_stats: RowStats,
+    summary: ReqSummary,
 }
 
 impl OtherRecord {
-    fn merge(&mut self, cpu_time_ms: u32, read_row_count: u64, read_index_count: u64) {
+    fn merge(&mut self, cpu_time_ms: u32, summary: &ReqSummary) {
         self.cpu_time_ms += cpu_time_ms;
-        self.row_stats.read_row_count += read_row_count;
-        self.row_stats.read_index_count += read_index_count;
+        self.summary.merge(summary);
     }
 }
 
@@ -162,7 +157,7 @@ impl ResourceMeteringReporter {
             client: None,
             reporting: Arc::new(AtomicBool::new(false)),
             cpu_records_collector: None,
-            row_records_collector: None,
+            summary_records_collector: None,
             records: HashMap::default(),
             others: HashMap::default(),
             find_top_k: Vec::default(),
@@ -182,8 +177,8 @@ impl ResourceMeteringReporter {
                 CpuRecordsCollector::new(self.scheduler.clone()),
             )));
         }
-        if self.row_records_collector.is_none() {
-            self.row_records_collector = Some(register_row_collector(Box::new(
+        if self.summary_records_collector.is_none() {
+            self.summary_records_collector = Some(summary_register_collector(Box::new(
                 RowRecordsCollector::new(self.scheduler.clone()),
             )));
         }
@@ -199,6 +194,7 @@ impl Runnable for ResourceMeteringReporter {
                 if !new_config.should_report() {
                     self.client.take();
                     self.cpu_records_collector.take();
+                    self.summary_records_collector.take();
                 } else if new_config.agent_address != self.config.agent_address
                     || new_config.enabled != self.config.enabled
                 {
@@ -222,7 +218,8 @@ impl Runnable for ResourceMeteringReporter {
                             record.add_cpu_time_ms(timestamp_secs, ms);
                         }
                         None => {
-                            let record = ReportRecord::new(timestamp_secs, ms, 0, 0);
+                            let record =
+                                ReportRecord::new(timestamp_secs, ms, ReqSummary::default());
                             self.records.insert(tag.clone(), record);
                         }
                     }
@@ -247,37 +244,28 @@ impl Runnable for ResourceMeteringReporter {
                                 .timestamp_secs_list
                                 .into_iter()
                                 .zip(
-                                    record.cpu_time_ms_list.into_iter().zip(
-                                        record
-                                            .read_row_count_list
-                                            .into_iter()
-                                            .zip(record.read_index_count_list)
-                                            .into_iter(),
-                                    ),
+                                    record
+                                        .cpu_time_ms_list
+                                        .into_iter()
+                                        .zip(record.summary_list.into_iter()),
                                 )
-                                .for_each(
-                                    |(secs, (cpu_time, (read_row_cound, read_index_count)))| {
-                                        (*others.entry(secs).or_insert(OtherRecord::default()))
-                                            .merge(cpu_time, read_row_cound, read_index_count);
-                                    },
-                                )
+                                .for_each(|(secs, (cpu_time, summary))| {
+                                    (*others.entry(secs).or_insert(OtherRecord::default()))
+                                        .merge(cpu_time, &summary);
+                                })
                         });
                 }
             }
-            Task::RowRecords(records) => {
+            Task::ReqSummaryRecords(records) => {
                 let timestamp_secs = records.begin_unix_time_secs;
-                for (tag, row_stats) in &records.records {
+                for (tag, summary) in &records.records {
+                    let tag = &tag.tag;
                     match self.records.get_mut(tag) {
                         Some(record) => {
-                            record.add_row_stats(timestamp_secs, row_stats);
+                            record.add_req_summary(timestamp_secs, summary);
                         }
                         None => {
-                            let record = ReportRecord::new(
-                                timestamp_secs,
-                                0,
-                                row_stats.read_row_count,
-                                row_stats.read_index_count,
-                            );
+                            let record = ReportRecord::new(timestamp_secs, 0, summary.clone());
                             self.records.insert(tag.clone(), record);
                         }
                     }
@@ -288,6 +276,7 @@ impl Runnable for ResourceMeteringReporter {
 
     fn shutdown(&mut self) {
         self.cpu_records_collector.take();
+        self.summary_records_collector.take();
         self.client.take();
     }
 }
@@ -320,7 +309,11 @@ impl RunnableWithTimer for ResourceMeteringReporter {
                             req.set_resource_group_tag(tag);
                             req.set_record_list_timestamp_sec(record.timestamp_secs_list);
                             req.set_record_list_cpu_time_ms(record.cpu_time_ms_list);
-                            req.set_record_list_scan_rows(record.read_row_count_list);
+                            let mut read_row_count_list = vec![];
+                            for summary in record.summary_list {
+                                read_row_count_list.push(summary.get_read_key_count())
+                            }
+                            req.set_record_list_scan_rows(read_row_count_list);
                             if tx.send((req, WriteFlags::default())).await.is_err() {
                                 return;
                             }
@@ -335,7 +328,7 @@ impl RunnableWithTimer for ResourceMeteringReporter {
                             for (ts, record) in others {
                                 timestamp_secs_list.push(ts);
                                 cpu_time_ms_list.push(record.cpu_time_ms);
-                                read_row_count_list.push(record.row_stats.read_row_count);
+                                read_row_count_list.push(record.summary.get_read_key_count());
                             }
                             let mut req = CpuTimeRecord::default();
                             req.set_record_list_timestamp_sec(timestamp_secs_list);

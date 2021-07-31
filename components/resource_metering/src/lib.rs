@@ -13,12 +13,14 @@ use std::sync::Arc;
 
 use online_config::{ConfigChange, OnlineConfig};
 use serde_derive::{Deserialize, Serialize};
+use std::sync::atomic::AtomicPtr;
+use std::sync::atomic::Ordering::SeqCst;
 use tikv_util::config::ReadableDuration;
 use tikv_util::worker::Scheduler;
 
 pub mod cpu;
 pub mod reporter;
-pub mod row;
+pub mod summary;
 
 #[derive(Debug, Default, Eq, PartialEq, Clone, Hash)]
 pub struct ResourceMeteringTag {
@@ -34,6 +36,25 @@ impl ResourceMeteringTag {
 impl From<Arc<TagInfos>> for ResourceMeteringTag {
     fn from(infos: Arc<TagInfos>) -> Self {
         Self { infos }
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct SharedTagPtr {
+    tag: Arc<AtomicPtr<TagInfos>>,
+}
+impl SharedTagPtr {
+    fn take(&self) -> Option<ResourceMeteringTag> {
+        let prev_ptr = self.tag.swap(std::ptr::null_mut(), SeqCst);
+        (!prev_ptr.is_null())
+            .then(|| unsafe { ResourceMeteringTag::from(Arc::from_raw(prev_ptr as _)) })
+    }
+
+    fn swap(&self, value: ResourceMeteringTag) -> Option<ResourceMeteringTag> {
+        let tag_arc_ptr = Arc::into_raw(value.infos);
+        let prev_ptr = self.tag.swap(tag_arc_ptr as _, SeqCst);
+        (!prev_ptr.is_null())
+            .then(|| unsafe { ResourceMeteringTag::from(Arc::from_raw(prev_ptr as _)) })
     }
 }
 
@@ -132,6 +153,7 @@ pub struct ConfigManager {
     current_config: Config,
     scheduler: Scheduler<Task>,
     recorder: RecorderHandle,
+    summary_recorder: RecorderHandle,
 }
 
 impl ConfigManager {
@@ -139,11 +161,13 @@ impl ConfigManager {
         current_config: Config,
         scheduler: Scheduler<Task>,
         recorder: RecorderHandle,
+        summary_recorder: RecorderHandle,
     ) -> Self {
         ConfigManager {
             current_config,
             scheduler,
             recorder,
+            summary_recorder,
         }
     }
 }
@@ -160,13 +184,16 @@ impl online_config::ConfigManager for ConfigManager {
         if self.current_config.enabled != new_config.enabled {
             if new_config.enabled {
                 self.recorder.resume();
+                self.summary_recorder.resume();
             } else {
                 self.recorder.pause();
+                self.summary_recorder.pause();
             }
         }
 
         if self.current_config.precision != new_config.precision {
             self.recorder.set_precision(new_config.precision.0);
+            self.summary_recorder.set_precision(new_config.precision.0);
         }
 
         self.scheduler

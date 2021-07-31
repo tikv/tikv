@@ -2,7 +2,7 @@
 
 use crate::ResourceMeteringTag;
 
-use crate::row::recorder::{on_poll_begin, on_poll_finish};
+use crate::summary::recorder::{on_poll_begin, on_poll_finish};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
