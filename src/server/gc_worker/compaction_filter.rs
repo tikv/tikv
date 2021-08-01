@@ -880,7 +880,8 @@ pub mod tests {
         let mut gc_and_check = |expect_tasks: bool, prefix: &[u8]| {
             gc_runner.safe_point(500).gc(&raw_engine);
 
-            if let Some(task) = gc_runner.gc_receiver.recv() {
+            // Wait up to 1 second, and treat as no task if timeout.
+            if let Ok(Some(task)) = gc_runner.gc_receiver.recv_timeout(Duration::new(1, 0)) {
                 assert!(expect_tasks, "a GC task is expected");
                 match task {
                     GcTask::GcKeys { keys, .. } => {
