@@ -660,10 +660,9 @@ pub mod test_utils {
     use engine_rocks::util::get_cf_handle;
     use engine_rocks::RocksEngine;
     use engine_traits::{SyncMutable, CF_WRITE};
-    use futures::channel::mpsc::{unbounded, UnboundedReceiver};
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
     use tikv_util::config::VersionTrack;
-    use tikv_util::worker::Builder as WorkerBuilder;
+    use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
 
     /// Do a global GC with the given safe point.
     pub fn gc_by_compact(engine: &StorageRocksEngine, _: &[u8], safe_point: u64) {
@@ -693,15 +692,13 @@ pub mod test_utils {
         pub end: Option<&'a [u8]>,
         pub target_level: Option<usize>,
         pub gc_scheduler: Scheduler<GcTask<RocksEngine>>,
-        pub gc_receiver: UnboundedReceiver<Option<GcTask<RocksEngine>>>,
+        pub gc_receiver: ReceiverWrapper<GcTask<RocksEngine>>,
         pub(super) callbacks_on_drop: Vec<Arc<dyn Fn(&WriteCompactionFilter) + Send + Sync>>,
     }
 
     impl<'a> TestGCRunner<'a> {
         pub fn new(safe_point: u64) -> Self {
-            let (_tx, rx) = unbounded();
-            let worker = WorkerBuilder::new("test-gc-runner").create();
-            let gc_scheduler = worker.lazy_build("gc-runner").scheduler();
+            let (gc_scheduler, gc_receiver) = dummy_scheduler();
 
             TestGCRunner {
                 safe_point,
@@ -710,7 +707,7 @@ pub mod test_utils {
                 end: None,
                 target_level: None,
                 gc_scheduler,
-                gc_receiver: rx,
+                gc_receiver,
                 callbacks_on_drop: vec![],
             }
         }
@@ -820,6 +817,7 @@ pub mod tests {
     use crate::storage::mvcc::tests::{must_get, must_get_none};
     use crate::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
     use engine_traits::{DeleteStrategy, MiscExt, Peekable, Range, SyncMutable, CF_WRITE};
+    use tikv_util::worker::Msg;
 
     #[test]
     fn test_is_compaction_filter_allowed() {
@@ -883,9 +881,9 @@ pub mod tests {
         let mut gc_and_check = |expect_tasks: bool, prefix: &[u8]| {
             gc_runner.safe_point(500).gc(&raw_engine);
 
-            if let Ok(Some(task)) = gc_runner.gc_receiver.try_next() {
+            if let Some(task) = gc_runner.gc_receiver.recv() {
                 assert!(expect_tasks, "a GC task is expected");
-                match task.unwrap() {
+                match task {
                     GcTask::GcKeys { keys, .. } => {
                         assert_eq!(keys.len(), 1);
                         let got = keys[0].as_encoded();
