@@ -2,7 +2,9 @@
 
 use crate::cpu::collector::{Collector, CollectorId};
 use crate::cpu::collector::{CollectorRegistrationMsg, COLLECTOR_REGISTRATION_CHANNEL};
-use crate::cpu::recorder::{CpuRecords, CURRENT_REQ};
+use crate::cpu::recorder::{
+    CpuRecords, ThreadRegistrationMsg, CURRENT_REQ, THREAD_REGISTRATION_CHANNEL,
+};
 use crate::{ResourceMeteringTag, SharedTagPtr};
 
 use std::fs::read_dir;
@@ -14,7 +16,6 @@ use std::thread;
 use std::time::Duration;
 
 use collections::{HashMap, HashSet};
-use crossbeam::channel::{unbounded, Receiver, Sender};
 use fail::fail_point;
 use lazy_static::lazy_static;
 use libc::pid_t;
@@ -79,18 +80,6 @@ impl ResourceMeteringTag {
     }
 }
 
-thread_local! {
-    static THREAD_ID :libc::pid_t = {
-        let thread_id = unsafe { libc::syscall(libc::SYS_gettid) as libc::pid_t };
-        CURRENT_REQ.with(|s| {
-            THREAD_REGISTRATION_CHANNEL.0.send(ThreadRegistrationMsg {
-                thread_id,
-                shared_ptr: s.shared_ptr.clone(),
-            }).ok();
-        });
-    }
-}
-
 #[derive(Default)]
 pub struct Guard {
     // A trick to impl !Send, !Sync
@@ -108,14 +97,6 @@ impl Drop for Guard {
 lazy_static! {
     static ref PID: pid_t = unsafe { libc::getpid() };
     static ref CLK_TCK: libc::c_long = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
-    static ref THREAD_REGISTRATION_CHANNEL: (
-        Sender<ThreadRegistrationMsg>,
-        Receiver<ThreadRegistrationMsg>
-    ) = unbounded();
-}
-struct ThreadRegistrationMsg {
-    thread_id: pid_t,
-    shared_ptr: SharedTagPtr,
 }
 
 struct CpuRecorder {

@@ -169,9 +169,9 @@ impl ReqSummaryRecorder {
         let need_gc = duration_secs >= GC_INTERVAL_SECS;
 
         if need_gc {
-            if let Some(thread_ids) = Self::get_thread_ids() {
-                self.thread_stats.retain(|k, _v| thread_ids.contains(k));
-            }
+            // if let Some(thread_ids) = Self::get_thread_ids() {
+            //     self.thread_stats.retain(|k, _v| thread_ids.contains(k));
+            // }
 
             if self.thread_stats.capacity() > THREAD_STAT_LEN_THRESHOLD
                 && self.thread_stats.len() < THREAD_STAT_LEN_THRESHOLD / 2

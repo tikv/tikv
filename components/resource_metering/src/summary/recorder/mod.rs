@@ -2,6 +2,7 @@
 
 mod recorder;
 
+use crate::cpu::recorder::get_thread_id;
 use collections::HashMap;
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use lazy_static::lazy_static;
@@ -59,8 +60,7 @@ thread_local! {
         CURRENT_REQ_SUMMARY.with(|r|{
             let cur_req_summary = r.clone();
             crate::cpu::recorder::CURRENT_REQ.with(|s| {
-                // let thread_id = unsafe { libc::syscall(libc::SYS_gettid) as libc::pid_t };
-                let thread_id = thread_id::get() as libc::pid_t;
+                let thread_id = get_thread_id();
                 let shared_ptr = s.shared_ptr.clone();
                 THREAD_REGISTRATION_CHANNEL.0.send(ThreadRegistrationMsg {
                     thread_id,

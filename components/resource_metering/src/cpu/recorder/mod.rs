@@ -2,14 +2,16 @@
 
 use crate::{ResourceMeteringTag, SharedTagPtr};
 
+use collections::HashMap;
+use crossbeam::channel::{unbounded, Receiver, Sender};
+use lazy_static::lazy_static;
+use libc::pid_t;
 use std::cell::Cell;
 use std::sync::atomic::Ordering::SeqCst;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-use collections::HashMap;
 
 pub const TEST_TAG_PREFIX: &[u8] = b"__resource_metering::tests::";
 
@@ -98,10 +100,38 @@ pub struct LocalReqTag {
 
 thread_local! {
     pub static CURRENT_REQ: LocalReqTag = {
-        let shared_ptr = SharedTagPtr::default();
+        let thread_id = get_thread_id();
+       let shared_ptr = SharedTagPtr::default();
+       THREAD_REGISTRATION_CHANNEL.0.send(ThreadRegistrationMsg {
+            thread_id,
+            shared_ptr: shared_ptr.clone(),
+        }).ok();
         LocalReqTag {
             is_set: Cell::new(false),
             shared_ptr,
         }
     };
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn get_thread_id() -> libc::pid_t {
+    thread_id::get() as libc::pid_t
+}
+
+#[cfg(target_os = "linux")]
+pub fn get_thread_id() -> libc::pid_t {
+    let thread_id = unsafe { libc::syscall(libc::SYS_gettid) as libc::pid_t };
+    thread_id
+}
+
+lazy_static! {
+    pub(crate) static ref THREAD_REGISTRATION_CHANNEL: (
+        Sender<ThreadRegistrationMsg>,
+        Receiver<ThreadRegistrationMsg>
+    ) = unbounded();
+}
+
+pub(crate) struct ThreadRegistrationMsg {
+    pub(crate) thread_id: pid_t,
+    pub(crate) shared_ptr: SharedTagPtr,
 }
