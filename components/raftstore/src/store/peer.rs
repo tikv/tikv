@@ -14,7 +14,7 @@ use engine_traits::{Engines, KvEngine, RaftEngine, Snapshot, WriteBatch, WriteOp
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use kvproto::errorpb;
-use kvproto::kvrpcpb::AllowedLevel;
+use kvproto::kvrpcpb::DiskFullOpt;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{self, PeerRole};
 use kvproto::pdpb::PeerStats;
@@ -2315,7 +2315,7 @@ where
         mut cb: Callback<EK::Snapshot>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
-        allowed_level: AllowedLevel,
+        disk_full_opt: DiskFullOpt,
     ) -> bool {
         if self.pending_remove {
             return false;
@@ -2339,25 +2339,23 @@ where
             Ok(RequestPolicy::ReadIndex) => return self.read_index(ctx, req, err_resp, cb),
             Ok(RequestPolicy::ProposeNormal) => {
                 let mut allowed = true;
-                let mut err_msg = String::from("propose failed: disk full ");
+                let mut err_msg = String::from("propose failed: disk ");
                 let store_id = ctx.store.get_id();
-                match allowed_level {
-                    AllowedLevel::AllowedAlreadyFull => allowed = true,
-                    AllowedLevel::AllowedAlmostFull => {
-                        if disk::is_disk_threshold_2(ctx.disk_status, store_id) {
+                match disk_full_opt {
+                    DiskFullOpt::AllowedOnAlreadyFull => allowed = true,
+                    DiskFullOpt::AllowedOnAlmostFull => {
+                        if disk::is_disk_already_full(ctx.disk_status, store_id) {
                             allowed = false;
-                            err_msg.push_str("threshod2 happened");
+                            err_msg.push_str("already full");
                         }
                     }
-                    AllowedLevel::AllowedNormal => {
-                        if disk::is_disk_threshold_2(ctx.disk_status, store_id) {
+                    DiskFullOpt::NotAllowedOnFull => {
+                        if disk::is_disk_already_full(ctx.disk_status, store_id) {
                             allowed = false;
-                            err_msg.push_str("threshod2 happened");
-                        } else if disk::is_disk_threshold_1(ctx.disk_status, store_id)
-                            && !req.has_admin_request()
-                        {
+                            err_msg.push_str("already full");
+                        } else if disk::is_disk_almost_full(ctx.disk_status, store_id) {
                             allowed = false;
-                            err_msg.push_str("threshod1 happened");
+                            err_msg.push_str("almost full");
                         }
                     }
                 }
@@ -3143,6 +3141,9 @@ where
         if self.is_applying_snapshot()
             || self.has_pending_snapshot()
             || msg.get_from() != self.leader_id()
+            // For followers whose disk is full.
+            || disk::is_disk_almost_full(ctx.disk_status,ctx.store.get_id())
+            || disk::is_disk_already_full(ctx.disk_status,ctx.store.get_id())
         {
             info!(
                 "reject transferring leader";

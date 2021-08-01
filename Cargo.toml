@@ -369,7 +369,3 @@ incremental = false
 debug-assertions = false
 overflow-checks = false
 rpath = false
-
-
-[patch.'https://github.com/pingcap/kvproto.git']
-kvproto = { path = "/home/xiaojin.zxj/010.tidb/kvproto" }

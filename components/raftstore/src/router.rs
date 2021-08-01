@@ -4,17 +4,17 @@ use std::cell::RefCell;
 
 use crossbeam::channel::{SendError, TrySendError};
 use engine_traits::{KvEngine, RaftEngine, Snapshot};
-use kvproto::kvrpcpb::AllowedLevel;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::SnapshotStatus;
+use tikv_util::error;
 use tikv_util::time::ThreadReadId;
-use tikv_util::{deadline::Deadline, error};
 
 use crate::store::fsm::RaftRouter;
 use crate::store::transport::{CasualRouter, ProposalRouter, StoreRouter};
 use crate::store::{
-    Callback, CasualMessage, LocalReader, PeerMsg, RaftCommand, SignificantMsg, StoreMsg,
+    Callback, CasualMessage, LocalReader, PeerMsg, RaftCmdExtraOpt, RaftCommand, SignificantMsg,
+    StoreMsg,
 };
 use crate::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
 
@@ -48,27 +48,13 @@ where
     }
 
     /// Sends RaftCmdRequest to local store.
-    fn send_command(&self, req: RaftCmdRequest, cb: Callback<EK::Snapshot>) -> RaftStoreResult<()> {
-        send_command_impl::<EK, _>(self, req, cb, None, AllowedLevel::default())
-    }
-
-    fn send_command_with_deadline(
+    fn send_command(
         &self,
         req: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
-        deadline: Deadline,
-        allowed_level: AllowedLevel,
+        extra_opt: RaftCmdExtraOpt,
     ) -> RaftStoreResult<()> {
-        send_command_impl::<EK, _>(self, req, cb, Some(deadline), allowed_level)
-    }
-
-    fn send_command_without_deadline(
-        &self,
-        req: RaftCmdRequest,
-        cb: Callback<EK::Snapshot>,
-        allowed_level: AllowedLevel,
-    ) -> RaftStoreResult<()> {
-        send_command_impl::<EK, _>(self, req, cb, None, allowed_level)
+        send_command_impl::<EK, _>(self, req, cb, extra_opt)
     }
 
     /// Reports the peer being unreachable to the Region.
@@ -112,8 +98,7 @@ fn send_command_impl<EK, PR>(
     router: &PR,
     req: RaftCmdRequest,
     cb: Callback<EK::Snapshot>,
-    deadline: Option<Deadline>,
-    allowed_level: AllowedLevel,
+    extra_opt: RaftCmdExtraOpt,
 ) -> RaftStoreResult<()>
 where
     EK: KvEngine,
@@ -121,8 +106,7 @@ where
 {
     let region_id = req.get_header().get_region_id();
     let mut cmd = RaftCommand::new(req, cb);
-    cmd.deadline = deadline;
-    cmd.allowed_level = allowed_level;
+    cmd.extra_opt = extra_opt;
     router
         .send(cmd)
         .map_err(|e| handle_send_error(region_id, e))

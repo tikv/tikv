@@ -12,7 +12,7 @@ use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::ReplicationStatus;
-use kvproto::{import_sstpb::SstMeta, kvrpcpb::AllowedLevel};
+use kvproto::{import_sstpb::SstMeta, kvrpcpb::DiskFullOpt};
 use raft::SnapshotStatus;
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
@@ -409,6 +409,21 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
     }
 }
 
+/// control options for raftcmd.
+#[derive(Debug)]
+pub struct RaftCmdExtraOpt {
+    pub deadline: Option<Deadline>,
+    pub disk_full_opt: DiskFullOpt,
+}
+
+impl Default for RaftCmdExtraOpt {
+    fn default() -> Self {
+        RaftCmdExtraOpt {
+            deadline: None,
+            disk_full_opt: DiskFullOpt::NotAllowedOnFull,
+        }
+    }
+}
 /// Raft command is the command that is expected to be proposed by the
 /// leader of the target raft group.
 #[derive(Debug)]
@@ -416,8 +431,7 @@ pub struct RaftCommand<S: Snapshot> {
     pub send_time: Instant,
     pub request: RaftCmdRequest,
     pub callback: Callback<S>,
-    pub deadline: Option<Deadline>,
-    pub allowed_level: AllowedLevel,
+    pub extra_opt: RaftCmdExtraOpt,
 }
 
 impl<S: Snapshot> RaftCommand<S> {
@@ -427,8 +441,23 @@ impl<S: Snapshot> RaftCommand<S> {
             request,
             callback,
             send_time: Instant::now(),
-            deadline: None,
-            allowed_level: AllowedLevel::default(),
+            extra_opt: RaftCmdExtraOpt::default(),
+        }
+    }
+
+    pub fn new_ext(
+        request: RaftCmdRequest,
+        callback: Callback<S>,
+        extra_opt: RaftCmdExtraOpt,
+    ) -> RaftCommand<S> {
+        RaftCommand {
+            request,
+            callback,
+            send_time: Instant::now(),
+            extra_opt: RaftCmdExtraOpt {
+                deadline: extra_opt.deadline,
+                disk_full_opt: extra_opt.disk_full_opt,
+            },
         }
     }
 }

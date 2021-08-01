@@ -908,6 +908,39 @@ pub fn must_kv_prewrite_with(
     );
 }
 
+// Disk full test interface.
+pub fn try_kv_prewrite_with(
+    client: &TikvClient,
+    ctx: Context,
+    muts: Vec<Mutation>,
+    pk: Vec<u8>,
+    ts: u64,
+    use_async_commit: bool,
+    try_one_pc: bool,
+) -> PrewriteResponse {
+    let mut prewrite_req = PrewriteRequest::default();
+    prewrite_req.set_context(ctx);
+    prewrite_req.set_mutations(muts.into_iter().collect());
+    prewrite_req.primary_lock = pk;
+    prewrite_req.start_version = ts;
+    prewrite_req.lock_ttl = 3000;
+    prewrite_req.min_commit_ts = prewrite_req.start_version + 1;
+    prewrite_req.use_async_commit = use_async_commit;
+    prewrite_req.try_one_pc = try_one_pc;
+    client.kv_prewrite(&prewrite_req).unwrap()
+}
+
+// Disk full test interface.
+pub fn try_kv_prewrite(
+    client: &TikvClient,
+    ctx: Context,
+    muts: Vec<Mutation>,
+    pk: Vec<u8>,
+    ts: u64,
+) -> PrewriteResponse {
+    try_kv_prewrite_with(client, ctx, muts, pk, ts, false, false)
+}
+
 pub fn must_kv_prewrite(
     client: &TikvClient,
     ctx: Context,

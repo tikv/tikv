@@ -561,10 +561,10 @@ impl<K: PrewriteKind> Prewriter<K> {
             // If an error (KeyIsLocked or WriteConflict) occurs before, these lock guards
             // are dropped along with `txn` automatically.
             let lock_guards = txn.take_guards();
-            let allowed_level = self.ctx.get_allowed_level();
+            let disk_full_opt = self.ctx.get_disk_full_opt();
             WriteResult {
                 ctx: self.ctx,
-                to_be_write: WriteData::new_ext(txn.into_modifies(), extra, None, allowed_level),
+                to_be_write: WriteData::new_ext(txn.into_modifies(), extra, None, disk_full_opt),
                 rows,
                 pr,
                 lock_info: None,

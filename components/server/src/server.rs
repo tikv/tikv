@@ -420,7 +420,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             );
         }
         disk::set_disk_reserved_space(reserve_space);
-        //TODO after disk full readonly impl, such file should be removed.
         file_system::reserve_space_for_recover(&self.config.storage.data_dir, reserve_space / 5)
             .unwrap();
     }
@@ -1097,9 +1096,9 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                         "disk full thd2, available={},snap={},kv={},raft={},capacity={}",
                         available, snap_size, kv_size, raft_size, capacity
                     );
-                    disk::set_disk_status(disk::DiskStatus::DiskThd2);
+                    disk::set_disk_status(disk::DiskUsageStatus::AlreadyFull);
                 } else if available <= thd1 {
-                    if disk::is_disk_threshold_2(disk_status, 0) {
+                    if disk::is_disk_already_full(disk_status, 0) {
                         warn!(
                             "disk full thd2->thd1, available={},snap={},kv={},raft={},capacity={}",
                             available, snap_size, kv_size, raft_size, capacity
@@ -1110,15 +1109,15 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                             available, snap_size, kv_size, raft_size, capacity
                         );
                     }
-                    disk::set_disk_status(disk::DiskStatus::DiskThd1);
+                    disk::set_disk_status(disk::DiskUsageStatus::AlmostFull);
                 } else {
-                    if disk::is_disk_threshold_1(disk_status, 0) {
+                    if disk::is_disk_almost_full(disk_status, 0) {
                         info!(
                             "disk full thd1->normal, available={},snap={},kv={},raft={},capacity={}",
                             available, snap_size, kv_size, raft_size, capacity
                         );
                     }
-                    disk::set_disk_status(disk::DiskStatus::DiskNormal);
+                    disk::set_disk_status(disk::DiskUsageStatus::Normal);
                 }
             })
     }

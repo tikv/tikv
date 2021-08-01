@@ -8,7 +8,6 @@ use std::{result, thread};
 
 use futures::executor::block_on;
 use kvproto::errorpb::Error as PbError;
-use kvproto::kvrpcpb::AllowedLevel;
 use kvproto::metapb::{self, PeerRole, RegionEpoch, StoreLabel};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
@@ -125,12 +124,6 @@ pub trait Simulator {
         rx.recv_timeout(timeout)
             .map_err(|e| Error::Timeout(format!("request timeout for {:?}: {:?}", timeout, e)))
     }
-
-    fn set_allowed_level_on_disk_full(&mut self, level: AllowedLevel);
-
-    fn get_allowed_level_on_disk_full(&self) -> AllowedLevel;
-
-    fn clear_allowed_level_on_disk_full(&mut self);
 }
 
 pub struct Cluster<T: Simulator> {
@@ -1489,19 +1482,6 @@ impl<T: Simulator> Cluster<T> {
     // it's so common that we provide an API for it
     pub fn partition(&self, s1: Vec<u64>, s2: Vec<u64>) {
         self.add_send_filter(PartitionFilterFactory::new(s1, s2));
-    }
-
-    // set operation allowed level when tikv disk full happens.
-    pub fn set_allowed_level_on_disk_full(&mut self, level: AllowedLevel) {
-        self.sim.wl().set_allowed_level_on_disk_full(level);
-    }
-
-    pub fn get_allowed_level_on_disk_full(&self) -> AllowedLevel {
-        return self.sim.rl().get_allowed_level_on_disk_full();
-    }
-
-    pub fn clear_allowed_level_on_disk_full(&mut self) {
-        self.sim.wl().clear_allowed_level_on_disk_full()
     }
 }
 

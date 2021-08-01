@@ -29,7 +29,7 @@ use std::u64;
 
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
-use kvproto::kvrpcpb::{AllowedLevel, CommandPri, ExtraOp};
+use kvproto::kvrpcpb::{CommandPri, DiskFullOpt, ExtraOp};
 use resource_metering::{cpu::FutureExt, ResourceMeteringTag};
 use tikv_util::{callback::must_call, deadline::Deadline, time::Instant};
 use txn_types::TimeStamp;
@@ -726,13 +726,13 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 response_policy,
             }) => {
                 SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
-                match ctx.get_allowed_level() {
-                    AllowedLevel::AllowedAlreadyFull => {
-                        to_be_write.allowed_level = AllowedLevel::AllowedAlreadyFull
+                match ctx.get_disk_full_opt() {
+                    DiskFullOpt::AllowedOnAlreadyFull => {
+                        to_be_write.disk_full_opt = DiskFullOpt::AllowedOnAlreadyFull
                     }
-                    AllowedLevel::AllowedAlmostFull => {
-                        if to_be_write.allowed_level != AllowedLevel::AllowedAlreadyFull {
-                            to_be_write.allowed_level = AllowedLevel::AllowedAlmostFull
+                    DiskFullOpt::AllowedOnAlmostFull => {
+                        if to_be_write.disk_full_opt != DiskFullOpt::AllowedOnAlreadyFull {
+                            to_be_write.disk_full_opt = DiskFullOpt::AllowedOnAlmostFull
                         }
                     }
                     _ => {}

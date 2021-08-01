@@ -5,7 +5,6 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use tempfile::{Builder, TempDir};
 
-use kvproto::kvrpcpb::AllowedLevel;
 use kvproto::metapb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{self, RaftMessage};
@@ -135,7 +134,6 @@ pub struct NodeCluster {
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
     #[allow(clippy::type_complexity)]
     post_create_coprocessor_host: Option<Box<dyn Fn(u64, &mut CoprocessorHost<RocksEngine>)>>,
-    allowed_level: AllowedLevel,
 }
 
 impl NodeCluster {
@@ -148,7 +146,6 @@ impl NodeCluster {
             simulate_trans: HashMap::default(),
             concurrency_managers: HashMap::default(),
             post_create_coprocessor_host: None,
-            allowed_level: AllowedLevel::AllowedNormal,
         }
     }
 }
@@ -383,7 +380,7 @@ impl Simulator for NodeCluster {
             .get(&node_id)
             .cloned()
             .unwrap();
-        router.send_command(request, cb)
+        router.send_command(request, cb, RaftCmdExtraOpt::default())
     }
 
     fn async_read(
@@ -442,18 +439,6 @@ impl Simulator for NodeCluster {
 
     fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RocksEngine>> {
         self.nodes.get(&node_id).map(|node| node.get_router())
-    }
-
-    fn set_allowed_level_on_disk_full(&mut self, level: AllowedLevel) {
-        self.allowed_level = level
-    }
-
-    fn get_allowed_level_on_disk_full(&self) -> AllowedLevel {
-        self.allowed_level
-    }
-
-    fn clear_allowed_level_on_disk_full(&mut self) {
-        self.allowed_level = AllowedLevel::AllowedNormal
     }
 }
 

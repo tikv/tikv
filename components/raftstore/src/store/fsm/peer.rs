@@ -16,6 +16,7 @@ use error_code::ErrorCodeExt;
 use fail::fail_point;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SwitchMode;
+use kvproto::kvrpcpb::DiskFullOpt;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{
@@ -546,26 +547,31 @@ where
                     }
                 }
                 PeerMsg::RaftCommand(cmd) => {
-                    self.ctx.allowed_level = cmd.allowed_level;
                     self.ctx
                         .raft_metrics
                         .propose
                         .request_wait_time
                         .observe(duration_to_sec(cmd.send_time.saturating_elapsed()) as f64);
-                    if let Some(Err(e)) = cmd.deadline.map(|deadline| deadline.check()) {
+                    if let Some(Err(e)) = cmd.extra_opt.deadline.map(|deadline| deadline.check()) {
                         cmd.callback.invoke_with_response(new_error(e.into()));
                         continue;
                     }
 
                     let req_size = cmd.request.compute_size();
-                    if self.fsm.batch_req_builder.can_batch(&cmd.request, req_size) {
+                    if cmd.extra_opt.disk_full_opt == DiskFullOpt::NotAllowedOnFull
+                        && self.fsm.batch_req_builder.can_batch(&cmd.request, req_size)
+                    {
                         self.fsm.batch_req_builder.add(cmd, req_size);
                         if self.fsm.batch_req_builder.should_finish() {
                             self.propose_batch_raft_command();
                         }
                     } else {
                         self.propose_batch_raft_command();
-                        self.propose_raft_command(cmd.request, cmd.callback)
+                        self.propose_raft_command(
+                            cmd.request,
+                            cmd.callback,
+                            cmd.extra_opt.disk_full_opt,
+                        )
                     }
                 }
                 PeerMsg::Tick(tick) => self.on_tick(tick),
@@ -604,7 +610,7 @@ where
             .batch_req_builder
             .build(&mut self.ctx.raft_metrics.propose)
         {
-            self.propose_raft_command(cmd.request, cmd.callback)
+            self.propose_raft_command(cmd.request, cmd.callback, DiskFullOpt::NotAllowedOnFull)
         }
     }
 
@@ -872,6 +878,7 @@ where
                     },
                 )
             })),
+            DiskFullOpt::NotAllowedOnFull,
         );
     }
 
@@ -969,7 +976,7 @@ where
             self.region().get_region_epoch().clone(),
             self.fsm.peer.peer.clone(),
         );
-        self.propose_raft_command(msg, cb);
+        self.propose_raft_command(msg, cb, DiskFullOpt::NotAllowedOnFull);
     }
 
     fn on_role_changed(&mut self, ready: &Ready) {
@@ -1269,7 +1276,9 @@ where
 
         let msg_type = msg.get_message().get_msg_type();
 
-        if disk::is_disk_threshold_2(self.ctx.disk_status, self.ctx.store.get_id()) {
+        if disk::is_disk_almost_full(self.ctx.disk_status, self.ctx.store.get_id())
+            || disk::is_disk_already_full(self.ctx.disk_status, self.ctx.store.get_id())
+        {
             // only leader transfer and winning log are allowed.
             let mut allowed = true;
             if MessageType::MsgAppend == msg_type {
@@ -1281,6 +1290,8 @@ where
                         break;
                     }
                 }
+            } else if MessageType::MsgTimeoutNow == msg_type {
+                allowed = false;
             }
 
             if !allowed {
@@ -1290,7 +1301,7 @@ where
                 );
                 return Err(Error::DiskFull(
                     self.ctx.store.get_id(),
-                    "disk full threshold2 happens".to_owned(),
+                    "disk full happen when handle raft message".to_owned(),
                 ));
             }
         }
@@ -2683,7 +2694,7 @@ where
             request.set_admin_request(admin);
             request
         };
-        self.propose_raft_command(req, Callback::None);
+        self.propose_raft_command(req, Callback::None, DiskFullOpt::AllowedOnAlmostFull);
     }
 
     fn on_check_merge(&mut self) {
@@ -3382,7 +3393,12 @@ where
         }
     }
 
-    fn propose_raft_command(&mut self, mut msg: RaftCmdRequest, cb: Callback<EK::Snapshot>) {
+    fn propose_raft_command(
+        &mut self,
+        mut msg: RaftCmdRequest,
+        cb: Callback<EK::Snapshot>,
+        diskfullopt: DiskFullOpt,
+    ) {
         match self.pre_propose_raft_command(&msg) {
             Ok(Some(resp)) => {
                 cb.invoke_with_response(resp);
@@ -3428,11 +3444,7 @@ where
         let mut resp = RaftCmdResponse::default();
         let term = self.fsm.peer.term();
         bind_term(&mut resp, term);
-        if self
-            .fsm
-            .peer
-            .propose(self.ctx, cb, msg, resp, self.ctx.allowed_level)
-        {
+        if self.fsm.peer.propose(self.ctx, cb, msg, resp, diskfullopt) {
             self.fsm.has_ready = true;
         }
 
@@ -3607,7 +3619,7 @@ where
         let peer = self.fsm.peer.peer.clone();
         let term = self.fsm.peer.get_index_term(compact_idx);
         let request = new_compact_log_request(region_id, peer, compact_idx, term);
-        self.propose_raft_command(request, Callback::None);
+        self.propose_raft_command(request, Callback::None, DiskFullOpt::AllowedOnAlmostFull);
 
         self.fsm.skip_gc_raft_log_ticks = 0;
         self.register_raft_gc_log_tick();
@@ -4046,7 +4058,7 @@ where
             self.fsm.peer.peer.clone(),
             &self.fsm.peer.consistency_state,
         );
-        self.propose_raft_command(req, Callback::None);
+        self.propose_raft_command(req, Callback::None, DiskFullOpt::NotAllowedOnFull);
     }
 
     fn on_ingest_sst_result(&mut self, ssts: Vec<SSTMetaInfo>) {

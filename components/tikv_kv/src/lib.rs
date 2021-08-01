@@ -36,7 +36,7 @@ use engine_traits::{
 };
 use futures::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
-use kvproto::kvrpcpb::{AllowedLevel, Context, ExtraOp as TxnExtraOp, KeyRange};
+use kvproto::kvrpcpb::{Context, DiskFullOpt, ExtraOp as TxnExtraOp, KeyRange};
 use thiserror::Error;
 use tikv_util::{deadline::Deadline, escape};
 use txn_types::{Key, TimeStamp, TxnExtra, Value};
@@ -111,12 +111,12 @@ pub struct WriteData {
     pub modifies: Vec<Modify>,
     pub extra: TxnExtra,
     pub deadline: Option<Deadline>,
-    pub allowed_level: AllowedLevel,
+    pub disk_full_opt: DiskFullOpt,
 }
 
 impl WriteData {
     pub fn new(modifies: Vec<Modify>, extra: TxnExtra) -> Self {
-        Self::new_ext(modifies, extra, None, AllowedLevel::AllowedNormal)
+        Self::new_ext(modifies, extra, None, DiskFullOpt::NotAllowedOnFull)
     }
 
     pub fn from_modifies(modifies: Vec<Modify>) -> Self {
@@ -127,13 +127,13 @@ impl WriteData {
         modifies: Vec<Modify>,
         extra: TxnExtra,
         deadline: Option<Deadline>,
-        allowed_level: AllowedLevel,
+        disk_full_opt: DiskFullOpt,
     ) -> Self {
         Self {
             modifies,
             extra,
             deadline,
-            allowed_level,
+            disk_full_opt,
         }
     }
 
@@ -142,7 +142,7 @@ impl WriteData {
             modifies,
             TxnExtra::default(),
             None,
-            AllowedLevel::AllowedAlmostFull,
+            DiskFullOpt::AllowedOnAlmostFull,
         )
     }
 
@@ -151,7 +151,7 @@ impl WriteData {
             modifies,
             TxnExtra::default(),
             None,
-            AllowedLevel::AllowedAlreadyFull,
+            DiskFullOpt::AllowedOnAlreadyFull,
         )
     }
 }
