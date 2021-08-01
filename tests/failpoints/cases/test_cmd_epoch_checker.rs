@@ -186,7 +186,7 @@ fn test_reject_proposal_during_region_merge() {
     fail::remove(prepare_merge_fp);
     assert!(
         !merge_rx
-            .recv_timeout(Duration::from_secs(1))
+            .recv_timeout(Duration::from_secs(5))
             .unwrap()
             .get_header()
             .has_error()
@@ -218,7 +218,7 @@ fn test_reject_proposal_during_region_merge() {
 
     // Wait for region merge done.
     fail::remove(commit_merge_fp);
-    pd_client.check_merged_timeout(source.get_id(), Duration::from_secs(1));
+    pd_client.check_merged_timeout(source.get_id(), Duration::from_secs(5));
     // The write request fails due to epoch not match.
     cb_receivers.assert_err();
 
