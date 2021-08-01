@@ -808,7 +808,7 @@ where
         let new_handle = GcManager::new(
             cfg,
             safe_point,
-            self.scheduler().clone(),
+            self.scheduler(),
             self.config_manager.clone(),
             self.feature_gate.clone(),
         )
