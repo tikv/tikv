@@ -817,7 +817,6 @@ pub mod tests {
     use crate::storage::mvcc::tests::{must_get, must_get_none};
     use crate::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
     use engine_traits::{DeleteStrategy, MiscExt, Peekable, Range, SyncMutable, CF_WRITE};
-    use tikv_util::worker::Msg;
 
     #[test]
     fn test_is_compaction_filter_allowed() {
