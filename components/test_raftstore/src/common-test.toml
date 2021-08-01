@@ -46,7 +46,6 @@ raft-heartbeat-ticks = 2
 raft-election-timeout-ticks = 25
 raft-log-gc-tick-interval = "100ms"
 raft-log-gc-threshold = 1
-raft-log-reserve-max-ticks = 1000000
 raft-engine-purge-interval = "100ms"
 region-split-check-diff = 10000
 region-compact-check-interval = "12s"

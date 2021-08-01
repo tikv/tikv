@@ -137,7 +137,6 @@ raft-log-gc-tick-interval = "12s"
 raft-log-gc-threshold = 12
 raft-log-gc-count-limit = 12
 raft-log-gc-size-limit = "1KB"
-raft-log-reserve-max-ticks = 100
 raft-engine-purge-interval = "20m"
 raft-entry-cache-life-time = "12s"
 raft-reject-transfer-leader-duration = "3s"
