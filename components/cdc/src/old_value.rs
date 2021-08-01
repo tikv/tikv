@@ -61,6 +61,16 @@ impl OldValueCache {
             miss_none_count: 0,
         }
     }
+
+    pub(crate) fn resize(&mut self, new_capacity: ReadableSize) {
+        CDC_OLD_VALUE_CACHE_MEMORY_QUOTA.set(new_capacity.0 as i64);
+        self.cache.resize(new_capacity.0 as usize);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn capacity(&self) -> usize {
+        self.cache.capacity()
+    }
 }
 
 pub struct OldValueReader<S: EngineSnapshot> {
@@ -205,6 +215,17 @@ mod tests {
     use std::sync::Arc;
     use tikv::storage::kv::TestEngineBuilder;
     use tikv::storage::txn::tests::*;
+
+    #[test]
+    fn test_old_value_resize() {
+        let capacity = 1024;
+        let mut old_value_cache = OldValueCache::new(ReadableSize(capacity));
+        assert_eq!(old_value_cache.capacity(), capacity as usize);
+
+        let new_capacity = 256;
+        old_value_cache.resize(ReadableSize(new_capacity));
+        assert_eq!(old_value_cache.capacity(), new_capacity as usize);
+    }
 
     #[test]
     fn test_old_value_reader() {
