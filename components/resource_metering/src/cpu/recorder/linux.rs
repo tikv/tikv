@@ -2,14 +2,13 @@
 
 use crate::cpu::collector::{Collector, CollectorId};
 use crate::cpu::collector::{CollectorRegistrationMsg, COLLECTOR_REGISTRATION_CHANNEL};
-use crate::cpu::recorder::CpuRecords;
-use crate::{ResourceMeteringTag, SharedTagPtr, TagInfos};
+use crate::cpu::recorder::{CpuRecords, CURRENT_REQ};
+use crate::{ResourceMeteringTag, SharedTagPtr};
 
-use std::cell::Cell;
 use std::fs::read_dir;
 use std::marker::PhantomData;
 use std::sync::atomic::Ordering::{Relaxed, SeqCst};
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -80,25 +79,16 @@ impl ResourceMeteringTag {
     }
 }
 
-struct LocalReqTag {
-    is_set: Cell<bool>,
-    shared_ptr: SharedTagPtr,
-}
 thread_local! {
-    static CURRENT_REQ: LocalReqTag = {
+    static THREAD_ID :libc::pid_t = {
         let thread_id = unsafe { libc::syscall(libc::SYS_gettid) as libc::pid_t };
-
-        let shared_ptr = SharedTagPtr::default();
-        THREAD_REGISTRATION_CHANNEL.0.send(ThreadRegistrationMsg {
-            thread_id,
-            shared_ptr: shared_ptr.clone(),
-        }).ok();
-
-        LocalReqTag {
-            is_set: Cell::new(false),
-            shared_ptr,
-        }
-    };
+        CURRENT_REQ.with(|s| {
+            THREAD_REGISTRATION_CHANNEL.0.send(ThreadRegistrationMsg {
+                thread_id,
+                shared_ptr: s.shared_ptr.clone(),
+            }).ok();
+        });
+    }
 }
 
 #[derive(Default)]

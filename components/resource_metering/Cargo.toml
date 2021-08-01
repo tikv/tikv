@@ -35,6 +35,7 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 futures = "0.3"
 pdqselect = "0.1"
 fail = "0.4"
+thread-id = "4.0.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }

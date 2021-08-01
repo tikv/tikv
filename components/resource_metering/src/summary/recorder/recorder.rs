@@ -1,20 +1,22 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use crate::cpu::recorder::RecorderHandle;
 use crate::summary::collector::{Collector, CollectorId};
 use crate::summary::collector::{CollectorRegistrationMsg, COLLECTOR_REGISTRATION_CHANNEL};
 
-use crate::summary::recorder::{ReqSummary, ReqSummaryRecords, TagInfo};
-use crate::SharedTagPtr;
+use crate::summary::recorder::{
+    ReqSummary, ReqSummaryRecords, TagInfo, ThreadRegistrationMsg, ThreadStat,
+    THREAD_REGISTRATION_CHANNEL,
+};
 
 use std::fs::read_dir;
 use std::sync::atomic::Ordering::{Relaxed, SeqCst};
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
 use collections::{HashMap, HashSet};
-use crossbeam::channel::{unbounded, Receiver, Sender};
 use lazy_static::lazy_static;
 use libc::pid_t;
 use std::borrow::Borrow;
@@ -59,15 +61,6 @@ pub fn init_recorder() -> RecorderHandle {
 
 lazy_static! {
     static ref PID: pid_t = unsafe { libc::getpid() };
-    static ref THREAD_REGISTRATION_CHANNEL: (
-        Sender<ThreadRegistrationMsg>,
-        Receiver<ThreadRegistrationMsg>
-    ) = unbounded();
-}
-
-struct ThreadRegistrationMsg {
-    thread_id: pid_t,
-    thread_stat: ThreadStat,
 }
 
 struct ReqSummaryRecorder {
@@ -78,13 +71,6 @@ struct ReqSummaryRecorder {
     last_collect_instant: Instant,
     last_gc_instant: Instant,
     collectors: HashMap<CollectorId, Box<dyn Collector>>,
-}
-
-struct ThreadStat {
-    shared_ptr: SharedTagPtr,
-    req_summary: Arc<ReqSummary>,
-    // tag -> Req
-    records_by_tag: Arc<Mutex<HashMap<TagInfo, ReqSummary>>>,
 }
 
 impl ReqSummaryRecorder {

@@ -1,7 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::ResourceMeteringTag;
+use crate::{ResourceMeteringTag, SharedTagPtr};
 
+use std::cell::Cell;
 use std::sync::atomic::Ordering::SeqCst;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Arc;
@@ -88,4 +89,19 @@ impl Default for CpuRecords {
             records: HashMap::default(),
         }
     }
+}
+
+pub struct LocalReqTag {
+    pub(crate) is_set: Cell<bool>,
+    pub shared_ptr: SharedTagPtr,
+}
+
+thread_local! {
+    pub static CURRENT_REQ: LocalReqTag = {
+        let shared_ptr = SharedTagPtr::default();
+        LocalReqTag {
+            is_set: Cell::new(false),
+            shared_ptr,
+        }
+    };
 }

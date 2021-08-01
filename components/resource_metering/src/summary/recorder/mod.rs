@@ -1,12 +1,18 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 mod recorder;
 
 use collections::HashMap;
+use crossbeam::channel::{unbounded, Receiver, Sender};
+use lazy_static::lazy_static;
+use libc::pid_t;
 use std::borrow::Borrow;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::SharedTagPtr;
 pub use recorder::init_recorder;
 
 pub fn add_thread_read_key(count: u64) {
@@ -48,7 +54,45 @@ pub fn on_poll_finish(tag: Vec<u8>) {
 
 thread_local! {
     pub static CURRENT_REQ_SUMMARY: Arc<ReqSummary> = Arc::new(ReqSummary::default());
-    pub static REQ_SUMMARY_MAP: Arc<Mutex<HashMap<TagInfo, ReqSummary>>> = Arc::new(Mutex::new(HashMap::default()));
+    pub static REQ_SUMMARY_MAP: Arc<Mutex<HashMap<TagInfo, ReqSummary>>> = {
+        let map = Arc::new(Mutex::new(HashMap::default()));
+        CURRENT_REQ_SUMMARY.with(|r|{
+            let cur_req_summary = r.clone();
+            crate::cpu::recorder::CURRENT_REQ.with(|s| {
+                // let thread_id = unsafe { libc::syscall(libc::SYS_gettid) as libc::pid_t };
+                let thread_id = thread_id::get() as libc::pid_t;
+                let shared_ptr = s.shared_ptr.clone();
+                THREAD_REGISTRATION_CHANNEL.0.send(ThreadRegistrationMsg {
+                    thread_id,
+                    thread_stat: ThreadStat{
+                        shared_ptr: shared_ptr,
+                        req_summary: cur_req_summary,
+                        records_by_tag: map.clone(),
+                    }
+                }).ok();
+            });
+        });
+        map
+    };
+}
+
+pub(crate) struct ThreadRegistrationMsg {
+    pub(crate) thread_id: pid_t,
+    pub(crate) thread_stat: ThreadStat,
+}
+
+pub(crate) struct ThreadStat {
+    pub(crate) shared_ptr: SharedTagPtr,
+    pub(crate) req_summary: Arc<ReqSummary>,
+    // tag -> Req
+    pub(crate) records_by_tag: Arc<Mutex<HashMap<TagInfo, ReqSummary>>>,
+}
+
+lazy_static! {
+    pub(crate) static ref THREAD_REGISTRATION_CHANNEL: (
+        Sender<ThreadRegistrationMsg>,
+        Receiver<ThreadRegistrationMsg>
+    ) = unbounded();
 }
 
 #[derive(Debug, Default)]
@@ -125,21 +169,3 @@ impl Default for ReqSummaryRecords {
         }
     }
 }
-
-// impl RowRecords {
-//     fn take_and_reset(&mut self) -> Self {
-//         let mut records = HashMap::default();
-//         for (k, v) in self.records.drain() {
-//             records.insert(k, v);
-//         }
-//         let old_begin_unix_time_secs = self.begin_unix_time_secs;
-//         let now_unix_time = SystemTime::now()
-//             .duration_since(UNIX_EPOCH)
-//             .expect("Clock may have gone backwards");
-//         self.begin_unix_time_secs = now_unix_time.as_secs();
-//         Self {
-//             begin_unix_time_secs: old_begin_unix_time_secs,
-//             records,
-//         }
-//     }
-// }
