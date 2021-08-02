@@ -23,3 +23,21 @@ fn test_region_detail() {
     assert!(region_detail.has_leader());
     assert_eq!(region_detail.get_leader(), &leader);
 }
+
+#[test]
+fn test_latency_inspect() {
+    let mut cluster = new_node_cluster(0, 1);
+    cluster.run();
+    let router = cluster.sim.wl().get_router(1).unwrap();
+    let (tx, rx) = std::sync::mpsc::sync_channel(10);
+    let inspector = LatencyInspecter::new(
+        1,
+        Box::new(move |_, duration| {
+            let dur = duration.sum();
+            tx.send(dur).unwrap();
+        }),
+    );
+    let msg = StoreMsg::LatencyInspect(Instant::now(), inspector);
+    router.send_control(msg).unwrap();
+    rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+}

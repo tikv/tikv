@@ -18,7 +18,7 @@ use raft::SnapshotStatus;
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeObserver};
 use crate::store::metrics::RaftEventDurationType;
-use crate::store::util::KeysInfoFormatter;
+use crate::store::util::{KeysInfoFormatter, LatencyInspector};
 use crate::store::SnapKey;
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
 
@@ -521,6 +521,12 @@ where
     /// Asks the store to update replication mode.
     UpdateReplicationMode(ReplicationStatus),
 
+    /// Inspect the latency of raftstore.
+    LatencyInspect {
+        send_time: Instant,
+        inspector: LatencyInspector,
+    },
+
     /// Message only used for test.
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
@@ -551,6 +557,7 @@ where
             #[cfg(any(test, feature = "testexport"))]
             StoreMsg::Validate(_) => write!(fmt, "Validate config"),
             StoreMsg::UpdateReplicationMode(_) => write!(fmt, "UpdateReplicationMode"),
+            StoreMsg::LatencyInspect { .. } => write!(fmt, "LatencyInspect"),
         }
     }
 }
