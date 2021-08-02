@@ -198,6 +198,10 @@ impl<T: Display + Send + 'static> LazyWorker<T> {
         self.stop();
         self.worker.stop()
     }
+
+    pub fn remote(&self) -> Remote<yatp::task::future::TaskCell> {
+        self.worker.remote.clone()
+    }
 }
 
 pub struct ReceiverWrapper<T: Display + Send> {
