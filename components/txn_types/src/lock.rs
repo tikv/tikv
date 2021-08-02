@@ -365,7 +365,7 @@ impl Lock {
         !self.for_update_ts.is_zero()
     }
 
-    pub fn is_pessimistic_lock_type(&self) -> bool {
+    pub fn is_pessimistic_lock(&self) -> bool {
         self.lock_type == LockType::Pessimistic
     }
 }
