@@ -4086,7 +4086,7 @@ mod tests {
     pub fn create_tmp_importer(path: &str) -> (TempDir, Arc<SSTImporter>) {
         let dir = Builder::new().prefix(path).tempdir().unwrap();
         let importer =
-            Arc::new(SSTImporter::new(&ImportConfig::default(), dir.path(), None).unwrap());
+            Arc::new(SSTImporter::new(&ImportConfig::default(), dir.path(), None, false).unwrap());
         (dir, importer)
     }
 

@@ -21,8 +21,7 @@ use engine_rocks::RocksMvccProperties;
 use engine_rocks::{Compat, RocksEngine, RocksEngineIterator, RocksWriteBatch};
 use engine_traits::{
     Engines, IterOptions, Iterable, Iterator as EngineIterator, Mutable, Peekable, RaftEngine,
-    RangePropertiesExt, SeekKey, TableProperties, TablePropertiesCollection, TablePropertiesExt,
-    WriteBatch, WriteOptions,
+    RangePropertiesExt, SeekKey, WriteBatch, WriteOptions,
 };
 use engine_traits::{MvccProperties, Range, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raftstore::coprocessor::get_region_approximate_middle;
@@ -784,7 +783,7 @@ fn dump_mvcc_properties(db: &Arc<DB>, start: &[u8], end: &[u8]) -> Result<Vec<(S
     let mut mvcc_properties = MvccProperties::new();
     for (_, v) in collection.iter() {
         num_entries += v.num_entries();
-        let mvcc = box_try!(RocksMvccProperties::decode(&v.user_collected_properties()));
+        let mvcc = box_try!(RocksMvccProperties::decode(v.user_collected_properties()));
         mvcc_properties.add(&mvcc);
     }
 

@@ -72,6 +72,8 @@ pub use compat::*;
 mod compact_listener;
 pub use compact_listener::*;
 
+pub mod decode_properties;
+pub use decode_properties::*;
 pub mod properties;
 pub use properties::*;
 
@@ -100,3 +102,11 @@ pub use rocksdb::set_perf_level;
 pub use rocksdb::PerfContext;
 
 pub mod raw;
+
+pub fn get_env(
+    key_manager: Option<std::sync::Arc<::encryption::DataKeyManager>>,
+    limiter: Option<std::sync::Arc<::file_system::IORateLimiter>>,
+) -> std::result::Result<std::sync::Arc<raw::Env>, String> {
+    let env = encryption::get_env(None /*base_env*/, key_manager)?;
+    file_system::get_env(Some(env), limiter)
+}
