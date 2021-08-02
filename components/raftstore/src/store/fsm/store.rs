@@ -44,7 +44,7 @@ use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::sys::disk;
 use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::timer::SteadyTimer;
-use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
+use tikv_util::worker::{LazyWorker, Scheduler, Worker};
 use tikv_util::{
     box_err, box_try, debug, defer, error, info, is_zero_duration, slow_log, sys as sys_util, warn,
     Either, RingQueue,
@@ -350,7 +350,7 @@ where
     pub processed_fsm_count: usize,
     pub cfg: Config,
     pub store: metapb::Store,
-    pub pd_scheduler: FutureScheduler<PdTask<EK>>,
+    pub pd_scheduler: Scheduler<PdTask<EK>>,
     pub consistency_check_scheduler: Scheduler<ConsistencyCheckTask<EK::Snapshot>>,
     pub split_check_scheduler: Scheduler<SplitCheckTask>,
     // handle Compact, CleanupSST task
@@ -906,7 +906,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
 pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     pub cfg: Arc<VersionTrack<Config>>,
     pub store: metapb::Store,
-    pd_scheduler: FutureScheduler<PdTask<EK>>,
+    pd_scheduler: Scheduler<PdTask<EK>>,
     consistency_check_scheduler: Scheduler<ConsistencyCheckTask<EK::Snapshot>>,
     split_check_scheduler: Scheduler<SplitCheckTask>,
     cleanup_scheduler: Scheduler<CleanupTask>,
@@ -1160,7 +1160,7 @@ where
 }
 
 struct Workers<EK: KvEngine> {
-    pd_worker: FutureWorker<PdTask<EK>>,
+    pd_worker: LazyWorker<PdTask<EK>>,
     background_worker: Worker,
 
     // Both of cleanup tasks and region tasks get their own workers, instead of reusing
@@ -1198,7 +1198,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         trans: T,
         pd_client: Arc<C>,
         mgr: SnapManager,
-        pd_worker: FutureWorker<PdTask<EK>>,
+        pd_worker: LazyWorker<PdTask<EK>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         mut coprocessor_host: CoprocessorHost<EK>,
         importer: Arc<SSTImporter>,
@@ -1378,8 +1378,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             auto_split_controller,
             concurrency_manager,
             snap_mgr,
+            workers.pd_worker.remote(),
         );
-        box_try!(workers.pd_worker.start(pd_runner));
+        assert!(workers.pd_worker.start(pd_runner));
 
         if let Err(e) = sys_util::thread::set_priority(sys_util::HIGH_PRI) {
             warn!("set thread priority for raftstore failed"; "error" => ?e);
@@ -1396,7 +1397,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         }
         let mut workers = self.workers.take().unwrap();
         // Wait all workers finish.
-        let handle = workers.pd_worker.stop();
+        workers.pd_worker.stop();
 
         self.apply_system.shutdown();
         MEMTRACE_APPLY_ROUTER_ALIVE.trace(TraceEvent::Reset(0));
@@ -1408,9 +1409,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         MEMTRACE_RAFT_ROUTER_ALIVE.trace(TraceEvent::Reset(0));
         MEMTRACE_RAFT_ROUTER_LEAK.trace(TraceEvent::Reset(0));
 
-        if let Some(h) = handle {
-            h.join().unwrap();
-        }
         workers.coprocessor_host.shutdown();
         workers.cleanup_worker.stop();
         workers.region_worker.stop();
