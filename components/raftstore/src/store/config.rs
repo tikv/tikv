@@ -680,19 +680,14 @@ impl Config {
             .with_label_values(&["raft_write_size_limit"])
             .set(self.raft_write_size_limit.0 as f64);
         CONFIG_RAFTSTORE_GAUGE
-<<<<<<< HEAD
-            .with_label_values(&["store_waterfall_metrics"])
-            .set((self.store_waterfall_metrics as i32).into());
+            .with_label_values(&["waterfall_metrics"])
+            .set((self.waterfall_metrics as i32).into());
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["io_reschedule_concurrent_max_count"])
             .set((self.io_reschedule_concurrent_max_count as i32).into());
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["io_reschedule_hotpot_duration"])
             .set(self.io_reschedule_hotpot_duration.as_secs() as f64);
-=======
-            .with_label_values(&["waterfall_metrics"])
-            .set((self.waterfall_metrics as i32).into());
->>>>>>> introduce-async-io
     }
 
     fn write_change_into_metrics(change: ConfigChange) {

@@ -111,7 +111,7 @@ impl<S: Snapshot> ProposalQueue<S> {
         }
     }
 
-    fn find_request_times(&self, index: u64) -> Option<(u64, &Vec<TiInstant>)> {
+    fn find_request_times(&self, index: u64) -> Option<(u64, &SmallVec<[TiInstant; 4]>)> {
         self.queue
             .binary_search_by_key(&index, |p: &Proposal<_>| (p.index))
             .ok()
@@ -1883,7 +1883,7 @@ where
             for entry in ready.entries() {
                 if let Some((term, times)) = self.proposals.find_request_times(entry.get_index()) {
                     if entry.term == term {
-                        request_times.append(&mut times.clone());
+                        request_times.append(&mut times.clone().into_vec());
                         if now.is_none() {
                             now = Some(TiInstant::now());
                         }
