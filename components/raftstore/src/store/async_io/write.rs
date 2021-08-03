@@ -529,8 +529,11 @@ where
                 }
             }
         }
-        self.trans.flush();
-        self.message_metrics.flush();
+        if self.trans.need_flush() {
+            self.trans.flush();
+            self.message_metrics.flush();
+        }
+
         for (region_id, to_peer_id) in unreachable_peers {
             self.notifier.notify_unreachable(region_id, to_peer_id);
         }
