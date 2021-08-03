@@ -812,7 +812,7 @@ where
     }
 
     fn on_gc_snap(&mut self, snaps: Vec<(SnapKey, bool)>) {
-        let is_applying_snap = self.fsm.peer.is_applying_snapshot_strictly();
+        let is_applying_snap = self.fsm.peer.is_applying_snapshot();
         let s = self.fsm.peer.get_store();
         let compacted_idx = s.truncated_index();
         let compacted_term = s.truncated_term();
@@ -1177,7 +1177,7 @@ where
         // When having pending snapshot, if election timeout is met, it can't pass
         // the pending conf change check because first index has been updated to
         // a value that is larger than last index.
-        if self.fsm.peer.is_applying_snapshot_strictly() || self.fsm.peer.has_pending_snapshot() {
+        if self.fsm.peer.is_applying_snapshot() || self.fsm.peer.has_pending_snapshot() {
             // need to check if snapshot is applied.
             self.fsm.has_ready = true;
             self.fsm.missing_ticks = 0;
@@ -1877,7 +1877,7 @@ where
         // After the applying snapshot is finished, the log may able to catch up and so a
         // CommitMerge will be applied.
         // 2. There is a CommitMerge pending in apply thread.
-        let ready = !self.fsm.peer.is_applying_snapshot_strictly()
+        let ready = !self.fsm.peer.is_applying_snapshot()
             && !self.fsm.peer.has_pending_snapshot()
             // It must be ensured that all logs have been applied.
             // Suppose apply fsm is applying a `CommitMerge` log and this snapshot is generated after
@@ -3059,7 +3059,7 @@ where
                 );
             }
         }
-        if self.fsm.peer.is_applying_snapshot_strictly() {
+        if self.fsm.peer.is_applying_snapshot() {
             panic!(
                 "{} is applying snapshot on getting merge result, target region id {}, target peer {:?}, merge result type {:?}",
                 self.fsm.peer.tag, target_region_id, target, result
@@ -3435,7 +3435,7 @@ where
         }
         // If the peer is applying snapshot, it may drop some sending messages, that could
         // make clients wait for response until timeout.
-        if self.fsm.peer.is_applying_snapshot_strictly() {
+        if self.fsm.peer.is_applying_snapshot() {
             self.ctx.raft_metrics.invalid_proposal.is_applying_snapshot += 1;
             // TODO: replace to a more suitable error.
             return Err(Error::Other(box_err!(
@@ -3983,7 +3983,7 @@ where
 
         self.register_check_peer_stale_state_tick();
 
-        if self.fsm.peer.is_applying_snapshot_strictly() || self.fsm.peer.has_pending_snapshot() {
+        if self.fsm.peer.is_applying_snapshot() || self.fsm.peer.has_pending_snapshot() {
             return;
         }
 

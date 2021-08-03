@@ -831,7 +831,7 @@ where
             }
         }
 
-        if self.is_applying_snapshot() && !self.mut_store().cancel_applying_snap() {
+        if self.get_store().is_applying_snapshot() && !self.mut_store().cancel_applying_snap() {
             info!(
                 "stale peer is applying snapshot, will destroy next time";
                 "region_id" => self.region_id,
@@ -1078,11 +1078,6 @@ where
 
     #[inline]
     pub fn is_applying_snapshot(&self) -> bool {
-        self.get_store().is_applying_snapshot()
-    }
-
-    #[inline]
-    pub fn is_applying_snapshot_strictly(&self) -> bool {
         self.snap_ctx.is_some() || self.get_store().is_applying_snapshot()
     }
 
@@ -1675,7 +1670,7 @@ where
             && self.pending_merge_state.is_none()
             // a peer which is applying snapshot will clean up its data and ingest a snapshot file,
             // during between the two operations a replica read could read empty data.
-            && !self.is_applying_snapshot_strictly()
+            && !self.is_applying_snapshot()
     }
 
     #[inline]
@@ -1704,7 +1699,7 @@ where
     ///
     /// The snapshot process order would be:
     /// 1.  Get the snapshot from the ready
-    /// 2.  Wait for the notify of persisting this ready through `check_new_persisted`
+    /// 2.  Wait for the notify of persisting this ready through `on_persist_ready`
     /// 3.  Schedule the snapshot task to region worker through `schedule_applying_snapshot`
     /// 4.  Wait for applying snapshot to complete(`check_snap_status`)
     /// Then it's valid to handle the next ready.
@@ -2211,7 +2206,7 @@ where
         );
 
         assert!(
-            !self.is_applying_snapshot_strictly(),
+            !self.is_applying_snapshot(),
             "{} is applying snapshot when it is ready to handle committed entries",
             self.tag
         );
@@ -2567,7 +2562,7 @@ where
     ) -> bool {
         let mut has_ready = false;
 
-        if self.is_applying_snapshot_strictly() {
+        if self.is_applying_snapshot() {
             panic!("{} should not applying snapshot.", self.tag);
         }
 
@@ -3520,7 +3515,7 @@ where
         }
 
         #[allow(clippy::suspicious_operation_groupings)]
-        if self.is_applying_snapshot_strictly()
+        if self.is_applying_snapshot()
             || self.has_pending_snapshot()
             || msg.get_from() != self.leader_id()
             // For followers whose disk is full.
