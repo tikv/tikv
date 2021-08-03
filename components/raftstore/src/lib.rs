@@ -6,7 +6,6 @@
 #![feature(div_duration)]
 #![feature(min_specialization)]
 #![feature(box_patterns)]
-#![feature(num_as_ne_bytes)]
 #![recursion_limit = "256"]
 
 #[cfg(test)]
