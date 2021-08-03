@@ -227,12 +227,6 @@ lazy_static! {
             "Bucketed histogram of store write task wait time duration.",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
-    pub static ref STORE_WRITE_TASK_GEN_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_store_write_task_gen_duration_secs",
-            "Bucketed histogram of waiting the first store write task duration.",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
-        ).unwrap();
     pub static ref STORE_WRITE_HANDLE_MSG_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_write_handle_msg_duration_secs",
@@ -269,22 +263,10 @@ lazy_static! {
             "Bucketed histogram of sending callback to store thread duration.",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
-    pub static ref STORE_WRITE_FLUSH_SEND_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_store_write_flush_send_duration_seconds",
-            "Bucketed histogram of sending msg duration after writing db.",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
-        ).unwrap();
     pub static ref STORE_WRITE_LOOP_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_write_loop_duration_seconds",
             "Bucketed histogram of store write loop duration.",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
-        ).unwrap();
-    pub static ref STORE_WRITE_SYNC_RAFT_DB_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_store_sync_raft_db_duration_seconds",
-            "Bucketed histogram of sync raft db duration.",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
 
