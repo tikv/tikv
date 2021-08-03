@@ -13,9 +13,10 @@ use cdc::MemoryQuota;
 use encryption::DataKeyManager;
 use engine::rocks;
 use engine_rocks::{
-    encryption::get_env, Compat, RocksEngine, RocksMetricsFlusher, DEFAULT_FLUSHER_INTERVAL,
+    encryption::get_env, from_rocks_compression_type, Compat, RocksEngine, RocksMetricsFlusher,
+    DEFAULT_FLUSHER_INTERVAL,
 };
-use engine_traits::{KvEngines, MetricsFlusher};
+use engine_traits::{KvEngines, MetricsFlusher, CF_DEFAULT, CF_WRITE};
 use fs2::FileExt;
 use futures_cpupool::Builder;
 use kvproto::{
@@ -543,8 +544,20 @@ impl TiKVServer {
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
 
         let import_path = self.store_path.join("import");
-        let importer =
-            Arc::new(SSTImporter::new(import_path, self.encryption_key_manager.clone()).unwrap());
+        let mut importer = SSTImporter::new(import_path, self.encryption_key_manager.clone()).unwrap();
+        for (cf_name, compression_type) in &[
+            (
+                CF_DEFAULT,
+                self.config.rocksdb.defaultcf.compression_per_level[6],
+            ),
+            (
+                CF_WRITE,
+                self.config.rocksdb.writecf.compression_per_level[6],
+            ),
+        ] {
+            importer.set_compression_type(cf_name, from_rocks_compression_type(*compression_type));
+        }
+        let importer = Arc::new(importer);
 
         let mut split_check_worker = Worker::new("split-check");
         let split_check_runner = SplitCheckRunner::new(
