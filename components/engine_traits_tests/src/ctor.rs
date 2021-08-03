@@ -69,7 +69,7 @@ fn new_engine_readonly_dir() {
     fs::set_permissions(&path, perms).unwrap();
 
     let path = path.to_str().unwrap();
-    let err = KvTestEngine::new_engine(&path, None, ALL_CFS, None);
+    let err = KvTestEngine::new_engine(path, None, ALL_CFS, None);
 
     assert!(err.is_err());
 }
@@ -93,7 +93,7 @@ fn new_engine_opt_readonly_dir() {
         .iter()
         .map(|cf| CFOptions::new(cf, ColumnFamilyOptions::new()))
         .collect();
-    let err = KvTestEngine::new_engine_opt(&path, db_opts, cf_opts);
+    let err = KvTestEngine::new_engine_opt(path, db_opts, cf_opts);
 
     assert!(err.is_err());
 }
