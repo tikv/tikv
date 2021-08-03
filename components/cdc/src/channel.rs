@@ -3,8 +3,6 @@
 use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
 use std::time::Duration;
 
-use tikv_util::time::Instant;
-
 use futures::{
     channel::mpsc::{
         channel as bounded, unbounded, Receiver, SendError as FuturesSendError, Sender,
@@ -16,8 +14,10 @@ use futures::{
 use grpcio::WriteFlags;
 use kvproto::cdcpb::ChangeDataEvent;
 
+use tikv_util::time::Instant;
 use tikv_util::{impl_display_as_debug, warn};
 
+use crate::metrics::*;
 use crate::service::{CdcEvent, EventBatcher};
 
 const CDC_MSG_MAX_BATCH_SIZE: usize = 128;
@@ -83,6 +83,7 @@ impl MemoryQuota {
 pub fn channel(buffer: usize, memory_quota: MemoryQuota) -> (Sink, Drain) {
     let (unbounded_sender, unbounded_receiver) = unbounded();
     let (bounded_sender, bounded_receiver) = bounded(buffer);
+
     (
         Sink {
             unbounded_sender,
@@ -207,6 +208,10 @@ impl<'a> Drain {
     where
         S: futures::Sink<(ChangeDataEvent, WriteFlags), Error = E> + Unpin,
     {
+        let total_event_bytes = CDC_GRPC_ACCUMULATE_MESSAGE_BYTES.with_label_values(&["event"]);
+        let total_resolved_ts_bytes =
+            CDC_GRPC_ACCUMULATE_MESSAGE_BYTES.with_label_values(&["resolved_ts"]);
+
         let memory_quota = self.memory_quota.clone();
         let mut chunks = self.drain().ready_chunks(CDC_MSG_MAX_BATCH_SIZE);
         while let Some(events) = chunks.next().await {
@@ -216,6 +221,7 @@ impl<'a> Drain {
                 bytes += size;
                 batcher.push(e);
             });
+            let (event_bytes, resolved_ts_bytes) = batcher.statistics();
             let resps = batcher.build();
             let last_idx = resps.len() - 1;
             // Events are about to be sent, free pending events memory counter.
@@ -226,6 +232,8 @@ impl<'a> Drain {
                 sink.feed((e, write_flags)).await?;
             }
             sink.flush().await?;
+            total_event_bytes.inc_by(event_bytes as u64);
+            total_resolved_ts_bytes.inc_by(resolved_ts_bytes as u64);
         }
         Ok(())
     }

@@ -119,6 +119,10 @@ impl fmt::Debug for CdcEvent {
 pub struct EventBatcher {
     buffer: Vec<ChangeDataEvent>,
     last_size: u32,
+
+    // statistics
+    total_event_bytes: usize,
+    total_resolved_ts_bytes: usize,
 }
 
 impl EventBatcher {
@@ -126,6 +130,9 @@ impl EventBatcher {
         EventBatcher {
             buffer: Vec::with_capacity(cap),
             last_size: 0,
+
+            total_event_bytes: 0,
+            total_resolved_ts_bytes: 0,
         }
     }
 
@@ -144,6 +151,7 @@ impl EventBatcher {
                 }
                 self.last_size += size;
                 self.buffer.last_mut().unwrap().mut_events().push(e);
+                self.total_resolved_ts_bytes += size as usize;
             }
             CdcEvent::ResolvedTs(r) => {
                 let mut change_data_event = ChangeDataEvent::default();
@@ -152,6 +160,7 @@ impl EventBatcher {
 
                 // Make sure the next message is not batched with ResolvedTs.
                 self.last_size = CDC_MAX_RESP_SIZE;
+                self.total_event_bytes += size as usize;
             }
             CdcEvent::Barrier(_) => {
                 // Barrier requires events must be batched accross the barrier.
@@ -162,6 +171,10 @@ impl EventBatcher {
 
     pub fn build(self) -> Vec<ChangeDataEvent> {
         self.buffer
+    }
+
+    pub fn statistics(&self) -> (usize, usize) {
+        (self.total_event_bytes, self.total_resolved_ts_bytes)
     }
 }
 
