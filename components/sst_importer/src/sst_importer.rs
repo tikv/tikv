@@ -29,6 +29,7 @@ use engine_rocks::{
 use engine_traits::{
     name_to_cf, CfName, EncryptionKeyManager, IngestExternalFileOptions, Iterator, KvEngine,
     SSTMetaInfo, SeekKey, SstCompressionType, SstExt, SstReader, SstWriter, SstWriterBuilder,
+    CF_DEFAULT, CF_WRITE,
 };
 use external_storage::{create_storage, url_of_backend};
 use file_system::{sync_dir, File, OpenOptions};
@@ -2073,7 +2074,7 @@ mod tests {
         // performs the download.
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let mut importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
+        let mut importer = SSTImporter::new(&cfg, &importer_dir, None).unwrap();
         importer.set_compression_type(CF_DEFAULT, Some(SstCompressionType::Snappy));
         let db = create_sst_test_engine().unwrap();
 
@@ -2104,12 +2105,12 @@ mod tests {
 
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let mut importer = SSTImporter::new(&cfg, &importer_dir, None, false).unwrap();
+        let mut importer = SSTImporter::new(&cfg, &importer_dir, None).unwrap();
         importer.set_compression_type(CF_DEFAULT, Some(SstCompressionType::Zstd));
         let db_path = importer_dir.path().join("db");
         let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
 
-        let mut w = importer.new_txn_writer::<TestEngine>(&db, meta).unwrap();
+        let mut w = importer.new_writer::<TestEngine>(&db, meta).unwrap();
         let mut batch = WriteBatch::default();
         let mut pairs = vec![];
 
