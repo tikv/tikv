@@ -2408,11 +2408,17 @@ mod tests {
         exp_res.push(new_entry(7, 8));
         validate_cache(&store, &exp_res);
 
-        // compact
-        store.compact_to(6);
+        // compact to min(6, 7)
+        store.cache.persisted = 6;
+        store.compact_to(7);
         exp_res = vec![new_entry(6, 7), new_entry(7, 8)];
         validate_cache(&store, &exp_res);
 
+        // compact to min(8, 7)
+        store.cache.persisted = 8;
+        store.compact_to(7);
+        exp_res = vec![new_entry(7, 8)];
+        validate_cache(&store, &exp_res);
         // compact all
         store.compact_to(8);
         validate_cache(&store, &[]);
@@ -2468,6 +2474,7 @@ mod tests {
         assert_eq!(rx.try_recv().unwrap(), 1);
 
         // Test compact all entries and traced dangle entries.
+        cache.persisted = 104;
         cache.compact_to(104);
         assert_eq!(rx.try_recv().unwrap(), -17);
 

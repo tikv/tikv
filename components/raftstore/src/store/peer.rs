@@ -1740,14 +1740,8 @@ where
             }
             CheckApplyingSnapStatus::Success => {
                 fail_point!("raft_before_applying_snap_finished");
-                self.post_pending_read_index_on_replica(ctx);
-                // Resume `read_progress`
-                self.read_progress.resume();
-                // Update apply index to `last_applying_idx`
-                self.read_progress.update_applied(self.last_applying_idx);
 
-                if self.snap_ctx.is_some() {
-                    let snap_ctx = self.snap_ctx.as_mut().unwrap();
+                if let Some(mut snap_ctx) = self.snap_ctx.take() {
                     // This snapshot must be scheduled
                     assert!(snap_ctx.ready_status.1);
 
@@ -1757,8 +1751,6 @@ where
                         raft_msgs,
                         &mut ctx.raft_metrics.send_message,
                     );
-
-                    self.snap_ctx = None;
 
                     // Snapshot has been persisted.
                     self.last_applying_idx = self.get_store().truncated_index();
@@ -1772,6 +1764,14 @@ where
                 // If `snap_ctx` is none, it means this snapshot does not
                 // come from the ready but comes from the unfinished snapshot task
                 // after restarting.
+
+                // Note that this function must be called after applied index is updated,
+                // i.e. call `RawNode::advance_apply_to`.
+                self.post_pending_read_index_on_replica(ctx);
+                // Resume `read_progress`
+                self.read_progress.resume();
+                // Update apply index to `last_applying_idx`
+                self.read_progress.update_applied(self.last_applying_idx);
             }
             CheckApplyingSnapStatus::Idle => {
                 // FIXME: It's possible that the snapshot applying task is canceled.
