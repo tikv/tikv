@@ -42,7 +42,7 @@ pub trait SstWriter {
 }
 
 // compression type used for write sst file
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq, Debug)]
 pub enum SstCompressionType {
     Lz4,
     Snappy,

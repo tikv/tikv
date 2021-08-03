@@ -25,7 +25,7 @@ use encryption::{DataKeyManager, EncrypterWriter};
 use engine_rocks::{encryption::get_env, RocksSstReader};
 use engine_traits::{
     CfName, EncryptionKeyManager, IngestExternalFileOptions, Iterator, KvEngine, SeekKey,
-    SstCompressionType, SstExt, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
+    SstCompressionType, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 
 };
 use external_storage::{block_on_external_io, create_storage, url_of_backend, READ_BUF_SIZE};
@@ -77,7 +77,7 @@ impl SSTImporter {
         }
     }
 
-    pub fn get_compression_type(&self, cf_name: CfName) -> Option<SstCompressionType> {
+    pub fn get_compression_type(&self, cf_name: &str) -> Option<SstCompressionType> {
         self.compression_types.get(cf_name).copied()
     }
 
