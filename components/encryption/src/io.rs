@@ -106,7 +106,7 @@ impl<R> CrypterReader<R> {
         mode: Mode,
         iv: Option<Iv>,
     ) -> Result<(CrypterReader<R>, Iv)> {
-        crate::verify_encryption_config(method, &key)?;
+        crate::verify_encryption_config(method, key)?;
         let iv = iv.unwrap_or_else(Iv::new_ctr);
         let (cipher, crypter) = create_aes_ctr_crypter(method, key, mode, iv)?;
         let block_size = cipher.block_size();
@@ -178,7 +178,7 @@ impl<W: Write> EncrypterWriter<W> {
         key: &[u8],
         iv: Iv,
     ) -> Result<EncrypterWriter<W>> {
-        crate::verify_encryption_config(method, &key)?;
+        crate::verify_encryption_config(method, key)?;
         let (cipher, crypter) = create_aes_ctr_crypter(method, key, Mode::Encrypt, iv)?;
         let block_size = cipher.block_size();
         Ok(EncrypterWriter {

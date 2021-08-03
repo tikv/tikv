@@ -66,7 +66,7 @@ impl RpcClient {
         // -1 means the max.
         let retries = match cfg.retry_max_count {
             -1 => std::isize::MAX,
-            v => v.checked_add(1).unwrap_or(std::isize::MAX),
+            v => v.saturating_add(1),
         };
         let monitor = Arc::new(
             yatp::Builder::new(thd_name!("pdmonitor"))

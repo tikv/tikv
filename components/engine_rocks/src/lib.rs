@@ -72,6 +72,8 @@ pub use compat::*;
 mod compact_listener;
 pub use compact_listener::*;
 
+pub mod decode_properties;
+pub use decode_properties::*;
 pub mod properties;
 pub use properties::*;
 

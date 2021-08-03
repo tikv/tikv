@@ -179,7 +179,7 @@ impl MiscExt for RocksEngine {
             }
             DeleteStrategy::DeleteByKey => {
                 for r in ranges {
-                    self.delete_all_in_range_cf_by_key(cf, &r)?;
+                    self.delete_all_in_range_cf_by_key(cf, r)?;
                 }
             }
             DeleteStrategy::DeleteByWriter { sst_path } => {
@@ -320,7 +320,7 @@ impl MiscExt for RocksEngine {
         let handle = util::get_cf_handle(self.as_inner(), cf)?;
         Ok(crate::util::get_cf_num_files_at_level(
             self.as_inner(),
-            &handle,
+            handle,
             level,
         ))
     }
@@ -329,7 +329,7 @@ impl MiscExt for RocksEngine {
         let handle = util::get_cf_handle(self.as_inner(), cf)?;
         Ok(crate::util::get_cf_num_immutable_mem_table(
             self.as_inner(),
-            &handle,
+            handle,
         ))
     }
 
@@ -337,7 +337,7 @@ impl MiscExt for RocksEngine {
         let handle = util::get_cf_handle(self.as_inner(), cf)?;
         Ok(crate::util::get_cf_compaction_pending_bytes(
             self.as_inner(),
-            &handle,
+            handle,
         ))
     }
 

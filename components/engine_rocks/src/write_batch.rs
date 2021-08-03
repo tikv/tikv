@@ -23,11 +23,11 @@ impl WriteBatchExt for RocksEngine {
     }
 
     fn write_batch(&self) -> Self::WriteBatch {
-        Self::WriteBatch::new(Arc::clone(&self.as_inner()))
+        Self::WriteBatch::new(Arc::clone(self.as_inner()))
     }
 
     fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
-        Self::WriteBatch::with_capacity(Arc::clone(&self.as_inner()), cap)
+        Self::WriteBatch::with_capacity(Arc::clone(self.as_inner()), cap)
     }
 }
 
