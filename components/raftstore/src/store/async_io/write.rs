@@ -1,5 +1,12 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! The implementation of asynchronous write for raftstore.
+//!
+//! `WriteTask` is the unit of write which is created by a certain
+//! peer. Afterwards the `WriteTask` should be sent to `Worker`.
+//! The `Worker` is responsible for persisting `WriteTask` to kv db or
+//! raft db and then invoking callback or sending msgs if any.
+
 use std::fmt;
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -374,9 +381,9 @@ where
     }
 
     fn run(&mut self) {
-        loop {
-            let loop_begin = Instant::now();
-            let mut handle_begin = loop_begin;
+        let mut stopped = false;
+        while !stopped {
+            let mut handle_begin = None;
 
             let mut first_time = true;
             while self.batch.get_raft_size() < self.raft_write_size_limit {
@@ -384,20 +391,29 @@ where
                     first_time = false;
                     match self.receiver.recv() {
                         Ok(msg) => {
-                            handle_begin = Instant::now();
+                            handle_begin = Some(Instant::now());
                             msg
                         }
-                        Err(_) => return,
+                        Err(_) => {
+                            stopped = true;
+                            break;
+                        }
                     }
                 } else {
                     match self.receiver.try_recv() {
                         Ok(msg) => msg,
                         Err(TryRecvError::Empty) => break,
-                        Err(TryRecvError::Disconnected) => return,
+                        Err(TryRecvError::Disconnected) => {
+                            stopped = true;
+                            break;
+                        }
                     }
                 };
                 match msg {
-                    WriteMsg::Shutdown => return,
+                    WriteMsg::Shutdown => {
+                        stopped = true;
+                        break;
+                    }
                     WriteMsg::WriteTask(task) => {
                         self.metrics
                             .task_wait
@@ -417,14 +433,14 @@ where
 
             self.metrics.flush();
 
-            STORE_WRITE_LOOP_DURATION_HISTOGRAM
-                .observe(duration_to_sec(handle_begin.saturating_elapsed()));
-
             // update config
             if let Some(incoming) = self.cfg_tracker.any_new() {
                 self.raft_write_size_limit = incoming.raft_write_size_limit.0 as usize;
                 self.metrics.waterfall_metrics = incoming.waterfall_metrics;
             }
+
+            STORE_WRITE_LOOP_DURATION_HISTOGRAM
+                .observe(duration_to_sec(handle_begin.unwrap().saturating_elapsed()));
         }
     }
 
