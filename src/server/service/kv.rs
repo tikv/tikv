@@ -987,19 +987,26 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
         let response_retriever = BatchReceiver::new(
             rx,
             GRPC_MSG_MAX_BATCH_SIZE,
-            BatchCommandsResponse::default,
+            MeasuredBatchResponse::default,
             BatchRespCollector,
         );
 
-        let mut response_retriever = response_retriever
-            .inspect(|r| GRPC_RESP_BATCH_COMMANDS_SIZE.observe(r.request_ids.len() as f64))
-            .map(move |mut r| {
-                r.set_transport_layer_load(thread_load.load() as u64);
-                GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Ok((
-                    r,
-                    WriteFlags::default().buffer_hint(false),
-                ))
-            });
+        let mut response_retriever = response_retriever.map(move |item| {
+            for measure in item.measures {
+                let GrpcRequestDuration { label, begin } = measure;
+                GRPC_MSG_HISTOGRAM_STATIC
+                    .get(label)
+                    .observe(begin.saturating_elapsed_secs());
+            }
+
+            let mut r = item.batch_resp;
+            GRPC_RESP_BATCH_COMMANDS_SIZE.observe(r.request_ids.len() as f64);
+            r.set_transport_layer_load(thread_load.load() as u64);
+            GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Ok((
+                r,
+                WriteFlags::default().buffer_hint(false),
+            ))
+        });
 
         let send_task = async move {
             sink.send_all(&mut response_retriever).await?;
@@ -1135,20 +1142,18 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
 fn response_batch_commands_request<F>(
     id: u64,
     resp: F,
-    tx: Sender<(u64, batch_commands_response::Response)>,
-    begin_instant: Instant,
-    label_enum: GrpcTypeKind,
+    tx: Sender<MeasuredSingleResponse>,
+    begin: Instant,
+    label: GrpcTypeKind,
 ) where
     F: Future<Output = Result<batch_commands_response::Response, ()>> + Send + 'static,
 {
     let task = async move {
         if let Ok(resp) = resp.await {
-            if let Err(e) = tx.send_and_notify((id, resp)) {
+            let measure = GrpcRequestDuration { begin, label };
+            let task = MeasuredSingleResponse::new(id, resp, measure);
+            if let Err(e) = tx.send_and_notify(task) {
                 error!("KvService response batch commands fail"; "err" => ?e);
-            } else {
-                GRPC_MSG_HISTOGRAM_STATIC
-                    .get(label_enum)
-                    .observe(begin_instant.saturating_elapsed_secs());
             }
         }
     };
@@ -1163,7 +1168,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
     peer: &str,
     id: u64,
     req: batch_commands_request::Request,
-    tx: &Sender<(u64, batch_commands_response::Response)>,
+    tx: &Sender<MeasuredSingleResponse>,
 ) {
     // To simplify code and make the logic more clear.
     macro_rules! oneof {
@@ -1990,17 +1995,59 @@ pub use kvproto::tikvpb::batch_commands_request;
 pub use kvproto::tikvpb::batch_commands_response;
 use protobuf::RepeatedField;
 
+/// To measure execute time for a given request.
+#[derive(Debug)]
+pub struct GrpcRequestDuration {
+    pub begin: Instant,
+    pub label: GrpcTypeKind,
+}
+impl GrpcRequestDuration {
+    pub fn new(begin: Instant, label: GrpcTypeKind) -> Self {
+        GrpcRequestDuration { begin, label }
+    }
+}
+
+/// A single response, will be collected into `MeasuredBatchResponse`.
+#[derive(Debug)]
+pub struct MeasuredSingleResponse {
+    pub id: u64,
+    pub resp: batch_commands_response::Response,
+    pub measure: GrpcRequestDuration,
+}
+impl MeasuredSingleResponse {
+    pub fn new(
+        id: u64,
+        resp: batch_commands_response::Response,
+        measure: GrpcRequestDuration,
+    ) -> Self {
+        MeasuredSingleResponse { id, resp, measure }
+    }
+}
+
+/// A batch response.
+pub struct MeasuredBatchResponse {
+    pub batch_resp: BatchCommandsResponse,
+    pub measures: Vec<GrpcRequestDuration>,
+}
+impl Default for MeasuredBatchResponse {
+    fn default() -> Self {
+        MeasuredBatchResponse {
+            batch_resp: Default::default(),
+            measures: Vec::with_capacity(GRPC_MSG_MAX_BATCH_SIZE),
+        }
+    }
+}
+
 struct BatchRespCollector;
-impl BatchCollector<BatchCommandsResponse, (u64, batch_commands_response::Response)>
-    for BatchRespCollector
-{
+impl BatchCollector<MeasuredBatchResponse, MeasuredSingleResponse> for BatchRespCollector {
     fn collect(
         &mut self,
-        v: &mut BatchCommandsResponse,
-        e: (u64, batch_commands_response::Response),
-    ) -> Option<(u64, batch_commands_response::Response)> {
-        v.mut_request_ids().push(e.0);
-        v.mut_responses().push(e.1);
+        v: &mut MeasuredBatchResponse,
+        e: MeasuredSingleResponse,
+    ) -> Option<MeasuredSingleResponse> {
+        v.batch_resp.mut_request_ids().push(e.id);
+        v.batch_resp.mut_responses().push(e.resp);
+        v.measures.push(e.measure);
         None
     }
 }
