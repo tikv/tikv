@@ -216,9 +216,11 @@ where
             // SST writer must not be opened in gRPC threads, because it may be
             // blocked for a long time due to IO, especially, when encryption at rest
             // is enabled, and it leads to gRPC keepalive timeout.
+            let cf_name = req.get_sst().get_cf_name();
             let sst_writer = <RocksEngine as SstExt>::SstWriterBuilder::new()
                 .set_db(RocksEngine::from_ref(&engine))
-                .set_cf(name_to_cf(req.get_sst().get_cf_name()).unwrap())
+                .set_cf(name_to_cf(cf_name).unwrap())
+                .set_compression_type(importer.get_compression_type(cf_name))
                 .build(importer.get_path(req.get_sst()).to_str().unwrap())
                 .unwrap();
 
