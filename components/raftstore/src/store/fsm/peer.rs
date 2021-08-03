@@ -34,7 +34,7 @@ use tikv_alloc::trace::TraceEvent;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::sys::{disk, memory_usage_reaches_high_water};
 use tikv_util::time::duration_to_sec;
-use tikv_util::worker::{Scheduler, Stopped};
+use tikv_util::worker::{ScheduleError, Scheduler};
 use tikv_util::{box_err, debug, defer, error, info, trace, warn};
 use tikv_util::{escape, is_zero_duration, Either};
 use txn_types::WriteBatchFlags;
@@ -3712,7 +3712,7 @@ where
             right_derive: self.ctx.cfg.right_derive_when_split,
             callback: cb,
         };
-        if let Err(Stopped(t)) = self.ctx.pd_scheduler.schedule(task) {
+        if let Err(ScheduleError::Stopped(t)) = self.ctx.pd_scheduler.schedule(task) {
             error!(
                 "failed to notify pd to split: Stopped";
                 "region_id" => self.fsm.region_id(),
