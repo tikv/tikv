@@ -4,6 +4,8 @@ use std::time::Duration;
 
 use crate::store::{Config, Transport};
 use crate::Result;
+
+use collections::HashSet;
 use crossbeam::channel::unbounded;
 use engine_rocks::RocksWriteBatch;
 use engine_test::kv::{new_engine, KvTestEngine};
@@ -78,9 +80,6 @@ struct TestNotifier {
 impl Notifier for TestNotifier {
     fn notify_persisted(&self, region_id: u64, peer_id: u64, ready_number: u64, _now: Instant) {
         self.tx.send((region_id, (peer_id, ready_number))).unwrap()
-    }
-    fn notify_unreachable(&self, _region_id: u64, _to_peer_id: u64) {
-        panic!("unimplemented");
     }
 }
 
