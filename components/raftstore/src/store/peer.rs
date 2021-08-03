@@ -62,7 +62,7 @@ use tikv_util::codec::number::decode_u64;
 use tikv_util::sys::disk;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::time::{Instant as TiInstant, InstantExt, ThreadReadId};
-use tikv_util::worker::{FutureScheduler, Scheduler};
+use tikv_util::worker::Scheduler;
 use tikv_util::Either;
 use tikv_util::{box_err, debug, error, info, warn};
 use txn_types::WriteBatchFlags;
@@ -3237,10 +3237,7 @@ where
                 self.term()
             ));
         }
-        if let Some(index) = self
-            .cmd_epoch_checker
-            .propose_check_epoch(&req, self.term())
-        {
+        if let Some(index) = self.cmd_epoch_checker.propose_check_epoch(req, self.term()) {
             return Ok(Either::Right(index));
         }
 
@@ -3662,7 +3659,7 @@ where
         self.send_extra_message(extra_msg, &mut ctx.trans, &to_peer);
     }
 
-    pub fn require_updating_max_ts(&self, pd_scheduler: &FutureScheduler<PdTask<EK>>) {
+    pub fn require_updating_max_ts(&self, pd_scheduler: &Scheduler<PdTask<EK>>) {
         let epoch = self.region().get_region_epoch();
         let term_low_bits = self.term() & ((1 << 32) - 1); // 32 bits
         let version_lot_bits = epoch.get_version() & ((1 << 31) - 1); // 31 bits

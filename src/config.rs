@@ -1502,7 +1502,7 @@ impl ConfigManager for DBConfigManger {
                 let cf_name = &cf_name[..(cf_name.len() - 2)];
                 if let Some(v) = cf_change.remove("block_cache_size") {
                     // currently we can't modify block_cache_size via set_options_cf
-                    self.set_block_cache_size(&cf_name, v.into())?;
+                    self.set_block_cache_size(cf_name, v.into())?;
                 }
                 if let Some(ConfigValue::Module(titan_change)) = cf_change.remove("titan") {
                     for (name, value) in titan_change {
@@ -1512,7 +1512,7 @@ impl ConfigManager for DBConfigManger {
                 if !cf_change.is_empty() {
                     let cf_change = config_value_to_string(cf_change.into_iter().collect());
                     let cf_change_slice = config_to_slice(&cf_change);
-                    self.set_cf_config(&cf_name, &cf_change_slice)?;
+                    self.set_cf_config(cf_name, &cf_change_slice)?;
                 }
             }
         }
@@ -2982,8 +2982,12 @@ fn to_config_change(change: HashMap<String, String>) -> CfgResult<ConfigChange> 
     }
     let mut res = HashMap::new();
     for (name, value) in change {
-        let fields: Vec<_> = name.as_str().split('.').collect();
-        let fields: Vec<_> = fields.into_iter().map(|s| s.to_owned()).rev().collect();
+        let fields: Vec<_> = name
+            .as_str()
+            .split('.')
+            .map(|s| s.to_owned())
+            .rev()
+            .collect();
         helper(fields, &mut res, &TIKVCONFIG_TYPED, value)?;
     }
     Ok(res)
@@ -3045,8 +3049,12 @@ fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, 
     }
     let mut dst = HashMap::new();
     for (name, value) in change {
-        let fields: Vec<_> = name.as_str().split('.').collect();
-        let fields: Vec<_> = fields.into_iter().map(|s| s.to_owned()).rev().collect();
+        let fields: Vec<_> = name
+            .as_str()
+            .split('.')
+            .map(|s| s.to_owned())
+            .rev()
+            .collect();
         if helper(fields, &TIKVCONFIG_TYPED)? {
             dst.insert(name.replace("_", "-"), format!("\"{}\"", value));
         } else {

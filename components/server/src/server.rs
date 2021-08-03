@@ -90,7 +90,7 @@ use tikv_util::{
     sys::{disk, register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
     time::{Instant, Monitor},
-    worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker, Worker},
+    worker::{Builder as WorkerBuilder, LazyWorker, Worker},
 };
 use tokio::runtime::Builder;
 
@@ -558,7 +558,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         let engines = self.engines.as_ref().unwrap();
 
-        let pd_worker = FutureWorker::new("pd-worker");
+        let pd_worker = LazyWorker::new("pd-worker");
         let pd_sender = pd_worker.scheduler();
 
         let unified_read_pool = if self.config.readpool.is_unified_pool_enabled() {
