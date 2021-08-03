@@ -2350,6 +2350,9 @@ where
         self.report_know_persist_duration(pre_persist_index, &ctx.raft_metrics);
         self.report_know_commit_duration(pre_commit_index, &ctx.raft_metrics);
 
+        let persist_index = self.raft_group.raft.raft_log.persisted;
+        self.mut_store().update_persisted(persist_index);
+
         if let Some((_, last_number)) = self.pending_write_tasks.as_ref() {
             if persisted_number >= *last_number {
                 // The peer must be destroyed after all previous write tasks have been finished.

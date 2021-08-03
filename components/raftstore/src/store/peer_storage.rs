@@ -110,6 +110,9 @@ pub fn last_index(state: &RaftLocalState) -> u64 {
 }
 
 struct EntryCache {
+    // The last index of persisted entry.
+    // It should be equal to `RaftLog::persisted`.
+    persisted: u64,
     cache: VecDeque<Entry>,
     trace: VecDeque<CachedEntries>,
     hit: Cell<u64>,
@@ -223,6 +226,9 @@ impl EntryCache {
     }
 
     pub fn compact_to(&mut self, mut idx: u64) -> u64 {
+        // Only the persisted entries can be compacted
+        idx = cmp::min(idx, self.persisted);
+
         let mut mem_size_change = 0;
 
         // Clean cached entries which have been already sent to apply threads. For example,
@@ -363,6 +369,7 @@ impl EntryCache {
 impl Default for EntryCache {
     fn default() -> Self {
         let entry_cache = EntryCache {
+            persisted: 0,
             cache: Default::default(),
             trace: Default::default(),
             hit: Cell::new(0),
@@ -1549,6 +1556,10 @@ where
         Ok((res, write_task))
     }
 
+    pub fn update_persisted(&mut self, persisted: u64) {
+        self.cache.persisted = persisted;
+    }
+
     pub fn persist_snapshot(&mut self, res: &PersistSnapshotResult) {
         // cleanup data before scheduling apply task
         if self.is_initialized() {
@@ -1814,6 +1825,7 @@ mod tests {
     impl EntryCache {
         fn new_with_cb(cb: impl Fn(i64) + Send + 'static) -> Self {
             let entry_cache = EntryCache {
+                persisted: 0,
                 cache: Default::default(),
                 trace: Default::default(),
                 hit: Cell::new(0),
