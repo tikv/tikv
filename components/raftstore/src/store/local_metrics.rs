@@ -446,7 +446,6 @@ impl RaftMetrics {
 }
 
 pub struct StoreWriteMetrics {
-    pub task_gen: LocalHistogram,
     pub task_wait: LocalHistogram,
     pub waterfall_metrics: bool,
     pub before_write: LocalHistogram,
@@ -457,7 +456,6 @@ pub struct StoreWriteMetrics {
 impl StoreWriteMetrics {
     pub fn new(waterfall_metrics: bool) -> Self {
         Self {
-            task_gen: STORE_WRITE_TASK_GEN_DURATION_HISTOGRAM.local(),
             task_wait: STORE_WRITE_TASK_WAIT_DURATION_HISTOGRAM.local(),
             waterfall_metrics,
             before_write: STORE_BEFORE_WRITE_DURATION_HISTOGRAM.local(),
@@ -467,7 +465,6 @@ impl StoreWriteMetrics {
     }
 
     pub fn flush(&mut self) {
-        self.task_gen.flush();
         self.task_wait.flush();
         if self.waterfall_metrics {
             self.before_write.flush();

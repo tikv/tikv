@@ -424,6 +424,15 @@ pub struct PersistSnapshotResult {
     pub destroy_regions: Vec<metapb::Region>,
 }
 
+#[derive(Debug)]
+pub struct UnpersistedReady {
+    /// Number of ready.
+    pub number: u64,
+    /// Max number of following ready whose data to be persisted is empty.
+    pub max_number: u64,
+    pub raft_msgs: Vec<Vec<RaftMessage>>,
+}
+
 pub struct Peer<EK, ER>
 where
     EK: KvEngine,
@@ -552,12 +561,11 @@ where
 
     pub memtrace_raft_entries: usize,
 
-    /// unpersisted readies: (ready number, the max number of following ready
-    /// whose data to be persisted is empty, msgs).
-    unpersisted_readies: VecDeque<(u64, u64, Vec<Vec<RaftMessage>>)>,
+    unpersisted_readies: VecDeque<UnpersistedReady>,
     /// The message count in `unpersisted_readies` for memory caculation.
     unpersisted_message_count: usize,
     persisted_number: u64,
+    /// The context of applying snapshot.
     snap_ctx: Option<SnapshotContext>,
     /// (chosen id of writer thread, last chosen time, reschedule retry count)
     current_writer_id: Option<(usize, TiInstant, usize)>,
@@ -2048,7 +2056,8 @@ where
         if success {
             STORE_IO_RESCHEDULE_PEER_TOTAL_GAUGE.inc();
             // Rescheduling succeeds. The task should be pushed into `self.pending_write_tasks`.
-            self.pending_write_tasks = Some((vec![], self.unpersisted_readies.back().unwrap().0));
+            self.pending_write_tasks =
+                Some((vec![], self.unpersisted_readies.back().unwrap().number));
             None
         } else {
             // Rescheduling fails at this time, add one to the `retry_cnt`.
@@ -2091,8 +2100,11 @@ where
     ) {
         match res {
             HandleReadyResult::SendIOTask => {
-                self.unpersisted_readies
-                    .push_back((ready.number(), ready.number(), vec![]));
+                self.unpersisted_readies.push_back(UnpersistedReady {
+                    number: ready.number(),
+                    max_number: ready.number(),
+                    raft_msgs: vec![],
+                });
                 self.raft_group.advance_append_async(ready);
             }
             HandleReadyResult::Snapshot {
@@ -2100,8 +2112,11 @@ where
                 snap_region,
                 destroy_regions,
             } => {
-                self.unpersisted_readies
-                    .push_back((ready.number(), ready.number(), vec![]));
+                self.unpersisted_readies.push_back(UnpersistedReady {
+                    number: ready.number(),
+                    max_number: ready.number(),
+                    raft_msgs: vec![],
+                });
                 self.snap_ctx = Some(SnapshotContext {
                     ready_status: (ready.number(), false),
                     msgs,
@@ -2121,10 +2136,10 @@ where
                 if let Some(last) = self.unpersisted_readies.back_mut() {
                     // Attach to the last unpersisted ready so that it can be considered to be
                     // persisted with the last ready at the same time.
-                    assert!(ready.number() > last.1);
-                    last.1 = ready.number();
+                    assert!(ready.number() > last.max_number);
+                    last.max_number = ready.number();
                     self.unpersisted_message_count += msgs.len();
-                    last.2.push(msgs);
+                    last.raft_msgs.push(msgs);
                 } else {
                     // If this ready don't need to be persisted and there is no previous unpersisted ready,
                     // we can safely consider it is persisted so the persisted msgs can be sent immediately.
@@ -2290,16 +2305,13 @@ where
         ctx: &mut PollContext<EK, ER, T>,
         number: u64,
     ) -> Option<PersistSnapshotResult> {
-        if self.unpersisted_readies.is_empty() {
+        if self.unpersisted_readies.is_empty()
+            || self.persisted_number >= number
+            || number < self.unpersisted_readies.front().unwrap().number
+        {
             return None;
         }
-        if self.persisted_number >= number {
-            return None;
-        }
-        if number < self.unpersisted_readies.front().unwrap().0 {
-            return None;
-        }
-        let last_unpersisted_number = self.unpersisted_readies.back().unwrap().0;
+        let last_unpersisted_number = self.unpersisted_readies.back().unwrap().number;
         assert!(
             number <= last_unpersisted_number,
             "{} persisted number {} > last_unpersisted_number {}, unpersisted numbers {:?}",
@@ -2311,16 +2323,16 @@ where
         // There must be a match in `self.unpersisted_readies`
         let mut persisted_number = 0;
         while let Some(v) = self.unpersisted_readies.front() {
-            if number < v.0 {
+            if number < v.number {
                 break;
             }
             let v = self.unpersisted_readies.pop_front().unwrap();
-            self.unpersisted_message_count -= v.2.len();
-            for msgs in v.2 {
+            self.unpersisted_message_count -= v.raft_msgs.len();
+            for msgs in v.raft_msgs {
                 self.send_raft_msg(&mut ctx.trans, msgs, &mut ctx.raft_metrics.send_message);
             }
-            if number == v.0 {
-                persisted_number = v.1;
+            if number == v.number {
+                persisted_number = v.max_number;
                 break;
             }
         }
