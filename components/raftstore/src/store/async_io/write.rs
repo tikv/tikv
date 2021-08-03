@@ -1,5 +1,12 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! The implementation of asynchronous write for raftstore.
+//!
+//! `WriteTask` is the unit of write which is created by a certain
+//! peer. Afterwards the `WriteTask` should be sent to `Worker`.
+//! The `Worker` is responsible for persisting `WriteTask` to kv db or
+//! raft db and then invoking callback or sending msgs if any.
+
 //TODO: remove it
 #![allow(dead_code)]
 use std::fmt;
