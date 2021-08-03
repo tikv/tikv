@@ -44,7 +44,17 @@ pub enum CdcEvent {
 impl CdcEvent {
     pub fn size(&self) -> u32 {
         match self {
-            CdcEvent::ResolvedTs(ref r) => r.compute_size(),
+            CdcEvent::ResolvedTs(ref r) => {
+                // For region id, it is unlikely to exceed 100,000,000 which is
+                // encoded into 4 bytes.
+                // For TSO, it is likely to be encoded into 9 bytes,
+                // e.g., 426624231625982140.
+                //
+                // See https://play.golang.org/p/GFA9S-z_kUt
+                let approximate_region_id_bytes = 4;
+                let approximate_tso_bytes = 9;
+                r.regions.len() as u32 * approximate_region_id_bytes + approximate_tso_bytes
+            }
             CdcEvent::Event(ref e) => e.compute_size(),
             CdcEvent::Barrier(_) => 0,
         }
@@ -159,6 +169,7 @@ bitflags::bitflags! {
 pub struct Conn {
     id: ConnID,
     sink: Sink,
+    // region id -> DownstreamID
     downstreams: HashMap<u64, DownstreamID>,
     peer: String,
     version: Option<(semver::Version, FeatureGate)>,
@@ -221,6 +232,10 @@ impl Conn {
 
     pub fn get_id(&self) -> ConnID {
         self.id
+    }
+
+    pub fn get_downstreams(&self) -> &HashMap<u64, DownstreamID> {
+        &self.downstreams
     }
 
     pub fn take_downstreams(self) -> HashMap<u64, DownstreamID> {

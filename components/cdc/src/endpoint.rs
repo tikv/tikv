@@ -6,7 +6,7 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use collections::HashMap;
+use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::atomic::AtomicCell;
 use engine_traits::{KvEngine, Snapshot as EngineSnapshot};
@@ -602,7 +602,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
 
     fn on_min_ts(&mut self, regions: Vec<u64>, min_ts: TimeStamp) {
         let total_region_count = regions.len();
-        let mut resolved_regions = Vec::with_capacity(regions.len());
+        let mut resolved_regions =
+            HashSet::with_capacity_and_hasher(regions.len(), Default::default());
         self.min_resolved_ts = TimeStamp::max();
         for region_id in regions {
             if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
@@ -611,7 +612,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                         self.min_resolved_ts = resolved_ts;
                         self.min_ts_region_id = region_id;
                     }
-                    resolved_regions.push(region_id);
+                    resolved_regions.insert(region_id);
                 }
             }
         }
@@ -620,18 +621,25 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         self.broadcast_resolved_ts(resolved_regions);
     }
 
-    fn broadcast_resolved_ts(&self, regions: Vec<u64>) {
-        let resolved_ts = ResolvedTs {
-            regions,
-            ts: self.min_resolved_ts.into_inner(),
-            ..Default::default()
-        };
-
-        let send_cdc_event = |conn: &Conn, event| {
+    fn broadcast_resolved_ts(&self, regions: HashSet<u64>) {
+        let min_resolved_ts = self.min_resolved_ts.into_inner();
+        let send_cdc_event = |regions: &HashSet<u64>, min_resolved_ts: u64, conn: &Conn| {
+            let downstream_regions = conn.get_downstreams();
+            let mut resolved_ts = ResolvedTs::default();
+            resolved_ts.ts = min_resolved_ts;
+            resolved_ts.regions = Vec::with_capacity(downstream_regions.len());
+            for region_id in conn.get_downstreams().keys() {
+                if regions.contains(region_id) {
+                    resolved_ts.regions.push(*region_id);
+                }
+            }
             // No need force send, as resolved ts messages is sent regularly.
             // And errors can be ignored.
             let force_send = false;
-            match conn.get_sink().unbounded_send(event, force_send) {
+            match conn
+                .get_sink()
+                .unbounded_send(CdcEvent::ResolvedTs(resolved_ts), force_send)
+            {
                 Ok(_) => (),
                 Err(SendError::Disconnected) => {
                     debug!("cdc send event failed, disconnected";
@@ -652,11 +660,11 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             };
 
             if features.contains(FeatureGate::BATCH_RESOLVED_TS) {
-                send_cdc_event(conn, CdcEvent::ResolvedTs(resolved_ts.clone()));
+                send_cdc_event(&regions, min_resolved_ts, conn);
             } else {
                 // Fallback to previous non-batch resolved ts event.
-                for region_id in &resolved_ts.regions {
-                    self.broadcast_resolved_ts_compact(*region_id, resolved_ts.ts, conn);
+                for region_id in &regions {
+                    self.broadcast_resolved_ts_compact(*region_id, min_resolved_ts, conn);
                 }
             }
         }
@@ -2028,9 +2036,9 @@ mod tests {
             .unwrap();
         if let CdcEvent::ResolvedTs(mut r) = cdc_event.0 {
             r.regions.as_mut_slice().sort_unstable();
-            // Although region 3 is not register in the first conn, batch resolved ts
-            // sends all region ids.
-            assert_eq!(r.regions, vec![1, 2, 3]);
+            // Region 3 resolved ts must not be send to the first conn when
+            // batch resolved ts is enabled.
+            assert_eq!(r.regions, vec![1, 2]);
             assert_eq!(r.ts, 3);
         } else {
             panic!("unknown cdc event {:?}", cdc_event);
