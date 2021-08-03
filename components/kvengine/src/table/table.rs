@@ -1,18 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use byteorder::{ByteOrder, LittleEndian};
-use bytes::Bytes;
-use std::{ptr, slice};
-
-pub trait Table {
-    fn id(&self) -> u64;
-    fn size(&self) -> i64;
-    fn smallest(&self) -> &[u8];
-    fn biggest(&self) -> &[u8];
-    fn new_iterator(&self) -> Box<dyn Iterator>;
-    fn get(&self, key: &[u8], version: u64, key_hash: u64) -> Result<Value, Error>;
-    fn has_overlap(&self, start: &[u8], end: &[u8], include_end: bool) -> bool;
-}
+use bytes::{BufMut, Bytes};
+use std::{ops::Add, ptr, slice};
+use thiserror::Error;
+use std::{result, io};
 
 pub trait Iterator {
     // next returns the next entry with different key on the latest version.
@@ -34,8 +26,6 @@ pub trait Iterator {
     fn value(&self) -> Value;
 
     fn valid(&self) -> bool;
-
-    fn close(&self);
 }
 
 pub fn seek_to_version(it: &mut dyn Iterator, version: u64) -> bool {
@@ -64,17 +54,30 @@ pub fn is_deleted(meta: u8) -> bool {
 
 const VALUE_PTR_OFF: usize = 10;
 
+
+// Value is a short life struct used to pass value across iterators.
+// It is valid until iterator call next or next_version.
+// As long as the value is never escaped, there will be no dangling pointer.
 #[derive(Debug, Clone, Copy)]
 pub struct Value {
+    ptr: *const u8,
     pub meta: u8,
     user_meta_len: u8,
     val_len: u32,
     pub version: u64,
-    um_ptr: *const u8,
-    val_ptr: *const u8,
 }
 
 impl Value {
+    pub fn new() -> Self {
+        Self {
+            ptr: ptr::null(),
+            meta: 0,
+            user_meta_len: 0,
+            val_len: 0,
+            version: 0,
+        }
+    }
+
     pub fn encode(&self, buf: &mut [u8]) {
         buf[0] = self.meta;
         buf[1] = self.user_meta_len;
@@ -82,14 +85,28 @@ impl Value {
         unsafe {
             if self.user_meta_len > 0 {
                 ptr::copy(
-                    self.um_ptr,
+                    self.ptr,
                     buf[VALUE_PTR_OFF..].as_mut_ptr(),
                     self.user_meta_len as usize,
                 )
             }
             let off = VALUE_PTR_OFF + self.user_meta_len as usize;
-            ptr::copy(self.val_ptr, buf[off..].as_mut_ptr(), self.val_len as usize)
+            ptr::copy(self.ptr.add(self.user_meta_len as usize), buf[off..].as_mut_ptr(), self.val_len as usize)
         }
+    }
+
+    pub fn encode_buf(meta: u8, user_meta: &[u8], version: u64, val: &[u8]) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(VALUE_PTR_OFF + user_meta.len() + val.len());
+        buf.resize(buf.capacity(), 0);
+        let m_buf = buf.as_mut_slice();
+        m_buf[0] = meta;
+        m_buf[1] = user_meta.len() as u8;
+        LittleEndian::write_u64(&mut m_buf[2..], version);
+        let off = 10usize;
+        m_buf[off..off+user_meta.len()].copy_from_slice(user_meta);
+        let off = 10 + user_meta.len();
+        m_buf[off..off+val.len()].copy_from_slice(val);
+        buf
     }
 
     pub fn decode(bin: &[u8]) -> Self {
@@ -98,49 +115,36 @@ impl Value {
         let version = LittleEndian::read_u64(&bin[2..10]);
         let val_len = (bin.len() - VALUE_PTR_OFF - user_meta_len as usize) as u32;
         Self {
+            ptr: bin[VALUE_PTR_OFF..].as_ptr(),
             meta,
             user_meta_len,
             val_len,
             version,
-            um_ptr: unsafe { bin.as_ptr().add(VALUE_PTR_OFF) },
-            val_ptr: unsafe { bin.as_ptr().add(VALUE_PTR_OFF + user_meta_len as usize) },
         }
     }
 
-    pub fn new(meta: u8, user_meta: &[u8], version: u64, val: &[u8]) -> Self {
+    pub fn new_with_meta_version(meta: u8, version: u64, user_meta_len: u8, bin: &[u8]) -> Self {
         Self {
+            ptr: bin.as_ptr(),
             meta,
-            user_meta_len: 0,
-            val_len: val.len() as u32,
+            user_meta_len,
+            val_len: bin.len() as u32 - user_meta_len as u32,
             version,
-            um_ptr: user_meta.as_ptr(),
-            val_ptr: val.as_ptr(),
-        }
-    }
-
-    pub fn empty() -> Self {
-        Self {
-            meta: 0,
-            user_meta_len: 0,
-            val_len: 0,
-            version: 0,
-            um_ptr: ptr::null(),
-            val_ptr: ptr::null(),
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.meta == 0 && self.val_ptr == ptr::null()
+        self.meta == 0 && self.ptr == ptr::null()
     }
 
     pub fn user_meta(&self) -> &[u8] {
-        unsafe { slice::from_raw_parts::<u8>(self.val_ptr, self.user_meta_len as usize) }
+        unsafe { slice::from_raw_parts::<u8>(self.ptr, self.user_meta_len as usize) }
     }
 
     pub fn get_value(&self) -> &[u8] {
         unsafe {
             slice::from_raw_parts::<u8>(
-                self.val_ptr.add(self.user_meta_len as usize),
+                self.ptr.add(self.user_meta_len as usize),
                 self.val_len as usize,
             )
         }
@@ -151,9 +155,32 @@ impl Value {
     }
 }
 
+#[derive(Debug, Error, Clone)]
 pub enum Error {
+    #[error("Key not found")]
     NotFound,
+    #[error("Invalid checksum {0}")]
+    InvalidChecksum(String),
+    #[error("Invalid filename")]
+    InvalidFileName,
+    #[error("Invalid file size")]
+    InvalidFileSize,
+    #[error("Invalid magic number")]
+    InvalidMagicNumber,
+    #[error("IO error: {0}")]
+    Io(String),
+    #[error("EOF")]
+    EOF,
 }
+
+impl From<io::Error> for Error {
+    #[inline]
+    fn from(e: io::Error) -> Error {
+        Error::Io(e.to_string())
+    }
+}
+
+pub type Result<T> = result::Result<T, Error>;
 
 /// simple rewrite of golang sort.Search
 pub fn search<F>(n: usize, mut f: F) -> usize
@@ -171,4 +198,27 @@ where
         }
     }
     i
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct LocalAddr {
+    pub start: usize,
+    pub end: usize,
+}
+
+impl LocalAddr {
+    pub fn new(start: usize, end: usize) -> Self {
+        Self {
+            start,
+            end,
+        }
+    }
+
+    pub fn get(self, buf: &[u8]) -> &[u8] {
+        &buf[self.start..self.end]
+    }
+
+    pub fn len(self) -> usize {
+        (self.end - self.start) as usize
+    }
 }

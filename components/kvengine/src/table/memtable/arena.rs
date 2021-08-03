@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
 use std::{mem, ptr, slice};
 
 use super::super::table::Value;
+use super::WriteBatchEntry;
 use super::skl::{deref, Node, MAX_HEIGHT};
 
 pub const NULL_ARENA_ADDR: u64 = 0;
@@ -138,19 +139,24 @@ impl Arena {
         addr
     }
 
-    pub fn put_val(&self, val: Value) -> ArenaAddr {
-        let size = val.encoded_size();
+    pub fn put_val(&self, buf: &[u8], entry: WriteBatchEntry) -> ArenaAddr {
+        let size = entry.encoded_val_size();
         let addr = self.alloc(size as u32);
-        let buf = self.get_mut_bytes(addr);
-        val.encode(buf);
+        let m_buf = self.get_mut_bytes(addr);
+        m_buf[0] = entry.meta;
+        m_buf[1] = entry.user_meta_len;
+        LittleEndian::write_u64(&mut m_buf[2..], entry.version);
+        m_buf[10..10+entry.user_meta_len as usize].copy_from_slice(entry.user_meta(buf));
+        let offset = 10 + entry.user_meta_len as usize;
+        m_buf[offset..offset + entry.val_len as usize].copy_from_slice(entry.value(buf));
         addr
     }
 
-    pub fn put_node(&self, height: usize, key: &[u8], val: Value) -> &mut Node {
+    pub fn put_node(&self, height: usize, buf: &[u8], entry: WriteBatchEntry) -> &mut Node {
         let node_size = mem::size_of::<Node>() - (MAX_HEIGHT - height) * 8;
         let node_addr = self.alloc(node_size as u32);
-        let key_addr = self.put_key(key);
-        let val_addr = self.put_val(val);
+        let key_addr = self.put_key(entry.key(buf));
+        let val_addr = self.put_val(buf, entry);
         let node_ptr = self.get_node(node_addr);
         let node = deref(node_ptr);
         node.addr = node_addr;

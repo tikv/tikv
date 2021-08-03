@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::table::*;
+use crate::table::*;
 use bytes::Bytes;
 use std::cmp::Ordering::*;
 use std::mem;
@@ -103,11 +103,6 @@ impl Iterator for MergeIterator {
     fn valid(&self) -> bool {
         self.smaller.valid
     }
-
-    fn close(&self) {
-        self.smaller.iter.close();
-        self.bigger.iter.close();
-    }
 }
 
 impl MergeIterator {
@@ -199,12 +194,10 @@ impl Iterator for EmptyIterator {
     }
 
     fn value(&self) -> Value {
-        Value::empty()
+        Value::new()
     }
 
     fn valid(&self) -> bool {
         false
     }
-
-    fn close(&self) {}
 }

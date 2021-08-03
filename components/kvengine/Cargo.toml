@@ -14,3 +14,7 @@ byteorder = "1.2"
 crossbeam = "0.8"
 farmhash = "1.1.5"
 crc32c = "0.6"
+kvenginepb = { path = "../kvenginepb", default-features = false }
+
+[dev-dependencies]
+tempfile = "3"

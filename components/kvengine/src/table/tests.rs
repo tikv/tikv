@@ -11,8 +11,7 @@ use std::cmp::Ordering::*;
 #[derive(Debug)]
 struct SimpleIterator {
     keys: Vec<Bytes>,
-    vers: Vec<u64>,
-    vals: Vec<Bytes>,
+    vals: Vec<Vec<u8>>,
     idx: i32,
     reversed: bool,
 
@@ -28,12 +27,12 @@ impl SimpleIterator {
         let mut latest_off = vec![];
         for i in 0..length {
             ks.push(Bytes::from(keys[i]));
-            vs.push(Bytes::from(vals[i]));
+            let val = Value::encode_buf(0, &[], 0, vals[i].as_bytes());
+            vs.push(val);
             latest_off.push(i);
         }
         Self {
             keys: ks,
-            vers: vec![0; length],
             vals: vs,
             idx: 0,
             reversed,
@@ -46,7 +45,6 @@ impl SimpleIterator {
         let mut last_offs = vec![];
         let mut keys = vec![];
         let mut vals = vec![];
-        let mut vers = vec![];
 
         let mut rng = rand::thread_rng();
         for i in 0..100 {
@@ -54,8 +52,8 @@ impl SimpleIterator {
             let key = Bytes::from(format!("key{:03}", i));
             for j in (min_ver..=max_ver).rev() {
                 keys.push(key.clone());
-                vers.push(j);
-                vals.push(key.clone());
+                let val = Value::encode_buf(0, &[], j, key.chunk());
+                vals.push(val);
                 if rng.gen_range(0..4) == 0 {
                     break;
                 }
@@ -63,7 +61,6 @@ impl SimpleIterator {
         }
         Self {
             keys,
-            vers,
             vals,
             idx: 0,
             reversed,
@@ -126,19 +123,13 @@ impl Iterator for SimpleIterator {
     }
 
     fn value(&self) -> Value {
-        Value::new(
-            0,
-            &[],
-            self.vers[self.entry_idx()],
-            self.vals[self.entry_idx()].chunk(),
-        )
+        let buf = self.vals[self.entry_idx()].as_slice();
+        Value::decode(buf)
     }
 
     fn valid(&self) -> bool {
         self.idx >= 0 && self.idx < self.latest_offsets.len() as i32
     }
-
-    fn close(&self) {}
 }
 
 fn get_all<'a>(mut it: Box<dyn Iterator>) -> (Vec<Bytes>, Vec<Bytes>) {

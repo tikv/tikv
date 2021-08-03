@@ -1,0 +1,102 @@
+// Copyright 2021-present PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Use ./gen.sh to generate .pb.go files.
+syntax = "proto3";
+
+package enginepb;
+
+message ChangeSet {
+  uint64 shardID = 1;
+  uint64 shardVer = 2;
+  Compaction compaction = 4;
+  Flush flush = 5;
+  Snapshot snapshot = 6;
+  SplitStage stage = 7;
+  PreSplit preSplit = 8;
+  SplitFiles splitFiles = 9;
+  Split split = 10;
+  bool shardDelete = 11;
+  // The sequence value is not set by the DB when generating the change set, user have to assign the value.
+  // If specified, we check sequence is monotonically increasing.
+  uint64 sequence = 12;
+  int64 nextMemTableSize = 13;
+  ChangeSet parent = 14;
+}
+
+enum SplitStage {
+  INITIAL = 0;
+  PRE_SPLIT = 1;
+  PRE_SPLIT_FLUSH_DONE = 2;
+  SPLIT_FILE_DONE = 3;
+}
+
+message Compaction {
+  int32 cf = 1;
+  uint32 level = 2;
+  repeated TableCreate tableCreates = 3;
+  repeated uint64 topDeletes = 4;
+  repeated uint64 bottomDeletes = 5;
+  bool conflicted = 6;
+}
+
+message Flush {
+  L0Create l0Create = 1;
+  uint64 commitTS = 2;
+  Properties properties = 3;
+}
+
+message Snapshot {
+  bytes start = 1;
+  bytes end = 2;
+  Properties properties = 3;
+  repeated bytes splitKeys = 4;
+  repeated L0Create l0Creates = 5;
+  repeated TableCreate tableCreates = 6;
+  uint64 commitTS = 7;
+}
+
+message SplitFiles {
+  repeated L0Create l0Creates = 1;
+  repeated TableCreate tableCreates = 2;
+  repeated uint64 tableDeletes = 3;
+}
+
+message L0Create {
+  uint64 ID = 1;
+  bytes smallest = 2;
+  bytes biggest = 3;
+}
+
+message TableCreate {
+  uint64 ID = 1;
+  uint32 level = 2;
+  int32 CF = 3;
+  bytes smallest = 4;
+  bytes biggest = 5;
+}
+
+message PreSplit {
+  repeated bytes Keys = 1;
+}
+
+message Split {
+  repeated Properties newShards = 1;
+  repeated bytes Keys = 3;
+}
+
+message Properties {
+  uint64 shardID = 1;
+  repeated string keys = 2;
+  repeated bytes values = 3;
+}

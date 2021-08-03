@@ -4,20 +4,21 @@ use core::slice::{self};
 use std::mem;
 
 use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
-use bytes::{buf, BufMut};
+use bytes::{BufMut, BytesMut, Bytes};
 
 use crate::table::table::Error;
 
 use super::super::table::Value;
 use farmhash;
 
-const CRC32_CASTAGNOLI: u8 = 1;
-const PROP_KEY_SMALLEST: &str = "smallest";
-const PROP_KEY_BIGGEST: &str = "biggest";
+pub const CRC32_CASTAGNOLI: u8 = 1;
+pub const PROP_KEY_SMALLEST: &str = "smallest";
+pub const PROP_KEY_BIGGEST: &str = "biggest";
 const NO_COMPRESSION: u8 = 0;
 const TABLE_FORMAT: u16 = 1;
-const MAGIC_NUMBER: u32 = 2940551257;
-const META_HAS_OLD: u8 = 1 << 1;
+pub const MAGIC_NUMBER: u32 = 2940551257;
+pub const META_HAS_OLD: u8 = 1 << 1;
+pub const BLOCK_ADDR_SIZE: usize = mem::size_of::<BlockAddress>();
 
 pub struct TableBuilderOptions {
     pub block_size: usize,
@@ -85,7 +86,7 @@ impl EntrySlice {
 
 #[allow(dead_code)]
 #[derive(Default)]
-struct Builder {
+pub struct Builder {
     fid: u64,
 
     block_builder: BlockBuilder,
@@ -104,6 +105,7 @@ impl Builder {
         x.fid = fid;
         x.bloom_fpr = opt.bloom_fpr;
         x.checksum_tp = CRC32_CASTAGNOLI;
+        x.block_size = opt.block_size;
         x
     }
 
@@ -116,7 +118,7 @@ impl Builder {
         self.biggest.truncate(0);
     }
 
-    fn add_property(buf: &mut Vec<u8>, key: &[u8], val: &[u8]) {
+    fn add_property(buf: &mut BytesMut, key: &[u8], val: &[u8]) {
         buf.put_u16_le(key.len() as u16);
         buf.put_slice(key);
         buf.put_u32_le(val.len() as u32);
@@ -139,7 +141,7 @@ impl Builder {
             self.block_builder.add_entry(key, val);
             self.key_hashes.push(farmhash::fingerprint64(key));
             if self.smallest.len() == 0 {
-                self.smallest.copy_from_slice(key);
+                self.smallest.extend_from_slice(key);
             }
         }
     }
@@ -151,10 +153,10 @@ impl Builder {
             + self.old_builder.block.size
     }
 
-    pub fn finish(&mut self, mut data_buf: Vec<u8>) -> BuildResult {
+    pub fn finish(&mut self, mut data_buf: BytesMut) -> BuildResult {
         if self.block_builder.block.size > 0 {
             let last_key = self.block_builder.block.tmp_keys.get_last();
-            self.biggest.copy_from_slice(last_key);
+            self.biggest.extend_from_slice(last_key);
             self.block_builder.finish_block(self.fid, self.checksum_tp);
         }
         if self.old_builder.block.size > 0 {
@@ -185,28 +187,23 @@ impl Builder {
         footer.checksum_type = self.checksum_tp;
         footer.table_format_version = TABLE_FORMAT;
         footer.magic = MAGIC_NUMBER;
-        let footer_ptr = &footer as *const Footer as *const u8;
-        unsafe {
-            let slice = slice::from_raw_parts(footer_ptr, FOOTER_SIZE);
-            data_buf.extend_from_slice(slice);
-        }
+        data_buf.extend_from_slice(footer.marshal());
         BuildResult {
             id: self.fid,
-            file_data: data_buf,
+            file_data: data_buf.freeze(),
             smallest: self.smallest.clone(),
             biggest: self.biggest.clone(),
         }
     }
 
-    fn build_properties(&self, buf: &mut Vec<u8>) {
+    fn build_properties(&self, buf: &mut BytesMut) {
         let origin_len = buf.len();
         buf.put_u32_le(0);
         Builder::add_property(buf, PROP_KEY_SMALLEST.as_bytes(), self.smallest.as_slice());
         Builder::add_property(buf, PROP_KEY_BIGGEST.as_bytes(), self.biggest.as_slice());
         if self.checksum_tp == CRC32_CASTAGNOLI {
             let checksum = crc32c::crc32c(&buf[(origin_len + 4)..]);
-            let slice = buf.as_mut_slice();
-            LittleEndian::write_u32(&mut slice[origin_len..], checksum);
+            LittleEndian::write_u32(&mut buf[origin_len..], checksum);
         }
     }
 
@@ -215,42 +212,42 @@ impl Builder {
     }
 }
 
-const FOOTER_SIZE: usize = mem::size_of::<Footer>();
+pub const FOOTER_SIZE: usize = mem::size_of::<Footer>();
 
-#[derive(Default)]
-struct Footer {
-    old_data_offset: u32,
-    index_offset: u32,
-    old_index_offset: u32,
-    properties_offset: u32,
-    compression_type: u8,
-    checksum_type: u8,
-    table_format_version: u16,
-    magic: u32,
+#[derive(Default, Clone, Copy)]
+pub struct Footer {
+    pub old_data_offset: u32,
+    pub index_offset: u32,
+    pub old_index_offset: u32,
+    pub properties_offset: u32,
+    pub compression_type: u8,
+    pub checksum_type: u8,
+    pub table_format_version: u16,
+    pub magic: u32,
 }
 
 impl Footer {
-    fn data_len(&self) -> usize {
+    pub fn data_len(&self) -> usize {
         self.old_data_offset as usize
     }
 
-    fn old_data_len(&self) -> usize {
+    pub fn old_data_len(&self) -> usize {
         (self.index_offset - self.old_data_offset) as usize
     }
 
-    fn index_len(&self) -> usize {
+    pub fn index_len(&self) -> usize {
         (self.old_index_offset - self.index_offset) as usize
     }
 
-    fn old_index_len(&self) -> usize {
+    pub fn old_index_len(&self) -> usize {
         (self.properties_offset - self.old_index_offset) as usize
     }
 
-    fn properties_len(&self, table_size: usize) -> usize {
+    pub fn properties_len(&self, table_size: usize) -> usize {
         table_size - self.properties_offset as usize - FOOTER_SIZE
     }
 
-    fn validate(&self, table_size: usize) -> bool {
+    pub fn validate(&self, table_size: usize) -> bool {
         table_size
             == self.data_len()
                 + self.old_data_len()
@@ -258,6 +255,20 @@ impl Footer {
                 + self.old_index_len()
                 + self.properties_len(table_size)
                 + FOOTER_SIZE
+    }
+
+    pub fn unmarshal(&mut self, mut data: &[u8]) {
+        let footer_ptr = data.as_ptr() as *const Footer;
+        *self = unsafe {
+            *footer_ptr
+        };
+    }
+
+    pub fn marshal(&self) -> &[u8] {
+        let footer_ptr = self as *const Footer as *const u8;
+        unsafe {
+            slice::from_raw_parts(footer_ptr, FOOTER_SIZE)
+        }
     }
 }
 
@@ -358,7 +369,7 @@ impl BlockBuilder {
             meta |= META_HAS_OLD;
         } else {
             // The val meta from the old table may have `metaHasOld` flag, need to unset it.
-            meta &= META_HAS_OLD.reverse_bits();
+            meta &= !META_HAS_OLD;
         }
         self.buf.push(meta);
         self.buf.put_u64_le(v.version);
@@ -397,7 +408,7 @@ impl BlockBuilder {
         self.buf.put_u32_le(num_blocks as u32);
         let mut common_prefix_len = 0;
         if num_blocks > 0 {
-            common_prefix_len = self.get_block_common_prefix_len();
+            common_prefix_len = self.get_index_common_prefix_len();
         }
         let mut key_offset = 0u32;
         for i in 0..num_blocks {
@@ -412,8 +423,10 @@ impl BlockBuilder {
             self.buf.put_u32_le(block_addr.curr_off + base_off);
         }
         self.buf.put_u16_le(common_prefix_len as u16);
-        let common_prefix = &self.block_keys.get_entry(0)[..common_prefix_len];
-        self.buf.extend_from_slice(common_prefix);
+        if common_prefix_len > 0 {
+            let common_prefix = &self.block_keys.get_entry(0)[..common_prefix_len];
+            self.buf.extend_from_slice(common_prefix);
+        }
         let block_keys_len = self.block_keys.buf.len() - num_blocks * common_prefix_len;
         self.buf.put_u32_le(block_keys_len as u32);
         for i in 0..num_blocks {
@@ -427,11 +440,11 @@ impl BlockBuilder {
     }
 }
 
-#[derive(Default)]
-struct BlockAddress {
-    origin_fid: u64,
-    origin_off: u32,
-    curr_off: u32,
+#[derive(Default, Clone, Copy)]
+pub struct BlockAddress {
+    pub origin_fid: u64,
+    pub origin_off: u32,
+    pub curr_off: u32,
 }
 
 impl BlockAddress {
@@ -444,9 +457,9 @@ impl BlockAddress {
     }
 }
 
-struct BuildResult {
+pub struct BuildResult {
     pub id: u64,
-    pub file_data: Vec<u8>,
+    pub file_data: Bytes,
     pub smallest: Vec<u8>,
     pub biggest: Vec<u8>,
 }
@@ -469,7 +482,9 @@ mod tests {
     fn test_entry_slice() {
         let mut es = EntrySlice::new();
         es.append("abc".as_bytes());
-        es.append_value(Value::new(1, &[1], 1, "abc".as_bytes()));
+        let val_buf = Value::encode_buf(1, &[1], 1, "abc".as_bytes());
+        let val = Value::decode(&val_buf);
+        es.append_value(val);
         dbg!(es.buf);
         dbg!(es.end_offs);
     }

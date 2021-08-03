@@ -1,23 +1,97 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    ptr::{self, null_mut},
-    sync::{
-        atomic::{AtomicU32, AtomicU64, Ordering::*},
-        Arc,
-    },
-};
+use std::{ops::{Deref, DerefMut}, ptr::{self, null_mut}, sync::{Arc, atomic::{AtomicU32, AtomicU64, Ordering::*}}};
 
 use crate::table::table::{Iterator, Value};
 use bytes::{Buf, Bytes, BytesMut};
 
-use super::arena::*;
+use super::{arena::*};
 use std::cmp::Ordering::*;
 use std::str;
 
 pub const MAX_HEIGHT: usize = 14;
 const HEIGHT_INCREASE: u32 = u32::MAX / 4;
 const RAND_SEED: u32 = 410958445;
+
+
+
+pub struct WriteBatch {
+    entries: Vec<WriteBatchEntry>,
+    buf: Vec<u8>,
+    hint: Box<Hint>,
+}
+
+impl WriteBatch {
+    pub fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            buf: Vec::new(),
+            hint: Hint::new(),
+        }
+    }
+
+    pub fn put(&mut self, key: &[u8], meta: u8, user_meta: &[u8], version: u64, val: &[u8]) {
+        let offset = self.buf.len();
+        let entry = WriteBatchEntry {
+            buf_off: offset as u32,
+            meta,
+            user_meta_len: user_meta.len() as u8,
+            key_len: key.len() as u16,
+            version,
+            val_len: val.len() as u32,
+        };
+        self.buf.extend_from_slice(key);
+        self.buf.extend_from_slice(user_meta);
+        self.buf.extend_from_slice(val);
+        self.entries.push(entry);
+    }
+
+    pub fn get(&self, idx: usize) -> WriteBatchEntry {
+        self.entries[idx]
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct WriteBatchEntry {
+    buf_off: u32,
+    pub meta: u8,
+    pub user_meta_len: u8,
+    key_len: u16,
+    pub version: u64,
+    pub val_len: u32,
+}
+
+impl WriteBatchEntry {
+    pub fn key(self, buf: &[u8]) -> &[u8] {
+        let start = self.buf_off as usize;
+        let end = start + self.key_len as usize;
+        &buf[start..end]
+    }
+
+    pub fn user_meta(self, buf: &[u8]) -> &[u8] {
+        let start = self.buf_off as usize + self.key_len as usize;
+        let end = start + self.user_meta_len as usize;
+        &buf[start..end]
+    }
+
+    pub fn value(self, buf: &[u8]) -> &[u8] {
+        let start = self.buf_off as usize + self.key_len as usize + self.user_meta_len as usize;
+        let end = start + self.val_len as usize;
+        &buf[start..end]
+    }
+
+    pub fn encoded_val_size(self) -> usize {
+        1 + 1 + 8 + self.user_meta_len as usize + self.val_len as usize
+    }
+
+    pub fn encoded_full_size(self) -> usize {
+        2 + self.key_len as usize + 1 + 1 + 8 + self.user_meta_len as usize + self.val_len as usize
+    }
+}
 
 pub struct Node {
     pub addr: ArenaAddr,
@@ -57,38 +131,61 @@ pub fn get_node_offset(node: *mut Node) -> ArenaAddr {
     deref(node).addr
 }
 
+#[derive(Clone)]
 pub struct SkipList {
-    height: AtomicU32,
-    head: *mut Node,
-    arena: Arc<Arena>,
-    rnd_x: u32,
+    inner: Arc<SkipListInner>,
 }
 
-impl Clone for SkipList {
-    fn clone(&self) -> Self {
+impl Deref for SkipList {
+    type Target = SkipListInner;
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl SkipList {
+    pub fn new(arena: Option<Arena>) -> Self {
+        let inner = SkipListInner::new(arena);
         Self {
-            height: AtomicU32::new(self.get_height() as u32),
-            head: self.head,
-            arena: self.arena.clone(),
-            rnd_x: RAND_SEED,
+            inner: Arc::new(inner),
         }
     }
+
+    pub fn new_iterator(&self, reversed: bool) -> SKIterator {
+        let it = SKIterator {
+            list: self.clone(),
+            n: null_mut(),
+            uk: BytesMut::new(),
+            v: Value::new(),
+            val_list: Vec::new(),
+            val_list_idx: 0,
+            reversed,
+        };
+        it
+    }
+}
+
+pub struct SkipListInner {
+    height: AtomicU32,
+    head: *mut Node,
+    arena: Arena,
+    rnd_x: AtomicU32,
 }
 
 #[allow(dead_code)]
-impl SkipList {
-    fn new(arena: Option<Arc<Arena>>) -> Self {
-        let a = arena.unwrap_or(Arc::new(Arena::new()));
-        let head = a.put_node(MAX_HEIGHT, &[], Value::empty());
+impl SkipListInner {
+    fn new(arena: Option<Arena>) -> Self {
+        let a = arena.unwrap_or(Arena::new());
+        let head = a.put_node(MAX_HEIGHT, &[], WriteBatchEntry::default());
         Self {
             height: AtomicU32::new(1),
             head,
-            arena: a.clone(),
-            rnd_x: RAND_SEED,
+            arena: a,
+            rnd_x: AtomicU32::new(RAND_SEED),
         }
     }
 
-    fn random_height(&mut self) -> usize {
+    fn random_height(&self) -> usize {
         let mut h = 1;
         while h < MAX_HEIGHT && self.next_rand() <= HEIGHT_INCREASE {
             h += 1;
@@ -97,12 +194,12 @@ impl SkipList {
     }
 
     // See https://en.wikipedia.org/wiki/Xorshift
-    fn next_rand(&mut self) -> u32 {
-        let mut x = self.rnd_x;
+    fn next_rand(&self) -> u32 {
+        let mut x = self.rnd_x.load(Relaxed);
         x ^= x << 13;
         x ^= x >> 17;
         x ^= x << 5;
-        self.rnd_x = x;
+        self.rnd_x.store(x, Relaxed);
         x
     }
 
@@ -117,12 +214,19 @@ impl SkipList {
         self.height.load(Acquire) as usize
     }
 
-    pub fn put(&mut self, key: &[u8], val: Value) {
-        let mut h = Hint::new();
-        self.put_with_hint(key, val, &mut h)
+    pub fn put_batch(&self, batch: &mut WriteBatch) {
+        for i in 0..batch.entries.len() {
+            let entry = batch.entries[i];
+            self.put_with_hint(&batch.buf, entry, &mut batch.hint)
+        }
     }
 
-    pub fn put_with_hint(&mut self, key: &[u8], val: Value, h: &mut Box<Hint>) {
+    pub fn put(&self, buf: &[u8], entry: WriteBatchEntry) {
+        let mut h = Hint::new();
+        self.put_with_hint(buf, entry, &mut h)
+    }
+
+    pub fn put_with_hint(&self, buf: &[u8], entry: WriteBatchEntry, h: &mut Box<Hint>) {
         // Since we allow overwrite, we may not need to create a new node. We might not even need to
         // increase the height. Let's defer these actions.
         let mut list_height = self.get_height();
@@ -134,8 +238,10 @@ impl SkipList {
             list_height = height;
         }
         let mut splice_valid = true;
+        let key =  entry.key(buf);
         let recomput_height = self.calculate_recompute_height(key, h, list_height);
         if recomput_height > 0 {
+            
             for i in (0..recomput_height).rev() {
                 let (prev, next, matched) = self.find_splice_for_level(key, h.prev[i + 1], i);
                 h.prev[i] = prev;
@@ -143,7 +249,7 @@ impl SkipList {
                 if matched {
                     // In-place update.
                     let node = deref(h.next[i]);
-                    node.set_val_addr(self.arena.put_val(val));
+                    node.set_val_addr(self.arena.put_val(buf, entry));
                     let mut j = i;
                     while j > 0 {
                         h.prev[j - 1] = h.prev[j];
@@ -158,14 +264,14 @@ impl SkipList {
             if h.next[0] != ptr::null_mut() {
                 let node = deref(h.next[0]);
                 if self.arena.get(node.key_addr).eq(key) {
-                    node.set_val_addr(self.arena.put_val(val));
+                    node.set_val_addr(self.arena.put_val(buf, entry));
                     return;
                 }
             }
         }
 
         // We do need to create a new node.
-        let x = self.arena.put_node(height, key, val);
+        let x = self.arena.put_node(height, buf, entry);
 
         // We always insert from the base level and up. After you add a node in base level, we cannot
         // create a node in the level above because it would have discovered the node in the base level.
@@ -221,11 +327,11 @@ impl SkipList {
             n = h.next[0];
         }
         if n.is_null() {
-            return Value::empty();
+            return Value::new();
         }
         let next_key = self.arena.get(deref(n).key_addr);
         if next_key.ne(key) {
-            return Value::empty();
+            return Value::new();
         }
         let mut val_off = deref(n).get_val_addr();
         while val_off.is_value_node_addr() {
@@ -235,11 +341,11 @@ impl SkipList {
                 return v;
             }
             if vn.next_val_addr.0 == NULL_ARENA_ADDR {
-                return Value::empty();
+                return Value::new();
             }
             val_off = vn.next_val_addr;
         }
-        Value::empty()
+        Value::new()
     }
 
     pub fn calculate_recompute_height(
@@ -270,7 +376,7 @@ impl SkipList {
             }
             if prev_node != self.head
                 && prev_node != null_mut()
-                && key.le(self.arena.get(deref(prev_node).key_addr))
+                && key <= self.arena.get(deref(prev_node).key_addr)
             {
                 // Key is before splice.
                 while prev_node == h.prev[recompute_height] {
@@ -278,7 +384,7 @@ impl SkipList {
                 }
                 continue;
             }
-            if next_node != null_mut() && key.gt(self.arena.get(deref(next_node).key_addr)) {
+            if next_node != null_mut() && key > self.arena.get(deref(next_node).key_addr) {
                 // Key is after splice.
                 while next_node == h.next[recompute_height] {
                     recompute_height += 1;
@@ -412,11 +518,11 @@ impl SkipList {
     pub fn get(&self, key: &[u8], version: u64) -> Value {
         let (n, _) = self.find_near(key, false, true);
         if n == null_mut() {
-            return Value::empty();
+            return Value::new();
         }
         let next_key = self.arena.get(deref(n).key_addr);
         if key.ne(next_key) {
-            return Value::empty();
+            return Value::new();
         }
         let mut value_off = deref(n).get_val_addr();
         while value_off.is_value_node_addr() {
@@ -431,21 +537,10 @@ impl SkipList {
         if version >= v.version {
             return v;
         }
-        Value::empty()
+        Value::new()
     }
 
-    pub fn new_iterator(&self, reversed: bool) -> SKIterator {
-        let it = SKIterator {
-            list: self.clone(),
-            n: null_mut(),
-            uk: BytesMut::new(),
-            v: Value::empty(),
-            val_list: Vec::new(),
-            val_list_idx: 0,
-            reversed,
-        };
-        it
-    }
+
 }
 
 // Hint is used to speed up sequential write.
@@ -461,7 +556,7 @@ pub struct Hint {
 }
 
 impl Hint {
-    fn new() -> Box<Hint> {
+    pub fn new() -> Box<Hint> {
         Box::new(Hint {
             height: 0,
             hit_height: 0,
@@ -595,14 +690,14 @@ impl Iterator for SKIterator {
     fn valid(&self) -> bool {
         self.n != null_mut()
     }
-
-    fn close(&self) {}
 }
 
 #[cfg(test)]
 mod tests {
     use byteorder::{ByteOrder, LittleEndian};
     use rand::Rng;
+
+    use crate::table::memtable::WriteBatch;
 
     use super::*;
 
@@ -639,20 +734,23 @@ mod tests {
         assert_eq!(it.valid(), false);
         it.seek(key);
         assert_eq!(it.valid(), false);
-        it.close()
     }
 
     #[test]
     fn test_basic() {
-        let mut l = SkipList::new(None);
+        let l = SkipListInner::new(None);
         let val1 = new_value(42);
         let val2 = new_value(52);
         let val3 = new_value(62);
         let val4 = new_value(72);
 
-        l.put("key1".as_bytes(), Value::new(55, &[0], 0, val1.as_bytes()));
-        l.put("key2".as_bytes(), Value::new(56, &[0], 2, val2.as_bytes()));
-        l.put("key3".as_bytes(), Value::new(57, &[0], 0, val3.as_bytes()));
+        let mut wb = WriteBatch::new();
+
+        wb.put("key1".as_bytes(), 55, &[0], 0, val1.as_bytes());
+        wb.put("key2".as_bytes(), 56, &[0], 2, val2.as_bytes());
+        wb.put("key3".as_bytes(), 57, &[0], 0, val3.as_bytes());
+
+        l.put_batch(&mut wb);
 
         let mut v = l.get("key".as_bytes(), 0);
         assert_eq!(v.is_empty(), true);
@@ -670,7 +768,9 @@ mod tests {
         assert_eq!(v.get_value(), "00062".as_bytes());
         assert_eq!(v.meta, 57);
 
-        l.put("key3".as_bytes(), Value::new(12, &[0], 1, val4.as_bytes()));
+        let mut wb = WriteBatch::new();
+        wb.put("key3".as_bytes(), 12, &[0], 1, val4.as_bytes());
+        l.put_batch(&mut wb);
         v = l.get("key3".as_bytes(), 1);
         assert_eq!(v.is_empty(), false);
         assert_eq!(v.get_value(), "00072".as_bytes());
@@ -679,13 +779,12 @@ mod tests {
 
     #[test]
     fn test_find_near() {
-        let mut l = SkipList::new(None);
+        let l = SkipListInner::new(None);
         for i in 0..1000 {
             let key = format!("{:05}", i * 10 + 5);
-            l.put(
-                key.as_bytes(),
-                Value::new(0, &[], 0, new_value(i).as_bytes()),
-            );
+            let mut wb = WriteBatch::new();
+            wb.put(key.as_bytes(), 0, &[], 0, new_value(i).as_bytes());
+            l.put_batch(&mut wb);
         }
 
         let (n, eq) = l.find_near("00001".as_bytes(), false, false);
@@ -788,16 +887,18 @@ mod tests {
     #[test]
     fn test_iterator_next() {
         let n = 100;
-        let mut l = SkipList::new(None);
+        let l = SkipList::new(None);
         let mut it = l.new_iterator(false);
         assert_eq!(it.valid(), false);
         it.seek_to_first();
         assert_eq!(it.valid(), false);
         for i in 0..n {
-            l.put(
+            let mut wb = WriteBatch::new();
+            wb.put(
                 new_key(i).as_bytes(),
-                Value::new(0, &[0], 0, new_value(i).as_bytes()),
+                0, &[0], 0, new_value(i).as_bytes(),
             );
+            l.put_batch(&mut wb)
         }
         let mut it = l.new_iterator(false);
         it.rewind();
@@ -812,16 +913,18 @@ mod tests {
     #[test]
     fn test_iterator_prev() {
         let n = 100;
-        let mut l = SkipList::new(None);
+        let l = SkipList::new(None);
         let mut it = l.new_iterator(true);
         assert_eq!(it.valid(), false);
         it.seek_to_first();
         assert_eq!(it.valid(), false);
         for i in (0..n).rev() {
-            l.put(
+            let mut wb = WriteBatch::new();
+            wb.put(
                 new_key(i).as_bytes(),
-                Value::new(0, &[0], 0, new_value(i).as_bytes()),
+                0, &[0], 0, new_value(i).as_bytes(),
             );
+            l.put_batch(&mut wb)
         }
         it.seek_to_last();
         for i in (0..n).rev() {
@@ -835,7 +938,7 @@ mod tests {
     #[test]
     fn test_iterator_seek() {
         let n = 100;
-        let mut l = SkipList::new(None);
+        let l = SkipList::new(None);
         let mut it = l.new_iterator(false);
         assert_eq!(it.valid(), false);
         it.seek_to_first();
@@ -844,10 +947,12 @@ mod tests {
         for i in (0..n).rev() {
             let v = i * 10 + 1000;
             let key = format!("{:05}", v);
-            l.put(
+            let mut wb = WriteBatch::new();
+            wb.put(
                 key.as_bytes(),
-                Value::new(0, &[0], 0, new_value(v).as_bytes()),
+                0, &[0], 0, new_value(v).as_bytes(),
             );
+            l.put_batch(&mut wb)
         }
         it.seek_to_first();
         assert_eq!(it.valid(), true);
@@ -902,33 +1007,33 @@ mod tests {
 
     #[test]
     fn test_put_with_hint() {
-        let mut l = SkipList::new(None);
-        let mut h = Hint::new();
+        let l = SkipList::new(None);
+        let mut wb = WriteBatch::new();
         let mut cnt = 0;
         loop {
             if l.arena.size() > ARENA_SIZE - 256 {
                 break;
             }
             let key = random_key();
-            l.put_with_hint(
+            wb.put(
                 key.as_slice(),
-                Value::new(0, &[], 0, key.as_slice()),
-                &mut h,
+                0, &[], 0, key.as_slice(),
             );
             cnt += 1;
         }
+        l.put_batch(&mut wb);
         let mut it = l.new_iterator(false);
         let mut last_key = Vec::new();
-        let mut cntGot = 0;
+        let mut cnt_got = 0;
         it.seek_to_first();
         while it.valid() {
-            assert_eq!(last_key.as_slice().le(it.key()), true);
-            assert_eq!(it.key().eq(it.value().get_value()), true);
-            cntGot += 1;
+            assert_eq!(last_key.as_slice() <= it.key(), true);
+            assert_eq!(it.key() == it.value().get_value(), true);
+            cnt_got += 1;
             last_key.truncate(0);
             last_key.extend_from_slice(it.key());
             it.next();
         }
-        assert_eq!(cnt, cntGot);
+        assert_eq!(cnt, cnt_got);
     }
 }
