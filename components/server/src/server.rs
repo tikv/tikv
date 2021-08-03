@@ -420,8 +420,16 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             );
         }
         disk::set_disk_reserved_space(reserve_space);
-        file_system::reserve_space_for_recover(&self.config.storage.data_dir, reserve_space / 5)
+        let available = disk_stats.available_space();
+        if available > reserve_space / 2 {
+            file_system::reserve_space_for_recover(
+                &self.config.storage.data_dir,
+                reserve_space / 5,
+            )
             .unwrap();
+        } else {
+            warn!("no enough disk space left to create the place holder file");
+        }
     }
 
     fn init_yatp(&self) {
@@ -1052,9 +1060,9 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             info!("disk space checker not enabled");
             return;
         }
-        //threshold not exposed to users.
-        let thd1 = reserve_space;
-        let thd2 = reserve_space / 2;
+
+        let almost_full_threshold = reserve_space;
+        let already_full_threshold = reserve_space / 2;
         self.background_worker
             .spawn_interval_task(DEFAULT_STORAGE_STATS_INTERVAL, move || {
                 let disk_stats = match fs2::statvfs(&store_path) {
@@ -1090,35 +1098,28 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
                 let mut available = capacity.checked_sub(used_size).unwrap_or_default();
                 available = cmp::min(available, disk_stats.available_space());
-                let disk_status = disk::get_disk_status();
-                if available <= thd2 {
-                    warn!(
-                        "disk full thd2, available={},snap={},kv={},raft={},capacity={}",
-                        available, snap_size, kv_size, raft_size, capacity
-                    );
-                    disk::set_disk_status(disk::DiskUsageStatus::AlreadyFull);
-                } else if available <= thd1 {
-                    if disk::is_disk_already_full(disk_status, 0) {
-                        warn!(
-                            "disk full thd2->thd1, available={},snap={},kv={},raft={},capacity={}",
-                            available, snap_size, kv_size, raft_size, capacity
-                        );
-                    } else {
-                        warn!(
-                            "disk full thd1, available={},snap={},kv={},raft={},capacity={}",
-                            available, snap_size, kv_size, raft_size, capacity
-                        );
-                    }
-                    disk::set_disk_status(disk::DiskUsageStatus::AlmostFull);
+
+                let prev_disk_status = disk::get_disk_status(0); //0 no need care about failpoint.
+                let cur_disk_status = if available <= already_full_threshold {
+                    disk::DiskUsage::AlreadyFull
+                } else if available <= almost_full_threshold {
+                    disk::DiskUsage::AlmostFull
                 } else {
-                    if disk::is_disk_almost_full(disk_status, 0) {
-                        info!(
-                            "disk full thd1->normal, available={},snap={},kv={},raft={},capacity={}",
-                            available, snap_size, kv_size, raft_size, capacity
-                        );
-                    }
-                    disk::set_disk_status(disk::DiskUsageStatus::Normal);
+                    disk::DiskUsage::Normal
+                };
+                if prev_disk_status != cur_disk_status {
+                    warn!(
+                        "disk usage {:?}->{:?}, available={},snap={},kv={},raft={},capacity={}",
+                        prev_disk_status,
+                        cur_disk_status,
+                        available,
+                        snap_size,
+                        kv_size,
+                        raft_size,
+                        capacity
+                    );
                 }
+                disk::set_disk_status(cur_disk_status);
             })
     }
 

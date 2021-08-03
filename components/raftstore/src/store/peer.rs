@@ -2339,23 +2339,16 @@ where
             Ok(RequestPolicy::ReadIndex) => return self.read_index(ctx, req, err_resp, cb),
             Ok(RequestPolicy::ProposeNormal) => {
                 let mut allowed = true;
-                let mut err_msg = String::from("propose failed: disk ");
-                let store_id = ctx.store.get_id();
                 match disk_full_opt {
                     DiskFullOpt::AllowedOnAlreadyFull => allowed = true,
                     DiskFullOpt::AllowedOnAlmostFull => {
-                        if disk::is_disk_already_full(ctx.disk_status, store_id) {
+                        if matches!(ctx.disk_usage, disk::DiskUsage::AlreadyFull) {
                             allowed = false;
-                            err_msg.push_str("already full");
                         }
                     }
                     DiskFullOpt::NotAllowedOnFull => {
-                        if disk::is_disk_already_full(ctx.disk_status, store_id) {
-                            allowed = false;
-                            err_msg.push_str("already full");
-                        } else if disk::is_disk_almost_full(ctx.disk_status, store_id) {
-                            allowed = false;
-                            err_msg.push_str("almost full");
+                        if !matches!(ctx.disk_usage, disk::DiskUsage::Normal) {
+                            allowed = false
                         }
                     }
                 }
@@ -2363,7 +2356,10 @@ where
                 if allowed {
                     self.propose_normal(ctx, req)
                 } else {
-                    Err(Error::DiskFull(ctx.store.get_id(), err_msg))
+                    Err(Error::DiskFull(
+                        ctx.store.get_id(),
+                        String::from("propose failed: disk full"),
+                    ))
                 }
             }
             Ok(RequestPolicy::ProposeTransferLeader) => {
@@ -3142,8 +3138,7 @@ where
             || self.has_pending_snapshot()
             || msg.get_from() != self.leader_id()
             // For followers whose disk is full.
-            || disk::is_disk_almost_full(ctx.disk_status,ctx.store.get_id())
-            || disk::is_disk_already_full(ctx.disk_status,ctx.store.get_id())
+            || !matches!(ctx.disk_usage, disk::DiskUsage::Normal)
         {
             info!(
                 "reject transferring leader";

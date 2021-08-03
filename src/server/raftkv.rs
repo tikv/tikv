@@ -30,8 +30,8 @@ use raftstore::{
     errors::Error as RaftServerError,
     router::{LocalReadRouter, RaftStoreRouter},
     store::{
-        Callback as StoreCallback, RaftCmdExtraOpt, ReadIndexContext, ReadResponse, RegionSnapshot,
-        WriteResponse,
+        Callback as StoreCallback, RaftCmdExtraOpts, ReadIndexContext, ReadResponse,
+        RegionSnapshot, WriteResponse,
     },
 };
 use tikv_util::codec::number::NumberEncoder;
@@ -294,11 +294,11 @@ where
             proposed_cb,
             committed_cb,
         );
-        let extra_opt = RaftCmdExtraOpt {
+        let extra_opts = RaftCmdExtraOpts {
             deadline: batch.deadline,
             disk_full_opt: batch.disk_full_opt,
         };
-        self.router.send_command(cmd, cb, extra_opt)?;
+        self.router.send_command(cmd, cb, extra_opts)?;
 
         Ok(())
     }

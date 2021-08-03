@@ -39,7 +39,7 @@ use raftstore::store::{
 use raftstore::Result;
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionInfoAccessor},
-    store::msg::RaftCmdExtraOpt,
+    store::msg::RaftCmdExtraOpts,
 };
 use security::SecurityManager;
 use tikv::coprocessor;
@@ -536,7 +536,7 @@ impl Simulator for ServerCluster {
             None => return Err(box_err!("missing sender for store {}", node_id)),
             Some(meta) => meta.sim_router.clone(),
         };
-        router.send_command(request, cb, RaftCmdExtraOpt::default())
+        router.send_command(request, cb, RaftCmdExtraOpts::default())
     }
 
     fn async_read(

@@ -43,7 +43,7 @@ use raft::eraftpb::MessageType;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::memory::{MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES};
 use raftstore::store::CheckLeaderTask;
-use raftstore::store::{Callback, CasualMessage, RaftCmdExtraOpt};
+use raftstore::store::{Callback, CasualMessage, RaftCmdExtraOpts};
 use raftstore::{DiscardReason, Error as RaftStoreError};
 use tikv_util::future::{paired_future_callback, poll_future_notify};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
@@ -882,7 +882,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
         // so just send it as an command.
         if let Err(e) = self
             .ch
-            .send_command(cmd, Callback::Read(cb), RaftCmdExtraOpt::default())
+            .send_command(cmd, Callback::Read(cb), RaftCmdExtraOpts::default())
         {
             // Retrun region error instead a gRPC error.
             let mut resp = ReadIndexResponse::default();

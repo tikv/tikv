@@ -552,13 +552,13 @@ where
                         .propose
                         .request_wait_time
                         .observe(duration_to_sec(cmd.send_time.saturating_elapsed()) as f64);
-                    if let Some(Err(e)) = cmd.extra_opt.deadline.map(|deadline| deadline.check()) {
+                    if let Some(Err(e)) = cmd.extra_opts.deadline.map(|deadline| deadline.check()) {
                         cmd.callback.invoke_with_response(new_error(e.into()));
                         continue;
                     }
 
                     let req_size = cmd.request.compute_size();
-                    if cmd.extra_opt.disk_full_opt == DiskFullOpt::NotAllowedOnFull
+                    if cmd.extra_opts.disk_full_opt == DiskFullOpt::NotAllowedOnFull
                         && self.fsm.batch_req_builder.can_batch(&cmd.request, req_size)
                     {
                         self.fsm.batch_req_builder.add(cmd, req_size);
@@ -570,7 +570,7 @@ where
                         self.propose_raft_command(
                             cmd.request,
                             cmd.callback,
-                            cmd.extra_opt.disk_full_opt,
+                            cmd.extra_opts.disk_full_opt,
                         )
                     }
                 }
@@ -1276,9 +1276,7 @@ where
 
         let msg_type = msg.get_message().get_msg_type();
 
-        if disk::is_disk_almost_full(self.ctx.disk_status, self.ctx.store.get_id())
-            || disk::is_disk_already_full(self.ctx.disk_status, self.ctx.store.get_id())
-        {
+        if !matches!(self.ctx.disk_usage, disk::DiskUsage::Normal) {
             // only leader transfer and winning log are allowed.
             let mut allowed = true;
             if MessageType::MsgAppend == msg_type {
@@ -1299,10 +1297,8 @@ where
                     "skip {:?} because of disk full", msg_type;
                     "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id()
                 );
-                return Err(Error::DiskFull(
-                    self.ctx.store.get_id(),
-                    "disk full happen when handle raft message".to_owned(),
-                ));
+                self.ctx.raft_metrics.message_dropped.disk_full += 1;
+                return Ok(());
             }
         }
 

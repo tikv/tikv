@@ -13,7 +13,7 @@ use tikv_util::time::ThreadReadId;
 use crate::store::fsm::RaftRouter;
 use crate::store::transport::{CasualRouter, ProposalRouter, StoreRouter};
 use crate::store::{
-    Callback, CasualMessage, LocalReader, PeerMsg, RaftCmdExtraOpt, RaftCommand, SignificantMsg,
+    Callback, CasualMessage, LocalReader, PeerMsg, RaftCmdExtraOpts, RaftCommand, SignificantMsg,
     StoreMsg,
 };
 use crate::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
@@ -52,9 +52,9 @@ where
         &self,
         req: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
-        extra_opt: RaftCmdExtraOpt,
+        extra_opts: RaftCmdExtraOpts,
     ) -> RaftStoreResult<()> {
-        send_command_impl::<EK, _>(self, req, cb, extra_opt)
+        send_command_impl::<EK, _>(self, req, cb, extra_opts)
     }
 
     /// Reports the peer being unreachable to the Region.
@@ -98,7 +98,7 @@ fn send_command_impl<EK, PR>(
     router: &PR,
     req: RaftCmdRequest,
     cb: Callback<EK::Snapshot>,
-    extra_opt: RaftCmdExtraOpt,
+    extra_opts: RaftCmdExtraOpts,
 ) -> RaftStoreResult<()>
 where
     EK: KvEngine,
@@ -106,7 +106,7 @@ where
 {
     let region_id = req.get_header().get_region_id();
     let mut cmd = RaftCommand::new(req, cb);
-    cmd.extra_opt = extra_opt;
+    cmd.extra_opts = extra_opts;
     router
         .send(cmd)
         .map_err(|e| handle_send_error(region_id, e))

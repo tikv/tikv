@@ -380,7 +380,7 @@ impl Simulator for NodeCluster {
             .get(&node_id)
             .cloned()
             .unwrap();
-        router.send_command(request, cb, RaftCmdExtraOpt::default())
+        router.send_command(request, cb, RaftCmdExtraOpts::default())
     }
 
     fn async_read(

@@ -930,7 +930,6 @@ pub fn try_kv_prewrite_with(
     client.kv_prewrite(&prewrite_req).unwrap()
 }
 
-// Disk full test interface.
 pub fn try_kv_prewrite(
     client: &TikvClient,
     ctx: Context,
@@ -972,6 +971,19 @@ pub fn must_kv_commit(
     );
     assert!(!commit_resp.has_error(), "{:?}", commit_resp.get_error());
     assert_eq!(commit_resp.get_commit_version(), expect_commit_ts);
+}
+
+pub fn must_kv_rollback(client: &TikvClient, ctx: Context, keys: Vec<Vec<u8>>, start_ts: u64) {
+    let mut rollback_req = BatchRollbackRequest::default();
+    rollback_req.set_context(ctx);
+    rollback_req.start_version = start_ts;
+    rollback_req.set_keys(keys.into_iter().collect());
+    let rollback_req = client.kv_batch_rollback(&rollback_req).unwrap();
+    assert!(
+        !rollback_req.has_region_error(),
+        "{:?}",
+        rollback_req.get_region_error()
+    );
 }
 
 pub fn kv_pessimistic_lock(

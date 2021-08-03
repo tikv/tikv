@@ -44,7 +44,7 @@ impl PeerClient {
         must_kv_read_equal(&self.cli, self.ctx.clone(), key, val, ts)
     }
 
-    fn must_kv_write(&self, pd_client: &TestPdClient, kvs: Vec<Mutation>, pk: Vec<u8>) -> u64 {
+    pub fn must_kv_write(&self, pd_client: &TestPdClient, kvs: Vec<Mutation>, pk: Vec<u8>) -> u64 {
         must_kv_write(pd_client, &self.cli, self.ctx.clone(), kvs, pk)
     }
 
@@ -83,8 +83,16 @@ impl PeerClient {
         )
     }
 
-    fn must_kv_pessimistic_lock(&self, key: Vec<u8>, ts: u64) {
+    pub fn must_kv_rollback(&self, keys: Vec<Vec<u8>>, start_ts: u64) {
+        must_kv_rollback(&self.cli, self.ctx.clone(), keys, start_ts)
+    }
+
+    pub fn must_kv_pessimistic_lock(&self, key: Vec<u8>, ts: u64) {
         must_kv_pessimistic_lock(&self.cli, self.ctx.clone(), key, ts)
+    }
+
+    pub fn must_kv_pessimistic_rollback(&self, key: Vec<u8>, ts: u64) {
+        must_kv_pessimistic_rollback(&self.cli, self.ctx.clone(), key, ts)
     }
 }
 

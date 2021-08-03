@@ -120,7 +120,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
         }
 
         let pr = ProcessResult::TxnStatus { txn_status };
-        let write_data = WriteData::from_modifies_allowed_already_full(txn.into_modifies());
+        let mut write_data = WriteData::from_modifies(txn.into_modifies());
+        write_data.set_allowed_on_disk_already_full();
         Ok(WriteResult {
             ctx: self.ctx,
             to_be_write: write_data,

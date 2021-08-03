@@ -116,43 +116,28 @@ pub struct WriteData {
 
 impl WriteData {
     pub fn new(modifies: Vec<Modify>, extra: TxnExtra) -> Self {
-        Self::new_ext(modifies, extra, None, DiskFullOpt::NotAllowedOnFull)
+        Self {
+            modifies,
+            extra,
+            deadline: None,
+            disk_full_opt: DiskFullOpt::NotAllowedOnFull,
+        }
     }
 
     pub fn from_modifies(modifies: Vec<Modify>) -> Self {
         Self::new(modifies, TxnExtra::default())
     }
 
-    pub fn new_ext(
-        modifies: Vec<Modify>,
-        extra: TxnExtra,
-        deadline: Option<Deadline>,
-        disk_full_opt: DiskFullOpt,
-    ) -> Self {
-        Self {
-            modifies,
-            extra,
-            deadline,
-            disk_full_opt,
-        }
+    pub fn set_allowed_on_disk_almost_full(&mut self) {
+        self.disk_full_opt = DiskFullOpt::AllowedOnAlmostFull
     }
 
-    pub fn from_modifies_allowed_almost_full(modifies: Vec<Modify>) -> Self {
-        Self::new_ext(
-            modifies,
-            TxnExtra::default(),
-            None,
-            DiskFullOpt::AllowedOnAlmostFull,
-        )
+    pub fn set_allowed_on_disk_already_full(&mut self) {
+        self.disk_full_opt = DiskFullOpt::AllowedOnAlreadyFull
     }
 
-    pub fn from_modifies_allowed_already_full(modifies: Vec<Modify>) -> Self {
-        Self::new_ext(
-            modifies,
-            TxnExtra::default(),
-            None,
-            DiskFullOpt::AllowedOnAlreadyFull,
-        )
+    pub fn set_disk_full_opt(&mut self, level: DiskFullOpt) {
+        self.disk_full_opt = level
     }
 }
 

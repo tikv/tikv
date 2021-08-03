@@ -470,7 +470,7 @@ fn test_node_leader_change_with_log_overlap() {
                 assert!(resp.response.get_header().has_error());
                 assert!(resp.response.get_header().get_error().has_stale_command());
             })),
-            RaftCmdExtraOpt::default(),
+            RaftCmdExtraOpts::default(),
         )
         .unwrap();
 
@@ -721,7 +721,7 @@ fn test_node_dropped_proposal() {
             Callback::write(Box::new(move |resp: WriteResponse| {
                 let _ = tx.send(resp.response);
             })),
-            RaftCmdExtraOpt::default(),
+            RaftCmdExtraOpts::default(),
         )
         .unwrap();
 

@@ -34,7 +34,7 @@ pub use self::hibernate_state::{GroupState, HibernateState};
 pub use self::memory::*;
 pub use self::msg::{
     Callback, CasualMessage, ExtCallback, InspectedRaftMessage, MergeResultKind, PeerMsg,
-    PeerTicks, RaftCmdExtraOpt, RaftCommand, ReadCallback, ReadResponse, SignificantMsg, StoreMsg,
+    PeerTicks, RaftCmdExtraOpts, RaftCommand, ReadCallback, ReadResponse, SignificantMsg, StoreMsg,
     StoreTick, WriteCallback, WriteResponse,
 };
 pub use self::peer::{

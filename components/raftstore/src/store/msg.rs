@@ -410,20 +410,12 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
 }
 
 /// control options for raftcmd.
-#[derive(Debug)]
-pub struct RaftCmdExtraOpt {
+#[derive(Debug, Default)]
+pub struct RaftCmdExtraOpts {
     pub deadline: Option<Deadline>,
     pub disk_full_opt: DiskFullOpt,
 }
 
-impl Default for RaftCmdExtraOpt {
-    fn default() -> Self {
-        RaftCmdExtraOpt {
-            deadline: None,
-            disk_full_opt: DiskFullOpt::NotAllowedOnFull,
-        }
-    }
-}
 /// Raft command is the command that is expected to be proposed by the
 /// leader of the target raft group.
 #[derive(Debug)]
@@ -431,7 +423,7 @@ pub struct RaftCommand<S: Snapshot> {
     pub send_time: Instant,
     pub request: RaftCmdRequest,
     pub callback: Callback<S>,
-    pub extra_opt: RaftCmdExtraOpt,
+    pub extra_opts: RaftCmdExtraOpts,
 }
 
 impl<S: Snapshot> RaftCommand<S> {
@@ -441,22 +433,22 @@ impl<S: Snapshot> RaftCommand<S> {
             request,
             callback,
             send_time: Instant::now(),
-            extra_opt: RaftCmdExtraOpt::default(),
+            extra_opts: RaftCmdExtraOpts::default(),
         }
     }
 
     pub fn new_ext(
         request: RaftCmdRequest,
         callback: Callback<S>,
-        extra_opt: RaftCmdExtraOpt,
+        extra_opts: RaftCmdExtraOpts,
     ) -> RaftCommand<S> {
         RaftCommand {
             request,
             callback,
             send_time: Instant::now(),
-            extra_opt: RaftCmdExtraOpt {
-                deadline: extra_opt.deadline,
-                disk_full_opt: extra_opt.disk_full_opt,
+            extra_opts: RaftCmdExtraOpts {
+                deadline: extra_opts.deadline,
+                disk_full_opt: extra_opts.disk_full_opt,
             },
         }
     }
