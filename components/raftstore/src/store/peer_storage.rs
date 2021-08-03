@@ -685,7 +685,6 @@ where
     pub engines: Engines<EK, ER>,
 
     peer_id: u64,
-    witness: bool,
     region: metapb::Region,
     raft_state: RaftLocalState,
     apply_state: RaftApplyState,
@@ -777,7 +776,6 @@ where
         Ok(PeerStorage {
             engines,
             peer_id,
-            witness,
             region: region.clone(),
             raft_state,
             apply_state,
