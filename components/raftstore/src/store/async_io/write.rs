@@ -16,10 +16,10 @@ use crate::store::fsm::RaftRouter;
 use crate::store::local_metrics::{RaftSendMessageMetrics, StoreWriteMetrics};
 use crate::store::metrics::*;
 use crate::store::transport::Transport;
-use crate::store::{PeerMsg, SignificantMsg};
+use crate::store::PeerMsg;
 use crate::Result;
 
-use collections::{HashMap, HashSet};
+use collections::HashMap;
 use crossbeam::channel::{bounded, Receiver, Sender, TryRecvError};
 use engine_traits::{
     Engines, KvEngine, PerfContext, PerfContextKind, RaftEngine, RaftLogBatch, WriteBatch,
@@ -41,7 +41,6 @@ const RAFT_WB_DEFAULT_SIZE: usize = 256 * 1024;
 /// Notify the event to the specified region.
 pub trait Notifier: Clone + Send + 'static {
     fn notify_persisted(&self, region_id: u64, peer_id: u64, ready_number: u64, now: Instant);
-    fn notify_unreachable(&self, region_id: u64, to_peer_id: u64);
 }
 
 impl<EK, ER> Notifier for RaftRouter<EK, ER>
@@ -69,21 +68,6 @@ where
                 "region_id" => region_id,
                 "peer_id" => peer_id,
                 "ready_number" => ready_number,
-                "error" => ?e,
-            );
-        }
-    }
-
-    fn notify_unreachable(&self, region_id: u64, to_peer_id: u64) {
-        let msg = SignificantMsg::Unreachable {
-            region_id,
-            to_peer_id,
-        };
-        if let Err(e) = self.force_send(region_id, PeerMsg::SignificantMsg(msg)) {
-            warn!(
-                "failed to send unreachable";
-                "region_id" => region_id,
-                "unreachable_peer_id" => to_peer_id,
                 "error" => ?e,
             );
         }
@@ -499,7 +483,6 @@ where
         fail_point!("raft_before_follower_send");
 
         let now = Instant::now();
-        let mut unreachable_peers = HashSet::default();
         for task in &mut self.batch.tasks {
             for msg in task.messages.drain(..) {
                 let msg_type = msg.get_message().get_msg_type();
@@ -517,11 +500,11 @@ where
                         "error_code" => %e.error_code(),
                     );
                     self.message_metrics.add(msg_type, false);
-                    // Send unreachable to this peer.
                     // If this msg is snapshot, it is unnecessary to send snapshot
                     // status to this peer because it has already become follower.
                     // (otherwise the snapshot msg should be sent in store thread other than here)
-                    unreachable_peers.insert((task.region_id, to_peer_id));
+                    // Also, the follower don't need flow control, so don't send
+                    // unreachable msg here.
                 } else {
                     self.message_metrics.add(msg_type, true);
                 }
@@ -531,16 +514,13 @@ where
             self.trans.flush();
             self.message_metrics.flush();
         }
-        for (region_id, to_peer_id) in unreachable_peers {
-            self.notifier.notify_unreachable(region_id, to_peer_id);
-        }
         let now2 = Instant::now();
         STORE_WRITE_SEND_DURATION_HISTOGRAM
             .observe(duration_to_sec(now2.saturating_duration_since(now)));
 
         for (region_id, (peer_id, ready_number)) in &self.batch.readies {
             self.notifier
-                .notify_persisted(*region_id, *peer_id, *ready_number, now);
+                .notify_persisted(*region_id, *peer_id, *ready_number, now2);
         }
         STORE_WRITE_CALLBACK_DURATION_HISTOGRAM.observe(duration_to_sec(now2.saturating_elapsed()));
 
