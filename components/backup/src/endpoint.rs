@@ -169,7 +169,7 @@ impl BackupRange {
                 |key, lock| {
                     Lock::check_ts_conflict(
                         Cow::Borrowed(lock),
-                        &key,
+                        key,
                         backup_ts,
                         &Default::default(),
                     )
@@ -507,8 +507,8 @@ impl<R: RegionInfoProvider> Progress<R> {
                         }
                     }
                     if info.role == StateRole::Leader {
-                        let ekey = get_min_end_key(end_key.as_ref(), &region);
-                        let skey = get_max_start_key(start_key.as_ref(), &region);
+                        let ekey = get_min_end_key(end_key.as_ref(), region);
+                        let skey = get_max_start_key(start_key.as_ref(), region);
                         assert!(!(skey == ekey && ekey.is_some()), "{:?} {:?}", skey, ekey);
                         let leader = find_peer(region, store_id).unwrap().to_owned();
                         let backup_range = BackupRange {

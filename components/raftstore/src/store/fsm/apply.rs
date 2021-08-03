@@ -1223,7 +1223,7 @@ where
         ctx.exec_ctx = Some(self.new_ctx(index, term));
         ctx.kv_wb_mut().set_save_point();
         let mut origin_epoch = None;
-        let (resp, exec_result) = match self.exec_raft_cmd(ctx, &req) {
+        let (resp, exec_result) = match self.exec_raft_cmd(ctx, req) {
             Ok(a) => {
                 ctx.kv_wb_mut().pop_save_point().unwrap();
                 if req.has_admin_request() {
@@ -1539,7 +1539,7 @@ where
                     "{} failed to write ({}, {}) to cf {}: {:?}",
                     self.tag,
                     log_wrappers::Value::key(&key),
-                    log_wrappers::Value::value(&value),
+                    log_wrappers::Value::value(value),
                     cf,
                     e
                 )
@@ -1550,7 +1550,7 @@ where
                     "{} failed to write ({}, {}): {:?}",
                     self.tag,
                     log_wrappers::Value::key(&key),
-                    log_wrappers::Value::value(&value),
+                    log_wrappers::Value::value(value),
                     e
                 );
             });

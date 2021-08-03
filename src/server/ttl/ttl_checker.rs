@@ -154,8 +154,8 @@ pub fn check_ttl_and_compact_files<E: KvEngine>(
         Err(e) => {
             error!(
                 "get range ttl properties failed";
-                "range_start" => log_wrappers::Value::key(&start_key),
-                "range_end" => log_wrappers::Value::key(&end_key),
+                "range_start" => log_wrappers::Value::key(start_key),
+                "range_end" => log_wrappers::Value::key(end_key),
                 "err" => %e,
             );
             TTL_CHECKER_ACTIONS_COUNTER_VEC
@@ -189,8 +189,8 @@ pub fn check_ttl_and_compact_files<E: KvEngine>(
         if let Err(e) = engine.compact_files_cf(CF_DEFAULT, vec![file], None, 0, exclude_l0) {
             error!(
                 "execute ttl compact files failed";
-                "range_start" => log_wrappers::Value::key(&start_key),
-                "range_end" => log_wrappers::Value::key(&end_key),
+                "range_start" => log_wrappers::Value::key(start_key),
+                "range_end" => log_wrappers::Value::key(end_key),
                 "err" => %e,
             );
             TTL_CHECKER_ACTIONS_COUNTER_VEC

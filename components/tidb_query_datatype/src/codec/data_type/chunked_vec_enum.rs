@@ -135,7 +135,7 @@ impl<'a> ChunkRef<'a, EnumRef<'a>> for &'a ChunkedVecEnum {
     }
 
     fn get_bit_vec(self) -> &'a BitVec {
-        &self.values.get_bit_vec()
+        self.values.get_bit_vec()
     }
 
     #[inline]

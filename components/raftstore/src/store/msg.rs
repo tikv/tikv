@@ -373,7 +373,7 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
                 fmt,
                 "ComputeHashResult [index: {}, context: {}, hash: {}]",
                 index,
-                log_wrappers::Value::key(&context),
+                log_wrappers::Value::key(context),
                 escape(hash)
             ),
             CasualMessage::SplitRegion {

@@ -249,7 +249,7 @@ fn test_collect_applying_locks() {
 
     // Write 1 lock.
     must_kv_prewrite(
-        &store_1_client,
+        store_1_client,
         ctx,
         vec![new_mutation(Op::Put, b"k1", b"v")],
         b"k1".to_vec(),

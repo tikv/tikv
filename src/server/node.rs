@@ -26,7 +26,7 @@ use raftstore::store::AutoSplitController;
 use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager, Transport};
 use raftstore::store::{GlobalReplicationState, PdTask, SplitCheckTask};
 use tikv_util::config::VersionTrack;
-use tikv_util::worker::{FutureWorker, Scheduler, Worker};
+use tikv_util::worker::{LazyWorker, Scheduler, Worker};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
@@ -155,7 +155,7 @@ where
         engines: Engines<RocksEngine, ER>,
         trans: T,
         snap_mgr: SnapManager,
-        pd_worker: FutureWorker<PdTask<RocksEngine>>,
+        pd_worker: LazyWorker<PdTask<RocksEngine>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,
@@ -286,7 +286,7 @@ where
         );
 
         let region = initial_region(store_id, region_id, peer_id);
-        store::prepare_bootstrap_cluster(&engines, &region)?;
+        store::prepare_bootstrap_cluster(engines, &region)?;
         Ok(region)
     }
 
@@ -321,16 +321,16 @@ where
                     fail_point!("node_after_bootstrap_cluster", |_| Err(box_err!(
                         "injected error: node_after_bootstrap_cluster"
                     )));
-                    store::clear_prepare_bootstrap_key(&engines)?;
+                    store::clear_prepare_bootstrap_key(engines)?;
                     return Ok(());
                 }
                 Err(PdError::ClusterBootstrapped(_)) => match self.pd_client.get_region(b"") {
                     Ok(region) => {
                         if region == first_region {
-                            store::clear_prepare_bootstrap_key(&engines)?;
+                            store::clear_prepare_bootstrap_key(engines)?;
                         } else {
                             info!("cluster is already bootstrapped"; "cluster_id" => self.cluster_id);
-                            store::clear_prepare_bootstrap_cluster(&engines, region_id)?;
+                            store::clear_prepare_bootstrap_cluster(engines, region_id)?;
                         }
                         return Ok(());
                     }
@@ -371,7 +371,7 @@ where
         engines: Engines<RocksEngine, ER>,
         trans: T,
         snap_mgr: SnapManager,
-        pd_worker: FutureWorker<PdTask<RocksEngine>>,
+        pd_worker: LazyWorker<PdTask<RocksEngine>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,
