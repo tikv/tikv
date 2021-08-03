@@ -1,5 +1,5 @@
 use crate::router::RaftStoreRouter;
-use crate::store::{Callback, RaftRouter};
+use crate::store::{Callback, RaftRouter, ReadResponse};
 use engine_rocks::RocksEngine;
 use engine_traits::RaftEngine;
 use futures::executor::block_on;
@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use tikv_util::future::paired_future_callback;
 use txn_types::Key;
 
+use std::future::Future;
 use tikv_util::{debug, error};
 
 pub trait ReadIndex: Sync + Send {
@@ -34,6 +35,40 @@ impl<ER: RaftEngine> ReadIndexClient<ER> {
     }
 }
 
+fn into_read_index_response<S: engine_traits::Snapshot>(
+    res: Option<ReadResponse<S>>,
+) -> kvproto::kvrpcpb::ReadIndexResponse {
+    let mut resp = ReadIndexResponse::default();
+    if res.is_none() {
+        resp.set_region_error(Default::default());
+    } else {
+        let mut res = res.unwrap();
+        if res.response.get_header().has_error() {
+            resp.set_region_error(res.response.mut_header().take_error());
+        } else {
+            let mut raft_resps = res.response.take_responses();
+            if raft_resps.len() != 1 {
+                error!(
+                    "invalid read index response";
+                    "response" => ?raft_resps
+                );
+                resp.mut_region_error().set_message(format!(
+                    "Internal Error: invalid response: {:?}",
+                    raft_resps
+                ));
+            } else {
+                let mut read_index_resp = raft_resps[0].take_read_index();
+                if read_index_resp.has_locked() {
+                    resp.set_locked(read_index_resp.take_locked());
+                } else {
+                    resp.set_read_index(read_index_resp.get_read_index());
+                }
+            }
+        }
+    }
+    resp
+}
+
 impl<ER: RaftEngine> ReadIndex for ReadIndexClient<ER> {
     fn batch_read_index(
         &self,
@@ -41,7 +76,7 @@ impl<ER: RaftEngine> ReadIndex for ReadIndexClient<ER> {
         timeout: Duration,
     ) -> Vec<(ReadIndexResponse, u64)> {
         debug!("batch_read_index start"; "size"=>req_vec.len(), "request"=>?req_vec);
-        let mut router_cb_vec = Vec::with_capacity(req_vec.len());
+        let mut router_cbs = std::collections::LinkedList::new();
         for req in &req_vec {
             let region_id = req.get_context().get_region_id();
             let mut cmd = RaftCmdRequest::default();
@@ -70,54 +105,30 @@ impl<ER: RaftEngine> ReadIndex for ReadIndexClient<ER> {
                 .unwrap()
                 .send_command(cmd, Callback::Read(cb))
             {
-                router_cb_vec.push((None, region_id));
+                router_cbs.push_back((None, region_id));
             } else {
-                router_cb_vec.push((Some(f), region_id));
+                router_cbs.push_back((Some(f), region_id));
             }
         }
 
         let mut read_index_res = Vec::with_capacity(req_vec.len());
-        {
+        let finished = {
             let read_index_res = &mut read_index_res;
             let read_index_fut = async {
-                for (cb, region_id) in router_cb_vec {
-                    let mut resp = ReadIndexResponse::default();
-                    let res = match cb {
-                        None => None,
-                        Some(cb) => match cb.await {
-                            Err(_) => None,
-                            Ok(e) => Some(e),
-                        },
-                    };
-                    if res.is_none() {
-                        resp.set_region_error(Default::default());
-                        read_index_res.push((resp, region_id));
-                        continue;
-                    }
-                    let mut res = res.unwrap();
-                    if res.response.get_header().has_error() {
-                        resp.set_region_error(res.response.mut_header().take_error());
+                loop {
+                    if let Some((fut, region_id)) = router_cbs.front_mut() {
+                        let res = match fut {
+                            None => None,
+                            Some(fut) => match fut.await {
+                                Err(_) => None,
+                                Ok(e) => Some(e),
+                            },
+                        };
+                        read_index_res.push((into_read_index_response(res), *region_id));
+                        router_cbs.pop_front();
                     } else {
-                        let mut raft_resps = res.response.take_responses();
-                        if raft_resps.len() != 1 {
-                            error!(
-                                "invalid read index response";
-                                "response" => ?raft_resps
-                            );
-                            resp.mut_region_error().set_message(format!(
-                                "Internal Error: invalid response: {:?}",
-                                raft_resps
-                            ));
-                        } else {
-                            let mut read_index_resp = raft_resps[0].take_read_index();
-                            if read_index_resp.has_locked() {
-                                resp.set_locked(read_index_resp.take_locked());
-                            } else {
-                                resp.set_read_index(read_index_resp.get_read_index());
-                            }
-                        }
+                        break;
                     }
-                    read_index_res.push((resp, region_id));
                 }
             };
 
@@ -128,21 +139,37 @@ impl<ER: RaftEngine> ReadIndex for ReadIndexClient<ER> {
                 .compat();
             let ret = futures::future::select(read_index_fut, delay);
             match block_on(ret) {
-                futures::future::Either::Left(_) => {}
-                futures::future::Either::Right(_) => {}
+                futures::future::Either::Left(_) => true,
+                futures::future::Either::Right(_) => false,
+            }
+        };
+        if !finished {
+            let read_index_res = &mut read_index_res;
+            loop {
+                if let Some((cb, region_id)) = router_cbs.front_mut() {
+                    let res = match cb {
+                        None => None,
+                        Some(fut) => {
+                            let waker = futures::task::noop_waker();
+                            let cx = &mut std::task::Context::from_waker(&waker);
+                            futures::pin_mut!(fut);
+                            match fut.poll(cx) {
+                                std::task::Poll::Pending => None,
+                                std::task::Poll::Ready(e) => match e {
+                                    Err(_) => None,
+                                    Ok(e) => Some(e),
+                                },
+                            }
+                        }
+                    };
+                    read_index_res.push((into_read_index_response(res), *region_id));
+                    router_cbs.pop_front();
+                } else {
+                    break;
+                }
             }
         }
-        {
-            // fill rest result with region error and let upper layer retry.
-            let mut idx = read_index_res.len();
-            while idx < req_vec.len() {
-                let mut resp = ReadIndexResponse::default();
-                resp.set_region_error(Default::default());
-                read_index_res.push((resp, req_vec[idx].get_context().get_region_id()));
-                idx += 1;
-            }
-        }
-
+        assert_eq!(req_vec.len(), read_index_res.len());
         debug!("batch_read_index success"; "response"=>?read_index_res);
         read_index_res
     }
