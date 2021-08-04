@@ -40,7 +40,8 @@ use uuid::Uuid;
 
 use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::errors::RAFTSTORE_IS_BUSY;
-use crate::store::async_io::write::{WriteMsg, WriteTask};
+use crate::store::async_io::write::WriteMsg;
+use crate::store::async_io::write_router::WriteRouter;
 use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, CollectedReady, Proposal};
@@ -562,18 +563,14 @@ where
     pub read_progress: Arc<RegionReadProgress>,
 
     pub memtrace_raft_entries: usize,
-
+    /// Used for sending write msg.
+    write_router: WriteRouter<EK, ER>,
     unpersisted_readies: VecDeque<UnpersistedReady>,
     /// The message count in `unpersisted_readies` for memory caculation.
     unpersisted_message_count: usize,
     persisted_number: u64,
     /// The context of applying snapshot.
     snap_ctx: Option<SnapshotContext>,
-    /// (chosen id of writer thread, last chosen time, reschedule retry count)
-    current_writer_id: Option<(usize, TiInstant, usize)>,
-    /// Used for rescheduling to another write thread.
-    /// (pending write tasks, the last unpersisted ready number since rescheduling)
-    pending_write_tasks: Option<(Vec<WriteTask<EK, ER>>, u64)>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -670,15 +667,14 @@ where
                 region,
                 applied_index,
                 REGION_READ_PROGRESS_CAP,
-                tag,
+                tag.clone(),
             )),
             memtrace_raft_entries: 0,
+            write_router: WriteRouter::new(tag),
             unpersisted_readies: VecDeque::default(),
             unpersisted_message_count: 0,
             persisted_number: 0,
             snap_ctx: None,
-            current_writer_id: None,
-            pending_write_tasks: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -1723,7 +1719,7 @@ where
     ///
     /// The snapshot process order would be:
     /// 1.  Get the snapshot from the ready
-    /// 2.  Wait for the notify of persisting this ready through `on_persist_ready`
+    /// 2.  Wait for the notify of persisting this ready through `Peer::on_persist_ready`
     /// 3.  Schedule the snapshot task to region worker through `schedule_applying_snapshot`
     /// 4.  Wait for applying snapshot to complete(`check_snap_status`)
     /// Then it's valid to handle the next ready.
@@ -1997,118 +1993,16 @@ where
 
         match &ready_res {
             HandleReadyResult::SendIOTask | HandleReadyResult::Snapshot { .. } => {
-                match self.should_send_write_task(ctx) {
-                    None => {
-                        self.pending_write_tasks.as_mut().unwrap().0.push(task);
-                        STORE_IO_RESCHEDULE_PENDING_TASKS_TOTAL_GAUGE.inc();
-                    }
-                    Some(id) => {
-                        self.send_write_msg(&ctx, id, WriteMsg::WriteTask(task));
-                    }
-                }
+                self.write_router.send_write_msg(
+                    ctx,
+                    self.unpersisted_readies.back().map(|r| r.number),
+                    WriteMsg::WriteTask(task),
+                );
             }
             _ => (),
         }
 
         Some(CollectedReady::new(ready_res, ready, has_new_entries))
-    }
-
-    /// Check if write task can be sent to write worker or pushed into `self.pending_write_tasks`.
-    ///
-    /// Returns None if the task should be pushed into `self.pending_write_tasks`.
-    /// Some(id) means the task should be sent to the write worker with this id.
-    fn should_send_write_task<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) -> Option<usize> {
-        // If pending_write_tasks is not None, the later task should be pushed into it.
-        if self.pending_write_tasks.is_some() {
-            return None;
-        }
-        if ctx.cfg.store_io_pool_size <= 1 {
-            return Some(0);
-        }
-        let now = TiInstant::now_coarse();
-        if !self.has_unpersisted_ready() {
-            // If no previous pending ready, we can randomly select a new writer worker.
-            let new_id = rand::random::<usize>() % ctx.cfg.store_io_pool_size;
-            self.current_writer_id = Some((new_id, now, 0));
-            return Some(new_id);
-        }
-        // There are some unpersisted readies so `async_writer_id` must not be None
-        let (id, last_time, retry_cnt) = self.current_writer_id.as_mut().unwrap();
-        if ctx.cfg.io_reschedule_concurrent_max_count == 0 {
-            // No rescheduling
-            return Some(*id);
-        }
-        // Whether the duration doesn't exceed the `io_reschedule_hotpot_duration` or not
-        if now - *last_time
-            < ctx.cfg.io_reschedule_hotpot_duration.0
-                + Duration::from_millis(*retry_cnt as u64 * 10)
-        {
-            return Some(*id);
-        }
-        if *retry_cnt == 0 {
-            // The hot write peers should not be rescheduled entirely.
-            // So it will not be rescheduled if the random id is the same as the original one.
-            let new_id = rand::random::<usize>() % ctx.cfg.store_io_pool_size;
-            if new_id == *id {
-                // Reset the time
-                *last_time = TiInstant::now_coarse();
-                return Some(*id);
-            }
-        }
-        // This peer should be rescheduled.
-        // Try to add 1 to `io_reschedule_concurrent_count`.
-        // The `cfg.io_reschedule_concurrent_max_count` is used for controlling the concurrent count
-        // of rescheduling peer fsm because rescheduling will introduce performance penalty.
-        let success = loop {
-            let count = ctx.io_reschedule_concurrent_count.load(Ordering::SeqCst);
-            if count >= ctx.cfg.io_reschedule_concurrent_max_count {
-                break false;
-            }
-            if ctx
-                .io_reschedule_concurrent_count
-                .compare_exchange(count, count + 1, Ordering::SeqCst, Ordering::Relaxed)
-                .is_ok()
-            {
-                break true;
-            }
-        };
-        if success {
-            STORE_IO_RESCHEDULE_PEER_TOTAL_GAUGE.inc();
-            // Rescheduling succeeds. The task should be pushed into `self.pending_write_tasks`.
-            self.pending_write_tasks =
-                Some((vec![], self.unpersisted_readies.back().unwrap().number));
-            None
-        } else {
-            // Rescheduling fails at this time, add one to the `retry_cnt`.
-            // The task should be sent to the original write worker.
-            *retry_cnt += 1;
-            Some(*id)
-        }
-    }
-
-    fn send_write_msg<T>(
-        &self,
-        ctx: &PollContext<EK, ER, T>,
-        writer_id: usize,
-        msg: WriteMsg<EK, ER>,
-    ) {
-        match ctx.write_senders[writer_id].try_send(msg) {
-            Ok(()) => (),
-            Err(TrySendError::Full(msg)) => {
-                let now = TiInstant::now();
-                if ctx.write_senders[writer_id].send(msg).is_err() {
-                    // Write threads are destroyed after store threads during shutdown.
-                    panic!("{} failed to send write msg, err: disconnected", self.tag);
-                }
-                ctx.raft_metrics
-                    .write_block_wait
-                    .observe(now.saturating_elapsed_secs());
-            }
-            Err(TrySendError::Disconnected(_)) => {
-                // Write threads are destroyed after store threads during shutdown.
-                panic!("{} failed to send write msg, err: disconnected", self.tag);
-            }
-        }
     }
 
     pub fn post_raft_ready_append<T: Transport>(
@@ -2374,27 +2268,7 @@ where
         let persist_index = self.raft_group.raft.raft_log.persisted;
         self.mut_store().update_persisted(persist_index);
 
-        if let Some((_, last_number)) = self.pending_write_tasks.as_ref() {
-            if persisted_number >= *last_number {
-                // The peer must be destroyed after all previous write tasks have been finished.
-                // So do not worry about a destroyed peer being counted in `io_reschedule_concurrent_count`.
-                ctx.io_reschedule_concurrent_count
-                    .fetch_sub(1, Ordering::SeqCst);
-
-                STORE_IO_RESCHEDULE_PEER_TOTAL_GAUGE.dec();
-
-                let new_id = rand::random::<usize>() % ctx.cfg.store_io_pool_size;
-                self.current_writer_id = Some((new_id, TiInstant::now_coarse(), 0));
-
-                let (tasks, _) = self.pending_write_tasks.take().unwrap();
-
-                STORE_IO_RESCHEDULE_PENDING_TASKS_TOTAL_GAUGE.sub(tasks.len() as i64);
-
-                for task in tasks {
-                    self.send_write_msg(&ctx, new_id, WriteMsg::WriteTask(task));
-                }
-            }
-        }
+        self.write_router.check_new_persisted(ctx, persist_index);
 
         if self.snap_ctx.is_some() && self.unpersisted_readies.is_empty() {
             // Since the snapshot must belong to the last ready, so if `unpersisted_readies`
