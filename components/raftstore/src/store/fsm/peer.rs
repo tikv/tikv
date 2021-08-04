@@ -655,7 +655,7 @@ where
 
     fn propose_batch_raft_command(&mut self) {
         if let Some(cmd) = self.fsm.batch_req_builder.build(&mut self.ctx.raft_metrics) {
-            self.propose_raft_command(cmd.request, cmd.callback);
+            self.propose_raft_command(cmd.request, cmd.callback)
         }
     }
 

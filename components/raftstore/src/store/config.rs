@@ -197,9 +197,10 @@ pub struct Config {
 
     pub cmd_batch: bool,
 
+    /// When the size of ready entries exceeds this value, ready will be fetched and handled.
     pub raft_ready_size_limit: ReadableSize,
 
-    // When the size of raft db writebatch exceeds this value, write will be triggered.
+    /// When the size of raft db writebatch exceeds this value, write will be triggered.
     pub raft_write_size_limit: ReadableSize,
 
     pub waterfall_metrics: bool,
